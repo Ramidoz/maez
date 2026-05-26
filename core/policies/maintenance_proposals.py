@@ -17,6 +17,11 @@ from core.policies.autonomy_preferences import (
     PreferenceClass,
     PreferenceExpressedBy,
 )
+from core.policies.sandbox_witnesses import (
+    WitnessRefusalReason,
+    WitnessRefused,
+    WitnessStatus,
+)
 
 
 DiagnosticSink = Callable[[dict], None]
@@ -52,7 +57,7 @@ class EvidenceRef:
 
 
 @dataclass(frozen=True)
-class SandboxWitness:
+class LegacySandboxWitness:
     red_tests_passed: bool
     focused_tests_passed: bool
     scratch_canary_passed: bool
@@ -72,11 +77,12 @@ class MaintenanceProposal:
     diagnosis_digest: str
     proposed_patch_ref: str
     predicted_effect: str
-    sandbox_witness: SandboxWitness | None
+    sandbox_witness: LegacySandboxWitness | None
     evidence_refs: tuple[EvidenceRef, ...]
     status: ProposalStatus
     ratified_utc: datetime | None
     decline_reason_digest: str | None
+    witness_status: WitnessStatus | None = None
 
     def __post_init__(self) -> None:
         if not self.proposal_id:
@@ -102,6 +108,11 @@ class MaintenanceProposal:
             raise ValueError("predicted_effect is required")
         if not self.evidence_refs:
             raise ValueError("evidence_refs are required")
+        if self.witness_status is not None and not isinstance(
+            self.witness_status,
+            WitnessStatus,
+        ):
+            raise ValueError("witness_status must be WitnessStatus")
 
 
 class MaintenanceProposals:
@@ -137,10 +148,21 @@ class MaintenanceProposals:
                     evidence_refs_json TEXT NOT NULL,
                     status TEXT NOT NULL,
                     ratified_utc TEXT,
-                    decline_reason_digest TEXT
+                    decline_reason_digest TEXT,
+                    witness_status TEXT
                 )
                 """
             )
+            columns = {
+                row[1]
+                for row in con.execute(
+                    "PRAGMA table_info(maintenance_proposals)"
+                ).fetchall()
+            }
+            if "witness_status" not in columns:
+                con.execute(
+                    "ALTER TABLE maintenance_proposals ADD COLUMN witness_status TEXT"
+                )
             con.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_maintenance_proposals_bond_status
@@ -150,6 +172,7 @@ class MaintenanceProposals:
 
     def append(self, proposal: MaintenanceProposal) -> None:
         _validate_proposal(proposal)
+        _refuse_legacy_witness(proposal)
         with self._lock, self._conn() as con:
             con.execute(
                 """
@@ -165,9 +188,10 @@ class MaintenanceProposals:
                     evidence_refs_json,
                     status,
                     ratified_utc,
-                    decline_reason_digest
+                    decline_reason_digest,
+                    witness_status
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 _proposal_values(proposal),
             )
@@ -205,6 +229,7 @@ class MaintenanceProposals:
 
     def update(self, proposal: MaintenanceProposal) -> None:
         _validate_proposal(proposal)
+        _refuse_legacy_witness(proposal)
         with self._lock, self._conn() as con:
             cur = con.execute(
                 """
@@ -212,7 +237,7 @@ class MaintenanceProposals:
                 SET status = ?,
                     ratified_utc = ?,
                     decline_reason_digest = ?,
-                    sandbox_witness_json = ?
+                    witness_status = ?
                 WHERE bond_id = ? AND proposal_id = ?
                 """,
                 (
@@ -221,7 +246,7 @@ class MaintenanceProposals:
                     if proposal.ratified_utc is not None
                     else None,
                     proposal.decline_reason_digest,
-                    _sandbox_to_json(proposal.sandbox_witness),
+                    proposal.witness_status.value if proposal.witness_status else None,
                     proposal.bond_id,
                     proposal.proposal_id,
                 ),
@@ -237,6 +262,7 @@ def emit_maintenance_proposal(
     diagnostic_sink: DiagnosticSink | None = None,
 ) -> MaintenanceProposal:
     active_store = store or MaintenanceProposals()
+    _refuse_legacy_witness(proposal)
     active_store.append(proposal)
     _emit(
         diagnostic_sink,
@@ -257,11 +283,13 @@ def ratify_maintenance_proposal(
 ) -> MaintenanceProposal:
     active_store = store or MaintenanceProposals()
     proposal = active_store.get(bond_id, proposal_id)
+    _refuse_legacy_witness(proposal)
     ratified = replace(
         proposal,
         status=ProposalStatus.RATIFIED,
         ratified_utc=_coerce_utc(ratified_utc, field_name="ratified_utc"),
         decline_reason_digest=None,
+        witness_status=WitnessStatus.UNWITNESSED_BY_OMISSION,
     )
     active_preferences = preference_store or AutonomyPreferences()
     active_preferences.append(_ratification_preference(ratified))
@@ -354,15 +382,16 @@ def _proposal_values(proposal: MaintenanceProposal) -> tuple:
         proposal.diagnosis_digest,
         proposal.proposed_patch_ref,
         proposal.predicted_effect,
-        _sandbox_to_json(proposal.sandbox_witness),
+        None,
         json.dumps([_evidence_to_dict(ref) for ref in proposal.evidence_refs]),
         proposal.status.value,
         proposal.ratified_utc.isoformat() if proposal.ratified_utc else None,
         proposal.decline_reason_digest,
+        proposal.witness_status.value if proposal.witness_status else None,
     )
 
 
-def _sandbox_to_json(witness: SandboxWitness | None) -> str | None:
+def _legacy_sandbox_to_json(witness: LegacySandboxWitness | None) -> str | None:
     if witness is None:
         return None
     return json.dumps(
@@ -376,11 +405,11 @@ def _sandbox_to_json(witness: SandboxWitness | None) -> str | None:
     )
 
 
-def _sandbox_from_json(raw: str | None) -> SandboxWitness | None:
+def _legacy_sandbox_from_json(raw: str | None) -> LegacySandboxWitness | None:
     if raw is None:
         return None
     data = json.loads(raw)
-    return SandboxWitness(
+    return LegacySandboxWitness(
         red_tests_passed=bool(data["red_tests_passed"]),
         focused_tests_passed=bool(data["focused_tests_passed"]),
         scratch_canary_passed=bool(data["scratch_canary_passed"]),
@@ -413,7 +442,7 @@ def _row_to_proposal(row: sqlite3.Row) -> MaintenanceProposal:
         diagnosis_digest=str(row["diagnosis_digest"]),
         proposed_patch_ref=str(row["proposed_patch_ref"]),
         predicted_effect=str(row["predicted_effect"]),
-        sandbox_witness=_sandbox_from_json(row["sandbox_witness_json"]),
+        sandbox_witness=_legacy_sandbox_from_json(row["sandbox_witness_json"]),
         evidence_refs=tuple(
             _evidence_from_dict(item)
             for item in json.loads(str(row["evidence_refs_json"]))
@@ -423,7 +452,18 @@ def _row_to_proposal(row: sqlite3.Row) -> MaintenanceProposal:
         if row["ratified_utc"]
         else None,
         decline_reason_digest=row["decline_reason_digest"],
+        witness_status=WitnessStatus(str(row["witness_status"]))
+        if "witness_status" in row.keys() and row["witness_status"]
+        else None,
     )
+
+
+def _refuse_legacy_witness(proposal: MaintenanceProposal) -> None:
+    if proposal.sandbox_witness is not None:
+        raise WitnessRefused(
+            WitnessRefusalReason.LEGACY_WITNESS_SHAPE_REFUSED,
+            "legacy sandbox_witness_json is read-only compatibility state",
+        )
 
 
 def _is_digest(value: str) -> bool:

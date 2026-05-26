@@ -4,6 +4,7 @@ import sqlite3
 import tempfile
 import unittest
 from contextlib import closing
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -42,7 +43,6 @@ class MaintenanceProposalTests(unittest.TestCase):
             MaintenanceProposal,
             ProposalScopeClass,
             ProposalStatus,
-            SandboxWitness,
         )
 
         values = {
@@ -53,12 +53,7 @@ class MaintenanceProposalTests(unittest.TestCase):
             "diagnosis_digest": _DIGEST_A,
             "proposed_patch_ref": "refs/heads/reddit-recall-fix",
             "predicted_effect": "Reddit-shaped queries open source-tagged rows first.",
-            "sandbox_witness": SandboxWitness(
-                red_tests_passed=True,
-                focused_tests_passed=True,
-                scratch_canary_passed=False,
-                witness_digest=_DIGEST_B,
-            ),
+            "sandbox_witness": None,
             "evidence_refs": (
                 EvidenceRef(
                     evidence_kind="raw_memory",
@@ -145,8 +140,49 @@ class MaintenanceProposalTests(unittest.TestCase):
         self.assertEqual(events[0]["proposal_id"], "proposal-1")
         self.assertEqual(events[0]["scope_class"], "ranking_refinement")
 
+    def test_legacy_sandbox_witness_refused_at_append_update_and_emit(self):
+        from core.policies.maintenance_proposals import (
+            LegacySandboxWitness,
+            emit_maintenance_proposal,
+        )
+        from core.policies.sandbox_witnesses import (
+            WitnessRefusalReason,
+            WitnessRefused,
+        )
+
+        store = self._store()
+        legacy = LegacySandboxWitness(
+            red_tests_passed=True,
+            focused_tests_passed=True,
+            scratch_canary_passed=True,
+            witness_digest=_DIGEST_B,
+        )
+
+        with self.assertRaises(WitnessRefused) as append_ctx:
+            store.append(self._proposal(sandbox_witness=legacy))
+        self.assertEqual(
+            append_ctx.exception.reason,
+            WitnessRefusalReason.LEGACY_WITNESS_SHAPE_REFUSED,
+        )
+
+        clean = self._proposal()
+        store.append(clean)
+        with self.assertRaises(WitnessRefused) as update_ctx:
+            store.update(replace(clean, sandbox_witness=legacy))
+        self.assertEqual(
+            update_ctx.exception.reason,
+            WitnessRefusalReason.LEGACY_WITNESS_SHAPE_REFUSED,
+        )
+
+        with self.assertRaises(WitnessRefused):
+            emit_maintenance_proposal(
+                self._proposal(proposal_id="proposal-2", sandbox_witness=legacy),
+                store=store,
+            )
+
     def test_ratify_updates_status_and_writes_owner_explicit_preference(self):
         from core.policies.maintenance_proposals import ratify_maintenance_proposal
+        from core.policies.sandbox_witnesses import WitnessStatus
 
         store = self._store()
         preference_store = AutonomyPreferences(self.pref_path)
@@ -170,6 +206,11 @@ class MaintenanceProposalTests(unittest.TestCase):
         self.assertEqual(prefs[0].expressed_by, PreferenceExpressedBy.OWNER_EXPLICIT)
         self.assertEqual(prefs[0].preference_id, "maintenance-ratification:proposal-1")
         self.assertEqual(prefs[0].target_field, "maintenance_proposal_ratified")
+        self.assertEqual(ratified.witness_status, WitnessStatus.UNWITNESSED_BY_OMISSION)
+        self.assertEqual(
+            store.get("firstborn", "proposal-1").witness_status,
+            WitnessStatus.UNWITNESSED_BY_OMISSION,
+        )
 
     def test_ratify_does_not_mark_proposal_ratified_when_preference_write_fails(self):
         from core.policies.maintenance_proposals import ratify_maintenance_proposal
