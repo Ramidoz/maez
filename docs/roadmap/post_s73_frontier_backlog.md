@@ -418,6 +418,145 @@ substrate work is authorized by this section.
   integrity, scale profiles, latency and recall-quality measurements, and
   regression thresholds.
 
+### G8. Entity-recall stack default-off in production
+
+- **Purpose:** wire the existing entity-resolution infrastructure (entity_index,
+  entity_alias_seed, entity_semantic_resolver, entity_llm_extractor,
+  entity_backfill) into the reply-time recall path so entity-shaped queries
+  consult canonical aliases and entity_mentions.
+- **Witness:** 2026-05-26 10-agent gap hunt, surface 4 finding 4.1. The flag
+  `MAEZ_ENTITY_EXPANSION` defaults OFF and is set only in tests / probe
+  scripts. `core/memory/lived_recall.py:89-95` short-circuits the entity
+  expansion. `memory/memory_manager.py:1605` imports no entity modules.
+  48 entities, 7 aliases, 89 mentions live on disk, unreferenced at reply time.
+- **Preconditions:** the entity infrastructure already exists; this is a
+  wiring + activation task plus an alias-rewrite preprocessor on the recall
+  axis (covered by Recall-Axis Dispatcher slice once that lands).
+- **Risk:** activating without an alias-rewrite preprocessor produces a brief
+  section that injects entity context without affecting Chroma query
+  shaping; partial activation is misleading.
+- **Rough scope:** flag-default review; alias-rewrite preprocessor on
+  `recall_for_telegram` / `recall_for_cycle`; entity-mention pull on
+  entity-shaped queries; council review because the stack touches
+  third-party subject discipline (ADR 0042 §13).
+
+### G9. Cross-surface trust_scope fragmentation
+
+- **Purpose:** unify owner-shaped fast-lane history so Telegram and web
+  cockpit read the same conversational tail under the same bonded-user
+  identity.
+- **Witness:** 2026-05-26 10-agent gap hunt, surface 6 finding 6.1.
+  `skills/web_interface.py:9551` pins authenticated owner calls to
+  `trust_scope="guest"`. `core/infra/fast_conversation_log.py:113-127`
+  filters strictly by scope with no union. Owner data fragments across at
+  least 4 disjoint trust scopes (`owner.draft`, `rohit`, `rohit.web_dev_probe`,
+  `guest`).
+- **Preconditions:** S7 operator/user role boundary (already canonical);
+  S7.1 founder WebAuthn ceremony; bonded-user identity surface.
+- **Risk:** owner identity is structurally bonded but the fast-lane substrate
+  shards owner history by surface-imposed scope, violating cross-surface
+  continuity.
+- **Rough scope:** stop forcing `guest` scope on authenticated owner calls;
+  union-read across owner-class scopes; surface-tag distinct from
+  trust-tag; backward-compat for existing scope-tagged rows.
+
+### G10. Perception surfaces write-silent against recall
+
+- **Purpose:** let terminal / camera / calendar / hardware-telemetry
+  observations become recallable when the owner references them at reply
+  time.
+- **Witness:** 2026-05-26 10-agent gap hunt, surface 6 finding 6.3 and
+  surface 7 findings 7.1–7.4. `daemon/{presence,calendar,screen}_perception.py`
+  contain no calls to `store_telegram` / `store_raw` / `memory_manager`.
+  `memory/raw.db` is 0 bytes. Hardware telemetry (38,435 rows in chroma raw
+  with `gpu_temp` keys), camera presence state, GitHub limb (live API,
+  unwritten), and calendar `next_event` (38,269 metadata rows) are all
+  write-only.
+- **Preconditions:** body topology (ADR 0029); S2 contextual integrity at
+  ingest; Body Bus pattern.
+- **Risk:** any "did you see what I just…" query is structurally impossible
+  to answer truthfully from recall; confabulation fills the gap.
+- **Rough scope:** per-limb writer that produces source-tagged, S2-bounded
+  rows; recall axis for ambient queries; freshness/staleness discipline so
+  perception rows decay appropriately; covenant review because perception
+  data has its own contextual-integrity weight.
+
+### G11. Lived-graph traversal API absent — built-but-mute substrate
+
+- **Purpose:** give `RelationshipGraph` and `EpisodeStore` traversal
+  verbs (neighbors, path, predecessor, successor, chain-from) so
+  relationship/history-shaped queries can walk the graph instead of
+  flat-scanning all edges and Jaccard-ranking them.
+- **Witness:** 2026-05-26 10-agent gap hunt, surface 8 findings 8.1–8.3.
+  `core/memory/relationship_graph.py:103-330` exposes only flat enumeration
+  (`list_active`). `core/memory/episodes.py:74-218` exposes no chain API and
+  has no `predecessor_id` schema column. `lived_recall.py:635-678` already
+  classifies queries as `relationship` / `temporal` but only adjusts section
+  floors; no traversal dispatched.
+- **Preconditions:** ADR 0019 lived memory architecture; M1 lived-episode
+  promotion (ADR 0030); existing 21 nodes / 19 edges / 32 episodes.
+- **Risk:** the substrate carries graph data that is structurally
+  unreachable at reply time; the classifier already detects graph-shaped
+  queries but cannot dispatch to a traversal.
+- **Rough scope:** traversal verbs on both stores; episodes schema
+  extension for causal predecessor (or deriving chains from
+  `source_memory_ids_json` + `occurred_at`); `build_lived_recall_brief`
+  dispatches anchor-then-walk on relationship / temporal modes; covenant
+  weight medium because traversal touches biography composition.
+
+### G12. consequence_memory.CLASS_USER_CORRECTION defined-but-unwired
+
+- **Purpose:** activate the existing `user_correction` class so explicit
+  owner corrections become recallable across future turns ("Rohit has
+  corrected this before").
+- **Witness:** 2026-05-26 10-agent gap hunt, surface 9 finding 9.2.
+  `core/learning/consequence_memory.py:23-27,92` defines the class with
+  full schema. Repo-wide grep returns zero callers outside tests.
+- **Preconditions:** correction-shape detection (sibling of repair-followup
+  inheritance); the consequence_memory writer already supports the class.
+- **Risk:** without this, every challenge is a fresh query; Maez cannot
+  remember what it has already been corrected on; doubles down on identical
+  mistakes.
+- **Rough scope:** correction-intent classifier; writer integration at the
+  post-reply hook in `daemon/maez_daemon.py` / `core/brain/conversation_controller.py`;
+  reader integration in synthesis context.
+
+### G13. context_compressor.compress advertised but dead in chat path
+
+- **Purpose:** wire the dormant prompt-budget compressor so cumulative
+  payload (soul + ambient + lived + temporal + system_state + web + recall)
+  cannot silently exceed the model's context window.
+- **Witness:** 2026-05-26 10-agent gap hunt, surface 10 finding 10.4.
+  `core/routing/README.md:56` advertises `context_compressor.compress`.
+  Live `grep` on `core/` and `daemon/` returns no call sites. Only the
+  recall block is char-capped; total payload is unbounded.
+- **Preconditions:** the compressor exists; needs invocation at message
+  assembly time and priority-aware trimming policy.
+- **Risk:** llama-server head-truncation makes opaque decisions invisible
+  to the producer; the soul (24KB at messages[0]) or the recall block can
+  be silently cut.
+- **Rough scope:** invoke compressor at `daemon/maez_daemon.py:3563`;
+  priority-aware trim policy (recall + premise flags protected;
+  ambient/web/older history demoted first); cumulative token budget
+  enforced before LLM call.
+
+### G14. self_dev.reviews has no reply-time reader
+
+- **Purpose:** let owner-facing procedural queries about Maez's
+  self-reviews surface from `memory/self_dev.db` instead of falling
+  through to generic semantic recall.
+- **Witness:** 2026-05-26 10-agent gap hunt, surface 5 finding 5.4.
+  `memory/self_dev.db` contains 14 reviews. `grep -r "self_dev.db"
+  core/brain core/cognition memory/memory_manager.py` returns empty.
+  No module reads the table into a prompt.
+- **Preconditions:** Recall-Axis Dispatcher slice (procedural axis); the
+  writer side is already in `core/self_dev/persistence.py`.
+- **Risk:** Maez confabulates self-review answers from raw conversation
+  embeddings instead of the structured review records it has actually
+  written.
+- **Rough scope:** procedural axis in the dispatcher; reader integration
+  on self_dev.db; small RED test for the procedural surface.
+
 ### S3. Sandbox-witness inbound taint discipline
 
 - **Purpose:** ensure sandbox witnesses for maintenance proposals cannot use
@@ -450,6 +589,7 @@ Helix / LIA / Sibelium-inspired ideas are **comparative inspiration only.** They
 1. **Attentional Gravity** - a future retrieval-weighting experiment; gated by the Gold Set (#8), the Drive Integrator (#13), and memory probes. Does not guarantee state-output isomorphism; must be measured.
 2. **Dynamic Gear Shifting** - late-stage event-reactor behavior (#24C). Must include max burst length, max call count, budget rails, freeze integration, no authority bypass, and an audit trace. Cannot trigger self-modification outside S7.3.
 3. **Zero-Inference Signal Gates** - a future reflex-loop (cadence #1) primitive; deterministic / no LLM; escalations route through freeze, egress, capability quarantine, and the decision pipeline.
+4. **Liquid Neural Networks** (Hasani / Lechner / Rus, MIT CSAIL 2020+; Liquid AI's LFM line 2024+) - continuous-time recurrent networks with adaptive time constants, originally built for robotics edge compute. Comparative-inspiration candidate for **Item #18 (Jetson Body Bus)** sensor-edge processing (ASR / VAD / sensor-fusion at constrained-compute scale) and conditionally **Item #19 (Voice/Audio Organ)** under the same constraint. Specifically NOT a candidate for the executive brain (covenant: model swaps are S5-gated; #22 stance: *prompt discipline beats weight class*) and NOT a candidate for any authority-bearing layer (covenant: deterministic-only). Read-only research signal; no slice authorization implied.
 
 ---
 
