@@ -734,6 +734,138 @@ class RedditSourceAwareRecallTests(unittest.TestCase):
             [row["id"] for row in recalled["raw"]],
         )
 
+    def _temporal_followup_setup(self, now, repair_phrase):
+        last_night = now - timedelta(hours=15)
+        previous_question = now - timedelta(minutes=18)
+        previous_followup = now - timedelta(minutes=1)
+        mm = self._manager_with_raw(
+            rows=[
+                {
+                    "id": f"generic-{repair_phrase.replace(' ', '-').replace(',', '').replace('?', '').strip('-')}",
+                    "content": "No anomalies detected.",
+                    "metadata": {"timestamp": now.isoformat(), "type": "reasoning"},
+                    "distance": 0.08,
+                },
+            ],
+            get_rows=[
+                {
+                    "id": "telegram-previous-followup",
+                    "content": (
+                        "the owner (telegram_surface): You sure?\n"
+                        "Maez: No. I don't have a record of last evening."
+                    ),
+                    "metadata": {
+                        "timestamp": previous_followup.isoformat(),
+                        "type": "telegram_exchange",
+                        "trust_tier": "lived",
+                    },
+                    "distance": 0.50,
+                },
+                {
+                    "id": "telegram-previous-temporal-question",
+                    "content": (
+                        "the owner (telegram_surface): You remember what I was talking last evening?\n"
+                        "Maez: I don't have a record of our conversation from last evening."
+                    ),
+                    "metadata": {
+                        "timestamp": previous_question.isoformat(),
+                        "type": "telegram_exchange",
+                        "trust_tier": "lived",
+                    },
+                    "distance": 0.50,
+                },
+                {
+                    "id": "telegram-last-night",
+                    "content": (
+                        "the owner (telegram_surface): How's the Reddit community doing?\n"
+                        "Maez: The Reddit pipeline is currently silent."
+                    ),
+                    "metadata": {
+                        "timestamp": last_night.isoformat(),
+                        "type": "telegram_exchange",
+                        "trust_tier": "lived",
+                    },
+                    "distance": 0.50,
+                },
+            ],
+        )
+        return mm
+
+    def test_really_inherits_recent_temporal_question(self):
+        now = datetime(2026, 5, 26, 19, 8, tzinfo=timezone.utc)
+        mm = self._temporal_followup_setup(now, "really")
+        with (
+            mock.patch("memory.memory_manager._now_seconds", return_value=now.timestamp()),
+            mock.patch("memory.mmr.mmr_rerank", side_effect=lambda rows, k, lambda_: rows[:k]),
+        ):
+            recalled = mm.recall_for_telegram("Really?")
+        self.assertEqual(recalled["raw"][0]["id"], "telegram-last-night")
+
+    def test_are_you_certain_inherits_recent_temporal_question(self):
+        now = datetime(2026, 5, 26, 19, 8, tzinfo=timezone.utc)
+        mm = self._temporal_followup_setup(now, "are you certain")
+        with (
+            mock.patch("memory.memory_manager._now_seconds", return_value=now.timestamp()),
+            mock.patch("memory.mmr.mmr_rerank", side_effect=lambda rows, k, lambda_: rows[:k]),
+        ):
+            recalled = mm.recall_for_telegram("Are you certain?")
+        self.assertEqual(recalled["raw"][0]["id"], "telegram-last-night")
+
+    def test_no_thats_not_it_inherits_recent_temporal_question(self):
+        now = datetime(2026, 5, 26, 19, 8, tzinfo=timezone.utc)
+        mm = self._temporal_followup_setup(now, "no thats not it")
+        with (
+            mock.patch("memory.memory_manager._now_seconds", return_value=now.timestamp()),
+            mock.patch("memory.mmr.mmr_rerank", side_effect=lambda rows, k, lambda_: rows[:k]),
+        ):
+            recalled = mm.recall_for_telegram("No, that's not it.")
+        self.assertEqual(recalled["raw"][0]["id"], "telegram-last-night")
+
+    def test_go_on_inherits_recent_temporal_question(self):
+        now = datetime(2026, 5, 26, 19, 8, tzinfo=timezone.utc)
+        mm = self._temporal_followup_setup(now, "go on")
+        with (
+            mock.patch("memory.memory_manager._now_seconds", return_value=now.timestamp()),
+            mock.patch("memory.mmr.mmr_rerank", side_effect=lambda rows, k, lambda_: rows[:k]),
+        ):
+            recalled = mm.recall_for_telegram("Go on")
+        self.assertEqual(recalled["raw"][0]["id"], "telegram-last-night")
+
+    def test_really_without_prior_temporal_question_stays_semantic(self):
+        now = datetime(2026, 5, 26, 19, 8, tzinfo=timezone.utc)
+        previous_followup = now - timedelta(minutes=1)
+        mm = self._manager_with_raw(
+            rows=[
+                {
+                    "id": "generic-really",
+                    "content": "No anomalies detected.",
+                    "metadata": {"timestamp": now.isoformat(), "type": "reasoning"},
+                    "distance": 0.08,
+                },
+            ],
+            get_rows=[
+                {
+                    "id": "telegram-previous-nontemporal",
+                    "content": (
+                        "the owner (telegram_surface): How is the system?\n"
+                        "Maez: Quiet and stable."
+                    ),
+                    "metadata": {
+                        "timestamp": previous_followup.isoformat(),
+                        "type": "telegram_exchange",
+                        "trust_tier": "lived",
+                    },
+                    "distance": 0.50,
+                },
+            ],
+        )
+        with (
+            mock.patch("memory.memory_manager._now_seconds", return_value=now.timestamp()),
+            mock.patch("memory.mmr.mmr_rerank", side_effect=lambda rows, k, lambda_: rows[:k]),
+        ):
+            recalled = mm.recall_for_telegram("Really?")
+        self.assertEqual(recalled["raw"][0]["id"], "generic-really")
+
     def test_two_days_ago_query_supplements_two_day_old_exchanges(self):
         now = datetime(2026, 5, 26, 12, 0, tzinfo=timezone.utc)
         two_days_ago = now - timedelta(hours=48)

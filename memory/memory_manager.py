@@ -494,9 +494,23 @@ def _is_temporal_recall_followup(query: str) -> bool:
 
     This deliberately does not make every vague message inherit prior
     recall intent; it covers the screenshot-shaped repair turns only.
+    Each entry is a short repair-shape; inheritance only fires when a
+    recent prior owner Telegram exchange carries a temporal phrase.
     """
-    q = re.sub(r"[?!.]+", "", (query or "").lower()).strip()
-    if q in {"you sure", "are you sure", "check again", "look again", "try again"}:
+    q = re.sub(r"[?!.,]+", "", (query or "").lower()).strip()
+    if q in {
+        "you sure",
+        "are you sure",
+        "check again",
+        "look again",
+        "try again",
+        "really",
+        "are you certain",
+        "you certain",
+        "no that's not it",
+        "no thats not it",
+        "go on",
+    }:
         return True
     return bool(re.fullmatch(r"(can you )?(check|look|try) again", q))
 
