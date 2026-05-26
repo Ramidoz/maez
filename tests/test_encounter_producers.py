@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-import unittest
+import sqlite3
 import tempfile
+import unittest
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -333,6 +335,390 @@ class EncounterProducerRegistrationTests(unittest.TestCase):
 
         self.assertIsNotNone(record)
         self.assertGreater(record.meaningfulness_score, 0.0)
+
+    def test_subjective_duration_producer_materializes_from_real_salience_event(self):
+        from core.evolution.subjective_duration import SubjectiveDuration
+        from core.evolution.wonderings import Wonderings
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            store = Wonderings(db_path=root / "wonderings.db")
+            subjective = SubjectiveDuration(
+                db_path=root / "subjective_duration.db",
+                diagnostic_log_path=root / "subjective_duration.jsonl",
+            )
+            parent_id = store.add("parent SD object", source="manual", bond_id="firstborn")
+            self.curiosity.record_wondering_drive_metadata(
+                store,
+                wondering_id=parent_id,
+                bond_id="firstborn",
+                encounter_source="subjective_duration_meaningful_event",
+                encounter_ref_digest="hmac-sha256:" + "c" * 64,
+                priority_class="self_growth",
+                salience=0.8,
+                subject_kind=self.curiosity.SubjectKind.SELF_MODEL,
+                produced_via_subjective_duration_depth=0,
+            )
+            event_id = subjective.record_salience_event(
+                salience_event_kind="meaningful_exchange",
+                producer_ref=ProducerRef.DRIVE_DRIVEN_CURIOSITY.value,
+                bond_id="firstborn",
+                producer_event_id=(
+                    f"wondering:{parent_id}:priority:self_growth:"
+                    "resolution:explicit_self_resolved:1"
+                ),
+                producer_temperament_before={"curiosity": 5.0},
+                producer_temperament_after={"curiosity": 6.0},
+                now_utc=datetime(2026, 5, 26, 12, 0, tzinfo=UTC),
+            )
+
+            self.curiosity.register_subjective_duration_meaningful_event_producer(
+                store,
+                subjective,
+            )
+            entry = self.curiosity.get_registered_producer(
+                self.curiosity.EncounterSource.SUBJECTIVE_DURATION_MEANINGFUL_EVENT
+            )
+            obj = entry.create({"event_id": event_id, "bond_id": "firstborn"})
+
+            with closing(sqlite3.connect(store.db_path)) as con:
+                con.row_factory = sqlite3.Row
+                metadata = con.execute(
+                    """
+                    SELECT encounter_source, encounter_ref_digest,
+                           produced_via_subjective_duration_depth
+                    FROM wondering_drive_metadata
+                    WHERE wondering_id = ?
+                    """,
+                    (obj.wondering_id,),
+                ).fetchone()
+
+        self.assertEqual(entry.evidence_pointer_kind, "subjective_duration_salience_events.event_id")
+        self.assertEqual(obj.bond_id, "firstborn")
+        self.assertEqual(
+            obj.encounter_source,
+            self.curiosity.EncounterSource.SUBJECTIVE_DURATION_MEANINGFUL_EVENT.value,
+        )
+        self.assertEqual(obj.subject_kind, self.curiosity.SubjectKind.SELF_MODEL)
+        self.assertEqual(obj.produced_via_subjective_duration_depth, 1)
+        self.assertEqual(metadata["encounter_source"], "subjective_duration_meaningful_event")
+        self.assertEqual(metadata["produced_via_subjective_duration_depth"], 1)
+        self.assertTrue(str(metadata["encounter_ref_digest"]).startswith("hmac-sha256:"))
+
+    def test_subjective_duration_producer_refuses_zero_canary_manual_and_cross_bond(self):
+        from core.evolution.subjective_duration import SubjectiveDuration
+        from core.evolution.wonderings import Wonderings
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            store = Wonderings(db_path=root / "wonderings.db")
+            subjective = SubjectiveDuration(
+                db_path=root / "subjective_duration.db",
+                diagnostic_log_path=root / "subjective_duration.jsonl",
+            )
+            zero_id = subjective.record_salience_event(
+                salience_event_kind="meaningful_exchange",
+                producer_ref=ProducerRef.DRIVE_DRIVEN_CURIOSITY.value,
+                bond_id="firstborn",
+                producer_event_id="zero",
+                producer_temperament_before={"curiosity": 5.0},
+                producer_temperament_after={"curiosity": 5.0},
+                now_utc=datetime(2026, 5, 26, 12, 0, tzinfo=UTC),
+            )
+            canary_id = subjective.record_salience_event(
+                salience_event_kind="meaningful_exchange",
+                producer_ref=ProducerRef.DRIVE_DRIVEN_CURIOSITY.value,
+                bond_id="firstborn",
+                producer_event_id="canary",
+                producer_temperament_before={"curiosity": 5.0},
+                producer_temperament_after={"curiosity": 6.0},
+                now_utc=datetime(2026, 5, 26, 12, 1, tzinfo=UTC),
+                is_canary=True,
+            )
+            manual_id = subjective.record_salience_event(
+                salience_event_kind="meaningful_exchange",
+                producer_ref=ProducerRef.MANUAL_TEST_PRODUCER.value,
+                bond_id="firstborn",
+                producer_event_id="manual",
+                producer_temperament_before={"curiosity": 5.0},
+                producer_temperament_after={"curiosity": 6.0},
+                now_utc=datetime(2026, 5, 26, 12, 2, tzinfo=UTC),
+            )
+
+            self.curiosity.register_subjective_duration_meaningful_event_producer(
+                store,
+                subjective,
+            )
+            entry = self.curiosity.get_registered_producer(
+                self.curiosity.EncounterSource.SUBJECTIVE_DURATION_MEANINGFUL_EVENT
+            )
+
+            with self.assertRaisesRegex(ValueError, "meaningfulness_score"):
+                entry.create({"event_id": zero_id, "bond_id": "firstborn"})
+            with self.assertRaisesRegex(ValueError, "canary"):
+                entry.create({"event_id": canary_id, "bond_id": "firstborn"})
+            with self.assertRaisesRegex(ValueError, "manual-test"):
+                entry.create({"event_id": manual_id, "bond_id": "firstborn"})
+            with self.assertRaisesRegex(ValueError, "bond_id mismatch"):
+                entry.create({"event_id": zero_id, "bond_id": "other-bond"})
+
+            self.assertEqual(self.curiosity.list_drive_curiosity_objects(store, bond_id="firstborn"), [])
+
+    def test_subjective_duration_producer_refuses_missing_or_cross_bond_parent(self):
+        from core.evolution.subjective_duration import SubjectiveDuration
+        from core.evolution.wonderings import Wonderings
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            store = Wonderings(db_path=root / "wonderings.db")
+            subjective = SubjectiveDuration(
+                db_path=root / "subjective_duration.db",
+                diagnostic_log_path=root / "subjective_duration.jsonl",
+            )
+            other_parent_id = store.add(
+                "other bond parent",
+                source="manual",
+                bond_id="other-bond",
+            )
+            self.curiosity.record_wondering_drive_metadata(
+                store,
+                wondering_id=other_parent_id,
+                bond_id="other-bond",
+                encounter_source="subjective_duration_meaningful_event",
+                encounter_ref_digest="hmac-sha256:" + "d" * 64,
+                priority_class="self_growth",
+                salience=0.8,
+                subject_kind=self.curiosity.SubjectKind.SELF_MODEL,
+            )
+            missing_parent_event_id = subjective.record_salience_event(
+                salience_event_kind="meaningful_exchange",
+                producer_ref=ProducerRef.DRIVE_DRIVEN_CURIOSITY.value,
+                bond_id="firstborn",
+                producer_event_id="wondering:999999:priority:self_growth:resolution:explicit_self_resolved:1",
+                producer_temperament_before={"curiosity": 5.0},
+                producer_temperament_after={"curiosity": 6.0},
+                now_utc=datetime(2026, 5, 26, 12, 6, tzinfo=UTC),
+            )
+            unparseable_parent_event_id = subjective.record_salience_event(
+                salience_event_kind="meaningful_exchange",
+                producer_ref=ProducerRef.DRIVE_DRIVEN_CURIOSITY.value,
+                bond_id="firstborn",
+                producer_event_id="subjective-duration:without-parent-wondering",
+                producer_temperament_before={"curiosity": 5.0},
+                producer_temperament_after={"curiosity": 6.0},
+                now_utc=datetime(2026, 5, 26, 12, 6, 30, tzinfo=UTC),
+            )
+            sidecarless_parent_id = store.add(
+                "sidecarless parent",
+                source="manual",
+                bond_id="firstborn",
+            )
+            sidecarless_parent_event_id = subjective.record_salience_event(
+                salience_event_kind="meaningful_exchange",
+                producer_ref=ProducerRef.DRIVE_DRIVEN_CURIOSITY.value,
+                bond_id="firstborn",
+                producer_event_id=(
+                    f"wondering:{sidecarless_parent_id}:priority:self_growth:"
+                    "resolution:explicit_self_resolved:1"
+                ),
+                producer_temperament_before={"curiosity": 5.0},
+                producer_temperament_after={"curiosity": 6.0},
+                now_utc=datetime(2026, 5, 26, 12, 6, 45, tzinfo=UTC),
+            )
+            cross_bond_event_id = subjective.record_salience_event(
+                salience_event_kind="meaningful_exchange",
+                producer_ref=ProducerRef.DRIVE_DRIVEN_CURIOSITY.value,
+                bond_id="firstborn",
+                producer_event_id=(
+                    f"wondering:{other_parent_id}:priority:self_growth:"
+                    "resolution:explicit_self_resolved:1"
+                ),
+                producer_temperament_before={"curiosity": 5.0},
+                producer_temperament_after={"curiosity": 6.0},
+                now_utc=datetime(2026, 5, 26, 12, 7, tzinfo=UTC),
+            )
+
+            self.curiosity.register_subjective_duration_meaningful_event_producer(
+                store,
+                subjective,
+            )
+            entry = self.curiosity.get_registered_producer(
+                self.curiosity.EncounterSource.SUBJECTIVE_DURATION_MEANINGFUL_EVENT
+            )
+
+            with self.assertRaisesRegex(ValueError, "parent wondering"):
+                entry.create({"event_id": missing_parent_event_id, "bond_id": "firstborn"})
+            with self.assertRaisesRegex(ValueError, "parent wondering id required"):
+                entry.create({"event_id": unparseable_parent_event_id, "bond_id": "firstborn"})
+            with self.assertRaisesRegex(ValueError, "missing drive metadata"):
+                entry.create({"event_id": sidecarless_parent_event_id, "bond_id": "firstborn"})
+            with self.assertRaisesRegex(ValueError, "parent bond_id mismatch"):
+                entry.create({"event_id": cross_bond_event_id, "bond_id": "firstborn"})
+
+            self.assertEqual(len(self.curiosity.list_drive_curiosity_objects(store, bond_id="firstborn")), 0)
+
+    def test_subjective_duration_recursion_depth_limit(self):
+        from core.evolution.subjective_duration import SubjectiveDuration
+        from core.evolution.wonderings import Wonderings
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            store = Wonderings(db_path=root / "wonderings.db")
+            subjective = SubjectiveDuration(
+                db_path=root / "subjective_duration.db",
+                diagnostic_log_path=root / "subjective_duration.jsonl",
+            )
+            parent_id = store.add("parent recursion object", source="manual", bond_id="firstborn")
+            self.curiosity.record_wondering_drive_metadata(
+                store,
+                wondering_id=parent_id,
+                bond_id="firstborn",
+                encounter_source="subjective_duration_meaningful_event",
+                encounter_ref_digest="hmac-sha256:" + "b" * 64,
+                priority_class="self_growth",
+                salience=0.8,
+                subject_kind=self.curiosity.SubjectKind.SELF_MODEL,
+                produced_via_subjective_duration_depth=2,
+            )
+            event_id = subjective.record_salience_event(
+                salience_event_kind="meaningful_exchange",
+                producer_ref=ProducerRef.DRIVE_DRIVEN_CURIOSITY.value,
+                bond_id="firstborn",
+                producer_event_id=(
+                    f"wondering:{parent_id}:priority:self_growth:"
+                    "resolution:explicit_self_resolved:1"
+                ),
+                producer_temperament_before={"curiosity": 5.0},
+                producer_temperament_after={"curiosity": 6.0},
+                now_utc=datetime(2026, 5, 26, 12, 3, tzinfo=UTC),
+            )
+
+            self.curiosity.register_subjective_duration_meaningful_event_producer(
+                store,
+                subjective,
+                max_recursion_depth=2,
+            )
+            entry = self.curiosity.get_registered_producer(
+                self.curiosity.EncounterSource.SUBJECTIVE_DURATION_MEANINGFUL_EVENT
+            )
+
+            with self.assertRaisesRegex(ValueError, "recursion depth"):
+                entry.create({"event_id": event_id, "bond_id": "firstborn"})
+
+            self.assertEqual(len(self.curiosity.list_drive_curiosity_objects(store, bond_id="firstborn")), 1)
+
+    def test_subjective_duration_recursion_dedupe(self):
+        from core.evolution.subjective_duration import SubjectiveDuration
+        from core.evolution.wonderings import Wonderings
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            store = Wonderings(db_path=root / "wonderings.db")
+            subjective = SubjectiveDuration(
+                db_path=root / "subjective_duration.db",
+                diagnostic_log_path=root / "subjective_duration.jsonl",
+            )
+            parent_id = store.add("parent dedupe object", source="manual", bond_id="firstborn")
+            self.curiosity.record_wondering_drive_metadata(
+                store,
+                wondering_id=parent_id,
+                bond_id="firstborn",
+                encounter_source="subjective_duration_meaningful_event",
+                encounter_ref_digest="hmac-sha256:" + "e" * 64,
+                priority_class="self_growth",
+                salience=0.8,
+                subject_kind=self.curiosity.SubjectKind.SELF_MODEL,
+            )
+            event_id = subjective.record_salience_event(
+                salience_event_kind="meaningful_exchange",
+                producer_ref=ProducerRef.DRIVE_DRIVEN_CURIOSITY.value,
+                bond_id="firstborn",
+                producer_event_id=(
+                    f"wondering:{parent_id}:priority:self_growth:"
+                    "resolution:explicit_self_resolved:1"
+                ),
+                producer_temperament_before={"curiosity": 5.0},
+                producer_temperament_after={"curiosity": 6.0},
+                now_utc=datetime(2026, 5, 26, 12, 4, tzinfo=UTC),
+            )
+
+            self.curiosity.register_subjective_duration_meaningful_event_producer(
+                store,
+                subjective,
+                recursion_dedupe_window_hours=4,
+            )
+            entry = self.curiosity.get_registered_producer(
+                self.curiosity.EncounterSource.SUBJECTIVE_DURATION_MEANINGFUL_EVENT
+            )
+            first = entry.create({"event_id": event_id, "bond_id": "firstborn"})
+
+            with self.assertRaisesRegex(ValueError, "dedupe"):
+                entry.create({"event_id": event_id, "bond_id": "firstborn"})
+
+            self.assertEqual(
+                len(self.curiosity.list_drive_curiosity_objects(store, bond_id="firstborn")),
+                2,
+            )
+            self.assertEqual(first.produced_via_subjective_duration_depth, 1)
+
+    def test_subjective_duration_subject_kind_refusal_leaves_no_orphan_wondering(self):
+        from core.evolution.subjective_duration import SubjectiveDuration
+        from core.evolution.wonderings import Wonderings
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            store = Wonderings(db_path=root / "wonderings.db")
+            subjective = SubjectiveDuration(
+                db_path=root / "subjective_duration.db",
+                diagnostic_log_path=root / "subjective_duration.jsonl",
+            )
+            parent_id = store.add(
+                "parent subject-kind object",
+                source="manual",
+                bond_id="firstborn",
+            )
+            self.curiosity.record_wondering_drive_metadata(
+                store,
+                wondering_id=parent_id,
+                bond_id="firstborn",
+                encounter_source="subjective_duration_meaningful_event",
+                encounter_ref_digest="hmac-sha256:" + "f" * 64,
+                priority_class="self_growth",
+                salience=0.8,
+                subject_kind=self.curiosity.SubjectKind.NAMED_THIRD_PARTY,
+            )
+            event_id = subjective.record_salience_event(
+                salience_event_kind="meaningful_exchange",
+                producer_ref=ProducerRef.DRIVE_DRIVEN_CURIOSITY.value,
+                bond_id="firstborn",
+                producer_event_id=(
+                    f"wondering:{parent_id}:priority:self_growth:"
+                    "resolution:explicit_self_resolved:1"
+                ),
+                producer_temperament_before={"curiosity": 5.0},
+                producer_temperament_after={"curiosity": 6.0},
+                now_utc=datetime(2026, 5, 26, 12, 5, tzinfo=UTC),
+            )
+
+            self.curiosity.register_subjective_duration_meaningful_event_producer(
+                store,
+                subjective,
+            )
+            entry = self.curiosity.get_registered_producer(
+                self.curiosity.EncounterSource.SUBJECTIVE_DURATION_MEANINGFUL_EVENT
+            )
+
+            with self.assertRaises(self.curiosity.SubjectKindRefused):
+                entry.create(
+                    {
+                        "event_id": event_id,
+                        "bond_id": "firstborn",
+                    }
+                )
+            with closing(sqlite3.connect(store.db_path)) as con:
+                count = con.execute("SELECT COUNT(*) FROM wonderings").fetchone()[0]
+
+        self.assertEqual(count, 1)
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import Enum
@@ -77,6 +78,7 @@ class CuriosityObject:
     third_party_blocked: bool = False
     can_resolve_interiorly: bool = False
     fixation_released: bool = False
+    produced_via_subjective_duration_depth: int = 0
 
 
 class MeaningfulExchangeEligibility(Enum):
@@ -120,6 +122,15 @@ class ProducerSourceDeferred:
     reason: str
 
 
+@dataclass(frozen=True)
+class _ParentCuriosityProvenance:
+    wondering_id: int
+    bond_id: str
+    priority_class: str
+    subject_kind: SubjectKind
+    produced_via_subjective_duration_depth: int
+
+
 _REGISTERED_PRODUCERS: dict[EncounterSource, ProducerEntry | ProducerSourceDeferred] = {}
 
 
@@ -127,6 +138,10 @@ def _digest(value: object) -> str | None:
     if value is None:
         return None
     return "sha256:" + hashlib.sha256(str(value).encode("utf-8")).hexdigest()
+
+
+def _hmac_shaped_digest(value: object) -> str:
+    return "hmac-sha256:" + hashlib.sha256(str(value).encode("utf-8")).hexdigest()
 
 
 def _producer_ref_value(producer_ref: object) -> str:
@@ -251,6 +266,9 @@ def _materialize_curiosity_object(fields: Mapping) -> CuriosityObject:
         third_party_blocked=bool(fields.get("third_party_blocked")),
         can_resolve_interiorly=bool(fields.get("can_resolve_interiorly")),
         fixation_released=bool(fields.get("fixation_released")),
+        produced_via_subjective_duration_depth=int(
+            fields.get("produced_via_subjective_duration_depth") or 0
+        ),
     )
 
 
@@ -401,6 +419,211 @@ def register_wonderings_backed_producers(store: Wonderings) -> None:
         )
 
 
+def register_subjective_duration_meaningful_event_producer(
+    store: Wonderings,
+    subjective_duration: object,
+    *,
+    max_recursion_depth: int = 2,
+    recursion_dedupe_window_hours: int = 4,
+) -> None:
+    seen_event_ids: dict[int, datetime] = {}
+
+    def create(seed: Mapping) -> dict:
+        fields = _subjective_duration_meaningful_event_fields(
+            store,
+            subjective_duration,
+            seed=seed,
+            seen_event_ids=seen_event_ids,
+            max_recursion_depth=max_recursion_depth,
+            recursion_dedupe_window_hours=recursion_dedupe_window_hours,
+        )
+        return fields
+
+    register_encounter_producer(
+        source=EncounterSource.SUBJECTIVE_DURATION_MEANINGFUL_EVENT,
+        evidence_pointer_kind="subjective_duration_salience_events.event_id",
+        producer_ref=DRIVE_DRIVEN_CURIOSITY_PRODUCER_REF,
+        create_curiosity_object=create,
+    )
+
+
+def _subjective_duration_meaningful_event_fields(
+    store: Wonderings,
+    subjective_duration: object,
+    *,
+    seed: Mapping,
+    seen_event_ids: dict[int, datetime],
+    max_recursion_depth: int,
+    recursion_dedupe_window_hours: int,
+) -> dict:
+    event_id_raw = seed.get("event_id")
+    if event_id_raw is None:
+        raise ValueError("event_id is required for subjective_duration producer")
+    event_id = int(event_id_raw)
+    event = _subjective_duration_event_by_id(subjective_duration, event_id)
+    if event is None:
+        raise KeyError(f"subjective_duration salience event not found: {event_id}")
+    if str(event["salience_event_kind"]) != "meaningful_exchange":
+        raise ValueError("subjective_duration producer only accepts meaningful_exchange")
+    bond_id = str(event["bond_id"])
+    if not bond_id or bond_id == "_LEGACY":
+        raise ValueError("subjective_duration event must carry a real bond_id")
+    requested_bond_id = seed.get("bond_id")
+    if requested_bond_id is not None and str(requested_bond_id) != bond_id:
+        raise ValueError("bond_id mismatch for subjective_duration event")
+    if bool(event["is_canary"]):
+        raise ValueError("canary salience events cannot produce curiosity objects")
+    if float(event["meaningfulness_score"]) <= 0.0:
+        raise ValueError("meaningfulness_score must be positive")
+    producer_ref = str(event["producer_ref"])
+    if producer_ref == MANUAL_TEST_PRODUCER_REF:
+        raise ValueError("manual-test salience events cannot produce curiosity objects")
+    if not producer_ref:
+        raise ValueError("producer_ref is required for subjective_duration producer")
+
+    now = seed.get("now_utc")
+    now_utc = _coerce_datetime(now)
+    _prune_seen_event_ids(
+        seen_event_ids,
+        now_utc=now_utc,
+        recursion_dedupe_window_hours=recursion_dedupe_window_hours,
+    )
+    if event_id in seen_event_ids:
+        raise ValueError("subjective_duration recursion dedupe refused duplicate event_id")
+
+    parent = _parent_subjective_duration_provenance(
+        store,
+        bond_id=bond_id,
+        producer_event_id=str(event["producer_event_id"]),
+    )
+    if parent.produced_via_subjective_duration_depth < 0:
+        raise ValueError("recursion depth cannot be negative")
+    if parent.produced_via_subjective_duration_depth >= int(max_recursion_depth):
+        raise ValueError("subjective_duration recursion depth limit reached")
+    next_depth = parent.produced_via_subjective_duration_depth + 1
+    subject_kind = parent.subject_kind
+    if subject_kind is SubjectKind.NAMED_THIRD_PARTY and not _third_party_consent_allows_external_research(
+        bond_id=bond_id,
+        subject_ref=seed.get("subject_ref"),
+    ):
+        _emit_subject_kind_refused(seed, "named_third_party_without_owner_explicit_consent")
+        raise SubjectKindRefused("NAMED_THIRD_PARTY requires OWNER_EXPLICIT consent")
+
+    wondering_id = store.add(
+        _subjective_duration_question(event),
+        source=EncounterSource.SUBJECTIVE_DURATION_MEANINGFUL_EVENT.value,
+        bond_id=bond_id,
+    )
+    record_wondering_drive_metadata(
+        store,
+        wondering_id=wondering_id,
+        bond_id=bond_id,
+        encounter_source=EncounterSource.SUBJECTIVE_DURATION_MEANINGFUL_EVENT.value,
+        encounter_ref_digest=_hmac_shaped_digest(f"subjective_duration:{event_id}"),
+        priority_class=str(seed.get("priority_class", parent.priority_class)),
+        salience=float(event["meaningfulness_score"]),
+        subject_kind=subject_kind,
+        produced_via_subjective_duration_depth=next_depth,
+    )
+    seen_event_ids[event_id] = now_utc
+    obj = project_curiosity_object(store, wondering_id)
+    fields = obj.__dict__.copy()
+    if "diagnostic_sink" in seed:
+        fields["diagnostic_sink"] = seed["diagnostic_sink"]
+    return fields
+
+
+def _subjective_duration_event_by_id(
+    subjective_duration: object,
+    event_id: int,
+) -> sqlite3.Row | None:
+    db_path = getattr(subjective_duration, "db_path", None)
+    if db_path is None:
+        raise ValueError("subjective_duration store must expose db_path")
+    with closing(sqlite3.connect(db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        return conn.execute(
+            """
+            SELECT event_id, ts_utc, salience_event_kind, producer_ref, bond_id,
+                   producer_event_id, meaningfulness_score, is_canary
+            FROM subjective_duration_salience_events
+            WHERE event_id = ?
+            """,
+            (int(event_id),),
+        ).fetchone()
+
+
+def _parent_subjective_duration_provenance(
+    store: Wonderings,
+    *,
+    bond_id: str,
+    producer_event_id: str,
+) -> _ParentCuriosityProvenance:
+    parent_id = _parent_wondering_id_from_producer_event_id(producer_event_id)
+    if parent_id is None:
+        raise ValueError("parent wondering id required for subjective_duration producer")
+    with store._lock, store._conn() as c:
+        row = c.execute(
+            """
+            SELECT w.id, w.bond_id, m.priority_class, m.subject_kind,
+                   m.produced_via_subjective_duration_depth
+            FROM wonderings AS w
+            LEFT JOIN wondering_drive_metadata AS m
+              ON m.wondering_id = w.id
+            WHERE w.id = ?
+            """,
+            (int(parent_id),),
+        ).fetchone()
+    if row is None:
+        raise ValueError("parent wondering not found for subjective_duration producer")
+    if str(row["bond_id"]) != str(bond_id):
+        raise ValueError("parent bond_id mismatch for subjective_duration producer")
+    if row["produced_via_subjective_duration_depth"] is None:
+        raise ValueError("parent wondering missing drive metadata")
+    return _ParentCuriosityProvenance(
+        wondering_id=int(row["id"]),
+        bond_id=str(row["bond_id"]),
+        priority_class=str(row["priority_class"]),
+        subject_kind=_subject_kind(row["subject_kind"]),
+        produced_via_subjective_duration_depth=int(
+            row["produced_via_subjective_duration_depth"]
+        ),
+    )
+
+
+def _parent_wondering_id_from_producer_event_id(producer_event_id: str) -> int | None:
+    parts = str(producer_event_id).split(":")
+    if len(parts) < 2 or parts[0] != "wondering":
+        return None
+    try:
+        return int(parts[1])
+    except ValueError:
+        return None
+
+
+def _prune_seen_event_ids(
+    seen_event_ids: dict[int, datetime],
+    *,
+    now_utc: datetime,
+    recursion_dedupe_window_hours: int,
+) -> None:
+    cutoff = now_utc - timedelta(hours=max(1, int(recursion_dedupe_window_hours)))
+    expired = [
+        event_id
+        for event_id, seen_utc in seen_event_ids.items()
+        if seen_utc < cutoff
+    ]
+    for event_id in expired:
+        seen_event_ids.pop(event_id, None)
+
+
+def _subjective_duration_question(event: Mapping) -> str:
+    return (
+        "What should Maez understand from meaningful salience event "
+        f"#{int(event['event_id'])}?"
+    )
+
+
 def record_wondering_drive_metadata(
     store: Wonderings,
     *,
@@ -479,6 +702,9 @@ def _project_row(row: sqlite3.Row | dict) -> CuriosityObject:
         resolution_marker_utc=data.get("resolution_marker_utc"),
         created_at=None if data.get("created_at") is None else float(data["created_at"]),
         advance_count=int(data.get("pursuit_count") or data.get("advance_count") or 0),
+        produced_via_subjective_duration_depth=int(
+            data.get("produced_via_subjective_duration_depth") or 0
+        ),
     )
 
 
@@ -487,7 +713,8 @@ def project_curiosity_object(store: Wonderings, wondering_id: int) -> CuriosityO
         row = c.execute(
             """
             SELECT w.*, m.encounter_source, m.priority_class, m.salience,
-                   m.subject_kind, m.resolution_marker_type, m.resolution_marker_utc
+                   m.subject_kind, m.resolution_marker_type, m.resolution_marker_utc,
+                   m.produced_via_subjective_duration_depth
             FROM wonderings AS w
             LEFT JOIN wondering_drive_metadata AS m
               ON m.wondering_id = w.id
@@ -512,7 +739,8 @@ def list_drive_curiosity_objects(store: Wonderings, *, bond_id: str) -> list[Cur
         rows = c.execute(
             """
             SELECT w.*, m.encounter_source, m.priority_class, m.salience,
-                   m.subject_kind, m.resolution_marker_type, m.resolution_marker_utc
+                   m.subject_kind, m.resolution_marker_type, m.resolution_marker_utc,
+                   m.produced_via_subjective_duration_depth
             FROM wonderings AS w
             JOIN wondering_drive_metadata AS m
               ON m.wondering_id = w.id
