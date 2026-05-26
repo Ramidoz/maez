@@ -785,22 +785,26 @@ def write_curiosity_resolution_seam_call(
         TEMPERAMENT_VALUE_MIN,
         TEMPERAMENT_VALUE_MAX,
     )
-    temperament_event_id = temperament.record_event(
-        parameter="curiosity",
-        value=new_value,
-        source="drive_driven_curiosity_resolution",
-        reason=f"resolution:{resolution_marker_type}",
-        evidence={
-            "object_id_digest": _digest(curiosity_object.wondering_id),
-            "bond_id": curiosity_object.bond_id,
-            "priority_class": curiosity_object.priority_class,
-            "marker_type": resolution_marker_type,
-            "delta_intent": delta_intent,
-            "delta_applied": delta_applied,
-            "budget_date_utc": budget_date,
-        },
-    )
-    after_snapshot = temperament.current()
+    if is_canary:
+        temperament_event_id = None
+        after_snapshot = {**before_snapshot, "curiosity": new_value}
+    else:
+        temperament_event_id = temperament.record_event(
+            parameter="curiosity",
+            value=new_value,
+            source="drive_driven_curiosity_resolution",
+            reason=f"resolution:{resolution_marker_type}",
+            evidence={
+                "object_id_digest": _digest(curiosity_object.wondering_id),
+                "bond_id": curiosity_object.bond_id,
+                "priority_class": curiosity_object.priority_class,
+                "marker_type": resolution_marker_type,
+                "delta_intent": delta_intent,
+                "delta_applied": delta_applied,
+                "budget_date_utc": budget_date,
+            },
+        )
+        after_snapshot = temperament.current()
     salience_event_id = subjective_duration.record_salience_event(
         salience_event_kind="meaningful_exchange",
         producer_ref=DRIVE_DRIVEN_CURIOSITY_PRODUCER_REF,

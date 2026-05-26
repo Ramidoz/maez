@@ -190,8 +190,10 @@ class CuriosityProducerCeremonyTests(unittest.TestCase):
         )
 
         self.assertIsNotNone(record)
+        self.assertIsNone(result.temperament_event_id)
         self.assertTrue(record.is_canary)
         self.assertGreater(record.meaningfulness_score, 0.0)
+        self.assertEqual(temperament.current_value("curiosity"), 5.0)
         self.assertEqual(post_residual, pre_residual)
         self.assertEqual(post_count, pre_count)
 
