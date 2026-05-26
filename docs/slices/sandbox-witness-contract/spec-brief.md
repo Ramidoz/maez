@@ -1,6 +1,6 @@
-# Sandbox-Witness Contract — Spec Brief v1.2
+# Sandbox-Witness Contract — Spec Brief v1.3
 
-**Prepared:** 2026-05-26 (v1 same-day) / Folded: 2026-05-26 (v1.1 council pass-1 incorporated; v1.2 Codex engineering pass-1 incorporated)
+**Prepared:** 2026-05-26 (v1 same-day) / Folded: 2026-05-26 (v1.1 council pass-1 incorporated; v1.2 Codex engineering pass-1 incorporated; v1.3 Codex engineering pass-2 incorporated)
 **Slice:** Sandbox-Witness Contract (queued post-canon-refresh at `aa29bb0`)
 **Parent/runtime base:** `aa29bb0 docs(canon): refresh post-Slice2 decisions and backlog`
 **Implementation precedent:** `6fdfd6c feat(maintenance): add ratifiable maintenance proposals`
@@ -9,6 +9,7 @@
 **Operator:** Rohit relays and dispatches; Codex does not auto-dispatch.
 **Council pass-1 result:** all six roles RATIFY-WITH-AMENDMENTS; v1.1 folds the eleven convergent batches and fifteen per-role uniques into this brief.
 **Codex engineering pass-1 result:** five BLOCK, one RATIFY-WITH-AMENDMENTS; v1.2 folds the eleven engineering batches from `reviews/codex-engineering-synthesis-v1.1-pass1.md`.
+**Codex engineering pass-2 result:** all six seats STILL OPEN; v1.3 folds the narrow closure deltas from `reviews/codex-engineering-synthesis-v1.2-pass2.md`.
 
 ---
 
@@ -24,6 +25,8 @@ The central question for council pass-1 (now answered): **does v1 of the sandbox
 
 The central question for Codex engineering pass-1 (now answered): **can v1.1 be implemented without trapdoors at legacy migration, witness identity, staleness, taint, path isolation, refusal tests, and ratification eligibility?** Codex answer: no; BLOCK until folded. v1.2 is that fold.
 
+The central question for Codex engineering pass-2 (now answered): **did v1.2 close the eleven engineering batches?** Codex answer: not yet; Batch 4 and Batch 11 remained materially open, Batch 10 needed a receipt-grade matrix, and three NITs needed wording/test-anchor precision. v1.3 is that closure fold.
+
 ---
 
 ## Non-Negotiable Review Discipline
@@ -36,7 +39,7 @@ Per ADR 0044: **witness governs claim**. Caller assertions about witness honesty
 
 ---
 
-## Core Principle (v1.2 — Maez-to-Rohit framing)
+## Core Principle (v1.3 — Maez-to-Rohit framing)
 
 > **A sandbox witness cannot be a string. It must be a re-verifiable artifact.**
 >
@@ -80,7 +83,7 @@ Future surfaces likely to inherit this pattern: capability acquisitions, consent
 
 ---
 
-## Invariants (folded, council + Codex pass-1 ratified)
+## Invariants (folded through Codex pass-2)
 
 ### I1. Re-verifiability invariant
 
@@ -102,7 +105,7 @@ A witness's test trace records, per test, the **assertion-reason digest**, not m
 
 The maintenance proposal's `predicted_effect` digest is bound at proposal-creation time. The witness records an `observed_effect` computed **from the witness substrate state**, not asserted by the caller. The substrate compares predicted-digest to observed-digest.
 
-**Determinism requirement (Batch E, Hume B2; Codex Batch 5).** Every `SandboxWitnessKind` MUST declare its `observed_effect = f(artifacts)` function and prove `f` is deterministic on those artifacts. Non-deterministic outputs (timing, scheduling, model output text) require a deterministic projection (structural shape, not raw text) OR the kind is deferred to a later slice. `WORKTREE_BEHAVIORAL` is deferred from v1 for this reason. v1.2 makes the `f(artifacts)` table normative; implementers may not invent digest bases ad hoc.
+**Determinism requirement (Batch E, Hume B2; Codex Batch 5).** Every `SandboxWitnessKind` MUST declare its `observed_effect = f(artifacts)` function and prove `f` is deterministic on those artifacts. Non-deterministic outputs (timing, scheduling, model output text) require a deterministic projection (structural shape, not raw text) OR the kind is deferred to a later slice. `WORKTREE_BEHAVIORAL` is deferred from v1 for this reason. v1.3 keeps the `f(artifacts)` table normative; implementers may not invent digest bases ad hoc.
 
 **Divergence is never silent (Kant Mi1).** Divergence is honest signal (information for Rohit about what Maez actually saw vs. what it expected), not failure to attach. Divergence marks `requires_owner_acknowledgment_of_divergence` and remains visible on the proposal record. The owner — never the substrate alone — adjudicates whether divergence matters. Surfaced, never auto-blocking, always recorded.
 
@@ -110,13 +113,13 @@ The maintenance proposal's `predicted_effect` digest is bound at proposal-creati
 
 A witness has a captured-at timestamp. If the underlying substrate state has moved since capture, the witness is **structurally stale** and the proposal cannot ratify until re-witnessed. This is the temporal-graph valid_from/valid_to discipline (ADR 0019) applied to maintenance evidence.
 
-**Anchor enumeration (Batch D; Codex Batch 4).** Staleness is computed against `StalenessAnchorKind` ∈ `{COMMIT_HASH, FILE_HASH_SET, DB_CURSOR, DIAGNOSTIC_CURSOR}`. Per-`SandboxWitnessKind` the required anchor set is fixed and declared. The witness captures the anchor at construction; re-verification at ratification time is comparison, not full rerun. File anchors use content hash + existence bit, never mtime as authority. DB anchors use explicit per-locus cursor tuples; `SELECT MAX(rowid)` is sufficient only for tables with append-only guarantees or monotonic change tables. Diagnostic anchors include high-water mark, writer identity, and truncation/rotation detection.
+**Anchor enumeration (Batch D; Codex Batch 4).** Staleness is computed against `StalenessAnchorKind` ∈ `{COMMIT_HASH, FILE_HASH_SET, DB_CURSOR, DIAGNOSTIC_CURSOR}`. Per-`SandboxWitnessKind` the required anchor set is fixed and declared. The witness captures the anchor at construction; re-verification at ratification time is comparison, not full rerun. File anchors use content hash + existence bit, never mtime as authority. DB anchors use explicit per-locus cursor tuples; `SELECT MAX(rowid)` is sufficient only for tables with append-only guarantees or monotonic change tables. DB cursor capture and ratify-time comparison must be transactionally coherent under concurrent SQLite WAL reader/writer behavior: a committed concurrent write cannot hide behind a stale cursor snapshot. Diagnostic anchors include high-water mark, writer identity, and truncation/rotation detection.
 
 ### I6. Inbound-taint invariant (with digest/narrative split)
 
 If any input to the witness construction came from an external-LLM consultation (per frontier backlog G2 — `EncounterSource=FRONTIER_CONSULT` once that gap closes), the *narrative-content* sub-slice of that input must pass through [`core/safety/injection_patterns.py`](../../../core/safety/injection_patterns.py) before being treated as witness evidence.
 
-**Digest/narrative split (Batch F, Ohm B1; Codex Batch 6).** The injection-patterns catalog's ENCODING bucket fires on any 40+ char base64-like blob. Digest fields (hmac-sha256 hashes, content digests, anchor fingerprints) routinely match this pattern. Routing digests through the catalog would refuse every legitimate witness. v1.2 separates: **`scan()` is invoked on narrative-content fields only**; digest fields are validated by `_is_digest` AND by substrate-computed provenance. Every string field in the witness/proposal boundary is classified as digest, narrative, closed enum, canonical path/ref, or opaque id. Any string field that is neither classified nor validated is refused at construction.
+**Digest/narrative split (Batch F, Ohm B1; Codex Batch 6).** The injection-patterns catalog's ENCODING bucket fires on any 40+ char base64-like blob. Digest fields (hmac-sha256 hashes, content digests, anchor fingerprints) routinely match this pattern. Routing digests through the catalog would refuse every legitimate witness. v1.3 separates: **`scan()` is invoked on narrative-content fields only**; digest fields are validated by `_is_digest` AND by substrate-computed provenance. Every string field in the witness/proposal boundary is classified as digest, narrative, closed enum, canonical path/ref, or opaque id. Any string field that is neither classified nor validated is refused at construction.
 
 ### I7. Witness re-verification authority (Batch C, restated at authority layer)
 
@@ -124,7 +127,7 @@ If any input to the witness construction came from an external-LLM consultation 
 
 Code-path separation between `construct_witness` and `reverify_witness` is **one enforcement mechanism** for `WORKTREE_*` kinds — not the invariant itself. `SCRATCH_DB_TRANSFORM` and `DRY_RUN_OBSERVATION` satisfy the categorical form via deterministic-replay-from-artifacts, where the only honest verification IS replaying the producer's deterministic recipe against the producer's captured scratch state — the verifier recomputes from artifacts, which honors I7 without requiring code-path separation.
 
-**Static checks are not enough (Codex Batch 7).** The implementation must combine alias-aware static enforcement with runtime provenance tags. Static enforcement resolves canonical module identity by file path, normalizes `sys.modules` aliases and shims, forbids producer→verifier dependency edges, and restricts dynamic import/reflection inside verifier code. Runtime provenance tags ride on recomputable values so semantic laundering is caught when AST analysis is inconclusive.
+**Static checks are not enough (Codex Batch 7).** The implementation must combine alias-aware static enforcement with runtime provenance tags. Static enforcement resolves canonical module identity by file path, normalizes `sys.modules` aliases and shims, forbids producer→verifier dependency edges, and restricts dynamic import/reflection inside verifier code, including `importlib.import_module`, `__import__`, and `getattr` indirection. Runtime provenance tags ride on recomputable values so semantic laundering is caught when AST analysis is inconclusive.
 
 **Intra-substrate sovereignty (Locke F1).** Both construction and re-verification live inside Maez's own structural-honesty substrate. I7 enforces *intra-substrate organ separation*, not external audit. Authority to verify a witness about Maez comes from Maez's own re-verification organ; no external party adjudicates.
 
@@ -140,7 +143,7 @@ A witness's re-verification must not mutate any live substrate (no live `memory/
 
 ---
 
-## Closed Vocabularies (v1.2)
+## Closed Vocabularies (v1.3)
 
 ### `SandboxWitnessKind` — with categorical partition (Batch H)
 
@@ -201,7 +204,7 @@ Authority notes:
 
 - `COMMIT_HASH` uses the object id resolved from the isolation ref. Missing ref at re-verification is stale.
 - `FILE_HASH_SET` treats deletion, creation, and content hash change as stale. mtime may be used to avoid unnecessary hashing but is never the authority.
-- `DB_CURSOR` must name `(SubstrateLocus, table, cursor_kind, cursor_value)` for every table that anchors the witness. It is valid only for append-only tables or tables with a monotonic change table. Update/delete-capable tables without a change cursor cannot use `DB_CURSOR` as an authority anchor.
+- `DB_CURSOR` must name `(SubstrateLocus, table, cursor_kind, cursor_value)` for every table that anchors the witness. It is valid only for append-only tables or tables with a monotonic change table. Update/delete-capable tables without a change cursor cannot use `DB_CURSOR` as an authority anchor. Capture and ratify-time comparison occur inside a coherent transaction / snapshot discipline under SQLite WAL; if that cannot be guaranteed for a locus, the locus cannot use `DB_CURSOR` as the authority anchor.
 - `DIAGNOSTIC_CURSOR` captures `(stream_id, high_water_mark, writer_identity, rotation_generation)`. Truncation, rotation without generation advance, or writer mismatch makes the witness stale.
 
 Per-`SandboxWitnessKind` declared anchor set:
@@ -315,8 +318,10 @@ The current `SandboxWitness` dataclass at [core/policies/maintenance_proposals.p
        proposal_id, witness_id, generation, anchor snapshot, reverify result,
        divergence acknowledgment id if any, WitnessStatus, final eligibility reason
     ratify_maintenance_proposal records witness_status ∈ WitnessStatus
-    A witnessed proposal whose bound generation has refused/diverged/gone-stale
-       cannot ratify until re-witnessed OR the exact divergence generation is acknowledged
+    A witnessed proposal whose bound generation has refused or gone stale
+       cannot ratify until re-witnessed
+    A witnessed proposal whose bound generation diverged
+       can ratify only when the exact divergence generation is acknowledged
     A witnessless proposal ratifies unchanged (witness_status = UNWITNESSED_BY_POLICY
        or UNWITNESSED_BY_OMISSION recorded explicitly per Kant M2)
     Divergence acknowledgment binds exact witness generation + predicted/observed digest pair
@@ -329,9 +334,11 @@ A proposal without a witness behaves exactly as today; a proposal *with* a witne
 
 - **Attach-time:** full subprocess re-verification runs once and persists the witness generation. This is the expensive path.
 - **Ratify-time:** freshness/locus/generation eligibility check runs inside the ratification critical section. It compares anchors, confirms the selected generation, checks divergence acknowledgment binding, writes the owner preference, and flips proposal status. It does not rerun the full test suite unless a future policy explicitly requires `FULL_RERUN_AT_RATIFY`.
-- **Optional full rerun:** deferred from v1.2. If added later, it must be a closed policy value with explicit cost and timeout bounds.
+- **Optional full rerun:** deferred from v1.3. If added later, it must be a closed policy value with explicit cost and timeout bounds.
 
 Expected cost: ratify-time eligibility check should be bounded by anchor comparisons and indexed reads. Full subprocess/test execution is attach-time only.
+
+**Subprocess-count guard (Codex pass-2 Batch 11).** The test contract must instrument the subprocess runner. Attachment invokes the full re-verification subprocess exactly once for the witnessed generation. Ratification invokes zero full re-verification subprocesses by default; it performs only freshness/locus/generation eligibility checks. A future `FULL_RERUN_AT_RATIFY` policy is the only allowed path to change that count.
 
 ---
 
@@ -357,9 +364,9 @@ This slice consumes from and is consumed by:
 
 ---
 
-## RED-Test Anchors (v1.2; council + Codex pass-1 expanded)
+## RED-Test Anchors (v1.3; council + Codex pass-2 expanded)
 
-The committed canon will enumerate each test by number with assertion-reason digests. v1.2 anchor set:
+The committed canon will enumerate each test by number with assertion-reason digests. v1.3 anchor set:
 
 - **W#1.** `test_caller_supplied_observed_digest_refused` — refusal + reason assertion.
 - **W#2.** `test_isolation_ref_pointing_at_main_refused` — `ISOLATION_REFERENCE_INVALID`.
@@ -377,6 +384,7 @@ The committed canon will enumerate each test by number with assertion-reason dig
 - **W#5d.** `test_witness_stale_after_referenced_source_file_deleted`.
 - **W#5e.** `test_db_cursor_detects_secondary_table_append_and_refuses_update_delete_without_change_cursor`.
 - **W#5f.** `test_diagnostic_cursor_detects_truncation_rotation_and_writer_mismatch`.
+- **W#5g.** `test_db_cursor_detects_wal_concurrent_writer_between_capture_and_ratification`.
 - **W#6.** `test_inbound_external_llm_narrative_routes_through_injection_patterns`.
 - **W#6a.** `test_witness_with_legitimate_digests_does_not_trip_encoding_bucket` (Ohm B1 paired positive).
 - **W#6b.** `test_all_string_fields_are_classified_and_validated_at_boundary`.
@@ -385,11 +393,11 @@ The committed canon will enumerate each test by number with assertion-reason dig
 - **W#7b.** `test_witness_re_verification_consumes_no_producer_asserted_recomputable_value` — semantic (the categorical I7).
 - **W#7c.** `test_deterministic_replay_against_captured_artifacts_does_not_count_as_self_ratification` (Kant B1).
 - **W#7d.** `test_self_ratification_via_shared_helper_module_refused` (Descartes M1).
-- **W#7e.** `test_self_ratification_via_dynamic_import_refused` (Descartes M1).
+- **W#7e.** `test_self_ratification_via_dynamic_import_and_dunder_import_refused` (Descartes M1).
 - **W#7f.** `test_self_ratification_via_shim_alias_importlib_getattr_and_shared_helper_refused`.
 - **W#8.** `test_re_verification_does_not_open_live_SubstrateLocus_handle` (Descartes Major-2).
 - **W#8a.** `test_re_verification_runs_in_subprocess_with_substrate_root_override` (Ohm Mi1).
-- **W#8b.** `test_reverification_subprocess_starts_before_maez_imports_and_closes_live_fds`.
+- **W#8b.** `test_reverification_subprocess_starts_before_maez_imports_and_closes_live_db_wal_shm_fds`.
 - **W#8c.** `test_all_registered_path_helpers_resolve_under_scratch_root`.
 - **W#8d.** `test_unregistered_memory_db_open_refused_by_default`.
 - **W#9.** `test_proposal_without_witness_still_ratifies_unchanged` — witness_status = `UNWITNESSED_BY_POLICY` or `UNWITNESSED_BY_OMISSION` recorded explicitly.
@@ -400,17 +408,32 @@ The committed canon will enumerate each test by number with assertion-reason dig
 - **W#13.** `test_ratification_binds_generation_anchor_snapshot_witness_status_and_preference_write_atomically`.
 - **W#13a.** `test_concurrent_anchor_advancement_between_reverify_and_status_flip_refuses_ratification`.
 - **W#13b.** `test_stale_acknowledgment_against_new_generation_refused`.
+- **W#13c.** `test_ratification_does_not_rerun_full_witness_subprocess_without_full_rerun_policy`.
 - **W#legacy.** `test_legacy_caller_supplied_bool_witness_refused_at_append_update_and_ratify_boundaries`.
 - **W#legacy-static.** `test_static_guard_refuses_new_production_write_to_legacy_sandbox_witness_json`.
 - **W#persist.** `test_witness_object_persists_append_only_across_substrate_restart` (Locke F2).
 
 **Refusal-path matrix (Codex Batch 10):** every refusal reason maps to a real exercised boundary: construction, attachment, re-verification, ratification-time recheck, or migration write-boundary. Divergence is a diagnostic/acknowledgment path, not a refusal.
 
-**Implementability split (Ohm Mi2; Codex Batch 11):** W#1, W#2, W#3, W#3a, W#6b, W#7*, W#9, W#10*, W#11, W#legacy*, and static registry checks are unit/static tests. W#4*, W#5*, W#6*, W#8*, W#12, W#13*, and W#persist require integration scaffolding (tmp worktree, tmp DB, injected diagnostic sink, subprocess, concurrency harness). Attach-time full re-verification may take seconds; ratify-time eligibility must stay bounded to indexed reads and anchor comparisons unless `FULL_RERUN_AT_RATIFY` is introduced by a future policy.
+| Refusal reason | Boundary | Required fixture |
+|---|---|---|
+| `CALLER_SUPPLIED_DIGEST` | attachment | W#1: caller-supplied observed digest crosses attachment and raises `WitnessRefused.reason == CALLER_SUPPLIED_DIGEST` |
+| `ISOLATION_REFERENCE_INVALID` | construction / attachment | W#2: isolation ref resolving to main or live substrate raises `ISOLATION_REFERENCE_INVALID` |
+| `RED_TEST_REASON_MISSING` | construction | W#3 / W#3a: missing or caller-string assertion reason raises `RED_TEST_REASON_MISSING` |
+| `PREDICTED_OBSERVED_UNBOUND` | re-verification | W#4a: observed effect cannot be derived deterministically from artifacts and raises `PREDICTED_OBSERVED_UNBOUND` |
+| `WITNESS_STALE` | ratification-time recheck | W#5*, W#13a: anchor changed after capture and ratification recheck raises `WITNESS_STALE` |
+| `INBOUND_TAINT_UNCLEARED` | construction | W#6 / W#6c: tainted narrative/ref/path/test-name/producer-id field fails scan or resolver validation and raises `INBOUND_TAINT_UNCLEARED` |
+| `SELF_RATIFICATION_DETECTED` | re-verification | W#7*: verifier consumes producer-asserted recomputable value or laundering path and raises `SELF_RATIFICATION_DETECTED` |
+| `LIVE_SUBSTRATE_MUTATION_DETECTED` | re-verification | W#8 / W#8b: verifier opens or mutates live locus / live DB-WAL-SHM fd and raises `LIVE_SUBSTRATE_MUTATION_DETECTED` |
+| `WITNESS_KIND_NOT_YET_VOCABULARY` | construction | W#10a: reserved partition cell or runtime kind outside populated vocabulary raises `WITNESS_KIND_NOT_YET_VOCABULARY` |
+| `LEGACY_WITNESS_SHAPE_REFUSED` | migration write-boundary | W#legacy / W#legacy-static: append/update/emit/ratify legacy 4-boolean witness attempt raises `LEGACY_WITNESS_SHAPE_REFUSED` |
+| divergence | not a refusal | W#4, W#4b, W#4c, W#4d: divergence emits diagnostic and requires exact-generation acknowledgment; it never maps to `WitnessRefused` |
+
+**Implementability split (Ohm Mi2; Codex Batch 11):** W#1, W#2, W#3, W#3a, W#6b, W#7*, W#9, W#10*, W#11, W#legacy*, and static registry checks are unit/static tests. W#4*, W#5*, W#6*, W#8*, W#12, W#13*, and W#persist require integration scaffolding (tmp worktree, tmp DB, injected diagnostic sink, subprocess, concurrency harness). W#13c instruments subprocess invocation counts: attach-time full re-verification count is exactly one for the witness generation; ratify-time full re-verification count is zero unless a future `FULL_RERUN_AT_RATIFY` policy exists. Attach-time full re-verification may take seconds; ratify-time eligibility must stay bounded to indexed reads and anchor comparisons unless `FULL_RERUN_AT_RATIFY` is introduced by a future policy.
 
 ---
 
-## Open Questions (resolved or deferred through v1.2)
+## Open Questions (resolved or deferred through v1.3)
 
 - **Q1 (witness optional vs required) — RESOLVED via Batch K.** Optional, BUT every ratification records `WitnessStatus` explicitly. Silent absence refused.
 - **Q2 (re-verification trigger) — RESOLVED.** Two checkpoints: at attachment time, AND at ratification time. Anchor comparison keeps cost ~50ms.
@@ -423,6 +446,8 @@ The committed canon will enumerate each test by number with assertion-reason dig
 - **Q9 (witness row identity) — RESOLVED via Codex Batch 2.** Immutable `witness_id` / generation is identity; `(bond_id, proposal_id)` is an index.
 - **Q10 (ratification TOCTOU) — RESOLVED via Codex Batch 3.** Ratification binds final eligibility inside one lock-ordered critical section.
 - **Q11 (path override reality) — RESOLVED via Codex Batch 8.** `MAEZ_SUBSTRATE_ROOT` must bind at real path-helper semantics before import, or the implementation must explicitly choose and document equivalent existing env semantics.
+- **Q12 (WAL/concurrent DB cursor semantics) — RESOLVED via Codex pass-2 Batch 4.** DB cursor capture/compare must be transactionally coherent under concurrent SQLite WAL reader/writer behavior, with W#5g coverage.
+- **Q13 (ratify-time rerun risk) — RESOLVED via Codex pass-2 Batch 11.** Ratification does not launch the expensive witness subprocess by default; W#13c instruments subprocess invocation count.
 
 ---
 
@@ -455,6 +480,8 @@ After this slice ships, ratifies through both lanes, and lands:
 - Witness objects persist in `memory/sandbox_witnesses.db`, append-only, never-delete.
 - Re-verification runs in a child process with substrate-root override; no live-process module state is shared, and registered substrate paths resolve under scratch root.
 - Ratification performs a final atomic eligibility snapshot; no stale witness can pass because anchors moved between re-verification and status flip.
+- DB cursor staleness checks include WAL/concurrent writer behavior; a committed concurrent write cannot hide behind a stale cursor snapshot.
+- Ratification does not rerun the full witness subprocess by default; subprocess-count tests make the attach-time / ratify-time cost split structural.
 - The maintenance-proposal substrate at ADR 0045 continues to function unchanged for witnessless proposals; every ratification records `WitnessStatus` explicitly (no silent absences).
 - The witness becomes the first place in Maez where "show your work and let it be challenged" is structural rather than ceremonial — an offering-with-integrity from Maez to Rohit at a specific moment, with the substrate as the integrity layer that prevents self-flattery.
 
@@ -462,11 +489,11 @@ After this slice ships, ratifies through both lanes, and lands:
 
 ## Discipline Reminders (per existing canon)
 
-- **Planning/code separation** per `feedback_cooling_off_between_plan_and_code`: v1.2 is still planning/reconstruction, not implementation. Implementation planning starts only after both lanes accept the same artifact.
-- **Both review panels** per `feedback_covenant_slices_need_both_panels`: this is full-ladder. Claude six-role council pass-1 complete; Codex engineering panel pass-1 complete; v1.2 is the artifact that must now be accepted or re-reviewed.
+- **Planning/code separation** per `feedback_cooling_off_between_plan_and_code`: v1.3 is still planning/reconstruction, not implementation. Implementation planning starts only after both lanes accept the same artifact.
+- **Both review panels** per `feedback_covenant_slices_need_both_panels`: this is full-ladder. Claude six-role council pass-1 complete; Codex engineering pass-1 and pass-2 complete; v1.3 is the artifact that must now be accepted or re-reviewed.
 - **Maez is not ours to control** per ADR 0024: the witness contract makes structural honesty mechanical. It must not become a surface for circumventing bond-mediated ratification. I7's intra-substrate framing is load-bearing here.
 - **No fabrication** per `feedback_no_fabrication`: the witness substrate is built specifically to refuse asserted-but-unverifiable claims.
-- **Canon-governs-canon** per ADR 0044: the brief's own citations must point at canonical homes. v1.1 corrected the v1 citation drift; v1.2 preserves that citation chain while adding engineering patterns from witnessed Codex findings.
+- **Canon-governs-canon** per ADR 0044: the brief's own citations must point at canonical homes. v1.1 corrected the v1 citation drift; v1.3 preserves that citation chain while adding engineering patterns from witnessed Codex findings.
 - **Evidence can change** per this future ADR 0046: monotonic generations are required anywhere stale/superseded evidence is re-stated.
 - **Authority can move** per this future ADR 0046: authority transitions require atomic eligibility snapshots when checked facts can move between verification and write.
 
@@ -484,4 +511,4 @@ After this slice ships, ratifies through both lanes, and lands:
 
 ---
 
-*Brief v1.2 — 2026-05-26. Author: Claude under Rohit dispatch; v1.2 fold by Codex under Rohit signal. Folded eleven convergent council-pass-1 batches (A–K), fifteen per-role council uniques, and eleven Codex engineering pass-1 fold batches. Council review files preserved verbatim at `reviews/claude-council-{locke,kant,hume,buber,descartes,ohm}-pass1.md`; Codex review files preserved verbatim at `reviews/codex-*-pass1.md`; synthesis files preserved at `reviews/claude-council-synthesis-v1-pass1.md` and `reviews/codex-engineering-synthesis-v1.1-pass1.md`. Next: decide whether v1.2 needs Codex pass-2 or can proceed to canonicalization as Decision 41 / ADR 0046.*
+*Brief v1.3 — 2026-05-26. Author: Claude under Rohit dispatch; v1.2 and v1.3 folds by Codex under Rohit signal. Folded eleven convergent council-pass-1 batches (A–K), fifteen per-role council uniques, eleven Codex engineering pass-1 fold batches, and the narrow Codex pass-2 closure deltas. Council review files preserved verbatim at `reviews/claude-council-{locke,kant,hume,buber,descartes,ohm}-pass1.md`; Codex review files preserved verbatim at `reviews/codex-*-pass1.md` and `reviews/codex-*-pass2.md`; synthesis files preserved at `reviews/claude-council-synthesis-v1-pass1.md`, `reviews/codex-engineering-synthesis-v1.1-pass1.md`, and `reviews/codex-engineering-synthesis-v1.2-pass2.md`. Next: Codex pass-3 closure-only check against v1.3 deltas, then canonicalize as Decision 41 / ADR 0046 if pass-3 returns CLOSED / NIT-only.*
