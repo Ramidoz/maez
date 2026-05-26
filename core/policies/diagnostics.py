@@ -33,6 +33,10 @@ class CuriosityDiagnosticEventType(Enum):
     QUERY_SANITIZATION = "query_sanitization"
     PREFERENCE_RECORDED = "preference_recorded"
     SUPPRESSION_EVENT = "suppression_event"
+    MAINTENANCE_PROPOSAL_EMITTED = "maintenance_proposal_emitted"
+    MAINTENANCE_PROPOSAL_SANDBOX_WITNESS_RECORDED = "maintenance_proposal_sandbox_witness_recorded"
+    MAINTENANCE_PROPOSAL_RATIFIED = "maintenance_proposal_ratified"
+    MAINTENANCE_PROPOSAL_DECLINED = "maintenance_proposal_declined"
     CROSS_BOND_ACCESS_REFUSED = "cross_bond_access_refused"
     SUBJECT_BOUNDARY_REFUSED = "subject_boundary_refused"
     SUBJECT_KIND_REFUSED = "subject_kind_refused"
@@ -56,6 +60,7 @@ _ROW_KEYS: tuple[str, ...] = (
     "subject_ref_digest",
     "seed_text_digest",
     "preference_id_digest",
+    "proposal_id_digest",
     "matched_pattern_digest",
     "suppression_kind",
     "reason",
@@ -65,6 +70,8 @@ _ROW_KEYS: tuple[str, ...] = (
     "signal_quality",
     "owner_state",
     "preference_class",
+    "proposal_scope_class",
+    "proposal_status",
     "expressed_by",
     "weight",
     "outreach_dispatch_id",
@@ -264,6 +271,7 @@ def _uniform_row(
         "seed_text": "seed_text_digest",
         "raw_seed_text": "seed_text_digest",
         "preference_id": "preference_id_digest",
+        "proposal_id": "proposal_id_digest",
         "matched_pattern": "matched_pattern_digest",
     }
     if master_key is not None:
@@ -298,6 +306,8 @@ def _uniform_row(
         "signal_quality",
         "owner_state",
         "preference_class",
+        "proposal_scope_class",
+        "proposal_status",
         "expressed_by",
         "weight",
         "outreach_dispatch_id",

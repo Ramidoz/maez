@@ -19,6 +19,7 @@ class PreferenceClass(Enum):
     LANE_CEILING = "lane_ceiling"
     LANE_FLOOR = "lane_floor"
     PROVIDER_RESTRICTION = "provider_restriction"
+    MAINTENANCE_RATIFICATION = "maintenance_ratification"
 
 
 class PreferenceExpressedBy(Enum):
@@ -87,6 +88,7 @@ _POLICY_FIELDS = frozenset(
         "capability_acquisition_proposal_rate_per_day",
     }
 )
+_NON_POLICY_FIELDS = frozenset({"maintenance_proposal_ratified"})
 
 _FIELDS_BY_CLASS = {
     PreferenceClass.QUIET_PERIOD: frozenset(
@@ -117,6 +119,7 @@ _FIELDS_BY_CLASS = {
             "external_knowledge_cost_cap_cents",
         }
     ),
+    PreferenceClass.MAINTENANCE_RATIFICATION: _NON_POLICY_FIELDS,
 }
 
 
@@ -383,6 +386,8 @@ def composed_policy(
     )
     if not relevant:
         return base
+    if situation_class is PreferenceClass.MAINTENANCE_RATIFICATION:
+        return base
 
     candidate = base
     field_floor_authority: dict[str, bool] = {}
@@ -481,7 +486,7 @@ def _validate_preference(preference: AutonomyPreference) -> None:
         raise ValueError("pattern_digest must be hmac-sha256")
     if preference.notes_digest is not None and not _is_digest(preference.notes_digest):
         raise ValueError("notes_digest must be hmac-sha256")
-    if preference.target_field not in _POLICY_FIELDS:
+    if preference.target_field not in _POLICY_FIELDS | _NON_POLICY_FIELDS:
         raise ValueError(f"unsupported autonomy policy field: {preference.target_field}")
     allowed_fields = _FIELDS_BY_CLASS[preference.preference_class]
     if preference.target_field not in allowed_fields:

@@ -190,6 +190,36 @@ class DriveCuriosityDiagnosticSchemaTests(unittest.TestCase):
         saturation = next(row for row in rows if row["event_type"] == "saturation_sample")
         self.assertRegex(saturation["bond_digest"], r"^hmac-sha256:[0-9a-f]{64}$")
 
+    def test_maintenance_proposal_events_use_unified_schema_and_hmac_proposal_id(self):
+        from core.policies.diagnostics import (
+            CuriosityDiagnosticEventType,
+            DriveCuriosityDiagnosticSink,
+        )
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            sink = DriveCuriosityDiagnosticSink(
+                log_path=root / "logs" / "drive_driven_curiosity_diagnostics.jsonl",
+                master_key_path=root / "memory" / "drive_curiosity_master.key",
+            )
+
+            sink.emit(
+                event_type=CuriosityDiagnosticEventType.MAINTENANCE_PROPOSAL_EMITTED,
+                bond_id="firstborn",
+                occurred_utc=datetime(2026, 5, 26, 12, 0, tzinfo=UTC),
+                proposal_id="proposal-1",
+                proposal_scope_class="ranking_refinement",
+                proposal_status="proposed",
+            )
+            row = json.loads(sink.log_path.read_text(encoding="utf-8").splitlines()[-1])
+
+        self.assertEqual(row["event_type"], "maintenance_proposal_emitted")
+        self.assertRegex(row["bond_digest"], r"^hmac-sha256:[0-9a-f]{64}$")
+        self.assertRegex(row["proposal_id_digest"], r"^hmac-sha256:[0-9a-f]{64}$")
+        self.assertEqual(row["proposal_scope_class"], "ranking_refinement")
+        self.assertEqual(row["proposal_status"], "proposed")
+        self.assertNotIn("proposal-1", json.dumps(row, sort_keys=True))
+
     def test_bond_isolation_refusals_feed_hmac_rows_to_unified_sink(self):
         from core.egress.fetch_for_curiosity import ProvenancedQuery, fetch_for_curiosity
         from core.evolution import drive_driven_curiosity as curiosity

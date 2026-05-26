@@ -150,6 +150,11 @@ def autonomy_preferences_db() -> Path:
     return memory_dir() / "autonomy_preferences.db"
 
 
+def maintenance_proposals_db() -> Path:
+    """Sqlite DB for owner-ratified self-maintenance proposals."""
+    return memory_dir() / "maintenance_proposals.db"
+
+
 def owner_outreach_db() -> Path:
     """Sqlite DB for owner-interrupting outreach dispatch records."""
     return memory_dir() / "owner_outreach.db"
