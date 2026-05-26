@@ -365,6 +365,119 @@ class RedditSourceAwareRecallTests(unittest.TestCase):
 
         self.assertEqual(recalled["raw"][0]["id"], "fresh-reddit-local")
 
+    def test_last_evening_query_supplements_recent_telegram_exchanges(self):
+        now = datetime(2026, 5, 26, 18, 50, tzinfo=timezone.utc)
+        last_evening = now - timedelta(hours=14)
+        this_morning = now - timedelta(hours=3)
+        too_old = now - timedelta(hours=30)
+        mm = self._manager_with_raw(
+            rows=[
+                {
+                    "id": "generic-remember",
+                    "content": "A generic note about remembering old conversations.",
+                    "metadata": {"timestamp": now.isoformat(), "type": "reasoning"},
+                    "distance": 0.08,
+                },
+            ],
+            get_rows=[
+                {
+                    "id": "telegram-this-morning",
+                    "content": "the owner (telegram_surface): Morning Maez\nMaez: Morning.",
+                    "metadata": {
+                        "timestamp": this_morning.isoformat(),
+                        "type": "telegram_exchange",
+                        "trust_tier": "lived",
+                    },
+                    "distance": 0.50,
+                },
+                {
+                    "id": "telegram-last-evening",
+                    "content": (
+                        "the owner (telegram_surface): How's the Reddit community doing?\n"
+                        "Maez: The Reddit pipeline is currently silent."
+                    ),
+                    "metadata": {
+                        "timestamp": last_evening.isoformat(),
+                        "type": "telegram_exchange",
+                        "trust_tier": "lived",
+                    },
+                    "distance": 0.50,
+                },
+                {
+                    "id": "telegram-too-old",
+                    "content": "the owner (telegram_surface): older unrelated exchange",
+                    "metadata": {
+                        "timestamp": too_old.isoformat(),
+                        "type": "telegram_exchange",
+                        "trust_tier": "lived",
+                    },
+                    "distance": 0.50,
+                },
+            ],
+        )
+
+        with (
+            mock.patch("memory.memory_manager._now_seconds", return_value=now.timestamp()),
+            mock.patch("memory.mmr.mmr_rerank", side_effect=lambda rows, k, lambda_: rows[:k]),
+        ):
+            recalled = mm.recall_for_telegram("You remember what I was talking last evening?")
+
+        self.assertEqual(recalled["raw"][0]["id"], "telegram-last-evening")
+        self.assertNotIn(
+            "telegram-this-morning",
+            [row["id"] for row in recalled["raw"][:3]],
+        )
+        self.assertNotIn("telegram-too-old", [row["id"] for row in recalled["raw"]])
+
+    def test_reddit_last_night_query_prefers_conversation_over_reddit_posts(self):
+        now = datetime(2026, 5, 26, 18, 50, tzinfo=timezone.utc)
+        last_night = now - timedelta(hours=14)
+        mm = self._manager_with_raw(
+            rows=[
+                {
+                    "id": "generic-close",
+                    "content": "A generic note about Reddit.",
+                    "metadata": {"timestamp": now.isoformat(), "type": "reasoning"},
+                    "distance": 0.08,
+                },
+            ],
+            get_rows=[
+                {
+                    "id": "fresh-reddit-post",
+                    "content": "[REDDIT r/LocalLLaMA post abc] fresh model discussion",
+                    "metadata": {
+                        "timestamp": now.isoformat(),
+                        "type": "reddit_post",
+                        "source": "reddit/r/LocalLLaMA",
+                        "reddit_post_id": "abc",
+                    },
+                    "distance": 0.45,
+                },
+                {
+                    "id": "telegram-last-night",
+                    "content": (
+                        "the owner (telegram_surface): How's the Reddit community doing?\n"
+                        "Maez: The Reddit pipeline is currently silent."
+                    ),
+                    "metadata": {
+                        "timestamp": last_night.isoformat(),
+                        "type": "telegram_exchange",
+                        "trust_tier": "lived",
+                    },
+                    "distance": 0.50,
+                },
+            ],
+        )
+
+        with (
+            mock.patch("memory.memory_manager._now_seconds", return_value=now.timestamp()),
+            mock.patch("memory.mmr.mmr_rerank", side_effect=lambda rows, k, lambda_: rows[:k]),
+        ):
+            recalled = mm.recall_for_telegram("What did I ask you about Reddit last night?")
+
+        self.assertEqual(recalled["raw"][0]["id"], "telegram-last-night")
+        self.assertIn("fresh-reddit-post", [row["id"] for row in recalled["raw"]])
+
 
 class GetRecentDailyTests(unittest.TestCase):
     """``get_recent_daily(limit)`` was added 2026-04-27 to close the

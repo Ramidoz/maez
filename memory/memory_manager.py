@@ -470,6 +470,10 @@ def _age_hours_from_iso(raw_ts, now_s: float) -> float:
 
 
 _REDDIT_SOURCE_BOOST_MAX_AGE_HOURS = 24.0
+_LAST_NIGHT_MIN_AGE_HOURS = 6.0
+_LAST_NIGHT_MAX_AGE_HOURS = 24.0
+_YESTERDAY_MIN_AGE_HOURS = 12.0
+_YESTERDAY_MAX_AGE_HOURS = 48.0
 
 
 def _reddit_source_distance_factor(query: str, mem: dict, now_s: float) -> float:
@@ -531,6 +535,22 @@ def _reddit_source_where_clauses(query: str) -> list[dict]:
         return [{"source": "reddit/r/LocalLLaMA"}]
 
     return [{"type": "reddit_post"}]
+
+
+def _temporal_telegram_age_window(query: str) -> tuple[float, float] | None:
+    """Return an age window for recent conversational-time queries.
+
+    The vector store already has Telegram exchanges. The missing piece
+    is translating vague owner phrases like "last evening" into a
+    source/time-shaped supplement so semantic recall does not open the
+    wrong notebook.
+    """
+    q = (query or "").lower()
+    if re.search(r"\b(last night|last evening)\b", q):
+        return (_LAST_NIGHT_MIN_AGE_HOURS, _LAST_NIGHT_MAX_AGE_HOURS)
+    if re.search(r"\byesterday\b", q):
+        return (_YESTERDAY_MIN_AGE_HOURS, _YESTERDAY_MAX_AGE_HOURS)
+    return None
 
 
 def _humanize_age(raw_ts, now: datetime) -> str:
@@ -1353,6 +1373,58 @@ class MemoryManager:
         )
         return rows[:limit]
 
+    def _recent_telegram_exchange_rows(
+        self,
+        collection,
+        query: str,
+        *,
+        limit: int = 6,
+    ) -> list[dict]:
+        """Fetch recent Telegram exchanges for temporal recall queries.
+
+        Semantic search is weak at owner phrases like "last evening":
+        the query names a time window, not the topic words in the
+        exchange. This supplement is deliberately narrow: it only
+        triggers on explicit conversational-time phrases, only reads
+        stored Telegram exchanges, and filters by age before ranking.
+        """
+        window = _temporal_telegram_age_window(query)
+        if not window or collection.count() == 0:
+            return []
+
+        min_age_h, max_age_h = window
+        now_s = _now_seconds()
+        try:
+            got = collection.get(
+                where={"type": "telegram_exchange"},
+                include=["documents", "metadatas"],
+            )
+        except Exception as exc:
+            logger.debug("telegram temporal supplement skipped: %s", exc)
+            return []
+
+        rows: list[dict] = []
+        for i, row_id in enumerate(got.get("ids") or []):
+            meta = (got.get("metadatas") or [{}])[i] or {}
+            if meta.get("integrity") in self._EXCLUDED_INTEGRITY:
+                continue
+            age_h = _age_hours_from_iso(meta.get("timestamp", ""), now_s)
+            if age_h < min_age_h or age_h > max_age_h:
+                continue
+            docs = got.get("documents") or []
+            rows.append({
+                "id": row_id,
+                "content": docs[i] if i < len(docs) else "",
+                "metadata": meta,
+                "distance": 0.01,
+            })
+
+        rows.sort(
+            key=lambda r: str((r.get("metadata") or {}).get("timestamp") or ""),
+            reverse=True,
+        )
+        return rows[:limit]
+
     def _merge_recall_candidates(
         self,
         semantic_rows: list[dict],
@@ -1488,6 +1560,10 @@ class MemoryManager:
         raw = self._merge_recall_candidates(
             raw,
             self._recent_reddit_source_rows(self.raw, query),
+        )
+        raw = self._merge_recall_candidates(
+            raw,
+            self._recent_telegram_exchange_rows(self.raw, query),
         )
         raw = self._topic_rerank(query, raw, n=10)
 
