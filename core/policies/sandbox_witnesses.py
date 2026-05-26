@@ -321,6 +321,7 @@ def construct_witness_record(
             WitnessRefusalReason.CALLER_SUPPLIED_DIGEST,
             "observed_effect_digest must be substrate-computed from artifacts",
         )
+    _refuse_tainted_narrative(bundle)
     artifact_digest = _digest_json(bundle.artifacts)
     observed_digest = _observed_effect_digest(bundle.witness_kind, bundle.artifacts)
     return SandboxWitnessRecord.new(
@@ -333,6 +334,24 @@ def construct_witness_record(
         captured_utc=bundle.captured_utc,
         staleness_anchors=bundle.staleness_anchors,
     )
+
+
+def _refuse_tainted_narrative(bundle: WitnessArtifactBundle) -> None:
+    if not bundle.external_llm_tainted:
+        return
+    try:
+        from core.safety.injection_patterns import scan
+    except Exception as exc:
+        raise WitnessRefused(
+            WitnessRefusalReason.INBOUND_TAINT_UNCLEARED,
+            "injection pattern scanner unavailable for tainted witness narrative",
+        ) from exc
+    for narrative in bundle.narrative_fields:
+        if scan(narrative):
+            raise WitnessRefused(
+                WitnessRefusalReason.INBOUND_TAINT_UNCLEARED,
+                "external-LLM-tainted witness narrative matched injection patterns",
+            )
 
 
 def _record_values(record: SandboxWitnessRecord) -> tuple:
