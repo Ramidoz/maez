@@ -145,6 +145,11 @@ def wonderings_db() -> Path:
     return memory_dir() / "wonderings.db"
 
 
+def autonomy_preferences_db() -> Path:
+    """Sqlite DB for per-bond autonomy preference composition."""
+    return memory_dir() / "autonomy_preferences.db"
+
+
 def trace_labels_db() -> Path:
     """Sqlite DB for owner-supplied labels on chat traces (Slice 5).
     Foundation for KTO-style preference training: each label is a
