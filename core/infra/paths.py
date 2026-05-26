@@ -155,6 +155,11 @@ def owner_outreach_db() -> Path:
     return memory_dir() / "owner_outreach.db"
 
 
+def reflection_audit_db() -> Path:
+    """Sqlite DB for reflection-before-interruption audit rows."""
+    return memory_dir() / "reflection_audit.db"
+
+
 def trace_labels_db() -> Path:
     """Sqlite DB for owner-supplied labels on chat traces (Slice 5).
     Foundation for KTO-style preference training: each label is a
