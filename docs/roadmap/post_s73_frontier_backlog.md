@@ -603,6 +603,16 @@ tool, or memory path to open.
   evidence. The current repo has no established Outlines/Guidance/JSON-schema
   routing infrastructure in the reply path, and no MiniLM latency number should
   be claimed until benchmarked on Maez's actual hardware.
+- **Graph-Assisted Routing (v2+ enhancement, depends on G11):** when a query
+  mentions an entity present in `lived_graph.db` (per ADR 0019 lived memory
+  architecture), use graph edges to bias routing toward the substrate with
+  strongest history about that entity. Surfaced by 2026-05-26 cross-check;
+  recorded as architectural option. Depends on G11 (lived-graph traversal API
+  absent) closing first: the graph currently has no `neighbors()`, `path()`,
+  `predecessor()` verbs at the recall layer, so an entity-anchored routing
+  bias has no traversal API to consult yet. Orthogonal to v1 dispatch
+  (heuristic + embedding); enhances rather than replaces it; complements
+  either v1 or v2 classifier paths. Not for v1.
 
 ### S3. Sandbox-witness inbound taint discipline
 
