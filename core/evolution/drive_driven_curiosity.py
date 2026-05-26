@@ -13,8 +13,11 @@ from enum import Enum
 import hashlib
 from typing import Callable, Mapping
 
+from core.evolution.temperament import Temperament
 from core.evolution.wonderings import Wonderings
-from core.policies.exceptions import SubjectKindRefused
+from core.memory import identity
+from core.policies.exceptions import CrossBondAccessError, SubjectKindRefused
+from core.policies.diagnostics import DriveCuriosityDiagnosticSink
 from core.policies.third_party_subject_gate import SubjectKind
 
 
@@ -58,6 +61,7 @@ BASE_RESOLUTION_DELTA = 0.5
 NEUTRAL_TEMPERAMENT_VALUE_FOR_FIRST_OBSERVATION = 5.0
 TEMPERAMENT_VALUE_MIN = 0.0
 TEMPERAMENT_VALUE_MAX = 10.0
+BASE_SATURATION_CAPACITY = 10.0
 
 
 @dataclass(frozen=True)
@@ -91,6 +95,13 @@ class MeaningfulExchangeEligibility(Enum):
     NOT_ELIGIBLE_OWNER_BOND_ROUTINE = "not_eligible_owner_bond_routine"
 
 
+class PressBand(Enum):
+    LIGHT = "light"
+    PRESS = "press"
+    HEAVY = "heavy"
+    OVERLOADED = "overloaded"
+
+
 @dataclass(frozen=True)
 class OwnerBondSaturationGuard:
     rolling_window_hours: int = 24
@@ -105,6 +116,17 @@ class CuriosityResolutionCeremonyResult:
     producer_event_id: str
     delta_intent: float
     delta_applied: float
+
+
+@dataclass(frozen=True)
+class SaturationRegister:
+    bond_id: str
+    open_object_count: int
+    total_salience: float
+    weighted_salience: float
+    carrying_capacity: float
+    press: float
+    sampled_utc: datetime
 
 
 @dataclass(frozen=True)
@@ -198,6 +220,35 @@ def _emit_subject_kind_refused(fields: Mapping, refusal_kind: str) -> None:
             "bond_digest": _digest(fields.get("bond_id")),
             "subject_kind": fields.get("subject_kind"),
             "subject_ref_digest": _digest(fields.get("subject_ref")),
+        }
+    )
+
+
+def _emit_cross_bond_access_refused(
+    *,
+    attempted_bond_id: str,
+    authorized_bond_id: str,
+    surface: str,
+    diagnostic_sink: Callable[[dict], None] | None,
+) -> None:
+    if diagnostic_sink is None:
+        diagnostic_sink = DriveCuriosityDiagnosticSink()
+    if getattr(diagnostic_sink, "accepts_raw_diagnostic_fields", False):
+        diagnostic_sink(
+            {
+                "event_type": "CROSS_BOND_ACCESS_REFUSED",
+                "bond_id": authorized_bond_id,
+                "requested_bond_id": attempted_bond_id,
+                "surface": surface,
+            }
+        )
+        return
+    diagnostic_sink(
+        {
+            "event_type": "CROSS_BOND_ACCESS_REFUSED",
+            "requested_bond_digest": _digest(attempted_bond_id),
+            "bond_digest": _digest(authorized_bond_id),
+            "surface": surface,
         }
     )
 
@@ -766,6 +817,125 @@ def list_drive_curiosity_objects(store: Wonderings, *, bond_id: str) -> list[Cur
         except LegacyWonderingProjectionRefused:
             continue
     return out
+
+
+def list_open_drive_curiosity_objects(
+    store: Wonderings,
+    *,
+    bond_id: str,
+) -> list[CuriosityObject]:
+    out: list[CuriosityObject] = []
+    with store._lock, store._conn() as c:
+        rows = c.execute(
+            """
+            SELECT w.*, m.encounter_source, m.priority_class, m.salience,
+                   m.subject_kind, m.resolution_marker_type, m.resolution_marker_utc,
+                   m.produced_via_subjective_duration_depth
+            FROM wonderings AS w
+            JOIN wondering_drive_metadata AS m
+              ON m.wondering_id = w.id
+            WHERE m.bond_id = ?
+              AND w.bond_id = ?
+              AND w.status IN ('open', 'active')
+            ORDER BY w.id ASC
+            """,
+            (str(bond_id), str(bond_id)),
+        ).fetchall()
+    for row in rows:
+        try:
+            out.append(_project_row(row))
+        except LegacyWonderingProjectionRefused:
+            continue
+    return out
+
+
+def snapshot_temperament_for_bond(
+    bond_id: str,
+    *,
+    temperament: object | None = None,
+    diagnostic_sink: Callable[[dict], None] | None = None,
+) -> Mapping[str, float | None]:
+    authorized_bond_id = identity.user_profile_id()
+    if str(bond_id) != str(authorized_bond_id):
+        _emit_cross_bond_access_refused(
+            attempted_bond_id=str(bond_id),
+            authorized_bond_id=str(authorized_bond_id),
+            surface="snapshot_temperament_for_bond",
+            diagnostic_sink=diagnostic_sink,
+        )
+        raise CrossBondAccessError(
+            "v1 single-bond temperament wrapper refused cross-bond access; "
+            "see CROSS_BOND_ACCESS_REFUSED diagnostic row for details"
+        )
+    temperament_store = temperament if temperament is not None else Temperament()
+    return dict(temperament_store.current())
+
+
+def compute_carrying_capacity(temperament_snapshot: Mapping[str, float | None]) -> float:
+    awareness = temperament_snapshot.get("awareness")
+    persistence = temperament_snapshot.get("persistence")
+    if awareness is None:
+        awareness = 5.0
+    if persistence is None:
+        persistence = 5.0
+    return BASE_SATURATION_CAPACITY * (float(awareness) / 5.0) * (
+        float(persistence) / 5.0
+    )
+
+
+def classify_press(press: float) -> PressBand:
+    value = float(press)
+    if value < 0.3:
+        return PressBand.LIGHT
+    if value < 0.7:
+        return PressBand.PRESS
+    if value < 1.2:
+        return PressBand.HEAVY
+    return PressBand.OVERLOADED
+
+
+def compute_saturation(
+    bond_id: str,
+    *,
+    store: Wonderings | None = None,
+    temperament_snapshot: Mapping[str, float | None] | None = None,
+    temperament: object | None = None,
+    now_utc: datetime | float | int | None = None,
+    diagnostic_sink: Callable[[dict], None] | None = None,
+) -> SaturationRegister:
+    if not bond_id:
+        raise ValueError("bond_id is required for saturation computation")
+    curiosity_store = store if store is not None else Wonderings()
+    open_objects = list_open_drive_curiosity_objects(curiosity_store, bond_id=str(bond_id))
+    total_salience = sum(float(obj.salience) for obj in open_objects)
+    weighted_salience = sum(
+        float(obj.salience) * _priority_class_weight(obj.priority_class)
+        for obj in open_objects
+    )
+    snapshot = (
+        temperament_snapshot
+        if temperament_snapshot is not None
+        else snapshot_temperament_for_bond(
+            str(bond_id),
+            temperament=temperament,
+            diagnostic_sink=diagnostic_sink,
+        )
+    )
+    carrying_capacity = compute_carrying_capacity(snapshot)
+    press = (
+        weighted_salience / carrying_capacity
+        if carrying_capacity > 0
+        else float("inf")
+    )
+    return SaturationRegister(
+        bond_id=str(bond_id),
+        open_object_count=len(open_objects),
+        total_salience=total_salience,
+        weighted_salience=weighted_salience,
+        carrying_capacity=carrying_capacity,
+        press=press,
+        sampled_utc=_coerce_datetime(now_utc),
+    )
 
 
 def _parse_event_time(value: str) -> datetime | None:

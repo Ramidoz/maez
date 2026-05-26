@@ -60,6 +60,101 @@ class DriveCuriosityBondScopingTests(unittest.TestCase):
         self.assertNotEqual(drive_path, egress_path)
         self.assertEqual(drive_path.name, "drive_curiosity_master.key")
 
+    def test_compute_saturation_bond_scoped(self):
+        from core.evolution.drive_driven_curiosity import (
+            SubjectKind,
+            record_wondering_drive_metadata,
+        )
+        from core.evolution.wonderings import Wonderings
+        from tests.test_saturation_interface import sample_saturation_for_test
+
+        with tempfile.TemporaryDirectory() as td:
+            store = Wonderings(db_path=Path(td) / "wonderings.db")
+            firstborn_id = store.add(
+                "firstborn open question",
+                source="manual",
+                bond_id="firstborn",
+            )
+            second_bond_id = store.add(
+                "second bond open question",
+                source="manual",
+                bond_id="second-bond",
+            )
+            record_wondering_drive_metadata(
+                store,
+                wondering_id=firstborn_id,
+                bond_id="firstborn",
+                encounter_source="wondering_generated",
+                encounter_ref_digest="hmac-sha256:" + "a" * 64,
+                priority_class="owner_bond",
+                salience=0.4,
+                subject_kind=SubjectKind.PUBLIC_TOPIC,
+            )
+            record_wondering_drive_metadata(
+                store,
+                wondering_id=second_bond_id,
+                bond_id="second-bond",
+                encounter_source="wondering_generated",
+                encounter_ref_digest="hmac-sha256:" + "b" * 64,
+                priority_class="owner_bond",
+                salience=1.0,
+                subject_kind=SubjectKind.PUBLIC_TOPIC,
+            )
+
+            register = sample_saturation_for_test(
+                bond_id="firstborn",
+                store=store,
+                temperament_snapshot={"awareness": 5.0, "persistence": 5.0},
+            )
+
+        self.assertEqual(register.open_object_count, 1)
+        self.assertAlmostEqual(register.total_salience, 0.4)
+        self.assertAlmostEqual(register.weighted_salience, 0.4)
+
+    def test_compute_saturation_rechecks_parent_wondering_bond(self):
+        from core.evolution.drive_driven_curiosity import (
+            SubjectKind,
+            record_wondering_drive_metadata,
+        )
+        from core.evolution.wonderings import Wonderings
+        from tests.test_saturation_interface import sample_saturation_for_test
+
+        with tempfile.TemporaryDirectory() as td:
+            store = Wonderings(db_path=Path(td) / "wonderings.db")
+            wondering_id = store.add(
+                "parent belongs to the other bond",
+                source="manual",
+                bond_id="second-bond",
+            )
+            record_wondering_drive_metadata(
+                store,
+                wondering_id=wondering_id,
+                bond_id="second-bond",
+                encounter_source="wondering_generated",
+                encounter_ref_digest="hmac-sha256:" + "c" * 64,
+                priority_class="owner_bond",
+                salience=1.0,
+                subject_kind=SubjectKind.PUBLIC_TOPIC,
+            )
+            with store._lock, store._conn() as con:
+                con.execute(
+                    """
+                    UPDATE wondering_drive_metadata
+                       SET bond_id = ?
+                     WHERE wondering_id = ?
+                    """,
+                    ("firstborn", wondering_id),
+                )
+
+            register = sample_saturation_for_test(
+                bond_id="firstborn",
+                store=store,
+                temperament_snapshot={"awareness": 5.0, "persistence": 5.0},
+            )
+
+        self.assertEqual(register.open_object_count, 0)
+        self.assertAlmostEqual(register.weighted_salience, 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()
