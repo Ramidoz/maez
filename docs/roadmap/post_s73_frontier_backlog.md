@@ -582,6 +582,92 @@ tool, or memory path to open.
   source/domain, default to memory-first recall and offer live fetch only when
   freshness is explicitly requested or memory is stale/insufficient.
 
+##### Finding 19 root-cause trace (added 2026-05-26 second runtime catch)
+
+A second runtime trace recorded later the same day revealed the
+specific routing code path. The substrate had 2,462 `reddit_post` rows
+correctly source-tagged (verified by `sqlite3` query on
+`memory/db/raw/chroma.sqlite3`), but they were never consulted because
+the upstream classifier sent the query to the JARVIS tool-loop, not to
+the chat-with-recall path.
+
+**Witnessed trace from `logs/actions.log` (2026-05-26 evening):**
+
+```
+18:12:50 web_search | "r/LocalLLaMA reddit recent posts"      → No results
+18:12:52 web_search | "site:reddit.com/r/LocalLLaMA"           → No results
+18:12:53 web_search | "reddit r/LocalLLaMA latest discussions" → No results
+18:13:36 web_search | "reddit r/LocalLLaMA top posts today"    → No results
+18:13:37 web_search | "site:reddit.com/r/LocalLLaMA"           → No results
+18:13:40 fetch_url  | empty url                                → empty url
+18:13:42 fetch_url  | https://reddit.com/r/LocalLLaMA/top      → "Reddit - Please wait for verification" (bot-blocked)
+```
+
+Seven external fetch attempts, all failed. Substrate recall
+(`recall_for_telegram`) never invoked. `logs/cognition.log` confirmed
+the routing classification with `self_claim_audit | surface=telegram_surface
+mode=skipped reason=tool_continuation` at 18:13:13 and 18:14:00.
+
+**Root-cause code path:** `core/brain/brain_loop.py:324`
+(`_should_run_jarvis_loop`) is a two-stage filter:
+
+1. `_CONVERSATIONAL_RE` (line 149) — short greetings and acknowledgments
+2. `_is_conversational_intent` (line 225) — meta-conversation, reflective
+   questions, clarifications without system-noun anchor
+
+Neither stage catches **content-source-anchored recall queries** —
+queries that name a substrate Maez has data for ("Reddit",
+"Telegram", "your wonderings"). Per-query trace:
+
+- *"Check Reddit then"* — `_SYSTEM_NOUN_RE` matches `check` (line 188:
+  `run|check`); `_is_conversational_intent` returns False → JARVIS fires.
+- *"What's going on on Reddit?"* — no system noun;
+  `_CONVERSATIONAL_SHAPE_RE` at line 205-207 matches
+  `going on (with you|in there)` but NOT `going on on Reddit` →
+  JARVIS fires.
+- *"You have access to Reddit data"* — no system noun; no conversational
+  shape match → JARVIS fires.
+- *"Just let me know what's going on in Reddit in localllama"* — no
+  system noun; no conversational shape match → JARVIS fires.
+
+The classifier's semantic gap: it asks "is this conversational?" and
+treats anything-not-conversational as "needs tools." The missing third
+stage is "is this asking about a substrate I have?" If yes AND no
+explicit fetch verb AND no system-noun anchor, route to chat-with-recall
+instead of JARVIS.
+
+**Sharpened dispatcher scope from this trace:** the dispatcher is NOT
+just choosing between substrates (Reddit memory vs Telegram memory vs
+entity recall vs ...). It is choosing between **substrate** and
+**tool-fetch** as orthogonal layers above substrate-axis routing.
+
+The JARVIS classifier surface (`_should_run_jarvis_loop`,
+`_is_conversational_intent`, `_SYSTEM_NOUN_RE`,
+`_CONVERSATIONAL_SHAPE_RE`) has never been through a council/Codex
+review cycle. A spot-fix today would be slice-shaped, not seam-shaped,
+per [[feedback_seam_vs_slice_cooling_off]]. Cooling-off applies; the
+right fix is the dispatcher brief's substrate-vs-tool layer.
+
+**Substrate-vs-tool layer (sharpened v1 architecture requirement):**
+
+1. *Layer 0 — substrate-vs-tool decision (NEW).* Before the JARVIS
+   classifier or any substrate-axis routing fires, ask: does Maez have
+   substrate rows that could answer this query? If yes AND no explicit
+   fetch verb AND no system-noun-style operational query, default to
+   chat-with-recall. JARVIS fires only when substrate is empty, stale,
+   freshness is explicitly requested, or the query is operational
+   (system-state, tool execution, etc.).
+2. *Layer 1 — substrate-axis routing (existing).* When substrate is
+   the right surface, route to the right substrate axis (Reddit,
+   Telegram, entity, procedural, etc.) per the existing v1 option set.
+
+**Witnessed-trace files for future dispatcher brief author:**
+`logs/actions.log` lines 2026-05-26 18:12:50 through 18:13:42;
+`logs/cognition.log` lines at 18:13:13 and 18:14:00; substrate
+verification via
+`sqlite3 memory/db/raw/chroma.sqlite3 "SELECT COUNT(*) FROM embedding_metadata WHERE key='type' AND string_value='reddit_post';"`
+returning 2462.
+
 #### Dispatcher v1 architecture option set
 
 - **State interception:** generalize the Reddit precedent from `5c6be72`.
