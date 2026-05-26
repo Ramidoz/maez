@@ -94,7 +94,8 @@ class OutreachLedger:
                     owner_state_at_dispatch TEXT NOT NULL,
                     signal_quality TEXT NOT NULL,
                     importance REAL NOT NULL,
-                    decision TEXT NOT NULL
+                    decision TEXT NOT NULL,
+                    delivered_utc TEXT
                 )
                 """
             )
@@ -110,11 +111,19 @@ class OutreachLedger:
                     "PRAGMA table_info(owner_outreach_dispatches)"
                 ).fetchall()
             }
-            if "owner_state_at_dispatch" not in existing_cols:
+            for column_name, column_sql in (
+                (
+                    "owner_state_at_dispatch",
+                    "owner_state_at_dispatch TEXT NOT NULL DEFAULT 'unknown'",
+                ),
+                ("delivered_utc", "delivered_utc TEXT"),
+            ):
+                if column_name in existing_cols:
+                    continue
                 try:
                     con.execute(
                         "ALTER TABLE owner_outreach_dispatches "
-                        "ADD COLUMN owner_state_at_dispatch TEXT NOT NULL DEFAULT 'unknown'"
+                        f"ADD COLUMN {column_sql}"
                     )
                 except sqlite3.OperationalError as exc:
                     if "duplicate column" not in str(exc).lower():
@@ -159,6 +168,20 @@ class OutreachLedger:
                 ),
             )
             return int(cur.lastrowid)
+
+    def mark_delivered(self, dispatch_id: int, *, delivered_utc: datetime) -> None:
+        when = _coerce_utc(delivered_utc)
+        with self._lock, self._conn() as con:
+            cur = con.execute(
+                """
+                UPDATE owner_outreach_dispatches
+                SET delivered_utc = ?
+                WHERE id = ?
+                """,
+                (when.isoformat(), int(dispatch_id)),
+            )
+            if cur.rowcount != 1:
+                raise ValueError("dispatch_id not found")
 
     def allowed_count_since(self, *, bond_id: str, since_utc: datetime) -> int:
         since = _coerce_utc(since_utc).isoformat()

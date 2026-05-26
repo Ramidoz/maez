@@ -22,6 +22,10 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.evolution.subjective_duration import SubjectiveDurationOwnerAuth
 
 # Decision 26: load ordinary config first, then credentials through the
 # dedicated loader before importing surfaces that read os.environ.
@@ -184,6 +188,12 @@ from core.evolution.wondering_pursuit import (
     load_last_pursuit_at,
     save_last_pursuit_at,
 )
+from core.policies.extraction_gate import (
+    OutreachLane,
+    evaluate_extraction_gate,
+)
+from core.policies.reflection_audit import ReflectionAudit, ReflectionDecision
+from core.policies.signal_gate import OutreachLedger, OwnerState, PriorityClass, SignalQuality
 from core.turn_traces import (
     AuditInfo,
     Trace,
@@ -3624,6 +3634,9 @@ class MaezDaemon:
         _pursuit_evaluated = False
         _pursuit_error: "str | None" = None
         _pursuit_w_store = None  # captured for record_pursuit below
+        _pursuit_delivery_ledger = None
+        _pursuit_delivery_dispatch_id = None
+        _pursuit_delivery_text = None
         if _pursuit_enabled:
             try:
                 from core.memory import identity as _identity_mod
@@ -3645,51 +3658,58 @@ class MaezDaemon:
                     if _pursuit_decision is not None:
                         _utterance = format_pursuit_utterance(_pursuit_decision)
                         if _utterance:
-                            reply = f"{reply}\n\n{_utterance}"
-                            save_last_pursuit_at(
-                                time.time(),
-                                wondering_id=_pursuit_decision.wondering_id,
+                            def _extraction_diagnostic_sink(event: dict) -> None:
+                                logger.info(
+                                    "curiosity_extraction_gate %s",
+                                    json.dumps(event, sort_keys=True),
+                                )
+
+                            _extraction_ledger = OutreachLedger()
+                            _extraction_now = datetime.now(timezone.utc)
+                            _extraction_decision = evaluate_extraction_gate(
+                                _utterance,
+                                bond_id="firstborn",
+                                priority_class=PriorityClass.SELF_GROWTH,
+                                lane=OutreachLane.OWNER_INTERRUPTING,
+                                outreach_ledger=_extraction_ledger,
+                                now_utc=_extraction_now,
+                                diagnostic_sink=_extraction_diagnostic_sink,
+                                reflection_audit=ReflectionAudit(
+                                    object_id=(
+                                        f"wondering-pursuit:"
+                                        f"{_pursuit_decision.wondering_id}"
+                                    ),
+                                    bond_id="firstborn",
+                                    reflection_utc=_extraction_now,
+                                    can_resolve_interiorly=False,
+                                    is_owner_likely_available=True,
+                                    is_worth_interrupting=True,
+                                    is_extraction_shaped=False,
+                                    decision=ReflectionDecision.PROCEED,
+                                    reasoning_digest="hmac-sha256:" + "0" * 64,
+                                    owner_response=None,
+                                ),
                             )
+                            if _extraction_decision.decision in {"allow", "rephrase"}:
+                                _pursuit_delivery_text = _extraction_decision.rendered_text
+                                _dispatch_id = _extraction_ledger.record_dispatch(
+                                    bond_id="firstborn",
+                                    dispatched_utc=_extraction_now,
+                                    priority_class=PriorityClass.SELF_GROWTH.value,
+                                    owner_state_at_dispatch=OwnerState.AVAILABLE,
+                                    signal_quality=SignalQuality.HIGH,
+                                    importance=float(_pursuit_decision.proactive_score),
+                                    decision="allow",
+                                )
+                                _pursuit_delivery_ledger = _extraction_ledger
+                                _pursuit_delivery_dispatch_id = _dispatch_id
+                                reply = f"{reply}\n\n{_pursuit_delivery_text}"
+                            else:
+                                _pursuit_decision = None
             except Exception as _pursuit_exc:
                 logger.debug("wondering-pursuit evaluation failed: %s", _pursuit_exc)
                 _pursuit_decision = None
                 _pursuit_error = str(_pursuit_exc)[:200]
-        # Slice 2 Session 3: record the surface decision in the
-        # wonderings store + emit a lived episode (ADR 0019
-        # alignment — proactive surfaces are high-signal moments
-        # that future reflection should be able to cite). Both are
-        # best-effort; failures must not break the reply path.
-        if _pursuit_w_store is not None and _pursuit_decision is not None:
-            try:
-                _pursuit_w_store.record_pursuit(
-                    _pursuit_decision.wondering_id,
-                    decision="surface",
-                    score=_pursuit_decision.proactive_score,
-                    components=dict(_pursuit_decision.components),
-                )
-            except Exception as _record_exc:
-                logger.debug("record_pursuit (surface) failed: %s", _record_exc)
-            try:
-                # Lived-episode emission — ``source_kind="pursuit_surface"``
-                # so the lived-recall layer can later surface "Maez
-                # surfaced wondering X to owner at time T" as
-                # episode-shaped evidence. Conway 2000: reflection-
-                # on-action is part of self-memory.
-                self.lived_episodes.add(
-                    title=f"Surfaced wondering #{_pursuit_decision.wondering_id}",
-                    summary=_pursuit_decision.wondering_question[:500],
-                    participants=["Maez"],
-                    source_memory_ids=[
-                        f"pursuit-{_pursuit_decision.wondering_id}-{int(time.time())}",
-                    ],
-                    source_kind="pursuit_surface",
-                    importance=3,
-                )
-            except Exception as _ep_exc:
-                logger.debug(
-                    "pursuit-surface episode emission failed: %s",
-                    _ep_exc,
-                )
 
         # 2026-04-23 memory-integrity contract: audit BEFORE store + return.
         # See core/safety/audited_output.py for the full invariant.
@@ -3730,6 +3750,68 @@ class MaezDaemon:
             temporal_anchor_result=_temporal_anchor_result,
             trace=_trace,
         )
+        if (
+            _pursuit_delivery_ledger is not None
+            and _pursuit_delivery_dispatch_id is not None
+            and _pursuit_delivery_text
+        ):
+            if _pursuit_delivery_text in reply:
+                try:
+                    _pursuit_delivery_ledger.mark_delivered(
+                        _pursuit_delivery_dispatch_id,
+                        delivered_utc=datetime.now(timezone.utc),
+                    )
+                except Exception as _pursuit_delivery_exc:
+                    logger.debug("pursuit delivery mark failed: %s", _pursuit_delivery_exc)
+                    reply = reply.replace(_pursuit_delivery_text, "", 1)
+                    _pursuit_decision = None
+                else:
+                    try:
+                        save_last_pursuit_at(
+                            time.time(),
+                            wondering_id=_pursuit_decision.wondering_id,
+                        )
+                    except Exception as _pursuit_sidecar_exc:
+                        logger.debug("save_last_pursuit_at failed: %s", _pursuit_sidecar_exc)
+            else:
+                _pursuit_decision = None
+
+        # Slice 2 Session 3: record the surface decision in the
+        # wonderings store + emit a lived episode (ADR 0019
+        # alignment — proactive surfaces are high-signal moments
+        # that future reflection should be able to cite). Both are
+        # best-effort; failures must not break the reply path.
+        if _pursuit_w_store is not None and _pursuit_decision is not None:
+            try:
+                _pursuit_w_store.record_pursuit(
+                    _pursuit_decision.wondering_id,
+                    decision="surface",
+                    score=_pursuit_decision.proactive_score,
+                    components=dict(_pursuit_decision.components),
+                )
+            except Exception as _record_exc:
+                logger.debug("record_pursuit (surface) failed: %s", _record_exc)
+            try:
+                # Lived-episode emission — ``source_kind="pursuit_surface"``
+                # so the lived-recall layer can later surface "Maez
+                # surfaced wondering X to owner at time T" as
+                # episode-shaped evidence. Conway 2000: reflection-
+                # on-action is part of self-memory.
+                self.lived_episodes.add(
+                    title=f"Surfaced wondering #{_pursuit_decision.wondering_id}",
+                    summary=_pursuit_decision.wondering_question[:500],
+                    participants=["Maez"],
+                    source_memory_ids=[
+                        f"pursuit-{_pursuit_decision.wondering_id}-{int(time.time())}",
+                    ],
+                    source_kind="pursuit_surface",
+                    importance=3,
+                )
+            except Exception as _ep_exc:
+                logger.debug(
+                    "pursuit-surface episode emission failed: %s",
+                    _ep_exc,
+                )
 
         # Slice 4c.5a — autobiographical continuity turning on.
         # Persist the post-audit owner-private reply as a model_reply row.
