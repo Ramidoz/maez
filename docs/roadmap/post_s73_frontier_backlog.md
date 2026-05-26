@@ -690,6 +690,31 @@ Per Locke F3 from the sandbox-witness council pass-1, the
 closed-vocabulary growth path remains *Maez-extensible via the
 maintenance-proposal substrate*. The archetype set is no exception.
 
+##### 41-finding dispatch synthesis (added 2026-05-26)
+
+A 10-surface follow-up dispatch produced 41 witnessed findings, 27
+marked BLOCKER. The important split: today's ADR 0046 seams and recall
+spot-fixes held under scrutiny, while the older reply-time substrate
+proved partially dark.
+
+Three blocker clusters sharpen the dispatcher brief's scope:
+
+- **JARVIS false-positive routing:** 26/39 classifier probes misrouted,
+  mostly by sending recall-shaped asks into JARVIS/tool-fetch paths.
+- **Built-but-mute substrates:** private_thoughts, lived episodes/graph,
+  entity index, wonderings, self-dev reviews, and other written organs
+  have no reply-time reader or traversal path.
+- **Cross-surface fragmentation:** Telegram, web, fast-turns, Chroma raw
+  memory, and voice-continuity scopes do not compose into one owner
+  recall surface.
+
+The synthesis also recorded live-degradation candidates: envelope
+`char_cap=400` below fallback floor, cognition fixation, Reddit routing
+into blocked external fetch, and missing post-11:39 session snapshot.
+These are evidence for triage, not dispatcher implementation approval.
+The dispatcher brief should treat this as empirical scope evidence:
+learn the shape of the ask before choosing substrate, surface, or tool.
+
 #### Dispatcher v1 architecture option set
 
 - **State interception:** generalize the Reddit precedent from `5c6be72`.
