@@ -557,6 +557,53 @@ substrate work is authorized by this section.
 - **Rough scope:** procedural axis in the dispatcher; reader integration
   on self_dev.db; small RED test for the procedural surface.
 
+### Recall-Axis Dispatcher evidence pile
+
+**Anchor line:** learn the shape of the ask before deciding which notebook,
+tool, or memory path to open.
+
+#### Finding 19. Reddit runtime routing gap
+
+- **Purpose:** make the eventual dispatcher distinguish "open Maez's existing
+  Reddit notebook" from "trigger live web/search tooling."
+- **Witness:** 2026-05-26 runtime screenshot. Rohit asked, "Just let me know
+  what's going on in Reddit in localllama"; Maez replied that it did not have
+  the latest Reddit data in context and asked for a live-search phrasing
+  (`search r/LocalLLaMA`). This happened after Reddit rows were verified as
+  persisted and after the source-shaped Reddit recall supplement landed.
+- **Substrate anchors:** `memory/memory_manager.py:578` and
+  `memory/memory_manager.py:1400` already implement Reddit-specific state
+  interception for source-shaped recall. The observed gap is intent routing in
+  chat, not absence of Reddit memory.
+- **Risk:** Maez has relevant ambient memory but routes the owner toward a
+  live tool trigger first, making the notebook look blank when it is merely
+  unopened.
+- **Rough scope:** dispatcher rule: when source-tagged rows exist for a named
+  source/domain, default to memory-first recall and offer live fetch only when
+  freshness is explicitly requested or memory is stale/insufficient.
+
+#### Dispatcher v1 architecture option set
+
+- **State interception:** generalize the Reddit precedent from `5c6be72`.
+  When source-tagged rows exist in substantial quantity for a named domain,
+  bias toward memory-first recall. The v1 rule must define substantial
+  quantity, recency/freshness thresholds, and when explicit live-fetch language
+  overrides memory-first.
+- **Heuristic layer:** preserve known unambiguous shapes already established by
+  the spot fixes: temporal phrases, repair-follow-up phrases, explicit source
+  names, and explicit fetch verbs such as "search", "fetch", or "go check."
+- **Embedding Proximity Gate:** use the existing `all-MiniLM-L6-v2` embedding
+  contract (`memory/embedding_contract.py:177`,
+  `memory/embedding_contract.json`) against pre-encoded closed-vocabulary
+  intent archetypes for ambiguous queries that pass through state interception
+  and heuristics. Archetype growth follows the same spec-amendment discipline
+  as other authority-bearing vocabularies.
+- **Deferred v2 classifier:** constrained-grammar or small-LLM intent
+  classification remains a v2 option gated by the Gold Set (#8) and benchmark
+  evidence. The current repo has no established Outlines/Guidance/JSON-schema
+  routing infrastructure in the reply path, and no MiniLM latency number should
+  be claimed until benchmarked on Maez's actual hardware.
+
 ### S3. Sandbox-witness inbound taint discipline
 
 - **Purpose:** ensure sandbox witnesses for maintenance proposals cannot use
