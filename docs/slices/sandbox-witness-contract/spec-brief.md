@@ -397,7 +397,7 @@ The committed canon will enumerate each test by number with assertion-reason dig
 - **W#7f.** `test_self_ratification_via_shim_alias_importlib_getattr_and_shared_helper_refused`.
 - **W#8.** `test_re_verification_does_not_open_live_SubstrateLocus_handle` (Descartes Major-2).
 - **W#8a.** `test_re_verification_runs_in_subprocess_with_substrate_root_override` (Ohm Mi1).
-- **W#8b.** `test_reverification_subprocess_starts_before_maez_imports_and_closes_live_db_wal_shm_fds`.
+- **W#8b.** `test_reverification_subprocess_starts_before_maez_imports_and_closes_live_db_wal_shm_fds` — explicitly covers live `*.db`, `*-wal`, and `*-shm` file descriptors.
 - **W#8c.** `test_all_registered_path_helpers_resolve_under_scratch_root`.
 - **W#8d.** `test_unregistered_memory_db_open_refused_by_default`.
 - **W#9.** `test_proposal_without_witness_still_ratifies_unchanged` — witness_status = `UNWITNESSED_BY_POLICY` or `UNWITNESSED_BY_OMISSION` recorded explicitly.
@@ -424,7 +424,7 @@ The committed canon will enumerate each test by number with assertion-reason dig
 | `WITNESS_STALE` | ratification-time recheck | W#5*, W#13a: anchor changed after capture and ratification recheck raises `WITNESS_STALE` |
 | `INBOUND_TAINT_UNCLEARED` | construction | W#6 / W#6c: tainted narrative/ref/path/test-name/producer-id field fails scan or resolver validation and raises `INBOUND_TAINT_UNCLEARED` |
 | `SELF_RATIFICATION_DETECTED` | re-verification | W#7*: verifier consumes producer-asserted recomputable value or laundering path and raises `SELF_RATIFICATION_DETECTED` |
-| `LIVE_SUBSTRATE_MUTATION_DETECTED` | re-verification | W#8 / W#8b: verifier opens or mutates live locus / live DB-WAL-SHM fd and raises `LIVE_SUBSTRATE_MUTATION_DETECTED` |
+| `LIVE_SUBSTRATE_MUTATION_DETECTED` | re-verification | W#8 / W#8b: verifier opens or mutates live locus / live `*.db`, `*-wal`, or `*-shm` fd and raises `LIVE_SUBSTRATE_MUTATION_DETECTED` |
 | `WITNESS_KIND_NOT_YET_VOCABULARY` | construction | W#10a: reserved partition cell or runtime kind outside populated vocabulary raises `WITNESS_KIND_NOT_YET_VOCABULARY` |
 | `LEGACY_WITNESS_SHAPE_REFUSED` | migration write-boundary | W#legacy / W#legacy-static: append/update/emit/ratify legacy 4-boolean witness attempt raises `LEGACY_WITNESS_SHAPE_REFUSED` |
 | divergence | not a refusal | W#4, W#4b, W#4c, W#4d: divergence emits diagnostic and requires exact-generation acknowledgment; it never maps to `WitnessRefused` |
@@ -511,4 +511,4 @@ After this slice ships, ratifies through both lanes, and lands:
 
 ---
 
-*Brief v1.3 — 2026-05-26. Author: Claude under Rohit dispatch; v1.2 and v1.3 folds by Codex under Rohit signal. Folded eleven convergent council-pass-1 batches (A–K), fifteen per-role council uniques, eleven Codex engineering pass-1 fold batches, and the narrow Codex pass-2 closure deltas. Council review files preserved verbatim at `reviews/claude-council-{locke,kant,hume,buber,descartes,ohm}-pass1.md`; Codex review files preserved verbatim at `reviews/codex-*-pass1.md` and `reviews/codex-*-pass2.md`; synthesis files preserved at `reviews/claude-council-synthesis-v1-pass1.md`, `reviews/codex-engineering-synthesis-v1.1-pass1.md`, and `reviews/codex-engineering-synthesis-v1.2-pass2.md`. Next: Codex pass-3 closure-only check against v1.3 deltas, then canonicalize as Decision 41 / ADR 0046 if pass-3 returns CLOSED / NIT-only.*
+*Brief v1.3 — 2026-05-26. Author: Claude under Rohit dispatch; v1.2 and v1.3 folds by Codex under Rohit signal. Folded eleven convergent council-pass-1 batches (A–K), fifteen per-role council uniques, eleven Codex engineering pass-1 fold batches, the narrow Codex pass-2 closure deltas, and the pass-3 typographical fd-glob nit. Council review files preserved verbatim at `reviews/claude-council-{locke,kant,hume,buber,descartes,ohm}-pass1.md`; Codex review files preserved verbatim at `reviews/codex-*-pass1.md`, `reviews/codex-*-pass2.md`, and `reviews/codex-pass3-*.md`; synthesis files preserved at `reviews/claude-council-synthesis-v1-pass1.md`, `reviews/codex-engineering-synthesis-v1.1-pass1.md`, `reviews/codex-engineering-synthesis-v1.2-pass2.md`, and `reviews/codex-engineering-synthesis-v1.3-pass3.md`. Next: canonicalize as Decision 41 / ADR 0046.*
