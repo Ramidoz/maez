@@ -386,7 +386,7 @@ substrate work is authorized by this section.
 - **Purpose:** codify the Claude covenant council + Codex engineering panel
   method so it survives context loss and future agent replacement.
 - **Preconditions:** existing review artifacts from S4 through Slice 2; canon
-  refresh current as of Decisions 36-40.
+  refresh current as of Decisions 36-41.
 - **Risk:** the process remains oral tradition and drifts when future agents do
   not know which lane owns which judgment.
 - **Rough scope:** lane responsibilities, dependency-map requirement,

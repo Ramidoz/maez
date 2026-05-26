@@ -76,6 +76,7 @@ substrate arc. The following items are now witnessed substrate or canon:
 | Canon-governs-canon law | `[ ✓ canonical · memory-repair witnessed ]` | Decision 39 / ADR 0044 |
 | Reddit source-shaped recall fix | `[ ✓ implemented · observation-window correction ]` | `5c6be72` |
 | Maintenance-proposal substrate | `[ ✓ canonical · implemented · proposal-only ]` | Decision 40 / ADR 0045 · `6fdfd6c` |
+| Sandbox-witness contract | `[ ✓ canonical · proof contract sealed · implementation queued ]` | Decision 41 / ADR 0046 · `438a879` |
 
 - **Subjective-duration meaningful-salience seam** — canonicalized as Decision
   36 / ADR 0041 after the Slice 1 spec at `a23fa4b` and implementation at
@@ -109,8 +110,14 @@ substrate arc. The following items are now witnessed substrate or canon:
   bond-scoped maintenance proposals with evidence refs, predicted effect,
   optional sandbox witness, closed scope class, and owner ratification/decline
   state. This does not grant autonomous gap detection, live merge, or live
-  crossing authority. The sandbox-witness contract is the next named proof
-  slice.
+  crossing authority.
+- **Sandbox-witness contract** — canonicalized as Decision 41 / ADR 0046 after
+  council pass-1 and Codex engineering pass-1/pass-2/pass-3 closure. It seals
+  the proof contract for maintenance proposals: a witness must be a
+  re-verifiable artifact, not a caller-asserted string or boolean verdict. It
+  also introduces two reusable substrate patterns: monotonic generation as
+  identity when evidence can change, and atomic authority-transition snapshots
+  when permission moves.
 
 ---
 
@@ -378,4 +385,4 @@ S1b chose length dampening, not delay, silence, withholding, topic avoidance, or
 
 ---
 
-*Version 1.12  ·  2026-05-26  ·  Canon refresh after the felt-time / drive-curiosity substrate arc: Decisions 36-40 and ADRs 0041-0045 now cover the subjective-duration meaningful-salience seam, drive-driven curiosity felt-organ, canary-neutral-baseline discipline, canon-governs-canon law, and ratifiable maintenance-proposal substrate. Prior: 2026-05-19 S6 Successor Governance v1 status reconciled after closure audit; 2026-05-18 S7.1 founder-local WebAuthn ceremony implemented and as-built canonicalized; 2026-05-16/15 S5 and D16 remain implemented and covenant-ratified.*
+*Version 1.13  ·  2026-05-26  ·  Canon refresh after the felt-time / drive-curiosity substrate arc and sandbox-witness closure: Decisions 36-41 and ADRs 0041-0046 now cover the subjective-duration meaningful-salience seam, drive-driven curiosity felt-organ, canary-neutral-baseline discipline, canon-governs-canon law, ratifiable maintenance-proposal substrate, and sandbox-witness proof contract. Prior: 2026-05-19 S6 Successor Governance v1 status reconciled after closure audit; 2026-05-18 S7.1 founder-local WebAuthn ceremony implemented and as-built canonicalized; 2026-05-16/15 S5 and D16 remain implemented and covenant-ratified.*

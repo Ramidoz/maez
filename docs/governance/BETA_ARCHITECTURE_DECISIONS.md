@@ -3206,6 +3206,30 @@ ADR: [`0045-ratifiable-maintenance-proposals`](../adr/0045-ratifiable-maintenanc
 
 ---
 
+## Decision 41 — Sandbox-witness contract
+
+ADR: [`0046-sandbox-witness-contract`](../adr/0046-sandbox-witness-contract.md).
+
+**The decision.** A sandbox witness attached to a maintenance proposal must be a re-verifiable artifact, not a caller-asserted string or four-boolean verdict. The contract introduces two durable substrate patterns: **monotonic generation as identity, semantic key as index** and **atomic authority-transition snapshot**.
+
+**Why now.** Decision 40 created the maintenance-proposal form while deliberately leaving proof unsealed. The five small-maintenance-shape fixes from the observation window showed the form's intended use, and the legacy `SandboxWitness` booleans showed the laundering surface: "I checked my work" could become owner-ratified authority without a separable proof object. The sandbox-witness brief passed council pass-1, Codex pass-1, Codex pass-2, and Codex pass-3 closure before canonicalization.
+
+**Surface mode.**
+- Witnesses attach to ADR 0045 maintenance proposals; they do not change owner-ratification authority.
+- V1 witness kinds are closed vocabulary: `WORKTREE_RED_TEST`, `WORKTREE_SCHEMA_DIFF`, `SCRATCH_DB_TRANSFORM`, and `DRY_RUN_OBSERVATION`.
+- Every kind declares deterministic `observed_effect = f(artifacts)`.
+- Legacy four-boolean witnesses are read-only compatibility state; new append/update/emit/ratify paths refuse them with `LEGACY_WITNESS_SHAPE_REFUSED`.
+- Staleness anchors must be concrete and race-safe, including SQLite WAL/concurrent-writer DB cursor behavior.
+- Ratification does a final atomic eligibility snapshot and does not rerun the full witness subprocess by default.
+
+**Pattern mode.**
+- **Evidence can change: use monotonic generations.** If a substrate object can be re-stated, stale, superseded, or refreshed, the new statement gets a new identity; the semantic key locates the family.
+- **Authority can move: bind eligibility atomically.** If a state change records authority, every fact that makes it eligible must be checked and bound inside one critical section, then written in the same ordered transition.
+
+**This decision does not** add autonomous witness running, autonomous gap detection, autonomous patch application, autonomous live merge, consent-card UI, Maez-asks-Claude routing, or decline-pattern learning. It seals the proof contract that later slices must use.
+
+---
+
 ## How to update this document
 
 Append new decisions as numbered sections. Never rewrite existing decisions unless explicitly rescoped, and when rescoping, preserve the original text as a *"Previous version"* subsection. The record matters more than neatness.
@@ -3216,4 +3240,4 @@ When a decision in this document becomes code, add a *"Implementation"* subsecti
 
 ---
 
-*Last updated: 2026-05-26 — Decisions 36-40 minted for the witnessed Slice 1 subjective-duration meaningful-salience seam, Slice 2 drive-driven curiosity felt-organ, canary-neutral-baseline discipline, canon-governs-canon law, and ratifiable maintenance-proposal substrate. Prior update: 2026-05-19 — Decision 33 status reconciled after S6 implementation and persisted-authorship round-2 recovery were both-lane ratified and pushed; S6 is implemented as a grammar/validation organ, not successor activation. Earlier: 2026-05-18 — Decision 34 amended for S7.1 as-built canonicalization; 2026-05-16 through 2026-05-15 — Decisions 31-33; 2026-05-15 — Decisions 28-30; 2026-05-14 — Decisions 24-27.*
+*Last updated: 2026-05-26 — Decision 41 minted for the sandbox-witness contract after council + Codex closure. Prior same-day update: Decisions 36-40 minted for the witnessed Slice 1 subjective-duration meaningful-salience seam, Slice 2 drive-driven curiosity felt-organ, canary-neutral-baseline discipline, canon-governs-canon law, and ratifiable maintenance-proposal substrate. Prior update: 2026-05-19 — Decision 33 status reconciled after S6 implementation and persisted-authorship round-2 recovery were both-lane ratified and pushed; S6 is implemented as a grammar/validation organ, not successor activation. Earlier: 2026-05-18 — Decision 34 amended for S7.1 as-built canonicalization; 2026-05-16 through 2026-05-15 — Decisions 31-33; 2026-05-15 — Decisions 28-30; 2026-05-14 — Decisions 24-27.*
