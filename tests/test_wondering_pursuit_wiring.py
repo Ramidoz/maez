@@ -168,10 +168,17 @@ class PursuitFailureIsSilent(unittest.TestCase):
         idx = _DAEMON_SRC.find("decide_pursuit(")
         self.assertGreater(idx, 0, "decide_pursuit callsite missing")
         before = _DAEMON_SRC[max(0, idx - 600) : idx]
-        after = _DAEMON_SRC[idx : idx + 1500]
+        next_boundary = _DAEMON_SRC.find(
+            "# 2026-04-23 memory-integrity contract",
+            idx,
+        )
+        self.assertGreater(next_boundary, idx, "pursuit block boundary missing")
+        pursuit_block = _DAEMON_SRC[idx:next_boundary]
         self.assertIn("try:", before, "decide_pursuit must be inside a try: block")
         self.assertRegex(
-            after, r"except\s+Exception", "decide_pursuit must catch Exception (silent fail-open)"
+            pursuit_block,
+            r"except\s+Exception",
+            "decide_pursuit must catch Exception (silent fail-open)",
         )
 
 
