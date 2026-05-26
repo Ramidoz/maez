@@ -787,6 +787,7 @@ def write_curiosity_resolution_seam_call(
     )
     if is_canary:
         temperament_event_id = None
+        before_snapshot = {**before_snapshot, "curiosity": prior}
         after_snapshot = {**before_snapshot, "curiosity": new_value}
     else:
         temperament_event_id = temperament.record_event(
