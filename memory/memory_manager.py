@@ -474,6 +474,18 @@ _LAST_NIGHT_MIN_AGE_HOURS = 6.0
 _LAST_NIGHT_MAX_AGE_HOURS = 24.0
 _YESTERDAY_MIN_AGE_HOURS = 12.0
 _YESTERDAY_MAX_AGE_HOURS = 48.0
+_THIS_MORNING_MIN_AGE_HOURS = 2.0
+_THIS_MORNING_MAX_AGE_HOURS = 12.0
+_EARLIER_TODAY_MIN_AGE_HOURS = 1.0
+_EARLIER_TODAY_MAX_AGE_HOURS = 12.0
+_YESTERDAY_AFTERNOON_MIN_AGE_HOURS = 18.0
+_YESTERDAY_AFTERNOON_MAX_AGE_HOURS = 28.0
+_YESTERDAY_MORNING_MIN_AGE_HOURS = 28.0
+_YESTERDAY_MORNING_MAX_AGE_HOURS = 36.0
+_TWO_DAYS_AGO_MIN_AGE_HOURS = 36.0
+_TWO_DAYS_AGO_MAX_AGE_HOURS = 60.0
+_LAST_HOUR_MIN_AGE_HOURS = 0.0
+_LAST_HOUR_MAX_AGE_HOURS = 1.5
 
 
 def _is_temporal_recall_followup(query: str) -> bool:
@@ -578,9 +590,28 @@ def _temporal_telegram_age_window(query: str) -> tuple[float, float] | None:
     The vector store already has Telegram exchanges. The missing piece
     is translating vague owner phrases like "last evening" into a
     source/time-shaped supplement so semantic recall does not open the
-    wrong notebook.
+    wrong notebook. More specific phrases must be checked before less
+    specific ones — "yesterday afternoon" is narrower than "yesterday".
     """
     q = (query or "").lower()
+    if re.search(r"\bin the last hour\b", q):
+        return (_LAST_HOUR_MIN_AGE_HOURS, _LAST_HOUR_MAX_AGE_HOURS)
+    if re.search(r"\byesterday afternoon\b", q):
+        return (
+            _YESTERDAY_AFTERNOON_MIN_AGE_HOURS,
+            _YESTERDAY_AFTERNOON_MAX_AGE_HOURS,
+        )
+    if re.search(r"\byesterday morning\b", q):
+        return (
+            _YESTERDAY_MORNING_MIN_AGE_HOURS,
+            _YESTERDAY_MORNING_MAX_AGE_HOURS,
+        )
+    if re.search(r"\btwo days ago\b", q):
+        return (_TWO_DAYS_AGO_MIN_AGE_HOURS, _TWO_DAYS_AGO_MAX_AGE_HOURS)
+    if re.search(r"\bthis morning\b", q):
+        return (_THIS_MORNING_MIN_AGE_HOURS, _THIS_MORNING_MAX_AGE_HOURS)
+    if re.search(r"\bearlier today\b", q):
+        return (_EARLIER_TODAY_MIN_AGE_HOURS, _EARLIER_TODAY_MAX_AGE_HOURS)
     if re.search(r"\b(last night|last evening)\b", q):
         return (_LAST_NIGHT_MIN_AGE_HOURS, _LAST_NIGHT_MAX_AGE_HOURS)
     if re.search(r"\byesterday\b", q):

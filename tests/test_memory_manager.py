@@ -584,6 +584,208 @@ class RedditSourceAwareRecallTests(unittest.TestCase):
 
         self.assertEqual(recalled["raw"][0]["id"], "generic-check-again")
 
+    def test_this_morning_query_supplements_morning_telegram_exchanges(self):
+        now = datetime(2026, 5, 26, 16, 30, tzinfo=timezone.utc)
+        this_morning = now - timedelta(hours=8)
+        too_old = now - timedelta(hours=20)
+        mm = self._manager_with_raw(
+            rows=[
+                {
+                    "id": "generic-morning",
+                    "content": "A generic note about mornings.",
+                    "metadata": {"timestamp": now.isoformat(), "type": "reasoning"},
+                    "distance": 0.08,
+                },
+            ],
+            get_rows=[
+                {
+                    "id": "telegram-this-morning",
+                    "content": (
+                        "the owner (telegram_surface): Maez I'm starting the day.\n"
+                        "Maez: Good morning, Rohit."
+                    ),
+                    "metadata": {
+                        "timestamp": this_morning.isoformat(),
+                        "type": "telegram_exchange",
+                        "trust_tier": "lived",
+                    },
+                    "distance": 0.50,
+                },
+                {
+                    "id": "telegram-too-old",
+                    "content": "the owner (telegram_surface): older exchange",
+                    "metadata": {
+                        "timestamp": too_old.isoformat(),
+                        "type": "telegram_exchange",
+                        "trust_tier": "lived",
+                    },
+                    "distance": 0.50,
+                },
+            ],
+        )
+
+        with (
+            mock.patch("memory.memory_manager._now_seconds", return_value=now.timestamp()),
+            mock.patch("memory.mmr.mmr_rerank", side_effect=lambda rows, k, lambda_: rows[:k]),
+        ):
+            recalled = mm.recall_for_telegram("What were we talking about this morning?")
+
+        self.assertEqual(recalled["raw"][0]["id"], "telegram-this-morning")
+        self.assertNotIn("telegram-too-old", [row["id"] for row in recalled["raw"]])
+
+    def test_earlier_today_query_supplements_today_telegram_exchanges(self):
+        now = datetime(2026, 5, 26, 21, 0, tzinfo=timezone.utc)
+        earlier_today = now - timedelta(hours=5)
+        too_old = now - timedelta(hours=20)
+        mm = self._manager_with_raw(
+            rows=[
+                {
+                    "id": "generic-earlier",
+                    "content": "Generic note about earlier discussions.",
+                    "metadata": {"timestamp": now.isoformat(), "type": "reasoning"},
+                    "distance": 0.08,
+                },
+            ],
+            get_rows=[
+                {
+                    "id": "telegram-earlier-today",
+                    "content": (
+                        "the owner (telegram_surface): Quick question about the audit.\n"
+                        "Maez: Audit is on aa29bb0."
+                    ),
+                    "metadata": {
+                        "timestamp": earlier_today.isoformat(),
+                        "type": "telegram_exchange",
+                        "trust_tier": "lived",
+                    },
+                    "distance": 0.50,
+                },
+                {
+                    "id": "telegram-too-old",
+                    "content": "the owner (telegram_surface): older exchange",
+                    "metadata": {
+                        "timestamp": too_old.isoformat(),
+                        "type": "telegram_exchange",
+                        "trust_tier": "lived",
+                    },
+                    "distance": 0.50,
+                },
+            ],
+        )
+
+        with (
+            mock.patch("memory.memory_manager._now_seconds", return_value=now.timestamp()),
+            mock.patch("memory.mmr.mmr_rerank", side_effect=lambda rows, k, lambda_: rows[:k]),
+        ):
+            recalled = mm.recall_for_telegram("What did we talk about earlier today?")
+
+        self.assertEqual(recalled["raw"][0]["id"], "telegram-earlier-today")
+        self.assertNotIn("telegram-too-old", [row["id"] for row in recalled["raw"]])
+
+    def test_yesterday_afternoon_query_supplements_yesterday_afternoon_exchanges(self):
+        now = datetime(2026, 5, 26, 14, 0, tzinfo=timezone.utc)
+        yesterday_afternoon = now - timedelta(hours=22)
+        yesterday_morning = now - timedelta(hours=30)
+        mm = self._manager_with_raw(
+            rows=[
+                {
+                    "id": "generic-yesterday",
+                    "content": "Generic note about yesterday.",
+                    "metadata": {"timestamp": now.isoformat(), "type": "reasoning"},
+                    "distance": 0.08,
+                },
+            ],
+            get_rows=[
+                {
+                    "id": "telegram-yesterday-afternoon",
+                    "content": (
+                        "the owner (telegram_surface): How did Slice 2 land?\n"
+                        "Maez: Slice 2 is live at fbe78e1."
+                    ),
+                    "metadata": {
+                        "timestamp": yesterday_afternoon.isoformat(),
+                        "type": "telegram_exchange",
+                        "trust_tier": "lived",
+                    },
+                    "distance": 0.50,
+                },
+                {
+                    "id": "telegram-yesterday-morning",
+                    "content": "the owner (telegram_surface): Morning check-in yesterday.",
+                    "metadata": {
+                        "timestamp": yesterday_morning.isoformat(),
+                        "type": "telegram_exchange",
+                        "trust_tier": "lived",
+                    },
+                    "distance": 0.50,
+                },
+            ],
+        )
+
+        with (
+            mock.patch("memory.memory_manager._now_seconds", return_value=now.timestamp()),
+            mock.patch("memory.mmr.mmr_rerank", side_effect=lambda rows, k, lambda_: rows[:k]),
+        ):
+            recalled = mm.recall_for_telegram("What did we discuss yesterday afternoon?")
+
+        self.assertEqual(recalled["raw"][0]["id"], "telegram-yesterday-afternoon")
+        self.assertNotIn(
+            "telegram-yesterday-morning",
+            [row["id"] for row in recalled["raw"]],
+        )
+
+    def test_two_days_ago_query_supplements_two_day_old_exchanges(self):
+        now = datetime(2026, 5, 26, 12, 0, tzinfo=timezone.utc)
+        two_days_ago = now - timedelta(hours=48)
+        too_recent = now - timedelta(hours=20)
+        mm = self._manager_with_raw(
+            rows=[
+                {
+                    "id": "generic-days",
+                    "content": "Generic note.",
+                    "metadata": {"timestamp": now.isoformat(), "type": "reasoning"},
+                    "distance": 0.08,
+                },
+            ],
+            get_rows=[
+                {
+                    "id": "telegram-two-days",
+                    "content": (
+                        "the owner (telegram_surface): The canon refresh discussion.\n"
+                        "Maez: Decisions 36-40 minted."
+                    ),
+                    "metadata": {
+                        "timestamp": two_days_ago.isoformat(),
+                        "type": "telegram_exchange",
+                        "trust_tier": "lived",
+                    },
+                    "distance": 0.50,
+                },
+                {
+                    "id": "telegram-too-recent",
+                    "content": "the owner (telegram_surface): yesterday's chat",
+                    "metadata": {
+                        "timestamp": too_recent.isoformat(),
+                        "type": "telegram_exchange",
+                        "trust_tier": "lived",
+                    },
+                    "distance": 0.50,
+                },
+            ],
+        )
+
+        with (
+            mock.patch("memory.memory_manager._now_seconds", return_value=now.timestamp()),
+            mock.patch("memory.mmr.mmr_rerank", side_effect=lambda rows, k, lambda_: rows[:k]),
+        ):
+            recalled = mm.recall_for_telegram("What did we discuss two days ago?")
+
+        self.assertEqual(recalled["raw"][0]["id"], "telegram-two-days")
+        self.assertNotIn(
+            "telegram-too-recent",
+            [row["id"] for row in recalled["raw"]],
+        )
+
 
 class GetRecentDailyTests(unittest.TestCase):
     """``get_recent_daily(limit)`` was added 2026-04-27 to close the
