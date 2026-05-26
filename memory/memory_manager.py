@@ -476,6 +476,41 @@ _YESTERDAY_MIN_AGE_HOURS = 12.0
 _YESTERDAY_MAX_AGE_HOURS = 48.0
 
 
+def _is_temporal_recall_followup(query: str) -> bool:
+    """Return true for short owner follow-ups that ask Maez to re-check
+    the immediately preceding recall claim.
+
+    This deliberately does not make every vague message inherit prior
+    recall intent; it covers the screenshot-shaped repair turns only.
+    """
+    q = re.sub(r"[?!.]+", "", (query or "").lower()).strip()
+    if q in {"you sure", "are you sure", "check again", "look again", "try again"}:
+        return True
+    return bool(re.fullmatch(r"(can you )?(check|look|try) again", q))
+
+
+def _owner_text_from_telegram_exchange(content: str) -> str:
+    """Extract the owner-side first line from stored Telegram exchange
+    rows.
+
+    Stored forms are not all identical across surfaces, so this keeps
+    the parsing intentionally shallow: only the owner first line is
+    needed to inherit a prior temporal recall phrase.
+    """
+    first_line = (content or "").split("\n", 1)[0].strip()
+    if not first_line:
+        return ""
+    source_match = re.match(r"^the owner \([^)]+\):\s*(.*)$", first_line)
+    if source_match:
+        return source_match.group(1).strip()
+    asked_match = re.match(r"^the owner asked:\s*(.*)$", first_line)
+    if asked_match:
+        return asked_match.group(1).strip()
+    if ":" in first_line:
+        return first_line.split(":", 1)[1].strip()
+    return ""
+
+
 def _reddit_source_distance_factor(query: str, mem: dict, now_s: float) -> float:
     """Return a distance multiplier for fresh Reddit rows when the
     owner asks a Reddit-shaped question.
@@ -1389,10 +1424,10 @@ class MemoryManager:
         stored Telegram exchanges, and filters by age before ranking.
         """
         window = _temporal_telegram_age_window(query)
-        if not window or collection.count() == 0:
+        followup = window is None and _is_temporal_recall_followup(query)
+        if (not window and not followup) or collection.count() == 0:
             return []
 
-        min_age_h, max_age_h = window
         now_s = _now_seconds()
         try:
             got = collection.get(
@@ -1403,26 +1438,41 @@ class MemoryManager:
             logger.debug("telegram temporal supplement skipped: %s", exc)
             return []
 
-        rows: list[dict] = []
+        fetched: list[dict] = []
         for i, row_id in enumerate(got.get("ids") or []):
             meta = (got.get("metadatas") or [{}])[i] or {}
             if meta.get("integrity") in self._EXCLUDED_INTEGRITY:
                 continue
-            age_h = _age_hours_from_iso(meta.get("timestamp", ""), now_s)
-            if age_h < min_age_h or age_h > max_age_h:
-                continue
             docs = got.get("documents") or []
-            rows.append({
+            fetched.append({
                 "id": row_id,
                 "content": docs[i] if i < len(docs) else "",
                 "metadata": meta,
                 "distance": 0.01,
             })
 
-        rows.sort(
+        fetched.sort(
             key=lambda r: str((r.get("metadata") or {}).get("timestamp") or ""),
             reverse=True,
         )
+
+        if window is None:
+            for row in fetched[:8]:
+                owner_text = _owner_text_from_telegram_exchange(row.get("content") or "")
+                window = _temporal_telegram_age_window(owner_text)
+                if window is not None:
+                    break
+        if window is None:
+            return []
+
+        min_age_h, max_age_h = window
+        rows: list[dict] = []
+        for row in fetched:
+            meta = row.get("metadata") or {}
+            age_h = _age_hours_from_iso(meta.get("timestamp", ""), now_s)
+            if age_h < min_age_h or age_h > max_age_h:
+                continue
+            rows.append(row)
         return rows[:limit]
 
     def _merge_recall_candidates(
