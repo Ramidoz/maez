@@ -470,7 +470,10 @@ def _row_to_proposal(row: sqlite3.Row) -> MaintenanceProposal:
 
 
 def _refuse_legacy_witness(proposal: MaintenanceProposal) -> None:
-    if proposal.sandbox_witness is not None:
+    if (
+        proposal.sandbox_witness is not None
+        or proposal.legacy_sandbox_witness_json is not None
+    ):
         raise WitnessRefused(
             WitnessRefusalReason.LEGACY_WITNESS_SHAPE_REFUSED,
             "legacy sandbox_witness_json is read-only compatibility state",

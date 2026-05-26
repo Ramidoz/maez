@@ -236,6 +236,81 @@ class MaintenanceProposalTests(unittest.TestCase):
         self.assertIsNone(loaded.sandbox_witness)
         self.assertEqual(loaded.legacy_sandbox_witness_json, legacy_json)
 
+    def test_legacy_sandbox_witness_json_refused_at_ratification(self):
+        from core.policies.maintenance_proposals import ratify_maintenance_proposal
+        from core.policies.sandbox_witnesses import (
+            WitnessRefusalReason,
+            WitnessRefused,
+        )
+
+        store = self._store()
+        preference_store = AutonomyPreferences(self.pref_path)
+        legacy_json = (
+            '{"focused_tests_passed": true, "red_tests_passed": true, '
+            f'"scratch_canary_passed": true, "witness_digest": "{_DIGEST_B}"}}'
+        )
+        with closing(sqlite3.connect(self.db_path)) as con:
+            con.execute(
+                dedent(
+                    """
+                    INSERT INTO maintenance_proposals (
+                        proposal_id,
+                        bond_id,
+                        emitted_utc,
+                        scope_class,
+                        diagnosis_digest,
+                        proposed_patch_ref,
+                        predicted_effect,
+                        sandbox_witness_json,
+                        evidence_refs_json,
+                        status,
+                        ratified_utc,
+                        decline_reason_digest,
+                        witness_status
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """
+                ),
+                (
+                    "legacy-ratify",
+                    "firstborn",
+                    datetime(2026, 5, 26, 12, 0, tzinfo=UTC).isoformat(),
+                    "ranking_refinement",
+                    _DIGEST_A,
+                    "refs/heads/legacy-ratify",
+                    "Legacy row should not authorize ratification.",
+                    legacy_json,
+                    (
+                        '[{"evidence_kind": "raw_memory", '
+                        f'"ref_digest": "{_DIGEST_C}", '
+                        '"observed_utc": "2026-05-26T11:30:00+00:00"}]'
+                    ),
+                    "proposed",
+                    None,
+                    None,
+                    None,
+                ),
+            )
+            con.commit()
+
+        with self.assertRaises(WitnessRefused) as ctx:
+            ratify_maintenance_proposal(
+                bond_id="firstborn",
+                proposal_id="legacy-ratify",
+                ratified_utc=datetime(2026, 5, 26, 13, 0, tzinfo=UTC),
+                store=store,
+                preference_store=preference_store,
+            )
+
+        self.assertEqual(
+            ctx.exception.reason,
+            WitnessRefusalReason.LEGACY_WITNESS_SHAPE_REFUSED,
+        )
+        self.assertEqual(
+            store.get("firstborn", "legacy-ratify").status.value,
+            "proposed",
+        )
+
     def test_static_guard_refuses_new_production_write_to_legacy_sandbox_witness_json(self):
         source = Path("core/policies/maintenance_proposals.py").read_text(
             encoding="utf-8"
