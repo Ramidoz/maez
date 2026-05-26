@@ -18,10 +18,12 @@ from core.policies.autonomy_preferences import (
     PreferenceExpressedBy,
 )
 from core.policies.sandbox_witnesses import (
+    AnchorResolver,
     SandboxWitnesses,
     WitnessRefusalReason,
     WitnessRefused,
     WitnessStatus,
+    assert_witness_not_stale,
 )
 
 
@@ -284,6 +286,7 @@ def ratify_maintenance_proposal(
     store: MaintenanceProposals | None = None,
     preference_store: AutonomyPreferences | None = None,
     witness_store: SandboxWitnesses | None = None,
+    witness_anchor_resolver: AnchorResolver | None = None,
     diagnostic_sink: DiagnosticSink | None = None,
 ) -> MaintenanceProposal:
     active_store = store or MaintenanceProposals()
@@ -293,6 +296,7 @@ def ratify_maintenance_proposal(
         bond_id=bond_id,
         proposal_id=proposal_id,
         witness_store=witness_store,
+        witness_anchor_resolver=witness_anchor_resolver,
     )
     ratified = replace(
         proposal,
@@ -485,6 +489,7 @@ def _ratification_witness_status(
     bond_id: str,
     proposal_id: str,
     witness_store: SandboxWitnesses | None,
+    witness_anchor_resolver: AnchorResolver | None,
 ) -> WitnessStatus:
     if witness_store is None:
         return WitnessStatus.UNWITNESSED_BY_OMISSION
@@ -496,6 +501,7 @@ def _ratification_witness_status(
             witness.refusal_reason or WitnessRefusalReason.WITNESS_STALE,
             "current sandbox witness generation is not ratification-eligible",
         )
+    assert_witness_not_stale(witness, witness_anchor_resolver)
     return WitnessStatus.WITNESSED
 
 

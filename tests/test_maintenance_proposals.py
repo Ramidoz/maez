@@ -397,6 +397,63 @@ class MaintenanceProposalTests(unittest.TestCase):
             WitnessStatus.WITNESSED,
         )
 
+    def test_ratification_refuses_stale_current_witness_before_preference_write(self):
+        from core.policies.maintenance_proposals import ratify_maintenance_proposal
+        from core.policies.sandbox_witnesses import (
+            SandboxWitnessKind,
+            SandboxWitnessRecord,
+            SandboxWitnesses,
+            StalenessAnchor,
+            StalenessAnchorKind,
+            WitnessRefusalReason,
+            WitnessRefused,
+        )
+
+        store = self._store()
+        preference_store = AutonomyPreferences(self.pref_path)
+        witness_store = SandboxWitnesses(Path(self.tmp.name) / "sandbox_witnesses.db")
+        store.append(self._proposal())
+        witness_store.append(
+            SandboxWitnessRecord.new(
+                bond_id="firstborn",
+                proposal_id="proposal-1",
+                witness_kind=SandboxWitnessKind.WORKTREE_RED_TEST,
+                observed_effect_digest=_DIGEST_A,
+                predicted_effect_digest=_DIGEST_B,
+                artifact_digest=_DIGEST_C,
+                captured_utc=datetime(2026, 5, 26, 12, 30, tzinfo=UTC),
+                staleness_anchors=(
+                    StalenessAnchor(
+                        anchor_kind=StalenessAnchorKind.DB_CURSOR,
+                        anchor_name="raw_memory:reddit_post_id",
+                        anchor_value="2373",
+                    ),
+                ),
+            )
+        )
+
+        with self.assertRaises(WitnessRefused) as ctx:
+            ratify_maintenance_proposal(
+                bond_id="firstborn",
+                proposal_id="proposal-1",
+                ratified_utc=datetime(2026, 5, 26, 13, 0, tzinfo=UTC),
+                store=store,
+                preference_store=preference_store,
+                witness_store=witness_store,
+                witness_anchor_resolver=lambda anchor: "2374",
+            )
+
+        self.assertEqual(ctx.exception.reason, WitnessRefusalReason.WITNESS_STALE)
+        self.assertEqual(store.get("firstborn", "proposal-1").status.value, "proposed")
+        self.assertEqual(
+            preferences_for_bond_and_class(
+                "firstborn",
+                PreferenceClass.MAINTENANCE_RATIFICATION,
+                store=preference_store,
+            ),
+            [],
+        )
+
     def test_ratify_does_not_mark_proposal_ratified_when_preference_write_fails(self):
         from core.policies.maintenance_proposals import ratify_maintenance_proposal
 

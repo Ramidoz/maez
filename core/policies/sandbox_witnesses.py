@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from enum import Enum
 from hashlib import sha256
 from pathlib import Path
+from typing import Callable
 
 from core import paths
 
@@ -51,6 +52,9 @@ class WitnessRefused(ValueError):
     def __init__(self, reason: WitnessRefusalReason, message: str):
         self.reason = reason
         super().__init__(message)
+
+
+AnchorResolver = Callable[["StalenessAnchor"], str]
 
 
 @dataclass(frozen=True)
@@ -334,6 +338,27 @@ def construct_witness_record(
         captured_utc=bundle.captured_utc,
         staleness_anchors=bundle.staleness_anchors,
     )
+
+
+def assert_witness_not_stale(
+    witness: SandboxWitnessRecord,
+    resolver: AnchorResolver | None,
+) -> None:
+    if resolver is None:
+        return
+    for anchor in witness.staleness_anchors:
+        try:
+            current_value = resolver(anchor)
+        except Exception as exc:
+            raise WitnessRefused(
+                WitnessRefusalReason.WITNESS_STALE,
+                f"staleness anchor could not be resolved: {anchor.anchor_name}",
+            ) from exc
+        if not current_value or str(current_value) != anchor.anchor_value:
+            raise WitnessRefused(
+                WitnessRefusalReason.WITNESS_STALE,
+                f"staleness anchor advanced: {anchor.anchor_name}",
+            )
 
 
 def _refuse_tainted_narrative(bundle: WitnessArtifactBundle) -> None:
