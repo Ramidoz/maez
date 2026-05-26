@@ -124,3 +124,89 @@ class SandboxWitnessVocabularyTests(unittest.TestCase):
                 [anchor.anchor_name for anchor in loaded.staleness_anchors],
                 ["worktree", "raw_memory:reddit_post_id"],
             )
+
+    def test_caller_supplied_observed_digest_refused_at_construction(self):
+        from core.policies.sandbox_witnesses import (
+            SandboxWitnessKind,
+            WitnessArtifactBundle,
+            WitnessRefusalReason,
+            WitnessRefused,
+            construct_witness_record,
+        )
+
+        bundle = WitnessArtifactBundle(
+            witness_kind=SandboxWitnessKind.WORKTREE_RED_TEST,
+            artifacts={
+                "command_argv": ["python", "-m", "unittest", "tests.test_memory"],
+                "test_results": [
+                    {
+                        "test_id": "tests.test_memory::test_reddit",
+                        "verdict": "failed_red",
+                        "assertion_reason_digest": "hmac-sha256:" + "1" * 64,
+                        "failure_class": "AssertionError",
+                        "normalized_failure_location": "tests/test_memory.py:10",
+                    }
+                ],
+                "source_hashes": {"memory_manager.py": "hmac-sha256:" + "2" * 64},
+            },
+            predicted_effect_digest="hmac-sha256:" + "b" * 64,
+            captured_utc=datetime(2026, 5, 26, 12, 0, tzinfo=UTC),
+        )
+
+        with self.assertRaises(WitnessRefused) as ctx:
+            construct_witness_record(
+                bond_id="firstborn",
+                proposal_id="proposal-1",
+                bundle=bundle,
+                observed_effect_digest="hmac-sha256:" + "a" * 64,
+            )
+
+        self.assertEqual(ctx.exception.reason, WitnessRefusalReason.CALLER_SUPPLIED_DIGEST)
+
+    def test_observed_effect_recomputation_is_idempotent_on_unchanged_artifacts(self):
+        from core.policies.sandbox_witnesses import (
+            SandboxWitnessKind,
+            WitnessArtifactBundle,
+            construct_witness_record,
+        )
+
+        artifacts = {
+            "command_argv": ["python", "-m", "unittest", "tests.test_memory"],
+            "runner_version": "unittest",
+            "test_results": [
+                {
+                    "test_id": "b",
+                    "verdict": "passed",
+                    "assertion_reason_digest": "hmac-sha256:" + "1" * 64,
+                    "failure_class": "",
+                    "normalized_failure_location": "",
+                },
+                {
+                    "test_id": "a",
+                    "verdict": "failed_red",
+                    "assertion_reason_digest": "hmac-sha256:" + "2" * 64,
+                    "failure_class": "AssertionError",
+                    "normalized_failure_location": "tests/test_memory.py:10",
+                },
+            ],
+        }
+        bundle = WitnessArtifactBundle(
+            witness_kind=SandboxWitnessKind.WORKTREE_RED_TEST,
+            artifacts=artifacts,
+            predicted_effect_digest="hmac-sha256:" + "b" * 64,
+            captured_utc=datetime(2026, 5, 26, 12, 0, tzinfo=UTC),
+        )
+
+        first = construct_witness_record(
+            bond_id="firstborn",
+            proposal_id="proposal-1",
+            bundle=bundle,
+        )
+        second = construct_witness_record(
+            bond_id="firstborn",
+            proposal_id="proposal-1",
+            bundle=bundle,
+        )
+
+        self.assertEqual(first.observed_effect_digest, second.observed_effect_digest)
+        self.assertEqual(first.artifact_digest, second.artifact_digest)

@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import Enum
+from hashlib import sha256
 from pathlib import Path
 
 from core import paths
@@ -65,6 +66,31 @@ class StalenessAnchor:
             raise ValueError("anchor_name is required")
         if not self.anchor_value:
             raise ValueError("anchor_value is required")
+
+
+@dataclass(frozen=True)
+class WitnessArtifactBundle:
+    witness_kind: SandboxWitnessKind
+    artifacts: dict
+    predicted_effect_digest: str
+    captured_utc: datetime
+    staleness_anchors: tuple[StalenessAnchor, ...] = ()
+    narrative_fields: tuple[str, ...] = ()
+    external_llm_tainted: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.witness_kind, SandboxWitnessKind):
+            raise ValueError("witness_kind must be SandboxWitnessKind")
+        if not isinstance(self.artifacts, dict) or not self.artifacts:
+            raise ValueError("artifacts are required")
+        if not _is_digest(self.predicted_effect_digest):
+            raise ValueError("predicted_effect_digest must be hmac-sha256")
+        for anchor in self.staleness_anchors:
+            anchor.__post_init__()
+        for narrative in self.narrative_fields:
+            if not isinstance(narrative, str):
+                raise ValueError("narrative_fields must be strings")
+        _coerce_utc(self.captured_utc, field_name="captured_utc")
 
 
 @dataclass(frozen=True)
@@ -282,6 +308,33 @@ class SandboxWitnesses:
         return [_row_to_record(row) for row in rows]
 
 
+def construct_witness_record(
+    *,
+    bond_id: str,
+    proposal_id: str,
+    bundle: WitnessArtifactBundle,
+    observed_effect_digest: str | None = None,
+) -> SandboxWitnessRecord:
+    bundle.__post_init__()
+    if observed_effect_digest is not None:
+        raise WitnessRefused(
+            WitnessRefusalReason.CALLER_SUPPLIED_DIGEST,
+            "observed_effect_digest must be substrate-computed from artifacts",
+        )
+    artifact_digest = _digest_json(bundle.artifacts)
+    observed_digest = _observed_effect_digest(bundle.witness_kind, bundle.artifacts)
+    return SandboxWitnessRecord.new(
+        bond_id=bond_id,
+        proposal_id=proposal_id,
+        witness_kind=bundle.witness_kind,
+        observed_effect_digest=observed_digest,
+        predicted_effect_digest=bundle.predicted_effect_digest,
+        artifact_digest=artifact_digest,
+        captured_utc=bundle.captured_utc,
+        staleness_anchors=bundle.staleness_anchors,
+    )
+
+
 def _record_values(record: SandboxWitnessRecord) -> tuple:
     return (
         record.witness_id,
@@ -347,6 +400,102 @@ def _anchors_from_json(raw: str) -> tuple[StalenessAnchor, ...]:
         )
         for item in data
     )
+
+
+def _observed_effect_digest(kind: SandboxWitnessKind, artifacts: dict) -> str:
+    if kind is SandboxWitnessKind.WORKTREE_RED_TEST:
+        return _digest_json(
+            {
+                "kind": kind.value,
+                "command_argv": _required(artifacts, "command_argv"),
+                "runner_version": artifacts.get("runner_version", ""),
+                "source_hashes": artifacts.get("source_hashes", {}),
+                "test_results": sorted(
+                    (
+                        _test_result_projection(item)
+                        for item in _required(artifacts, "test_results")
+                    ),
+                    key=lambda item: item["test_id"],
+                ),
+            }
+        )
+    if kind is SandboxWitnessKind.WORKTREE_SCHEMA_DIFF:
+        return _digest_json(
+            {
+                "kind": kind.value,
+                "schema_objects": sorted(
+                    _required(artifacts, "schema_objects"),
+                    key=lambda item: json.dumps(
+                        item,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                ),
+            }
+        )
+    if kind is SandboxWitnessKind.SCRATCH_DB_TRANSFORM:
+        return _digest_json(
+            {
+                "kind": kind.value,
+                "rows": sorted(
+                    _required(artifacts, "rows"),
+                    key=lambda item: json.dumps(
+                        item,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                ),
+            }
+        )
+    if kind is SandboxWitnessKind.DRY_RUN_OBSERVATION:
+        return _digest_json(
+            {
+                "kind": kind.value,
+                "observations": sorted(
+                    _required(artifacts, "observations"),
+                    key=lambda item: json.dumps(
+                        item,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                ),
+            }
+        )
+    raise WitnessRefused(
+        WitnessRefusalReason.WITNESS_KIND_NOT_YET_VOCABULARY,
+        f"unsupported witness kind: {kind!r}",
+    )
+
+
+def _test_result_projection(item: dict) -> dict:
+    required = {
+        "test_id": str(item["test_id"]),
+        "verdict": str(item["verdict"]),
+        "assertion_reason_digest": str(item["assertion_reason_digest"]),
+        "failure_class": str(item.get("failure_class", "")),
+        "normalized_failure_location": str(item.get("normalized_failure_location", "")),
+    }
+    if not _is_digest(required["assertion_reason_digest"]):
+        raise WitnessRefused(
+            WitnessRefusalReason.RED_TEST_REASON_MISSING,
+            "test result lacks AST-derived assertion_reason_digest",
+        )
+    return required
+
+
+def _required(artifacts: dict, key: str):
+    value = artifacts.get(key)
+    if value in (None, "", [], {}):
+        raise WitnessRefused(
+            WitnessRefusalReason.PREDICTED_OBSERVED_UNBOUND,
+            f"artifact key required for deterministic observed effect: {key}",
+        )
+    return value
+
+
+def _digest_json(value) -> str:
+    raw = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return "hmac-sha256:" + sha256(raw).hexdigest()
 
 
 def _is_digest(value: str) -> bool:
