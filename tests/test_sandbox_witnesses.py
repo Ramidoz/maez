@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from datetime import UTC, datetime
+from pathlib import Path
 
 
 class SandboxWitnessVocabularyTests(unittest.TestCase):
@@ -35,3 +38,46 @@ class SandboxWitnessVocabularyTests(unittest.TestCase):
             "legacy_witness_shape_refused",
             {reason.value for reason in WitnessRefusalReason},
         )
+
+    def test_store_appends_monotonic_generations_for_same_proposal(self):
+        from core.policies.sandbox_witnesses import (
+            SandboxWitnessKind,
+            SandboxWitnessRecord,
+            SandboxWitnesses,
+            WitnessStatus,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SandboxWitnesses(Path(tmp) / "sandbox_witnesses.db")
+            first = SandboxWitnessRecord.new(
+                bond_id="firstborn",
+                proposal_id="proposal-1",
+                witness_kind=SandboxWitnessKind.WORKTREE_RED_TEST,
+                observed_effect_digest="hmac-sha256:" + "a" * 64,
+                predicted_effect_digest="hmac-sha256:" + "b" * 64,
+                artifact_digest="hmac-sha256:" + "c" * 64,
+                captured_utc=datetime(2026, 5, 26, 12, 0, tzinfo=UTC),
+            )
+
+            stored_first = store.append(first)
+            stored_second = store.append(
+                SandboxWitnessRecord.new(
+                    bond_id="firstborn",
+                    proposal_id="proposal-1",
+                    witness_kind=SandboxWitnessKind.WORKTREE_RED_TEST,
+                    observed_effect_digest="hmac-sha256:" + "d" * 64,
+                    predicted_effect_digest="hmac-sha256:" + "b" * 64,
+                    artifact_digest="hmac-sha256:" + "e" * 64,
+                    captured_utc=datetime(2026, 5, 26, 12, 5, tzinfo=UTC),
+                )
+            )
+
+            self.assertEqual(stored_first.generation, 1)
+            self.assertEqual(stored_second.generation, 2)
+            self.assertNotEqual(stored_first.witness_id, stored_second.witness_id)
+            self.assertEqual(
+                store.current_for_proposal("firstborn", "proposal-1"),
+                stored_second,
+            )
+            self.assertEqual(len(store.family_for_proposal("firstborn", "proposal-1")), 2)
+            self.assertEqual(stored_second.witness_status, WitnessStatus.WITNESSED)
