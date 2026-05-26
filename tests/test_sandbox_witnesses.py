@@ -125,6 +125,57 @@ class SandboxWitnessVocabularyTests(unittest.TestCase):
                 ["worktree", "raw_memory:reddit_post_id"],
             )
 
+    def test_divergence_acknowledgment_binds_exact_generation_and_digests(self):
+        from core.policies.sandbox_witnesses import (
+            DivergenceAckChannel,
+            DivergenceAcknowledgment,
+            DivergenceAcknowledgments,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = DivergenceAcknowledgments(Path(tmp) / "sandbox_witnesses.db")
+            ack = store.append(
+                DivergenceAcknowledgment.new(
+                    bond_id="firstborn",
+                    proposal_id="proposal-1",
+                    witness_generation=2,
+                    predicted_effect_digest="hmac-sha256:" + "a" * 64,
+                    observed_effect_digest="hmac-sha256:" + "b" * 64,
+                    ack_channel=DivergenceAckChannel.NATURAL_LANGUAGE,
+                    ack_digest="hmac-sha256:" + "c" * 64,
+                    acknowledged_utc=datetime(2026, 5, 26, 13, 0, tzinfo=UTC),
+                )
+            )
+
+            self.assertEqual(
+                store.latest_for_witness(
+                    bond_id="firstborn",
+                    proposal_id="proposal-1",
+                    witness_generation=2,
+                    predicted_effect_digest="hmac-sha256:" + "a" * 64,
+                    observed_effect_digest="hmac-sha256:" + "b" * 64,
+                ),
+                ack,
+            )
+            self.assertIsNone(
+                store.latest_for_witness(
+                    bond_id="firstborn",
+                    proposal_id="proposal-1",
+                    witness_generation=3,
+                    predicted_effect_digest="hmac-sha256:" + "a" * 64,
+                    observed_effect_digest="hmac-sha256:" + "b" * 64,
+                )
+            )
+            self.assertIsNone(
+                store.latest_for_witness(
+                    bond_id="firstborn",
+                    proposal_id="proposal-1",
+                    witness_generation=2,
+                    predicted_effect_digest="hmac-sha256:" + "a" * 64,
+                    observed_effect_digest="hmac-sha256:" + "d" * 64,
+                )
+            )
+
     def test_caller_supplied_observed_digest_refused_at_construction(self):
         from core.policies.sandbox_witnesses import (
             SandboxWitnessKind,

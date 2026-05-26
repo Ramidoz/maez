@@ -48,10 +48,25 @@ class StalenessAnchorKind(Enum):
     DIAGNOSTIC_CURSOR = "diagnostic_cursor"
 
 
+class DivergenceAckChannel(Enum):
+    NATURAL_LANGUAGE = "natural_language"
+    REACTION = "reaction"
+
+
 class WitnessRefused(ValueError):
     def __init__(self, reason: WitnessRefusalReason, message: str):
         self.reason = reason
         super().__init__(message)
+
+
+class DivergenceAcknowledgmentRequired(ValueError):
+    def __init__(self, witness: "SandboxWitnessRecord"):
+        self.bond_id = witness.bond_id
+        self.proposal_id = witness.proposal_id
+        self.witness_generation = witness.generation
+        super().__init__(
+            "diverged sandbox witness requires owner acknowledgment for exact generation"
+        )
 
 
 AnchorResolver = Callable[["StalenessAnchor"], str]
@@ -95,6 +110,64 @@ class WitnessArtifactBundle:
             if not isinstance(narrative, str):
                 raise ValueError("narrative_fields must be strings")
         _coerce_utc(self.captured_utc, field_name="captured_utc")
+
+
+@dataclass(frozen=True)
+class DivergenceAcknowledgment:
+    ack_id: str
+    bond_id: str
+    proposal_id: str
+    witness_generation: int
+    predicted_effect_digest: str
+    observed_effect_digest: str
+    ack_channel: DivergenceAckChannel
+    ack_digest: str
+    acknowledged_utc: datetime
+
+    @classmethod
+    def new(
+        cls,
+        *,
+        bond_id: str,
+        proposal_id: str,
+        witness_generation: int,
+        predicted_effect_digest: str,
+        observed_effect_digest: str,
+        ack_channel: DivergenceAckChannel,
+        ack_digest: str,
+        acknowledged_utc: datetime,
+    ) -> "DivergenceAcknowledgment":
+        return cls(
+            ack_id="",
+            bond_id=bond_id,
+            proposal_id=proposal_id,
+            witness_generation=witness_generation,
+            predicted_effect_digest=predicted_effect_digest,
+            observed_effect_digest=observed_effect_digest,
+            ack_channel=ack_channel,
+            ack_digest=ack_digest,
+            acknowledged_utc=acknowledged_utc,
+        )
+
+    def __post_init__(self) -> None:
+        if self.ack_id and not _is_slug(self.ack_id):
+            raise ValueError("ack_id must be a lowercase opaque id")
+        if not self.bond_id:
+            raise ValueError("bond_id is required")
+        if not self.proposal_id:
+            raise ValueError("proposal_id is required")
+        if self.witness_generation < 1:
+            raise ValueError("witness_generation must be positive")
+        for field_name in (
+            "predicted_effect_digest",
+            "observed_effect_digest",
+            "ack_digest",
+        ):
+            if not _is_digest(getattr(self, field_name)):
+                raise ValueError(f"{field_name} must be hmac-sha256")
+        if not isinstance(self.ack_channel, DivergenceAckChannel):
+            raise ValueError("ack_channel must be DivergenceAckChannel")
+        _coerce_utc(self.acknowledged_utc, field_name="acknowledged_utc")
 
 
 @dataclass(frozen=True)
@@ -312,6 +385,125 @@ class SandboxWitnesses:
         return [_row_to_record(row) for row in rows]
 
 
+class DivergenceAcknowledgments:
+    def __init__(self, db_path: Path | str | None = None):
+        self.db_path = Path(db_path) if db_path else paths.sandbox_witnesses_db()
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.RLock()
+        self._init_schema()
+
+    @contextmanager
+    def _conn(self):
+        con = sqlite3.connect(str(self.db_path))
+        con.row_factory = sqlite3.Row
+        try:
+            yield con
+            con.commit()
+        finally:
+            con.close()
+
+    def _init_schema(self) -> None:
+        with self._lock, self._conn() as con:
+            con.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sandbox_witness_divergence_acks (
+                    ack_id TEXT PRIMARY KEY,
+                    bond_id TEXT NOT NULL,
+                    proposal_id TEXT NOT NULL,
+                    witness_generation INTEGER NOT NULL,
+                    predicted_effect_digest TEXT NOT NULL,
+                    observed_effect_digest TEXT NOT NULL,
+                    ack_channel TEXT NOT NULL,
+                    ack_digest TEXT NOT NULL,
+                    acknowledged_utc TEXT NOT NULL,
+                    created_utc TEXT NOT NULL
+                )
+                """
+            )
+            con.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_sandbox_witness_divergence_acks_exact
+                ON sandbox_witness_divergence_acks (
+                    bond_id,
+                    proposal_id,
+                    witness_generation,
+                    predicted_effect_digest,
+                    observed_effect_digest,
+                    acknowledged_utc
+                )
+                """
+            )
+
+    def append(self, ack: DivergenceAcknowledgment) -> DivergenceAcknowledgment:
+        ack.__post_init__()
+        stored = replace(
+            ack,
+            ack_id=ack.ack_id or f"divergence-ack-{uuid.uuid4().hex}",
+        )
+        with self._lock, self._conn() as con:
+            con.execute(
+                """
+                INSERT INTO sandbox_witness_divergence_acks (
+                    ack_id,
+                    bond_id,
+                    proposal_id,
+                    witness_generation,
+                    predicted_effect_digest,
+                    observed_effect_digest,
+                    ack_channel,
+                    ack_digest,
+                    acknowledged_utc,
+                    created_utc
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                _ack_values(stored),
+            )
+        return stored
+
+    def latest_for_witness(
+        self,
+        *,
+        bond_id: str,
+        proposal_id: str,
+        witness_generation: int,
+        predicted_effect_digest: str,
+        observed_effect_digest: str,
+    ) -> DivergenceAcknowledgment | None:
+        if not bond_id:
+            raise ValueError("bond_id is required")
+        if not proposal_id:
+            raise ValueError("proposal_id is required")
+        if witness_generation < 1:
+            raise ValueError("witness_generation must be positive")
+        if not _is_digest(predicted_effect_digest):
+            raise ValueError("predicted_effect_digest must be hmac-sha256")
+        if not _is_digest(observed_effect_digest):
+            raise ValueError("observed_effect_digest must be hmac-sha256")
+        with self._lock, self._conn() as con:
+            row = con.execute(
+                """
+                SELECT *
+                FROM sandbox_witness_divergence_acks
+                WHERE bond_id = ?
+                  AND proposal_id = ?
+                  AND witness_generation = ?
+                  AND predicted_effect_digest = ?
+                  AND observed_effect_digest = ?
+                ORDER BY acknowledged_utc DESC, ack_id DESC
+                LIMIT 1
+                """,
+                (
+                    bond_id,
+                    proposal_id,
+                    witness_generation,
+                    predicted_effect_digest,
+                    observed_effect_digest,
+                ),
+            ).fetchone()
+        return _row_to_ack(row) if row is not None else None
+
+
 def construct_witness_record(
     *,
     bond_id: str,
@@ -361,6 +553,25 @@ def assert_witness_not_stale(
             )
 
 
+def assert_divergence_acknowledged(
+    witness: SandboxWitnessRecord,
+    ack_store: DivergenceAcknowledgments | None,
+) -> None:
+    if witness.predicted_effect_digest == witness.observed_effect_digest:
+        return
+    if ack_store is None:
+        raise DivergenceAcknowledgmentRequired(witness)
+    ack = ack_store.latest_for_witness(
+        bond_id=witness.bond_id,
+        proposal_id=witness.proposal_id,
+        witness_generation=witness.generation,
+        predicted_effect_digest=witness.predicted_effect_digest,
+        observed_effect_digest=witness.observed_effect_digest,
+    )
+    if ack is None:
+        raise DivergenceAcknowledgmentRequired(witness)
+
+
 def _refuse_tainted_narrative(bundle: WitnessArtifactBundle) -> None:
     if not bundle.external_llm_tainted:
         return
@@ -397,6 +608,21 @@ def _record_values(record: SandboxWitnessRecord) -> tuple:
     )
 
 
+def _ack_values(ack: DivergenceAcknowledgment) -> tuple:
+    return (
+        ack.ack_id,
+        ack.bond_id,
+        ack.proposal_id,
+        ack.witness_generation,
+        ack.predicted_effect_digest,
+        ack.observed_effect_digest,
+        ack.ack_channel.value,
+        ack.ack_digest,
+        ack.acknowledged_utc.isoformat(),
+        datetime.now(UTC).isoformat(),
+    )
+
+
 def _row_to_record(row: sqlite3.Row) -> SandboxWitnessRecord:
     return SandboxWitnessRecord(
         witness_id=str(row["witness_id"]),
@@ -413,6 +639,20 @@ def _row_to_record(row: sqlite3.Row) -> SandboxWitnessRecord:
         refusal_reason=WitnessRefusalReason(str(row["refusal_reason"]))
         if row["refusal_reason"]
         else None,
+    )
+
+
+def _row_to_ack(row: sqlite3.Row) -> DivergenceAcknowledgment:
+    return DivergenceAcknowledgment(
+        ack_id=str(row["ack_id"]),
+        bond_id=str(row["bond_id"]),
+        proposal_id=str(row["proposal_id"]),
+        witness_generation=int(row["witness_generation"]),
+        predicted_effect_digest=str(row["predicted_effect_digest"]),
+        observed_effect_digest=str(row["observed_effect_digest"]),
+        ack_channel=DivergenceAckChannel(str(row["ack_channel"])),
+        ack_digest=str(row["ack_digest"]),
+        acknowledged_utc=datetime.fromisoformat(str(row["acknowledged_utc"])),
     )
 
 

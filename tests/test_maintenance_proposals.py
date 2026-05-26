@@ -376,7 +376,7 @@ class MaintenanceProposalTests(unittest.TestCase):
                 proposal_id="proposal-1",
                 witness_kind=SandboxWitnessKind.WORKTREE_RED_TEST,
                 observed_effect_digest=_DIGEST_A,
-                predicted_effect_digest=_DIGEST_B,
+                predicted_effect_digest=_DIGEST_A,
                 artifact_digest=_DIGEST_C,
                 captured_utc=datetime(2026, 5, 26, 12, 30, tzinfo=UTC),
             )
@@ -419,7 +419,7 @@ class MaintenanceProposalTests(unittest.TestCase):
                 proposal_id="proposal-1",
                 witness_kind=SandboxWitnessKind.WORKTREE_RED_TEST,
                 observed_effect_digest=_DIGEST_A,
-                predicted_effect_digest=_DIGEST_B,
+                predicted_effect_digest=_DIGEST_A,
                 artifact_digest=_DIGEST_C,
                 captured_utc=datetime(2026, 5, 26, 12, 30, tzinfo=UTC),
                 staleness_anchors=(
@@ -444,6 +444,235 @@ class MaintenanceProposalTests(unittest.TestCase):
             )
 
         self.assertEqual(ctx.exception.reason, WitnessRefusalReason.WITNESS_STALE)
+        self.assertEqual(store.get("firstborn", "proposal-1").status.value, "proposed")
+        self.assertEqual(
+            preferences_for_bond_and_class(
+                "firstborn",
+                PreferenceClass.MAINTENANCE_RATIFICATION,
+                store=preference_store,
+            ),
+            [],
+        )
+
+    def test_ratification_requires_exact_ack_for_diverged_current_witness(self):
+        from core.policies.maintenance_proposals import ratify_maintenance_proposal
+        from core.policies.sandbox_witnesses import (
+            DivergenceAcknowledgmentRequired,
+            DivergenceAcknowledgments,
+            SandboxWitnessKind,
+            SandboxWitnessRecord,
+            SandboxWitnesses,
+        )
+
+        store = self._store()
+        preference_store = AutonomyPreferences(self.pref_path)
+        witness_store = SandboxWitnesses(Path(self.tmp.name) / "sandbox_witnesses.db")
+        ack_store = DivergenceAcknowledgments(Path(self.tmp.name) / "sandbox_witnesses.db")
+        store.append(self._proposal())
+        witness_store.append(
+            SandboxWitnessRecord.new(
+                bond_id="firstborn",
+                proposal_id="proposal-1",
+                witness_kind=SandboxWitnessKind.WORKTREE_RED_TEST,
+                observed_effect_digest=_DIGEST_A,
+                predicted_effect_digest=_DIGEST_B,
+                artifact_digest=_DIGEST_C,
+                captured_utc=datetime(2026, 5, 26, 12, 30, tzinfo=UTC),
+            )
+        )
+
+        with self.assertRaises(DivergenceAcknowledgmentRequired):
+            ratify_maintenance_proposal(
+                bond_id="firstborn",
+                proposal_id="proposal-1",
+                ratified_utc=datetime(2026, 5, 26, 13, 0, tzinfo=UTC),
+                store=store,
+                preference_store=preference_store,
+                witness_store=witness_store,
+                divergence_ack_store=ack_store,
+            )
+
+        self.assertEqual(store.get("firstborn", "proposal-1").status.value, "proposed")
+        self.assertEqual(
+            preferences_for_bond_and_class(
+                "firstborn",
+                PreferenceClass.MAINTENANCE_RATIFICATION,
+                store=preference_store,
+            ),
+            [],
+        )
+
+    def test_owner_natural_language_acknowledgment_of_divergence_ratifies(self):
+        from core.policies.maintenance_proposals import ratify_maintenance_proposal
+        from core.policies.sandbox_witnesses import (
+            DivergenceAckChannel,
+            DivergenceAcknowledgment,
+            DivergenceAcknowledgments,
+            SandboxWitnessKind,
+            SandboxWitnessRecord,
+            SandboxWitnesses,
+            WitnessStatus,
+        )
+
+        store = self._store()
+        preference_store = AutonomyPreferences(self.pref_path)
+        witness_store = SandboxWitnesses(Path(self.tmp.name) / "sandbox_witnesses.db")
+        ack_store = DivergenceAcknowledgments(Path(self.tmp.name) / "sandbox_witnesses.db")
+        store.append(self._proposal())
+        witness = witness_store.append(
+            SandboxWitnessRecord.new(
+                bond_id="firstborn",
+                proposal_id="proposal-1",
+                witness_kind=SandboxWitnessKind.WORKTREE_RED_TEST,
+                observed_effect_digest=_DIGEST_A,
+                predicted_effect_digest=_DIGEST_B,
+                artifact_digest=_DIGEST_C,
+                captured_utc=datetime(2026, 5, 26, 12, 30, tzinfo=UTC),
+            )
+        )
+        ack_store.append(
+            DivergenceAcknowledgment.new(
+                bond_id="firstborn",
+                proposal_id="proposal-1",
+                witness_generation=witness.generation,
+                predicted_effect_digest=witness.predicted_effect_digest,
+                observed_effect_digest=witness.observed_effect_digest,
+                ack_channel=DivergenceAckChannel.NATURAL_LANGUAGE,
+                ack_digest=_DIGEST_C,
+                acknowledged_utc=datetime(2026, 5, 26, 12, 45, tzinfo=UTC),
+            )
+        )
+
+        ratified = ratify_maintenance_proposal(
+            bond_id="firstborn",
+            proposal_id="proposal-1",
+            ratified_utc=datetime(2026, 5, 26, 13, 0, tzinfo=UTC),
+            store=store,
+            preference_store=preference_store,
+            witness_store=witness_store,
+            divergence_ack_store=ack_store,
+        )
+
+        self.assertEqual(ratified.witness_status, WitnessStatus.WITNESSED)
+        self.assertEqual(ratified.status.value, "ratified")
+
+    def test_owner_reaction_acknowledgment_of_divergence_ratifies(self):
+        from core.policies.maintenance_proposals import ratify_maintenance_proposal
+        from core.policies.sandbox_witnesses import (
+            DivergenceAckChannel,
+            DivergenceAcknowledgment,
+            DivergenceAcknowledgments,
+            SandboxWitnessKind,
+            SandboxWitnessRecord,
+            SandboxWitnesses,
+            WitnessStatus,
+        )
+
+        store = self._store()
+        preference_store = AutonomyPreferences(self.pref_path)
+        witness_store = SandboxWitnesses(Path(self.tmp.name) / "sandbox_witnesses.db")
+        ack_store = DivergenceAcknowledgments(Path(self.tmp.name) / "sandbox_witnesses.db")
+        store.append(self._proposal())
+        witness = witness_store.append(
+            SandboxWitnessRecord.new(
+                bond_id="firstborn",
+                proposal_id="proposal-1",
+                witness_kind=SandboxWitnessKind.WORKTREE_RED_TEST,
+                observed_effect_digest=_DIGEST_A,
+                predicted_effect_digest=_DIGEST_B,
+                artifact_digest=_DIGEST_C,
+                captured_utc=datetime(2026, 5, 26, 12, 30, tzinfo=UTC),
+            )
+        )
+        ack_store.append(
+            DivergenceAcknowledgment.new(
+                bond_id="firstborn",
+                proposal_id="proposal-1",
+                witness_generation=witness.generation,
+                predicted_effect_digest=witness.predicted_effect_digest,
+                observed_effect_digest=witness.observed_effect_digest,
+                ack_channel=DivergenceAckChannel.REACTION,
+                ack_digest=_DIGEST_C,
+                acknowledged_utc=datetime(2026, 5, 26, 12, 45, tzinfo=UTC),
+            )
+        )
+
+        ratified = ratify_maintenance_proposal(
+            bond_id="firstborn",
+            proposal_id="proposal-1",
+            ratified_utc=datetime(2026, 5, 26, 13, 0, tzinfo=UTC),
+            store=store,
+            preference_store=preference_store,
+            witness_store=witness_store,
+            divergence_ack_store=ack_store,
+        )
+
+        self.assertEqual(ratified.witness_status, WitnessStatus.WITNESSED)
+        self.assertEqual(ratified.status.value, "ratified")
+
+    def test_old_divergence_acknowledgment_does_not_ratify_new_witness_generation(self):
+        from core.policies.maintenance_proposals import ratify_maintenance_proposal
+        from core.policies.sandbox_witnesses import (
+            DivergenceAckChannel,
+            DivergenceAcknowledgment,
+            DivergenceAcknowledgmentRequired,
+            DivergenceAcknowledgments,
+            SandboxWitnessKind,
+            SandboxWitnessRecord,
+            SandboxWitnesses,
+        )
+
+        store = self._store()
+        preference_store = AutonomyPreferences(self.pref_path)
+        witness_store = SandboxWitnesses(Path(self.tmp.name) / "sandbox_witnesses.db")
+        ack_store = DivergenceAcknowledgments(Path(self.tmp.name) / "sandbox_witnesses.db")
+        store.append(self._proposal())
+        first = witness_store.append(
+            SandboxWitnessRecord.new(
+                bond_id="firstborn",
+                proposal_id="proposal-1",
+                witness_kind=SandboxWitnessKind.WORKTREE_RED_TEST,
+                observed_effect_digest=_DIGEST_A,
+                predicted_effect_digest=_DIGEST_B,
+                artifact_digest=_DIGEST_C,
+                captured_utc=datetime(2026, 5, 26, 12, 30, tzinfo=UTC),
+            )
+        )
+        ack_store.append(
+            DivergenceAcknowledgment.new(
+                bond_id="firstborn",
+                proposal_id="proposal-1",
+                witness_generation=first.generation,
+                predicted_effect_digest=first.predicted_effect_digest,
+                observed_effect_digest=first.observed_effect_digest,
+                ack_channel=DivergenceAckChannel.NATURAL_LANGUAGE,
+                ack_digest=_DIGEST_C,
+                acknowledged_utc=datetime(2026, 5, 26, 12, 45, tzinfo=UTC),
+            )
+        )
+        witness_store.append(
+            SandboxWitnessRecord.new(
+                bond_id="firstborn",
+                proposal_id="proposal-1",
+                witness_kind=SandboxWitnessKind.WORKTREE_RED_TEST,
+                observed_effect_digest=_DIGEST_A,
+                predicted_effect_digest=_DIGEST_B,
+                artifact_digest=_DIGEST_C,
+                captured_utc=datetime(2026, 5, 26, 12, 50, tzinfo=UTC),
+            )
+        )
+
+        with self.assertRaises(DivergenceAcknowledgmentRequired):
+            ratify_maintenance_proposal(
+                bond_id="firstborn",
+                proposal_id="proposal-1",
+                ratified_utc=datetime(2026, 5, 26, 13, 0, tzinfo=UTC),
+                store=store,
+                preference_store=preference_store,
+                witness_store=witness_store,
+                divergence_ack_store=ack_store,
+            )
+
         self.assertEqual(store.get("firstborn", "proposal-1").status.value, "proposed")
         self.assertEqual(
             preferences_for_bond_and_class(

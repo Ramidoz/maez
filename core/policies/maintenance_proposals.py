@@ -19,10 +19,12 @@ from core.policies.autonomy_preferences import (
 )
 from core.policies.sandbox_witnesses import (
     AnchorResolver,
+    DivergenceAcknowledgments,
     SandboxWitnesses,
     WitnessRefusalReason,
     WitnessRefused,
     WitnessStatus,
+    assert_divergence_acknowledged,
     assert_witness_not_stale,
 )
 
@@ -287,6 +289,7 @@ def ratify_maintenance_proposal(
     preference_store: AutonomyPreferences | None = None,
     witness_store: SandboxWitnesses | None = None,
     witness_anchor_resolver: AnchorResolver | None = None,
+    divergence_ack_store: DivergenceAcknowledgments | None = None,
     diagnostic_sink: DiagnosticSink | None = None,
 ) -> MaintenanceProposal:
     active_store = store or MaintenanceProposals()
@@ -297,6 +300,7 @@ def ratify_maintenance_proposal(
         proposal_id=proposal_id,
         witness_store=witness_store,
         witness_anchor_resolver=witness_anchor_resolver,
+        divergence_ack_store=divergence_ack_store,
     )
     ratified = replace(
         proposal,
@@ -490,6 +494,7 @@ def _ratification_witness_status(
     proposal_id: str,
     witness_store: SandboxWitnesses | None,
     witness_anchor_resolver: AnchorResolver | None,
+    divergence_ack_store: DivergenceAcknowledgments | None,
 ) -> WitnessStatus:
     if witness_store is None:
         return WitnessStatus.UNWITNESSED_BY_OMISSION
@@ -502,6 +507,7 @@ def _ratification_witness_status(
             "current sandbox witness generation is not ratification-eligible",
         )
     assert_witness_not_stale(witness, witness_anchor_resolver)
+    assert_divergence_acknowledged(witness, divergence_ack_store)
     return WitnessStatus.WITNESSED
 
 
