@@ -348,6 +348,59 @@ def register_default_encounter_producers() -> None:
         _REGISTERED_PRODUCERS[source] = ProducerSourceDeferred(source=source, reason=reason)
 
 
+def _wonderings_backed_fields(
+    store: Wonderings,
+    *,
+    source: EncounterSource,
+    seed: Mapping,
+) -> dict:
+    wondering_id = seed.get("wondering_id")
+    if wondering_id is None:
+        raise ValueError("wondering_id is required for wonderings-backed producer")
+    with store._lock, store._conn() as c:
+        parent = c.execute(
+            "SELECT source FROM wonderings WHERE id = ?",
+            (int(wondering_id),),
+        ).fetchone()
+    if parent is None:
+        raise KeyError(f"wondering not found: {wondering_id}")
+    if (
+        source is EncounterSource.EXPLICIT_OWNER_FLAG
+        and parent["source"] != EncounterSource.EXPLICIT_OWNER_FLAG.value
+    ):
+        raise ValueError(
+            f"wondering #{wondering_id} source={parent['source']!r} "
+            "cannot enter explicit_owner_flag producer"
+        )
+    obj = project_curiosity_object(store, int(wondering_id))
+    if obj.encounter_source != source.value:
+        raise ValueError(
+            f"wondering #{wondering_id} encounter_source={obj.encounter_source!r} "
+            f"does not match registered producer {source.value!r}"
+        )
+    fields = obj.__dict__.copy()
+    if "diagnostic_sink" in seed:
+        fields["diagnostic_sink"] = seed["diagnostic_sink"]
+    return fields
+
+
+def register_wonderings_backed_producers(store: Wonderings) -> None:
+    for source in (
+        EncounterSource.WONDERING_GENERATED,
+        EncounterSource.EXPLICIT_OWNER_FLAG,
+    ):
+        register_encounter_producer(
+            source=source,
+            evidence_pointer_kind="wonderings.id",
+            producer_ref=DRIVE_DRIVEN_CURIOSITY_PRODUCER_REF,
+            create_curiosity_object=lambda seed, source=source: _wonderings_backed_fields(
+                store,
+                source=source,
+                seed=seed,
+            ),
+        )
+
+
 def record_wondering_drive_metadata(
     store: Wonderings,
     *,

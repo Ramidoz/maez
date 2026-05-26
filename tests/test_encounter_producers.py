@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import unittest
+import tempfile
+from datetime import UTC, datetime
+from pathlib import Path
 
 from core.evolution.subjective_duration import ProducerRef
 from core.policies.exceptions import BondIsolationViolation
@@ -165,6 +168,171 @@ class EncounterProducerRegistrationTests(unittest.TestCase):
                 entry = self.curiosity.get_registered_producer(source)
                 self.assertIsInstance(entry, self.curiosity.ProducerSourceDeferred)
                 self.assertTrue(entry.reason)
+
+    def test_wondering_generated_producer_materializes_from_real_wondering_row(self):
+        from core.evolution.wonderings import Wonderings
+
+        with tempfile.TemporaryDirectory() as td:
+            store = Wonderings(db_path=Path(td) / "wonderings.db")
+            wid = store.add(
+                "why did that owner-bond thread stay open?",
+                source="manual",
+                bond_id="firstborn",
+            )
+            self.curiosity.record_wondering_drive_metadata(
+                store,
+                wondering_id=wid,
+                bond_id="firstborn",
+                encounter_source="wondering_generated",
+                encounter_ref_digest="hmac-sha256:" + "7" * 64,
+                priority_class="owner_bond",
+                salience=0.8,
+                subject_kind=self.curiosity.SubjectKind.OWNER_BOND_RELATIONAL,
+            )
+
+            self.curiosity.register_wonderings_backed_producers(store)
+            entry = self.curiosity.get_registered_producer(
+                self.curiosity.EncounterSource.WONDERING_GENERATED
+            )
+            obj = entry.create({"wondering_id": wid})
+
+        self.assertEqual(entry.evidence_pointer_kind, "wonderings.id")
+        self.assertEqual(obj.wondering_id, wid)
+        self.assertEqual(obj.bond_id, "firstborn")
+        self.assertEqual(obj.encounter_source, "wondering_generated")
+        self.assertEqual(obj.priority_class, "owner_bond")
+        self.assertEqual(obj.subject_kind, self.curiosity.SubjectKind.OWNER_BOND_RELATIONAL)
+        self.assertIsNotNone(obj.created_at)
+
+    def test_explicit_owner_flag_producer_materializes_from_real_flagged_wondering_row(self):
+        from core.evolution.wonderings import Wonderings
+
+        with tempfile.TemporaryDirectory() as td:
+            store = Wonderings(db_path=Path(td) / "wonderings.db")
+            wid = store.add(
+                "look this up later",
+                source="explicit_owner_flag",
+                bond_id="firstborn",
+            )
+            self.curiosity.record_wondering_drive_metadata(
+                store,
+                wondering_id=wid,
+                bond_id="firstborn",
+                encounter_source="explicit_owner_flag",
+                encounter_ref_digest="hmac-sha256:" + "9" * 64,
+                priority_class="world_knowledge",
+                salience=0.9,
+                subject_kind=self.curiosity.SubjectKind.PUBLIC_TOPIC,
+            )
+
+            self.curiosity.register_wonderings_backed_producers(store)
+            entry = self.curiosity.get_registered_producer(
+                self.curiosity.EncounterSource.EXPLICIT_OWNER_FLAG
+            )
+            obj = entry.create({"wondering_id": wid})
+
+        self.assertEqual(entry.evidence_pointer_kind, "wonderings.id")
+        self.assertEqual(obj.encounter_source, "explicit_owner_flag")
+        self.assertEqual(obj.priority_class, "world_knowledge")
+        self.assertEqual(obj.subject_kind, self.curiosity.SubjectKind.PUBLIC_TOPIC)
+
+    def test_explicit_owner_flag_refuses_non_flagged_wondering_row(self):
+        from core.evolution.wonderings import Wonderings
+
+        with tempfile.TemporaryDirectory() as td:
+            store = Wonderings(db_path=Path(td) / "wonderings.db")
+            wid = store.add(
+                "ordinary manual row cannot become an explicit owner flag",
+                source="manual",
+                bond_id="firstborn",
+            )
+            self.curiosity.record_wondering_drive_metadata(
+                store,
+                wondering_id=wid,
+                bond_id="firstborn",
+                encounter_source="explicit_owner_flag",
+                encounter_ref_digest="hmac-sha256:" + "a" * 64,
+                priority_class="world_knowledge",
+                salience=0.8,
+                subject_kind=self.curiosity.SubjectKind.PUBLIC_TOPIC,
+            )
+
+            self.curiosity.register_wonderings_backed_producers(store)
+            entry = self.curiosity.get_registered_producer(
+                self.curiosity.EncounterSource.EXPLICIT_OWNER_FLAG
+            )
+
+            with self.assertRaisesRegex(ValueError, "cannot enter explicit_owner_flag producer"):
+                entry.create({"wondering_id": wid})
+
+    def test_wonderings_backed_producer_refuses_legacy_or_missing_sidecar_rows(self):
+        from core.evolution.wonderings import Wonderings
+
+        with tempfile.TemporaryDirectory() as td:
+            store = Wonderings(db_path=Path(td) / "wonderings.db")
+            legacy_id = store.add("legacy question", source="manual")
+            bonded_id = store.add("bonded without sidecar", source="manual", bond_id="firstborn")
+
+            self.curiosity.register_wonderings_backed_producers(store)
+            entry = self.curiosity.get_registered_producer(
+                self.curiosity.EncounterSource.WONDERING_GENERATED
+            )
+            with self.assertRaises(self.curiosity.LegacyWonderingProjectionRefused):
+                entry.create({"wondering_id": legacy_id})
+            with self.assertRaises(ValueError):
+                entry.create({"wondering_id": bonded_id})
+
+    def test_wonderings_backed_producer_can_drive_scratch_ceremony(self):
+        from core.evolution.subjective_duration import SubjectiveDuration
+        from core.evolution.temperament import Temperament
+        from core.evolution.wonderings import Wonderings
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            store = Wonderings(db_path=root / "wonderings.db")
+            temperament = Temperament(db_path=root / "temperament.db")
+            subjective = SubjectiveDuration(
+                db_path=root / "subjective_duration.db",
+                diagnostic_log_path=root / "subjective_duration.jsonl",
+            )
+            temperament.record_event(parameter="curiosity", value=5.0)
+            wid = store.add(
+                "what did that unresolved owner-bond question mean?",
+                source="manual",
+                bond_id="firstborn",
+            )
+            self.curiosity.record_wondering_drive_metadata(
+                store,
+                wondering_id=wid,
+                bond_id="firstborn",
+                encounter_source="wondering_generated",
+                encounter_ref_digest="hmac-sha256:" + "8" * 64,
+                priority_class="owner_bond",
+                salience=1.0,
+                subject_kind=self.curiosity.SubjectKind.OWNER_BOND_RELATIONAL,
+            )
+            self.curiosity.register_wonderings_backed_producers(store)
+            obj = self.curiosity.get_registered_producer(
+                self.curiosity.EncounterSource.WONDERING_GENERATED
+            ).create({"wondering_id": wid})
+
+            result = self.curiosity.write_curiosity_resolution_seam_call(
+                curiosity_object=obj,
+                temperament=temperament,
+                subjective_duration=subjective,
+                resolution_marker_type="explicit_owner_resolved",
+                resolution_marker_utc=datetime(2026, 5, 25, 12, 0, tzinfo=UTC),
+                guard=self.curiosity.OwnerBondSaturationGuard(
+                    owner_bond_meaningful_daily_cap=99
+                ),
+            )
+            record = subjective.lookup_meaningful_salience_event_record(
+                bond_id="firstborn",
+                producer_event_id=result.producer_event_id,
+            )
+
+        self.assertIsNotNone(record)
+        self.assertGreater(record.meaningfulness_score, 0.0)
 
 
 if __name__ == "__main__":
