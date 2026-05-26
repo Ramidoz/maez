@@ -180,6 +180,17 @@ def _emit_subject_kind_refused(fields: Mapping, refusal_kind: str) -> None:
     diagnostic_sink = fields.get("diagnostic_sink")
     if not callable(diagnostic_sink):
         return
+    if getattr(diagnostic_sink, "accepts_raw_diagnostic_fields", False):
+        diagnostic_sink(
+            {
+                "event_type": "SUBJECT_KIND_REFUSED",
+                "refusal_kind": refusal_kind,
+                "bond_id": fields.get("bond_id"),
+                "subject_kind": fields.get("subject_kind"),
+                "subject_ref": fields.get("subject_ref"),
+            }
+        )
+        return
     diagnostic_sink(
         {
             "event_type": "SUBJECT_KIND_REFUSED",
@@ -828,9 +839,9 @@ def classify_meaningful_exchange(
             if diagnostic_sink is not None:
                 diagnostic_sink(
                     {
-                        "event_type": "MEANINGFUL_EXCHANGE_CLASSIFIED",
+                        "event_type": "SATURATION_SAMPLE",
                         "reason": "owner_bond_saturation",
-                        "bond_digest": _digest(curiosity_object.bond_id),
+                        "bond_id": curiosity_object.bond_id,
                         "eligibility": (
                             MeaningfulExchangeEligibility
                             .NOT_ELIGIBLE_OWNER_BOND_ROUTINE
@@ -899,7 +910,7 @@ def _emit_temperament_write_clamped(
     diagnostic_sink(
         {
             "event_type": "TEMPERAMENT_WRITE_CLAMPED",
-            "bond_digest": _digest(bond_id),
+            "bond_id": bond_id,
             "parameter": parameter,
             "proposed_delta": proposed_delta,
             "delta_applied": delta_applied,

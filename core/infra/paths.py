@@ -160,6 +160,16 @@ def reflection_audit_db() -> Path:
     return memory_dir() / "reflection_audit.db"
 
 
+def drive_curiosity_master_key() -> Path:
+    """Master secret for drive-driven curiosity per-bond HMAC digests."""
+    return memory_dir() / "drive_curiosity_master.key"
+
+
+def drive_curiosity_diagnostics_log() -> Path:
+    """Append-only diagnostic stream for drive-driven curiosity."""
+    return logs_dir() / "drive_driven_curiosity_diagnostics.jsonl"
+
+
 def trace_labels_db() -> Path:
     """Sqlite DB for owner-supplied labels on chat traces (Slice 5).
     Foundation for KTO-style preference training: each label is a

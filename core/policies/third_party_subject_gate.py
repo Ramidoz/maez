@@ -48,6 +48,17 @@ def _emit_refusal(
 ) -> None:
     if diagnostic_sink is None:
         return
+    if getattr(diagnostic_sink, "accepts_raw_diagnostic_fields", False):
+        diagnostic_sink(
+            {
+                "event_type": "SUBJECT_BOUNDARY_REFUSED",
+                "refusal_kind": refusal_kind,
+                "bond_id": query.bond_id,
+                "subject_ref": query.subject_ref,
+                "surface": "fetch_for_curiosity",
+            }
+        )
+        return
     diagnostic_sink(
         {
             "event_type": "SUBJECT_BOUNDARY_REFUSED",

@@ -3658,7 +3658,19 @@ class MaezDaemon:
                     if _pursuit_decision is not None:
                         _utterance = format_pursuit_utterance(_pursuit_decision)
                         if _utterance:
+                            from core.policies.diagnostics import (
+                                DriveCuriosityDiagnosticSink,
+                                emit_diagnostic_best_effort,
+                            )
+
+                            _drive_curiosity_diagnostics = DriveCuriosityDiagnosticSink()
+
                             def _extraction_diagnostic_sink(event: dict) -> None:
+                                emit_diagnostic_best_effort(
+                                    _drive_curiosity_diagnostics,
+                                    event,
+                                    logger=logger,
+                                )
                                 logger.info(
                                     "curiosity_extraction_gate %s",
                                     json.dumps(event, sort_keys=True),

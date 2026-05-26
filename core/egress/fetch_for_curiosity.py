@@ -44,6 +44,16 @@ def _emit_cross_bond_refusal(
 ) -> None:
     if diagnostic_sink is None:
         return
+    if getattr(diagnostic_sink, "accepts_raw_diagnostic_fields", False):
+        diagnostic_sink(
+            {
+                "event_type": "CROSS_BOND_ACCESS_REFUSED",
+                "requested_bond_id": requested_bond_id,
+                "query_bond_id": query.bond_id,
+                "surface": "fetch_for_curiosity",
+            }
+        )
+        return
     diagnostic_sink(
         {
             "event_type": "CROSS_BOND_ACCESS_REFUSED",
