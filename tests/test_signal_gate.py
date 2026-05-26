@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -269,7 +270,7 @@ class SignalGateTests(unittest.TestCase):
         self.assertEqual(rows[0]["signal_quality"], "high")
 
     def test_signal_gate_schema_contains_owner_state_at_dispatch(self):
-        with sqlite3.connect(self.ledger.db_path) as con:
+        with closing(sqlite3.connect(self.ledger.db_path)) as con:
             columns = {
                 row[1]
                 for row in con.execute("PRAGMA table_info(owner_outreach_dispatches)")

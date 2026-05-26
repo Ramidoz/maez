@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -12,6 +13,11 @@ from core.policies.reflection_audit import (
     ReflectionDecision,
     ReflectionInputs,
     run_reflection_audit,
+)
+from core.policies.autonomy_preferences import (
+    PreferenceClass,
+    PreferenceExpressedBy,
+    record_owner_response_preference,
 )
 from core.policies.signal_gate import GateDecision, OwnerState, PriorityClass, SignalQuality
 
@@ -259,8 +265,89 @@ class ReflectionAuditTests(unittest.TestCase):
         self.assertEqual(audit.owner_response, OwnerResponse.DEFERRED)
         self.assertEqual(self.ledger.audits_for_bond("bond-a")[0]["owner_response"], "deferred")
 
+    def test_deferred_response_writes_no_preference(self):
+        events: list[dict] = []
+
+        preference = record_owner_response_preference(
+            bond_id="bond-a",
+            object_id="object-a",
+            owner_response=OwnerResponse.DEFERRED,
+            pattern_digest="hmac-sha256:" + "c" * 64,
+            target_field="owner_interrupting_minimum_importance",
+            encoded_modifier=0.8,
+            recorded_utc=self.now,
+            store_path=Path(self.tmp.name) / "autonomy_preferences.db",
+            diagnostic_sink=events.append,
+        )
+
+        self.assertIsNone(preference)
+        self.assertEqual(events, [])
+
+    def test_corrected_response_writes_explicit_revision(self):
+        preference = record_owner_response_preference(
+            bond_id="bond-a",
+            object_id="object-a",
+            owner_response=OwnerResponse.CORRECTED,
+            pattern_digest="hmac-sha256:" + "e" * 64,
+            target_field="owner_interrupting_minimum_importance",
+            encoded_modifier=0.75,
+            recorded_utc=self.now,
+            store_path=Path(self.tmp.name) / "autonomy_preferences.db",
+        )
+
+        self.assertIsNotNone(preference)
+        assert preference is not None
+        self.assertEqual(preference.preference_class, PreferenceClass.LANE_CEILING)
+        self.assertEqual(preference.expressed_by, PreferenceExpressedBy.OWNER_EXPLICIT_REVISION)
+        self.assertEqual(preference.weight, 1.0)
+        self.assertEqual(preference.relevance_decay_half_life_days, 90)
+
+    def test_invited_more_response_writes_encouraged_topic(self):
+        preference = record_owner_response_preference(
+            bond_id="bond-a",
+            object_id="object-a",
+            owner_response=OwnerResponse.INVITED_MORE,
+            pattern_digest="hmac-sha256:" + "f" * 64,
+            target_field="owner_interrupting_minimum_importance",
+            encoded_modifier=0.35,
+            recorded_utc=self.now,
+            store_path=Path(self.tmp.name) / "autonomy_preferences.db",
+        )
+
+        self.assertIsNotNone(preference)
+        assert preference is not None
+        self.assertEqual(preference.preference_class, PreferenceClass.ENCOURAGED_TOPIC)
+        self.assertEqual(preference.expressed_by, PreferenceExpressedBy.OWNER_OBSERVED)
+        self.assertEqual(preference.weight, 0.6)
+        self.assertEqual(preference.relevance_decay_half_life_days, 60)
+
+    def test_declined_without_teaching_writes_discouraged_topic_weight_0_4(self):
+        events: list[dict] = []
+        store_path = Path(self.tmp.name) / "autonomy_preferences.db"
+
+        preference = record_owner_response_preference(
+            bond_id="bond-a",
+            object_id="object-a",
+            owner_response=OwnerResponse.DECLINED_WITHOUT_TEACHING,
+            pattern_digest="hmac-sha256:" + "d" * 64,
+            target_field="owner_interrupting_minimum_importance",
+            encoded_modifier=0.9,
+            recorded_utc=self.now,
+            store_path=store_path,
+            diagnostic_sink=events.append,
+        )
+
+        self.assertIsNotNone(preference)
+        assert preference is not None
+        self.assertEqual(preference.preference_class, PreferenceClass.DISCOURAGED_TOPIC)
+        self.assertEqual(preference.expressed_by, PreferenceExpressedBy.OWNER_OBSERVED)
+        self.assertEqual(preference.weight, 0.4)
+        self.assertEqual(preference.relevance_decay_half_life_days, 30)
+        self.assertEqual(events[0]["event_type"], "PREFERENCE_RECORDED")
+        self.assertEqual(events[0]["expressed_by"], "owner_observed")
+
     def test_schema_is_append_only_and_contains_owner_response(self):
-        with sqlite3.connect(self.ledger.db_path) as con:
+        with closing(sqlite3.connect(self.ledger.db_path)) as con:
             columns = {
                 row[1]
                 for row in con.execute("PRAGMA table_info(reflection_audits)")

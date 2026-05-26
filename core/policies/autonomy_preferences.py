@@ -4,10 +4,10 @@ import sqlite3
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 from core import paths
 
@@ -28,6 +28,12 @@ class PreferenceExpressedBy(Enum):
     SYSTEM_DEFAULT = "system_default"
 
 
+class SuppressionKind(Enum):
+    SIGNAL_GATED = "SIGNAL_GATED"
+    REFLECTION_DEFERRED = "REFLECTION_DEFERRED"
+    EXTRACTION_BLOCKED = "EXTRACTION_BLOCKED"
+
+
 @dataclass(frozen=True)
 class AutonomyPreference:
     preference_id: str
@@ -42,6 +48,34 @@ class AutonomyPreference:
     target_field: str
     encoded_modifier: float
 
+
+@dataclass(frozen=True)
+class DeliveredOutreachSample:
+    bond_id: str
+    delivered_utc: datetime
+    owner_response: str
+
+
+@dataclass(frozen=True)
+class SuppressionEvent:
+    bond_id: str
+    occurred_utc: datetime
+    suppression_kind: SuppressionKind
+
+
+DiagnosticSink = Callable[[dict], None]
+OWNER_OBSERVED_MIN_DELIVERED_SAMPLE_SIZE = 5
+SUPPRESSION_WINDOW_MINUTES = 30
+_SUPPORTED_OWNER_RESPONSE_VALUES = frozenset(
+    {
+        "acknowledged",
+        "corrected",
+        "invited_more",
+        "deferred",
+        "declined_without_teaching",
+        "no_response",
+    }
+)
 
 _POLICY_FIELDS = frozenset(
     {
@@ -226,6 +260,112 @@ def tier_weight(expressed_by: PreferenceExpressedBy) -> float:
     raise ValueError(f"unknown preference tier: {expressed_by!r}")
 
 
+def record_owner_response_preference(
+    *,
+    bond_id: str,
+    object_id: str,
+    owner_response,
+    pattern_digest: str,
+    target_field: str,
+    encoded_modifier: float,
+    recorded_utc: datetime,
+    store: AutonomyPreferences | None = None,
+    store_path: Path | str | None = None,
+    diagnostic_sink: DiagnosticSink | None = None,
+) -> AutonomyPreference | None:
+    response = _owner_response_value(owner_response)
+    if response in {"acknowledged", "deferred", "no_response"}:
+        return None
+    if response == "corrected":
+        preference = AutonomyPreference(
+            preference_id=f"owner-response:{object_id}:corrected",
+            bond_id=bond_id,
+            recorded_utc=_coerce_utc(recorded_utc, field_name="recorded_utc"),
+            preference_class=PreferenceClass.LANE_CEILING,
+            pattern_digest=pattern_digest,
+            weight=1.0,
+            expressed_by=PreferenceExpressedBy.OWNER_EXPLICIT_REVISION,
+            relevance_decay_half_life_days=90.0,
+            notes_digest=None,
+            target_field=target_field,
+            encoded_modifier=encoded_modifier,
+        )
+    elif response == "invited_more":
+        preference = AutonomyPreference(
+            preference_id=f"owner-response:{object_id}:invited_more",
+            bond_id=bond_id,
+            recorded_utc=_coerce_utc(recorded_utc, field_name="recorded_utc"),
+            preference_class=PreferenceClass.ENCOURAGED_TOPIC,
+            pattern_digest=pattern_digest,
+            weight=0.6,
+            expressed_by=PreferenceExpressedBy.OWNER_OBSERVED,
+            relevance_decay_half_life_days=60.0,
+            notes_digest=None,
+            target_field=target_field,
+            encoded_modifier=encoded_modifier,
+        )
+    elif response == "declined_without_teaching":
+        preference = AutonomyPreference(
+            preference_id=f"owner-response:{object_id}:declined_without_teaching",
+            bond_id=bond_id,
+            recorded_utc=_coerce_utc(recorded_utc, field_name="recorded_utc"),
+            preference_class=PreferenceClass.DISCOURAGED_TOPIC,
+            pattern_digest=pattern_digest,
+            weight=0.4,
+            expressed_by=PreferenceExpressedBy.OWNER_OBSERVED,
+            relevance_decay_half_life_days=30.0,
+            notes_digest=None,
+            target_field=target_field,
+            encoded_modifier=encoded_modifier,
+        )
+    else:
+        raise ValueError(f"unsupported owner_response: {response!r}")
+
+    active_store = store or AutonomyPreferences(store_path)
+    active_store.append(preference)
+    _emit_preference_recorded(preference, diagnostic_sink=diagnostic_sink)
+    return preference
+
+
+def owner_observed_preference_from_response_window(
+    *,
+    bond_id: str,
+    samples: Iterable[DeliveredOutreachSample],
+    suppression_events: Iterable[SuppressionEvent],
+    preference_id: str,
+    pattern_digest: str,
+    target_field: str,
+    encoded_modifier: float,
+    recorded_utc: datetime,
+) -> AutonomyPreference | None:
+    delivered = _unsuppressed_delivered_samples(
+        bond_id=bond_id,
+        samples=samples,
+        suppression_events=suppression_events,
+    )
+    if len(delivered) < OWNER_OBSERVED_MIN_DELIVERED_SAMPLE_SIZE:
+        return None
+    consistency = sum(
+        1
+        for sample in delivered
+        if _owner_response_value(sample.owner_response) == "declined_without_teaching"
+    ) / len(delivered)
+    weight = 0.3 + (0.3 * consistency)
+    return AutonomyPreference(
+        preference_id=preference_id,
+        bond_id=bond_id,
+        recorded_utc=_coerce_utc(recorded_utc, field_name="recorded_utc"),
+        preference_class=PreferenceClass.DISCOURAGED_TOPIC,
+        pattern_digest=pattern_digest,
+        weight=round(weight, 3),
+        expressed_by=PreferenceExpressedBy.OWNER_OBSERVED,
+        relevance_decay_half_life_days=30.0,
+        notes_digest=None,
+        target_field=target_field,
+        encoded_modifier=encoded_modifier,
+    )
+
+
 def composed_policy(
     bond_id: str,
     situation_class: PreferenceClass,
@@ -336,8 +476,7 @@ def _validate_preference(preference: AutonomyPreference) -> None:
         raise ValueError("preference_id is required")
     if not preference.bond_id:
         raise ValueError("bond_id is required")
-    if preference.recorded_utc.tzinfo is None or preference.recorded_utc.utcoffset() != UTC.utcoffset(None):
-        raise ValueError("recorded_utc must be timezone-aware UTC")
+    _coerce_utc(preference.recorded_utc, field_name="recorded_utc")
     if not _is_digest(preference.pattern_digest):
         raise ValueError("pattern_digest must be hmac-sha256")
     if preference.notes_digest is not None and not _is_digest(preference.notes_digest):
@@ -355,12 +494,81 @@ def _validate_preference(preference: AutonomyPreference) -> None:
         raise ValueError("relevance_decay_half_life_days must be positive")
 
 
+def _unsuppressed_delivered_samples(
+    *,
+    bond_id: str,
+    samples: Iterable[DeliveredOutreachSample],
+    suppression_events: Iterable[SuppressionEvent],
+) -> list[DeliveredOutreachSample]:
+    relevant_events = [
+        event
+        for event in suppression_events
+        if event.bond_id == bond_id
+    ]
+    for event in relevant_events:
+        if not isinstance(event.suppression_kind, SuppressionKind):
+            raise ValueError("suppression_kind must be SuppressionKind")
+    delivered: list[DeliveredOutreachSample] = []
+    for sample in samples:
+        if sample.bond_id != bond_id:
+            continue
+        delivered_utc = _coerce_utc(sample.delivered_utc, field_name="delivered_utc")
+        _owner_response_value(sample.owner_response)
+        if _inside_suppression_window(delivered_utc, relevant_events):
+            continue
+        delivered.append(sample)
+    return delivered
+
+
+def _inside_suppression_window(
+    delivered_utc: datetime,
+    suppression_events: Iterable[SuppressionEvent],
+) -> bool:
+    for event in suppression_events:
+        occurred = _coerce_utc(event.occurred_utc, field_name="occurred_utc")
+        if occurred <= delivered_utc < occurred + timedelta(minutes=SUPPRESSION_WINDOW_MINUTES):
+            return True
+    return False
+
+
+def _owner_response_value(owner_response) -> str:
+    value = str(getattr(owner_response, "value", owner_response))
+    if value not in _SUPPORTED_OWNER_RESPONSE_VALUES:
+        raise ValueError(f"unsupported owner_response: {value!r}")
+    return value
+
+
+def _emit_preference_recorded(
+    preference: AutonomyPreference,
+    *,
+    diagnostic_sink: DiagnosticSink | None,
+) -> None:
+    if diagnostic_sink is None:
+        return
+    diagnostic_sink(
+        {
+            "event_type": "PREFERENCE_RECORDED",
+            "bond_id": preference.bond_id,
+            "preference_id": preference.preference_id,
+            "preference_class": preference.preference_class.value,
+            "expressed_by": preference.expressed_by.value,
+            "weight": preference.weight,
+        }
+    )
+
+
 def _is_digest(value: str) -> bool:
     prefix = "hmac-sha256:"
     if not value.startswith(prefix):
         return False
     digest = value.removeprefix(prefix)
     return len(digest) == 64 and all(char in "0123456789abcdef" for char in digest)
+
+
+def _coerce_utc(value: datetime, *, field_name: str) -> datetime:
+    if value.tzinfo is None or value.utcoffset() != UTC.utcoffset(None):
+        raise ValueError(f"{field_name} must be timezone-aware UTC")
+    return value.astimezone(UTC)
 
 
 def _row_to_preference(row: sqlite3.Row) -> AutonomyPreference:

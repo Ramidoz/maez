@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
@@ -80,7 +81,7 @@ class AutonomyPreferenceStorageTests(unittest.TestCase):
         rows = self.store.preferences_for_bond_and_class("bond-a", PreferenceClass.LANE_CEILING)
 
         self.assertEqual(rows, [pref])
-        with sqlite3.connect(self.db_path) as con:
+        with closing(sqlite3.connect(self.db_path)) as con:
             columns = {
                 row[1]
                 for row in con.execute("PRAGMA table_info(autonomy_preferences)").fetchall()
