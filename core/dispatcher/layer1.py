@@ -152,9 +152,10 @@ class Layer1Fanout:
         *,
         utterance: str,
         conversation_state: Mapping[str, Any],
+        fanout_generation_id: str | None = None,
     ) -> Layer1FanoutResult:
         del utterance, conversation_state
-        generation_id = uuid.uuid4().hex
+        generation_id = fanout_generation_id if fanout_generation_id is not None else uuid.uuid4().hex
         started_at = self.clock()
         deadline_at = started_at + self.global_deadline_s
         ordered_sources = _stable_sources(spec.substrate_sources)

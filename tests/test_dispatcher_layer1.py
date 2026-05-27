@@ -196,6 +196,120 @@ class DispatcherLayer1Tests(unittest.TestCase):
         self.assertEqual(statuses[SubstrateSource.WONDERINGS], RecallBranchStatus.ERROR)
         self.assertEqual([block.text for block in result.recall_blocks], ["kept row"])
 
+    def test_layer1_accepts_injected_fanout_generation_id(self):
+        from core.dispatcher.layer1 import Layer1Fanout, RecallBlock
+        from core.dispatcher.spec import SubstrateSource
+
+        def adapter(source):
+            return [
+                RecallBlock(
+                    source=source,
+                    text="kept row",
+                    timestamp=30.0,
+                    freshness="current",
+                    rationale="fixture",
+                    prompt_cost=2,
+                )
+            ]
+
+        result = Layer1Fanout(
+            adapters={SubstrateSource.TELEGRAM_SEMANTIC: adapter},
+            branch_timeout_s=0.2,
+            global_deadline_s=0.4,
+        ).run(
+            _spec(SubstrateSource.TELEGRAM_SEMANTIC),
+            utterance="what do you remember?",
+            conversation_state={},
+            fanout_generation_id="turn-seal-123",
+        )
+
+        self.assertEqual(result.fanout_generation_id, "turn-seal-123")
+        self.assertEqual(
+            [branch.fanout_generation_id for branch in result.branch_results],
+            ["turn-seal-123"],
+        )
+
+    def test_layer1_default_generation_id_still_generated_when_absent(self):
+        from unittest import mock
+
+        from core.dispatcher.layer1 import Layer1Fanout, RecallBlock
+        from core.dispatcher.spec import SubstrateSource
+
+        def adapter(source):
+            return [
+                RecallBlock(
+                    source=source,
+                    text="kept row",
+                    timestamp=30.0,
+                    freshness="current",
+                    rationale="fixture",
+                    prompt_cost=2,
+                )
+            ]
+
+        fake_uuid = mock.Mock(hex="minted-default-id")
+        with mock.patch("core.dispatcher.layer1.uuid.uuid4", return_value=fake_uuid):
+            result = Layer1Fanout(
+                adapters={SubstrateSource.TELEGRAM_SEMANTIC: adapter},
+                branch_timeout_s=0.2,
+                global_deadline_s=0.4,
+            ).run(
+                _spec(SubstrateSource.TELEGRAM_SEMANTIC),
+                utterance="what do you remember?",
+                conversation_state={},
+            )
+
+        self.assertEqual(result.fanout_generation_id, "minted-default-id")
+        self.assertEqual(
+            [branch.fanout_generation_id for branch in result.branch_results],
+            ["minted-default-id"],
+        )
+
+    def test_layer1_branch_ids_use_shared_generation_id(self):
+        from core.dispatcher.layer1 import Layer1Fanout, RecallBlock
+        from core.dispatcher.spec import SubstrateSource
+
+        def adapter(source):
+            return [
+                RecallBlock(
+                    source=source,
+                    text=f"{source.value} row",
+                    timestamp=30.0,
+                    freshness="current",
+                    rationale="fixture",
+                    prompt_cost=2,
+                )
+            ]
+
+        result = Layer1Fanout(
+            adapters={
+                SubstrateSource.TELEGRAM_SEMANTIC: adapter,
+                SubstrateSource.ENTITY_INDEX: adapter,
+            },
+            branch_timeout_s=0.2,
+            global_deadline_s=0.4,
+        ).run(
+            _spec(SubstrateSource.ENTITY_INDEX, SubstrateSource.TELEGRAM_SEMANTIC),
+            utterance="what do you remember?",
+            conversation_state={},
+            fanout_generation_id="shared-turn-seal",
+        )
+
+        self.assertEqual(
+            [branch.branch_id for branch in result.branch_results],
+            [
+                "shared-turn-seal:TELEGRAM_SEMANTIC",
+                "shared-turn-seal:ENTITY_INDEX",
+            ],
+        )
+        self.assertEqual(
+            result.accepted_branch_ids,
+            (
+                "shared-turn-seal:TELEGRAM_SEMANTIC",
+                "shared-turn-seal:ENTITY_INDEX",
+            ),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
