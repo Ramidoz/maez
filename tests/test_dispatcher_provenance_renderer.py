@@ -86,8 +86,11 @@ class DispatcherProvenanceRendererTests(unittest.TestCase):
         self.assertEqual(
             sorted(rendered.audit_assistant_text_metadata),
             [
+                "fresh_attempt_outcome",
                 "mismatch_reason",
                 "provenance_framing",
+                "reconstructed_from_framing",
+                "reconstructed_from_hint",
                 "refusal_reason",
                 "rendered_block_roles",
                 "schema_version",

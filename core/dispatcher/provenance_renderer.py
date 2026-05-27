@@ -64,6 +64,9 @@ def render_provenance(
     ask_shape: AskShape,
     timestamp: str,
     source_summaries: list[SourceSummary],
+    reconstructed_from_framing: ProvenanceFraming | None = None,
+    reconstructed_from_hint: CompositionHint | None = None,
+    fresh_attempt_outcome: Any | None = None,
 ) -> RenderedProvenance:
     ask_shape = AskShape(ask_shape)
     _validate_source_roles(spec, source_summaries)
@@ -82,6 +85,9 @@ def render_provenance(
         source_summaries=source_summaries,
         rendered_block_roles=rendered_roles,
         template_id=template_id,
+        reconstructed_from_framing=reconstructed_from_framing,
+        reconstructed_from_hint=reconstructed_from_hint,
+        fresh_attempt_outcome=fresh_attempt_outcome,
     )
     return RenderedProvenance(
         prompt_block=prompt_block,
@@ -223,6 +229,9 @@ def _audit_envelope(
     source_summaries: list[SourceSummary],
     rendered_block_roles: list[str],
     template_id: str,
+    reconstructed_from_framing: ProvenanceFraming | None,
+    reconstructed_from_hint: CompositionHint | None,
+    fresh_attempt_outcome: Any | None,
 ) -> dict[str, Any]:
     spec_payload = spec.to_dict()
     source_role_map = {
@@ -257,6 +266,17 @@ def _audit_envelope(
         "rendered_block_roles": rendered_block_roles,
         "template_id": template_id,
         "template_version_hash": TEMPLATE_VERSION_HASH,
+        "reconstructed_from_framing": (
+            reconstructed_from_framing.value if reconstructed_from_framing else None
+        ),
+        "reconstructed_from_hint": (
+            reconstructed_from_hint.value if reconstructed_from_hint else None
+        ),
+        "fresh_attempt_outcome": (
+            fresh_attempt_outcome.value
+            if hasattr(fresh_attempt_outcome, "value")
+            else fresh_attempt_outcome
+        ),
         "mismatch_reason": ProvenanceAuditMismatchReason.NONE.value,
         "refusal_reason": None,
     }
@@ -274,6 +294,9 @@ def _assistant_text_metadata(envelope: dict[str, Any]) -> dict[str, Any]:
         "rendered_block_roles",
         "template_id",
         "template_version_hash",
+        "reconstructed_from_framing",
+        "reconstructed_from_hint",
+        "fresh_attempt_outcome",
         "mismatch_reason",
         "refusal_reason",
     )
