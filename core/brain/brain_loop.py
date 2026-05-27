@@ -152,6 +152,7 @@ def _dispatcher_enabled() -> bool:
 
 _DISPATCHER_ARCHETYPE_INDEX = None
 _DISPATCHER_REPAIR_FSM = None
+_DISPATCHER_MEMORY_MANAGER = None
 
 
 def _dispatcher_index():
@@ -170,6 +171,15 @@ def _dispatcher_repair_fsm():
 
         _DISPATCHER_REPAIR_FSM = Layer2RepairFSM()
     return _DISPATCHER_REPAIR_FSM
+
+
+def _dispatcher_memory_manager():
+    global _DISPATCHER_MEMORY_MANAGER
+    if _DISPATCHER_MEMORY_MANAGER is None:
+        from memory.memory_manager import MemoryManager
+
+        _DISPATCHER_MEMORY_MANAGER = MemoryManager()
+    return _DISPATCHER_MEMORY_MANAGER
 
 
 def _dispatcher_inventory_summary():
@@ -198,21 +208,52 @@ def _dispatcher_inventory_summary():
 
 
 def _dispatcher_recall_adapters(user_text: str):
-    from core.dispatcher.layer1 import RecallBlock
+    from core.dispatcher.layer1 import MAX_RECALL_CHARS_PER_SOURCE, RecallBlock
     from core.dispatcher.spec import SubstrateSource
 
-    def _memory_manager_adapter(source: SubstrateSource):
-        from memory.memory_manager import MemoryManager
+    def _bounded_text(text: str, *, limit: int = MAX_RECALL_CHARS_PER_SOURCE) -> str:
+        if len(text) <= limit:
+            return text
+        marker = "\n[truncated for dispatcher recall budget]"
+        if limit <= len(marker):
+            return marker[:limit]
+        return text[: limit - len(marker)].rstrip() + marker
 
-        memory = MemoryManager()
-        try:
-            recalled = memory.recall_for_telegram(user_text)
-            text = memory.format_for_prompt(recalled, max_chars=1200)
-        finally:
-            try:
-                memory.close()
-            except Exception:
-                pass
+    def _reddit_source_adapter(source: SubstrateSource):
+        memory = _dispatcher_memory_manager()
+        rows = memory._recent_reddit_source_rows(memory.raw, user_text, limit=3)
+        if not rows:
+            return []
+        lines = ["Recent Reddit substrate rows:"]
+        for row in rows:
+            meta = row.get("metadata") or {}
+            source_label = meta.get("source") or "reddit"
+            timestamp = meta.get("timestamp") or "unknown time"
+            score = meta.get("reddit_score")
+            comments = meta.get("reddit_comments")
+            engagement = []
+            if score is not None:
+                engagement.append(f"{score} pts")
+            if comments is not None:
+                engagement.append(f"{comments} comments")
+            suffix = f" ({', '.join(engagement)})" if engagement else ""
+            lines.append(f"- {source_label} at {timestamp}{suffix}: {row.get('content') or ''}")
+        text = _bounded_text("\n".join(lines))
+        return [
+            RecallBlock(
+                source=source,
+                text=text,
+                timestamp=None,
+                freshness="reddit_source_rows",
+                rationale="recent_reddit_source_rows",
+                prompt_cost=len(text),
+            )
+        ]
+
+    def _memory_manager_adapter(source: SubstrateSource):
+        memory = _dispatcher_memory_manager()
+        recalled = memory.recall_for_telegram(user_text)
+        text = memory.format_for_prompt(recalled, max_chars=1200)
         if not text:
             return []
         return [
@@ -227,7 +268,7 @@ def _dispatcher_recall_adapters(user_text: str):
         ]
 
     return {
-        SubstrateSource.REDDIT_SOURCE: _memory_manager_adapter,
+        SubstrateSource.REDDIT_SOURCE: _reddit_source_adapter,
         SubstrateSource.TELEGRAM_TEMPORAL: _memory_manager_adapter,
         SubstrateSource.TELEGRAM_SEMANTIC: _memory_manager_adapter,
     }
@@ -243,7 +284,7 @@ def _source_role_for_dispatcher_block(spec):
 
 
 def _render_dispatcher_transcript(spec, layer1_result, *, user_text: str, surface: str) -> str:
-    if not layer1_result.recall_blocks or spec.external_sources:
+    if spec.external_sources:
         return ""
 
     from core.dispatcher.provenance_renderer import (
@@ -262,6 +303,38 @@ def _render_dispatcher_transcript(spec, layer1_result, *, user_text: str, surfac
         )
         for block in layer1_result.recall_blocks
     ]
+    summarized_sources = {summary.source for summary in summaries}
+    for branch in getattr(layer1_result, "branch_results", ()) or ():
+        if branch.source in summarized_sources or branch.source not in spec.substrate_sources:
+            continue
+        reason = branch.empty_reason or branch.error_class or branch.deadline_kind or "no_rows"
+        text = (
+            f"No usable recall returned from {branch.source.value}: "
+            f"{branch.status.value}"
+            f"{f' ({reason})' if reason else ''}."
+        )
+        summaries.append(
+            SourceSummary(
+                source=branch.source,
+                role=role,
+                text=text,
+                content_digest="sha256:" + hashlib.sha256(text.encode()).hexdigest(),
+            )
+        )
+        summarized_sources.add(branch.source)
+    for source in spec.substrate_sources:
+        if source in summarized_sources:
+            continue
+        text = f"No usable recall returned from {source.value}: NO_BRANCH_RESULT."
+        summaries.append(
+            SourceSummary(
+                source=source,
+                role=role,
+                text=text,
+                content_digest="sha256:" + hashlib.sha256(text.encode()).hexdigest(),
+            )
+        )
+        summarized_sources.add(source)
     rendered = render_provenance(
         spec,
         utterance=user_text,
@@ -354,7 +427,11 @@ def _run_dispatcher_pipeline(
         spec = layer2_result
 
     layer1_started = time.monotonic()
-    layer1_result = Layer1Fanout(adapters=_dispatcher_recall_adapters(user_text)).run(
+    layer1_result = Layer1Fanout(
+        adapters=_dispatcher_recall_adapters(user_text),
+        branch_timeout_s=0.8,
+        global_deadline_s=1.0,
+    ).run(
         spec,
         utterance=user_text,
         conversation_state={"bond_id": bond_id, "surface": surface, "chat_id": chat_id},

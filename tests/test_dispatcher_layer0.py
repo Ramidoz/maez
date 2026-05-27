@@ -261,7 +261,7 @@ class DispatcherLayer0Tests(unittest.TestCase):
                 inventory=inventory,
             )
 
-        self.assertEqual(spec.substrate_sources[0], SubstrateSource.REDDIT_SOURCE)
+        self.assertEqual(spec.substrate_sources, [SubstrateSource.REDDIT_SOURCE])
         self.assertIn(SubstrateSource.REDDIT_SOURCE, spec.source_availability)
 
     def test_reddit_source_anchor_survives_explicit_substrate_class_win(self):
@@ -298,7 +298,7 @@ class DispatcherLayer0Tests(unittest.TestCase):
                 inventory=inventory,
             )
 
-        self.assertEqual(spec.substrate_sources[0], SubstrateSource.REDDIT_SOURCE)
+        self.assertEqual(spec.substrate_sources, [SubstrateSource.REDDIT_SOURCE])
 
 
 if __name__ == "__main__":

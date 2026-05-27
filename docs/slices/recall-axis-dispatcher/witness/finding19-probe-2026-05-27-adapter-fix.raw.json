@@ -1,0 +1,237 @@
+{
+  "date": "2026-05-27",
+  "mode": "in-process shared-entry adapter-fix witness; maez.service daemon-level witness still required",
+  "predecessor_partial_witness": "docs/slices/recall-axis-dispatcher/witness/finding19-probe-2026-05-27.md",
+  "command_shape": "run_brain_loop(..., max_iters=0, surface=telegram) with MAEZ_DISPATCHER_ENABLED=0 then 1",
+  "baseline_flag_0": [
+    {
+      "index": 1,
+      "probe": "Check Reddit then",
+      "transcript_len": 0,
+      "transcript_preview": "",
+      "dispatcher_events": [],
+      "branches": []
+    },
+    {
+      "index": 2,
+      "probe": "Just let me know what's going on in Reddit in localllama",
+      "transcript_len": 0,
+      "transcript_preview": "",
+      "dispatcher_events": [],
+      "branches": []
+    },
+    {
+      "index": 3,
+      "probe": "What's going on on Reddit?",
+      "transcript_len": 0,
+      "transcript_preview": "",
+      "dispatcher_events": [],
+      "branches": []
+    },
+    {
+      "index": 4,
+      "probe": "You have access to Reddit data",
+      "transcript_len": 0,
+      "transcript_preview": "",
+      "dispatcher_events": [],
+      "branches": []
+    },
+    {
+      "index": 5,
+      "probe": "What were we talking about last evening?",
+      "transcript_len": 0,
+      "transcript_preview": "",
+      "dispatcher_events": [],
+      "branches": []
+    },
+    {
+      "index": 6,
+      "probe": "Search r/LocalLLaMA right now",
+      "transcript_len": 0,
+      "transcript_preview": "",
+      "dispatcher_events": [],
+      "branches": []
+    },
+    {
+      "index": 7,
+      "probe": "Really?",
+      "transcript_len": 0,
+      "transcript_preview": "",
+      "dispatcher_events": [],
+      "branches": []
+    },
+    {
+      "index": 8,
+      "probe": "Are you sure?",
+      "transcript_len": 0,
+      "transcript_preview": "",
+      "dispatcher_events": [],
+      "branches": []
+    }
+  ],
+  "after_flag_1": [
+    {
+      "index": 1,
+      "probe": "Check Reddit then",
+      "transcript_len": 771,
+      "transcript_preview": "[memory context] Recent Reddit substrate rows:\n- reddit/r/artificial at 2026-05-27T15:28:41.388689+00:00 (22 pts, 4 comments): [REDDIT r/artificial post 1tp80d6] Looking for an AI image generator, what's the best one (22 pts, 4 comments, flair: Miscellaneous)\n- reddit/r/f1visa at 2026-05-27T15:28:41.252530+00:00 (2 pts, 0 comments): [REDDIT r/f1visa post 1tp",
+      "dispatcher_events": [
+        "INFO dispatcher_path_entry surface=telegram bond_id=rohit chat_id=adapter-fix-after-1 flag_state=enabled recovery_seed_present=False",
+        "INFO dispatcher_layer0_emit surface=telegram bond_id=rohit composition_hint=SUBSTRATE_ONLY provenance_framing=SUBSTRATE_ONLY_NO_FRESH_VALIDATION inventory_witness=UNKNOWN substrate_source_count=1 external_source_count=0 elapsed_ms=1318.530",
+        "WARNING dispatcher_layer0_budget_breach surface=telegram elapsed_ms=1318.530 budget_ms=50 cold_or_warm=warm",
+        "INFO dispatcher_layer2_repair surface=telegram bond_id=rohit result=unchanged refusal_reason=",
+        "INFO dispatcher_layer1_branch surface=telegram source=REDDIT_SOURCE outcome=rows row_count=1 elapsed_ms=345.036",
+        "INFO dispatcher_layer1_fanout surface=telegram fanout_generation_id=d27ef7c4928543078cc99e568736203d branch_count=1 seal_state=clean total_elapsed_ms=345.164",
+        "INFO dispatcher_path_exit surface=telegram bond_id=rohit chat_id=adapter-fix-after-1 path_taken=dispatcher total_elapsed_ms=1665.005"
+      ],
+      "branches": [
+        {
+          "source": "REDDIT_SOURCE",
+          "outcome": "rows",
+          "row_count": 1,
+          "elapsed_ms": 345.036
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "probe": "Just let me know what's going on in Reddit in localllama",
+      "transcript_len": 823,
+      "transcript_preview": "[memory context] Recent Reddit substrate rows:\n- reddit/r/LocalLLaMA at 2026-05-27T11:11:51.536374+00:00 (41 pts, 10 comments): [REDDIT r/LocalLLaMA post 1tp0vk1] Info: Nvidia Cuda 13.3 landed (41 pts, 10 comments, flair: News)\n- reddit/r/LocalLLaMA at 2026-05-27T11:11:51.392140+00:00 (90 pts, 17 comments): [REDDIT r/LocalLLaMA post 1toychi] New DeepSWE benc",
+      "dispatcher_events": [
+        "INFO dispatcher_path_entry surface=telegram bond_id=rohit chat_id=adapter-fix-after-2 flag_state=enabled recovery_seed_present=False",
+        "INFO dispatcher_layer0_emit surface=telegram bond_id=rohit composition_hint=SUBSTRATE_ONLY provenance_framing=SUBSTRATE_ONLY_NO_FRESH_VALIDATION inventory_witness=UNKNOWN substrate_source_count=1 external_source_count=0 elapsed_ms=15.220",
+        "INFO dispatcher_layer2_repair surface=telegram bond_id=rohit result=unchanged refusal_reason=",
+        "INFO dispatcher_layer1_branch surface=telegram source=REDDIT_SOURCE outcome=rows row_count=1 elapsed_ms=21.837",
+        "INFO dispatcher_layer1_fanout surface=telegram fanout_generation_id=40efb9bc452d41b88a27a4c9db2c1c48 branch_count=1 seal_state=clean total_elapsed_ms=21.958",
+        "INFO dispatcher_path_exit surface=telegram bond_id=rohit chat_id=adapter-fix-after-2 path_taken=dispatcher total_elapsed_ms=37.389"
+      ],
+      "branches": [
+        {
+          "source": "REDDIT_SOURCE",
+          "outcome": "rows",
+          "row_count": 1,
+          "elapsed_ms": 21.837
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "probe": "What's going on on Reddit?",
+      "transcript_len": 771,
+      "transcript_preview": "[memory context] Recent Reddit substrate rows:\n- reddit/r/artificial at 2026-05-27T15:28:41.388689+00:00 (22 pts, 4 comments): [REDDIT r/artificial post 1tp80d6] Looking for an AI image generator, what's the best one (22 pts, 4 comments, flair: Miscellaneous)\n- reddit/r/f1visa at 2026-05-27T15:28:41.252530+00:00 (2 pts, 0 comments): [REDDIT r/f1visa post 1tp",
+      "dispatcher_events": [
+        "INFO dispatcher_path_entry surface=telegram bond_id=rohit chat_id=adapter-fix-after-3 flag_state=enabled recovery_seed_present=False",
+        "INFO dispatcher_layer0_emit surface=telegram bond_id=rohit composition_hint=SUBSTRATE_ONLY provenance_framing=SUBSTRATE_ONLY_NO_FRESH_VALIDATION inventory_witness=UNKNOWN substrate_source_count=1 external_source_count=0 elapsed_ms=15.289",
+        "INFO dispatcher_layer2_repair surface=telegram bond_id=rohit result=unchanged refusal_reason=",
+        "INFO dispatcher_layer1_branch surface=telegram source=REDDIT_SOURCE outcome=rows row_count=1 elapsed_ms=101.325",
+        "INFO dispatcher_layer1_fanout surface=telegram fanout_generation_id=620102f89ff94c3aa53aa90566d56169 branch_count=1 seal_state=clean total_elapsed_ms=101.440",
+        "INFO dispatcher_path_exit surface=telegram bond_id=rohit chat_id=adapter-fix-after-3 path_taken=dispatcher total_elapsed_ms=116.918"
+      ],
+      "branches": [
+        {
+          "source": "REDDIT_SOURCE",
+          "outcome": "rows",
+          "row_count": 1,
+          "elapsed_ms": 101.325
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "probe": "You have access to Reddit data",
+      "transcript_len": 771,
+      "transcript_preview": "[memory context] Recent Reddit substrate rows:\n- reddit/r/artificial at 2026-05-27T15:28:41.388689+00:00 (22 pts, 4 comments): [REDDIT r/artificial post 1tp80d6] Looking for an AI image generator, what's the best one (22 pts, 4 comments, flair: Miscellaneous)\n- reddit/r/f1visa at 2026-05-27T15:28:41.252530+00:00 (2 pts, 0 comments): [REDDIT r/f1visa post 1tp",
+      "dispatcher_events": [
+        "INFO dispatcher_path_entry surface=telegram bond_id=rohit chat_id=adapter-fix-after-4 flag_state=enabled recovery_seed_present=False",
+        "INFO dispatcher_layer0_emit surface=telegram bond_id=rohit composition_hint=SUBSTRATE_ONLY provenance_framing=SUBSTRATE_ONLY_NO_FRESH_VALIDATION inventory_witness=UNKNOWN substrate_source_count=1 external_source_count=0 elapsed_ms=15.101",
+        "INFO dispatcher_layer2_repair surface=telegram bond_id=rohit result=unchanged refusal_reason=",
+        "INFO dispatcher_layer1_branch surface=telegram source=REDDIT_SOURCE outcome=rows row_count=1 elapsed_ms=116.915",
+        "INFO dispatcher_layer1_fanout surface=telegram fanout_generation_id=7a2d359f0d344aa780889ebe9d1ee148 branch_count=1 seal_state=clean total_elapsed_ms=117.031",
+        "INFO dispatcher_path_exit surface=telegram bond_id=rohit chat_id=adapter-fix-after-4 path_taken=dispatcher total_elapsed_ms=132.319"
+      ],
+      "branches": [
+        {
+          "source": "REDDIT_SOURCE",
+          "outcome": "rows",
+          "row_count": 1,
+          "elapsed_ms": 116.915
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "probe": "What were we talking about last evening?",
+      "transcript_len": 371,
+      "transcript_preview": "[memory context] No usable recall returned from TELEGRAM_SEMANTIC: SUCCESS (no_rows).\n[memory context] No usable recall returned from ENTITY_INDEX: ERROR (adapter_missing).\n[memory context] No usable recall returned from LIVED_EPISODES: ERROR (adapter_missing).\n[fresh validation] No fresh source was used for this answer; the substrate is not being framed as ",
+      "dispatcher_events": [
+        "INFO dispatcher_path_entry surface=telegram bond_id=rohit chat_id=adapter-fix-after-5 flag_state=enabled recovery_seed_present=False",
+        "INFO dispatcher_layer0_emit surface=telegram bond_id=rohit composition_hint=SUBSTRATE_ONLY provenance_framing=SUBSTRATE_ONLY_NO_FRESH_VALIDATION inventory_witness=UNKNOWN substrate_source_count=3 external_source_count=0 elapsed_ms=15.130",
+        "INFO dispatcher_layer2_repair surface=telegram bond_id=rohit result=unchanged refusal_reason=",
+        "INFO dispatcher_layer1_branch surface=telegram source=TELEGRAM_SEMANTIC outcome=rows row_count=1 elapsed_ms=345.313",
+        "INFO dispatcher_layer1_branch surface=telegram source=ENTITY_INDEX outcome=error row_count=0 elapsed_ms=0.000",
+        "INFO dispatcher_layer1_branch surface=telegram source=LIVED_EPISODES outcome=error row_count=0 elapsed_ms=0.000",
+        "INFO dispatcher_layer1_fanout surface=telegram fanout_generation_id=5933c1d6f193430ebf05e8317e16c2a9 branch_count=3 seal_state=partial_failure total_elapsed_ms=345.427",
+        "INFO dispatcher_path_exit surface=telegram bond_id=rohit chat_id=adapter-fix-after-5 path_taken=dispatcher total_elapsed_ms=360.722"
+      ],
+      "branches": [
+        {
+          "source": "TELEGRAM_SEMANTIC",
+          "outcome": "rows",
+          "row_count": 1,
+          "elapsed_ms": 345.313
+        },
+        {
+          "source": "ENTITY_INDEX",
+          "outcome": "error",
+          "row_count": 0,
+          "elapsed_ms": 0.0
+        },
+        {
+          "source": "LIVED_EPISODES",
+          "outcome": "error",
+          "row_count": 0,
+          "elapsed_ms": 0.0
+        }
+      ]
+    },
+    {
+      "index": 6,
+      "probe": "Search r/LocalLLaMA right now",
+      "transcript_len": 0,
+      "transcript_preview": "",
+      "dispatcher_events": [
+        "INFO dispatcher_path_entry surface=telegram bond_id=rohit chat_id=adapter-fix-after-6 flag_state=enabled recovery_seed_present=False",
+        "INFO dispatcher_layer0_emit surface=telegram bond_id=rohit composition_hint=FRESH_ONLY provenance_framing=FRESH_ONLY inventory_witness=UNKNOWN substrate_source_count=0 external_source_count=1 elapsed_ms=15.193",
+        "INFO dispatcher_layer2_repair surface=telegram bond_id=rohit result=unchanged refusal_reason=",
+        "INFO dispatcher_layer1_fanout surface=telegram fanout_generation_id=6ac1b62ffbdd41cf8c0053493ff1abfb branch_count=0 seal_state=clean total_elapsed_ms=0.047",
+        "INFO dispatcher_path_exit surface=telegram bond_id=rohit chat_id=adapter-fix-after-6 path_taken=dispatcher total_elapsed_ms=15.351"
+      ],
+      "branches": []
+    },
+    {
+      "index": 7,
+      "probe": "Really?",
+      "transcript_len": 0,
+      "transcript_preview": "",
+      "dispatcher_events": [
+        "INFO dispatcher_path_entry surface=telegram bond_id=rohit chat_id=adapter-fix-after-7 flag_state=enabled recovery_seed_present=False",
+        "INFO dispatcher_layer0_emit surface=telegram bond_id=rohit composition_hint=SUBSTRATE_ONLY provenance_framing=SUBSTRATE_ONLY_NO_FRESH_VALIDATION inventory_witness=UNKNOWN substrate_source_count=3 external_source_count=0 elapsed_ms=15.016",
+        "INFO dispatcher_layer2_repair surface=telegram bond_id=rohit result=refused refusal_reason=NO_PRIOR_SPEC"
+      ],
+      "branches": []
+    },
+    {
+      "index": 8,
+      "probe": "Are you sure?",
+      "transcript_len": 0,
+      "transcript_preview": "",
+      "dispatcher_events": [
+        "INFO dispatcher_path_entry surface=telegram bond_id=rohit chat_id=adapter-fix-after-8 flag_state=enabled recovery_seed_present=False",
+        "INFO dispatcher_layer0_emit surface=telegram bond_id=rohit composition_hint=SUBSTRATE_ONLY provenance_framing=SUBSTRATE_ONLY_NO_FRESH_VALIDATION inventory_witness=UNKNOWN substrate_source_count=3 external_source_count=0 elapsed_ms=15.023",
+        "INFO dispatcher_layer2_repair surface=telegram bond_id=rohit result=refused refusal_reason=NO_PRIOR_SPEC"
+      ],
+      "branches": []
+    }
+  ]
+}

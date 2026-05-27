@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from core.brain_loop import (
@@ -132,6 +133,281 @@ class DispatcherWiring(unittest.TestCase):
 
         self.assertEqual(result, "")
         gate.assert_called_once_with("Check Reddit then")
+
+    def test_reddit_adapter_reads_source_rows_without_full_prompt_format(self):
+        from core import brain_loop
+        from core.dispatcher.spec import SubstrateSource
+
+        class FakeMemoryManager:
+            raw = object()
+
+            def _recent_reddit_source_rows(self, collection, query, *, limit=5):
+                self.collection = collection
+                self.query = query
+                self.limit = limit
+                return [
+                    {
+                        "content": "x" * 5000,
+                        "metadata": {
+                            "source": "reddit/r/LocalLLaMA",
+                            "timestamp": "2026-05-27T15:28:41+00:00",
+                            "reddit_score": 42,
+                            "reddit_comments": 7,
+                        },
+                    }
+                ]
+
+            def recall_for_telegram(self, query):
+                raise AssertionError("REDDIT_SOURCE adapter must not run full recall")
+
+            def format_for_prompt(self, recalled, max_chars):
+                raise AssertionError("REDDIT_SOURCE adapter must not format full prompt")
+
+            def close(self):
+                pass
+
+        with patch("memory.memory_manager.MemoryManager", FakeMemoryManager):
+            adapter = brain_loop._dispatcher_recall_adapters("Check Reddit then")[
+                SubstrateSource.REDDIT_SOURCE
+            ]
+            blocks = adapter(SubstrateSource.REDDIT_SOURCE)
+
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(blocks[0].source, SubstrateSource.REDDIT_SOURCE)
+        self.assertLessEqual(len(blocks[0].text), 1200)
+        self.assertIn("reddit/r/LocalLLaMA", blocks[0].text)
+
+    def test_dispatcher_reddit_adapter_reuses_memory_manager(self):
+        from core import brain_loop
+        from core.dispatcher.spec import SubstrateSource
+
+        created = []
+
+        class FakeMemoryManager:
+            raw = object()
+
+            def __init__(self):
+                created.append(self)
+
+            def _recent_reddit_source_rows(self, collection, query, *, limit=5):
+                return [
+                    {
+                        "content": "reddit row",
+                        "metadata": {
+                            "source": "reddit/r/LocalLLaMA",
+                            "timestamp": "2026-05-27T15:28:41+00:00",
+                        },
+                    }
+                ]
+
+            def recall_for_telegram(self, query):
+                return ["telegram row"]
+
+            def format_for_prompt(self, recalled, max_chars):
+                return "telegram row"
+
+            def close(self):
+                pass
+
+        brain_loop._DISPATCHER_MEMORY_MANAGER = None
+        try:
+            with patch("memory.memory_manager.MemoryManager", FakeMemoryManager):
+                first = brain_loop._dispatcher_recall_adapters("Check Reddit then")[
+                    SubstrateSource.REDDIT_SOURCE
+                ]
+                second = brain_loop._dispatcher_recall_adapters("Check Reddit then")[
+                    SubstrateSource.REDDIT_SOURCE
+                ]
+                semantic = brain_loop._dispatcher_recall_adapters("What were we discussing?")[
+                    SubstrateSource.TELEGRAM_SEMANTIC
+                ]
+                self.assertEqual(len(first(SubstrateSource.REDDIT_SOURCE)), 1)
+                self.assertEqual(len(second(SubstrateSource.REDDIT_SOURCE)), 1)
+                self.assertEqual(len(semantic(SubstrateSource.TELEGRAM_SEMANTIC)), 1)
+        finally:
+            brain_loop._DISPATCHER_MEMORY_MANAGER = None
+
+        self.assertEqual(len(created), 1)
+
+    def test_dispatcher_pipeline_uses_reddit_capable_fanout_budget(self):
+        from core import brain_loop
+        from core.dispatcher.spec import (
+            CompositionHint,
+            CompositionSpec,
+            InventoryWitness,
+            ProvenanceFraming,
+            SourceAvailability,
+            SubstrateSource,
+        )
+
+        spec = CompositionSpec(
+            substrate_sources=[SubstrateSource.REDDIT_SOURCE],
+            external_sources=[],
+            composition_hint=CompositionHint.SUBSTRATE_ONLY,
+            provenance_framing=ProvenanceFraming.SUBSTRATE_ONLY_NO_FRESH_VALIDATION,
+            inventory_witness=InventoryWitness.UNKNOWN,
+            source_availability={SubstrateSource.REDDIT_SOURCE: SourceAvailability.EXECUTABLE_UNKNOWN},
+            availability_limitations=[],
+            freshness_window=None,
+            trust_scope_union=None,
+        )
+        seen = {}
+
+        class FakeLayer0:
+            def __init__(self, *, index):
+                pass
+
+            def emit_spec(self, user_text, *, surface, inventory):
+                return spec
+
+        class FakeLayer1:
+            def __init__(self, *, adapters, branch_timeout_s=None, global_deadline_s=None):
+                seen["branch_timeout_s"] = branch_timeout_s
+                seen["global_deadline_s"] = global_deadline_s
+
+            def run(self, spec, *, utterance, conversation_state):
+                return SimpleNamespace(
+                    branch_results=(),
+                    recall_blocks=(),
+                    fanout_generation_id="test-generation",
+                )
+
+        class FakeFSM:
+            def apply_repair(self, **kwargs):
+                return kwargs["current_spec"]
+
+            def record_completed_spec(self, **kwargs):
+                pass
+
+        with (
+            patch.object(brain_loop, "_dispatcher_index", return_value=object()),
+            patch.object(brain_loop, "_dispatcher_repair_fsm", return_value=FakeFSM()),
+            patch("core.dispatcher.layer0.Layer0Dispatcher", FakeLayer0),
+            patch("core.dispatcher.layer1.Layer1Fanout", FakeLayer1),
+        ):
+            brain_loop._run_dispatcher_pipeline(
+                user_text="Check Reddit then",
+                surface="telegram",
+                bond_id="rohit",
+                chat_id="budget-test",
+            )
+
+        self.assertGreaterEqual(seen["branch_timeout_s"], 0.8)
+        self.assertGreaterEqual(seen["global_deadline_s"], 1.0)
+
+    def test_dispatcher_render_includes_empty_summaries_for_partial_fanout(self):
+        from core import brain_loop
+        from core.dispatcher.layer1 import RecallBlock, RecallBranchResult, RecallBranchStatus
+        from core.dispatcher.spec import (
+            CompositionHint,
+            CompositionSpec,
+            InventoryWitness,
+            ProvenanceFraming,
+            SourceAvailability,
+            SubstrateSource,
+        )
+
+        spec = CompositionSpec(
+            substrate_sources=[
+                SubstrateSource.REDDIT_SOURCE,
+                SubstrateSource.TELEGRAM_SEMANTIC,
+            ],
+            external_sources=[],
+            composition_hint=CompositionHint.SUBSTRATE_ONLY,
+            provenance_framing=ProvenanceFraming.SUBSTRATE_ONLY_NO_FRESH_VALIDATION,
+            inventory_witness=InventoryWitness.UNKNOWN,
+            source_availability={
+                SubstrateSource.REDDIT_SOURCE: SourceAvailability.EXECUTABLE_UNKNOWN,
+                SubstrateSource.TELEGRAM_SEMANTIC: SourceAvailability.EXECUTABLE_UNKNOWN,
+            },
+            availability_limitations=[],
+            freshness_window=None,
+            trust_scope_union=None,
+        )
+        reddit_block = RecallBlock(
+            source=SubstrateSource.REDDIT_SOURCE,
+            text="recent reddit row",
+            timestamp=None,
+            freshness="reddit_source_rows",
+            rationale="test",
+            prompt_cost=17,
+        )
+        result = SimpleNamespace(
+            recall_blocks=(reddit_block,),
+            branch_results=(
+                RecallBranchResult(
+                    branch_id="g:reddit",
+                    fanout_generation_id="g",
+                    source=SubstrateSource.REDDIT_SOURCE,
+                    status=RecallBranchStatus.SUCCESS,
+                    blocks=(reddit_block,),
+                ),
+                RecallBranchResult(
+                    branch_id="g:telegram",
+                    fanout_generation_id="g",
+                    source=SubstrateSource.TELEGRAM_SEMANTIC,
+                    status=RecallBranchStatus.TIMEOUT,
+                    empty_reason="deadline_reached",
+                ),
+            ),
+        )
+
+        rendered = brain_loop._render_dispatcher_transcript(
+            spec,
+            result,
+            user_text="Check Reddit then",
+            surface="telegram",
+        )
+
+        self.assertIn("recent reddit row", rendered)
+        self.assertIn("TELEGRAM_SEMANTIC", rendered)
+        self.assertIn("TIMEOUT", rendered)
+
+    def test_dispatcher_render_includes_empty_summary_when_all_selected_sources_fail(self):
+        from core import brain_loop
+        from core.dispatcher.layer1 import RecallBranchResult, RecallBranchStatus
+        from core.dispatcher.spec import (
+            CompositionHint,
+            CompositionSpec,
+            InventoryWitness,
+            ProvenanceFraming,
+            SourceAvailability,
+            SubstrateSource,
+        )
+
+        spec = CompositionSpec(
+            substrate_sources=[SubstrateSource.REDDIT_SOURCE],
+            external_sources=[],
+            composition_hint=CompositionHint.SUBSTRATE_ONLY,
+            provenance_framing=ProvenanceFraming.SUBSTRATE_ONLY_NO_FRESH_VALIDATION,
+            inventory_witness=InventoryWitness.UNKNOWN,
+            source_availability={SubstrateSource.REDDIT_SOURCE: SourceAvailability.EXECUTABLE_UNKNOWN},
+            availability_limitations=[],
+            freshness_window=None,
+            trust_scope_union=None,
+        )
+        result = SimpleNamespace(
+            recall_blocks=(),
+            branch_results=(
+                RecallBranchResult(
+                    branch_id="g:reddit",
+                    fanout_generation_id="g",
+                    source=SubstrateSource.REDDIT_SOURCE,
+                    status=RecallBranchStatus.TIMEOUT,
+                    empty_reason="deadline_reached",
+                ),
+            ),
+        )
+
+        rendered = brain_loop._render_dispatcher_transcript(
+            spec,
+            result,
+            user_text="Check Reddit then",
+            surface="telegram",
+        )
+
+        self.assertIn("No usable recall returned from REDDIT_SOURCE", rendered)
+        self.assertIn("TIMEOUT", rendered)
 
     def test_conversational_returns_empty(self):
         result = run_brain_loop(

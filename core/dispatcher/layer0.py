@@ -404,7 +404,9 @@ def _source_anchor_candidates(utterance: str) -> list[SubstrateSource]:
 
 
 def _substrate_candidates(source_anchor_candidates: Sequence[SubstrateSource]) -> list[SubstrateSource]:
-    return [*source_anchor_candidates, *_DEFAULT_SUBSTRATE_FALLBACK]
+    if source_anchor_candidates:
+        return list(source_anchor_candidates)
+    return list(_DEFAULT_SUBSTRATE_FALLBACK)
 
 
 def _availability_for_selected(
