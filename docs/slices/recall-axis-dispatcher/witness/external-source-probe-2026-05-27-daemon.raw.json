@@ -1,0 +1,216 @@
+{
+  "slice": "recall-axis-dispatcher-external-source-consumption",
+  "date": "2026-05-27",
+  "mode": "live user-scoped maez.service daemon HTTP /internal/brain_loop probe",
+  "predecessor_witness": "docs/slices/recall-axis-dispatcher/witness/finding19-probe-2026-05-27-daemon.md",
+  "seams_witnessed": ["1", "2", "3", "4", "5", "6", "7"],
+  "service": {
+    "unit": "maez.service",
+    "scope": "user",
+    "ingress": "http://127.0.0.1:11435/internal/brain_loop",
+    "baseline_pid": 3042166,
+    "after_run_pid": 3191404,
+    "restored_pid": 3193973,
+    "segv_trap": {
+      "pythonfaulthandler": true,
+      "preserved_across_restarts": true,
+      "recurrence_during_probe": false
+    }
+  },
+  "flag_posture": {
+    "baseline": "MAEZ_DISPATCHER_ENABLED absent in /proc/3042166/environ",
+    "after_run": "MAEZ_DISPATCHER_ENABLED=1 in /proc/3191404/environ",
+    "restored": "MAEZ_DISPATCHER_ENABLED absent in /proc/3193973/environ"
+  },
+  "verdict": "headline_closed_dispatcher_external_source_pipeline_live_with_two_carried_forward_v1_2_items",
+  "log_offsets": {
+    "before_baseline": {"maez_log": 48383660, "cognition_log": 20060751, "actions_log": 5645028},
+    "after_baseline": {"maez_log": 48410040, "cognition_log": 20060955, "actions_log": 5648248},
+    "before_after_run": {"maez_log": 48421937, "cognition_log": 20060955, "actions_log": 5648248},
+    "after_after_run": {"maez_log": 48435583, "actions_log": 5648248},
+    "actions_log_unchanged_during_after_run": true
+  },
+  "probe_corpus": [
+    {"index": 1, "text": "Search r/LocalLLaMA right now", "layer0_expected": "PARALLEL+HYBRID with substrate+LIVE_REDDIT"},
+    {"index": 2, "text": "Just let me know what is going on in Reddit in localllama", "layer0_expected": "SUBSTRATE_ONLY no subreddit anchor"},
+    {"index": 3, "text": "What is going on on Reddit?", "layer0_expected": "SUBSTRATE_ONLY no subreddit anchor"},
+    {"index": 4, "text": "Check r/Python for recent posts", "layer0_expected": "PARALLEL+HYBRID with no Python substrate"},
+    {"index": 5, "text": "What were we talking about last evening?", "layer0_expected": "SUBSTRATE_ONLY memory query"}
+  ],
+  "baseline_results": [
+    {"probe": 1, "chat_id": "seam8-baseline-1", "tool_calls": ["web_search", "fetch_url"], "transcript_shape": "jarvis web/fetch"},
+    {"probe": 2, "chat_id": "seam8-baseline-2", "tool_calls": ["web_search", "web_search", "web_search", "web_search"], "transcript_shape": "jarvis web_search"},
+    {"probe": 3, "chat_id": "seam8-baseline-3", "tool_calls": ["web_search", "fetch_url"], "transcript_shape": "jarvis web/fetch"},
+    {"probe": 4, "chat_id": "seam8-baseline-4", "tool_calls": ["web_search", "fetch_url"], "transcript_shape": "jarvis web/fetch"},
+    {"probe": 5, "chat_id": "seam8-baseline-5", "tool_calls": [], "transcript_shape": "empty"}
+  ],
+  "after_run_results": [
+    {
+      "probe": 1,
+      "chat_id": "seam8-after-1",
+      "fanout_generation_id": "eeb8b98bceda4b0db844755198837d4a",
+      "layer0_emit": {
+        "composition_hint": "PARALLEL",
+        "provenance_framing": "HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES",
+        "inventory_witness": "UNKNOWN",
+        "substrate_source_count": 1,
+        "external_source_count": 1,
+        "elapsed_ms": 98.315,
+        "budget_breach": true
+      },
+      "layer1_branches": [
+        {"source": "REDDIT_SOURCE", "outcome": "rows", "row_count": 1, "elapsed_ms": 111.201}
+      ],
+      "layer1_seal_state": "clean",
+      "layer1_total_elapsed_ms": 613.641,
+      "external_branches": [
+        {"source": "LIVE_REDDIT", "outcome": "rows", "block_count": 1, "elapsed_ms": 613.095, "error_class": "", "empty_reason": ""}
+      ],
+      "external_seal_state": "clean",
+      "external_total_elapsed_ms": 613.641,
+      "turn_seal_state": "clean",
+      "path_total_elapsed_ms": 712.408,
+      "tool_calls": [],
+      "transcript_shape": "rendered hybrid: [memory context] substrate rows + [fresh evidence] live reddit"
+    },
+    {
+      "probe": 2,
+      "chat_id": "seam8-after-2",
+      "fanout_generation_id": "1728337a5a52454887cbc2ca09d4cdd0",
+      "layer0_emit": {
+        "composition_hint": "SUBSTRATE_ONLY",
+        "provenance_framing": "SUBSTRATE_ONLY_NO_FRESH_VALIDATION",
+        "inventory_witness": "UNKNOWN",
+        "substrate_source_count": 1,
+        "external_source_count": 0,
+        "elapsed_ms": 17.761
+      },
+      "layer1_branches": [
+        {"source": "REDDIT_SOURCE", "outcome": "rows", "row_count": 1, "elapsed_ms": 20.742}
+      ],
+      "layer1_seal_state": "clean",
+      "external_branch_count": 0,
+      "external_seal_state": "clean",
+      "turn_seal_state": "clean",
+      "path_total_elapsed_ms": 39.162,
+      "tool_calls": [],
+      "transcript_shape": "rendered substrate: [memory evidence] reddit substrate rows"
+    },
+    {
+      "probe": 3,
+      "chat_id": "seam8-after-3",
+      "fanout_generation_id": "72f9d12492594f259c7957033e49959c",
+      "layer0_emit": {
+        "composition_hint": "SUBSTRATE_ONLY",
+        "provenance_framing": "SUBSTRATE_ONLY_NO_FRESH_VALIDATION",
+        "substrate_source_count": 1,
+        "external_source_count": 0,
+        "elapsed_ms": 12.765
+      },
+      "layer1_branches": [
+        {"source": "REDDIT_SOURCE", "outcome": "rows", "row_count": 1, "elapsed_ms": 107.440}
+      ],
+      "layer1_seal_state": "clean",
+      "external_branch_count": 0,
+      "turn_seal_state": "clean",
+      "path_total_elapsed_ms": 120.810,
+      "tool_calls": [],
+      "transcript_shape": "rendered substrate: [memory evidence] reddit substrate rows"
+    },
+    {
+      "probe": 4,
+      "chat_id": "seam8-after-4",
+      "fanout_generation_id": "91f3d6cba0c94ac3a284a2e973b7d763",
+      "layer0_emit": {
+        "composition_hint": "PARALLEL",
+        "provenance_framing": "HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES",
+        "substrate_source_count": 1,
+        "external_source_count": 1,
+        "elapsed_ms": 12.686
+      },
+      "layer1_branches": [
+        {"source": "REDDIT_SOURCE", "outcome": "empty_with_reason", "row_count": 0, "elapsed_ms": 4.308}
+      ],
+      "layer1_seal_state": "partial_failure",
+      "external_branches": [
+        {"source": "LIVE_REDDIT", "outcome": "rows", "block_count": 1, "elapsed_ms": 981.320, "error_class": "", "empty_reason": ""}
+      ],
+      "external_seal_state": "clean",
+      "turn_seal_state": "partial_failure",
+      "path_total_elapsed_ms": 994.756,
+      "tool_calls": [],
+      "transcript_shape": "[dispatcher refusal: FRESH_FAILURE_HYBRID_FALLBACK_ILLEGAL]",
+      "verify_run": {
+        "chat_id": "seam8-verify-4",
+        "fanout_generation_id": "9486767f907c43efbdd185b34b3346bf",
+        "reproducible": true,
+        "transcript_shape": "[dispatcher refusal: FRESH_FAILURE_HYBRID_FALLBACK_ILLEGAL]"
+      }
+    },
+    {
+      "probe": 5,
+      "chat_id": "seam8-after-5",
+      "fanout_generation_id": "37f1c02ff1ad49c3850cc45016ac8aab",
+      "layer0_emit": {
+        "composition_hint": "SUBSTRATE_ONLY",
+        "provenance_framing": "SUBSTRATE_ONLY_NO_FRESH_VALIDATION",
+        "substrate_source_count": 3,
+        "external_source_count": 0,
+        "elapsed_ms": 16.851
+      },
+      "layer1_branches": [
+        {"source": "TELEGRAM_SEMANTIC", "outcome": "rows", "row_count": 1, "elapsed_ms": 322.378},
+        {"source": "ENTITY_INDEX", "outcome": "error", "row_count": 0, "elapsed_ms": 0.000},
+        {"source": "LIVED_EPISODES", "outcome": "error", "row_count": 0, "elapsed_ms": 0.000}
+      ],
+      "layer1_seal_state": "partial_failure",
+      "external_branch_count": 0,
+      "external_seal_state": "clean",
+      "turn_seal_state": "partial_failure",
+      "path_total_elapsed_ms": 339.794,
+      "tool_calls": [],
+      "transcript_shape": "[dispatcher refusal: FRESH_FAILURE_HYBRID_FALLBACK_ILLEGAL]",
+      "verify_run": {
+        "chat_id": "seam8-verify-5",
+        "fanout_generation_id": "12213b19ca8c42988ff1d5a7d655b699",
+        "reproducible": true,
+        "transcript_shape": "[dispatcher refusal: FRESH_FAILURE_HYBRID_FALLBACK_ILLEGAL]"
+      }
+    }
+  ],
+  "surface_verdicts": {
+    "no_jarvis_fallthrough_under_dispatcher_enabled": "CLOSED",
+    "shared_fanout_generation_id_across_organs": "CLOSED",
+    "dispatcher_external_branch_telemetry_vocabulary": "CLOSED",
+    "dispatcher_external_fanout_telemetry": "CLOSED",
+    "turn_seal_state_field_on_dispatcher_path_exit": "CLOSED",
+    "live_reddit_egress_route_through_external_fetch": "CLOSED",
+    "layer0_live_reddit_selector_growth": "CLOSED",
+    "hybrid_rendering_substrate_plus_fresh_success": "CLOSED",
+    "reddit_substrate_bypass_finding19_under_new_pipeline": "CLOSED",
+    "hybrid_no_substrate_plus_fresh_success_refusal": "STILL_OPEN_CONTRACT_LANGUAGE",
+    "substrate_only_refusal_when_budget_blocks_empties_recall_blocks": "STILL_OPEN",
+    "fresh_only_total_failure_no_fresh_deterministic_summary": "NOT_WITNESSED",
+    "reconstructed_from_framing_audit_field": "NOT_WITNESSED",
+    "layer1_entity_index_lived_episodes_synchronous_errors": "STILL_OPEN_RECURRENCE",
+    "telegram_transport": "NOT_SEPARATELY_WITNESSED",
+    "segv_trap": "HOLDING"
+  },
+  "findings": {
+    "finding_1": "Dispatcher external-source pipeline is live, audited, and JARVIS-free under flag-on. First-ever rendered hybrid transcript with substrate + fresh evidence through external_fetch.fetch_text(fetch_type='live_reddit').",
+    "finding_2": "Hybrid framing + no substrate + fresh SUCCESS produces dispatcher refusal (FRESH_FAILURE_HYBRID_FALLBACK_ILLEGAL). Per-contract correct under closed reconstruction transform but operationally surfaces as a refusal even when LIVE_REDDIT succeeded. Anticipated by Claude pass-1 review SUGGEST #2; carry to v1.2.",
+    "finding_3": "_budget_blocks (layer1.py:385-408) can empty recall_blocks after a Layer 1 branch reports rows when text exceeds max_chars_per_source=1200. The merge owner uses post-budget recall_blocks for substrate_has_rows, so a single oversized row causes refusal even though the branch outcome was 'rows'. Three v1.2 options: budget-drop telemetry, fallback derivation from branch_results, or _budget_blocks truncation rather than dropping.",
+    "finding_4": "Layer 1 ENTITY_INDEX and LIVED_EPISODES synchronous errors (0.000ms) recur. Pre-existing carried-forward investigation item; reproducible across the prior daemon witness and this one.",
+    "finding_5": "Probe 1 Layer 0 budget breach at 98.315ms (warm-after-restart). 6s external global deadline accommodated 613ms LIVE_REDDIT fetch comfortably."
+  },
+  "carried_forward_to_v1_2": [
+    "Finding 2: HYBRID + no substrate + fresh SUCCESS path (transform row OR refusal-reason rename)",
+    "Finding 3: _budget_blocks empties recall_blocks behavioral gap",
+    "Finding 4: ENTITY_INDEX / LIVED_EPISODES adapter investigation",
+    "No-fresh deterministic summary path not exercised live",
+    "Reconstructed-from-framing audit field not exercised live",
+    "Telegram transport probe still deferred"
+  ],
+  "telemetry_lines_captured": 57,
+  "service_posture_after_witness": "MAEZ_DISPATCHER_ENABLED absent; not in observation window"
+}
