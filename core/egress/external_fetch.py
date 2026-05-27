@@ -138,6 +138,16 @@ def build_fetch_registry() -> FetchRegistry:
         result_origin_class="tool_result_public",
     )
     registry.register_fetch_type(
+        "live_reddit",
+        threat_model_class=PUBLIC_LOOKUP,
+        result_origin_class="tool_result_public",
+    )
+    registry.register_fetch_type(
+        "arxiv",
+        threat_model_class=PUBLIC_LOOKUP,
+        result_origin_class="tool_result_public",
+    )
+    registry.register_fetch_type(
         "fetch_url",
         threat_model_class=UNKNOWN_URL_FETCH,
         result_origin_class="unclassified",
