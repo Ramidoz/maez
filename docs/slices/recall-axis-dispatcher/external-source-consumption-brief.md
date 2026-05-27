@@ -1,11 +1,13 @@
 # Recall-Axis Dispatcher External-Source Consumption Brief
 
-**Status:** v1.2 discovery brief; seam-8 witness findings folded.
+**Status:** v1.3 discovery brief; v1.2 verification Finding 6 folded.
 **Date:** 2026-05-27
 **Predecessor witness:** `docs/slices/recall-axis-dispatcher/witness/finding19-probe-2026-05-27-daemon.md`
 **Pass-1 synthesis:** `docs/slices/recall-axis-dispatcher/reviews/claude-external-source-synthesis-v1-pass1.md`
 **v1.2 witness source:** `docs/slices/recall-axis-dispatcher/witness/external-source-probe-2026-05-27-daemon.md`
 **v1.2 amendment proposal:** `docs/slices/recall-axis-dispatcher/reviews/claude-external-source-v1.2-amendment-proposal.md`
+**v1.3 witness source:** `docs/slices/recall-axis-dispatcher/witness/external-source-v1p2-verify-2026-05-27-daemon.md`
+**v1.3 amendment proposal:** `docs/slices/recall-axis-dispatcher/reviews/claude-external-source-v1.3-amendment-proposal.md`
 
 ## 1. Why This Slice Exists
 
@@ -452,6 +454,20 @@ claim. The original framing and hint remain recoverable from the audit envelope.
 Substrate-only turns with no external sources report
 `FreshAttemptOutcome.NOT_ATTEMPTED`, not `ALL_SUCCEEDED`.
 
+The rebuilt `effective_spec.substrate_sources` reflects only substrate sources
+that actually contributed rows to `recall_blocks` after Layer 1 budget handling.
+Sources whose branches errored, timed out, returned empty, or were reserved are
+omitted from the rebuilt spec before rendering. This mirrors the existing
+external-source behavior, where `external_sources` are filtered to accepted
+`FreshBlock` sources. When the filtered substrate list differs from the original
+Layer 0 emission, the existing reconstruction audit fields preserve the prior
+claim through `reconstructed_from_framing` and `reconstructed_from_hint`.
+
+`core/dispatcher/provenance_renderer.py` remains strict: every source listed in
+the effective spec must have a matching rendered summary. The v1.3 filter is
+upstream of renderer validation; the renderer is not relaxed to accept missing
+source summaries.
+
 The merge owner must use the canonical hint/framing legality source from
 `spec.py`, or carry a CI equivalence test plus an inline comment tying the local
 table to the canonical `_LEGAL_HINT_FRAMING` matrix. A stale local legality table
@@ -619,6 +635,20 @@ failure table plus these cross-cutting tests:
     Substrate-only turns with empty `external_sources` report
     `FreshAttemptOutcome.NOT_ATTEMPTED`.
 
+23. `test_substrate_sources_filtered_to_those_with_rows`
+    A substrate-only spec with multiple substrate sources but rows from only one
+    source rebuilds `effective_spec.substrate_sources` to the row-producing
+    source list and preserves the original Layer 0 framing/hint in audit.
+
+24. `test_substrate_filter_preserves_renderable_state`
+    Mixed-status Layer 1 substrate branches render without
+    `PROVENANCE_TEMPLATE_MISMATCH`; every source in the effective spec has a
+    matching source summary.
+
+25. `test_substrate_sources_unchanged_when_all_branches_have_rows`
+    If every declared substrate source contributes rows, the filter is a no-op
+    and reconstruction does not fire solely because of substrate filtering.
+
 ## 10. Explicit Non-Goals
 
 - Do not implement frontier consultation.
@@ -643,6 +673,9 @@ failure table plus these cross-cutting tests:
 - Do not claim direct Telegram transport closure from this slice.
 - Do not flip `MAEZ_DISPATCHER_ENABLED` default.
 - Do not close R#17 Chroma singleton sharing.
+- Do not relax `provenance_renderer._validate_source_roles` strictness to hide
+  missing source summaries. The merge owner must give the renderer an honest
+  effective spec.
 
 ## 11. Predicted Effect
 
@@ -669,3 +702,7 @@ The negative predictions are equally important:
   `_run_dispatcher_pipeline` returns a `RenderedTurn`.
 - Failures are surfaced as structured limitations rather than laundered into
   silence.
+- Probe 5 from the v1.2 verification witness (`What were we talking about last
+  evening?`) renders the truncated `TELEGRAM_SEMANTIC` evidence even when
+  `ENTITY_INDEX` and `LIVED_EPISODES` branches error, with no
+  `PROVENANCE_TEMPLATE_MISMATCH`.
