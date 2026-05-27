@@ -460,20 +460,6 @@ def _summarize_shell_error(err: str) -> str:
     return ""
 
 
-def _should_run_jarvis_loop(text: str) -> bool:
-    """True if the message could plausibly need tools. Inverts the old
-    keyword gate — bias toward running the loop, only skip on messages
-    that are obviously pure conversation."""
-    if not text:
-        return False
-    t = text.strip()
-    if len(t) < 3:
-        return False
-    if _CONVERSATIONAL_RE.match(t):
-        return False
-    return True
-
-
 # Tool-call parser. Accepts several formats the merged-LoRA gemma actually
 # emits, plus the literal TOOL_CALL: {...} form we ask for in the manifest.
 # Returns {"action": str, "params": dict} or None.
