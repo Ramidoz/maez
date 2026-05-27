@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, wait
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 import time
 import uuid
@@ -29,6 +29,7 @@ DEFAULT_MAX_PARALLEL_BRANCHES = 6
 MAX_RECALL_BLOCKS_PER_SOURCE = 3
 MAX_RECALL_CHARS_PER_SOURCE = 1200
 MAX_TOTAL_RECALL_CHARS = 4200
+TRUNCATION_MARKER = "...[truncated]"
 
 SOURCE_PRIORITY = (
     SubstrateSource.REDDIT_SOURCE,
@@ -66,6 +67,8 @@ class RecallBlock:
     freshness: str
     rationale: str
     prompt_cost: int
+    truncated: bool = False
+    original_chars: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -75,6 +78,8 @@ class RecallBlock:
             "freshness": self.freshness,
             "rationale": self.rationale,
             "prompt_cost": self.prompt_cost,
+            "truncated": self.truncated,
+            "original_chars": self.original_chars,
         }
 
 
@@ -111,12 +116,31 @@ class RecallBranchResult:
 
 
 @dataclass(frozen=True)
+class RecallBudgetEvent:
+    source: SubstrateSource
+    truncated_blocks: int = 0
+    dropped_blocks: int = 0
+    original_chars: int = 0
+    capped_chars: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "source": self.source.value,
+            "truncated_blocks": self.truncated_blocks,
+            "dropped_blocks": self.dropped_blocks,
+            "original_chars": self.original_chars,
+            "capped_chars": self.capped_chars,
+        }
+
+
+@dataclass(frozen=True)
 class Layer1FanoutResult:
     fanout_generation_id: str
     sealed_at: float
     accepted_branch_ids: tuple[str, ...]
     branch_results: tuple[RecallBranchResult, ...]
     recall_blocks: tuple[RecallBlock, ...]
+    budget_events: tuple[RecallBudgetEvent, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -125,6 +149,7 @@ class Layer1FanoutResult:
             "accepted_branch_ids": list(self.accepted_branch_ids),
             "branch_results": [branch.to_dict() for branch in self.branch_results],
             "recall_blocks": [block.to_dict() for block in self.recall_blocks],
+            "budget_events": [event.to_dict() for event in self.budget_events],
         }
 
 
@@ -248,20 +273,20 @@ class Layer1Fanout:
             if result.status is RecallBranchStatus.SUCCESS:
                 accepted_branch_ids.append(result.branch_id)
                 accepted_blocks.extend(result.blocks)
+        budgeted_blocks, budget_events = _budget_blocks(
+            accepted_blocks,
+            max_per_source=MAX_RECALL_BLOCKS_PER_SOURCE,
+            max_chars_per_source=MAX_RECALL_CHARS_PER_SOURCE,
+            max_total_chars=MAX_TOTAL_RECALL_CHARS,
+        )
 
         return Layer1FanoutResult(
             fanout_generation_id=generation_id,
             sealed_at=sealed_at,
             accepted_branch_ids=tuple(accepted_branch_ids),
             branch_results=tuple(results[source] for source in ordered_sources),
-            recall_blocks=tuple(
-                _budget_blocks(
-                    accepted_blocks,
-                    max_per_source=MAX_RECALL_BLOCKS_PER_SOURCE,
-                    max_chars_per_source=MAX_RECALL_CHARS_PER_SOURCE,
-                    max_total_chars=MAX_TOTAL_RECALL_CHARS,
-                )
-            ),
+            recall_blocks=tuple(budgeted_blocks),
+            budget_events=budget_events,
         )
 
     def _preflight_result(
@@ -388,21 +413,105 @@ def _budget_blocks(
     max_per_source: int,
     max_chars_per_source: int,
     max_total_chars: int,
-) -> list[RecallBlock]:
+) -> tuple[list[RecallBlock], tuple[RecallBudgetEvent, ...]]:
     selected: list[RecallBlock] = []
     per_source_count: dict[SubstrateSource, int] = {}
     per_source_chars: dict[SubstrateSource, int] = {}
+    events: dict[SubstrateSource, _MutableBudgetEvent] = {}
     total_chars = 0
     for block in blocks:
         block_chars = len(block.text)
         if per_source_count.get(block.source, 0) >= max_per_source:
+            _record_drop(events, block.source, original_chars=block_chars)
             continue
-        if per_source_chars.get(block.source, 0) + block_chars > max_chars_per_source:
+
+        remaining_source_chars = max_chars_per_source - per_source_chars.get(block.source, 0)
+        remaining_total_chars = max_total_chars - total_chars
+        allowed_chars = min(remaining_source_chars, remaining_total_chars)
+        if allowed_chars <= 0:
+            _record_drop(events, block.source, original_chars=block_chars)
             continue
-        if total_chars + block_chars > max_total_chars:
-            continue
-        selected.append(block)
+
+        selected_block = block
+        if block_chars > allowed_chars:
+            selected_block = _truncate_block(block, allowed_chars)
+            if selected_block is None:
+                _record_drop(events, block.source, original_chars=block_chars)
+                continue
+            _record_truncation(
+                events,
+                block.source,
+                original_chars=block_chars,
+                capped_chars=len(selected_block.text),
+            )
+
+        selected.append(selected_block)
         per_source_count[block.source] = per_source_count.get(block.source, 0) + 1
-        per_source_chars[block.source] = per_source_chars.get(block.source, 0) + block_chars
-        total_chars += block_chars
-    return selected
+        per_source_chars[block.source] = per_source_chars.get(block.source, 0) + len(selected_block.text)
+        total_chars += len(selected_block.text)
+    return selected, tuple(event.freeze() for _, event in sorted(events.items(), key=lambda item: item[0].value))
+
+
+@dataclass
+class _MutableBudgetEvent:
+    source: SubstrateSource
+    truncated_blocks: int = 0
+    dropped_blocks: int = 0
+    original_chars: int = 0
+    capped_chars: int = 0
+
+    def freeze(self) -> RecallBudgetEvent:
+        return RecallBudgetEvent(
+            source=self.source,
+            truncated_blocks=self.truncated_blocks,
+            dropped_blocks=self.dropped_blocks,
+            original_chars=self.original_chars,
+            capped_chars=self.capped_chars,
+        )
+
+
+def _budget_event(
+    events: dict[SubstrateSource, _MutableBudgetEvent],
+    source: SubstrateSource,
+) -> _MutableBudgetEvent:
+    if source not in events:
+        events[source] = _MutableBudgetEvent(source=source)
+    return events[source]
+
+
+def _record_drop(
+    events: dict[SubstrateSource, _MutableBudgetEvent],
+    source: SubstrateSource,
+    *,
+    original_chars: int,
+) -> None:
+    event = _budget_event(events, source)
+    event.dropped_blocks += 1
+    event.original_chars += original_chars
+
+
+def _record_truncation(
+    events: dict[SubstrateSource, _MutableBudgetEvent],
+    source: SubstrateSource,
+    *,
+    original_chars: int,
+    capped_chars: int,
+) -> None:
+    event = _budget_event(events, source)
+    event.truncated_blocks += 1
+    event.original_chars += original_chars
+    event.capped_chars += capped_chars
+
+
+def _truncate_block(block: RecallBlock, allowed_chars: int) -> RecallBlock | None:
+    if allowed_chars <= len(TRUNCATION_MARKER):
+        return None
+    prefix_chars = allowed_chars - len(TRUNCATION_MARKER)
+    text = block.text[:prefix_chars] + TRUNCATION_MARKER
+    return replace(
+        block,
+        text=text,
+        truncated=True,
+        original_chars=len(block.text),
+        prompt_cost=min(block.prompt_cost, len(text)),
+    )

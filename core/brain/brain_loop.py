@@ -476,6 +476,16 @@ def _run_dispatcher_pipeline(
             len(branch.blocks),
             branch.elapsed_ms,
         )
+    for event in getattr(layer1_result, "budget_events", ()) or ():
+        logger.info(
+            "dispatcher_layer1_budget_limited surface=%s source=%s truncated_blocks=%s dropped_blocks=%s original_chars=%s capped_chars=%s",
+            surface,
+            event.source.value,
+            event.truncated_blocks,
+            event.dropped_blocks,
+            event.original_chars,
+            event.capped_chars,
+        )
     total_fanout_ms = (time.monotonic() - fanout_started) * 1000
     seal_state = "clean"
     if any(branch.status != RecallBranchStatus.SUCCESS for branch in layer1_result.branch_results):

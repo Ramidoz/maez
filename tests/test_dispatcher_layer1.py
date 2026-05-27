@@ -310,6 +310,114 @@ class DispatcherLayer1Tests(unittest.TestCase):
             ),
         )
 
+    def test_layer1_budget_blocks_truncate_instead_of_drop(self):
+        from core.dispatcher.layer1 import Layer1Fanout, RecallBlock
+        from core.dispatcher.spec import SubstrateSource
+
+        long_text = "x" * 1300
+
+        def adapter(source):
+            return [
+                RecallBlock(
+                    source=source,
+                    text=long_text,
+                    timestamp=30.0,
+                    freshness="current",
+                    rationale="fixture",
+                    prompt_cost=2,
+                )
+            ]
+
+        result = Layer1Fanout(
+            adapters={SubstrateSource.TELEGRAM_SEMANTIC: adapter},
+            branch_timeout_s=0.2,
+            global_deadline_s=0.4,
+        ).run(
+            _spec(SubstrateSource.TELEGRAM_SEMANTIC),
+            utterance="what were we talking about?",
+            conversation_state={},
+        )
+
+        self.assertEqual(len(result.recall_blocks), 1)
+        block = result.recall_blocks[0]
+        self.assertTrue(block.truncated)
+        self.assertEqual(block.original_chars, len(long_text))
+        self.assertLessEqual(len(block.text), 1200)
+        self.assertTrue(block.text.endswith("...[truncated]"))
+        self.assertEqual(len(result.budget_events), 1)
+        event = result.budget_events[0]
+        self.assertEqual(event.source, SubstrateSource.TELEGRAM_SEMANTIC)
+        self.assertEqual(event.truncated_blocks, 1)
+        self.assertEqual(event.dropped_blocks, 0)
+        self.assertEqual(event.original_chars, len(long_text))
+        self.assertEqual(event.capped_chars, len(block.text))
+        self.assertTrue(result.to_dict()["recall_blocks"][0]["truncated"])
+        self.assertEqual(
+            result.to_dict()["recall_blocks"][0]["original_chars"],
+            len(long_text),
+        )
+
+    def test_layer1_budget_count_cap_still_drops_extra_blocks(self):
+        from core.dispatcher.layer1 import Layer1Fanout, RecallBlock
+        from core.dispatcher.spec import SubstrateSource
+
+        def adapter(source):
+            return [
+                RecallBlock(
+                    source=source,
+                    text=f"row {idx}",
+                    timestamp=30.0,
+                    freshness="current",
+                    rationale="fixture",
+                    prompt_cost=2,
+                )
+                for idx in range(4)
+            ]
+
+        result = Layer1Fanout(
+            adapters={SubstrateSource.TELEGRAM_SEMANTIC: adapter},
+            branch_timeout_s=0.2,
+            global_deadline_s=0.4,
+        ).run(
+            _spec(SubstrateSource.TELEGRAM_SEMANTIC),
+            utterance="what were we talking about?",
+            conversation_state={},
+        )
+
+        self.assertEqual([block.text for block in result.recall_blocks], ["row 0", "row 1", "row 2"])
+        self.assertEqual(len(result.budget_events), 1)
+        self.assertEqual(result.budget_events[0].dropped_blocks, 1)
+        self.assertEqual(result.budget_events[0].truncated_blocks, 0)
+
+    def test_layer1_budget_no_truncation_or_drop_emits_no_event(self):
+        from core.dispatcher.layer1 import Layer1Fanout, RecallBlock
+        from core.dispatcher.spec import SubstrateSource
+
+        def adapter(source):
+            return [
+                RecallBlock(
+                    source=source,
+                    text="small row",
+                    timestamp=30.0,
+                    freshness="current",
+                    rationale="fixture",
+                    prompt_cost=2,
+                )
+            ]
+
+        result = Layer1Fanout(
+            adapters={SubstrateSource.TELEGRAM_SEMANTIC: adapter},
+            branch_timeout_s=0.2,
+            global_deadline_s=0.4,
+        ).run(
+            _spec(SubstrateSource.TELEGRAM_SEMANTIC),
+            utterance="what were we talking about?",
+            conversation_state={},
+        )
+
+        self.assertEqual([block.text for block in result.recall_blocks], ["small row"])
+        self.assertEqual(result.budget_events, ())
+
 
 if __name__ == "__main__":
     unittest.main()

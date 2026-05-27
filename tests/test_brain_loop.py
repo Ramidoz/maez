@@ -395,6 +395,112 @@ class DispatcherWiring(unittest.TestCase):
         dispatcher.assert_not_called()
         self.assertIsInstance(result, str)
 
+    def test_dispatcher_logs_layer1_budget_limited_event(self):
+        from core import brain_loop
+        from core.dispatcher.external_sources import ExternalFanoutResult
+        from core.dispatcher.spec import (
+            CompositionHint,
+            CompositionSpec,
+            ExternalSource,
+            InventoryWitness,
+            ProvenanceFraming,
+            SourceAvailability,
+            SubstrateSource,
+        )
+
+        spec = CompositionSpec(
+            substrate_sources=[SubstrateSource.TELEGRAM_SEMANTIC],
+            external_sources=[ExternalSource.LIVE_REDDIT],
+            composition_hint=CompositionHint.SUBSTRATE_ONLY,
+            provenance_framing=ProvenanceFraming.SUBSTRATE_ONLY_NO_FRESH_VALIDATION,
+            inventory_witness=InventoryWitness.UNKNOWN,
+            source_availability={
+                SubstrateSource.TELEGRAM_SEMANTIC: SourceAvailability.EXECUTABLE_UNKNOWN,
+                ExternalSource.LIVE_REDDIT: SourceAvailability.EXECUTABLE_UNKNOWN,
+            },
+            availability_limitations=[],
+            freshness_window=None,
+            trust_scope_union=None,
+        )
+
+        class FakeLayer0:
+            def __init__(self, *, index):
+                pass
+
+            def emit_spec(self, user_text, *, surface, inventory):
+                return spec
+
+        class FakeLayer1:
+            def __init__(self, *, adapters, branch_timeout_s=None, global_deadline_s=None):
+                pass
+
+            def run(self, spec, *, utterance, conversation_state, fanout_generation_id=None):
+                return SimpleNamespace(
+                    branch_results=(),
+                    recall_blocks=(),
+                    fanout_generation_id=fanout_generation_id,
+                    sealed_at=1.0,
+                    budget_events=(
+                        SimpleNamespace(
+                            source=SubstrateSource.TELEGRAM_SEMANTIC,
+                            truncated_blocks=1,
+                            dropped_blocks=0,
+                            original_chars=1300,
+                            capped_chars=1200,
+                        ),
+                    ),
+                )
+
+        class FakeExternalFanout:
+            def run(self, spec, *, utterance, conversation_state, fanout_generation_id):
+                return ExternalFanoutResult(
+                    fanout_generation_id=fanout_generation_id,
+                    sealed_at=1.0,
+                    branch_results=(),
+                    fresh_blocks=(),
+                    availability_limitations=(),
+                )
+
+        class FakeFSM:
+            def apply_repair(self, **kwargs):
+                return kwargs["current_spec"]
+
+            def record_completed_spec(self, **kwargs):
+                pass
+
+        def fake_merge(spec_arg, layer1_result, external_result, **kwargs):
+            return SimpleNamespace(
+                prompt_block="MERGED",
+                effective_spec=spec_arg,
+                refusal_reason=None,
+                audit_envelope={},
+            )
+
+        with (
+            patch.object(brain_loop, "_dispatcher_index", return_value=object()),
+            patch.object(brain_loop, "_dispatcher_repair_fsm", return_value=FakeFSM()),
+            patch("core.dispatcher.layer0.Layer0Dispatcher", FakeLayer0),
+            patch("core.dispatcher.layer1.Layer1Fanout", FakeLayer1),
+            patch("core.dispatcher.external_sources.ExternalFanout", return_value=FakeExternalFanout()),
+            patch("core.dispatcher.merge.merge_fanout_results", side_effect=fake_merge),
+            self.assertLogs("core.brain.brain_loop", level="INFO") as logs,
+        ):
+            result = brain_loop._run_dispatcher_pipeline(
+                user_text="what were we talking about last evening?",
+                surface="web",
+                bond_id="rohit",
+                chat_id="budget-test",
+            )
+
+        self.assertEqual(result.transcript, "MERGED")
+        joined = "\n".join(logs.output)
+        self.assertIn("dispatcher_layer1_budget_limited", joined)
+        self.assertIn("source=TELEGRAM_SEMANTIC", joined)
+        self.assertIn("truncated_blocks=1", joined)
+        self.assertIn("dropped_blocks=0", joined)
+        self.assertIn("original_chars=1300", joined)
+        self.assertIn("capped_chars=1200", joined)
+
     def test_dispatcher_render_includes_empty_summaries_for_partial_fanout(self):
         from core import brain_loop
         from core.dispatcher.layer1 import RecallBlock, RecallBranchResult, RecallBranchStatus
