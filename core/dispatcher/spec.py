@@ -148,6 +148,7 @@ class FreshnessClass(StrEnum):
 
 
 class FreshAttemptOutcome(StrEnum):
+    NOT_ATTEMPTED = "NOT_ATTEMPTED"
     ALL_FAILED = "ALL_FAILED"
     PARTIAL = "PARTIAL"
     ALL_SUCCEEDED = "ALL_SUCCEEDED"

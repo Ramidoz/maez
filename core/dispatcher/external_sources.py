@@ -34,6 +34,8 @@ DEFAULT_BRANCH_TIMEOUT_S = 5.0
 DEFAULT_GLOBAL_DEADLINE_S = 6.0
 DEFAULT_CLEANUP_GRACE_S = 0.025
 DEFAULT_MAX_PARALLEL_BRANCHES = 5
+# Hard prompt cap for each fresh evidence source; text beyond this is omitted
+# before rendering and the egress diagnostic remains the source-of-truth witness.
 MAX_FRESH_CHARS_PER_SOURCE = 2000
 URL_RE = re.compile(r"https?://[^\s<>()\"']+", re.IGNORECASE)
 SUBREDDIT_RE = re.compile(r"\br/([A-Za-z0-9_][A-Za-z0-9_]{1,20})\b")
@@ -340,6 +342,8 @@ class ExternalFanout:
     ) -> ExternalBranchResult | None:
         if source is ExternalSource.FRONTIER_CONSULT:
             return _reserved_result(generation_id, branch_id, source)
+        # The v1 arxiv route is audited; explicit paperclip asks stay
+        # reserved until the paperclip substrate has its own egress contract.
         if source is ExternalSource.ARXIV_OR_PAPERCLIP and "paperclip" in utterance.lower():
             return _reserved_result(generation_id, branch_id, source)
         if self.subject_boundary_predicate(source, utterance, conversation_state):

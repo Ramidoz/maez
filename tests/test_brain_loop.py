@@ -501,6 +501,116 @@ class DispatcherWiring(unittest.TestCase):
         self.assertIn("original_chars=1300", joined)
         self.assertIn("capped_chars=1200", joined)
 
+    def test_dispatcher_path_exit_distinguishes_refused_turn_seal_state(self):
+        from core import brain_loop
+        from core.dispatcher.external_sources import ExternalFanoutResult
+        from core.dispatcher.spec import (
+            AvailabilityLimitation,
+            CompositionHint,
+            CompositionSpec,
+            DispatcherRefusalReason,
+            InventoryWitness,
+            ProvenanceFraming,
+            SourceAvailability,
+            SubstrateSource,
+        )
+
+        spec = CompositionSpec(
+            substrate_sources=[SubstrateSource.TELEGRAM_SEMANTIC],
+            external_sources=[],
+            composition_hint=CompositionHint.SUBSTRATE_ONLY,
+            provenance_framing=ProvenanceFraming.SUBSTRATE_ONLY_NO_FRESH_VALIDATION,
+            inventory_witness=InventoryWitness.UNKNOWN,
+            source_availability={
+                SubstrateSource.TELEGRAM_SEMANTIC: SourceAvailability.EXECUTABLE_UNKNOWN,
+            },
+            availability_limitations=[],
+            freshness_window=None,
+            trust_scope_union=None,
+        )
+        reconstructed = CompositionSpec(
+            substrate_sources=[SubstrateSource.TELEGRAM_SEMANTIC],
+            external_sources=[],
+            composition_hint=CompositionHint.SUBSTRATE_ONLY,
+            provenance_framing=ProvenanceFraming.SUBSTRATE_ONLY_NO_FRESH_VALIDATION,
+            inventory_witness=InventoryWitness.UNKNOWN,
+            source_availability={
+                SubstrateSource.TELEGRAM_SEMANTIC: SourceAvailability.EXECUTABLE_UNKNOWN,
+            },
+            availability_limitations=[AvailabilityLimitation.NO_RELEVANT_SUBSTRATE],
+            freshness_window=None,
+            trust_scope_union=None,
+        )
+        seen = {}
+
+        class FakeLayer0:
+            def __init__(self, *, index):
+                pass
+
+            def emit_spec(self, user_text, *, surface, inventory):
+                return spec
+
+        class FakeLayer1:
+            def __init__(self, *, adapters, branch_timeout_s=None, global_deadline_s=None):
+                pass
+
+            def run(self, spec, *, utterance, conversation_state, fanout_generation_id=None):
+                return SimpleNamespace(
+                    branch_results=(),
+                    recall_blocks=(),
+                    fanout_generation_id=fanout_generation_id,
+                    sealed_at=1.0,
+                    budget_events=(),
+                )
+
+        class FakeExternalFanout:
+            def run(self, spec, *, utterance, conversation_state, fanout_generation_id):
+                return ExternalFanoutResult(
+                    fanout_generation_id=fanout_generation_id,
+                    sealed_at=1.0,
+                    branch_results=(),
+                    fresh_blocks=(),
+                    availability_limitations=(),
+                )
+
+        class FakeFSM:
+            def apply_repair(self, **kwargs):
+                return kwargs["current_spec"]
+
+            def record_completed_spec(self, **kwargs):
+                seen["recorded"] = kwargs["spec"]
+
+        def fake_merge(spec_arg, layer1_result, external_result, **kwargs):
+            return SimpleNamespace(
+                prompt_block="[no fresh evidence available: test]",
+                effective_spec=reconstructed,
+                refusal_reason=DispatcherRefusalReason.FRESH_FAILURE_HYBRID_FALLBACK_ILLEGAL,
+                audit_envelope={},
+            )
+
+        with (
+            patch.object(brain_loop, "_dispatcher_index", return_value=object()),
+            patch.object(brain_loop, "_dispatcher_repair_fsm", return_value=FakeFSM()),
+            patch("core.dispatcher.layer0.Layer0Dispatcher", FakeLayer0),
+            patch("core.dispatcher.layer1.Layer1Fanout", FakeLayer1),
+            patch("core.dispatcher.external_sources.ExternalFanout", return_value=FakeExternalFanout()),
+            patch("core.dispatcher.merge.merge_fanout_results", side_effect=fake_merge),
+            self.assertLogs("core.brain.brain_loop", level="INFO") as logs,
+        ):
+            result = brain_loop._run_dispatcher_pipeline(
+                user_text="search live",
+                surface="web",
+                bond_id="rohit",
+                chat_id="refused-test",
+            )
+
+        self.assertEqual(result.transcript, "[no fresh evidence available: test]")
+        self.assertNotIn("recorded", seen)
+        joined = "\n".join(logs.output)
+        self.assertIn("dispatcher_path_exit", joined)
+        self.assertIn("turn_seal_state=refused", joined)
+        self.assertNotIn("turn_seal_state=reconstructed", joined)
+
     def test_dispatcher_render_includes_empty_summaries_for_partial_fanout(self):
         from core import brain_loop
         from core.dispatcher.layer1 import RecallBlock, RecallBranchResult, RecallBranchStatus

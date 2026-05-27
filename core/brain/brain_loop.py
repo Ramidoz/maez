@@ -542,16 +542,19 @@ def _run_dispatcher_pipeline(
         timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     )
     turn_seal_state = "clean"
-    if rendered_turn.effective_spec.to_dict() != spec.to_dict():
+    if rendered_turn.refusal_reason is not None:
+        turn_seal_state = "refused"
+    elif rendered_turn.effective_spec.to_dict() != spec.to_dict():
         turn_seal_state = "reconstructed"
     elif (
         seal_state == "partial_failure"
         or external_seal_state == "partial_failure"
-        or rendered_turn.refusal_reason is not None
     ):
         turn_seal_state = "partial_failure"
 
     if rendered_turn.refusal_reason is None:
+        # Store the final effective spec, including merge-time reconstruction,
+        # so the next repair turn inherits what was actually rendered.
         fsm.record_completed_spec(
             bond_id=bond_id,
             surface=surface,

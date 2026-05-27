@@ -91,7 +91,9 @@ _CONTENT_ANCHOR_RE = re.compile(
     r"\b(qwen|reddit|online|local ?llama|telegram|github|calendar|project|status)\b",
     re.IGNORECASE,
 )
+# Generic Reddit talk selects the owned Reddit substrate.
 _REDDIT_ANCHOR_RE = re.compile(r"\b(reddit|local ?llama|r/[A-Za-z0-9_]+)\b", re.IGNORECASE)
+# A syntactically valid subreddit anchor additionally selects LIVE_REDDIT.
 _SUBREDDIT_ANCHOR_RE = re.compile(r"\br/[A-Za-z0-9_][A-Za-z0-9_]{1,20}\b", re.IGNORECASE)
 
 

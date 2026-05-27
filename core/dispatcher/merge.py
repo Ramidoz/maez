@@ -38,6 +38,7 @@ from core.dispatcher.spec import (
     ProvenanceAuditMismatchReason,
     ProvenanceFraming,
     SourceAvailability,
+    _LEGAL_HINT_FRAMING,
 )
 
 
@@ -311,7 +312,7 @@ def _fresh_attempt_outcome(
     accepted_blocks: tuple[FreshBlock, ...],
 ) -> FreshAttemptOutcome:
     if not spec.external_sources:
-        return FreshAttemptOutcome.ALL_SUCCEEDED
+        return FreshAttemptOutcome.NOT_ATTEMPTED
     successful_sources = {block.source for block in accepted_blocks}
     if len(successful_sources) == len(set(spec.external_sources)):
         return FreshAttemptOutcome.ALL_SUCCEEDED
@@ -438,7 +439,7 @@ def _base_audit_envelope(
         ],
         "rendered_block_roles": [],
         "template_id": "merge.no_fresh_or_refusal.v1",
-        "template_version_hash": "sha256:adr0047-merge-v1",
+        "template_version_hash": "version:adr0047-merge-v1",
         "reconstructed_from_framing": None,
         "reconstructed_from_hint": None,
         "fresh_attempt_outcome": fresh_attempt_outcome.value,
@@ -493,38 +494,7 @@ def _limitation_for_external_branch(branch: ExternalBranchResult) -> Availabilit
 
 
 def _legal_framings(hint: CompositionHint) -> frozenset[ProvenanceFraming]:
-    if hint == CompositionHint.SUBSTRATE_ONLY:
-        return frozenset(
-            {
-                ProvenanceFraming.SUBSTRATE_ONLY_NO_FRESH_VALIDATION,
-                ProvenanceFraming.SUBSTRATE_EVIDENCE_FRESH_CONTEXT,
-            }
-        )
-    if hint == CompositionHint.FRESH_ONLY:
-        return frozenset({ProvenanceFraming.FRESH_ONLY})
-    if hint == CompositionHint.PARALLEL:
-        return frozenset(
-            {
-                ProvenanceFraming.HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES,
-                ProvenanceFraming.SUBSTRATE_EVIDENCE_FRESH_CONTEXT,
-            }
-        )
-    if hint == CompositionHint.SUBSTRATE_THEN_FETCH_IF_STALE:
-        return frozenset(
-            {
-                ProvenanceFraming.HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES,
-                ProvenanceFraming.SUBSTRATE_ONLY_NO_FRESH_VALIDATION,
-                ProvenanceFraming.FRESH_ATTEMPTED_UNAVAILABLE_SUBSTRATE_CONTEXT,
-            }
-        )
-    if hint == CompositionHint.FRESH_THEN_CONTEXTUALIZE:
-        return frozenset(
-            {
-                ProvenanceFraming.HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES,
-                ProvenanceFraming.FRESH_ATTEMPTED_UNAVAILABLE_SUBSTRATE_CONTEXT,
-            }
-        )
-    return frozenset()
+    return _LEGAL_HINT_FRAMING.get(hint, frozenset())
 
 
 def _digest_json(payload: dict[str, Any]) -> str:

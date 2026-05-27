@@ -371,6 +371,36 @@ class DispatcherMergeTests(unittest.TestCase):
                 self.assertIn("[fresh evidence]", rendered.prompt_block)
                 self.assertNotIn("[memory context]", rendered.prompt_block)
 
+    def test_substrate_only_turn_records_fresh_attempt_not_attempted(self):
+        from core.dispatcher.merge import merge_fanout_results
+        from core.dispatcher.spec import (
+            CompositionHint,
+            FreshAttemptOutcome,
+            ProvenanceFraming,
+            SubstrateSource,
+        )
+
+        spec = _spec(
+            hint=CompositionHint.SUBSTRATE_ONLY,
+            framing=ProvenanceFraming.SUBSTRATE_ONLY_NO_FRESH_VALIDATION,
+            substrate_sources=(SubstrateSource.TELEGRAM_SEMANTIC,),
+        )
+
+        rendered = merge_fanout_results(
+            spec,
+            _layer1_result(_recall_block(SubstrateSource.TELEGRAM_SEMANTIC)),
+            _external_result(),
+            utterance="what did I say yesterday?",
+            surface="telegram",
+            timestamp="2026-05-27T12:05:00Z",
+        )
+
+        self.assertEqual(rendered.fresh_attempt_outcome, FreshAttemptOutcome.NOT_ATTEMPTED)
+        self.assertEqual(
+            rendered.audit_envelope["fresh_attempt_outcome"],
+            FreshAttemptOutcome.NOT_ATTEMPTED.value,
+        )
+
     def test_legal_transform_table_rows_render_without_refusal(self):
         from core.dispatcher.external_sources import ExternalBranchResult
         from core.dispatcher.merge import merge_fanout_results

@@ -168,6 +168,7 @@ class DispatcherCompositionSpecTests(unittest.TestCase):
         self.assertEqual(ExternalEmptyReason.NO_RESULTS.value, "NO_RESULTS")
         self.assertEqual(DeadlineKind.GLOBAL.value, "GLOBAL")
         self.assertEqual(FreshnessClass.LIVE_FETCH.value, "LIVE_FETCH")
+        self.assertEqual(FreshAttemptOutcome.NOT_ATTEMPTED.value, "NOT_ATTEMPTED")
         self.assertEqual(FreshAttemptOutcome.PARTIAL.value, "PARTIAL")
 
         with self.assertRaises(ValueError):
