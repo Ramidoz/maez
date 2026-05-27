@@ -1,0 +1,296 @@
+"""Provenance rendering for ADR 0047 dispatcher composition specs.
+
+This module is the prompt/audit boundary for the dispatcher. It turns an
+already-validated CompositionSpec into provenance-marked prompt text and a
+closed audit envelope. It does not choose sources or run recall.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import StrEnum
+import hashlib
+import json
+from typing import Any
+
+from core.dispatcher.spec import (
+    CompositionHint,
+    CompositionSpec,
+    DispatcherRefusalReason,
+    DispatcherSpecRefused,
+    ExternalSource,
+    ProvenanceAuditMismatchReason,
+    ProvenanceFraming,
+    SourceLabel,
+    SubstrateSource,
+)
+
+
+TEMPLATE_VERSION_HASH = "sha256:adr0047-provenance-renderer-v1"
+
+
+class AskShape(StrEnum):
+    CONVERSATIONAL = "CONVERSATIONAL"
+    REPORT = "REPORT"
+
+
+class SourceRole(StrEnum):
+    SUBSTRATE_CONTEXT = "SUBSTRATE_CONTEXT"
+    SUBSTRATE_EVIDENCE = "SUBSTRATE_EVIDENCE"
+    FRESH_EVIDENCE = "FRESH_EVIDENCE"
+    FRESH_CONTEXT = "FRESH_CONTEXT"
+
+
+@dataclass(frozen=True)
+class SourceSummary:
+    source: SourceLabel
+    role: SourceRole
+    text: str
+    content_digest: str
+
+
+@dataclass(frozen=True)
+class RenderedProvenance:
+    prompt_block: str
+    audit_envelope: dict[str, Any]
+    audit_assistant_text_metadata: dict[str, Any]
+
+
+def render_provenance(
+    spec: CompositionSpec,
+    *,
+    utterance: str,
+    surface: str,
+    ask_shape: AskShape,
+    timestamp: str,
+    source_summaries: list[SourceSummary],
+) -> RenderedProvenance:
+    ask_shape = AskShape(ask_shape)
+    _validate_source_roles(spec, source_summaries)
+
+    template_id = _template_id(spec.provenance_framing, ask_shape)
+    prompt_block, rendered_roles = _render_prompt_block(
+        spec,
+        ask_shape=ask_shape,
+        source_summaries=source_summaries,
+    )
+    envelope = _audit_envelope(
+        spec,
+        utterance=utterance,
+        surface=surface,
+        timestamp=timestamp,
+        source_summaries=source_summaries,
+        rendered_block_roles=rendered_roles,
+        template_id=template_id,
+    )
+    return RenderedProvenance(
+        prompt_block=prompt_block,
+        audit_envelope=envelope,
+        audit_assistant_text_metadata=_assistant_text_metadata(envelope),
+    )
+
+
+def _validate_source_roles(
+    spec: CompositionSpec,
+    source_summaries: list[SourceSummary],
+) -> None:
+    expected = _allowed_roles(spec.provenance_framing)
+    selected = set(spec.substrate_sources) | set(spec.external_sources)
+    seen: set[SourceLabel] = set()
+
+    for summary in source_summaries:
+        seen.add(summary.source)
+        if summary.source not in selected:
+            _refuse_template_mismatch(f"unselected source {summary.source.value}")
+        if summary.role not in expected:
+            _refuse_template_mismatch(
+                f"{summary.source.value} rendered as {summary.role.value}"
+            )
+        if isinstance(summary.source, SubstrateSource) and summary.role not in {
+            SourceRole.SUBSTRATE_CONTEXT,
+            SourceRole.SUBSTRATE_EVIDENCE,
+        }:
+            _refuse_template_mismatch(
+                f"{summary.source.value} must render as substrate role"
+            )
+        if isinstance(summary.source, ExternalSource) and summary.role not in {
+            SourceRole.FRESH_CONTEXT,
+            SourceRole.FRESH_EVIDENCE,
+        }:
+            _refuse_template_mismatch(
+                f"{summary.source.value} must render as fresh role"
+            )
+
+    missing = sorted(source.value for source in selected - seen)
+    if missing:
+        _refuse_template_mismatch(f"missing source summaries for {', '.join(missing)}")
+
+
+def _allowed_roles(framing: ProvenanceFraming) -> frozenset[SourceRole]:
+    if framing == ProvenanceFraming.SUBSTRATE_ONLY_NO_FRESH_VALIDATION:
+        return frozenset({SourceRole.SUBSTRATE_CONTEXT, SourceRole.SUBSTRATE_EVIDENCE})
+    if framing == ProvenanceFraming.SUBSTRATE_EVIDENCE_FRESH_CONTEXT:
+        return frozenset({SourceRole.SUBSTRATE_EVIDENCE, SourceRole.FRESH_CONTEXT})
+    if framing == ProvenanceFraming.HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES:
+        return frozenset({SourceRole.SUBSTRATE_CONTEXT, SourceRole.FRESH_EVIDENCE})
+    if framing == ProvenanceFraming.FRESH_ATTEMPTED_UNAVAILABLE_SUBSTRATE_CONTEXT:
+        return frozenset({SourceRole.SUBSTRATE_CONTEXT})
+    if framing == ProvenanceFraming.FRESH_ONLY:
+        return frozenset({SourceRole.FRESH_EVIDENCE})
+    _refuse_template_mismatch(f"unsupported framing {framing.value}")
+
+
+def _template_id(framing: ProvenanceFraming, ask_shape: AskShape) -> str:
+    if framing == ProvenanceFraming.HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES:
+        base = "hybrid"
+    elif framing == ProvenanceFraming.SUBSTRATE_ONLY_NO_FRESH_VALIDATION:
+        base = "substrate_only_no_fresh_validation"
+    elif framing == ProvenanceFraming.SUBSTRATE_EVIDENCE_FRESH_CONTEXT:
+        base = "substrate_evidence"
+    elif framing == ProvenanceFraming.FRESH_ATTEMPTED_UNAVAILABLE_SUBSTRATE_CONTEXT:
+        base = "fresh_attempted_unavailable"
+    elif framing == ProvenanceFraming.FRESH_ONLY:
+        base = "fresh_only"
+    else:
+        _refuse_template_mismatch(f"unsupported framing {framing.value}")
+    return f"{ask_shape.value.lower()}.{base}.v1"
+
+
+def _render_prompt_block(
+    spec: CompositionSpec,
+    *,
+    ask_shape: AskShape,
+    source_summaries: list[SourceSummary],
+) -> tuple[str, list[str]]:
+    rendered_roles: list[str] = []
+    if ask_shape == AskShape.REPORT:
+        sections = []
+        for summary in source_summaries:
+            title = _section_title(summary.role)
+            rendered_roles.append(summary.role.value)
+            sections.append(f"## {title}\n{summary.text}")
+        return "\n\n".join(sections), rendered_roles
+
+    parts = []
+    for summary in source_summaries:
+        marker = _inline_marker(summary.role)
+        rendered_roles.append(summary.role.value)
+        parts.append(f"{marker} {summary.text}")
+
+    if (
+        spec.composition_hint == CompositionHint.SUBSTRATE_ONLY
+        and spec.provenance_framing
+        == ProvenanceFraming.SUBSTRATE_ONLY_NO_FRESH_VALIDATION
+    ):
+        parts.append(
+            "[fresh validation] No fresh source was used for this answer; "
+            "the substrate is not being framed as unreliable."
+        )
+        rendered_roles.append("NO_FRESH_VALIDATION")
+    return "\n".join(parts), rendered_roles
+
+
+def _inline_marker(role: SourceRole) -> str:
+    if role == SourceRole.SUBSTRATE_CONTEXT:
+        return "[memory context]"
+    if role == SourceRole.SUBSTRATE_EVIDENCE:
+        return "[memory evidence]"
+    if role == SourceRole.FRESH_EVIDENCE:
+        return "[fresh evidence]"
+    if role == SourceRole.FRESH_CONTEXT:
+        return "[fresh context]"
+    _refuse_template_mismatch(f"unsupported role {role.value}")
+
+
+def _section_title(role: SourceRole) -> str:
+    if role == SourceRole.SUBSTRATE_CONTEXT:
+        return "Memory context"
+    if role == SourceRole.SUBSTRATE_EVIDENCE:
+        return "Memory evidence"
+    if role == SourceRole.FRESH_EVIDENCE:
+        return "Fresh evidence"
+    if role == SourceRole.FRESH_CONTEXT:
+        return "Fresh context"
+    _refuse_template_mismatch(f"unsupported role {role.value}")
+
+
+def _audit_envelope(
+    spec: CompositionSpec,
+    *,
+    utterance: str,
+    surface: str,
+    timestamp: str,
+    source_summaries: list[SourceSummary],
+    rendered_block_roles: list[str],
+    template_id: str,
+) -> dict[str, Any]:
+    spec_payload = spec.to_dict()
+    source_role_map = {
+        summary.source.value: summary.role.value for summary in source_summaries
+    }
+    source_digests = {
+        summary.source.value: summary.content_digest for summary in source_summaries
+    }
+    return {
+        "spec_digest": _digest_json(spec_payload),
+        "schema_version": spec.schema_version,
+        "utterance_digest": _digest_text(utterance),
+        "surface": surface,
+        "timestamp": timestamp,
+        "composition_hint": spec.composition_hint.value,
+        "provenance_framing": spec.provenance_framing.value,
+        "substrate_sources": [source.value for source in spec.substrate_sources],
+        "external_sources": [source.value for source in spec.external_sources],
+        "source_role_map": source_role_map,
+        "source_digests": source_digests,
+        "inventory_witness": spec.inventory_witness.value,
+        "source_availability": {
+            source.value: availability.value
+            for source, availability in sorted(
+                spec.source_availability.items(),
+                key=lambda item: item[0].value,
+            )
+        },
+        "availability_limitations": [
+            limitation.value for limitation in spec.availability_limitations
+        ],
+        "rendered_block_roles": rendered_block_roles,
+        "template_id": template_id,
+        "template_version_hash": TEMPLATE_VERSION_HASH,
+        "mismatch_reason": ProvenanceAuditMismatchReason.NONE.value,
+        "refusal_reason": None,
+    }
+
+
+def _assistant_text_metadata(envelope: dict[str, Any]) -> dict[str, Any]:
+    keys = (
+        "spec_digest",
+        "schema_version",
+        "utterance_digest",
+        "surface",
+        "timestamp",
+        "provenance_framing",
+        "source_role_map",
+        "rendered_block_roles",
+        "template_id",
+        "template_version_hash",
+        "mismatch_reason",
+        "refusal_reason",
+    )
+    return {key: envelope[key] for key in keys}
+
+
+def _digest_json(payload: dict[str, Any]) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def _digest_text(text: str) -> str:
+    return "sha256:" + hashlib.sha256(text.encode()).hexdigest()
+
+
+def _refuse_template_mismatch(detail: str) -> None:
+    raise DispatcherSpecRefused(
+        DispatcherRefusalReason.PROVENANCE_TEMPLATE_MISMATCH,
+        detail,
+    )
