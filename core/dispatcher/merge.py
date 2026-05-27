@@ -7,6 +7,7 @@ brain-loop routing.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 import hashlib
 import json
@@ -38,6 +39,7 @@ from core.dispatcher.spec import (
     ProvenanceAuditMismatchReason,
     ProvenanceFraming,
     SourceAvailability,
+    SubstrateSource,
     _LEGAL_HINT_FRAMING,
 )
 
@@ -93,6 +95,7 @@ def merge_fanout_results(
 
     effective_spec, reconstructed_from = _effective_spec(
         spec,
+        recall_blocks=layer1_result.recall_blocks,
         accepted_fresh_blocks=accepted_fresh_blocks,
         include_substrate=substrate_has_rows,
         new_hint=transform[0],
@@ -189,6 +192,7 @@ def _transform_for(
 def _effective_spec(
     spec: CompositionSpec,
     *,
+    recall_blocks: tuple[RecallBlock, ...],
     accepted_fresh_blocks: tuple[FreshBlock, ...],
     include_substrate: bool,
     new_hint: CompositionHint,
@@ -196,7 +200,11 @@ def _effective_spec(
     external_limitations: tuple[AvailabilityLimitation, ...],
 ) -> tuple[CompositionSpec, bool]:
     external_sources = _external_sources_for(new_framing, accepted_fresh_blocks)
-    substrate_sources = list(spec.substrate_sources) if include_substrate else []
+    substrate_sources = (
+        _substrate_sources_with_rows(spec.substrate_sources, recall_blocks)
+        if include_substrate
+        else []
+    )
     selected = [*substrate_sources, *external_sources]
     source_availability = {
         source: spec.source_availability.get(source, SourceAvailability.EXECUTABLE_PRESENT)
@@ -206,7 +214,7 @@ def _effective_spec(
         spec.availability_limitations,
         external_limitations,
     )
-    if spec.substrate_sources and not include_substrate:
+    if spec.substrate_sources and substrate_sources != list(spec.substrate_sources):
         limitations = _combined_limitations(
             limitations,
             (AvailabilityLimitation.NO_RELEVANT_SUBSTRATE,),
@@ -231,6 +239,14 @@ def _effective_spec(
         ),
         reconstructed,
     )
+
+
+def _substrate_sources_with_rows(
+    declared: Sequence[SubstrateSource],
+    recall_blocks: Sequence[RecallBlock],
+) -> list[SubstrateSource]:
+    sources_with_rows = {block.source for block in recall_blocks}
+    return [source for source in declared if source in sources_with_rows]
 
 
 def _combined_limitations(

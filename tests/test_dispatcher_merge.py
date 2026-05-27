@@ -401,6 +401,125 @@ class DispatcherMergeTests(unittest.TestCase):
             FreshAttemptOutcome.NOT_ATTEMPTED.value,
         )
 
+    def test_substrate_sources_filtered_to_those_with_rows(self):
+        from core.dispatcher.merge import merge_fanout_results
+        from core.dispatcher.spec import (
+            AvailabilityLimitation,
+            CompositionHint,
+            ProvenanceFraming,
+            SubstrateSource,
+        )
+
+        spec = _spec(
+            hint=CompositionHint.SUBSTRATE_ONLY,
+            framing=ProvenanceFraming.SUBSTRATE_ONLY_NO_FRESH_VALIDATION,
+            substrate_sources=(
+                SubstrateSource.TELEGRAM_SEMANTIC,
+                SubstrateSource.ENTITY_INDEX,
+                SubstrateSource.LIVED_EPISODES,
+            ),
+        )
+        rendered = merge_fanout_results(
+            spec,
+            _layer1_result(
+                _recall_block(SubstrateSource.TELEGRAM_SEMANTIC, "truncated remembered row")
+            ),
+            _external_result(),
+            utterance="what were we talking about last evening?",
+            surface="web",
+            timestamp="2026-05-27T12:06:00Z",
+        )
+
+        self.assertIsNone(rendered.refusal_reason)
+        self.assertEqual(
+            rendered.effective_spec.substrate_sources,
+            [SubstrateSource.TELEGRAM_SEMANTIC],
+        )
+        self.assertEqual(
+            rendered.audit_envelope["reconstructed_from_framing"],
+            ProvenanceFraming.SUBSTRATE_ONLY_NO_FRESH_VALIDATION.value,
+        )
+        self.assertEqual(
+            rendered.audit_envelope["reconstructed_from_hint"],
+            CompositionHint.SUBSTRATE_ONLY.value,
+        )
+        self.assertIn(
+            AvailabilityLimitation.NO_RELEVANT_SUBSTRATE,
+            rendered.effective_spec.availability_limitations,
+        )
+        self.assertIn("[memory evidence] truncated remembered row", rendered.prompt_block)
+
+    def test_substrate_filter_preserves_renderable_state(self):
+        from core.dispatcher.merge import merge_fanout_results
+        from core.dispatcher.spec import (
+            CompositionHint,
+            ProvenanceAuditMismatchReason,
+            ProvenanceFraming,
+            SubstrateSource,
+        )
+
+        spec = _spec(
+            hint=CompositionHint.SUBSTRATE_ONLY,
+            framing=ProvenanceFraming.SUBSTRATE_ONLY_NO_FRESH_VALIDATION,
+            substrate_sources=(
+                SubstrateSource.TELEGRAM_SEMANTIC,
+                SubstrateSource.ENTITY_INDEX,
+                SubstrateSource.LIVED_EPISODES,
+            ),
+        )
+        rendered = merge_fanout_results(
+            spec,
+            _layer1_result(
+                _recall_block(SubstrateSource.TELEGRAM_SEMANTIC, "renderable row")
+            ),
+            _external_result(),
+            utterance="mixed branches",
+            surface="web",
+            timestamp="2026-05-27T12:06:30Z",
+        )
+
+        self.assertEqual(
+            rendered.audit_envelope["mismatch_reason"],
+            ProvenanceAuditMismatchReason.NONE.value,
+        )
+        self.assertEqual(
+            {summary.source for summary in rendered.source_summaries},
+            {SubstrateSource.TELEGRAM_SEMANTIC},
+        )
+
+    def test_substrate_sources_unchanged_when_all_branches_have_rows(self):
+        from core.dispatcher.merge import merge_fanout_results
+        from core.dispatcher.spec import (
+            CompositionHint,
+            ProvenanceFraming,
+            SubstrateSource,
+        )
+
+        sources = (
+            SubstrateSource.TELEGRAM_SEMANTIC,
+            SubstrateSource.ENTITY_INDEX,
+        )
+        spec = _spec(
+            hint=CompositionHint.SUBSTRATE_ONLY,
+            framing=ProvenanceFraming.SUBSTRATE_ONLY_NO_FRESH_VALIDATION,
+            substrate_sources=sources,
+        )
+        rendered = merge_fanout_results(
+            spec,
+            _layer1_result(
+                _recall_block(SubstrateSource.TELEGRAM_SEMANTIC, "memory row"),
+                _recall_block(SubstrateSource.ENTITY_INDEX, "entity row"),
+            ),
+            _external_result(),
+            utterance="all rows",
+            surface="web",
+            timestamp="2026-05-27T12:07:00Z",
+        )
+
+        self.assertEqual(rendered.effective_spec.substrate_sources, list(sources))
+        self.assertIsNone(rendered.audit_envelope["reconstructed_from_framing"])
+        self.assertIsNone(rendered.audit_envelope["reconstructed_from_hint"])
+
     def test_legal_transform_table_rows_render_without_refusal(self):
         from core.dispatcher.external_sources import ExternalBranchResult
         from core.dispatcher.merge import merge_fanout_results
