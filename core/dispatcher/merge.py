@@ -168,6 +168,11 @@ def _transform_for(
                 else CompositionHint.FRESH_THEN_CONTEXTUALIZE
             )
             return (hint, ProvenanceFraming.FRESH_ATTEMPTED_UNAVAILABLE_SUBSTRATE_CONTEXT)
+        if not substrate_has_rows and fresh_outcome in {
+            FreshAttemptOutcome.ALL_SUCCEEDED,
+            FreshAttemptOutcome.PARTIAL,
+        }:
+            return (CompositionHint.FRESH_ONLY, ProvenanceFraming.FRESH_ONLY)
         return None
 
     if spec.provenance_framing in {
@@ -200,6 +205,11 @@ def _effective_spec(
         spec.availability_limitations,
         external_limitations,
     )
+    if spec.substrate_sources and not include_substrate:
+        limitations = _combined_limitations(
+            limitations,
+            (AvailabilityLimitation.NO_RELEVANT_SUBSTRATE,),
+        )
     reconstructed = (
         new_hint != spec.composition_hint
         or new_framing != spec.provenance_framing

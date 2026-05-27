@@ -278,6 +278,99 @@ class DispatcherMergeTests(unittest.TestCase):
             DispatcherRefusalReason.FRESH_FAILURE_HYBRID_FALLBACK_ILLEGAL.value,
         )
 
+    def test_hybrid_no_substrate_fresh_success_or_partial_reconstructs_to_fresh_only(self):
+        from core.dispatcher.merge import merge_fanout_results
+        from core.dispatcher.spec import (
+            AvailabilityLimitation,
+            CompositionHint,
+            ExternalBranchStatus,
+            ExternalErrorClass,
+            ExternalSource,
+            FreshAttemptOutcome,
+            ProvenanceFraming,
+            SubstrateSource,
+        )
+
+        cases = (
+            (
+                "success",
+                (ExternalSource.LIVE_REDDIT,),
+                (ExternalSource.LIVE_REDDIT,),
+                (),
+                FreshAttemptOutcome.ALL_SUCCEEDED,
+            ),
+            (
+                "partial",
+                (ExternalSource.LIVE_REDDIT, ExternalSource.WEB_SEARCH),
+                (ExternalSource.LIVE_REDDIT,),
+                (
+                    _external_branch(
+                        ExternalSource.WEB_SEARCH,
+                        ExternalBranchStatus.ERROR,
+                        error_class=ExternalErrorClass.RATE_LIMITED,
+                    ),
+                ),
+                FreshAttemptOutcome.PARTIAL,
+            ),
+        )
+
+        for name, external_sources, successful_sources, extra_branches, expected_outcome in cases:
+            with self.subTest(name=name):
+                blocks = tuple(
+                    _fresh_block(source, f"fresh {source.value} rows")
+                    for source in successful_sources
+                )
+                spec = _spec(
+                    hint=CompositionHint.PARALLEL,
+                    framing=ProvenanceFraming.HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES,
+                    substrate_sources=(SubstrateSource.REDDIT_SOURCE,),
+                    external_sources=external_sources,
+                )
+
+                rendered = merge_fanout_results(
+                    spec,
+                    _layer1_result(),
+                    _external_result(
+                        *(
+                            _external_branch(
+                                block.source,
+                                ExternalBranchStatus.SUCCESS,
+                                blocks=(block,),
+                            )
+                            for block in blocks
+                        ),
+                        *extra_branches,
+                        blocks=blocks,
+                    ),
+                    utterance="check r/Python",
+                    surface="web",
+                    timestamp="2026-05-27T12:04:15Z",
+                )
+
+                self.assertIsNone(rendered.refusal_reason)
+                self.assertEqual(rendered.effective_spec.substrate_sources, [])
+                self.assertEqual(rendered.effective_spec.external_sources, list(successful_sources))
+                self.assertEqual(rendered.effective_spec.composition_hint, CompositionHint.FRESH_ONLY)
+                self.assertEqual(rendered.effective_spec.provenance_framing, ProvenanceFraming.FRESH_ONLY)
+                self.assertIn(
+                    AvailabilityLimitation.NO_RELEVANT_SUBSTRATE,
+                    rendered.effective_spec.availability_limitations,
+                )
+                self.assertEqual(
+                    rendered.audit_envelope["reconstructed_from_framing"],
+                    ProvenanceFraming.HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES.value,
+                )
+                self.assertEqual(
+                    rendered.audit_envelope["reconstructed_from_hint"],
+                    CompositionHint.PARALLEL.value,
+                )
+                self.assertEqual(
+                    rendered.audit_envelope["fresh_attempt_outcome"],
+                    expected_outcome.value,
+                )
+                self.assertIn("[fresh evidence]", rendered.prompt_block)
+                self.assertNotIn("[memory context]", rendered.prompt_block)
+
     def test_legal_transform_table_rows_render_without_refusal(self):
         from core.dispatcher.external_sources import ExternalBranchResult
         from core.dispatcher.merge import merge_fanout_results
