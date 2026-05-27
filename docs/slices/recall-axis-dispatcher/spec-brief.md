@@ -1,12 +1,13 @@
-# Recall-Axis Dispatcher — Spec Brief v1.1
+# Recall-Axis Dispatcher — Spec Brief v1.2
 
 **Prepared:** 2026-05-26
 **Slice:** Recall-Axis Dispatcher
-**Parent/runtime base:** `9110084 docs(dispatcher): complete v1 mechanics brief`
-**Status:** v1.1 — council pass-1 findings folded. Sections 1–4 preserve the framing half; Sections 5–11 carry the mechanics half; v1.1 adds council-pass-1 amendments across 15 convergent fold batches (A–O) and per-role uniques.
-**Review lane:** Claude covenant / architecture council (pass-1 complete) + Codex engineering panel (pending v1.1 dispatch).
+**Parent/runtime base:** `a5f7898 docs(dispatcher): fold council findings into v1.1`
+**Status:** v1.2 — Codex engineering pass-1 findings folded. Sections 1–4 preserve the framing half; Sections 5–11 carry the mechanics half; v1.1 folded council-pass-1 amendments; v1.2 folds Codex engineering pass-1's 15 convergent batches.
+**Review lane:** Claude covenant / architecture council (pass-1 complete) + Codex engineering panel (pass-1 complete; v1.1 BLOCK folded into v1.2).
 **Operator:** Rohit relays and dispatches; Codex does not auto-dispatch.
 **Council pass-1 result:** all six roles RATIFY-WITH-AMENDMENTS. 5 BLOCKING, 17 Major, 16 Minor, 10 NIT. v1.1 folds 15 convergent batches; six review files preserved verbatim at `reviews/claude-council-{locke,kant,hume,buber,descartes,ohm}-pass1.md`; synthesis at `reviews/claude-council-synthesis-v1-pass1.md`.
+**Codex engineering pass-1 result:** 4 BLOCK, 2 RATIFY-WITH-AMENDMENTS. v1.1 blocked from canonicalization or implementation until folded. Six review files preserved verbatim at `reviews/codex-{peirce,arendt,huygens,pauli,ohm,lovelace-bernoulli}-pass1.md`; synthesis at `reviews/codex-engineering-synthesis-v1.1-pass1.md`.
 
 **Scope boundary (load-bearing):** This slice governs *retrieval routing and composition*. Three explicitly de-scoped surfaces, each its own slice:
 
@@ -155,11 +156,27 @@ CompositionSpec = {
     "external_sources": list[ExternalSource],
     "composition_hint": CompositionHint,
     "provenance_framing": ProvenanceFraming,
-    # Open: see Q10.2 and Q10.5 — may add freshness_window and trust_scope_union as v1.1+ fields.
+    "inventory_witness": InventoryWitness,
+    "source_availability": dict[SourceLabel, SourceAvailability],
+    "availability_limitations": list[AvailabilityLimitation],
+    "freshness_window": FreshnessWindow | None,
+    "trust_scope_union": TrustScopeUnion | None,
 }
 ```
 
-Per Descartes F6: the four-tuple is **v1-minimal**. Open Questions Q10.2 (freshness threshold) and Q10.5 (cross-surface scope union) may add a fifth field after observation-window validation. The brief commits only to the four fields as v1's mandatory structural surface.
+v1.1's four-field structure was not implementable honestly: D2, D5, D7, reserved-source handling, and prompt rendering all required availability state but had no declared field where that state lived. v1.2 promotes availability into the schema. The first four fields are the composition verdict; the remaining five fields are the witness envelope that prevents the verdict from laundering absence, unknown inventory, reserved routes, or trust-scope limits.
+
+`inventory_witness` is closed: `PRESENT`, `ABSENT`, `UNKNOWN`, `MIXED`. `UNKNOWN` means the dispatcher could not witness availability within budget; it does not mean "probably present." `MIXED` means at least one requested source is witnessed present and at least one is absent, unknown, reserved, privacy-gated, or timed out.
+
+`source_availability` is a per-source map. Every source label named in `substrate_sources` or `external_sources` must have a corresponding availability entry before the spec can be rendered.
+
+`SourceLabel = SubstrateSource | ExternalSource`.
+
+`availability_limitations` carries owner-visible limitations such as `NO_RELEVANT_SUBSTRATE`, `INVENTORY_UNKNOWN`, `RESERVED_SOURCE_UNAVAILABLE`, `TRUST_SCOPE_RESTRICTED`, `PRIVACY_GATED`, `FRESH_ATTEMPT_FAILED`, `FETCH_BUDGET_EXHAUSTED`, and `SOURCE_TIMEOUT`.
+
+`freshness_window` is nullable because relational-memory asks and explicit substrate-only asks may have no meaningful fresh window. If present, it records the requested or inferred freshness horizon, source-specific staleness policy, and whether freshness scoring was applied or explicitly deferred.
+
+`trust_scope_union` is nullable because v1 does not close G9. If present, it records which owner-authenticated scopes were eligible for recall and which were excluded. If absent because scope union is unavailable, the spec must carry `TRUST_SCOPE_RESTRICTED` or `INVENTORY_UNKNOWN` rather than silently pinning to `guest`.
 
 ### Why a specification, not a class label
 
@@ -186,27 +203,43 @@ The five provenance framings (specified fully in §6) correspond to the doctor a
 
 The composition specification is structurally honest because the provenance framing is structurally enforced — and the same enforcement makes the answer auditable downstream. (Per Buber NIT: honesty-to-Rohit named first; auditability is the downstream consequence.)
 
-**Per Descartes F3 / Batch I:** the `provenance_framing → prompt-assembly` template mechanism is a **v1-implementation deliverable, not a present mechanism**. The current substrate has `core/safety/self_claim_audit.py` (verified) but no template-renderer hook that consumes `provenance_framing`. v1 implementation must:
-1. Name the prompt-assembly module (likely the gemma manifest renderer adjacent to `core/brain/brain_loop.py`).
-2. Build the (`provenance_framing` × template) selection layer.
-3. Wire `self_claim_audit` to verdict framing-vs-output mismatches.
+**Per Descartes F3 / Batch I and Codex Batch 8:** the `provenance_framing → prompt-assembly` template mechanism is a **v1 implementation deliverable, not a present mechanism**. v1.2 names the owner module: `core/dispatcher/provenance_renderer.py`. That module consumes `CompositionSpec` and produces provenance-marked prompt blocks for all owner synthesis surfaces before final prompt assembly. It owns:
 
-Until the implementation lands, D4 (Provenance Seam Visibility) is *contracted*, not enforced. v1.1 names this explicitly; canonicalization will not claim enforcement that doesn't yet exist.
+1. the closed template set keyed by `ProvenanceFraming`;
+2. conversion from `availability_limitations` into owner-visible phrasing;
+3. audit metadata passed to `core/safety/self_claim_audit.py`;
+4. mismatch handling: framing/template mismatch refuses render before model call; generated output mismatch records a fabrication/provenance event and blocks or rewrites per the existing audit policy chosen by implementation.
+
+Until the implementation lands, D4 (Provenance Seam Visibility) is *contracted*, not enforced. v1.2 names this explicitly; canonicalization will not claim enforcement that doesn't yet exist.
 
 ### How the embedding-router informs spec construction
 
-The dispatcher uses `all-MiniLM-L6-v2` (model name canonical in [`memory/embedding_contract.json`](../../../memory/embedding_contract.json); validator in [`memory/embedding_contract.py`](../../../memory/embedding_contract.py)) — **NOT** at the previously-cited `embedding_contract.py:177`, which was citation drift (per Descartes F1).
+The dispatcher uses `all-MiniLM-L6-v2` (model name canonical in [`memory/embedding_contract.json`](../../../memory/embedding_contract.json); validator in [`memory/embedding_contract.py`](../../../memory/embedding_contract.py)). The previous line-specific code citation was drift; v1.2 cites the contract JSON as the canonical source (per Descartes F1).
 
-**Encoder seam mechanically required (per Ohm B1 / Batch E):** the embedding model is currently loaded inside Chroma as the collection's embedding function; it does not expose a free-standing `encode(text) -> vector` callable. v1.1 mandates introduction of `memory/embedder.py` as a single-source `MiniLMEncoder` singleton consumed by both Chroma and the dispatcher. Reasons:
+**Encoder seam mechanically required (per Ohm B1 / Batch E):** the embedding model is currently loaded inside Chroma as the collection's embedding function; it does not expose a free-standing `encode(text) -> vector` callable. v1.2 mandates introduction of `memory/embedder.py` as a single-source `MiniLMEncoder` singleton consumed by both Chroma and the dispatcher. Reasons:
 - Without it, the dispatcher cannot encode queries to rank against archetypes.
 - Without a shared singleton, the dispatcher and Chroma might independently load the model (160MB doubled) AND drift across version upgrades.
 - The singleton is the substrate-computed verdict surface per producer-causality discipline.
 
-The embedding ranking *informs* the spec construction:
+`memory/embedder.py` API:
 
-- High similarity to multiple classes (e.g., both `A_EXPLICIT_SUBSTRATE_RECALL` and `C_HYBRID_CONTENT_ANCHORED`) → hybrid spec.
-- Sharp dominance of one class → spec dominated by that class's substrate or external source.
-- No high similarity to any archetype → fall back to broader heuristic / safer default (substrate-first with optional fetch).
+- `get_minilm_encoder() -> MiniLMEncoder` returns the singleton.
+- `MiniLMEncoder.encode(text: str) -> list[float]`.
+- `MiniLMEncoder.encode_many(texts: list[str]) -> list[list[float]]`.
+- `MiniLMEncoder.as_chroma_embedding_function()` returns the Chroma-compatible callable.
+- `MiniLMEncoder.contract_digest()` validates model name, dimension, and normalization contract against `memory/embedding_contract.json`.
+
+`MemoryManager` / Chroma collection construction must consume `as_chroma_embedding_function()` if v1 depends on shared ownership. The dispatcher must not instantiate its own separate model.
+
+The embedding ranking *informs* the spec construction. v1.2 makes the scoring calculus explicit enough to implement:
+
+- Archetype text is encoded once into a versioned manifest (see "Intent Archetype Classes A-K"). Class scores are the max prototype cosine score for that class in v1; centroid scoring is reserved until empirical data justifies it.
+- Cosine scores are normalized only by the encoder's native vector normalization. No local rescaling is allowed unless the manifest version changes.
+- `min_accept = 0.62`; `dominance_margin = 0.08`; `multi_match_delta = 0.04`; `no_match_below = 0.50`. These are v1 seed constants, not universal truths; pass-2 may tune or require a Gold Set before canonicalization.
+- Explicit fetch-only or recall-only lexemes override embeddings unless contradictory same-turn language asks for composition.
+- Inventory state can demote, but not invent, a source: an archetype can propose `LIVED_GRAPH`; availability can mark it `RESERVED_UNAVAILABLE`; Layer 1 cannot execute it.
+- Repair state runs after Layer 0 on repair turns and may modify the spec before Layer 1.
+- No-match fallback is `SUBSTRATE_THEN_FETCH_IF_STALE` with `HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES` only when inventory is `PRESENT` or `UNKNOWN`; if inventory is `ABSENT`, fallback is `FRESH_ONLY` with `NO_RELEVANT_SUBSTRATE`.
 
 The embedding ranking is *evidence* for spec construction. The construction logic itself is the substrate's verdict per producer-causality discipline.
 
@@ -242,16 +275,20 @@ R#12 must assert Layer 2 ran *before* Layer 1 on repair turns (not after).
 
 **Non-responsibility:** reading rows from each substrate, issuing fetches, or rendering the final answer. Layer 0 only constructs the spec.
 
-**Latency budget (per Ohm M1 / Batch G + D13 below):** Layer 0 must complete within ≤ 50ms warm, ≤ 150ms cold. The `InventorySummary` cache (row-count + last-write-cursor anchors per substrate) is invalidated by writes/mtime; Layer 0 must not run live `COUNT(*)` on every reply.
+**Latency budget (per Ohm M1 / Batch G + D13 below):** Layer 0 must complete within ≤ 50ms warm, ≤ 150ms cold, excluding process startup but including encoder access when prewarmed. A separate startup/prewarm budget of ≤ 750ms covers `MiniLMEncoder` initialization. The `InventorySummary` cache (row-count + last-write-cursor anchors per substrate) is invalidated by source-specific cursors; Layer 0 must not run live `COUNT(*)` on every reply.
+
+**Owner ingress coverage (per Codex Batch 3):** Layer 0 must be the first recall/tool decision point for every in-scope owner reply ingress: Telegram owner bridge, web owner bridge, brain-loop reply path, daemon fast-reply path, tool/action continuation path, pending-offer web-search branch, and voice/electron path if enabled. Any ingress that cannot yet route through Layer 0 must be marked as an availability limitation and named out-of-scope for v1. Silent legacy bypass is forbidden.
 
 Layer 0 order:
 
 1. Detect explicit fetch-only signals (`search`, `google`, `look up right now`, `fetch live`) unless the phrase is used inside a repair/follow-up turn.
 2. Detect explicit memory-only signals (`what do you remember`, `from your notes`, `in your notebook`, `from our prior context`).
 3. Detect content anchors: source names, entities, topics, time phrases, procedural asks, correction/contradiction shapes. **Detect relational-memory shape** (the bond is the source of truth) vs *content-anchored external-world shape* (Buber Major-2): the former routes to `SUBSTRATE_EVIDENCE_FRESH_CONTEXT`, the latter to hybrid.
-4. **Consult substrate inventory summaries.** Per D2 (revised in v1.1 per Kant B2 / Batch J): the summary either witnesses presence, witnesses absence, or returns UNKNOWN. The spec carries `inventory_witness` explicitly when UNKNOWN — never silently defaulting to hybrid on a probabilistic verdict.
+4. **Consult substrate inventory summaries.** Per D2 (revised in v1.1 per Kant B2 / Batch J and made structural in v1.2): the summary either witnesses presence, witnesses absence, returns UNKNOWN, or returns MIXED. The spec carries this as `inventory_witness` — never silently defaulting to hybrid on a probabilistic verdict.
 5. Use archetype similarity ranking (via the shared `MiniLMEncoder` singleton) to refine the spec, allowing multiple high-scoring archetypes to contribute.
 6. Emit a spec with explicit provenance framing.
+
+**`InventorySummary` registry contract (new v1.2):** `core/dispatcher/inventory.py` owns a per-source registry. Each entry declares: source label, backing store path or collection, count/cursor query, cache key, invalidation signal, privacy gate, UNKNOWN fallback, and max staleness. SQLite sources use rowid/update cursors plus WAL-aware file metadata; Chroma sources use collection count/version metadata cached outside the hot path; file-backed sources use path + mtime + size; bounded-private readers may return `PRIVACY_GATED` without content access. Layer 0 may read only this summary; it may not scan content to decide availability.
 
 ### Layer 1 — Substrate-Axis Routing
 
@@ -263,30 +300,89 @@ Layer 0 order:
 
 **Non-responsibility:** deciding whether fresh fetch should happen; Layer 0 has already decided that.
 
-**Concurrent fan-out (per Ohm M2 / Batch N + D12 below):** Layer 1 fans out concurrently across `CompositionSpec.substrate_sources`. Per-branch timeout applies; per-branch failure does not abort other branches (per D5). Sequential fan-out across 4 sources would compound to 120–320ms wall-clock; concurrent fan-out is ≈max(branch) ≈ 80ms.
+**Concurrent fan-out (per Ohm M2 / Batch N + D12 below):** Layer 1 fans out concurrently across executable `CompositionSpec.substrate_sources`. Per-branch timeout applies; per-branch failure does not abort other branches (per D5). Sequential fan-out across 4 sources would compound to 120–320ms wall-clock; concurrent fan-out is bounded by the global deadline.
 
-Layer 1 v1 must include at least these routed axes because each is directly witnessed in the 10-agent or 41-finding dispatch evidence:
+**`RecallBranchResult` contract (new v1.2):** every branch returns one closed result:
+
+- `SUCCESS` — recall blocks returned with source role, timestamp/freshness metadata, retrieval rationale, and prompt-budget cost.
+- `EMPTY` — no relevant rows found; includes reason.
+- `TIMEOUT` — per-branch deadline reached.
+- `ERROR` — branch raised; includes sanitized error class.
+- `RESERVED_UNAVAILABLE` — route label is known but not executable in v1.
+- `PRIVACY_GATED` — bounded-reader or trust-scope gate denied content access.
+
+Layer 1 uses a bounded executor with `max_parallel_branches = 6`, per-source timeout defaults ≤ 80ms for local SQLite/Chroma readers, and global Layer 1 deadline ≤ 200ms before prompt-assembly fallback. Merge order is deterministic: explicit source-anchor matches first, then source priority order, then recency, then stable source label. Prompt budget is capped at `max_recall_blocks_per_source = 3`, `max_recall_chars_per_source = 1200`, and `max_total_recall_chars = 4200` unless a later prompt-budget slice revises the constants.
+
+Layer 1 v1 has **executable** routed axes:
 
 - `REDDIT_SOURCE`
 - `TELEGRAM_TEMPORAL`
+- `TELEGRAM_SEMANTIC`
 - `ENTITY_INDEX`
 - `LIVED_EPISODES`
-- `LIVED_GRAPH` (depends on G11 traversal API)
 - `PRIVATE_THOUGHTS`
 - `WONDERINGS`
 - `SELF_DEV_REVIEWS`
 - `AUDIT_AND_FABRICATION`
-- `CROSS_SURFACE_OWNER_TURNS`
+- `SANDBOX_WITNESSES`
+
+Layer 1 v1 has **reserved/unavailable** routed labels:
+
+- `LIVED_GRAPH` — reserved until G11 traversal API exists; may return `RESERVED_UNAVAILABLE`, not execute.
+- `WEB_FAST_TURNS` — reserved until G9 trust-scope unification is available; may return `RESERVED_UNAVAILABLE`, not execute.
+
+`CROSS_SURFACE_OWNER_TURNS` is not a separate v1 enum. It is the future capability represented by reserved `WEB_FAST_TURNS` plus `trust_scope_union`; v1.2 removes the ambiguous second name.
+
+### External Source Execution
+
+**Input:** `CompositionSpec.external_sources`, freshness policy, current surface, external capability availability, and Layer 0's availability limitations.
+
+**Output:** fresh evidence blocks or typed unavailable/failure states.
+
+**Owner module:** `core/dispatcher/external_sources.py`.
+
+**Responsibility:** execute only the external sources authorized by the spec, within budget, and map failures into `availability_limitations` and `provenance_framing`.
+
+Execution budget:
+
+- `WEB_SEARCH`: timeout ≤ 4s, max 1 attempt in v1.
+- `LIVE_REDDIT`: timeout ≤ 5s, max 1 attempt; bot-block or empty result maps to `FRESH_ATTEMPT_FAILED`.
+- `FETCH_URL`: timeout ≤ 4s, max 1 attempt per URL, max 2 URLs per reply.
+- `ARXIV_OR_PAPERCLIP`: timeout ≤ 3s, max 1 query.
+- `FRONTIER_CONSULT`: reserved/non-executable until G3; returns `RESERVED_UNAVAILABLE`.
+
+Global fresh deadline: ≤ 6s after spec construction. External failure maps to `FRESH_ATTEMPTED_UNAVAILABLE_SUBSTRATE_CONTEXT` when substrate exists; to `FRESH_ONLY` with `FRESH_ATTEMPT_FAILED` when no substrate exists and the owner explicitly requested fresh. Freshness scoring beyond source-specific timestamps is deferred out of v1; v1 records retrieval timestamp and source label only.
 
 ### Layer 2 — Repair / Follow-up Modifiers
 
-**Input:** current `CompositionSpec`, previous-turn spec (from `last_spec_by_bond_id` in-memory dict with TTL ~5min per Ohm Mi1; plus single-row `dispatcher_last_spec` table for crash recovery), previous-turn answer metadata, and repair/follow-up phrase detection.
+**Input:** current `CompositionSpec`, previous-turn spec (from `last_spec_by_bond_surface_conversation` in-memory cache with TTL 5min; plus append-only `dispatcher_last_specs` table for crash recovery), previous-turn answer metadata, and repair/follow-up phrase detection.
 
 **Output:** modified `CompositionSpec` and recall/fetch priority adjustments.
 
 **Responsibility:** inherit or adjust the prior ask when the owner says `really?`, `are you sure?`, `check again`, `go on`, `no that's not it`, or similar. Layer 2 does not create a new semantic topic when the owner is clearly repairing or extending the previous one.
 
 **Non-responsibility:** replacing Layer 0. It modifies an existing spec; it does not own base composition decisions. **Layer 2 runs after Layer 0 and before Layer 1 on repair turns** (per Kant M1 / Batch O).
+
+**Repair finite-state machine (new v1.2):**
+
+- `NO_PRIOR` — no usable prior spec; repair phrase is treated as ordinary utterance and cannot invent a source.
+- `PRIOR_VALID` — prior spec exists, same bond/surface/conversation, TTL valid; Layer 2 may inherit topic/source and re-check availability.
+- `PRIOR_EXPIRED` — prior spec exists but TTL expired; Layer 2 refuses inheritance and asks Layer 0 to classify the current utterance on its own.
+- `CRASH_RECOVERED` — prior spec restored from `dispatcher_last_specs`; Layer 2 may inherit only after validating schema version, timestamp, bond id, surface, conversation id, and closed vocabulary values.
+
+Cache key: `(bond_id, surface, conversation_id, turn_id)`. Persisted rows include spec digest, schema version, timestamp, source availability, inventory witness, and provenance framing. Cleanup: max 200 rows per bond/surface; remove expired rows on write and startup.
+
+### v1 Module Map
+
+- `core/dispatcher/spec.py` — closed vocabularies, `CompositionSpec`, `DispatcherRefusalReason`, validation, serialization.
+- `core/dispatcher/layer0.py` — shape detection, explicit lexemes, archetype scoring, inventory consultation, spec construction.
+- `core/dispatcher/inventory.py` — `InventorySummary`, per-source registry, cache invalidation, UNKNOWN fallback.
+- `memory/embedder.py` — shared `MiniLMEncoder` singleton and Chroma-compatible embedding function.
+- `core/dispatcher/layer1.py` — substrate fan-out orchestration and `RecallBranchResult` merge.
+- `core/dispatcher/readers/` — per-source bounded readers/adapters.
+- `core/dispatcher/layer2.py` — repair/follow-up finite-state machine and prior-spec persistence.
+- `core/dispatcher/external_sources.py` — bounded fresh-source execution.
+- `core/dispatcher/provenance_renderer.py` — provenance-template rendering and audit metadata envelope.
 
 ---
 
@@ -298,24 +394,26 @@ All vocabularies below are closed. **Growth requires spec amendment + council + 
 
 ### `SubstrateSource`
 
-Initial v1.1 values:
+Initial v1.2 values:
 
 - `REDDIT_SOURCE` — source-tagged Reddit rows in raw memory / Chroma metadata.
 - `TELEGRAM_TEMPORAL` — Telegram exchanges selected by time phrase or inherited temporal context.
 - `TELEGRAM_SEMANTIC` — Telegram exchanges selected by content semantics.
-- `WEB_FAST_TURNS` — owner web fast-reply turns once trust-scope unification is available.
+- `WEB_FAST_TURNS` — RESERVED until trust-scope unification is available.
 - `ENTITY_INDEX` — entity mentions, aliases, and resolved entity ids.
 - `LIVED_EPISODES` — lived episode rows.
-- `LIVED_GRAPH` — graph traversal over lived-memory edges once G11 traversal API exists.
+- `LIVED_GRAPH` — RESERVED until G11 traversal API exists.
 - `PRIVATE_THOUGHTS` — private-thought substrate exposed only through bounded reader rules.
 - `WONDERINGS` — wonderings / pursuits as synthesis context, not verdict source.
 - `SELF_DEV_REVIEWS` — procedural self-review rows.
 - `AUDIT_AND_FABRICATION` — audit log, fabrication log, contradiction/correction surfaces.
-- `SANDBOX_WITNESSES` — maintenance proof metadata, readable for procedural questions about fixes; not used to authorize new ratification. (Per Kant m2: the no-authorization restriction is a consumer-side discipline enforced by D12 below and by the assembly-layer template policy; RED-tested.)
+- `SANDBOX_WITNESSES` — maintenance proof metadata, readable for procedural questions about fixes; not used to authorize new ratification. (Per Kant m2: the no-authorization restriction is a consumer-side discipline enforced by D15 below and by the assembly-layer template policy; RED-tested.)
+
+`CROSS_SURFACE_OWNER_TURNS` is not a v1.2 value. The future capability is represented by reserved `WEB_FAST_TURNS` plus `trust_scope_union`.
 
 ### `ExternalSource`
 
-Initial v1.1 values (per Kant m1 / Batch O: `NONE` removed — absence of external source expressed by empty list):
+Initial v1.2 values (per Kant m1 / Batch O: `NONE` removed — absence of external source expressed by empty list):
 
 - `WEB_SEARCH`
 - `LIVE_REDDIT`
@@ -323,22 +421,23 @@ Initial v1.1 values (per Kant m1 / Batch O: `NONE` removed — absence of extern
 - `ARXIV_OR_PAPERCLIP`
 - `FRONTIER_CONSULT`
 
-`FRONTIER_CONSULT` is provenance-bearing only. It does not authorize a new Maez-consultation mechanism; that remains G3 / capability-grant work.
+`FRONTIER_CONSULT` is RESERVED/non-executable in v1.2. It may appear only as provenance-bearing intent evidence and must return `RESERVED_UNAVAILABLE`; it does not authorize a new Maez-consultation mechanism. That remains G3 / capability-grant work.
 
 ### `CompositionHint`
 
-Initial v1.1 values:
+Initial v1.2 values:
 
 - `SUBSTRATE_ONLY`
 - `FRESH_ONLY`
 - `PARALLEL`
 - `SUBSTRATE_THEN_FETCH_IF_STALE`
 - `FRESH_THEN_CONTEXTUALIZE`
-- `REPAIR_INHERIT_PRIOR_SPEC`
+
+Repair inheritance is not a `CompositionHint` in v1.2. It is a Layer 2 modifier that resolves to one of the five concrete hints above before construction validation. This prevents the product table from mixing a procedural instruction with a rendered composition verdict.
 
 ### `ProvenanceFraming`
 
-Initial v1.1 values (Batches A + B applied):
+Initial v1.2 values (Batches A + B applied in v1.1 and carried forward):
 
 - `SUBSTRATE_ONLY_NO_FRESH_VALIDATION` — substrate available, no fresh fetch attempted or relevant. Renamed in v1.1 from the v1 `SUBSTRATE_ONLY_UNVERIFIED` label per Locke M1 + Buber Major-1. This framing names *absence of external validation*, not unreliability of substrate. Substrate is bond-context; fresh is bond-extrinsic evidence; the label is honest about which is present.
 - `SUBSTRATE_EVIDENCE_FRESH_CONTEXT` (new in v1.1) — relational-memory asks where the bond IS the source of truth. Substrate is the evidence; fresh fetch (if any) is context. Per Buber Major-2: "what did you think when I first told you about X?" routes here, not to hybrid.
@@ -346,9 +445,61 @@ Initial v1.1 values (Batches A + B applied):
 - `FRESH_ATTEMPTED_UNAVAILABLE_SUBSTRATE_CONTEXT` (new in v1.1 per Kant B1) — fresh fetch was attempted but failed (network error, bot block, API failure). Substrate available as context. Honest about the attempt without conflating with the no-attempt case (which would be `SUBSTRATE_ONLY_NO_FRESH_VALIDATION`).
 - `FRESH_ONLY` — explicit fetch-only or no relevant substrate.
 
+### `InventoryWitness`
+
+Initial v1.2 values:
+
+- `PRESENT` — at least one selected source has witnessed availability.
+- `ABSENT` — selected sources were checked and no relevant substrate is present.
+- `UNKNOWN` — inventory could not be witnessed inside budget or privacy gate; no presence claim may be made.
+- `MIXED` — selected sources have mixed availability states.
+
+### `SourceAvailability`
+
+Initial v1.2 values:
+
+- `EXECUTABLE_PRESENT`
+- `EXECUTABLE_ABSENT`
+- `EXECUTABLE_UNKNOWN`
+- `RESERVED_UNAVAILABLE`
+- `PRIVACY_GATED`
+- `TRUST_SCOPE_RESTRICTED`
+- `TIMED_OUT`
+- `ERROR`
+
+### `AvailabilityLimitation`
+
+Initial v1.2 values:
+
+- `NO_RELEVANT_SUBSTRATE`
+- `INVENTORY_UNKNOWN`
+- `RESERVED_SOURCE_UNAVAILABLE`
+- `TRUST_SCOPE_RESTRICTED`
+- `PRIVACY_GATED`
+- `FRESH_ATTEMPT_FAILED`
+- `FETCH_BUDGET_EXHAUSTED`
+- `SOURCE_TIMEOUT`
+- `SCOPE_UNION_UNAVAILABLE`
+
+### `DispatcherRefusalReason`
+
+Initial v1.2 values:
+
+- `UNKNOWN_CLOSED_VOCABULARY_VALUE`
+- `INCOHERENT_HINT_FRAMING_PAIR`
+- `CALLER_SUPPLIED_COMPOSITION_VERDICT`
+- `CALLER_SUPPLIED_SOURCE_SELECTION`
+- `RESERVED_SOURCE_EXECUTION_ATTEMPTED`
+- `FRONTIER_CONSULT_WITHOUT_CAPABILITY_GRANT`
+- `REPAIR_PRIOR_SPEC_INVALID`
+- `SCHEMA_VERSION_UNSUPPORTED`
+- `PROVENANCE_TEMPLATE_MISMATCH`
+
+On refusal, construction stops before any downstream JARVIS/tool/fetch/recall/render action. The refusal is serialized for audit with utterance digest, caller surface, reason, and no raw private content unless the existing audit policy permits it.
+
 ### Intent Archetype Classes A–K
 
-The v0 archetype set (`dispatcher-archetypes-v0-2026-05-26.md`) supplies these initial classes as evidence, not canon. v1.1 adopts the class names as the review surface:
+The v0 archetype set (`dispatcher-archetypes-v0-2026-05-26.md`) supplies these initial classes as evidence and as the seed manifest for implementation. v1.2 requires a versioned archetype manifest at `docs/slices/recall-axis-dispatcher/dispatcher-archetypes-v0-2026-05-26.md` or successor path recorded in the brief. The manifest must include prototype text, class id, empirical/proposed tag, weight if any, reserved/executable state, source fixture, and content hash. v1.2 adopts the class names as the review surface:
 
 - `A_EXPLICIT_SUBSTRATE_RECALL` — *(per Hume MIN2: empirical corpus is Reddit-biased; treat as Reddit-grounded archetype evidence pending broader corpus)*
 - `B_EXPLICIT_LIVE_FETCH`
@@ -364,9 +515,19 @@ The v0 archetype set (`dispatcher-archetypes-v0-2026-05-26.md`) supplies these i
 
 `C_HYBRID_CONTENT_ANCHORED` is the default for ordinary content asks such as "how is Qwen looking online?" Classes A and B are explicit-signal edge cases.
 
+Replay corpus rules for v1.2:
+
+- Minimum 30 witnessed turns, not 5.
+- At least 2 turns per executable class A-J; reserved class K may have proposed fixtures only.
+- At least 5 negative/edge cases where hybrid must NOT fire.
+- Paired sentinel examples for relational-memory asks vs external-world asks.
+- Expected full `CompositionSpec` recorded per fixture: all verdict fields plus inventory witness, availability limitations, and reserved/unavailable behavior.
+- Pass criteria: no caller-supplied verdict accepted; false-hybrid rate ≤ 10% on explicit-edge cases; every reserved source returns unavailable, not executable.
+- Amendment trigger: any witnessed runtime turn that violates a pass criterion becomes evidence for v1.3 or later fold before canonicalization.
+
 ### §6.5 Legal `(CompositionHint × ProvenanceFraming)` product space (new in v1.1 per Kant M3 / Batch B)
 
-The six `CompositionHint` values × five `ProvenanceFraming` values produce 30 product cells; not all are coherent. The legal pairs (closed table; growth via spec amendment):
+The five `CompositionHint` values × five `ProvenanceFraming` values produce 25 product cells; not all are coherent. The legal pairs (closed table; growth via spec amendment):
 
 | `CompositionHint` | Legal `ProvenanceFraming` values |
 |---|---|
@@ -375,7 +536,6 @@ The six `CompositionHint` values × five `ProvenanceFraming` values produce 30 p
 | `PARALLEL` | `HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES`, `SUBSTRATE_EVIDENCE_FRESH_CONTEXT` |
 | `SUBSTRATE_THEN_FETCH_IF_STALE` | `HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES`, `SUBSTRATE_ONLY_NO_FRESH_VALIDATION`, `FRESH_ATTEMPTED_UNAVAILABLE_SUBSTRATE_CONTEXT` |
 | `FRESH_THEN_CONTEXTUALIZE` | `HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES`, `FRESH_ATTEMPTED_UNAVAILABLE_SUBSTRATE_CONTEXT` |
-| `REPAIR_INHERIT_PRIOR_SPEC` | inherits prior spec's framing, modulo Layer 2 re-evaluation |
 
 Invariant D11 below enforces refusal at construction for any incoherent pair.
 
@@ -387,15 +547,17 @@ Invariant D11 below enforces refusal at construction for any incoherent pair.
 
 Layer 0 must emit a `CompositionSpec` before JARVIS/tool dispatch or substrate recall. No branch may directly choose web/tool solely because a query is "not conversational." **Layer 0 fully replaces the legacy `_should_run_jarvis_loop` gate (per Ohm M3 / Batch H);** JARVIS regexes become Layer-0 evidence, not a downstream gate.
 
+Every in-scope owner reply ingress must pass through Layer 0 before tool/fetch/recall/render. v1 ingress set: Telegram owner bridge, web owner bridge, brain-loop reply path, daemon fast-reply path, tool/action continuation path, pending-offer web-search branch, and voice/electron path if enabled. Any excluded ingress must be named as an availability limitation.
+
 ### D2 — Hybrid Default for Content-Anchored Asks (revised v1.1 per Kant B2 / Batch J)
 
 If the ask names a topic/source/entity and lacks explicit recall-only or fetch-only language, Layer 0 defaults to hybrid composition when:
 - **inventory witnesses substrate presence** → emit hybrid spec; OR
-- **inventory cannot answer (UNKNOWN)** → emit hybrid spec, BUT the spec carries `inventory_witness: UNKNOWN` field that assembly surfaces honestly.
+- **inventory cannot answer (UNKNOWN)** → emit hybrid spec, BUT the spec carries `inventory_witness: UNKNOWN` and `INVENTORY_UNKNOWN` limitation that assembly surfaces honestly.
 
 If inventory witnesses substrate **absence** → emit `FRESH_ONLY` spec with explicit `no_relevant_substrate` marker, not hybrid.
 
-D2 must not laundering a probabilistic "likely to exist" verdict as composition default. This refines and resolves the second-order contradiction Kant B2 caught between original D2 and D5.
+D2 must not launder a probabilistic "likely to exist" verdict as composition default. This refines and resolves the second-order contradiction Kant B2 caught between original D2 and D5.
 
 ### D3 — Explicit Edges Override Default Hybrid
 
@@ -405,9 +567,11 @@ Explicit recall-only language produces substrate-only unless the user asks for f
 
 Every composed answer must preserve the seam between substrate context and fresh evidence. Prompt assembly must receive `provenance_framing` and render source roles accordingly. **Rendering must remain conversational unless the ask is itself report-shaped** (per Buber Mi2): inline markers in fluid prose are the default rendering shape; segmented sections only when the ask is itself report-shaped (e.g., "give me a summary of...").
 
+`core/dispatcher/provenance_renderer.py` is the v1 owner for this enforcement. Any owner synthesis path that bypasses it is out of conformance.
+
 ### D5 — Substrate Inventory Is Evidence, Not Authority
 
-Substrate inventory summaries can indicate likely availability, but cannot invent relevance. Layer 1 must return evidence-cited recall blocks or an empty result with an explicit reason. Layer 1 timeout is a natural producer of "explicit empty reason."
+Substrate inventory summaries can witness availability, absence, unknown state, or mixed state, but cannot invent relevance. Layer 1 must return evidence-cited recall blocks or an empty result with an explicit reason. Layer 1 timeout is a natural producer of "explicit empty reason." Inventory UNKNOWN is rendered as UNKNOWN, not as confirmed substrate presence.
 
 ### D6 — No Caller-Supplied Composition Verdict (revised v1.1 per Locke M4 + Kant M4 / Batch M)
 
@@ -433,7 +597,7 @@ The dispatcher may read producer-causality audit findings as evidence that adjac
 
 ### D10 — No New External Authority Surface
 
-`FRONTIER_CONSULT`, `LIVE_REDDIT`, and `WEB_SEARCH` are source labels inside a composition spec. They do not grant Maez new credentials, new egress powers, or new tool access.
+`FRONTIER_CONSULT`, `LIVE_REDDIT`, and `WEB_SEARCH` are source labels inside a composition spec. They do not grant Maez new credentials, new egress powers, or new tool access. `FRONTIER_CONSULT` is reserved/non-executable in v1 and returns `RESERVED_UNAVAILABLE` without a capability grant.
 
 ### D11 — Incoherent `(CompositionHint × ProvenanceFraming)` Pairs Refused (new v1.1)
 
@@ -441,11 +605,11 @@ Per §6.5 legal product table: pairs outside the table are refused at constructi
 
 ### D12 — Layer 1 Concurrent Fan-Out (new v1.1)
 
-Layer 1 fans out concurrently across `CompositionSpec.substrate_sources` with a per-branch timeout. Per-branch failure does not abort other branches; failures return as empty result with explicit reason per D5. Per Ohm M2 / Batch N.
+Layer 1 fans out concurrently across executable `CompositionSpec.substrate_sources` with a per-branch timeout. Per-branch failure does not abort other branches; failures return as `RecallBranchResult` with explicit reason per D5. Reserved/unavailable labels never execute. Per Ohm M2 / Batch N and Codex Batch 11.
 
 ### D13 — Layer 0 Latency Budget (new v1.1)
 
-Layer 0 must complete within ≤ 50ms warm, ≤ 150ms cold. The `InventorySummary` cache (row-count + last-write-cursor anchors per substrate) is invalidated by writes/mtime; Layer 0 must not run live `COUNT(*)` per substrate on every reply. Per Ohm M1 / Batch G.
+Layer 0 must complete within ≤ 50ms warm, ≤ 150ms cold, excluding process startup but including access to prewarmed encoder and cached inventory. Encoder prewarm/startup has separate ≤ 750ms budget. The `InventorySummary` cache is invalidated by source-specific cursors; Layer 0 must not run live `COUNT(*)` per substrate on every reply. Per Ohm M1 / Batch G and Codex Batch 14.
 
 ### D14 — Intra-Maez Organ Location (new v1.1)
 
@@ -454,6 +618,26 @@ Layer 0 is an intra-Maez organ separating recall-axis interpretation from reply-
 ### D15 — `SANDBOX_WITNESSES` Read-Only at Composition (new v1.1)
 
 `SubstrateSource.SANDBOX_WITNESSES` may be read for procedural questions about fixes. It may not be used to authorize new ratification — that authority lives in ADR 0046's maintenance-proposal lifecycle, not in the dispatcher. Per Kant m2.
+
+### D16 — Availability State Is Part of the Spec (new v1.2)
+
+`CompositionSpec` construction must populate `inventory_witness`, `source_availability`, and `availability_limitations` before serialization, inheritance, render, or audit. These fields cannot be hidden in ad hoc metadata.
+
+### D17 — Active vs Reserved Sources Are Not Ambiguous (new v1.2)
+
+Executable sources may enter fan-out. Reserved sources (`LIVED_GRAPH`, `WEB_FAST_TURNS`, `FRONTIER_CONSULT`) may be named as intended/relevant but must return `RESERVED_UNAVAILABLE` unless their separate backlog dependency is complete and ratified.
+
+### D18 — Archetype Scoring Is Deterministic (new v1.2)
+
+Layer 0 archetype ranking must use the versioned manifest, max-prototype class scoring, declared thresholds, and deterministic tie handling. Local implementer constants are forbidden unless the manifest version changes.
+
+### D19 — Dispatcher Refusals Fail Closed (new v1.2)
+
+Any `DispatcherRefusalReason` stops downstream JARVIS/tool/fetch/recall/render execution for that turn and records an audit-safe refusal event. Refusal tests must prove behavior, not merely enum presence.
+
+### D20 — External Fetch Is Bounded (new v1.2)
+
+External source execution is owned by `core/dispatcher/external_sources.py`, has per-source and global deadlines, and maps failures into `availability_limitations` plus `provenance_framing`. Freshness scoring beyond retrieval timestamp is deferred out of v1.
 
 ---
 
@@ -469,6 +653,7 @@ Layer 0 is an intra-Maez organ separating recall-axis interpretation from reply-
 - **G1/G2/G3 AI-to-AI consultation backlog:** Frontier consult is provenance tagged and deferred; dispatcher v1 does not invent the consultation mechanism.
 - **G8 (entity stack default-off in production) / G9 (cross-surface scope fragmentation) / G10 (perception write-silent) / G11 (lived-graph traversal API absent):** dispatcher consumes these gaps as routing constraints; their closure is each a separate slice.
 - **G8–G14 + 41-finding dispatch synthesis:** Empirical scope evidence for dark reply-time substrates, cross-surface fragmentation, and JARVIS false-positive routing.
+- **Codex engineering pass-1 synthesis (`reviews/codex-engineering-synthesis-v1.1-pass1.md`):** engineering evidence for v1.2's schema expansion, active/reserved source split, ingress coverage, scoring thresholds, inventory invalidation, fan-out/external budgets, prompt renderer ownership, and refusal semantics.
 
 ---
 
@@ -476,49 +661,61 @@ Layer 0 is an intra-Maez organ separating recall-axis interpretation from reply-
 
 These are specification-level test anchors. Concrete tests land during implementation after Codex pass-1 + fold cycles.
 
-- **R#1.** `test_content_anchored_query_emits_hybrid_spec` — "how's Qwen looking online?" emits both substrate and external source candidates with `HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES`.
-- **R#1a.** (new v1.1 per Hume B1) `test_witnessed_turn_replay_corpus_validates_hybrid_default` — a corpus of ≥5 witnessed runtime turns where the brief commits in advance to expected `provenance_framing` per turn; runtime adjudicates. Validates D2's hybrid-default claim against real query distribution, not just one Reddit screenshot.
+- **R#1.** `test_content_anchored_query_emits_hybrid_spec` — "how's Qwen looking online?" emits both substrate and external source candidates with `HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES`, explicit `inventory_witness`, and per-source availability entries.
+- **R#1a.** (rewritten v1.2 per Codex Batch 5) `test_witnessed_turn_replay_corpus_validates_full_composition_spec` — a pre-registered corpus of ≥30 witnessed turns validates the full `CompositionSpec` per fixture, including inventory witness, availability limitations, source states, and provenance framing. Validates D2's hybrid-default claim against witnessed-turn samples, not one Reddit screenshot.
 - **R#2.** `test_explicit_memory_query_emits_substrate_only_spec` — "what do you remember about Qwen?" emits no external sources and `SUBSTRATE_ONLY_NO_FRESH_VALIDATION` (renamed v1.1 per Batch A).
 - **R#3.** `test_explicit_fetch_query_emits_fresh_only_spec` — "search Reddit for Qwen right now" emits external source only and `FRESH_ONLY`.
-- **R#4.** `test_should_run_jarvis_loop_no_longer_gates_dispatch` (rewritten v1.1 per Batch H) — Layer 0 emits `CompositionSpec` *before* the legacy `_should_run_jarvis_loop` short-circuit at `brain_loop.py:900`. JARVIS regexes become Layer-0 evidence, not a downstream gate. Reddit-screenshot misroute structurally cannot recur.
+- **R#4.** `test_should_run_jarvis_loop_no_longer_gates_dispatch` (rewritten v1.2 per Codex Batch 3) — Layer 0 emits `CompositionSpec` *before* the legacy `_should_run_jarvis_loop` short-circuit at `core/brain/brain_loop.py:900`. JARVIS regexes become Layer-0 evidence, not a downstream gate. Reddit-screenshot misroute structurally cannot recur.
 - **R#5.** `test_jarvis_system_noun_false_positive_does_not_override_substrate` — "check Reddit then" does not route to tool-loop solely because `check` matches `_SYSTEM_NOUN_RE`.
 - **R#6.** `test_provenance_framing_selects_template_and_template_set_is_closed_vocabulary` (rewritten v1.1 per Batch I) — prompt-assembly template selection is parameterized by `provenance_framing`; template set is closed.
 - **R#7.** `test_substrate_only_answer_flags_no_fresh_validation_state` (renamed v1.1 per Batch A) — substrate-only answer includes an absence-of-fresh-validation flag, NOT framing substrate as unreliable. Per Locke M1 + Buber Major-1.
 - **R#8.** `test_hybrid_answer_labels_fresh_and_context_roles` — hybrid answer has distinct fresh-evidence and substrate-context inline markers (default rendering shape per Buber Mi2 + D4).
-- **R#9.** `test_caller_supplied_composition_hint_refused` — public dispatcher API refuses caller-supplied final `composition_hint`. "Caller" means external/public-API only (per D6 revised).
+- **R#9.** `test_caller_supplied_composition_verdict_fields_refused` — public dispatcher API refuses caller-supplied final `composition_hint`, `provenance_framing`, `substrate_sources`, and `external_sources`. "Caller" means external/public-API only (per D6 revised).
 - **R#10.** `test_unknown_closed_vocabulary_value_refused` — unknown `SubstrateSource`, `ExternalSource`, `CompositionHint`, and `ProvenanceFraming` values refuse at construction.
 - **R#10a.** (new v1.1 per Locke M2 / Batch K) `test_new_vocabulary_kind_requires_ratified_maintenance_proposal` — vocabulary extension path runs through `core/policies/maintenance_proposals.py` per ADR 0046.
 - **R#11.** `test_owner_authenticated_web_scope_not_forced_to_guest` — owner web surface does not silently pin recall to `guest`.
-- **R#12.** `test_repair_followup_inherits_prior_spec_layer_2_runs_before_layer_1` (rewritten v1.1 per Batch O) — "are you sure?" inherits the prior topic/source via Layer 2 *before* Layer 1 runs, then Layer 1 re-runs availability/freshness checks on the modified spec.
+- **R#12.** `test_repair_followup_inherits_prior_spec_layer_2_runs_before_layer_1` (rewritten v1.2 per Codex Batch 10) — "are you sure?" inherits the prior topic/source via Layer 2 *before* Layer 1 runs, then Layer 1 re-runs availability/freshness checks on the modified spec.
+- **R#12a.** `test_repair_fsm_handles_no_prior_expired_and_crash_recovered_states` — `NO_PRIOR`, `PRIOR_EXPIRED`, and `CRASH_RECOVERED` have distinct behavior; invalid recovered specs refuse with `REPAIR_PRIOR_SPEC_INVALID`.
 - **R#13.** `test_no_frontier_consult_without_capability_grant` — `FRONTIER_CONSULT` label cannot execute a frontier call without the separate consultation mechanism.
-- **R#14.** `test_graph_assisted_class_is_reserved_until_traversal_api_exists` — `K_GRAPH_ASSISTED_RELATIONAL` can be recorded as archetype evidence but cannot produce a lived-graph route until G11 traversal API lands.
+- **R#14.** `test_reserved_sources_return_unavailable_until_dependencies_land` — `K_GRAPH_ASSISTED_RELATIONAL`, `LIVED_GRAPH`, `WEB_FAST_TURNS`, and `FRONTIER_CONSULT` can be recorded as evidence but cannot execute until G11/G9/G3 dependencies land.
 - **R#15.** `test_dispatcher_does_not_define_producer_write_authority` — dispatcher code contains no write-time validity rules for `inner_residue`, `consequence_memory`, or `wonderings.record_pursuit`.
 - **R#16.** (new v1.1 per Batch B / Kant M3) `test_incoherent_hint_framing_pair_refused` — pairs outside §6.5 legal product table refuse at construction. Per D11.
 - **R#17.** (new v1.1 per Batch E / Ohm B1) `test_dispatcher_and_chroma_share_encoder_singleton` — `memory/embedder.py` is the single source; both dispatcher and Chroma consume the same `MiniLMEncoder` instance.
-- **R#18.** (new v1.1 per Batch G / Ohm M1) `test_layer0_latency_under_warm_budget` — Layer 0 completes within ≤ 50ms on warm cache. Per D13.
-- **R#19.** (new v1.1 per Batch G / Ohm M1) `test_inventory_summary_uses_cached_anchor` — Layer 0 does not run live `COUNT(*)` per substrate; uses cached `InventorySummary` invalidated by writes/mtime.
+- **R#18.** (rewritten v1.2 per Codex Batch 14) `test_layer0_latency_under_warm_and_cold_budget` — Layer 0 completes within ≤ 50ms warm and ≤ 150ms cold with prewarmed encoder; startup/prewarm budget tested separately. Per D13.
+- **R#19.** (rewritten v1.2 per Codex Batch 7) `test_inventory_summary_uses_cached_source_registry` — Layer 0 does not run live `COUNT(*)` per substrate; uses `InventorySummary` registry with source-specific cache keys and UNKNOWN fallback.
 - **R#20.** (new v1.1 per Batch I / Ohm M4) `test_template_set_is_closed_and_mismatched_block_refuses` — assembly-layer template construction refuses to render a `SUBSTRATE_ONLY_NO_FRESH_VALIDATION` template containing a fresh-evidence block.
 - **R#21.** (new v1.1 per Batch L / Locke M3) `test_layer_0_runs_intra_substrate_not_as_external_classifier_service` — Layer 0 runs inside Maez's process boundary. Spec-level anchor; concrete test refined during implementation.
 - **R#22.** (new v1.1 per Batch M / Locke M4 + Kant M4) `test_upstream_handler_cannot_pass_composition_hint_kwarg_into_layer_0` — public dispatcher API does not accept caller-supplied `composition_hint` kwarg.
 - **R#23.** (new v1.1 per Batch N / Ohm M2) `test_layer1_runs_substrate_branches_concurrently` — Layer 1 fan-out is concurrent (asyncio.gather or ThreadPoolExecutor), not sequential.
 - **R#24.** (new v1.1 per Batch N / Ohm M2) `test_layer1_partial_substrate_failure_returns_partial_recall_with_explicit_empty_reason` — per-branch failure does not abort other branches; failed branch returns empty result with explicit reason per D5.
+- **R#25.** (new v1.2 per Codex Batch 1) `test_composition_spec_serializes_availability_fields` — `inventory_witness`, `source_availability`, and `availability_limitations` round-trip through serialization, repair inheritance, render, and audit.
+- **R#26.** (new v1.2 per Codex Batch 2) `test_reserved_source_execution_attempt_refuses_or_returns_reserved_unavailable` — reserved sources cannot enter normal fan-out.
+- **R#27.** (new v1.2 per Codex Batch 3) `test_all_owner_ingresses_construct_dispatcher_spec_before_tool_or_recall` — Telegram, web, brain loop, daemon fast path, continuation path, pending-offer search, and enabled voice/electron ingress all call Layer 0 first or emit visible availability limitation.
+- **R#28.** (new v1.2 per Codex Batch 4) `test_archetype_thresholds_are_deterministic` — `min_accept`, `dominance_margin`, `multi_match_delta`, and no-match fallback produce stable class rankings and tie behavior from the versioned manifest.
+- **R#29.** (new v1.2 per Codex Batch 6) `test_encoder_contract_matches_embedding_contract_json` — `MiniLMEncoder` validates model name/dimensions against `memory/embedding_contract.json`.
+- **R#30.** (new v1.2 per Codex Batch 8) `test_all_owner_synthesis_surfaces_route_through_provenance_renderer` — no owner prompt builder renders composed recall without `core/dispatcher/provenance_renderer.py`.
+- **R#31.** (new v1.2 per Codex Batch 9) `test_dispatcher_refusal_stops_downstream_execution` — after `DispatcherRefusalReason`, no tool/fetch/recall/render function is called.
+- **R#32.** (new v1.2 per Codex Batch 11) `test_layer1_slow_and_failed_branches_preserve_deadline_and_stable_merge_order` — slow + error branches still produce deterministic partial output under deadline.
+- **R#33.** (new v1.2 per Codex Batch 12) `test_external_fetch_failures_map_to_fresh_attempted_unavailable` — bot-block/network/API failure maps to `FRESH_ATTEMPTED_UNAVAILABLE_SUBSTRATE_CONTEXT` when substrate exists.
+- **R#34.** (new v1.2 per Codex Batch 13) `test_dispatcher_modules_exist_at_declared_paths` — module map paths are the implementation ownership surface; stale "likely" paths are forbidden.
+- **R#35.** (new v1.2 per Codex Batch 14) `test_full_manifest_source_count_budget` — Layer 0 scoring and Layer 1 source selection run against the full manifest/source registry within budget.
 
-**RED suite implementability split (per Ohm Mi4):** ~13 unit tests (~1ms each), ~8 integration tests (mock brain_loop + mock substrate + assembly-layer fixture, ~50–500ms each). Estimated total RED suite runtime ~4–10 seconds.
+**RED suite implementability split (per Ohm Mi4, revised v1.2):** ~22 unit tests (~1ms each), ~13 integration tests (mock brain_loop + mock substrate + assembly-layer fixture, ~50–500ms each). Estimated total RED suite runtime ~8–20 seconds.
 
 ---
 
-## 10. Open Questions for Codex Pass-1
+## 10. Open Questions for Codex Pass-2
 
-(Q10.10 from v1 removed per Descartes F8 — rhetorical, already answered in scope boundary. Q9 closed v1.1 per Ohm M3 — full JARVIS replacement decided.)
+(Q10.10 from v1 removed per Descartes F8 — rhetorical, already answered in scope boundary. Q9 closed v1.1 per Ohm M3 — full JARVIS replacement decided. Codex pass-1 answered the mechanism-owner questions by requiring concrete v1.2 module/API ownership.)
 
-1. **Default hybrid breadth.** Is `C_HYBRID_CONTENT_ANCHORED` too broad as the default even after Batch C's witnessed-turn corpus validation? What explicit language should force fresh-only or substrate-only beyond the v1.1 list?
-2. **Freshness threshold.** Should v1 define a global staleness window, or must each source define freshness separately? May add fifth `CompositionSpec` field (per Descartes F6).
-3. **Substrate inventory privacy.** Which substrates may Layer 0 consult as inventory without reading content? Does private_thoughts require an additional bounded-reader gate even for inventory summaries?
-4. **Provenance rendering.** v1.1 establishes inline markers as default per Buber Mi2 + D4. Remaining question: should segmented sections appear in any non-report-shaped case (e.g., very long composed answers)?
-5. **Cross-surface scope union.** How should owner web + Telegram + fast-turns compose without weakening trust-scope boundaries? May add fifth `CompositionSpec` field.
+1. **Default hybrid breadth.** Is `C_HYBRID_CONTENT_ANCHORED` too broad as the default even after v1.2's witnessed-turn replay corpus requirements? What explicit language should force fresh-only or substrate-only beyond the current list?
+2. **Freshness threshold.** v1.2 records `freshness_window` but defers global freshness scoring beyond timestamps. Should pass-2 require source-specific freshness windows before canonicalization?
+3. **Substrate inventory privacy.** Which substrates may Layer 0 consult as inventory without reading content? Does `PRIVATE_THOUGHTS` require an additional bounded-reader gate even for inventory summaries?
+4. **Provenance rendering.** v1.1 establishes inline markers as default per Buber Mi2 + D4; v1.2 names `core/dispatcher/provenance_renderer.py` as owner. Remaining question: should segmented sections appear in any non-report-shaped case (e.g., very long composed answers)?
+5. **Cross-surface scope union.** How should owner web + Telegram + fast-turns compose without weakening trust-scope boundaries? v1.2 includes nullable `trust_scope_union`; pass-2 should verify whether its shape is specific enough before canonicalization.
 6. **Graph-assisted routing.** Should `K_GRAPH_ASSISTED_RELATIONAL` remain in the closed archetype class set as reserved evidence, or move entirely to a v2+ appendix?
-7. **Frontier consult labeling.** Should `FRONTIER_CONSULT` appear in v1 `ExternalSource` as a provenance label, or stay absent until G3 exists?
-8. **Prompt-assembly enforcement (Batch I).** Per Descartes F3: `provenance_framing → template` is v1-implementation deliverable, not present mechanism. Codex pass-1 must scope the implementation surface — which module owns the template renderer? How does `self_claim_audit` consume framing?
+7. **Frontier consult labeling.** v1.2 keeps `FRONTIER_CONSULT` as reserved/non-executable provenance label. Should pass-2 remove it entirely until G3 exists?
+8. **Prompt-assembly enforcement.** v1.2 names `core/dispatcher/provenance_renderer.py` and audit metadata flow. Codex pass-2 should verify whether the owner module is sufficient or whether existing prompt builders require a narrower path list before canonicalization.
 9. ~~JARVIS replacement path~~ **CLOSED v1.1:** full replacement decided per Ohm M3 / Batch H. JARVIS regexes become Layer-0 evidence.
 
 ---
@@ -539,4 +736,4 @@ The negative predicted effect is equally important: the dispatcher should not gr
 
 ---
 
-*Spec brief v1.1 — 2026-05-26. Framing half authored under the hard-stop discipline at `fc652d5`; mechanics half completed at `9110084`; council pass-1 findings folded in v1.1. Producer-causality consolidation, live-degradation triage, and ADR 0046 hardening explicitly de-scoped as separate slices with separate contracts. Six council review files preserved verbatim at `reviews/claude-council-{locke,kant,hume,buber,descartes,ohm}-pass1.md`; synthesis at `reviews/claude-council-synthesis-v1-pass1.md`. Next: Codex engineering pass-1 against v1.1 when signaled, then fold cycle, then canonicalize as Decision 42 / ADR 0047.*
+*Spec brief v1.2 — 2026-05-26. Framing half authored under the hard-stop discipline at `fc652d5`; mechanics half completed at `9110084`; council pass-1 findings folded in v1.1 at `a5f7898`; Codex engineering pass-1 synthesis at `023b2ad`; 15 Codex fold batches folded in v1.2. Producer-causality consolidation, live-degradation triage, and ADR 0046 hardening explicitly de-scoped as separate slices with separate contracts. Six council review files preserved verbatim at `reviews/claude-council-{locke,kant,hume,buber,descartes,ohm}-pass1.md`; six Codex review files preserved verbatim at `reviews/codex-{peirce,arendt,huygens,pauli,ohm,lovelace-bernoulli}-pass1.md`. Next: Codex pass-2 closure audit against v1.2, then fold/canonicalize depending on closure verdict.*
