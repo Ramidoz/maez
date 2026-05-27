@@ -1,9 +1,11 @@
 # Recall-Axis Dispatcher External-Source Consumption Brief
 
-**Status:** v1.1 discovery brief; Claude external-source pass-1 BLOCKING findings folded.
+**Status:** v1.2 discovery brief; seam-8 witness findings folded.
 **Date:** 2026-05-27
 **Predecessor witness:** `docs/slices/recall-axis-dispatcher/witness/finding19-probe-2026-05-27-daemon.md`
 **Pass-1 synthesis:** `docs/slices/recall-axis-dispatcher/reviews/claude-external-source-synthesis-v1-pass1.md`
+**v1.2 witness source:** `docs/slices/recall-axis-dispatcher/witness/external-source-probe-2026-05-27-daemon.md`
+**v1.2 amendment proposal:** `docs/slices/recall-axis-dispatcher/reviews/claude-external-source-v1.2-amendment-proposal.md`
 
 ## 1. Why This Slice Exists
 
@@ -167,6 +169,7 @@ class FreshnessClass(StrEnum):
 
 
 class FreshAttemptOutcome(StrEnum):
+    NOT_ATTEMPTED = "NOT_ATTEMPTED"
     ALL_FAILED = "ALL_FAILED"
     PARTIAL = "PARTIAL"
     ALL_SUCCEEDED = "ALL_SUCCEEDED"
@@ -209,6 +212,9 @@ class ExternalFanoutResult:
 `FreshBlock.rationale` is intentionally absent. Success-side post-hoc framing
 does not belong in prompt rendering or audit metadata. The block carries source,
 retrieval timestamp, freshness class, prompt cost, and a diagnostic foreign key.
+`FreshBlock.text` is bounded to `MAX_FRESH_CHARS_PER_SOURCE = 2000` characters
+per source. Truncation is part of the external-source contract, not an adapter
+judgment call.
 
 `FreshBlock.egress_diagnostic_id` is non-optional for `SUCCESS` blocks. It keys
 into `external_fetch_diagnostics.jsonl`, whose timestamp window must contain
@@ -225,6 +231,17 @@ The caller in `_run_dispatcher_pipeline` mints one `fanout_generation_id` per
 turn and passes it to both `Layer1Fanout.run(...)` and `ExternalFanout.run(...)`.
 This slice therefore includes a narrow Layer 1 patch that permits external
 orchestration to inject the already-minted id. One turn has one seal identity.
+
+Layer 1's prompt budget contract is also part of this slice's witness-derived
+v1.2 amendment. `_budget_blocks` must truncate oversized substrate rows rather
+than silently dropping them. A truncated `RecallBlock` carries
+`truncated: bool` and `original_chars: int` audit fields, plus an explicit
+truncation marker in the rendered text. The post-budget result must still carry
+bounded substrate evidence when a source produced rows. Budget truncation emits
+`dispatcher_layer1_budget_limited`; if any future path drops a block instead of
+truncating it, that event must also name the dropped source and character count.
+The audit footprint must make the truncation explicit so any digest or character
+count mismatch with the original retrieved row is explained rather than hidden.
 
 ## 5. Source Behavior
 
@@ -279,6 +296,11 @@ Use deterministic public Reddit retrieval only when the utterance contains a
 subreddit anchor such as `r/LocalLLaMA`. The request remains bounded: one
 request, <= 5s branch timeout, no credentials, no cookies, no browser session.
 
+Layer 0 maintains two Reddit regex surfaces: a broad generic Reddit anchor and a
+stricter valid-subreddit anchor. The implementation must document that semantic
+split at the regex declarations so future changes do not collapse generic
+Reddit talk into live subreddit egress.
+
 `core/dispatcher/external_sources.py` must not import or call
 `skills.reddit_skill.RedditSkill`, `urllib.request`, `requests`, `httpx`, or
 any other surface that bypasses `external_fetch.fetch_text`.
@@ -311,10 +333,13 @@ In v1, reduce this source to arXiv via a new audited
 `external_fetch.fetch_text(fetch_type="arxiv")` registry entry against the
 public arXiv API URL. One query, <= 3s, top result only.
 
-Paperclip execution is reserved in this slice. The current repo does not
-witness a dispatcher-audited paperclip executable or egress diagnostics path.
-If a future slice wants Paperclip execution, it must add an audited egress route
-and equivalent diagnostics before returning `FreshBlock` evidence.
+Paperclip execution is reserved in this slice. If the utterance contains the
+literal word `paperclip`, the adapter returns `RESERVED_UNAVAILABLE`; otherwise
+`ARXIV_OR_PAPERCLIP` routes to arXiv through
+`external_fetch.fetch_text(fetch_type="arxiv")`. The current repo does not
+witness a dispatcher-audited paperclip executable or egress diagnostics path. If
+a future slice wants Paperclip execution, it must add an audited egress route and
+equivalent diagnostics before returning `FreshBlock` evidence.
 
 ### `FRONTIER_CONSULT`
 
@@ -359,6 +384,10 @@ Raw exception text must not reach persisted logger, prompt rendering, or audit
 metadata. Where exception detail is needed for live debugging, it routes through
 the existing `external_fetch_diagnostics.jsonl` discipline.
 
+Unmapped adapter exceptions bucket to `ExternalErrorClass.UNCLASSIFIED`, not a
+more specific invented class. A non-zero `UNCLASSIFIED` count is the signal that
+the closed taxonomy needs a future amendment.
+
 ## 7. Composition, Reconstruction, and Rendering
 
 External execution produces source summaries for
@@ -392,6 +421,8 @@ Legal reconstruction transform:
 | `FRESH_EVIDENCE` | `FRESH_ONLY` | `ALL_SUCCEEDED` | false | render original spec |
 | `FRESH_EVIDENCE` | `FRESH_ONLY` | `PARTIAL` | false | render original spec with limitations |
 | `FRESH_EVIDENCE` | `FRESH_ONLY` | `ALL_FAILED` | false | deterministic no-fresh summary; no `FRESH_EVIDENCE` block |
+| `HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES` | `PARALLEL` | `ALL_SUCCEEDED` | false | reconstruct to `FRESH_EVIDENCE` with `FRESH_ONLY` hint; record substrate-empty limitation |
+| `HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES` | `PARALLEL` | `PARTIAL` | false | reconstruct to `FRESH_EVIDENCE` with `FRESH_ONLY` hint; record substrate-empty and fresh limitations |
 | `FRESH_AND_MEMORY_CONTEXT` | `SUBSTRATE_AND_FRESH` | `ALL_SUCCEEDED` | true | render original spec |
 | `FRESH_AND_MEMORY_CONTEXT` | `SUBSTRATE_AND_FRESH` | `PARTIAL` | true | render original spec with limitations |
 | `FRESH_AND_MEMORY_CONTEXT` | `SUBSTRATE_AND_FRESH` | `ALL_FAILED` | true | reconstruct to `FRESH_ATTEMPTED_UNAVAILABLE_SUBSTRATE_CONTEXT` |
@@ -413,9 +444,22 @@ closed-vocabulary additions:
 - `reconstructed_from_framing: ProvenanceFraming | None`
 - `reconstructed_from_hint: CompositionHint | None`
 - `fresh_attempt_outcome: FreshAttemptOutcome`
+- `recall_block.truncated: bool`
+- `recall_block.original_chars: int | None`
 
 Reconstruction is reconstruction, never disguised as an uninterrupted Layer 0
 claim. The original framing and hint remain recoverable from the audit envelope.
+Substrate-only turns with no external sources report
+`FreshAttemptOutcome.NOT_ATTEMPTED`, not `ALL_SUCCEEDED`.
+
+The merge owner must use the canonical hint/framing legality source from
+`spec.py`, or carry a CI equivalence test plus an inline comment tying the local
+table to the canonical `_LEGAL_HINT_FRAMING` matrix. A stale local legality table
+is not an acceptable reconstruction authority.
+
+Audit template version labels must not use a `sha256:` prefix unless the value is
+a real content-derived SHA-256. Static labels use a non-hash prefix such as
+`version:adr0047-merge-v1`.
 
 ## 8. Wiring Shape
 
@@ -452,6 +496,11 @@ When `MAEZ_DISPATCHER_ENABLED=1` and `_run_dispatcher_pipeline` returns a
 `RenderedTurn` (success, partial, or refusal), `should_run_jarvis` is forced
 False. Fall-through to JARVIS exists only on the dispatcher-disabled path.
 
+After any non-refused dispatcher turn, the orchestrator records the final
+effective spec for next-turn Layer 2 repair inheritance. This is not gated on
+`recall_blocks` containing rows; empty-but-non-refused turns still define the
+next repair context. Refused turns are not recorded.
+
 Under `recovery_seed`, external fan-out is bypassed identically to Layer 1; the
 recovery path remains JARVIS-only as of this slice.
 
@@ -463,7 +512,8 @@ logger:
 ```text
 dispatcher_external_branch surface=... source=<ExternalSource> outcome=<rows|empty|timeout|error|reserved_skip|preflight_blocked> block_count=N elapsed_ms=... error_class=<ExternalErrorClass|""> empty_reason=<ExternalEmptyReason|"">
 dispatcher_external_fanout surface=... fanout_generation_id=... branch_count=N seal_state=<clean|partial_failure> total_elapsed_ms=...
-dispatcher_path_exit ... turn_seal_state=<clean|partial_failure|reconstructed>
+dispatcher_layer1_budget_limited surface=... source=<SubstrateSource> truncated_blocks=N dropped_blocks=N original_chars=N capped_chars=N
+dispatcher_path_exit ... turn_seal_state=<clean|partial_failure|reconstructed|refused>
 ```
 
 Telemetry may render closed enum values. Prompt rendering and audit metadata
@@ -551,6 +601,24 @@ failure table plus these cross-cutting tests:
     Dispatcher-enabled turns that produce a `RenderedTurn` never run the legacy
     JARVIS planner, including external-source turns.
 
+19. `test_hybrid_no_substrate_fresh_success_reconstructs_to_fresh_only`
+    A `HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES` spec with no substrate
+    rows and successful fresh evidence reconstructs to `FRESH_EVIDENCE` with
+    `FRESH_ONLY` hint, while audit preserves the original framing and hint.
+
+20. `test_layer1_budget_blocks_truncate_instead_of_drop`
+    A single oversized substrate row is truncated, marked
+    `truncated=True`, records `original_chars`, emits
+    `dispatcher_layer1_budget_limited`, and remains renderable.
+
+21. `test_dispatcher_path_exit_distinguishes_refused_turn_seal_state`
+    Refused dispatcher turns log `turn_seal_state=refused`, not
+    `partial_failure`.
+
+22. `test_fresh_attempt_outcome_not_attempted_for_substrate_only_turns`
+    Substrate-only turns with empty `external_sources` report
+    `FreshAttemptOutcome.NOT_ATTEMPTED`.
+
 ## 10. Explicit Non-Goals
 
 - Do not implement frontier consultation.
@@ -567,6 +635,8 @@ failure table plus these cross-cutting tests:
 - Do not allow credential-bearing query strings.
 - Do not execute Paperclip until a repo-witnessed, audited egress route and
   diagnostics path exist.
+- Do not treat literal `paperclip` utterances as arXiv fallback requests; that
+  path is reserved until Paperclip execution is audited.
 - Do not perform autonomous research about unconsented named third parties.
   Subject-boundary refusal is a structured limitation, not a silent drop.
 - Do not run external fan-out under `recovery_seed`.
