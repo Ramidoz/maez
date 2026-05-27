@@ -149,6 +149,84 @@ class DispatcherCompositionSpecTests(unittest.TestCase):
             DispatcherRefusalReason.CALLER_SUPPLIED_SOURCE_SELECTION,
         )
 
+    def test_external_source_closed_vocabulary_enums_are_strict(self):
+        from core.dispatcher.spec import (
+            DeadlineKind,
+            ExternalBranchStatus,
+            ExternalEmptyReason,
+            ExternalErrorClass,
+            FreshAttemptOutcome,
+            FreshnessClass,
+        )
+
+        self.assertEqual(ExternalBranchStatus.PREFLIGHT_BLOCKED.value, "PREFLIGHT_BLOCKED")
+        self.assertEqual(ExternalErrorClass.AUTH_DENIED.value, "AUTH_DENIED")
+        self.assertEqual(
+            ExternalErrorClass.SUBJECT_BOUNDARY_REFUSED.value,
+            "SUBJECT_BOUNDARY_REFUSED",
+        )
+        self.assertEqual(ExternalEmptyReason.NO_RESULTS.value, "NO_RESULTS")
+        self.assertEqual(DeadlineKind.GLOBAL.value, "GLOBAL")
+        self.assertEqual(FreshnessClass.LIVE_FETCH.value, "LIVE_FETCH")
+        self.assertEqual(FreshAttemptOutcome.PARTIAL.value, "PARTIAL")
+
+        with self.assertRaises(ValueError):
+            ExternalErrorClass("MODEL_DECIDED_REASON")
+
+    def test_external_source_subject_boundary_limitation_is_closed_vocab(self):
+        from core.dispatcher.spec import (
+            AvailabilityLimitation,
+            CompositionHint,
+            CompositionSpec,
+            ExternalSource,
+            InventoryWitness,
+            ProvenanceFraming,
+            SourceAvailability,
+        )
+
+        spec = CompositionSpec(
+            substrate_sources=[],
+            external_sources=[ExternalSource.WEB_SEARCH],
+            composition_hint=CompositionHint.FRESH_ONLY,
+            provenance_framing=ProvenanceFraming.FRESH_ONLY,
+            inventory_witness=InventoryWitness.PRESENT,
+            source_availability={
+                ExternalSource.WEB_SEARCH: SourceAvailability.TRUST_SCOPE_RESTRICTED,
+            },
+            availability_limitations=[
+                AvailabilityLimitation.THIRD_PARTY_SUBJECT_BOUNDARY
+            ],
+            freshness_window={"requested": "live"},
+            trust_scope_union={"subject_boundary": "third_party"},
+        )
+
+        payload = spec.to_dict()
+
+        self.assertEqual(
+            payload["availability_limitations"],
+            ["THIRD_PARTY_SUBJECT_BOUNDARY"],
+        )
+        self.assertEqual(
+            CompositionSpec.from_dict(payload).availability_limitations,
+            [AvailabilityLimitation.THIRD_PARTY_SUBJECT_BOUNDARY],
+        )
+
+    def test_model_invented_url_refusal_reason_is_closed_vocab(self):
+        from core.dispatcher.spec import DispatcherRefusalReason
+
+        self.assertEqual(
+            DispatcherRefusalReason.MODEL_INVENTED_URL.value,
+            "MODEL_INVENTED_URL",
+        )
+
+    def test_fresh_failure_hybrid_fallback_illegal_reason_is_closed_vocab(self):
+        from core.dispatcher.spec import DispatcherRefusalReason
+
+        self.assertEqual(
+            DispatcherRefusalReason.FRESH_FAILURE_HYBRID_FALLBACK_ILLEGAL.value,
+            "FRESH_FAILURE_HYBRID_FALLBACK_ILLEGAL",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
