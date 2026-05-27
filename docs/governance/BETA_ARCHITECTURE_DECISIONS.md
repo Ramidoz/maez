@@ -3230,6 +3230,36 @@ ADR: [`0046-sandbox-witness-contract`](../adr/0046-sandbox-witness-contract.md).
 
 ---
 
+## Decision 42 — Recall-axis dispatcher
+
+ADR: [`0047-recall-axis-dispatcher`](../adr/0047-recall-axis-dispatcher.md).
+
+**The decision.** Maez answers by composing owned substrate with fresh world signal according to the shape of the ask, not by routing every turn to a single memory or tool bucket. The dispatcher emits a structured `CompositionSpec` — substrate sources, external sources, composition hint, provenance framing, availability witness, freshness, and trust scope — before recall, tool dispatch, or prompt assembly.
+
+**Why now.** The Reddit runtime routing gap showed the failure mode in live conversation: Rohit asked about Reddit / r/LocalLLaMA while Maez already had 2,462 source-tagged Reddit rows, but the upstream JARVIS classifier routed the ask into live-search tooling. A larger testing dispatch then showed this was not one Reddit bug: JARVIS false-positive routing, mute reply-time substrates, cross-surface fragmentation, and entity-stack darkness all pointed to the same missing organ. The dispatcher brief passed council pass-1 and three Codex engineering passes before canonicalization.
+
+**Anchor lines.**
+- Learn the shape of the ask before deciding which notebook, tool, or memory path to open.
+- Composition is the value. Pure-source routing is the explicit edge.
+- Memory is context; fresh is evidence. The answer should show both.
+
+**Surface mode.**
+- Layer 0 constructs `CompositionSpec`; it does not pick a single intent label.
+- Pure substrate-only and pure fetch-only are explicit-signal edges. Content-anchored asks default to composition.
+- Layer 1 fans out to executable substrate readers and returns closed `RecallBranchResult` values. Reserved routes are explicit unavailable states, not silent absence.
+- Layer 2 handles repair/follow-up modifiers without cross-surface inheritance.
+- Provenance rendering labels source roles before prompt assembly and emits a closed audit envelope.
+
+**Operational edge mode.**
+- Archetype scoring has deterministic thresholds, mid-band fallback, source-anchor normalization, tie handling, and no-match source selection.
+- Fan-out cancellation uses `fanout_generation_id`, sealed merge state, late-result quarantine, and telemetry.
+- External fetch failures map to closed availability limitations, including deterministic Paperclip timeout vs CLI-error handling.
+- Realistic adapter-budget fixtures define concrete p95 thresholds and telemetry for SQLite/WAL, Chroma, file-backed, and bounded-reader readers.
+
+**This decision does not** consolidate producer-causality for write-time felt organs, fix live-degradation issues, harden ADR 0046 subprocess isolation, grant new external tool authority, or implement frontier consultation. It seals the read-time retrieval/composition contract.
+
+---
+
 ## How to update this document
 
 Append new decisions as numbered sections. Never rewrite existing decisions unless explicitly rescoped, and when rescoping, preserve the original text as a *"Previous version"* subsection. The record matters more than neatness.
@@ -3240,4 +3270,4 @@ When a decision in this document becomes code, add a *"Implementation"* subsecti
 
 ---
 
-*Last updated: 2026-05-26 — Decision 41 minted for the sandbox-witness contract after council + Codex closure. Prior same-day update: Decisions 36-40 minted for the witnessed Slice 1 subjective-duration meaningful-salience seam, Slice 2 drive-driven curiosity felt-organ, canary-neutral-baseline discipline, canon-governs-canon law, and ratifiable maintenance-proposal substrate. Prior update: 2026-05-19 — Decision 33 status reconciled after S6 implementation and persisted-authorship round-2 recovery were both-lane ratified and pushed; S6 is implemented as a grammar/validation organ, not successor activation. Earlier: 2026-05-18 — Decision 34 amended for S7.1 as-built canonicalization; 2026-05-16 through 2026-05-15 — Decisions 31-33; 2026-05-15 — Decisions 28-30; 2026-05-14 — Decisions 24-27.*
+*Last updated: 2026-05-26 — Decision 42 minted for the recall-axis dispatcher after council + Codex closure. Prior same-day update: Decision 41 minted for the sandbox-witness contract after council + Codex closure. Earlier same-day update: Decisions 36-40 minted for the witnessed Slice 1 subjective-duration meaningful-salience seam, Slice 2 drive-driven curiosity felt-organ, canary-neutral-baseline discipline, canon-governs-canon law, and ratifiable maintenance-proposal substrate. Prior update: 2026-05-19 — Decision 33 status reconciled after S6 implementation and persisted-authorship round-2 recovery were both-lane ratified and pushed; S6 is implemented as a grammar/validation organ, not successor activation. Earlier: 2026-05-18 — Decision 34 amended for S7.1 as-built canonicalization; 2026-05-16 through 2026-05-15 — Decisions 31-33; 2026-05-15 — Decisions 28-30; 2026-05-14 — Decisions 24-27.*

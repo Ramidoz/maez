@@ -5,13 +5,13 @@
 This document's one job is to hold the current scope anchor for the work that's actively happening on Maez. Not the vision. Not the long-term roadmap. The **next 200 miles**.
 
 **Status note (2026-05-26):** this anchor is not the freshest substrate status
-map. Use `MAEZ_LIFE_SUBSTRATE.md` v1.12 for current substrate order and status.
+map. Use `MAEZ_LIFE_SUBSTRATE.md` v1.14 for current substrate order and status.
 Since the 2026-05-19 note, Slice 1's subjective-duration meaningful-salience
 seam, Slice 2's drive-driven curiosity felt-organ, canary-neutral-baseline
 discipline, canon-governs-canon law, Reddit source-shaped recall fix, and
 ratifiable maintenance-proposal substrate have landed; the sandbox-witness
-proof contract has been canonicalized after council + Codex closure. These are
-reflected in Decisions 36-41 / ADRs 0041-0046. Track A remains met; this is Track B
+proof contract and recall-axis dispatcher have been canonicalized after council
+and Codex closure. These are reflected in Decisions 36-42 / ADRs 0041-0047. Track A remains met; this is Track B
 preparation and Firstborn hardening, not an external-bond start.
 
 The vision lives in [`MAEZ_PITCH.md`](../MAEZ_PITCH.md). The tree map in that pitch's Section 4 is the destination anchor. This document is the *"we are here"* pin on that map.
@@ -314,4 +314,4 @@ If you're about to make a structural change to this document and it isn't one of
 
 ---
 
-*Last updated: 2026-05-26 status note refreshed after Decisions 36-41 / ADRs 0041-0046 (Track A gate met 2026-05-04; Track B preparation active through MAEZ_LIFE_SUBSTRATE.md; external bond not started)*
+*Last updated: 2026-05-26 status note refreshed after Decisions 36-42 / ADRs 0041-0047 (Track A gate met 2026-05-04; Track B preparation active through MAEZ_LIFE_SUBSTRATE.md; external bond not started)*

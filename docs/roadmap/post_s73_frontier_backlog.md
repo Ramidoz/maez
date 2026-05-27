@@ -385,8 +385,8 @@ substrate work is authorized by this section.
 
 - **Purpose:** codify the Claude covenant council + Codex engineering panel
   method so it survives context loss and future agent replacement.
-- **Preconditions:** existing review artifacts from S4 through Slice 2; canon
-  refresh current as of Decisions 36-41.
+- **Preconditions:** existing review artifacts from S4 through the dispatcher
+  slice; canon refresh current as of Decisions 36-42.
 - **Risk:** the process remains oral tradition and drifts when future agents do
   not know which lane owns which judgment.
 - **Rough scope:** lane responsibilities, dependency-map requirement,
@@ -431,7 +431,7 @@ substrate work is authorized by this section.
   48 entities, 7 aliases, 89 mentions live on disk, unreferenced at reply time.
 - **Preconditions:** the entity infrastructure already exists; this is a
   wiring + activation task plus an alias-rewrite preprocessor on the recall
-  axis (covered by Recall-Axis Dispatcher slice once that lands).
+  axis (covered by the Decision 42 / ADR 0047 dispatcher contract).
 - **Risk:** activating without an alias-rewrite preprocessor produces a brief
   section that injects entity context without affecting Chroma query
   shaping; partial activation is misleading.
@@ -558,6 +558,10 @@ substrate work is authorized by this section.
   on self_dev.db; small RED test for the procedural surface.
 
 ### Recall-Axis Dispatcher evidence pile
+
+**Canonicalization note:** sealed as Decision 42 / ADR 0047 on 2026-05-26.
+The evidence pile below is preserved as the witnessed empirical base that led
+to the dispatcher brief and review ladder.
 
 **Anchor line:** learn the shape of the ask before deciding which notebook,
 tool, or memory path to open.

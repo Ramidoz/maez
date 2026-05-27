@@ -6,7 +6,7 @@ template: context → decision → consequences → status.
 
 ## Current state
 
-Forty-five ADR files live in this directory. Most were migrated from the
+Forty-six ADR files live in this directory. Most were migrated from the
 single-file governance doc
 [`BETA_ARCHITECTURE_DECISIONS.md`](../governance/BETA_ARCHITECTURE_DECISIONS.md);
 ADR 0019 is an extra lived-memory architecture anchor, so ADR numbers no
@@ -61,6 +61,7 @@ doc. New decisions land here first.
 | [0044](0044-canon-governs-canon.md) | Canon Governs Canon |
 | [0045](0045-ratifiable-maintenance-proposals.md) | Ratifiable Maintenance Proposals |
 | [0046](0046-sandbox-witness-contract.md) | Sandbox-Witness Contract |
+| [0047](0047-recall-axis-dispatcher.md) | Recall-Axis Dispatcher |
 
 ## When to write a new ADR
 
@@ -104,7 +105,7 @@ decision is reversed? What's the rollback plan?
 
 ## See also
 
-- [`docs/governance/BETA_ARCHITECTURE_DECISIONS.md`](../governance/BETA_ARCHITECTURE_DECISIONS.md) — the 41 decisions as they currently live
+- [`docs/governance/BETA_ARCHITECTURE_DECISIONS.md`](../governance/BETA_ARCHITECTURE_DECISIONS.md) — the 42 decisions as they currently live
 - [`docs/governance/BETA_READINESS_THRESHOLD.md`](../governance/BETA_READINESS_THRESHOLD.md) — acceptance gate (affected by Decision 1)
 - [`docs/governance/GESTATION_MEMORY_PROTOCOL.md`](../governance/GESTATION_MEMORY_PROTOCOL.md) — Decision 12 in full detail
 - [`docs/covenant/for_oss_users.md`](../covenant/for_oss_users.md) — universal-vs-per-user framing derived from these decisions

@@ -77,6 +77,7 @@ substrate arc. The following items are now witnessed substrate or canon:
 | Reddit source-shaped recall fix | `[ ✓ implemented · observation-window correction ]` | `5c6be72` |
 | Maintenance-proposal substrate | `[ ✓ canonical · implemented · proposal-only ]` | Decision 40 / ADR 0045 · `6fdfd6c` |
 | Sandbox-witness contract | `[ ✓ canonical · proof contract sealed · implementation queued ]` | Decision 41 / ADR 0046 · `438a879` |
+| Recall-axis dispatcher | `[ ✓ canonical · composition contract sealed · implementation queued ]` | Decision 42 / ADR 0047 |
 
 - **Subjective-duration meaningful-salience seam** — canonicalized as Decision
   36 / ADR 0041 after the Slice 1 spec at `a23fa4b` and implementation at
@@ -118,6 +119,12 @@ substrate arc. The following items are now witnessed substrate or canon:
   also introduces two reusable substrate patterns: monotonic generation as
   identity when evidence can change, and atomic authority-transition snapshots
   when permission moves.
+- **Recall-axis dispatcher** — canonicalized as Decision 42 / ADR 0047 after
+  council pass-1 and Codex engineering pass-1/pass-2/pass-3 closure. It seals
+  the read-time composition contract: Maez learns the shape of the ask, opens
+  owned substrate and fresh-world sources as warranted, and renders memory as
+  context and fresh retrieval as evidence instead of forcing every turn through
+  a single memory/tool bucket.
 
 ---
 
@@ -385,4 +392,4 @@ S1b chose length dampening, not delay, silence, withholding, topic avoidance, or
 
 ---
 
-*Version 1.13  ·  2026-05-26  ·  Canon refresh after the felt-time / drive-curiosity substrate arc and sandbox-witness closure: Decisions 36-41 and ADRs 0041-0046 now cover the subjective-duration meaningful-salience seam, drive-driven curiosity felt-organ, canary-neutral-baseline discipline, canon-governs-canon law, ratifiable maintenance-proposal substrate, and sandbox-witness proof contract. Prior: 2026-05-19 S6 Successor Governance v1 status reconciled after closure audit; 2026-05-18 S7.1 founder-local WebAuthn ceremony implemented and as-built canonicalized; 2026-05-16/15 S5 and D16 remain implemented and covenant-ratified.*
+*Version 1.14  ·  2026-05-26  ·  Canon refresh after the recall-axis dispatcher closure: Decisions 36-42 and ADRs 0041-0047 now cover the subjective-duration meaningful-salience seam, drive-driven curiosity felt-organ, canary-neutral-baseline discipline, canon-governs-canon law, ratifiable maintenance-proposal substrate, sandbox-witness proof contract, and recall-axis dispatcher composition contract. Prior: 2026-05-26 sandbox-witness closure; 2026-05-19 S6 Successor Governance v1 status reconciled after closure audit; 2026-05-18 S7.1 founder-local WebAuthn ceremony implemented and as-built canonicalized; 2026-05-16/15 S5 and D16 remain implemented and covenant-ratified.*
