@@ -1,0 +1,346 @@
+{
+  "slice": "recall-axis-dispatcher / ADR 0047",
+  "witness": "finding19-daemon-http-service-probe-2026-05-27",
+  "mode": "live user-scoped maez.service daemon HTTP /internal/brain_loop probe",
+  "probe_corpus": "docs/slices/recall-axis-dispatcher/probes/witnessed_turn_corpus.txt",
+  "predecessor_adapter_witness": "docs/slices/recall-axis-dispatcher/witness/finding19-probe-2026-05-27-adapter-fix.md",
+  "service_scope": "systemctl --user maez.service",
+  "flag_control": {
+    "baseline": "MAEZ_DISPATCHER_ENABLED absent/unset in live process",
+    "after": "systemctl --user set-environment MAEZ_DISPATCHER_ENABLED=1; restart maez.service; verified in /proc/<pid>/environ",
+    "restored": "systemctl --user unset-environment MAEZ_DISPATCHER_ENABLED; restart maez.service; verified absent from /proc/<pid>/environ"
+  },
+  "verdict": "closed_for_daemon_http_reddit_substrate_surface_with_external_source_caveat",
+  "baseline": {
+    "mode": "daemon-http-baseline-flag-off",
+    "started_log_offsets": {
+      "cognition.log": 19839950,
+      "actions.log": 5362805
+    },
+    "results": [
+      {
+        "index": 1,
+        "probe": "Check Reddit then",
+        "http_status": 200,
+        "elapsed_ms": 2723.728,
+        "transcript_len": 0,
+        "transcript_preview": "",
+        "tool_calls": [],
+        "error": null
+      },
+      {
+        "index": 2,
+        "probe": "Just let me know what's going on in Reddit in localllama",
+        "http_status": 200,
+        "elapsed_ms": 7436.71,
+        "transcript_len": 1788,
+        "transcript_preview": "[JARVIS TRANSCRIPT — the AUTHORITATIVE record of what you did\n this turn on the owner's machine. Tell the owner naturally what you did\n and what you found. Don't list raw output; synthesize.\n\n Marker legend:\n   ✓  the tool ran, the → output is real\n   ✗  the tool call was REJECTED, nothing ran\n   ⏳ the action was PROPOSED as a card, NOT YET EXECUTED —\n       the owner must approve in Telegram before it runs\n\n HARD RULES for your reply:\n 1. Only mention tools, commands, packages, or files that ap",
+        "tool_calls": [
+          {
+            "args_summary": "{\"query\": \"Reddit localllama recent activity\"}",
+            "elapsed_ms": 0,
+            "error_summary": "",
+            "name": "web_search",
+            "output_summary": "[WEB SEARCH: 'Reddit localllama recent activity'] No results found.",
+            "status": "ok"
+          },
+          {
+            "args_summary": "{\"query\": \"Reddit localLLaMA community recent posts\"}",
+            "elapsed_ms": 0,
+            "error_summary": "",
+            "name": "web_search",
+            "output_summary": "[WEB SEARCH: 'Reddit localLLaMA community recent posts'] No results found.",
+            "status": "ok"
+          },
+          {
+            "args_summary": "{\"query\": \"site:reddit.com localLLaMA\"}",
+            "elapsed_ms": 0,
+            "error_summary": "",
+            "name": "web_search",
+            "output_summary": "[WEB SEARCH: 'site:reddit.com localLLaMA'] No results found.",
+            "status": "ok"
+          },
+          {
+            "args_summary": "{\"query\": \"Reddit local llama AI\"}",
+            "elapsed_ms": 0,
+            "error_summary": "",
+            "name": "web_search",
+            "output_summary": "[WEB SEARCH: 'Reddit local llama AI'] No results found.",
+            "status": "ok"
+          }
+        ],
+        "error": null
+      },
+      {
+        "index": 3,
+        "probe": "What's going on on Reddit?",
+        "http_status": 200,
+        "elapsed_ms": 23220.904,
+        "transcript_len": 1616,
+        "transcript_preview": "[JARVIS TRANSCRIPT — the AUTHORITATIVE record of what you did\n this turn on the owner's machine. Tell the owner naturally what you did\n and what you found. Don't list raw output; synthesize.\n\n Marker legend:\n   ✓  the tool ran, the → output is real\n   ✗  the tool call was REJECTED, nothing ran\n   ⏳ the action was PROPOSED as a card, NOT YET EXECUTED —\n       the owner must approve in Telegram before it runs\n\n HARD RULES for your reply:\n 1. Only mention tools, commands, packages, or files that ap",
+        "tool_calls": [
+          {
+            "args_summary": "{\"query\": \"what is trending on reddit today\"}",
+            "elapsed_ms": 0,
+            "error_summary": "",
+            "name": "web_search",
+            "output_summary": "[WEB SEARCH: 'what is trending on reddit today'] No results found.",
+            "status": "ok"
+          },
+          {
+            "args_summary": "{\"query\": \"reddit front page trending topics today\"}",
+            "elapsed_ms": 0,
+            "error_summary": "",
+            "name": "web_search",
+            "output_summary": "[WEB SEARCH: 'reddit front page trending topics today'] No results found.",
+            "status": "ok"
+          },
+          {
+            "args_summary": "{}",
+            "elapsed_ms": 0,
+            "error_summary": "",
+            "name": "fetch_url",
+            "output_summary": "empty url",
+            "status": "ok"
+          },
+          {
+            "args_summary": "{}",
+            "elapsed_ms": 0,
+            "error_summary": "",
+            "name": "fetch_url",
+            "output_summary": "empty url",
+            "status": "ok"
+          }
+        ],
+        "error": null
+      },
+      {
+        "index": 4,
+        "probe": "You have access to Reddit data",
+        "http_status": 200,
+        "elapsed_ms": 1863.584,
+        "transcript_len": 0,
+        "transcript_preview": "",
+        "tool_calls": [],
+        "error": null
+      },
+      {
+        "index": 5,
+        "probe": "What were we talking about last evening?",
+        "http_status": 200,
+        "elapsed_ms": 1870.993,
+        "transcript_len": 0,
+        "transcript_preview": "",
+        "tool_calls": [],
+        "error": null
+      },
+      {
+        "index": 6,
+        "probe": "Search r/LocalLLaMA right now",
+        "http_status": 200,
+        "elapsed_ms": 6102.73,
+        "transcript_len": 2377,
+        "transcript_preview": "[JARVIS TRANSCRIPT — the AUTHORITATIVE record of what you did\n this turn on the owner's machine. Tell the owner naturally what you did\n and what you found. Don't list raw output; synthesize.\n\n Marker legend:\n   ✓  the tool ran, the → output is real\n   ✗  the tool call was REJECTED, nothing ran\n   ⏳ the action was PROPOSED as a card, NOT YET EXECUTED —\n       the owner must approve in Telegram before it runs\n\n HARD RULES for your reply:\n 1. Only mention tools, commands, packages, or files that ap",
+        "tool_calls": [
+          {
+            "args_summary": "{\"query\": \"r/LocalLLaMA reddit latest posts\"}",
+            "elapsed_ms": 0,
+            "error_summary": "",
+            "name": "web_search",
+            "output_summary": "[WEB SEARCH: 'r/LocalLLaMA reddit latest posts'] No results found.",
+            "status": "ok"
+          },
+          {
+            "args_summary": "{\"url\": \"https://old.reddit.com/r/LocalLLaMA/hot/.json\", \"reason\": \"fetch latest hot posts from r/LocalLLaMA via Reddit JSON API\", \"max_chars\": 3000}",
+            "elapsed_ms": 0,
+            "error_summary": "",
+            "name": "fetch_url",
+            "output_summary": "{\"kind\": \"Listing\", \"data\": {\"after\": \"t3_1to5fj5\", \"dist\": 25, \"modhash\": \"\", \"geo_filter\": null, \"children\": [{\"kind\": \"t3\", \"data\": {\"approved_at_utc\": null, \"subreddit\": \"LocalLLaMA\", \"selftext\": \"[Cuda 13.3 Downloads](https://developer.nvidia.com/cuda-downloads)\\n\\n[Release Notes](https://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html)\\n\\nAnybody already tried llama.cpp with 13.3?\", \"author_fullname\": \"t2_axbdzza\", \"saved\": false, \"mod_reason_title\": null, \"gilded\": 0, \"clicked\"",
+            "status": "ok"
+          }
+        ],
+        "error": null
+      },
+      {
+        "index": 7,
+        "probe": "Really?",
+        "http_status": 200,
+        "elapsed_ms": 1873.966,
+        "transcript_len": 0,
+        "transcript_preview": "",
+        "tool_calls": [],
+        "error": null
+      },
+      {
+        "index": 8,
+        "probe": "Are you sure?",
+        "http_status": 200,
+        "elapsed_ms": 1864.446,
+        "transcript_len": 0,
+        "transcript_preview": "",
+        "tool_calls": [],
+        "error": null
+      }
+    ],
+    "logs": {
+      "cognition.log": "2026-05-27 13:21:43 | policy | mode=normal avoid=[] force_new=False specificity=True grounding=True\n",
+      "actions.log": "2026-05-27 13:21:38 | T0 | web_search | chat: Just let me know what's going on in Reddit in localllama | {\"query\": \"Reddit localllama recent activity\"} | OK: [WEB SEARCH: 'Reddit localllama recent activity'] No results found. | 0.37s\n2026-05-27 13:21:40 | T0 | web_search | chat: Just let me know what's going on in Reddit in localllama | {\"query\": \"Reddit localLLaMA community recent posts\"} | OK: [WEB SEARCH: 'Reddit localLLaMA community recent posts'] No results found. | 0.33s\n2026-05-27 13:21:42 | T0 | web_search | chat: Just let me know what's going on in Reddit in localllama | {\"query\": \"site:reddit.com localLLaMA\"} | OK: [WEB SEARCH: 'site:reddit.com localLLaMA'] No results found. | 0.53s\n2026-05-27 13:21:43 | T0 | web_search | chat: Just let me know what's going on in Reddit in localllama | {\"query\": \"Reddit local llama AI\"} | OK: [WEB SEARCH: 'Reddit local llama AI'] No results found. | 0.37s\n2026-05-27 13:21:46 | T0 | web_search | chat: What's going on on Reddit? | {\"query\": \"what is trending on reddit today\"} | OK: [WEB SEARCH: 'what is trending on reddit today'] No results found. | 0.39s\n2026-05-27 13:22:03 | T0 | web_search | chat: What's going on on Reddit? | {\"query\": \"reddit front page trending topics today\"} | OK: [WEB SEARCH: 'reddit front page trending topics today'] No results found. | 0.34s\n2026-05-27 13:22:05 | T0 | fetch_url | chat: What's going on on Reddit? | {} | OK: empty url | 0.01s\n2026-05-27 13:22:06 | T0 | fetch_url | chat: What's going on on Reddit? | {} | OK: empty url | 0.01s\n2026-05-27 13:22:14 | T0 | web_search | chat: Search r/LocalLLaMA right now | {\"query\": \"r/LocalLLaMA reddit latest posts\"} | OK: [WEB SEARCH: 'r/LocalLLaMA reddit latest posts'] No results found. | 0.35s\n2026-05-27 13:22:16 | T0 | fetch_url | chat: Search r/LocalLLaMA right now | {\"url\": \"https://old.reddit.com/r/LocalLLaMA/hot/.json\", \"reason\": \"fetch latest hot posts from r/LocalLLaMA via Reddit JSON API\", \"max_chars\": 3000} | OK: {\"kind\": \"Listing\", \"data\": {\"after\": \"t3_1to5fj5\", \"dist\": 25, \"modhash\": \"\", \"geo_filter\": null, \"children\": [{\"kind\": \"t3\", \"data\": {\"approved_at_utc\": null, \"subreddit\": \"LocalLLaMA\", \"selftext\":  | 0.72s\n"
+    }
+  },
+  "after": {
+    "mode": "daemon-http-after-flag-on",
+    "started_log_offsets": {
+      "cognition.log": 19840050,
+      "actions.log": 5364984
+    },
+    "results": [
+      {
+        "index": 1,
+        "probe": "Check Reddit then",
+        "http_status": 200,
+        "elapsed_ms": 1072.395,
+        "transcript_len": 850,
+        "transcript_preview": "[memory context] Recent Reddit substrate rows:\n- reddit/r/pennystocks at 2026-05-27T18:00:35.701371+00:00 (23 pts, 1 comments): [REDDIT r/pennystocks post 1tpcyyp] Trying to find the best penny stocks to buy now but most analysis makes zero sense to me -- how did you learn? (23 pts, 1 comments, flair: 𝑺𝒕𝒐𝒄𝒌 𝑰𝒏𝒇𝒐 :stonk:)\n- reddit/r/LocalLLaMA at 2026-05-27T17:48:44.155175+00:00 (52 pts, 23 comments): [REDDIT r/LocalLLaMA post 1tp6pg7] I ran 8 open-weight models as agents in a persistent MMO for 10 days. Here's the 93k event dataset and some things that  (52 pts, 23 comments, flair: Resources)\n- reddit/r/h1b at 2026-05-27T17:48:44.020224+00:00 (1 pts, 0 comments): [REDDIT r/h1b post 1tpcqil] CoS using form I-539 (1 pts, 0 comments)\n[fresh validation] No fresh source was used for this answer",
+        "tool_calls": [],
+        "error": null
+      },
+      {
+        "index": 2,
+        "probe": "Just let me know what's going on in Reddit in localllama",
+        "http_status": 200,
+        "elapsed_ms": 51.393,
+        "transcript_len": 856,
+        "transcript_preview": "[memory context] Recent Reddit substrate rows:\n- reddit/r/LocalLLaMA at 2026-05-27T17:48:44.155175+00:00 (52 pts, 23 comments): [REDDIT r/LocalLLaMA post 1tp6pg7] I ran 8 open-weight models as agents in a persistent MMO for 10 days. Here's the 93k event dataset and some things that  (52 pts, 23 comments, flair: Resources)\n- reddit/r/LocalLLaMA at 2026-05-27T16:49:49.276717+00:00 (41 pts, 28 comments): [REDDIT r/LocalLLaMA post 1tp9d1w] KV cache quant benchmarks: q5 &amp; q6 are underrated, q8/q4 is bad, TCQ has a niche (41 pts, 28 comments, flair: Discussion)\n- reddit/r/LocalLLaMA at 2026-05-27T11:11:51.536374+00:00 (41 pts, 10 comments): [REDDIT r/LocalLLaMA post 1tp0vk1] Info: Nvidia Cuda 13.3 landed (41 pts, 10 comments, flair: News)\n[fresh validation] No fresh source was used for this ",
+        "tool_calls": [],
+        "error": null
+      },
+      {
+        "index": 3,
+        "probe": "What's going on on Reddit?",
+        "http_status": 200,
+        "elapsed_ms": 134.075,
+        "transcript_len": 850,
+        "transcript_preview": "[memory context] Recent Reddit substrate rows:\n- reddit/r/pennystocks at 2026-05-27T18:00:35.701371+00:00 (23 pts, 1 comments): [REDDIT r/pennystocks post 1tpcyyp] Trying to find the best penny stocks to buy now but most analysis makes zero sense to me -- how did you learn? (23 pts, 1 comments, flair: 𝑺𝒕𝒐𝒄𝒌 𝑰𝒏𝒇𝒐 :stonk:)\n- reddit/r/LocalLLaMA at 2026-05-27T17:48:44.155175+00:00 (52 pts, 23 comments): [REDDIT r/LocalLLaMA post 1tp6pg7] I ran 8 open-weight models as agents in a persistent MMO for 10 days. Here's the 93k event dataset and some things that  (52 pts, 23 comments, flair: Resources)\n- reddit/r/h1b at 2026-05-27T17:48:44.020224+00:00 (1 pts, 0 comments): [REDDIT r/h1b post 1tpcqil] CoS using form I-539 (1 pts, 0 comments)\n[fresh validation] No fresh source was used for this answer",
+        "tool_calls": [],
+        "error": null
+      },
+      {
+        "index": 4,
+        "probe": "You have access to Reddit data",
+        "http_status": 200,
+        "elapsed_ms": 108.089,
+        "transcript_len": 850,
+        "transcript_preview": "[memory context] Recent Reddit substrate rows:\n- reddit/r/pennystocks at 2026-05-27T18:00:35.701371+00:00 (23 pts, 1 comments): [REDDIT r/pennystocks post 1tpcyyp] Trying to find the best penny stocks to buy now but most analysis makes zero sense to me -- how did you learn? (23 pts, 1 comments, flair: 𝑺𝒕𝒐𝒄𝒌 𝑰𝒏𝒇𝒐 :stonk:)\n- reddit/r/LocalLLaMA at 2026-05-27T17:48:44.155175+00:00 (52 pts, 23 comments): [REDDIT r/LocalLLaMA post 1tp6pg7] I ran 8 open-weight models as agents in a persistent MMO for 10 days. Here's the 93k event dataset and some things that  (52 pts, 23 comments, flair: Resources)\n- reddit/r/h1b at 2026-05-27T17:48:44.020224+00:00 (1 pts, 0 comments): [REDDIT r/h1b post 1tpcqil] CoS using form I-539 (1 pts, 0 comments)\n[fresh validation] No fresh source was used for this answer",
+        "tool_calls": [],
+        "error": null
+      },
+      {
+        "index": 5,
+        "probe": "What were we talking about last evening?",
+        "http_status": 200,
+        "elapsed_ms": 321.141,
+        "transcript_len": 371,
+        "transcript_preview": "[memory context] No usable recall returned from TELEGRAM_SEMANTIC: SUCCESS (no_rows).\n[memory context] No usable recall returned from ENTITY_INDEX: ERROR (adapter_missing).\n[memory context] No usable recall returned from LIVED_EPISODES: ERROR (adapter_missing).\n[fresh validation] No fresh source was used for this answer; the substrate is not being framed as unreliable.",
+        "tool_calls": [],
+        "error": null
+      },
+      {
+        "index": 6,
+        "probe": "Search r/LocalLLaMA right now",
+        "http_status": 200,
+        "elapsed_ms": 1315.783,
+        "transcript_len": 0,
+        "transcript_preview": "",
+        "tool_calls": [],
+        "error": null
+      },
+      {
+        "index": 7,
+        "probe": "Really?",
+        "http_status": 200,
+        "elapsed_ms": 17.435,
+        "transcript_len": 0,
+        "transcript_preview": "",
+        "tool_calls": [],
+        "error": null
+      },
+      {
+        "index": 8,
+        "probe": "Are you sure?",
+        "http_status": 200,
+        "elapsed_ms": 13.835,
+        "transcript_len": 0,
+        "transcript_preview": "",
+        "tool_calls": [],
+        "error": null
+      }
+    ],
+    "logs": {
+      "cognition.log": "",
+      "actions.log": ""
+    }
+  },
+  "derived": {
+    "baseline_dispatcher_cognition_lines": [],
+    "baseline_action_web_fetch_lines": [
+      "2026-05-27 13:21:38 | T0 | web_search | chat: Just let me know what's going on in Reddit in localllama | {\"query\": \"Reddit localllama recent activity\"} | OK: [WEB SEARCH: 'Reddit localllama recent activity'] No results found. | 0.37s",
+      "2026-05-27 13:21:40 | T0 | web_search | chat: Just let me know what's going on in Reddit in localllama | {\"query\": \"Reddit localLLaMA community recent posts\"} | OK: [WEB SEARCH: 'Reddit localLLaMA community recent posts'] No results found. | 0.33s",
+      "2026-05-27 13:21:42 | T0 | web_search | chat: Just let me know what's going on in Reddit in localllama | {\"query\": \"site:reddit.com localLLaMA\"} | OK: [WEB SEARCH: 'site:reddit.com localLLaMA'] No results found. | 0.53s",
+      "2026-05-27 13:21:43 | T0 | web_search | chat: Just let me know what's going on in Reddit in localllama | {\"query\": \"Reddit local llama AI\"} | OK: [WEB SEARCH: 'Reddit local llama AI'] No results found. | 0.37s",
+      "2026-05-27 13:21:46 | T0 | web_search | chat: What's going on on Reddit? | {\"query\": \"what is trending on reddit today\"} | OK: [WEB SEARCH: 'what is trending on reddit today'] No results found. | 0.39s",
+      "2026-05-27 13:22:03 | T0 | web_search | chat: What's going on on Reddit? | {\"query\": \"reddit front page trending topics today\"} | OK: [WEB SEARCH: 'reddit front page trending topics today'] No results found. | 0.34s",
+      "2026-05-27 13:22:05 | T0 | fetch_url | chat: What's going on on Reddit? | {} | OK: empty url | 0.01s",
+      "2026-05-27 13:22:06 | T0 | fetch_url | chat: What's going on on Reddit? | {} | OK: empty url | 0.01s",
+      "2026-05-27 13:22:14 | T0 | web_search | chat: Search r/LocalLLaMA right now | {\"query\": \"r/LocalLLaMA reddit latest posts\"} | OK: [WEB SEARCH: 'r/LocalLLaMA reddit latest posts'] No results found. | 0.35s",
+      "2026-05-27 13:22:16 | T0 | fetch_url | chat: Search r/LocalLLaMA right now | {\"url\": \"https://old.reddit.com/r/LocalLLaMA/hot/.json\", \"reason\": \"fetch latest hot posts from r/LocalLLaMA via Reddit JSON API\", \"max_chars\": 3000} | OK: {\"kind\": \"Listing\", \"data\": {\"after\": \"t3_1to5fj5\", \"dist\": 25, \"modhash\": \"\", \"geo_filter\": null, \"children\": [{\"kind\": \"t3\", \"data\": {\"approved_at_utc\": null, \"subreddit\": \"LocalLLaMA\", \"selftext\":  | 0.72s"
+    ],
+    "after_dispatcher_maez_log_lines": [
+      "2026-05-27 13:22:58 [INFO] core.brain.brain_loop: dispatcher_path_entry surface=web bond_id=rohit chat_id=finding19-daemon-after-1 flag_state=enabled recovery_seed_present=False",
+      "2026-05-27 13:22:58 [INFO] core.brain.brain_loop: dispatcher_layer0_emit surface=web bond_id=rohit composition_hint=SUBSTRATE_ONLY provenance_framing=SUBSTRATE_ONLY_NO_FRESH_VALIDATION inventory_witness=UNKNOWN substrate_source_count=1 external_source_count=0 elapsed_ms=848.756",
+      "2026-05-27 13:22:58 [WARNING] core.brain.brain_loop: dispatcher_layer0_budget_breach surface=web elapsed_ms=848.756 budget_ms=50 cold_or_warm=warm",
+      "2026-05-27 13:22:58 [INFO] core.brain.brain_loop: dispatcher_layer2_repair surface=web bond_id=rohit result=unchanged refusal_reason=",
+      "2026-05-27 13:22:59 [INFO] core.brain.brain_loop: dispatcher_layer1_branch surface=web source=REDDIT_SOURCE outcome=rows row_count=1 elapsed_ms=209.332",
+      "2026-05-27 13:22:59 [INFO] core.brain.brain_loop: dispatcher_layer1_fanout surface=web fanout_generation_id=90f5224f7a3a423394eb01146a6593cc branch_count=1 seal_state=clean total_elapsed_ms=209.494",
+      "2026-05-27 13:22:59 [INFO] core.brain.brain_loop: dispatcher_path_exit surface=web bond_id=rohit chat_id=finding19-daemon-after-1 path_taken=dispatcher total_elapsed_ms=1059.586",
+      "2026-05-27 13:22:59 [INFO] core.brain.brain_loop: dispatcher_path_entry surface=web bond_id=rohit chat_id=finding19-daemon-after-2 flag_state=enabled recovery_seed_present=False",
+      "2026-05-27 13:22:59 [INFO] core.brain.brain_loop: dispatcher_layer0_emit surface=web bond_id=rohit composition_hint=SUBSTRATE_ONLY provenance_framing=SUBSTRATE_ONLY_NO_FRESH_VALIDATION inventory_witness=UNKNOWN substrate_source_count=1 external_source_count=0 elapsed_ms=26.486",
+      "2026-05-27 13:22:59 [INFO] core.brain.brain_loop: dispatcher_layer2_repair surface=web bond_id=rohit result=unchanged refusal_reason=",
+      "2026-05-27 13:22:59 [INFO] core.brain.brain_loop: dispatcher_layer1_branch surface=web source=REDDIT_SOURCE outcome=rows row_count=1 elapsed_ms=23.484",
+      "2026-05-27 13:22:59 [INFO] core.brain.brain_loop: dispatcher_layer1_fanout surface=web fanout_generation_id=0bdd2928f2c54dc8ac289e59a18bfbab branch_count=1 seal_state=clean total_elapsed_ms=23.655",
+      "2026-05-27 13:22:59 [INFO] core.brain.brain_loop: dispatcher_path_exit surface=web bond_id=rohit chat_id=finding19-daemon-after-2 path_taken=dispatcher total_elapsed_ms=50.453",
+      "2026-05-27 13:22:59 [INFO] core.brain.brain_loop: dispatcher_path_entry surface=web bond_id=rohit chat_id=finding19-daemon-after-3 flag_state=enabled recovery_seed_present=False",
+      "2026-05-27 13:22:59 [INFO] core.brain.brain_loop: dispatcher_layer0_emit surface=web bond_id=rohit composition_hint=SUBSTRATE_ONLY provenance_framing=SUBSTRATE_ONLY_NO_FRESH_VALIDATION inventory_witness=UNKNOWN substrate_source_count=1 external_source_count=0 elapsed_ms=13.174",
+      "2026-05-27 13:22:59 [INFO] core.brain.brain_loop: dispatcher_layer2_repair surface=web bond_id=rohit result=unchanged refusal_reason=",
+      "2026-05-27 13:22:59 [INFO] core.brain.brain_loop: dispatcher_layer1_branch surface=web source=REDDIT_SOURCE outcome=rows row_count=1 elapsed_ms=119.701",
+      "2026-05-27 13:22:59 [INFO] core.brain.brain_loop: dispatcher_layer1_fanout surface=web fanout_generation_id=f6310954e6d448d4b4a8327c6ec49de9 branch_count=1 seal_state=clean total_elapsed_ms=119.856",
+      "2026-05-27 13:22:59 [INFO] core.brain.brain_loop: dispatcher_path_exit surface=web bond_id=rohit chat_id=finding19-daemon-after-3 path_taken=dispatcher total_elapsed_ms=133.300",
+      "2026-05-27 13:22:59 [INFO] core.brain.brain_loop: dispatcher_path_entry surface=web bond_id=rohit chat_id=finding19-daemon-after-4 flag_state=enabled recovery_seed_present=False",
+      "2026-05-27 13:22:59 [INFO] core.brain.brain_loop: dispatcher_layer0_emit surface=web bond_id=rohit composition_hint=SUBSTRATE_ONLY provenance_framing=SUBSTRATE_ONLY_NO_FRESH_VALIDATION inventory_witness=UNKNOWN substrate_source_count=1 external_source_count=0 elapsed_ms=12.577",
+      "2026-05-27 13:22:59 [INFO] core.brain.brain_loop: dispatcher_layer2_repair surface=web bond_id=rohit result=unchanged refusal_reason=",
+      "2026-05-27 13:22:59 [INFO] core.brain.brain_loop: dispatcher_layer1_branch surface=web source=REDDIT_SOURCE outcome=rows row_count=1 elapsed_ms=94.255",
+      "2026-05-27 13:23:00 [INFO] core.brain.brain_loop: dispatcher_layer1_fanout surface=web fanout_generation_id=727b4b0887a44333898637aa196a387d branch_count=1 seal_state=clean total_elapsed_ms=94.417",
+      "2026-05-27 13:23:00 [INFO] core.brain.brain_loop: dispatcher_path_exit surface=web bond_id=rohit chat_id=finding19-daemon-after-4 path_taken=dispatcher total_elapsed_ms=107.273",
+      "2026-05-27 13:23:00 [INFO] core.brain.brain_loop: dispatcher_path_entry surface=web bond_id=rohit chat_id=finding19-daemon-after-5 flag_state=enabled recovery_seed_present=False",
+      "2026-05-27 13:23:00 [INFO] core.brain.brain_loop: dispatcher_layer0_emit surface=web bond_id=rohit composition_hint=SUBSTRATE_ONLY provenance_framing=SUBSTRATE_ONLY_NO_FRESH_VALIDATION inventory_witness=UNKNOWN substrate_source_count=3 external_source_count=0 elapsed_ms=14.141",
+      "2026-05-27 13:23:00 [INFO] core.brain.brain_loop: dispatcher_layer2_repair surface=web bond_id=rohit result=unchanged refusal_reason=",
+      "2026-05-27 13:23:00 [INFO] core.brain.brain_loop: dispatcher_layer1_branch surface=web source=TELEGRAM_SEMANTIC outcome=rows row_count=1 elapsed_ms=304.311",
+      "2026-05-27 13:23:00 [INFO] core.brain.brain_loop: dispatcher_layer1_branch surface=web source=ENTITY_INDEX outcome=error row_count=0 elapsed_ms=0.000",
+      "2026-05-27 13:23:00 [INFO] core.brain.brain_loop: dispatcher_layer1_branch surface=web source=LIVED_EPISODES outcome=error row_count=0 elapsed_ms=0.000",
+      "2026-05-27 13:23:00 [INFO] core.brain.brain_loop: dispatcher_layer1_fanout surface=web fanout_generation_id=524f83b9ad6946ee940c9118c0528eb6 branch_count=3 seal_state=partial_failure total_elapsed_ms=304.478",
+      "2026-05-27 13:23:00 [INFO] core.brain.brain_loop: dispatcher_path_exit surface=web bond_id=rohit chat_id=finding19-daemon-after-5 path_taken=dispatcher total_elapsed_ms=318.888",
+      "2026-05-27 13:23:00 [INFO] core.brain.brain_loop: dispatcher_path_entry surface=web bond_id=rohit chat_id=finding19-daemon-after-6 flag_state=enabled recovery_seed_present=False",
+      "2026-05-27 13:23:00 [INFO] core.brain.brain_loop: dispatcher_layer0_emit surface=web bond_id=rohit composition_hint=FRESH_ONLY provenance_framing=FRESH_ONLY inventory_witness=UNKNOWN substrate_source_count=0 external_source_count=1 elapsed_ms=17.949",
+      "2026-05-27 13:23:00 [INFO] core.brain.brain_loop: dispatcher_layer2_repair surface=web bond_id=rohit result=unchanged refusal_reason=",
+      "2026-05-27 13:23:00 [INFO] core.brain.brain_loop: dispatcher_layer1_fanout surface=web fanout_generation_id=921d827296984db9a280286274fd4626 branch_count=0 seal_state=clean total_elapsed_ms=0.042",
+      "2026-05-27 13:23:00 [INFO] core.brain.brain_loop: dispatcher_path_exit surface=web bond_id=rohit chat_id=finding19-daemon-after-6 path_taken=dispatcher total_elapsed_ms=18.264",
+      "2026-05-27 13:23:02 [INFO] core.brain.brain_loop: dispatcher_path_entry surface=web bond_id=rohit chat_id=finding19-daemon-after-7 flag_state=enabled recovery_seed_present=False",
+      "2026-05-27 13:23:02 [INFO] core.brain.brain_loop: dispatcher_layer0_emit surface=web bond_id=rohit composition_hint=SUBSTRATE_ONLY provenance_framing=SUBSTRATE_ONLY_NO_FRESH_VALIDATION inventory_witness=UNKNOWN substrate_source_count=3 external_source_count=0 elapsed_ms=16.438",
+      "2026-05-27 13:23:02 [INFO] core.brain.brain_loop: dispatcher_layer2_repair surface=web bond_id=rohit result=refused refusal_reason=NO_PRIOR_SPEC",
+      "2026-05-27 13:23:02 [INFO] core.brain.brain_loop: dispatcher_path_entry surface=web bond_id=rohit chat_id=finding19-daemon-after-8 flag_state=enabled recovery_seed_present=False",
+      "2026-05-27 13:23:02 [INFO] core.brain.brain_loop: dispatcher_layer0_emit surface=web bond_id=rohit composition_hint=SUBSTRATE_ONLY provenance_framing=SUBSTRATE_ONLY_NO_FRESH_VALIDATION inventory_witness=UNKNOWN substrate_source_count=3 external_source_count=0 elapsed_ms=12.858",
+      "2026-05-27 13:23:02 [INFO] core.brain.brain_loop: dispatcher_layer2_repair surface=web bond_id=rohit result=refused refusal_reason=NO_PRIOR_SPEC"
+    ],
+    "after_action_web_fetch_lines": [],
+    "after_dispatcher_cognition_lines": []
+  }
+}
