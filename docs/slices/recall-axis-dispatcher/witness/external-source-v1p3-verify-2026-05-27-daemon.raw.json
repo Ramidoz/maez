@@ -1,0 +1,115 @@
+{
+  "mode": "live user-scoped maez.service daemon HTTP /internal/brain_loop probe",
+  "date": "2026-05-27",
+  "implementation_under_test": [
+    "6634f43 docs(dispatcher): propose v1.3 amendment for substrate filtering",
+    "0271e0d docs(dispatcher): fold v1.3 substrate filtering amendment",
+    "3218f20 fix(dispatcher): filter rendered substrate sources"
+  ],
+  "service_posture": {
+    "baseline": {
+      "pid": 3257521,
+      "MAEZ_DISPATCHER_ENABLED": "absent"
+    },
+    "after_run": {
+      "pid": 3269816,
+      "MAEZ_DISPATCHER_ENABLED": "1",
+      "PYTHONFAULTHANDLER": "1"
+    },
+    "restored": {
+      "pid": 3270345,
+      "MAEZ_DISPATCHER_ENABLED_present": false,
+      "PYTHONFAULTHANDLER": "1"
+    }
+  },
+  "log_offsets": {
+    "maez_log_size_before": 49923301,
+    "actions_log_size_before": 5772712,
+    "maez_bytes_after_offset": 20761,
+    "actions_bytes_after_offset": 0
+  },
+  "probes": [
+    {
+      "idx": 1,
+      "slug": "probe1-hybrid-control",
+      "chat_id": "external-v1p3-verify-1-probe1-hybrid-control",
+      "text": "Search r/LocalLLaMA right now",
+      "status": 200,
+      "elapsed_ms": 710.58,
+      "transcript_len": 2750,
+      "transcript_head": "[memory context] Recent Reddit substrate rows:\n- reddit/r/LocalLLaMA at 2026-05-27T21:43:13.775541+00:00 (48 pts, 29 comments): [REDDIT r/LocalLLaMA post 1tpawlm] SWE-rebench Leaderboard (March, April and May 2026): GPT-5.5, Opus 4.7, Cursor (Composer 2.5), Kimi K2.6 and More (48 pts, 29 comments, flair: Other)",
+      "error": null,
+      "tool_calls_count": 0,
+      "log_summary": [
+        "dispatcher_layer0_emit composition_hint=PARALLEL provenance_framing=HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES substrate_source_count=1 external_source_count=1 elapsed_ms=111.884",
+        "dispatcher_layer1_branch source=REDDIT_SOURCE outcome=rows row_count=1 elapsed_ms=110.643",
+        "dispatcher_external_branch source=LIVE_REDDIT outcome=rows block_count=1 elapsed_ms=578.707",
+        "dispatcher_path_exit turn_seal_state=clean total_elapsed_ms=692.687"
+      ]
+    },
+    {
+      "idx": 2,
+      "slug": "probe3-substrate-control",
+      "chat_id": "external-v1p3-verify-2-probe3-substrate-control",
+      "text": "What is going on on Reddit?",
+      "status": 200,
+      "elapsed_ms": 148.949,
+      "transcript_len": 958,
+      "transcript_head": "[memory evidence] Recent Reddit substrate rows:\n- reddit/r/datascience at 2026-05-27T21:43:14.013393+00:00 (7 pts, 6 comments): [REDDIT r/datascience post 1tp5yse] Do you work in a domain where data management isn't a huge headache",
+      "error": null,
+      "tool_calls_count": 0,
+      "log_summary": [
+        "dispatcher_layer0_emit composition_hint=SUBSTRATE_ONLY provenance_framing=SUBSTRATE_ONLY_NO_FRESH_VALIDATION substrate_source_count=1 external_source_count=0 elapsed_ms=19.092",
+        "dispatcher_layer1_branch source=REDDIT_SOURCE outcome=rows row_count=1 elapsed_ms=127.516",
+        "dispatcher_path_exit turn_seal_state=clean total_elapsed_ms=147.382"
+      ]
+    },
+    {
+      "idx": 3,
+      "slug": "probe4-a1-control",
+      "chat_id": "external-v1p3-verify-3-probe4-a1-control",
+      "text": "Check r/Python for recent posts",
+      "status": 200,
+      "elapsed_ms": 799.601,
+      "transcript_len": 2017,
+      "transcript_head": "[fresh evidence] {\"kind\": \"Listing\", \"data\": {\"after\": \"t3_1tonw41\", \"dist\": 5, \"modhash\": \"\", \"geo_filter\": null, \"children\": [{\"kind\": \"t3\", \"data\": {\"approved_at_utc\": null, \"subreddit\": \"Python\"",
+      "error": null,
+      "tool_calls_count": 0,
+      "log_summary": [
+        "dispatcher_layer0_emit composition_hint=PARALLEL provenance_framing=HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES substrate_source_count=1 external_source_count=1 elapsed_ms=14.349",
+        "dispatcher_layer1_branch source=REDDIT_SOURCE outcome=empty_with_reason row_count=0 elapsed_ms=5.350",
+        "dispatcher_external_branch source=LIVE_REDDIT outcome=rows block_count=1 elapsed_ms=782.381",
+        "dispatcher_path_exit turn_seal_state=reconstructed total_elapsed_ms=798.287"
+      ]
+    },
+    {
+      "idx": 4,
+      "slug": "probe5-finding6",
+      "chat_id": "external-v1p3-verify-4-probe5-finding6",
+      "text": "What were we talking about last evening?",
+      "status": 200,
+      "elapsed_ms": 314.98,
+      "transcript_len": 1328,
+      "transcript_head": "[memory evidence] === PAST OBSERVATIONS - NOT CURRENT STATE ===\nEvery block below is a recollection from an earlier time. Each carries an 'age' attribute showing how long ago it was recorded.",
+      "error": null,
+      "tool_calls_count": 0,
+      "log_summary": [
+        "dispatcher_layer0_emit composition_hint=SUBSTRATE_ONLY provenance_framing=SUBSTRATE_ONLY_NO_FRESH_VALIDATION substrate_source_count=3 external_source_count=0 elapsed_ms=19.175",
+        "dispatcher_layer1_branch source=TELEGRAM_SEMANTIC outcome=rows row_count=1 elapsed_ms=293.788",
+        "dispatcher_layer1_branch source=ENTITY_INDEX outcome=error row_count=0 elapsed_ms=0.000",
+        "dispatcher_layer1_branch source=LIVED_EPISODES outcome=error row_count=0 elapsed_ms=0.000",
+        "dispatcher_layer1_budget_limited source=TELEGRAM_SEMANTIC truncated_blocks=1 dropped_blocks=0 original_chars=77165 capped_chars=1200",
+        "dispatcher_layer1_fanout fanout_generation_id=0bd3f6d846dc4346a03e464c1a197d4a branch_count=3 seal_state=partial_failure total_elapsed_ms=294.170",
+        "dispatcher_external_fanout fanout_generation_id=0bd3f6d846dc4346a03e464c1a197d4a branch_count=0 seal_state=clean total_elapsed_ms=294.170",
+        "dispatcher_path_exit turn_seal_state=reconstructed total_elapsed_ms=313.705"
+      ]
+    }
+  ],
+  "negative_checks": {
+    "provenance_template_mismatch_present": false,
+    "internal_brain_loop_failed_present": false,
+    "actions_log_bytes_added": 0,
+    "tool_calls_total": 0
+  },
+  "verdict": "Finding 6 closed for daemon HTTP path; Layer 1 ENTITY_INDEX and LIVED_EPISODES synchronous errors remain open as adapter-level investigation."
+}
