@@ -289,15 +289,27 @@ class Layer0Dispatcher:
 def _parse_manifest(raw: str) -> list[Archetype]:
     archetypes: list[Archetype] = []
     current_class: str | None = None
+    in_archetype_table = False
     for line in raw.splitlines():
         heading_match = re.match(r"### Class [A-Z] .+`([^`]+)`", line)
         if heading_match:
             current_class = _canonical_class_id(heading_match.group(1))
+            in_archetype_table = False
             continue
+        if line.startswith("## "):
+            current_class = None
+            in_archetype_table = False
         if current_class is None or not line.startswith("|"):
             continue
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
-        if len(cells) < 3 or cells[0] in {"Archetype", "---"}:
+        if len(cells) < 3:
+            continue
+        if cells[0] == "Archetype":
+            in_archetype_table = True
+            continue
+        if cells[0] == "---":
+            continue
+        if not in_archetype_table:
             continue
         text = cells[0]
         archetypes.append(

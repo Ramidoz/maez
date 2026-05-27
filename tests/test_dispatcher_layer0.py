@@ -69,6 +69,29 @@ class _RecallBiasedRedditEncoder(_FakeEncoder):
 
 
 class DispatcherLayer0Tests(unittest.TestCase):
+    def test_archetype_manifest_parser_stops_at_non_archetype_tables(self):
+        from core.dispatcher.layer0 import _parse_manifest
+
+        raw = """# Test Dispatcher Archetypes
+
+### Class K — `CONTRADICTION`
+
+| Archetype | Tag | Anchor |
+|---|---|---|
+| You're wrong | empirical | test |
+
+## Empirical-anchor coverage
+
+| Class | Total | Empirical | Proposed | Coverage rationale |
+|---|---|---|---|---|
+| K — CONTRADICTION | 1 | 1 | 0 | summary row |
+| **Total** | **1** | **1** | **0** | summary row |
+"""
+
+        archetypes = _parse_manifest(raw)
+
+        self.assertEqual([item.text for item in archetypes], ["You're wrong"])
+
     def test_archetype_cache_reencodes_when_manifest_or_encoder_identity_changes(self):
         from core.dispatcher.layer0 import load_archetype_index
 
