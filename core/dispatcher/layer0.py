@@ -92,6 +92,7 @@ _CONTENT_ANCHOR_RE = re.compile(
     re.IGNORECASE,
 )
 _REDDIT_ANCHOR_RE = re.compile(r"\b(reddit|local ?llama|r/[A-Za-z0-9_]+)\b", re.IGNORECASE)
+_SUBREDDIT_ANCHOR_RE = re.compile(r"\br/[A-Za-z0-9_][A-Za-z0-9_]{1,20}\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -213,6 +214,7 @@ class Layer0Dispatcher:
         explicit_memory = bool(_EXPLICIT_MEMORY_RE.search(utterance))
         content_anchored = bool(_CONTENT_ANCHOR_RE.search(utterance))
         source_anchor_candidates = _source_anchor_candidates(utterance)
+        live_reddit_anchor = _has_subreddit_anchor(utterance)
         scores = self.score_classes(utterance)
         accepted = _accepted_classes(scores, self.thresholds)
         limitations = list(inventory.availability_limitations)
@@ -220,7 +222,19 @@ class Layer0Dispatcher:
         if not accepted and scores and scores[0].score >= self.thresholds.no_match_below:
             _append_once(limitations, AvailabilityLimitation.SCORING_LOW_CONFIDENCE)
 
-        if explicit_fetch and not explicit_memory:
+        if live_reddit_anchor and not explicit_memory:
+            substrate_sources = _available_substrates(
+                inventory,
+                _substrate_candidates(source_anchor_candidates),
+            )
+            external_sources = [ExternalSource.LIVE_REDDIT]
+            if substrate_sources:
+                hint = CompositionHint.PARALLEL
+                framing = ProvenanceFraming.HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES
+            else:
+                hint = CompositionHint.FRESH_ONLY
+                framing = ProvenanceFraming.FRESH_ONLY
+        elif explicit_fetch and not explicit_memory:
             substrate_sources: list[SubstrateSource] = []
             external_sources = [ExternalSource.WEB_SEARCH]
             hint = CompositionHint.FRESH_ONLY
@@ -253,6 +267,7 @@ class Layer0Dispatcher:
                     "C_HYBRID_CONTENT_ANCHORED", accepted
                 ),
                 source_anchor_candidates=source_anchor_candidates,
+                live_reddit_anchor=live_reddit_anchor,
                 limitations=limitations,
             )
 
@@ -359,6 +374,7 @@ def _fallback_spec_shape(
     *,
     content_anchored: bool,
     source_anchor_candidates: Sequence[SubstrateSource],
+    live_reddit_anchor: bool,
     limitations: list[AvailabilityLimitation],
 ) -> tuple[
     list[SubstrateSource],
@@ -378,12 +394,17 @@ def _fallback_spec_shape(
         inventory,
         _substrate_candidates(source_anchor_candidates),
     )
-    external = [ExternalSource.WEB_SEARCH] if content_anchored else []
+    if live_reddit_anchor:
+        external = [ExternalSource.LIVE_REDDIT]
+    elif source_anchor_candidates:
+        external = []
+    else:
+        external = [ExternalSource.WEB_SEARCH] if content_anchored else []
     if external:
         return (
             substrate,
             external,
-            CompositionHint.SUBSTRATE_THEN_FETCH_IF_STALE,
+            CompositionHint.PARALLEL if live_reddit_anchor else CompositionHint.SUBSTRATE_THEN_FETCH_IF_STALE,
             ProvenanceFraming.HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES,
         )
     return (
@@ -413,6 +434,10 @@ def _source_anchor_candidates(utterance: str) -> list[SubstrateSource]:
     if _REDDIT_ANCHOR_RE.search(utterance):
         return [SubstrateSource.REDDIT_SOURCE]
     return []
+
+
+def _has_subreddit_anchor(utterance: str) -> bool:
+    return bool(_SUBREDDIT_ANCHOR_RE.search(utterance))
 
 
 def _substrate_candidates(source_anchor_candidates: Sequence[SubstrateSource]) -> list[SubstrateSource]:

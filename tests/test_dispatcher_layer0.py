@@ -323,6 +323,166 @@ class DispatcherLayer0Tests(unittest.TestCase):
 
         self.assertEqual(spec.substrate_sources, [SubstrateSource.REDDIT_SOURCE])
 
+    def test_live_reddit_subreddit_anchor_selects_substrate_and_live_reddit(self):
+        from core.dispatcher.inventory import InventorySummary
+        from core.dispatcher.layer0 import Layer0Dispatcher, load_archetype_index
+        from core.dispatcher.spec import (
+            CompositionHint,
+            ExternalSource,
+            InventoryWitness,
+            ProvenanceFraming,
+            SourceAvailability,
+            SubstrateSource,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "archetypes.md"
+            _write_manifest(manifest)
+            encoder = _FakeEncoder()
+            index = load_archetype_index(
+                manifest_path=manifest,
+                cache_path=Path(tmp) / "cache.json",
+                encoder=encoder,
+            )
+            inventory = InventorySummary(
+                inventory_witness=InventoryWitness.PRESENT,
+                source_availability={
+                    SubstrateSource.REDDIT_SOURCE: SourceAvailability.EXECUTABLE_PRESENT,
+                    ExternalSource.LIVE_REDDIT: SourceAvailability.EXECUTABLE_PRESENT,
+                    ExternalSource.WEB_SEARCH: SourceAvailability.EXECUTABLE_PRESENT,
+                },
+                availability_limitations=[],
+                generated_at=1.0,
+            )
+
+            spec = Layer0Dispatcher(index=index, encoder=encoder).emit_spec(
+                "Search r/LocalLLaMA right now",
+                surface="telegram",
+                inventory=inventory,
+            )
+
+        self.assertEqual(spec.substrate_sources, [SubstrateSource.REDDIT_SOURCE])
+        self.assertEqual(spec.external_sources, [ExternalSource.LIVE_REDDIT])
+        self.assertEqual(spec.composition_hint, CompositionHint.PARALLEL)
+        self.assertEqual(
+            spec.provenance_framing,
+            ProvenanceFraming.HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES,
+        )
+
+    def test_subreddit_anchor_without_search_verb_selects_live_reddit_hybrid(self):
+        from core.dispatcher.inventory import InventorySummary
+        from core.dispatcher.layer0 import Layer0Dispatcher, load_archetype_index
+        from core.dispatcher.spec import (
+            ExternalSource,
+            InventoryWitness,
+            SourceAvailability,
+            SubstrateSource,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "archetypes.md"
+            _write_manifest(manifest)
+            encoder = _FakeEncoder()
+            index = load_archetype_index(
+                manifest_path=manifest,
+                cache_path=Path(tmp) / "cache.json",
+                encoder=encoder,
+            )
+            inventory = InventorySummary(
+                inventory_witness=InventoryWitness.PRESENT,
+                source_availability={
+                    SubstrateSource.REDDIT_SOURCE: SourceAvailability.EXECUTABLE_PRESENT,
+                    ExternalSource.LIVE_REDDIT: SourceAvailability.EXECUTABLE_PRESENT,
+                    ExternalSource.WEB_SEARCH: SourceAvailability.EXECUTABLE_PRESENT,
+                },
+                availability_limitations=[],
+                generated_at=1.0,
+            )
+
+            spec = Layer0Dispatcher(index=index, encoder=encoder).emit_spec(
+                "What's on r/LocalLLaMA?",
+                surface="telegram",
+                inventory=inventory,
+            )
+
+        self.assertEqual(spec.substrate_sources, [SubstrateSource.REDDIT_SOURCE])
+        self.assertEqual(spec.external_sources, [ExternalSource.LIVE_REDDIT])
+
+    def test_non_subreddit_reddit_anchor_stays_substrate_only(self):
+        from core.dispatcher.inventory import InventorySummary
+        from core.dispatcher.layer0 import Layer0Dispatcher, load_archetype_index
+        from core.dispatcher.spec import (
+            ExternalSource,
+            InventoryWitness,
+            SourceAvailability,
+            SubstrateSource,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "archetypes.md"
+            _write_manifest(manifest)
+            encoder = _FakeEncoder()
+            index = load_archetype_index(
+                manifest_path=manifest,
+                cache_path=Path(tmp) / "cache.json",
+                encoder=encoder,
+            )
+            inventory = InventorySummary(
+                inventory_witness=InventoryWitness.PRESENT,
+                source_availability={
+                    SubstrateSource.REDDIT_SOURCE: SourceAvailability.EXECUTABLE_PRESENT,
+                    ExternalSource.LIVE_REDDIT: SourceAvailability.EXECUTABLE_PRESENT,
+                    ExternalSource.WEB_SEARCH: SourceAvailability.EXECUTABLE_PRESENT,
+                },
+                availability_limitations=[],
+                generated_at=1.0,
+            )
+
+            spec = Layer0Dispatcher(index=index, encoder=encoder).emit_spec(
+                "What's going on on Reddit?",
+                surface="telegram",
+                inventory=inventory,
+            )
+
+        self.assertEqual(spec.substrate_sources, [SubstrateSource.REDDIT_SOURCE])
+        self.assertEqual(spec.external_sources, [])
+
+    def test_generic_fresh_search_selects_web_search_not_live_reddit(self):
+        from core.dispatcher.inventory import InventorySummary
+        from core.dispatcher.layer0 import Layer0Dispatcher, load_archetype_index
+        from core.dispatcher.spec import (
+            ExternalSource,
+            InventoryWitness,
+            SourceAvailability,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "archetypes.md"
+            _write_manifest(manifest)
+            encoder = _FakeEncoder()
+            index = load_archetype_index(
+                manifest_path=manifest,
+                cache_path=Path(tmp) / "cache.json",
+                encoder=encoder,
+            )
+            inventory = InventorySummary(
+                inventory_witness=InventoryWitness.PRESENT,
+                source_availability={
+                    ExternalSource.LIVE_REDDIT: SourceAvailability.EXECUTABLE_PRESENT,
+                    ExternalSource.WEB_SEARCH: SourceAvailability.EXECUTABLE_PRESENT,
+                },
+                availability_limitations=[],
+                generated_at=1.0,
+            )
+
+            spec = Layer0Dispatcher(index=index, encoder=encoder).emit_spec(
+                "Search Qwen online",
+                surface="telegram",
+                inventory=inventory,
+            )
+
+        self.assertEqual(spec.external_sources, [ExternalSource.WEB_SEARCH])
+
 
 if __name__ == "__main__":
     unittest.main()
