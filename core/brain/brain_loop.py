@@ -185,28 +185,10 @@ def _dispatcher_memory_manager():
 
 
 def _dispatcher_inventory_summary():
-    from core.dispatcher.spec import (
-        AvailabilityLimitation,
-        ExternalSource,
-        InventoryWitness,
-        SourceAvailability,
-        SubstrateSource,
-    )
+    from core.dispatcher.inventory import InventoryRegistry
+    from core.dispatcher.spec import ExternalSource, SubstrateSource
 
-    return {
-        "inventory_witness": InventoryWitness.UNKNOWN,
-        "source_availability": {
-            **{
-                source: SourceAvailability.EXECUTABLE_UNKNOWN
-                for source in SubstrateSource
-            },
-            **{
-                source: SourceAvailability.EXECUTABLE_UNKNOWN
-                for source in ExternalSource
-            },
-        },
-        "availability_limitations": [AvailabilityLimitation.INVENTORY_UNKNOWN],
-    }
+    return InventoryRegistry().summarize([*SubstrateSource, *ExternalSource]).to_spec_fields()
 
 
 def _dispatcher_recall_adapters(user_text: str):

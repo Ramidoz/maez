@@ -229,6 +229,29 @@ class DispatcherWiring(unittest.TestCase):
 
         self.assertEqual(len(created), 1)
 
+    def test_dispatcher_inventory_summary_uses_reserved_registry(self):
+        from core import brain_loop
+        from core.dispatcher.spec import (
+            AvailabilityLimitation,
+            SourceAvailability,
+            SubstrateSource,
+        )
+
+        summary = brain_loop._dispatcher_inventory_summary()
+
+        self.assertEqual(
+            summary["source_availability"][SubstrateSource.ENTITY_INDEX],
+            SourceAvailability.RESERVED_UNAVAILABLE,
+        )
+        self.assertEqual(
+            summary["source_availability"][SubstrateSource.LIVED_EPISODES],
+            SourceAvailability.RESERVED_UNAVAILABLE,
+        )
+        self.assertIn(
+            AvailabilityLimitation.RESERVED_SOURCE_UNAVAILABLE,
+            summary["availability_limitations"],
+        )
+
     def test_dispatcher_pipeline_uses_reddit_capable_fanout_budget(self):
         from core import brain_loop
         from core.dispatcher.external_sources import ExternalFanoutResult
