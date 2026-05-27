@@ -411,7 +411,7 @@ class DispatcherExternalSourceFanoutTests(unittest.TestCase):
         self.assertTrue(result.branch_results[0].late_result_ignored)
         self.assertEqual(result.fresh_blocks, ())
 
-    def test_no_free_form_string_reaches_source_summary_text(self):
+    def test_unmapped_adapter_exception_uses_unclassified_not_network_error(self):
         from core.dispatcher.external_sources import ExternalFanout
         from core.dispatcher.spec import ExternalErrorClass, ExternalSource, ExternalBranchStatus
 
@@ -428,8 +428,35 @@ class DispatcherExternalSourceFanoutTests(unittest.TestCase):
         )
 
         self.assertEqual(result.branch_results[0].status, ExternalBranchStatus.ERROR)
-        self.assertEqual(result.branch_results[0].error_class, ExternalErrorClass.NETWORK_ERROR)
+        self.assertEqual(result.branch_results[0].error_class, ExternalErrorClass.UNCLASSIFIED)
         self.assertNotIn("SECRET RAW", json.dumps(result.to_dict(), sort_keys=True))
+
+    def test_fresh_block_timestamp_uses_adapter_request_timestamp(self):
+        from core.dispatcher.external_sources import ExternalAdapterPayload, ExternalFanout
+        from core.dispatcher.spec import ExternalSource, ExternalBranchStatus
+
+        seen_request_timestamp = []
+
+        def adapter(_source, request):
+            seen_request_timestamp.append(request.retrieval_timestamp)
+            time.sleep(0.01)
+            return ExternalAdapterPayload(
+                text="fresh evidence",
+                egress_diagnostic_id="diag-timestamp",
+                retrieval_timestamp=request.retrieval_timestamp,
+            )
+
+        result = ExternalFanout(
+            adapters={ExternalSource.WEB_SEARCH: adapter}
+        ).run(
+            _spec(ExternalSource.WEB_SEARCH),
+            utterance="search the web",
+            conversation_state={},
+            fanout_generation_id="seal-timestamp",
+        )
+
+        self.assertEqual(result.branch_results[0].status, ExternalBranchStatus.SUCCESS)
+        self.assertEqual(result.fresh_blocks[0].retrieval_timestamp, seen_request_timestamp[0])
 
     def test_external_sources_does_not_import_embedder_or_chroma(self):
         source = Path("core/dispatcher/external_sources.py").read_text(encoding="utf-8")

@@ -143,6 +143,7 @@ class ExternalAdapterPayload:
     egress_diagnostic_id: str
     freshness: FreshnessClass = FreshnessClass.LIVE_FETCH
     prompt_cost: int | None = None
+    retrieval_timestamp: str | None = None
 
 
 ExternalAdapter = Callable[[ExternalSource, ExternalAdapterRequest], ExternalAdapterPayload]
@@ -419,7 +420,7 @@ class ExternalFanout:
                 branch_id=branch_id,
                 source=source,
                 status=ExternalBranchStatus.ERROR,
-                error_class=ExternalErrorClass.NETWORK_ERROR,
+                error_class=ExternalErrorClass.UNCLASSIFIED,
                 elapsed_ms=elapsed_ms,
             )
 
@@ -435,7 +436,7 @@ class ExternalFanout:
         block = FreshBlock(
             source=source,
             text=payload.text[:MAX_FRESH_CHARS_PER_SOURCE],
-            retrieval_timestamp=_utc_now_iso(),
+            retrieval_timestamp=payload.retrieval_timestamp or _utc_now_iso(),
             freshness=payload.freshness,
             prompt_cost=payload.prompt_cost
             if payload.prompt_cost is not None
@@ -504,7 +505,11 @@ def _web_search_adapter(
             error_class=ExternalErrorClass.UNCLASSIFIED,
             limitation=AvailabilityLimitation.FRESH_ATTEMPT_FAILED,
         )
-    return ExternalAdapterPayload(text=text, egress_diagnostic_id=diagnostic_id)
+    return ExternalAdapterPayload(
+        text=text,
+        egress_diagnostic_id=diagnostic_id,
+        retrieval_timestamp=request.retrieval_timestamp,
+    )
 
 
 def _latest_diagnostic_id_after(
@@ -547,7 +552,10 @@ def _live_reddit_adapter(
         caller="core.dispatcher.external_sources.live_reddit",
         timeout_s=5.0,
     )
-    return _payload_from_fetch_result(fetched)
+    return _payload_from_fetch_result(
+        fetched,
+        retrieval_timestamp=request.retrieval_timestamp,
+    )
 
 
 def _fetch_url_adapter(
@@ -561,7 +569,10 @@ def _fetch_url_adapter(
         caller="core.dispatcher.external_sources.fetch_url",
         timeout_s=5.0,
     )
-    return _payload_from_fetch_result(fetched)
+    return _payload_from_fetch_result(
+        fetched,
+        retrieval_timestamp=request.retrieval_timestamp,
+    )
 
 
 def _arxiv_adapter(
@@ -575,7 +586,10 @@ def _arxiv_adapter(
         caller="core.dispatcher.external_sources.arxiv",
         timeout_s=3.0,
     )
-    return _payload_from_fetch_result(fetched)
+    return _payload_from_fetch_result(
+        fetched,
+        retrieval_timestamp=request.retrieval_timestamp,
+    )
 
 
 _DEFAULT_ADAPTERS: dict[ExternalSource, ExternalAdapter] = {
@@ -586,7 +600,11 @@ _DEFAULT_ADAPTERS: dict[ExternalSource, ExternalAdapter] = {
 }
 
 
-def _payload_from_fetch_result(result: Any) -> ExternalAdapterPayload:
+def _payload_from_fetch_result(
+    result: Any,
+    *,
+    retrieval_timestamp: str | None = None,
+) -> ExternalAdapterPayload:
     if getattr(result, "ok", False):
         text = str(getattr(result, "text", ""))
         if not text.strip():
@@ -598,6 +616,7 @@ def _payload_from_fetch_result(result: Any) -> ExternalAdapterPayload:
         return ExternalAdapterPayload(
             text=text,
             egress_diagnostic_id=str(getattr(result, "request_id", "")),
+            retrieval_timestamp=retrieval_timestamp,
         )
 
     status_code = getattr(result, "status_code", None)
