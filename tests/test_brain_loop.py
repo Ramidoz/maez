@@ -231,9 +231,11 @@ class DispatcherWiring(unittest.TestCase):
 
     def test_dispatcher_pipeline_uses_reddit_capable_fanout_budget(self):
         from core import brain_loop
+        from core.dispatcher.external_sources import ExternalFanoutResult
         from core.dispatcher.spec import (
             CompositionHint,
             CompositionSpec,
+            ExternalSource,
             InventoryWitness,
             ProvenanceFraming,
             SourceAvailability,
@@ -242,11 +244,14 @@ class DispatcherWiring(unittest.TestCase):
 
         spec = CompositionSpec(
             substrate_sources=[SubstrateSource.REDDIT_SOURCE],
-            external_sources=[],
+            external_sources=[ExternalSource.LIVE_REDDIT],
             composition_hint=CompositionHint.SUBSTRATE_ONLY,
             provenance_framing=ProvenanceFraming.SUBSTRATE_ONLY_NO_FRESH_VALIDATION,
             inventory_witness=InventoryWitness.UNKNOWN,
-            source_availability={SubstrateSource.REDDIT_SOURCE: SourceAvailability.EXECUTABLE_UNKNOWN},
+            source_availability={
+                SubstrateSource.REDDIT_SOURCE: SourceAvailability.EXECUTABLE_UNKNOWN,
+                ExternalSource.LIVE_REDDIT: SourceAvailability.EXECUTABLE_UNKNOWN,
+            },
             availability_limitations=[],
             freshness_window=None,
             trust_scope_union=None,
@@ -265,11 +270,27 @@ class DispatcherWiring(unittest.TestCase):
                 seen["branch_timeout_s"] = branch_timeout_s
                 seen["global_deadline_s"] = global_deadline_s
 
-            def run(self, spec, *, utterance, conversation_state):
+            def run(self, spec, *, utterance, conversation_state, fanout_generation_id=None):
+                seen["layer1_generation_id"] = fanout_generation_id
                 return SimpleNamespace(
                     branch_results=(),
                     recall_blocks=(),
-                    fanout_generation_id="test-generation",
+                    fanout_generation_id=fanout_generation_id,
+                    sealed_at=1.0,
+                )
+
+        class FakeExternalFanout:
+            def __init__(self, **kwargs):
+                seen["external_init"] = kwargs
+
+            def run(self, spec, *, utterance, conversation_state, fanout_generation_id):
+                seen["external_generation_id"] = fanout_generation_id
+                return ExternalFanoutResult(
+                    fanout_generation_id=fanout_generation_id,
+                    sealed_at=1.0,
+                    branch_results=(),
+                    fresh_blocks=(),
+                    availability_limitations=(),
                 )
 
         class FakeFSM:
@@ -277,23 +298,102 @@ class DispatcherWiring(unittest.TestCase):
                 return kwargs["current_spec"]
 
             def record_completed_spec(self, **kwargs):
-                pass
+                seen["recorded_spec"] = kwargs["spec"]
+
+        def fake_merge(spec_arg, layer1_result, external_result, **kwargs):
+            seen["merge_generation_ids"] = (
+                layer1_result.fanout_generation_id,
+                external_result.fanout_generation_id,
+            )
+            return SimpleNamespace(
+                prompt_block="MERGED",
+                effective_spec=spec_arg,
+                refusal_reason=None,
+                audit_envelope={},
+            )
 
         with (
             patch.object(brain_loop, "_dispatcher_index", return_value=object()),
             patch.object(brain_loop, "_dispatcher_repair_fsm", return_value=FakeFSM()),
             patch("core.dispatcher.layer0.Layer0Dispatcher", FakeLayer0),
             patch("core.dispatcher.layer1.Layer1Fanout", FakeLayer1),
+            patch("core.dispatcher.external_sources.ExternalFanout", FakeExternalFanout),
+            patch("core.dispatcher.merge.merge_fanout_results", side_effect=fake_merge),
+            patch("core.brain.brain_loop.uuid.uuid4", return_value=SimpleNamespace(hex="shared-seal")),
         ):
-            brain_loop._run_dispatcher_pipeline(
+            result = brain_loop._run_dispatcher_pipeline(
                 user_text="Check Reddit then",
                 surface="telegram",
                 bond_id="rohit",
                 chat_id="budget-test",
             )
 
+        self.assertEqual(result.transcript, "MERGED")
+        self.assertFalse(result.should_run_jarvis)
         self.assertGreaterEqual(seen["branch_timeout_s"], 0.8)
         self.assertGreaterEqual(seen["global_deadline_s"], 1.0)
+        self.assertEqual(seen["layer1_generation_id"], "shared-seal")
+        self.assertEqual(seen["external_generation_id"], "shared-seal")
+        self.assertEqual(seen["merge_generation_ids"], ("shared-seal", "shared-seal"))
+        self.assertIs(seen["recorded_spec"], spec)
+
+    def test_dispatcher_enabled_never_falls_through_to_jarvis_for_external_sources(self):
+        from core import brain_loop
+
+        with (
+            patch.dict(os.environ, {"MAEZ_DISPATCHER_ENABLED": "1"}),
+            patch.object(
+                brain_loop,
+                "_run_dispatcher_pipeline",
+                return_value=brain_loop._DispatcherPathResult(
+                    transcript="[no fresh evidence available: WEB_SEARCH:ERROR:AUTH_DENIED:FRESH_ATTEMPT_FAILED]",
+                    should_run_jarvis=False,
+                ),
+            ),
+            patch.object(
+                brain_loop,
+                "_should_run_jarvis_loop",
+                side_effect=AssertionError("JARVIS gate should not run under dispatcher-enabled RenderedTurn"),
+            ),
+        ):
+            result = run_brain_loop(
+                "Search r/LocalLLaMA right now",
+                action_engine=object(),
+                get_pipeline=lambda: None,
+                surface="web",
+            )
+
+        self.assertIn("[no fresh evidence available:", result)
+
+    def test_recovery_seed_bypasses_external_fanout(self):
+        from core import brain_loop
+
+        with (
+            patch.dict(os.environ, {"MAEZ_DISPATCHER_ENABLED": "1"}),
+            patch("core.dispatcher.external_sources.ExternalFanout.run") as external_run,
+            patch.object(brain_loop, "_run_dispatcher_pipeline") as dispatcher,
+            patch.object(brain_loop, "_llm_client") as llm_client,
+        ):
+            response = MagicMock()
+            response.message.content = "NO_RECOVERY_FOUND"
+            llm_client.chat.return_value = response
+            result = run_brain_loop(
+                "recover",
+                action_engine=MagicMock(),
+                get_pipeline=MagicMock(),
+                recovery_seed={
+                    "failed_action": "run_shell",
+                    "failed_params": {"cmd": "false"},
+                    "error": "exit=1",
+                    "original_intent": "test recovery",
+                    "recovery_depth": 1,
+                },
+                max_iters=1,
+            )
+
+        external_run.assert_not_called()
+        dispatcher.assert_not_called()
+        self.assertIsInstance(result, str)
 
     def test_dispatcher_render_includes_empty_summaries_for_partial_fanout(self):
         from core import brain_loop

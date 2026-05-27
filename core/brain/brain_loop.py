@@ -36,6 +36,8 @@ import logging
 import os
 import re as _re
 import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -354,9 +356,11 @@ def _run_dispatcher_pipeline(
     chat_id: str,
 ) -> _DispatcherPathResult:
     from core.dispatcher.inventory import InventorySummary
+    from core.dispatcher.external_sources import ExternalBranchStatus, ExternalFanout
     from core.dispatcher.layer0 import Layer0Dispatcher
     from core.dispatcher.layer1 import Layer1Fanout, RecallBranchStatus
     from core.dispatcher.layer2 import RepairRefusal
+    from core.dispatcher.merge import merge_fanout_results
 
     total_started = time.monotonic()
     logger.info(
@@ -426,16 +430,33 @@ def _run_dispatcher_pipeline(
         )
         spec = layer2_result
 
-    layer1_started = time.monotonic()
-    layer1_result = Layer1Fanout(
+    fanout_generation_id = uuid.uuid4().hex
+    fanout_started = time.monotonic()
+    conversation_state = {"bond_id": bond_id, "surface": surface, "chat_id": chat_id}
+    layer1 = Layer1Fanout(
         adapters=_dispatcher_recall_adapters(user_text),
         branch_timeout_s=0.8,
         global_deadline_s=1.0,
-    ).run(
-        spec,
-        utterance=user_text,
-        conversation_state={"bond_id": bond_id, "surface": surface, "chat_id": chat_id},
     )
+    external_fanout = ExternalFanout()
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        layer1_future = executor.submit(
+            layer1.run,
+            spec,
+            utterance=user_text,
+            conversation_state=conversation_state,
+            fanout_generation_id=fanout_generation_id,
+        )
+        external_future = executor.submit(
+            external_fanout.run,
+            spec,
+            utterance=user_text,
+            conversation_state=conversation_state,
+            fanout_generation_id=fanout_generation_id,
+        )
+        layer1_result = layer1_future.result()
+        external_result = external_future.result()
+
     for branch in layer1_result.branch_results:
         if branch.status == RecallBranchStatus.SUCCESS:
             outcome = "rows"
@@ -455,7 +476,7 @@ def _run_dispatcher_pipeline(
             len(branch.blocks),
             branch.elapsed_ms,
         )
-    total_layer1_ms = (time.monotonic() - layer1_started) * 1000
+    total_fanout_ms = (time.monotonic() - fanout_started) * 1000
     seal_state = "clean"
     if any(branch.status != RecallBranchStatus.SUCCESS for branch in layer1_result.branch_results):
         seal_state = "partial_failure"
@@ -465,33 +486,79 @@ def _run_dispatcher_pipeline(
         layer1_result.fanout_generation_id,
         len(layer1_result.branch_results),
         seal_state,
-        total_layer1_ms,
+        total_fanout_ms,
+    )
+    external_seal_state = "clean"
+    for branch in external_result.branch_results:
+        if branch.status == ExternalBranchStatus.SUCCESS:
+            outcome = "rows"
+        elif branch.status == ExternalBranchStatus.EMPTY:
+            outcome = "empty"
+        elif branch.status == ExternalBranchStatus.TIMEOUT:
+            outcome = "timeout"
+        elif branch.status == ExternalBranchStatus.RESERVED_UNAVAILABLE:
+            outcome = "reserved_skip"
+        elif branch.status == ExternalBranchStatus.PREFLIGHT_BLOCKED:
+            outcome = "preflight_blocked"
+        else:
+            outcome = "error"
+        if branch.status != ExternalBranchStatus.SUCCESS:
+            external_seal_state = "partial_failure"
+        logger.info(
+            "dispatcher_external_branch surface=%s source=%s outcome=%s block_count=%s elapsed_ms=%.3f error_class=%s empty_reason=%s",
+            surface,
+            branch.source.value,
+            outcome,
+            len(branch.blocks),
+            branch.elapsed_ms,
+            branch.error_class.value if branch.error_class else "",
+            branch.empty_reason.value if branch.empty_reason else "",
+        )
+    logger.info(
+        "dispatcher_external_fanout surface=%s fanout_generation_id=%s branch_count=%s seal_state=%s total_elapsed_ms=%.3f",
+        surface,
+        external_result.fanout_generation_id,
+        len(external_result.branch_results),
+        external_seal_state,
+        total_fanout_ms,
     )
 
-    if layer1_result.recall_blocks:
+    rendered_turn = merge_fanout_results(
+        spec,
+        layer1_result,
+        external_result,
+        utterance=user_text,
+        surface=surface,
+        timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    )
+    turn_seal_state = "clean"
+    if rendered_turn.effective_spec.to_dict() != spec.to_dict():
+        turn_seal_state = "reconstructed"
+    elif (
+        seal_state == "partial_failure"
+        or external_seal_state == "partial_failure"
+        or rendered_turn.refusal_reason is not None
+    ):
+        turn_seal_state = "partial_failure"
+
+    if rendered_turn.refusal_reason is None:
         fsm.record_completed_spec(
             bond_id=bond_id,
             surface=surface,
             conversation_id=chat_id,
-            spec=spec,
+            spec=rendered_turn.effective_spec,
         )
-    transcript = _render_dispatcher_transcript(
-        spec,
-        layer1_result,
-        user_text=user_text,
-        surface=surface,
-    )
-    should_run_jarvis = bool(spec.external_sources)
     logger.info(
-        "dispatcher_path_exit surface=%s bond_id=%s chat_id=%s path_taken=dispatcher total_elapsed_ms=%.3f",
+        "dispatcher_path_exit surface=%s bond_id=%s chat_id=%s path_taken=dispatcher turn_seal_state=%s total_elapsed_ms=%.3f",
         surface,
         bond_id,
         chat_id,
+        turn_seal_state,
         (time.monotonic() - total_started) * 1000,
     )
     return _DispatcherPathResult(
-        transcript=transcript,
-        should_run_jarvis=should_run_jarvis,
+        transcript=rendered_turn.prompt_block,
+        should_run_jarvis=False,
     )
 
 # Alias to match original module's import style (`_jarvis_re` is the
