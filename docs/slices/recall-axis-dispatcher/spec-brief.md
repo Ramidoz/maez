@@ -1,14 +1,15 @@
-# Recall-Axis Dispatcher — Spec Brief v1.3
+# Recall-Axis Dispatcher — Spec Brief v1.4
 
 **Prepared:** 2026-05-26
 **Slice:** Recall-Axis Dispatcher
-**Parent/runtime base:** `d0c3230 docs(dispatcher): fold Codex findings into v1.2`
-**Status:** v1.3 — Codex engineering pass-2 findings folded. Sections 1–4 preserve the framing half; Sections 5–11 carry the mechanics half; v1.1 folded council-pass-1 amendments; v1.2 folded Codex pass-1's 15 convergent batches; v1.3 folds Codex pass-2's six operational edge batches.
-**Review lane:** Claude covenant / architecture council (pass-1 complete) + Codex engineering panel (pass-1 and pass-2 complete; v1.2 STILL OPEN folded into v1.3).
+**Parent/runtime base:** `b71ef27 docs(dispatcher): synthesize Codex engineering pass-3`
+**Status:** v1.4 — Codex engineering pass-3 findings folded. Sections 1–4 preserve the framing half; Sections 5–11 carry the mechanics half; v1.1 folded council-pass-1 amendments; v1.2 folded Codex pass-1's 15 convergent batches; v1.3 folded Codex pass-2's six operational edge batches; v1.4 folds Codex pass-3's five remaining implementer-choice cells.
+**Review lane:** Claude covenant / architecture council (pass-1 complete) + Codex engineering panel (pass-1, pass-2, and pass-3 complete; v1.3 STILL OPEN folded into v1.4).
 **Operator:** Rohit relays and dispatches; Codex does not auto-dispatch.
 **Council pass-1 result:** all six roles RATIFY-WITH-AMENDMENTS. 5 BLOCKING, 17 Major, 16 Minor, 10 NIT. v1.1 folds 15 convergent batches; six review files preserved verbatim at `reviews/claude-council-{locke,kant,hume,buber,descartes,ohm}-pass1.md`; synthesis at `reviews/claude-council-synthesis-v1-pass1.md`.
 **Codex engineering pass-1 result:** 4 BLOCK, 2 RATIFY-WITH-AMENDMENTS. v1.1 blocked from canonicalization or implementation until folded. Six review files preserved verbatim at `reviews/codex-{peirce,arendt,huygens,pauli,ohm,lovelace-bernoulli}-pass1.md`; synthesis at `reviews/codex-engineering-synthesis-v1.1-pass1.md`.
 **Codex engineering pass-2 result:** all six seats STILL OPEN, no covenant escalation. v1.2 blocked from canonicalization until six operational edge batches were folded. Six review files preserved verbatim at `reviews/codex-{peirce,arendt,huygens,pauli,ohm,lovelace-bernoulli}-pass2.md`; synthesis at `reviews/codex-engineering-synthesis-v1.2-pass2.md`.
+**Codex engineering pass-3 result:** all six seats STILL OPEN, no covenant escalation. v1.3 blocked from canonicalization until five implementer-choice cells were folded. Six review files preserved verbatim at `reviews/codex-{peirce,arendt,huygens,pauli,ohm,lovelace-bernoulli}-pass3.md`; synthesis at `reviews/codex-engineering-synthesis-v1.3-pass3.md`.
 
 **Scope boundary (load-bearing):** This slice governs *retrieval routing and composition*. Three explicitly de-scoped surfaces, each its own slice:
 
@@ -234,6 +235,8 @@ The composition specification is structurally honest because the provenance fram
 
 `audit_assistant_text` receives the fields needed to compare rendered text against expected source-role claims: `spec_digest`, `schema_version`, `utterance_digest`, `surface`, `timestamp`, `provenance_framing`, `source_role_map`, `rendered_block_roles`, `template_id`, `template_version_hash`, `mismatch_reason`, and `refusal_reason`. `core/safety/self_claim_audit.py` receives the full envelope, including source availability and limitations, so provenance/fabrication events can be tied back to the exact spec witness.
 
+**Mismatch reason closure (new v1.4):** `mismatch_reason` is nullable. It is `null` when rendering and generation align with the expected provenance framing. When populated, it must be one of the closed `ProvenanceAuditMismatchReason` values in §6; free-form mismatch strings are forbidden. `refusal_reason` remains a `DispatcherRefusalReason` when construction/rendering refuses before model call.
+
 Until the implementation lands, D4 (Provenance Seam Visibility) is *contracted*, not enforced. v1.2 names this explicitly; canonicalization will not claim enforcement that doesn't yet exist.
 
 ### How the embedding-router informs spec construction
@@ -259,7 +262,7 @@ The embedding ranking *informs* the spec construction. v1.2 makes the scoring ca
 
 - Archetype text is encoded once into a versioned manifest (see "Intent Archetype Classes A-K"). Class scores are the max prototype cosine score for that class in v1; centroid scoring is reserved until empirical data justifies it.
 - Cosine scores are normalized only by the encoder's native vector normalization. No local rescaling is allowed unless the manifest version changes.
-- `min_accept = 0.62`; `dominance_margin = 0.08`; `multi_match_delta = 0.04`; `no_match_below = 0.50`. These are v1 seed constants, not universal truths; pass-3 may tune or require a Gold Set before canonicalization.
+- `min_accept = 0.62`; `dominance_margin = 0.08`; `multi_match_delta = 0.04`; `no_match_below = 0.50`. These are v1 seed constants, not universal truths; a final receipt check may tune or require a Gold Set before canonicalization.
 - Explicit fetch-only or recall-only lexemes override embeddings unless contradictory same-turn language asks for composition.
 - Inventory state can demote, but not invent, a source: an archetype can propose `LIVED_GRAPH`; availability can mark it `RESERVED_UNAVAILABLE`; Layer 1 cannot execute it.
 - Repair state runs after Layer 0 on repair turns and may modify the spec before Layer 1.
@@ -270,6 +273,8 @@ The embedding ranking *informs* the spec construction. v1.2 makes the scoring ca
 - A class wins outright when its score is ≥ `min_accept` and exceeds the second score by at least `dominance_margin`.
 - Classes whose scores are within `multi_match_delta` of the top accepted score are multi-match contributors. Multi-match produces a composed spec only when the legal product table can represent the combined evidence; otherwise explicit-edge lexemes win, then stable manifest order breaks the tie.
 - Stable manifest order is the class order A-K in §6. The tie-breaker is deterministic and never caller supplied.
+- Mid-band scores (`no_match_below <= top_score < min_accept`) are low-confidence fallback, not accepted class evidence. They may use explicit-edge lexemes and inventory state, but may not select a class from embedding score alone. If explicit-edge lexemes are absent, use the same source-selection rules as no-match with `inventory_witness` preserved and add `SCORING_LOW_CONFIDENCE` to `availability_limitations`.
+- Explicit source anchors normalize through the closed `SubstrateSource` / `ExternalSource` vocabularies before any source set is emitted. Reserved anchors become `RESERVED_SOURCE_UNAVAILABLE` availability limitations only. Executable anchored sources are ordered by utterance span order, then stable source-label order as tie-breaker. If a reserved class participates in an accepted-score tie, it may contribute provenance evidence but cannot become an executable source.
 - No-match (`top_score < no_match_below`) source selection:
   - `inventory_witness=PRESENT`: choose explicit source-anchor sources if any, else `TELEGRAM_SEMANTIC`, `ENTITY_INDEX`, and `LIVED_EPISODES` in that order; add `WEB_SEARCH` only when the utterance is content-anchored external-world.
   - `inventory_witness=UNKNOWN`: choose the same substrate candidates but mark `INVENTORY_UNKNOWN`; add `WEB_SEARCH` for content-anchored external-world asks unless explicit recall-only language is present.
@@ -356,6 +361,8 @@ Layer 1 uses a bounded executor with `max_parallel_branches = 6`, per-source tim
 - Executor cleanup drains completed/cancelled futures with bounded grace ≤ 25ms after prompt fallback; anything still live is quarantined from the turn output and recorded in telemetry.
 - Cancellation telemetry fields: `branch_id`, `source_label`, `deadline_kind`, `elapsed_ms`, `cancel_requested`, `cancel_observed`, `late_result_ignored`, and `generation_id`.
 
+**Fan-out seal identity (new v1.4):** Layer 1 mints `fanout_generation_id` at fan-out start, after `CompositionSpec` construction and before any branch future is submitted. Every branch future and every `RecallBranchResult` carries that id. The sealed merge set records `fanout_generation_id`, `sealed_at`, and `accepted_branch_ids`. A branch result is eligible to mutate merged recall only when its `fanout_generation_id` matches the sealed merge id and it arrives before `sealed_at`. Mismatched or post-`sealed_at` results are telemetry-only and cannot mutate merged recall, prompt blocks, or `CompositionSpec`.
+
 Layer 1 v1 has **executable** routed axes:
 
 - `REDDIT_SOURCE`
@@ -409,7 +416,8 @@ Global fresh deadline: ≤ 6s after spec construction. External failure maps to 
 | `FETCH_URL` | URL blocked / non-2xx / parse failure | `FRESH_ATTEMPT_FAILED` | stop for that URL; max 2 URLs |
 | `FETCH_URL` | timeout | `SOURCE_TIMEOUT` | stop for that URL; global deadline still applies |
 | `ARXIV_OR_PAPERCLIP` | no match / empty result | `FRESH_ATTEMPT_FAILED` | stop after first query |
-| `ARXIV_OR_PAPERCLIP` | timeout / CLI error | `SOURCE_TIMEOUT` or `FRESH_ATTEMPT_FAILED` | stop after first failure |
+| `ARXIV_OR_PAPERCLIP` | timeout | `SOURCE_TIMEOUT` | stop after first query |
+| `ARXIV_OR_PAPERCLIP` | CLI nonzero exit / invocation error / parse failure | `FRESH_ATTEMPT_FAILED` | stop after first failure |
 | `FRONTIER_CONSULT` | reserved source | `RESERVED_SOURCE_UNAVAILABLE` | never execute in v1 |
 | any external source | max attempts exhausted | `FETCH_BUDGET_EXHAUSTED` | stop source |
 | any external source | global fresh deadline reached | `FETCH_BUDGET_EXHAUSTED` | stop all unfinished fresh sources |
@@ -532,7 +540,7 @@ Initial v1.2 values:
 
 ### `AvailabilityLimitation`
 
-Initial v1.3 values:
+Initial v1.4 values:
 
 - `NO_RELEVANT_SUBSTRATE`
 - `INVENTORY_UNKNOWN`
@@ -543,10 +551,11 @@ Initial v1.3 values:
 - `FETCH_BUDGET_EXHAUSTED`
 - `SOURCE_TIMEOUT`
 - `SCOPE_UNION_UNAVAILABLE`
+- `SCORING_LOW_CONFIDENCE`
 
 ### `DispatcherRefusalReason`
 
-Initial v1.3 values:
+Initial v1.4 values:
 
 - `UNKNOWN_CLOSED_VOCABULARY_VALUE`
 - `INCOHERENT_HINT_FRAMING_PAIR`
@@ -560,9 +569,25 @@ Initial v1.3 values:
 
 On refusal, construction stops before any downstream JARVIS/tool/fetch/recall/render action. The refusal is serialized for audit with utterance digest, caller surface, reason, and no raw private content unless the existing audit policy permits it.
 
+### `ProvenanceAuditMismatchReason`
+
+Initial v1.4 values:
+
+- `NONE` — no mismatch; serialized as `null` in the audit envelope unless the consumer requires an explicit enum value.
+- `TEMPLATE_FRAMING_MISMATCH`
+- `SOURCE_ROLE_MAP_MISMATCH`
+- `RENDERED_BLOCK_ROLE_MISMATCH`
+- `UNSUPPORTED_PROVENANCE_FRAMING`
+- `UNEXPECTED_FRESH_CLAIM`
+- `UNEXPECTED_SUBSTRATE_CLAIM`
+- `MISSING_REQUIRED_SOURCE_LABEL`
+- `AUDIT_ENVELOPE_SCHEMA_MISMATCH`
+
+No free-form mismatch reason may enter the audit envelope. Additional mismatch reasons require the closed-vocabulary amendment path.
+
 ### Intent Archetype Classes A–K
 
-The v0 archetype set (`dispatcher-archetypes-v0-2026-05-26.md`) supplies these initial classes as evidence and as the seed manifest for implementation. v1.3 requires a versioned archetype manifest at `docs/slices/recall-axis-dispatcher/dispatcher-archetypes-v0-2026-05-26.md` or successor path recorded in the brief. The manifest must include prototype text, class id, empirical/proposed tag, weight if any, reserved/executable state, source fixture, and content hash. v1.3 adopts the class names as the review surface:
+The v0 archetype set (`dispatcher-archetypes-v0-2026-05-26.md`) supplies these initial classes as evidence and as the seed manifest for implementation. v1.4 requires a versioned archetype manifest at `docs/slices/recall-axis-dispatcher/dispatcher-archetypes-v0-2026-05-26.md` or successor path recorded in the brief. The manifest must include prototype text, class id, empirical/proposed tag, weight if any, reserved/executable state, source fixture, and content hash. v1.4 adopts the class names as the review surface:
 
 - `A_EXPLICIT_SUBSTRATE_RECALL` — *(per Hume MIN2: empirical corpus is Reddit-biased; treat as Reddit-grounded archetype evidence pending broader corpus)*
 - `B_EXPLICIT_LIVE_FETCH`
@@ -668,7 +693,7 @@ Per §6.5 legal product table: pairs outside the table are refused at constructi
 
 ### D12 — Layer 1 Concurrent Fan-Out (new v1.1)
 
-Layer 1 fans out concurrently across executable `CompositionSpec.substrate_sources` with a per-branch timeout. Per-branch failure does not abort other branches; failures return as `RecallBranchResult` with explicit reason per D5. Reserved/unavailable labels never execute. Per-branch timeout and global deadline trigger the v1.3 cancellation / late-result semantics; late results cannot mutate sealed prompt output. Per Ohm M2 / Batch N and Codex Batch 11.
+Layer 1 fans out concurrently across executable `CompositionSpec.substrate_sources` with a per-branch timeout. Per-branch failure does not abort other branches; failures return as `RecallBranchResult` with explicit reason per D5. Reserved/unavailable labels never execute. Per-branch timeout and global deadline trigger the v1.4 cancellation / late-result and fan-out seal semantics; late results cannot mutate sealed prompt output. Per Ohm M2 / Batch N and Codex Batch 11.
 
 ### D13 — Layer 0 Latency Budget (new v1.1)
 
@@ -692,7 +717,7 @@ Executable sources may enter fan-out. Reserved sources (`LIVED_GRAPH`, `WEB_FAST
 
 ### D18 — Archetype Scoring Is Deterministic (new v1.2)
 
-Layer 0 archetype ranking must use the versioned manifest, max-prototype class scoring, declared thresholds, deterministic tie handling, and explicit no-match source-selection rules. Local implementer constants are forbidden unless the manifest version changes.
+Layer 0 archetype ranking must use the versioned manifest, max-prototype class scoring, declared thresholds, deterministic tie handling, mid-band fallback, explicit source-anchor normalization, and explicit no-match source-selection rules. Local implementer constants are forbidden unless the manifest version changes.
 
 ### D19 — Dispatcher Refusals Fail Closed (new v1.2)
 
@@ -718,6 +743,7 @@ External source execution is owned by `core/dispatcher/external_sources.py`, has
 - **G8–G14 + 41-finding dispatch synthesis:** Empirical scope evidence for dark reply-time substrates, cross-surface fragmentation, and JARVIS false-positive routing.
 - **Codex engineering pass-1 synthesis (`reviews/codex-engineering-synthesis-v1.1-pass1.md`):** engineering evidence for v1.2's schema expansion, active/reserved source split, ingress coverage, scoring thresholds, inventory invalidation, fan-out/external budgets, prompt renderer ownership, and refusal semantics.
 - **Codex engineering pass-2 synthesis (`reviews/codex-engineering-synthesis-v1.2-pass2.md`):** operational-edge evidence for v1.3's realistic adapter budgets, audit metadata envelope, repair isolation, fan-out cancellation, tie/no-match rules, and external error taxonomy.
+- **Codex engineering pass-3 synthesis (`reviews/codex-engineering-synthesis-v1.3-pass3.md`):** final operational-edge evidence for v1.4's closed mismatch reasons, mid-band scoring/source-anchor handling, fan-out seal identity, deterministic Paperclip error mapping, and concrete p95 fixture budgets.
 
 ---
 
@@ -756,38 +782,49 @@ These are specification-level test anchors. Concrete tests land during implement
 - **R#26.** (new v1.2 per Codex Batch 2) `test_reserved_source_execution_attempt_refuses_or_returns_reserved_unavailable` — reserved sources cannot enter normal fan-out.
 - **R#27.** (new v1.2 per Codex Batch 3) `test_all_owner_ingresses_construct_dispatcher_spec_before_tool_or_recall` — Telegram, web, brain loop, daemon fast path, continuation path, pending-offer search, and enabled voice/electron ingress all call Layer 0 first or emit visible availability limitation.
 - **R#28.** (new v1.2 per Codex Batch 4) `test_archetype_thresholds_are_deterministic` — `min_accept`, `dominance_margin`, `multi_match_delta`, and no-match fallback produce stable class rankings and tie behavior from the versioned manifest.
-- **R#28a.** (new v1.3 per Codex pass-2 Batch 4) `test_archetype_ties_and_no_match_source_selection_are_deterministic` — tied class scores within `multi_match_delta` produce deterministic multi-match or stable-order tie-break behavior; no-match fallback selects exact substrate/external sources for `PRESENT`, `UNKNOWN`, `ABSENT`, and reserved-source cases.
+- **R#28a.** (new v1.3 per Codex pass-2 Batch 4; expanded v1.4 per pass-3 Batch 2) `test_archetype_ties_and_no_match_source_selection_are_deterministic` — tied class scores within `multi_match_delta` produce deterministic multi-match or stable-order tie-break behavior; mid-band scores fall back with `SCORING_LOW_CONFIDENCE`; explicit source anchors normalize/order deterministically; no-match fallback selects exact substrate/external sources for `PRESENT`, `UNKNOWN`, `ABSENT`, and reserved-source cases.
 - **R#29.** (new v1.2 per Codex Batch 6) `test_encoder_contract_matches_embedding_contract_json` — `MiniLMEncoder` validates model name/dimensions against `memory/embedding_contract.json`.
 - **R#30.** (new v1.2 per Codex Batch 8) `test_all_owner_synthesis_surfaces_route_through_provenance_renderer` — no owner prompt builder renders composed recall without `core/dispatcher/provenance_renderer.py`.
-- **R#30a.** (new v1.3 per Codex pass-2 Batch 8) `test_provenance_renderer_emits_closed_audit_envelope` — renderer emits the closed audit metadata contract to `audit_assistant_text` and `core/safety/self_claim_audit.py`, with no raw private content.
+- **R#30a.** (new v1.3 per Codex pass-2 Batch 8; expanded v1.4 per pass-3 Batch 1) `test_provenance_renderer_emits_closed_audit_envelope` — renderer emits the closed audit metadata contract to `audit_assistant_text` and `core/safety/self_claim_audit.py`, with no raw private content and closed `ProvenanceAuditMismatchReason` values only.
 - **R#31.** (new v1.2 per Codex Batch 9) `test_dispatcher_refusal_stops_downstream_execution` — after `DispatcherRefusalReason`, no tool/fetch/recall/render function is called.
 - **R#32.** (new v1.2 per Codex Batch 11) `test_layer1_slow_and_failed_branches_preserve_deadline_and_stable_merge_order` — slow + error branches still produce deterministic partial output under deadline.
-- **R#32a.** (new v1.3 per Codex pass-2 Batch 11) `test_layer1_cancels_or_quarantines_late_branch_results` — per-branch timeout and global deadline seal the merge set; late branch results are ignored by generation id and cannot mutate prompt output.
+- **R#32a.** (new v1.3 per Codex pass-2 Batch 11; expanded v1.4 per pass-3 Batch 3) `test_layer1_cancels_or_quarantines_late_branch_results` — per-branch timeout and global deadline seal the merge set; branch futures/results carry `fanout_generation_id`; late or mismatched branch results are ignored by generation id and cannot mutate prompt output.
 - **R#33.** (new v1.2 per Codex Batch 12) `test_external_fetch_failures_map_to_fresh_attempted_unavailable` — bot-block/network/API failure maps to `FRESH_ATTEMPTED_UNAVAILABLE_SUBSTRATE_CONTEXT` when substrate exists.
-- **R#33a.** (new v1.3 per Codex pass-2 Batch 12) `test_external_fetch_error_classes_map_to_availability_limitations` — web, Reddit, fetch-url, Paperclip, frontier-reserved, timeout, empty-result, max-attempt, and global-deadline cases map to the closed external error taxonomy.
+- **R#33a.** (new v1.3 per Codex pass-2 Batch 12; expanded v1.4 per pass-3 Batch 4) `test_external_fetch_error_classes_map_to_availability_limitations` — web, Reddit, fetch-url, Paperclip timeout, Paperclip CLI/invocation failure, frontier-reserved, empty-result, max-attempt, and global-deadline cases map to the closed external error taxonomy.
 - **R#34.** (new v1.2 per Codex Batch 13) `test_dispatcher_modules_exist_at_declared_paths` — module map paths are the implementation ownership surface; stale "likely" paths are forbidden.
 - **R#35.** (new v1.2 per Codex Batch 14) `test_full_manifest_source_count_budget` — Layer 0 scoring and Layer 1 source selection run against the full manifest/source registry within budget.
 - **R#36.** (new v1.3 per Codex pass-2 Batch 10) `test_repair_fsm_does_not_cross_inherit_between_concurrent_surfaces` — simultaneous Telegram/web repair turns under the same bond cannot inherit each other's prior spec.
 - **R#37.** (new v1.3 per Codex pass-2 Batch 10) `test_post_repair_spec_validation_refuses_invalid_modified_spec` — Layer 2 output passes normal construction validation; invalid modified specs refuse with `REPAIR_PRIOR_SPEC_INVALID` before Layer 1.
-- **R#38.** (new v1.3 per Codex pass-2 Batch 14) `test_realistic_local_adapter_p95_budgets` — representative SQLite/WAL, Chroma, file-backed, and bounded-reader fixtures enforce p95 adapter budgets and telemetry under realistic source counts.
-- **R#39.** (new v1.3 per Codex pass-2 Batch 14) `test_dispatcher_budget_telemetry_records_edge_costs` — cold/prewarm, source selection, slow-branch timeout/cancellation, full-manifest scoring, external-fetch stop, and total prompt-budget contribution all produce budget telemetry.
+- **R#38.** (new v1.3 per Codex pass-2 Batch 14; expanded v1.4 per pass-3 Batch 6) `test_realistic_local_adapter_p95_budgets` — representative SQLite/WAL, Chroma, file-backed, and bounded-reader fixtures enforce the concrete p95 adapter budgets in the table below.
+- **R#39.** (new v1.3 per Codex pass-2 Batch 14; expanded v1.4 per pass-3 Batch 6) `test_dispatcher_budget_telemetry_records_edge_costs` — cold/prewarm, source selection, slow-branch timeout/cancellation, full-manifest scoring, external-fetch stop, total prompt-budget contribution, fixture id, sample count, p50, p95, and timeout/cancellation counts all produce budget telemetry.
 
-**RED suite implementability split (per Ohm Mi4, revised v1.3):** ~26 unit tests (~1ms each), ~13 mock integration tests (mock brain_loop + mock substrate + assembly-layer fixture, ~50–500ms each), plus ~4 realistic adapter-budget fixtures for SQLite/WAL, Chroma, file-backed, and bounded-reader surfaces. Estimated total RED suite runtime ~12–35 seconds. Pure mocks are allowed for unit behavior; p95 adapter budgets require realistic local stores.
+**Realistic adapter-budget fixture contract (new v1.4):** R#38 and R#39 use deterministic local fixtures. Each fixture runs 5 warmup calls, then 30 measured calls. Thresholds are RED-test enforced in local CI; noisy hosted CI may report them as perf-smoke only if the run records the same telemetry and does not claim budget conformance.
+
+| Adapter | Fixture scale | Condition | p95 threshold | Telemetry required |
+|---|---:|---|---:|---|
+| SQLite/WAL | 50,000 rows, indexed cursor query, WAL present | warm | ≤ 20ms | `fixture_id`, `sample_count`, `p50_ms`, `p95_ms`, `row_count`, `rows_returned`, `wal_present` |
+| SQLite/WAL | same fixture, cold connection | cold first-read | ≤ 60ms | same fields plus `cold_start=true` |
+| Chroma | 10,000 records, 384-dim vectors, top-k ≤ 12, encoder excluded | warm collection | ≤ 70ms | `fixture_id`, `sample_count`, `p50_ms`, `p95_ms`, `collection_count`, `top_k`, `encoder_included=false` |
+| Chroma | same fixture after collection prewarm | prewarm path | ≤ 150ms | same fields plus `prewarm=true` |
+| File-backed | 1,000 files or 25MB metadata scan, no raw private content read for inventory | warm | ≤ 25ms | `fixture_id`, `sample_count`, `p50_ms`, `p95_ms`, `file_count`, `bytes_considered`, `content_read=false` |
+| Bounded reader | 10,000 candidate metadata rows; gated and allowed cases both represented | warm | ≤ 25ms | `fixture_id`, `sample_count`, `p50_ms`, `p95_ms`, `gate_result`, `candidates_considered`, `chars_returned` |
+
+**RED suite implementability split (per Ohm Mi4, revised v1.4):** ~26 unit tests (~1ms each), ~13 mock integration tests (mock brain_loop + mock substrate + assembly-layer fixture, ~50–500ms each), plus 6 realistic adapter-budget fixtures for SQLite/WAL, Chroma, file-backed, and bounded-reader surfaces. Estimated total RED suite runtime ~12–35 seconds excluding optional cold/prewarm perf-smoke repeats. Pure mocks are allowed for unit behavior; p95 adapter budgets require realistic local stores.
 
 ---
 
-## 10. Open Questions for Codex Pass-3
+## 10. Open Questions for Codex Pass-4 / Canonicalization Check
 
-(Q10.10 from v1 removed per Descartes F8 — rhetorical, already answered in scope boundary. Q9 closed v1.1 per Ohm M3 — full JARVIS replacement decided. Codex pass-1 answered the mechanism-owner questions by requiring concrete v1.2 module/API ownership. Codex pass-2 answered operational-edge gaps by requiring v1.3 failure-mode contracts.)
+(Q10.10 from v1 removed per Descartes F8 — rhetorical, already answered in scope boundary. Q9 closed v1.1 per Ohm M3 — full JARVIS replacement decided. Codex pass-1 answered the mechanism-owner questions by requiring concrete v1.2 module/API ownership. Codex pass-2 answered operational-edge gaps by requiring v1.3 failure-mode contracts. Codex pass-3 answered the remaining implementer-choice cells by requiring v1.4 closed enums, deterministic fallback rules, seal identity, and concrete p95 fixture budgets.)
 
-1. **Default hybrid breadth.** Is `C_HYBRID_CONTENT_ANCHORED` too broad as the default even after v1.3's witnessed-turn replay corpus requirements? What explicit language should force fresh-only or substrate-only beyond the current list?
-2. **Freshness threshold.** v1.3 records `freshness_window` but defers global freshness scoring beyond timestamps. Should pass-3 require source-specific freshness windows before canonicalization?
+1. **Default hybrid breadth.** Is `C_HYBRID_CONTENT_ANCHORED` too broad as the default even after v1.4's witnessed-turn replay corpus requirements? What explicit language should force fresh-only or substrate-only beyond the current list?
+2. **Freshness threshold.** v1.4 records `freshness_window` but defers global freshness scoring beyond timestamps. Should the canonicalization check require source-specific freshness windows before ADR mint?
 3. **Substrate inventory privacy.** Which substrates may Layer 0 consult as inventory without reading content? Does `PRIVATE_THOUGHTS` require an additional bounded-reader gate even for inventory summaries?
-4. **Provenance rendering.** v1.1 establishes inline markers as default per Buber Mi2 + D4; v1.2 names `core/dispatcher/provenance_renderer.py` as owner; v1.3 names the audit envelope. Remaining question: should segmented sections appear in any non-report-shaped case (e.g., very long composed answers)?
-5. **Cross-surface scope union.** How should owner web + Telegram + fast-turns compose without weakening trust-scope boundaries? v1.3 includes nullable `trust_scope_union`; pass-3 should verify whether its shape is specific enough before canonicalization.
+4. **Provenance rendering.** v1.1 establishes inline markers as default per Buber Mi2 + D4; v1.2 names `core/dispatcher/provenance_renderer.py` as owner; v1.3 names the audit envelope; v1.4 closes mismatch reasons. Remaining question: should segmented sections appear in any non-report-shaped case (e.g., very long composed answers)?
+5. **Cross-surface scope union.** How should owner web + Telegram + fast-turns compose without weakening trust-scope boundaries? v1.4 includes nullable `trust_scope_union`; canonicalization check should verify whether its shape is specific enough before ADR mint.
 6. **Graph-assisted routing.** Should `K_GRAPH_ASSISTED_RELATIONAL` remain in the closed archetype class set as reserved evidence, or move entirely to a v2+ appendix?
-7. **Frontier consult labeling.** v1.3 keeps `FRONTIER_CONSULT` as reserved/non-executable provenance label. Should pass-3 remove it entirely until G3 exists?
-8. **Prompt-assembly enforcement.** v1.3 names `core/dispatcher/provenance_renderer.py` and a closed audit metadata envelope. Codex pass-3 should verify whether the owner module and payload are sufficient or whether existing prompt builders require a narrower path list before canonicalization.
+7. **Frontier consult labeling.** v1.4 keeps `FRONTIER_CONSULT` as reserved/non-executable provenance label. Should canonicalization remove it entirely until G3 exists?
+8. **Prompt-assembly enforcement.** v1.4 names `core/dispatcher/provenance_renderer.py`, a closed audit metadata envelope, and closed mismatch reasons. A final receipt check should verify whether the owner module and payload are sufficient or whether existing prompt builders require a narrower path list before canonicalization.
 9. ~~JARVIS replacement path~~ **CLOSED v1.1:** full replacement decided per Ohm M3 / Batch H. JARVIS regexes become Layer-0 evidence.
 
 ---
@@ -804,8 +841,8 @@ When implemented, the Recall-Axis Dispatcher should change Maez's reply-time beh
 
 The negative predicted effect is equally important: the dispatcher should not grant new external tool authority, should not define producer-causality rules for write-time organs, and should not silently merge fresh evidence with substrate memory under one unsupported voice.
 
-**Operational-edge validation (per Codex pass-2):** R#28a, R#30a, R#32a, R#33a, R#36, R#37, R#38, and R#39 are the edge-case trust suite. Happy paths prove the idea works; edge cases prove the system can be trusted. If the operational-edge tests diverge from brief expectation, witness governs (per ADR 0044); the brief is revised, not the witness.
+**Operational-edge validation (per Codex pass-2 and pass-3):** R#28a, R#30a, R#32a, R#33a, R#36, R#37, R#38, and R#39 are the edge-case trust suite. Happy paths prove the idea works; edge cases prove the system can be trusted. If the operational-edge tests diverge from brief expectation, witness governs (per ADR 0044); the brief is revised, not the witness.
 
 ---
 
-*Spec brief v1.3 — 2026-05-26. Framing half authored under the hard-stop discipline at `fc652d5`; mechanics half completed at `9110084`; council pass-1 findings folded in v1.1 at `a5f7898`; Codex engineering pass-1 synthesis at `023b2ad`; 15 Codex fold batches folded in v1.2 at `d0c3230`; Codex pass-2 synthesis at `da605a8`; six operational-edge batches folded in v1.3. Producer-causality consolidation, live-degradation triage, and ADR 0046 hardening explicitly de-scoped as separate slices with separate contracts. Six council review files preserved verbatim at `reviews/claude-council-{locke,kant,hume,buber,descartes,ohm}-pass1.md`; six Codex pass-1 and six Codex pass-2 review files preserved verbatim at `reviews/codex-*-pass1.md` and `reviews/codex-*-pass2.md`. Next: Codex pass-3 closure audit against v1.3, then fold/canonicalize depending on closure verdict.*
+*Spec brief v1.4 — 2026-05-26. Framing half authored under the hard-stop discipline at `fc652d5`; mechanics half completed at `9110084`; council pass-1 findings folded in v1.1 at `a5f7898`; Codex engineering pass-1 synthesis at `023b2ad`; 15 Codex fold batches folded in v1.2 at `d0c3230`; Codex pass-2 synthesis at `da605a8`; six operational-edge batches folded in v1.3 at `e3b01e3`; Codex pass-3 synthesis at `b71ef27`; five remaining implementer-choice cells folded in v1.4. Producer-causality consolidation, live-degradation triage, and ADR 0046 hardening explicitly de-scoped as separate slices with separate contracts. Six council review files preserved verbatim at `reviews/claude-council-{locke,kant,hume,buber,descartes,ohm}-pass1.md`; six Codex pass-1, six Codex pass-2, and six Codex pass-3 review files preserved verbatim at `reviews/codex-*-pass1.md`, `reviews/codex-*-pass2.md`, and `reviews/codex-*-pass3.md`. Next: final receipt check or canonicalization as Decision 42 / ADR 0047, depending on operator judgment.*
