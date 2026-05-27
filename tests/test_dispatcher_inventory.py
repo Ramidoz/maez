@@ -138,6 +138,39 @@ class DispatcherInventoryTests(unittest.TestCase):
         )
         self.assertEqual(calls["private_count"], 0)
 
+    def test_unimplemented_default_fallback_sources_are_reserved(self):
+        from core.dispatcher.inventory import InventoryRegistry
+        from core.dispatcher.spec import (
+            AvailabilityLimitation,
+            SourceAvailability,
+            SubstrateSource,
+        )
+
+        summary = InventoryRegistry().summarize(
+            [
+                SubstrateSource.TELEGRAM_SEMANTIC,
+                SubstrateSource.ENTITY_INDEX,
+                SubstrateSource.LIVED_EPISODES,
+            ]
+        )
+
+        self.assertEqual(
+            summary.source_availability[SubstrateSource.TELEGRAM_SEMANTIC],
+            SourceAvailability.EXECUTABLE_UNKNOWN,
+        )
+        self.assertEqual(
+            summary.source_availability[SubstrateSource.ENTITY_INDEX],
+            SourceAvailability.RESERVED_UNAVAILABLE,
+        )
+        self.assertEqual(
+            summary.source_availability[SubstrateSource.LIVED_EPISODES],
+            SourceAvailability.RESERVED_UNAVAILABLE,
+        )
+        self.assertIn(
+            AvailabilityLimitation.RESERVED_SOURCE_UNAVAILABLE,
+            summary.availability_limitations,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

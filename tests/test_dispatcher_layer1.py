@@ -115,6 +115,70 @@ class DispatcherLayer1Tests(unittest.TestCase):
         )
         self.assertEqual(result.recall_blocks, ())
 
+    def test_default_fallback_unimplemented_sources_are_reserved_not_adapter_missing(self):
+        from core.dispatcher.layer1 import Layer1Fanout, RecallBlock, RecallBranchStatus
+        from core.dispatcher.spec import (
+            AvailabilityLimitation,
+            SourceAvailability,
+            SubstrateSource,
+        )
+
+        def telegram_adapter(source):
+            return [
+                RecallBlock(
+                    source=source,
+                    text="kept telegram row",
+                    timestamp=10.0,
+                    freshness="test",
+                    rationale="fixture",
+                    prompt_cost=3,
+                )
+            ]
+
+        result = Layer1Fanout(
+            adapters={SubstrateSource.TELEGRAM_SEMANTIC: telegram_adapter},
+            branch_timeout_s=0.2,
+            global_deadline_s=0.4,
+        ).run(
+            _spec(
+                SubstrateSource.TELEGRAM_SEMANTIC,
+                SubstrateSource.ENTITY_INDEX,
+                SubstrateSource.LIVED_EPISODES,
+                availability={
+                    SubstrateSource.ENTITY_INDEX: SourceAvailability.RESERVED_UNAVAILABLE,
+                    SubstrateSource.LIVED_EPISODES: SourceAvailability.RESERVED_UNAVAILABLE,
+                },
+            ),
+            utterance="what were we talking about last evening?",
+            conversation_state={},
+            fanout_generation_id="reserved-default-seal",
+        )
+
+        statuses = {branch.source: branch.status for branch in result.branch_results}
+        empty_reasons = {branch.source: branch.empty_reason for branch in result.branch_results}
+        self.assertEqual(
+            statuses[SubstrateSource.TELEGRAM_SEMANTIC],
+            RecallBranchStatus.SUCCESS,
+        )
+        self.assertEqual(
+            statuses[SubstrateSource.ENTITY_INDEX],
+            RecallBranchStatus.RESERVED_UNAVAILABLE,
+        )
+        self.assertEqual(
+            statuses[SubstrateSource.LIVED_EPISODES],
+            RecallBranchStatus.RESERVED_UNAVAILABLE,
+        )
+        self.assertEqual(
+            empty_reasons[SubstrateSource.ENTITY_INDEX],
+            AvailabilityLimitation.RESERVED_SOURCE_UNAVAILABLE.value.lower(),
+        )
+        self.assertEqual(
+            empty_reasons[SubstrateSource.LIVED_EPISODES],
+            AvailabilityLimitation.RESERVED_SOURCE_UNAVAILABLE.value.lower(),
+        )
+        self.assertNotIn("adapter_missing", result.to_dict().__repr__())
+        self.assertEqual([block.source for block in result.recall_blocks], [SubstrateSource.TELEGRAM_SEMANTIC])
+
     def test_branch_timeout_seals_merge_and_late_result_cannot_mutate_output(self):
         from core.dispatcher.layer1 import Layer1Fanout, RecallBlock, RecallBranchStatus
         from core.dispatcher.spec import SubstrateSource

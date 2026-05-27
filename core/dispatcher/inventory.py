@@ -25,6 +25,8 @@ from core.dispatcher.spec import (
 
 RESERVED_SOURCES: frozenset[SourceLabel] = frozenset(
     {
+        SubstrateSource.ENTITY_INDEX,
+        SubstrateSource.LIVED_EPISODES,
         SubstrateSource.LIVED_GRAPH,
         SubstrateSource.WEB_FAST_TURNS,
         ExternalSource.FRONTIER_CONSULT,
@@ -111,6 +113,11 @@ class InventoryRegistry:
         limitations: list[AvailabilityLimitation] = []
 
         for source in sources:
+            if source in RESERVED_SOURCES:
+                source_availability[source] = SourceAvailability.RESERVED_UNAVAILABLE
+                _append_once(limitations, AvailabilityLimitation.RESERVED_SOURCE_UNAVAILABLE)
+                continue
+
             entry = self._entries.get(source)
             if entry is None:
                 source_availability[source] = SourceAvailability.EXECUTABLE_UNKNOWN
