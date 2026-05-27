@@ -55,6 +55,10 @@ from skills.web_search import (
 logger = logging.getLogger("maez")
 
 
+def _telegram_pipeline_a_web_search_enabled() -> bool:
+    return os.environ.get("MAEZ_DISPATCHER_ENABLED", "0") != "1"
+
+
 async def _reply_text(update, text: str, **kwargs):
     chat_id = getattr(getattr(update, "effective_chat", None), "id", "")
     envelope = owner_text_envelope(
@@ -3360,7 +3364,7 @@ class TelegramVoice:
         )
 
         web_context = ""
-        if needs_web_search(user_text):
+        if _telegram_pipeline_a_web_search_enabled() and needs_web_search(user_text):
             logger.info("Web search triggered for: %s", user_text[:80])
             if is_news_query(user_text):
                 sr = search_rss(user_text, max_results=5)
