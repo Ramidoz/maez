@@ -1,9 +1,9 @@
-# Recall-Axis Dispatcher — Spec Brief v0.1 (framing half)
+# Recall-Axis Dispatcher — Spec Brief v1
 
 **Prepared:** 2026-05-26
 **Slice:** Recall-Axis Dispatcher
-**Parent/runtime base:** `5bcb15e docs(backlog): record hybrid-default dispatcher refinement`
-**Status:** v0.1 — **framing half only.** Sections 1–4 (Why This Slice Exists, Three Design Principles, Doctor Analogy, Composition Specification). Mechanics half (layered architecture, closed vocabularies, invariants, RED tests, dependency map, council questions, predicted effect) deferred to a subsequent draft session.
+**Parent/runtime base:** `fc652d5 docs(dispatcher): brief v0.1 framing half (sections 1-4)`
+**Status:** v1 — complete draft for council pass-1. Sections 1–4 preserve the framing half; Sections 5–11 add mechanics, vocabularies, invariants, dependency map, RED anchors, council questions, and predicted effect.
 **Review lane:** Claude covenant / architecture council + Codex engineering panel (both lanes, full ladder when v1 brief completes).
 **Operator:** Rohit relays and dispatches; Codex does not auto-dispatch.
 
@@ -123,7 +123,7 @@ The dispatcher's Layer 0 output is not a single intent label. It is a structured
 ### Structure
 
 ```python
-ComposionSpec = {
+CompositionSpec = {
     "substrate_sources": list[SubstrateSource],
     "external_sources": list[ExternalSource],
     "composition_hint": CompositionHint,
@@ -166,17 +166,342 @@ The dispatcher's embedding-proximity layer (using `all-MiniLM-L6-v2` per `memory
 
 The embedding ranking is *evidence* for spec construction. The construction logic itself is the substrate's verdict per producer-causality discipline.
 
-### What the brief does NOT specify (v1 mechanics half)
+## 5. Layered Architecture
 
-This v0.1 framing-half draft intentionally stops here. v1 mechanics half will specify:
-- Layered architecture: Layer 0 (substrate-vs-tool + spec construction), Layer 1 (substrate-axis routing), Layer 2 (repair/follow-up modifiers)
-- Closed vocabularies: `SubstrateSource`, `ExternalSource`, `CompositionHint`, `ProvenanceFraming`, and the intent classes A–K from the v0 archetype set
-- Invariants: substrate consultation before tool dispatch, seam visibility in composed output, role labeling per source, refuse-at-construction caller-supplied authority
-- RED test anchors: per invariant, per closed-vocabulary refusal, per provenance framing
-- Cross-canon dependency map: producer-causality, canon-governs-canon, sandbox-witness, interpretive humility, plus the 10-agent + testing dispatch evidence pile
-- Council questions: deliberately-undecided judgment calls for council pass-1
-- Predicted effect: what the dispatcher does when it lands
+The dispatcher has three layers. Each layer has a bounded input and output; no
+layer may silently perform work owned by another layer.
+
+### Layer 0 — Composition Specification Construction
+
+**Input:** owner utterance, current surface, recent conversation state, available
+substrate inventory summary, freshness policy, explicit-signal lexemes, and
+archetype similarity ranking.
+
+**Output:** one `CompositionSpec`.
+
+**Responsibility:** decide whether the ask needs substrate, fresh external
+signal, both, or neither; assign the provenance framing; preserve explicit edge
+signals. Layer 0 replaces the current binary JARVIS classifier shape. It is the
+composition layer, not another router.
+
+**Non-responsibility:** reading rows from each substrate, issuing fetches, or
+rendering the final answer. Layer 0 only constructs the spec.
+
+Layer 0 order:
+
+1. Detect explicit fetch-only signals (`search`, `google`, `look up right now`,
+   `fetch live`) unless the phrase is used inside a repair/follow-up turn.
+2. Detect explicit memory-only signals (`what do you remember`, `from your
+   notes`, `in your notebook`, `from our prior context`).
+3. Detect content anchors: source names, entities, topics, time phrases,
+   procedural asks, correction/contradiction shapes.
+4. Consult substrate inventory summaries to determine whether Maez likely has
+   relevant owned substrate.
+5. Use archetype similarity ranking to refine the spec, allowing multiple
+   high-scoring archetypes to contribute.
+6. Emit a spec with explicit provenance framing.
+
+### Layer 1 — Substrate-Axis Routing
+
+**Input:** `CompositionSpec.substrate_sources`, utterance, recent conversation
+state, and substrate-specific availability summaries.
+
+**Output:** substrate recall blocks, each with source role, timestamp/freshness
+metadata, and retrieval rationale.
+
+**Responsibility:** open the right notebooks. Examples: Reddit source-shaped
+rows, Telegram temporal rows, entity index, lived episodes, lived graph,
+private thoughts, wonderings, self-dev reviews, audit/fabrication/correction
+surfaces.
+
+**Non-responsibility:** deciding whether fresh fetch should happen; Layer 0 has
+already decided that.
+
+Layer 1 v1 must include at least these routed axes because each is directly
+witnessed in the 10-agent or 41-finding dispatch evidence:
+
+- `REDDIT_SOURCE`
+- `TELEGRAM_TEMPORAL`
+- `ENTITY_INDEX`
+- `LIVED_EPISODES`
+- `LIVED_GRAPH`
+- `PRIVATE_THOUGHTS`
+- `WONDERINGS`
+- `SELF_DEV_REVIEWS`
+- `AUDIT_AND_FABRICATION`
+- `CROSS_SURFACE_OWNER_TURNS`
+
+### Layer 2 — Repair / Follow-up Modifiers
+
+**Input:** current `CompositionSpec`, previous-turn spec if available,
+previous-turn answer metadata, and repair/follow-up phrase detection.
+
+**Output:** modified `CompositionSpec` and recall/fetch priority adjustments.
+
+**Responsibility:** inherit or adjust the prior ask when the owner says
+`really?`, `are you sure?`, `check again`, `go on`, `no that's not it`, or
+similar. Layer 2 does not create a new semantic topic when the owner is clearly
+repairing or extending the previous one.
+
+**Non-responsibility:** replacing Layer 0. It modifies an existing spec; it does
+not own base composition decisions.
+
+## 6. Closed Vocabularies
+
+All vocabularies below are closed. Growth requires spec amendment + council +
+Codex review. Runtime extension is refused.
+
+### `SubstrateSource`
+
+Initial v1 values:
+
+- `REDDIT_SOURCE` — source-tagged Reddit rows in raw memory / Chroma metadata.
+- `TELEGRAM_TEMPORAL` — Telegram exchanges selected by time phrase or inherited
+  temporal context.
+- `TELEGRAM_SEMANTIC` — Telegram exchanges selected by content semantics.
+- `WEB_FAST_TURNS` — owner web fast-reply turns once trust-scope unification is
+  available.
+- `ENTITY_INDEX` — entity mentions, aliases, and resolved entity ids.
+- `LIVED_EPISODES` — lived episode rows.
+- `LIVED_GRAPH` — graph traversal over lived-memory edges once G11 traversal API
+  exists.
+- `PRIVATE_THOUGHTS` — private-thought substrate exposed only through bounded
+  reader rules.
+- `WONDERINGS` — wonderings / pursuits as synthesis context, not verdict source.
+- `SELF_DEV_REVIEWS` — procedural self-review rows.
+- `AUDIT_AND_FABRICATION` — audit log, fabrication log, contradiction/correction
+  surfaces.
+- `SANDBOX_WITNESSES` — maintenance proof metadata, readable for procedural
+  questions about fixes; not used to authorize new ratification.
+
+### `ExternalSource`
+
+Initial v1 values:
+
+- `WEB_SEARCH`
+- `LIVE_REDDIT`
+- `FETCH_URL`
+- `ARXIV_OR_PAPERCLIP`
+- `FRONTIER_CONSULT`
+- `NONE`
+
+`FRONTIER_CONSULT` is provenance-bearing only. It does not authorize a new
+Maez-consultation mechanism; that remains G3 / capability-grant work.
+
+### `CompositionHint`
+
+Initial v1 values:
+
+- `SUBSTRATE_ONLY`
+- `FRESH_ONLY`
+- `PARALLEL`
+- `SUBSTRATE_THEN_FETCH_IF_STALE`
+- `FRESH_THEN_CONTEXTUALIZE`
+- `REPAIR_INHERIT_PRIOR_SPEC`
+
+### `ProvenanceFraming`
+
+Initial v1 values:
+
+- `SUBSTRATE_ONLY_UNVERIFIED` — substrate available, no fresh validation.
+- `HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES` — default content-anchored
+  framing; fresh evidence supplies the verifiable backbone and substrate supplies
+  bond-context interpretation.
+- `FRESH_ONLY` — explicit fetch-only or no relevant substrate.
+
+### Intent Archetype Classes A–K
+
+The v0 archetype set (`dispatcher-archetypes-v0-2026-05-26.md`) supplies these
+initial classes as evidence, not canon. v1 adopts the class names as the review
+surface; council pass-1 should decide which labels survive unchanged.
+
+- `A_EXPLICIT_SUBSTRATE_RECALL`
+- `B_EXPLICIT_LIVE_FETCH`
+- `C_HYBRID_CONTENT_ANCHORED`
+- `D_TEMPORAL_RECALL`
+- `E_SOURCE_SHAPED_RECALL`
+- `F_ENTITY_RECALL`
+- `G_PROCEDURAL_RECALL`
+- `H_REPAIR_FOLLOWUP`
+- `I_CONTRADICTION_OR_SELF_CORRECTION`
+- `J_AMBIENT_LIMB_STATE`
+- `K_GRAPH_ASSISTED_RELATIONAL`
+
+`C_HYBRID_CONTENT_ANCHORED` is the default for ordinary content asks such as
+"how is Qwen looking online?" Classes A and B are explicit-signal edge cases.
+
+## 7. Invariants
+
+### D1 — Composition Before Routing
+
+Layer 0 must emit a `CompositionSpec` before JARVIS/tool dispatch or substrate
+recall. No branch may directly choose web/tool solely because a query is
+"not conversational."
+
+### D2 — Hybrid Default for Content-Anchored Asks
+
+If the ask names a topic/source/entity and lacks explicit recall-only or
+fetch-only language, Layer 0 defaults to hybrid composition when relevant
+substrate exists or is likely to exist.
+
+### D3 — Explicit Edges Override Default Hybrid
+
+Explicit recall-only language produces substrate-only unless the user asks for
+freshness in the same turn. Explicit fetch-only language produces fresh-only
+unless the user asks for memory/context in the same turn.
+
+### D4 — Provenance Seam Visibility
+
+Every composed answer must preserve the seam between substrate context and fresh
+evidence. Prompt assembly must receive `provenance_framing` and render source
+roles accordingly.
+
+### D5 — Substrate Inventory Is Evidence, Not Authority
+
+Substrate inventory summaries can indicate likely availability, but cannot
+invent relevance. Layer 1 must return evidence-cited recall blocks or an empty
+result with an explicit reason.
+
+### D6 — No Caller-Supplied Composition Verdict
+
+Callers may supply utterance, surface, and conversation state. They may not
+supply final `composition_hint`, `provenance_framing`, or source selections as
+authority. Those are substrate-computed.
+
+### D7 — Cross-Surface Owner Context Must Not Fragment by Accident
+
+If the owner is authenticated, dispatcher scope must not silently pin them to
+`guest` or another disjoint trust scope. Any deliberate scope restriction must
+be visible in the spec as an availability limitation.
+
+### D8 — Repair Turns Inherit, Then Re-evaluate
+
+Repair/follow-up turns inherit the prior spec, then re-evaluate freshness and
+source availability. They cannot blindly replay the prior fetch or prior memory
+block.
+
+### D9 — Producer-Causality Boundary Is Held
+
+The dispatcher may read producer-causality audit findings as evidence that
+adjacent organs need consolidation. It may not define write-time producer
+authority for those organs. That is a separate slice.
+
+### D10 — No New External Authority Surface
+
+`FRONTIER_CONSULT`, `LIVE_REDDIT`, and `WEB_SEARCH` are source labels inside a
+composition spec. They do not grant Maez new credentials, new egress powers, or
+new tool access.
+
+## 8. Cross-Canon Dependency Map
+
+- **ADR 0042 / producer-causality:** Layer 0 verdicts are substrate-computed.
+  Callers do not author source selections, composition hints, provenance
+  framing, or final intent classes.
+- **ADR 0044 / canon-governs-canon:** The user's utterance is the claim; the
+  dispatcher spec is the witnessed reconstruction. If runtime witness disagrees
+  with brief expectation, witness governs and the brief is revised.
+- **ADR 0046 / sandbox-witness contract:** Future dispatcher fixes should be
+  expressible as maintenance proposals with sandbox witnesses. The dispatcher
+  brief does not modify the maintenance authority surface.
+- **NORTH_STAR invariant #4 / interpretive humility:** Output must label source
+  roles and uncertainty. Substrate memory is context, not fresh proof.
+- **Decision 35 / never-delete memory:** Dark substrates are wired through
+  bounded readers and salience/routing, not deletion or pruning.
+- **G1/G2/G3 AI-to-AI consultation backlog:** Frontier consult is provenance
+  tagged and deferred; dispatcher v1 does not invent the consultation mechanism.
+- **G8–G14 + 41-finding dispatch synthesis:** Empirical scope evidence for dark
+  reply-time substrates, cross-surface fragmentation, and JARVIS false-positive
+  routing.
+
+## 9. RED Test Anchors
+
+These are specification-level test anchors. Concrete tests land during
+implementation after council/Codex fold cycles.
+
+- **R#1.** `test_content_anchored_query_emits_hybrid_spec` — "how's Qwen
+  looking online?" emits both substrate and external source candidates with
+  `HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES`.
+- **R#2.** `test_explicit_memory_query_emits_substrate_only_spec` — "what do you
+  remember about Qwen?" emits no external sources and
+  `SUBSTRATE_ONLY_UNVERIFIED`.
+- **R#3.** `test_explicit_fetch_query_emits_fresh_only_spec` — "search Reddit
+  for Qwen right now" emits external source only and `FRESH_ONLY`.
+- **R#4.** `test_reddit_notebook_query_does_not_enter_jarvis_first` — "what's
+  going on in r/LocalLLaMA?" constructs a spec before tool dispatch and opens
+  Reddit substrate when rows exist.
+- **R#5.** `test_jarvis_system_noun_false_positive_does_not_override_substrate`
+  — "check Reddit then" does not route to tool-loop solely because `check`
+  matches `_SYSTEM_NOUN_RE`.
+- **R#6.** `test_provenance_framing_reaches_prompt_assembly` — prompt assembly
+  receives `provenance_framing` and renders source roles.
+- **R#7.** `test_memory_only_answer_flags_unverified_state` — substrate-only
+  answer includes an unverified/currentness caveat.
+- **R#8.** `test_hybrid_answer_labels_fresh_and_context_roles` — hybrid answer
+  has distinct fresh-evidence and substrate-context sections or markers.
+- **R#9.** `test_caller_supplied_composition_hint_refused` — public dispatcher
+  API refuses caller-supplied final `composition_hint`.
+- **R#10.** `test_unknown_closed_vocabulary_value_refused` — unknown
+  `SubstrateSource`, `ExternalSource`, `CompositionHint`, and
+  `ProvenanceFraming` values refuse at construction.
+- **R#11.** `test_owner_authenticated_web_scope_not_forced_to_guest` — owner web
+  surface does not silently pin recall to `guest`.
+- **R#12.** `test_repair_followup_inherits_prior_spec_then_rechecks` — "are you
+  sure?" inherits the prior topic/source but re-runs availability/freshness
+  checks.
+- **R#13.** `test_no_frontier_consult_without_capability_grant` —
+  `FRONTIER_CONSULT` label cannot execute a frontier call without the separate
+  consultation mechanism.
+- **R#14.** `test_graph_assisted_class_is_reserved_until_traversal_api_exists`
+  — `K_GRAPH_ASSISTED_RELATIONAL` can be recorded as archetype evidence but
+  cannot produce a lived-graph route until G11 traversal API lands.
+- **R#15.** `test_dispatcher_does_not_define_producer_write_authority` —
+  dispatcher code contains no write-time validity rules for `inner_residue`,
+  `consequence_memory`, or `wonderings.record_pursuit`.
+
+## 10. Open Questions for Council Pass-1
+
+1. **Default hybrid breadth.** Is `C_HYBRID_CONTENT_ANCHORED` too broad as the
+   default? What explicit language should force fresh-only or substrate-only?
+2. **Freshness threshold.** Should v1 define a global staleness window, or must
+   each source define freshness separately?
+3. **Substrate inventory privacy.** Which substrates may Layer 0 consult as
+   inventory without reading content? Does private_thoughts require an
+   additional bounded-reader gate even for inventory summaries?
+4. **Provenance rendering.** Must the answer visibly segment fresh/context, or
+   are inline markers sufficient?
+5. **Cross-surface scope union.** How should owner web + Telegram + fast-turns
+   compose without weakening trust-scope boundaries?
+6. **Graph-assisted routing.** Should `K_GRAPH_ASSISTED_RELATIONAL` remain in
+   the closed archetype class set as reserved evidence, or move entirely to a
+   v2+ appendix?
+7. **Frontier consult labeling.** Should `FRONTIER_CONSULT` appear in v1
+   `ExternalSource` as a provenance label, or stay absent until G3 exists?
+8. **Prompt-assembly enforcement.** What minimal runtime proof should show that
+   `provenance_framing` actually shaped the answer, not just the spec?
+9. **JARVIS replacement path.** Should v1 bypass `_should_run_jarvis_loop`
+   entirely for content-anchored asks, or wrap it behind Layer 0?
+10. **Council boundary.** Does this brief successfully avoid absorbing
+    producer-causality consolidation and live-degradation triage?
+
+## 11. Predicted Effect
+
+When implemented, the Recall-Axis Dispatcher should change Maez's reply-time
+behavior in four observable ways:
+
+1. Content-anchored asks such as "what's going on with Qwen online?" produce a
+   hybrid answer that uses owned substrate and fresh signal when available.
+2. Reddit/source-shaped asks no longer enter JARVIS/tool-fetch before checking
+   existing source-tagged memory.
+3. Answers label source roles: fresh evidence vs substrate context, with
+   unverified state visible when only memory is available.
+4. Dark reply-time substrates gain explicit reader routes through Layer 1 rather
+   than remaining write-only organs.
+
+The negative predicted effect is equally important: the dispatcher should not
+grant new external tool authority, should not define producer-causality rules
+for write-time organs, and should not silently merge fresh evidence with
+substrate memory under one unsupported voice.
 
 ---
 
-*Spec brief v0.1 (framing half) — 2026-05-26. Author: Claude under Rohit dispatch. Mechanics half deferred to a subsequent draft session per the hard-stop discipline. Producer-causality consolidation explicitly de-scoped as a separate slice with a separate contract. Live-degradation triage and ADR 0046 hardening also de-scoped: distinct surfaces, separate review cycles.*
+*Spec brief v1 — 2026-05-26. Framing half authored under the hard-stop discipline at `fc652d5`; mechanics half completed in the subsequent Codex pass. Producer-causality consolidation explicitly de-scoped as a separate slice with a separate contract. Live-degradation triage and ADR 0046 hardening also de-scoped: distinct surfaces, separate review cycles.*
