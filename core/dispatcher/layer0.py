@@ -157,7 +157,7 @@ def load_archetype_index(
                 embeddings=[list(vector) for vector in cached["embeddings"]],
             )
 
-    embeddings = encoder.encode_many([item.text for item in archetypes])
+    embeddings = _json_embedding_matrix(encoder.encode_many([item.text for item in archetypes]))
     index = ArchetypeIndex(
         manifest_path=str(manifest),
         manifest_hash=manifest_hash,
@@ -183,6 +183,10 @@ def load_archetype_index(
             encoding="utf-8",
         )
     return index
+
+
+def _json_embedding_matrix(embeddings: Sequence[Sequence[float]]) -> list[list[float]]:
+    return [[float(value) for value in vector] for vector in embeddings]
 
 
 class Layer0Dispatcher:
@@ -222,7 +226,10 @@ class Layer0Dispatcher:
             hint = CompositionHint.FRESH_ONLY
             framing = ProvenanceFraming.FRESH_ONLY
         elif explicit_memory and not explicit_fetch:
-            substrate_sources = _available_substrates(inventory, _DEFAULT_SUBSTRATE_FALLBACK)
+            substrate_sources = _available_substrates(
+                inventory,
+                _substrate_candidates(source_anchor_candidates),
+            )
             external_sources = []
             hint = CompositionHint.SUBSTRATE_ONLY
             framing = ProvenanceFraming.SUBSTRATE_ONLY_NO_FRESH_VALIDATION
@@ -232,7 +239,10 @@ class Layer0Dispatcher:
             hint = CompositionHint.FRESH_ONLY
             framing = ProvenanceFraming.FRESH_ONLY
         elif _class_won("A_EXPLICIT_SUBSTRATE_RECALL", accepted):
-            substrate_sources = _available_substrates(inventory, _DEFAULT_SUBSTRATE_FALLBACK)
+            substrate_sources = _available_substrates(
+                inventory,
+                _substrate_candidates(source_anchor_candidates),
+            )
             external_sources = []
             hint = CompositionHint.SUBSTRATE_ONLY
             framing = ProvenanceFraming.SUBSTRATE_ONLY_NO_FRESH_VALIDATION
@@ -354,7 +364,7 @@ def _fallback_spec_shape(
 
     substrate = _available_substrates(
         inventory,
-        [*source_anchor_candidates, *_DEFAULT_SUBSTRATE_FALLBACK],
+        _substrate_candidates(source_anchor_candidates),
     )
     external = [ExternalSource.WEB_SEARCH] if content_anchored else []
     if external:
@@ -391,6 +401,10 @@ def _source_anchor_candidates(utterance: str) -> list[SubstrateSource]:
     if _REDDIT_ANCHOR_RE.search(utterance):
         return [SubstrateSource.REDDIT_SOURCE]
     return []
+
+
+def _substrate_candidates(source_anchor_candidates: Sequence[SubstrateSource]) -> list[SubstrateSource]:
+    return [*source_anchor_candidates, *_DEFAULT_SUBSTRATE_FALLBACK]
 
 
 def _availability_for_selected(

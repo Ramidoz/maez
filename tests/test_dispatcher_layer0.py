@@ -1,4 +1,5 @@
 import json
+import numpy as np
 import tempfile
 import unittest
 from pathlib import Path
@@ -55,6 +56,18 @@ class _FakeEncoder:
         return [0.25, 0.25, 0.25]
 
 
+class _NumpyScalarEncoder(_FakeEncoder):
+    def _vec(self, text):
+        return [np.float32(value) for value in super()._vec(text)]
+
+
+class _RecallBiasedRedditEncoder(_FakeEncoder):
+    def _vec(self, text):
+        if "reddit" in text.lower():
+            return [1.0, 0.0, 0.0]
+        return super()._vec(text)
+
+
 class DispatcherLayer0Tests(unittest.TestCase):
     def test_archetype_cache_reencodes_when_manifest_or_encoder_identity_changes(self):
         from core.dispatcher.layer0 import load_archetype_index
@@ -81,6 +94,23 @@ class DispatcherLayer0Tests(unittest.TestCase):
             cache.write_text(json.dumps(payload), encoding="utf-8")
             load_archetype_index(manifest_path=manifest, cache_path=cache, encoder=encoder)
             self.assertEqual(len(encoder.calls), 3)
+
+    def test_archetype_cache_serializes_numpy_scalar_embeddings(self):
+        from core.dispatcher.layer0 import load_archetype_index
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "archetypes.md"
+            cache = Path(tmp) / "archetypes-cache.json"
+            _write_manifest(manifest)
+
+            index = load_archetype_index(
+                manifest_path=manifest,
+                cache_path=cache,
+                encoder=_NumpyScalarEncoder(),
+            )
+            self.assertTrue(cache.exists())
+
+        self.assertEqual(index.encoder_dimension, 3)
 
     def test_content_anchored_query_emits_hybrid_spec_with_inventory_witness(self):
         from core.dispatcher.inventory import InventorySummary
@@ -233,6 +263,42 @@ class DispatcherLayer0Tests(unittest.TestCase):
 
         self.assertEqual(spec.substrate_sources[0], SubstrateSource.REDDIT_SOURCE)
         self.assertIn(SubstrateSource.REDDIT_SOURCE, spec.source_availability)
+
+    def test_reddit_source_anchor_survives_explicit_substrate_class_win(self):
+        from core.dispatcher.inventory import InventorySummary
+        from core.dispatcher.layer0 import Layer0Dispatcher, load_archetype_index
+        from core.dispatcher.spec import (
+            InventoryWitness,
+            SourceAvailability,
+            SubstrateSource,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "archetypes.md"
+            _write_manifest(manifest)
+            encoder = _RecallBiasedRedditEncoder()
+            index = load_archetype_index(
+                manifest_path=manifest,
+                cache_path=Path(tmp) / "cache.json",
+                encoder=encoder,
+            )
+            inventory = InventorySummary(
+                inventory_witness=InventoryWitness.PRESENT,
+                source_availability={
+                    SubstrateSource.REDDIT_SOURCE: SourceAvailability.EXECUTABLE_PRESENT,
+                    SubstrateSource.TELEGRAM_SEMANTIC: SourceAvailability.EXECUTABLE_PRESENT,
+                },
+                availability_limitations=[],
+                generated_at=1.0,
+            )
+
+            spec = Layer0Dispatcher(index=index, encoder=encoder).emit_spec(
+                "Check Reddit then",
+                surface="telegram",
+                inventory=inventory,
+            )
+
+        self.assertEqual(spec.substrate_sources[0], SubstrateSource.REDDIT_SOURCE)
 
 
 if __name__ == "__main__":
