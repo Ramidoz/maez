@@ -10,6 +10,7 @@ return, and the tool-call parser.
 """
 from __future__ import annotations
 
+import os
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -34,6 +35,7 @@ class PublicSurface(unittest.TestCase):
         self.assertIn("user_id", sig.parameters)
         self.assertIn("chat_id", sig.parameters)
         self.assertIn("send_intermediate", sig.parameters)
+        self.assertIn("surface", sig.parameters)
 
     def test_tool_manifest_nonempty(self):
         self.assertGreater(len(_TOOL_MANIFEST), 500)
@@ -76,6 +78,60 @@ class EarlyReturns(unittest.TestCase):
             get_pipeline=lambda: None,
         )
         self.assertEqual(result, "")
+
+
+class DispatcherWiring(unittest.TestCase):
+    def test_dispatcher_enabled_path_replaces_jarvis_gate(self):
+        from core import brain_loop
+
+        with (
+            patch.dict(os.environ, {"MAEZ_DISPATCHER_ENABLED": "1"}),
+            patch.object(
+                brain_loop,
+                "_should_run_jarvis_loop",
+                side_effect=AssertionError("JARVIS gate should not run"),
+            ),
+            patch.object(
+                brain_loop,
+                "_run_dispatcher_pipeline",
+                return_value=brain_loop._DispatcherPathResult(
+                    transcript="DISPATCHER TRANSCRIPT",
+                    should_run_jarvis=False,
+                ),
+            ) as dispatcher,
+        ):
+            result = run_brain_loop(
+                "Check Reddit then",
+                action_engine=object(),
+                get_pipeline=lambda: None,
+                surface="telegram",
+            )
+
+        self.assertEqual(result, "DISPATCHER TRANSCRIPT")
+        dispatcher.assert_called_once()
+        self.assertEqual(dispatcher.call_args.kwargs["surface"], "telegram")
+
+    def test_dispatcher_disabled_uses_existing_jarvis_gate(self):
+        from core import brain_loop
+
+        with (
+            patch.dict(os.environ, {"MAEZ_DISPATCHER_ENABLED": "0"}),
+            patch.object(brain_loop, "_should_run_jarvis_loop", return_value=False) as gate,
+            patch.object(
+                brain_loop,
+                "_run_dispatcher_pipeline",
+                side_effect=AssertionError("dispatcher path should not run"),
+            ),
+        ):
+            result = run_brain_loop(
+                "Check Reddit then",
+                action_engine=object(),
+                get_pipeline=lambda: None,
+                surface="telegram",
+            )
+
+        self.assertEqual(result, "")
+        gate.assert_called_once_with("Check Reddit then")
 
     def test_conversational_returns_empty(self):
         result = run_brain_loop(

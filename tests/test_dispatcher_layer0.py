@@ -195,6 +195,45 @@ class DispatcherLayer0Tests(unittest.TestCase):
         )
         self.assertEqual(first.external_sources, [ExternalSource.WEB_SEARCH])
 
+    def test_reddit_source_anchor_selects_reddit_substrate(self):
+        from core.dispatcher.inventory import InventorySummary
+        from core.dispatcher.layer0 import Layer0Dispatcher, load_archetype_index
+        from core.dispatcher.spec import (
+            ExternalSource,
+            InventoryWitness,
+            SourceAvailability,
+            SubstrateSource,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "archetypes.md"
+            _write_manifest(manifest)
+            encoder = _FakeEncoder()
+            index = load_archetype_index(
+                manifest_path=manifest,
+                cache_path=Path(tmp) / "cache.json",
+                encoder=encoder,
+            )
+            inventory = InventorySummary(
+                inventory_witness=InventoryWitness.PRESENT,
+                source_availability={
+                    SubstrateSource.REDDIT_SOURCE: SourceAvailability.EXECUTABLE_PRESENT,
+                    SubstrateSource.TELEGRAM_SEMANTIC: SourceAvailability.EXECUTABLE_PRESENT,
+                    ExternalSource.WEB_SEARCH: SourceAvailability.EXECUTABLE_PRESENT,
+                },
+                availability_limitations=[],
+                generated_at=1.0,
+            )
+
+            spec = Layer0Dispatcher(index=index, encoder=encoder).emit_spec(
+                "Check Reddit then",
+                surface="telegram",
+                inventory=inventory,
+            )
+
+        self.assertEqual(spec.substrate_sources[0], SubstrateSource.REDDIT_SOURCE)
+        self.assertIn(SubstrateSource.REDDIT_SOURCE, spec.source_availability)
+
 
 if __name__ == "__main__":
     unittest.main()

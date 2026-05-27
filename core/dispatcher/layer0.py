@@ -91,6 +91,7 @@ _CONTENT_ANCHOR_RE = re.compile(
     r"\b(qwen|reddit|online|local ?llama|telegram|github|calendar|project|status)\b",
     re.IGNORECASE,
 )
+_REDDIT_ANCHOR_RE = re.compile(r"\b(reddit|local ?llama|r/[A-Za-z0-9_]+)\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -207,6 +208,7 @@ class Layer0Dispatcher:
         explicit_fetch = bool(_EXPLICIT_FETCH_RE.search(utterance))
         explicit_memory = bool(_EXPLICIT_MEMORY_RE.search(utterance))
         content_anchored = bool(_CONTENT_ANCHOR_RE.search(utterance))
+        source_anchor_candidates = _source_anchor_candidates(utterance)
         scores = self.score_classes(utterance)
         accepted = _accepted_classes(scores, self.thresholds)
         limitations = list(inventory.availability_limitations)
@@ -240,6 +242,7 @@ class Layer0Dispatcher:
                 content_anchored=content_anchored or _class_won(
                     "C_HYBRID_CONTENT_ANCHORED", accepted
                 ),
+                source_anchor_candidates=source_anchor_candidates,
                 limitations=limitations,
             )
 
@@ -333,6 +336,7 @@ def _fallback_spec_shape(
     inventory: InventorySummary,
     *,
     content_anchored: bool,
+    source_anchor_candidates: Sequence[SubstrateSource],
     limitations: list[AvailabilityLimitation],
 ) -> tuple[
     list[SubstrateSource],
@@ -348,7 +352,10 @@ def _fallback_spec_shape(
     if inventory.inventory_witness == InventoryWitness.UNKNOWN:
         _append_once(limitations, AvailabilityLimitation.INVENTORY_UNKNOWN)
 
-    substrate = _available_substrates(inventory, _DEFAULT_SUBSTRATE_FALLBACK)
+    substrate = _available_substrates(
+        inventory,
+        [*source_anchor_candidates, *_DEFAULT_SUBSTRATE_FALLBACK],
+    )
     external = [ExternalSource.WEB_SEARCH] if content_anchored else []
     if external:
         return (
@@ -378,6 +385,12 @@ def _available_substrates(
         }:
             selected.append(source)
     return selected
+
+
+def _source_anchor_candidates(utterance: str) -> list[SubstrateSource]:
+    if _REDDIT_ANCHOR_RE.search(utterance):
+        return [SubstrateSource.REDDIT_SOURCE]
+    return []
 
 
 def _availability_for_selected(

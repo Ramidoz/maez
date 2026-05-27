@@ -3087,6 +3087,7 @@ class TelegramVoice:
             get_pipeline=self._get_pipeline,
             user_id="rohit",
             chat_id=str(self.authorized_user),
+            surface="telegram",
             model=MODEL,
             max_iters=max_iters,
             recovery_seed=recovery_seed,

@@ -6994,6 +6994,7 @@ class MaezDaemon:
                     get_pipeline=get_pipeline_fn,
                     user_id=data.get("user_id") or "rohit",
                     chat_id=str(data.get("chat_id") or ""),
+                    surface="web",
                     send_intermediate=None,  # web has no out-of-band card surface
                     return_structured=True,
                 )

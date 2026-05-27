@@ -31,8 +31,11 @@ Changes here are mechanical: `self.X` → parameters, `MODEL` → param,
 from __future__ import annotations
 
 import json as _json
+import hashlib
 import logging
+import os
 import re as _re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -68,6 +71,12 @@ class BrainLoopResult:
 
     transcript: str = ""
     tool_calls: list[dict] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _DispatcherPathResult:
+    transcript: str = ""
+    should_run_jarvis: bool = False
 
 
 def _summarize(value, *, limit: int) -> str:
@@ -134,6 +143,279 @@ def _transcript_to_tool_call_dict(item: tuple) -> dict:
         "output_summary": out_str[:500] if status == "ok" else "",
         "error_summary": out_str[:500] if status != "ok" else "",
     }
+
+
+def _dispatcher_enabled() -> bool:
+    value = os.environ.get("MAEZ_DISPATCHER_ENABLED", "0")
+    return value.strip().lower() in {"1", "true", "yes"}
+
+
+_DISPATCHER_ARCHETYPE_INDEX = None
+_DISPATCHER_REPAIR_FSM = None
+
+
+def _dispatcher_index():
+    global _DISPATCHER_ARCHETYPE_INDEX
+    if _DISPATCHER_ARCHETYPE_INDEX is None:
+        from core.dispatcher.layer0 import load_archetype_index
+
+        _DISPATCHER_ARCHETYPE_INDEX = load_archetype_index()
+    return _DISPATCHER_ARCHETYPE_INDEX
+
+
+def _dispatcher_repair_fsm():
+    global _DISPATCHER_REPAIR_FSM
+    if _DISPATCHER_REPAIR_FSM is None:
+        from core.dispatcher.layer2 import Layer2RepairFSM
+
+        _DISPATCHER_REPAIR_FSM = Layer2RepairFSM()
+    return _DISPATCHER_REPAIR_FSM
+
+
+def _dispatcher_inventory_summary():
+    from core.dispatcher.spec import (
+        AvailabilityLimitation,
+        ExternalSource,
+        InventoryWitness,
+        SourceAvailability,
+        SubstrateSource,
+    )
+
+    return {
+        "inventory_witness": InventoryWitness.UNKNOWN,
+        "source_availability": {
+            **{
+                source: SourceAvailability.EXECUTABLE_UNKNOWN
+                for source in SubstrateSource
+            },
+            **{
+                source: SourceAvailability.EXECUTABLE_UNKNOWN
+                for source in ExternalSource
+            },
+        },
+        "availability_limitations": [AvailabilityLimitation.INVENTORY_UNKNOWN],
+    }
+
+
+def _dispatcher_recall_adapters(user_text: str):
+    from core.dispatcher.layer1 import RecallBlock
+    from core.dispatcher.spec import SubstrateSource
+
+    def _memory_manager_adapter(source: SubstrateSource):
+        from memory.memory_manager import MemoryManager
+
+        memory = MemoryManager()
+        try:
+            recalled = memory.recall_for_telegram(user_text)
+            text = memory.format_for_prompt(recalled, max_chars=1200)
+        finally:
+            try:
+                memory.close()
+            except Exception:
+                pass
+        if not text:
+            return []
+        return [
+            RecallBlock(
+                source=source,
+                text=text,
+                timestamp=None,
+                freshness="memory_manager",
+                rationale="recall_for_telegram",
+                prompt_cost=len(text),
+            )
+        ]
+
+    return {
+        SubstrateSource.REDDIT_SOURCE: _memory_manager_adapter,
+        SubstrateSource.TELEGRAM_TEMPORAL: _memory_manager_adapter,
+        SubstrateSource.TELEGRAM_SEMANTIC: _memory_manager_adapter,
+    }
+
+
+def _source_role_for_dispatcher_block(spec):
+    from core.dispatcher.provenance_renderer import SourceRole
+    from core.dispatcher.spec import ProvenanceFraming
+
+    if spec.provenance_framing == ProvenanceFraming.SUBSTRATE_EVIDENCE_FRESH_CONTEXT:
+        return SourceRole.SUBSTRATE_EVIDENCE
+    return SourceRole.SUBSTRATE_CONTEXT
+
+
+def _render_dispatcher_transcript(spec, layer1_result, *, user_text: str, surface: str) -> str:
+    if not layer1_result.recall_blocks or spec.external_sources:
+        return ""
+
+    from core.dispatcher.provenance_renderer import (
+        AskShape,
+        SourceSummary,
+        render_provenance,
+    )
+
+    role = _source_role_for_dispatcher_block(spec)
+    summaries = [
+        SourceSummary(
+            source=block.source,
+            role=role,
+            text=block.text,
+            content_digest="sha256:" + hashlib.sha256(block.text.encode()).hexdigest(),
+        )
+        for block in layer1_result.recall_blocks
+    ]
+    rendered = render_provenance(
+        spec,
+        utterance=user_text,
+        surface=surface,
+        ask_shape=AskShape.CONVERSATIONAL,
+        timestamp=str(int(time.time())),
+        source_summaries=summaries,
+    )
+    return rendered.prompt_block
+
+
+def _run_dispatcher_pipeline(
+    *,
+    user_text: str,
+    surface: str,
+    bond_id: str,
+    chat_id: str,
+) -> _DispatcherPathResult:
+    from core.dispatcher.inventory import InventorySummary
+    from core.dispatcher.layer0 import Layer0Dispatcher
+    from core.dispatcher.layer1 import Layer1Fanout, RecallBranchStatus
+    from core.dispatcher.layer2 import RepairRefusal
+
+    total_started = time.monotonic()
+    logger.info(
+        "dispatcher_path_entry surface=%s bond_id=%s chat_id=%s flag_state=enabled recovery_seed_present=%s",
+        surface,
+        bond_id,
+        chat_id,
+        False,
+    )
+
+    inventory = InventorySummary(generated_at=time.monotonic(), **_dispatcher_inventory_summary())
+
+    layer0_started = time.monotonic()
+    spec = Layer0Dispatcher(index=_dispatcher_index()).emit_spec(
+        user_text,
+        surface=surface,
+        inventory=inventory,
+    )
+    layer0_elapsed_ms = (time.monotonic() - layer0_started) * 1000
+    logger.info(
+        "dispatcher_layer0_emit surface=%s bond_id=%s composition_hint=%s provenance_framing=%s inventory_witness=%s substrate_source_count=%s external_source_count=%s elapsed_ms=%.3f",
+        surface,
+        bond_id,
+        spec.composition_hint.value,
+        spec.provenance_framing.value,
+        spec.inventory_witness.value,
+        len(spec.substrate_sources),
+        len(spec.external_sources),
+        layer0_elapsed_ms,
+    )
+    if layer0_elapsed_ms > 50:
+        logger.warning(
+            "dispatcher_layer0_budget_breach surface=%s elapsed_ms=%.3f budget_ms=%s cold_or_warm=%s",
+            surface,
+            layer0_elapsed_ms,
+            50,
+            "warm",
+        )
+
+    fsm = _dispatcher_repair_fsm()
+    layer2_result = fsm.apply_repair(
+        bond_id=bond_id,
+        surface=surface,
+        conversation_id=chat_id,
+        current_utterance=user_text,
+        current_spec=spec,
+    )
+    if isinstance(layer2_result, RepairRefusal):
+        logger.info(
+            "dispatcher_layer2_repair surface=%s bond_id=%s result=refused refusal_reason=%s",
+            surface,
+            bond_id,
+            layer2_result.reason.value,
+        )
+        return _DispatcherPathResult(transcript="", should_run_jarvis=False)
+    if layer2_result is spec:
+        logger.info(
+            "dispatcher_layer2_repair surface=%s bond_id=%s result=unchanged refusal_reason=",
+            surface,
+            bond_id,
+        )
+    else:
+        logger.info(
+            "dispatcher_layer2_repair surface=%s bond_id=%s result=repaired refusal_reason=",
+            surface,
+            bond_id,
+        )
+        spec = layer2_result
+
+    layer1_started = time.monotonic()
+    layer1_result = Layer1Fanout(adapters=_dispatcher_recall_adapters(user_text)).run(
+        spec,
+        utterance=user_text,
+        conversation_state={"bond_id": bond_id, "surface": surface, "chat_id": chat_id},
+    )
+    for branch in layer1_result.branch_results:
+        if branch.status == RecallBranchStatus.SUCCESS:
+            outcome = "rows"
+        elif branch.status == RecallBranchStatus.EMPTY:
+            outcome = "empty_with_reason"
+        elif branch.status == RecallBranchStatus.TIMEOUT:
+            outcome = "timeout"
+        elif branch.status == RecallBranchStatus.RESERVED_UNAVAILABLE:
+            outcome = "reserved_skip"
+        else:
+            outcome = branch.status.value.lower()
+        logger.info(
+            "dispatcher_layer1_branch surface=%s source=%s outcome=%s row_count=%s elapsed_ms=%.3f",
+            surface,
+            branch.source.value,
+            outcome,
+            len(branch.blocks),
+            branch.elapsed_ms,
+        )
+    total_layer1_ms = (time.monotonic() - layer1_started) * 1000
+    seal_state = "clean"
+    if any(branch.status != RecallBranchStatus.SUCCESS for branch in layer1_result.branch_results):
+        seal_state = "partial_failure"
+    logger.info(
+        "dispatcher_layer1_fanout surface=%s fanout_generation_id=%s branch_count=%s seal_state=%s total_elapsed_ms=%.3f",
+        surface,
+        layer1_result.fanout_generation_id,
+        len(layer1_result.branch_results),
+        seal_state,
+        total_layer1_ms,
+    )
+
+    if layer1_result.recall_blocks:
+        fsm.record_completed_spec(
+            bond_id=bond_id,
+            surface=surface,
+            conversation_id=chat_id,
+            spec=spec,
+        )
+    transcript = _render_dispatcher_transcript(
+        spec,
+        layer1_result,
+        user_text=user_text,
+        surface=surface,
+    )
+    should_run_jarvis = bool(spec.external_sources)
+    logger.info(
+        "dispatcher_path_exit surface=%s bond_id=%s chat_id=%s path_taken=dispatcher total_elapsed_ms=%.3f",
+        surface,
+        bond_id,
+        chat_id,
+        (time.monotonic() - total_started) * 1000,
+    )
+    return _DispatcherPathResult(
+        transcript=transcript,
+        should_run_jarvis=should_run_jarvis,
+    )
 
 # Alias to match original module's import style (`_jarvis_re` is the
 # original name for the re module import in telegram_voice.py).
@@ -856,6 +1138,7 @@ def run_brain_loop(
     get_pipeline,
     user_id: str | None = None,
     chat_id: str = "",
+    surface: str | None = None,
     model: str | None = None,  # None → use core.model_config.PRIMARY_MODEL
     max_iters: int = 4,
     recovery_seed=None,
@@ -897,8 +1180,38 @@ def run_brain_loop(
 
     if not action_engine:
         return _empty()
-    if recovery_seed is None and not _should_run_jarvis_loop(user_text):
-        return _empty()
+
+    dispatcher_path = False
+    if recovery_seed is None:
+        if _dispatcher_enabled():
+            if not surface:
+                logger.warning(
+                    "dispatcher_path_entry surface=%s bond_id=%s chat_id=%s flag_state=enabled recovery_seed_present=%s",
+                    "",
+                    user_id or "",
+                    chat_id,
+                    False,
+                )
+                if not _should_run_jarvis_loop(user_text):
+                    return _empty()
+            else:
+                dispatcher_path = True
+        elif not _should_run_jarvis_loop(user_text):
+            return _empty()
+
+    if dispatcher_path:
+        dispatcher_result = _run_dispatcher_pipeline(
+            user_text=user_text,
+            surface=surface or "",
+            bond_id=user_id or "",
+            chat_id=chat_id,
+        )
+        if dispatcher_result.transcript:
+            if return_structured:
+                return BrainLoopResult(transcript=dispatcher_result.transcript)
+            return dispatcher_result.transcript
+        if not dispatcher_result.should_run_jarvis:
+            return _empty()
 
     # Resolve default user_id from identity (owner.user_id in the yaml)
     # when the caller passed None. Keeps the scope-label "rohit" out of
