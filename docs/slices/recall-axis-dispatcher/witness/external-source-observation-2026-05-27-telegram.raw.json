@@ -1,0 +1,70 @@
+{
+  "slice": "recall-axis-dispatcher external-source observation",
+  "surface": "telegram_adapter",
+  "git_head_at_flip": "fd21828",
+  "opened_at": "2026-05-27T17:12:00-05:00",
+  "closed_log_end_at": "2026-05-27T17:30:23-05:00",
+  "logs": {
+    "maez_log_start_byte": 50368956,
+    "maez_log_end_byte": 50533207,
+    "maez_log_delta_bytes": 164371,
+    "actions_log_start_byte": 5803828,
+    "actions_log_end_byte": 5803828,
+    "actions_log_delta_bytes": 0
+  },
+  "service": {
+    "observation_pid": 3291912,
+    "restored_pid": 3300597,
+    "observation_dispatcher_enabled": true,
+    "restored_dispatcher_enabled": false,
+    "python_faulthandler_preserved": true
+  },
+  "counts": {
+    "dispatcher_path_entry": 10,
+    "dispatcher_path_exit": 10,
+    "dispatcher_external_branch": 0,
+    "dispatcher_external_fanout": 10,
+    "dispatcher_layer1_budget_limited": 7,
+    "provenance_template_mismatch": 0,
+    "segv_or_fatal_python_error": 0,
+    "web_search_log_lines": 6
+  },
+  "turn_seal_state": {
+    "clean": 3,
+    "reconstructed": 7
+  },
+  "layer0_source_shapes": {
+    "substrate_source_count=3 external_source_count=0": 7,
+    "substrate_source_count=1 external_source_count=0": 3
+  },
+  "layer1_branch_outcomes": {
+    "TELEGRAM_SEMANTIC:rows": 7,
+    "ENTITY_INDEX:error": 7,
+    "LIVED_EPISODES:error": 7,
+    "REDDIT_SOURCE:rows": 3
+  },
+  "external_fanout_shapes": {
+    "branch_count=0 seal_state=clean": 10
+  },
+  "verdicts": {
+    "telegram_dispatcher_path": "closed",
+    "v1p3_renderer_mismatch": "closed_in_observation",
+    "b3_budget_truncation": "closed_in_observation",
+    "action_log_jarvis_fallthrough": "closed_by_zero_action_bytes",
+    "legacy_web_search_side_path": "open",
+    "telegram_live_reddit_external_fanout": "not_witnessed",
+    "finding7_reserved_reclassification_live": "still_open"
+  },
+  "new_findings": [
+    {
+      "id": "finding8",
+      "title": "brain_loop inventory summary bypasses InventoryRegistry reserved source declarations",
+      "evidence": "ENTITY_INDEX and LIVED_EPISODES still logged outcome=error after fd21828; _dispatcher_inventory_summary hardcodes all sources EXECUTABLE_UNKNOWN"
+    },
+    {
+      "id": "finding9",
+      "title": "Telegram legacy web-search side path can run after dispatcher exit",
+      "evidence": "Web search triggered lines appeared after dispatcher_path_exit while dispatcher_external_fanout branch_count=0 and actions.log delta was 0 bytes"
+    }
+  ]
+}
