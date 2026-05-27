@@ -715,6 +715,30 @@ These are evidence for triage, not dispatcher implementation approval.
 The dispatcher brief should treat this as empirical scope evidence:
 learn the shape of the ask before choosing substrate, surface, or tool.
 
+##### Hybrid-by-default refinement (added 2026-05-26)
+
+The dispatcher should not treat hybrid recall+freshness as a rare edge
+case. For content-anchored queries, hybrid composition is the default
+value Maez adds: open the relevant owner/bond substrate, fetch fresh
+world signal when appropriate, then compose the picture.
+
+Pure-source modes are explicit-signal exceptions:
+
+- **Pure recall:** "what do you remember", "from your notes", "in your
+  notebook" -> substrate only.
+- **Pure fetch:** "search", "google", "look up right now", "fetch live"
+  -> external source only.
+- **Default hybrid:** "how is X looking online", "what's going on with
+  X", "anything on X" -> substrate plus freshness, with composition.
+
+Layer 0 should therefore produce an **intent specification**, not a
+single intent class: `{substrate_sources, external_sources,
+composition_hint}`. Embedding-proximity rankings can inform that spec
+by allowing multiple high-scoring archetype classes to contribute,
+rather than forcing a single label. The v0 archetype set should treat
+Class C / memory-then-freshness as the broad default for content
+queries; Classes A and B are explicit-edge cases.
+
 #### Dispatcher v1 architecture option set
 
 - **State interception:** generalize the Reddit precedent from `5c6be72`.
