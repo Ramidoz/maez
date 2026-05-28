@@ -986,6 +986,31 @@ def _daemon_parallel_web_search_enabled(transcript: str = "") -> bool:
     )
 
 
+def _consolidate_system_messages(
+    messages: list[dict],
+    *,
+    final_system_part: str | None = None,
+) -> list[dict]:
+    """Collapse system-role prompt parts into one leading system message."""
+    system_parts: list[str] = []
+    non_system_messages: list[dict] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = message.get("role")
+        content = str(message.get("content") or "")
+        if role == "system":
+            if content.strip():
+                system_parts.append(content)
+        else:
+            non_system_messages.append(message)
+    if final_system_part and final_system_part.strip():
+        system_parts.append(final_system_part)
+    if not system_parts:
+        return non_system_messages
+    return [{"role": "system", "content": "\n\n".join(system_parts)}] + non_system_messages
+
+
 # Sentinel the model emits when nothing noteworthy to report this cycle.
 # Storing fabricated prose is worse than storing nothing — HEARTBEAT_OK
 # short-circuits audit, storage, and broadcast so the cycle is silent.
@@ -3416,6 +3441,7 @@ class MaezDaemon:
         # memory/search with internal instructions and made follow-up turns
         # like "Proceed" lose the real action request. Keep owner text clean
         # and give the model tool-state as a system note instead.
+        transcript_context = ""
         if transcript and transcript.strip():
             try:
                 from core.brain_loop import (
@@ -3431,12 +3457,7 @@ class MaezDaemon:
                     transcript[:100],
                 )
 
-                messages.append(
-                    {
-                        "role": "system",
-                        "content": (f"{transcript}\n\n{instruction_block}"),
-                    }
-                )
+                transcript_context = f"{transcript}\n\n{instruction_block}"
             except Exception as _tool_ctx_exc:
                 logger.debug("tool transcript context skipped: %s", _tool_ctx_exc)
         # ADR 0019 Phase 6 — lived recall brief. Built from the user's
@@ -3574,6 +3595,10 @@ class MaezDaemon:
         # not background context. 2026-04-27 incident fix.
         if _premise_flag:
             messages.append({"role": "system", "content": _premise_flag})
+        messages = _consolidate_system_messages(
+            messages,
+            final_system_part=transcript_context,
+        )
         messages.append({"role": "user", "content": prompt})
 
         if authoritative_tool_reply:

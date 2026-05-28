@@ -48,6 +48,7 @@ from __future__ import annotations
 import ast
 import os
 import sys
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -255,6 +256,194 @@ class DaemonHandleMessageContract(unittest.TestCase):
                     "[fresh evidence] LIVE_REDDIT: recent posts"
                 )
             )
+
+    def test_dispatcher_transcript_prompt_consolidates_to_one_system_message(self):
+        """Dispatcher transcript context must be one system message, transcript last."""
+        from daemon.maez_daemon import _consolidate_system_messages
+
+        transcript_context = (
+            "[fresh evidence] LIVE_REDDIT: recent posts\n\n"
+            "HARD INSTRUCTION — dispatcher"
+        )
+        messages = [
+            {"role": "system", "content": "daemon system prompt"},
+            {"role": "user", "content": "Rohit: previous turn"},
+            {"role": "assistant", "content": "Maez: previous reply"},
+            {"role": "system", "content": "lived recall brief"},
+            {"role": "system", "content": "ambient context"},
+        ]
+
+        consolidated = _consolidate_system_messages(
+            messages,
+            final_system_part=transcript_context,
+        )
+
+        system_messages = [m for m in consolidated if m.get("role") == "system"]
+        self.assertEqual(len(system_messages), 1)
+        self.assertEqual(consolidated[0]["role"], "system")
+        self.assertEqual(consolidated[1]["role"], "user")
+        self.assertEqual(consolidated[2]["role"], "assistant")
+        self.assertTrue(system_messages[0]["content"].endswith(transcript_context))
+
+        handle_src = ast.get_source_segment(
+            (_REPO / "daemon" / "maez_daemon.py").read_text(),
+            next(
+                node
+                for node in ast.walk(ast.parse((_REPO / "daemon" / "maez_daemon.py").read_text()))
+                if isinstance(node, ast.FunctionDef) and node.name == "handle_message"
+            ),
+        ) or ""
+        self.assertIn("_consolidate_system_messages", handle_src)
+        self.assertIn("final_system_part=transcript_context", handle_src)
+
+    def test_handle_message_sends_one_system_message_with_dispatcher_suffix(self):
+        """The live daemon prompt assembly must send one system message."""
+        from daemon import maez_daemon
+
+        class FakeMemory:
+            def recall_for_telegram(self, _text):
+                return {}
+
+            def format_for_prompt(self, _recalled, max_chars=None):
+                return "MEMORY BLOCK"
+
+            def store_telegram(self, *_args, **_kwargs):
+                return "raw-memory-id"
+
+        class FreshState:
+            def with_freshness(self):
+                return self
+
+        captured: dict[str, list[dict]] = {}
+
+        def fake_chat(*, model, messages, think, options):
+            captured["messages"] = messages
+            return types.SimpleNamespace(
+                message=types.SimpleNamespace(content="grounded reply")
+            )
+
+        daemon = object.__new__(maez_daemon.MaezDaemon)
+        daemon.system_prompt = "DAEMON SYSTEM"
+        daemon.memory = FakeMemory()
+        daemon.lived_episodes = types.SimpleNamespace(
+            add=lambda *args, **kwargs: None,
+        )
+        daemon.lived_graph = object()
+        daemon._camera_presence_state = FreshState()
+        daemon._last_screen_obs = None
+        daemon._last_calendar_snap = None
+        daemon.m1_promoter = None
+        daemon._get_public_context = lambda: ""
+        daemon._trf_apply_fragment_guard = lambda **kwargs: kwargs["reply"]
+        daemon._ws_broadcast = lambda _payload: None
+
+        trace = types.SimpleNamespace(
+            audit=types.SimpleNamespace(),
+            lived_recall_ids=[],
+        )
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "MAEZ_DISPATCHER_ENABLED": "1",
+                "MAEZ_LIVED_RECALL": "0",
+                "MAEZ_AMBIENT_BRIEF": "0",
+                "MAEZ_WORKING_SELF": "0",
+                "MAEZ_WONDERING_PURSUIT": "0",
+            },
+            clear=False,
+        ), mock.patch.object(
+            maez_daemon,
+            "guard_owner_text",
+            return_value=types.SimpleNamespace(matched=False, answer_text=None),
+        ), mock.patch.object(
+            maez_daemon,
+            "answer_camera_presence_question",
+            return_value=None,
+        ), mock.patch.object(
+            maez_daemon,
+            "perception_snapshot",
+            return_value=object(),
+        ), mock.patch.object(
+            maez_daemon,
+            "format_snapshot",
+            return_value="SYSTEM_STATE",
+        ), mock.patch.object(
+            maez_daemon,
+            "Trace",
+            types.SimpleNamespace(start=lambda **_kwargs: trace),
+        ), mock.patch.object(
+            maez_daemon,
+            "default_writer",
+            return_value=types.SimpleNamespace(write=lambda _trace: None),
+        ), mock.patch.object(
+            maez_daemon,
+            "_trace_hash_text",
+            return_value="hash",
+        ), mock.patch.object(
+            maez_daemon,
+            "_trace_extract_evidence_ids",
+            return_value=[],
+        ), mock.patch.object(
+            maez_daemon,
+            "build_temporal_anchor_recall_brief",
+            return_value=types.SimpleNamespace(
+                anchor_detected=False,
+                brief_text="",
+                evidence_ids=[],
+            ),
+        ), mock.patch(
+            "core.cognition.envelope_builder.build_envelope",
+            return_value=None,
+        ), mock.patch(
+            "core.cognition.envelope_builder.render_envelope_for_prompt",
+            return_value="",
+        ), mock.patch(
+            "core.cognition.envelope_builder.resolve_recall_cap_chars",
+            return_value=1000,
+        ), mock.patch(
+            "skills.web_search.needs_web_search",
+            return_value=False,
+        ), mock.patch(
+            "core.safety.audited_output.audit_assistant_text",
+            side_effect=lambda text, **_kwargs: text,
+        ), mock.patch(
+            "core.ledger.writer.try_write_turn",
+            return_value="turn-1",
+        ), mock.patch(
+            "core.ledger.model_reply_persistence.persist_model_reply",
+            return_value=None,
+        ), mock.patch(
+            "core.llm_client.chat",
+            side_effect=fake_chat,
+        ):
+            reply = maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                "Search r/LocalLLaMA right now",
+                source="telegram_surface",
+                transcript="[fresh evidence] LIVE_REDDIT: recent posts",
+                chat_history=[
+                    {"content": "Rohit: earlier\nMaez: prior answer"},
+                ],
+            )
+
+        self.assertEqual(reply, "grounded reply")
+        system_messages = [
+            message
+            for message in captured["messages"]
+            if message.get("role") == "system"
+        ]
+        self.assertEqual(len(system_messages), 1)
+        from core.brain_loop import _instruction_block_for_transcript
+
+        self.assertTrue(
+            system_messages[0]["content"].endswith(
+                "[fresh evidence] LIVE_REDDIT: recent posts\n\n"
+                + _instruction_block_for_transcript(
+                    "[fresh evidence] LIVE_REDDIT: recent posts"
+                )
+            )
+        )
 
     def test_authoritative_currency_tool_reply_bypasses_llm_synthesis(self):
         """A deterministic currency tool result must not be re-synthesized.
