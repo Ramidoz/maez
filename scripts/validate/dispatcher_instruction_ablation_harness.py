@@ -255,13 +255,16 @@ def build_messages(transcript: str, user_text: str, case: str) -> list[dict]:
       I: case F's content CONSOLIDATED into ONE system message (structural test —
          same content as F, single message instead of three. Tests whether
          multi-system-message stacking is the structural contaminant.)
+      J: case I + 3-turn chat history. Tests whether the consolidation fix
+         alone closes Finding 10, or whether chat history needs separate
+         treatment under dispatcher-enabled.
     """
     instruction_block = _instruction_block_for_transcript(transcript)
     transcript_with_instruction = f"{transcript}\n\n{instruction_block}"
 
     messages: list[dict] = []
 
-    if case == "I":
+    if case in ("I", "J"):
         # Consolidated single system message: daemon + memory + transcript + instr.
         # Dispatcher transcript+instruction placed LAST so it's the most-recent
         # context within the single message.
@@ -271,6 +274,9 @@ def build_messages(transcript: str, user_text: str, case: str) -> list[dict]:
             f"{transcript_with_instruction}"
         )
         messages.append({"role": "system", "content": consolidated})
+        if case == "J":
+            # Chat history added between system and user — same as cases C/E
+            messages.extend(_CHAT_HISTORY)
         messages.append({"role": "user", "content": user_text})
         return messages
 
@@ -361,8 +367,8 @@ def classify_reply(reply: str) -> dict:
     }
 
 
-CASES = ("I",)  # Case I: consolidated single-system-message variant.
-# Full case set: ("A", "B", "C", "D", "E", "F", "G", "H", "I")
+CASES = ("J",)  # Case J: case I + chat history.
+# Full case set: ("A", "B", "C", "D", "E", "F", "G", "H", "I", "J")
 
 
 def run_ablation() -> list[dict]:
