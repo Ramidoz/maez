@@ -50,6 +50,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _REPO = Path(__file__).resolve().parent.parent
 if str(_REPO) not in sys.path:
@@ -223,10 +224,37 @@ class DaemonHandleMessageContract(unittest.TestCase):
                 body_src = ast.get_source_segment(src, node) or ""
                 self.assertIn("Tool transcripts are synthesis context", body_src)
                 self.assertIn('"role": "system"', body_src)
-                self.assertIn("_JARVIS_INSTRUCTION_BLOCK", body_src)
+                self.assertIn("_instruction_block_for_transcript", body_src)
+                self.assertIn("_transcript_instruction_state", body_src)
+                self.assertIn("daemon_transcript_instruction_state", body_src)
                 self.assertNotIn("build_synthesis_user_text(", body_src)
                 return
         self.fail("handle_message not found in maez_daemon.py")
+
+    def test_dispatcher_enabled_transcript_gates_daemon_parallel_web_search(self):
+        """Dispatcher transcripts are the fresh-evidence authority.
+
+        The daemon synthesis layer must not also run its legacy
+        needs_web_search branch after the dispatcher already produced a
+        transcript. That was the active-path sibling of the legacy
+        Telegram Pipeline A gate.
+        """
+        from daemon.maez_daemon import _daemon_parallel_web_search_enabled
+
+        with mock.patch.dict("os.environ", {"MAEZ_DISPATCHER_ENABLED": "1"}):
+            self.assertFalse(
+                _daemon_parallel_web_search_enabled(
+                    "[fresh evidence] LIVE_REDDIT: recent posts"
+                )
+            )
+            self.assertTrue(_daemon_parallel_web_search_enabled(""))
+
+        with mock.patch.dict("os.environ", {"MAEZ_DISPATCHER_ENABLED": "0"}):
+            self.assertTrue(
+                _daemon_parallel_web_search_enabled(
+                    "[fresh evidence] LIVE_REDDIT: recent posts"
+                )
+            )
 
     def test_authoritative_currency_tool_reply_bypasses_llm_synthesis(self):
         """A deterministic currency tool result must not be re-synthesized.

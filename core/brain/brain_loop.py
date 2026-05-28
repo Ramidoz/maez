@@ -1155,6 +1155,84 @@ _JARVIS_INSTRUCTION_BLOCK = (
     + _AMBIGUITY_GUARD
 )
 
+DISPATCHER_TRANSCRIPT_MARKERS = (
+    "[memory evidence]",
+    "[memory context]",
+    "[fresh evidence]",
+    "[no fresh evidence available:",
+    "[dispatcher refusal:",
+)
+
+
+_DISPATCHER_INSTRUCTION_BLOCK = (
+    "HARD INSTRUCTION — read this before writing a single word of your reply:\n"
+    "\n"
+    "1. Marker vocabulary. The transcript above is dispatcher output from THIS turn:\n"
+    "   · [memory evidence] — substrate recall returned content for this turn.\n"
+    "     This is dispatcher-emitted grounding. Cite it directly when it answers\n"
+    "     the owner's question.\n"
+    "   · [memory context] — substrate recall returned context for fresh evidence.\n"
+    "     It is real grounding for this turn, but the fresh evidence is the headline.\n"
+    "   · [fresh evidence] — live external fetch succeeded for this turn. Treat it\n"
+    "     as just-fetched data and report what it says.\n"
+    "   · [no fresh evidence available: <SOURCE>:<STATUS>:<CLASS>:<LIMITATION>]\n"
+    "     means the dispatcher attempted fresh evidence and failed honestly. Say\n"
+    "     what was tried and use the closed-vocab labels as written.\n"
+    "   · [dispatcher refusal: <REASON>] means the dispatcher refused this turn.\n"
+    "     Report the refusal reason honestly. Do not bypass it.\n"
+    "\n"
+    "2. This-turn semantics. Content under dispatcher markers is the result of\n"
+    "   THIS turn's substrate and external fan-out. The JARVIS rule that memory\n"
+    "   recall is only history does NOT apply to dispatcher-emitted [memory\n"
+    "   evidence] or [memory context]. Do not confuse these markers with the\n"
+    "   older [RECALLED MEMORY] historical section elsewhere in the prompt.\n"
+    "\n"
+    "3. Use the evidence, not architecture stories. If the dispatcher emitted\n"
+    "   relevant evidence, answer from it. If it emitted no relevant evidence,\n"
+    "   say that plainly. Do not invent internal-architecture descriptions such\n"
+    "   as 'Reddit signal pipeline', 'tool loop', 'Telegram interceptor', or\n"
+    "   'DuckDuckGo loop' to explain absence.\n"
+    "\n"
+    "4. Closed-vocabulary discipline. When citing failures, limitations, or\n"
+    "   refusals, use the labels in the marker as written, such as AUTH_DENIED,\n"
+    "   SOURCE_TIMEOUT, FRESH_ATTEMPT_FAILED, or\n"
+    "   FRESH_FAILURE_HYBRID_FALLBACK_ILLEGAL. Do not paraphrase them into a\n"
+    "   different reason.\n"
+    "\n"
+    "5. Forbidden fallback phrases for dispatcher turns:\n"
+    "   · 'I cannot perform that search'\n"
+    "   · 'I have no live web search tool'\n"
+    "   · 'the Reddit pipeline is broken'\n"
+    "   · 'the X pipeline is broken'\n"
+    "   · 'I am blind to Reddit'\n"
+    "   · 'trigger a Telegram interceptor'\n"
+    "   These phrases are false when dispatcher evidence is present. If the\n"
+    "   dispatcher reports a failure, name the marker's closed-vocab failure\n"
+    "   instead of inventing a system explanation.\n"
+    "\n"
+    "SUMMARY: The dispatcher transcript is current-turn grounding. Read the\n"
+    "markers literally, answer from the evidence they carry, and do not replace\n"
+    "that evidence with a story about missing tools or hidden pipelines.\n"
+)
+
+
+def _transcript_is_dispatcher_shaped(transcript: str) -> bool:
+    return any(marker in transcript for marker in DISPATCHER_TRANSCRIPT_MARKERS)
+
+
+def _transcript_instruction_state(transcript: str) -> str:
+    if not transcript:
+        return "empty"
+    if _transcript_is_dispatcher_shaped(transcript):
+        return "dispatcher"
+    return "jarvis"
+
+
+def _instruction_block_for_transcript(transcript: str) -> str:
+    if _transcript_is_dispatcher_shaped(transcript):
+        return _DISPATCHER_INSTRUCTION_BLOCK
+    return _JARVIS_INSTRUCTION_BLOCK
+
 _NO_TOOL_INSTRUCTION_BLOCK = (
     "[TURN STATE — NO TOOLS RAN THIS TURN]\n"
     " You did not run any new tools for THIS message. This is a "
@@ -1265,7 +1343,7 @@ def build_synthesis_user_text(user_text: str, jarvis_transcript: str = "") -> st
         return (
             f"{base}\n\n"
             f"{jarvis_transcript}\n\n"
-            f"{_JARVIS_INSTRUCTION_BLOCK}"
+            f"{_instruction_block_for_transcript(jarvis_transcript)}"
         )
     return f"{base}\n\n{_NO_TOOL_INSTRUCTION_BLOCK}"
 

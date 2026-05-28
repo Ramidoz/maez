@@ -114,7 +114,7 @@ class WebGatedByFlagAndOwner(unittest.TestCase):
         add it as system context. Folding tool scaffolding into user
         text pollutes memory/search/trace with non-owner instructions."""
         src = (_REPO / "skills" / "web_interface.py").read_text()
-        self.assertIn("_JARVIS_INSTRUCTION_BLOCK", src)
+        self.assertIn("_instruction_block_for_transcript", src)
         self.assertIn('"role": "system"', src)
         self.assertIn("not folded into the owner's user text", src)
         self.assertNotIn("build_synthesis_user_text", src)

@@ -293,6 +293,56 @@ class ToolTranscriptPromptHonesty(unittest.TestCase):
         self.assertIn("tool(s) above already ran", block)
 
 
+class TranscriptInstructionSelection(unittest.TestCase):
+    """Transcript wrappers must match the transcript producer vocabulary."""
+
+    def test_dispatcher_marker_set_is_centralized_in_brain_loop(self):
+        from core.brain import brain_loop
+
+        self.assertIsInstance(brain_loop.DISPATCHER_TRANSCRIPT_MARKERS, tuple)
+        self.assertIn("[memory evidence]", brain_loop.DISPATCHER_TRANSCRIPT_MARKERS)
+        self.assertIn("[memory context]", brain_loop.DISPATCHER_TRANSCRIPT_MARKERS)
+        self.assertIn("[fresh evidence]", brain_loop.DISPATCHER_TRANSCRIPT_MARKERS)
+        self.assertIn("[no fresh evidence available:", brain_loop.DISPATCHER_TRANSCRIPT_MARKERS)
+        self.assertIn("[dispatcher refusal:", brain_loop.DISPATCHER_TRANSCRIPT_MARKERS)
+
+    def test_dispatcher_transcript_uses_dispatcher_instruction_block(self):
+        from core.brain import brain_loop
+
+        instruction = brain_loop._instruction_block_for_transcript(
+            "[fresh evidence] LIVE_REDDIT: recent posts"
+        )
+
+        self.assertIn("dispatcher-emitted grounding", instruction)
+        self.assertIn("THIS turn's substrate and external fan-out", instruction)
+        self.assertIn("Do not invent internal-architecture descriptions", instruction)
+        self.assertNotIn("Memory recall blocks (the [RECALLED MEMORY] section", instruction)
+
+    def test_jarvis_transcript_still_uses_jarvis_instruction_block(self):
+        from core.brain import brain_loop
+
+        instruction = brain_loop._instruction_block_for_transcript(
+            "✓ web_search: found relevant output"
+        )
+
+        self.assertIn("✓ line — the tool RAN", instruction)
+        self.assertIn("Do not deny tool access", instruction)
+        self.assertNotIn("dispatcher-emitted grounding", instruction)
+
+    def test_transcript_instruction_state_is_closed_vocab(self):
+        from core.brain import brain_loop
+
+        self.assertEqual(
+            brain_loop._transcript_instruction_state("[memory evidence] TELEGRAM_SEMANTIC"),
+            "dispatcher",
+        )
+        self.assertEqual(
+            brain_loop._transcript_instruction_state("✓ run_shell: ok"),
+            "jarvis",
+        )
+        self.assertEqual(brain_loop._transcript_instruction_state(""), "empty")
+
+
 class MaezAdapterWiring(unittest.TestCase):
     """Source-level wiring check: the adapter requests the structured
     result and forwards tool_calls into handle_message. Mocking the

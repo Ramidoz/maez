@@ -978,6 +978,14 @@ def _authoritative_tool_reply(tool_calls: "list[dict] | None") -> str:
     return ""
 
 
+def _daemon_parallel_web_search_enabled(transcript: str = "") -> bool:
+    """Return whether daemon synthesis may run its legacy web-search side path."""
+    return not (
+        os.environ.get("MAEZ_DISPATCHER_ENABLED", "0") == "1"
+        and bool((transcript or "").strip())
+    )
+
+
 # Sentinel the model emits when nothing noteworthy to report this cycle.
 # Storing fabricated prose is worse than storing nothing — HEARTBEAT_OK
 # short-circuits audit, storage, and broadcast so the cycle is silent.
@@ -3306,7 +3314,11 @@ class MaezDaemon:
         # a volatile fact (e.g. currency conversion), do not add web
         # snippets that can override the tool result during synthesis.
         web_context = ""
-        if not authoritative_tool_reply and needs_web_search(text):
+        if (
+            not authoritative_tool_reply
+            and _daemon_parallel_web_search_enabled(transcript)
+            and needs_web_search(text)
+        ):
             logger.info("Web search triggered for: %s", text[:80])
             if is_news_query(text):
                 sr = search_rss(text, max_results=5)
@@ -3406,12 +3418,23 @@ class MaezDaemon:
         # and give the model tool-state as a system note instead.
         if transcript and transcript.strip():
             try:
-                from core.brain_loop import _JARVIS_INSTRUCTION_BLOCK
+                from core.brain_loop import (
+                    _instruction_block_for_transcript,
+                    _transcript_instruction_state,
+                )
+
+                instruction_block = _instruction_block_for_transcript(transcript)
+                logger.info(
+                    "daemon_transcript_instruction_state surface=%s state=%s prefix=%r",
+                    source,
+                    _transcript_instruction_state(transcript),
+                    transcript[:100],
+                )
 
                 messages.append(
                     {
                         "role": "system",
-                        "content": (f"{transcript}\n\n{_JARVIS_INSTRUCTION_BLOCK}"),
+                        "content": (f"{transcript}\n\n{instruction_block}"),
                     }
                 )
             except Exception as _tool_ctx_exc:

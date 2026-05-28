@@ -6589,12 +6589,15 @@ def chat():
                     len(jarvis_transcript_web),
                 )
                 try:
-                    from core.brain_loop import _JARVIS_INSTRUCTION_BLOCK
+                    from core.brain_loop import _instruction_block_for_transcript
 
                     messages_list.append(
                         {
                             "role": "system",
-                            "content": (f"{jarvis_transcript_web}\n\n{_JARVIS_INSTRUCTION_BLOCK}"),
+                            "content": (
+                                f"{jarvis_transcript_web}\n\n"
+                                f"{_instruction_block_for_transcript(jarvis_transcript_web)}"
+                            ),
                         }
                     )
                 except Exception as _ctx_exc:
