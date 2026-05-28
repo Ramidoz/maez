@@ -208,6 +208,38 @@ _DAEMON_SYSTEM_PROMPT = (
 )
 
 
+# Case G — daemon prompt with self-referential architecture language removed.
+# Tests whether the "substrate / dispatcher / audit envelope / language-generation
+# brain" self-description in the original prompt is what primes the model into
+# metacognitive-architecture-describing mode.
+_DAEMON_SYSTEM_PROMPT_NEUTRAL = (
+    "You are Maez, a companion that responds to Rohit. Respond directly from the "
+    "evidence in this turn's context. If evidence is provided in this turn, cite "
+    "it. If evidence is not provided, say so plainly. Genderless self-reference "
+    "(Maez is 'it/its' unless Rohit changes that). Claims must be backed by what's "
+    "in this turn's context, not by plausible-sounding narrative."
+)
+
+
+# Case H — memory block reframed with explicit hierarchy: dispatcher markers
+# dominate. Tests whether labeling the memory block as lower-priority background
+# (rather than substrate-equivalent) suppresses the priming that activates
+# fabrication when combined with the daemon system prompt.
+_RECALLED_MEMORY_BLOCK_HIERARCHY = (
+    "[BACKGROUND MEMORY — LOWER PRIORITY than dispatcher markers]\n"
+    "The following block is background only. For this turn, dispatcher markers in "
+    "the system messages below are higher-priority grounding. If [fresh evidence], "
+    "[memory evidence], [memory context], [no fresh evidence available:], or "
+    "[dispatcher refusal:] appears, answer from those markers FIRST. Use this "
+    "background only if dispatcher markers do not address the question.\n"
+    "\n"
+    "- Owner mentioned interest in local LLM benchmarks last week\n"
+    "- Owner sometimes asks about r/LocalLLaMA for community signals\n"
+    "- Owner prefers concise honest answers grounded in actual evidence\n"
+    "[END BACKGROUND MEMORY]"
+)
+
+
 def build_messages(transcript: str, user_text: str, case: str) -> list[dict]:
     """Build the messages array for a given (transcript, user_text, case).
 
@@ -217,28 +249,34 @@ def build_messages(transcript: str, user_text: str, case: str) -> list[dict]:
       C: + 3-turn chat history
       D: + daemon-style system prompt
       E: full live-style (B + C + D stacked)
-      F: case E minus chat history — the clean hinge to confirm
-         chat-history-only contamination hypothesis from v2 results.
+      F: case E minus chat history — falsified the chat-history-only hypothesis
+      G: case F with daemon system prompt NEUTRALIZED (self-architecture removed)
+      H: case F with memory block HIERARCHY-FRAMED (dispatcher markers dominate)
     """
     instruction_block = _instruction_block_for_transcript(transcript)
     transcript_with_instruction = f"{transcript}\n\n{instruction_block}"
 
     messages: list[dict] = []
 
-    if case in ("D", "E", "F"):
-        # Daemon-style system prompt
-        messages.append({"role": "system", "content": _DAEMON_SYSTEM_PROMPT})
+    # Daemon system prompt: neutralized variant for case G, original otherwise
+    if case in ("D", "E", "F", "G", "H"):
+        if case == "G":
+            messages.append({"role": "system", "content": _DAEMON_SYSTEM_PROMPT_NEUTRAL})
+        else:
+            messages.append({"role": "system", "content": _DAEMON_SYSTEM_PROMPT})
 
-    if case in ("B", "E", "F"):
-        # Recalled memory block (separate from dispatcher transcript)
-        messages.append({"role": "system", "content": _RECALLED_MEMORY_BLOCK})
+    # Memory block: hierarchy-framed variant for case H, original otherwise
+    if case in ("B", "E", "F", "G", "H"):
+        if case == "H":
+            messages.append({"role": "system", "content": _RECALLED_MEMORY_BLOCK_HIERARCHY})
+        else:
+            messages.append({"role": "system", "content": _RECALLED_MEMORY_BLOCK})
 
     if case in ("C", "E"):
-        # Chat history (F deliberately excludes this — the hypothesis under test)
         messages.extend(_CHAT_HISTORY)
 
-    # Dispatcher transcript + instruction block as system message (matches
-    # daemon.handle_message:3407-3416 in production after the 85f316a fix).
+    # Dispatcher transcript + instruction block (matches daemon.handle_message
+    # production assembly after the 85f316a relocate-fix)
     messages.append({"role": "system", "content": transcript_with_instruction})
 
     # Final user turn
@@ -307,7 +345,8 @@ def classify_reply(reply: str) -> dict:
     }
 
 
-CASES = ("A", "B", "C", "D", "E", "F")
+CASES = ("I",)  # Case I: consolidated single-system-message variant.
+# Full case set: ("A", "B", "C", "D", "E", "F", "G", "H", "I")
 
 
 def run_ablation() -> list[dict]:
