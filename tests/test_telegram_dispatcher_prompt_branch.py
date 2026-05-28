@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import unittest
+from unittest import mock
 
 
 class TelegramDispatcherPromptBranchTests(unittest.TestCase):
@@ -46,6 +47,41 @@ class TelegramDispatcherPromptBranchTests(unittest.TestCase):
         self.assertIn("[TURN STATE — NO TOOLS RAN THIS TURN]", source)
         self.assertIn("if jarvis_block:", source)
         self.assertIn("else:\n            # Track A fabrication fix", source)
+
+    def test_jarvis_block_state_logger_emits_closed_state_and_prefix(self):
+        from skills import telegram_voice
+
+        long_dispatcher_block = "[fresh evidence] " + ("x" * 140)
+
+        with mock.patch.object(telegram_voice.logger, "info") as info:
+            telegram_voice._telegram_log_jarvis_block_state(
+                chat_id="owner-chat",
+                jarvis_block=long_dispatcher_block,
+            )
+
+        info.assert_called_once()
+        message, chat_id, state, prefix = info.call_args.args
+        self.assertEqual(message, "telegram_jarvis_block_state chat_id=%s state=%s prefix=%r")
+        self.assertEqual(chat_id, "owner-chat")
+        self.assertEqual(state, "dispatcher")
+        self.assertEqual(len(prefix), 100)
+        self.assertTrue(prefix.startswith("[fresh evidence] "))
+
+    def test_jarvis_block_state_logger_classifies_jarvis_and_empty(self):
+        from skills import telegram_voice
+
+        with mock.patch.object(telegram_voice.logger, "info") as info:
+            telegram_voice._telegram_log_jarvis_block_state(
+                chat_id="owner-chat",
+                jarvis_block="✓ web_search: result",
+            )
+            telegram_voice._telegram_log_jarvis_block_state(
+                chat_id="owner-chat",
+                jarvis_block="",
+            )
+
+        states = [call.args[2] for call in info.call_args_list]
+        self.assertEqual(states, ["jarvis", "empty"])
 
 
 if __name__ == "__main__":

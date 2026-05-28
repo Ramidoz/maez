@@ -72,6 +72,23 @@ def _telegram_jarvis_block_is_dispatcher_shaped(jarvis_block: str) -> bool:
     return any(marker in jarvis_block for marker in DISPATCHER_TRANSCRIPT_MARKERS)
 
 
+def _telegram_jarvis_block_state(jarvis_block: str) -> str:
+    if not jarvis_block:
+        return "empty"
+    if _telegram_jarvis_block_is_dispatcher_shaped(jarvis_block):
+        return "dispatcher"
+    return "jarvis"
+
+
+def _telegram_log_jarvis_block_state(*, chat_id: str, jarvis_block: str) -> None:
+    logger.info(
+        "telegram_jarvis_block_state chat_id=%s state=%s prefix=%r",
+        chat_id,
+        _telegram_jarvis_block_state(jarvis_block),
+        jarvis_block[:100],
+    )
+
+
 def _telegram_dispatcher_hard_instruction() -> str:
     return (
         "HARD INSTRUCTION — read this before writing a single word of your reply:\n"
@@ -3635,6 +3652,10 @@ class TelegramVoice:
         # "CARD_CREATED: waiting for your approval" status by pretending
         # the check had already run.
         final_user = user_text
+        _telegram_log_jarvis_block_state(
+            chat_id=str(getattr(getattr(update, "effective_chat", None), "id", self.authorized_user)),
+            jarvis_block=jarvis_block,
+        )
         if jarvis_block:
             final_user = (
                 f"{user_text}\n\n"
