@@ -18,6 +18,7 @@ import re
 import sqlite3
 import time
 import uuid
+from contextlib import closing
 from typing import Any
 
 from core.dispatcher.spec import (
@@ -123,78 +124,79 @@ class RoutingObservationStore:
         return conn
 
     def _init_schema(self) -> None:
-        with self._connect() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS routing_observations (
-                    id TEXT PRIMARY KEY,
-                    created_at REAL NOT NULL,
-                    turn_id TEXT,
-                    surface TEXT NOT NULL,
-                    chat_id_hash TEXT,
-                    utterance_hash TEXT NOT NULL,
-                    utterance_shape TEXT NOT NULL,
-                    path TEXT NOT NULL,
-                    composition_hint TEXT,
-                    provenance_framing TEXT,
-                    substrate_sources_json TEXT NOT NULL,
-                    external_sources_json TEXT NOT NULL,
-                    source_availability_json TEXT NOT NULL,
-                    availability_limitations_json TEXT NOT NULL,
-                    chosen_source TEXT,
-                    chosen_tool TEXT,
-                    execution_status TEXT NOT NULL,
-                    empty_reason TEXT,
-                    error_class TEXT,
-                    evidence_block_count INTEGER NOT NULL,
-                    latency_ms REAL,
-                    spec_match_score REAL NOT NULL,
-                    spec_match_reason TEXT NOT NULL,
-                    outcome_quality TEXT NOT NULL,
-                    owner_feedback_kind TEXT,
-                    owner_feedback_text TEXT,
-                    owner_feedback_observed_at REAL,
-                    producer_version TEXT NOT NULL
+        with closing(self._connect()) as conn:
+            with conn:
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS routing_observations (
+                        id TEXT PRIMARY KEY,
+                        created_at REAL NOT NULL,
+                        turn_id TEXT,
+                        surface TEXT NOT NULL,
+                        chat_id_hash TEXT,
+                        utterance_hash TEXT NOT NULL,
+                        utterance_shape TEXT NOT NULL,
+                        path TEXT NOT NULL,
+                        composition_hint TEXT,
+                        provenance_framing TEXT,
+                        substrate_sources_json TEXT NOT NULL,
+                        external_sources_json TEXT NOT NULL,
+                        source_availability_json TEXT NOT NULL,
+                        availability_limitations_json TEXT NOT NULL,
+                        chosen_source TEXT,
+                        chosen_tool TEXT,
+                        execution_status TEXT NOT NULL,
+                        empty_reason TEXT,
+                        error_class TEXT,
+                        evidence_block_count INTEGER NOT NULL,
+                        latency_ms REAL,
+                        spec_match_score REAL NOT NULL,
+                        spec_match_reason TEXT NOT NULL,
+                        outcome_quality TEXT NOT NULL,
+                        owner_feedback_kind TEXT,
+                        owner_feedback_text TEXT,
+                        owner_feedback_observed_at REAL,
+                        producer_version TEXT NOT NULL
+                    )
+                    """
                 )
-                """
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_routing_observations_created_at "
-                "ON routing_observations(created_at)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_routing_observations_path_created "
-                "ON routing_observations(path, created_at)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_routing_observations_sources "
-                "ON routing_observations(chosen_source, chosen_tool)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_routing_observations_quality "
-                "ON routing_observations(outcome_quality, spec_match_score)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_routing_observations_shape "
-                "ON routing_observations(utterance_shape)"
-            )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_routing_observations_created_at "
+                    "ON routing_observations(created_at)"
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_routing_observations_path_created "
+                    "ON routing_observations(path, created_at)"
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_routing_observations_sources "
+                    "ON routing_observations(chosen_source, chosen_tool)"
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_routing_observations_quality "
+                    "ON routing_observations(outcome_quality, spec_match_score)"
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_routing_observations_shape "
+                    "ON routing_observations(utterance_shape)"
+                )
 
     def table_names(self) -> set[str]:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             rows = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()
         return {row["name"] for row in rows}
 
     def index_names(self) -> set[str]:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             rows = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='index'"
             ).fetchall()
         return {row["name"] for row in rows}
 
     def get(self, row_id: str) -> sqlite3.Row:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             row = conn.execute(
                 "SELECT * FROM routing_observations WHERE id = ?",
                 (row_id,),
@@ -336,11 +338,12 @@ class RoutingObservationStore:
         }
         columns = tuple(row.keys())
         placeholders = ", ".join("?" for _ in columns)
-        with self._connect() as conn:
-            conn.execute(
-                f"INSERT INTO routing_observations ({', '.join(columns)}) VALUES ({placeholders})",
-                tuple(row[column] for column in columns),
-            )
+        with closing(self._connect()) as conn:
+            with conn:
+                conn.execute(
+                    f"INSERT INTO routing_observations ({', '.join(columns)}) VALUES ({placeholders})",
+                    tuple(row[column] for column in columns),
+                )
         logger.info(
             "routing_observation path=%s source=%s tool=%s status=%s spec_match_score=%.3f outcome_quality=%s utterance_shape=%s",
             path,

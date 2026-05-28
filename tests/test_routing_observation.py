@@ -39,6 +39,42 @@ def _live_reddit_spec() -> CompositionSpec:
 
 
 class RoutingObservationStoreTests(unittest.TestCase):
+    def test_store_closes_sqlite_connections(self):
+        from core.routing import observation
+        from core.routing.observation import RoutingObservationStore
+
+        connections = []
+
+        class FakeConnection:
+            row_factory = None
+
+            def __init__(self):
+                self.closed = False
+                connections.append(self)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def close(self):
+                self.closed = True
+
+            def execute(self, *_args, **_kwargs):
+                return self
+
+            def fetchall(self):
+                return []
+
+        with tempfile.TemporaryDirectory() as td:
+            with mock.patch.object(observation.sqlite3, "connect", side_effect=lambda _path: FakeConnection()):
+                store = RoutingObservationStore(db_path=Path(td) / "routing_observation.db")
+                store.table_names()
+
+        self.assertGreaterEqual(len(connections), 2)
+        self.assertTrue(all(conn.closed for conn in connections))
+
     def test_routing_observation_store_creates_schema(self):
         from core.routing.observation import RoutingObservationStore
 
