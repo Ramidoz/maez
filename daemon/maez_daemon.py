@@ -1086,6 +1086,52 @@ def _log_daemon_prompt_payload_shape(
     )
 
 
+def _summarize_daemon_system_parts(
+    system_parts: list[tuple[str, str]],
+) -> dict[str, object]:
+    """Return safe metadata for pre-consolidation system prompt parts."""
+    labels: list[str] = []
+    lengths: list[str] = []
+    hashes: list[str] = []
+    summary: dict[str, object] = {}
+    for index, (label, content) in enumerate(system_parts):
+        safe_label = str(label or f"part_{index}")
+        safe_content = str(content or "")
+        if not safe_content.strip():
+            continue
+        labels.append(safe_label)
+        lengths.append(str(len(safe_content)))
+        hashes.append(_prompt_capture_hash(safe_content))
+        summary[f"system_part_{index}_head"] = _prompt_capture_excerpt(safe_content)
+        summary[f"system_part_{index}_tail"] = (
+            safe_content[-100:] if len(safe_content) > 100 else safe_content
+        )
+    summary.update(
+        {
+            "system_part_count": len(labels),
+            "system_part_labels": ",".join(labels),
+            "system_part_lengths": ",".join(lengths),
+            "system_part_hashes": ",".join(hashes),
+        }
+    )
+    return summary
+
+
+def _log_daemon_system_part_shape(
+    *,
+    surface: str,
+    call_purpose: str,
+    system_parts: list[tuple[str, str]],
+) -> None:
+    summary = _summarize_daemon_system_parts(system_parts)
+    logger.info(
+        "daemon_system_part_shape surface=%s call_purpose=%s summary=%s",
+        surface,
+        call_purpose,
+        json.dumps(summary, sort_keys=True),
+    )
+
+
 # Sentinel the model emits when nothing noteworthy to report this cycle.
 # Storing fabricated prose is worse than storing nothing — HEARTBEAT_OK
 # short-circuits audit, storage, and broadcast so the cycle is silent.
@@ -3505,6 +3551,7 @@ class MaezDaemon:
         # not in memory recall (semantic overlap is too low for recall
         # to surface it reliably). See chat_history docstring above.
         messages: list[dict] = [{"role": "system", "content": sys_prompt}]
+        system_part_capture: list[tuple[str, str]] = [("sys_prompt", sys_prompt)]
         try:
             from core.brain.conversation_history import history_to_messages
 
@@ -3590,6 +3637,7 @@ class MaezDaemon:
                 _lived_brief = ""
         if _lived_brief:
             messages.append({"role": "system", "content": _lived_brief})
+            system_part_capture.append(("lived_brief", _lived_brief))
         try:
             _temporal_anchor_result = build_temporal_anchor_recall_brief(
                 text,
@@ -3612,6 +3660,9 @@ class MaezDaemon:
                         "role": "system",
                         "content": _temporal_anchor_result.brief_text,
                     }
+                )
+                system_part_capture.append(
+                    ("temporal_anchor", _temporal_anchor_result.brief_text)
                 )
         except Exception as _temporal_exc:
             logger.debug("temporal anchor recall failed: %s", _temporal_exc)
@@ -3642,6 +3693,7 @@ class MaezDaemon:
                             "content": _ambient_block,
                         }
                     )
+                    system_part_capture.append(("ambient_block", _ambient_block))
             except Exception as _amb_exc:
                 logger.debug(
                     "ambient brief injection failed: %s",
@@ -3670,12 +3722,20 @@ class MaezDaemon:
         # not background context. 2026-04-27 incident fix.
         if _premise_flag:
             messages.append({"role": "system", "content": _premise_flag})
+            system_part_capture.append(("premise_flag", _premise_flag))
+        if transcript_context:
+            system_part_capture.append(("transcript_context", transcript_context))
         messages = _consolidate_system_messages(
             messages,
             final_system_part=transcript_context,
         )
         messages.append({"role": "user", "content": prompt})
         if transcript_context:
+            _log_daemon_system_part_shape(
+                surface=source,
+                call_purpose="llm_synthesis",
+                system_parts=system_part_capture,
+            )
             _log_daemon_prompt_payload_shape(
                 surface=source,
                 call_purpose="llm_synthesis",

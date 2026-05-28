@@ -497,6 +497,47 @@ class DaemonHandleMessageContract(unittest.TestCase):
         self.assertIn("call_purpose=llm_synthesis", joined)
         self.assertIn('"role_sequence": "system,assistant,user"', joined)
 
+    def test_daemon_system_part_capture_names_consolidated_blocks(self):
+        """System-block capture should identify each pre-consolidation part."""
+        from daemon import maez_daemon
+
+        parts = [
+            ("sys_prompt", "SYS " + ("s" * 140)),
+            ("lived_brief", "LIVED " + ("l" * 140)),
+            ("ambient_block", "AMBIENT " + ("a" * 140)),
+            ("transcript_context", "[fresh evidence] LIVE_REDDIT\n\ninstruction"),
+        ]
+
+        summary = maez_daemon._summarize_daemon_system_parts(parts)
+
+        self.assertEqual(summary["system_part_count"], 4)
+        self.assertEqual(
+            summary["system_part_labels"],
+            "sys_prompt,lived_brief,ambient_block,transcript_context",
+        )
+        self.assertEqual(len(summary["system_part_hashes"].split(",")), 4)
+        self.assertEqual(len(summary["system_part_lengths"].split(",")), 4)
+        self.assertIn("SYS ", summary["system_part_0_head"])
+        self.assertIn("instruction", summary["system_part_3_tail"])
+        self.assertLessEqual(len(summary["system_part_1_head"]), 100)
+        self.assertLessEqual(len(summary["system_part_1_tail"]), 100)
+        self.assertNotIn("l" * 120, str(summary))
+
+        with self.assertLogs(maez_daemon.logger, level="INFO") as log_capture:
+            maez_daemon._log_daemon_system_part_shape(
+                surface="telegram_surface",
+                call_purpose="llm_synthesis",
+                system_parts=parts,
+            )
+        joined = "\n".join(log_capture.output)
+        self.assertIn("daemon_system_part_shape", joined)
+        self.assertIn("surface=telegram_surface", joined)
+        self.assertIn("call_purpose=llm_synthesis", joined)
+        self.assertIn(
+            '"system_part_labels": "sys_prompt,lived_brief,ambient_block,transcript_context"',
+            joined,
+        )
+
     def test_authoritative_currency_tool_reply_bypasses_llm_synthesis(self):
         """A deterministic currency tool result must not be re-synthesized.
 
