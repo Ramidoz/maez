@@ -209,27 +209,36 @@ _DAEMON_SYSTEM_PROMPT = (
 
 
 def build_messages(transcript: str, user_text: str, case: str) -> list[dict]:
-    """Build the messages array for a given (transcript, user_text, case)."""
+    """Build the messages array for a given (transcript, user_text, case).
+
+    Cases:
+      A: dispatcher transcript + dispatcher instruction only
+      B: + [RECALLED MEMORY] historical block
+      C: + 3-turn chat history
+      D: + daemon-style system prompt
+      E: full live-style (B + C + D stacked)
+      F: case E minus chat history — the clean hinge to confirm
+         chat-history-only contamination hypothesis from v2 results.
+    """
     instruction_block = _instruction_block_for_transcript(transcript)
     transcript_with_instruction = f"{transcript}\n\n{instruction_block}"
 
     messages: list[dict] = []
 
-    if case in ("D", "E"):
-        # Add daemon-style system prompt first
+    if case in ("D", "E", "F"):
+        # Daemon-style system prompt
         messages.append({"role": "system", "content": _DAEMON_SYSTEM_PROMPT})
 
-    if case in ("B", "E"):
-        # Add recalled memory block (separate from dispatcher transcript)
+    if case in ("B", "E", "F"):
+        # Recalled memory block (separate from dispatcher transcript)
         messages.append({"role": "system", "content": _RECALLED_MEMORY_BLOCK})
 
     if case in ("C", "E"):
-        # Add chat history
+        # Chat history (F deliberately excludes this — the hypothesis under test)
         messages.extend(_CHAT_HISTORY)
 
     # Dispatcher transcript + instruction block as system message (matches
-    # what daemon.handle_message:3407-3416 does in production after the
-    # 85f316a relocate-fix).
+    # daemon.handle_message:3407-3416 in production after the 85f316a fix).
     messages.append({"role": "system", "content": transcript_with_instruction})
 
     # Final user turn
@@ -298,7 +307,7 @@ def classify_reply(reply: str) -> dict:
     }
 
 
-CASES = ("A", "B", "C", "D", "E")
+CASES = ("A", "B", "C", "D", "E", "F")
 
 
 def run_ablation() -> list[dict]:
