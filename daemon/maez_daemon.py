@@ -1011,6 +1011,81 @@ def _consolidate_system_messages(
     return [{"role": "system", "content": "\n\n".join(system_parts)}] + non_system_messages
 
 
+def _prompt_capture_excerpt(content: str, *, limit: int = 100) -> str:
+    return content[:limit]
+
+
+def _prompt_capture_hash(content: str) -> str:
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def _summarize_daemon_prompt_messages(
+    messages: list[dict],
+    *,
+    transcript_context: str = "",
+) -> dict[str, object]:
+    """Return safe structural metadata for the daemon prompt payload."""
+    roles: list[str] = []
+    hashes: list[str] = []
+    system_lengths: list[int] = []
+    user_length = 0
+    summary: dict[str, object] = {}
+    for index, message in enumerate(messages):
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "")
+        content = str(message.get("content") or "")
+        roles.append(role)
+        hashes.append(_prompt_capture_hash(content))
+        if role == "system":
+            system_lengths.append(len(content))
+        if role == "user":
+            user_length = len(content)
+        summary[f"message_{index}_head"] = _prompt_capture_excerpt(content)
+        summary[f"message_{index}_tail"] = (
+            content[-100:] if len(content) > 100 else content
+        )
+    system_content = ""
+    for message in messages:
+        if isinstance(message, dict) and message.get("role") == "system":
+            system_content = str(message.get("content") or "")
+            break
+    summary.update(
+        {
+            "message_count": len(roles),
+            "role_sequence": ",".join(roles),
+            "system_message_count": len(system_lengths),
+            "system_message_length": system_lengths[0] if system_lengths else 0,
+            "user_message_length": user_length,
+            "transcript_is_suffix": bool(
+                transcript_context
+                and system_content.endswith(transcript_context)
+            ),
+            "message_hashes": ",".join(hashes),
+        }
+    )
+    return summary
+
+
+def _log_daemon_prompt_payload_shape(
+    *,
+    surface: str,
+    call_purpose: str,
+    messages: list[dict],
+    transcript_context: str,
+) -> None:
+    summary = _summarize_daemon_prompt_messages(
+        messages,
+        transcript_context=transcript_context,
+    )
+    logger.info(
+        "daemon_prompt_payload_shape surface=%s call_purpose=%s summary=%s",
+        surface,
+        call_purpose,
+        json.dumps(summary, sort_keys=True),
+    )
+
+
 # Sentinel the model emits when nothing noteworthy to report this cycle.
 # Storing fabricated prose is worse than storing nothing — HEARTBEAT_OK
 # short-circuits audit, storage, and broadcast so the cycle is silent.
@@ -3600,6 +3675,13 @@ class MaezDaemon:
             final_system_part=transcript_context,
         )
         messages.append({"role": "user", "content": prompt})
+        if transcript_context:
+            _log_daemon_prompt_payload_shape(
+                surface=source,
+                call_purpose="llm_synthesis",
+                messages=messages,
+                transcript_context=transcript_context,
+            )
 
         if authoritative_tool_reply:
             reply = authoritative_tool_reply

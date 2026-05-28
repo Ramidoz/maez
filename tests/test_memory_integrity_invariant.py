@@ -445,6 +445,58 @@ class DaemonHandleMessageContract(unittest.TestCase):
             )
         )
 
+    def test_daemon_prompt_capture_summarizes_structure_without_full_text(self):
+        """Diagnostic capture should expose prompt shape, not full prompt text."""
+        from daemon import maez_daemon
+
+        transcript_context = "[fresh evidence] LIVE_REDDIT\n\ninstruction"
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "SYSTEM-BEGIN "
+                    + ("a" * 160)
+                    + " SYSTEM-END\n\n"
+                    + transcript_context
+                ),
+            },
+            {"role": "assistant", "content": "prior answer"},
+            {
+                "role": "user",
+                "content": "USER-BEGIN " + ("b" * 160) + " USER-END",
+            },
+        ]
+
+        summary = maez_daemon._summarize_daemon_prompt_messages(
+            messages,
+            transcript_context=transcript_context,
+        )
+
+        self.assertEqual(summary["message_count"], 3)
+        self.assertEqual(summary["role_sequence"], "system,assistant,user")
+        self.assertEqual(summary["system_message_count"], 1)
+        self.assertEqual(summary["user_message_length"], 180)
+        self.assertTrue(summary["transcript_is_suffix"])
+        self.assertEqual(len(summary["message_hashes"].split(",")), 3)
+        self.assertIn("SYSTEM-BEGIN", summary["message_0_head"])
+        self.assertIn("SYSTEM-END", summary["message_0_tail"])
+        self.assertLessEqual(len(summary["message_0_head"]), 100)
+        self.assertLessEqual(len(summary["message_0_tail"]), 100)
+        self.assertNotIn("a" * 120, str(summary))
+
+        with self.assertLogs(maez_daemon.logger, level="INFO") as log_capture:
+            maez_daemon._log_daemon_prompt_payload_shape(
+                surface="telegram_surface",
+                call_purpose="llm_synthesis",
+                messages=messages,
+                transcript_context=transcript_context,
+            )
+        joined = "\n".join(log_capture.output)
+        self.assertIn("daemon_prompt_payload_shape", joined)
+        self.assertIn("surface=telegram_surface", joined)
+        self.assertIn("call_purpose=llm_synthesis", joined)
+        self.assertIn('"role_sequence": "system,assistant,user"', joined)
+
     def test_authoritative_currency_tool_reply_bypasses_llm_synthesis(self):
         """A deterministic currency tool result must not be re-synthesized.
 
