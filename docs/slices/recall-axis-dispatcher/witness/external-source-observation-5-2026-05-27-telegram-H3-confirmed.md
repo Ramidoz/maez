@@ -153,3 +153,40 @@ The slice arc didn't fail. It surfaced exactly the gap it was built to surface. 
 Flag restored to dispatcher-disabled on PID 3501800. SEGV trap intact. The dispatcher infrastructure remains available behind the flag; it just isn't currently being used because the user-facing benefit is blocked by the model-layer issue this witness confirmed.
 
 Do not flip the default flag. The dispatcher-enabled path delivers an internally-honest pipeline whose output the model ignores. The dispatcher-disabled path uses the legacy parallel surfaces. Neither produces a clean owner experience yet; the choice of which to ship as default should wait until the model-layer fix.
+
+---
+
+## Addendum — 2026-05-27 22:30 — LoRA framing corrected
+
+The "Architectural Options" section above named the live override layer as a LoRA fine-tune, citing the code comment at `skills/telegram_voice.py:3574` ("v3 (after live tests): v2 was too prescriptive and the LoRA pattern-matched on a specific example phrase..."). Rohit checked the runtime and found this was unverified speculation: there is no LoRA in the live inference path.
+
+**Live verified runtime** (independently re-checked from process list and `systemctl status llama-server`):
+
+```text
+PID 3188  llama-server -m /home/rohit/maez/models/llamacpp/Qwen3.6-27B-UD-Q4_K_XL.gguf --alias qwen36-27b --host 127.0.0.1 --port 8080 --ctx-size 32768 --parallel 1 --n-gpu-layers 999 --flash-attn on --cache-type-k q4_0 --cache-type-v q4_0
+PID 3187  llama-server -m /home/rohit/maez/models/llamacpp/Qwen3.5-4B-Q4_K_M.gguf --alias maez-judge ...
+```
+
+No `--lora` flag on either server. Repository LoRA artifacts (Gemma-4-26B early experiments, qwen36-sft adapters for Qwen3.6-35B-A3B / Ornstein variants) are for different base models and are not loaded against the currently live Qwen3.6-27B-UD-Q4_K_XL.
+
+**What's actually overriding the dispatcher instruction is the base Qwen3.6-27B-UD-Q4_K_XL itself, against the full live prompt context (substrate + memory block + chat history + dispatcher transcript + dispatcher HARD INSTRUCTION).** The LoRA framing was a false premise inherited from a code comment describing historical voice-adaptation experiments. The override is the base model alone, no adapter, against a richly stacked context — and it is producing the fabrication pattern verbatim despite Rule 5 explicitly forbidding it.
+
+**Discipline failure named honestly:** I treated a code comment about past LoRA pattern-matching behavior as evidence of current LoRA presence in the inference path. That's the same shape as Finding 8 (unit-test pass without integration witness) and Finding 10's H1 (static code trace without runtime reach), applied this time to my own causal reasoning rather than to someone else's code. The slice arc's discipline lessons apply symmetrically.
+
+**Corrected architectural options:** the four options remain on the table, but their framings change:
+
+- **Option 3 — constrained decoding** — unchanged. Applies regardless of whether a LoRA is involved.
+- **Option 4 — was "re-train the LoRA"; is "train a new corrective adapter for the live base Qwen3.6-27B"** — still possible but a different decision (build new adapter from scratch, not retrain an existing one). Also possible: switch to a different base model that already follows instructions better, with no adapter.
+- **Option 5 — model swap** — unchanged framing; the candidate set should include MTP-class instruction-followers and dense models with stronger instruction-tuning baked in.
+- **Hybrid — output validation stopgap** — unchanged.
+
+**The honest immediate next step is not "pick a fix" — it's ablation.** Per Rohit's diagnostic plan:
+
+1. Base Qwen3.6-27B-UD-Q4_K_XL alone, exact dispatcher prompt (no chat history, no memory block) — does the base model honor the dispatcher instruction in isolation?
+2. + memory block, no chat history — adds substrate context; tests grounding against evidence without conversational priming
+3. + chat history, no memory block — isolates conversational priming; the "I cannot search / Telegram interceptor" pattern may be self-reinforcing across turns once it appears in history
+4. Full live prompt — production posture; confirms the override is the combined-context effect
+
+Whichever step first produces the override behavior tells us which architectural layer needs to change. If step 1 already overrides, the architecture has to address the base model (Option 3 or 5). If only step 3 or 4 overrides, the fix is at the context-management layer (history compression, anti-priming, or scoped instruction reinforcement). The decision space narrows once the diagnostic landscape is mapped.
+
+**Apology and lesson:** the original Option 4 recommendation was built on the LoRA false premise. Future witnesses should anchor architectural recommendations to runtime-verifiable facts (the actual llama-server invocation, the actual loaded weights), not to historical code comments. The discipline of canon-governs-canon applies to causal narratives generated during review, not just to claims about substrate state.
