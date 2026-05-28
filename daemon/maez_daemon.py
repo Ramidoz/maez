@@ -3470,13 +3470,12 @@ class MaezDaemon:
                 sr = search_rss(text, max_results=5)
             else:
                 sr = web_search(text, max_results=3)
-            if sr.get("success"):
-                web_context = web_format(sr)
-                logger.info(
-                    "Web search: %d results injected (%s)",
-                    sr["result_count"],
-                    sr.get("source_type", "web"),
-                )
+            web_context = web_format(sr)
+            logger.info(
+                "Web search: %d results injected (%s)",
+                sr.get("result_count", 0),
+                sr.get("source_type", "web"),
+            )
 
         is_voice = source == "voice"
         prompt = f"{system_state}\n\n"
@@ -4313,8 +4312,7 @@ class MaezDaemon:
                     sr = search_rss(text, max_results=3)
                 else:
                     sr = web_search(text, max_results=3)
-                if sr.get("success"):
-                    web_context = web_format(sr)
+                web_context = web_format(sr)
             prompt = f"{system_state}\n\n"
             if memory_block:
                 prompt += memory_block + "\n\n"

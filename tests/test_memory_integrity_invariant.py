@@ -538,6 +538,160 @@ class DaemonHandleMessageContract(unittest.TestCase):
             joined,
         )
 
+    def test_zero_result_web_search_reaches_synthesis_prompt(self):
+        """A real zero-result search is still evidence for the reply."""
+        from daemon import maez_daemon
+
+        class FakeMemory:
+            def recall_for_telegram(self, _text):
+                return {}
+
+            def format_for_prompt(self, _recalled, max_chars=None):
+                return ""
+
+            def store_telegram(self, *_args, **_kwargs):
+                return "raw-memory-id"
+
+        class FreshState:
+            def with_freshness(self):
+                return self
+
+        captured: dict[str, list[dict]] = {}
+
+        def fake_chat(*, model, messages, think, options):
+            captured["messages"] = messages
+            return types.SimpleNamespace(
+                message=types.SimpleNamespace(content="I searched and found nothing.")
+            )
+
+        daemon = object.__new__(maez_daemon.MaezDaemon)
+        daemon.system_prompt = "DAEMON SYSTEM"
+        daemon.memory = FakeMemory()
+        daemon.lived_episodes = types.SimpleNamespace(add=lambda *args, **kwargs: None)
+        daemon.lived_graph = object()
+        daemon._camera_presence_state = FreshState()
+        daemon._last_screen_obs = None
+        daemon._last_calendar_snap = None
+        daemon.m1_promoter = None
+        daemon._get_public_context = lambda: ""
+        daemon._trf_apply_fragment_guard = lambda **kwargs: kwargs["reply"]
+        daemon._ws_broadcast = lambda _payload: None
+
+        trace = types.SimpleNamespace(
+            audit=types.SimpleNamespace(),
+            lived_recall_ids=[],
+        )
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "MAEZ_LIVED_RECALL": "0",
+                "MAEZ_AMBIENT_BRIEF": "0",
+                "MAEZ_WORKING_SELF": "0",
+                "MAEZ_WONDERING_PURSUIT": "0",
+            },
+            clear=False,
+        ), mock.patch.object(
+            maez_daemon,
+            "guard_owner_text",
+            return_value=types.SimpleNamespace(matched=False, answer_text=None),
+        ), mock.patch.object(
+            maez_daemon,
+            "answer_camera_presence_question",
+            return_value=None,
+        ), mock.patch.object(
+            maez_daemon,
+            "perception_snapshot",
+            return_value=object(),
+        ), mock.patch.object(
+            maez_daemon,
+            "format_snapshot",
+            return_value="SYSTEM_STATE",
+        ), mock.patch.object(
+            maez_daemon,
+            "Trace",
+            types.SimpleNamespace(start=lambda **_kwargs: trace),
+        ), mock.patch.object(
+            maez_daemon,
+            "default_writer",
+            return_value=types.SimpleNamespace(write=lambda _trace: None),
+        ), mock.patch.object(
+            maez_daemon,
+            "_trace_hash_text",
+            return_value="hash",
+        ), mock.patch.object(
+            maez_daemon,
+            "_trace_extract_evidence_ids",
+            return_value=[],
+        ), mock.patch.object(
+            maez_daemon,
+            "build_temporal_anchor_recall_brief",
+            return_value=types.SimpleNamespace(
+                anchor_detected=False,
+                brief_text="",
+                evidence_ids=[],
+            ),
+        ), mock.patch(
+            "core.cognition.envelope_builder.build_envelope",
+            return_value=None,
+        ), mock.patch(
+            "core.cognition.envelope_builder.render_envelope_for_prompt",
+            return_value="",
+        ), mock.patch(
+            "core.cognition.envelope_builder.resolve_recall_cap_chars",
+            return_value=1000,
+        ), mock.patch(
+            "skills.web_search.needs_web_search",
+            return_value=True,
+        ), mock.patch(
+            "skills.web_search.is_news_query",
+            return_value=False,
+        ), mock.patch(
+            "skills.web_search.search",
+            return_value={
+                "query": "Search r/LocalLLaMA right now",
+                "success": False,
+                "results": [],
+                "result_count": 0,
+            },
+        ), mock.patch(
+            "skills.web_search.format_for_context",
+            return_value="[WEB SEARCH: 'Search r/LocalLLaMA right now'] No results found.",
+        ), mock.patch(
+            "core.safety.audited_output.audit_assistant_text",
+            side_effect=lambda text, **_kwargs: text,
+        ), mock.patch(
+            "core.ledger.writer.try_write_turn",
+            return_value="turn-1",
+        ), mock.patch(
+            "core.ledger.model_reply_persistence.persist_model_reply",
+            return_value=None,
+        ), mock.patch(
+            "core.llm_client.chat",
+            side_effect=fake_chat,
+        ):
+            reply = maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                "Search r/LocalLLaMA right now",
+                source="telegram_surface",
+            )
+
+        self.assertEqual(reply, "I searched and found nothing.")
+        user_message = captured["messages"][-1]["content"]
+        self.assertIn(
+            "[WEB SEARCH: 'Search r/LocalLLaMA right now'] No results found.",
+            user_message,
+        )
+
+    def test_soul_web_search_section_matches_inline_search_reality(self):
+        """Soul must not teach the stale Telegram-interceptor architecture."""
+        soul = (_REPO / "config" / "soul.base.md").read_text()
+
+        self.assertNotIn("Telegram interceptor", soul)
+        self.assertNotIn("do not yet have the ability to invoke web_search", soul)
+        self.assertIn("web_search.py runs inline", soul)
+        self.assertIn("[WEB SEARCH: '<query>'] No results found.", soul)
+
     def test_authoritative_currency_tool_reply_bypasses_llm_synthesis(self):
         """A deterministic currency tool result must not be re-synthesized.
 
