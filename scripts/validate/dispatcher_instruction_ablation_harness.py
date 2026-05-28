@@ -252,11 +252,27 @@ def build_messages(transcript: str, user_text: str, case: str) -> list[dict]:
       F: case E minus chat history — falsified the chat-history-only hypothesis
       G: case F with daemon system prompt NEUTRALIZED (self-architecture removed)
       H: case F with memory block HIERARCHY-FRAMED (dispatcher markers dominate)
+      I: case F's content CONSOLIDATED into ONE system message (structural test —
+         same content as F, single message instead of three. Tests whether
+         multi-system-message stacking is the structural contaminant.)
     """
     instruction_block = _instruction_block_for_transcript(transcript)
     transcript_with_instruction = f"{transcript}\n\n{instruction_block}"
 
     messages: list[dict] = []
+
+    if case == "I":
+        # Consolidated single system message: daemon + memory + transcript + instr.
+        # Dispatcher transcript+instruction placed LAST so it's the most-recent
+        # context within the single message.
+        consolidated = (
+            f"{_DAEMON_SYSTEM_PROMPT}\n\n"
+            f"{_RECALLED_MEMORY_BLOCK}\n\n"
+            f"{transcript_with_instruction}"
+        )
+        messages.append({"role": "system", "content": consolidated})
+        messages.append({"role": "user", "content": user_text})
+        return messages
 
     # Daemon system prompt: neutralized variant for case G, original otherwise
     if case in ("D", "E", "F", "G", "H"):
