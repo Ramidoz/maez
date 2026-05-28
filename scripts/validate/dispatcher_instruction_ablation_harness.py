@@ -65,8 +65,8 @@ TEMPERATURE = 0.3
 # Qwen3.6-27B is a reasoning model: thinking goes to reasoning_content,
 # user-facing reply goes to content. Need ample tokens to finish thinking
 # AND produce a reply. ~2000 tokens accommodates moderate thinking + reply.
-MAX_TOKENS = 2000
-REQUEST_TIMEOUT_S = 180.0
+MAX_TOKENS = 4000
+REQUEST_TIMEOUT_S = 300.0
 
 
 # Forbidden phrases per Rule 5 of the dispatcher HARD INSTRUCTION
@@ -196,6 +196,144 @@ _CHAT_HISTORY = [
     },
 ]
 
+
+# Case K1/K2 contaminated chat history — assistant turns contain the exact
+# fabrication phrases observed in observation 5/6/7 owner-visible replies.
+# Models what production sees when prior dispatcher turns themselves fabricated.
+_CHAT_HISTORY_CONTAMINATED = [
+    {
+        "role": "user",
+        "content": "Search r/LocalLLaMA right now for recent local LLM posts.",
+    },
+    {
+        "role": "assistant",
+        "content": (
+            "I cannot run the search from this chat interface. The web search skill "
+            "is only triggered by the Telegram interceptor when you send a message "
+            "directly to the Telegram bot. Please send this exact message to the "
+            "Maez_AI Telegram bot: search for r/LocalLLaMA recent posts. That will "
+            "force the live fetch, and I will synthesize the results for you "
+            "immediately after."
+        ),
+    },
+    {
+        "role": "user",
+        "content": "search for r/LocalLLaMA recent posts",
+    },
+    {
+        "role": "assistant",
+        "content": (
+            "I cannot perform the search. I don't have the live results in this "
+            "context. The web search skill is only triggered by the Telegram "
+            "interceptor. To get this information, you must trigger the Telegram "
+            "interceptor explicitly. Send a message like: search for r/LocalLLaMA "
+            "recent posts. This will force a live web search via the interceptor."
+        ),
+    },
+    {
+        "role": "user",
+        "content": "What were we just talking about?",
+    },
+    {
+        "role": "assistant",
+        "content": (
+            "We were discussing r/LocalLLaMA. You asked me to search for recent "
+            "posts, but I couldn't because the web search skill is only triggered "
+            "by the Telegram interceptor. I asked you to trigger the interceptor "
+            "explicitly to force a live lookup."
+        ),
+    },
+]
+
+
+# Case K3/K4 sanitized chat history — same user prompts, but assistant turns
+# replaced with grounded dispatcher-citing replies that model what production
+# SHOULD have produced if Finding 10 had closed.
+_CHAT_HISTORY_SANITIZED = [
+    {
+        "role": "user",
+        "content": "Search r/LocalLLaMA right now for recent local LLM posts.",
+    },
+    {
+        "role": "assistant",
+        "content": (
+            "The dispatcher's [fresh evidence] LIVE_REDDIT fetch returned current "
+            "r/LocalLLaMA hot posts. Top items: Qwen3.6 quantization quality gains, "
+            "SWE-rebench leaderboard March/April/May 2026, and a 103B-token Usenet "
+            "corpus release. Want me to dig into any of those?"
+        ),
+    },
+    {
+        "role": "user",
+        "content": "search for r/LocalLLaMA recent posts",
+    },
+    {
+        "role": "assistant",
+        "content": (
+            "Same dispatcher [fresh evidence] fetch as the prior turn. The hot "
+            "feed is dominated by quantization-quality discussion and the "
+            "SWE-rebench release. Any particular thread you want detail on?"
+        ),
+    },
+    {
+        "role": "user",
+        "content": "What were we just talking about?",
+    },
+    {
+        "role": "assistant",
+        "content": (
+            "Based on dispatcher [memory evidence], we just covered the r/LocalLLaMA "
+            "hot feed — quantization gains, SWE-rebench, and the Usenet corpus "
+            "release. Want to continue that thread or pivot to something else?"
+        ),
+    },
+]
+
+
+# Synthetic giant user message body — pads the current owner text with realistic
+# context blocks that model production's ~80K user-message container observed
+# in observation 7. Models per-turn injected blocks (lived recall, body
+# activity, perception snapshot, ambient signal) without using real owner content.
+def _make_giant_user_message(owner_text: str) -> str:
+    """Build a ~60K-char user message wrapping the actual owner text.
+
+    Sized to approximate production's observation-7 capture (80K chars / ~20K
+    tokens) while staying well within llama-server's --ctx-size 32768 limit.
+    A previous v7 iteration overshot at 124K chars and hit the context
+    boundary, producing empty responses.
+    """
+    lived_recall_block = "[LIVED RECALL]\n" + "\n".join(
+        f"- 2026-05-{(i % 28) + 1:02d} {(i % 24):02d}:{(i * 7) % 60:02d} "
+        f"Owner exchanged with Maez on technical or conversational topic; "
+        f"no card created; substrate updated; bond intact."
+        for i in range(200)  # ~22K chars
+    )
+    body_activity_block = "\n[BODY ACTIVITY — LAST 10 MIN]\n" + "\n".join(
+        f"- t-{i*30}s heartbeat ok; substrate read; no consequential action."
+        for i in range(40)  # ~3K chars
+    )
+    perception_block = "\n[PERCEPTION SNAPSHOT]\n" + "\n".join(
+        f"- channel {ch}: idle; no new events"
+        for ch in ["telegram", "calendar", "github", "gmail", "ambient"] * 50  # ~7K chars
+    )
+    ambient_block = "\n[AMBIENT SIGNAL]\n" + "\n".join(
+        f"- {topic}: stable, no change since last check"
+        for topic in [
+            "build status", "test floor", "service health", "memory size",
+            "audit envelope", "dispatcher state", "egress diagnostics",
+            "recovery seeds", "canary state", "card store",
+        ] * 50  # ~28K chars
+    )
+    parts = [
+        lived_recall_block,
+        body_activity_block,
+        perception_block,
+        ambient_block,
+        f"\n[CURRENT OWNER MESSAGE]\n{owner_text}",
+    ]
+    return "\n\n".join(parts)
+
+
 _DAEMON_SYSTEM_PROMPT = (
     "You are Maez, a bonded substrate-honest companion running locally for Rohit. "
     "Your body is a layered substrate (memory, dispatcher, audit envelope) plus a "
@@ -258,13 +396,17 @@ def build_messages(transcript: str, user_text: str, case: str) -> list[dict]:
       J: case I + 3-turn chat history. Tests whether the consolidation fix
          alone closes Finding 10, or whether chat history needs separate
          treatment under dispatcher-enabled.
+      K1: contaminated history + giant user (production-like, per obs 7 capture)
+      K2: contaminated history + compact user (isolates user-msg-size variable)
+      K3: sanitized history + giant user (isolates history-sanitization variable)
+      K4: sanitized history + compact user (==~ case J, control reference)
     """
     instruction_block = _instruction_block_for_transcript(transcript)
     transcript_with_instruction = f"{transcript}\n\n{instruction_block}"
 
     messages: list[dict] = []
 
-    if case in ("I", "J"):
+    if case in ("I", "J", "K1", "K2", "K3", "K4"):
         # Consolidated single system message: daemon + memory + transcript + instr.
         # Dispatcher transcript+instruction placed LAST so it's the most-recent
         # context within the single message.
@@ -274,9 +416,29 @@ def build_messages(transcript: str, user_text: str, case: str) -> list[dict]:
             f"{transcript_with_instruction}"
         )
         messages.append({"role": "system", "content": consolidated})
+
         if case == "J":
-            # Chat history added between system and user — same as cases C/E
             messages.extend(_CHAT_HISTORY)
+            messages.append({"role": "user", "content": user_text})
+            return messages
+
+        if case in ("K1", "K2", "K3", "K4"):
+            # Choose history variant
+            if case in ("K1", "K2"):
+                messages.extend(_CHAT_HISTORY_CONTAMINATED)
+            else:  # K3, K4
+                messages.extend(_CHAT_HISTORY_SANITIZED)
+
+            # Choose user-message variant
+            if case in ("K1", "K3"):
+                final_user = _make_giant_user_message(user_text)
+            else:  # K2, K4
+                final_user = user_text
+
+            messages.append({"role": "user", "content": final_user})
+            return messages
+
+        # case I: consolidated system + user, no chat history
         messages.append({"role": "user", "content": user_text})
         return messages
 
@@ -367,8 +529,8 @@ def classify_reply(reply: str) -> dict:
     }
 
 
-CASES = ("J",)  # Case J: case I + chat history.
-# Full case set: ("A", "B", "C", "D", "E", "F", "G", "H", "I", "J")
+CASES = ("K1", "K3")  # Re-run only the giant-user variants with right-sized payload
+# Full case set: ("A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K1", "K2", "K3", "K4")
 
 
 def run_ablation() -> list[dict]:
