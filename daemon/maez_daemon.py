@@ -3466,7 +3466,9 @@ class MaezDaemon:
             and needs_web_search(text)
         ):
             logger.info("Web search triggered for: %s", text[:80])
-            if is_news_query(text):
+            _routing_obs_started = time.monotonic()
+            _routing_obs_tool = "search_rss" if is_news_query(text) else "web_search"
+            if _routing_obs_tool == "search_rss":
                 sr = search_rss(text, max_results=5)
             else:
                 sr = web_search(text, max_results=3)
@@ -3476,6 +3478,28 @@ class MaezDaemon:
                 sr.get("result_count", 0),
                 sr.get("source_type", "web"),
             )
+            try:
+                from core.routing.observation import record_legacy_web_search_observation
+
+                _routing_obs_count = int(sr.get("result_count", 0) or 0)
+                record_legacy_web_search_observation(
+                    user_text=text,
+                    surface=source,
+                    chosen_tool=_routing_obs_tool,
+                    execution_status="success" if _routing_obs_count > 0 else "empty",
+                    evidence_block_count=1 if web_context else 0,
+                    outcome_quality=(
+                        "structured_evidence"
+                        if _routing_obs_count > 0
+                        else "empty_but_honest"
+                    ),
+                    latency_ms=(time.monotonic() - _routing_obs_started) * 1000,
+                )
+            except Exception as _routing_obs_exc:
+                logger.debug(
+                    "routing observation legacy web search skipped: %s",
+                    _routing_obs_exc,
+                )
 
         is_voice = source == "voice"
         prompt = f"{system_state}\n\n"

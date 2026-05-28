@@ -361,6 +361,7 @@ def _run_dispatcher_pipeline(
         surface=surface,
         inventory=inventory,
     )
+    layer0_spec = spec
     layer0_elapsed_ms = (time.monotonic() - layer0_started) * 1000
     logger.info(
         "dispatcher_layer0_emit surface=%s bond_id=%s composition_hint=%s provenance_framing=%s inventory_witness=%s substrate_source_count=%s external_source_count=%s elapsed_ms=%.3f",
@@ -397,6 +398,19 @@ def _run_dispatcher_pipeline(
             bond_id,
             layer2_result.reason.value,
         )
+        try:
+            from core.routing.observation import record_dispatcher_refusal_observation
+
+            record_dispatcher_refusal_observation(
+                user_text=user_text,
+                surface=surface,
+                chat_id=chat_id,
+                spec=spec,
+                refusal_reason=layer2_result.reason,
+                elapsed_ms=(time.monotonic() - total_started) * 1000,
+            )
+        except Exception as exc:
+            logger.debug("routing observation dispatcher refusal skipped: %s", exc)
         return _DispatcherPathResult(transcript="", should_run_jarvis=False)
     if layer2_result is spec:
         logger.info(
@@ -551,6 +565,23 @@ def _run_dispatcher_pipeline(
         turn_seal_state,
         (time.monotonic() - total_started) * 1000,
     )
+    try:
+        from core.routing.observation import record_dispatcher_turn_observation
+
+        record_dispatcher_turn_observation(
+            user_text=user_text,
+            surface=surface,
+            chat_id=chat_id,
+            original_spec=layer0_spec,
+            effective_spec=rendered_turn.effective_spec,
+            layer1_result=layer1_result,
+            external_result=external_result,
+            rendered_turn=rendered_turn,
+            turn_seal_state=turn_seal_state,
+            elapsed_ms=(time.monotonic() - total_started) * 1000,
+        )
+    except Exception as exc:
+        logger.debug("routing observation dispatcher turn skipped: %s", exc)
     return _DispatcherPathResult(
         transcript=rendered_turn.prompt_block,
         should_run_jarvis=False,
