@@ -3502,6 +3502,8 @@ class MaezDaemon:
         # snippets that can override the tool result during synthesis.
         web_context = ""
         _legacy_routing_observation_id = None
+        _empty_web_search = False
+        _routing_obs_tool = None
         if (
             not authoritative_tool_reply
             and _daemon_parallel_web_search_enabled(transcript)
@@ -3515,6 +3517,11 @@ class MaezDaemon:
             else:
                 sr = web_search(text, max_results=3)
             web_context = web_format(sr)
+            from core.routing.focused_cognition import (
+                is_empty_search_result as _is_empty_search_result,
+            )
+
+            _empty_web_search = _is_empty_search_result(sr)
             logger.info(
                 "Web search: %d results injected (%s)",
                 sr.get("result_count", 0),
@@ -3562,7 +3569,7 @@ class MaezDaemon:
         # legacy prompt shape identical in those cases.
         if _envelope_block:
             prompt += _envelope_block + "\n\n"
-        if web_context:
+        if web_context and not _empty_web_search:
             prompt += (
                 f"{web_context}\n\n"
                 f"INSTRUCTION: Real search results above. Do NOT list headlines. "
@@ -3844,9 +3851,18 @@ class MaezDaemon:
             and not _current_turn_echo_reply
             and (_evidence_state.evidence_present or _dialogue_needs_or_uncertain)
         )
+        _honest_empty_candidate = (
+            _empty_web_search
+            and not _evidence_state.evidence_present
+            and not _dialogue_needs_or_uncertain
+            and not _current_turn_echo_reply
+            and not authoritative_tool_reply
+        )
         _legacy_call_purpose = (
             "echo_reply"
             if _current_turn_echo_reply
+            else "honest_empty"
+            if _honest_empty_candidate
             else "legacy_candidate"
             if _focused_candidate
             else "llm_synthesis"
@@ -3869,6 +3885,44 @@ class MaezDaemon:
             reply = authoritative_tool_reply
         elif _current_turn_echo_reply:
             reply = _current_turn_echo_reply
+        elif _honest_empty_candidate:
+            from core.routing.focused_cognition import (
+                build_honest_empty_reply as _build_honest_empty_reply,
+                record_focused_cognition_run as _record_focused_cognition_run,
+            )
+
+            _hr = _build_honest_empty_reply(
+                query=text,
+                source=(_routing_obs_tool or "web"),
+                surface=source,
+            )
+            reply = _hr.reply
+            # Dedicated witness log: empty turns may have neither transcript nor
+            # evidence directive, so the normal prompt-shape seam can be silent.
+            logger.info(
+                "honest_empty_reply surface=%s source=%s mode=%s "
+                "call_purpose=honest_empty",
+                source,
+                _routing_obs_tool or "web",
+                _hr.mode,
+            )
+            try:
+                _record_focused_cognition_run(
+                    surface=source,
+                    chat_id=chat_id,
+                    working_set=_hr.working_set,
+                    result=_hr.result,
+                    verdict=_hr.verdict,
+                    legacy_prompt_chars=None,
+                    fallback_reason=(
+                        "honest_empty_deterministic"
+                        if _hr.mode == "deterministic_fallback"
+                        else None
+                    ),
+                    routing_observation_id=_legacy_routing_observation_id,
+                )
+            except Exception as _hee:
+                logger.debug("honest_empty record skipped: %s", _hee)
         else:
             reply = None
             _focused_used = False
