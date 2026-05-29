@@ -160,6 +160,28 @@ class DialogueContinuityStateTests(unittest.TestCase):
         self.assertFalse(state.needs_dialogue)
         self.assertFalse(state.fail_safe_legacy)
         self.assertIsNone(state.matched_reason)
+
+    def test_intra_turn_echo_with_stale_evidence_returns_none(self):
+        from core.routing.focused_cognition import assemble_working_set
+
+        ws = assemble_working_set(
+            transcript="[memory evidence] stale:\n- April 6 journal",
+            web_context="",
+            owner_question=(
+                "For the continuity witness: dialogue anchors now strip stale "
+                "prior citations before they become current evidence. Say that "
+                "back in one sentence."
+            ),
+            chat_history=[
+                {
+                    "content": (
+                        "Rohit: previous continuity probe\n"
+                        "Maez: previous continuity answer"
+                    )
+                }
+            ],
+        )
+        self.assertIsNone(ws)
 ```
 
 - [ ] **Step 2: Run tests to verify fail**
@@ -239,6 +261,11 @@ _UNCERTAIN_CONTINUITY_PATTERNS = (
 )
 
 
+def _is_intra_turn_echo_instruction(text: str) -> bool:
+    lowered = (text or "").strip().lower()
+    return any(pattern in lowered for pattern in _INTRA_TURN_ECHO_PATTERNS)
+
+
 def dialogue_continuity_state(owner_question: str) -> DialogueContinuityState:
     text = (owner_question or "").strip().lower()
     for pattern in _DIRECT_CONTINUITY_PATTERNS:
@@ -257,14 +284,13 @@ def dialogue_continuity_state(owner_question: str) -> DialogueContinuityState:
                 fail_safe_legacy=False,
                 matched_reason=pattern,
             )
-    for pattern in _INTRA_TURN_ECHO_PATTERNS:
-        if pattern in text:
-            return DialogueContinuityState(
-                kind=ContinuityKind.NONE,
-                needs_dialogue=False,
-                fail_safe_legacy=False,
-                matched_reason=None,
-            )
+    if _is_intra_turn_echo_instruction(text):
+        return DialogueContinuityState(
+            kind=ContinuityKind.NONE,
+            needs_dialogue=False,
+            fail_safe_legacy=False,
+            matched_reason=None,
+        )
     for pattern in _ANAPHORIC_WORDS:
         if re.search(rf"\b{re.escape(pattern)}\b", text):
             return DialogueContinuityState(
@@ -664,6 +690,11 @@ def assemble_working_set(
 ) -> WorkingSet | None:
     state = turn_evidence_state(transcript=transcript, web_context=web_context)
     dialogue_state = dialogue_continuity_state(owner_question)
+    if (
+        dialogue_state.kind == ContinuityKind.NONE
+        and _is_intra_turn_echo_instruction(owner_question)
+    ):
+        return None
     anchors = (
         dialogue_anchor_items(chat_history)
         if dialogue_state.needs_dialogue or dialogue_state.fail_safe_legacy
@@ -873,6 +904,46 @@ Append to the existing daemon focused-cognition test class in `tests/test_memory
             )
 
         self.assertEqual(reply, "legacy uncertain reply")
+        fsyn.assert_not_called()
+        megachat.assert_called_once()
+
+    def test_daemon_intra_turn_echo_with_stale_evidence_uses_legacy(self):
+        from daemon import maez_daemon
+
+        captured: dict[str, list[dict]] = {}
+        daemon = self._build_daemon_for_handle_message()
+
+        with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+            os.environ,
+            {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+        ), mock.patch(
+            "core.routing.focused_cognition.focused_synthesize",
+        ) as fsyn, mock.patch(
+            "core.llm_client.chat",
+        ) as megachat:
+            megachat.return_value = types.SimpleNamespace(
+                message=types.SimpleNamespace(content="legacy echo reply")
+            )
+            reply = maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                (
+                    "For the continuity witness: dialogue anchors now strip stale "
+                    "prior citations before they become current evidence. Say that "
+                    "back in one sentence."
+                ),
+                source="telegram_surface",
+                transcript="[memory evidence] stale:\n- April 6 journal",
+                chat_history=[
+                    {
+                        "content": (
+                            "Rohit: earlier continuity probe\n"
+                            "Maez: earlier continuity answer"
+                        )
+                    }
+                ],
+            )
+
+        self.assertEqual(reply, "legacy echo reply")
         fsyn.assert_not_called()
         megachat.assert_called_once()
 

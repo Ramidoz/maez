@@ -87,7 +87,7 @@ Detection:
 
 - **DIRECT:** asks about the conversation itself: "what were we talking about", "what did we just discuss", "what was the last thing I said", "what was the last thing you said", "before this", "before that", "what did I say", "what did you say".
 - **ANAPHORIC:** asks with a bare referent likely resolved by the recent thread: "that", "it", "this", "those", "which one", "try that", "do it", "what about that", "why does that matter". Short tokens use word-boundary matching so words like "thatched" or "within" do not trigger the anchor.
-- **INTRA-TURN ECHO:** phrases like "say that back", "repeat that back", or "read that back" are not continuity. They ask Maez to restate the current user sentence, so they must be excluded before the bare `that` detector runs.
+- **INTRA-TURN ECHO:** phrases like "say that back", "repeat that back", or "read that back" are not continuity. They ask Maez to restate the current user sentence, so they must be excluded before the bare `that` detector runs. They also skip focused synthesis when unrelated evidence is present; otherwise stale memory can hijack a current-turn restatement.
 - **NONE:** no continuity marker.
 
 Fail-safe bias:
@@ -269,19 +269,21 @@ Optional non-schema telemetry additions may be logged in `focused_cognition_prom
 6. `test_dialogue_anchor_reuses_history_to_messages` — monkeypatch `history_to_messages`; anchor helper calls it and does not parse independently.
 7. `test_dialogue_anchor_strips_stale_local_citations` — prior reply labels like `[E1]` / `[E3]` are removed before dialogue becomes current evidence.
 8. `test_intra_turn_echo_instruction_is_not_anaphoric_continuity` — "say that back" / "repeat that back" style prompts do not trigger the bare `that` anaphoric detector.
-9. `test_direct_continuity_prioritizes_dialogue` — direct ask with chat history + stale memory evidence -> `[E1]` is `dialogue_anchor`, tail repeat is dialogue, stale memory is suppressed.
-10. `test_direct_continuity_keeps_only_newest_dialogue_anchor` — direct ask with a polluted older continuity answer + a clean latest exchange -> only the clean latest exchange is present.
-11. `test_direct_continuity_without_anchor_returns_none` — direct ask with no usable chat history -> no focused working set.
-12. `test_uncertain_continuity_without_anchor_returns_none_even_with_stale_evidence` — uncertain continuity + stale evidence + no anchor -> no focused working set.
-13. `test_uncertain_continuity_with_anchor_prioritizes_dialogue` — uncertain continuity + stale evidence + anchor -> dialogue first.
-14. `test_anaphoric_uses_only_newest_dialogue_anchor` — anaphoric ask with current evidence + older dialogue + latest dialogue -> only the latest dialogue anchor is present.
-15. `test_normal_evidence_excludes_dialogue_anchor` — normal Reddit ask with chat history -> no `dialogue_anchor` item.
-16. `test_dialogue_anchor_trace_stores_no_raw_text` — focused run with distinctive dialogue strings stores hashes/map only, no raw dialogue text.
-17. `test_daemon_continuity_no_anchor_falls_back_to_legacy` — flag on + direct continuity ask + no chat history -> focused synthesis not called; legacy chat called.
-18. `test_daemon_uncertain_continuity_no_anchor_falls_back_to_legacy` — flag on + uncertain continuity + stale evidence + no chat history -> focused synthesis not called; legacy chat called.
-19. `test_daemon_continuity_with_anchor_uses_focused` — flag on + direct continuity ask + usable chat history -> focused synthesis called.
-20. `test_daemon_anaphoric_with_anchor_uses_focused` — flag on + "which one matters?" + usable chat history/current evidence -> focused synthesis called with the newest dialogue anchor.
-21. `test_focused_disabled_unchanged` — flag off behavior unchanged.
+9. `test_intra_turn_echo_with_stale_evidence_returns_none` — echo/restatement prompt + stale evidence returns no focused working set.
+10. `test_direct_continuity_prioritizes_dialogue` — direct ask with chat history + stale memory evidence -> `[E1]` is `dialogue_anchor`, tail repeat is dialogue, stale memory is suppressed.
+11. `test_direct_continuity_keeps_only_newest_dialogue_anchor` — direct ask with a polluted older continuity answer + a clean latest exchange -> only the clean latest exchange is present.
+12. `test_direct_continuity_without_anchor_returns_none` — direct ask with no usable chat history -> no focused working set.
+13. `test_uncertain_continuity_without_anchor_returns_none_even_with_stale_evidence` — uncertain continuity + stale evidence + no anchor -> no focused working set.
+14. `test_uncertain_continuity_with_anchor_prioritizes_dialogue` — uncertain continuity + stale evidence + anchor -> dialogue first.
+15. `test_anaphoric_uses_only_newest_dialogue_anchor` — anaphoric ask with current evidence + older dialogue + latest dialogue -> only the latest dialogue anchor is present.
+16. `test_normal_evidence_excludes_dialogue_anchor` — normal Reddit ask with chat history -> no `dialogue_anchor` item.
+17. `test_dialogue_anchor_trace_stores_no_raw_text` — focused run with distinctive dialogue strings stores hashes/map only, no raw dialogue text.
+18. `test_daemon_continuity_no_anchor_falls_back_to_legacy` — flag on + direct continuity ask + no chat history -> focused synthesis not called; legacy chat called.
+19. `test_daemon_uncertain_continuity_no_anchor_falls_back_to_legacy` — flag on + uncertain continuity + stale evidence + no chat history -> focused synthesis not called; legacy chat called.
+20. `test_daemon_intra_turn_echo_with_stale_evidence_uses_legacy` — flag on + echo/restatement prompt + stale evidence -> focused synthesis not called; legacy chat called.
+21. `test_daemon_continuity_with_anchor_uses_focused` — flag on + direct continuity ask + usable chat history -> focused synthesis called.
+22. `test_daemon_anaphoric_with_anchor_uses_focused` — flag on + "which one matters?" + usable chat history/current evidence -> focused synthesis called with the newest dialogue anchor.
+23. `test_focused_disabled_unchanged` — flag off behavior unchanged.
 
 ## Witness Plan — Obs 16
 

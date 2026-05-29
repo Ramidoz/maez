@@ -159,6 +159,11 @@ def _strip_local_citations(text: str) -> str:
     return re.sub(r"\s*\[E\d+\]", "", text or "").strip()
 
 
+def _is_intra_turn_echo_instruction(text: str) -> bool:
+    lowered = (text or "").strip().lower()
+    return any(pattern in lowered for pattern in _INTRA_TURN_ECHO_PATTERNS)
+
+
 def dialogue_continuity_state(owner_question: str) -> DialogueContinuityState:
     text = (owner_question or "").strip().lower()
     for pattern in _DIRECT_CONTINUITY_PATTERNS:
@@ -177,14 +182,13 @@ def dialogue_continuity_state(owner_question: str) -> DialogueContinuityState:
                 fail_safe_legacy=False,
                 matched_reason=pattern,
             )
-    for pattern in _INTRA_TURN_ECHO_PATTERNS:
-        if pattern in text:
-            return DialogueContinuityState(
-                kind=ContinuityKind.NONE,
-                needs_dialogue=False,
-                fail_safe_legacy=False,
-                matched_reason=None,
-            )
+    if _is_intra_turn_echo_instruction(text):
+        return DialogueContinuityState(
+            kind=ContinuityKind.NONE,
+            needs_dialogue=False,
+            fail_safe_legacy=False,
+            matched_reason=None,
+        )
     for pattern in _ANAPHORIC_WORDS:
         if re.search(rf"\b{re.escape(pattern)}\b", text):
             return DialogueContinuityState(
@@ -319,6 +323,11 @@ def assemble_working_set(
 ) -> WorkingSet | None:
     state = turn_evidence_state(transcript=transcript, web_context=web_context)
     dialogue_state = dialogue_continuity_state(owner_question)
+    if (
+        dialogue_state.kind == ContinuityKind.NONE
+        and _is_intra_turn_echo_instruction(owner_question)
+    ):
+        return None
     anchors = (
         dialogue_anchor_items(chat_history)
         if dialogue_state.needs_dialogue or dialogue_state.fail_safe_legacy

@@ -83,6 +83,26 @@ class AssembleWorkingSetTests(unittest.TestCase):
         )
         self.assertIsNone(absent)
 
+    def test_intra_turn_echo_with_stale_evidence_returns_none(self):
+        ws = assemble_working_set(
+            transcript="[memory evidence] stale:\n- April 6 journal",
+            web_context="",
+            owner_question=(
+                "For the continuity witness: dialogue anchors now strip stale "
+                "prior citations before they become current evidence. Say that "
+                "back in one sentence."
+            ),
+            chat_history=[
+                {
+                    "content": (
+                        "Rohit: previous continuity probe\n"
+                        "Maez: previous continuity answer"
+                    )
+                }
+            ],
+        )
+        self.assertIsNone(ws)
+
 
 class DialogueContinuityStateTests(unittest.TestCase):
     def test_direct_continuity_state(self):
