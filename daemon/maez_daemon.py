@@ -986,6 +986,14 @@ def _daemon_parallel_web_search_enabled(transcript: str = "") -> bool:
     )
 
 
+def _focused_cognition_enabled() -> bool:
+    return os.environ.get("MAEZ_FOCUSED_COGNITION_ENABLED", "0") in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
 def _consolidate_system_messages(
     messages: list[dict],
     *,
@@ -1135,6 +1143,31 @@ def _log_daemon_system_part_shape(
         "daemon_system_part_shape surface=%s call_purpose=%s summary=%s",
         surface,
         call_purpose,
+        json.dumps(summary, sort_keys=True),
+    )
+
+
+def _log_focused_cognition_prompt_shape(
+    *,
+    surface: str,
+    working_set: object,
+    legacy_prompt_chars: int,
+) -> None:
+    items = list(getattr(working_set, "items", []) or [])
+    source_types = sorted({str(getattr(item, "source_type", "")) for item in items})
+    summary = {
+        "evidence_item_count": len(items),
+        "source_types": ",".join(source_types),
+        "working_set_chars": int(getattr(working_set, "working_set_chars", 0) or 0),
+        "working_set_tokens_est": int(
+            getattr(working_set, "working_set_tokens_est", 0) or 0
+        ),
+        "legacy_prompt_chars": int(legacy_prompt_chars),
+        "legacy_prompt_tokens_est": int(legacy_prompt_chars // 4),
+    }
+    logger.info(
+        "focused_cognition_prompt_shape surface=%s summary=%s",
+        surface,
         json.dumps(summary, sort_keys=True),
     )
 
@@ -3468,6 +3501,7 @@ class MaezDaemon:
         # a volatile fact (e.g. currency conversion), do not add web
         # snippets that can override the tool result during synthesis.
         web_context = ""
+        _legacy_routing_observation_id = None
         if (
             not authoritative_tool_reply
             and _daemon_parallel_web_search_enabled(transcript)
@@ -3490,7 +3524,7 @@ class MaezDaemon:
                 from core.routing.observation import record_legacy_web_search_observation
 
                 _routing_obs_count = int(sr.get("result_count", 0) or 0)
-                record_legacy_web_search_observation(
+                _legacy_routing_observation_id = record_legacy_web_search_observation(
                     user_text=text,
                     surface=source,
                     chat_id=chat_id,
@@ -3786,15 +3820,21 @@ class MaezDaemon:
             final_system_part=turn_final_context,
         )
         messages.append({"role": "user", "content": prompt})
+        _focused_candidate = (
+            _focused_cognition_enabled()
+            and source != "voice"
+            and _evidence_state.evidence_present
+        )
+        _legacy_call_purpose = "legacy_candidate" if _focused_candidate else "llm_synthesis"
         if transcript_context or evidence_directive:
             _log_daemon_system_part_shape(
                 surface=source,
-                call_purpose="llm_synthesis",
+                call_purpose=_legacy_call_purpose,
                 system_parts=system_part_capture,
             )
             _log_daemon_prompt_payload_shape(
                 surface=source,
-                call_purpose="llm_synthesis",
+                call_purpose=_legacy_call_purpose,
                 messages=messages,
                 transcript_context=transcript_context,
                 evidence_directive=evidence_directive,
@@ -3803,36 +3843,128 @@ class MaezDaemon:
         if authoritative_tool_reply:
             reply = authoritative_tool_reply
         else:
-            try:
-                # Session 11r: via llm_client (was missed in 11p batch)
-                from core import llm_client as _llm_client
-
-                response = _llm_client.chat(
-                    model=MODEL,
-                    messages=messages,
-                    think=False,
-                    options={"temperature": 0.7, "num_predict": 4096},
-                )
-                reply = (response.message.content or "").strip() or "(no response)"
-            except Exception as e:
+            reply = None
+            _focused_used = False
+            if _focused_candidate:
+                _focused_working_set = None
                 try:
-                    from core.error_classifier import (
-                        classify as _classify_backend_error,
-                        emit_telemetry as _emit_backend_error,
-                        owner_visible_message,
+                    from core.routing.focused_cognition import (
+                        assemble_working_set as _assemble_working_set,
+                        check_groundedness as _check_groundedness,
+                        focused_synthesize as _focused_synthesize,
+                        record_focused_cognition_run as _record_focused_cognition_run,
                     )
 
-                    _classified_error = _classify_backend_error(e)
-                    _emit_backend_error(_classified_error, surface="telegram_chat")
-                    reply = owner_visible_message(_classified_error)
-                    logger.error(
-                        "telegram chat synthesis failed (%s): %s",
-                        _classified_error.error_class.value,
-                        e,
+                    _focused_working_set = _assemble_working_set(
+                        transcript=transcript,
+                        web_context=web_context,
+                        owner_question=text,
                     )
-                except Exception:
-                    logger.exception("telegram chat synthesis failed")
-                    reply = "I hit a local brain error while answering. Try me again in a moment."
+                    if _focused_working_set is not None:
+                        _legacy_prompt_chars = sum(
+                            len(str(message.get("content") or ""))
+                            for message in messages
+                            if isinstance(message, dict)
+                        )
+                        _log_focused_cognition_prompt_shape(
+                            surface=source,
+                            working_set=_focused_working_set,
+                            legacy_prompt_chars=_legacy_prompt_chars,
+                        )
+                        _focused_result = _focused_synthesize(
+                            _focused_working_set,
+                            surface=source,
+                        )
+                        _focused_verdict = _check_groundedness(
+                            _focused_result,
+                            _focused_working_set,
+                        )
+                        _focused_reply = (_focused_result.reply or "").strip()
+                        _record_focused_cognition_run(
+                            surface=source,
+                            chat_id=chat_id,
+                            working_set=_focused_working_set,
+                            result=_focused_result,
+                            verdict=_focused_verdict,
+                            legacy_prompt_chars=_legacy_prompt_chars,
+                            fallback_reason=None if _focused_reply else "empty_focused_reply",
+                            routing_observation_id=_legacy_routing_observation_id,
+                        )
+                        if _focused_reply:
+                            reply = _focused_reply
+                            _focused_used = True
+                except Exception as _focused_exc:
+                    logger.warning(
+                        "focused cognition failed, falling back to megaprompt: %s",
+                        _focused_exc,
+                    )
+                    try:
+                        from core.routing.focused_cognition import (
+                            record_focused_cognition_run as _record_focused_cognition_run,
+                        )
+
+                        _legacy_prompt_chars = sum(
+                            len(str(message.get("content") or ""))
+                            for message in messages
+                            if isinstance(message, dict)
+                        )
+                        _record_focused_cognition_run(
+                            surface=source,
+                            chat_id=chat_id,
+                            working_set=_focused_working_set,
+                            result=None,
+                            verdict=None,
+                            legacy_prompt_chars=_legacy_prompt_chars,
+                            fallback_reason="focused_call_error",
+                            routing_observation_id=_legacy_routing_observation_id,
+                        )
+                    except Exception:
+                        pass
+
+            if not _focused_used:
+                try:
+                    # Session 11r: via llm_client (was missed in 11p batch)
+                    from core import llm_client as _llm_client
+
+                    response = _llm_client.chat(
+                        model=MODEL,
+                        messages=messages,
+                        think=False,
+                        options={"temperature": 0.7, "num_predict": 4096},
+                    )
+                    reply = (response.message.content or "").strip() or "(no response)"
+                    if _focused_candidate and (transcript_context or evidence_directive):
+                        _log_daemon_system_part_shape(
+                            surface=source,
+                            call_purpose="llm_synthesis",
+                            system_parts=system_part_capture,
+                        )
+                        _log_daemon_prompt_payload_shape(
+                            surface=source,
+                            call_purpose="llm_synthesis",
+                            messages=messages,
+                            transcript_context=transcript_context,
+                            evidence_directive=evidence_directive,
+                        )
+                except Exception as e:
+                    try:
+                        from core.error_classifier import (
+                            classify as _classify_backend_error,
+                            emit_telemetry as _emit_backend_error,
+                            owner_visible_message,
+                        )
+
+                        _classified_error = _classify_backend_error(e)
+                        _emit_backend_error(_classified_error, surface="telegram_chat")
+                        reply = owner_visible_message(_classified_error)
+                        logger.error(
+                            "telegram chat synthesis failed (%s): %s",
+                            _classified_error.error_class.value,
+                            e,
+                        )
+                    except Exception:
+                        logger.exception("telegram chat synthesis failed")
+                        reply = "I hit a local brain error while answering. Try me again in a moment."
 
         # 2026-04-23 Commit 7b: strip tool-call JSON leaks from the raw
         # model output BEFORE audit and BEFORE store. Models occasionally

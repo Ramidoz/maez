@@ -707,6 +707,212 @@ class DaemonHandleMessageContract(unittest.TestCase):
         self.assertFalse(summary["transcript_is_suffix"])
         self.assertTrue(summary["evidence_directive_is_suffix"])
 
+    def test_focused_replaces_megaprompt_when_flag_and_text_evidence(self):
+        from daemon import maez_daemon
+
+        captured: dict[str, list[dict]] = {}
+        daemon = self._build_daemon_for_handle_message()
+
+        with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+            os.environ,
+            {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+        ), mock.patch(
+            "core.routing.focused_cognition.focused_synthesize",
+        ) as fsyn, mock.patch(
+            "core.routing.focused_cognition.record_focused_cognition_run",
+            return_value="focused-row-1",
+        ), mock.patch(
+            "core.llm_client.chat",
+        ) as megachat:
+            from core.routing.focused_cognition import FocusedResult
+
+            fsyn.return_value = FocusedResult("voiced answer [E1]", ["E1"], 800)
+            reply = maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                "Search r/LocalLLaMA right now",
+                source="telegram_surface",
+                transcript="[memory context] r/LocalLLaMA:\n- LiquidAI LFM2.5 (67 pts)",
+                chat_history=[],
+            )
+
+        self.assertEqual(reply, "voiced answer [E1]")
+        fsyn.assert_called_once()
+        megachat.assert_not_called()
+
+    def test_focused_excludes_voice_surface_v1(self):
+        from daemon import maez_daemon
+
+        captured: dict[str, list[dict]] = {}
+        daemon = self._build_daemon_for_handle_message()
+
+        with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+            os.environ,
+            {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+        ), mock.patch(
+            "core.routing.focused_cognition.focused_synthesize",
+        ) as fsyn:
+            maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                "what's new",
+                source="voice",
+                transcript="[memory context] r/x:\n- a post (1 pts)",
+                chat_history=[],
+            )
+
+        fsyn.assert_not_called()
+
+    def test_focused_legacy_when_flag_off(self):
+        from daemon import maez_daemon
+
+        captured: dict[str, list[dict]] = {}
+        daemon = self._build_daemon_for_handle_message()
+
+        with self._handle_message_mock_stack(maez_daemon, captured), mock.patch(
+            "core.routing.focused_cognition.focused_synthesize",
+        ) as fsyn:
+            maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                "Search r/LocalLLaMA",
+                source="telegram_surface",
+                transcript="[memory context] r/x:\n- a post (1 pts)",
+                chat_history=[],
+            )
+
+        fsyn.assert_not_called()
+
+    def test_focused_fallback_on_error_uses_legacy_megaprompt(self):
+        from daemon import maez_daemon
+
+        captured: dict[str, list[dict]] = {}
+        daemon = self._build_daemon_for_handle_message()
+
+        with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+            os.environ,
+            {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+        ), mock.patch(
+            "core.routing.focused_cognition.focused_synthesize",
+            side_effect=RuntimeError("boom"),
+        ) as fsyn, mock.patch(
+            "core.routing.focused_cognition.record_focused_cognition_run",
+            return_value="focused-row-1",
+        ), mock.patch(
+            "core.llm_client.chat",
+        ) as megachat:
+            megachat.return_value = types.SimpleNamespace(
+                message=types.SimpleNamespace(content="legacy reply")
+            )
+            reply = maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                "Search r/LocalLLaMA",
+                source="telegram_surface",
+                transcript="[memory context] r/x:\n- a post (1 pts)",
+                chat_history=[],
+            )
+
+        self.assertEqual(reply, "legacy reply")
+        fsyn.assert_called_once()
+        megachat.assert_called()
+
+    def test_focused_telemetry_relabels_candidate_and_logs_actual_prompt(self):
+        from daemon import maez_daemon
+
+        captured: dict[str, list[dict]] = {}
+        daemon = self._build_daemon_for_handle_message()
+
+        with self.assertLogs(maez_daemon.logger, level="INFO") as log_capture:
+            with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+                os.environ,
+                {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+            ), mock.patch(
+                "core.routing.focused_cognition.focused_synthesize",
+            ) as fsyn, mock.patch(
+                "core.routing.focused_cognition.record_focused_cognition_run",
+                return_value="focused-row-1",
+            ):
+                from core.routing.focused_cognition import FocusedResult
+
+                fsyn.return_value = FocusedResult("voiced answer [E1]", ["E1"], 800)
+                maez_daemon.MaezDaemon.handle_message(
+                    daemon,
+                    "Search r/LocalLLaMA",
+                    source="telegram_surface",
+                    transcript="[memory context] r/x:\n- a post (1 pts)",
+                    chat_history=[],
+                )
+
+        joined = "\n".join(log_capture.output)
+        self.assertIn("call_purpose=legacy_candidate", joined)
+        self.assertIn("focused_cognition_prompt_shape", joined)
+        self.assertNotIn("call_purpose=llm_synthesis", joined)
+
+    def test_focused_links_legacy_routing_observation_id_only(self):
+        from daemon import maez_daemon
+
+        captured: dict[str, list[dict]] = {}
+        daemon = self._build_daemon_for_handle_message()
+        web_context = (
+            "[WEB SEARCH: 'local llm'] 2 results - 2026\n"
+            "  1. Post\n"
+            "     body"
+        )
+
+        with self._handle_message_mock_stack(
+            maez_daemon,
+            captured,
+            needs_web_search=True,
+            web_context=web_context,
+        ), mock.patch.dict(
+            os.environ,
+            {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+        ), mock.patch(
+            "core.routing.observation.record_legacy_web_search_observation",
+            return_value="legacy-routing-row",
+        ), mock.patch(
+            "core.routing.focused_cognition.focused_synthesize",
+        ) as fsyn, mock.patch(
+            "core.routing.focused_cognition.record_focused_cognition_run",
+            return_value="focused-row-1",
+        ) as rec:
+            from core.routing.focused_cognition import FocusedResult
+
+            fsyn.return_value = FocusedResult("web answer [E1]", ["E1"], 800)
+            maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                "what's the latest on local llms",
+                source="telegram_surface",
+                transcript="",
+                chat_history=[],
+            )
+
+        self.assertEqual(
+            rec.call_args.kwargs["routing_observation_id"],
+            "legacy-routing-row",
+        )
+
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+        with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+            os.environ,
+            {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+        ), mock.patch(
+            "core.routing.focused_cognition.focused_synthesize",
+        ) as fsyn, mock.patch(
+            "core.routing.focused_cognition.record_focused_cognition_run",
+            return_value="focused-row-2",
+        ) as rec:
+            from core.routing.focused_cognition import FocusedResult
+
+            fsyn.return_value = FocusedResult("dispatcher answer [E1]", ["E1"], 800)
+            maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                "Search r/LocalLLaMA",
+                source="telegram_surface",
+                transcript="[memory context] r/x:\n- a post (1 pts)",
+                chat_history=[],
+            )
+
+        self.assertIsNone(rec.call_args.kwargs["routing_observation_id"])
+
     def test_daemon_system_part_capture_names_consolidated_blocks(self):
         """System-block capture should identify each pre-consolidation part."""
         from daemon import maez_daemon
