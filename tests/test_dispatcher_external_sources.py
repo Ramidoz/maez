@@ -125,7 +125,20 @@ class DispatcherExternalSourceFanoutTests(unittest.TestCase):
 
         fetched = SimpleNamespace(
             ok=True,
-            text="fresh reddit rows",
+            text=json.dumps(
+                {
+                    "data": {
+                        "children": [
+                            {
+                                "data": {
+                                    "id": "abc123",
+                                    "title": "fresh reddit rows",
+                                }
+                            }
+                        ]
+                    }
+                }
+            ),
             request_id="diag-live-reddit",
             status_code=200,
             reason_codes=("public_lookup_allowed",),
