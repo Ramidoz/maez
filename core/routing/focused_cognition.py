@@ -9,10 +9,17 @@ megaprompt.
 
 from __future__ import annotations
 
+from contextlib import closing
 from dataclasses import dataclass
 import hashlib
+import json
+from pathlib import Path
 import re
+import sqlite3
+import time
+import uuid
 
+from core.routing.observation import _default_db_path, _sha256
 from core.routing.evidence_state import turn_evidence_state
 
 _POSITIVE_MARKERS: tuple[str, ...] = (
@@ -245,3 +252,118 @@ def check_groundedness(
         citation_coverage=coverage,
         unmatched=unmatched,
     )
+
+
+class FocusedCognitionStore:
+    def __init__(self, *, db_path: str | Path | None = None) -> None:
+        self.db_path = Path(db_path) if db_path is not None else _default_db_path()
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._init_schema()
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _init_schema(self) -> None:
+        with closing(self._connect()) as conn:
+            with conn:
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS focused_cognition_runs (
+                        id TEXT PRIMARY KEY,
+                        created_at REAL NOT NULL,
+                        surface TEXT NOT NULL,
+                        chat_id_hash TEXT,
+                        evidence_map_json TEXT NOT NULL,
+                        source_types_json TEXT NOT NULL,
+                        working_set_chars INTEGER NOT NULL,
+                        working_set_tokens_est INTEGER NOT NULL,
+                        legacy_prompt_chars INTEGER,
+                        legacy_prompt_tokens_est INTEGER,
+                        citation_ids_emitted_json TEXT NOT NULL,
+                        citation_coverage REAL NOT NULL,
+                        unmatched_citations_json TEXT NOT NULL,
+                        groundedness_verdict TEXT NOT NULL,
+                        fallback_reason TEXT,
+                        routing_observation_id TEXT
+                    )
+                    """
+                )
+
+    def record(
+        self,
+        *,
+        surface: str,
+        chat_id: str | None,
+        working_set: WorkingSet | None,
+        result: FocusedResult | None,
+        verdict: GroundednessVerdict | None,
+        legacy_prompt_chars: int | None,
+        fallback_reason: str | None,
+        routing_observation_id: str | None,
+    ) -> str:
+        row_id = uuid.uuid4().hex
+        items = list(working_set.items) if working_set is not None else []
+        evidence_map = [
+            {
+                "local_label": item.local_label,
+                "source_type": item.source_type,
+                "durable_id": item.durable_id,
+            }
+            for item in items
+        ]
+        source_types = sorted({item.source_type for item in items})
+        citation_ids = result.cited_ids if result is not None else []
+        unmatched = verdict.unmatched if verdict is not None else []
+        coverage = verdict.citation_coverage if verdict is not None else 0.0
+        groundedness = verdict.verdict if verdict is not None else "not_applicable"
+        working_set_chars = working_set.working_set_chars if working_set is not None else 0
+        working_set_tokens = working_set.working_set_tokens_est if working_set is not None else 0
+        legacy_tokens = legacy_prompt_chars // 4 if legacy_prompt_chars else None
+        row = {
+            "id": row_id,
+            "created_at": time.time(),
+            "surface": surface,
+            "chat_id_hash": _sha256(chat_id) if chat_id else None,
+            "evidence_map_json": json.dumps(evidence_map, sort_keys=True),
+            "source_types_json": json.dumps(source_types, sort_keys=True),
+            "working_set_chars": int(working_set_chars),
+            "working_set_tokens_est": int(working_set_tokens),
+            "legacy_prompt_chars": legacy_prompt_chars,
+            "legacy_prompt_tokens_est": legacy_tokens,
+            "citation_ids_emitted_json": json.dumps(citation_ids, sort_keys=True),
+            "citation_coverage": float(coverage),
+            "unmatched_citations_json": json.dumps(unmatched, sort_keys=True),
+            "groundedness_verdict": groundedness,
+            "fallback_reason": fallback_reason,
+            "routing_observation_id": routing_observation_id,
+        }
+        columns = tuple(row.keys())
+        placeholders = ", ".join("?" for _ in columns)
+        with closing(self._connect()) as conn:
+            with conn:
+                conn.execute(
+                    f"INSERT INTO focused_cognition_runs ({', '.join(columns)}) "
+                    f"VALUES ({placeholders})",
+                    tuple(row[column] for column in columns),
+                )
+        return row_id
+
+    def get(self, row_id: str) -> sqlite3.Row:
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT * FROM focused_cognition_runs WHERE id = ?",
+                (row_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(row_id)
+        return row
+
+
+def _default_store() -> FocusedCognitionStore:
+    return FocusedCognitionStore()
+
+
+def record_focused_cognition_run(**kwargs) -> str:
+    return _default_store().record(**kwargs)

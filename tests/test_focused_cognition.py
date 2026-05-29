@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from tempfile import TemporaryDirectory
 
 from core.routing.focused_cognition import assemble_working_set
 
@@ -151,6 +152,76 @@ class GroundednessTests(unittest.TestCase):
 
         none = check_groundedness(FocusedResult("no tags here", [], 0), ws)
         self.assertEqual(none.verdict, "no_citations")
+
+
+class FocusedCognitionStoreTests(unittest.TestCase):
+    def setUp(self):
+        self._td = TemporaryDirectory()
+        self.addCleanup(self._td.cleanup)
+
+    def _store(self):
+        from pathlib import Path
+
+        from core.routing.focused_cognition import FocusedCognitionStore
+
+        return FocusedCognitionStore(db_path=Path(self._td.name) / "focused.db")
+
+    def test_schema_and_roundtrip(self):
+        from core.routing.focused_cognition import (
+            FocusedResult,
+            GroundednessVerdict,
+        )
+
+        store = self._store()
+        ws = assemble_working_set(transcript=_FRESH, web_context="", owner_question="q")
+        row_id = store.record(
+            surface="telegram",
+            chat_id="c1",
+            working_set=ws,
+            result=FocusedResult("uses [E1]", ["E1"], ws.working_set_chars),
+            verdict=GroundednessVerdict("grounded", 0.5, []),
+            legacy_prompt_chars=104000,
+            fallback_reason=None,
+            routing_observation_id=None,
+        )
+        row = store.get(row_id)
+        self.assertEqual(row["groundedness_verdict"], "grounded")
+        self.assertEqual(row["legacy_prompt_chars"], 104000)
+        self.assertLess(row["working_set_chars"], row["legacy_prompt_chars"])
+        self.assertIn("evidence_map_json", row.keys())
+
+    def test_stores_no_raw_evidence_text(self):
+        import sqlite3
+
+        from core.routing.focused_cognition import (
+            FocusedResult,
+            GroundednessVerdict,
+        )
+
+        store = self._store()
+        secret = "REACHY_SECRET_MARKER_XYZ"
+        ws = assemble_working_set(
+            transcript=f"[fresh evidence] X:\n- {secret} (1 pts)",
+            web_context="",
+            owner_question="q",
+        )
+        store.record(
+            surface="telegram",
+            chat_id="c1",
+            working_set=ws,
+            result=FocusedResult("ok [E1]", ["E1"], ws.working_set_chars),
+            verdict=GroundednessVerdict("grounded", 1.0, []),
+            legacy_prompt_chars=104000,
+            fallback_reason=None,
+            routing_observation_id=None,
+        )
+        conn = sqlite3.connect(store.db_path)
+        try:
+            rows = conn.execute("SELECT * FROM focused_cognition_runs").fetchall()
+        finally:
+            conn.close()
+        stored = " ".join(str(row) for row in rows)
+        self.assertNotIn(secret, stored)
 
 
 if __name__ == "__main__":
