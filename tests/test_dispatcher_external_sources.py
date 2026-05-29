@@ -335,6 +335,62 @@ class DispatcherExternalSourceFanoutTests(unittest.TestCase):
 
         self.assertEqual(result.branch_results[0].status, ExternalBranchStatus.ERROR)
 
+    def test_dispatcher_live_reddit_block_records_honest_axes(self):
+        from core.dispatcher.external_sources import ExternalFanout
+        from core.dispatcher.spec import ExternalSource
+        from core.routing.observation import (
+            RoutingObservationStore,
+            record_dispatcher_turn_observation,
+        )
+
+        block_page = "<body class=theme-beta><div><style>.x{}</style></div></body>"
+        fetched = SimpleNamespace(
+            ok=True,
+            text=block_page,
+            request_id="diag-orth",
+            status_code=200,
+            reason_codes=("public_lookup_allowed",),
+        )
+        spec = _spec(ExternalSource.LIVE_REDDIT)
+
+        with mock.patch(
+            "core.dispatcher.external_sources.external_fetch.fetch_text",
+            return_value=fetched,
+        ):
+            external_result = ExternalFanout().run(
+                spec,
+                utterance="Search r/LocalLLaMA right now",
+                conversation_state={},
+                fanout_generation_id="seal-orth",
+            )
+
+        layer1_result = SimpleNamespace(branch_results=(), recall_blocks=())
+        rendered_turn = SimpleNamespace(
+            refusal_reason=None,
+            effective_spec=spec,
+            prompt_block="",
+        )
+
+        row_id = record_dispatcher_turn_observation(
+            user_text="Search r/LocalLLaMA right now",
+            surface="test_orth",
+            chat_id=None,
+            original_spec=spec,
+            effective_spec=spec,
+            layer1_result=layer1_result,
+            external_result=external_result,
+            rendered_turn=rendered_turn,
+            turn_seal_state="clean",
+            elapsed_ms=1.0,
+        )
+
+        row = RoutingObservationStore().get(row_id)
+        self.assertEqual(row["spec_match_score"], 1.0)
+        self.assertEqual(row["spec_match_reason"], "matched_requested_source")
+        self.assertEqual(row["outcome_quality"], "empty_but_honest")
+        self.assertEqual(row["evidence_block_count"], 0)
+        self.assertEqual(row["empty_reason"], "PARSED_BUT_NO_USABLE_FIELDS")
+
     def test_fetch_url_refuses_model_invented_url(self):
         from core.dispatcher.external_sources import ExternalFanout
         from core.dispatcher.spec import (
