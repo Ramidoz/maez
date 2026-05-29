@@ -23,6 +23,7 @@ import uuid
 
 from core.routing.observation import _default_db_path, _sha256
 from core.routing.evidence_state import turn_evidence_state
+from core.routing.search_context import WEB_NO_RESULTS as _WEB_NO_RESULTS
 
 _POSITIVE_MARKERS: tuple[str, ...] = (
     "[fresh evidence]",
@@ -47,7 +48,6 @@ _PRIORITY: dict[str, int] = {
     "memory_context": 1,
     "web_context": 2,
 }
-_WEB_NO_RESULTS = "No results found."
 _CITE_RE = re.compile(r"\[E(\d+)\]")
 _FAITHFUL_INSTRUCTION = (
     "Answer the owner's question ONLY from the evidence below. Cite the [E#] "

@@ -34,6 +34,15 @@ class AssembleWorkingSetTests(unittest.TestCase):
             )
         )
 
+    def test_web_no_results_single_source_of_truth(self):
+        import core.routing.evidence_state as es
+        import core.routing.focused_cognition as fc
+        import core.routing.search_context as sc
+
+        self.assertIs(fc._WEB_NO_RESULTS, sc.WEB_NO_RESULTS)
+        self.assertIs(es._WEB_NO_RESULTS, sc.WEB_NO_RESULTS)
+        self.assertEqual(sc.WEB_NO_RESULTS, "No results found.")
+
     def test_extracts_atomic_items_with_ids_and_durable_id(self):
         ws = assemble_working_set(
             transcript=_SUBSTRATE,

@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from core.routing.search_context import WEB_NO_RESULTS as _WEB_NO_RESULTS
+
 
 _POSITIVE_MARKERS: tuple[str, ...] = (
     "[memory evidence]",
@@ -24,9 +26,6 @@ _SOURCE_HINTS: dict[str, str] = {
     "fresh evidence": "fresh evidence",
     "web search results": "web search results",
 }
-
-_WEB_NO_RESULTS = "No results found."
-
 
 @dataclass(frozen=True)
 class EvidenceState:
