@@ -252,7 +252,41 @@ class DialogueAwareAssembleTests(unittest.TestCase):
             ws.ordered_evidence_text.count(f"[{ws.items[0].local_label}]"),
             2,
         )
-        self.assertEqual(ws.items[1].source_type, "memory_evidence")
+        self.assertEqual(len(ws.items), 1)
+
+    def test_direct_continuity_keeps_only_newest_dialogue_anchor(self):
+        history = [
+            {
+                "content": (
+                    "Rohit: What were we talking about earlier?\n"
+                    "Maez: I only have the April 6 journal."
+                )
+            },
+            {
+                "content": (
+                    "Rohit: For the continuity witness: bare temporal words "
+                    "are freshness.\n"
+                    "Maez: Bare temporal words are freshness, and newest "
+                    "dialogue anchors come first."
+                )
+            },
+        ]
+        ws = assemble_working_set(
+            transcript="[memory evidence] stale journal:\n- April 6 journaling note",
+            web_context="",
+            owner_question="What were we talking about earlier?",
+            chat_history=history,
+        )
+        self.assertIsNotNone(ws)
+        assert ws is not None
+        dialogue_items = [
+            item for item in ws.items if item.source_type == "dialogue_anchor"
+        ]
+        self.assertEqual(len(dialogue_items), 1)
+        self.assertIn("bare temporal words are freshness", dialogue_items[0].text)
+        self.assertNotIn("I only have the April 6 journal", dialogue_items[0].text)
+        self.assertEqual(ws.items[0].source_type, "dialogue_anchor")
+        self.assertEqual(len(ws.items), 1)
 
     def test_direct_continuity_without_anchor_returns_none(self):
         ws = assemble_working_set(

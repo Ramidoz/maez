@@ -166,11 +166,11 @@ Important control-flow change: the assembler must not start with the old uncondi
 Example: "What were we talking about earlier?"
 
 - Require usable dialogue anchors.
-- Dialogue anchors become highest-priority evidence.
-- Non-dialogue evidence is **subordinated, not suppressed** in v1.
-  - Reason: if the dispatcher also surfaced relevant memory, it may help Maez answer richer context.
-  - Guardrail: dialogue is first and tail-repeated, so the current thread dominates.
-  - Witness fallback: if Obs 16 shows stale memory leaking into direct-continuity answers, tighten to suppression for direct continuity.
+- Use only the newest completed dialogue pair.
+- Suppress non-dialogue evidence for this turn shape.
+  - Reason: Obs 16 showed stale continuity answers can compete even when dialogue is ranked first.
+  - Direct continuity asks are asking for the thread itself; memory recall is not the authority.
+  - The single newest dialogue anchor is first and tail-repeated.
 - If no usable dialogue anchors exist, return `None`; the daemon logs `focused_skip_reason="continuity_no_dialogue_anchor"` and falls back to legacy.
 
 ### Anaphoric Follow-Up
@@ -264,18 +264,19 @@ Optional non-schema telemetry additions may be logged in `focused_cognition_prom
 4. `test_recent_freshness_query_is_not_continuity` — normal freshness query with "recent" does not set `fail_safe_legacy`.
 5. `test_bare_temporal_freshness_queries_are_not_continuity` — normal temporal/freshness queries with "last", "before", or bare "earlier" do not set `fail_safe_legacy`.
 6. `test_dialogue_anchor_reuses_history_to_messages` — monkeypatch `history_to_messages`; anchor helper calls it and does not parse independently.
-7. `test_direct_continuity_prioritizes_dialogue` — direct ask with chat history + stale memory evidence -> `[E1]` is `dialogue_anchor`, tail repeat is dialogue, stale memory is below.
-8. `test_direct_continuity_without_anchor_returns_none` — direct ask with no usable chat history -> no focused working set.
-9. `test_uncertain_continuity_without_anchor_returns_none_even_with_stale_evidence` — uncertain continuity + stale evidence + no anchor -> no focused working set.
-10. `test_uncertain_continuity_with_anchor_prioritizes_dialogue` — uncertain continuity + stale evidence + anchor -> dialogue first.
-11. `test_anaphoric_includes_dialogue_support_below_query_evidence` — current evidence stays first, dialogue anchor included below it.
-12. `test_normal_evidence_excludes_dialogue_anchor` — normal Reddit ask with chat history -> no `dialogue_anchor` item.
-13. `test_dialogue_anchor_trace_stores_no_raw_text` — focused run with distinctive dialogue strings stores hashes/map only, no raw dialogue text.
-14. `test_daemon_continuity_no_anchor_falls_back_to_legacy` — flag on + direct continuity ask + no chat history -> focused synthesis not called; legacy chat called.
-15. `test_daemon_uncertain_continuity_no_anchor_falls_back_to_legacy` — flag on + uncertain continuity + stale evidence + no chat history -> focused synthesis not called; legacy chat called.
-16. `test_daemon_continuity_with_anchor_uses_focused` — flag on + direct continuity ask + usable chat history -> focused synthesis called.
-17. `test_daemon_anaphoric_with_anchor_uses_focused` — flag on + "which one matters?" + usable chat history/current evidence -> focused synthesis called with dialogue support.
-18. `test_focused_disabled_unchanged` — flag off behavior unchanged.
+7. `test_direct_continuity_prioritizes_dialogue` — direct ask with chat history + stale memory evidence -> `[E1]` is `dialogue_anchor`, tail repeat is dialogue, stale memory is suppressed.
+8. `test_direct_continuity_keeps_only_newest_dialogue_anchor` — direct ask with a polluted older continuity answer + a clean latest exchange -> only the clean latest exchange is present.
+9. `test_direct_continuity_without_anchor_returns_none` — direct ask with no usable chat history -> no focused working set.
+10. `test_uncertain_continuity_without_anchor_returns_none_even_with_stale_evidence` — uncertain continuity + stale evidence + no anchor -> no focused working set.
+11. `test_uncertain_continuity_with_anchor_prioritizes_dialogue` — uncertain continuity + stale evidence + anchor -> dialogue first.
+12. `test_anaphoric_includes_dialogue_support_below_query_evidence` — current evidence stays first, dialogue anchor included below it.
+13. `test_normal_evidence_excludes_dialogue_anchor` — normal Reddit ask with chat history -> no `dialogue_anchor` item.
+14. `test_dialogue_anchor_trace_stores_no_raw_text` — focused run with distinctive dialogue strings stores hashes/map only, no raw dialogue text.
+15. `test_daemon_continuity_no_anchor_falls_back_to_legacy` — flag on + direct continuity ask + no chat history -> focused synthesis not called; legacy chat called.
+16. `test_daemon_uncertain_continuity_no_anchor_falls_back_to_legacy` — flag on + uncertain continuity + stale evidence + no chat history -> focused synthesis not called; legacy chat called.
+17. `test_daemon_continuity_with_anchor_uses_focused` — flag on + direct continuity ask + usable chat history -> focused synthesis called.
+18. `test_daemon_anaphoric_with_anchor_uses_focused` — flag on + "which one matters?" + usable chat history/current evidence -> focused synthesis called with dialogue support.
+19. `test_focused_disabled_unchanged` — flag off behavior unchanged.
 
 ## Witness Plan — Obs 16
 
@@ -293,7 +294,7 @@ Success:
 - `focused_cognition_runs` rows for direct/anaphoric anchored turns.
 - `evidence_map_json` includes `dialogue_anchor` ids, no raw dialogue text.
 - Owner-visible answers cite `[E#]`, preserve continuity, and do not mention implementation.
-- No stale-memory leak on direct continuity; if leak appears, direct continuity changes from "subordinate" to "suppress non-dialogue evidence" before default-on.
+- No stale-memory leak on direct continuity; direct continuity suppresses non-dialogue evidence before default-on.
 - Classifier precision watch: normal evidence asks containing short words like "that"/"this" should not visibly degrade. If Obs 16 shows noisy dialogue anchors on normal evidence asks, tighten short-token patterns further before default-on.
 
 Only after Obs 16 crosses does `MAEZ_FOCUSED_COGNITION_ENABLED` become eligible for default-on.

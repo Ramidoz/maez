@@ -454,7 +454,40 @@ class DialogueAwareAssembleTests(unittest.TestCase):
             ws.ordered_evidence_text.count(f"[{ws.items[0].local_label}]"),
             2,
         )
-        self.assertEqual(ws.items[1].source_type, "memory_evidence")
+        self.assertEqual(len(ws.items), 1)
+
+    def test_direct_continuity_keeps_only_newest_dialogue_anchor(self):
+        history = [
+            {
+                "content": (
+                    "Rohit: What were we talking about earlier?\n"
+                    "Maez: I only have the April 6 journal."
+                )
+            },
+            {
+                "content": (
+                    "Rohit: For the continuity witness: bare temporal words "
+                    "are freshness.\n"
+                    "Maez: Bare temporal words are freshness, and newest "
+                    "dialogue anchors come first."
+                )
+            },
+        ]
+        ws = assemble_working_set(
+            transcript="[memory evidence] stale journal:\n- April 6 journaling note",
+            web_context="",
+            owner_question="What were we talking about earlier?",
+            chat_history=history,
+        )
+        self.assertIsNotNone(ws)
+        dialogue_items = [
+            item for item in ws.items if item.source_type == "dialogue_anchor"
+        ]
+        self.assertEqual(len(dialogue_items), 1)
+        self.assertIn("bare temporal words are freshness", dialogue_items[0].text)
+        self.assertNotIn("I only have the April 6 journal", dialogue_items[0].text)
+        self.assertEqual(ws.items[0].source_type, "dialogue_anchor")
+        self.assertEqual(len(ws.items), 1)
 
     def test_direct_continuity_without_anchor_returns_none(self):
         ws = assemble_working_set(
@@ -557,6 +590,8 @@ def assemble_working_set(
         if dialogue_state.needs_dialogue or dialogue_state.fail_safe_legacy
         else []
     )
+    if dialogue_state.kind == ContinuityKind.DIRECT:
+        anchors = anchors[:1]
 
     if (dialogue_state.needs_dialogue or dialogue_state.fail_safe_legacy) and not anchors:
         return None
@@ -564,14 +599,15 @@ def assemble_working_set(
         return None
 
     raw_items: list[tuple[str, str, str | None]] = []
-    for marker, body in _split_blocks(transcript or ""):
-        for item_text in _atomic_items(body):
-            raw_items.append((_SOURCE_TYPE[marker], item_text, None))
+    if dialogue_state.kind != ContinuityKind.DIRECT:
+        for marker, body in _split_blocks(transcript or ""):
+            for item_text in _atomic_items(body):
+                raw_items.append((_SOURCE_TYPE[marker], item_text, None))
 
-    web_context = web_context or ""
-    if web_context.strip() and _WEB_NO_RESULTS not in web_context:
-        for item_text in _atomic_items(web_context):
-            raw_items.append(("web_context", item_text, None))
+        web_context = web_context or ""
+        if web_context.strip() and _WEB_NO_RESULTS not in web_context:
+            for item_text in _atomic_items(web_context):
+                raw_items.append(("web_context", item_text, None))
 
     for anchor in anchors:
         raw_items.append((anchor.source_type, anchor.text, anchor.durable_id))

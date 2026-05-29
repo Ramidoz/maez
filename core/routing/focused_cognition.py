@@ -299,6 +299,8 @@ def assemble_working_set(
         if dialogue_state.needs_dialogue or dialogue_state.fail_safe_legacy
         else []
     )
+    if dialogue_state.kind == ContinuityKind.DIRECT:
+        anchors = anchors[:1]
 
     if (dialogue_state.needs_dialogue or dialogue_state.fail_safe_legacy) and not anchors:
         return None
@@ -306,14 +308,15 @@ def assemble_working_set(
         return None
 
     raw_items: list[tuple[str, str, str | None]] = []
-    for marker, body in _split_blocks(transcript or ""):
-        for item_text in _atomic_items(body):
-            raw_items.append((_SOURCE_TYPE[marker], item_text, None))
+    if dialogue_state.kind != ContinuityKind.DIRECT:
+        for marker, body in _split_blocks(transcript or ""):
+            for item_text in _atomic_items(body):
+                raw_items.append((_SOURCE_TYPE[marker], item_text, None))
 
-    web_context = web_context or ""
-    if web_context.strip() and _WEB_NO_RESULTS not in web_context:
-        for item_text in _atomic_items(web_context):
-            raw_items.append(("web_context", item_text, None))
+        web_context = web_context or ""
+        if web_context.strip() and _WEB_NO_RESULTS not in web_context:
+            for item_text in _atomic_items(web_context):
+                raw_items.append(("web_context", item_text, None))
 
     for anchor in anchors:
         raw_items.append((anchor.source_type, anchor.text, anchor.durable_id))
