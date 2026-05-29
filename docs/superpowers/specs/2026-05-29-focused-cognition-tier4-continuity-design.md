@@ -177,10 +177,10 @@ Example: "What were we talking about earlier?"
 
 Example: "Which one matters most?" after a Reddit answer.
 
-- Include dialogue anchors as referent support.
-- Current-turn fresh/substrate/web evidence remains primary.
-- Dialogue anchors sit below query evidence and above background.
-- If there is no current query evidence but there is usable dialogue, focused cognition may still fire using dialogue alone.
+- Use only the newest completed dialogue pair.
+- Suppress non-dialogue evidence for this turn shape.
+  - Reason: Obs 16 showed broad anaphoric support can cite an older dialogue anchor instead of the immediate referent.
+  - Anaphoric asks are asking against the prior exchange; the latest exchange is the authority.
 - If the classifier says anaphoric but no usable dialogue anchor exists, return `None`; the daemon logs `focused_skip_reason="continuity_no_dialogue_anchor"` and falls back to legacy.
 
 ### Normal Evidence Ask
@@ -269,13 +269,13 @@ Optional non-schema telemetry additions may be logged in `focused_cognition_prom
 9. `test_direct_continuity_without_anchor_returns_none` — direct ask with no usable chat history -> no focused working set.
 10. `test_uncertain_continuity_without_anchor_returns_none_even_with_stale_evidence` — uncertain continuity + stale evidence + no anchor -> no focused working set.
 11. `test_uncertain_continuity_with_anchor_prioritizes_dialogue` — uncertain continuity + stale evidence + anchor -> dialogue first.
-12. `test_anaphoric_includes_dialogue_support_below_query_evidence` — current evidence stays first, dialogue anchor included below it.
+12. `test_anaphoric_uses_only_newest_dialogue_anchor` — anaphoric ask with current evidence + older dialogue + latest dialogue -> only the latest dialogue anchor is present.
 13. `test_normal_evidence_excludes_dialogue_anchor` — normal Reddit ask with chat history -> no `dialogue_anchor` item.
 14. `test_dialogue_anchor_trace_stores_no_raw_text` — focused run with distinctive dialogue strings stores hashes/map only, no raw dialogue text.
 15. `test_daemon_continuity_no_anchor_falls_back_to_legacy` — flag on + direct continuity ask + no chat history -> focused synthesis not called; legacy chat called.
 16. `test_daemon_uncertain_continuity_no_anchor_falls_back_to_legacy` — flag on + uncertain continuity + stale evidence + no chat history -> focused synthesis not called; legacy chat called.
 17. `test_daemon_continuity_with_anchor_uses_focused` — flag on + direct continuity ask + usable chat history -> focused synthesis called.
-18. `test_daemon_anaphoric_with_anchor_uses_focused` — flag on + "which one matters?" + usable chat history/current evidence -> focused synthesis called with dialogue support.
+18. `test_daemon_anaphoric_with_anchor_uses_focused` — flag on + "which one matters?" + usable chat history/current evidence -> focused synthesis called with the newest dialogue anchor.
 19. `test_focused_disabled_unchanged` — flag off behavior unchanged.
 
 ## Witness Plan — Obs 16
@@ -285,7 +285,7 @@ Flag-on short window with both dispatcher and focused flags as needed.
 Probes:
 
 1. **Direct continuity:** after a known exchange, ask "What were we talking about earlier?" Expected: focused path uses dialogue anchors first and answers the immediate thread, not stale memory.
-2. **Anaphoric follow-up:** ask a grounded evidence question, then "Which one matters most?" Expected: focused path includes the prior answer as dialogue support and resolves "one" correctly.
+2. **Anaphoric follow-up:** ask a grounded evidence question, then "Which one matters most?" Expected: focused path uses only the newest dialogue anchor and resolves "one" correctly.
 3. **Normal evidence regression:** repeat the Reddit ask. Expected: no dialogue anchor included; answer remains grounded in Reddit evidence.
 4. **No-anchor safety:** synthetic/unit witness is enough for live if hard to trigger; daemon falls back to legacy when continuity needs dialogue but no anchors exist.
 

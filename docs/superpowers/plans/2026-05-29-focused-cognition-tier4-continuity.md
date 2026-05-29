@@ -517,16 +517,34 @@ class DialogueAwareAssembleTests(unittest.TestCase):
         self.assertIsNotNone(ws)
         self.assertEqual(ws.items[0].source_type, "dialogue_anchor")
 
-    def test_anaphoric_includes_dialogue_support_below_query_evidence(self):
+    def test_anaphoric_uses_only_newest_dialogue_anchor(self):
+        history = [
+            {
+                "content": (
+                    "Rohit: For the continuity witness: bare temporal words "
+                    "are freshness.\n"
+                    "Maez: Bare temporal words are freshness, and newest "
+                    "dialogue anchors come first."
+                )
+            },
+            {
+                "content": (
+                    "Rohit: What were we talking about earlier?\n"
+                    "Maez: We were discussing the direct-continuity fix."
+                )
+            },
+        ]
         ws = assemble_working_set(
             transcript=_FRESH,
             web_context="",
             owner_question="Which one matters most?",
-            chat_history=self._history(),
+            chat_history=history,
         )
         self.assertIsNotNone(ws)
-        self.assertEqual(ws.items[0].source_type, "fresh_evidence")
-        self.assertTrue(any(item.source_type == "dialogue_anchor" for item in ws.items))
+        self.assertEqual(len(ws.items), 1)
+        self.assertEqual(ws.items[0].source_type, "dialogue_anchor")
+        self.assertIn("direct-continuity fix", ws.items[0].text)
+        self.assertNotIn("bare temporal words are freshness", ws.items[0].text)
 
     def test_normal_evidence_excludes_dialogue_anchor(self):
         ws = assemble_working_set(
@@ -848,7 +866,7 @@ Append to the existing daemon focused-cognition test class in `tests/test_memory
         ):
             from core.routing.focused_cognition import FocusedResult
 
-            fsyn.return_value = FocusedResult("LiquidAI matters most [E1][E3]", ["E1", "E3"], 800)
+            fsyn.return_value = FocusedResult("LiquidAI matters most [E1]", ["E1"], 800)
             reply = maez_daemon.MaezDaemon.handle_message(
                 daemon,
                 "Which one matters most?",
@@ -859,7 +877,7 @@ Append to the existing daemon focused-cognition test class in `tests/test_memory
                 ],
             )
 
-        self.assertEqual(reply, "LiquidAI matters most [E1][E3]")
+        self.assertEqual(reply, "LiquidAI matters most [E1]")
         fsyn.assert_called_once()
 ```
 

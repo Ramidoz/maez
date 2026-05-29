@@ -1032,8 +1032,8 @@ class DaemonHandleMessageContract(unittest.TestCase):
             from core.routing.focused_cognition import FocusedResult
 
             fsyn.return_value = FocusedResult(
-                "LiquidAI matters most [E1][E3]",
-                ["E1", "E3"],
+                "LiquidAI matters most [E1]",
+                ["E1"],
                 800,
             )
             reply = maez_daemon.MaezDaemon.handle_message(
@@ -1051,7 +1051,7 @@ class DaemonHandleMessageContract(unittest.TestCase):
                 ],
             )
 
-        self.assertEqual(reply, "LiquidAI matters most [E1][E3]")
+        self.assertEqual(reply, "LiquidAI matters most [E1]")
         fsyn.assert_called_once()
 
     def test_daemon_system_part_capture_names_consolidated_blocks(self):

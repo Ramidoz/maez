@@ -299,7 +299,11 @@ def assemble_working_set(
         if dialogue_state.needs_dialogue or dialogue_state.fail_safe_legacy
         else []
     )
-    if dialogue_state.kind == ContinuityKind.DIRECT:
+    dialogue_authoritative = dialogue_state.kind in (
+        ContinuityKind.DIRECT,
+        ContinuityKind.ANAPHORIC,
+    )
+    if dialogue_authoritative:
         anchors = anchors[:1]
 
     if (dialogue_state.needs_dialogue or dialogue_state.fail_safe_legacy) and not anchors:
@@ -308,7 +312,7 @@ def assemble_working_set(
         return None
 
     raw_items: list[tuple[str, str, str | None]] = []
-    if dialogue_state.kind != ContinuityKind.DIRECT:
+    if not dialogue_authoritative:
         for marker, body in _split_blocks(transcript or ""):
             for item_text in _atomic_items(body):
                 raw_items.append((_SOURCE_TYPE[marker], item_text, None))
