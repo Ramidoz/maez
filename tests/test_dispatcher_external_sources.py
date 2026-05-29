@@ -147,6 +147,41 @@ class DispatcherExternalSourceFanoutTests(unittest.TestCase):
         self.assertEqual(result.branch_results[0].status, ExternalBranchStatus.SUCCESS)
         self.assertEqual(result.fresh_blocks[0].egress_diagnostic_id, "diag-live-reddit")
 
+    def test_live_reddit_adapter_rejects_html_block_page(self):
+        from core.dispatcher.external_sources import ExternalFanout
+        from core.dispatcher.spec import (
+            ExternalEmptyReason,
+            ExternalSource,
+            ExternalBranchStatus,
+        )
+
+        block_page = "<body class=theme-beta><div><style>.x{}</style></div></body>"
+        fetched = SimpleNamespace(
+            ok=True,
+            text=block_page,
+            request_id="diag-block",
+            status_code=200,
+            reason_codes=("public_lookup_allowed",),
+        )
+
+        with mock.patch(
+            "core.dispatcher.external_sources.external_fetch.fetch_text",
+            return_value=fetched,
+        ):
+            result = ExternalFanout().run(
+                _spec(ExternalSource.LIVE_REDDIT),
+                utterance="Search r/LocalLLaMA right now",
+                conversation_state={},
+                fanout_generation_id="seal-block",
+            )
+
+        self.assertEqual(result.branch_results[0].status, ExternalBranchStatus.EMPTY)
+        self.assertEqual(
+            result.branch_results[0].empty_reason,
+            ExternalEmptyReason.PARSED_BUT_NO_USABLE_FIELDS,
+        )
+        self.assertEqual(result.fresh_blocks, ())
+
     def test_fetch_url_refuses_model_invented_url(self):
         from core.dispatcher.external_sources import ExternalFanout
         from core.dispatcher.spec import (

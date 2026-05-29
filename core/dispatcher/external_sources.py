@@ -538,6 +538,37 @@ def _latest_diagnostic_id_after(
     return ""
 
 
+def _require_reddit_listing(text: str) -> None:
+    """Fail closed unless text is a parsed Reddit listing."""
+    try:
+        parsed = json.loads(text)
+    except (TypeError, ValueError):
+        raise _MappedExternalFailure(
+            status=ExternalBranchStatus.EMPTY,
+            empty_reason=ExternalEmptyReason.PARSED_BUT_NO_USABLE_FIELDS,
+            limitation=AvailabilityLimitation.FRESH_ATTEMPT_FAILED,
+        )
+
+    children = None
+    if isinstance(parsed, dict):
+        data = parsed.get("data")
+        if isinstance(data, dict):
+            children = data.get("children")
+
+    if not isinstance(children, list):
+        raise _MappedExternalFailure(
+            status=ExternalBranchStatus.EMPTY,
+            empty_reason=ExternalEmptyReason.PARSED_BUT_NO_USABLE_FIELDS,
+            limitation=AvailabilityLimitation.FRESH_ATTEMPT_FAILED,
+        )
+    if not children:
+        raise _MappedExternalFailure(
+            status=ExternalBranchStatus.EMPTY,
+            empty_reason=ExternalEmptyReason.NO_RESULTS,
+            limitation=AvailabilityLimitation.FRESH_ATTEMPT_FAILED,
+        )
+
+
 def _live_reddit_adapter(
     _source: ExternalSource,
     request: ExternalAdapterRequest,
@@ -556,6 +587,9 @@ def _live_reddit_adapter(
         caller="core.dispatcher.external_sources.live_reddit",
         timeout_s=5.0,
     )
+    text = str(getattr(fetched, "text", ""))
+    if getattr(fetched, "ok", False) and text.strip():
+        _require_reddit_listing(text)
     return _payload_from_fetch_result(
         fetched,
         retrieval_timestamp=request.retrieval_timestamp,
