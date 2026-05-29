@@ -3530,13 +3530,21 @@ class TelegramVoice:
         )
 
         web_context = ""
+        _tv_empty_search = False
+        _tv_search_source = "web"
         if _telegram_pipeline_a_web_search_enabled() and needs_web_search(user_text):
             logger.info("Web search triggered for: %s", user_text[:80])
-            if is_news_query(user_text):
+            _tv_search_source = "news_rss" if is_news_query(user_text) else "web"
+            if _tv_search_source == "news_rss":
                 sr = search_rss(user_text, max_results=5)
             else:
                 sr = web_search(user_text, max_results=3)
-            if sr.get("success"):
+            from core.routing.focused_cognition import (
+                is_empty_search_result as _is_empty_search_result,
+            )
+
+            _tv_empty_search = _is_empty_search_result(sr)
+            if sr.get("success") and not _tv_empty_search:
                 web_context = web_format(sr)
 
         # Session 11y: Jarvis tool-use loop. Lets the LLM emit TOOL_CALL
@@ -3885,6 +3893,36 @@ class TelegramVoice:
                     self.daemon._rohit_active_until = _time.time() + 15.0
                 except Exception:
                     pass
+
+            if _tv_empty_search:
+                from core.routing.focused_cognition import (
+                    build_honest_empty_reply as _build_honest_empty_reply,
+                )
+
+                _hr = _build_honest_empty_reply(
+                    query=user_text,
+                    source=_tv_search_source,
+                    surface="voice",
+                )
+                logger.info(
+                    "honest_empty_reply surface=voice source=%s mode=%s "
+                    "call_purpose=honest_empty",
+                    _tv_search_source,
+                    _hr.mode,
+                )
+                _he_env = owner_text_envelope(
+                    bot_route="voice_owner_private",
+                    chat_id=str(update.effective_chat.id),
+                    text=_hr.reply,
+                    source_ref="telegram_voice:honest_empty",
+                )
+                await _bot_send_message(
+                    context.bot,
+                    chat_id=update.effective_chat.id,
+                    text=_hr.reply,
+                    envelope=_he_env,
+                )
+                return _hr.reply
 
             from core import llm_client as _llm_client
 

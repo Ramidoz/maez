@@ -21,5 +21,17 @@ class DaemonModeAWiring(unittest.TestCase):
         self.assertIn("honest_empty_reply", self.src)
 
 
+class VoiceModeBWiring(unittest.TestCase):
+    def setUp(self):
+        self.src = Path("skills/telegram_voice.py").read_text(encoding="utf-8")
+
+    def test_detects_empty_search(self):
+        self.assertIn("is_empty_search_result", self.src)
+        self.assertIn("_tv_empty_search", self.src)
+
+    def test_routes_to_honest_empty(self):
+        self.assertIn("build_honest_empty_reply", self.src)
+
+
 if __name__ == "__main__":
     unittest.main()
