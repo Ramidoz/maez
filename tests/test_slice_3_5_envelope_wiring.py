@@ -164,7 +164,7 @@ class CliSlice35WiringTests(unittest.TestCase):
         self.assertIn("build_envelope", src)
         self.assertIn("render_envelope_for_prompt", src)
         self.assertIn("_evidence_envelope", src)
-        audit_idx = src.find('surface="cli"')
+        audit_idx = src.find("_sc_audit(")
         self.assertGreater(audit_idx, 0)
         self.assertIn("evidence_envelope=_evidence_envelope", src[audit_idx : audit_idx + 350])
         self.assertIn("in_tool_continuation=(iteration > 0)", src[audit_idx : audit_idx + 350])

@@ -1138,8 +1138,8 @@ class DaemonHandleMessageContract(unittest.TestCase):
             joined,
         )
 
-    def test_zero_result_web_search_reaches_synthesis_prompt(self):
-        """A real zero-result search is still evidence for the reply."""
+    def test_zero_result_web_search_uses_honest_empty_path(self):
+        """A real zero-result search is anchored without the legacy false premise."""
         from daemon import maez_daemon
 
         class FakeMemory:
@@ -1277,11 +1277,16 @@ class DaemonHandleMessageContract(unittest.TestCase):
             )
 
         self.assertEqual(reply, "I searched and found nothing.")
-        user_message = captured["messages"][-1]["content"]
-        self.assertIn(
-            "[WEB SEARCH: 'Search r/LocalLLaMA right now'] No results found.",
-            user_message,
+        prompt_material = "\n\n".join(
+            str(message.get("content") or "") for message in captured["messages"]
         )
+        self.assertIn(
+            'A web_search search for "Search r/LocalLLaMA right now" '
+            "returned no usable results.",
+            prompt_material,
+        )
+        self.assertNotIn("[WEB SEARCH:", prompt_material)
+        self.assertNotIn("Real search results above", prompt_material)
 
     def test_soul_web_search_section_matches_inline_search_reality(self):
         """Soul must not teach the stale Telegram-interceptor architecture."""
