@@ -129,11 +129,30 @@ class DialogueContinuityStateTests(unittest.TestCase):
             dialogue_continuity_state,
         )
 
-        state = dialogue_continuity_state("Anything since earlier?")
+        state = dialogue_continuity_state("Anything since we were talking?")
         self.assertEqual(state.kind, ContinuityKind.NONE)
         self.assertFalse(state.needs_dialogue)
         self.assertTrue(state.fail_safe_legacy)
-        self.assertIn("earlier", state.matched_reason or "")
+        self.assertIn("we were", state.matched_reason or "")
+
+    def test_bare_temporal_freshness_queries_are_not_continuity(self):
+        from core.routing.focused_cognition import (
+            ContinuityKind,
+            dialogue_continuity_state,
+        )
+
+        examples = [
+            "what are the last 5 posts on r/LocalLLaMA",
+            "any news before the launch",
+            "Anything since earlier?",
+        ]
+        for text in examples:
+            with self.subTest(text=text):
+                state = dialogue_continuity_state(text)
+                self.assertEqual(state.kind, ContinuityKind.NONE)
+                self.assertFalse(state.needs_dialogue)
+                self.assertFalse(state.fail_safe_legacy)
+                self.assertIsNone(state.matched_reason)
 
     def test_recent_freshness_query_is_not_continuity(self):
         from core.routing.focused_cognition import (
@@ -235,7 +254,7 @@ class DialogueAwareAssembleTests(unittest.TestCase):
         ws = assemble_working_set(
             transcript="[memory evidence] stale journal:\n- April 6 journaling note",
             web_context="",
-            owner_question="Anything since earlier?",
+            owner_question="Anything since we were talking?",
             chat_history=[],
         )
         self.assertIsNone(ws)
@@ -244,7 +263,7 @@ class DialogueAwareAssembleTests(unittest.TestCase):
         ws = assemble_working_set(
             transcript="[memory evidence] stale journal:\n- April 6 journaling note",
             web_context="",
-            owner_question="Anything since earlier?",
+            owner_question="Anything since we were talking?",
             chat_history=self._history(),
         )
         self.assertIsNotNone(ws)

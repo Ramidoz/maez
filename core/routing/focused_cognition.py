@@ -117,14 +117,16 @@ _DIRECT_CONTINUITY_PATTERNS: tuple[str, ...] = (
     "what were we talking about",
     "what did we just discuss",
     "what were we discussing",
-    "what was the last thing",
+    "what was the last thing i said",
+    "what was the last thing you said",
+    "what was the last thing we discussed",
+    "what was the last thing we talked about",
     "what did i say",
     "what did you say",
-    "what happened earlier",
-    "what happened before",
     "what were we doing earlier",
     "what were we doing before",
     "before this",
+    "before that",
 )
 _ANAPHORIC_PHRASES: tuple[str, ...] = (
     "which one",
@@ -135,9 +137,6 @@ _ANAPHORIC_PHRASES: tuple[str, ...] = (
 )
 _ANAPHORIC_WORDS: tuple[str, ...] = ("that", "this", "those", "it")
 _UNCERTAIN_CONTINUITY_PATTERNS: tuple[str, ...] = (
-    "earlier",
-    "before",
-    "last",
     "we were",
     "you said",
     "i said",

@@ -106,11 +106,11 @@ class DialogueContinuityStateTests(unittest.TestCase):
             dialogue_continuity_state,
         )
 
-        state = dialogue_continuity_state("Anything since earlier?")
+        state = dialogue_continuity_state("Anything since we were talking?")
         self.assertEqual(state.kind, ContinuityKind.NONE)
         self.assertFalse(state.needs_dialogue)
         self.assertTrue(state.fail_safe_legacy)
-        self.assertIn("earlier", state.matched_reason or "")
+        self.assertIn("we were", state.matched_reason or "")
 
     def test_recent_freshness_query_is_not_continuity(self):
         from core.routing.focused_cognition import (
@@ -125,6 +125,25 @@ class DialogueContinuityStateTests(unittest.TestCase):
         self.assertFalse(state.needs_dialogue)
         self.assertFalse(state.fail_safe_legacy)
         self.assertIsNone(state.matched_reason)
+
+    def test_bare_temporal_freshness_queries_are_not_continuity(self):
+        from core.routing.focused_cognition import (
+            ContinuityKind,
+            dialogue_continuity_state,
+        )
+
+        examples = [
+            "what are the last 5 posts on r/LocalLLaMA",
+            "any news before the launch",
+            "Anything since earlier?",
+        ]
+        for text in examples:
+            with self.subTest(text=text):
+                state = dialogue_continuity_state(text)
+                self.assertEqual(state.kind, ContinuityKind.NONE)
+                self.assertFalse(state.needs_dialogue)
+                self.assertFalse(state.fail_safe_legacy)
+                self.assertIsNone(state.matched_reason)
 ```
 
 - [ ] **Step 2: Run tests to verify fail**
@@ -167,14 +186,16 @@ _DIRECT_CONTINUITY_PATTERNS = (
     "what were we talking about",
     "what did we just discuss",
     "what were we discussing",
-    "what was the last thing",
+    "what was the last thing i said",
+    "what was the last thing you said",
+    "what was the last thing we discussed",
+    "what was the last thing we talked about",
     "what did i say",
     "what did you say",
-    "what happened earlier",
-    "what happened before",
     "what were we doing earlier",
     "what were we doing before",
     "before this",
+    "before that",
 )
 
 _ANAPHORIC_PHRASES = (
@@ -187,9 +208,6 @@ _ANAPHORIC_PHRASES = (
 _ANAPHORIC_WORDS = ("that", "this", "those", "it")
 
 _UNCERTAIN_CONTINUITY_PATTERNS = (
-    "earlier",
-    "before",
-    "last",
     "we were",
     "you said",
     "i said",
@@ -436,7 +454,7 @@ class DialogueAwareAssembleTests(unittest.TestCase):
         ws = assemble_working_set(
             transcript="[memory evidence] stale journal:\n- April 6 journaling note",
             web_context="",
-            owner_question="Anything since earlier?",
+            owner_question="Anything since we were talking?",
             chat_history=[],
         )
         self.assertIsNone(ws)
@@ -445,7 +463,7 @@ class DialogueAwareAssembleTests(unittest.TestCase):
         ws = assemble_working_set(
             transcript="[memory evidence] stale journal:\n- April 6 journaling note",
             web_context="",
-            owner_question="Anything since earlier?",
+            owner_question="Anything since we were talking?",
             chat_history=self._history(),
         )
         self.assertIsNotNone(ws)
@@ -718,7 +736,7 @@ Append to the existing daemon focused-cognition test class in `tests/test_memory
             )
             reply = maez_daemon.MaezDaemon.handle_message(
                 daemon,
-                "Anything since earlier?",
+                "Anything since we were talking?",
                 source="telegram_surface",
                 transcript="[memory evidence] stale:\n- April 6 journal",
                 chat_history=[],

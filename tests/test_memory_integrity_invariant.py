@@ -961,7 +961,7 @@ class DaemonHandleMessageContract(unittest.TestCase):
             )
             reply = maez_daemon.MaezDaemon.handle_message(
                 daemon,
-                "Anything since earlier?",
+                "Anything since we were talking?",
                 source="telegram_surface",
                 transcript="[memory evidence] stale:\n- April 6 journal",
                 chat_history=[],
