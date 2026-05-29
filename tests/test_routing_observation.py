@@ -39,6 +39,26 @@ def _live_reddit_spec() -> CompositionSpec:
 
 
 class RoutingObservationStoreTests(unittest.TestCase):
+    def test_test_suite_redirects_routing_observation_default_path(self):
+        db_path = os.environ.get("MAEZ_ROUTING_OBSERVATION_DB_PATH", "")
+
+        self.assertIn("maez_test_routing_observation_", db_path)
+        self.assertNotIn("/home/rohit/maez/memory/routing_observation.db", db_path)
+
+    def test_default_store_uses_env_db_path(self):
+        from core.routing.observation import RoutingObservationStore
+
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "routing_observation.db"
+            with mock.patch.dict(
+                os.environ,
+                {"MAEZ_ROUTING_OBSERVATION_DB_PATH": str(db_path)},
+                clear=False,
+            ):
+                store = RoutingObservationStore()
+
+        self.assertEqual(store.db_path, db_path)
+
     def test_store_closes_sqlite_connections(self):
         from core.routing import observation
         from core.routing.observation import RoutingObservationStore
@@ -436,12 +456,14 @@ class RoutingObservationHookTests(unittest.TestCase):
                 daemon,
                 "Search r/LocalLLaMA right now",
                 source="telegram_surface",
+                chat_id="chat-1",
             )
 
         self.assertEqual(reply, "I searched and found nothing.")
         record.assert_called_once()
         self.assertEqual(record.call_args.kwargs["user_text"], "Search r/LocalLLaMA right now")
         self.assertEqual(record.call_args.kwargs["surface"], "telegram_surface")
+        self.assertEqual(record.call_args.kwargs["chat_id"], "chat-1")
         self.assertEqual(record.call_args.kwargs["chosen_tool"], "web_search")
 
 

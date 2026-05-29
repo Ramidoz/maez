@@ -436,6 +436,7 @@ class MaezMessageHandler:
                         SURFACE_NAME,
                         transcript=jarvis_transcript or "",
                         chat_history=chat_history,
+                        chat_id=chat_id,
                         tool_calls=jarvis_tool_calls or None,
                     ),
                 )

@@ -3150,6 +3150,7 @@ class MaezDaemon:
         signals_present: "list | None" = None,
         signals_absent: "list | None" = None,
         chat_history: "list | None" = None,
+        chat_id: "str | None" = None,
         tool_calls: "list[dict] | None" = None,
         subjective_duration_owner_auth: "SubjectiveDurationOwnerAuth | None" = None,
     ) -> str:
@@ -3485,6 +3486,7 @@ class MaezDaemon:
                 record_legacy_web_search_observation(
                     user_text=text,
                     surface=source,
+                    chat_id=chat_id,
                     chosen_tool=_routing_obs_tool,
                     execution_status="success" if _routing_obs_count > 0 else "empty",
                     evidence_block_count=1 if web_context else 0,

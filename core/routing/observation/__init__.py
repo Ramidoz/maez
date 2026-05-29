@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+import os
 import hashlib
 import json
 import logging
@@ -114,7 +115,7 @@ def compute_spec_match(
 
 class RoutingObservationStore:
     def __init__(self, *, db_path: str | Path | None = None) -> None:
-        self.db_path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
+        self.db_path = Path(db_path) if db_path is not None else _default_db_path()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_schema()
 
@@ -359,6 +360,13 @@ class RoutingObservationStore:
 
 def _default_store() -> RoutingObservationStore:
     return RoutingObservationStore()
+
+
+def _default_db_path() -> Path:
+    override = os.environ.get("MAEZ_ROUTING_OBSERVATION_DB_PATH")
+    if override:
+        return Path(override)
+    return DEFAULT_DB_PATH
 
 
 def _branch_source(branch: Any) -> ExternalSource | SubstrateSource | str | None:
