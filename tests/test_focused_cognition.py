@@ -83,5 +83,48 @@ class AssembleWorkingSetTests(unittest.TestCase):
         self.assertIsNone(absent)
 
 
+class FocusedSynthesizeTests(unittest.TestCase):
+    def _ws(self):
+        return assemble_working_set(
+            transcript=_FRESH,
+            web_context="",
+            owner_question="what's new on r/LocalLLaMA",
+        )
+
+    def test_builds_bounded_injectable_messages(self):
+        from core.routing.focused_cognition import focused_synthesize
+
+        captured = {}
+
+        def fake_chat(*, model, messages, think, options):
+            captured["model"] = model
+            captured["messages"] = messages
+            captured["think"] = think
+            captured["options"] = options
+
+            class _Response:
+                class message:
+                    content = "Notable: [E1] LiquidAI's tiny MoE."
+
+            return _Response()
+
+        result = focused_synthesize(self._ws(), surface="telegram", chat_fn=fake_chat)
+
+        from core.model_config import PRIMARY_MODEL
+
+        self.assertEqual(captured["model"], PRIMARY_MODEL)
+        self.assertFalse(captured["think"])
+        self.assertEqual(captured["options"]["temperature"], 0.7)
+        roles = [message["role"] for message in captured["messages"]]
+        self.assertEqual(roles, ["system", "user"])
+        system = captured["messages"][0]["content"]
+        self.assertIn("[E1]", system)
+        self.assertNotIn("HARD CONSTRAINTS", system)
+        for banned in ("DuckDuckGo", "interceptor", "tool loop", "blocked"):
+            self.assertNotIn(banned, system)
+        self.assertLess(len(system), 2000)
+        self.assertIn("E1", result.cited_ids)
+
+
 if __name__ == "__main__":
     unittest.main()

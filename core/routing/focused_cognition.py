@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import re
 
 from core.routing.evidence_state import turn_evidence_state
 
@@ -38,6 +39,17 @@ _PRIORITY: dict[str, int] = {
     "web_context": 2,
 }
 _WEB_NO_RESULTS = "No results found."
+_CITE_RE = re.compile(r"\[E(\d+)\]")
+_FAITHFUL_INSTRUCTION = (
+    "Answer the owner's question ONLY from the evidence below. Cite the [E#] "
+    "labels you use, inline. If the evidence does not cover the question, say so "
+    "plainly. Do not add claims unsupported by the evidence."
+)
+_VOICE_CARD_TEXT = (
+    "Speak as Maez: dense, opinionated, useful. 3-5 sentences. Give your read "
+    "and connect it to what the owner cares about (local AI, what's being built). "
+    "Not a mechanical list."
+)
 
 
 @dataclass(frozen=True)
@@ -55,6 +67,13 @@ class WorkingSet:
     owner_question: str
     working_set_chars: int
     working_set_tokens_est: int
+
+
+@dataclass(frozen=True)
+class FocusedResult:
+    reply: str
+    cited_ids: list[str]
+    working_set_chars: int
 
 
 def _content_hash(text: str) -> str:
@@ -148,4 +167,50 @@ def assemble_working_set(
         owner_question=owner_question,
         working_set_chars=total_chars,
         working_set_tokens_est=total_chars // 4,
+    )
+
+
+def _voice_card(surface: str) -> str:
+    # Voice surfaces are excluded by the daemon gate in v1.
+    return _VOICE_CARD_TEXT
+
+
+def focused_synthesize(
+    working_set: WorkingSet,
+    *,
+    surface: str,
+    chat_fn=None,
+    model=None,
+) -> FocusedResult:
+    if chat_fn is None:
+        from core import llm_client as _llm_client
+
+        chat_fn = _llm_client.chat
+    if model is None:
+        from core.model_config import PRIMARY_MODEL
+
+        model = PRIMARY_MODEL
+
+    system = (
+        f"{_voice_card(surface)}\n\n"
+        f"{_FAITHFUL_INSTRUCTION}\n\n"
+        f"=== EVIDENCE (cite [E#]) ===\n"
+        f"{working_set.ordered_evidence_text}"
+    )
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": working_set.owner_question},
+    ]
+    response = chat_fn(
+        model=model,
+        messages=messages,
+        think=False,
+        options={"temperature": 0.7, "num_predict": 4096},
+    )
+    reply = (getattr(getattr(response, "message", None), "content", None) or "").strip()
+    cited_ids = sorted({f"E{match.group(1)}" for match in _CITE_RE.finditer(reply)})
+    return FocusedResult(
+        reply=reply,
+        cited_ids=cited_ids,
+        working_set_chars=working_set.working_set_chars,
     )
