@@ -399,6 +399,53 @@ class FocusedCognitionStoreTests(unittest.TestCase):
         stored = " ".join(str(row) for row in rows)
         self.assertNotIn(secret, stored)
 
+    def test_dialogue_anchor_trace_stores_no_raw_dialogue_text(self):
+        import sqlite3
+
+        from core.routing.focused_cognition import (
+            FocusedResult,
+            GroundednessVerdict,
+        )
+
+        store = self._store()
+        secret = "DIALOGUE_SECRET_MARKER_ABC"
+        ws = assemble_working_set(
+            transcript="",
+            web_context="",
+            owner_question="What were we talking about earlier?",
+            chat_history=[
+                {
+                    "content": (
+                        f"Rohit: {secret}\n"
+                        "Maez: We were discussing local models."
+                    )
+                }
+            ],
+        )
+        self.assertIsNotNone(ws)
+        store.record(
+            surface="telegram",
+            chat_id="c1",
+            working_set=ws,
+            result=FocusedResult(
+                "We were discussing local models [E1]",
+                ["E1"],
+                ws.working_set_chars,
+            ),
+            verdict=GroundednessVerdict("grounded", 1.0, []),
+            legacy_prompt_chars=104000,
+            fallback_reason=None,
+            routing_observation_id=None,
+        )
+        conn = sqlite3.connect(store.db_path)
+        try:
+            rows = conn.execute("SELECT * FROM focused_cognition_runs").fetchall()
+        finally:
+            conn.close()
+        stored = " ".join(str(row) for row in rows)
+        self.assertNotIn(secret, stored)
+        self.assertIn("dialogue_anchor", stored)
+
 
 if __name__ == "__main__":
     unittest.main()
