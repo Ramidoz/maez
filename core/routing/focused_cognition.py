@@ -76,6 +76,13 @@ class FocusedResult:
     working_set_chars: int
 
 
+@dataclass(frozen=True)
+class GroundednessVerdict:
+    verdict: str
+    citation_coverage: float
+    unmatched: list[str]
+
+
 def _content_hash(text: str) -> str:
     return "ch_" + hashlib.sha256(text.strip().encode("utf-8")).hexdigest()[:16]
 
@@ -213,4 +220,28 @@ def focused_synthesize(
         reply=reply,
         cited_ids=cited_ids,
         working_set_chars=working_set.working_set_chars,
+    )
+
+
+def check_groundedness(
+    result: FocusedResult,
+    working_set: WorkingSet,
+) -> GroundednessVerdict:
+    valid_labels = {item.local_label for item in working_set.items}
+    cited = set(result.cited_ids)
+    unmatched = sorted(cited - valid_labels)
+    matched = cited & valid_labels
+    coverage = len(matched) / len(valid_labels) if valid_labels else 0.0
+
+    if not cited:
+        verdict = "no_citations"
+    elif unmatched:
+        verdict = "unmatched_citation"
+    else:
+        verdict = "grounded"
+
+    return GroundednessVerdict(
+        verdict=verdict,
+        citation_coverage=coverage,
+        unmatched=unmatched,
     )

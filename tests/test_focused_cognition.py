@@ -126,5 +126,32 @@ class FocusedSynthesizeTests(unittest.TestCase):
         self.assertIn("E1", result.cited_ids)
 
 
+class GroundednessTests(unittest.TestCase):
+    def _ws(self):
+        return assemble_working_set(transcript=_FRESH, web_context="", owner_question="q")
+
+    def test_overlap_verdicts(self):
+        from core.routing.focused_cognition import (
+            FocusedResult,
+            check_groundedness,
+        )
+
+        ws = self._ws()
+        grounded = check_groundedness(
+            FocusedResult("uses [E1] and [E2]", ["E1", "E2"], 0),
+            ws,
+        )
+        self.assertEqual(grounded.verdict, "grounded")
+
+        unmatched = check_groundedness(
+            FocusedResult("cites [E9]", ["E9"], 0),
+            ws,
+        )
+        self.assertEqual(unmatched.verdict, "unmatched_citation")
+
+        none = check_groundedness(FocusedResult("no tags here", [], 0), ws)
+        self.assertEqual(none.verdict, "no_citations")
+
+
 if __name__ == "__main__":
     unittest.main()
