@@ -168,6 +168,22 @@ class DialogueContinuityStateTests(unittest.TestCase):
         self.assertFalse(state.fail_safe_legacy)
         self.assertIsNone(state.matched_reason)
 
+    def test_intra_turn_echo_instruction_is_not_anaphoric_continuity(self):
+        from core.routing.focused_cognition import (
+            ContinuityKind,
+            dialogue_continuity_state,
+        )
+
+        state = dialogue_continuity_state(
+            "For the continuity witness: dialogue anchors now strip stale prior "
+            "citations before they become current evidence. Say that back in "
+            "one sentence."
+        )
+        self.assertEqual(state.kind, ContinuityKind.NONE)
+        self.assertFalse(state.needs_dialogue)
+        self.assertFalse(state.fail_safe_legacy)
+        self.assertIsNone(state.matched_reason)
+
 
 class DialogueAnchorTests(unittest.TestCase):
     def test_dialogue_anchor_reuses_history_to_messages(self):

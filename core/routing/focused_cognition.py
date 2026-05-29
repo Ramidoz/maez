@@ -136,6 +136,13 @@ _ANAPHORIC_PHRASES: tuple[str, ...] = (
     "why does that matter",
 )
 _ANAPHORIC_WORDS: tuple[str, ...] = ("that", "this", "those", "it")
+_INTRA_TURN_ECHO_PATTERNS: tuple[str, ...] = (
+    "say that back",
+    "repeat that back",
+    "read that back",
+    "say that in",
+    "repeat that in",
+)
 _UNCERTAIN_CONTINUITY_PATTERNS: tuple[str, ...] = (
     "we were",
     "you said",
@@ -169,6 +176,14 @@ def dialogue_continuity_state(owner_question: str) -> DialogueContinuityState:
                 needs_dialogue=True,
                 fail_safe_legacy=False,
                 matched_reason=pattern,
+            )
+    for pattern in _INTRA_TURN_ECHO_PATTERNS:
+        if pattern in text:
+            return DialogueContinuityState(
+                kind=ContinuityKind.NONE,
+                needs_dialogue=False,
+                fail_safe_legacy=False,
+                matched_reason=None,
             )
     for pattern in _ANAPHORIC_WORDS:
         if re.search(rf"\b{re.escape(pattern)}\b", text):

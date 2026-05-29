@@ -144,6 +144,22 @@ class DialogueContinuityStateTests(unittest.TestCase):
                 self.assertFalse(state.needs_dialogue)
                 self.assertFalse(state.fail_safe_legacy)
                 self.assertIsNone(state.matched_reason)
+
+    def test_intra_turn_echo_instruction_is_not_anaphoric_continuity(self):
+        from core.routing.focused_cognition import (
+            ContinuityKind,
+            dialogue_continuity_state,
+        )
+
+        state = dialogue_continuity_state(
+            "For the continuity witness: dialogue anchors now strip stale prior "
+            "citations before they become current evidence. Say that back in "
+            "one sentence."
+        )
+        self.assertEqual(state.kind, ContinuityKind.NONE)
+        self.assertFalse(state.needs_dialogue)
+        self.assertFalse(state.fail_safe_legacy)
+        self.assertIsNone(state.matched_reason)
 ```
 
 - [ ] **Step 2: Run tests to verify fail**
@@ -207,6 +223,14 @@ _ANAPHORIC_PHRASES = (
 )
 _ANAPHORIC_WORDS = ("that", "this", "those", "it")
 
+_INTRA_TURN_ECHO_PATTERNS = (
+    "say that back",
+    "repeat that back",
+    "read that back",
+    "say that in",
+    "repeat that in",
+)
+
 _UNCERTAIN_CONTINUITY_PATTERNS = (
     "we were",
     "you said",
@@ -232,6 +256,14 @@ def dialogue_continuity_state(owner_question: str) -> DialogueContinuityState:
                 needs_dialogue=True,
                 fail_safe_legacy=False,
                 matched_reason=pattern,
+            )
+    for pattern in _INTRA_TURN_ECHO_PATTERNS:
+        if pattern in text:
+            return DialogueContinuityState(
+                kind=ContinuityKind.NONE,
+                needs_dialogue=False,
+                fail_safe_legacy=False,
+                matched_reason=None,
             )
     for pattern in _ANAPHORIC_WORDS:
         if re.search(rf"\b{re.escape(pattern)}\b", text):
