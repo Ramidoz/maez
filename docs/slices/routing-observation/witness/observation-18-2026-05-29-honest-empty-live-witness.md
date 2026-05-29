@@ -49,4 +49,6 @@ That megaprompt was **built but never sent**: the `honest_empty_reply` branch sh
 
 ## Service posture (close-out)
 
-- Witness daemon 627045 ran the branch code under the unit, flag-absent. Resting-state decision (merge → run main, vs restore to pre-witness) recorded with the merge action.
+- Branch fast-forwarded into `main` at `6077dba`.
+- `maez.service` restarted onto merged `main`, flag-absent: old PID 627045 → new PID 637733, active under `systemd --user`.
+- Working tree checkout restored to `main`; no focused/dispatcher flags present in the process environment.
