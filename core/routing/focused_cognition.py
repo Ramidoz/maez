@@ -59,6 +59,25 @@ _VOICE_CARD_TEXT = (
     "and connect it to what the owner cares about (local AI, what's being built). "
     "Not a mechanical list."
 )
+_HONEST_EMPTY_INSTRUCTION = (
+    "You attempted a search and it returned no usable results. Tell the owner, "
+    "in your voice, that you searched and found nothing. Do NOT speculate about "
+    "why it was empty. Do NOT describe or propose changes to your own tools, "
+    "pipeline, or system. You may offer to try a different source or rephrase. "
+    "1-3 sentences."
+)
+_FORBIDDEN_EMPTY_VOCAB: tuple[str, ...] = (
+    "interceptor",
+    "tool loop",
+    "pipeline",
+    "persist",
+    "not wired",
+    "ollama",
+    "fetcher",
+    "patch",
+    "database",
+    "layer",
+)
 
 
 def is_empty_search_result(sr: dict) -> bool:
@@ -70,6 +89,11 @@ def is_empty_search_result(sr: dict) -> bool:
         or not sr.get("results")
         or not sr.get("success")
     )
+
+
+def _contains_forbidden_empty_vocab(text: str) -> bool:
+    low = (text or "").lower()
+    return any(term in low for term in _FORBIDDEN_EMPTY_VOCAB)
 
 
 @dataclass(frozen=True)
@@ -108,6 +132,16 @@ class GroundednessVerdict:
     verdict: str
     citation_coverage: float
     unmatched: list[str]
+
+
+@dataclass(frozen=True)
+class HonestEmptyResult:
+    reply: str
+    mode: str
+    forbidden_hit: bool
+    working_set: WorkingSet
+    result: FocusedResult
+    verdict: GroundednessVerdict
 
 
 class ContinuityKind(str, Enum):
@@ -462,6 +496,95 @@ def focused_synthesize(
         reply=reply,
         cited_ids=cited_ids,
         working_set_chars=working_set.working_set_chars,
+    )
+
+
+def build_honest_empty_reply(
+    *,
+    query: str,
+    source: str,
+    surface: str,
+    chat_fn=None,
+    model=None,
+) -> HonestEmptyResult:
+    """Answer an empty search from a one-fact focused working set."""
+    if chat_fn is None:
+        from core import llm_client as _llm_client
+
+        chat_fn = _llm_client.chat
+    if model is None:
+        from core.model_config import PRIMARY_MODEL
+
+        model = PRIMARY_MODEL
+
+    query = query or ""
+    source = source or "web"
+    empty_fact = f'A {source} search for "{query}" returned no usable results.'
+    item = EvidenceItem(
+        local_label="E1",
+        source_type="empty_result",
+        text=empty_fact,
+        durable_id=_content_hash(f"{source}\n{query}"),
+    )
+    working_set_chars = len(empty_fact)
+    working_set = WorkingSet(
+        items=[item],
+        ordered_evidence_text=empty_fact,
+        owner_question=query,
+        working_set_chars=working_set_chars,
+        working_set_tokens_est=working_set_chars // 4,
+    )
+    deterministic = (
+        f"I searched {source} for that and found no usable results. "
+        "I won't guess why or invent a fix. "
+        "Want me to try a different source or rephrase the query?"
+    )
+
+    raw_reply = ""
+    try:
+        system = (
+            f"{_voice_card(surface)}\n\n"
+            f"{_HONEST_EMPTY_INSTRUCTION}\n\n"
+            f"=== FACT ===\n{empty_fact}"
+        )
+        response = chat_fn(
+            model=model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": query},
+            ],
+            think=False,
+            options={"temperature": 0.7, "num_predict": 256},
+        )
+        raw_reply = (
+            getattr(getattr(response, "message", None), "content", None) or ""
+        ).strip()
+    except Exception:
+        raw_reply = ""
+
+    forbidden_hit = bool(raw_reply) and _contains_forbidden_empty_vocab(raw_reply)
+    if not raw_reply or forbidden_hit:
+        reply = deterministic
+        mode = "deterministic_fallback"
+    else:
+        reply = raw_reply
+        mode = "focused"
+
+    return HonestEmptyResult(
+        reply=reply,
+        mode=mode,
+        forbidden_hit=forbidden_hit,
+        working_set=working_set,
+        result=FocusedResult(
+            reply=reply,
+            cited_ids=[],
+            working_set_chars=working_set_chars,
+        ),
+        verdict=GroundednessVerdict(
+            verdict="empty_but_honest",
+            citation_coverage=0.0,
+            unmatched=[],
+        ),
     )
 
 

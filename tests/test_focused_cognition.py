@@ -43,6 +43,78 @@ class AssembleWorkingSetTests(unittest.TestCase):
         self.assertIs(es._WEB_NO_RESULTS, sc.WEB_NO_RESULTS)
         self.assertEqual(sc.WEB_NO_RESULTS, "No results found.")
 
+    def test_honest_empty_focused_reply_clean(self):
+        from types import SimpleNamespace
+
+        from core.routing.focused_cognition import build_honest_empty_reply
+
+        hr = build_honest_empty_reply(
+            query="search r/LocalLLaMA right now",
+            source="web",
+            surface="telegram",
+            chat_fn=lambda **_k: SimpleNamespace(
+                message=SimpleNamespace(
+                    content="I searched and came up empty. Want me to try another source?"
+                )
+            ),
+            model="m",
+        )
+        self.assertEqual(hr.mode, "focused")
+        self.assertFalse(hr.forbidden_hit)
+        self.assertEqual(hr.verdict.verdict, "empty_but_honest")
+        self.assertEqual([i.source_type for i in hr.working_set.items], ["empty_result"])
+        self.assertEqual(hr.result.cited_ids, [])
+
+    def test_honest_empty_forbidden_triggers_deterministic(self):
+        from types import SimpleNamespace
+
+        from core.routing.focused_cognition import build_honest_empty_reply
+
+        hr = build_honest_empty_reply(
+            query="q",
+            source="web",
+            surface="telegram",
+            chat_fn=lambda **_k: SimpleNamespace(
+                message=SimpleNamespace(
+                    content="The pipeline is blocked; patch the persistence layer."
+                )
+            ),
+            model="m",
+        )
+        self.assertEqual(hr.mode, "deterministic_fallback")
+        self.assertTrue(hr.forbidden_hit)
+        for term in ("pipeline", "persist", "patch", "layer"):
+            self.assertNotIn(term, hr.reply.lower())
+
+    def test_honest_empty_source_agnostic(self):
+        from types import SimpleNamespace
+
+        from core.routing.focused_cognition import build_honest_empty_reply
+
+        hr = build_honest_empty_reply(
+            query="q",
+            source="reddit",
+            surface="telegram",
+            chat_fn=lambda **_k: SimpleNamespace(
+                message=SimpleNamespace(content="Nothing came back.")
+            ),
+            model="m",
+        )
+        self.assertTrue(hr.reply)
+        self.assertEqual(hr.verdict.verdict, "empty_but_honest")
+
+    def test_honest_empty_chat_failure_falls_back(self):
+        from core.routing.focused_cognition import build_honest_empty_reply
+
+        def _boom(**_k):
+            raise RuntimeError("llm down")
+
+        hr = build_honest_empty_reply(
+            query="q", source="web", surface="telegram", chat_fn=_boom, model="m"
+        )
+        self.assertEqual(hr.mode, "deterministic_fallback")
+        self.assertTrue(hr.reply)
+
     def test_extracts_atomic_items_with_ids_and_durable_id(self):
         ws = assemble_working_set(
             transcript=_SUBSTRATE,
