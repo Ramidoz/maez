@@ -148,6 +148,10 @@ def _content_hash(text: str) -> str:
     return "ch_" + hashlib.sha256(text.strip().encode("utf-8")).hexdigest()[:16]
 
 
+def _strip_local_citations(text: str) -> str:
+    return re.sub(r"\s*\[E\d+\]", "", text or "").strip()
+
+
 def dialogue_continuity_state(owner_question: str) -> DialogueContinuityState:
     text = (owner_question or "").strip().lower()
     for pattern in _DIRECT_CONTINUITY_PATTERNS:
@@ -215,8 +219,14 @@ def dialogue_anchor_items(
     return [
         EvidenceItemSeed(
             source_type="dialogue_anchor",
-            text=f"User: {user_text}\nMaez: {assistant_text}",
-            durable_id=_content_hash(f"{user_text}\n{assistant_text}"),
+            text=(
+                f"User: {_strip_local_citations(user_text)}\n"
+                f"Maez: {_strip_local_citations(assistant_text)}"
+            ),
+            durable_id=_content_hash(
+                f"{_strip_local_citations(user_text)}\n"
+                f"{_strip_local_citations(assistant_text)}"
+            ),
         )
         for user_text, assistant_text in selected
     ]

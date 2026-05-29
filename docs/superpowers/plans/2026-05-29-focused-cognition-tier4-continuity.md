@@ -343,6 +343,25 @@ class DialogueAnchorTests(unittest.TestCase):
         self.assertIn("fourth", items[0].text)
         self.assertIn("three", items[1].text)
         self.assertIn("second", items[2].text)
+
+    def test_dialogue_anchor_strips_stale_local_citations(self):
+        from core.routing.focused_cognition import dialogue_anchor_items
+
+        history = [
+            {
+                "content": (
+                    "Rohit: What were we talking about earlier?\n"
+                    "Maez: We were discussing continuity [E1]. "
+                    "The old row said the same thing [E3]."
+                )
+            }
+        ]
+        items = dialogue_anchor_items(history, limit_pairs=1)
+        self.assertEqual(len(items), 1)
+        self.assertIn("We were discussing continuity.", items[0].text)
+        self.assertIn("The old row said the same thing.", items[0].text)
+        self.assertNotIn("[E1]", items[0].text)
+        self.assertNotIn("[E3]", items[0].text)
 ```
 
 - [ ] **Step 2: Run tests to verify fail**
@@ -365,6 +384,10 @@ class EvidenceItemSeed:
     source_type: str
     text: str
     durable_id: str
+
+
+def _strip_local_citations(text: str) -> str:
+    return re.sub(r"\s*\[E\d+\]", "", text or "").strip()
 
 
 def dialogue_anchor_items(
@@ -392,8 +415,14 @@ def dialogue_anchor_items(
     return [
         EvidenceItemSeed(
             source_type="dialogue_anchor",
-            text=f"User: {user_text}\nMaez: {assistant_text}",
-            durable_id=_content_hash(f"{user_text}\n{assistant_text}"),
+            text=(
+                f"User: {_strip_local_citations(user_text)}\n"
+                f"Maez: {_strip_local_citations(assistant_text)}"
+            ),
+            durable_id=_content_hash(
+                f"{_strip_local_citations(user_text)}\n"
+                f"{_strip_local_citations(assistant_text)}"
+            ),
         )
         for user_text, assistant_text in selected
     ]

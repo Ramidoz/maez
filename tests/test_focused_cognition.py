@@ -226,6 +226,27 @@ class DialogueAnchorTests(unittest.TestCase):
         self.assertIn("three", items[1].text)
         self.assertIn("second", items[2].text)
 
+    def test_dialogue_anchor_strips_stale_local_citations(self):
+        from core.routing.focused_cognition import dialogue_anchor_items
+
+        history = [
+            {
+                "content": (
+                    "Rohit: What were we talking about earlier?\n"
+                    "Maez: We were discussing continuity [E1]. "
+                    "The old row said the same thing [E3]."
+                )
+            }
+        ]
+
+        items = dialogue_anchor_items(history, limit_pairs=1)
+
+        self.assertEqual(len(items), 1)
+        self.assertIn("We were discussing continuity.", items[0].text)
+        self.assertIn("The old row said the same thing.", items[0].text)
+        self.assertNotIn("[E1]", items[0].text)
+        self.assertNotIn("[E3]", items[0].text)
+
 
 class DialogueAwareAssembleTests(unittest.TestCase):
     def _history(self):
