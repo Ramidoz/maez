@@ -3820,10 +3820,25 @@ class MaezDaemon:
             final_system_part=turn_final_context,
         )
         messages.append({"role": "user", "content": prompt})
+        try:
+            from core.routing.focused_cognition import (
+                dialogue_continuity_state as _dialogue_continuity_state,
+            )
+
+            _dialogue_state = _dialogue_continuity_state(text)
+        except Exception:
+            _dialogue_state = None
+        _dialogue_needs_or_uncertain = bool(
+            _dialogue_state
+            and (
+                getattr(_dialogue_state, "needs_dialogue", False)
+                or getattr(_dialogue_state, "fail_safe_legacy", False)
+            )
+        )
         _focused_candidate = (
             _focused_cognition_enabled()
             and source != "voice"
-            and _evidence_state.evidence_present
+            and (_evidence_state.evidence_present or _dialogue_needs_or_uncertain)
         )
         _legacy_call_purpose = "legacy_candidate" if _focused_candidate else "llm_synthesis"
         if transcript_context or evidence_directive:
@@ -3859,7 +3874,17 @@ class MaezDaemon:
                         transcript=transcript,
                         web_context=web_context,
                         owner_question=text,
+                        chat_history=chat_history,
                     )
+                    if (
+                        _focused_working_set is None
+                        and _dialogue_needs_or_uncertain
+                    ):
+                        logger.info(
+                            "focused_cognition_skip surface=%s "
+                            "reason=continuity_no_dialogue_anchor",
+                            source,
+                        )
                     if _focused_working_set is not None:
                         _legacy_prompt_chars = sum(
                             len(str(message.get("content") or ""))

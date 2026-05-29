@@ -913,6 +913,147 @@ class DaemonHandleMessageContract(unittest.TestCase):
 
         self.assertIsNone(rec.call_args.kwargs["routing_observation_id"])
 
+    def test_daemon_continuity_no_anchor_falls_back_to_legacy(self):
+        from daemon import maez_daemon
+
+        captured: dict[str, list[dict]] = {}
+        daemon = self._build_daemon_for_handle_message()
+
+        with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+            os.environ,
+            {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+        ), mock.patch(
+            "core.routing.focused_cognition.focused_synthesize",
+        ) as fsyn, mock.patch(
+            "core.llm_client.chat",
+        ) as megachat:
+            megachat.return_value = types.SimpleNamespace(
+                message=types.SimpleNamespace(content="legacy continuity reply")
+            )
+            reply = maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                "What were we talking about earlier?",
+                source="telegram_surface",
+                transcript="[memory evidence] stale:\n- April 6 journal",
+                chat_history=[],
+            )
+
+        self.assertEqual(reply, "legacy continuity reply")
+        fsyn.assert_not_called()
+        megachat.assert_called_once()
+
+    def test_daemon_uncertain_continuity_no_anchor_falls_back_to_legacy(self):
+        from daemon import maez_daemon
+
+        captured: dict[str, list[dict]] = {}
+        daemon = self._build_daemon_for_handle_message()
+
+        with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+            os.environ,
+            {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+        ), mock.patch(
+            "core.routing.focused_cognition.focused_synthesize",
+        ) as fsyn, mock.patch(
+            "core.llm_client.chat",
+        ) as megachat:
+            megachat.return_value = types.SimpleNamespace(
+                message=types.SimpleNamespace(content="legacy uncertain reply")
+            )
+            reply = maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                "Anything since earlier?",
+                source="telegram_surface",
+                transcript="[memory evidence] stale:\n- April 6 journal",
+                chat_history=[],
+            )
+
+        self.assertEqual(reply, "legacy uncertain reply")
+        fsyn.assert_not_called()
+        megachat.assert_called_once()
+
+    def test_daemon_continuity_with_anchor_uses_focused(self):
+        from daemon import maez_daemon
+
+        captured: dict[str, list[dict]] = {}
+        daemon = self._build_daemon_for_handle_message()
+
+        with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+            os.environ,
+            {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+        ), mock.patch(
+            "core.routing.focused_cognition.focused_synthesize",
+        ) as fsyn, mock.patch(
+            "core.routing.focused_cognition.record_focused_cognition_run",
+            return_value="focused-row-1",
+        ), mock.patch(
+            "core.llm_client.chat",
+        ) as megachat:
+            from core.routing.focused_cognition import FocusedResult
+
+            fsyn.return_value = FocusedResult(
+                "We were discussing Reddit [E1]",
+                ["E1"],
+                800,
+            )
+            reply = maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                "What were we talking about earlier?",
+                source="telegram_surface",
+                transcript="[memory evidence] stale:\n- April 6 journal",
+                chat_history=[
+                    {
+                        "content": (
+                            "Rohit: Search r/LocalLLaMA\n"
+                            "Maez: I found LiquidAI."
+                        )
+                    }
+                ],
+            )
+
+        self.assertEqual(reply, "We were discussing Reddit [E1]")
+        fsyn.assert_called_once()
+        megachat.assert_not_called()
+
+    def test_daemon_anaphoric_with_anchor_uses_focused(self):
+        from daemon import maez_daemon
+
+        captured: dict[str, list[dict]] = {}
+        daemon = self._build_daemon_for_handle_message()
+
+        with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+            os.environ,
+            {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+        ), mock.patch(
+            "core.routing.focused_cognition.focused_synthesize",
+        ) as fsyn, mock.patch(
+            "core.routing.focused_cognition.record_focused_cognition_run",
+            return_value="focused-row-1",
+        ):
+            from core.routing.focused_cognition import FocusedResult
+
+            fsyn.return_value = FocusedResult(
+                "LiquidAI matters most [E1][E3]",
+                ["E1", "E3"],
+                800,
+            )
+            reply = maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                "Which one matters most?",
+                source="telegram_surface",
+                transcript="[fresh evidence] r/LocalLLaMA:\n- LiquidAI LFM2.5\n- Reachy Mini",
+                chat_history=[
+                    {
+                        "content": (
+                            "Rohit: Search r/LocalLLaMA\n"
+                            "Maez: LiquidAI and Reachy were active."
+                        )
+                    }
+                ],
+            )
+
+        self.assertEqual(reply, "LiquidAI matters most [E1][E3]")
+        fsyn.assert_called_once()
+
     def test_daemon_system_part_capture_names_consolidated_blocks(self):
         """System-block capture should identify each pre-consolidation part."""
         from daemon import maez_daemon
