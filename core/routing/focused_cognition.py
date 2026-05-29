@@ -211,7 +211,7 @@ def dialogue_anchor_items(
             pairs.append((pending_user, content))
             pending_user = None
 
-    selected = pairs[-limit_pairs:]
+    selected = list(reversed(pairs[-limit_pairs:]))
     return [
         EvidenceItemSeed(
             source_type="dialogue_anchor",

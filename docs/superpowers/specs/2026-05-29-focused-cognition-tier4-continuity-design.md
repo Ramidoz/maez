@@ -123,8 +123,8 @@ def dialogue_anchor_items(chat_history: Iterable[dict] | None, *, limit_pairs: i
 Rules:
 
 - Call `history_to_messages(chat_history)`; do not create a second parser.
-- Preserve conversational order.
 - Use only the most recent `limit_pairs` user/assistant pairs.
+- Order selected pairs newest-first, so `[E1]` and the tail-repeat point at the latest exchange rather than the oldest pair in the bounded window.
 - Convert each pair into one compact item:
   - `User: <owner turn>\nMaez: <assistant turn>`
 - Reject empty or unparseable history by returning `[]`.

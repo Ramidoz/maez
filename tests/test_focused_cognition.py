@@ -211,6 +211,21 @@ class DialogueAnchorTests(unittest.TestCase):
         self.assertIn("third", joined)
         self.assertIn("fourth", joined)
 
+    def test_dialogue_anchor_orders_newest_pair_first(self):
+        from core.routing.focused_cognition import dialogue_anchor_items
+
+        history = [
+            {"content": "Rohit: first\nMaez: one"},
+            {"content": "Rohit: second\nMaez: two"},
+            {"content": "Rohit: third\nMaez: three"},
+            {"content": "Rohit: fourth\nMaez: four"},
+        ]
+        items = dialogue_anchor_items(history, limit_pairs=3)
+        self.assertEqual(len(items), 3)
+        self.assertIn("fourth", items[0].text)
+        self.assertIn("three", items[1].text)
+        self.assertIn("second", items[2].text)
+
 
 class DialogueAwareAssembleTests(unittest.TestCase):
     def _history(self):

@@ -328,6 +328,21 @@ class DialogueAnchorTests(unittest.TestCase):
         self.assertNotIn("one", joined)
         self.assertIn("third", joined)
         self.assertIn("fourth", joined)
+
+    def test_dialogue_anchor_orders_newest_pair_first(self):
+        from core.routing.focused_cognition import dialogue_anchor_items
+
+        history = [
+            {"content": "Rohit: first\nMaez: one"},
+            {"content": "Rohit: second\nMaez: two"},
+            {"content": "Rohit: third\nMaez: three"},
+            {"content": "Rohit: fourth\nMaez: four"},
+        ]
+        items = dialogue_anchor_items(history, limit_pairs=3)
+        self.assertEqual(len(items), 3)
+        self.assertIn("fourth", items[0].text)
+        self.assertIn("three", items[1].text)
+        self.assertIn("second", items[2].text)
 ```
 
 - [ ] **Step 2: Run tests to verify fail**
@@ -373,7 +388,7 @@ def dialogue_anchor_items(
             pairs.append((pending_user, content))
             pending_user = None
 
-    selected = pairs[-limit_pairs:]
+    selected = list(reversed(pairs[-limit_pairs:]))
     return [
         EvidenceItemSeed(
             source_type="dialogue_anchor",
