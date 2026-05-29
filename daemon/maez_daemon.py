@@ -3822,12 +3822,15 @@ class MaezDaemon:
         messages.append({"role": "user", "content": prompt})
         try:
             from core.routing.focused_cognition import (
+                build_intra_turn_echo_reply as _build_intra_turn_echo_reply,
                 dialogue_continuity_state as _dialogue_continuity_state,
             )
 
             _dialogue_state = _dialogue_continuity_state(text)
+            _current_turn_echo_reply = _build_intra_turn_echo_reply(text)
         except Exception:
             _dialogue_state = None
+            _current_turn_echo_reply = None
         _dialogue_needs_or_uncertain = bool(
             _dialogue_state
             and (
@@ -3838,9 +3841,16 @@ class MaezDaemon:
         _focused_candidate = (
             _focused_cognition_enabled()
             and source != "voice"
+            and not _current_turn_echo_reply
             and (_evidence_state.evidence_present or _dialogue_needs_or_uncertain)
         )
-        _legacy_call_purpose = "legacy_candidate" if _focused_candidate else "llm_synthesis"
+        _legacy_call_purpose = (
+            "echo_reply"
+            if _current_turn_echo_reply
+            else "legacy_candidate"
+            if _focused_candidate
+            else "llm_synthesis"
+        )
         if transcript_context or evidence_directive:
             _log_daemon_system_part_shape(
                 surface=source,
@@ -3857,6 +3867,8 @@ class MaezDaemon:
 
         if authoritative_tool_reply:
             reply = authoritative_tool_reply
+        elif _current_turn_echo_reply:
+            reply = _current_turn_echo_reply
         else:
             reply = None
             _focused_used = False

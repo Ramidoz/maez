@@ -204,6 +204,26 @@ class DialogueContinuityStateTests(unittest.TestCase):
         self.assertFalse(state.fail_safe_legacy)
         self.assertIsNone(state.matched_reason)
 
+    def test_build_intra_turn_echo_reply_restates_current_clause(self):
+        from core.routing.focused_cognition import build_intra_turn_echo_reply
+
+        reply = build_intra_turn_echo_reply(
+            "For the continuity witness: dialogue anchors now strip stale prior "
+            "citations before they become current evidence. Say that back in "
+            "one sentence."
+        )
+        self.assertEqual(
+            reply,
+            "Dialogue anchors now strip stale prior citations before they become "
+            "current evidence.",
+        )
+
+    def test_build_intra_turn_echo_reply_ignores_cross_turn_anaphora(self):
+        from core.routing.focused_cognition import build_intra_turn_echo_reply
+
+        self.assertIsNone(build_intra_turn_echo_reply("Which one matters most?"))
+        self.assertIsNone(build_intra_turn_echo_reply("Try that."))
+
 
 class DialogueAnchorTests(unittest.TestCase):
     def test_dialogue_anchor_reuses_history_to_messages(self):

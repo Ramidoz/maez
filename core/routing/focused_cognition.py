@@ -164,6 +164,26 @@ def _is_intra_turn_echo_instruction(text: str) -> bool:
     return any(pattern in lowered for pattern in _INTRA_TURN_ECHO_PATTERNS)
 
 
+def build_intra_turn_echo_reply(owner_question: str) -> str | None:
+    text = (owner_question or "").strip()
+    lowered = text.lower()
+    matches = [
+        lowered.find(pattern)
+        for pattern in _INTRA_TURN_ECHO_PATTERNS
+        if lowered.find(pattern) >= 0
+    ]
+    if not matches:
+        return None
+    target = text[: min(matches)].strip()
+    if ":" in target:
+        target = target.rsplit(":", 1)[1].strip()
+    target = target.strip(" \"'“”‘’")
+    target = target.rstrip(".!?;: ")
+    if not target:
+        return None
+    return target[:1].upper() + target[1:] + "."
+
+
 def dialogue_continuity_state(owner_question: str) -> DialogueContinuityState:
     text = (owner_question or "").strip().lower()
     for pattern in _DIRECT_CONTINUITY_PATTERNS:
