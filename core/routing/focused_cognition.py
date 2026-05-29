@@ -18,6 +18,7 @@ from pathlib import Path
 import re
 import sqlite3
 import time
+from typing import Iterable
 import uuid
 
 from core.routing.observation import _default_db_path, _sha256
@@ -63,6 +64,13 @@ _VOICE_CARD_TEXT = (
 @dataclass(frozen=True)
 class EvidenceItem:
     local_label: str
+    source_type: str
+    text: str
+    durable_id: str
+
+
+@dataclass(frozen=True)
+class EvidenceItemSeed:
     source_type: str
     text: str
     durable_id: str
@@ -182,6 +190,38 @@ def dialogue_continuity_state(owner_question: str) -> DialogueContinuityState:
         fail_safe_legacy=False,
         matched_reason=None,
     )
+
+
+def dialogue_anchor_items(
+    chat_history: Iterable[dict] | None,
+    *,
+    limit_pairs: int = 3,
+) -> list[EvidenceItemSeed]:
+    from core.brain.conversation_history import history_to_messages
+
+    messages = history_to_messages(chat_history)
+    pairs: list[tuple[str, str]] = []
+    pending_user: str | None = None
+    for message in messages:
+        role = message.get("role")
+        content = (message.get("content") or "").strip()
+        if not content:
+            continue
+        if role == "user":
+            pending_user = content
+        elif role == "assistant" and pending_user:
+            pairs.append((pending_user, content))
+            pending_user = None
+
+    selected = pairs[-limit_pairs:]
+    return [
+        EvidenceItemSeed(
+            source_type="dialogue_anchor",
+            text=f"User: {user_text}\nMaez: {assistant_text}",
+            durable_id=_content_hash(f"{user_text}\n{assistant_text}"),
+        )
+        for user_text, assistant_text in selected
+    ]
 
 
 def _split_blocks(transcript: str) -> list[tuple[str, str]]:

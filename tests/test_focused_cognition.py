@@ -136,6 +136,49 @@ class DialogueContinuityStateTests(unittest.TestCase):
         self.assertIn("earlier", state.matched_reason or "")
 
 
+class DialogueAnchorTests(unittest.TestCase):
+    def test_dialogue_anchor_reuses_history_to_messages(self):
+        from unittest import mock
+
+        from core.routing import focused_cognition
+
+        with mock.patch(
+            "core.brain.conversation_history.history_to_messages",
+            return_value=[
+                {"role": "user", "content": "Search r/LocalLLaMA"},
+                {"role": "assistant", "content": "I found LiquidAI [E1]."},
+            ],
+        ) as parser:
+            items = focused_cognition.dialogue_anchor_items(
+                [{"content": "ignored because parser is patched"}],
+                limit_pairs=3,
+            )
+
+        parser.assert_called_once()
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].source_type, "dialogue_anchor")
+        self.assertIn("User: Search r/LocalLLaMA", items[0].text)
+        self.assertIn("Maez: I found LiquidAI", items[0].text)
+        self.assertTrue(items[0].durable_id.startswith("ch_"))
+
+    def test_dialogue_anchor_limits_to_recent_pairs(self):
+        from core.routing.focused_cognition import dialogue_anchor_items
+
+        history = [
+            {"content": "Rohit: first\nMaez: one"},
+            {"content": "Rohit: second\nMaez: two"},
+            {"content": "Rohit: third\nMaez: three"},
+            {"content": "Rohit: fourth\nMaez: four"},
+        ]
+        items = dialogue_anchor_items(history, limit_pairs=2)
+        self.assertEqual(len(items), 2)
+        joined = "\n".join(item.text for item in items)
+        self.assertNotIn("first", joined)
+        self.assertNotIn("one", joined)
+        self.assertIn("third", joined)
+        self.assertIn("fourth", joined)
+
+
 class FocusedSynthesizeTests(unittest.TestCase):
     def _ws(self):
         return assemble_working_set(
