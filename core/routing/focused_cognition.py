@@ -138,7 +138,6 @@ _UNCERTAIN_CONTINUITY_PATTERNS: tuple[str, ...] = (
     "earlier",
     "before",
     "last",
-    "recent",
     "we were",
     "you said",
     "i said",

@@ -135,6 +135,20 @@ class DialogueContinuityStateTests(unittest.TestCase):
         self.assertTrue(state.fail_safe_legacy)
         self.assertIn("earlier", state.matched_reason or "")
 
+    def test_recent_freshness_query_is_not_continuity(self):
+        from core.routing.focused_cognition import (
+            ContinuityKind,
+            dialogue_continuity_state,
+        )
+
+        state = dialogue_continuity_state(
+            "Search r/LocalLLaMA right now for recent local LLM posts."
+        )
+        self.assertEqual(state.kind, ContinuityKind.NONE)
+        self.assertFalse(state.needs_dialogue)
+        self.assertFalse(state.fail_safe_legacy)
+        self.assertIsNone(state.matched_reason)
+
 
 class DialogueAnchorTests(unittest.TestCase):
     def test_dialogue_anchor_reuses_history_to_messages(self):
@@ -251,7 +265,7 @@ class DialogueAwareAssembleTests(unittest.TestCase):
         ws = assemble_working_set(
             transcript=_FRESH,
             web_context="",
-            owner_question="Search r/LocalLLaMA right now",
+            owner_question="Search r/LocalLLaMA right now for recent local LLM posts.",
             chat_history=self._history(),
         )
         self.assertIsNotNone(ws)
