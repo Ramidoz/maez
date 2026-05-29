@@ -94,7 +94,11 @@ def build_evidence_precedence_directive(state: EvidenceState) -> str:
         "EVIDENCE PRESENT THIS TURN.",
         "You are holding real evidence for the owner's question right now:",
     ]
-    for label, description in zip(state.marker_labels, state.descriptions):
+    for label, description in zip(
+        state.marker_labels,
+        state.descriptions,
+        strict=True,
+    ):
         if description:
             lines.append(f"  - {label}: {description}")
         else:

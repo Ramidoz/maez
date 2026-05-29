@@ -46,6 +46,7 @@ in a full runtime harness.
 from __future__ import annotations
 
 import ast
+import contextlib
 import os
 import sys
 import types
@@ -294,10 +295,9 @@ class DaemonHandleMessageContract(unittest.TestCase):
             ),
         ) or ""
         self.assertIn("_consolidate_system_messages", handle_src)
-        self.assertIn("final_system_part=transcript_context", handle_src)
+        self.assertIn("final_system_part=turn_final_context", handle_src)
 
-    def test_handle_message_sends_one_system_message_with_dispatcher_suffix(self):
-        """The live daemon prompt assembly must send one system message."""
+    def _build_daemon_for_handle_message(self):
         from daemon import maez_daemon
 
         class FakeMemory:
@@ -314,14 +314,6 @@ class DaemonHandleMessageContract(unittest.TestCase):
             def with_freshness(self):
                 return self
 
-        captured: dict[str, list[dict]] = {}
-
-        def fake_chat(*, model, messages, think, options):
-            captured["messages"] = messages
-            return types.SimpleNamespace(
-                message=types.SimpleNamespace(content="grounded reply")
-            )
-
         daemon = object.__new__(maez_daemon.MaezDaemon)
         daemon.system_prompt = "DAEMON SYSTEM"
         daemon.memory = FakeMemory()
@@ -336,87 +328,157 @@ class DaemonHandleMessageContract(unittest.TestCase):
         daemon._get_public_context = lambda: ""
         daemon._trf_apply_fragment_guard = lambda **kwargs: kwargs["reply"]
         daemon._ws_broadcast = lambda _payload: None
+        return daemon
 
+    @contextlib.contextmanager
+    def _handle_message_mock_stack(
+        self,
+        maez_daemon,
+        captured: dict[str, list[dict]],
+        *,
+        needs_web_search: bool = False,
+        web_context: str = "",
+        reply: str = "grounded reply",
+    ):
         trace = types.SimpleNamespace(
             audit=types.SimpleNamespace(),
             lived_recall_ids=[],
         )
 
-        with mock.patch.dict(
-            os.environ,
-            {
-                "MAEZ_DISPATCHER_ENABLED": "1",
-                "MAEZ_LIVED_RECALL": "0",
-                "MAEZ_AMBIENT_BRIEF": "0",
-                "MAEZ_WORKING_SELF": "0",
-                "MAEZ_WONDERING_PURSUIT": "0",
-            },
-            clear=False,
-        ), mock.patch.object(
-            maez_daemon,
-            "guard_owner_text",
-            return_value=types.SimpleNamespace(matched=False, answer_text=None),
-        ), mock.patch.object(
-            maez_daemon,
-            "answer_camera_presence_question",
-            return_value=None,
-        ), mock.patch.object(
-            maez_daemon,
-            "perception_snapshot",
-            return_value=object(),
-        ), mock.patch.object(
-            maez_daemon,
-            "format_snapshot",
-            return_value="SYSTEM_STATE",
-        ), mock.patch.object(
-            maez_daemon,
-            "Trace",
-            types.SimpleNamespace(start=lambda **_kwargs: trace),
-        ), mock.patch.object(
-            maez_daemon,
-            "default_writer",
-            return_value=types.SimpleNamespace(write=lambda _trace: None),
-        ), mock.patch.object(
-            maez_daemon,
-            "_trace_hash_text",
-            return_value="hash",
-        ), mock.patch.object(
-            maez_daemon,
-            "_trace_extract_evidence_ids",
-            return_value=[],
-        ), mock.patch.object(
-            maez_daemon,
-            "build_temporal_anchor_recall_brief",
-            return_value=types.SimpleNamespace(
-                anchor_detected=False,
-                brief_text="",
-                evidence_ids=[],
-            ),
-        ), mock.patch(
-            "core.cognition.envelope_builder.build_envelope",
-            return_value=None,
-        ), mock.patch(
-            "core.cognition.envelope_builder.render_envelope_for_prompt",
-            return_value="",
-        ), mock.patch(
-            "core.cognition.envelope_builder.resolve_recall_cap_chars",
-            return_value=1000,
-        ), mock.patch(
-            "skills.web_search.needs_web_search",
-            return_value=False,
-        ), mock.patch(
-            "core.safety.audited_output.audit_assistant_text",
-            side_effect=lambda text, **_kwargs: text,
-        ), mock.patch(
-            "core.ledger.writer.try_write_turn",
-            return_value="turn-1",
-        ), mock.patch(
-            "core.ledger.model_reply_persistence.persist_model_reply",
-            return_value=None,
-        ), mock.patch(
-            "core.llm_client.chat",
-            side_effect=fake_chat,
-        ):
+        def fake_chat(*, model, messages, think, options):
+            captured["messages"] = messages
+            return types.SimpleNamespace(
+                message=types.SimpleNamespace(content=reply)
+            )
+
+        stack = contextlib.ExitStack()
+        try:
+            stack.enter_context(mock.patch.dict(
+                os.environ,
+                {
+                    "MAEZ_DISPATCHER_ENABLED": "1",
+                    "MAEZ_LIVED_RECALL": "0",
+                    "MAEZ_AMBIENT_BRIEF": "0",
+                    "MAEZ_WORKING_SELF": "0",
+                    "MAEZ_WONDERING_PURSUIT": "0",
+                },
+                clear=False,
+            ))
+            stack.enter_context(mock.patch.object(
+                maez_daemon,
+                "guard_owner_text",
+                return_value=types.SimpleNamespace(matched=False, answer_text=None),
+            ))
+            stack.enter_context(mock.patch.object(
+                maez_daemon,
+                "answer_camera_presence_question",
+                return_value=None,
+            ))
+            stack.enter_context(mock.patch.object(
+                maez_daemon,
+                "perception_snapshot",
+                return_value=object(),
+            ))
+            stack.enter_context(mock.patch.object(
+                maez_daemon,
+                "format_snapshot",
+                return_value="SYSTEM_STATE",
+            ))
+            stack.enter_context(mock.patch.object(
+                maez_daemon,
+                "Trace",
+                types.SimpleNamespace(start=lambda **_kwargs: trace),
+            ))
+            stack.enter_context(mock.patch.object(
+                maez_daemon,
+                "default_writer",
+                return_value=types.SimpleNamespace(write=lambda _trace: None),
+            ))
+            stack.enter_context(mock.patch.object(
+                maez_daemon,
+                "_trace_hash_text",
+                return_value="hash",
+            ))
+            stack.enter_context(mock.patch.object(
+                maez_daemon,
+                "_trace_extract_evidence_ids",
+                return_value=[],
+            ))
+            stack.enter_context(mock.patch.object(
+                maez_daemon,
+                "build_temporal_anchor_recall_brief",
+                return_value=types.SimpleNamespace(
+                    anchor_detected=False,
+                    brief_text="",
+                    evidence_ids=[],
+                ),
+            ))
+            stack.enter_context(mock.patch(
+                "core.cognition.envelope_builder.build_envelope",
+                return_value=None,
+            ))
+            stack.enter_context(mock.patch(
+                "core.cognition.envelope_builder.render_envelope_for_prompt",
+                return_value="",
+            ))
+            stack.enter_context(mock.patch(
+                "core.cognition.envelope_builder.resolve_recall_cap_chars",
+                return_value=1000,
+            ))
+            stack.enter_context(mock.patch(
+                "skills.web_search.needs_web_search",
+                return_value=needs_web_search,
+            ))
+            stack.enter_context(mock.patch(
+                "skills.web_search.is_news_query",
+                return_value=False,
+            ))
+            stack.enter_context(mock.patch(
+                "skills.web_search.search",
+                return_value={
+                    "query": "local llm",
+                    "success": bool(web_context),
+                    "results": [{"title": "Post"}] if web_context else [],
+                    "result_count": 1 if web_context else 0,
+                },
+            ))
+            stack.enter_context(mock.patch(
+                "skills.web_search.format_for_context",
+                return_value=web_context,
+            ))
+            stack.enter_context(mock.patch(
+                "core.routing.observation.record_legacy_web_search_observation",
+                return_value=None,
+            ))
+            stack.enter_context(mock.patch(
+                "core.safety.audited_output.audit_assistant_text",
+                side_effect=lambda text, **_kwargs: text,
+            ))
+            stack.enter_context(mock.patch(
+                "core.ledger.writer.try_write_turn",
+                return_value="turn-1",
+            ))
+            stack.enter_context(mock.patch(
+                "core.ledger.model_reply_persistence.persist_model_reply",
+                return_value=None,
+            ))
+            stack.enter_context(mock.patch(
+                "core.llm_client.chat",
+                side_effect=fake_chat,
+            ))
+            yield
+        finally:
+            stack.close()
+
+    def test_handle_message_sends_one_system_message_with_dispatcher_suffix(self):
+        """The live daemon prompt assembly must send one system message."""
+        from daemon import maez_daemon
+
+        captured: dict[str, list[dict]] = {}
+
+        daemon = self._build_daemon_for_handle_message()
+
+        with self._handle_message_mock_stack(maez_daemon, captured):
             reply = maez_daemon.MaezDaemon.handle_message(
                 daemon,
                 "Search r/LocalLLaMA right now",
@@ -434,16 +496,137 @@ class DaemonHandleMessageContract(unittest.TestCase):
             if message.get("role") == "system"
         ]
         self.assertEqual(len(system_messages), 1)
-        from core.brain_loop import _instruction_block_for_transcript
-
+        self.assertIn(
+            "[fresh evidence] LIVE_REDDIT: recent posts",
+            system_messages[0]["content"],
+        )
+        self.assertIn("EVIDENCE PRESENT THIS TURN", system_messages[0]["content"])
         self.assertTrue(
-            system_messages[0]["content"].endswith(
-                "[fresh evidence] LIVE_REDDIT: recent posts\n\n"
-                + _instruction_block_for_transcript(
-                    "[fresh evidence] LIVE_REDDIT: recent posts"
-                )
+            system_messages[0]["content"].rstrip().endswith(
+                "the evidence above contradicts that."
             )
         )
+
+    def test_handle_message_feeds_raw_transcript_to_detector(self):
+        """Evidence detection must never scan transcript_context."""
+        from daemon import maez_daemon
+
+        captured: dict[str, list[dict]] = {}
+        seen: dict[str, str] = {}
+
+        def _spy(*, transcript, web_context):
+            seen["transcript"] = transcript
+            seen["web_context"] = web_context
+            from core.routing.evidence_state import EvidenceState
+
+            return EvidenceState(evidence_present=False)
+
+        daemon = self._build_daemon_for_handle_message()
+
+        with self._handle_message_mock_stack(maez_daemon, captured), mock.patch(
+            "core.routing.evidence_state.turn_evidence_state",
+            side_effect=_spy,
+        ):
+            maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                "Search r/LocalLLaMA right now",
+                source="telegram_surface",
+                transcript="[fresh evidence] LIVE_REDDIT: recent posts",
+                chat_history=[
+                    {"content": "Rohit: earlier\nMaez: prior answer"},
+                ],
+            )
+
+        self.assertEqual(
+            seen["transcript"],
+            "[fresh evidence] LIVE_REDDIT: recent posts",
+        )
+        self.assertNotIn("HARD INSTRUCTION", seen["transcript"])
+
+    def test_directive_general_on_legacy_web_turn(self):
+        """Legacy web results should get the same final-tail evidence steer."""
+        from daemon import maez_daemon
+
+        captured: dict[str, list[dict]] = {}
+        daemon = self._build_daemon_for_handle_message()
+        web_context = (
+            "[WEB SEARCH: 'local llm'] 2 results - 2026\n"
+            "  1. Post\n"
+            "     body"
+        )
+
+        with self._handle_message_mock_stack(
+            maez_daemon,
+            captured,
+            needs_web_search=True,
+            web_context=web_context,
+        ):
+            maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                "what's the latest on local llms",
+                source="telegram_surface",
+                transcript="",
+            )
+
+        system_messages = [
+            message
+            for message in captured["messages"]
+            if message.get("role") == "system"
+        ]
+        self.assertEqual(len(system_messages), 1)
+        self.assertIn("web search results", system_messages[0]["content"])
+        self.assertTrue(
+            system_messages[0]["content"].rstrip().endswith(
+                "the evidence above contradicts that."
+            )
+        )
+
+    def test_no_directive_when_no_evidence(self):
+        """No evidence means the steer stays absent."""
+        from daemon import maez_daemon
+
+        captured: dict[str, list[dict]] = {}
+        daemon = self._build_daemon_for_handle_message()
+
+        with self._handle_message_mock_stack(maez_daemon, captured):
+            maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                "just chatting, nothing to look up",
+                source="telegram_surface",
+                transcript="",
+            )
+
+        system_messages = [
+            message
+            for message in captured["messages"]
+            if message.get("role") == "system"
+        ]
+        self.assertFalse(
+            any(
+                "EVIDENCE PRESENT THIS TURN" in message["content"]
+                for message in system_messages
+            )
+        )
+
+    def test_system_part_capture_includes_evidence_directive(self):
+        """The daemon system-part seam must expose the directive label."""
+        from daemon import maez_daemon
+
+        captured: dict[str, list[dict]] = {}
+        daemon = self._build_daemon_for_handle_message()
+
+        with self.assertLogs(maez_daemon.logger, level="INFO") as log_capture:
+            with self._handle_message_mock_stack(maez_daemon, captured):
+                maez_daemon.MaezDaemon.handle_message(
+                    daemon,
+                    "Search r/LocalLLaMA right now",
+                    source="telegram_surface",
+                    transcript="[fresh evidence] LIVE_REDDIT: recent posts",
+                )
+
+        joined = "\n".join(log_capture.output)
+        self.assertIn("daemon_system_part_shape", joined)
+        self.assertIn("evidence_precedence_directive", joined)
 
     def test_daemon_prompt_capture_summarizes_structure_without_full_text(self):
         """Diagnostic capture should expose prompt shape, not full prompt text."""
@@ -496,6 +679,33 @@ class DaemonHandleMessageContract(unittest.TestCase):
         self.assertIn("surface=telegram_surface", joined)
         self.assertIn("call_purpose=llm_synthesis", joined)
         self.assertIn('"role_sequence": "system,assistant,user"', joined)
+
+    def test_payload_shape_reports_evidence_directive_suffix(self):
+        """Prompt capture should name the new evidence directive tail honestly."""
+        from daemon import maez_daemon
+
+        transcript_context = "[fresh evidence] LIVE_REDDIT\n\ninstruction"
+        directive = (
+            "EVIDENCE PRESENT THIS TURN.\n"
+            "You are holding real evidence.\n"
+            "the evidence above contradicts that."
+        )
+        messages = [
+            {
+                "role": "system",
+                "content": f"BASE\n\n{transcript_context}\n\n{directive}",
+            },
+            {"role": "user", "content": "u"},
+        ]
+
+        summary = maez_daemon._summarize_daemon_prompt_messages(
+            messages,
+            transcript_context=transcript_context,
+            evidence_directive=directive,
+        )
+
+        self.assertFalse(summary["transcript_is_suffix"])
+        self.assertTrue(summary["evidence_directive_is_suffix"])
 
     def test_daemon_system_part_capture_names_consolidated_blocks(self):
         """System-block capture should identify each pre-consolidation part."""

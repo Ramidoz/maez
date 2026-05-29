@@ -1023,6 +1023,7 @@ def _summarize_daemon_prompt_messages(
     messages: list[dict],
     *,
     transcript_context: str = "",
+    evidence_directive: str = "",
 ) -> dict[str, object]:
     """Return safe structural metadata for the daemon prompt payload."""
     roles: list[str] = []
@@ -1061,6 +1062,10 @@ def _summarize_daemon_prompt_messages(
                 transcript_context
                 and system_content.endswith(transcript_context)
             ),
+            "evidence_directive_is_suffix": bool(
+                evidence_directive
+                and system_content.endswith(evidence_directive)
+            ),
             "message_hashes": ",".join(hashes),
         }
     )
@@ -1073,10 +1078,12 @@ def _log_daemon_prompt_payload_shape(
     call_purpose: str,
     messages: list[dict],
     transcript_context: str,
+    evidence_directive: str = "",
 ) -> None:
     summary = _summarize_daemon_prompt_messages(
         messages,
         transcript_context=transcript_context,
+        evidence_directive=evidence_directive,
     )
     logger.info(
         "daemon_prompt_payload_shape surface=%s call_purpose=%s summary=%s",
@@ -3748,14 +3755,38 @@ class MaezDaemon:
         if _premise_flag:
             messages.append({"role": "system", "content": _premise_flag})
             system_part_capture.append(("premise_flag", _premise_flag))
+        # Slice 3a - Evidence Precedence Steer. Compute from the raw
+        # dispatcher transcript, never transcript_context; the latter includes
+        # instruction examples that contain the marker strings.
+        from core.routing.evidence_state import (
+            build_evidence_precedence_directive,
+            build_turn_final_context,
+            turn_evidence_state,
+        )
+
+        _evidence_state = turn_evidence_state(
+            transcript=transcript,
+            web_context=web_context,
+        )
+        evidence_directive = ""
+        if _evidence_state.evidence_present:
+            evidence_directive = build_evidence_precedence_directive(_evidence_state)
         if transcript_context:
             system_part_capture.append(("transcript_context", transcript_context))
+        if evidence_directive:
+            system_part_capture.append(
+                ("evidence_precedence_directive", evidence_directive)
+            )
+        turn_final_context = build_turn_final_context(
+            transcript_context,
+            evidence_directive,
+        )
         messages = _consolidate_system_messages(
             messages,
-            final_system_part=transcript_context,
+            final_system_part=turn_final_context,
         )
         messages.append({"role": "user", "content": prompt})
-        if transcript_context:
+        if transcript_context or evidence_directive:
             _log_daemon_system_part_shape(
                 surface=source,
                 call_purpose="llm_synthesis",
@@ -3766,6 +3797,7 @@ class MaezDaemon:
                 call_purpose="llm_synthesis",
                 messages=messages,
                 transcript_context=transcript_context,
+                evidence_directive=evidence_directive,
             )
 
         if authoritative_tool_reply:
