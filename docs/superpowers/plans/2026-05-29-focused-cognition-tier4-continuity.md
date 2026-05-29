@@ -428,6 +428,16 @@ class DialogueAwareAssembleTests(unittest.TestCase):
         )
         self.assertIsNone(ws)
 
+    def test_uncertain_continuity_with_anchor_prioritizes_dialogue(self):
+        ws = assemble_working_set(
+            transcript="[memory evidence] stale journal:\n- April 6 journaling note",
+            web_context="",
+            owner_question="Anything since earlier?",
+            chat_history=self._history(),
+        )
+        self.assertIsNotNone(ws)
+        self.assertEqual(ws.items[0].source_type, "dialogue_anchor")
+
     def test_anaphoric_includes_dialogue_support_below_query_evidence(self):
         ws = assemble_working_set(
             transcript=_FRESH,
@@ -471,7 +481,10 @@ def _ranked_items_for_state(
 ) -> list[tuple[str, str, str | None]]:
     def rank(item: tuple[str, str, str | None]) -> tuple[int, int]:
         source_type = item[0]
-        if dialogue_state.kind == ContinuityKind.DIRECT:
+        if (
+            dialogue_state.kind == ContinuityKind.DIRECT
+            or dialogue_state.fail_safe_legacy
+        ):
             if source_type == "dialogue_anchor":
                 return (0, 0)
             return (_PRIORITY.get(source_type, 9) + 1, 0)

@@ -179,6 +179,87 @@ class DialogueAnchorTests(unittest.TestCase):
         self.assertIn("fourth", joined)
 
 
+class DialogueAwareAssembleTests(unittest.TestCase):
+    def _history(self):
+        return [
+            {
+                "content": (
+                    "Rohit: Search r/LocalLLaMA right now\n"
+                    "Maez: LiquidAI and Reachy Mini were the active threads."
+                )
+            }
+        ]
+
+    def test_direct_continuity_prioritizes_dialogue_over_stale_memory(self):
+        ws = assemble_working_set(
+            transcript="[memory evidence] stale journal:\n- April 6 journaling note",
+            web_context="",
+            owner_question="What were we talking about earlier?",
+            chat_history=self._history(),
+        )
+        self.assertIsNotNone(ws)
+        self.assertEqual(ws.items[0].source_type, "dialogue_anchor")
+        self.assertIn("Search r/LocalLLaMA", ws.items[0].text)
+        self.assertGreaterEqual(
+            ws.ordered_evidence_text.count(f"[{ws.items[0].local_label}]"),
+            2,
+        )
+        self.assertEqual(ws.items[1].source_type, "memory_evidence")
+
+    def test_direct_continuity_without_anchor_returns_none(self):
+        ws = assemble_working_set(
+            transcript="[memory evidence] stale journal:\n- April 6 journaling note",
+            web_context="",
+            owner_question="What were we talking about earlier?",
+            chat_history=[],
+        )
+        self.assertIsNone(ws)
+
+    def test_uncertain_continuity_without_anchor_returns_none_even_with_stale_evidence(
+        self,
+    ):
+        ws = assemble_working_set(
+            transcript="[memory evidence] stale journal:\n- April 6 journaling note",
+            web_context="",
+            owner_question="Anything since earlier?",
+            chat_history=[],
+        )
+        self.assertIsNone(ws)
+
+    def test_uncertain_continuity_with_anchor_prioritizes_dialogue(self):
+        ws = assemble_working_set(
+            transcript="[memory evidence] stale journal:\n- April 6 journaling note",
+            web_context="",
+            owner_question="Anything since earlier?",
+            chat_history=self._history(),
+        )
+        self.assertIsNotNone(ws)
+        self.assertEqual(ws.items[0].source_type, "dialogue_anchor")
+
+    def test_anaphoric_includes_dialogue_support_below_query_evidence(self):
+        ws = assemble_working_set(
+            transcript=_FRESH,
+            web_context="",
+            owner_question="Which one matters most?",
+            chat_history=self._history(),
+        )
+        self.assertIsNotNone(ws)
+        self.assertEqual(ws.items[0].source_type, "fresh_evidence")
+        self.assertTrue(any(item.source_type == "dialogue_anchor" for item in ws.items))
+
+    def test_normal_evidence_excludes_dialogue_anchor(self):
+        ws = assemble_working_set(
+            transcript=_FRESH,
+            web_context="",
+            owner_question="Search r/LocalLLaMA right now",
+            chat_history=self._history(),
+        )
+        self.assertIsNotNone(ws)
+        self.assertFalse(
+            any(item.source_type == "dialogue_anchor" for item in ws.items)
+        )
+
+
 class FocusedSynthesizeTests(unittest.TestCase):
     def _ws(self):
         return assemble_working_set(

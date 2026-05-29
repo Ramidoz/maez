@@ -265,38 +265,73 @@ def _atomic_items(body: str) -> list[str]:
     return [body] if body else []
 
 
+def _ranked_items_for_state(
+    raw_items: list[tuple[str, str, str | None]],
+    dialogue_state: DialogueContinuityState,
+) -> list[tuple[str, str, str | None]]:
+    def rank(item: tuple[str, str, str | None]) -> int:
+        source_type = item[0]
+        if (
+            dialogue_state.kind == ContinuityKind.DIRECT
+            or dialogue_state.fail_safe_legacy
+        ):
+            if source_type == "dialogue_anchor":
+                return 0
+            return _PRIORITY.get(source_type, 9) + 1
+        if dialogue_state.kind == ContinuityKind.ANAPHORIC:
+            if source_type == "dialogue_anchor":
+                return 3
+            return _PRIORITY.get(source_type, 9)
+        return _PRIORITY.get(source_type, 9)
+
+    return sorted(raw_items, key=rank)
+
+
 def assemble_working_set(
     *,
     transcript: str,
     web_context: str,
     owner_question: str,
+    chat_history: Iterable[dict] | None = None,
 ) -> WorkingSet | None:
     state = turn_evidence_state(transcript=transcript, web_context=web_context)
-    if not state.evidence_present:
+    dialogue_state = dialogue_continuity_state(owner_question)
+    anchors = (
+        dialogue_anchor_items(chat_history)
+        if dialogue_state.needs_dialogue or dialogue_state.fail_safe_legacy
+        else []
+    )
+
+    if (dialogue_state.needs_dialogue or dialogue_state.fail_safe_legacy) and not anchors:
+        return None
+    if not state.evidence_present and not anchors:
         return None
 
-    raw_items: list[tuple[str, str]] = []
+    raw_items: list[tuple[str, str, str | None]] = []
     for marker, body in _split_blocks(transcript or ""):
         for item_text in _atomic_items(body):
-            raw_items.append((_SOURCE_TYPE[marker], item_text))
+            raw_items.append((_SOURCE_TYPE[marker], item_text, None))
 
     web_context = web_context or ""
     if web_context.strip() and _WEB_NO_RESULTS not in web_context:
         for item_text in _atomic_items(web_context):
-            raw_items.append(("web_context", item_text))
+            raw_items.append(("web_context", item_text, None))
+
+    for anchor in anchors:
+        raw_items.append((anchor.source_type, anchor.text, anchor.durable_id))
 
     if not raw_items:
         return None
 
-    raw_items.sort(key=lambda item: _PRIORITY.get(item[0], 9))
+    raw_items = _ranked_items_for_state(raw_items, dialogue_state)
     items = [
         EvidenceItem(
             local_label=f"E{index + 1}",
             source_type=source_type,
             text=text,
-            durable_id=_content_hash(text),
+            durable_id=durable_id or _content_hash(text),
         )
-        for index, (source_type, text) in enumerate(raw_items)
+        for index, (source_type, text, durable_id) in enumerate(raw_items)
     ]
 
     lines = [f"[{item.local_label}] ({item.source_type}) {item.text}" for item in items]
