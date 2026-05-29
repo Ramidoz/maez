@@ -61,6 +61,17 @@ _VOICE_CARD_TEXT = (
 )
 
 
+def is_empty_search_result(sr: dict) -> bool:
+    """True when a search produced no usable results."""
+    if not isinstance(sr, dict):
+        return True
+    return (
+        int(sr.get("result_count", 0) or 0) == 0
+        or not sr.get("results")
+        or not sr.get("success")
+    )
+
+
 @dataclass(frozen=True)
 class EvidenceItem:
     local_label: str

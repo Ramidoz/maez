@@ -18,6 +18,22 @@ _SUBSTRATE = (
 
 
 class AssembleWorkingSetTests(unittest.TestCase):
+    def test_is_empty_search_result_or_invariant(self):
+        from core.routing.focused_cognition import is_empty_search_result
+
+        self.assertTrue(
+            is_empty_search_result({"success": False, "results": [], "result_count": 0})
+        )
+        self.assertTrue(
+            is_empty_search_result({"success": True, "results": [], "result_count": 0})
+        )
+        self.assertTrue(is_empty_search_result({"success": True, "result_count": 0}))
+        self.assertFalse(
+            is_empty_search_result(
+                {"success": True, "results": [{"title": "x"}], "result_count": 1}
+            )
+        )
+
     def test_extracts_atomic_items_with_ids_and_durable_id(self):
         ws = assemble_working_set(
             transcript=_SUBSTRATE,
