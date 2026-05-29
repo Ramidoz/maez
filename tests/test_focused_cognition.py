@@ -115,6 +115,48 @@ class AssembleWorkingSetTests(unittest.TestCase):
         self.assertEqual(hr.mode, "deterministic_fallback")
         self.assertTrue(hr.reply)
 
+    def test_honest_empty_telemetry_no_raw_query(self):
+        from types import SimpleNamespace
+
+        from core.routing.focused_cognition import (
+            FocusedCognitionStore,
+            build_honest_empty_reply,
+        )
+
+        secret = "SECRETQUERY12345"
+        hr = build_honest_empty_reply(
+            query=f"search for {secret}",
+            source="web",
+            surface="telegram",
+            chat_fn=lambda **_k: SimpleNamespace(
+                message=SimpleNamespace(content="Found nothing.")
+            ),
+            model="m",
+        )
+        with TemporaryDirectory() as tmp:
+            store = FocusedCognitionStore(db_path=f"{tmp}/t.db")
+            row_id = store.record(
+                surface="telegram",
+                chat_id=None,
+                working_set=hr.working_set,
+                result=hr.result,
+                verdict=hr.verdict,
+                legacy_prompt_chars=None,
+                fallback_reason=(
+                    "honest_empty_deterministic"
+                    if hr.mode == "deterministic_fallback"
+                    else None
+                ),
+                routing_observation_id=None,
+            )
+            row = store.get(row_id)
+
+        self.assertEqual(row["groundedness_verdict"], "empty_but_honest")
+        self.assertIn("empty_result", row["source_types_json"])
+        self.assertIn("ch_", row["evidence_map_json"])
+        persisted = "".join("" if row[key] is None else str(row[key]) for key in row.keys())
+        self.assertNotIn(secret, persisted)
+
     def test_extracts_atomic_items_with_ids_and_durable_id(self):
         ws = assemble_working_set(
             transcript=_SUBSTRATE,
