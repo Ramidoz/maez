@@ -6,7 +6,7 @@
 
 **Architecture:** A source-agnostic honest-empty primitive in `core/routing/focused_cognition.py` runs a tiny focused call (one empty-fact working set + scrubbed voice card + faithful instruction) with a forbidden-vocabulary deterministic fallback — lives *outside* the megaprompt. Three call sites detect the empty search on the search-result dict and route to it: the daemon text path (Mode A, the witnessed false-premise bug — required) and the Telegram-voice + CLI paths (Mode B, attempted-empty silent fall-through — optional parity).
 
-**Tech Stack:** Python 3, `unittest` + `pytest`, SQLite (`memory/routing_observation.db`), llama.cpp via `core.llm_client.chat`. Executor: **Codex** (RED-first); **Claude** verifies the diff + the live witness.
+**Tech Stack:** Python 3, `unittest` (note: `pytest` is NOT installed in this venv — use `.venv/bin/python -m unittest tests.test_x` for targeted runs and `python -m unittest discover -s tests -p 'test_*.py'` for the floor), SQLite (`memory/routing_observation.db`), llama.cpp via `core.llm_client.chat`. Executor: **Codex** (RED-first); **Claude** verifies the diff + the live witness.
 
 **Source of truth:** [docs/superpowers/specs/2026-05-29-honest-empty-evidence-path-design.md](../specs/2026-05-29-honest-empty-evidence-path-design.md). Read it before starting.
 
