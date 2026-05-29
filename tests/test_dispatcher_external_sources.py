@@ -182,6 +182,146 @@ class DispatcherExternalSourceFanoutTests(unittest.TestCase):
         )
         self.assertEqual(result.fresh_blocks, ())
 
+    def test_live_reddit_adapter_empty_children_is_no_results(self):
+        from core.dispatcher.external_sources import ExternalFanout
+        from core.dispatcher.spec import (
+            ExternalEmptyReason,
+            ExternalSource,
+            ExternalBranchStatus,
+        )
+
+        empty_listing = json.dumps({"data": {"children": []}})
+        fetched = SimpleNamespace(
+            ok=True,
+            text=empty_listing,
+            request_id="diag-empty",
+            status_code=200,
+            reason_codes=("public_lookup_allowed",),
+        )
+
+        with mock.patch(
+            "core.dispatcher.external_sources.external_fetch.fetch_text",
+            return_value=fetched,
+        ):
+            result = ExternalFanout().run(
+                _spec(ExternalSource.LIVE_REDDIT),
+                utterance="Search r/EmptySubreddit right now",
+                conversation_state={},
+                fanout_generation_id="seal-empty",
+            )
+
+        self.assertEqual(result.branch_results[0].status, ExternalBranchStatus.EMPTY)
+        self.assertEqual(
+            result.branch_results[0].empty_reason,
+            ExternalEmptyReason.NO_RESULTS,
+        )
+
+    def test_live_reddit_adapter_accepts_valid_listing(self):
+        from core.dispatcher.external_sources import ExternalFanout
+        from core.dispatcher.spec import ExternalSource, ExternalBranchStatus
+
+        listing = json.dumps(
+            {
+                "data": {
+                    "children": [
+                        {"data": {"id": "abc123", "title": "A real local LLM post"}}
+                    ]
+                }
+            }
+        )
+        fetched = SimpleNamespace(
+            ok=True,
+            text=listing,
+            request_id="diag-valid",
+            status_code=200,
+            reason_codes=("public_lookup_allowed",),
+        )
+
+        with mock.patch(
+            "core.dispatcher.external_sources.external_fetch.fetch_text",
+            return_value=fetched,
+        ):
+            result = ExternalFanout().run(
+                _spec(ExternalSource.LIVE_REDDIT),
+                utterance="Search r/LocalLLaMA right now",
+                conversation_state={},
+                fanout_generation_id="seal-valid",
+            )
+
+        self.assertEqual(result.branch_results[0].status, ExternalBranchStatus.SUCCESS)
+        self.assertEqual(
+            result.fresh_blocks[0].egress_diagnostic_id,
+            "diag-valid",
+        )
+
+    def test_live_reddit_adapter_validates_full_body_not_truncated(self):
+        from core.dispatcher.external_sources import (
+            ExternalFanout,
+            MAX_FRESH_CHARS_PER_SOURCE,
+        )
+        from core.dispatcher.spec import ExternalSource, ExternalBranchStatus
+
+        listing = json.dumps(
+            {
+                "data": {
+                    "children": [
+                        {"data": {"id": f"p{i}", "title": "x" * 100}}
+                        for i in range(40)
+                    ]
+                }
+            }
+        )
+        self.assertGreater(len(listing), MAX_FRESH_CHARS_PER_SOURCE)
+        fetched = SimpleNamespace(
+            ok=True,
+            text=listing,
+            request_id="diag-large",
+            status_code=200,
+            reason_codes=("public_lookup_allowed",),
+        )
+
+        with mock.patch(
+            "core.dispatcher.external_sources.external_fetch.fetch_text",
+            return_value=fetched,
+        ):
+            result = ExternalFanout().run(
+                _spec(ExternalSource.LIVE_REDDIT),
+                utterance="Search r/LocalLLaMA right now",
+                conversation_state={},
+                fanout_generation_id="seal-large",
+            )
+
+        self.assertEqual(result.branch_results[0].status, ExternalBranchStatus.SUCCESS)
+        self.assertLessEqual(
+            len(result.fresh_blocks[0].text),
+            MAX_FRESH_CHARS_PER_SOURCE,
+        )
+
+    def test_live_reddit_adapter_transport_failure_stays_error(self):
+        from core.dispatcher.external_sources import ExternalFanout
+        from core.dispatcher.spec import ExternalSource, ExternalBranchStatus
+
+        fetched = SimpleNamespace(
+            ok=False,
+            text="<html><body>503 Service Unavailable</body></html>",
+            request_id="diag-503",
+            status_code=503,
+            reason_codes=("upstream_unavailable",),
+        )
+
+        with mock.patch(
+            "core.dispatcher.external_sources.external_fetch.fetch_text",
+            return_value=fetched,
+        ):
+            result = ExternalFanout().run(
+                _spec(ExternalSource.LIVE_REDDIT),
+                utterance="Search r/LocalLLaMA right now",
+                conversation_state={},
+                fanout_generation_id="seal-503",
+            )
+
+        self.assertEqual(result.branch_results[0].status, ExternalBranchStatus.ERROR)
+
     def test_fetch_url_refuses_model_invented_url(self):
         from core.dispatcher.external_sources import ExternalFanout
         from core.dispatcher.spec import (
