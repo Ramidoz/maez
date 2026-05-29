@@ -21,6 +21,7 @@ from core.dispatcher.spec import (
     ExternalSource,
     ProvenanceAuditMismatchReason,
     ProvenanceFraming,
+    SourceRole,
     SourceLabel,
     SubstrateSource,
 )
@@ -32,13 +33,6 @@ TEMPLATE_VERSION_HASH = "sha256:adr0047-provenance-renderer-v1"
 class AskShape(StrEnum):
     CONVERSATIONAL = "CONVERSATIONAL"
     REPORT = "REPORT"
-
-
-class SourceRole(StrEnum):
-    SUBSTRATE_CONTEXT = "SUBSTRATE_CONTEXT"
-    SUBSTRATE_EVIDENCE = "SUBSTRATE_EVIDENCE"
-    FRESH_EVIDENCE = "FRESH_EVIDENCE"
-    FRESH_CONTEXT = "FRESH_CONTEXT"
 
 
 @dataclass(frozen=True)
@@ -234,12 +228,22 @@ def _audit_envelope(
     fresh_attempt_outcome: Any | None,
 ) -> dict[str, Any]:
     spec_payload = spec.to_dict()
-    source_role_map = {
-        summary.source.value: summary.role.value for summary in source_summaries
-    }
-    source_digests = {
-        summary.source.value: summary.content_digest for summary in source_summaries
-    }
+    # Compatibility maps are source-keyed and therefore lossy when a source
+    # intentionally renders multiple roles. They preserve the first rendered role;
+    # source_role_entries is authoritative.
+    source_role_map: dict[str, str] = {}
+    source_digests: dict[str, str] = {}
+    for summary in source_summaries:
+        source_role_map.setdefault(summary.source.value, summary.role.value)
+        source_digests.setdefault(summary.source.value, summary.content_digest)
+    source_role_entries = [
+        {
+            "source": summary.source.value,
+            "role": summary.role.value,
+            "digest": summary.content_digest,
+        }
+        for summary in source_summaries
+    ]
     return {
         "spec_digest": _digest_json(spec_payload),
         "schema_version": spec.schema_version,
@@ -252,6 +256,7 @@ def _audit_envelope(
         "external_sources": [source.value for source in spec.external_sources],
         "source_role_map": source_role_map,
         "source_digests": source_digests,
+        "source_role_entries": source_role_entries,
         "inventory_witness": spec.inventory_witness.value,
         "source_availability": {
             source.value: availability.value
@@ -291,6 +296,7 @@ def _assistant_text_metadata(envelope: dict[str, Any]) -> dict[str, Any]:
         "timestamp",
         "provenance_framing",
         "source_role_map",
+        "source_role_entries",
         "rendered_block_roles",
         "template_id",
         "template_version_hash",

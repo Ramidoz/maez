@@ -22,8 +22,9 @@ from core.dispatcher.layer1 import Layer1FanoutResult, RecallBlock
 from core.dispatcher.provenance_renderer import (
     AskShape,
     RenderedProvenance,
-    SourceRole,
     SourceSummary,
+    _allowed_roles,
+    _refuse_template_mismatch,
     render_provenance,
 )
 from core.dispatcher.spec import (
@@ -38,6 +39,7 @@ from core.dispatcher.spec import (
     FreshAttemptOutcome,
     ProvenanceAuditMismatchReason,
     ProvenanceFraming,
+    SourceRole,
     SourceAvailability,
     SubstrateSource,
     _LEGAL_HINT_FRAMING,
@@ -53,6 +55,19 @@ class RenderedTurn:
     source_summaries: tuple[SourceSummary, ...]
     fresh_attempt_outcome: FreshAttemptOutcome
     refusal_reason: DispatcherRefusalReason | None = None
+
+
+_SUBSTRATE_ROLE_ORDER = (
+    SourceRole.SUBSTRATE_EVIDENCE,
+    SourceRole.SUBSTRATE_CONTEXT,
+)
+
+
+def _role_order(role: SourceRole) -> tuple[int, str]:
+    try:
+        return (_SUBSTRATE_ROLE_ORDER.index(role), role.value)
+    except ValueError:
+        return (len(_SUBSTRATE_ROLE_ORDER), role.value)
 
 
 def merge_fanout_results(
@@ -103,7 +118,7 @@ def merge_fanout_results(
         external_limitations=external_result.availability_limitations,
     )
     summaries = tuple(
-        _source_summaries(
+        source_summaries_for_render(
             effective_spec,
             layer1_result.recall_blocks,
             accepted_fresh_blocks,
@@ -265,17 +280,40 @@ def _source_summaries(
     recall_blocks: tuple[RecallBlock, ...],
     fresh_blocks: tuple[FreshBlock, ...],
 ) -> list[SourceSummary]:
+    return source_summaries_for_render(spec, recall_blocks, fresh_blocks)
+
+
+def source_summaries_for_render(
+    spec: CompositionSpec,
+    recall_blocks: tuple[RecallBlock, ...],
+    fresh_blocks: tuple[FreshBlock, ...],
+) -> list[SourceSummary]:
     summaries: list[SourceSummary] = []
     substrate_role = _substrate_role(spec.provenance_framing)
     fresh_role = _fresh_role(spec.provenance_framing)
 
+    allowed_roles = _allowed_roles(spec.provenance_framing)
+
     for source in spec.substrate_sources:
-        text = "\n".join(block.text for block in recall_blocks if block.source == source)
-        if text:
+        by_role: dict[SourceRole, list[str]] = {}
+        for block in recall_blocks:
+            if block.source != source:
+                continue
+            role = block.role_hint or substrate_role
+            by_role.setdefault(role, []).append(block.text)
+        for role in sorted(by_role, key=_role_order):
+            if role not in allowed_roles:
+                _refuse_template_mismatch(
+                    f"illegal substrate role {role.value} for framing "
+                    f"{spec.provenance_framing.value}"
+                )
+            text = "\n".join(by_role[role])
+            if not text:
+                continue
             summaries.append(
                 SourceSummary(
                     source=source,
-                    role=substrate_role,
+                    role=role,
                     text=text,
                     content_digest=_digest_text(text),
                 )
@@ -442,6 +480,7 @@ def _base_audit_envelope(
         "external_sources": [source.value for source in spec.external_sources],
         "source_role_map": {},
         "source_digests": {},
+        "source_role_entries": [],
         "inventory_witness": spec.inventory_witness.value,
         "source_availability": {
             source.value: availability.value
@@ -473,6 +512,7 @@ def _assistant_metadata(envelope: dict[str, Any]) -> dict[str, Any]:
         "timestamp",
         "provenance_framing",
         "source_role_map",
+        "source_role_entries",
         "rendered_block_roles",
         "template_id",
         "template_version_hash",

@@ -58,6 +58,13 @@ class ProvenanceFraming(StrEnum):
     FRESH_ONLY = "FRESH_ONLY"
 
 
+class SourceRole(StrEnum):
+    SUBSTRATE_CONTEXT = "SUBSTRATE_CONTEXT"
+    SUBSTRATE_EVIDENCE = "SUBSTRATE_EVIDENCE"
+    FRESH_EVIDENCE = "FRESH_EVIDENCE"
+    FRESH_CONTEXT = "FRESH_CONTEXT"
+
+
 class InventoryWitness(StrEnum):
     PRESENT = "PRESENT"
     ABSENT = "ABSENT"

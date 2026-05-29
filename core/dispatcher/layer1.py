@@ -17,6 +17,7 @@ from typing import Any
 
 from core.dispatcher.spec import (
     CompositionSpec,
+    SourceRole,
     SourceAvailability,
     SubstrateSource,
 )
@@ -69,9 +70,10 @@ class RecallBlock:
     prompt_cost: int
     truncated: bool = False
     original_chars: int | None = None
+    role_hint: SourceRole | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "source": self.source.value,
             "text": self.text,
             "timestamp": self.timestamp,
@@ -81,6 +83,9 @@ class RecallBlock:
             "truncated": self.truncated,
             "original_chars": self.original_chars,
         }
+        if self.role_hint is not None:
+            payload["role_hint"] = self.role_hint.value
+        return payload
 
 
 @dataclass(frozen=True)

@@ -259,8 +259,7 @@ def _dispatcher_recall_adapters(user_text: str):
 
 
 def _source_role_for_dispatcher_block(spec):
-    from core.dispatcher.provenance_renderer import SourceRole
-    from core.dispatcher.spec import ProvenanceFraming
+    from core.dispatcher.spec import ProvenanceFraming, SourceRole
 
     if spec.provenance_framing == ProvenanceFraming.SUBSTRATE_EVIDENCE_FRESH_CONTEXT:
         return SourceRole.SUBSTRATE_EVIDENCE
@@ -277,17 +276,9 @@ def _render_dispatcher_transcript(spec, layer1_result, *, user_text: str, surfac
         render_provenance,
     )
 
-    role = _source_role_for_dispatcher_block(spec)
-    summaries = [
-        SourceSummary(
-            source=block.source,
-            role=role,
-            text=block.text,
-            content_digest="sha256:" + hashlib.sha256(block.text.encode()).hexdigest(),
-        )
-        for block in layer1_result.recall_blocks
-    ]
+    summaries = _recall_source_summaries(spec, tuple(layer1_result.recall_blocks))
     summarized_sources = {summary.source for summary in summaries}
+    role = _source_role_for_dispatcher_block(spec)
     for branch in getattr(layer1_result, "branch_results", ()) or ():
         if branch.source in summarized_sources or branch.source not in spec.substrate_sources:
             continue
@@ -328,6 +319,12 @@ def _render_dispatcher_transcript(spec, layer1_result, *, user_text: str, surfac
         source_summaries=summaries,
     )
     return rendered.prompt_block
+
+
+def _recall_source_summaries(spec, recall_blocks):
+    from core.dispatcher.merge import source_summaries_for_render
+
+    return source_summaries_for_render(spec, tuple(recall_blocks), ())
 
 
 def _run_dispatcher_pipeline(

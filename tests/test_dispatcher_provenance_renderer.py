@@ -94,6 +94,7 @@ class DispatcherProvenanceRendererTests(unittest.TestCase):
                 "refusal_reason",
                 "rendered_block_roles",
                 "schema_version",
+                "source_role_entries",
                 "source_role_map",
                 "spec_digest",
                 "surface",
