@@ -33,5 +33,14 @@ class VoiceModeBWiring(unittest.TestCase):
         self.assertIn("build_honest_empty_reply", self.src)
 
 
+class CliModeBWiring(unittest.TestCase):
+    def setUp(self):
+        self.src = Path("cli/maez_chat.py").read_text(encoding="utf-8")
+
+    def test_detects_empty_and_routes(self):
+        self.assertIn("is_empty_search_result", self.src)
+        self.assertIn("build_honest_empty_reply", self.src)
+
+
 if __name__ == "__main__":
     unittest.main()

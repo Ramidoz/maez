@@ -860,9 +860,25 @@ class ChatSession:
                 console.print(Text.from_markup(
                     f"[dim]— web search: {user_text[:80]} —[/dim]"
                 ))
+                _web_source = "news_rss" if _web_is_news(user_text) else "web"
                 _sr = (_web_rss(user_text, max_results=5)
-                       if _web_is_news(user_text)
+                       if _web_source == "news_rss"
                        else _web_search(user_text, max_results=3))
+                from core.routing.focused_cognition import (
+                    build_honest_empty_reply as _build_honest_empty_reply,
+                    is_empty_search_result as _is_empty_search_result,
+                )
+
+                if _is_empty_search_result(_sr):
+                    _hr = _build_honest_empty_reply(
+                        query=user_text,
+                        source=_web_source,
+                        surface="cli",
+                    )
+                    console.print(_role_header("assistant", "honest_empty"))
+                    console.print(Markdown(_hr.reply))
+                    self.turns.append(Turn("assistant", _hr.reply, meta="honest_empty"))
+                    return
                 if _sr.get("success"):
                     system_prompt += (
                         "\n\n" + _web_format(_sr)
