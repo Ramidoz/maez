@@ -84,6 +84,58 @@ class AssembleWorkingSetTests(unittest.TestCase):
         self.assertIsNone(absent)
 
 
+class DialogueContinuityStateTests(unittest.TestCase):
+    def test_direct_continuity_state(self):
+        from core.routing.focused_cognition import (
+            ContinuityKind,
+            dialogue_continuity_state,
+        )
+
+        examples = [
+            "What were we talking about earlier?",
+            "What did we just discuss?",
+            "What was the last thing I said?",
+            "What did you say before this?",
+        ]
+        for text in examples:
+            with self.subTest(text=text):
+                state = dialogue_continuity_state(text)
+                self.assertEqual(state.kind, ContinuityKind.DIRECT)
+                self.assertTrue(state.needs_dialogue)
+                self.assertFalse(state.fail_safe_legacy)
+
+    def test_anaphoric_continuity_state(self):
+        from core.routing.focused_cognition import (
+            ContinuityKind,
+            dialogue_continuity_state,
+        )
+
+        examples = [
+            "Which one matters most?",
+            "Try that.",
+            "Why does that matter?",
+            "What about those?",
+        ]
+        for text in examples:
+            with self.subTest(text=text):
+                state = dialogue_continuity_state(text)
+                self.assertEqual(state.kind, ContinuityKind.ANAPHORIC)
+                self.assertTrue(state.needs_dialogue)
+                self.assertFalse(state.fail_safe_legacy)
+
+    def test_conservative_uncertain_continuity_state(self):
+        from core.routing.focused_cognition import (
+            ContinuityKind,
+            dialogue_continuity_state,
+        )
+
+        state = dialogue_continuity_state("Anything since earlier?")
+        self.assertEqual(state.kind, ContinuityKind.NONE)
+        self.assertFalse(state.needs_dialogue)
+        self.assertTrue(state.fail_safe_legacy)
+        self.assertIn("earlier", state.matched_reason or "")
+
+
 class FocusedSynthesizeTests(unittest.TestCase):
     def _ws(self):
         return assemble_working_set(

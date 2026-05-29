@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from contextlib import closing
 from dataclasses import dataclass
+from enum import Enum
 import hashlib
 import json
 from pathlib import Path
@@ -90,8 +91,97 @@ class GroundednessVerdict:
     unmatched: list[str]
 
 
+class ContinuityKind(str, Enum):
+    DIRECT = "direct"
+    ANAPHORIC = "anaphoric"
+    NONE = "none"
+
+
+@dataclass(frozen=True)
+class DialogueContinuityState:
+    kind: ContinuityKind
+    needs_dialogue: bool
+    fail_safe_legacy: bool
+    matched_reason: str | None = None
+
+
+_DIRECT_CONTINUITY_PATTERNS: tuple[str, ...] = (
+    "what were we talking about",
+    "what did we just discuss",
+    "what were we discussing",
+    "what was the last thing",
+    "what did i say",
+    "what did you say",
+    "what happened earlier",
+    "what happened before",
+    "what were we doing earlier",
+    "what were we doing before",
+    "before this",
+)
+_ANAPHORIC_PHRASES: tuple[str, ...] = (
+    "which one",
+    "try that",
+    "do it",
+    "what about that",
+    "why does that matter",
+)
+_ANAPHORIC_WORDS: tuple[str, ...] = ("that", "this", "those", "it")
+_UNCERTAIN_CONTINUITY_PATTERNS: tuple[str, ...] = (
+    "earlier",
+    "before",
+    "last",
+    "recent",
+    "we were",
+    "you said",
+    "i said",
+    "that thing",
+)
+
+
 def _content_hash(text: str) -> str:
     return "ch_" + hashlib.sha256(text.strip().encode("utf-8")).hexdigest()[:16]
+
+
+def dialogue_continuity_state(owner_question: str) -> DialogueContinuityState:
+    text = (owner_question or "").strip().lower()
+    for pattern in _DIRECT_CONTINUITY_PATTERNS:
+        if pattern in text:
+            return DialogueContinuityState(
+                kind=ContinuityKind.DIRECT,
+                needs_dialogue=True,
+                fail_safe_legacy=False,
+                matched_reason=pattern,
+            )
+    for pattern in _ANAPHORIC_PHRASES:
+        if pattern in text:
+            return DialogueContinuityState(
+                kind=ContinuityKind.ANAPHORIC,
+                needs_dialogue=True,
+                fail_safe_legacy=False,
+                matched_reason=pattern,
+            )
+    for pattern in _ANAPHORIC_WORDS:
+        if re.search(rf"\b{re.escape(pattern)}\b", text):
+            return DialogueContinuityState(
+                kind=ContinuityKind.ANAPHORIC,
+                needs_dialogue=True,
+                fail_safe_legacy=False,
+                matched_reason=pattern,
+            )
+    for pattern in _UNCERTAIN_CONTINUITY_PATTERNS:
+        if pattern in text:
+            return DialogueContinuityState(
+                kind=ContinuityKind.NONE,
+                needs_dialogue=False,
+                fail_safe_legacy=True,
+                matched_reason=pattern,
+            )
+    return DialogueContinuityState(
+        kind=ContinuityKind.NONE,
+        needs_dialogue=False,
+        fail_safe_legacy=False,
+        matched_reason=None,
+    )
 
 
 def _split_blocks(transcript: str) -> list[tuple[str, str]]:
