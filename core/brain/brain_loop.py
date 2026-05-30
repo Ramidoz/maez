@@ -152,6 +152,11 @@ def _dispatcher_enabled() -> bool:
     return value.strip().lower() in {"1", "true", "yes"}
 
 
+def _living_recall_enabled() -> bool:
+    value = os.environ.get("MAEZ_LIVING_RECALL_ENABLED", "0")
+    return value.strip().lower() in {"1", "true", "yes"}
+
+
 _DISPATCHER_ARCHETYPE_INDEX = None
 _DISPATCHER_REPAIR_FSM = None
 _DISPATCHER_MEMORY_MANAGER = None
@@ -191,7 +196,13 @@ def _dispatcher_inventory_summary():
     return InventoryRegistry().summarize([*SubstrateSource, *ExternalSource]).to_spec_fields()
 
 
-def _dispatcher_recall_adapters(user_text: str):
+def _dispatcher_recall_adapters(
+    user_text: str,
+    *,
+    spec=None,
+    surface: str = "",
+    chat_history=None,
+):
     from core.dispatcher.layer1 import MAX_RECALL_CHARS_PER_SOURCE, RecallBlock
     from core.dispatcher.spec import SubstrateSource
 
@@ -234,7 +245,7 @@ def _dispatcher_recall_adapters(user_text: str):
             )
         ]
 
-    def _memory_manager_adapter(source: SubstrateSource):
+    def _legacy_memory_manager_adapter(source: SubstrateSource):
         memory = _dispatcher_memory_manager()
         recalled = memory.recall_for_telegram(user_text)
         text = memory.format_for_prompt(recalled, max_chars=1200)
@@ -251,10 +262,205 @@ def _dispatcher_recall_adapters(user_text: str):
             )
         ]
 
+    def _latest_dialogue_anchor_text() -> str:
+        if not chat_history:
+            return ""
+        for exchange in reversed(list(chat_history)):
+            if isinstance(exchange, dict):
+                content = str(exchange.get("content") or "").strip()
+            else:
+                content = str(exchange or "").strip()
+            if content:
+                return content
+        return ""
+
+    def _continuity_needs_dialogue_anchor() -> bool:
+        try:
+            from core.routing.focused_cognition import (
+                ContinuityKind,
+                dialogue_continuity_state,
+            )
+
+            state = dialogue_continuity_state(user_text)
+            return state.kind in {ContinuityKind.DIRECT, ContinuityKind.ANAPHORIC}
+        except Exception:
+            return False
+
+    def _living_memory_manager_adapter(source: SubstrateSource):
+        if not _living_recall_enabled() or not (surface or "").startswith("telegram"):
+            return _legacy_memory_manager_adapter(source)
+
+        from core.dispatcher.spec import ProvenanceFraming, SourceRole
+
+        def _allowed_substrate_roles():
+            if spec is None:
+                return {SourceRole.SUBSTRATE_EVIDENCE, SourceRole.SUBSTRATE_CONTEXT}
+            framing = spec.provenance_framing
+            if framing == ProvenanceFraming.SUBSTRATE_ONLY_NO_FRESH_VALIDATION:
+                return {SourceRole.SUBSTRATE_EVIDENCE, SourceRole.SUBSTRATE_CONTEXT}
+            if framing == ProvenanceFraming.SUBSTRATE_EVIDENCE_FRESH_CONTEXT:
+                return {SourceRole.SUBSTRATE_EVIDENCE}
+            if framing in {
+                ProvenanceFraming.HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES,
+                ProvenanceFraming.FRESH_ATTEMPTED_UNAVAILABLE_SUBSTRATE_CONTEXT,
+            }:
+                return {SourceRole.SUBSTRATE_CONTEXT}
+            return set()
+
+        allowed_roles = _allowed_substrate_roles()
+        if not allowed_roles:
+            return []
+        memory = _dispatcher_memory_manager()
+        evidence, context = memory.recall_for_telegram_living(
+            user_text,
+            record_recalls=False,
+        )
+
+        def _rendered_partition(rendered_text: str, partition: dict) -> dict:
+            rendered_ids = set(_re.findall(r'id="([^"]+)"', rendered_text or ""))
+            if not rendered_ids:
+                return partition
+
+            filtered = {}
+            for tier, rows in (partition or {}).items():
+                filtered[tier] = [
+                    row for row in (rows or [])
+                    if str(row.get("id", ""))[:16] in rendered_ids
+                ]
+            return filtered
+
+        def _record_rendered(*rendered_pairs):
+            recorder = getattr(memory, "_record_living_recall", None)
+            if callable(recorder):
+                recorder(
+                    user_text,
+                    *[
+                        _rendered_partition(rendered_text, partition)
+                        for rendered_text, partition in rendered_pairs
+                        if rendered_text
+                    ],
+                )
+
+        def _memory_prompt_without_items(text: str) -> bool:
+            return (
+                (text or "").lstrip().startswith("=== PAST OBSERVATIONS")
+                and not _re.search(r'<RECALLED\b[^>]*\bid="', text or "")
+            )
+
+        deep_context_priority = bool(context.get("core")) and _re.search(
+            r"\b(?:january|february|march|april|june|july|august|"
+            r"september|october|november|december|20\d{2}|"
+            r"may\s+\d{1,2}|may\s+20\d{2}|"
+            r"back around|back in|months ago|years ago|last month)\b",
+            user_text.lower(),
+        )
+        if deep_context_priority:
+            context_budget = int(MAX_RECALL_CHARS_PER_SOURCE * 0.75)
+            evidence_budget = MAX_RECALL_CHARS_PER_SOURCE - context_budget
+        else:
+            evidence_budget = int(MAX_RECALL_CHARS_PER_SOURCE * 0.75)
+            context_budget = MAX_RECALL_CHARS_PER_SOURCE - evidence_budget
+        blocks = []
+        memory_ev_text = _bounded_text(
+            memory.format_for_prompt(evidence, max_chars=evidence_budget),
+            limit=evidence_budget,
+        )
+        if _memory_prompt_without_items(memory_ev_text):
+            memory_ev_text = ""
+        context_for_prompt = context
+        ctx_text = _bounded_text(
+            memory.format_living_context(context_for_prompt, max_chars=context_budget),
+            limit=context_budget,
+        )
+        if _memory_prompt_without_items(ctx_text):
+            ctx_text = ""
+        ev_text = memory_ev_text
+        anchor_active = False
+        if _continuity_needs_dialogue_anchor():
+            anchor = _latest_dialogue_anchor_text()
+            if anchor:
+                anchor_active = True
+                ev_text = _bounded_text(
+                    f"Recent dialogue anchor:\n{anchor}",
+                    limit=evidence_budget,
+                )
+                ctx_text = _bounded_text(
+                    "\n".join(
+                        part for part in (memory_ev_text, ctx_text) if part
+                    ),
+                    limit=context_budget,
+                )
+        if allowed_roles == {SourceRole.SUBSTRATE_CONTEXT}:
+            combined = "\n".join(part for part in (ev_text, ctx_text) if part)
+            if not combined:
+                return []
+            text = _bounded_text(combined)
+            if anchor_active:
+                _record_rendered((ctx_text, evidence), (ctx_text, context_for_prompt))
+            else:
+                _record_rendered((ev_text, evidence), (ctx_text, context_for_prompt))
+            return [
+                RecallBlock(
+                    source=source,
+                    text=text,
+                    timestamp=None,
+                    freshness="living_recall",
+                    rationale="living_context",
+                    prompt_cost=len(text),
+                    role_hint=SourceRole.SUBSTRATE_CONTEXT,
+                )
+            ]
+        if allowed_roles == {SourceRole.SUBSTRATE_EVIDENCE}:
+            if not ev_text:
+                return []
+            text = _bounded_text(ev_text)
+            if not anchor_active:
+                _record_rendered((memory_ev_text, evidence))
+            return [
+                RecallBlock(
+                    source=source,
+                    text=text,
+                    timestamp=None,
+                    freshness="living_recall",
+                    rationale="living_evidence",
+                    prompt_cost=len(text),
+                    role_hint=SourceRole.SUBSTRATE_EVIDENCE,
+                )
+            ]
+        if ev_text:
+            blocks.append(
+                RecallBlock(
+                    source=source,
+                    text=ev_text,
+                    timestamp=None,
+                    freshness="living_recall",
+                    rationale="living_evidence",
+                    prompt_cost=len(ev_text),
+                    role_hint=SourceRole.SUBSTRATE_EVIDENCE,
+                )
+            )
+        if ctx_text:
+            blocks.append(
+                RecallBlock(
+                    source=source,
+                    text=ctx_text,
+                    timestamp=None,
+                    freshness="living_recall",
+                    rationale="living_context",
+                    prompt_cost=len(ctx_text),
+                    role_hint=SourceRole.SUBSTRATE_CONTEXT,
+                )
+            )
+        if anchor_active:
+            _record_rendered((ctx_text, evidence), (ctx_text, context_for_prompt))
+        else:
+            _record_rendered((memory_ev_text, evidence), (ctx_text, context_for_prompt))
+        return blocks
+
     return {
         SubstrateSource.REDDIT_SOURCE: _reddit_source_adapter,
-        SubstrateSource.TELEGRAM_TEMPORAL: _memory_manager_adapter,
-        SubstrateSource.TELEGRAM_SEMANTIC: _memory_manager_adapter,
+        SubstrateSource.TELEGRAM_TEMPORAL: _living_memory_manager_adapter,
+        SubstrateSource.TELEGRAM_SEMANTIC: _living_memory_manager_adapter,
     }
 
 
@@ -333,6 +539,7 @@ def _run_dispatcher_pipeline(
     surface: str,
     bond_id: str,
     chat_id: str,
+    chat_history=None,
 ) -> _DispatcherPathResult:
     from core.dispatcher.inventory import InventorySummary
     from core.dispatcher.external_sources import ExternalBranchStatus, ExternalFanout
@@ -427,7 +634,12 @@ def _run_dispatcher_pipeline(
     fanout_started = time.monotonic()
     conversation_state = {"bond_id": bond_id, "surface": surface, "chat_id": chat_id}
     layer1 = Layer1Fanout(
-        adapters=_dispatcher_recall_adapters(user_text),
+        adapters=_dispatcher_recall_adapters(
+            user_text,
+            spec=spec,
+            surface=surface,
+            chat_history=chat_history,
+        ),
         branch_timeout_s=0.8,
         global_deadline_s=1.0,
     )
@@ -1450,6 +1662,7 @@ def run_brain_loop(
             surface=surface or "",
             bond_id=user_id or "",
             chat_id=chat_id,
+            chat_history=chat_history,
         )
         if dispatcher_result.transcript:
             if return_structured:

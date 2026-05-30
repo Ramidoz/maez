@@ -11,6 +11,7 @@ Tier 3: Core Memories   — Permanent long-term observations, always in context.
 
 import json
 import logging
+import math
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -469,6 +470,57 @@ def _age_hours_from_iso(raw_ts, now_s: float) -> float:
         return 0.0
 
 
+def _age_hours_for_evidence_label(raw_ts, now_s: float) -> float | None:
+    """Return age for evidence labeling, or None when timestamp is unknown.
+
+    Ranking can treat malformed timestamps as "now" to avoid accidental
+    deletion. Evidence labeling is stricter: unknown time is context, not
+    authority.
+    """
+    if raw_ts is None:
+        return None
+    try:
+        if isinstance(raw_ts, (int, float)):
+            ts = datetime.fromtimestamp(float(raw_ts), tz=timezone.utc)
+        else:
+            s = str(raw_ts).strip()
+            if not s:
+                return None
+            if s.endswith("Z"):
+                s = s[:-1] + "+00:00"
+            ts = datetime.fromisoformat(s)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+        delta = now_s - ts.timestamp()
+        return max(0.0, delta / 3600.0)
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+RANKING_HALF_LIFE_DAYS = 90.0
+EVIDENCE_RECENCY_DAYS = 14.0
+_LIVING_RECALL_DISTANCE_FLOOR = 1e-3
+_QUERY_ECHO_MAX_AGE_HOURS = 2.0
+
+
+def recency_factor(
+    age_hours: float,
+    half_life_days: float = RANKING_HALF_LIFE_DAYS,
+) -> float:
+    """Gentle half-life decay used by living recall.
+
+    Returns 1.0 for current/future timestamps and halves exactly at
+    ``half_life_days``. The value is a ranking modulator, never a hard
+    deletion gate.
+    """
+    try:
+        age_h = max(0.0, float(age_hours))
+        half_life_h = max(float(half_life_days) * 24.0, 1e-6)
+    except (TypeError, ValueError, OverflowError):
+        return 1.0
+    return math.pow(0.5, age_h / half_life_h)
+
+
 _REDDIT_SOURCE_BOOST_MAX_AGE_HOURS = 24.0
 _LAST_NIGHT_MIN_AGE_HOURS = 6.0
 _LAST_NIGHT_MAX_AGE_HOURS = 24.0
@@ -535,6 +587,23 @@ def _owner_text_from_telegram_exchange(content: str) -> str:
     if ":" in first_line:
         return first_line.split(":", 1)[1].strip()
     return ""
+
+
+def _normalize_for_echo(text: str) -> str:
+    text = (text or "").lower()
+    text = re.sub(r"[^\w\s]", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _row_is_query_echo(content: str, query_norm: str) -> bool:
+    """True when a stored exchange is just the current owner query echoed."""
+    if not query_norm:
+        return False
+    owner_text = _owner_text_from_telegram_exchange(content)
+    owner_norm = _normalize_for_echo(owner_text)
+    if owner_norm:
+        return owner_norm == query_norm
+    return _normalize_for_echo(content) == query_norm
 
 
 def _reddit_source_distance_factor(query: str, mem: dict, now_s: float) -> float:
@@ -1306,7 +1375,14 @@ class MemoryManager:
     # `integrity` metadata field are assumed `standard` and pass through.
     _EXCLUDED_INTEGRITY = {"stale", "fabricated", "historical_artifact", "test_failure"}
 
-    def _query_collection(self, collection, query: str, n: int) -> list[dict]:
+    def _query_collection(
+        self,
+        collection,
+        query: str,
+        n: int,
+        *,
+        record_recalls: bool = True,
+    ) -> list[dict]:
         """Query a single collection and return formatted results.
 
         Over-fetches by 2x then post-filters out entries tagged with
@@ -1378,6 +1454,9 @@ class MemoryManager:
         # Observational — feeds promotion_score() but does not yet
         # change promotion behavior. Silent on failure; the query path
         # must never stall for a bookkeeping sidecar.
+        if not record_recalls:
+            return memories
+
         try:
             from core.memory_scoring import record_recall as _record
             for mem in memories:
@@ -1520,6 +1599,45 @@ class MemoryManager:
             rows.append(row)
         return rows[:limit]
 
+    def _latest_telegram_exchange_rows(
+        self,
+        collection,
+        *,
+        limit: int = 5,
+    ) -> list[dict]:
+        """Fetch newest Telegram exchanges for continuity-shaped recall."""
+        if collection.count() == 0:
+            return []
+        try:
+            got = collection.get(
+                where={"type": "telegram_exchange"},
+                include=["documents", "metadatas"],
+            )
+        except Exception as exc:
+            logger.debug("telegram continuity supplement skipped: %s", exc)
+            return []
+
+        rows: list[dict] = []
+        now_s = _now_seconds()
+        for i, row_id in enumerate(got.get("ids") or []):
+            meta = (got.get("metadatas") or [{}])[i] or {}
+            if meta.get("integrity") in self._EXCLUDED_INTEGRITY:
+                continue
+            if _age_hours_for_evidence_label(meta.get("timestamp"), now_s) is None:
+                continue
+            docs = got.get("documents") or []
+            rows.append({
+                "id": row_id,
+                "content": docs[i] if i < len(docs) else "",
+                "metadata": meta,
+                "distance": 0.01,
+            })
+        rows.sort(
+            key=lambda r: str((r.get("metadata") or {}).get("timestamp") or ""),
+            reverse=True,
+        )
+        return rows[:limit]
+
     def _merge_recall_candidates(
         self,
         semantic_rows: list[dict],
@@ -1646,6 +1764,174 @@ class MemoryManager:
         raw = self._topic_rerank(context_query, raw, n=5)
 
         return {"core": core, "daily": daily, "raw": raw}
+
+    def _shadow_log_living(
+        self,
+        mem: dict,
+        *,
+        base_distance: float,
+        recency: float,
+        effective_distance: float,
+    ) -> None:
+        """Telemetry seam for v1 living recall.
+
+        promotion_score is deliberately shadow-only here. It is computed
+        and logged so v2 can use a post-fix watermark, but it never feeds
+        the v1 effective-distance ranking.
+        """
+        shadow = None
+        try:
+            from core.memory_scoring import (
+                get_stats as _get_stats,
+                promotion_score as _promotion_score,
+            )
+
+            shadow = _promotion_score(_get_stats(str(mem.get("id", ""))))
+        except Exception as exc:
+            logger.debug("living recall shadow promotion skipped: %s", exc)
+
+        logger.info(
+            "living_recall_candidate id=%s base_distance=%.4f "
+            "recency_factor=%.4f effective_distance=%.4f "
+            "shadow_promotion=%s",
+            str(mem.get("id", ""))[:16],
+            base_distance,
+            recency,
+            effective_distance,
+            "None" if shadow is None else f"{shadow:.4f}",
+        )
+
+    def _record_living_recall(self, query: str, *partitions: dict) -> None:
+        try:
+            from core.memory_scoring import record_recall as _record
+
+            seen: set[str] = set()
+            for partition in partitions:
+                for tier in ("daily", "raw"):
+                    for mem in partition.get(tier, []) or []:
+                        mem_id = mem.get("id")
+                        if not mem_id or mem_id in seen:
+                            continue
+                        seen.add(mem_id)
+                        dist = mem.get("distance")
+                        relevance = 1.0 - float(dist) if isinstance(dist, (int, float)) else 0.0
+                        tags_str = (mem.get("metadata") or {}).get("concept_tags") or ""
+                        tags = [tag for tag in tags_str.split(",") if tag]
+                        _record(
+                            mem_id,
+                            query=query,
+                            relevance=max(0.0, min(1.0, relevance)),
+                            concept_tags=tags,
+                        )
+        except Exception as exc:
+            logger.debug("record_living_recall failed (ignored): %s", exc)
+
+    def recall_for_telegram_living(
+        self,
+        query: str,
+        *,
+        half_life_days: float = RANKING_HALF_LIFE_DAYS,
+        evidence_recency_days: float = EVIDENCE_RECENCY_DAYS,
+        record_recalls: bool = True,
+    ) -> tuple[dict, dict]:
+        """Build Telegram recall as (evidence, context) partitions.
+
+        This is deliberately separate from :meth:`recall_for_telegram`
+        so the legacy path and reasoning-cycle recall remain untouched
+        until the flag-gated adapter opts into living recall.
+        """
+        query_norm = _normalize_for_echo(query)
+        core = self._query_collection(self.core, query, n=3, record_recalls=False)
+        daily = self._query_collection(self.daily, query, n=12, record_recalls=False)
+        raw = self._query_collection(self.raw, query, n=60, record_recalls=False)
+        raw = self._merge_recall_candidates(
+            raw,
+            self._recent_reddit_source_rows(self.raw, query),
+        )
+        raw = self._merge_recall_candidates(
+            raw,
+            self._recent_telegram_exchange_rows(self.raw, query),
+        )
+        now_s = _now_seconds()
+
+        def _keep_not_echo(mem: dict) -> bool:
+            meta = mem.get("metadata") or {}
+            if meta.get("type") != "telegram_exchange":
+                return True
+            age_h = _age_hours_from_iso(meta.get("timestamp", ""), now_s)
+            if age_h > _QUERY_ECHO_MAX_AGE_HOURS:
+                return True
+            return not _row_is_query_echo(mem.get("content", ""), query_norm)
+
+        raw = [mem for mem in raw if _keep_not_echo(mem)]
+        daily = [mem for mem in daily if _keep_not_echo(mem)]
+
+        def _effective_distance(mem: dict) -> float:
+            dist = mem.get("distance")
+            base = float(dist) if isinstance(dist, (int, float)) else 1.0
+            meta = mem.get("metadata") or {}
+            age_h = _age_hours_from_iso(meta.get("timestamp", ""), now_s)
+            rf = recency_factor(age_h, half_life_days)
+            effective = base / max(rf, _LIVING_RECALL_DISTANCE_FLOOR)
+            self._shadow_log_living(
+                mem,
+                base_distance=base,
+                recency=rf,
+                effective_distance=effective,
+            )
+            return effective
+
+        raw = sorted(raw, key=_effective_distance)[:10]
+        daily = sorted(daily, key=_effective_distance)[:3]
+
+        cutoff_h = max(0.0, float(evidence_recency_days)) * 24.0
+
+        def _is_evidence(mem: dict) -> bool:
+            meta = mem.get("metadata") or {}
+            age_h = _age_hours_for_evidence_label(meta.get("timestamp"), now_s)
+            return age_h is not None and age_h <= cutoff_h
+
+        evidence = {
+            "core": [],
+            "daily": [mem for mem in daily if _is_evidence(mem)],
+            "raw": [mem for mem in raw if _is_evidence(mem)],
+        }
+        context = {
+            "core": core,
+            "daily": [mem for mem in daily if not _is_evidence(mem)],
+            "raw": [mem for mem in raw if not _is_evidence(mem)],
+        }
+
+        try:
+            from core.routing.focused_cognition import (
+                ContinuityKind,
+                dialogue_continuity_state,
+            )
+
+            continuity = dialogue_continuity_state(query)
+        except Exception as exc:
+            logger.debug("living recall continuity classifier skipped: %s", exc)
+            continuity = None
+
+        if continuity and continuity.kind in (
+            ContinuityKind.DIRECT,
+            ContinuityKind.ANAPHORIC,
+        ):
+            thread = [
+                row
+                for row in self._latest_telegram_exchange_rows(self.raw, limit=1)
+                if _keep_not_echo(row)
+            ]
+            thread_ids = {row.get("id") for row in thread if row.get("id")}
+            evidence = {"core": [], "daily": [], "raw": thread}
+            context = {
+                "core": core,
+                "daily": daily,
+                "raw": [mem for mem in raw if mem.get("id") not in thread_ids],
+            }
+        if record_recalls:
+            self._record_living_recall(query, evidence, context)
+        return evidence, context
 
     def recall_for_telegram(self, query: str) -> dict:
         """Build context for a Telegram response with topic-aware retrieval."""
@@ -1895,6 +2181,64 @@ class MemoryManager:
 
         lines.extend(tail_lines)
         return "\n".join(lines)
+
+    def format_living_context(self, recalled: dict, max_chars: "int | None" = None) -> str:
+        """Compact renderer for role-hinted living ``[memory context]``.
+
+        ``format_for_prompt`` is intentionally verbose for the legacy
+        megaprompt. Living context blocks are tiny and already wrapped
+        by the provenance label, so render the selected rows immediately
+        under a lean past-context line.
+        """
+        core = recalled.get("core", []) or []
+        daily = recalled.get("daily", []) or []
+        raw = recalled.get("raw", []) or []
+
+        if not (core or daily or raw):
+            return ""
+
+        now = datetime.now(timezone.utc)
+        lines: list[str] = ["Past memory context, not current state."]
+
+        # Core (the query-selected deep memory) renders FIRST so it cannot be
+        # truncated by background rows; raw is hard-capped — old semantic raw is
+        # background support, not the deep memory the owner explicitly asked for.
+        _raw_context_cap = 3
+        for tier, rows in (("core", core), ("daily", daily), ("raw", raw[:_raw_context_cap])):
+            for i, mem in enumerate(rows, 1):
+                meta = mem.get("metadata") or {}
+                mem_id = str(mem.get("id", f"{tier}-{i}"))[:16]
+                dist = mem.get("distance")
+                dist_attr = f' distance="{dist:.3f}"' if isinstance(dist, (int, float)) else ""
+                prov = self._provenance_attrs(meta)
+                content = sanitize_prompt_text(mem.get("content", ""))
+                if tier == "daily":
+                    date = meta.get("date", "unknown")
+                    age = _humanize_daily_age(date, now)
+                    lines.append(
+                        f'<RECALLED tier="daily" age="{age}" date="{date}" '
+                        f'id="{mem_id}"{dist_attr}{prov}>'
+                    )
+                elif tier == "raw":
+                    cycle = meta.get("cycle", "?")
+                    raw_ts = meta.get("timestamp")
+                    ts_str = (str(raw_ts) if raw_ts else "")[:19] or "unknown"
+                    age = _humanize_age(raw_ts, now)
+                    lines.append(
+                        f'<RECALLED tier="raw" age="{age}" cycle="{cycle}" '
+                        f'timestamp="{ts_str}" id="{mem_id}"{dist_attr}{prov}>'
+                    )
+                else:
+                    lines.append(
+                        f'<RECALLED tier="core" age="permanent" id="{mem_id}"{prov}>'
+                    )
+                lines.append(content)
+                lines.append("</RECALLED>")
+
+        rendered = "\n".join(lines)
+        if max_chars is not None and len(rendered) > max_chars:
+            return rendered[:max_chars]
+        return rendered
 
     # ------------------------------------------------------------------ #
     #  Stats                                                               #

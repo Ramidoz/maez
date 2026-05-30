@@ -14,6 +14,7 @@ import asyncio
 import unittest
 from pathlib import Path
 from typing import Optional
+from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 
@@ -160,6 +161,49 @@ class HandlerRouting(unittest.TestCase):
         self.assertNotIn("synthesis_text", src)
         self.assertIn("text,", src)
         self.assertIn("transcript=jarvis_transcript", src)
+
+    def test_brain_loop_receives_telegram_surface_label(self):
+        """Dispatcher recall must see the real Telegram surface.
+
+        Living recall is intentionally telegram-scoped. Passing the
+        generic "adapter" label here makes a live Telegram turn fall
+        back to legacy recall even when MAEZ_LIVING_RECALL_ENABLED=1.
+        """
+
+        class _Cards:
+            def get_open_for_channel(self, *args, **kwargs):
+                return []
+
+        class _Pipe:
+            card_store = _Cards()
+
+        class _Telegram:
+            def _get_pipeline(self):
+                return _Pipe()
+
+        class _Result:
+            transcript = ""
+            tool_calls = []
+
+        daemon = _FakeDaemon(reply="I heard you")
+        daemon.actions = object()
+        daemon.telegram = _Telegram()
+        handler = MaezMessageHandler(daemon)
+        event = MessageEvent(
+            text="living recall probe",
+            source=SessionSource(
+                platform=Platform.TELEGRAM,
+                chat_id="c",
+                user_id="rohit",
+                user_name="Rohit",
+            ),
+        )
+
+        with patch("core.brain_loop.run_brain_loop", return_value=_Result()) as run:
+            result = asyncio.run(handler(event))
+
+        self.assertEqual(result, "I heard you")
+        self.assertEqual(run.call_args.kwargs["surface"], SURFACE_NAME)
 
 
 class BuildTelegramAdapter(unittest.TestCase):

@@ -403,7 +403,7 @@ class MaezMessageHandler:
                             get_pipeline=get_pipeline,
                             user_id="rohit",
                             chat_id=chat_id,
-                            surface="adapter",
+                            surface=SURFACE_NAME,
                             send_intermediate=_send_intermediate,
                             chat_history=chat_history,
                             turn=turn,
