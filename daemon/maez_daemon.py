@@ -3972,6 +3972,7 @@ class MaezDaemon:
                         web_context=web_context,
                         owner_question=text,
                         chat_history=chat_history,
+                        recall_items=recall_items,
                     )
                     if (
                         _focused_working_set is None
