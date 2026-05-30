@@ -1001,6 +1001,30 @@ def _focused_cognition_enabled(*, recall_stack_config=None) -> bool:
     return recall_stack_config.triad_on
 
 
+RECALL_CARRIER_NOT_CONSULTED = "not_consulted"
+RECALL_CARRIER_CONSULTED = "consulted"
+RECALL_CARRIER_CONSULT_FAILED = "consult_failed"
+
+
+def _dated_denial_reply(*, carrier_receipt: str, had_confirmed: bool) -> str:
+    """Return an honest dated-memory fallback when focused produced no reply."""
+    if carrier_receipt != RECALL_CARRIER_CONSULTED:
+        return (
+            "I can't check my dated recall from this path right now - that "
+            "capability isn't active here. I won't answer it from recent chat "
+            "or guesswork."
+        )
+    if had_confirmed:
+        return (
+            "I have a dated memory for that, but I couldn't pull it together "
+            "just now. Ask me again in a moment."
+        )
+    return (
+        "I don't have a dated memory for that window. I'm not going to answer "
+        "it from recent chat or guesswork."
+    )
+
+
 def _consolidate_system_messages(
     messages: list[dict],
     *,
@@ -3522,13 +3546,19 @@ class MaezDaemon:
         # Web search if needed. If a deterministic tool already answered
         # a volatile fact (e.g. currency conversion), do not add web
         # snippets that can override the tool result during synthesis.
+        from core.routing.recall_stack_config import resolve_recall_stack
+
+        _recall_stack_config = resolve_recall_stack()
         web_context = ""
         _legacy_routing_observation_id = None
         _empty_web_search = False
         _routing_obs_tool = None
         if (
             not authoritative_tool_reply
-            and _daemon_parallel_web_search_enabled(transcript)
+            and _daemon_parallel_web_search_enabled(
+                transcript,
+                recall_stack_config=_recall_stack_config,
+            )
             and needs_web_search(text)
         ):
             logger.info("Web search triggered for: %s", text[:80])
@@ -3879,7 +3909,7 @@ class MaezDaemon:
             _abs_recall_cue and getattr(_abs_recall_cue, "is_address", False)
         )
         _focused_candidate = (
-            _focused_cognition_enabled()
+            _focused_cognition_enabled(recall_stack_config=_recall_stack_config)
             and source != "voice"
             and not _current_turn_echo_reply
             and (
@@ -3965,6 +3995,7 @@ class MaezDaemon:
             reply = None
             _focused_used = False
             _focused_working_set = None
+            _recall_carrier_receipt = RECALL_CARRIER_NOT_CONSULTED
             if _reply_decision.mode is ReplyMode.FOCUSED:
                 try:
                     from core.routing.focused_cognition import (
@@ -3981,6 +4012,8 @@ class MaezDaemon:
                         chat_history=chat_history,
                         recall_items=recall_items,
                     )
+                    if _date_addressed_turn and _focused_working_set is not None:
+                        _recall_carrier_receipt = RECALL_CARRIER_CONSULTED
                     if (
                         _focused_working_set is None
                         and _dialogue_needs_or_uncertain
@@ -4024,6 +4057,11 @@ class MaezDaemon:
                             reply = _focused_reply
                             _focused_used = True
                 except Exception as _focused_exc:
+                    if (
+                        _date_addressed_turn
+                        and _recall_carrier_receipt != RECALL_CARRIER_CONSULTED
+                    ):
+                        _recall_carrier_receipt = RECALL_CARRIER_CONSULT_FAILED
                     if _date_addressed_turn:
                         logger.warning(
                             "focused cognition failed on dated recall, using "
@@ -4067,16 +4105,10 @@ class MaezDaemon:
                         for item in _focused_working_set.items
                     )
                 )
-                if _had_confirmed:
-                    reply = (
-                        "I have a dated memory for that, but I couldn't pull it "
-                        "together just now. Ask me again in a moment."
-                    )
-                else:
-                    reply = (
-                        "I don't have a dated memory for that window. I'm not going "
-                        "to answer it from recent chat or guesswork."
-                    )
+                reply = _dated_denial_reply(
+                    carrier_receipt=_recall_carrier_receipt,
+                    had_confirmed=_had_confirmed,
+                )
                 _focused_used = True
 
             if not _focused_used:

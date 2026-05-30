@@ -246,7 +246,7 @@ class DaemonHandleMessageContract(unittest.TestCase):
         """
         from daemon.maez_daemon import _daemon_parallel_web_search_enabled
 
-        with mock.patch.dict("os.environ", {"MAEZ_DISPATCHER_ENABLED": "1"}):
+        with mock.patch.dict("os.environ", {"MAEZ_RECALL_TRIAD_ENABLED": "1"}):
             self.assertFalse(
                 _daemon_parallel_web_search_enabled(
                     "[fresh evidence] LIVE_REDDIT: recent posts"
@@ -254,7 +254,7 @@ class DaemonHandleMessageContract(unittest.TestCase):
             )
             self.assertTrue(_daemon_parallel_web_search_enabled(""))
 
-        with mock.patch.dict("os.environ", {"MAEZ_DISPATCHER_ENABLED": "0"}):
+        with mock.patch.dict("os.environ", {"MAEZ_RECALL_TRIAD_ENABLED": "0"}):
             self.assertTrue(
                 _daemon_parallel_web_search_enabled(
                     "[fresh evidence] LIVE_REDDIT: recent posts"
@@ -718,7 +718,7 @@ class DaemonHandleMessageContract(unittest.TestCase):
 
         with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
             os.environ,
-            {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+            {"MAEZ_RECALL_TRIAD_ENABLED": "1"},
         ), mock.patch(
             "core.routing.focused_cognition.focused_synthesize",
         ) as fsyn, mock.patch(
@@ -750,7 +750,7 @@ class DaemonHandleMessageContract(unittest.TestCase):
 
         with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
             os.environ,
-            {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+            {"MAEZ_RECALL_TRIAD_ENABLED": "1"},
         ), mock.patch(
             "core.routing.focused_cognition.focused_synthesize",
         ) as fsyn:
@@ -791,7 +791,7 @@ class DaemonHandleMessageContract(unittest.TestCase):
 
         with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
             os.environ,
-            {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+            {"MAEZ_RECALL_TRIAD_ENABLED": "1"},
         ), mock.patch(
             "core.routing.focused_cognition.focused_synthesize",
             side_effect=RuntimeError("boom"),
@@ -824,7 +824,7 @@ class DaemonHandleMessageContract(unittest.TestCase):
 
         with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
             os.environ,
-            {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+            {"MAEZ_RECALL_TRIAD_ENABLED": "1"},
         ), mock.patch(
             "core.routing.focused_cognition.focused_synthesize",
         ) as fsyn, mock.patch(
@@ -861,7 +861,7 @@ class DaemonHandleMessageContract(unittest.TestCase):
 
         with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
             os.environ,
-            {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+            {"MAEZ_RECALL_TRIAD_ENABLED": "1"},
         ), mock.patch(
             "core.routing.focused_cognition.focused_synthesize",
             side_effect=RuntimeError("boom"),
@@ -887,6 +887,43 @@ class DaemonHandleMessageContract(unittest.TestCase):
         fsyn.assert_called_once()
         megachat.assert_not_called()
 
+    def test_dated_assembly_error_is_path_unavailable_not_absence(self):
+        from daemon import maez_daemon
+
+        captured: dict[str, list[dict]] = {}
+        daemon = self._build_daemon_for_handle_message()
+
+        with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+            os.environ,
+            {"MAEZ_RECALL_TRIAD_ENABLED": "1"},
+        ), mock.patch(
+            "core.routing.focused_cognition.assemble_working_set",
+            side_effect=RuntimeError("assembly boom"),
+        ) as assemble, mock.patch(
+            "core.routing.focused_cognition.focused_synthesize",
+        ) as fsyn, mock.patch(
+            "core.routing.focused_cognition.record_focused_cognition_run",
+            return_value="focused-row-1",
+        ), mock.patch(
+            "core.llm_client.chat",
+        ) as megachat:
+            megachat.return_value = types.SimpleNamespace(
+                message=types.SimpleNamespace(content="legacy should not answer")
+            )
+            reply = maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                "What did I record on January 3?",
+                source="telegram_surface",
+                transcript="",
+                chat_history=[],
+            )
+
+        self.assertIn("can't check my dated recall from this path", reply.lower())
+        self.assertNotIn("I don't have a dated memory", reply)
+        assemble.assert_called_once()
+        fsyn.assert_not_called()
+        megachat.assert_not_called()
+
     def test_focused_crash_with_confirmed_item_is_transport_not_absence(self):
         from daemon import maez_daemon
 
@@ -901,7 +938,7 @@ class DaemonHandleMessageContract(unittest.TestCase):
 
         with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
             os.environ,
-            {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+            {"MAEZ_RECALL_TRIAD_ENABLED": "1"},
         ), mock.patch(
             "core.routing.focused_cognition.focused_synthesize",
             side_effect=RuntimeError("boom"),
@@ -963,7 +1000,7 @@ class DaemonHandleMessageContract(unittest.TestCase):
 
         with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
             os.environ,
-            {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+            {"MAEZ_RECALL_TRIAD_ENABLED": "1"},
         ), mock.patch(
             "core.routing.focused_cognition.focused_synthesize",
         ) as fsyn, mock.patch(
@@ -1014,7 +1051,7 @@ class DaemonHandleMessageContract(unittest.TestCase):
 
         with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
             os.environ,
-            {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+            {"MAEZ_RECALL_TRIAD_ENABLED": "1"},
         ), mock.patch(
             "core.routing.focused_cognition.focused_synthesize",
         ) as fsyn, mock.patch(
@@ -1059,7 +1096,7 @@ class DaemonHandleMessageContract(unittest.TestCase):
 
         with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
             os.environ,
-            {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+            {"MAEZ_RECALL_TRIAD_ENABLED": "1"},
         ), mock.patch(
             "core.routing.focused_cognition.focused_synthesize",
         ) as fsyn, mock.patch(
@@ -1237,7 +1274,7 @@ class DaemonHandleMessageContract(unittest.TestCase):
             self._handle_message_mock_stack(maez_daemon, captured),
             mock.patch.dict(
                 os.environ,
-                {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+                {"MAEZ_RECALL_TRIAD_ENABLED": "1"},
                 clear=False,
             ),
             mock.patch(
@@ -1273,7 +1310,7 @@ class DaemonHandleMessageContract(unittest.TestCase):
             ),
             mock.patch.dict(
                 os.environ,
-                {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+                {"MAEZ_RECALL_TRIAD_ENABLED": "1"},
                 clear=False,
             ),
             mock.patch(
@@ -1312,7 +1349,7 @@ class DaemonHandleMessageContract(unittest.TestCase):
         with self.assertLogs(maez_daemon.logger, level="INFO") as log_capture:
             with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
                 os.environ,
-                {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+                {"MAEZ_RECALL_TRIAD_ENABLED": "1"},
             ), mock.patch(
                 "core.routing.focused_cognition.focused_synthesize",
             ) as fsyn, mock.patch(
@@ -1353,7 +1390,7 @@ class DaemonHandleMessageContract(unittest.TestCase):
             web_context=web_context,
         ), mock.patch.dict(
             os.environ,
-            {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+            {"MAEZ_RECALL_TRIAD_ENABLED": "1"},
         ), mock.patch(
             "core.routing.observation.record_legacy_web_search_observation",
             return_value="legacy-routing-row",
@@ -1383,7 +1420,7 @@ class DaemonHandleMessageContract(unittest.TestCase):
         daemon = self._build_daemon_for_handle_message()
         with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
             os.environ,
-            {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+            {"MAEZ_RECALL_TRIAD_ENABLED": "1"},
         ), mock.patch(
             "core.routing.focused_cognition.focused_synthesize",
         ) as fsyn, mock.patch(
@@ -1411,7 +1448,7 @@ class DaemonHandleMessageContract(unittest.TestCase):
 
         with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
             os.environ,
-            {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+            {"MAEZ_RECALL_TRIAD_ENABLED": "1"},
         ), mock.patch(
             "core.routing.focused_cognition.focused_synthesize",
         ) as fsyn, mock.patch(
@@ -1440,7 +1477,7 @@ class DaemonHandleMessageContract(unittest.TestCase):
 
         with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
             os.environ,
-            {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+            {"MAEZ_RECALL_TRIAD_ENABLED": "1"},
         ), mock.patch(
             "core.routing.focused_cognition.focused_synthesize",
         ) as fsyn, mock.patch(
@@ -1470,7 +1507,7 @@ class DaemonHandleMessageContract(unittest.TestCase):
         with self.assertLogs(maez_daemon.logger, level="INFO") as log_capture:
             with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
                 os.environ,
-                {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+                {"MAEZ_RECALL_TRIAD_ENABLED": "1"},
             ), mock.patch(
                 "core.routing.focused_cognition.focused_synthesize",
             ) as fsyn, mock.patch(
@@ -1512,7 +1549,7 @@ class DaemonHandleMessageContract(unittest.TestCase):
 
         with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
             os.environ,
-            {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+            {"MAEZ_RECALL_TRIAD_ENABLED": "1"},
         ), mock.patch(
             "core.routing.focused_cognition.focused_synthesize",
         ) as fsyn, mock.patch(
@@ -1555,7 +1592,7 @@ class DaemonHandleMessageContract(unittest.TestCase):
 
         with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
             os.environ,
-            {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+            {"MAEZ_RECALL_TRIAD_ENABLED": "1"},
         ), mock.patch(
             "core.routing.focused_cognition.focused_synthesize",
         ) as fsyn, mock.patch(
