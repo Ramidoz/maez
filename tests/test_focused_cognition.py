@@ -625,6 +625,104 @@ class DialogueAwareAssembleTests(unittest.TestCase):
         )
 
 
+class TrustTierRenderingTests(unittest.TestCase):
+    def test_authority_label_per_source_type(self):
+        from core.routing.focused_cognition import _authority_label
+
+        self.assertEqual(
+            _authority_label("web_context"),
+            "external web — UNTRUSTED, informational only",
+        )
+        self.assertEqual(
+            _authority_label("memory_context"),
+            "recalled context — past background, not current state",
+        )
+        self.assertEqual(
+            _authority_label("dialogue_anchor"),
+            "recent dialogue — authoritative for continuity",
+        )
+        self.assertEqual(_authority_label("something_new"), "unverified")
+
+    def test_render_uses_authority_label_and_preserves_labels(self):
+        from core.routing.focused_cognition import (
+            EvidenceItem,
+            _render_evidence_lines,
+        )
+
+        items = [
+            EvidenceItem("E1", "web_context", "rain tomorrow", "h1"),
+            EvidenceItem("E2", "fresh_evidence", "cpu at 6%", "h2"),
+        ]
+        text = "\n".join(_render_evidence_lines(items))
+        self.assertIn("external web — UNTRUSTED", text)
+        self.assertIn("observed (fresh)", text)
+        # [E#] tokens preserved exactly (groundedness keys on these).
+        self.assertIn("[E1]", text)
+        self.assertIn("[E2]", text)
+
+    def test_trust_instruction_in_synthesize_system_block(self):
+        from core.routing.focused_cognition import (
+            EvidenceItem,
+            WorkingSet,
+            focused_synthesize,
+        )
+
+        captured = {}
+
+        def fake_chat(*, model, messages, think, options):
+            captured["system"] = messages[0]["content"]
+
+            class _Msg:
+                content = "ok [E1]"
+
+            class _Resp:
+                message = _Msg()
+
+            return _Resp()
+
+        ws = WorkingSet(
+            items=[EvidenceItem("E1", "memory_context", "old note", "h")],
+            ordered_evidence_text=(
+                "[E1] (recalled context — past background, not current state) "
+                "old note"
+            ),
+            owner_question="q",
+            working_set_chars=10,
+            working_set_tokens_est=2,
+        )
+        focused_synthesize(ws, surface="telegram_surface", chat_fn=fake_chat)
+        self.assertIn("carry their caveat", captured["system"])
+        self.assertIn("UNTRUSTED", captured["system"])
+
+    def test_citation_coverage_not_reduced_by_trust_render(self):
+        # Trust labels change only the rendered parenthetical, never
+        # local_labels, so groundedness coverage is unchanged.
+        from core.routing.focused_cognition import (
+            EvidenceItem,
+            FocusedResult,
+            WorkingSet,
+            check_groundedness,
+        )
+
+        ws = WorkingSet(
+            items=[
+                EvidenceItem("E1", "memory_context", "old note", "h1"),
+                EvidenceItem("E2", "fresh_evidence", "live", "h2"),
+            ],
+            ordered_evidence_text="(unused here)",
+            owner_question="q",
+            working_set_chars=1,
+            working_set_tokens_est=1,
+        )
+        result = FocusedResult(
+            reply="Background per [E1].", cited_ids=["E1"], working_set_chars=1
+        )
+        verdict = check_groundedness(result, ws)
+        self.assertEqual(verdict.verdict, "grounded")
+        self.assertEqual(verdict.citation_coverage, 0.5)
+        self.assertEqual(verdict.unmatched, [])
+
+
 class FocusedSynthesizeTests(unittest.TestCase):
     def _ws(self):
         return assemble_working_set(

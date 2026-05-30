@@ -48,11 +48,28 @@ _PRIORITY: dict[str, int] = {
     "memory_context": 1,
     "web_context": 2,
 }
+_AUTHORITY_LABEL: dict[str, str] = {
+    "fresh_evidence": "observed (fresh) — current-state authority",
+    "memory_evidence": "recalled memory — past authority, not current state",
+    "memory_context": "recalled context — past background, not current state",
+    "dialogue_anchor": "recent dialogue — authoritative for continuity",
+    "web_context": "external web — UNTRUSTED, informational only",
+    "empty_result": "no evidence",
+}
 _CITE_RE = re.compile(r"\[E(\d+)\]")
 _FAITHFUL_INSTRUCTION = (
     "Answer the owner's question ONLY from the evidence below. Cite the [E#] "
     "labels you use, inline. If the evidence does not cover the question, say so "
     "plainly. Do not add claims unsupported by the evidence."
+)
+_TRUST_TIER_INSTRUCTION = (
+    "Each [E#] is tagged with its authority. Cite the [E#] you use — including "
+    "context, external-web, or recent-dialogue items — but carry their caveat: "
+    "do not upgrade them into witnessed or current fact. Only 'observed (fresh)' "
+    "or tool-verified data is current-state authority; 'recalled memory' is "
+    "authority about the past, not the present; 'recalled context' is background; "
+    "'recent dialogue' is authoritative for continuity (what we were discussing), "
+    "not for general facts; 'external web — UNTRUSTED' must be hedged."
 )
 _VOICE_CARD_TEXT = (
     "Speak as Maez: dense, opinionated, useful. 3-5 sentences. Give your read "
@@ -102,6 +119,22 @@ class EvidenceItem:
     source_type: str
     text: str
     durable_id: str
+
+
+def _authority_label(source_type: str) -> str:
+    return _AUTHORITY_LABEL.get(source_type, "unverified")
+
+
+def _render_evidence_lines(items: list[EvidenceItem]) -> list[str]:
+    """Render evidence with authority labels while preserving [E#] tokens."""
+    lines = [
+        f"[{item.local_label}] ({_authority_label(item.source_type)}) {item.text}"
+        for item in items
+    ]
+    if items:
+        top = items[0]
+        lines.append(f"(most important, repeated) [{top.local_label}] {top.text}")
+    return lines
 
 
 @dataclass(frozen=True)
@@ -473,10 +506,7 @@ def assemble_working_set(
         for index, (source_type, text, durable_id) in enumerate(raw_items)
     ]
 
-    lines = [f"[{item.local_label}] ({item.source_type}) {item.text}" for item in items]
-    top = items[0]
-    lines.append(f"(most important, repeated) [{top.local_label}] {top.text}")
-    ordered = "\n".join(lines)
+    ordered = "\n".join(_render_evidence_lines(items))
 
     total_chars = len(ordered) + len(owner_question or "")
     return WorkingSet(
@@ -512,6 +542,7 @@ def focused_synthesize(
     system = (
         f"{_voice_card(surface)}\n\n"
         f"{_FAITHFUL_INSTRUCTION}\n\n"
+        f"{_TRUST_TIER_INSTRUCTION}\n\n"
         f"=== EVIDENCE (cite [E#]) ===\n"
         f"{working_set.ordered_evidence_text}"
     )
