@@ -100,7 +100,7 @@ existing test suites that mutate `os.environ`, and break the kill-switch). Tests
 enabled for the process/turn. It does **not** prove the carrier was consulted on this specific path. A
 turn can have `triad_on=True` while a separate gate still prevents focused recall from running (for
 example, the current daemon excludes `source == "voice"` from focused cognition). The denial wording
-therefore must use a **turn-local execution fact** (`_recall_carrier_consulted`), not the config property.
+therefore must use a **turn-local execution receipt** (`_recall_carrier_receipt`), not the config property.
 This is the same locked-shelf rule one layer deeper.
 
 **Codex engineering-pass amendment (2026-05-30).** The six-agent Codex pass tightened this further:
@@ -108,7 +108,10 @@ This is the same locked-shelf rule one layer deeper.
 before `assemble_working_set(...)` returns. Absence wording is therefore legal only when focused
 assembly returns a non-`None` working set/status for the dated turn. Implement the daemon with a
 turn-local receipt (`not_consulted` / `consulted` / `consult_failed`) and log it at the dated-denial
-branch. Plain English: walking toward the shelf is not opening the shelf.
+branch. Post-switchboard refinement: `consult_failed` must have its own spoken
+reply ("I went to check ... and the lookup errored out"), not the not-consulted
+wording. Plain English: walking toward the shelf is not opening the shelf, and
+stumbling while opening it is not the same as the shelf being unavailable.
 
 ### 2. Single source of truth — migrate all five raw read-sites
 | Site | Today | After |
@@ -123,13 +126,17 @@ After migration **no production module reads the three raw flag names** except t
 test enforces this — see Testing.)
 
 ### 3. Carrier-consulted denial gate — `daemon/maez_daemon.py:4054`
-Thread the resolved bundle config into the turn, then compute `_recall_carrier_consulted` from the
-selected execution path; replace the two-way dated-denial branch with a three-way one:
+Thread the resolved bundle config into the turn, then compute `_recall_carrier_receipt` from the
+selected execution path; replace the two-way dated-denial branch with a four-way one:
 ```python
 if _date_addressed_turn and not _focused_used and reply is None:
-    if not _recall_carrier_consulted:          # legacy / carrier not active on this path
-        reply = ("I can't check my dated recall from this path right now — that capability "
-                 "isn't active. I won't answer it from recent chat or guesswork.")
+    if _recall_carrier_receipt == "consult_failed":
+        reply = ("I went to check my dated memory and the lookup errored out just now - "
+                 "that's on my side, not an absence. I won't fill it in from recent chat "
+                 "or guesswork; ask me again in a moment.")
+    elif _recall_carrier_receipt == "not_consulted":
+        reply = ("I can't reach my dated memory from here right now. I won't answer it "
+                 "from recent chat or guesswork.")
     elif _had_confirmed:                         # carrier found a dated item, synthesis failed
         reply = ("I have a dated memory for that, but I couldn't pull it together just now. "
                  "Ask me again in a moment.")
@@ -138,9 +145,10 @@ if _date_addressed_turn and not _focused_used and reply is None:
                  "from recent chat or guesswork.")
     _focused_used = True
 ```
-`_recall_carrier_consulted` is a turn-local execution fact, not a config alias. Set it true only when the
-dated turn actually received a focused working set/status from `assemble_working_set(...)`. A selected
-FOCUSED mode that raises before assembly completes is `consult_failed`, not consulted. This matters
+`_recall_carrier_receipt` is a turn-local execution receipt, not a config alias. Set it to
+`consulted` only when the dated turn actually received a focused working set/status from
+`assemble_working_set(...)`. A selected FOCUSED mode that raises before assembly completes is
+`consult_failed`, not consulted. This matters
 because `triad_on=True` can still be prevented from consulting the carrier by other gates (`source ==
 "voice"` today, and any future source-specific exclusion), and because selected focused mode can still
 fail before the memory shelf opens. This is the move-2 scope expansion Rohit authorized: the denial site
@@ -182,12 +190,14 @@ living)` and assert `(mode, reason)`:
   intended value parses identically.
 - `triad_on`/`carrier_available` equal `mode is TRIAD` in every row.
 
-**Carrier-consulted denial test** (daemon/focused) — three rows for a dated query:
-- LEGACY (`_recall_carrier_consulted=False`) → "can't check my dated recall from this path" reply; assert it does
+**Carrier-consulted denial test** (daemon/focused) — four rows for a dated query:
+- LEGACY / not consulted (`_recall_carrier_receipt="not_consulted"`) → "can't reach my dated memory from here" reply; assert it does
   **not** say "I don't have a dated memory".
 - TRIAD available but focused not selected for this path (for example `source="voice"` or a direct unit
   fixture with `_reply_decision.mode=LEGACY`) → same path-unavailable wording; assert it does **not** say
   "I don't have a dated memory". This pins the availability-vs-consultation distinction.
+- TRIAD selected but assembly raises (`_recall_carrier_receipt="consult_failed"`) → "I went to check ...
+  lookup errored out"; assert it does **not** say "capability isn't active" or "I don't have a dated memory".
 - TRIAD + working set with a `confirmed` item but empty synthesis (`_had_confirmed=True`) → "I have a
   dated memory … couldn't pull it together".
 - TRIAD + consulted, no dated match (`_had_confirmed=False`) → "I don't have a dated memory for that
@@ -212,7 +222,7 @@ strings directly; telemetry imports resolver-owned constants so the single-sourc
 - Modify `core/brain/brain_loop.py` (`_dispatcher_enabled` / `_living_recall_enabled` → resolver).
 - Modify `daemon/maez_daemon.py` (`_focused_cognition_enabled` + `_daemon_parallel_web_search_enabled`
   → resolver; capture `carrier_available` once per turn for mode checks; compute turn-local
-  `_recall_carrier_consulted` from the selected reply path; three-way denial gate at 4054; startup +
+  `_recall_carrier_receipt` from the selected reply path; four-way denial gate at 4054; startup +
   WARN telemetry).
 - Modify `skills/telegram_voice.py` (`_telegram_pipeline_a_web_search_enabled` → resolver, inverted).
 - Tests: `tests/test_recall_stack_config.py`, `tests/test_recall_flag_single_source.py`, and the
@@ -220,15 +230,16 @@ strings directly; telemetry imports resolver-owned constants so the single-sourc
 - Update launch-env / witness invocation docs to the single bundle flag.
 
 ## Self-review
-- **Placeholders:** none — resolver contract, the three resolution branches, the five-site migration
-  table, the three-way denial wording, telemetry, and every truth-table case are concrete.
+- **Placeholders:** none — resolver contract, the resolution branches, the five-site migration
+  table, the four-way denial wording, telemetry, and every truth-table case are concrete.
 - **Consistency:** one `RecallMode` enum; `triad_on`/`carrier_available` derive from it; all five
   config-read sites use the same resolver; no second source of truth (raw-flag path cut). The denial
-  gate intentionally uses a turn-local `_recall_carrier_consulted` execution fact, because availability
+  gate intentionally uses a turn-local `_recall_carrier_receipt` execution fact, because availability
   is not the same thing as consultation.
 - **Scope:** config resolution + single-source migration + honest denial wording + telemetry. The flip,
   soak, coverage-novelty field, and Intake Bus are explicitly out. Move 2 (denial site) is the one
   authorized expansion beyond config-only.
-- **Ambiguity:** "carrier available" is `triad_on`; "carrier consulted" is a turn-local fact that the
-  focused/dated recall path was actually selected or attempted. Raw flags with bundle off are defined as
-  inert-but-WARN legacy, never a partial behavior path.
+- **Ambiguity:** "carrier available" is `triad_on`; "carrier consulted" is a turn-local fact that focused
+  assembly actually produced a dated working set/status. "Consult failed" is a separate turn-local receipt
+  for selected focused paths that fail before consultation completes. Raw flags with bundle off are defined
+  as inert-but-WARN legacy, never a partial behavior path.

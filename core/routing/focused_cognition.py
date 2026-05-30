@@ -551,6 +551,7 @@ def assemble_working_set(
     if (
         dialogue_state.kind == ContinuityKind.NONE
         and _is_intra_turn_echo_instruction(owner_question)
+        and not date_cue
     ):
         return None
     anchors = (

@@ -4,7 +4,7 @@
 
 **Goal:** Replace the three scattered raw recall flags with one bundle flag `MAEZ_RECALL_TRIAD_ENABLED` resolved to a single `RecallMode`, and make the deterministic dated-denial tell the truth about whether the recall carrier was actually consulted on this turn.
 
-**Architecture:** A new pure resolver `core/routing/recall_stack_config.py` returns a frozen `RecallStackConfig(mode, reason)` from `env`. All five raw flag-read sites migrate to it. The dated-denial block in the daemon gains a turn-local `_recall_carrier_consulted` fact and a three-way branch. The raw three flags become inert (bundle is the only behavior input) but emit a loud WARN if set. A CI guard test forbids raw flag reads outside the resolver.
+**Architecture:** A new pure resolver `core/routing/recall_stack_config.py` returns a frozen `RecallStackConfig(mode, reason)` from `env`. All five raw flag-read sites migrate to it. The dated-denial block in the daemon gains a turn-local `_recall_carrier_receipt` and a four-way branch. The raw three flags become inert (bundle is the only behavior input) but emit a loud WARN if set. A CI guard test forbids raw flag reads outside the resolver.
 
 **Tech Stack:** Python 3, stdlib `enum`/`dataclasses`, `unittest` (run via `.venv/bin/python -m unittest` — pytest is NOT installed). Flags via launch-env only; `config/.env` is not touched by this slice (the monitored flip is a separate, owner-authorized step).
 
@@ -21,11 +21,11 @@
 The pre-code Codex pass (Dewey, Feynman, Locke, Descartes, Ohm, Goodall) accepted
 the one-bundle resolver shape and required these amendments:
 
-1. **Selected is not consulted.** `_recall_carrier_consulted` must not be assigned
+1. **Selected is not consulted.** `_recall_carrier_receipt` must not be assigned
    from `ReplyMode.FOCUSED`. Focused mode is only a selected route. Set
    consultation true only after `assemble_working_set(...)` returns a non-`None`
-   working set/status for the dated turn. If assembly raises, use path-unavailable
-   wording, never absence wording.
+   working set/status for the dated turn. If assembly raises, use the distinct
+   consult-failed wording, never absence wording and never "inactive" wording.
 2. **Use a receipt.** Track `_recall_carrier_receipt` as `not_consulted`,
    `consulted`, or `consult_failed`; log it in the dated-denial branch.
 3. **Resolve once per daemon/brain turn.** Helpers may default to resolving for
@@ -46,9 +46,9 @@ The full engineering-pass memo is
 - **Create** `tests/test_recall_stack_config.py` — truth-table over `(bundle, D, F, L)`.
 - **Create** `tests/test_recall_flag_single_source.py` — CI guard: no raw flag reads outside the resolver.
 - **Modify** `core/brain/brain_loop.py` — `_dispatcher_enabled` / `_living_recall_enabled` derive from the resolver.
-- **Modify** `daemon/maez_daemon.py` — `_focused_cognition_enabled` + `_daemon_parallel_web_search_enabled` derive from the resolver; capture turn-local `_recall_carrier_receipt` / `_recall_carrier_consulted`; three-way denial gate; startup + WARN telemetry; turn-level dated-denial receipt telemetry.
+- **Modify** `daemon/maez_daemon.py` — `_focused_cognition_enabled` + `_daemon_parallel_web_search_enabled` derive from the resolver; capture turn-local `_recall_carrier_receipt`; four-way denial gate; startup + WARN telemetry; turn-level dated-denial receipt telemetry.
 - **Modify** `skills/telegram_voice.py` — `_telegram_pipeline_a_web_search_enabled` derives from the resolver (inverted).
-- **Create/extend** `tests/test_recall_carrier_consulted_denial.py` — three-way denial wording incl. the availability-vs-consultation row.
+- **Create/extend** `tests/test_recall_carrier_consulted_denial.py` — four-way denial wording incl. availability-vs-consultation and consult-failed rows.
 - **Create/extend** `tests/test_recall_web_gate_preservation.py` — web-search gate behavior preserved across migration.
 
 ---
@@ -498,15 +498,15 @@ git commit -m "refactor(recall): telegram_voice pipeline-A web gate derives from
 
 ---
 
-## Task 5: Carrier-consulted three-way denial gate
+## Task 5: Carrier-consulted four-way denial gate
 
 **Files:**
-- Modify: `daemon/maez_daemon.py` — compute `_recall_carrier_consulted` near the reply-mode resolution (~3891-3899) and rewrite the denial block at `daemon/maez_daemon.py:4054-4073`.
+- Modify: `daemon/maez_daemon.py` — compute `_recall_carrier_receipt` near the focused execution path and rewrite the denial block at `daemon/maez_daemon.py:4054-4073`.
 - Test: `tests/test_recall_carrier_consulted_denial.py`
 
 - [ ] **Step 1: Write the failing denial-wording test**
 
-This test exercises the three-way branch directly via a small extracted helper so it does not require booting the full daemon. Add the helper in Step 3.
+This test exercises the four-way branch directly via a small extracted helper so it does not require booting the full daemon. Add the helper in Step 3.
 
 ```python
 # tests/test_recall_carrier_consulted_denial.py
@@ -517,22 +517,22 @@ from daemon.maez_daemon import _dated_denial_reply
 
 class DatedDenialReplyTest(unittest.TestCase):
     def test_carrier_not_consulted_says_path_unavailable(self):
-        reply = _dated_denial_reply(carrier_consulted=False, had_confirmed=False)
-        self.assertIn("can't check my dated recall from this path", reply.lower())
+        reply = _dated_denial_reply(carrier_receipt="not_consulted", had_confirmed=False)
+        self.assertIn("can't reach my dated memory from here", reply.lower())
         self.assertNotIn("don't have a dated memory", reply.lower())
 
     def test_carrier_not_consulted_even_if_some_confirmed_flag_says_path(self):
         # availability/consultation dominates: if we did not consult, we cannot
         # claim presence or absence of a dated memory.
-        reply = _dated_denial_reply(carrier_consulted=False, had_confirmed=True)
-        self.assertIn("can't check my dated recall from this path", reply.lower())
+        reply = _dated_denial_reply(carrier_receipt="not_consulted", had_confirmed=True)
+        self.assertIn("can't reach my dated memory from here", reply.lower())
 
     def test_consulted_with_confirmed_item_but_synthesis_failed(self):
-        reply = _dated_denial_reply(carrier_consulted=True, had_confirmed=True)
+        reply = _dated_denial_reply(carrier_receipt="consulted", had_confirmed=True)
         self.assertIn("couldn't pull it together", reply.lower())
 
     def test_consulted_no_match_says_no_dated_memory(self):
-        reply = _dated_denial_reply(carrier_consulted=True, had_confirmed=False)
+        reply = _dated_denial_reply(carrier_receipt="consulted", had_confirmed=False)
         self.assertIn("don't have a dated memory for that window", reply.lower())
 
 
@@ -550,7 +550,7 @@ Expected: FAIL with `ImportError: cannot import name '_dated_denial_reply'`.
 Add a module-level helper to `daemon/maez_daemon.py` (near the other small helpers, e.g. after `_focused_cognition_enabled`):
 
 ```python
-def _dated_denial_reply(*, carrier_consulted: bool, had_confirmed: bool) -> str:
+def _dated_denial_reply(*, carrier_receipt: str, had_confirmed: bool) -> str:
     """Honest dated-memory reply when no focused dated answer was produced.
 
     Carrier-consulted gate: absence language ("I don't have a dated memory") is
@@ -558,11 +558,10 @@ def _dated_denial_reply(*, carrier_consulted: bool, had_confirmed: bool) -> str:
     turn. If it was not (legacy / a path that bypasses focused recall), say the
     path was unavailable — never that the memory does not exist.
     """
-    if not carrier_consulted:
+    if carrier_receipt == "not_consulted":
         return (
-            "I can't check my dated recall from this path right now — that "
-            "capability isn't active here. I won't answer it from recent chat "
-            "or guesswork."
+            "I can't reach my dated memory from here right now. I won't answer "
+            "it from recent chat or guesswork."
         )
     if had_confirmed:
         return (
@@ -578,7 +577,7 @@ def _dated_denial_reply(*, carrier_consulted: bool, had_confirmed: bool) -> str:
 Then, where the reply mode is resolved (after line 3899, `_reply_decision = resolve_reply_mode(...)`), add the turn-local consultation fact:
 
 ```python
-        _recall_carrier_consulted = _reply_decision.mode is ReplyMode.FOCUSED
+        _recall_carrier_receipt = RECALL_CARRIER_NOT_CONSULTED
 ```
 
 Finally, replace the denial block at `daemon/maez_daemon.py:4054-4073` with:
@@ -594,7 +593,7 @@ Finally, replace the denial block at `daemon/maez_daemon.py:4054-4073` with:
                     )
                 )
                 reply = _dated_denial_reply(
-                    carrier_consulted=_recall_carrier_consulted,
+                    carrier_receipt=_recall_carrier_receipt,
                     had_confirmed=_had_confirmed,
                 )
                 _focused_used = True
@@ -607,7 +606,7 @@ Expected: PASS.
 
 - [ ] **Step 5: Add an integration-shaped test for the voice availability-vs-consultation row**
 
-Append to `tests/test_recall_carrier_consulted_denial.py` a test that constructs `ReplyDecisionSignals` with `focused_candidate=False` (as a `source="voice"` turn would, even with the triad on) and asserts `resolve_reply_mode(...).mode` is not `FOCUSED`, so `_recall_carrier_consulted` would be False:
+Append to `tests/test_recall_carrier_consulted_denial.py` a test that constructs `ReplyDecisionSignals` with `focused_candidate=False` (as a `source="voice"` turn would, even with the triad on) and asserts `resolve_reply_mode(...).mode` is not `FOCUSED`, so `_recall_carrier_receipt` stays `not_consulted`:
 
 ```python
 from core.routing.reply_mode import (
@@ -630,7 +629,7 @@ class AvailabilityNotConsultationTest(unittest.TestCase):
             )
         )
         self.assertIsNot(decision.mode, ReplyMode.FOCUSED)
-        # => _recall_carrier_consulted would be False => path-unavailable wording
+        # => _recall_carrier_receipt stays not_consulted => path-unavailable wording
 ```
 
 - [ ] **Step 6: Run + Commit**
@@ -874,7 +873,7 @@ git commit -m "chore(recall): migrate launch-env/witness invocations to MAEZ_REC
 - Cut raw flags / unrepresentable partial → Task 1 (resolver) + Tasks 2-4 (sites inert) + Task 7 (guard). ✓
 - Five-site migration incl. the two web gates + inverted telegram → Tasks 2, 3, 4. ✓
 - Web-gate empty-transcript preservation → Task 3 tests. ✓
-- Carrier-consulted three-way denial + availability≠consultation → Task 5. ✓
+- Carrier-consulted four-way denial + availability≠consultation → Task 5. ✓
 - Telemetry startup line + WARN → Task 6. ✓
 - Canonical truthiness → Task 1 (`_truthy`) + tests. ✓
 - Migration guard → Task 7. ✓
@@ -883,6 +882,6 @@ git commit -m "chore(recall): migrate launch-env/witness invocations to MAEZ_REC
 
 **2. Placeholder scan:** No TBD/TODO. Every code step shows the actual code. The only "search it out" step (Task 8 Step 1) is a concrete grep command with expected output.
 
-**3. Type/symbol consistency:** `RecallMode`, `RecallStackConfig`, `resolve_recall_stack`, `triad_on`, `carrier_available`, `_dated_denial_reply`, `log_recall_stack_posture`, `_recall_carrier_consulted`, `ReplyMode.FOCUSED`, `ReplyDecisionSignals` — used identically across tasks and match the spec and the existing code (`ReplyMode.FOCUSED` confirmed in `core/routing/reply_mode.py`; `_focused_working_set`, `_had_confirmed`, `_date_addressed_turn`, `_focused_used` confirmed in `daemon/maez_daemon.py`).
+**3. Type/symbol consistency:** `RecallMode`, `RecallStackConfig`, `resolve_recall_stack`, `triad_on`, `carrier_available`, `_dated_denial_reply`, `_dated_denial_decision`, `log_recall_stack_posture`, `_recall_carrier_receipt`, `ReplyMode.FOCUSED`, `ReplyDecisionSignals` — used identically across tasks and match the spec and the existing code (`ReplyMode.FOCUSED` confirmed in `core/routing/reply_mode.py`; `_focused_working_set`, `_had_confirmed`, `_date_addressed_turn`, `_focused_used` confirmed in `daemon/maez_daemon.py`).
 
 **4. Ordering:** resolver first (Task 1), then site migrations (2-4), then the denial gate that depends on the resolved mode (5), telemetry (6), guard after all migrations (7), launch-env + full regression last (8). Each task is independently committable and leaves the suite green.

@@ -886,40 +886,118 @@ class DaemonHandleMessageContract(unittest.TestCase):
         fsyn.assert_called_once()
         megachat.assert_not_called()
 
+    def test_dated_empty_focused_reply_is_consulted_no_match(self):
+        from daemon import maez_daemon
+        from core.routing.focused_cognition import FocusedResult
+
+        captured: dict[str, list[dict]] = {}
+        daemon = self._build_daemon_for_handle_message()
+
+        with self.assertLogs("maez", level="INFO") as logs:
+            with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+                os.environ,
+                {"MAEZ_RECALL_TRIAD_ENABLED": "1"},
+            ), mock.patch(
+                "core.routing.focused_cognition.focused_synthesize",
+                return_value=FocusedResult("", [], 100),
+            ) as fsyn, mock.patch(
+                "core.routing.focused_cognition.record_focused_cognition_run",
+                return_value="focused-row-1",
+            ), mock.patch(
+                "core.llm_client.chat",
+            ) as megachat:
+                megachat.return_value = types.SimpleNamespace(
+                    message=types.SimpleNamespace(content="legacy should not answer")
+                )
+                reply = maez_daemon.MaezDaemon.handle_message(
+                    daemon,
+                    "What did I record on January 3?",
+                    source="telegram_surface",
+                    transcript="",
+                    chat_history=[],
+                )
+
+        self.assertIn("I don't have a dated memory for that window", reply)
+        joined_logs = "\n".join(logs.output)
+        self.assertIn("carrier_receipt=consulted", joined_logs)
+        self.assertIn("reply_kind=no_dated_memory", joined_logs)
+        fsyn.assert_called_once()
+        megachat.assert_not_called()
+
     def test_dated_assembly_error_is_path_unavailable_not_absence(self):
         from daemon import maez_daemon
 
         captured: dict[str, list[dict]] = {}
         daemon = self._build_daemon_for_handle_message()
 
-        with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
-            os.environ,
-            {"MAEZ_RECALL_TRIAD_ENABLED": "1"},
-        ), mock.patch(
-            "core.routing.focused_cognition.assemble_working_set",
-            side_effect=RuntimeError("assembly boom"),
-        ) as assemble, mock.patch(
-            "core.routing.focused_cognition.focused_synthesize",
-        ) as fsyn, mock.patch(
-            "core.routing.focused_cognition.record_focused_cognition_run",
-            return_value="focused-row-1",
-        ), mock.patch(
-            "core.llm_client.chat",
-        ) as megachat:
-            megachat.return_value = types.SimpleNamespace(
-                message=types.SimpleNamespace(content="legacy should not answer")
-            )
-            reply = maez_daemon.MaezDaemon.handle_message(
-                daemon,
-                "What did I record on January 3?",
-                source="telegram_surface",
-                transcript="",
-                chat_history=[],
-            )
+        with self.assertLogs("maez", level="INFO") as logs:
+            with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+                os.environ,
+                {"MAEZ_RECALL_TRIAD_ENABLED": "1"},
+            ), mock.patch(
+                "core.routing.focused_cognition.assemble_working_set",
+                side_effect=RuntimeError("assembly boom"),
+            ) as assemble, mock.patch(
+                "core.routing.focused_cognition.focused_synthesize",
+            ) as fsyn, mock.patch(
+                "core.routing.focused_cognition.record_focused_cognition_run",
+                return_value="focused-row-1",
+            ), mock.patch(
+                "core.llm_client.chat",
+            ) as megachat:
+                megachat.return_value = types.SimpleNamespace(
+                    message=types.SimpleNamespace(content="legacy should not answer")
+                )
+                reply = maez_daemon.MaezDaemon.handle_message(
+                    daemon,
+                    "What did I record on January 3?",
+                    source="telegram_surface",
+                    transcript="",
+                    chat_history=[],
+                )
 
-        self.assertIn("can't check my dated recall from this path", reply.lower())
+        self.assertIn("went to check my dated memory", reply.lower())
+        self.assertIn("lookup errored out", reply.lower())
+        self.assertNotIn("capability", reply.lower())
         self.assertNotIn("I don't have a dated memory", reply)
+        joined_logs = "\n".join(logs.output)
+        self.assertIn("carrier_receipt=consult_failed", joined_logs)
+        self.assertIn("reply_kind=carrier_failed", joined_logs)
         assemble.assert_called_once()
+        fsyn.assert_not_called()
+        megachat.assert_not_called()
+
+    def test_dated_voice_path_is_not_consulted_and_does_not_claim_absence(self):
+        from daemon import maez_daemon
+
+        captured: dict[str, list[dict]] = {}
+        daemon = self._build_daemon_for_handle_message()
+
+        with self.assertLogs("maez", level="INFO") as logs:
+            with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+                os.environ,
+                {"MAEZ_RECALL_TRIAD_ENABLED": "1"},
+            ), mock.patch(
+                "core.routing.focused_cognition.focused_synthesize",
+            ) as fsyn, mock.patch(
+                "core.llm_client.chat",
+            ) as megachat:
+                megachat.return_value = types.SimpleNamespace(
+                    message=types.SimpleNamespace(content="legacy should not answer")
+                )
+                reply = maez_daemon.MaezDaemon.handle_message(
+                    daemon,
+                    "What did I record on January 3?",
+                    source="voice",
+                    transcript="",
+                    chat_history=[],
+                )
+
+        self.assertIn("can't reach my dated memory from here right now", reply.lower())
+        self.assertNotIn("I don't have a dated memory", reply)
+        joined_logs = "\n".join(logs.output)
+        self.assertIn("carrier_receipt=not_consulted", joined_logs)
+        self.assertIn("reply_kind=carrier_unavailable", joined_logs)
         fsyn.assert_not_called()
         megachat.assert_not_called()
 

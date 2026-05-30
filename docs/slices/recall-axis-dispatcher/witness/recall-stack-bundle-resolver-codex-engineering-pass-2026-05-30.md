@@ -47,9 +47,10 @@ in telemetry assertions.
 - Memory absence is an owned claim. If focused assembly fails before memory is
   examined, absence wording would be false ownership.
 
-**Fold:** path-unavailable wording is used for no consultation or consultation
-failure; absence wording is legal only for a completed consultation with no
-confirmed dated item.
+**Fold:** no-consultation and consultation-failure are separate states. No
+consultation uses "can't reach my dated memory from here"; consultation failure
+uses "I went to check ... and the lookup errored out." Absence wording is legal
+only for a completed consultation with no confirmed dated item.
 
 ### Descartes
 
@@ -57,8 +58,9 @@ confirmed dated item.
   fallback uses the consultation fact.
 - The five production raw read sites are correctly identified.
 
-**Fold:** add daemon-shaped denial tests for assembly failure and successful
-working-set consultation, in addition to helper tests.
+**Fold:** add daemon-shaped denial tests for assembly failure, source paths that
+do not consult the carrier, and successful working-set consultation, in addition
+to helper tests.
 
 ### Ohm
 
@@ -80,13 +82,14 @@ confirmed state, and reply kind.
 ## Resulting Amendments
 
 1. `carrier_available` remains config-level and means "triad enabled".
-2. `_recall_carrier_consulted` becomes a turn-local execution fact set only
-   after focused assembly returns a non-`None` working set/status for the dated
-   turn.
+2. `_recall_carrier_receipt` becomes the turn-local execution fact: `consulted`
+   only after focused assembly returns a non-`None` working set/status for the
+   dated turn, `consult_failed` when focused fails before that point, and
+   `not_consulted` when the path never opens the carrier.
 3. `_recall_carrier_receipt` distinguishes `not_consulted`, `consulted`, and
-   `consult_failed` for logging and reply selection.
+   `consult_failed` for logging and reply selection; reply text and telemetry
+   kind are derived from one decision mapping so they cannot drift.
 4. Resolver config is captured once per daemon/brain turn and passed to local
    helper calls where both decisions occur in the same turn.
 5. New tests are hermetic around all four recall flags.
 6. Raw-flag migration explicitly searches `tests/`, `docs/`, and `scripts/`.
-

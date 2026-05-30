@@ -19,6 +19,7 @@ import subprocess
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -1006,6 +1007,12 @@ RECALL_CARRIER_CONSULTED = "consulted"
 RECALL_CARRIER_CONSULT_FAILED = "consult_failed"
 
 
+@dataclass(frozen=True)
+class DatedDenialDecision:
+    reply: str
+    kind: str
+
+
 def log_recall_stack_posture(env=None) -> None:
     """Emit the recall-stack posture once (startup / witness)."""
     import os as _os
@@ -1041,31 +1048,54 @@ def log_recall_stack_posture(env=None) -> None:
         )
 
 
-def _dated_denial_reply(*, carrier_receipt: str, had_confirmed: bool) -> str:
+def _dated_denial_decision(*, carrier_receipt: str, had_confirmed: bool) -> DatedDenialDecision:
     """Return an honest dated-memory fallback when focused produced no reply."""
-    if carrier_receipt != RECALL_CARRIER_CONSULTED:
-        return (
-            "I can't check my dated recall from this path right now - that "
-            "capability isn't active here. I won't answer it from recent chat "
-            "or guesswork."
+    if carrier_receipt == RECALL_CARRIER_CONSULT_FAILED:
+        return DatedDenialDecision(
+            reply=(
+                "I went to check my dated memory and the lookup errored out "
+                "just now - that's on my side, not an absence. I won't fill "
+                "it in from recent chat or guesswork; ask me again in a moment."
+            ),
+            kind="carrier_failed",
+        )
+    if carrier_receipt == RECALL_CARRIER_NOT_CONSULTED:
+        return DatedDenialDecision(
+            reply=(
+                "I can't reach my dated memory from here right now. I won't "
+                "answer it from recent chat or guesswork."
+            ),
+            kind="carrier_unavailable",
         )
     if had_confirmed:
-        return (
-            "I have a dated memory for that, but I couldn't pull it together "
-            "just now. Ask me again in a moment."
+        return DatedDenialDecision(
+            reply=(
+                "I have a dated memory for that, but I couldn't pull it together "
+                "just now. Ask me again in a moment."
+            ),
+            kind="transport_failure",
         )
-    return (
-        "I don't have a dated memory for that window. I'm not going to answer "
-        "it from recent chat or guesswork."
+    return DatedDenialDecision(
+        reply=(
+            "I don't have a dated memory for that window. I'm not going to answer "
+            "it from recent chat or guesswork."
+        ),
+        kind="no_dated_memory",
     )
 
 
+def _dated_denial_reply(*, carrier_receipt: str, had_confirmed: bool) -> str:
+    return _dated_denial_decision(
+        carrier_receipt=carrier_receipt,
+        had_confirmed=had_confirmed,
+    ).reply
+
+
 def _dated_denial_kind(*, carrier_receipt: str, had_confirmed: bool) -> str:
-    if carrier_receipt != RECALL_CARRIER_CONSULTED:
-        return "carrier_unavailable"
-    if had_confirmed:
-        return "transport_failure"
-    return "no_dated_memory"
+    return _dated_denial_decision(
+        carrier_receipt=carrier_receipt,
+        had_confirmed=had_confirmed,
+    ).kind
 
 
 def _log_dated_recall_denial(

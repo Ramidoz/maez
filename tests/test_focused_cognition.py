@@ -242,6 +242,19 @@ class AssembleWorkingSetTests(unittest.TestCase):
         )
         self.assertIsNone(ws)
 
+    def test_date_cued_echo_instruction_still_assembles_temporal_status(self):
+        ws = assemble_working_set(
+            transcript="[memory evidence] stale:\n- April 6 journal",
+            web_context="",
+            owner_question=(
+                "What did we note on May 3? Say that back in one sentence."
+            ),
+            chat_history=[],
+        )
+
+        self.assertIsNotNone(ws)
+        self.assertEqual(ws.items[0].source_type, "temporal_recall_status")
+
 
 class DialogueContinuityStateTests(unittest.TestCase):
     def test_direct_continuity_state(self):
