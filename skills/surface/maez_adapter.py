@@ -385,6 +385,7 @@ class MaezMessageHandler:
             # with the pipeline for card-or-inline decisions.
             jarvis_transcript = ""
             jarvis_tool_calls: list[dict] = []
+            jarvis_recall_items = ()
             try:
                 from core import brain_loop as _brain_loop
 
@@ -413,12 +414,14 @@ class MaezMessageHandler:
                     if hasattr(_result, "transcript"):
                         jarvis_transcript = _result.transcript or ""
                         jarvis_tool_calls = list(getattr(_result, "tool_calls", []) or [])
+                        jarvis_recall_items = tuple(getattr(_result, "recall_items", ()) or ())
                     else:  # legacy str fallback
                         jarvis_transcript = _result or ""
             except Exception as e:
                 logger.warning("brain_loop failed on %s: %s", SURFACE_NAME, e)
                 jarvis_transcript = ""
                 jarvis_tool_calls = []
+                jarvis_recall_items = ()
 
             # Synthesis stage — daemon.handle_message does the final text
             # reply with registry + residue + self-model blocks injected.
@@ -438,6 +441,7 @@ class MaezMessageHandler:
                         chat_history=chat_history,
                         chat_id=chat_id,
                         tool_calls=jarvis_tool_calls or None,
+                        recall_items=jarvis_recall_items,
                     ),
                 )
             except Exception as e:

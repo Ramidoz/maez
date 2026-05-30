@@ -162,6 +162,9 @@ class DaemonHandleMessageContract(unittest.TestCase):
         self.assertIn("transcript", params,
                       "handle_message must accept transcript= so the "
                       "adapter can pass jarvis tool-loop output.")
+        self.assertIn("recall_items", params,
+                      "handle_message must accept recall_items= so the "
+                      "adapter can pass structured recall provenance.")
         self.assertIn("signals_present", params)
         self.assertIn("signals_absent", params)
         # Defaults must be safe for legacy callers (no-transcript,
@@ -170,7 +173,7 @@ class DaemonHandleMessageContract(unittest.TestCase):
         self.assertIsInstance(t_default, ast.Constant)
         self.assertEqual(t_default.value, "",
                          "transcript default must be an empty string")
-        for key in ("signals_present", "signals_absent"):
+        for key in ("recall_items", "signals_present", "signals_absent"):
             d = params[key]
             self.assertIsInstance(d, ast.Constant)
             self.assertIsNone(d.value,
@@ -1841,6 +1844,10 @@ class AdapterNoLongerDoubleAudits(unittest.TestCase):
         self.assertIn("transcript=jarvis_transcript", src,
                       "adapter must pass jarvis_transcript into "
                       "handle_message so the audit sees tool context.")
+        self.assertIn("recall_items=jarvis_recall_items", src,
+                      "adapter must pass structured recall_items into "
+                      "handle_message so focused cognition gets "
+                      "budget-immune provenance.")
 
 
 class WebChatAuditsBeforeStore(unittest.TestCase):

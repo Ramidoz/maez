@@ -18,7 +18,7 @@ from core.dispatcher.external_sources import (
     ExternalFanoutResult,
     FreshBlock,
 )
-from core.dispatcher.layer1 import Layer1FanoutResult, RecallBlock
+from core.dispatcher.layer1 import Layer1FanoutResult, RecallBlock, RecallItem
 from core.dispatcher.provenance_renderer import (
     AskShape,
     RenderedProvenance,
@@ -54,6 +54,7 @@ class RenderedTurn:
     effective_spec: CompositionSpec
     source_summaries: tuple[SourceSummary, ...]
     fresh_attempt_outcome: FreshAttemptOutcome
+    recall_items: tuple[RecallItem, ...] = ()
     refusal_reason: DispatcherRefusalReason | None = None
 
 
@@ -142,6 +143,11 @@ def merge_fanout_results(
         effective_spec=effective_spec,
         source_summaries=summaries,
         fresh_attempt_outcome=fresh_outcome,
+        recall_items=tuple(
+            item
+            for block in layer1_result.recall_blocks
+            for item in block.items
+        ),
     )
 
 
@@ -447,6 +453,7 @@ def _rendered_turn(
     effective_spec: CompositionSpec,
     source_summaries: tuple[SourceSummary, ...],
     fresh_attempt_outcome: FreshAttemptOutcome,
+    recall_items: tuple[RecallItem, ...] = (),
 ) -> RenderedTurn:
     return RenderedTurn(
         prompt_block=rendered.prompt_block,
@@ -455,6 +462,7 @@ def _rendered_turn(
         effective_spec=effective_spec,
         source_summaries=source_summaries,
         fresh_attempt_outcome=fresh_attempt_outcome,
+        recall_items=recall_items,
     )
 
 

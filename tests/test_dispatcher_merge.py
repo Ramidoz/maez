@@ -39,7 +39,7 @@ def _layer1_result(*blocks):
     )
 
 
-def _recall_block(source, text="saved memory"):
+def _recall_block(source, text="saved memory", *, items=()):
     from core.dispatcher.layer1 import RecallBlock
 
     return RecallBlock(
@@ -49,6 +49,7 @@ def _recall_block(source, text="saved memory"):
         freshness="substrate",
         rationale="selected by test",
         prompt_cost=len(text),
+        items=tuple(items),
     )
 
 
@@ -93,6 +94,42 @@ def _external_branch(source, status, *, blocks=(), error_class=None, completed_a
 
 
 class DispatcherMergeTests(unittest.TestCase):
+    def test_merge_carries_structured_recall_items(self):
+        from core.dispatcher.layer1 import RecallItem
+        from core.dispatcher.merge import merge_fanout_results
+        from core.dispatcher.spec import (
+            CompositionHint,
+            ProvenanceFraming,
+            SubstrateSource,
+        )
+
+        item = RecallItem(
+            text="full recalled body",
+            source_type="memory_context",
+            durable_id="core-april-27",
+            temporal_provenance={"method": "exact_date", "confirmed": True},
+        )
+        rendered = merge_fanout_results(
+            _spec(
+                hint=CompositionHint.SUBSTRATE_ONLY,
+                framing=ProvenanceFraming.SUBSTRATE_ONLY_NO_FRESH_VALIDATION,
+                substrate_sources=(SubstrateSource.TELEGRAM_SEMANTIC,),
+            ),
+            _layer1_result(
+                _recall_block(
+                    SubstrateSource.TELEGRAM_SEMANTIC,
+                    text="[memory context]\ntruncated rendered memory",
+                    items=(item,),
+                )
+            ),
+            _external_result(),
+            utterance="what did we note around April 27?",
+            surface="telegram",
+            timestamp="2026-05-30T12:00:00Z",
+        )
+
+        self.assertEqual(rendered.recall_items, (item,))
+
     def test_hybrid_reconstruction_records_prior_framing_in_audit_envelope(self):
         from core.dispatcher.external_sources import ExternalBranchResult
         from core.dispatcher.merge import merge_fanout_results

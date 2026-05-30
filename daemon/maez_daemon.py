@@ -3192,6 +3192,7 @@ class MaezDaemon:
         chat_history: "list | None" = None,
         chat_id: "str | None" = None,
         tool_calls: "list[dict] | None" = None,
+        recall_items: "list | tuple | None" = None,
         subjective_duration_owner_auth: "SubjectiveDurationOwnerAuth | None" = None,
     ) -> str:
         """Process an incoming message through full reasoning context. Returns reply string.

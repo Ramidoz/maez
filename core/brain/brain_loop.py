@@ -40,6 +40,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from core import llm_client as _llm_client
 
@@ -73,12 +74,14 @@ class BrainLoopResult:
 
     transcript: str = ""
     tool_calls: list[dict] = field(default_factory=list)
+    recall_items: tuple[Any, ...] = ()
 
 
 @dataclass(frozen=True)
 class _DispatcherPathResult:
     transcript: str = ""
     should_run_jarvis: bool = False
+    recall_items: tuple[Any, ...] = ()
 
 
 def _summarize(value, *, limit: int) -> str:
@@ -847,6 +850,7 @@ def _run_dispatcher_pipeline(
     return _DispatcherPathResult(
         transcript=rendered_turn.prompt_block,
         should_run_jarvis=False,
+        recall_items=rendered_turn.recall_items,
     )
 
 # Alias to match original module's import style (`_jarvis_re` is the
@@ -1719,7 +1723,10 @@ def run_brain_loop(
         )
         if dispatcher_result.transcript:
             if return_structured:
-                return BrainLoopResult(transcript=dispatcher_result.transcript)
+                return BrainLoopResult(
+                    transcript=dispatcher_result.transcript,
+                    recall_items=dispatcher_result.recall_items,
+                )
             return dispatcher_result.transcript
         if not dispatcher_result.should_run_jarvis:
             return _empty()

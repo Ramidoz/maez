@@ -255,6 +255,7 @@ class DispatcherWiring(unittest.TestCase):
     def test_dispatcher_pipeline_uses_reddit_capable_fanout_budget(self):
         from core import brain_loop
         from core.dispatcher.external_sources import ExternalFanoutResult
+        from core.dispatcher.layer1 import RecallItem
         from core.dispatcher.spec import (
             CompositionHint,
             CompositionSpec,
@@ -280,6 +281,12 @@ class DispatcherWiring(unittest.TestCase):
             trust_scope_union=None,
         )
         seen = {}
+        recall_item = RecallItem(
+            text="full recalled body",
+            source_type="memory_context",
+            durable_id="core-april-27",
+            temporal_provenance={"method": "exact_date", "confirmed": True},
+        )
 
         class FakeLayer0:
             def __init__(self, *, index):
@@ -333,6 +340,7 @@ class DispatcherWiring(unittest.TestCase):
                 effective_spec=spec_arg,
                 refusal_reason=None,
                 audit_envelope={},
+                recall_items=(recall_item,),
             )
 
         with (
@@ -359,6 +367,7 @@ class DispatcherWiring(unittest.TestCase):
         self.assertEqual(seen["external_generation_id"], "shared-seal")
         self.assertEqual(seen["merge_generation_ids"], ("shared-seal", "shared-seal"))
         self.assertIs(seen["recorded_spec"], spec)
+        self.assertEqual(result.recall_items, (recall_item,))
 
     def test_dispatcher_enabled_never_falls_through_to_jarvis_for_external_sources(self):
         from core import brain_loop
@@ -387,6 +396,44 @@ class DispatcherWiring(unittest.TestCase):
             )
 
         self.assertIn("[no fresh evidence available:", result)
+
+    def test_structured_dispatcher_result_carries_recall_items(self):
+        from core import brain_loop
+        from core.dispatcher.layer1 import RecallItem
+
+        item = RecallItem(
+            text="full recalled body",
+            source_type="memory_context",
+            durable_id="core-april-27",
+            temporal_provenance={"method": "exact_date", "confirmed": True},
+        )
+        with (
+            patch.dict(os.environ, {"MAEZ_DISPATCHER_ENABLED": "1"}),
+            patch.object(
+                brain_loop,
+                "_should_run_jarvis_loop",
+                side_effect=AssertionError("JARVIS gate should not run"),
+            ),
+            patch.object(
+                brain_loop,
+                "_run_dispatcher_pipeline",
+                return_value=brain_loop._DispatcherPathResult(
+                    transcript="DISPATCHER TRANSCRIPT",
+                    should_run_jarvis=False,
+                    recall_items=(item,),
+                ),
+            ),
+        ):
+            result = run_brain_loop(
+                "what did we note around April 27?",
+                action_engine=object(),
+                get_pipeline=lambda: None,
+                surface="telegram",
+                return_structured=True,
+            )
+
+        self.assertEqual(result.transcript, "DISPATCHER TRANSCRIPT")
+        self.assertEqual(result.recall_items, (item,))
 
     def test_recovery_seed_bypasses_external_fanout(self):
         from core import brain_loop
