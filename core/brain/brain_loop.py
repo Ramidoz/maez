@@ -205,6 +205,9 @@ def _dispatcher_recall_adapters(
 ):
     from core.dispatcher.layer1 import MAX_RECALL_CHARS_PER_SOURCE, RecallBlock
     from core.dispatcher.spec import SubstrateSource
+    from core.routing.temporal_cue import absolute_recall_cue
+
+    _override_continuity_for_date = absolute_recall_cue(user_text).override_continuity
 
     def _bounded_text(text: str, *, limit: int = MAX_RECALL_CHARS_PER_SOURCE) -> str:
         if len(text) <= limit:
@@ -376,7 +379,9 @@ def _dispatcher_recall_adapters(
             ctx_text = ""
         ev_text = memory_ev_text
         anchor_active = False
-        if _continuity_needs_dialogue_anchor():
+        # Date-address override: assemble_working_set handles precedence; here
+        # we only decline to fabricate a dialogue-anchor producer.
+        if _continuity_needs_dialogue_anchor() and not _override_continuity_for_date:
             anchor = _latest_dialogue_anchor_text()
             if anchor:
                 anchor_active = True

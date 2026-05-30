@@ -900,6 +900,34 @@ class AdapterRoleHintTests(unittest.TestCase):
         self.assertEqual(blocks[1].role_hint, SourceRole.SUBSTRATE_CONTEXT)
         self.assertIn("two-day health check", blocks[1].text)
 
+    def test_date_address_adapter_does_not_inject_dialogue_anchor(self):
+        from core import brain_loop
+        from core.dispatcher.spec import SubstrateSource
+
+        fake = self._DeepContextMemory()
+        os.environ["MAEZ_LIVING_RECALL_ENABLED"] = "1"
+        try:
+            with mock.patch("core.brain.brain_loop._dispatcher_memory_manager", return_value=fake):
+                blocks = brain_loop._dispatcher_recall_adapters(
+                    "remind me what we were doing around April 27",
+                    spec=_substrate_semantic_spec(),
+                    surface="telegram_surface",
+                    chat_history=[
+                        {
+                            "content": (
+                                "Rohit: What about January 3?\n"
+                                "Maez: I don't have a dated memory for that window."
+                            )
+                        }
+                    ],
+                )[SubstrateSource.TELEGRAM_SEMANTIC](SubstrateSource.TELEGRAM_SEMANTIC)
+        finally:
+            os.environ.pop("MAEZ_LIVING_RECALL_ENABLED", None)
+
+        text = "\n".join(block.text for block in blocks)
+        self.assertIn("April infrastructure note", text)
+        self.assertNotIn("Recent dialogue anchor", text)
+
     def test_chat_history_anchor_does_not_record_unrendered_memory_evidence(self):
         from core import brain_loop
         from core.dispatcher.spec import (
