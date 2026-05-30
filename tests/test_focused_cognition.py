@@ -644,7 +644,7 @@ class TemporalProvenancePrecedenceTests(unittest.TestCase):
 
     def test_confirmed_is_primary_provenance_populated(self):
         ws = assemble_working_set(
-            transcript=self.CONFIRMED,
+            transcript=TemporalProvenancePrecedenceTests.CONFIRMED,
             web_context="",
             owner_question="what did we note around April 27?",
         )
@@ -707,6 +707,78 @@ class TemporalProvenancePrecedenceTests(unittest.TestCase):
         self.assertIsNotNone(ws)
         assert ws is not None
         self.assertTrue(ws.items[0].temporal_provenance["confirmed"])
+
+
+class StructuredRecallChannelTests(unittest.TestCase):
+    def test_recall_items_carry_confirmed_without_status(self):
+        from core.dispatcher.layer1 import RecallItem
+
+        full = "INFRASTRUCTURE GROUND-TRUTH 2026-04-27 " + ("full dated context " * 80)
+        ws = assemble_working_set(
+            transcript="[memory context]\n<RECALLED date_match=\"exact_date\">truncated junk",
+            web_context="",
+            owner_question="what did we note around April 27?",
+            recall_items=[
+                RecallItem(
+                    text=full,
+                    source_type="memory_context",
+                    durable_id="core-april-27",
+                    temporal_provenance={"method": "exact_date", "confirmed": True},
+                )
+            ],
+        )
+
+        self.assertIsNotNone(ws)
+        assert ws is not None
+        self.assertFalse(
+            any(item.source_type == "temporal_recall_status" for item in ws.items)
+        )
+        top = ws.items[0]
+        self.assertEqual(top.source_type, "memory_context")
+        self.assertEqual(top.durable_id, "core-april-27")
+        self.assertTrue(top.temporal_provenance["confirmed"])
+        self.assertIn("INFRASTRUCTURE GROUND-TRUTH", top.text)
+        self.assertIn("full dated context", top.text)
+
+    def test_recall_items_none_falls_back_to_transcript(self):
+        ws = assemble_working_set(
+            transcript=TemporalProvenancePrecedenceTests.CONFIRMED,
+            web_context="",
+            owner_question="what did we note around April 27?",
+            recall_items=None,
+        )
+
+        self.assertIsNotNone(ws)
+        assert ws is not None
+        self.assertEqual(ws.items[0].source_type, "memory_context")
+        self.assertTrue(ws.items[0].temporal_provenance["confirmed"])
+
+    def test_item_aware_budget_preserves_provenance(self):
+        from core.dispatcher.layer1 import RecallItem
+
+        full = "INFRASTRUCTURE GROUND-TRUTH 2026-04-27 " + ("long context " * 300)
+        ws = assemble_working_set(
+            transcript="[memory context]\n(rendered block intentionally truncated)",
+            web_context="",
+            owner_question="what did we note around April 27?",
+            recall_items=[
+                RecallItem(
+                    text=full,
+                    source_type="memory_context",
+                    durable_id="core-april-27",
+                    temporal_provenance={"method": "exact_date", "confirmed": True},
+                )
+            ],
+            max_working_set_chars=360,
+        )
+
+        self.assertIsNotNone(ws)
+        assert ws is not None
+        top = ws.items[0]
+        self.assertEqual(top.durable_id, "core-april-27")
+        self.assertTrue(top.temporal_provenance["confirmed"])
+        self.assertLess(len(top.text), len(full))
+        self.assertLessEqual(ws.working_set_chars, 360)
 
 
 class TrustTierRenderingTests(unittest.TestCase):

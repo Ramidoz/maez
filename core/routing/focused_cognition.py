@@ -10,7 +10,7 @@ megaprompt.
 from __future__ import annotations
 
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 import hashlib
 import json
@@ -53,6 +53,8 @@ _RANK_DATE_CONFIRMED = 0
 _RANK_TEMPORAL_STATUS = 1
 _RANK_DATE_CONTEXT_OFFSET = 2
 _RANK_DATE_DIALOGUE_ANCHOR = 50
+_DEFAULT_WORKING_SET_CHAR_BUDGET = 6000
+_TRUNCATION_SUFFIX = " ...[truncated]"
 _AUTHORITY_LABEL: dict[str, str] = {
     "fresh_evidence": "observed (fresh) — current-state authority",
     "memory_evidence": "recalled memory — past authority, not current state",
@@ -494,12 +496,54 @@ def _ranked_items_for_state(
     return sorted(raw_items, key=rank)
 
 
+def _truncate_item_text(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    if limit <= 0:
+        return ""
+    if limit <= len(_TRUNCATION_SUFFIX):
+        return text[:limit]
+    return text[: limit - len(_TRUNCATION_SUFFIX)].rstrip() + _TRUNCATION_SUFFIX
+
+
+def _budget_items_for_prompt(
+    items: list[EvidenceItem],
+    *,
+    owner_question: str,
+    max_chars: int | None,
+) -> list[EvidenceItem]:
+    if max_chars is None:
+        max_chars = _DEFAULT_WORKING_SET_CHAR_BUDGET
+    if max_chars <= 0 or not items:
+        return items
+    rendered_chars = len("\n".join(_render_evidence_lines(items))) + len(owner_question or "")
+    if rendered_chars <= max_chars:
+        return items
+
+    empty_text_items = [replace(item, text="") for item in items]
+    overhead = len("\n".join(_render_evidence_lines(empty_text_items))) + len(owner_question or "")
+    text_budget = max(max_chars - overhead, 0)
+    # The first item's text is rendered twice by _render_evidence_lines
+    # ("most important, repeated"), so count it twice in the budget.
+    weights = [2 if index == 0 else 1 for index, _item in enumerate(items)]
+    unit_budget = text_budget // max(sum(weights), 1)
+    budgeted: list[EvidenceItem] = []
+    for item, weight in zip(items, weights, strict=True):
+        allowance = max(unit_budget, 0)
+        if weight > 1:
+            allowance = max(unit_budget, 0)
+        budgeted.append(replace(item, text=_truncate_item_text(item.text, allowance)))
+    return budgeted
+
+
 def assemble_working_set(
     *,
     transcript: str,
     web_context: str,
     owner_question: str,
     chat_history: Iterable[dict] | None = None,
+    recall_items: Iterable | None = None,
+    max_working_set_chars: int | None = None,
 ) -> WorkingSet | None:
     state = turn_evidence_state(transcript=transcript, web_context=web_context)
     dialogue_state = dialogue_continuity_state(owner_question)
@@ -529,19 +573,47 @@ def assemble_working_set(
         and not date_cue
     ):
         return None
-    if not state.evidence_present and not anchors and not date_cue:
+    structured_recall_items = (
+        None if recall_items is None else tuple(recall_items)
+    )
+    if (
+        not state.evidence_present
+        and not anchors
+        and not date_cue
+        and not structured_recall_items
+    ):
         return None
 
     raw_items: list[tuple[str, str, str | None, dict | None]] = []
     if not dialogue_authoritative:
-        for marker, body in _split_blocks(transcript or ""):
-            source_type = _SOURCE_TYPE[marker]
-            if source_type in ("memory_context", "memory_evidence"):
-                for item_text, provenance in _memory_items_with_provenance(body):
-                    raw_items.append((source_type, item_text, None, provenance))
-            else:
+        if structured_recall_items is not None:
+            for item in structured_recall_items:
+                source_type = str(getattr(item, "source_type", "") or "")
+                if source_type not in ("memory_context", "memory_evidence"):
+                    continue
+                item_text = str(getattr(item, "text", "") or "").strip()
+                if not item_text:
+                    continue
+                durable_id = getattr(item, "durable_id", None)
+                temporal_provenance = getattr(item, "temporal_provenance", None)
+                raw_items.append(
+                    (source_type, item_text, durable_id, temporal_provenance)
+                )
+            for marker, body in _split_blocks(transcript or ""):
+                source_type = _SOURCE_TYPE[marker]
+                if source_type in ("memory_context", "memory_evidence"):
+                    continue
                 for item_text in _atomic_items(body):
                     raw_items.append((source_type, item_text, None, None))
+        else:
+            for marker, body in _split_blocks(transcript or ""):
+                source_type = _SOURCE_TYPE[marker]
+                if source_type in ("memory_context", "memory_evidence"):
+                    for item_text, provenance in _memory_items_with_provenance(body):
+                        raw_items.append((source_type, item_text, None, provenance))
+                else:
+                    for item_text in _atomic_items(body):
+                        raw_items.append((source_type, item_text, None, None))
 
         web_context = web_context or ""
         if web_context.strip() and _WEB_NO_RESULTS not in web_context:
@@ -585,6 +657,11 @@ def assemble_working_set(
             temporal_provenance,
         ) in enumerate(raw_items)
     ]
+    items = _budget_items_for_prompt(
+        items,
+        owner_question=owner_question,
+        max_chars=max_working_set_chars,
+    )
 
     ordered = "\n".join(_render_evidence_lines(items))
 
