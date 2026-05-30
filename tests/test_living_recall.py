@@ -1266,11 +1266,116 @@ class LivingRecallFramingTests(unittest.TestCase):
         self.assertTrue(
             any(
                 item.source_type == "memory_context"
-                and 'date_match="exact_date"' in item.text
+                and item.temporal_provenance
+                and item.temporal_provenance["method"] == "exact_date"
+                and item.temporal_provenance["confirmed"]
                 and "fabrication-class" in item.text
                 for item in working_set.items
             )
         )
+
+    def test_date_continuity_query_keeps_temporal_context_primary(self):
+        from core import brain_loop
+        from core.dispatcher.external_sources import ExternalFanout
+        from core.dispatcher.layer1 import Layer1Fanout
+        from core.dispatcher.merge import merge_fanout_results
+        from core.routing.focused_cognition import assemble_working_set
+
+        query = "remind me what we were doing around April 27"
+        april_core = {
+            "id": "core-april-27",
+            "content": "[Journal 2026-04-27] infrastructure ground-truth fabrication-class incident.",
+            "metadata": {
+                "type": "core_memory",
+                "source": "nightly_journal",
+                "timestamp": "2026-04-28T04:00:02+00:00",
+            },
+            "distance": 0.02,
+        }
+        may_core = {
+            "id": "core-may-20",
+            "content": "[Journal 2026-05-20] May progress on living recall.",
+            "metadata": {
+                "type": "core_memory",
+                "source": "nightly_journal",
+                "timestamp": "2026-05-20T04:00:00+00:00",
+            },
+            "distance": 0.05,
+        }
+        mm = _manager(core_rows=[april_core, may_core])
+        spec = _substrate_semantic_spec()
+        chat_history = [
+            {
+                "content": (
+                    "Rohit: What about January 3?\n"
+                    "Maez: I don't have a dated memory for that window."
+                )
+            }
+        ]
+
+        os.environ["MAEZ_LIVING_RECALL_ENABLED"] = "1"
+        try:
+            with (
+                mock.patch("core.brain.brain_loop._dispatcher_memory_manager", return_value=mm),
+                mock.patch("memory.memory_manager._now_seconds", return_value=datetime(2026, 5, 29, 12, 0, tzinfo=timezone.utc).timestamp()),
+                mock.patch("core.memory_scoring.record_recall", side_effect=lambda *a, **k: None),
+            ):
+                layer1 = Layer1Fanout(
+                    adapters=brain_loop._dispatcher_recall_adapters(
+                        query,
+                        spec=spec,
+                        surface="telegram_surface",
+                        chat_history=chat_history,
+                    ),
+                    branch_timeout_s=1.0,
+                    global_deadline_s=1.0,
+                )
+                layer1_result = layer1.run(
+                    spec,
+                    utterance=query,
+                    conversation_state={"surface": "telegram_surface"},
+                    fanout_generation_id="temporal-continuity-v2",
+                )
+                external_result = ExternalFanout().run(
+                    spec,
+                    utterance=query,
+                    conversation_state={"surface": "telegram_surface"},
+                    fanout_generation_id="temporal-continuity-v2",
+                )
+                rendered = merge_fanout_results(
+                    spec,
+                    layer1_result,
+                    external_result,
+                    utterance=query,
+                    surface="telegram_surface",
+                    timestamp="2026-05-29T12:00:00Z",
+                )
+        finally:
+            os.environ.pop("MAEZ_LIVING_RECALL_ENABLED", None)
+
+        transcript = rendered.prompt_block
+        self.assertIn("[memory context]", transcript)
+        self.assertIn('date_match="exact_date"', transcript)
+        self.assertIn("fabrication-class", transcript)
+        self.assertNotIn("Recent dialogue anchor", transcript)
+
+        working_set = assemble_working_set(
+            transcript=transcript,
+            web_context="",
+            owner_question=query,
+            chat_history=chat_history,
+        )
+        self.assertIsNotNone(working_set)
+        assert working_set is not None
+        top = working_set.items[0]
+        self.assertEqual(top.source_type, "memory_context")
+        self.assertTrue(top.temporal_provenance)
+        self.assertTrue(top.temporal_provenance["confirmed"])
+        self.assertEqual(top.temporal_provenance["method"], "exact_date")
+        self.assertIn("fabrication-class", top.text)
+        anchor_items = [item for item in working_set.items if item.source_type == "dialogue_anchor"]
+        self.assertTrue(anchor_items)
+        self.assertNotEqual(anchor_items[0].local_label, "E1")
 
     def test_content_anchored_deep_context_renders_and_is_seen(self):
         from core import brain_loop
