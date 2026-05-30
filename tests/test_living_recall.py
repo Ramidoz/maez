@@ -103,7 +103,7 @@ def _partition_text(partition: dict) -> str:
 
 class LivingRecallRankingTests(unittest.TestCase):
     def test_query_echo_excluded_from_living_recall(self):
-        query = "What did we note back around April 6 about the infrastructure?"
+        query = "What did we note back about the infrastructure?"
         echo = _row(
             "echo-query",
             content=f"the owner (telegram_surface): {query}",
@@ -125,12 +125,12 @@ class LivingRecallRankingTests(unittest.TestCase):
         ):
             evidence, context = mm.recall_for_telegram_living(query)
 
-        self.assertNotIn("What did we note back around April 6", _partition_text(evidence))
-        self.assertNotIn("the owner (telegram_surface): What did we note back around April 6", _partition_text(evidence))
-        self.assertNotIn("What did we note back around April 6", _partition_text(context))
+        self.assertNotIn(query, _partition_text(evidence))
+        self.assertNotIn(f"the owner (telegram_surface): {query}", _partition_text(evidence))
+        self.assertNotIn(query, _partition_text(context))
 
     def test_old_repeat_question_is_not_treated_as_current_query_echo(self):
-        query = "What did we note back around April 6 about the infrastructure?"
+        query = "What did we note back about the infrastructure?"
         old_repeat = _row(
             "old-repeat",
             content=f"the owner (telegram_surface): {query}\nMaez: older answer from the archive",
@@ -1147,6 +1147,99 @@ class LivingRecallFramingTests(unittest.TestCase):
             any(
                 item.source_type == "memory_context"
                 and ("2026-04" in item.text or "april" in item.text.lower())
+                for item in working_set.items
+            )
+        )
+
+    def test_absolute_date_label_survives_to_working_set(self):
+        from core import brain_loop
+        from core.dispatcher.external_sources import ExternalFanout
+        from core.dispatcher.layer1 import Layer1Fanout
+        from core.dispatcher.merge import merge_fanout_results
+        from core.routing.focused_cognition import assemble_working_set
+
+        query = "what did we note around April 6 about the infrastructure?"
+        april_core = {
+            "id": "core-april-date",
+            "content": "[Journal 2026-04-06] infrastructure ground-truth fabrication-class incident.",
+            "metadata": {
+                "type": "core_memory",
+                "source": "nightly_journal",
+                "timestamp": "2026-04-07T04:00:02+00:00",
+            },
+            "distance": 0.02,
+        }
+        may_core = {
+            "id": "core-may",
+            "content": "[Journal 2026-05-20] May progress on living recall.",
+            "metadata": {
+                "type": "core_memory",
+                "source": "nightly_journal",
+                "timestamp": "2026-05-20T04:00:00+00:00",
+            },
+            "distance": 0.05,
+        }
+        mm = _manager(core_rows=[april_core, may_core])
+        spec = _substrate_semantic_spec()
+
+        os.environ["MAEZ_LIVING_RECALL_ENABLED"] = "1"
+        try:
+            with (
+                mock.patch("core.brain.brain_loop._dispatcher_memory_manager", return_value=mm),
+                mock.patch("memory.memory_manager._now_seconds", return_value=datetime(2026, 5, 29, 12, 0, tzinfo=timezone.utc).timestamp()),
+                mock.patch("core.memory_scoring.record_recall", side_effect=lambda *a, **k: None),
+            ):
+                layer1 = Layer1Fanout(
+                    adapters=brain_loop._dispatcher_recall_adapters(
+                        query,
+                        spec=spec,
+                        surface="telegram_surface",
+                    ),
+                    branch_timeout_s=1.0,
+                    global_deadline_s=1.0,
+                )
+                layer1_result = layer1.run(
+                    spec,
+                    utterance=query,
+                    conversation_state={"surface": "telegram_surface"},
+                    fanout_generation_id="absolute-date",
+                )
+                external_result = ExternalFanout().run(
+                    spec,
+                    utterance=query,
+                    conversation_state={"surface": "telegram_surface"},
+                    fanout_generation_id="absolute-date",
+                )
+                rendered = merge_fanout_results(
+                    spec,
+                    layer1_result,
+                    external_result,
+                    utterance=query,
+                    surface="telegram_surface",
+                    timestamp="2026-05-29T12:00:00Z",
+                )
+        finally:
+            os.environ.pop("MAEZ_LIVING_RECALL_ENABLED", None)
+
+        transcript = rendered.prompt_block
+        self.assertIn("[memory context]", transcript)
+        self.assertIn('date_match="exact_date"', transcript)
+        self.assertIn("2026-04-06", transcript)
+        self.assertIn("fabrication-class", transcript)
+        self.assertNotIn("May progress", transcript)
+
+        working_set = assemble_working_set(
+            transcript=transcript,
+            web_context="",
+            owner_question=query,
+        )
+        self.assertIsNotNone(working_set)
+        assert working_set is not None
+        self.assertTrue(
+            any(
+                item.source_type == "memory_context"
+                and 'date_match="exact_date"' in item.text
+                and "fabrication-class" in item.text
                 for item in working_set.items
             )
         )
