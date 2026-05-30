@@ -884,6 +884,209 @@ class DaemonHandleMessageContract(unittest.TestCase):
         fsyn.assert_called_once()
         megachat.assert_not_called()
 
+    def test_reply_mode_resolver_drives_clinical_skip_tail_without_tail_seams(self):
+        from core.routing import reply_mode
+        from daemon import maez_daemon
+
+        daemon = self._build_daemon_for_handle_message()
+        daemon.memory.store_telegram = mock.Mock(wraps=daemon.memory.store_telegram)
+        daemon.lived_episodes.add = mock.Mock()
+        clinical = types.SimpleNamespace(
+            matched=True,
+            answer_text="clinical boundary reply",
+            promotion_policy="m1_ineligible_clinical_boundary",
+        )
+
+        with contextlib.ExitStack() as stack:
+            resolver = stack.enter_context(
+                mock.patch(
+                    "core.routing.reply_mode.resolve_reply_mode",
+                    wraps=reply_mode.resolve_reply_mode,
+                )
+            )
+            guard = stack.enter_context(
+                mock.patch.object(maez_daemon, "guard_owner_text", return_value=clinical)
+            )
+            camera = stack.enter_context(
+                mock.patch.object(
+                    maez_daemon,
+                    "answer_camera_presence_question",
+                    return_value="camera should not run",
+                )
+            )
+            trace = stack.enter_context(mock.patch.object(maez_daemon.Trace, "start"))
+            default_writer = stack.enter_context(
+                mock.patch.object(maez_daemon, "default_writer")
+            )
+            needs_web = stack.enter_context(
+                mock.patch("skills.web_search.needs_web_search")
+            )
+            llm_chat = stack.enter_context(mock.patch("core.llm_client.chat"))
+            audit = stack.enter_context(
+                mock.patch("core.safety.audited_output.audit_assistant_text")
+            )
+            ledger = stack.enter_context(mock.patch("core.ledger.writer.try_write_turn"))
+            model_reply = stack.enter_context(
+                mock.patch("core.ledger.model_reply_persistence.persist_model_reply")
+            )
+
+            reply = maez_daemon.MaezDaemon.handle_message(
+                daemon, "clinical boundary input", source="telegram_surface"
+            )
+
+        self.assertEqual(reply, "clinical boundary reply")
+        resolver.assert_called()
+        guard.assert_called_once()
+        camera.assert_not_called()
+        trace.assert_not_called()
+        default_writer.assert_not_called()
+        needs_web.assert_not_called()
+        llm_chat.assert_not_called()
+        audit.assert_not_called()
+        ledger.assert_not_called()
+        model_reply.assert_not_called()
+        daemon.memory.store_telegram.assert_not_called()
+        daemon.lived_episodes.add.assert_not_called()
+
+    def test_reply_mode_resolver_drives_camera_skip_tail_without_tail_seams(self):
+        from core.routing import reply_mode
+        from daemon import maez_daemon
+
+        daemon = self._build_daemon_for_handle_message()
+        daemon.memory.store_telegram = mock.Mock(wraps=daemon.memory.store_telegram)
+        daemon.lived_episodes.add = mock.Mock()
+        nonmatch = types.SimpleNamespace(
+            matched=False,
+            answer_text=None,
+            promotion_policy="m1_eligible",
+        )
+
+        with contextlib.ExitStack() as stack:
+            resolver = stack.enter_context(
+                mock.patch(
+                    "core.routing.reply_mode.resolve_reply_mode",
+                    wraps=reply_mode.resolve_reply_mode,
+                )
+            )
+            guard = stack.enter_context(
+                mock.patch.object(maez_daemon, "guard_owner_text", return_value=nonmatch)
+            )
+            camera = stack.enter_context(
+                mock.patch.object(
+                    maez_daemon,
+                    "answer_camera_presence_question",
+                    return_value="camera direct reply",
+                )
+            )
+            trace = stack.enter_context(mock.patch.object(maez_daemon.Trace, "start"))
+            default_writer = stack.enter_context(
+                mock.patch.object(maez_daemon, "default_writer")
+            )
+            needs_web = stack.enter_context(
+                mock.patch("skills.web_search.needs_web_search")
+            )
+            llm_chat = stack.enter_context(mock.patch("core.llm_client.chat"))
+            audit = stack.enter_context(
+                mock.patch("core.safety.audited_output.audit_assistant_text")
+            )
+            ledger = stack.enter_context(mock.patch("core.ledger.writer.try_write_turn"))
+            model_reply = stack.enter_context(
+                mock.patch("core.ledger.model_reply_persistence.persist_model_reply")
+            )
+
+            reply = maez_daemon.MaezDaemon.handle_message(
+                daemon, "is the camera active?", source="telegram_surface"
+            )
+
+        self.assertEqual(reply, "camera direct reply")
+        resolver.assert_called()
+        guard.assert_called_once()
+        camera.assert_called_once()
+        trace.assert_not_called()
+        default_writer.assert_not_called()
+        needs_web.assert_not_called()
+        llm_chat.assert_not_called()
+        audit.assert_not_called()
+        ledger.assert_not_called()
+        model_reply.assert_not_called()
+        daemon.memory.store_telegram.assert_not_called()
+        daemon.lived_episodes.add.assert_not_called()
+
+    def test_reply_mode_resolver_drives_echo_branch_with_same_reply(self):
+        from core.routing import reply_mode
+        from daemon import maez_daemon
+
+        daemon = self._build_daemon_for_handle_message()
+        captured: dict[str, list[dict]] = {}
+        text = (
+            "For the continuity witness: dialogue anchors now strip stale prior "
+            "citations before they become current evidence. Say that back in one sentence."
+        )
+        chat_history = [
+            {"role": "user", "content": "Earlier note"},
+            {
+                "role": "assistant",
+                "content": "[E1] stale citation that should not be repeated",
+            },
+        ]
+
+        with (
+            self._handle_message_mock_stack(maez_daemon, captured),
+            mock.patch.dict(
+                os.environ,
+                {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+                clear=False,
+            ),
+            mock.patch(
+                "core.routing.reply_mode.resolve_reply_mode",
+                wraps=reply_mode.resolve_reply_mode,
+            ) as resolver,
+        ):
+            reply = maez_daemon.MaezDaemon.handle_message(
+                daemon, text, chat_history=chat_history, source="telegram_surface"
+            )
+
+        self.assertEqual(
+            reply,
+            "Dialogue anchors now strip stale prior citations before they become current evidence.",
+        )
+        resolver.assert_called()
+
+    def test_reply_mode_resolver_preserves_honest_empty_before_focused_bug(self):
+        from core.routing import reply_mode
+        from daemon import maez_daemon
+
+        daemon = self._build_daemon_for_handle_message()
+        captured: dict[str, list[dict]] = {}
+        text = "What did I record on January 3?"
+
+        with (
+            self._handle_message_mock_stack(
+                maez_daemon,
+                captured,
+                needs_web_search=True,
+                web_context="",
+                reply="I searched and found nothing.",
+            ),
+            mock.patch.dict(
+                os.environ,
+                {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+                clear=False,
+            ),
+            mock.patch(
+                "core.routing.reply_mode.resolve_reply_mode",
+                wraps=reply_mode.resolve_reply_mode,
+            ) as resolver,
+            mock.patch("core.routing.focused_cognition.focused_synthesize") as focused,
+        ):
+            reply = maez_daemon.MaezDaemon.handle_message(
+                daemon, text, source="telegram_surface"
+            )
+
+        self.assertEqual(reply, "I searched and found nothing.")
+        resolver.assert_called()
+        focused.assert_not_called()
+
     def test_focused_telemetry_relabels_candidate_and_logs_actual_prompt(self):
         from daemon import maez_daemon
 
@@ -1424,7 +1627,7 @@ class DaemonHandleMessageContract(unittest.TestCase):
             if isinstance(node, ast.FunctionDef) and node.name == "handle_message":
                 body_src = ast.get_source_segment(src, node) or ""
                 self.assertIn("_authoritative_tool_reply(tool_calls)", body_src)
-                i_auth = body_src.find("if authoritative_tool_reply:")
+                i_auth = body_src.find("if _reply_decision.mode is ReplyMode.TOOL:")
                 i_chat = body_src.find("_llm_client.chat(")
                 self.assertGreaterEqual(i_auth, 0)
                 self.assertGreaterEqual(i_chat, 0)

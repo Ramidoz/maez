@@ -3228,6 +3228,12 @@ class MaezDaemon:
                 keyword overlap (incident: meta-harness at 04:42,
                 "it" at 04:53 lost the referent).
         """
+        from core.routing.reply_mode import (
+            ReplyDecisionSignals,
+            ReplyMode,
+            resolve_reply_mode,
+        )
+
         subjective_duration_line = ""
         _subjective_duration = None
         _sd = None
@@ -3252,17 +3258,25 @@ class MaezDaemon:
                 getattr(self, "private_thoughts", None)
             ),
         )
-        if _s4_result.matched:
-            self._mark_m1_s4_policy(_s4_result.promotion_policy)
-            return _s4_result.answer_text or ""
-
-        try:
-            self._camera_presence_state = self._camera_presence_state.with_freshness()
-            camera_answer = answer_camera_presence_question(text, self._camera_presence_state)
-            if camera_answer is not None:
-                return camera_answer
-        except Exception as exc:
-            logger.debug("camera presence direct-answer skipped: %s", exc)
+        camera_answer = None
+        if not _s4_result.matched:
+            try:
+                self._camera_presence_state = self._camera_presence_state.with_freshness()
+                camera_answer = answer_camera_presence_question(text, self._camera_presence_state)
+            except Exception as exc:
+                logger.debug("camera presence direct-answer skipped: %s", exc)
+        _pre_tail_decision = resolve_reply_mode(
+            ReplyDecisionSignals(
+                clinical_matched=bool(_s4_result.matched),
+                camera_answer=camera_answer,
+            )
+        )
+        if _pre_tail_decision.skip_tail:
+            if _pre_tail_decision.mode is ReplyMode.CLINICAL:
+                self._mark_m1_s4_policy(_s4_result.promotion_policy)
+                return _s4_result.answer_text or ""
+            if _pre_tail_decision.mode is ReplyMode.CAMERA:
+                return camera_answer or ""
 
         from skills.web_search import (
             search as web_search,
@@ -3873,15 +3887,15 @@ class MaezDaemon:
             and not _current_turn_echo_reply
             and not authoritative_tool_reply
         )
-        _legacy_call_purpose = (
-            "echo_reply"
-            if _current_turn_echo_reply
-            else "honest_empty"
-            if _honest_empty_candidate
-            else "legacy_candidate"
-            if _focused_candidate
-            else "llm_synthesis"
+        _reply_decision = resolve_reply_mode(
+            ReplyDecisionSignals(
+                authoritative_tool_reply=bool(authoritative_tool_reply),
+                echo_reply=bool(_current_turn_echo_reply),
+                honest_empty_candidate=bool(_honest_empty_candidate),
+                focused_candidate=bool(_focused_candidate),
+            )
         )
+        _legacy_call_purpose = _reply_decision.call_purpose
         if transcript_context or evidence_directive:
             _log_daemon_system_part_shape(
                 surface=source,
@@ -3896,11 +3910,11 @@ class MaezDaemon:
                 evidence_directive=evidence_directive,
             )
 
-        if authoritative_tool_reply:
+        if _reply_decision.mode is ReplyMode.TOOL:
             reply = authoritative_tool_reply
-        elif _current_turn_echo_reply:
+        elif _reply_decision.mode is ReplyMode.ECHO:
             reply = _current_turn_echo_reply
-        elif _honest_empty_candidate:
+        elif _reply_decision.mode is ReplyMode.HONEST_EMPTY:
             from core.routing.focused_cognition import (
                 build_honest_empty_reply as _build_honest_empty_reply,
                 record_focused_cognition_run as _record_focused_cognition_run,
@@ -3941,7 +3955,7 @@ class MaezDaemon:
         else:
             reply = None
             _focused_used = False
-            if _focused_candidate:
+            if _reply_decision.mode is ReplyMode.FOCUSED:
                 _focused_working_set = None
                 try:
                     from core.routing.focused_cognition import (
