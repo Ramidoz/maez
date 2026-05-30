@@ -813,6 +813,77 @@ class DaemonHandleMessageContract(unittest.TestCase):
         fsyn.assert_called_once()
         megachat.assert_called()
 
+    def test_dated_no_match_reaches_focused_status_not_legacy(self):
+        from daemon import maez_daemon
+
+        captured: dict[str, list[dict]] = {}
+        daemon = self._build_daemon_for_handle_message()
+
+        with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+            os.environ,
+            {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+        ), mock.patch(
+            "core.routing.focused_cognition.focused_synthesize",
+        ) as fsyn, mock.patch(
+            "core.routing.focused_cognition.record_focused_cognition_run",
+            return_value="focused-row-1",
+        ), mock.patch(
+            "core.llm_client.chat",
+        ) as megachat:
+            from core.routing.focused_cognition import FocusedResult
+
+            fsyn.return_value = FocusedResult("No dated memory [E1]", ["E1"], 200)
+            megachat.return_value = types.SimpleNamespace(
+                message=types.SimpleNamespace(content="legacy should not answer")
+            )
+            reply = maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                "What did I record on January 3?",
+                source="telegram_surface",
+                transcript="",
+                chat_history=[],
+            )
+
+        self.assertEqual(reply, "No dated memory [E1]")
+        fsyn.assert_called_once()
+        working_set = fsyn.call_args.args[0]
+        self.assertEqual(working_set.items[0].source_type, "temporal_recall_status")
+        megachat.assert_not_called()
+
+    def test_dated_focused_error_never_falls_through_to_legacy(self):
+        from daemon import maez_daemon
+
+        captured: dict[str, list[dict]] = {}
+        daemon = self._build_daemon_for_handle_message()
+
+        with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+            os.environ,
+            {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+        ), mock.patch(
+            "core.routing.focused_cognition.focused_synthesize",
+            side_effect=RuntimeError("boom"),
+        ) as fsyn, mock.patch(
+            "core.routing.focused_cognition.record_focused_cognition_run",
+            return_value="focused-row-1",
+        ), mock.patch(
+            "core.llm_client.chat",
+        ) as megachat:
+            megachat.return_value = types.SimpleNamespace(
+                message=types.SimpleNamespace(content="legacy should not answer")
+            )
+            reply = maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                "What did I record on January 3?",
+                source="telegram_surface",
+                transcript="",
+                chat_history=[],
+            )
+
+        self.assertIn("I don't have a dated memory for that window", reply)
+        self.assertIn("guesswork", reply)
+        fsyn.assert_called_once()
+        megachat.assert_not_called()
+
     def test_focused_telemetry_relabels_candidate_and_logs_actual_prompt(self):
         from daemon import maez_daemon
 

@@ -3845,11 +3845,26 @@ class MaezDaemon:
                 or getattr(_dialogue_state, "fail_safe_legacy", False)
             )
         )
+        try:
+            from core.routing.temporal_cue import (
+                absolute_recall_cue as _absolute_recall_cue,
+            )
+
+            _abs_recall_cue = _absolute_recall_cue(text)
+        except Exception:
+            _abs_recall_cue = None
+        _date_addressed_turn = bool(
+            _abs_recall_cue and getattr(_abs_recall_cue, "is_address", False)
+        )
         _focused_candidate = (
             _focused_cognition_enabled()
             and source != "voice"
             and not _current_turn_echo_reply
-            and (_evidence_state.evidence_present or _dialogue_needs_or_uncertain)
+            and (
+                _evidence_state.evidence_present
+                or _dialogue_needs_or_uncertain
+                or _date_addressed_turn
+            )
         )
         _honest_empty_candidate = (
             _empty_web_search
@@ -3985,10 +4000,17 @@ class MaezDaemon:
                             reply = _focused_reply
                             _focused_used = True
                 except Exception as _focused_exc:
-                    logger.warning(
-                        "focused cognition failed, falling back to megaprompt: %s",
-                        _focused_exc,
-                    )
+                    if _date_addressed_turn:
+                        logger.warning(
+                            "focused cognition failed on dated recall, using "
+                            "deterministic dated honesty: %s",
+                            _focused_exc,
+                        )
+                    else:
+                        logger.warning(
+                            "focused cognition failed, falling back to megaprompt: %s",
+                            _focused_exc,
+                        )
                     try:
                         from core.routing.focused_cognition import (
                             record_focused_cognition_run as _record_focused_cognition_run,
@@ -4011,6 +4033,13 @@ class MaezDaemon:
                         )
                     except Exception:
                         pass
+
+            if _date_addressed_turn and not _focused_used and reply is None:
+                reply = (
+                    "I don't have a dated memory for that window. I'm not going "
+                    "to answer it from recent chat or guesswork."
+                )
+                _focused_used = True
 
             if not _focused_used:
                 try:
