@@ -7,6 +7,9 @@ import unittest
 class DaemonModeAWiring(unittest.TestCase):
     def setUp(self):
         self.src = Path("daemon/maez_daemon.py").read_text(encoding="utf-8")
+        self.reply_mode_src = Path("core/routing/reply_mode.py").read_text(
+            encoding="utf-8"
+        )
 
     def test_empty_search_flag_computed(self):
         self.assertIn("_empty_web_search", self.src)
@@ -16,7 +19,7 @@ class DaemonModeAWiring(unittest.TestCase):
         self.assertIn("if web_context and not _empty_web_search:", self.src)
 
     def test_honest_empty_branch_and_telemetry(self):
-        self.assertIn('"honest_empty"', self.src)
+        self.assertIn('ReplyMode.HONEST_EMPTY: "honest_empty"', self.reply_mode_src)
         self.assertIn("build_honest_empty_reply", self.src)
         self.assertIn("honest_empty_reply", self.src)
 
