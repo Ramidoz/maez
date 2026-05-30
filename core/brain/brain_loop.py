@@ -850,7 +850,7 @@ def _run_dispatcher_pipeline(
     return _DispatcherPathResult(
         transcript=rendered_turn.prompt_block,
         should_run_jarvis=False,
-        recall_items=rendered_turn.recall_items,
+        recall_items=getattr(rendered_turn, "recall_items", ()),
     )
 
 # Alias to match original module's import style (`_jarvis_re` is the

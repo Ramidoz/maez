@@ -53,7 +53,7 @@ _RANK_DATE_CONFIRMED = 0
 _RANK_TEMPORAL_STATUS = 1
 _RANK_DATE_CONTEXT_OFFSET = 2
 _RANK_DATE_DIALOGUE_ANCHOR = 50
-_DEFAULT_WORKING_SET_CHAR_BUDGET = 6000
+_DEFAULT_WORKING_SET_CHAR_BUDGET = 12000
 _TRUNCATION_SUFFIX = " ...[truncated]"
 _AUTHORITY_LABEL: dict[str, str] = {
     "fresh_evidence": "observed (fresh) — current-state authority",

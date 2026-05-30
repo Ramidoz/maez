@@ -783,6 +783,71 @@ class AdapterRoleHintTests(unittest.TestCase):
         )
         self.assertIn("raw-fresh", {item.durable_id for item in blocks[0].items})
 
+    def test_dispatcher_merge_structured_items_drive_daemon_style_assemble(self):
+        from core import brain_loop
+        from core.dispatcher.external_sources import ExternalFanout
+        from core.dispatcher.layer1 import Layer1Fanout
+        from core.dispatcher.merge import merge_fanout_results
+        from core.routing.focused_cognition import assemble_working_set
+
+        fake = self._StructuredDatedMemory()
+        query = "What did we note around April 27 about infrastructure?"
+        spec = _substrate_semantic_spec()
+        os.environ["MAEZ_LIVING_RECALL_ENABLED"] = "1"
+        try:
+            with mock.patch("core.brain.brain_loop._dispatcher_memory_manager", return_value=fake):
+                layer1 = Layer1Fanout(
+                    adapters=brain_loop._dispatcher_recall_adapters(
+                        query,
+                        spec=spec,
+                        surface="telegram_surface",
+                    ),
+                    branch_timeout_s=1.0,
+                    global_deadline_s=1.0,
+                )
+                layer1_result = layer1.run(
+                    spec,
+                    utterance=query,
+                    conversation_state={"surface": "telegram_surface"},
+                    fanout_generation_id="structured-recall",
+                )
+                external_result = ExternalFanout().run(
+                    spec,
+                    utterance=query,
+                    conversation_state={"surface": "telegram_surface"},
+                    fanout_generation_id="structured-recall",
+                )
+                rendered = merge_fanout_results(
+                    spec,
+                    layer1_result,
+                    external_result,
+                    utterance=query,
+                    surface="telegram_surface",
+                    timestamp="2026-05-30T12:00:00Z",
+                )
+        finally:
+            os.environ.pop("MAEZ_LIVING_RECALL_ENABLED", None)
+
+        self.assertTrue(rendered.recall_items)
+        working_set = assemble_working_set(
+            transcript=rendered.prompt_block,
+            web_context="",
+            owner_question=query,
+            recall_items=rendered.recall_items,
+        )
+
+        self.assertIsNotNone(working_set)
+        assert working_set is not None
+        self.assertFalse(
+            any(item.source_type == "temporal_recall_status" for item in working_set.items)
+        )
+        top = working_set.items[0]
+        self.assertEqual(top.source_type, "memory_context")
+        self.assertEqual(top.durable_id, "core-april-27")
+        self.assertTrue(top.temporal_provenance["confirmed"])
+        self.assertEqual(top.temporal_provenance["method"], "exact_date")
+        self.assertEqual(top.text, fake.long_context.strip())
+
     def test_flag_on_non_telegram_surface_stays_legacy(self):
         from core import brain_loop
         from core.dispatcher.spec import SourceRole, SubstrateSource
