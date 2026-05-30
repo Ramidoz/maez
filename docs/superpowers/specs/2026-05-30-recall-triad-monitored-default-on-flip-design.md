@@ -57,6 +57,27 @@ the test fails if any free-text/content column like `query_text` or `recalled_sn
 - `declined_absence` — the legal "I don't have a dated memory" (`receipt=consulted ∧ ¬had_confirmed`).
 - `declined_unavailable` — "I can't reach my dated memory from here" (`receipt=not_consulted`).
 - `declined_failed` — "I went to check and it errored" (`receipt=consult_failed`).
+- `declined_transport` — "I have it but couldn't pull it together right now" (`denial_kind=transport_failure`).
+  This is **NOT an absence claim** — a confirmed item existed; synthesis failed. Must never be counted as
+  absence. *(Pre-reg amendment A4, below.)*
+- `declined_unverified` — a **legacy** absence claim produced with no consultation (`mode=legacy`, the
+  reply asserts absence-of-fact on a recall-relevant turn). This **is** a false-absence (legacy claiming
+  absence without ever checking). *(Pre-reg amendment A4.)*
+- `ordinary_answered` / `ordinary_declined` — **non-recall** turns (`turn_kind=ordinary`). Recorded ONLY
+  for the blast-radius guardrail (no-regression on ordinary turns); **excluded** from every recall
+  fabrication/benefit class. An ordinary legacy "what is X?" is `ordinary_answered`, never
+  `answered_unverifiable`. *(Pre-reg amendment A4 — closes the misclassification where ordinary legacy
+  turns would corrupt the fabrication metric.)*
+
+> **Pre-registration amendment A4 (2026-05-30, before any flag-on data — still legitimately
+> pre-registered; HARKing concerns post-hoc outcome-driven changes, and none have occurred).** Writing
+> slice 1a's plan surfaced three enum gaps in the frozen list above. Folded explicitly here rather than
+> drifted silently in implementation (canon-governs-canon): (1) `classify_outcome` takes `turn_kind`, and
+> ordinary turns map to `ordinary_answered`/`ordinary_declined`, never to recall fabrication classes;
+> (2) `transport_failure` maps to `declined_transport`, never `declined_absence` ("had it, couldn't pull
+> it together" ≠ absence); (3) a legacy absence-without-consultation is `declined_unverified` and counts
+> as a false-absence. The `is_false_absence` rule (below) is unchanged in intent — it points at
+> `denial_kind`/`had_confirmed` and now also flags `declined_unverified`.
 
 **Recall-relevant turn (pinned — Logical C3b, Visionary):** a turn where `_date_addressed_turn == True`
 OR the continuity classifier fired — i.e. recall *would* be consulted if the triad were on. Computed from
