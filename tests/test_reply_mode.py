@@ -4,11 +4,8 @@ import itertools
 import unittest
 
 
-def _today_oracle(s) -> str:
-    """Reference replica of handle_message's current routing order.
-
-    Slice 1 deliberately preserves the B4 bug: honest-empty wins before focused.
-    """
+def _declared_oracle(s) -> str:
+    """Reference replica of the declared resolver routing order."""
     if s.clinical_matched:
         return "CLINICAL"
     if s.camera_answer is not None:
@@ -17,10 +14,10 @@ def _today_oracle(s) -> str:
         return "TOOL"
     if s.echo_reply:
         return "ECHO"
-    if s.honest_empty_candidate:
-        return "HONEST_EMPTY"
     if s.focused_candidate:
         return "FOCUSED"
+    if s.honest_empty_candidate and not s.date_addressed:
+        return "HONEST_EMPTY"
     return "LEGACY"
 
 
@@ -34,6 +31,7 @@ class ResolveReplyModeOracleTests(unittest.TestCase):
             "echo_reply",
             "honest_empty_candidate",
             "focused_candidate",
+            "date_addressed",
         ]
         for combo in itertools.product([False, True], repeat=len(bool_fields)):
             for camera in (None, "the camera is on"):
@@ -43,7 +41,7 @@ class ResolveReplyModeOracleTests(unittest.TestCase):
                 with self.subTest(**kw):
                     self.assertEqual(
                         resolve_reply_mode(signals).mode.value,
-                        _today_oracle(signals),
+                        _declared_oracle(signals),
                     )
 
     def test_skip_tail_only_for_clinical_and_camera(self):
@@ -104,3 +102,50 @@ class ResolveReplyModeOracleTests(unittest.TestCase):
             resolve_reply_mode(ReplyDecisionSignals()).call_purpose,
             "llm_synthesis",
         )
+
+
+class ResolverB4PrecedenceTests(unittest.TestCase):
+    def test_date_addressed_prefers_focused_over_honest_empty(self):
+        from core.routing.reply_mode import (
+            ReplyDecisionSignals,
+            ReplyMode,
+            resolve_reply_mode,
+        )
+
+        signals = ReplyDecisionSignals(
+            honest_empty_candidate=True,
+            focused_candidate=True,
+            date_addressed=True,
+        )
+
+        self.assertIs(resolve_reply_mode(signals).mode, ReplyMode.FOCUSED)
+
+    def test_non_dated_empty_web_still_honest_empty(self):
+        from core.routing.reply_mode import (
+            ReplyDecisionSignals,
+            ReplyMode,
+            resolve_reply_mode,
+        )
+
+        signals = ReplyDecisionSignals(
+            honest_empty_candidate=True,
+            focused_candidate=False,
+            date_addressed=False,
+        )
+
+        self.assertIs(resolve_reply_mode(signals).mode, ReplyMode.HONEST_EMPTY)
+
+    def test_dated_empty_web_no_focused_excludes_honest_empty(self):
+        from core.routing.reply_mode import (
+            ReplyDecisionSignals,
+            ReplyMode,
+            resolve_reply_mode,
+        )
+
+        signals = ReplyDecisionSignals(
+            honest_empty_candidate=True,
+            focused_candidate=False,
+            date_addressed=True,
+        )
+
+        self.assertIs(resolve_reply_mode(signals).mode, ReplyMode.LEGACY)

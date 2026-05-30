@@ -1,8 +1,8 @@
 """Single declared-precedence resolver for MaezDaemon.handle_message reply modes.
 
-Slice 1 is behavior-preserving: resolve_reply_mode encodes today's actual
-precedence (early returns + if/elif chain), including the known B4 ordering bug
-(HONEST_EMPTY before FOCUSED). Slice 2 flips exactly two lines to fix B4/B5.
+resolve_reply_mode encodes the current declared precedence. Date-addressed turns
+prefer FOCUSED over HONEST_EMPTY so the temporal recall/status path can answer
+instead of being pre-empted by a zero-result web search.
 
 DATED_HONESTY and BACKEND_ERROR are execution outcomes of FOCUSED / LEGACY, not
 initial resolver winners; resolve_reply_mode never returns them.
@@ -34,6 +34,7 @@ class ReplyDecisionSignals:
     echo_reply: bool = False
     honest_empty_candidate: bool = False
     focused_candidate: bool = False
+    date_addressed: bool = False
 
 
 @dataclass(frozen=True)
@@ -58,8 +59,8 @@ _CALL_PURPOSE = {
 def resolve_reply_mode(signals: ReplyDecisionSignals) -> ReplyDecision:
     """Return today's top-level reply mode.
 
-    Order is the Slice 1 behavior contract. HONEST_EMPTY intentionally wins
-    before FOCUSED here; Slice 2 changes that precedence.
+    Order is the behavior contract. HONEST_EMPTY excludes date-addressed turns;
+    date-addressed misses are handled by focused temporal status/honesty.
     """
     if signals.clinical_matched:
         return ReplyDecision(
@@ -79,11 +80,11 @@ def resolve_reply_mode(signals: ReplyDecisionSignals) -> ReplyDecision:
         return ReplyDecision(ReplyMode.TOOL, _CALL_PURPOSE[ReplyMode.TOOL])
     if signals.echo_reply:
         return ReplyDecision(ReplyMode.ECHO, _CALL_PURPOSE[ReplyMode.ECHO])
-    if signals.honest_empty_candidate:
+    if signals.focused_candidate:
+        return ReplyDecision(ReplyMode.FOCUSED, _CALL_PURPOSE[ReplyMode.FOCUSED])
+    if signals.honest_empty_candidate and not signals.date_addressed:
         return ReplyDecision(
             ReplyMode.HONEST_EMPTY,
             _CALL_PURPOSE[ReplyMode.HONEST_EMPTY],
         )
-    if signals.focused_candidate:
-        return ReplyDecision(ReplyMode.FOCUSED, _CALL_PURPOSE[ReplyMode.FOCUSED])
     return ReplyDecision(ReplyMode.LEGACY, _CALL_PURPOSE[ReplyMode.LEGACY])
