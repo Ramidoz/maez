@@ -52,5 +52,25 @@ class DaemonWebGatePreservationTest(unittest.TestCase):
             self.assertFalse(md._focused_cognition_enabled())
 
 
+class TelegramVoiceGateTest(unittest.TestCase):
+    def test_pipeline_a_web_search_disabled_when_triad_on(self):
+        from skills import telegram_voice
+
+        with _clean_env(MAEZ_RECALL_TRIAD_ENABLED="1"):
+            self.assertFalse(telegram_voice._telegram_pipeline_a_web_search_enabled())
+
+    def test_pipeline_a_web_search_enabled_when_triad_off(self):
+        from skills import telegram_voice
+
+        with _clean_env():
+            self.assertTrue(telegram_voice._telegram_pipeline_a_web_search_enabled())
+
+    def test_raw_dispatcher_flag_alone_does_not_disable_pipeline_a_web(self):
+        from skills import telegram_voice
+
+        with _clean_env(MAEZ_DISPATCHER_ENABLED="1"):
+            self.assertTrue(telegram_voice._telegram_pipeline_a_web_search_enabled())
+
+
 if __name__ == "__main__":
     unittest.main()

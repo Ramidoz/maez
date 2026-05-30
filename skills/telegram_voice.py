@@ -65,7 +65,9 @@ DISPATCHER_TRANSCRIPT_MARKERS = (
 
 
 def _telegram_pipeline_a_web_search_enabled() -> bool:
-    return os.environ.get("MAEZ_DISPATCHER_ENABLED", "0") != "1"
+    from core.routing.recall_stack_config import resolve_recall_stack
+
+    return not resolve_recall_stack().triad_on
 
 
 def _telegram_jarvis_block_is_dispatcher_shaped(jarvis_block: str) -> bool:

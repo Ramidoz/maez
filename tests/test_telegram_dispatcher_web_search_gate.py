@@ -7,13 +7,13 @@ from unittest import mock
 
 
 class TelegramDispatcherWebSearchGateTests(unittest.TestCase):
-    def test_pipeline_a_web_search_gate_follows_dispatcher_flag(self):
+    def test_pipeline_a_web_search_gate_follows_recall_triad_bundle(self):
         from skills import telegram_voice
 
-        with mock.patch.dict(os.environ, {"MAEZ_DISPATCHER_ENABLED": "1"}, clear=False):
+        with mock.patch.dict(os.environ, {"MAEZ_RECALL_TRIAD_ENABLED": "1"}, clear=False):
             self.assertFalse(telegram_voice._telegram_pipeline_a_web_search_enabled())
 
-        with mock.patch.dict(os.environ, {"MAEZ_DISPATCHER_ENABLED": "0"}, clear=False):
+        with mock.patch.dict(os.environ, {"MAEZ_RECALL_TRIAD_ENABLED": "0"}, clear=False):
             self.assertTrue(telegram_voice._telegram_pipeline_a_web_search_enabled())
 
         with mock.patch.dict(os.environ, {}, clear=True):
