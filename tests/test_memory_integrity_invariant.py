@@ -999,6 +999,58 @@ class DaemonHandleMessageContract(unittest.TestCase):
         self.assertIn("full incident context", top.text)
         megachat.assert_not_called()
 
+    def test_handle_message_empty_recall_items_preserves_transcript_memory(self):
+        from daemon import maez_daemon
+        from core.routing.focused_cognition import FocusedResult
+
+        captured: dict[str, list[dict]] = {}
+        daemon = self._build_daemon_for_handle_message()
+        transcript = (
+            "[memory context]\n"
+            '<RECALLED id="core-april-27" date_match="exact_date">'
+            "INFRASTRUCTURE GROUND-TRUTH 2026-04-27 full incident context"
+            "</RECALLED>"
+        )
+
+        with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+            os.environ,
+            {"MAEZ_FOCUSED_COGNITION_ENABLED": "1"},
+        ), mock.patch(
+            "core.routing.focused_cognition.focused_synthesize",
+        ) as fsyn, mock.patch(
+            "core.routing.focused_cognition.record_focused_cognition_run",
+            return_value="focused-row-1",
+        ), mock.patch(
+            "core.llm_client.chat",
+        ) as megachat:
+            fsyn.return_value = FocusedResult("April 27 incident [E1]", ["E1"], 400)
+            megachat.return_value = types.SimpleNamespace(
+                message=types.SimpleNamespace(content="legacy should not answer")
+            )
+            reply = maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                "What did we note around April 27?",
+                source="telegram_surface",
+                transcript=transcript,
+                chat_history=[],
+                recall_items=(),
+            )
+
+        self.assertEqual(reply, "April 27 incident [E1]")
+        fsyn.assert_called_once()
+        working_set = fsyn.call_args.args[0]
+        self.assertFalse(
+            any(
+                item.source_type == "temporal_recall_status"
+                for item in working_set.items
+            )
+        )
+        top = working_set.items[0]
+        self.assertEqual(top.source_type, "memory_context")
+        self.assertTrue(top.temporal_provenance["confirmed"])
+        self.assertIn("INFRASTRUCTURE GROUND-TRUTH", top.text)
+        megachat.assert_not_called()
+
     def test_focused_empty_no_confirmed_is_honest_absence(self):
         from daemon import maez_daemon
 

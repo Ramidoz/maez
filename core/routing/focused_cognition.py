@@ -528,10 +528,8 @@ def _budget_items_for_prompt(
     weights = [2 if index == 0 else 1 for index, _item in enumerate(items)]
     unit_budget = text_budget // max(sum(weights), 1)
     budgeted: list[EvidenceItem] = []
-    for item, weight in zip(items, weights, strict=True):
+    for item, _weight in zip(items, weights, strict=True):
         allowance = max(unit_budget, 0)
-        if weight > 1:
-            allowance = max(unit_budget, 0)
         budgeted.append(replace(item, text=_truncate_item_text(item.text, allowance)))
     return budgeted
 
@@ -573,9 +571,7 @@ def assemble_working_set(
         and not date_cue
     ):
         return None
-    structured_recall_items = (
-        None if recall_items is None else tuple(recall_items)
-    )
+    structured_recall_items = tuple(recall_items) if recall_items else None
     if (
         not state.evidence_present
         and not anchors

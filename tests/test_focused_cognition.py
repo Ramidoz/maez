@@ -753,6 +753,22 @@ class StructuredRecallChannelTests(unittest.TestCase):
         self.assertEqual(ws.items[0].source_type, "memory_context")
         self.assertTrue(ws.items[0].temporal_provenance["confirmed"])
 
+    def test_empty_recall_items_falls_back_to_transcript_memory(self):
+        ws = assemble_working_set(
+            transcript=TemporalProvenancePrecedenceTests.CONFIRMED,
+            web_context="",
+            owner_question="what did we note around April 27?",
+            recall_items=(),
+        )
+
+        self.assertIsNotNone(ws)
+        assert ws is not None
+        self.assertEqual(ws.items[0].source_type, "memory_context")
+        self.assertTrue(ws.items[0].temporal_provenance["confirmed"])
+        self.assertFalse(
+            any(item.source_type == "temporal_recall_status" for item in ws.items)
+        )
+
     def test_item_aware_budget_preserves_provenance(self):
         from core.dispatcher.layer1 import RecallItem
 
