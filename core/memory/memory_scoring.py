@@ -71,6 +71,13 @@ _DB_PATH: Path = _paths.memory_dir() / "recall_stats.db"
 _MAX_QUERY_HASHES = 32      # same ceiling as OpenClaw; caps diversity score
 _MAX_RECALL_DAYS = 16       # ceiling for frequency-via-days
 MAX_CONCEPT_TAGS = 8        # matches OpenClaw constant
+# Recency decay half-life for memory ranking (a soft modulator, NOT a cutoff).
+# DECODER NOTE (recall-flip 1a): this 14 is the *ranking* half-life. It is distinct
+# from the recall "evidence ceiling", which is NOT a number but a TYPE RULE enforced
+# by source-type labels in core/routing/focused_cognition.py: recalled memory is
+# emitted as `memory_context`, never `memory_evidence` (old memory is context, never
+# current-state evidence). Do not conflate or "unify" these -- one is a decay constant,
+# the other is a type invariant. See the flip spec, "Reconcile the two 14s".
 _RECENCY_HALF_LIFE_DAYS = 14.0
 _DAY_SECONDS = 86400.0
 
