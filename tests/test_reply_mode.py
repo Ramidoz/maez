@@ -79,6 +79,12 @@ class ResolveReplyModeOracleTests(unittest.TestCase):
         from core.routing.reply_mode import ReplyDecisionSignals, resolve_reply_mode
 
         self.assertEqual(
+            resolve_reply_mode(
+                ReplyDecisionSignals(authoritative_tool_reply=True)
+            ).call_purpose,
+            "authoritative_tool",
+        )
+        self.assertEqual(
             resolve_reply_mode(ReplyDecisionSignals(echo_reply=True)).call_purpose,
             "echo_reply",
         )
