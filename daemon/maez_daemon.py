@@ -1002,6 +1002,17 @@ def _focused_cognition_enabled(*, recall_stack_config=None) -> bool:
     return recall_stack_config.triad_on
 
 
+RECALL_STATUS_INTERCEPT_FLAG = "MAEZ_RECALL_STATUS_INTERCEPT_ENABLED"
+
+
+def _recall_status_intercept_enabled() -> bool:
+    return (os.environ.get(RECALL_STATUS_INTERCEPT_FLAG, "") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
 RECALL_CARRIER_NOT_CONSULTED = "not_consulted"
 RECALL_CARRIER_CONSULTED = "consulted"
 RECALL_CARRIER_CONSULT_FAILED = "consult_failed"
@@ -1179,6 +1190,27 @@ def _is_dated_denial_reply(reply: str) -> bool:
         _dated_denial_reply(carrier_receipt=RECALL_CARRIER_CONSULTED, had_confirmed=True),
     }
     return text in replies
+
+
+def _log_recall_self_status(
+    *,
+    source: str,
+    state: str,
+    triad_on: bool,
+    carrier_reachable: bool,
+    receipt: str,
+    timestamp_requested: bool,
+) -> None:
+    logger.info(
+        "recall_self_status source=%s state=%s triad_on=%s "
+        "carrier_reachable=%s receipt=%s timestamp_requested=%s",
+        source,
+        state,
+        str(bool(triad_on)).lower(),
+        str(bool(carrier_reachable)).lower(),
+        receipt,
+        str(bool(timestamp_requested)).lower(),
+    )
 
 
 def _consolidate_system_messages(
@@ -4117,8 +4149,47 @@ class MaezDaemon:
         _focused_result = None
         _focused_verdict = None
         _reply_path = _reply_decision.mode.value.lower()
+        _recall_status_reply = None
+        if _recall_status_intercept_enabled():
+            try:
+                from core.routing.recall_self_status import (
+                    build_recall_status_reply as _build_recall_status_reply,
+                    is_recall_status_query as _is_recall_status_query,
+                    recall_status_query_wants_timestamp as _recall_status_query_wants_timestamp,
+                )
 
-        if _reply_decision.mode is ReplyMode.TOOL:
+                if _is_recall_status_query(text):
+                    _status_last_receipt = getattr(self, "_last_recall_receipt", None)
+                    _status_include_timestamp = _recall_status_query_wants_timestamp(text)
+                    _status_carrier_reachable = bool(
+                        _focused_cognition_enabled(
+                            recall_stack_config=_recall_stack_config,
+                        )
+                        and source != "voice"
+                    )
+                    _recall_status_reply, _recall_status_state = _build_recall_status_reply(
+                        triad_on=bool(_recall_stack_config.triad_on),
+                        carrier_reachable_from_surface=_status_carrier_reachable,
+                        last_receipt=_status_last_receipt,
+                        current_boot_id=str(getattr(self, "boot_time", "") or ""),
+                        now_ts=time.time(),
+                        include_timestamp=_status_include_timestamp,
+                    )
+                    _log_recall_self_status(
+                        source=source,
+                        state=_recall_status_state.value,
+                        triad_on=bool(_recall_stack_config.triad_on),
+                        carrier_reachable=_status_carrier_reachable,
+                        receipt=str(getattr(_status_last_receipt, "receipt", "none")),
+                        timestamp_requested=_status_include_timestamp,
+                    )
+            except Exception as _status_exc:
+                logger.debug("recall self-status intercept skipped: %s", _status_exc)
+
+        if _recall_status_reply is not None:
+            reply = _recall_status_reply
+            _reply_path = "self_status"
+        elif _reply_decision.mode is ReplyMode.TOOL:
             reply = authoritative_tool_reply
         elif _reply_decision.mode is ReplyMode.ECHO:
             reply = _current_turn_echo_reply

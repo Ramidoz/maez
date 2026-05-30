@@ -393,10 +393,13 @@ class DaemonHandleMessageContract(unittest.TestCase):
                 "Trace",
                 types.SimpleNamespace(start=lambda **_kwargs: trace),
             ))
+            def fake_trace_write(_trace):
+                captured["trace_written"] = True
+
             stack.enter_context(mock.patch.object(
                 maez_daemon,
                 "default_writer",
-                return_value=types.SimpleNamespace(write=lambda _trace: None),
+                return_value=types.SimpleNamespace(write=fake_trace_write),
             ))
             stack.enter_context(mock.patch.object(
                 maez_daemon,
@@ -553,6 +556,111 @@ class DaemonHandleMessageContract(unittest.TestCase):
         self.assertIn("turn_kind=continuity", line)
         self.assertIn("denial_kind=na", line)
         self.assertIn("receipt_or_na=na", line)
+
+    def test_recall_self_status_intercept_is_deterministic_and_tail_runs(self):
+        from daemon import maez_daemon
+
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+        daemon.memory.store_telegram = mock.Mock(return_value="raw-memory-id")
+        with self.assertLogs("maez", level="INFO") as logs:
+            with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+                os.environ,
+                {
+                    "MAEZ_RECALL_TRIAD_ENABLED": "0",
+                    "MAEZ_RECALL_STATUS_INTERCEPT_ENABLED": "1",
+                },
+                clear=False,
+            ):
+                reply = maez_daemon.MaezDaemon.handle_message(
+                    daemon,
+                    "is your dated recall reachable right now?",
+                    chat_id="c1",
+                    source="telegram",
+                )
+
+        self.assertIn("can't reach my dated memory", reply.lower())
+        self.assertNotIn("messages", captured)
+        self.assertTrue(captured.get("trace_written"))
+        daemon.memory.store_telegram.assert_called_once()
+        joined = "\n".join(logs.output)
+        self.assertIn("recall_self_status", joined)
+        self.assertIn("state=off_by_config", joined)
+        self.assertIn("reply_path=self_status", joined)
+
+    def test_recall_self_status_flag_off_does_not_intercept(self):
+        from daemon import maez_daemon
+
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+        with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+            os.environ,
+            {
+                "MAEZ_RECALL_TRIAD_ENABLED": "0",
+                "MAEZ_RECALL_STATUS_INTERCEPT_ENABLED": "0",
+            },
+            clear=False,
+        ):
+            maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                "is your dated recall reachable right now?",
+                chat_id="c1",
+                source="telegram",
+            )
+
+        self.assertIn("messages", captured)
+
+    def test_ordinary_dated_query_is_not_self_status_intercepted(self):
+        from daemon import maez_daemon
+
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+        with self.assertLogs("maez", level="INFO") as logs:
+            with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+                os.environ,
+                {
+                    "MAEZ_RECALL_TRIAD_ENABLED": "0",
+                    "MAEZ_RECALL_STATUS_INTERCEPT_ENABLED": "1",
+                },
+                clear=False,
+            ):
+                reply = maez_daemon.MaezDaemon.handle_message(
+                    daemon,
+                    "what did we discuss around April 27?",
+                    chat_id="c1",
+                    source="telegram",
+                )
+
+        self.assertNotIn("the dated-memory path is switched on", reply.lower())
+        self.assertNotIn("that path isn't switched on", reply.lower())
+        self.assertNotIn("recall_self_status", "\n".join(logs.output))
+
+    def test_recall_self_status_voice_surface_reports_unreachable(self):
+        from daemon import maez_daemon
+
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+        with self.assertLogs("maez", level="INFO") as logs:
+            with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+                os.environ,
+                {
+                    "MAEZ_RECALL_TRIAD_ENABLED": "1",
+                    "MAEZ_RECALL_STATUS_INTERCEPT_ENABLED": "1",
+                },
+                clear=False,
+            ):
+                reply = maez_daemon.MaezDaemon.handle_message(
+                    daemon,
+                    "is your dated recall reachable right now?",
+                    chat_id="c1",
+                    source="voice",
+                )
+
+        self.assertIn("from this surface", reply.lower())
+        self.assertNotIn("messages", captured)
+        joined = "\n".join(logs.output)
+        self.assertIn("recall_self_status", joined)
+        self.assertIn("state=unreachable_from_surface", joined)
 
     def test_handle_message_sends_one_system_message_with_dispatcher_suffix(self):
         """The live daemon prompt assembly must send one system message."""
