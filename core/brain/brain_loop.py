@@ -203,7 +203,11 @@ def _dispatcher_recall_adapters(
     surface: str = "",
     chat_history=None,
 ):
-    from core.dispatcher.layer1 import MAX_RECALL_CHARS_PER_SOURCE, RecallBlock
+    from core.dispatcher.layer1 import (
+        MAX_RECALL_CHARS_PER_SOURCE,
+        RecallBlock,
+        RecallItem,
+    )
     from core.dispatcher.spec import SubstrateSource
     from core.routing.temporal_cue import absolute_recall_cue
 
@@ -344,6 +348,42 @@ def _dispatcher_recall_adapters(
                     ],
                 )
 
+        def _partition_rows(partition: dict) -> list[dict]:
+            rows: list[dict] = []
+            for tier in ("core", "daily", "raw"):
+                rows.extend((partition or {}).get(tier, []) or [])
+            return rows
+
+        def _items_for(partition: dict, role_source_type: str) -> tuple[RecallItem, ...]:
+            items = []
+            for row in _partition_rows(partition):
+                meta = row.get("metadata") or {}
+                method = meta.get("temporal_match_method")
+                temporal_provenance = (
+                    {
+                        "method": method,
+                        "confirmed": method in ("exact_date", "month_window"),
+                    }
+                    if method
+                    else None
+                )
+                text = _llm_client.sanitize_prompt_text(str(row.get("content") or ""))
+                items.append(
+                    RecallItem(
+                        text=text,
+                        source_type=role_source_type,
+                        durable_id=str(row.get("id") or "") or None,
+                        temporal_provenance=temporal_provenance,
+                    )
+                )
+            return tuple(items)
+
+        def _combined_context_items(*partitions: dict) -> tuple[RecallItem, ...]:
+            items: list[RecallItem] = []
+            for partition in partitions:
+                items.extend(_items_for(partition, "memory_context"))
+            return tuple(items)
+
         def _memory_prompt_without_items(text: str) -> bool:
             return (
                 (text or "").lstrip().startswith("=== PAST OBSERVATIONS")
@@ -413,6 +453,7 @@ def _dispatcher_recall_adapters(
                     rationale="living_context",
                     prompt_cost=len(text),
                     role_hint=SourceRole.SUBSTRATE_CONTEXT,
+                    items=_combined_context_items(evidence, context_for_prompt),
                 )
             ]
         if allowed_roles == {SourceRole.SUBSTRATE_EVIDENCE}:
@@ -430,6 +471,7 @@ def _dispatcher_recall_adapters(
                     rationale="living_evidence",
                     prompt_cost=len(text),
                     role_hint=SourceRole.SUBSTRATE_EVIDENCE,
+                    items=() if anchor_active else _items_for(evidence, "memory_evidence"),
                 )
             ]
         if ev_text:
@@ -442,6 +484,7 @@ def _dispatcher_recall_adapters(
                     rationale="living_evidence",
                     prompt_cost=len(ev_text),
                     role_hint=SourceRole.SUBSTRATE_EVIDENCE,
+                    items=() if anchor_active else _items_for(evidence, "memory_evidence"),
                 )
             )
         if ctx_text:
@@ -454,6 +497,11 @@ def _dispatcher_recall_adapters(
                     rationale="living_context",
                     prompt_cost=len(ctx_text),
                     role_hint=SourceRole.SUBSTRATE_CONTEXT,
+                    items=(
+                        _combined_context_items(evidence, context_for_prompt)
+                        if anchor_active
+                        else _items_for(context_for_prompt, "memory_context")
+                    ),
                 )
             )
         if anchor_active:

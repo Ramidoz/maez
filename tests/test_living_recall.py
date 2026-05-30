@@ -629,6 +629,63 @@ class AdapterRoleHintTests(unittest.TestCase):
                 return '<RECALLED tier="core" id="core-april">April infrastructure note</RECALLED>'
             return super().format_for_prompt(recalled, max_chars=max_chars)
 
+    class _StructuredDatedMemory(_FakeMemory):
+        long_context = (
+            "INFRASTRUCTURE GROUND-TRUTH 2026-04-27 "
+            + ("full dated context " * 160)
+        )
+
+        def recall_for_telegram_living(self, query, *, record_recalls=True):
+            self.calls.append(f"living:{query}")
+            evidence = {
+                "core": [],
+                "daily": [],
+                "raw": [
+                    {
+                        "id": "raw-fresh",
+                        "content": "fresh evidence row",
+                        "metadata": {},
+                    }
+                ],
+            }
+            context = {
+                "core": [
+                    {
+                        "id": "core-april-27",
+                        "content": self.long_context,
+                        "metadata": {
+                            "temporal_match_method": "exact_date",
+                            "date_confirmed": True,
+                        },
+                    }
+                ],
+                "daily": [],
+                "raw": [],
+            }
+            if record_recalls:
+                self._record_living_recall(query, evidence, context)
+            return evidence, context
+
+        def format_for_prompt(self, recalled, max_chars=None):
+            raw_ids = [row["id"] for row in recalled.get("raw", [])]
+            if raw_ids == ["raw-fresh"]:
+                return '<RECALLED tier="raw" id="raw-fresh">fresh evidence row</RECALLED>'
+            return super().format_for_prompt(recalled, max_chars=max_chars)
+
+        def format_living_context(self, recalled, max_chars=None):
+            core_ids = [row["id"] for row in recalled.get("core", [])]
+            if core_ids == ["core-april-27"]:
+                text = (
+                    '<RECALLED tier="core" id="core-april-27" '
+                    'date_match="exact_date">'
+                    f"{self.long_context}"
+                    "</RECALLED>"
+                )
+                if max_chars is not None:
+                    return text[:max_chars]
+                return text
+            return super().format_living_context(recalled, max_chars=max_chars)
+
     def test_flag_off_semantic_adapter_returns_single_none_hint_block(self):
         from core import brain_loop
         from core.dispatcher.spec import SubstrateSource
@@ -665,6 +722,66 @@ class AdapterRoleHintTests(unittest.TestCase):
             SourceRole.SUBSTRATE_CONTEXT,
         ])
         self.assertEqual([block.text for block in blocks], ["evidence text", "context text"])
+
+    def test_adapter_items_carry_full_content_and_provenance(self):
+        from core import brain_loop
+        from core.dispatcher.spec import SourceRole, SubstrateSource
+
+        fake = self._StructuredDatedMemory()
+        os.environ["MAEZ_LIVING_RECALL_ENABLED"] = "1"
+        try:
+            with mock.patch("core.brain.brain_loop._dispatcher_memory_manager", return_value=fake):
+                blocks = brain_loop._dispatcher_recall_adapters(
+                    "What did we note back around April 27 about infrastructure?",
+                    spec=_substrate_semantic_spec(),
+                    surface="telegram_surface",
+                )[SubstrateSource.TELEGRAM_SEMANTIC](SubstrateSource.TELEGRAM_SEMANTIC)
+        finally:
+            os.environ.pop("MAEZ_LIVING_RECALL_ENABLED", None)
+
+        context_block = next(
+            block for block in blocks if block.role_hint is SourceRole.SUBSTRATE_CONTEXT
+        )
+        self.assertLess(len(context_block.text), len(fake.long_context))
+        item = next(
+            item for item in context_block.items if item.durable_id == "core-april-27"
+        )
+        self.assertEqual(item.source_type, "memory_context")
+        self.assertEqual(item.text, fake.long_context)
+        self.assertTrue(item.temporal_provenance["confirmed"])
+        self.assertEqual(item.temporal_provenance["method"], "exact_date")
+
+    def test_context_only_framing_items_are_all_memory_context(self):
+        from core import brain_loop
+        from core.dispatcher.spec import (
+            ExternalSource,
+            ProvenanceFraming,
+            SourceRole,
+            SubstrateSource,
+        )
+
+        fake = self._StructuredDatedMemory()
+        os.environ["MAEZ_LIVING_RECALL_ENABLED"] = "1"
+        try:
+            with mock.patch("core.brain.brain_loop._dispatcher_memory_manager", return_value=fake):
+                blocks = brain_loop._dispatcher_recall_adapters(
+                    "fresh plus memory around April 27",
+                    spec=_substrate_semantic_spec(
+                        framing=ProvenanceFraming.HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES,
+                        external_sources=[ExternalSource.WEB_SEARCH],
+                    ),
+                    surface="telegram_surface",
+                )[SubstrateSource.TELEGRAM_SEMANTIC](SubstrateSource.TELEGRAM_SEMANTIC)
+        finally:
+            os.environ.pop("MAEZ_LIVING_RECALL_ENABLED", None)
+
+        self.assertEqual([block.role_hint for block in blocks], [SourceRole.SUBSTRATE_CONTEXT])
+        self.assertTrue(blocks[0].items)
+        self.assertEqual(
+            {item.source_type for item in blocks[0].items},
+            {"memory_context"},
+        )
+        self.assertIn("raw-fresh", {item.durable_id for item in blocks[0].items})
 
     def test_flag_on_non_telegram_surface_stays_legacy(self):
         from core import brain_loop
