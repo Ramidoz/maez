@@ -16,6 +16,28 @@
 - Genderless self-reference in all user-facing reply strings (it/Maez; never she/he).
 - "Static trace is not integration witness" — the live witness is a separate post-merge step, not part of this plan.
 
+## Codex Six-Agent Engineering-Pass Amendments (folded before code)
+
+The pre-code Codex pass (Dewey, Feynman, Locke, Descartes, Ohm, Goodall) accepted
+the one-bundle resolver shape and required these amendments:
+
+1. **Selected is not consulted.** `_recall_carrier_consulted` must not be assigned
+   from `ReplyMode.FOCUSED`. Focused mode is only a selected route. Set
+   consultation true only after `assemble_working_set(...)` returns a non-`None`
+   working set/status for the dated turn. If assembly raises, use path-unavailable
+   wording, never absence wording.
+2. **Use a receipt.** Track `_recall_carrier_receipt` as `not_consulted`,
+   `consulted`, or `consult_failed`; log it in the dated-denial branch.
+3. **Resolve once per daemon/brain turn.** Helpers may default to resolving for
+   tests, but `handle_message` and `run_brain_loop` capture one config for their
+   turn and pass it into local decisions.
+4. **Telemetry tests use the actual daemon logger (`maez`).**
+5. **Env tests are hermetic.** Every new test clears/sets all four recall flags.
+6. **Migration search includes `tests/` as well as `docs/` and `scripts/`.**
+
+The full engineering-pass memo is
+`docs/slices/recall-axis-dispatcher/witness/recall-stack-bundle-resolver-codex-engineering-pass-2026-05-30.md`.
+
 ---
 
 ## File Structure
@@ -24,7 +46,7 @@
 - **Create** `tests/test_recall_stack_config.py` — truth-table over `(bundle, D, F, L)`.
 - **Create** `tests/test_recall_flag_single_source.py` — CI guard: no raw flag reads outside the resolver.
 - **Modify** `core/brain/brain_loop.py` — `_dispatcher_enabled` / `_living_recall_enabled` derive from the resolver.
-- **Modify** `daemon/maez_daemon.py` — `_focused_cognition_enabled` + `_daemon_parallel_web_search_enabled` derive from the resolver; capture turn-local `_recall_carrier_consulted`; three-way denial gate; startup + WARN telemetry.
+- **Modify** `daemon/maez_daemon.py` — `_focused_cognition_enabled` + `_daemon_parallel_web_search_enabled` derive from the resolver; capture turn-local `_recall_carrier_receipt` / `_recall_carrier_consulted`; three-way denial gate; startup + WARN telemetry; turn-level dated-denial receipt telemetry.
 - **Modify** `skills/telegram_voice.py` — `_telegram_pipeline_a_web_search_enabled` derives from the resolver (inverted).
 - **Create/extend** `tests/test_recall_carrier_consulted_denial.py` — three-way denial wording incl. the availability-vs-consultation row.
 - **Create/extend** `tests/test_recall_web_gate_preservation.py` — web-search gate behavior preserved across migration.

@@ -103,6 +103,13 @@ example, the current daemon excludes `source == "voice"` from focused cognition)
 therefore must use a **turn-local execution fact** (`_recall_carrier_consulted`), not the config property.
 This is the same locked-shelf rule one layer deeper.
 
+**Codex engineering-pass amendment (2026-05-30).** The six-agent Codex pass tightened this further:
+`ReplyMode.FOCUSED` is only "selected", not "consulted". Focused mode can be selected and then fail
+before `assemble_working_set(...)` returns. Absence wording is therefore legal only when focused
+assembly returns a non-`None` working set/status for the dated turn. Implement the daemon with a
+turn-local receipt (`not_consulted` / `consulted` / `consult_failed`) and log it at the dated-denial
+branch. Plain English: walking toward the shelf is not opening the shelf.
+
 ### 2. Single source of truth — migrate all five raw read-sites
 | Site | Today | After |
 |---|---|---|
@@ -132,12 +139,12 @@ if _date_addressed_turn and not _focused_used and reply is None:
     _focused_used = True
 ```
 `_recall_carrier_consulted` is a turn-local execution fact, not a config alias. Set it true only when the
-dated turn actually entered the focused/dated recall path; the simplest structural predicate is
-`_reply_decision.mode is ReplyMode.FOCUSED` (or an equivalent `_focused_attempted=True` set immediately
-before the focused assemble call). This matters because `triad_on=True` can still be prevented from
-consulting the carrier by other gates (`source == "voice"` today, and any future source-specific
-exclusion). This is the move-2 scope expansion Rohit authorized: the denial site is no longer config-only
-territory — it must tell the truth about *why* it has no dated item.
+dated turn actually received a focused working set/status from `assemble_working_set(...)`. A selected
+FOCUSED mode that raises before assembly completes is `consult_failed`, not consulted. This matters
+because `triad_on=True` can still be prevented from consulting the carrier by other gates (`source ==
+"voice"` today, and any future source-specific exclusion), and because selected focused mode can still
+fail before the memory shelf opens. This is the move-2 scope expansion Rohit authorized: the denial site
+is no longer config-only territory — it must tell the truth about *why* it has no dated item.
 
 ### 4. Telemetry (Fowler "expose toggle state" + OpenFeature reason + the toggle paper)
 - **Startup line** (once, at daemon start, like calendar/camera): `recall_stack mode=<…> reason=<…>
