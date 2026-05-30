@@ -10,6 +10,7 @@ OBSERVATIONS header making the past-ness explicit at the first token.
 """
 
 import os
+import re
 import sys
 import time
 import unittest
@@ -26,6 +27,65 @@ def _mm():
     # a real DB. Instantiate without calling __init__ to avoid spinning
     # up chroma collections.
     return MemoryManager.__new__(MemoryManager)
+
+
+class _RecallCollection:
+    def __init__(self):
+        self._rows = []
+
+    def add(self, *, ids, documents, metadatas):
+        for mem_id, doc, meta in zip(ids, documents, metadatas, strict=False):
+            self._rows.append({
+                "id": mem_id,
+                "document": doc,
+                "metadata": dict(meta or {}),
+            })
+
+    def count(self):
+        return len(self._rows)
+
+    def get(self, ids=None, include=None, limit=None, where=None):
+        rows = list(self._rows)
+        if ids is not None:
+            wanted = set(ids)
+            rows = [row for row in rows if row["id"] in wanted]
+        if where:
+            rows = [
+                row for row in rows
+                if all(row["metadata"].get(k) == v for k, v in where.items())
+            ]
+        if limit is not None:
+            rows = rows[:limit]
+        return {
+            "ids": [row["id"] for row in rows],
+            "documents": [row["document"] for row in rows],
+            "metadatas": [dict(row["metadata"]) for row in rows],
+        }
+
+    def query(self, *, query_texts, n_results):
+        query = (query_texts[0] if query_texts else "").lower()
+        terms = {term for term in re.findall(r"[a-z0-9]+", query) if len(term) > 2}
+
+        def distance(row):
+            content = row["document"].lower()
+            hits = sum(1 for term in terms if term in content)
+            return 1.0 - min(0.9, hits * 0.2)
+
+        rows = sorted(self._rows, key=distance)[:n_results]
+        return {
+            "ids": [[row["id"] for row in rows]],
+            "documents": [[row["document"] for row in rows]],
+            "metadatas": [[dict(row["metadata"]) for row in rows]],
+            "distances": [[distance(row) for row in rows]],
+        }
+
+
+def _temp_memory_manager():
+    mm = MemoryManager.__new__(MemoryManager)
+    mm.core = _RecallCollection()
+    mm.daily = _RecallCollection()
+    mm.raw = _RecallCollection()
+    return mm
 
 
 class FormatForPromptAgeFramingTests(unittest.TestCase):
@@ -179,6 +239,91 @@ class AbsoluteDateWindowTests(unittest.TestCase):
             )
         )
         self.assertIsNone(_absolute_date_window("how are you?", self._now()))
+
+
+class AbsoluteDateRecallTests(unittest.TestCase):
+    def _mm_with_dated_core(self):
+        mm = _temp_memory_manager()
+        mm.core.add(
+            ids=["c_apr6"],
+            documents=["[Journal] infrastructure ground-truth fabrication-class incident"],
+            metadatas=[{
+                "type": "core_memory",
+                "source": "nightly_journal",
+                "timestamp": "2026-04-07T04:00:02+00:00",
+            }],
+        )
+        mm.core.add(
+            ids=["c_may"],
+            documents=["[Journal] May progress on living recall"],
+            metadatas=[{
+                "type": "core_memory",
+                "source": "nightly_journal",
+                "timestamp": "2026-05-20T04:00:00+00:00",
+            }],
+        )
+        return mm
+
+    def test_april_date_ask_surfaces_april_row_labeled(self):
+        mm = self._mm_with_dated_core()
+        ev, ctx = mm.recall_for_telegram_living(
+            "what did we note around April 6 about the infrastructure?",
+            record_recalls=False,
+        )
+        core_text = " ".join(m.get("content", "") for m in (ctx.get("core") or []))
+        self.assertIn("fabrication-class", core_text)
+        self.assertNotIn("May progress", core_text)
+        apr = [m for m in ctx["core"] if "fabrication" in m.get("content", "")][0]
+        self.assertEqual(apr["metadata"]["temporal_match_method"], "exact_date")
+        self.assertTrue(apr["metadata"]["date_confirmed"])
+        self.assertEqual(ev.get("core"), [])
+        ev_all = " ".join(
+            m.get("content", "")
+            for tier in ("core", "daily", "raw")
+            for m in (ev.get(tier) or [])
+        )
+        self.assertNotIn("fabrication-class", ev_all)
+
+    def test_persisted_chroma_metadata_not_mutated(self):
+        mm = self._mm_with_dated_core()
+        mm.recall_for_telegram_living(
+            "around April 6 infra",
+            record_recalls=False,
+            half_life_days=90,
+            evidence_recency_days=14,
+        )
+        raw = mm.core.get(ids=["c_apr6"], include=["metadatas"])["metadatas"][0]
+        self.assertNotIn("temporal_match_method", raw)
+
+    def test_date_only_no_memory_returns_no_recall(self):
+        mm = self._mm_with_dated_core()
+        ev, ctx = mm.recall_for_telegram_living(
+            "what about January 3?",
+            record_recalls=False,
+        )
+        self.assertEqual(ctx.get("core"), [])
+        self.assertEqual(ctx.get("daily"), [])
+        self.assertEqual(ev.get("core"), [])
+
+    def test_empty_window_with_topic_is_semantic_fallback_labeled(self):
+        mm = self._mm_with_dated_core()
+        ev, ctx = mm.recall_for_telegram_living(
+            "what about the infrastructure on January 3?",
+            record_recalls=False,
+        )
+        self.assertEqual(ev.get("core"), [])
+        rows = (ctx.get("core") or []) + (ctx.get("daily") or [])
+        if rows:
+            self.assertTrue(
+                any(
+                    r["metadata"].get("temporal_match_method")
+                    == "semantic_fallback"
+                    for r in rows
+                )
+            )
+            self.assertFalse(
+                any(r["metadata"].get("date_confirmed") for r in rows)
+            )
 
 
 class FormatForPromptBudgetTests(unittest.TestCase):

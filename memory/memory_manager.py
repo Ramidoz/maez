@@ -879,6 +879,53 @@ def _absolute_date_window(
     return None
 
 
+def _date_string_bounds_utc(value: str) -> tuple[datetime, datetime] | None:
+    try:
+        parsed = datetime.strptime(str(value)[:10], "%Y-%m-%d")
+    except (TypeError, ValueError):
+        return None
+    tz = owner_timezone()
+    start = parsed.replace(tzinfo=tz)
+    end = start + timedelta(days=1) - timedelta(seconds=1)
+    return start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+
+
+def _row_in_window(meta: dict, window: AbsoluteRecallWindow) -> bool:
+    from core.time.temporal_spine import try_canonical_utc
+
+    for field in ("timestamp", "date"):
+        raw_ts = meta.get(field)
+        if not raw_ts:
+            continue
+        if field == "date":
+            bounds = _date_string_bounds_utc(str(raw_ts))
+            if bounds is not None:
+                start, end = bounds
+                if start <= window.end_utc and end >= window.start_utc:
+                    return True
+        ts = try_canonical_utc(raw_ts, field_name="event_at")
+        if ts is not None and window.start_utc <= ts <= window.end_utc:
+            return True
+    return False
+
+
+def _temporal_topic_signal(query: str) -> str:
+    text = (query or "").lower()
+    text = re.sub(r"\b\d{4}-\d{2}-\d{2}\b", " ", text)
+    text = re.sub(r"\b\d{1,2}\b", " ", text)
+    for name in sorted(_MONTH_NAMES, key=len, reverse=True):
+        text = re.sub(rf"\b{re.escape(name)}\b", " ", text)
+    text = re.sub(r"[^a-z0-9_]+", " ", text)
+    text = re.sub(
+        r"\b(around|about|near|circa|in|on|last|this|month|start|end|early|"
+        r"late|mid|middle|of|the|what|did|we|you|i|note|noted|anything|"
+        r"were|working|was|there|is|and|or)\b",
+        " ",
+        text,
+    )
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def _humanize_age(raw_ts, now: datetime) -> str:
     """Convert a timestamp (ISO string or unix float) into age-relative
     language for the prompt: 'just now', 'N minutes ago', 'N hours ago',
@@ -2003,6 +2050,126 @@ class MemoryManager:
         except Exception as exc:
             logger.debug("record_living_recall failed (ignored): %s", exc)
 
+    def _all_daily_rows(self) -> list[dict]:
+        """Return all daily consolidation rows in recall-row shape."""
+        if self.daily.count() == 0:
+            return []
+        results = self.daily.get(include=["documents", "metadatas"])
+        rows: list[dict] = []
+        for i, row_id in enumerate(results.get("ids") or []):
+            docs = results.get("documents") or []
+            metas = results.get("metadatas") or []
+            rows.append({
+                "id": row_id,
+                "content": docs[i] if i < len(docs) else "",
+                "metadata": metas[i] if i < len(metas) else {},
+            })
+        return rows
+
+    @staticmethod
+    def _tag_temporal_rows(
+        rows: list[dict],
+        *,
+        method: str,
+        label: str,
+        confirmed: bool,
+        window: AbsoluteRecallWindow | None = None,
+    ) -> list[dict]:
+        """Attach temporal-match metadata to returned row copies only."""
+        tagged: list[dict] = []
+        for row in rows:
+            meta = dict(row.get("metadata") or {})
+            meta["temporal_match_method"] = method
+            meta["temporal_match_label"] = label
+            meta["date_confirmed"] = confirmed
+            if window is not None:
+                meta["temporal_window_start_utc"] = window.start_utc.isoformat()
+                meta["temporal_window_end_utc"] = window.end_utc.isoformat()
+                meta["temporal_confidence"] = window.confidence
+            tagged.append({**row, "metadata": meta})
+        return tagged
+
+    def _absolute_date_recall(
+        self,
+        query: str,
+        window: AbsoluteRecallWindow,
+    ) -> tuple[dict, dict]:
+        """Date-filtered Telegram recall over dated tiers.
+
+        Date-confirmed old rows are past context, never evidence. Temporal
+        labels are attached to metadata copies so Chroma metadata remains the
+        source-of-record and is not mutated by recall.
+        """
+        core_all = self.get_all_core()
+        daily_all = self._all_daily_rows()
+        core_in = [
+            row for row in core_all
+            if _row_in_window(row.get("metadata") or {}, window)
+        ]
+        daily_in = [
+            row for row in daily_all
+            if _row_in_window(row.get("metadata") or {}, window)
+        ]
+        evidence = {"core": [], "daily": [], "raw": []}
+
+        if core_in or daily_in:
+            distances: dict[str, float] = {}
+            for collection in (self.core, self.daily):
+                for row in self._query_collection(
+                    collection,
+                    query,
+                    n=30,
+                    record_recalls=False,
+                ):
+                    row_id = row.get("id")
+                    dist = row.get("distance")
+                    if row_id is not None and isinstance(dist, (int, float)):
+                        distances[str(row_id)] = float(dist)
+
+            def _rank_key(row: dict) -> float:
+                return distances.get(str(row.get("id")), 1.0)
+
+            context = {
+                "core": self._tag_temporal_rows(
+                    sorted(core_in, key=_rank_key)[:3],
+                    method=window.method,
+                    label=window.label,
+                    confirmed=True,
+                    window=window,
+                ),
+                "daily": self._tag_temporal_rows(
+                    sorted(daily_in, key=_rank_key)[:3],
+                    method=window.method,
+                    label=window.label,
+                    confirmed=True,
+                    window=window,
+                ),
+                "raw": [],
+            }
+            return evidence, context
+
+        topic = _temporal_topic_signal(query)
+        if not topic:
+            return evidence, {"core": [], "daily": [], "raw": []}
+
+        fallback_label = "semantic match, timing uncertain (not date-confirmed)"
+        context = {
+            "core": self._tag_temporal_rows(
+                self._query_collection(self.core, topic, n=2, record_recalls=False),
+                method="semantic_fallback",
+                label=fallback_label,
+                confirmed=False,
+            ),
+            "daily": self._tag_temporal_rows(
+                self._query_collection(self.daily, topic, n=2, record_recalls=False),
+                method="semantic_fallback",
+                label=fallback_label,
+                confirmed=False,
+            ),
+            "raw": [],
+        }
+        return evidence, context
+
     def recall_for_telegram_living(
         self,
         query: str,
@@ -2018,6 +2185,10 @@ class MemoryManager:
         until the flag-gated adapter opts into living recall.
         """
         query_norm = _normalize_for_echo(query)
+        absolute_window = _absolute_date_window(query)
+        if absolute_window is not None:
+            return self._absolute_date_recall(query, absolute_window)
+
         core = self._query_collection(self.core, query, n=3, record_recalls=False)
         daily = self._query_collection(self.daily, query, n=12, record_recalls=False)
         raw = self._query_collection(self.raw, query, n=60, record_recalls=False)
