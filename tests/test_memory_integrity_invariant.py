@@ -331,6 +331,8 @@ class DaemonHandleMessageContract(unittest.TestCase):
         daemon._get_public_context = lambda: ""
         daemon._trf_apply_fragment_guard = lambda **kwargs: kwargs["reply"]
         daemon._ws_broadcast = lambda _payload: None
+        daemon.boot_time = "bootA"
+        daemon._last_recall_receipt = None
         return daemon
 
     @contextlib.contextmanager
@@ -471,6 +473,86 @@ class DaemonHandleMessageContract(unittest.TestCase):
             yield
         finally:
             stack.close()
+
+    def _recall_outcome_lines(self, logs):
+        return [ln for ln in logs.output if "recall_outcome" in ln]
+
+    def test_recall_outcome_emitted_on_dated_legacy_turn(self):
+        from daemon import maez_daemon
+
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+        with self.assertLogs("maez", level="INFO") as logs:
+            with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+                os.environ, {"MAEZ_RECALL_TRIAD_ENABLED": "0"}, clear=False
+            ):
+                maez_daemon.MaezDaemon.handle_message(
+                    daemon,
+                    "what did we decide around April 27?",
+                    chat_id="c1",
+                    source="telegram",
+                )
+        lines = self._recall_outcome_lines(logs)
+        self.assertEqual(len(lines), 1, lines)
+        line = lines[-1]
+        self.assertIn("schema_version=recall_outcome.v1", line)
+        self.assertIn("mode=legacy", line)
+        self.assertIn("turn_kind=dated", line)
+        self.assertIn("outcome_class=declined_unavailable", line)
+        self.assertIn("denial_kind=carrier_unavailable", line)
+        self.assertIn("receipt_or_na=na", line)
+        self.assertIn("had_confirmed=na", line)
+        self.assertNotIn("April 27", line)
+        self.assertNotIn("decide", line)
+
+    def test_recall_outcome_on_ordinary_turn_is_not_fabrication_class(self):
+        from daemon import maez_daemon
+
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+        with self.assertLogs("maez", level="INFO") as logs:
+            with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+                os.environ, {"MAEZ_RECALL_TRIAD_ENABLED": "0"}, clear=False
+            ):
+                maez_daemon.MaezDaemon.handle_message(
+                    daemon,
+                    "what is a transformer?",
+                    chat_id="c1",
+                    source="telegram",
+                )
+        lines = self._recall_outcome_lines(logs)
+        self.assertEqual(len(lines), 1, lines)
+        line = lines[-1]
+        self.assertIn("turn_kind=ordinary", line)
+        self.assertIn("outcome_class=ordinary_answered", line)
+        self.assertNotIn("answered_unverifiable", line)
+
+    def test_recall_outcome_legacy_absence_phrase_is_declined_unverified(self):
+        from daemon import maez_daemon
+
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+        with self.assertLogs("maez", level="INFO") as logs:
+            with self._handle_message_mock_stack(
+                maez_daemon,
+                captured,
+                reply="I don't remember that dated memory.",
+            ), mock.patch.dict(
+                os.environ, {"MAEZ_RECALL_TRIAD_ENABLED": "0"}, clear=False
+            ):
+                maez_daemon.MaezDaemon.handle_message(
+                    daemon,
+                    "what were we just talking about?",
+                    chat_id="c1",
+                    source="telegram",
+                )
+        lines = self._recall_outcome_lines(logs)
+        self.assertEqual(len(lines), 1, lines)
+        line = lines[-1]
+        self.assertIn("outcome_class=declined_unverified", line)
+        self.assertIn("turn_kind=continuity", line)
+        self.assertIn("denial_kind=na", line)
+        self.assertIn("receipt_or_na=na", line)
 
     def test_handle_message_sends_one_system_message_with_dispatcher_suffix(self):
         """The live daemon prompt assembly must send one system message."""

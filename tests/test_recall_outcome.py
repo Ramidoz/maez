@@ -133,6 +133,20 @@ class ClassifyOutcomeTest(unittest.TestCase):
         )
         self.assertIs(oc, OutcomeClass.DECLINED_UNVERIFIED)
 
+    def test_legacy_carrier_unavailable_remains_reachability_not_absence(self):
+        oc = classify_outcome(
+            mode="legacy",
+            turn_kind="dated",
+            answered=False,
+            receipt="na",
+            denial_kind="carrier_unavailable",
+            had_confirmed=None,
+            cited_grounded_context=False,
+            unmatched_citations=0,
+            asserts_absence=False,
+        )
+        self.assertIs(oc, OutcomeClass.DECLINED_UNAVAILABLE)
+
     def test_ordinary_legacy_answer_is_ordinary_answered_not_unverifiable(self):
         oc = classify_outcome(
             mode="legacy",

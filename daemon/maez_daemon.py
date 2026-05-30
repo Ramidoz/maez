@@ -1129,6 +1129,58 @@ def _log_dated_recall_denial(
     )
 
 
+def _log_recall_outcome(*, rec) -> None:
+    """Emit one content-free recall_outcome record."""
+    from core.routing.recall_outcome import format_log_value
+
+    logger.info(
+        "recall_outcome schema_version=%s mode=%s turn_kind=%s outcome_class=%s "
+        "denial_kind=%s had_confirmed=%s citation_coverage=%s receipt_or_na=%s "
+        "latency_ms=%s focused_elapsed_ms=%s reply_path=%s",
+        rec.schema_version,
+        rec.mode,
+        rec.turn_kind,
+        rec.outcome_class.value,
+        rec.denial_kind,
+        format_log_value(rec.had_confirmed),
+        format_log_value(rec.citation_coverage),
+        rec.receipt_or_na,
+        rec.latency_ms,
+        format_log_value(rec.focused_elapsed_ms),
+        rec.reply_path,
+    )
+
+
+def _reply_asserts_dated_absence(reply: str) -> bool:
+    low = (reply or "").lower()
+    return any(
+        phrase in low
+        for phrase in (
+            "don't have a dated memory",
+            "do not have a dated memory",
+            "no dated memory",
+            "don't remember",
+            "do not remember",
+            "don't recall",
+            "do not recall",
+            "no record",
+        )
+    )
+
+
+def _is_dated_denial_reply(reply: str) -> bool:
+    text = (reply or "").strip()
+    if not text:
+        return False
+    replies = {
+        _dated_denial_reply(carrier_receipt=RECALL_CARRIER_NOT_CONSULTED, had_confirmed=False),
+        _dated_denial_reply(carrier_receipt=RECALL_CARRIER_CONSULT_FAILED, had_confirmed=False),
+        _dated_denial_reply(carrier_receipt=RECALL_CARRIER_CONSULTED, had_confirmed=False),
+        _dated_denial_reply(carrier_receipt=RECALL_CARRIER_CONSULTED, had_confirmed=True),
+    }
+    return text in replies
+
+
 def _consolidate_system_messages(
     messages: list[dict],
     *,
@@ -1457,6 +1509,7 @@ class MaezDaemon:
     def __init__(self):
         self.running = False
         self.boot_time = None
+        self._last_recall_receipt = None
         self.cycle_count = 0
         self.last_cycle_time = None
         self._cycle_stage = "not_started"
@@ -4053,6 +4106,18 @@ class MaezDaemon:
                 evidence_directive=evidence_directive,
             )
 
+        _recall_carrier_receipt = RECALL_CARRIER_NOT_CONSULTED
+        _had_confirmed = False
+        _dated_denial_kind_for_turn = "na"
+        _rk_cited_grounded = False
+        _rk_unmatched = 0
+        _rk_coverage = None
+        _rk_focused_elapsed = None
+        _focused_working_set = None
+        _focused_result = None
+        _focused_verdict = None
+        _reply_path = _reply_decision.mode.value.lower()
+
         if _reply_decision.mode is ReplyMode.TOOL:
             reply = authoritative_tool_reply
         elif _reply_decision.mode is ReplyMode.ECHO:
@@ -4098,9 +4163,8 @@ class MaezDaemon:
         else:
             reply = None
             _focused_used = False
-            _focused_working_set = None
-            _recall_carrier_receipt = RECALL_CARRIER_NOT_CONSULTED
             if _reply_decision.mode is ReplyMode.FOCUSED:
+                _focused_started = time.monotonic()
                 try:
                     from core.routing.focused_cognition import (
                         assemble_working_set as _assemble_working_set,
@@ -4146,6 +4210,16 @@ class MaezDaemon:
                             _focused_result,
                             _focused_working_set,
                         )
+                        from core.routing.recall_outcome import (
+                            cites_confirmed_memory_context as _cites_confirmed_memory_context,
+                        )
+
+                        _rk_cited_grounded = _cites_confirmed_memory_context(
+                            _focused_result,
+                            _focused_working_set,
+                        )
+                        _rk_unmatched = len(getattr(_focused_verdict, "unmatched", []) or [])
+                        _rk_coverage = getattr(_focused_verdict, "citation_coverage", None)
                         _focused_reply = (_focused_result.reply or "").strip()
                         _record_focused_cognition_run(
                             surface=source,
@@ -4199,6 +4273,8 @@ class MaezDaemon:
                         )
                     except Exception:
                         pass
+                finally:
+                    _rk_focused_elapsed = int((time.monotonic() - _focused_started) * 1000)
 
             if _date_addressed_turn and not _focused_used and reply is None:
                 _had_confirmed = bool(
@@ -4213,6 +4289,7 @@ class MaezDaemon:
                     carrier_receipt=_recall_carrier_receipt,
                     had_confirmed=_had_confirmed,
                 )
+                _dated_denial_kind_for_turn = _dated_reply_kind
                 _log_dated_recall_denial(
                     source=source,
                     reply_mode=_reply_decision.mode,
@@ -4227,6 +4304,7 @@ class MaezDaemon:
                     had_confirmed=_had_confirmed,
                 )
                 _focused_used = True
+                _reply_path = "dated_honesty"
 
             if not _focused_used:
                 try:
@@ -4240,6 +4318,7 @@ class MaezDaemon:
                         options={"temperature": 0.7, "num_predict": 4096},
                     )
                     reply = (response.message.content or "").strip() or "(no response)"
+                    _reply_path = "legacy_synthesis"
                     if _focused_candidate and (transcript_context or evidence_directive):
                         _log_daemon_system_part_shape(
                             surface=source,
@@ -4448,6 +4527,86 @@ class MaezDaemon:
             temporal_anchor_result=_temporal_anchor_result,
             trace=_trace,
         )
+        try:
+            from core.routing.recall_outcome import RecallOutcome, classify_outcome
+            from core.routing.recall_self_status import RecallStatusReceipt
+
+            _rk_turn_kind = (
+                "both"
+                if (_date_addressed_turn and _dialogue_needs_or_uncertain)
+                else "dated"
+                if _date_addressed_turn
+                else "continuity"
+                if _dialogue_needs_or_uncertain
+                else "ordinary"
+            )
+            _rk_mode = "recall_triad" if _recall_stack_config.triad_on else "legacy"
+            if _recall_stack_config.triad_on and _focused_working_set is not None:
+                _had_confirmed = bool(
+                    any(
+                        getattr(item, "temporal_provenance", None)
+                        and item.temporal_provenance.get("confirmed")
+                        for item in _focused_working_set.items
+                    )
+                )
+            _rk_legacy_absence = (
+                _rk_mode == "legacy"
+                and _rk_turn_kind != "ordinary"
+                and _reply_asserts_dated_absence(reply)
+            )
+            if (
+                _rk_mode == "recall_triad"
+                and _date_addressed_turn
+                and _reply_asserts_dated_absence(reply)
+                and not _rk_cited_grounded
+            ):
+                _dated_denial_kind_for_turn = "no_dated_memory"
+            _rk_answered = bool(reply) and not _is_dated_denial_reply(reply) and not (
+                _rk_turn_kind != "ordinary" and _reply_asserts_dated_absence(reply)
+            )
+            _rk_outcome = classify_outcome(
+                mode=_rk_mode,
+                turn_kind=_rk_turn_kind,
+                answered=_rk_answered,
+                receipt=(
+                    _recall_carrier_receipt
+                    if _recall_stack_config.triad_on
+                    else "na"
+                ),
+                denial_kind=_dated_denial_kind_for_turn,
+                had_confirmed=_had_confirmed if _recall_stack_config.triad_on else None,
+                cited_grounded_context=_rk_cited_grounded,
+                unmatched_citations=_rk_unmatched,
+                asserts_absence=_rk_legacy_absence,
+            )
+            if _recall_stack_config.triad_on and _date_addressed_turn:
+                self._last_recall_receipt = RecallStatusReceipt(
+                    receipt=_recall_carrier_receipt,
+                    at_ts=time.time(),
+                    boot_id=str(getattr(self, "boot_time", "") or ""),
+                )
+            _log_recall_outcome(
+                rec=RecallOutcome(
+                    mode=_rk_mode,
+                    turn_kind=_rk_turn_kind,
+                    outcome_class=_rk_outcome,
+                    denial_kind=_dated_denial_kind_for_turn,
+                    had_confirmed=(
+                        _had_confirmed if _recall_stack_config.triad_on else None
+                    ),
+                    citation_coverage=_rk_coverage,
+                    receipt_or_na=(
+                        _recall_carrier_receipt
+                        if _recall_stack_config.triad_on
+                        else "na"
+                    ),
+                    latency_ms=int((time.time() - _trace_t_start) * 1000),
+                    focused_elapsed_ms=_rk_focused_elapsed,
+                    reply_path=_reply_path,
+                )
+            )
+        except Exception as _recall_outcome_exc:
+            logger.debug("recall_outcome emit skipped: %s", _recall_outcome_exc)
         if (
             _pursuit_delivery_ledger is not None
             and _pursuit_delivery_dispatch_id is not None

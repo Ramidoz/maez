@@ -75,6 +75,12 @@ def classify_outcome(
     if turn_kind == "ordinary":
         return OutcomeClass.ORDINARY_ANSWERED if answered else OutcomeClass.ORDINARY_DECLINED
 
+    if denial_kind == "carrier_unavailable":
+        return OutcomeClass.DECLINED_UNAVAILABLE
+    if denial_kind == "carrier_failed":
+        return OutcomeClass.DECLINED_FAILED
+    if denial_kind == "transport_failure":
+        return OutcomeClass.DECLINED_TRANSPORT
     if mode == "legacy" and asserts_absence:
         return OutcomeClass.DECLINED_UNVERIFIED
 
@@ -89,12 +95,6 @@ def classify_outcome(
         return OutcomeClass.DECLINED_UNVERIFIED
     if denial_kind == "no_dated_memory":
         return OutcomeClass.DECLINED_ABSENCE
-    if denial_kind == "carrier_unavailable":
-        return OutcomeClass.DECLINED_UNAVAILABLE
-    if denial_kind == "carrier_failed":
-        return OutcomeClass.DECLINED_FAILED
-    if denial_kind == "transport_failure":
-        return OutcomeClass.DECLINED_TRANSPORT
     return OutcomeClass.DECLINED_UNVERIFIED
 
 
