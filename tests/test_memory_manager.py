@@ -241,6 +241,73 @@ class AbsoluteDateWindowTests(unittest.TestCase):
         self.assertIsNone(_absolute_date_window("how are you?", self._now()))
 
 
+class AbsoluteRecallCueTests(unittest.TestCase):
+    def _now(self):
+        from datetime import datetime
+
+        from core.time.temporal_spine import owner_timezone
+
+        return datetime(2026, 5, 30, 12, 0, tzinfo=owner_timezone())
+
+    def test_address_intent_battery(self):
+        from core.routing.temporal_cue import absolute_recall_cue
+
+        now = self._now()
+        not_address = [
+            "I will be 30 in may",
+            "remind me to march 3 miles",
+            "in March we should ship",
+            "pick 2 may options",
+            "what were we just talking about, the 3 may bugs?",
+            "what were we just talking about?",
+        ]
+        address = [
+            "what did we note around April 27?",
+            "what were we doing April 27?",
+            "what happened May 6?",
+            "remind me what we were doing around April 27",
+            "what about January 3?",
+            "what were we working on last month?",
+        ]
+        for q in not_address:
+            with self.subTest(q=q):
+                self.assertFalse(absolute_recall_cue(q, now).is_address)
+                self.assertFalse(absolute_recall_cue(q, now).override_continuity)
+        for q in address:
+            with self.subTest(q=q):
+                self.assertTrue(absolute_recall_cue(q, now).is_address)
+                self.assertTrue(absolute_recall_cue(q, now).override_continuity)
+
+    def test_cue_carries_window_when_address(self):
+        from core.routing.temporal_cue import absolute_recall_cue
+
+        cue = absolute_recall_cue(
+            "what did we note around April 27?",
+            self._now(),
+        )
+        self.assertIsNotNone(cue.window)
+        assert cue.window is not None
+        self.assertEqual(cue.window.method, "exact_date")
+
+    def test_has_absolute_recall_cue_is_parser_parity_only(self):
+        from core.routing.temporal_cue import (
+            _absolute_date_window,
+            has_absolute_recall_cue,
+        )
+
+        now = self._now()
+        for q in [
+            "pick 2 may options",
+            "what did we note around April 27?",
+            "hello",
+        ]:
+            with self.subTest(q=q):
+                self.assertEqual(
+                    has_absolute_recall_cue(q, now),
+                    _absolute_date_window(q, now) is not None,
+                )
+
+
 class AbsoluteDateRecallTests(unittest.TestCase):
     def _mm_with_dated_core(self):
         mm = _temp_memory_manager()

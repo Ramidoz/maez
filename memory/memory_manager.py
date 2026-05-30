@@ -9,8 +9,6 @@ Tier 2: Daily Consolidations — 24-hour summaries via gemma4:26b, never deleted
 Tier 3: Core Memories   — Permanent long-term observations, always in context.
 """
 
-import calendar
-from dataclasses import dataclass
 import json
 import logging
 import math
@@ -22,6 +20,11 @@ from pathlib import Path
 
 from core.birth import memory_phase_tag as _memory_phase_tag
 from core.llm_client import sanitize_prompt_text
+from core.routing.temporal_cue import (
+    AbsoluteRecallWindow,
+    _absolute_date_window,
+    _MONTH_NAMES,
+)
 from core.time.temporal_spine import owner_timezone
 from memory.embedding_contract import (
     assert_embedding_writes_allowed as _assert_embedding_writes_allowed,
@@ -702,180 +705,6 @@ def _temporal_telegram_age_window(query: str) -> tuple[float, float] | None:
         return (_LAST_NIGHT_MIN_AGE_HOURS, _LAST_NIGHT_MAX_AGE_HOURS)
     if re.search(r"\byesterday\b", q):
         return (_YESTERDAY_MIN_AGE_HOURS, _YESTERDAY_MAX_AGE_HOURS)
-    return None
-
-
-@dataclass(frozen=True)
-class AbsoluteRecallWindow:
-    """Owner-local absolute-date recall window expressed as UTC bounds.
-
-    This is the layering seam for absolute-date recall and deliberately does
-    not shadow core.time.temporal_spine.TemporalWindow.
-    """
-
-    start_utc: datetime
-    end_utc: datetime
-    method: str
-    confidence: str
-    label: str
-
-
-_NIGHTLY_FWD_TOL_DAYS = 2
-
-_MONTH_NAMES: dict[str, int] = {}
-for _i in range(1, 13):
-    _MONTH_NAMES[calendar.month_name[_i].lower()] = _i
-    _MONTH_NAMES[calendar.month_abbr[_i].lower()] = _i
-
-
-def _owner_local_to_utc(d: datetime) -> datetime:
-    return d.astimezone(timezone.utc)
-
-
-def _day_bounds_local(year: int, month: int, day: int, tz) -> tuple[datetime, datetime]:
-    start = datetime(year, month, day, 0, 0, 0, tzinfo=tz)
-    end = datetime(year, month, day, 23, 59, 59, tzinfo=tz)
-    return start, end
-
-
-def _most_recent_year_for(month: int, day: int, now_local: datetime) -> int:
-    candidate = now_local.year
-    try:
-        if datetime(candidate, month, day, tzinfo=now_local.tzinfo) > now_local:
-            candidate -= 1
-    except ValueError:
-        pass
-    return candidate
-
-
-def _exact_window(
-    year: int,
-    month: int,
-    day: int,
-    tz,
-    symmetric: bool,
-) -> AbsoluteRecallWindow | None:
-    try:
-        start_local, end_local = _day_bounds_local(year, month, day, tz)
-    except ValueError:
-        return None
-    if symmetric:
-        start_local = start_local - timedelta(days=_NIGHTLY_FWD_TOL_DAYS)
-    end_local = end_local + timedelta(days=_NIGHTLY_FWD_TOL_DAYS)
-    return AbsoluteRecallWindow(
-        start_utc=_owner_local_to_utc(start_local),
-        end_utc=_owner_local_to_utc(end_local),
-        method="exact_date",
-        confidence="high",
-        label=(
-            f"matched by exact date "
-            f"({calendar.month_name[month]} {day}, {year} / {year:04d}-{month:02d}-{day:02d})"
-        ),
-    )
-
-
-def _month_window(
-    year: int,
-    month: int,
-    tz,
-    part: str | None = None,
-) -> AbsoluteRecallWindow:
-    last_day = calendar.monthrange(year, month)[1]
-    if part in ("start", "beginning", "early"):
-        day_start, day_end = 1, min(10, last_day)
-    elif part in ("mid", "middle"):
-        day_start, day_end = 11, min(20, last_day)
-    elif part in ("end", "late"):
-        day_start, day_end = 21, last_day
-    else:
-        day_start, day_end = 1, last_day
-    start_local, _ = _day_bounds_local(year, month, day_start, tz)
-    _, end_local = _day_bounds_local(year, month, day_end, tz)
-    end_local = end_local + timedelta(days=_NIGHTLY_FWD_TOL_DAYS)
-    return AbsoluteRecallWindow(
-        start_utc=_owner_local_to_utc(start_local),
-        end_utc=_owner_local_to_utc(end_local),
-        method="month_window",
-        confidence="medium",
-        label=f"matched by month window ({calendar.month_name[month]} {year})",
-    )
-
-
-def _absolute_date_window(
-    query: str,
-    now_local: datetime | None = None,
-) -> AbsoluteRecallWindow | None:
-    """Resolve explicit owner-local date/month phrases to a UTC window."""
-    if not query:
-        return None
-    tz = owner_timezone()
-    if now_local is None:
-        now_local = datetime.now(tz)
-    q = (query or "").lower()
-    symmetric = bool(re.search(r"\b(around|about|near|circa)\b", q))
-
-    iso = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", q)
-    if iso:
-        return _exact_window(
-            int(iso.group(1)),
-            int(iso.group(2)),
-            int(iso.group(3)),
-            tz,
-            symmetric,
-        )
-
-    month_alt = "|".join(re.escape(name) for name in _MONTH_NAMES)
-    md = re.search(rf"\b({month_alt})\.?\s+(\d{{1,2}})(?:,?\s+(\d{{4}}))?\b", q)
-    if md:
-        month = _MONTH_NAMES[md.group(1)]
-        day = int(md.group(2))
-        year = int(md.group(3)) if md.group(3) else _most_recent_year_for(month, day, now_local)
-        return _exact_window(year, month, day, tz, symmetric)
-
-    dm = re.search(rf"\b(\d{{1,2}})\s+({month_alt})\b", q)
-    if dm:
-        day = int(dm.group(1))
-        month = _MONTH_NAMES[dm.group(2)]
-        year = _most_recent_year_for(month, day, now_local)
-        return _exact_window(year, month, day, tz, symmetric)
-
-    if re.search(r"\blast month\b", q):
-        prior_month = (now_local.replace(day=1) - timedelta(days=1)).replace(day=1)
-        return _month_window(prior_month.year, prior_month.month, tz)
-    if re.search(r"\bthis month\b", q):
-        return _month_window(now_local.year, now_local.month, tz)
-
-    part_match = re.search(
-        rf"\b(start|beginning|early|mid|middle|end|late)\s+"
-        rf"(?:of\s+)?({month_alt})\b(?:\s+(\d{{4}}))?",
-        q,
-    )
-    if part_match:
-        month = _MONTH_NAMES[part_match.group(2)]
-        year = (
-            int(part_match.group(3))
-            if part_match.group(3)
-            else _most_recent_year_for(month, 15, now_local)
-        )
-        return _month_window(year, month, tz, part=part_match.group(1))
-
-    in_month = re.search(rf"\bin\s+({month_alt})\b(?:\s+(\d{{4}}))?", q)
-    if in_month:
-        month = _MONTH_NAMES[in_month.group(1)]
-        year = (
-            int(in_month.group(2))
-            if in_month.group(2)
-            else _most_recent_year_for(month, 15, now_local)
-        )
-        return _month_window(year, month, tz)
-
-    explicit_year_month = re.search(rf"\b({month_alt})\s+(\d{{4}})\b", q)
-    if explicit_year_month:
-        return _month_window(
-            int(explicit_year_month.group(2)),
-            _MONTH_NAMES[explicit_year_month.group(1)],
-            tz,
-        )
     return None
 
 
