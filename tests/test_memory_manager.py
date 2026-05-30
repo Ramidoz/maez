@@ -326,6 +326,36 @@ class AbsoluteDateRecallTests(unittest.TestCase):
             )
 
 
+class TemporalAttrRenderTests(unittest.TestCase):
+    def test_temporal_attr_renders_and_is_byte_safe(self):
+        self.assertEqual(MemoryManager._temporal_attrs(None), "")
+        self.assertEqual(MemoryManager._temporal_attrs({"type": "core_memory"}), "")
+        attr = MemoryManager._temporal_attrs({
+            "temporal_match_method": "exact_date",
+            "temporal_match_label": "matched by exact date (2026-04-06)",
+        })
+        self.assertIn('date_match="exact_date"', attr)
+        self.assertIn("2026-04-06", attr)
+
+    def test_format_for_prompt_includes_temporal_attr(self):
+        mm = _temp_memory_manager()
+        recalled = {
+            "core": [{
+                "id": "c1",
+                "content": "infra note",
+                "metadata": {
+                    "temporal_match_method": "exact_date",
+                    "temporal_match_label": "matched by exact date (2026-04-06)",
+                },
+            }],
+            "daily": [],
+            "raw": [],
+        }
+        out = mm.format_for_prompt(recalled)
+        self.assertIn("date_match=", out)
+        self.assertIn("2026-04-06", out)
+
+
 class FormatForPromptBudgetTests(unittest.TestCase):
     """`max_chars` parameter — drops raw RECALLED blocks from the
     tail until the assembled block fits the budget. Core + daily are

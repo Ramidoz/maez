@@ -2370,6 +2370,26 @@ class MemoryManager:
         return attrs
 
     @staticmethod
+    def _temporal_attrs(meta: dict | None) -> str:
+        """Inline RECALLED-tag suffix for temporal-match provenance.
+
+        Rows without temporal metadata render byte-equivalent to the old prompt
+        shape. The label is an explanatory cue for the brain, never authority
+        elevation; the row's block role still decides evidence vs context.
+        """
+        if not meta:
+            return ""
+        method = meta.get("temporal_match_method")
+        if not method:
+            return ""
+        safe_method = re.sub(r"[^a-z_]", "", str(method))
+        label = re.sub(r'[<>"]', "", str(meta.get("temporal_match_label", "")))
+        attrs = f' date_match="{safe_method}"'
+        if label:
+            attrs += f' date_match_label="{label}"'
+        return attrs
+
+    @staticmethod
     def _any_untrusted(*tiers) -> bool:
         """Return True iff at least one entry across the supplied
         recalled tiers carries ``trust_tier == "untrusted"``. Used to
@@ -2440,9 +2460,12 @@ class MemoryManager:
         for i, mem in enumerate(core, 1):
             mem_id = str(mem.get("id", f"core-{i}"))[:16]
             content = sanitize_prompt_text(mem.get("content", ""))
-            prov = self._provenance_attrs(mem.get("metadata"))
+            meta = mem.get("metadata")
+            prov = self._provenance_attrs(meta)
+            temporal = self._temporal_attrs(meta)
             lines.append(
-                f'<RECALLED tier="core" age="permanent" id="{mem_id}"{prov}>'
+                f'<RECALLED tier="core" age="permanent" '
+                f'id="{mem_id}"{prov}{temporal}>'
             )
             lines.append(content)
             lines.append("</RECALLED>")
@@ -2458,9 +2481,10 @@ class MemoryManager:
             content = sanitize_prompt_text(mem.get("content", ""))
             age = _humanize_daily_age(date, now)
             prov = self._provenance_attrs(meta)
+            temporal = self._temporal_attrs(meta)
             lines.append(
                 f'<RECALLED tier="daily" age="{age}" date="{date}" '
-                f'id="{mem_id}"{dist_attr}{prov}>'
+                f'id="{mem_id}"{dist_attr}{prov}{temporal}>'
             )
             lines.append(content)
             lines.append("</RECALLED>")
@@ -2482,9 +2506,10 @@ class MemoryManager:
             content = sanitize_prompt_text(mem.get("content", ""))
             raw_block_starts.append(len(lines))
             prov = self._provenance_attrs(meta)
+            temporal = self._temporal_attrs(meta)
             lines.append(
                 f'<RECALLED tier="raw" age="{age}" cycle="{cycle}" '
-                f'timestamp="{ts_str}" id="{mem_id}"{dist_attr}{prov}>'
+                f'timestamp="{ts_str}" id="{mem_id}"{dist_attr}{prov}{temporal}>'
             )
             lines.append(content)
             lines.append("</RECALLED>")
@@ -2559,13 +2584,14 @@ class MemoryManager:
                 dist = mem.get("distance")
                 dist_attr = f' distance="{dist:.3f}"' if isinstance(dist, (int, float)) else ""
                 prov = self._provenance_attrs(meta)
+                temporal = self._temporal_attrs(meta)
                 content = sanitize_prompt_text(mem.get("content", ""))
                 if tier == "daily":
                     date = meta.get("date", "unknown")
                     age = _humanize_daily_age(date, now)
                     lines.append(
                         f'<RECALLED tier="daily" age="{age}" date="{date}" '
-                        f'id="{mem_id}"{dist_attr}{prov}>'
+                        f'id="{mem_id}"{dist_attr}{prov}{temporal}>'
                     )
                 elif tier == "raw":
                     cycle = meta.get("cycle", "?")
@@ -2574,11 +2600,12 @@ class MemoryManager:
                     age = _humanize_age(raw_ts, now)
                     lines.append(
                         f'<RECALLED tier="raw" age="{age}" cycle="{cycle}" '
-                        f'timestamp="{ts_str}" id="{mem_id}"{dist_attr}{prov}>'
+                        f'timestamp="{ts_str}" id="{mem_id}"{dist_attr}{prov}{temporal}>'
                     )
                 else:
                     lines.append(
-                        f'<RECALLED tier="core" age="permanent" id="{mem_id}"{prov}>'
+                        f'<RECALLED tier="core" age="permanent" '
+                        f'id="{mem_id}"{prov}{temporal}>'
                     )
                 lines.append(content)
                 lines.append("</RECALLED>")
