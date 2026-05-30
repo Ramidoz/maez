@@ -978,20 +978,27 @@ def _authoritative_tool_reply(tool_calls: "list[dict] | None") -> str:
     return ""
 
 
-def _daemon_parallel_web_search_enabled(transcript: str = "") -> bool:
+def _daemon_parallel_web_search_enabled(
+    transcript: str = "",
+    *,
+    recall_stack_config=None,
+) -> bool:
     """Return whether daemon synthesis may run its legacy web-search side path."""
+    if recall_stack_config is None:
+        from core.routing.recall_stack_config import resolve_recall_stack
+
+        recall_stack_config = resolve_recall_stack()
     return not (
-        os.environ.get("MAEZ_DISPATCHER_ENABLED", "0") == "1"
-        and bool((transcript or "").strip())
+        recall_stack_config.triad_on and bool((transcript or "").strip())
     )
 
 
-def _focused_cognition_enabled() -> bool:
-    return os.environ.get("MAEZ_FOCUSED_COGNITION_ENABLED", "0") in (
-        "1",
-        "true",
-        "yes",
-    )
+def _focused_cognition_enabled(*, recall_stack_config=None) -> bool:
+    if recall_stack_config is None:
+        from core.routing.recall_stack_config import resolve_recall_stack
+
+        recall_stack_config = resolve_recall_stack()
+    return recall_stack_config.triad_on
 
 
 def _consolidate_system_messages(
