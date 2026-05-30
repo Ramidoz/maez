@@ -37,7 +37,7 @@ class ResolveReplyModeOracleTests(unittest.TestCase):
         ]
         for combo in itertools.product([False, True], repeat=len(bool_fields)):
             for camera in (None, "the camera is on"):
-                kw = dict(zip(bool_fields, combo))
+                kw = dict(zip(bool_fields, combo, strict=True))
                 kw["camera_answer"] = camera
                 signals = ReplyDecisionSignals(**kw)
                 with self.subTest(**kw):
