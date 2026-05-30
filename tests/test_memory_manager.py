@@ -110,6 +110,77 @@ class FormatForPromptAgeFramingTests(unittest.TestCase):
         )
 
 
+class AbsoluteDateWindowTests(unittest.TestCase):
+    def _now(self):
+        from datetime import datetime
+
+        from core.time.temporal_spine import owner_timezone
+
+        # Fixed owner-local "today" = 2026-05-30 for determinism.
+        return datetime(2026, 5, 30, 12, 0, tzinfo=owner_timezone())
+
+    def test_exact_date_named_month_day(self):
+        from memory.memory_manager import _absolute_date_window
+
+        w = _absolute_date_window(
+            "what did we note around April 6 about infra?",
+            self._now(),
+        )
+        self.assertIsNotNone(w)
+        assert w is not None
+        self.assertEqual(w.method, "exact_date")
+        # "around" uses symmetric tolerance; April 6 includes April 4..8.
+        self.assertLessEqual(w.start_utc.date().isoformat(), "2026-04-04")
+        self.assertGreaterEqual(w.end_utc.date().isoformat(), "2026-04-08")
+        self.assertIn("April", w.label)
+
+    def test_exact_iso_date_forward_tolerance_only(self):
+        from memory.memory_manager import _absolute_date_window
+
+        w = _absolute_date_window("2026-04-06 infra note", self._now())
+        self.assertIsNotNone(w)
+        assert w is not None
+        self.assertEqual(w.method, "exact_date")
+        # Plain date starts on the owner-local day and extends forward for the
+        # next-morning nightly journal; it does not widen backward.
+        self.assertEqual(w.start_utc.date().isoformat(), "2026-04-06")
+        self.assertGreaterEqual(w.end_utc.date().isoformat(), "2026-04-08")
+
+    def test_month_window_last_month(self):
+        from memory.memory_manager import _absolute_date_window
+
+        w = _absolute_date_window("what were we working on last month?", self._now())
+        self.assertIsNotNone(w)
+        assert w is not None
+        self.assertEqual(w.method, "month_window")
+        self.assertEqual(w.start_utc.date().isoformat(), "2026-04-01")
+
+    def test_bare_may_is_not_a_month_cue(self):
+        from memory.memory_manager import _absolute_date_window
+
+        self.assertIsNone(
+            _absolute_date_window("maybe we should check the logs", self._now())
+        )
+        self.assertIsNone(
+            _absolute_date_window("you may have noted something", self._now())
+        )
+        self.assertIsNotNone(_absolute_date_window("what about May 6?", self._now()))
+        self.assertIsNotNone(
+            _absolute_date_window("anything in May 2026?", self._now())
+        )
+
+    def test_no_temporal_cue_returns_none(self):
+        from memory.memory_manager import _absolute_date_window
+
+        self.assertIsNone(
+            _absolute_date_window(
+                "what's the infra ground-truth you noted earlier?",
+                self._now(),
+            )
+        )
+        self.assertIsNone(_absolute_date_window("how are you?", self._now()))
+
+
 class FormatForPromptBudgetTests(unittest.TestCase):
     """`max_chars` parameter — drops raw RECALLED blocks from the
     tail until the assembled block fits the budget. Core + daily are
