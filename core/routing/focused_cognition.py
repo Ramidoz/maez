@@ -196,6 +196,32 @@ _UNCERTAIN_CONTINUITY_PATTERNS: tuple[str, ...] = (
 )
 
 
+def _normalize_continuity(text: str) -> str:
+    """Light normalization for deterministic continuity matching.
+
+    Do not delete filler words globally; that can manufacture accidental
+    matches. The grammar below absorbs filler in place while staying anchored
+    to dialogue-meta structure.
+    """
+    lowered = (text or "").lower()
+    spaced = re.sub(r"[^\w\s]", " ", lowered)
+    return re.sub(r"\s+", " ", spaced).strip()
+
+
+_DIRECT_GRAMMAR: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"\b(?:what|which|remind me)\b[\w\s]*"
+        r"\b(?:we|us|i|you)\b[\w\s]*"
+        r"\b(?:talk|talking|discuss|discussing|cover|covering|"
+        r"doing|working|going over|say|saying|said)\b"
+    ),
+    re.compile(
+        r"\bwhere\b[\w\s]*\b(?:we|us)\b[\w\s]*"
+        r"\b(?:leave off|left off|get to|got to|were)\b"
+    ),
+)
+
+
 def _content_hash(text: str) -> str:
     return "ch_" + hashlib.sha256(text.strip().encode("utf-8")).hexdigest()[:16]
 
@@ -230,7 +256,16 @@ def build_intra_turn_echo_reply(owner_question: str) -> str | None:
 
 
 def dialogue_continuity_state(owner_question: str) -> DialogueContinuityState:
-    text = (owner_question or "").strip().lower()
+    text = _normalize_continuity(owner_question)
+    for pattern in _DIRECT_GRAMMAR:
+        match = pattern.search(text)
+        if match:
+            return DialogueContinuityState(
+                kind=ContinuityKind.DIRECT,
+                needs_dialogue=True,
+                fail_safe_legacy=False,
+                matched_reason=match.group(0)[:60],
+            )
     for pattern in _DIRECT_CONTINUITY_PATTERNS:
         if pattern in text:
             return DialogueContinuityState(

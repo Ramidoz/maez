@@ -263,6 +263,54 @@ class DialogueContinuityStateTests(unittest.TestCase):
                 self.assertTrue(state.needs_dialogue)
                 self.assertFalse(state.fail_safe_legacy)
 
+    def test_natural_phrasings_with_filler_are_direct(self):
+        from core.routing.focused_cognition import (
+            ContinuityKind,
+            dialogue_continuity_state,
+        )
+
+        examples = [
+            "What were we just talking about?",
+            "What were we actually discussing?",
+            "What were we just discussing?",
+            "Remind me what we were covering.",
+            "Where did we leave off?",
+            "What were we working on?",
+        ]
+        for text in examples:
+            with self.subTest(text=text):
+                state = dialogue_continuity_state(text)
+                self.assertEqual(state.kind, ContinuityKind.DIRECT)
+                self.assertTrue(state.needs_dialogue)
+                self.assertFalse(state.fail_safe_legacy)
+
+    def test_content_recall_is_not_continuity(self):
+        from core.routing.focused_cognition import (
+            ContinuityKind,
+            dialogue_continuity_state,
+        )
+
+        # Hard false-positive boundary: content-recall asks must NOT anchor.
+        for text in [
+            "What's the infrastructure ground-truth you noted earlier?",
+            "What did you find about the GPU?",
+        ]:
+            with self.subTest(text=text):
+                state = dialogue_continuity_state(text)
+                self.assertNotEqual(state.kind, ContinuityKind.DIRECT)
+                self.assertNotEqual(state.kind, ContinuityKind.ANAPHORIC)
+
+    def test_filler_does_not_manufacture_direct_continuity(self):
+        from core.routing.focused_cognition import (
+            ContinuityKind,
+            dialogue_continuity_state,
+        )
+
+        # "still" must not be deleted into a continuity match (no global
+        # filler deletion). This stays out of DIRECT.
+        state = dialogue_continuity_state("Is it still running?")
+        self.assertNotEqual(state.kind, ContinuityKind.DIRECT)
+
     def test_anaphoric_continuity_state(self):
         from core.routing.focused_cognition import (
             ContinuityKind,
