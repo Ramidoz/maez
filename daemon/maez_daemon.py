@@ -1006,6 +1006,41 @@ RECALL_CARRIER_CONSULTED = "consulted"
 RECALL_CARRIER_CONSULT_FAILED = "consult_failed"
 
 
+def log_recall_stack_posture(env=None) -> None:
+    """Emit the recall-stack posture once (startup / witness)."""
+    import os as _os
+
+    from core.routing.recall_stack_config import (
+        BUNDLE_FLAG,
+        RAW_RECALL_FLAG_NAMES,
+        resolve_recall_stack,
+    )
+
+    env = _os.environ if env is None else env
+    cfg = resolve_recall_stack(env=env)
+
+    def _state(name: str) -> str:
+        return "set" if (env.get(name) or "").strip() else "unset"
+
+    logger.info(
+        "recall_stack mode=%s reason=%s raw_flags=[bundle=%s dispatcher=%s "
+        "focused=%s living=%s]",
+        cfg.mode.value,
+        cfg.reason,
+        _state(BUNDLE_FLAG),
+        _state(RAW_RECALL_FLAG_NAMES[0]),
+        _state(RAW_RECALL_FLAG_NAMES[1]),
+        _state(RAW_RECALL_FLAG_NAMES[2]),
+    )
+    if cfg.reason.startswith("legacy_raw_flags_ignored:"):
+        logger.warning(
+            "recall_stack %s - deprecated raw recall flags are set but "
+            "ignored; use %s",
+            cfg.reason,
+            BUNDLE_FLAG,
+        )
+
+
 def _dated_denial_reply(*, carrier_receipt: str, had_confirmed: bool) -> str:
     """Return an honest dated-memory fallback when focused produced no reply."""
     if carrier_receipt != RECALL_CARRIER_CONSULTED:
@@ -1022,6 +1057,45 @@ def _dated_denial_reply(*, carrier_receipt: str, had_confirmed: bool) -> str:
     return (
         "I don't have a dated memory for that window. I'm not going to answer "
         "it from recent chat or guesswork."
+    )
+
+
+def _dated_denial_kind(*, carrier_receipt: str, had_confirmed: bool) -> str:
+    if carrier_receipt != RECALL_CARRIER_CONSULTED:
+        return "carrier_unavailable"
+    if had_confirmed:
+        return "transport_failure"
+    return "no_dated_memory"
+
+
+def _log_dated_recall_denial(
+    *,
+    source: str,
+    reply_mode,
+    recall_stack_config,
+    date_addressed: bool,
+    carrier_receipt: str,
+    had_confirmed: bool,
+    reply_kind: str,
+) -> None:
+    reply_mode_value = getattr(reply_mode, "value", str(reply_mode))
+    recall_mode_value = getattr(
+        recall_stack_config.mode,
+        "value",
+        str(recall_stack_config.mode),
+    )
+    logger.info(
+        "dated_recall_denial source=%s reply_mode=%s recall_stack_mode=%s "
+        "recall_stack_reason=%s date_addressed=%s carrier_receipt=%s "
+        "had_confirmed=%s reply_kind=%s",
+        source,
+        reply_mode_value,
+        recall_mode_value,
+        recall_stack_config.reason,
+        date_addressed,
+        carrier_receipt,
+        had_confirmed,
+        reply_kind,
     )
 
 
@@ -4105,6 +4179,19 @@ class MaezDaemon:
                         for item in _focused_working_set.items
                     )
                 )
+                _dated_reply_kind = _dated_denial_kind(
+                    carrier_receipt=_recall_carrier_receipt,
+                    had_confirmed=_had_confirmed,
+                )
+                _log_dated_recall_denial(
+                    source=source,
+                    reply_mode=_reply_decision.mode,
+                    recall_stack_config=_recall_stack_config,
+                    date_addressed=_date_addressed_turn,
+                    carrier_receipt=_recall_carrier_receipt,
+                    had_confirmed=_had_confirmed,
+                    reply_kind=_dated_reply_kind,
+                )
                 reply = _dated_denial_reply(
                     carrier_receipt=_recall_carrier_receipt,
                     had_confirmed=_had_confirmed,
@@ -6613,6 +6700,7 @@ class MaezDaemon:
         from core.memory.recall_activation_config import log_activation_startup_state
 
         log_activation_startup_state()
+        log_recall_stack_posture()
         self.boot_time = datetime.now(timezone.utc).isoformat()
         self._write_pid()
 
