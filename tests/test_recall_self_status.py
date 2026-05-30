@@ -34,6 +34,8 @@ class IntentMatchTest(unittest.TestCase):
             "is your dated memory of April 27 accurate?",
             "is your dated recall what we used yesterday?",
             "is your dated recall from April 27 relevant?",
+            "the dated recall system is working well after the fix",
+            "if your dated recall is working, what did we decide April 27?",
         ):
             self.assertFalse(is_recall_status_query(q), q)
 

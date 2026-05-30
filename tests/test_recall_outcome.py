@@ -242,6 +242,21 @@ class GroundedContextHelperTest(unittest.TestCase):
         ws = SimpleNamespace(items=[self._item("E1", "memory_evidence", True)])
         self.assertFalse(cites_confirmed_memory_context(result, ws))
 
+    def test_mixed_citations_do_not_count_as_dated_context_grounding(self):
+        result = SimpleNamespace(cited_ids=["E1", "E2"])
+        ws = SimpleNamespace(
+            items=[
+                self._item("E1", "memory_context", True),
+                self._item("E2", "memory_evidence", True),
+            ]
+        )
+        self.assertFalse(cites_confirmed_memory_context(result, ws))
+
+    def test_unknown_citation_does_not_count_as_dated_context_grounding(self):
+        result = SimpleNamespace(cited_ids=["E1", "E-missing"])
+        ws = SimpleNamespace(items=[self._item("E1", "memory_context", True)])
+        self.assertFalse(cites_confirmed_memory_context(result, ws))
+
     def test_unconfirmed_memory_context_does_not_count(self):
         result = SimpleNamespace(cited_ids=["E1"])
         ws = SimpleNamespace(items=[self._item("E1", "memory_context", False)])

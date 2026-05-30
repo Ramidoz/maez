@@ -12,8 +12,7 @@ _RECALL_NOUN = r"(?:dated\s+(?:recall|memory)|recall\s+(?:stack|system))"
 _REACH_PRED = r"(?:reachable|working|online|available|active|up|down|enabled|on|off|broken)"
 _REACHABILITY_RE = re.compile(
     rf"(?:\bcan\s+you\s+reach\b.*\byour\b.*\b{_RECALL_NOUN}\b)"
-    rf"|(?:\b(?:is|are)\b.*\byour\b.*\b{_RECALL_NOUN}\b.*\b{_REACH_PRED}\b)"
-    rf"|(?:\b{_RECALL_NOUN}\b.*\b{_REACH_PRED}\b)",
+    rf"|(?:\b(?:is|are)\b.*\byour\b.*\b{_RECALL_NOUN}\b.*\b{_REACH_PRED}\b)",
     re.IGNORECASE,
 )
 _WHEN_CHECK_RE = re.compile(

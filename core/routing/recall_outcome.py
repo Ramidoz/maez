@@ -117,16 +117,22 @@ def is_false_absence(rec: RecallOutcome) -> bool:
 
 
 def cites_confirmed_memory_context(result, working_set) -> bool:
-    """True only when cited labels include date-confirmed memory_context."""
+    """True only when every cited label is date-confirmed memory_context."""
     cited = {str(label) for label in (getattr(result, "cited_ids", None) or [])}
     if not cited:
+        return False
+    items_by_label = {
+        str(getattr(item, "local_label", "")): item
+        for item in (getattr(working_set, "items", ()) or ())
+    }
+    if not cited.issubset(items_by_label):
         return False
     for item in getattr(working_set, "items", ()) or ():
         if str(getattr(item, "local_label", "")) not in cited:
             continue
         if getattr(item, "source_type", None) != "memory_context":
-            continue
+            return False
         provenance = getattr(item, "temporal_provenance", None) or {}
-        if bool(provenance.get("confirmed")):
-            return True
-    return False
+        if not bool(provenance.get("confirmed")):
+            return False
+    return True
