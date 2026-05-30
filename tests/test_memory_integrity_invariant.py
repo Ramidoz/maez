@@ -359,7 +359,6 @@ class DaemonHandleMessageContract(unittest.TestCase):
             stack.enter_context(mock.patch.dict(
                 os.environ,
                 {
-                    "MAEZ_RECALL_TRIAD_ENABLED": "1",
                     "MAEZ_LIVED_RECALL": "0",
                     "MAEZ_AMBIENT_BRIEF": "0",
                     "MAEZ_WORKING_SELF": "0",
