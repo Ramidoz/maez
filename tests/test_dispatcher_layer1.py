@@ -31,6 +31,63 @@ def _spec(*sources, availability=None):
 
 
 class DispatcherLayer1Tests(unittest.TestCase):
+    def test_recall_item_fields_and_block_default(self):
+        from core.dispatcher.layer1 import RecallBlock, RecallItem
+        from core.dispatcher.spec import SubstrateSource
+
+        item = RecallItem(
+            text="full memory body",
+            source_type="memory_context",
+            durable_id="core-1",
+            temporal_provenance={"method": "exact_date", "confirmed": True},
+        )
+        self.assertEqual(item.source_type, "memory_context")
+        self.assertTrue(item.temporal_provenance["confirmed"])
+
+        block = RecallBlock(
+            source=SubstrateSource.TELEGRAM_SEMANTIC,
+            text="rendered",
+            timestamp=None,
+            freshness="living_recall",
+            rationale="x",
+            prompt_cost=8,
+        )
+        self.assertEqual(block.items, ())
+
+    def test_to_dict_does_not_serialize_item_text(self):
+        from core.dispatcher.layer1 import RecallBlock, RecallItem
+        from core.dispatcher.spec import SubstrateSource
+
+        block = RecallBlock(
+            source=SubstrateSource.TELEGRAM_SEMANTIC,
+            text="rendered",
+            timestamp=None,
+            freshness="living_recall",
+            rationale="x",
+            prompt_cost=8,
+            items=(
+                RecallItem(
+                    text="SECRET FULL MEMORY",
+                    source_type="memory_context",
+                    durable_id="core-1",
+                    temporal_provenance=None,
+                ),
+            ),
+        )
+        payload = block.to_dict()
+
+        self.assertNotIn("SECRET FULL MEMORY", str(payload))
+        self.assertEqual(
+            payload["items"],
+            [
+                {
+                    "durable_id": "core-1",
+                    "source_type": "memory_context",
+                    "temporal_provenance": None,
+                }
+            ],
+        )
+
     def test_layer1_fans_out_concurrently_and_merges_in_stable_source_order(self):
         from core.dispatcher.layer1 import Layer1Fanout, RecallBlock, RecallBranchStatus
         from core.dispatcher.spec import SubstrateSource

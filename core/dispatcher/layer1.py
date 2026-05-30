@@ -61,6 +61,14 @@ RecallAdapter = Callable[[SubstrateSource], Sequence["RecallBlock"]]
 
 
 @dataclass(frozen=True)
+class RecallItem:
+    text: str
+    source_type: str
+    durable_id: str | None = None
+    temporal_provenance: dict | None = None
+
+
+@dataclass(frozen=True)
 class RecallBlock:
     source: SubstrateSource
     text: str
@@ -71,6 +79,7 @@ class RecallBlock:
     truncated: bool = False
     original_chars: int | None = None
     role_hint: SourceRole | None = None
+    items: tuple[RecallItem, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
@@ -85,6 +94,15 @@ class RecallBlock:
         }
         if self.role_hint is not None:
             payload["role_hint"] = self.role_hint.value
+        if self.items:
+            payload["items"] = [
+                {
+                    "durable_id": item.durable_id,
+                    "source_type": item.source_type,
+                    "temporal_provenance": item.temporal_provenance,
+                }
+                for item in self.items
+            ]
         return payload
 
 
