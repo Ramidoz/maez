@@ -25,6 +25,16 @@ class OutcomeClass(Enum):
     ORDINARY_DECLINED = "ordinary_declined"
 
 
+class ReplyPath(Enum):
+    TOOL = "tool"
+    ECHO = "echo"
+    HONEST_EMPTY = "honest_empty"
+    FOCUSED = "focused"
+    LEGACY = "legacy"
+    DATED_HONESTY = "dated_honesty"
+    SELF_STATUS = "self_status"
+
+
 @dataclass(frozen=True)
 class RecallOutcome:
     schema_version: ClassVar[str] = "recall_outcome.v1"
@@ -38,7 +48,12 @@ class RecallOutcome:
     receipt_or_na: str
     latency_ms: int
     focused_elapsed_ms: int | None
-    reply_path: str
+    reply_path: ReplyPath
+
+    def __post_init__(self) -> None:
+        if isinstance(self.reply_path, ReplyPath):
+            return
+        object.__setattr__(self, "reply_path", ReplyPath(str(self.reply_path)))
 
 
 def format_log_value(value) -> str:

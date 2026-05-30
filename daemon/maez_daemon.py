@@ -1158,7 +1158,18 @@ def _log_recall_outcome(*, rec) -> None:
         rec.receipt_or_na,
         rec.latency_ms,
         format_log_value(rec.focused_elapsed_ms),
-        rec.reply_path,
+        rec.reply_path.value,
+    )
+
+
+def _focused_working_set_had_confirmed(working_set) -> bool:
+    return bool(
+        working_set is not None
+        and any(
+            getattr(item, "temporal_provenance", None)
+            and item.temporal_provenance.get("confirmed")
+            for item in getattr(working_set, "items", ()) or ()
+        )
     )
 
 
@@ -1541,6 +1552,8 @@ class MaezDaemon:
     def __init__(self):
         self.running = False
         self.boot_time = None
+        # In-memory only for now; the boot_id guard is ready for persistence,
+        # but this value does not survive process restart until a sink lands.
         self._last_recall_receipt = None
         self.cycle_count = 0
         self.last_cycle_time = None
@@ -3449,6 +3462,7 @@ class MaezDaemon:
                 keyword overlap (incident: meta-harness at 04:42,
                 "it" at 04:53 lost the referent).
         """
+        from core.routing.recall_outcome import ReplyPath
         from core.routing.reply_mode import (
             ReplyDecisionSignals,
             ReplyMode,
@@ -4148,7 +4162,9 @@ class MaezDaemon:
         _focused_working_set = None
         _focused_result = None
         _focused_verdict = None
-        _reply_path = _reply_decision.mode.value.lower()
+        _reply_path = ReplyPath(_reply_decision.mode.value.lower())
+        _focused_used = False
+        _focused_answer_used = False
         _recall_status_reply = None
         if _recall_status_intercept_enabled():
             try:
@@ -4158,13 +4174,14 @@ class MaezDaemon:
                     recall_status_query_wants_timestamp as _recall_status_query_wants_timestamp,
                 )
 
-                if _is_recall_status_query(text):
+                if _is_recall_status_query(text) and not _date_addressed_turn:
                     _status_last_receipt = getattr(self, "_last_recall_receipt", None)
                     _status_include_timestamp = _recall_status_query_wants_timestamp(text)
                     _status_carrier_reachable = bool(
                         _focused_cognition_enabled(
                             recall_stack_config=_recall_stack_config,
                         )
+                        # TODO: remove source != "voice" when the voice carrier lands.
                         and source != "voice"
                     )
                     _recall_status_reply, _recall_status_state = _build_recall_status_reply(
@@ -4188,7 +4205,7 @@ class MaezDaemon:
 
         if _recall_status_reply is not None:
             reply = _recall_status_reply
-            _reply_path = "self_status"
+            _reply_path = ReplyPath.SELF_STATUS
         elif _reply_decision.mode is ReplyMode.TOOL:
             reply = authoritative_tool_reply
         elif _reply_decision.mode is ReplyMode.ECHO:
@@ -4233,7 +4250,6 @@ class MaezDaemon:
                 logger.debug("honest_empty record skipped: %s", _hee)
         else:
             reply = None
-            _focused_used = False
             if _reply_decision.mode is ReplyMode.FOCUSED:
                 _focused_started = time.monotonic()
                 try:
@@ -4305,6 +4321,7 @@ class MaezDaemon:
                         if _focused_reply:
                             reply = _focused_reply
                             _focused_used = True
+                            _focused_answer_used = True
                 except Exception as _focused_exc:
                     if (
                         _date_addressed_turn
@@ -4348,14 +4365,7 @@ class MaezDaemon:
                     _rk_focused_elapsed = int((time.monotonic() - _focused_started) * 1000)
 
             if _date_addressed_turn and not _focused_used and reply is None:
-                _had_confirmed = bool(
-                    _focused_working_set is not None
-                    and any(
-                        getattr(item, "temporal_provenance", None)
-                        and item.temporal_provenance.get("confirmed")
-                        for item in _focused_working_set.items
-                    )
-                )
+                _had_confirmed = _focused_working_set_had_confirmed(_focused_working_set)
                 _dated_reply_kind = _dated_denial_kind(
                     carrier_receipt=_recall_carrier_receipt,
                     had_confirmed=_had_confirmed,
@@ -4375,7 +4385,7 @@ class MaezDaemon:
                     had_confirmed=_had_confirmed,
                 )
                 _focused_used = True
-                _reply_path = "dated_honesty"
+                _reply_path = ReplyPath.DATED_HONESTY
 
             if not _focused_used:
                 try:
@@ -4389,7 +4399,7 @@ class MaezDaemon:
                         options={"temperature": 0.7, "num_predict": 4096},
                     )
                     reply = (response.message.content or "").strip() or "(no response)"
-                    _reply_path = "legacy_synthesis"
+                    _reply_path = ReplyPath.LEGACY
                     if _focused_candidate and (transcript_context or evidence_directive):
                         _log_daemon_system_part_shape(
                             surface=source,
@@ -4602,6 +4612,11 @@ class MaezDaemon:
             from core.routing.recall_outcome import RecallOutcome, classify_outcome
             from core.routing.recall_self_status import RecallStatusReceipt
 
+            if not _focused_answer_used:
+                _rk_cited_grounded = False
+                _rk_unmatched = 0
+                _rk_coverage = None
+                _rk_focused_elapsed = None
             _rk_turn_kind = (
                 "both"
                 if (_date_addressed_turn and _dialogue_needs_or_uncertain)
@@ -4613,12 +4628,8 @@ class MaezDaemon:
             )
             _rk_mode = "recall_triad" if _recall_stack_config.triad_on else "legacy"
             if _recall_stack_config.triad_on and _focused_working_set is not None:
-                _had_confirmed = bool(
-                    any(
-                        getattr(item, "temporal_provenance", None)
-                        and item.temporal_provenance.get("confirmed")
-                        for item in _focused_working_set.items
-                    )
+                _had_confirmed = _focused_working_set_had_confirmed(
+                    _focused_working_set
                 )
             _rk_legacy_absence = (
                 _rk_mode == "legacy"
@@ -4633,7 +4644,9 @@ class MaezDaemon:
             ):
                 _dated_denial_kind_for_turn = "no_dated_memory"
             _rk_answered = bool(reply) and not _is_dated_denial_reply(reply) and not (
-                _rk_turn_kind != "ordinary" and _reply_asserts_dated_absence(reply)
+                _rk_turn_kind != "ordinary"
+                and _reply_asserts_dated_absence(reply)
+                and not _rk_cited_grounded
             )
             _rk_outcome = classify_outcome(
                 mode=_rk_mode,
@@ -4677,7 +4690,10 @@ class MaezDaemon:
                 )
             )
         except Exception as _recall_outcome_exc:
-            logger.debug("recall_outcome emit skipped: %s", _recall_outcome_exc)
+            logger.warning(
+                "recall_outcome_emit_failed error_class=%s",
+                type(_recall_outcome_exc).__name__,
+            )
         if (
             _pursuit_delivery_ledger is not None
             and _pursuit_delivery_dispatch_id is not None

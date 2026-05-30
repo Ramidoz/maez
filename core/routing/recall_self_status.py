@@ -19,6 +19,14 @@ _WHEN_CHECK_RE = re.compile(
     rf"\bwhen\b.*\b(?:last\s+)?(?:check|checked|look|looked)\b.*\byour\b.*\b{_RECALL_NOUN}\b",
     re.IGNORECASE,
 )
+_COMPOUND_CONTENT_RE = re.compile(
+    r"\b(?:and|,)\b.*\b(?:what|where|who|which|why|how)\b",
+    re.IGNORECASE,
+)
+_COMPOUND_CONTENT_WHEN_RE = re.compile(
+    rf"\b(?:and|,)\b.*\bwhen\b(?!.*\b(?:last\s+)?(?:check|checked|look|looked)\b.*\byour\b.*\b{_RECALL_NOUN}\b)",
+    re.IGNORECASE,
+)
 
 
 class RecallLiveness(Enum):
@@ -37,8 +45,12 @@ class RecallStatusReceipt:
 
 
 def is_recall_status_query(text: str) -> bool:
+    # Scope guard: liveness-of-faculty only, never content recall that happens
+    # to mention the dated-recall faculty.
     t = (text or "").strip()
     if not t:
+        return False
+    if _COMPOUND_CONTENT_RE.search(t) or _COMPOUND_CONTENT_WHEN_RE.search(t):
         return False
     return bool(_REACHABILITY_RE.search(t) or _WHEN_CHECK_RE.search(t))
 
@@ -74,7 +86,7 @@ def build_recall_status_reply(
         )
     if last_receipt is None or last_receipt.boot_id != current_boot_id:
         return (
-            "The dated-memory path is switched on, but I haven't checked it "
+            "My dated memory is reachable from here, but I haven't checked it "
             "since I came back up.",
             RecallLiveness.ON_NEVER_CONSULTED,
         )
@@ -85,7 +97,7 @@ def build_recall_status_reply(
             else ""
         )
         return (
-            "The dated-memory path is switched on, but my last check errored out - "
+            "My dated memory is reachable from here, but my last check errored out - "
             f"I'd want to try again before trusting it.{suffix}",
             RecallLiveness.ON_CONSULT_FAILED,
         )
@@ -98,11 +110,11 @@ def build_recall_status_reply(
             else ""
         )
         return (
-            f"The dated-memory path is switched on; I checked it {when}.{suffix}",
+            f"My dated memory is reachable from here; I checked it {when}.{suffix}",
             RecallLiveness.ON_OK,
         )
     return (
-        "The dated-memory path is switched on, but the last dated turn did not "
-        "actually consult it.",
+        "My dated memory is reachable from here, but I haven't confirmed a "
+        "same-boot check yet.",
         RecallLiveness.ON_NEVER_CONSULTED,
     )

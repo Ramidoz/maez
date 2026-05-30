@@ -16,6 +16,7 @@ class IntentMatchTest(unittest.TestCase):
             "is your dated recall working right now?",
             "can you reach your dated memory?",
             "when did you last check your dated recall?",
+            "is your dated recall reachable and when did you last check your dated recall?",
         ):
             self.assertTrue(is_recall_status_query(q), q)
 
@@ -36,6 +37,9 @@ class IntentMatchTest(unittest.TestCase):
             "is your dated recall from April 27 relevant?",
             "the dated recall system is working well after the fix",
             "if your dated recall is working, what did we decide April 27?",
+            "is your dated recall up and what did we decide Monday?",
+            "is your dated memory reachable and what did we note around April 27?",
+            "is your dated memory reachable and when did we decide on April 27?",
         ):
             self.assertFalse(is_recall_status_query(q), q)
 
@@ -77,9 +81,8 @@ class StatusReplyTest(unittest.TestCase):
             now_ts=1100.0,
         )
         self.assertIs(state, RecallLiveness.ON_NEVER_CONSULTED)
-        self.assertIn("switched on", reply.lower())
+        self.assertIn("dated memory is reachable", reply.lower())
         self.assertIn("haven't checked", reply.lower())
-        self.assertNotIn("can reach", reply.lower())
 
     def test_on_never_consulted_when_receipt_from_prior_boot(self):
         r = self._receipt(receipt="consulted", at_ts=1099.0, boot_id="bootPREV")
@@ -137,7 +140,21 @@ class StatusReplyTest(unittest.TestCase):
         )
         self.assertIs(state, RecallLiveness.ON_CONSULT_FAILED)
         self.assertIn("errored", reply.lower())
-        self.assertNotIn("can reach", reply.lower())
+        self.assertIn("dated memory is reachable", reply.lower())
+
+    def test_unknown_same_boot_receipt_uses_being_shaped_fallback(self):
+        r = self._receipt(receipt="not_consulted", at_ts=1099.0, boot_id="bootA")
+        reply, state = build_recall_status_reply(
+            triad_on=True,
+            carrier_reachable_from_surface=True,
+            last_receipt=r,
+            current_boot_id="bootA",
+            now_ts=1100.0,
+        )
+        self.assertIs(state, RecallLiveness.ON_NEVER_CONSULTED)
+        low = reply.lower()
+        self.assertIn("dated memory is reachable", low)
+        self.assertNotIn("last dated turn did not actually consult", low)
 
     def test_stale_consulted_same_boot_degrades(self):
         r = self._receipt(receipt="consulted", at_ts=1000.0, boot_id="bootA")

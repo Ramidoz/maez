@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from core.routing.recall_outcome import (
     OutcomeClass,
     RecallOutcome,
+    ReplyPath,
     cites_confirmed_memory_context,
     classify_outcome,
     format_log_value,
@@ -186,7 +187,7 @@ class FalseAbsenceTest(unittest.TestCase):
             receipt_or_na="consulted",
             latency_ms=10,
             focused_elapsed_ms=5,
-            reply_path="focused",
+            reply_path=ReplyPath.FOCUSED,
         )
         base.update(kw)
         return RecallOutcome(**base)
@@ -222,6 +223,61 @@ class FalseAbsenceTest(unittest.TestCase):
         ):
             rec = self._rec(denial_kind=dk, outcome_class=oc, had_confirmed=True)
             self.assertFalse(is_false_absence(rec), dk)
+
+    def test_grounded_answer_with_absence_phrase_is_not_false_absence(self):
+        rec = self._rec(
+            outcome_class=OutcomeClass.ANSWERED_GROUNDED,
+            denial_kind="na",
+            had_confirmed=True,
+            receipt_or_na="consulted",
+        )
+        self.assertFalse(is_false_absence(rec))
+
+
+class ReplyPathTest(unittest.TestCase):
+    def test_reply_path_is_closed_set(self):
+        self.assertEqual(
+            {path.value for path in ReplyPath},
+            {
+                "tool",
+                "echo",
+                "honest_empty",
+                "focused",
+                "legacy",
+                "dated_honesty",
+                "self_status",
+            },
+        )
+
+    def test_recall_outcome_normalizes_reply_path(self):
+        rec = RecallOutcome(
+            mode="recall_triad",
+            turn_kind="dated",
+            outcome_class=OutcomeClass.ANSWERED_GROUNDED,
+            denial_kind="na",
+            had_confirmed=True,
+            citation_coverage=1.0,
+            receipt_or_na="consulted",
+            latency_ms=10,
+            focused_elapsed_ms=5,
+            reply_path="focused",
+        )
+        self.assertIs(rec.reply_path, ReplyPath.FOCUSED)
+
+    def test_recall_outcome_rejects_unknown_reply_path(self):
+        with self.assertRaises(ValueError):
+            RecallOutcome(
+                mode="recall_triad",
+                turn_kind="dated",
+                outcome_class=OutcomeClass.ANSWERED_GROUNDED,
+                denial_kind="na",
+                had_confirmed=True,
+                citation_coverage=1.0,
+                receipt_or_na="consulted",
+                latency_ms=10,
+                focused_elapsed_ms=5,
+                reply_path="bogus",
+            )
 
 
 class GroundedContextHelperTest(unittest.TestCase):

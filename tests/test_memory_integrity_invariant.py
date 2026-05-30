@@ -480,6 +480,110 @@ class DaemonHandleMessageContract(unittest.TestCase):
     def _recall_outcome_lines(self, logs):
         return [ln for ln in logs.output if "recall_outcome" in ln]
 
+    def test_grounded_dated_answer_with_absence_phrase_stays_answered(self):
+        from daemon import maez_daemon
+        from core.routing.focused_cognition import FocusedResult, GroundednessVerdict
+
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+        transcript = (
+            "[memory context]\n"
+            '<RECALLED id="m-apr27" date_match="exact_date">'
+            "April 27 infrastructure incident was recorded."
+            "</RECALLED>"
+        )
+        focused_result = FocusedResult(
+            reply="I don't recall the empty log, but the April 27 incident is here [E1].",
+            cited_ids=["E1"],
+            working_set_chars=10,
+        )
+        with self.assertLogs("maez", level="INFO") as logs:
+            with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+                os.environ, {"MAEZ_RECALL_TRIAD_ENABLED": "1"}, clear=False
+            ), mock.patch(
+                "core.routing.focused_cognition.focused_synthesize",
+                return_value=focused_result,
+            ), mock.patch(
+                "core.routing.focused_cognition.check_groundedness",
+                return_value=GroundednessVerdict("grounded", 1.0, []),
+            ):
+                maez_daemon.MaezDaemon.handle_message(
+                    daemon,
+                    "what did we note around April 27?",
+                    chat_id="c1",
+                    source="telegram",
+                    transcript=transcript,
+                )
+
+        line = self._recall_outcome_lines(logs)[-1]
+        self.assertIn("outcome_class=answered_grounded", line)
+        self.assertIn("denial_kind=na", line)
+        self.assertIn("had_confirmed=true", line)
+        self.assertNotIn("declined_absence", line)
+
+    def test_discarded_focused_draft_does_not_contribute_coverage(self):
+        from daemon import maez_daemon
+        from core.routing.focused_cognition import FocusedResult, GroundednessVerdict
+
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+        transcript = (
+            "[memory context]\n"
+            '<RECALLED id="m-apr27" date_match="exact_date">'
+            "April 27 infrastructure incident was recorded."
+            "</RECALLED>"
+        )
+        empty_focused = FocusedResult(reply="", cited_ids=["E1"], working_set_chars=10)
+        with self.assertLogs("maez", level="INFO") as logs:
+            with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+                os.environ, {"MAEZ_RECALL_TRIAD_ENABLED": "1"}, clear=False
+            ), mock.patch(
+                "core.routing.focused_cognition.focused_synthesize",
+                return_value=empty_focused,
+            ), mock.patch(
+                "core.routing.focused_cognition.check_groundedness",
+                return_value=GroundednessVerdict("grounded", 1.0, []),
+            ):
+                maez_daemon.MaezDaemon.handle_message(
+                    daemon,
+                    "what did we note around April 27?",
+                    chat_id="c1",
+                    source="telegram",
+                    transcript=transcript,
+                )
+
+        line = self._recall_outcome_lines(logs)[-1]
+        self.assertIn("reply_path=dated_honesty", line)
+        self.assertIn("outcome_class=declined_transport", line)
+        self.assertIn("citation_coverage=na", line)
+        self.assertIn("had_confirmed=true", line)
+
+    def test_recall_outcome_emit_failure_is_visible_and_content_free(self):
+        from daemon import maez_daemon
+
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+        with self.assertLogs("maez", level="WARNING") as logs:
+            with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+                os.environ, {"MAEZ_RECALL_TRIAD_ENABLED": "0"}, clear=False
+            ), mock.patch.object(
+                maez_daemon,
+                "_log_recall_outcome",
+                side_effect=RuntimeError("counter broke"),
+            ):
+                maez_daemon.MaezDaemon.handle_message(
+                    daemon,
+                    "what did we decide around April 27?",
+                    chat_id="c1",
+                    source="telegram",
+                )
+
+        joined = "\n".join(logs.output)
+        self.assertIn("recall_outcome_emit_failed", joined)
+        self.assertIn("error_class=RuntimeError", joined)
+        self.assertNotIn("April 27", joined)
+        self.assertNotIn("decide", joined)
+
     def test_recall_outcome_emitted_on_dated_legacy_turn(self):
         from daemon import maez_daemon
 
@@ -633,6 +737,29 @@ class DaemonHandleMessageContract(unittest.TestCase):
 
         self.assertNotIn("the dated-memory path is switched on", reply.lower())
         self.assertNotIn("that path isn't switched on", reply.lower())
+        self.assertNotIn("recall_self_status", "\n".join(logs.output))
+
+    def test_compound_status_and_date_query_is_not_self_status_intercepted(self):
+        from daemon import maez_daemon
+
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+        with self.assertLogs("maez", level="INFO") as logs:
+            with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+                os.environ,
+                {
+                    "MAEZ_RECALL_TRIAD_ENABLED": "1",
+                    "MAEZ_RECALL_STATUS_INTERCEPT_ENABLED": "1",
+                },
+                clear=False,
+            ):
+                maez_daemon.MaezDaemon.handle_message(
+                    daemon,
+                    "is your dated recall up and what did we decide around April 27?",
+                    chat_id="c1",
+                    source="telegram",
+                )
+
         self.assertNotIn("recall_self_status", "\n".join(logs.output))
 
     def test_recall_self_status_voice_surface_reports_unreachable(self):
