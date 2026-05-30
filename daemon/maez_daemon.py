@@ -3893,6 +3893,7 @@ class MaezDaemon:
                 echo_reply=bool(_current_turn_echo_reply),
                 honest_empty_candidate=bool(_honest_empty_candidate),
                 focused_candidate=bool(_focused_candidate),
+                date_addressed=bool(_date_addressed_turn),
             )
         )
         _legacy_call_purpose = _reply_decision.call_purpose
@@ -3955,8 +3956,8 @@ class MaezDaemon:
         else:
             reply = None
             _focused_used = False
+            _focused_working_set = None
             if _reply_decision.mode is ReplyMode.FOCUSED:
-                _focused_working_set = None
                 try:
                     from core.routing.focused_cognition import (
                         assemble_working_set as _assemble_working_set,
@@ -4049,10 +4050,24 @@ class MaezDaemon:
                         pass
 
             if _date_addressed_turn and not _focused_used and reply is None:
-                reply = (
-                    "I don't have a dated memory for that window. I'm not going "
-                    "to answer it from recent chat or guesswork."
+                _had_confirmed = bool(
+                    _focused_working_set is not None
+                    and any(
+                        getattr(item, "temporal_provenance", None)
+                        and item.temporal_provenance.get("confirmed")
+                        for item in _focused_working_set.items
+                    )
                 )
+                if _had_confirmed:
+                    reply = (
+                        "I have a dated memory for that, but I couldn't pull it "
+                        "together just now. Ask me again in a moment."
+                    )
+                else:
+                    reply = (
+                        "I don't have a dated memory for that window. I'm not going "
+                        "to answer it from recent chat or guesswork."
+                    )
                 _focused_used = True
 
             if not _focused_used:
