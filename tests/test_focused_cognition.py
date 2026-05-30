@@ -625,6 +625,90 @@ class DialogueAwareAssembleTests(unittest.TestCase):
         )
 
 
+class TemporalProvenancePrecedenceTests(unittest.TestCase):
+    CONFIRMED = (
+        "[memory context]\n"
+        '<RECALLED tier="core" age="permanent" id="c1" date_match="exact_date" '
+        'date_match_label="matched by exact date (2026-04-27)">\n'
+        "infrastructure ground-truth fabrication-class incident\n"
+        "</RECALLED>"
+    )
+    FALLBACK = (
+        "[memory context]\n"
+        '<RECALLED tier="core" age="permanent" id="c2" '
+        'date_match="semantic_fallback" '
+        'date_match_label="semantic match, timing uncertain (not date-confirmed)">\n'
+        "some loosely related note\n"
+        "</RECALLED>"
+    )
+
+    def test_confirmed_is_primary_provenance_populated(self):
+        ws = assemble_working_set(
+            transcript=self.CONFIRMED,
+            web_context="",
+            owner_question="what did we note around April 27?",
+        )
+        self.assertIsNotNone(ws)
+        assert ws is not None
+        top = ws.items[0]
+        self.assertEqual(top.source_type, "memory_context")
+        self.assertTrue(
+            top.temporal_provenance and top.temporal_provenance["confirmed"]
+        )
+        self.assertEqual(top.temporal_provenance["method"], "exact_date")
+
+    def test_semantic_fallback_never_E1_status_fires(self):
+        ws = assemble_working_set(
+            transcript=self.FALLBACK,
+            web_context="",
+            owner_question="what did we note around April 27?",
+        )
+        self.assertIsNotNone(ws)
+        assert ws is not None
+        self.assertTrue(
+            any(item.source_type == "temporal_recall_status" for item in ws.items)
+        )
+        self.assertEqual(ws.items[0].source_type, "temporal_recall_status")
+        fallback_items = [
+            item for item in ws.items if item.source_type == "memory_context"
+        ]
+        for item in fallback_items:
+            self.assertNotEqual(item.local_label, "E1")
+
+    def test_web_not_E1_and_not_suppress_status(self):
+        ws = assemble_working_set(
+            transcript="",
+            web_context="- some web result line",
+            owner_question="what happened May 6?",
+        )
+        self.assertIsNotNone(ws)
+        assert ws is not None
+        self.assertTrue(
+            any(item.source_type == "temporal_recall_status" for item in ws.items)
+        )
+        self.assertEqual(ws.items[0].source_type, "temporal_recall_status")
+        for item in ws.items:
+            if item.source_type == "web_context":
+                self.assertNotEqual(item.local_label, "E1")
+
+    def test_provenance_from_envelope_not_body_substring(self):
+        tx = (
+            "[memory context]\n"
+            '<RECALLED tier="core" age="permanent" id="c3" '
+            'date_match="exact_date">\n'
+            "this note discusses semantic_fallback as a topic\n"
+            "</RECALLED>"
+        )
+        ws = assemble_working_set(
+            transcript=tx,
+            web_context="",
+            owner_question="what did we note around April 27?",
+        )
+        self.assertIsNotNone(ws)
+        assert ws is not None
+        self.assertTrue(ws.items[0].temporal_provenance["confirmed"])
+
+
 class TrustTierRenderingTests(unittest.TestCase):
     def test_authority_label_per_source_type(self):
         from core.routing.focused_cognition import _authority_label

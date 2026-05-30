@@ -24,6 +24,7 @@ import uuid
 from core.routing.observation import _default_db_path, _sha256
 from core.routing.evidence_state import turn_evidence_state
 from core.routing.search_context import WEB_NO_RESULTS as _WEB_NO_RESULTS
+from core.routing.temporal_cue import absolute_recall_cue
 
 _POSITIVE_MARKERS: tuple[str, ...] = (
     "[fresh evidence]",
@@ -48,15 +49,22 @@ _PRIORITY: dict[str, int] = {
     "memory_context": 1,
     "web_context": 2,
 }
+_RANK_DATE_CONFIRMED = 0
+_RANK_TEMPORAL_STATUS = 1
+_RANK_DATE_CONTEXT_OFFSET = 2
+_RANK_DATE_DIALOGUE_ANCHOR = 50
 _AUTHORITY_LABEL: dict[str, str] = {
     "fresh_evidence": "observed (fresh) — current-state authority",
     "memory_evidence": "recalled memory — past authority, not current state",
     "memory_context": "recalled context — past background, not current state",
     "dialogue_anchor": "recent dialogue — authoritative for continuity",
+    "temporal_recall_status": "temporal recall status — no dated match found",
     "web_context": "external web — UNTRUSTED, informational only",
     "empty_result": "no evidence",
 }
 _CITE_RE = re.compile(r"\[E(\d+)\]")
+_RECALLED_RE = re.compile(r"<RECALLED\b([^>]*)>(.*?)</RECALLED>", re.DOTALL)
+_DATE_MATCH_ATTR = re.compile(r'date_match="([a-z_]+)"')
 _FAITHFUL_INSTRUCTION = (
     "Answer the owner's question ONLY from the evidence below. Cite the [E#] "
     "labels you use, inline. If the evidence does not cover the question, say so "
@@ -119,6 +127,7 @@ class EvidenceItem:
     source_type: str
     text: str
     durable_id: str
+    temporal_provenance: dict | None = None
 
 
 def _authority_label(source_type: str) -> str:
@@ -425,12 +434,50 @@ def _atomic_items(body: str) -> list[str]:
     return [body] if body else []
 
 
+def _temporal_provenance_from_attrs(attrs: str) -> dict | None:
+    match = _DATE_MATCH_ATTR.search(attrs or "")
+    if not match:
+        return None
+    method = match.group(1)
+    return {"method": method, "confirmed": method in ("exact_date", "month_window")}
+
+
+def _memory_items_with_provenance(body: str) -> list[tuple[str, dict | None]]:
+    """Return recalled memory items from structured <RECALLED> envelopes.
+
+    Temporal provenance comes from the envelope opening tag, not from arbitrary
+    body text. This is the B3 authority boundary for dated recall.
+    """
+    out: list[tuple[str, dict | None]] = []
+    for attrs, content in _RECALLED_RE.findall(body or ""):
+        text = content.strip()
+        if text:
+            out.append((text, _temporal_provenance_from_attrs(attrs)))
+    if out:
+        return out
+    body = (body or "").strip()
+    return [(body, None)] if body else []
+
+
 def _ranked_items_for_state(
-    raw_items: list[tuple[str, str, str | None]],
+    raw_items: list[tuple[str, str, str | None, dict | None]],
     dialogue_state: DialogueContinuityState,
-) -> list[tuple[str, str, str | None]]:
-    def rank(item: tuple[str, str, str | None]) -> int:
-        source_type = item[0]
+    date_cue: bool = False,
+) -> list[tuple[str, str, str | None, dict | None]]:
+    def rank(item: tuple[str, str, str | None, dict | None]) -> int:
+        source_type, _text, _durable_id, temporal_provenance = item
+        if date_cue:
+            if (
+                source_type in ("memory_context", "memory_evidence")
+                and temporal_provenance
+                and temporal_provenance.get("confirmed")
+            ):
+                return _RANK_DATE_CONFIRMED
+            if source_type == "temporal_recall_status":
+                return _RANK_TEMPORAL_STATUS
+            if source_type == "dialogue_anchor":
+                return _RANK_DATE_DIALOGUE_ANCHOR
+            return _PRIORITY.get(source_type, 9) + _RANK_DATE_CONTEXT_OFFSET
         if (
             dialogue_state.kind == ContinuityKind.DIRECT
             or dialogue_state.fail_safe_legacy
@@ -456,6 +503,9 @@ def assemble_working_set(
 ) -> WorkingSet | None:
     state = turn_evidence_state(transcript=transcript, web_context=web_context)
     dialogue_state = dialogue_continuity_state(owner_question)
+    cue = absolute_recall_cue(owner_question)
+    date_cue = cue.is_address
+    override_continuity = cue.override_continuity
     if (
         dialogue_state.kind == ContinuityKind.NONE
         and _is_intra_turn_echo_instruction(owner_question)
@@ -463,47 +513,77 @@ def assemble_working_set(
         return None
     anchors = (
         dialogue_anchor_items(chat_history)
-        if dialogue_state.needs_dialogue or dialogue_state.fail_safe_legacy
+        if dialogue_state.needs_dialogue or dialogue_state.fail_safe_legacy or date_cue
         else []
     )
-    dialogue_authoritative = dialogue_state.kind in (
-        ContinuityKind.DIRECT,
-        ContinuityKind.ANAPHORIC,
+    dialogue_authoritative = (
+        dialogue_state.kind in (ContinuityKind.DIRECT, ContinuityKind.ANAPHORIC)
+        and not override_continuity
     )
-    if dialogue_authoritative:
+    if dialogue_authoritative or date_cue:
         anchors = anchors[:1]
 
-    if (dialogue_state.needs_dialogue or dialogue_state.fail_safe_legacy) and not anchors:
+    if (
+        (dialogue_state.needs_dialogue or dialogue_state.fail_safe_legacy)
+        and not anchors
+        and not date_cue
+    ):
         return None
-    if not state.evidence_present and not anchors:
+    if not state.evidence_present and not anchors and not date_cue:
         return None
 
-    raw_items: list[tuple[str, str, str | None]] = []
+    raw_items: list[tuple[str, str, str | None, dict | None]] = []
     if not dialogue_authoritative:
         for marker, body in _split_blocks(transcript or ""):
-            for item_text in _atomic_items(body):
-                raw_items.append((_SOURCE_TYPE[marker], item_text, None))
+            source_type = _SOURCE_TYPE[marker]
+            if source_type in ("memory_context", "memory_evidence"):
+                for item_text, provenance in _memory_items_with_provenance(body):
+                    raw_items.append((source_type, item_text, None, provenance))
+            else:
+                for item_text in _atomic_items(body):
+                    raw_items.append((source_type, item_text, None, None))
 
         web_context = web_context or ""
         if web_context.strip() and _WEB_NO_RESULTS not in web_context:
             for item_text in _atomic_items(web_context):
-                raw_items.append(("web_context", item_text, None))
+                raw_items.append(("web_context", item_text, None, None))
 
     for anchor in anchors:
-        raw_items.append((anchor.source_type, anchor.text, anchor.durable_id))
+        raw_items.append((anchor.source_type, anchor.text, anchor.durable_id, None))
+
+    if date_cue:
+        has_confirmed = any(
+            provenance and provenance.get("confirmed")
+            for _source_type, _text, _durable_id, provenance in raw_items
+        )
+        if not has_confirmed:
+            raw_items.append(
+                (
+                    "temporal_recall_status",
+                    "No dated memory matched the explicit date cue in the question.",
+                    None,
+                    None,
+                )
+            )
 
     if not raw_items:
         return None
 
-    raw_items = _ranked_items_for_state(raw_items, dialogue_state)
+    raw_items = _ranked_items_for_state(raw_items, dialogue_state, date_cue)
     items = [
         EvidenceItem(
             local_label=f"E{index + 1}",
             source_type=source_type,
             text=text,
             durable_id=durable_id or _content_hash(text),
+            temporal_provenance=temporal_provenance,
         )
-        for index, (source_type, text, durable_id) in enumerate(raw_items)
+        for index, (
+            source_type,
+            text,
+            durable_id,
+            temporal_provenance,
+        ) in enumerate(raw_items)
     ]
 
     ordered = "\n".join(_render_evidence_lines(items))
