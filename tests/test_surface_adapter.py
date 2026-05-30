@@ -167,7 +167,7 @@ class HandlerRouting(unittest.TestCase):
 
         Living recall is intentionally telegram-scoped. Passing the
         generic "adapter" label here makes a live Telegram turn fall
-        back to legacy recall even when MAEZ_LIVING_RECALL_ENABLED=1.
+        back to legacy recall even when MAEZ_RECALL_TRIAD_ENABLED=1.
         """
 
         class _Cards:
