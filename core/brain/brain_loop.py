@@ -150,14 +150,20 @@ def _transcript_to_tool_call_dict(item: tuple) -> dict:
     }
 
 
-def _dispatcher_enabled() -> bool:
-    value = os.environ.get("MAEZ_DISPATCHER_ENABLED", "0")
-    return value.strip().lower() in {"1", "true", "yes"}
+def _dispatcher_enabled(recall_stack_config=None) -> bool:
+    if recall_stack_config is None:
+        from core.routing.recall_stack_config import resolve_recall_stack
+
+        recall_stack_config = resolve_recall_stack()
+    return recall_stack_config.triad_on
 
 
-def _living_recall_enabled() -> bool:
-    value = os.environ.get("MAEZ_LIVING_RECALL_ENABLED", "0")
-    return value.strip().lower() in {"1", "true", "yes"}
+def _living_recall_enabled(recall_stack_config=None) -> bool:
+    if recall_stack_config is None:
+        from core.routing.recall_stack_config import resolve_recall_stack
+
+        recall_stack_config = resolve_recall_stack()
+    return recall_stack_config.triad_on
 
 
 _DISPATCHER_ARCHETYPE_INDEX = None
@@ -205,6 +211,7 @@ def _dispatcher_recall_adapters(
     spec=None,
     surface: str = "",
     chat_history=None,
+    recall_stack_config=None,
 ):
     from core.dispatcher.layer1 import (
         MAX_RECALL_CHARS_PER_SOURCE,
@@ -297,7 +304,7 @@ def _dispatcher_recall_adapters(
             return False
 
     def _living_memory_manager_adapter(source: SubstrateSource):
-        if not _living_recall_enabled() or not (surface or "").startswith("telegram"):
+        if not _living_recall_enabled(recall_stack_config) or not (surface or "").startswith("telegram"):
             return _legacy_memory_manager_adapter(source)
 
         from core.dispatcher.spec import ProvenanceFraming, SourceRole
@@ -596,6 +603,7 @@ def _run_dispatcher_pipeline(
     bond_id: str,
     chat_id: str,
     chat_history=None,
+    recall_stack_config=None,
 ) -> _DispatcherPathResult:
     from core.dispatcher.inventory import InventorySummary
     from core.dispatcher.external_sources import ExternalBranchStatus, ExternalFanout
@@ -695,6 +703,7 @@ def _run_dispatcher_pipeline(
             spec=spec,
             surface=surface,
             chat_history=chat_history,
+            recall_stack_config=recall_stack_config,
         ),
         branch_timeout_s=0.8,
         global_deadline_s=1.0,
@@ -1695,9 +1704,12 @@ def run_brain_loop(
     if not action_engine:
         return _empty()
 
+    from core.routing.recall_stack_config import resolve_recall_stack
+
+    _recall_stack_config = resolve_recall_stack()
     dispatcher_path = False
     if recovery_seed is None:
-        if _dispatcher_enabled():
+        if _dispatcher_enabled(_recall_stack_config):
             if not surface:
                 logger.warning(
                     "dispatcher_path_entry surface=%s bond_id=%s chat_id=%s flag_state=enabled recovery_seed_present=%s",
@@ -1720,6 +1732,7 @@ def run_brain_loop(
             bond_id=user_id or "",
             chat_id=chat_id,
             chat_history=chat_history,
+            recall_stack_config=_recall_stack_config,
         )
         if dispatcher_result.transcript:
             if return_structured:

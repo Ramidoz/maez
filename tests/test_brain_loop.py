@@ -86,7 +86,7 @@ class DispatcherWiring(unittest.TestCase):
         from core import brain_loop
 
         with (
-            patch.dict(os.environ, {"MAEZ_DISPATCHER_ENABLED": "1"}),
+            patch.dict(os.environ, {"MAEZ_RECALL_TRIAD_ENABLED": "1"}),
             patch.object(
                 brain_loop,
                 "_should_run_jarvis_loop",
@@ -116,7 +116,7 @@ class DispatcherWiring(unittest.TestCase):
         from core import brain_loop
 
         with (
-            patch.dict(os.environ, {"MAEZ_DISPATCHER_ENABLED": "0"}),
+            patch.dict(os.environ, {"MAEZ_RECALL_TRIAD_ENABLED": "0"}),
             patch.object(brain_loop, "_should_run_jarvis_loop", return_value=False) as gate,
             patch.object(
                 brain_loop,
@@ -373,7 +373,7 @@ class DispatcherWiring(unittest.TestCase):
         from core import brain_loop
 
         with (
-            patch.dict(os.environ, {"MAEZ_DISPATCHER_ENABLED": "1"}),
+            patch.dict(os.environ, {"MAEZ_RECALL_TRIAD_ENABLED": "1"}),
             patch.object(
                 brain_loop,
                 "_run_dispatcher_pipeline",
@@ -408,7 +408,7 @@ class DispatcherWiring(unittest.TestCase):
             temporal_provenance={"method": "exact_date", "confirmed": True},
         )
         with (
-            patch.dict(os.environ, {"MAEZ_DISPATCHER_ENABLED": "1"}),
+            patch.dict(os.environ, {"MAEZ_RECALL_TRIAD_ENABLED": "1"}),
             patch.object(
                 brain_loop,
                 "_should_run_jarvis_loop",
@@ -439,7 +439,7 @@ class DispatcherWiring(unittest.TestCase):
         from core import brain_loop
 
         with (
-            patch.dict(os.environ, {"MAEZ_DISPATCHER_ENABLED": "1"}),
+            patch.dict(os.environ, {"MAEZ_RECALL_TRIAD_ENABLED": "1"}),
             patch("core.dispatcher.external_sources.ExternalFanout.run") as external_run,
             patch.object(brain_loop, "_run_dispatcher_pipeline") as dispatcher,
             patch.object(brain_loop, "_llm_client") as llm_client,

@@ -473,18 +473,18 @@ class FlagReaderTests(unittest.TestCase):
     def test_living_recall_flag_defaults_off(self):
         from core.brain.brain_loop import _living_recall_enabled
 
-        os.environ.pop("MAEZ_LIVING_RECALL_ENABLED", None)
+        os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
         self.assertFalse(_living_recall_enabled())
 
     def test_living_recall_flag_accepts_truthy_values(self):
         from core.brain.brain_loop import _living_recall_enabled
 
         for value in ("1", "true", "True"):
-            os.environ["MAEZ_LIVING_RECALL_ENABLED"] = value
+            os.environ["MAEZ_RECALL_TRIAD_ENABLED"] = value
             try:
                 self.assertTrue(_living_recall_enabled())
             finally:
-                os.environ.pop("MAEZ_LIVING_RECALL_ENABLED", None)
+                os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
 
 
 class AdapterRoleHintTests(unittest.TestCase):
@@ -691,7 +691,7 @@ class AdapterRoleHintTests(unittest.TestCase):
         from core.dispatcher.spec import SubstrateSource
 
         fake = self._FakeMemory()
-        os.environ.pop("MAEZ_LIVING_RECALL_ENABLED", None)
+        os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
         with mock.patch("core.brain.brain_loop._dispatcher_memory_manager", return_value=fake):
             blocks = brain_loop._dispatcher_recall_adapters("hello")[
                 SubstrateSource.TELEGRAM_SEMANTIC
@@ -707,14 +707,14 @@ class AdapterRoleHintTests(unittest.TestCase):
         from core.dispatcher.spec import SourceRole, SubstrateSource
 
         fake = self._FakeMemory()
-        os.environ["MAEZ_LIVING_RECALL_ENABLED"] = "1"
+        os.environ["MAEZ_RECALL_TRIAD_ENABLED"] = "1"
         try:
             with mock.patch("core.brain.brain_loop._dispatcher_memory_manager", return_value=fake):
                 blocks = brain_loop._dispatcher_recall_adapters("hello", surface="telegram")[
                     SubstrateSource.TELEGRAM_SEMANTIC
                 ](SubstrateSource.TELEGRAM_SEMANTIC)
         finally:
-            os.environ.pop("MAEZ_LIVING_RECALL_ENABLED", None)
+            os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
 
         self.assertEqual(fake.calls, ["living:hello"])
         self.assertEqual([block.role_hint for block in blocks], [
@@ -728,7 +728,7 @@ class AdapterRoleHintTests(unittest.TestCase):
         from core.dispatcher.spec import SourceRole, SubstrateSource
 
         fake = self._StructuredDatedMemory()
-        os.environ["MAEZ_LIVING_RECALL_ENABLED"] = "1"
+        os.environ["MAEZ_RECALL_TRIAD_ENABLED"] = "1"
         try:
             with mock.patch("core.brain.brain_loop._dispatcher_memory_manager", return_value=fake):
                 blocks = brain_loop._dispatcher_recall_adapters(
@@ -737,7 +737,7 @@ class AdapterRoleHintTests(unittest.TestCase):
                     surface="telegram_surface",
                 )[SubstrateSource.TELEGRAM_SEMANTIC](SubstrateSource.TELEGRAM_SEMANTIC)
         finally:
-            os.environ.pop("MAEZ_LIVING_RECALL_ENABLED", None)
+            os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
 
         context_block = next(
             block for block in blocks if block.role_hint is SourceRole.SUBSTRATE_CONTEXT
@@ -761,7 +761,7 @@ class AdapterRoleHintTests(unittest.TestCase):
         )
 
         fake = self._StructuredDatedMemory()
-        os.environ["MAEZ_LIVING_RECALL_ENABLED"] = "1"
+        os.environ["MAEZ_RECALL_TRIAD_ENABLED"] = "1"
         try:
             with mock.patch("core.brain.brain_loop._dispatcher_memory_manager", return_value=fake):
                 blocks = brain_loop._dispatcher_recall_adapters(
@@ -773,7 +773,7 @@ class AdapterRoleHintTests(unittest.TestCase):
                     surface="telegram_surface",
                 )[SubstrateSource.TELEGRAM_SEMANTIC](SubstrateSource.TELEGRAM_SEMANTIC)
         finally:
-            os.environ.pop("MAEZ_LIVING_RECALL_ENABLED", None)
+            os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
 
         self.assertEqual([block.role_hint for block in blocks], [SourceRole.SUBSTRATE_CONTEXT])
         self.assertTrue(blocks[0].items)
@@ -793,7 +793,7 @@ class AdapterRoleHintTests(unittest.TestCase):
         fake = self._StructuredDatedMemory()
         query = "What did we note around April 27 about infrastructure?"
         spec = _substrate_semantic_spec()
-        os.environ["MAEZ_LIVING_RECALL_ENABLED"] = "1"
+        os.environ["MAEZ_RECALL_TRIAD_ENABLED"] = "1"
         try:
             with mock.patch("core.brain.brain_loop._dispatcher_memory_manager", return_value=fake):
                 layer1 = Layer1Fanout(
@@ -826,7 +826,7 @@ class AdapterRoleHintTests(unittest.TestCase):
                     timestamp="2026-05-30T12:00:00Z",
                 )
         finally:
-            os.environ.pop("MAEZ_LIVING_RECALL_ENABLED", None)
+            os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
 
         self.assertTrue(rendered.recall_items)
         working_set = assemble_working_set(
@@ -853,14 +853,14 @@ class AdapterRoleHintTests(unittest.TestCase):
         from core.dispatcher.spec import SourceRole, SubstrateSource
 
         fake = self._FakeMemory()
-        os.environ["MAEZ_LIVING_RECALL_ENABLED"] = "1"
+        os.environ["MAEZ_RECALL_TRIAD_ENABLED"] = "1"
         try:
             with mock.patch("core.brain.brain_loop._dispatcher_memory_manager", return_value=fake):
                 blocks = brain_loop._dispatcher_recall_adapters("hello", surface="web")[
                     SubstrateSource.TELEGRAM_SEMANTIC
                 ](SubstrateSource.TELEGRAM_SEMANTIC)
         finally:
-            os.environ.pop("MAEZ_LIVING_RECALL_ENABLED", None)
+            os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
 
         self.assertEqual(fake.calls, ["legacy:hello"])
         self.assertEqual(len(blocks), 1)
@@ -872,14 +872,14 @@ class AdapterRoleHintTests(unittest.TestCase):
         from core.dispatcher.spec import SourceRole, SubstrateSource
 
         fake = self._FakeMemory()
-        os.environ["MAEZ_LIVING_RECALL_ENABLED"] = "1"
+        os.environ["MAEZ_RECALL_TRIAD_ENABLED"] = "1"
         try:
             with mock.patch("core.brain.brain_loop._dispatcher_memory_manager", return_value=fake):
                 blocks = brain_loop._dispatcher_recall_adapters("last evening", surface="telegram")[
                     SubstrateSource.TELEGRAM_TEMPORAL
                 ](SubstrateSource.TELEGRAM_TEMPORAL)
         finally:
-            os.environ.pop("MAEZ_LIVING_RECALL_ENABLED", None)
+            os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
 
         self.assertEqual(fake.calls, ["living:last evening"])
         self.assertEqual([block.role_hint for block in blocks], [
@@ -897,7 +897,7 @@ class AdapterRoleHintTests(unittest.TestCase):
         )
 
         fake = self._FakeMemory()
-        os.environ["MAEZ_LIVING_RECALL_ENABLED"] = "1"
+        os.environ["MAEZ_RECALL_TRIAD_ENABLED"] = "1"
         try:
             with mock.patch("core.brain.brain_loop._dispatcher_memory_manager", return_value=fake):
                 blocks = brain_loop._dispatcher_recall_adapters(
@@ -909,7 +909,7 @@ class AdapterRoleHintTests(unittest.TestCase):
                     surface="telegram",
                 )[SubstrateSource.TELEGRAM_SEMANTIC](SubstrateSource.TELEGRAM_SEMANTIC)
         finally:
-            os.environ.pop("MAEZ_LIVING_RECALL_ENABLED", None)
+            os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
 
         self.assertEqual([block.role_hint for block in blocks], [SourceRole.SUBSTRATE_CONTEXT])
         self.assertIn("evidence text", blocks[0].text)
@@ -924,7 +924,7 @@ class AdapterRoleHintTests(unittest.TestCase):
         )
 
         fake = self._FakeMemory()
-        os.environ["MAEZ_LIVING_RECALL_ENABLED"] = "1"
+        os.environ["MAEZ_RECALL_TRIAD_ENABLED"] = "1"
         try:
             with mock.patch("core.brain.brain_loop._dispatcher_memory_manager", return_value=fake):
                 blocks = brain_loop._dispatcher_recall_adapters(
@@ -935,7 +935,7 @@ class AdapterRoleHintTests(unittest.TestCase):
                     surface="telegram",
                 )[SubstrateSource.TELEGRAM_SEMANTIC](SubstrateSource.TELEGRAM_SEMANTIC)
         finally:
-            os.environ.pop("MAEZ_LIVING_RECALL_ENABLED", None)
+            os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
 
         self.assertEqual([block.role_hint for block in blocks], [SourceRole.SUBSTRATE_EVIDENCE])
         self.assertEqual(blocks[0].text, "evidence text")
@@ -947,14 +947,14 @@ class AdapterRoleHintTests(unittest.TestCase):
         from core.dispatcher.spec import SourceRole, SubstrateSource
 
         fake = self._BudgetDroppingMemory()
-        os.environ["MAEZ_LIVING_RECALL_ENABLED"] = "1"
+        os.environ["MAEZ_RECALL_TRIAD_ENABLED"] = "1"
         try:
             with mock.patch("core.brain.brain_loop._dispatcher_memory_manager", return_value=fake):
                 blocks = brain_loop._dispatcher_recall_adapters("budgeted", surface="telegram")[
                     SubstrateSource.TELEGRAM_SEMANTIC
                 ](SubstrateSource.TELEGRAM_SEMANTIC)
         finally:
-            os.environ.pop("MAEZ_LIVING_RECALL_ENABLED", None)
+            os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
 
         self.assertEqual([block.role_hint for block in blocks], [SourceRole.SUBSTRATE_EVIDENCE])
         self.assertIn("ev-visible", blocks[0].text)
@@ -966,7 +966,7 @@ class AdapterRoleHintTests(unittest.TestCase):
         from core.dispatcher.spec import SourceRole, SubstrateSource
 
         fake = self._AllDroppedPromptMemory()
-        os.environ["MAEZ_LIVING_RECALL_ENABLED"] = "1"
+        os.environ["MAEZ_RECALL_TRIAD_ENABLED"] = "1"
         try:
             with mock.patch("core.brain.brain_loop._dispatcher_memory_manager", return_value=fake):
                 blocks = brain_loop._dispatcher_recall_adapters(
@@ -974,7 +974,7 @@ class AdapterRoleHintTests(unittest.TestCase):
                     surface="telegram",
                 )[SubstrateSource.TELEGRAM_SEMANTIC](SubstrateSource.TELEGRAM_SEMANTIC)
         finally:
-            os.environ.pop("MAEZ_LIVING_RECALL_ENABLED", None)
+            os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
 
         self.assertEqual([block.role_hint for block in blocks], [SourceRole.SUBSTRATE_CONTEXT])
         self.assertEqual(fake.recorded, [])
@@ -1010,7 +1010,7 @@ class AdapterRoleHintTests(unittest.TestCase):
             freshness_window=None,
             trust_scope_union=None,
         )
-        os.environ["MAEZ_LIVING_RECALL_ENABLED"] = "1"
+        os.environ["MAEZ_RECALL_TRIAD_ENABLED"] = "1"
         try:
             with mock.patch("core.brain.brain_loop._dispatcher_memory_manager", return_value=fake):
                 layer1 = Layer1Fanout(
@@ -1029,7 +1029,7 @@ class AdapterRoleHintTests(unittest.TestCase):
                     fanout_generation_id="living-budget",
                 )
         finally:
-            os.environ.pop("MAEZ_LIVING_RECALL_ENABLED", None)
+            os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
 
         roles_by_source = [
             (block.source, block.role_hint)
@@ -1057,7 +1057,7 @@ class AdapterRoleHintTests(unittest.TestCase):
         from core.dispatcher.spec import SourceRole, SubstrateSource
 
         fake = self._ContinuityFallbackMemory()
-        os.environ["MAEZ_LIVING_RECALL_ENABLED"] = "1"
+        os.environ["MAEZ_RECALL_TRIAD_ENABLED"] = "1"
         try:
             with mock.patch("core.brain.brain_loop._dispatcher_memory_manager", return_value=fake):
                 blocks = brain_loop._dispatcher_recall_adapters(
@@ -1074,7 +1074,7 @@ class AdapterRoleHintTests(unittest.TestCase):
                     ],
                 )[SubstrateSource.TELEGRAM_SEMANTIC](SubstrateSource.TELEGRAM_SEMANTIC)
         finally:
-            os.environ.pop("MAEZ_LIVING_RECALL_ENABLED", None)
+            os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
 
         self.assertEqual(blocks[0].role_hint, SourceRole.SUBSTRATE_EVIDENCE)
         self.assertIn("living memory split", blocks[0].text)
@@ -1087,7 +1087,7 @@ class AdapterRoleHintTests(unittest.TestCase):
         from core.dispatcher.spec import SubstrateSource
 
         fake = self._DeepContextMemory()
-        os.environ["MAEZ_LIVING_RECALL_ENABLED"] = "1"
+        os.environ["MAEZ_RECALL_TRIAD_ENABLED"] = "1"
         try:
             with mock.patch("core.brain.brain_loop._dispatcher_memory_manager", return_value=fake):
                 blocks = brain_loop._dispatcher_recall_adapters(
@@ -1104,7 +1104,7 @@ class AdapterRoleHintTests(unittest.TestCase):
                     ],
                 )[SubstrateSource.TELEGRAM_SEMANTIC](SubstrateSource.TELEGRAM_SEMANTIC)
         finally:
-            os.environ.pop("MAEZ_LIVING_RECALL_ENABLED", None)
+            os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
 
         text = "\n".join(block.text for block in blocks)
         self.assertIn("April infrastructure note", text)
@@ -1119,7 +1119,7 @@ class AdapterRoleHintTests(unittest.TestCase):
         )
 
         fake = self._ContinuityFallbackMemory()
-        os.environ["MAEZ_LIVING_RECALL_ENABLED"] = "1"
+        os.environ["MAEZ_RECALL_TRIAD_ENABLED"] = "1"
         try:
             with mock.patch("core.brain.brain_loop._dispatcher_memory_manager", return_value=fake):
                 blocks = brain_loop._dispatcher_recall_adapters(
@@ -1138,7 +1138,7 @@ class AdapterRoleHintTests(unittest.TestCase):
                     ],
                 )[SubstrateSource.TELEGRAM_SEMANTIC](SubstrateSource.TELEGRAM_SEMANTIC)
         finally:
-            os.environ.pop("MAEZ_LIVING_RECALL_ENABLED", None)
+            os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
 
         self.assertEqual([block.role_hint for block in blocks], [SourceRole.SUBSTRATE_EVIDENCE])
         self.assertIn("living memory split", blocks[0].text)
@@ -1150,7 +1150,7 @@ class AdapterRoleHintTests(unittest.TestCase):
         from core.dispatcher.spec import SourceRole, SubstrateSource
 
         fake = self._DeepContextMemory()
-        os.environ["MAEZ_LIVING_RECALL_ENABLED"] = "1"
+        os.environ["MAEZ_RECALL_TRIAD_ENABLED"] = "1"
         try:
             with mock.patch("core.brain.brain_loop._dispatcher_memory_manager", return_value=fake):
                 blocks = brain_loop._dispatcher_recall_adapters(
@@ -1159,7 +1159,7 @@ class AdapterRoleHintTests(unittest.TestCase):
                     surface="telegram_surface",
                 )[SubstrateSource.TELEGRAM_SEMANTIC](SubstrateSource.TELEGRAM_SEMANTIC)
         finally:
-            os.environ.pop("MAEZ_LIVING_RECALL_ENABLED", None)
+            os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
 
         self.assertEqual([block.role_hint for block in blocks], [SourceRole.SUBSTRATE_CONTEXT])
         self.assertIn("April infrastructure note", blocks[0].text)
@@ -1169,7 +1169,7 @@ class AdapterRoleHintTests(unittest.TestCase):
         from core.dispatcher.spec import ProvenanceFraming, SubstrateSource
 
         fake = self._FakeMemory()
-        os.environ["MAEZ_LIVING_RECALL_ENABLED"] = "1"
+        os.environ["MAEZ_RECALL_TRIAD_ENABLED"] = "1"
         try:
             with mock.patch("core.brain.brain_loop._dispatcher_memory_manager", return_value=fake):
                 blocks = brain_loop._dispatcher_recall_adapters(
@@ -1178,7 +1178,7 @@ class AdapterRoleHintTests(unittest.TestCase):
                     surface="telegram",
                 )[SubstrateSource.TELEGRAM_SEMANTIC](SubstrateSource.TELEGRAM_SEMANTIC)
         finally:
-            os.environ.pop("MAEZ_LIVING_RECALL_ENABLED", None)
+            os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
 
         self.assertEqual(blocks, [])
         self.assertEqual(fake.recorded, [])
@@ -1305,7 +1305,7 @@ class LivingRecallFramingTests(unittest.TestCase):
         )
         spec = _substrate_semantic_spec()
 
-        os.environ["MAEZ_LIVING_RECALL_ENABLED"] = "1"
+        os.environ["MAEZ_RECALL_TRIAD_ENABLED"] = "1"
         try:
             with (
                 mock.patch("core.brain.brain_loop._dispatcher_memory_manager", return_value=mm),
@@ -1342,7 +1342,7 @@ class LivingRecallFramingTests(unittest.TestCase):
                     timestamp="2026-05-29T12:00:00Z",
                 )
         finally:
-            os.environ.pop("MAEZ_LIVING_RECALL_ENABLED", None)
+            os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
 
         transcript = rendered.prompt_block
         self.assertIn("[memory context]", transcript)
@@ -1392,7 +1392,7 @@ class LivingRecallFramingTests(unittest.TestCase):
         mm = _manager(core_rows=[april_core, may_core])
         spec = _substrate_semantic_spec()
 
-        os.environ["MAEZ_LIVING_RECALL_ENABLED"] = "1"
+        os.environ["MAEZ_RECALL_TRIAD_ENABLED"] = "1"
         try:
             with (
                 mock.patch("core.brain.brain_loop._dispatcher_memory_manager", return_value=mm),
@@ -1429,7 +1429,7 @@ class LivingRecallFramingTests(unittest.TestCase):
                     timestamp="2026-05-29T12:00:00Z",
                 )
         finally:
-            os.environ.pop("MAEZ_LIVING_RECALL_ENABLED", None)
+            os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
 
         transcript = rendered.prompt_block
         self.assertIn("[memory context]", transcript)
@@ -1495,7 +1495,7 @@ class LivingRecallFramingTests(unittest.TestCase):
             }
         ]
 
-        os.environ["MAEZ_LIVING_RECALL_ENABLED"] = "1"
+        os.environ["MAEZ_RECALL_TRIAD_ENABLED"] = "1"
         try:
             with (
                 mock.patch("core.brain.brain_loop._dispatcher_memory_manager", return_value=mm),
@@ -1533,7 +1533,7 @@ class LivingRecallFramingTests(unittest.TestCase):
                     timestamp="2026-05-29T12:00:00Z",
                 )
         finally:
-            os.environ.pop("MAEZ_LIVING_RECALL_ENABLED", None)
+            os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
 
         transcript = rendered.prompt_block
         self.assertIn("[memory context]", transcript)
@@ -1582,7 +1582,7 @@ class LivingRecallFramingTests(unittest.TestCase):
         mm = _manager(daily_rows=[fresh_daily], core_rows=[core_note])
         spec = _substrate_semantic_spec()
 
-        os.environ["MAEZ_LIVING_RECALL_ENABLED"] = "1"
+        os.environ["MAEZ_RECALL_TRIAD_ENABLED"] = "1"
         try:
             with (
                 mock.patch("core.brain.brain_loop._dispatcher_memory_manager", return_value=mm),
@@ -1619,7 +1619,7 @@ class LivingRecallFramingTests(unittest.TestCase):
                     timestamp="2026-05-29T12:00:00Z",
                 )
         finally:
-            os.environ.pop("MAEZ_LIVING_RECALL_ENABLED", None)
+            os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
 
         transcript = rendered.prompt_block
         self.assertIn("[memory context]", transcript)
@@ -1650,9 +1650,9 @@ class ScopeParityTests(unittest.TestCase):
         def run(flag_value: str | None):
             mm = _manager(raw_rows=rows, daily_rows=[], core_rows=core)
             if flag_value is None:
-                os.environ.pop("MAEZ_LIVING_RECALL_ENABLED", None)
+                os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
             else:
-                os.environ["MAEZ_LIVING_RECALL_ENABLED"] = flag_value
+                os.environ["MAEZ_RECALL_TRIAD_ENABLED"] = flag_value
             try:
                 with (
                     mock.patch("core.memory_scoring.record_recall", side_effect=lambda *a, **k: None),
@@ -1660,7 +1660,7 @@ class ScopeParityTests(unittest.TestCase):
                 ):
                     return mm.recall_for_cycle("cycle memory")
             finally:
-                os.environ.pop("MAEZ_LIVING_RECALL_ENABLED", None)
+                os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
 
         self.assertEqual(run(None), run("1"))
 
