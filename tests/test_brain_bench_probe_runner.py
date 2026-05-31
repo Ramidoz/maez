@@ -303,6 +303,60 @@ class ProbeRunnerTests(unittest.TestCase):
                         {"label", "durable_id", "source_type", "confirmed"},
                     )
 
+    def test_repeated_probe_runs_do_not_accumulate_prior_seeded_fixtures(self):
+        from scripts.brain_bench.probe_runner import build_probe_run
+
+        selected = (eval_probes.get_probe("multi_year"),)
+
+        def first_root_disk_label(system: str) -> str:
+            for line in system.splitlines():
+                if "root disk crossed a watch threshold" not in line:
+                    continue
+                match = re.search(r"\[(E\d+)\]", line)
+                if match:
+                    return match.group(1)
+            self.fail("missing root disk evidence card")
+
+        def stream_factory(*, variant, payload):
+            del variant
+            label = first_root_disk_label(payload["messages"][0]["content"])
+            return iter(
+                [
+                    {
+                        "content": (
+                            "The current-year infrastructure note says router "
+                            f"failover stayed stable while root disk crossed a watch threshold [{label}]."
+                        )
+                    }
+                ]
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with sandbox.sandbox_env(Path(tmp)):
+                with mock.patch.object(eval_probes, "PROBES", selected):
+                    first_rows = list(
+                        build_probe_run(k=1, stream_factory=stream_factory)(_variant())
+                    )
+                    second_rows = list(
+                        build_probe_run(k=1, stream_factory=stream_factory)(_variant())
+                    )
+
+        self.assertTrue(first_rows[0].grounded_categorical)
+        self.assertTrue(
+            second_rows[0].grounded_categorical,
+            "a second screen/finalist probe run must not see stale right-year fixtures",
+        )
+        current_year_entries = [
+            entry
+            for entry in second_rows[0].available_label_map
+            if str(entry["durable_id"]).startswith("eval-multi_year-right_year-")
+        ]
+        self.assertEqual(current_year_entries, list(second_rows[0].available_label_map))
+        self.assertEqual(
+            [entry["durable_id"] for entry in current_year_entries],
+            list(second_rows[0].expected_fixture_ids),
+        )
+
     def test_available_fixture_honest_decline_fails_grounding_not_categorical(self):
         from scripts.brain_bench.probe_runner import build_probe_run
 
