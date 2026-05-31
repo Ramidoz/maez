@@ -132,3 +132,6 @@ data/longmemeval/
 # Per-run benchmark outputs: ignore raw JSON (large + per-machine),
 # but commit md / txt summaries and sample-ID lists by name.
 docs/eval/runs/*.json
+
+# Brain benchmark raw answer/evidence dumps are quarantined local artifacts.
+logs/brain_bench_debug/
