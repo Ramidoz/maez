@@ -63,6 +63,13 @@ class VoiceLintTests(unittest.TestCase):
         self.assertIn("cognition_verb", voice_lint("I think the note was April.").reasons)
         self.assertIn("gendered", voice_lint("Maez said she found it.").reasons)
 
+    def test_canonical_cognition_verbs_are_forbidden(self):
+        for verb in ("think", "thinking", "ponder", "consider", "wonder", "mull", "reflect", "feel", "sense"):
+            with self.subTest(verb=verb):
+                result = voice_lint(f"Maez might {verb} about the dated memory before answering from context.")
+                self.assertFalse(result.ok)
+                self.assertIn("cognition_verb", result.reasons)
+
 
 class GroundingStrictBoolTests(unittest.TestCase):
     def test_rejects_float_drift(self):

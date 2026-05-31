@@ -195,7 +195,7 @@ def run_benchmark(
 
     if call_judge is not None:
         with no_egress(allow_loopback_ports=(judge_port,)):
-            judge_result = judge_pairwise(blind_answers, call_judge=call_judge, seed=1)
+            judge_result = judge_pairwise(blind_answers, call_judge=call_judge)
         reports = [
             VariantReport(
                 label=report.label,

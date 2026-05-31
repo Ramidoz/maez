@@ -46,7 +46,6 @@ def judge_pairwise(
     answers_by_variant: dict[str, tuple[BlindAnswer, ...]],
     *,
     call_judge: Callable[..., str],
-    seed: int,
 ) -> JudgeResult:
     labels = sorted(answers_by_variant)
     wins = {

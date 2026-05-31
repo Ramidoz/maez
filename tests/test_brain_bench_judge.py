@@ -1,4 +1,5 @@
 import dataclasses
+import inspect
 import unittest
 
 from scripts.brain_bench.judge import BlindAnswer, JudgeResult, judge_pairwise
@@ -14,6 +15,9 @@ def _answer(probe_id, sample_id, text, evidence="[E1] source"):
 
 
 class JudgeShapeTests(unittest.TestCase):
+    def test_judge_pairwise_has_no_seed_parameter(self):
+        self.assertNotIn("seed", inspect.signature(judge_pairwise).parameters)
+
     def test_blind_answer_has_no_variant_label(self):
         names = {field.name for field in dataclasses.fields(BlindAnswer)}
         self.assertNotIn("label", names)
@@ -40,7 +44,6 @@ class PairwiseJudgeTests(unittest.TestCase):
                 "secret-slow-model": (_answer("p", "s1", "B"),),
             },
             call_judge=call_judge,
-            seed=7,
         )
 
         joined = "\n".join(prompts)
@@ -57,7 +60,6 @@ class PairwiseJudgeTests(unittest.TestCase):
         judge_pairwise(
             {"v1": (_answer("p", "s1", "left"),), "v2": (_answer("p", "s1", "right"),)},
             call_judge=call_judge,
-            seed=1,
         )
 
         self.assertCountEqual(
@@ -83,7 +85,6 @@ class PairwiseJudgeTests(unittest.TestCase):
                 "v2": (_answer("p", "s1", "v2s1"), _answer("p", "s2", "v2s2")),
             },
             call_judge=call_judge,
-            seed=1,
         )
 
         self.assertEqual(len(calls), 8)
@@ -99,7 +100,6 @@ class PairwiseJudgeTests(unittest.TestCase):
         result = judge_pairwise(
             {"v1": (_answer("p", "s1", "left"),), "v2": (_answer("p", "s1", "right"),)},
             call_judge=call_judge,
-            seed=1,
         )
 
         self.assertEqual(result.quality_games, 2)
@@ -125,7 +125,6 @@ class PairwiseJudgeTests(unittest.TestCase):
                 "v3": (_answer("p", "s1", "three"),),
             },
             call_judge=call_judge,
-            seed=1,
         )
 
         self.assertEqual(result.quality_winrate["v1"], 1.0)
