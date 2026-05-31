@@ -53,9 +53,11 @@ def run_probe(text: str, *, flag_on: bool) -> ProbeArmResult:
         classify_outcome,
     )
     from core.routing.recall_stack_config import RecallMode, RecallStackConfig
+    from core.routing.temporal_cue import absolute_recall_cue
     from scripts.recall_flip_eval import sandbox
 
     sandbox.assert_sandbox()
+    date_addressed = absolute_recall_cue(text).is_address
     stack_config = RecallStackConfig(RecallMode.TRIAD, "bundle_enabled")
     adapters = brain_loop._dispatcher_recall_adapters(
         text,
@@ -76,12 +78,35 @@ def run_probe(text: str, *, flag_on: bool) -> ProbeArmResult:
     )
     if working_set is None:
         elapsed = int((time.time() - start) * 1000)
+        if not date_addressed:
+            return ProbeArmResult(
+                answer="",
+                outcome_class="ordinary_answered",
+                receipt="not_consulted",
+                focused_elapsed_ms=elapsed,
+                citation_coverage=None,
+            )
         return ProbeArmResult(
             answer="",
             outcome_class="declined_absence",
             receipt="consulted",
             focused_elapsed_ms=elapsed,
             citation_coverage=None,
+        )
+
+    had_confirmed = any(
+        bool((item.temporal_provenance or {}).get("confirmed"))
+        for item in working_set.items
+    )
+    if date_addressed and not had_confirmed:
+        elapsed = int((time.time() - start) * 1000)
+        return ProbeArmResult(
+            answer="",
+            outcome_class="declined_absence",
+            receipt="consulted",
+            focused_elapsed_ms=elapsed,
+            citation_coverage=None,
+            working_set_source_types=tuple(item.source_type for item in working_set.items),
         )
 
     result = focused_cognition.focused_synthesize(
@@ -98,10 +123,7 @@ def run_probe(text: str, *, flag_on: bool) -> ProbeArmResult:
         answered=bool(result.reply),
         receipt="consulted",
         denial_kind="none",
-        had_confirmed=any(
-            bool((item.temporal_provenance or {}).get("confirmed"))
-            for item in working_set.items
-        ),
+        had_confirmed=had_confirmed,
         cited_grounded_context=grounded,
         unmatched_citations=len(verdict.unmatched),
     )
@@ -129,4 +151,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     main()
-
