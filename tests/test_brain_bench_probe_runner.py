@@ -16,6 +16,7 @@ def _variant():
             [
                 {
                     "label": "v",
+                    "backend_family": "ollama",
                     "base_url": "http://127.0.0.1:11434",
                     "model": "bench-model",
                     "ops": {
@@ -27,6 +28,31 @@ def _variant():
                         "startup_health": "ok",
                         "streaming_support": True,
                         "restart_recovery": "clean",
+                    },
+                }
+            ]
+        )
+    )[0]
+
+
+def _llamacpp_variant():
+    return load_variants(
+        json.dumps(
+            [
+                {
+                    "label": "llama",
+                    "backend_family": "openai_compatible",
+                    "base_url": "http://127.0.0.1:8080",
+                    "model": "qwen36-27b",
+                    "ops": {
+                        "api_family": "llama_cpp",
+                        "topology": "separate_server",
+                        "bind_host_verified": True,
+                        "live_daemon_disturbance": False,
+                        "gpu_contention": "high",
+                        "startup_health": "ok",
+                        "streaming_support": True,
+                        "restart_recovery": "manual",
                     },
                 }
             ]
@@ -79,6 +105,28 @@ class ProbeRunnerTests(unittest.TestCase):
         self.assertTrue(seen_payloads)
         self.assertTrue(all(payload["model"] == "bench-model" for payload in seen_payloads))
         self.assertTrue(all(payload["think"] is False for payload in seen_payloads))
+
+    def test_probe_run_with_llamacpp_variant_uses_openai_backend_not_ollama_chat(self):
+        from scripts.brain_bench.probe_runner import build_probe_run
+
+        selected = (eval_probes.get_probe("dated_hit"),)
+        response = mock.Mock()
+        response.iter_lines.return_value = [
+            b'data: {"choices":[{"delta":{"content":"Offline answer cites [E1]."}}]}',
+            b"data: [DONE]",
+        ]
+        response.raise_for_status.return_value = None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with sandbox.sandbox_env(Path(tmp)):
+                with mock.patch.object(eval_probes, "PROBES", selected), mock.patch("requests.Session") as session_factory:
+                    session = session_factory.return_value
+                    session.post.return_value = response
+                    rows = list(build_probe_run(k=1)(_llamacpp_variant()))
+
+        self.assertEqual(session.post.call_args.args[0], "http://127.0.0.1:8080/v1/chat/completions")
+        self.assertFalse(rows[0].inference_failed)
+        self.assertIsNone(rows[0].fail_code)
 
     def test_assert_probe_result_is_the_grounding_authority(self):
         from scripts.brain_bench.probe_runner import build_probe_run

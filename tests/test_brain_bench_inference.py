@@ -10,7 +10,7 @@ from scripts.brain_bench.inference import (
     make_benchmark_chat_fn,
     measure_generation,
 )
-from scripts.brain_bench.inference_backend import ollama_stream
+from scripts.brain_bench.inference_backend import openai_compat_stream, ollama_stream
 from scripts.brain_bench.variants import load_variants
 
 
@@ -32,10 +32,24 @@ def _ops_config(**overrides):
 def _loopback_variant(**overrides):
     data = {
         "label": "v",
+        "backend_family": "ollama",
         "base_url": "http://127.0.0.1:11434",
         "model": "bench-model",
         "chat_kwargs": {"temperature": 0.2, "num_predict": 99},
         "ops": _ops_config(),
+    }
+    data.update(overrides)
+    return load_variants(json.dumps([data]))[0]
+
+
+def _llamacpp_variant(**overrides):
+    data = {
+        "label": "llama",
+        "backend_family": "openai_compatible",
+        "base_url": "http://127.0.0.1:8080",
+        "model": "qwen36-27b",
+        "chat_kwargs": {"temperature": 0.3, "num_predict": 64},
+        "ops": _ops_config(api_family="llama_cpp", topology="separate_server"),
     }
     data.update(overrides)
     return load_variants(json.dumps([data]))[0]
@@ -67,6 +81,38 @@ class ChatFnAdapterTests(unittest.TestCase):
         self.assertFalse(seen["payload"]["think"])
         self.assertEqual(seen["payload"]["options"]["temperature"], 0.2)
         self.assertEqual(seen["payload"]["options"]["num_predict"], 256)
+
+    def test_adapter_dispatches_llamacpp_variants_to_openai_compat_endpoint(self):
+        response = mock.Mock()
+        response.iter_lines.return_value = [
+            b'data: {"choices":[{"delta":{"content":"April "}}]}',
+            b'data: {"choices":[{"delta":{"content":"27 [E1]"}}]}',
+            b"data: [DONE]",
+        ]
+        response.raise_for_status.return_value = None
+
+        with mock.patch("requests.Session") as session_factory:
+            session = session_factory.return_value
+            session.post.return_value = response
+            chat_fn, measurements = make_benchmark_chat_fn(variant=_llamacpp_variant())
+            out = chat_fn(
+                model="ignored-by-adapter",
+                messages=[{"role": "user", "content": "q"}],
+                think=False,
+                options={"num_predict": 256},
+            )
+
+        self.assertFalse(session.trust_env)
+        session.post.assert_called_once()
+        self.assertEqual(session.post.call_args.args[0], "http://127.0.0.1:8080/v1/chat/completions")
+        sent = session.post.call_args.kwargs["json"]
+        self.assertEqual(sent["model"], "qwen36-27b")
+        self.assertEqual(sent["messages"], [{"role": "user", "content": "q"}])
+        self.assertTrue(sent["stream"])
+        self.assertEqual(sent["temperature"], 0.3)
+        self.assertEqual(sent["max_tokens"], 256)
+        self.assertEqual(out.message.content, "April 27 [E1]")
+        self.assertEqual(measurements.last().answer, "April 27 [E1]")
 
     def test_adapter_failure_returns_empty_response_and_closed_code(self):
         def boom_after_one(*, variant, payload):
@@ -170,13 +216,79 @@ class BackendTests(unittest.TestCase):
         ]
         response.raise_for_status.return_value = None
 
-        with mock.patch("requests.post", return_value=response) as post:
+        with mock.patch("requests.Session") as session_factory:
+            session = session_factory.return_value
+            session.post.return_value = response
             chunks = list(ollama_stream(variant=_loopback_variant(), payload={"x": 1}))
 
-        post.assert_called_once()
-        self.assertEqual(post.call_args.args[0], "http://127.0.0.1:11434/api/chat")
-        self.assertTrue(post.call_args.kwargs["stream"])
+        self.assertFalse(session.trust_env)
+        session.post.assert_called_once()
+        self.assertEqual(session.post.call_args.args[0], "http://127.0.0.1:11434/api/chat")
+        self.assertTrue(session.post.call_args.kwargs["stream"])
         self.assertEqual(chunks, [{"content": "A "}, {"content": "B"}])
+
+    def test_openai_compat_stream_posts_to_v1_chat_completions(self):
+        response = mock.Mock()
+        response.iter_lines.return_value = [
+            b'data: {"choices":[{"delta":{"content":"A "}}]}',
+            b'{"choices":[{"delta":{"content":"B"}}]}',
+            b"data: [DONE]",
+        ]
+        response.raise_for_status.return_value = None
+
+        payload = {
+            "model": "ignored",
+            "messages": [{"role": "user", "content": "q"}],
+            "stream": True,
+            "think": False,
+            "options": {"temperature": 0.2, "num_predict": 77},
+        }
+        with mock.patch("requests.Session") as session_factory:
+            session = session_factory.return_value
+            session.post.return_value = response
+            chunks = list(openai_compat_stream(variant=_llamacpp_variant(), payload=payload))
+
+        self.assertFalse(session.trust_env)
+        session.post.assert_called_once()
+        self.assertEqual(session.post.call_args.args[0], "http://127.0.0.1:8080/v1/chat/completions")
+        sent = session.post.call_args.kwargs["json"]
+        self.assertEqual(sent["model"], "qwen36-27b")
+        self.assertEqual(sent["messages"], [{"role": "user", "content": "q"}])
+        self.assertTrue(sent["stream"])
+        self.assertEqual(sent["temperature"], 0.2)
+        self.assertEqual(sent["max_tokens"], 77)
+        self.assertNotIn("extra_body", sent)
+        self.assertEqual(sent["chat_template_kwargs"], {"enable_thinking": False})
+        self.assertEqual(chunks, [{"content": "A "}, {"content": "B"}])
+
+    def test_openai_compat_flattens_openai_client_extra_body_for_raw_http(self):
+        response = mock.Mock()
+        response.iter_lines.return_value = [b'data: {"choices":[{"delta":{"content":"A"}}]}']
+        response.raise_for_status.return_value = None
+
+        payload = {
+            "messages": [{"role": "user", "content": "q"}],
+            "think": False,
+            "options": {
+                "extra_body": {
+                    "chat_template_kwargs": {"custom": "ok"},
+                    "model": "wrong-model",
+                    "messages": [{"role": "user", "content": "wrong"}],
+                    "stream": False,
+                },
+            },
+        }
+        with mock.patch("requests.Session") as session_factory:
+            session = session_factory.return_value
+            session.post.return_value = response
+            list(openai_compat_stream(variant=_llamacpp_variant(), payload=payload))
+
+        sent = session.post.call_args.kwargs["json"]
+        self.assertNotIn("extra_body", sent)
+        self.assertEqual(sent["model"], "qwen36-27b")
+        self.assertEqual(sent["messages"], [{"role": "user", "content": "q"}])
+        self.assertTrue(sent["stream"])
+        self.assertEqual(sent["chat_template_kwargs"], {"custom": "ok", "enable_thinking": False})
 
 
 if __name__ == "__main__":

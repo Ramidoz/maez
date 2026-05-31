@@ -79,9 +79,9 @@ def measure_generation(
     if clock is None:
         clock = time.perf_counter
     if stream_factory is None:
-        from scripts.brain_bench.inference_backend import ollama_stream
+        from scripts.brain_bench.inference_backend import stream_variant
 
-        stream_factory = ollama_stream
+        stream_factory = stream_variant
 
     start = clock()
     parts: list[str] = []

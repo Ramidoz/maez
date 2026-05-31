@@ -55,6 +55,7 @@ def _packet(label="cli_variant"):
 def _variant_config(label="cli-v"):
     return {
         "label": label,
+        "backend_family": "ollama",
         "base_url": "http://127.0.0.1:11434",
         "model": "m",
         "ops": {

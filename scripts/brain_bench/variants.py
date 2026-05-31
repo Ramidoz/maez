@@ -28,9 +28,15 @@ class ConfigSource(str, Enum):
     INLINE = "inline"
 
 
+class BackendFamily(str, Enum):
+    OLLAMA = "ollama"
+    OPENAI_COMPATIBLE = "openai_compatible"
+
+
 @dataclass(frozen=True)
 class Variant:
     label: str
+    backend_family: BackendFamily
     base_url: str
     model: str
     port: int
@@ -91,7 +97,7 @@ def _normalized_endpoint(url: str) -> tuple[str, int]:
     if parsed.query or parsed.fragment:
         raise VariantConfigError("endpoint must not include query or fragment")
     if parsed.path not in ("", "/"):
-        raise VariantConfigError("endpoint must be pathless; /api/chat is pinned by code")
+        raise VariantConfigError("endpoint must be pathless; transport path is pinned by backend_family")
 
     host = parsed.hostname or ""
     if ":" in host and not host.startswith("["):
@@ -115,6 +121,15 @@ def _coerce_ops(raw_ops: Any) -> OpsRubric:
         )
     except (TypeError, ValueError) as exc:
         raise VariantConfigError("variant ops evidence must use closed values") from exc
+
+
+def _coerce_backend_family(raw_backend_family: Any) -> BackendFamily:
+    if not isinstance(raw_backend_family, str) or not raw_backend_family:
+        raise VariantConfigError("variant backend_family is required")
+    try:
+        return BackendFamily(raw_backend_family)
+    except ValueError as exc:
+        raise VariantConfigError("variant backend_family must be closed") from exc
 
 
 def validate_endpoint(url: str) -> int:
@@ -149,6 +164,7 @@ def load_variants(
         label = item.get("label")
         base_url = item.get("base_url")
         model = item.get("model")
+        backend_family = _coerce_backend_family(item.get("backend_family"))
         if not isinstance(label, str) or not label:
             raise VariantConfigError("variant label is required")
         if label in labels:
@@ -163,6 +179,8 @@ def load_variants(
         draft_model = item.get("draft_model")
         if draft_model is not None and not isinstance(draft_model, str):
             raise VariantConfigError("variant draft_model must be a string")
+        if draft_model is not None and backend_family is BackendFamily.OPENAI_COMPATIBLE:
+            raise VariantConfigError("draft_model is not wired for openai_compatible variants")
         ops_evidence = _coerce_ops(item.get("ops"))
 
         normalized, port = _normalized_endpoint(base_url)
@@ -170,6 +188,7 @@ def load_variants(
         variants.append(
             Variant(
                 label=label,
+                backend_family=backend_family,
                 base_url=normalized,
                 model=model,
                 port=port,
