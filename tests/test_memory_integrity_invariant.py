@@ -49,6 +49,7 @@ import ast
 import contextlib
 import os
 import sys
+import time
 import types
 import unittest
 from pathlib import Path
@@ -577,6 +578,137 @@ class DaemonHandleMessageContract(unittest.TestCase):
         joined = "\n".join(self._recall_outcome_lines(logs) + self._shadow_lines(logs))
         self.assertIn("shadow_pair_id=", joined)
         self.assertNotIn("TRACE_SENTINEL_RAW", joined)
+
+    def test_shadow_uses_read_only_recall_and_no_external_egress(self):
+        from daemon import maez_daemon
+
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+        with mock.patch(
+            "memory.memory_manager.MemoryManager.recall_for_telegram_living",
+            return_value=({}, {}),
+        ) as recall:
+            with self.assertLogs("maez", level="INFO") as logs:
+                with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+                    os.environ, {"MAEZ_RECALL_SHADOW_ENABLED": "1"}, clear=False
+                ), mock.patch("skills.web_search.search") as web_search, mock.patch.object(
+                    maez_daemon, "RECALL_SHADOW_BUDGET_MS", 10_000
+                ):
+                    os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
+                    maez_daemon.MaezDaemon.handle_message(
+                        daemon,
+                        "what did we decide around April 27?",
+                        chat_id="c1",
+                        source="telegram",
+                    )
+                    maez_daemon.MaezDaemon._shadow_worker_join_for_test(daemon, timeout=2.0)
+        recall.assert_called()
+        self.assertTrue(
+            any(call.kwargs.get("record_recalls") is False for call in recall.mock_calls)
+        )
+        web_search.assert_not_called()
+        self.assertIn("shadow_skipped=na", "\n".join(self._shadow_lines(logs)))
+
+    def test_shadow_queue_full_emits_pairable_skipped_row(self):
+        from daemon import maez_daemon
+
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+        with mock.patch.object(
+            daemon,
+            "_run_recall_shadow",
+            side_effect=lambda **_kwargs: time.sleep(0.25),
+        ):
+            with self.assertLogs("maez", level="INFO") as logs:
+                with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+                    os.environ, {"MAEZ_RECALL_SHADOW_ENABLED": "1"}, clear=False
+                ):
+                    os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
+                    for _ in range(2):
+                        maez_daemon.MaezDaemon.handle_message(
+                            daemon,
+                            "what did we decide around April 27?",
+                            chat_id="c1",
+                            source="telegram",
+                        )
+                    maez_daemon.MaezDaemon._shadow_worker_join_for_test(daemon, timeout=2.0)
+        joined = "\n".join(self._shadow_lines(logs))
+        self.assertIn("shadow_skipped=queue_full", joined)
+        self.assertIn("shadow_pair_id=", joined)
+
+    def test_shadow_budget_exceeded_emits_pairable_skipped_row(self):
+        from daemon import maez_daemon
+
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+        with self.assertLogs("maez", level="INFO") as logs:
+            with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+                os.environ, {"MAEZ_RECALL_SHADOW_ENABLED": "1"}, clear=False
+            ), mock.patch(
+                "memory.memory_manager.MemoryManager.recall_for_telegram_living",
+                return_value=({}, {}),
+            ), mock.patch.object(maez_daemon, "RECALL_SHADOW_BUDGET_MS", -1):
+                os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
+                maez_daemon.MaezDaemon.handle_message(
+                    daemon,
+                    "what did we decide around April 27?",
+                    chat_id="c1",
+                    source="telegram",
+                )
+                maez_daemon.MaezDaemon._shadow_worker_join_for_test(daemon, timeout=2.0)
+        joined = "\n".join(self._shadow_lines(logs))
+        self.assertIn("shadow_skipped=budget_exceeded", joined)
+        self.assertIn("shadow_pair_id=", joined)
+
+    def test_shadow_exception_log_is_content_free(self):
+        from daemon import maez_daemon
+
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+        with self.assertLogs("maez", level="INFO") as logs:
+            with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+                os.environ, {"MAEZ_RECALL_SHADOW_ENABLED": "1"}, clear=False
+            ), mock.patch(
+                "memory.memory_manager.MemoryManager.recall_for_telegram_living",
+                side_effect=RuntimeError("OWNER SECRET TEXT"),
+            ):
+                os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
+                maez_daemon.MaezDaemon.handle_message(
+                    daemon,
+                    "what did we decide around April 27?",
+                    chat_id="c1",
+                    source="telegram",
+                )
+                maez_daemon.MaezDaemon._shadow_worker_join_for_test(daemon, timeout=2.0)
+        joined = "\n".join(logs.output)
+        self.assertIn("shadow_skipped=exception", joined)
+        self.assertIn("class=RuntimeError", joined)
+        self.assertNotIn("OWNER SECRET TEXT", joined)
+
+    def test_shadow_does_not_delay_reply(self):
+        from daemon import maez_daemon
+
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+        with mock.patch.object(
+            daemon,
+            "_run_recall_shadow",
+            side_effect=lambda **_kwargs: time.sleep(1.0),
+        ):
+            with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+                os.environ, {"MAEZ_RECALL_SHADOW_ENABLED": "1"}, clear=False
+            ):
+                os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
+                start = time.monotonic()
+                maez_daemon.MaezDaemon.handle_message(
+                    daemon,
+                    "what did we decide around April 27?",
+                    chat_id="c1",
+                    source="telegram",
+                )
+                elapsed = time.monotonic() - start
+                maez_daemon.MaezDaemon._shadow_worker_join_for_test(daemon, timeout=2.0)
+        self.assertLess(elapsed, 0.5)
 
     def test_grounded_dated_answer_with_absence_phrase_stays_answered(self):
         from daemon import maez_daemon
