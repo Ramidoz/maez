@@ -24,6 +24,7 @@ from scripts.brain_bench.gates import (
     rank_variants,
     voice_lint,
 )
+from core.routing.recall_receipt import FORBIDDEN_COGNITION_VERBS
 
 
 def _ops(**overrides):
@@ -62,6 +63,13 @@ class VoiceLintTests(unittest.TestCase):
         self.assertIn("too_long", voice_lint("word " * 500).reasons)
         self.assertIn("cognition_verb", voice_lint("I think the note was April.").reasons)
         self.assertIn("gendered", voice_lint("Maez said she found it.").reasons)
+
+    def test_canonical_cognition_verbs_are_forbidden(self):
+        for verb in FORBIDDEN_COGNITION_VERBS:
+            with self.subTest(verb=verb):
+                result = voice_lint(f"Maez might {verb} about the dated memory before answering from context.")
+                self.assertFalse(result.ok)
+                self.assertEqual(result.reasons, ("cognition_verb",))
 
 
 class GroundingStrictBoolTests(unittest.TestCase):

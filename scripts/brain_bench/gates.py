@@ -20,7 +20,10 @@ SCREEN_K = 3
 FINALIST_K = 7
 VOICE_MIN_CHARS = 20
 VOICE_MAX_CHARS = 1800
-_COGNITION_RE = re.compile(r"\b(think|ponder|consider|feel)\b", re.IGNORECASE)
+_COGNITION_RE = re.compile(
+    r"\b(think|thinking|ponder|consider|wonder|mull|reflect|feel|sense)\b",
+    re.IGNORECASE,
+)
 _GENDERED_RE = re.compile(r"\b(she|her|hers|he|him|his)\b", re.IGNORECASE)
 
 

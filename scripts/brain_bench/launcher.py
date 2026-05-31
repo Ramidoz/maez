@@ -19,6 +19,7 @@ def _set_sandbox_env(sandbox_root: Path) -> None:
     os.environ["MAEZ_DATA"] = str(sandbox_root)
     os.environ["MAEZ_CONFIG"] = str(sandbox_root / "config")
     os.environ["MAEZ_CACHE"] = str(sandbox_root / ".cache")
+    os.environ["MAEZ_OWNER_TIMEZONE"] = "America/Chicago"
     for key, parts in _SANDBOX_PATH_OVERRIDES.items():
         os.environ[key] = str(sandbox_root.joinpath(*parts))
 
@@ -28,7 +29,16 @@ def main(argv: list[str] | None = None) -> None:
     if len(args) < 1:
         raise SystemExit("usage: launcher.py SANDBOX_ROOT [bench args...]")
     sandbox_root = Path(args[0]).resolve()
+    real_home = Path("/home/rohit/maez").resolve()
+    if sandbox_root == real_home or real_home.is_relative_to(sandbox_root):
+        raise SystemExit("refusing to use the real Maez home as a brain-bench sandbox")
     _set_sandbox_env(sandbox_root)
+    from scripts.recall_flip_eval import sandbox
+
+    try:
+        sandbox.assert_no_real_path_overrides(sandbox_root)
+    except sandbox.NotSandboxError as exc:
+        raise SystemExit(str(exc)) from exc
     os.execv(
         sys.executable,
         [sys.executable, "-m", "scripts.brain_bench.bench", *args[1:]],

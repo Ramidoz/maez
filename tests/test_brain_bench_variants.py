@@ -12,6 +12,21 @@ from scripts.brain_bench.variants import (
 )
 
 
+def _ops_config(**overrides):
+    data = {
+        "api_family": "ollama",
+        "topology": "reuse_endpoint",
+        "bind_host_verified": True,
+        "live_daemon_disturbance": False,
+        "gpu_contention": "low",
+        "startup_health": "ok",
+        "streaming_support": True,
+        "restart_recovery": "clean",
+    }
+    data.update(overrides)
+    return data
+
+
 class EndpointValidationTests(unittest.TestCase):
     def test_accepts_loopback_http_with_port(self):
         self.assertEqual(validate_endpoint("http://127.0.0.1:11434"), 11434)
@@ -51,6 +66,7 @@ class RegistryTests(unittest.TestCase):
                     "model": "local-model",
                     "chat_kwargs": {"temperature": 0.2},
                     "draft_model": "draft-local",
+                    "ops": _ops_config(),
                 }
             ]
         )
@@ -63,6 +79,7 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(variant.port, 11434)
         self.assertEqual(variant.chat_kwargs["temperature"], 0.2)
         self.assertEqual(variant.draft_model, "draft-local")
+        self.assertEqual(variant.ops_evidence.gpu_contention.value, "low")
         self.assertEqual(registry.variant_config_source, ConfigSource.FILE)
         self.assertRegex(registry.variant_config_hash, r"^[0-9a-f]{64}$")
 
@@ -86,6 +103,21 @@ class RegistryTests(unittest.TestCase):
                 )
             )
 
+    def test_ops_evidence_rejects_free_strings(self):
+        with self.assertRaises(VariantConfigError):
+            load_variants(
+                json.dumps(
+                    [
+                        {
+                            "label": "x",
+                            "base_url": "http://127.0.0.1:11434",
+                            "model": "m",
+                            "ops": _ops_config(gpu_contention="FABRICATED_SENTINEL"),
+                        }
+                    ]
+                )
+            )
+
     def test_missing_or_empty_config_fails_closed(self):
         for raw in (None, "", "[]"):
             with self.assertRaises(VariantConfigError):
@@ -100,6 +132,20 @@ class RegistryTests(unittest.TestCase):
             self.assertNotIn("core.routing.model_config", sys.modules)
         finally:
             os.environ.pop("MAEZ_PRIMARY_MODEL", None)
+
+    def test_ops_evidence_is_required_not_defaulted_clean(self):
+        with self.assertRaises(VariantConfigError):
+            load_variants(
+                json.dumps(
+                    [
+                        {
+                            "label": "x",
+                            "base_url": "http://127.0.0.1:11434",
+                            "model": "m",
+                        }
+                    ]
+                )
+            )
 
     def test_rejects_duplicate_labels_and_missing_fields(self):
         with self.assertRaises(VariantConfigError):

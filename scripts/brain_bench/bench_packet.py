@@ -94,7 +94,7 @@ _FORBIDDEN_CONTENT_TOKENS = (
 _CONFIG_SOURCES = {"env", "file", "inline"}
 _SAFE_LABEL_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
 _SAFE_METHODS = {"small_k_conservative_tail"}
-_SAFE_TAIL_FLAGS = {"tail_risk", "over_ceiling"}
+_SAFE_TAIL_FLAGS = {"tail_risk"}
 _SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -151,12 +151,15 @@ class VariantReport:
     p95_ms: int
     max_ms: int
     ops: OpsRubric
+    p50_ms: int = 0
+    p90_ms: int = 0
+    variance_ms: float = 0.0
     over_ceiling: bool = False
     ttft_ms: int | None = None
     tokens_per_sec: float = 0.0
-    quality_winrate: float = 0.0
-    voice_winrate: float = 0.0
-    quality_per_second: float = 0.0
+    quality_winrate: float | None = None
+    voice_winrate: float | None = None
+    quality_per_second: float | None = None
     sample_n: int = 0
     method: str = "small_k_conservative_tail"
     tail_flags: tuple[str, ...] = ()
@@ -184,8 +187,11 @@ class VariantReport:
             "hard_pass": self.hard_pass,
             "fail_reasons": [reason.value for reason in self.fail_reasons],
             "latency": {
+                "p50": self.p50_ms,
+                "p90": self.p90_ms,
                 "p95": self.p95_ms,
                 "max": self.max_ms,
+                "variance": self.variance_ms,
                 "sample_n": self.sample_n,
                 "method": self.method,
                 "tail_flags": list(self.tail_flags),
@@ -208,10 +214,13 @@ class BenchPacket:
     variant_config_source: str
     variants: tuple[VariantReport, ...]
     screen_result: ScreenResult
+    judge_evaluated: bool = False
 
     def __post_init__(self) -> None:
         if self.schema_version != "bench_packet.v3":
             raise ValueError("schema_version must be bench_packet.v3")
+        if type(self.judge_evaluated) is not bool:
+            raise ValueError("judge_evaluated must be bool")
         if not isinstance(self.screen_result, ScreenResult):
             raise ValueError("screen_result must be ScreenResult")
         if self.variant_config_source not in _CONFIG_SOURCES:
@@ -233,6 +242,7 @@ class BenchPacket:
             "variant_config_source": self.variant_config_source,
             "variants": [variant.to_dict() for variant in self.variants],
             "screen_result": self.screen_result.value,
+            "judge_evaluated": self.judge_evaluated,
             "artifact_role": "producer_evidence_not_verdict",
             "owner_verdict_required": True,
             "requires_s5_voice_continuity_gate": True,
