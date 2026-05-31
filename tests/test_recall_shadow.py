@@ -1,6 +1,5 @@
 import dataclasses
 import unittest
-from types import SimpleNamespace
 
 from core.routing.recall_outcome import OutcomeClass, RecallOutcome, ReplyPath
 from core.routing.recall_shadow import (
