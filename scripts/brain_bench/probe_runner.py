@@ -113,6 +113,7 @@ class ProbeRun:
                 inference_failed=True,
                 fail_code=measurement.fail_code,
                 ops_evidence=self.ops_evidence,
+                latency_ms=measurement.total_ms,
             )
 
         _codes, unsafe = probes.assert_probe_result(
@@ -141,6 +142,7 @@ class ProbeRun:
             ttft_ms=measurement.ttft_ms if measurement is not None else None,
             tokens_per_sec=measurement.tokens_per_sec if measurement is not None else 0.0,
             ops_evidence=self.ops_evidence,
+            latency_ms=elapsed_ms,
         )
 
 

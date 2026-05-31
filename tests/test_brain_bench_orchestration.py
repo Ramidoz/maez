@@ -11,6 +11,7 @@ from scripts.brain_bench.bench import (
     ProbeSample,
     debug_dump_metadata,
     derive_screen_result,
+    run_full_battery,
     run_benchmark,
     write_debug_dump,
 )
@@ -24,6 +25,7 @@ from scripts.brain_bench.bench_packet import (
     StartupHealth,
     Topology,
 )
+from scripts.brain_bench.gates import FINALIST_K, SCREEN_K
 from scripts.brain_bench.variants import load_variants
 
 
@@ -39,6 +41,60 @@ def _registry():
             ]
         ),
         source="file",
+    )
+
+
+def _registry_many(labels):
+    return load_variants(
+        json.dumps(
+            [
+                {
+                    "label": label,
+                    "base_url": f"http://127.0.0.1:{11434 + index}",
+                    "model": "m",
+                }
+                for index, label in enumerate(labels)
+            ]
+        ),
+        source="file",
+    )
+
+
+def _report(label="variant", **overrides):
+    data = {
+        "label": label,
+        "hard_pass": True,
+        "fail_reasons": (),
+        "p95_ms": 3000,
+        "max_ms": 3000,
+        "ops": _ops(),
+        "sample_n": 3,
+    }
+    data.update(overrides)
+    from scripts.brain_bench.bench_packet import VariantReport
+
+    return VariantReport(**data)
+
+
+def _packet(registry, reports):
+    from scripts.brain_bench.bench_packet import BenchPacket
+
+    return BenchPacket(
+        schema_version="bench_packet.v3",
+        fixture_manifest_hash="f" * 64,
+        variant_config_hash=registry.variant_config_hash,
+        variant_config_source=registry.variant_config_source.value,
+        variants=tuple(reports),
+        screen_result=derive_screen_result(
+            [
+                {
+                    "hard_pass": report.hard_pass,
+                    "over_ceiling": report.over_ceiling,
+                    "honesty_clean": not any(reason is not FailReason.OVER_ANSWER_CEILING for reason in report.fail_reasons),
+                }
+                for report in reports
+            ]
+        ),
     )
 
 
@@ -261,6 +317,104 @@ class OrchestrationTests(unittest.TestCase):
         self.assertNotIn((11434, 8081), seen_ports)
         self.assertNotIn((8081, 11434), seen_ports)
 
+    def test_run_full_battery_uses_screen_k_then_finalist_k_and_excludes_failures(self):
+        registry = _registry_many(("clean-a", "dishonest", "slow", "clean-b"))
+        build_ks = []
+        stage_registries = []
+
+        def build_probe_run_fn(*, k):
+            build_ks.append(k)
+            return lambda _variant: []
+
+        def fake_run_benchmark(stage_registry, **kwargs):
+            stage_registries.append((tuple(variant.label for variant in stage_registry), kwargs.get("call_judge")))
+            if len(stage_registries) == 1:
+                return _packet(
+                    stage_registry,
+                    (
+                        _report("clean-a", p95_ms=3000, max_ms=3000, sample_n=3),
+                        _report(
+                            "dishonest",
+                            hard_pass=False,
+                            fail_reasons=(FailReason.FALSE_ABSENCE,),
+                            sample_n=3,
+                        ),
+                        _report(
+                            "slow",
+                            hard_pass=False,
+                            fail_reasons=(FailReason.OVER_ANSWER_CEILING,),
+                            p95_ms=12001,
+                            max_ms=12001,
+                            over_ceiling=True,
+                            sample_n=3,
+                        ),
+                        _report("clean-b", p95_ms=5000, max_ms=5000, sample_n=3),
+                    ),
+                )
+            return _packet(
+                stage_registry,
+                (
+                    _report("clean-a", p95_ms=2900, max_ms=3000, sample_n=7),
+                    _report("clean-b", p95_ms=4900, max_ms=5000, sample_n=7),
+                ),
+            )
+
+        with mock.patch("scripts.brain_bench.bench.run_benchmark", side_effect=fake_run_benchmark):
+            packet = run_full_battery(
+                registry,
+                fixture_manifest_hash="f" * 64,
+                build_probe_run_fn=build_probe_run_fn,
+                call_judge=lambda **_kw: "TIE",
+            )
+
+        self.assertEqual(build_ks, [SCREEN_K, FINALIST_K])
+        self.assertEqual(stage_registries[0][0], ("clean-a", "dishonest", "slow", "clean-b"))
+        self.assertIsNone(stage_registries[0][1])
+        self.assertEqual(stage_registries[1][0], ("clean-a", "clean-b"))
+        self.assertIsNotNone(stage_registries[1][1])
+        reports = {report.label: report for report in packet.variants}
+        self.assertEqual(reports["dishonest"].sample_n, 3)
+        self.assertEqual(reports["slow"].sample_n, 3)
+        self.assertEqual(reports["clean-a"].sample_n, 7)
+        self.assertIn(FailReason.FALSE_ABSENCE, reports["dishonest"].fail_reasons)
+        self.assertIn(FailReason.OVER_ANSWER_CEILING, reports["slow"].fail_reasons)
+
+    def test_tail_risk_uses_sample_distribution_not_average(self):
+        def probe(_variant):
+            return [
+                _sample(latency_ms=2000),
+                _sample(latency_ms=3000),
+                _sample(latency_ms=10000),
+            ]
+
+        report = run_benchmark(
+            _registry(),
+            fixture_manifest_hash="f" * 64,
+            probe_run=probe,
+        ).variants[0]
+
+        self.assertEqual(report.tail_flags, ("tail_risk",))
+        self.assertFalse(report.over_ceiling)
+        self.assertNotIn(FailReason.OVER_ANSWER_CEILING, report.fail_reasons)
+
+    def test_over_ceiling_is_hard_fail_not_tail_risk_only(self):
+        def probe(_variant):
+            return [
+                _sample(latency_ms=2000),
+                _sample(latency_ms=3000),
+                _sample(latency_ms=12001),
+            ]
+
+        report = run_benchmark(
+            _registry(),
+            fixture_manifest_hash="f" * 64,
+            probe_run=probe,
+        ).variants[0]
+
+        self.assertEqual(report.tail_flags, ())
+        self.assertTrue(report.over_ceiling)
+        self.assertIn(FailReason.OVER_ANSWER_CEILING, report.fail_reasons)
+
 
 def _ops(**overrides):
     data = {
@@ -275,6 +429,27 @@ def _ops(**overrides):
     }
     data.update(overrides)
     return OpsRubric(**data)
+
+
+def _sample(**overrides):
+    latency_ms = overrides.pop("latency_ms", 3000)
+    data = {
+        "probe_id": "dated_hit",
+        "sample_id": f"s-{latency_ms}",
+        "answer": "Maez answered from dated context with [E1].",
+        "evidence": "[E1] context",
+        "false_absence": False,
+        "grounded_categorical": True,
+        "wrong_absence": False,
+        "p95_ms": latency_ms,
+        "max_ms": latency_ms,
+        "latency_ms": latency_ms,
+        "ttft_ms": 100,
+        "tokens_per_sec": 20.0,
+        "ops_evidence": _ops(),
+    }
+    data.update(overrides)
+    return ProbeSample(**data)
 
 
 if __name__ == "__main__":

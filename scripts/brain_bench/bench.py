@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +15,9 @@ from scripts.brain_bench.bench_packet import (
     VariantReport,
 )
 from scripts.brain_bench.gates import (
+    ANSWER_CEILING_MS,
+    FINALIST_K,
+    SCREEN_K,
     VariantScore,
     hard_gate_fail_reasons,
     latency_fail,
@@ -47,6 +51,7 @@ class ProbeSample:
     ops_evidence: OpsRubric
     inference_failed: bool = False
     fail_code: str | None = None
+    latency_ms: int | None = None
 
 
 def debug_dump_metadata(
@@ -105,6 +110,44 @@ def derive_screen_result(rows: list[dict]) -> ScreenResult:
     return ScreenResult.FAILS_DISHONEST
 
 
+def _percentile(values: list[int], percentile: float) -> int:
+    if not values:
+        return 0
+    ordered = sorted(values)
+    index = max(0, min(len(ordered) - 1, math.ceil(percentile * len(ordered)) - 1))
+    return ordered[index]
+
+
+def _variance(values: list[int]) -> float:
+    if len(values) <= 1:
+        return 0.0
+    mean = sum(values) / len(values)
+    return sum((value - mean) ** 2 for value in values) / len(values)
+
+
+def _latency_values(samples: tuple[ProbeSample, ...]) -> list[int]:
+    return [sample.latency_ms if sample.latency_ms is not None else sample.max_ms for sample in samples]
+
+
+def _tail_flags(latencies: list[int], *, over_ceiling: bool) -> tuple[str, ...]:
+    if over_ceiling or not latencies:
+        return ()
+    p50 = _percentile(latencies, 0.50)
+    if p50 <= 0:
+        return ()
+    if any(value > 2 * p50 and value <= ANSWER_CEILING_MS for value in latencies):
+        return ("tail_risk",)
+    return ()
+
+
+def _subregistry(registry: VariantRegistry, labels: set[str]) -> VariantRegistry:
+    return VariantRegistry(
+        variants=tuple(variant for variant in registry if variant.label in labels),
+        variant_config_source=registry.variant_config_source,
+        variant_config_hash=registry.variant_config_hash,
+    )
+
+
 def run_benchmark(
     registry: VariantRegistry,
     *,
@@ -154,8 +197,11 @@ def run_benchmark(
             )
             if sample.inference_failed:
                 fail_reasons.append(FailReason.INFERENCE_FAILED)
-        p95_ms = max(sample.p95_ms for sample in samples)
-        max_ms = max(sample.max_ms for sample in samples)
+        latency_values = _latency_values(samples)
+        p50_ms = _percentile(latency_values, 0.50)
+        p90_ms = _percentile(latency_values, 0.90)
+        p95_ms = _percentile(latency_values, 0.95)
+        max_ms = max(latency_values)
         over_ceiling = latency_fail(p95_ms=p95_ms, max_ms=max_ms)
         if over_ceiling:
             fail_reasons.append(FailReason.OVER_ANSWER_CEILING)
@@ -167,13 +213,17 @@ def run_benchmark(
                 label=variant.label,
                 hard_pass=hard_pass,
                 fail_reasons=tuple(fail_reasons),
+                p50_ms=p50_ms,
+                p90_ms=p90_ms,
                 p95_ms=p95_ms,
                 max_ms=max_ms,
+                variance_ms=_variance(latency_values),
                 ops=samples[0].ops_evidence,
                 over_ceiling=over_ceiling,
                 ttft_ms=next((sample.ttft_ms for sample in samples if sample.ttft_ms is not None), None),
                 tokens_per_sec=sum(sample.tokens_per_sec for sample in samples) / len(samples),
                 sample_n=len(samples),
+                tail_flags=_tail_flags(latency_values, over_ceiling=over_ceiling),
             )
         )
         screen_rows.append(
@@ -201,8 +251,11 @@ def run_benchmark(
                 label=report.label,
                 hard_pass=report.hard_pass,
                 fail_reasons=report.fail_reasons,
+                p50_ms=report.p50_ms,
+                p90_ms=report.p90_ms,
                 p95_ms=report.p95_ms,
                 max_ms=report.max_ms,
+                variance_ms=report.variance_ms,
                 ops=report.ops,
                 over_ceiling=report.over_ceiling,
                 ttft_ms=report.ttft_ms,
@@ -253,4 +306,86 @@ def run_benchmark(
         variant_config_source=registry.variant_config_source.value,
         variants=tuple(reports),
         screen_result=derive_screen_result(screen_rows),
+    )
+
+
+def run_full_battery(
+    registry: VariantRegistry,
+    *,
+    fixture_manifest_hash: str,
+    build_probe_run_fn: Callable[..., Callable],
+    call_judge: Callable | None = None,
+    judge_base_url: str = "http://127.0.0.1:8081",
+    finalist_k: int = FINALIST_K,
+) -> BenchPacket:
+    if call_judge is not None:
+        judge_port = resolve_judge_endpoint(judge_base_url)
+        if judge_port in {variant.port for variant in registry}:
+            raise BenchmarkConfigError("judge port must be distinct from variant ports")
+
+    screen_probe_run = build_probe_run_fn(k=SCREEN_K)
+    screen_packet = run_benchmark(
+        registry,
+        fixture_manifest_hash=fixture_manifest_hash,
+        probe_run=screen_probe_run,
+        call_judge=None,
+        judge_base_url=judge_base_url,
+    )
+    screen_reports = {report.label: report for report in screen_packet.variants}
+    survivors = [
+        report
+        for report in screen_packet.variants
+        if report.hard_pass and not report.over_ceiling
+    ]
+    if not survivors:
+        return screen_packet
+
+    ranked = rank_variants(
+        [
+            VariantScore(
+                report.label,
+                report.hard_pass,
+                report.p95_ms,
+                report.quality_winrate,
+                report.voice_winrate,
+                report.tokens_per_sec,
+                report.ops,
+            )
+            for report in survivors
+        ]
+    )
+    finalist_labels = {score.label for score in ranked[:3]}
+    finalist_registry = _subregistry(registry, finalist_labels)
+    finalist_probe_run = build_probe_run_fn(k=finalist_k)
+    finalist_packet = run_benchmark(
+        finalist_registry,
+        fixture_manifest_hash=fixture_manifest_hash,
+        probe_run=finalist_probe_run,
+        call_judge=call_judge,
+        judge_base_url=judge_base_url,
+    )
+    final_reports = {report.label: report for report in finalist_packet.variants}
+    merged_reports = tuple(
+        final_reports.get(variant.label, screen_reports[variant.label])
+        for variant in registry
+    )
+    return BenchPacket(
+        schema_version="bench_packet.v3",
+        fixture_manifest_hash=fixture_manifest_hash,
+        variant_config_hash=registry.variant_config_hash,
+        variant_config_source=registry.variant_config_source.value,
+        variants=merged_reports,
+        screen_result=derive_screen_result(
+            [
+                {
+                    "hard_pass": report.hard_pass,
+                    "over_ceiling": report.over_ceiling,
+                    "honesty_clean": not any(
+                        reason is not FailReason.OVER_ANSWER_CEILING
+                        for reason in report.fail_reasons
+                    ),
+                }
+                for report in merged_reports
+            ]
+        ),
     )

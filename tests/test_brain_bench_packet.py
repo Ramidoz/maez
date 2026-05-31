@@ -73,6 +73,16 @@ class ScreenResultTests(unittest.TestCase):
                 screen_result=ScreenResult.FAILS_DISHONEST,
             )
 
+    def test_tail_flags_reject_over_ceiling(self):
+        with self.assertRaises(ValueError):
+            _report(
+                fail_reasons=(FailReason.OVER_ANSWER_CEILING,),
+                p95_ms=12001,
+                max_ms=12001,
+                over_ceiling=True,
+                tail_flags=("over_ceiling",),
+            )
+
 
 class RecursiveContentFreeTests(unittest.TestCase):
     def test_rejects_compound_content_field_in_nested_dataclass(self):
@@ -120,6 +130,19 @@ class RecursiveContentFreeTests(unittest.TestCase):
         self.assertNotIn("FABRICATED_SENTINEL", blob)
         for forbidden in ("answer", "prompt", "snippet", "raw_reply"):
             self.assertNotIn(forbidden, blob)
+
+    def test_latency_serialization_includes_small_k_distribution_fields(self):
+        latency = _report(
+            p50_ms=3000,
+            p90_ms=7000,
+            p95_ms=9000,
+            max_ms=10000,
+            variance_ms=123.5,
+            sample_n=7,
+        ).to_dict()["latency"]
+
+        for key in ("p50", "p90", "p95", "max", "variance", "sample_n", "method", "tail_flags"):
+            self.assertIn(key, latency)
 
 
 class CovenantFieldTests(unittest.TestCase):
