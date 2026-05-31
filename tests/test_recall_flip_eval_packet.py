@@ -131,6 +131,7 @@ class ProofPacketTest(unittest.TestCase):
         blob = self._packet(probe).to_json()
         parsed = json.loads(blob)
         self.assertEqual(parsed["schema_version"], "eval_packet.v1")
+        self.assertIn("single-cite", parsed["citation_scope_note"])
         self.assertNotIn("RAW_QUERY_SENTINEL", blob)
         self.assertNotIn("RAW_ANSWER_SENTINEL", blob)
         self.assertNotIn("query", blob)
@@ -173,6 +174,40 @@ class ProofPacketTest(unittest.TestCase):
             self.assertNotIn("What did we note", blob)
             self.assertEqual(packet.run_id, json.loads(blob)["run_id"])
 
+    def test_fixture_manifest_hash_is_not_probe_set_hash(self):
+        from scripts.recall_flip_eval import harness, sandbox
+
+        with tempfile.TemporaryDirectory() as root, sandbox.sandbox_env(root):
+            packet = harness.run_eval(
+                sandbox_root=root,
+                expect_commit=harness.current_commit_sha(),
+                probe_ids=("dated_hit",),
+                variants_per_probe=1,
+                allow_dirty=True,
+            )
+
+        self.assertNotEqual(packet.fixture_manifest_hash, packet.probe_set_hash)
+
+    def test_fixture_manifest_hash_changes_with_fixture_content_or_date(self):
+        from scripts.recall_flip_eval import harness
+
+        base = {
+            "probe_id": "dated_hit",
+            "variant_id": "fixture",
+            "date": "2026-04-27",
+            "tier": "core",
+            "content_sha256": "aaa",
+            "durable_id": "eval-dated_hit-fixture-1",
+        }
+        self.assertNotEqual(
+            harness._fixture_manifest_hash((base,)),
+            harness._fixture_manifest_hash(({**base, "content_sha256": "bbb"},)),
+        )
+        self.assertNotEqual(
+            harness._fixture_manifest_hash((base,)),
+            harness._fixture_manifest_hash(({**base, "date": "2026-04-28"},)),
+        )
+
     def test_harness_aborts_on_commit_mismatch(self):
         from scripts.recall_flip_eval import harness
 
@@ -202,6 +237,24 @@ class ProofPacketTest(unittest.TestCase):
 
         self.assertEqual(restored_base_db, original_base_db)
         self.assertEqual(restored_scoring_db, original_scoring_db)
+
+    def test_harness_can_teardown_sandbox_after_run(self):
+        from scripts.recall_flip_eval import harness, sandbox
+
+        with tempfile.TemporaryDirectory() as parent:
+            root = Path(parent) / "eval-sandbox"
+            with sandbox.sandbox_env(root):
+                packet = harness.run_eval(
+                    sandbox_root=root,
+                    expect_commit=harness.current_commit_sha(),
+                    probe_ids=("dated_hit",),
+                    variants_per_probe=1,
+                    allow_dirty=True,
+                    teardown_sandbox=True,
+                )
+
+            self.assertTrue(packet.results)
+            self.assertFalse(root.exists())
 
     def _packet(self, *results, **overrides):
         kwargs = {

@@ -19,7 +19,9 @@
 1. **2a proof packet = PASS.** Run the offline harness at the flip commit; every correctness/safety probe
    green at k≥3 consistency, including the **both-shaped re-witness** (it was green at graduation @ 80b1674
    but 1a/1b touched the daemon since — re-confirm at the flip commit). If any probe is RED, **stop and
-   root-cause**; do not flip.
+   root-cause**; do not flip. Read the packet's `citation_scope_note`: 2a uses a deterministic single-cite
+   offline adapter, so it proves recall/assembly/type-rule safety, not that the live brain will avoid
+   over-citing an unconfirmed `[E2]`/`[E3]`. The live soak must still inspect multi-citation behavior.
 2. **Shadow pre-flip gate (1b).** Over the shadow window, **zero `false_absence_candidate`** on real
    traffic, or each one root-caused. Report **coverage** explicitly — `attempted / skipped / completed`
    and *why skipped* — and **name the async-residual sampling gap**: lost-on-crash shadows under-sample
@@ -141,3 +143,8 @@ disposition date — so the rehearsal can't silently outlive its purpose.
 - The 2a executability pass resolved the concrete DB path/query for focused runs and the log command shape.
   The only live-time check left is whether the current rotated log mtime range covers the chosen shadow
   window; if not, land the content-free sink before the soak.
+- Hardcoded-path substrate hazard: any new module-global `*_PATH`, `*_DB`, or `BASE_*` touching a real
+  substrate must be added to the 2a sandbox patch/assert set before future evals may exercise that module.
+  The current 2a set covers `memory.memory_manager.BASE_DB`,
+  `MemoryManager._LAST_CONSOLIDATION_FILE`, `core.memory.memory_scoring._DB_PATH`, and
+  `core.memory.birth.DEFAULT_STATE_PATH`.

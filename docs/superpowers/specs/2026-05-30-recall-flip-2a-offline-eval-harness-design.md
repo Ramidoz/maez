@@ -18,8 +18,10 @@ assertion + test — never "the live daemon with a flag." Enforced (Rohit requir
   a test asserts zero network during a battery run. (Maez's egress is otherwise chokepoint-gated, but the
   harness belt-and-suspenders blocks it.) Because `focused_synthesize` normally reaches a model service,
   2a injects a deterministic offline `chat_fn` that cites the selected evidence labels. This means 2a
-  proves recall/assembly/citation safety, not real-model answer quality; real-model lived quality belongs
-  to the live 2b soak per A6.
+  proves recall/assembly/type-rule safety, not real-model answer quality; real-model lived quality belongs
+  to the live 2b soak per A6. The deterministic adapter is deliberately single-cite (`[E1]`) so the proof
+  packet also carries a `citation_scope_note`: 2a cannot prove a real brain will avoid over-citing an
+  unconfirmed `[E2]`/`[E3]`; that remains a 2b live-soak reading rule.
 - **No send path:** the harness drives the cognition path **without a live `MaezDaemon`/Telegram** — it
   calls the dispatcher recall-adapter seam below the daemon (`_dispatcher_recall_adapters(...,
   surface="telegram", recall_stack_config=TRIAD)`), then passes the resulting structured recall items to
@@ -36,8 +38,11 @@ assertion + test — never "the live daemon with a flag." Enforced (Rohit requir
 - **Inherited path overrides rejected:** before any core/memory import that can open a substrate, the
   launcher rejects path-bearing `MAEZ_*` environment variables that point outside the sandbox except an
   explicit non-path allowlist. The sandbox patch/assertion covers `memory.memory_manager.BASE_DB`,
+  `memory.memory_manager.MemoryManager._LAST_CONSOLIDATION_FILE`,
   `core.memory.memory_scoring._DB_PATH`, `core.memory.birth.DEFAULT_STATE_PATH` if loaded, and resets the
-  dispatcher memory-manager cache before any `MemoryManager()` construction.
+  dispatcher memory-manager cache before any `MemoryManager()` construction. Hardcoded path rule:
+  any new module-global `*_PATH` / `*_DB` / `BASE_*` substrate must be added to this patch/assert set
+  before the offline eval may exercise that module.
 
 ## What 2a proves (correctness + safety, automated — NO human blind scoring)
 The benefit blind-verdict moved to the live soak (A6). 2a runs **assertable** correctness/safety probes
@@ -79,7 +84,8 @@ as environment context only; it is not consulted by 2a and is not a 2a pass/fail
   content-free rows (`variant_id`, arm outcomes, assertion codes, unsafe flag, focused elapsed,
   citation coverage, cited durable-id hashes/source types/temporal provenance). Hard probes are declared
   by `probe_id`, not only by kind. **No raw answer text, no query text.** A serializer-level sentinel test
-  proves raw query/answer sentinels never appear anywhere in the JSON.
+  proves raw query/answer sentinels never appear anywhere in the JSON. `fixture_manifest_hash` hashes the
+  real seeded fixture manifest (durable ids, date, tier, and content hashes), not just the probe list.
 - **Quarantined debug answer-dump (content-bearing, optional, sandbox-local):** if a probe fails, raw
   answers can be retained only when `--keep-failed-sandbox` or `--debug-dump-dir` is provided. The default
   deletes dumps with the sandbox. If retained, files live under a gitignored quarantine directory named by

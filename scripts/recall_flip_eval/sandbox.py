@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import os
 import shutil
 import socket
@@ -16,6 +17,7 @@ REAL_HOME = Path("/home/rohit/maez").resolve()
 _ORIGINAL_BASE_DB = None
 _ORIGINAL_SCORING_DB = None
 _ORIGINAL_BIRTH_STATE_PATH = None
+_ORIGINAL_LAST_CONSOLIDATION_FILE = None
 _PATH_ENV_ALLOWLIST = {
     "MAEZ_HOME",
     "MAEZ_DATA",
@@ -113,11 +115,16 @@ def patch_memory_manager_base_db(root: str | os.PathLike):
     assert_no_real_path_overrides(sandbox_root)
     import memory.memory_manager as mm_mod
 
-    global _ORIGINAL_BASE_DB
+    global _ORIGINAL_BASE_DB, _ORIGINAL_LAST_CONSOLIDATION_FILE
     if _ORIGINAL_BASE_DB is None:
         _ORIGINAL_BASE_DB = mm_mod.BASE_DB
+    if _ORIGINAL_LAST_CONSOLIDATION_FILE is None:
+        _ORIGINAL_LAST_CONSOLIDATION_FILE = mm_mod.MemoryManager._LAST_CONSOLIDATION_FILE
     mm_mod.BASE_DB = sandbox_root / "memory" / "db"
     mm_mod.BASE_DB.mkdir(parents=True, exist_ok=True)
+    mm_mod.MemoryManager._LAST_CONSOLIDATION_FILE = (
+        sandbox_root / "memory" / "last_consolidation.txt"
+    )
     _patch_loaded_path_modules(sandbox_root)
     _reset_dispatcher_memory_manager()
     return mm_mod
@@ -171,8 +178,15 @@ def assert_sandbox(root: str | os.PathLike | None = None) -> None:
             raise NotSandboxError(f"path outside sandbox: {resolved}")
 
     mm_mod = sys.modules.get("memory.memory_manager")
-    if mm_mod is not None and not _under(_resolve(mm_mod.BASE_DB), sandbox_root):
-        raise NotSandboxError(f"memory_manager.BASE_DB outside sandbox: {mm_mod.BASE_DB}")
+    if mm_mod is not None:
+        if not _under(_resolve(mm_mod.BASE_DB), sandbox_root):
+            raise NotSandboxError(f"memory_manager.BASE_DB outside sandbox: {mm_mod.BASE_DB}")
+        last_consolidation = mm_mod.MemoryManager._LAST_CONSOLIDATION_FILE
+        if not _under(_resolve(last_consolidation), sandbox_root):
+            raise NotSandboxError(
+                "memory_manager._LAST_CONSOLIDATION_FILE outside sandbox: "
+                f"{last_consolidation}"
+            )
 
     scoring = sys.modules.get("core.memory.memory_scoring")
     if scoring is not None and not _under(_resolve(scoring._DB_PATH), sandbox_root):
@@ -260,23 +274,70 @@ def _fingerprint_path(path: Path) -> tuple:
         return (str(path), "missing")
     if path.is_file():
         stat = path.stat()
-        return (str(path), "file", stat.st_size, stat.st_mtime_ns)
-    total_size = 0
-    latest_mtime = 0
+        return (str(path), "file", stat.st_size, _file_hash(path))
+    digest = hashlib.sha256()
     file_count = 0
-    for child in path.rglob("*"):
+    total_size = 0
+    for child in sorted(path.rglob("*")):
         if not child.is_file():
             continue
+        relative = str(child.relative_to(path))
         stat = child.stat()
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(_file_hash(child).encode("ascii"))
+        digest.update(b"\0")
         total_size += stat.st_size
-        latest_mtime = max(latest_mtime, stat.st_mtime_ns)
         file_count += 1
-    return (str(path), "dir", file_count, total_size, latest_mtime)
+    return (str(path), "dir", file_count, total_size, digest.hexdigest())
+
+
+def _file_hash(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def teardown(root: str | os.PathLike) -> None:
     restore_memory_patches()
     shutil.rmtree(root, ignore_errors=True)
+
+
+def memory_patch_snapshot() -> dict:
+    snapshot = {}
+    mm_mod = sys.modules.get("memory.memory_manager")
+    if mm_mod is not None:
+        snapshot["base_db"] = mm_mod.BASE_DB
+        snapshot["last_consolidation_file"] = (
+            mm_mod.MemoryManager._LAST_CONSOLIDATION_FILE
+        )
+    scoring = sys.modules.get("core.memory.memory_scoring")
+    if scoring is not None:
+        snapshot["scoring_db_path"] = scoring._DB_PATH
+    birth = sys.modules.get("core.memory.birth")
+    if birth is not None:
+        snapshot["birth_state_path"] = birth.DEFAULT_STATE_PATH
+    return snapshot
+
+
+def restore_memory_patch_snapshot(snapshot: dict) -> None:
+    mm_mod = sys.modules.get("memory.memory_manager")
+    if mm_mod is not None:
+        if "base_db" in snapshot:
+            mm_mod.BASE_DB = snapshot["base_db"]
+        if "last_consolidation_file" in snapshot:
+            mm_mod.MemoryManager._LAST_CONSOLIDATION_FILE = snapshot[
+                "last_consolidation_file"
+            ]
+    scoring = sys.modules.get("core.memory.memory_scoring")
+    if scoring is not None and "scoring_db_path" in snapshot:
+        scoring._DB_PATH = snapshot["scoring_db_path"]
+    birth = sys.modules.get("core.memory.birth")
+    if birth is not None and "birth_state_path" in snapshot:
+        birth.DEFAULT_STATE_PATH = snapshot["birth_state_path"]
+    _reset_dispatcher_memory_manager()
 
 
 def restore_memory_patches() -> None:
@@ -285,6 +346,8 @@ def restore_memory_patches() -> None:
     _reset_dispatcher_memory_manager()
     if _ORIGINAL_BASE_DB is not None:
         mm_mod.BASE_DB = _ORIGINAL_BASE_DB
+    if _ORIGINAL_LAST_CONSOLIDATION_FILE is not None:
+        mm_mod.MemoryManager._LAST_CONSOLIDATION_FILE = _ORIGINAL_LAST_CONSOLIDATION_FILE
     scoring = sys.modules.get("core.memory.memory_scoring")
     if scoring is not None and _ORIGINAL_SCORING_DB is not None:
         scoring._DB_PATH = _ORIGINAL_SCORING_DB

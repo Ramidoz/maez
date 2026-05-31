@@ -205,6 +205,76 @@ class RecallFlipEvalProbeDefinitionTest(unittest.TestCase):
         self.assertTrue(unsafe)
         self.assertIn("wrong_fixture_id", codes)
 
+    def test_multi_year_negative_control_wrong_year_is_unsafe(self):
+        from core.routing.focused_cognition import EvidenceItem, FocusedResult, WorkingSet
+        from core.routing.recall_outcome import cites_confirmed_memory_context
+        from scripts.recall_flip_eval import probes
+
+        wrong_year = EvidenceItem(
+            local_label="E1",
+            source_type="memory_context",
+            text="Wrong year fixture",
+            durable_id="fixture-2025",
+            temporal_provenance={"confirmed": True, "method": "exact_date"},
+        )
+        working_set = WorkingSet(
+            items=[wrong_year],
+            ordered_evidence_text="[E1] Wrong year fixture",
+            owner_question="What did we note around April 27, 2026?",
+            working_set_chars=25,
+            working_set_tokens_est=6,
+        )
+        result = FocusedResult(reply="Wrong year [E1]", cited_ids=["E1"], working_set_chars=25)
+
+        self.assertTrue(cites_confirmed_memory_context(result, working_set))
+        codes, unsafe = probes.assert_probe_result(
+            probes.get_probe("multi_year"),
+            SimpleNamespace(
+                outcome_class="answered_grounded",
+                cited_durable_ids=("fixture-2025",),
+                cited_confirmed_memory_context=True,
+                working_set_source_types=("memory_context",),
+            ),
+            expected_fixture_ids=("fixture-2026",),
+        )
+
+        self.assertTrue(unsafe)
+        self.assertIn("wrong_fixture_id", codes)
+
+    def test_over_citing_unknown_evidence_is_not_grounded(self):
+        from core.routing.focused_cognition import (
+            EvidenceItem,
+            FocusedResult,
+            WorkingSet,
+            check_groundedness,
+        )
+        from core.routing.recall_outcome import cites_confirmed_memory_context
+
+        working_set = WorkingSet(
+            items=[
+                EvidenceItem(
+                    local_label="E1",
+                    source_type="memory_context",
+                    text="Confirmed fixture",
+                    durable_id="fixture-2026",
+                    temporal_provenance={"confirmed": True, "method": "exact_date"},
+                )
+            ],
+            ordered_evidence_text="[E1] Confirmed fixture",
+            owner_question="What did we note around April 27, 2026?",
+            working_set_chars=25,
+            working_set_tokens_est=6,
+        )
+        result = FocusedResult(
+            reply="Over-cites [E1] and [E2]",
+            cited_ids=["E1", "E2"],
+            working_set_chars=25,
+        )
+
+        verdict = check_groundedness(result, working_set)
+        self.assertEqual(verdict.verdict, "unmatched_citation")
+        self.assertFalse(cites_confirmed_memory_context(result, working_set))
+
 
 if __name__ == "__main__":
     unittest.main()

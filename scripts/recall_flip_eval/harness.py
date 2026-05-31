@@ -180,6 +180,7 @@ def run_eval(
     variants_per_probe: int | None = None,
     allow_dirty: bool = False,
     debug_dump_dir: str | Path | None = None,
+    teardown_sandbox: bool = False,
 ):
     from core.model_config import PRIMARY_MODEL
     from scripts.recall_flip_eval import probes, sandbox
@@ -204,6 +205,7 @@ def run_eval(
             if probe_ids is None or probe.probe_id in set(probe_ids)
         ]
         probe_results: list[ProbeResult] = []
+        fixture_manifest: list[dict] = []
         debug_dump_count = 0
         debug_hash = None
 
@@ -212,6 +214,7 @@ def run_eval(
                 (
                     probe_result,
                     probe_debug_count,
+                    probe_fixture_manifest,
                 ) = _run_probe_battery(
                     sandbox_root=sandbox_root,
                     probe=probe,
@@ -221,6 +224,7 @@ def run_eval(
                 )
                 probe_results.append(probe_result)
                 debug_dump_count += probe_debug_count
+                fixture_manifest.extend(probe_fixture_manifest)
 
         if debug_dump_dir is not None and debug_dump_count:
             debug_hash = _hash_debug_manifest(debug_dump_dir)
@@ -231,7 +235,7 @@ def run_eval(
             actual_commit_sha=actual_commit,
             git_dirty=dirty,
             probe_set_hash=_manifest_hash([probe.probe_id for probe in selected]),
-            fixture_manifest_hash=_manifest_hash([probe.probe_id for probe in selected]),
+            fixture_manifest_hash=_fixture_manifest_hash(fixture_manifest),
             deterministic_chat_id=DETERMINISTIC_CHAT_ID,
             configured_model_id=str(PRIMARY_MODEL),
             debug_dump_count=debug_dump_count,
@@ -244,6 +248,8 @@ def run_eval(
         return packet
     finally:
         sandbox.restore_memory_patches()
+        if teardown_sandbox:
+            sandbox.teardown(sandbox_root)
 
 
 def _run_probe_battery(
@@ -253,57 +259,61 @@ def _run_probe_battery(
     run_id: str,
     variants_per_probe: int | None,
     debug_dump_dir: str | Path | None,
-) -> tuple[object, int]:
+) -> tuple[object, int, tuple[dict, ...]]:
     from scripts.recall_flip_eval import probes, sandbox
     from scripts.recall_flip_eval.proof_packet import ProbeResult, VariantResult
 
     probe_root = sandbox_root / "probe_sandboxes" / probe.probe_id
+    prior_patch_state = sandbox.memory_patch_snapshot()
     debug_dump_count = 0
-    with sandbox.sandbox_env(probe_root):
-        sandbox.patch_memory_manager_base_db(probe_root)
-        sandbox.assert_sandbox(probe_root)
-        expected_fixture_ids = _seed_for_probe(probe_root, probe, run_id)
-        variants = probe.variants[: variants_per_probe or len(probe.variants)]
-        variant_results: list[VariantResult] = []
-        passes = 0
-        unsafe_failures = 0
-        elapsed_values: list[int] = []
-        coverage_values: list[float] = []
-        last_outcome = "declined_unverified"
-        for index, text in enumerate(variants, start=1):
-            legacy = run_probe(text, flag_on=False)
-            triad = run_probe(text, flag_on=True)
-            codes, unsafe = probes.assert_probe_result(
-                probe,
-                triad,
-                expected_fixture_ids=expected_fixture_ids,
-            )
-            if not unsafe:
-                passes += 1
-            unsafe_failures += int(bool(unsafe))
-            elapsed_values.append(triad.focused_elapsed_ms)
-            if triad.citation_coverage is not None:
-                coverage_values.append(float(triad.citation_coverage))
-            last_outcome = triad.outcome_class
-            variant_results.append(
-                VariantResult(
-                    variant_id=f"{probe.probe_id}_v{index}",
-                    legacy_outcome_class=legacy.outcome_class,
-                    triad_outcome_class=triad.outcome_class,
-                    assertion_codes=tuple(codes),
-                    unsafe_failure=bool(unsafe),
-                    focused_elapsed_ms=triad.focused_elapsed_ms,
-                    citation_coverage=triad.citation_coverage,
-                    cited_source_types=triad.working_set_source_types,
-                    cited_temporal_confirmed=triad.cited_confirmed_memory_context,
-                    cited_durable_id_hashes=tuple(
-                        _hash_id(value) for value in triad.cited_durable_ids
-                    ),
+    try:
+        with sandbox.sandbox_env(probe_root):
+            sandbox.patch_memory_manager_base_db(probe_root)
+            sandbox.assert_sandbox(probe_root)
+            expected_fixture_ids, fixture_manifest = _seed_for_probe(probe_root, probe, run_id)
+            variants = probe.variants[: variants_per_probe or len(probe.variants)]
+            variant_results: list[VariantResult] = []
+            passes = 0
+            unsafe_failures = 0
+            elapsed_values: list[int] = []
+            coverage_values: list[float] = []
+            last_outcome = "declined_unverified"
+            for index, text in enumerate(variants, start=1):
+                legacy = run_probe(text, flag_on=False)
+                triad = run_probe(text, flag_on=True)
+                codes, unsafe = probes.assert_probe_result(
+                    probe,
+                    triad,
+                    expected_fixture_ids=expected_fixture_ids,
                 )
-            )
-            if unsafe and debug_dump_dir is not None:
-                debug_dump_count += 1
-                _write_debug_dump(debug_dump_dir, run_id, probe.probe_id, index, text, triad)
+                if not unsafe:
+                    passes += 1
+                unsafe_failures += int(bool(unsafe))
+                elapsed_values.append(triad.focused_elapsed_ms)
+                if triad.citation_coverage is not None:
+                    coverage_values.append(float(triad.citation_coverage))
+                last_outcome = triad.outcome_class
+                variant_results.append(
+                    VariantResult(
+                        variant_id=f"{probe.probe_id}_v{index}",
+                        legacy_outcome_class=legacy.outcome_class,
+                        triad_outcome_class=triad.outcome_class,
+                        assertion_codes=tuple(codes),
+                        unsafe_failure=bool(unsafe),
+                        focused_elapsed_ms=triad.focused_elapsed_ms,
+                        citation_coverage=triad.citation_coverage,
+                        cited_source_types=triad.working_set_source_types,
+                        cited_temporal_confirmed=triad.cited_confirmed_memory_context,
+                        cited_durable_id_hashes=tuple(
+                            _hash_id(value) for value in triad.cited_durable_ids
+                        ),
+                    )
+                )
+                if unsafe and debug_dump_dir is not None:
+                    debug_dump_count += 1
+                    _write_debug_dump(debug_dump_dir, run_id, probe.probe_id, index, text, triad)
+    finally:
+        sandbox.restore_memory_patch_snapshot(prior_patch_state)
 
     return (
         ProbeResult(
@@ -323,42 +333,72 @@ def _run_probe_battery(
             variants=tuple(variant_results),
         ),
         debug_dump_count,
+        tuple(fixture_manifest),
     )
 
 
-def _seed_for_probe(root: Path, probe, run_id: str) -> tuple[str, ...]:
-    from scripts.recall_flip_eval import sandbox
-
+def _seed_for_probe(root: Path, probe, run_id: str) -> tuple[tuple[str, ...], tuple[dict, ...]]:
     if probe.probe_id in {"dated_hit", "both_shaped", "type_rule"}:
+        fixture_id, manifest = _seed_fixture(
+            probe.probe_id,
+            "fixture",
+            date_value=date(2026, 4, 27),
+            content=f"SANDBOX {probe.probe_id} APRIL27 TOKEN",
+            tier="core",
+            run_id=run_id,
+        )
         return (
-            sandbox.seed_dated_memory(
-                probe.probe_id,
-                "fixture",
-                date=date(2026, 4, 27),
-                content=f"SANDBOX {probe.probe_id} APRIL27 TOKEN",
-                tier="core",
-                run_id=run_id,
-            ),
+            (fixture_id,),
+            (manifest,),
         )
     if probe.probe_id == "multi_year":
-        sandbox.seed_dated_memory(
+        _wrong_id, wrong_manifest = _seed_fixture(
             probe.probe_id,
             "wrong_year",
-            date=date(2025, 4, 27),
+            date_value=date(2025, 4, 27),
             content="SANDBOX multi_year WRONG 2025 TOKEN",
             tier="core",
             run_id=run_id,
         )
-        right = sandbox.seed_dated_memory(
+        right, right_manifest = _seed_fixture(
             probe.probe_id,
             "right_year",
-            date=date(2026, 4, 27),
+            date_value=date(2026, 4, 27),
             content="SANDBOX multi_year RIGHT 2026 TOKEN",
             tier="core",
             run_id=run_id,
         )
-        return (right,)
-    return ()
+        return (right,), (wrong_manifest, right_manifest)
+    return (), ()
+
+
+def _seed_fixture(
+    probe_id: str,
+    variant_id: str,
+    *,
+    date_value: date,
+    content: str,
+    tier: str,
+    run_id: str,
+) -> tuple[str, dict]:
+    from scripts.recall_flip_eval import sandbox
+
+    fixture_id = sandbox.seed_dated_memory(
+        probe_id,
+        variant_id,
+        date=date_value,
+        content=content,
+        tier=tier,
+        run_id=run_id,
+    )
+    return fixture_id, {
+        "probe_id": probe_id,
+        "variant_id": variant_id,
+        "date": date_value.isoformat(),
+        "tier": tier,
+        "content_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        "durable_id": fixture_id,
+    }
 
 
 def _hash_id(value: str) -> str:
@@ -368,6 +408,11 @@ def _hash_id(value: str) -> str:
 def _manifest_hash(values) -> str:
     blob = json.dumps(tuple(values), sort_keys=True)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
+def _fixture_manifest_hash(entries) -> str:
+    canonical = tuple(sorted(entries, key=lambda item: json.dumps(item, sort_keys=True)))
+    return _manifest_hash(canonical)
 
 
 def _write_debug_dump(debug_dump_dir, run_id, probe_id, index, text, triad) -> None:
@@ -401,12 +446,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expect-commit")
     parser.add_argument("--allow-dirty", action="store_true")
     parser.add_argument("--debug-dump-dir")
+    parser.add_argument("--teardown-sandbox", action="store_true")
     args = parser.parse_args(argv)
     run_eval(
         sandbox_root=args.sandbox_root,
         expect_commit=args.expect_commit,
         allow_dirty=args.allow_dirty,
         debug_dump_dir=args.debug_dump_dir,
+        teardown_sandbox=args.teardown_sandbox,
     )
     return 0
 

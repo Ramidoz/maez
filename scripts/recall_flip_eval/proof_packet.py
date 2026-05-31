@@ -64,6 +64,10 @@ class ProofPacket:
     configured_model_id: str
     debug_dump_count: int
     debug_dump_manifest_hash: Optional[str]
+    citation_scope_note: str = (
+        "2a uses a deterministic single-cite offline chat adapter; it proves "
+        "recall/assembly/type-rule safety, not real-brain multi-citation behavior."
+    )
     results: tuple[ProbeResult, ...] = field(default_factory=tuple)
 
     @property
@@ -84,4 +88,3 @@ class ProofPacket:
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"))
-

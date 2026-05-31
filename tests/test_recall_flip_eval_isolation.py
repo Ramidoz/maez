@@ -5,12 +5,14 @@ import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest import mock
 
 from scripts.recall_flip_eval import sandbox
 
 
 class IsolationTest(unittest.TestCase):
     def tearDown(self):
+        sandbox.restore_memory_patches()
         os.environ.pop("MAEZ_LEDGER_DB_PATH", None)
 
     def test_assert_sandbox_aborts_when_paths_are_real_home(self):
@@ -37,6 +39,19 @@ class IsolationTest(unittest.TestCase):
             module = sandbox.patch_memory_manager_base_db(root)
             self.assertTrue(str(module.BASE_DB).startswith(root), module.BASE_DB)
             sandbox.assert_sandbox()
+
+    def test_last_consolidation_file_is_sandboxed_and_restored(self):
+        import memory.memory_manager as mm_mod
+
+        original = mm_mod.MemoryManager._LAST_CONSOLIDATION_FILE
+        with tempfile.TemporaryDirectory() as root, sandbox.sandbox_env(root):
+            sandbox.patch_memory_manager_base_db(root)
+            patched = mm_mod.MemoryManager._LAST_CONSOLIDATION_FILE
+            self.assertTrue(str(patched).startswith(root), patched)
+            sandbox.assert_sandbox()
+            sandbox.restore_memory_patches()
+
+        self.assertEqual(mm_mod.MemoryManager._LAST_CONSOLIDATION_FILE, original)
 
     def test_socket_guard_blocks_dns_and_outbound(self):
         with sandbox.no_egress():
@@ -75,6 +90,36 @@ class IsolationTest(unittest.TestCase):
 
             sandbox.teardown(root)
         self.assertEqual(before, sandbox.real_substrate_fingerprint())
+
+    def test_fingerprint_path_detects_same_size_rewrite(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "sentinel.txt"
+            path.write_text("alpha")
+            before = sandbox._fingerprint_path(path)
+            stat = path.stat()
+            path.write_text("bravo")
+            os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+
+            self.assertNotEqual(before, sandbox._fingerprint_path(path))
+
+    def test_probe_battery_restores_paths_after_each_probe(self):
+        import memory.memory_manager as mm_mod
+        from scripts.recall_flip_eval import harness, probes
+
+        with tempfile.TemporaryDirectory() as root, sandbox.sandbox_env(root):
+            sandbox.patch_memory_manager_base_db(root)
+            outer_sandbox_base = mm_mod.BASE_DB
+            with mock.patch.object(harness, "run_probe", side_effect=RuntimeError("boom")):
+                with self.assertRaises(RuntimeError):
+                    harness._run_probe_battery(
+                        sandbox_root=Path(root),
+                        probe=probes.get_probe("dated_hit"),
+                        run_id="run-probe-restore",
+                        variants_per_probe=1,
+                        debug_dump_dir=None,
+                    )
+
+            self.assertEqual(mm_mod.BASE_DB, outer_sandbox_base)
 
     def test_launcher_has_no_core_memory_or_daemon_imports_before_exec(self):
         tree = ast.parse(Path("scripts/recall_flip_eval/launcher.py").read_text())
