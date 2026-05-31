@@ -7,15 +7,10 @@ from pathlib import Path
 from typing import Callable
 
 from scripts.brain_bench.bench_packet import (
-    ApiFamily,
     BenchPacket,
     FailReason,
-    GpuContention,
     OpsRubric,
-    RestartRecovery,
     ScreenResult,
-    StartupHealth,
-    Topology,
     VariantReport,
 )
 from scripts.brain_bench.gates import (
