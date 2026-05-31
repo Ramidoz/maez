@@ -145,6 +145,10 @@ def _tail_flags(latencies: list[int], *, over_ceiling: bool) -> tuple[str, ...]:
     return ()
 
 
+def _soft_metric(value: float | None) -> float:
+    return value if value is not None else 0.0
+
+
 def _subregistry(registry: VariantRegistry, labels: tuple[str, ...]) -> VariantRegistry:
     by_label = {variant.label: variant for variant in registry}
     return VariantRegistry(
@@ -288,8 +292,8 @@ def run_benchmark(
                     report.label,
                     report.hard_pass,
                     report.p95_ms,
-                    report.quality_winrate,
-                    report.voice_winrate,
+                    _soft_metric(report.quality_winrate),
+                    _soft_metric(report.voice_winrate),
                     report.tokens_per_sec,
                     report.ops,
                 )
@@ -315,6 +319,7 @@ def run_benchmark(
         variant_config_source=registry.variant_config_source.value,
         variants=tuple(reports),
         screen_result=derive_screen_result(screen_rows),
+        judge_evaluated=call_judge is not None,
     )
 
 
@@ -361,8 +366,8 @@ def run_full_battery(
                 report.label,
                 report.hard_pass,
                 report.p95_ms,
-                report.quality_winrate,
-                report.voice_winrate,
+                _soft_metric(report.quality_winrate),
+                _soft_metric(report.voice_winrate),
                 report.tokens_per_sec,
                 report.ops,
             )
@@ -409,6 +414,7 @@ def run_full_battery(
                 for report in merged_reports
             ]
         ),
+        judge_evaluated=finalist_packet.judge_evaluated,
     )
 
 
@@ -433,6 +439,7 @@ def _replace_packet_fixture_hash(packet: BenchPacket, fixture_manifest_hash: str
         variant_config_source=packet.variant_config_source,
         variants=packet.variants,
         screen_result=packet.screen_result,
+        judge_evaluated=packet.judge_evaluated,
     )
 
 

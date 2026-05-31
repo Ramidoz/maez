@@ -275,6 +275,39 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(report.sample_n, 2)
         self.assertIn(FailReason.INFERENCE_FAILED, report.fail_reasons)
 
+    def test_unjudged_run_marks_soft_scores_unmeasured(self):
+        def clean_probe(_variant):
+            return [
+                ProbeSample(
+                    probe_id="dated_hit",
+                    sample_id="sample-0",
+                    answer="Maez answered from dated context with [E1].",
+                    evidence="[E1] context",
+                    false_absence=False,
+                    grounded_categorical=True,
+                    wrong_absence=False,
+                    p95_ms=3000,
+                    max_ms=3000,
+                    ttft_ms=100,
+                    tokens_per_sec=20.0,
+                    ops_evidence=_ops(),
+                )
+            ]
+
+        packet = run_benchmark(
+            _registry(),
+            fixture_manifest_hash="f" * 64,
+            probe_run=clean_probe,
+        )
+
+        self.assertFalse(packet.judge_evaluated)
+        self.assertIsNone(packet.variants[0].quality_winrate)
+        self.assertIsNone(packet.variants[0].voice_winrate)
+        self.assertIsNone(packet.variants[0].quality_per_second)
+        data = packet.to_dict()
+        self.assertFalse(data["judge_evaluated"])
+        self.assertIsNone(data["variants"][0]["quality_winrate"])
+
     def test_judge_winrates_are_reported(self):
         def clean_probe(variant):
             return [
@@ -323,6 +356,7 @@ class OrchestrationTests(unittest.TestCase):
             judge_base_url="http://127.0.0.1:8081",
         )
 
+        self.assertTrue(packet.judge_evaluated)
         self.assertEqual(packet.variants[0].quality_winrate, 1.0)
         self.assertEqual(packet.variants[0].voice_winrate, 1.0)
 

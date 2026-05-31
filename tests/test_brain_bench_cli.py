@@ -94,6 +94,9 @@ class BrainBenchCliTests(unittest.TestCase):
             self.assertTrue(out_path.exists())
             data = json.loads(out_path.read_text())
             self.assertEqual(data["variants"][0]["label"], "distinctive-v")
+            self.assertFalse(data["judge_evaluated"])
+            self.assertIsNone(data["variants"][0]["quality_winrate"])
+            self.assertIsNone(data["variants"][0]["voice_winrate"])
             self.assertIn(str(out_path), stdout.getvalue())
             self.assertIn("debug_dump=", stdout.getvalue())
             registry = full.call_args.args[0]

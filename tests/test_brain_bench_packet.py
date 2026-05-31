@@ -144,6 +144,13 @@ class RecursiveContentFreeTests(unittest.TestCase):
         for key in ("p50", "p90", "p95", "max", "variance", "sample_n", "method", "tail_flags"):
             self.assertIn(key, latency)
 
+    def test_unjudged_soft_scores_serialize_as_unmeasured(self):
+        report = _report().to_dict()
+
+        self.assertIsNone(report["quality_winrate"])
+        self.assertIsNone(report["voice_winrate"])
+        self.assertIsNone(report["quality_per_second"])
+
 
 class CovenantFieldTests(unittest.TestCase):
     def test_fields_present(self):
@@ -159,6 +166,7 @@ class CovenantFieldTests(unittest.TestCase):
         self.assertEqual(packet["artifact_role"], "producer_evidence_not_verdict")
         self.assertTrue(packet["owner_verdict_required"])
         self.assertTrue(packet["requires_s5_voice_continuity_gate"])
+        self.assertFalse(packet["judge_evaluated"])
         self.assertEqual(packet["schema_version"], "bench_packet.v3")
         self.assertEqual(packet["variant_config_hash"], "c" * 64)
         self.assertEqual(packet["variant_config_source"], "file")

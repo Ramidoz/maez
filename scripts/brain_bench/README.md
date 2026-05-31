@@ -9,7 +9,8 @@ variant validation, the production `focused_synthesize(chat_fn=...)` seam,
 two-stage `k=3` / `k=7` battery orchestration, hard gates, the advisory judge
 library path, content-free packet output, and quarantined debug dumps. The owner
 CLI does not run the advisory judge yet; it emits the deterministic screen
-packet. Judge wiring remains an explicit follow-up, not an inert CLI flag.
+packet with `judge_evaluated: false` and `null` judge-derived winrates. Judge
+wiring remains an explicit follow-up, not an inert CLI flag.
 
 The real benchmark is owner-operated through the sandbox launcher against real
 local model endpoints. Its `BenchPacket` is producer evidence only. Rohit's
