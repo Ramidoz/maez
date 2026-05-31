@@ -204,6 +204,13 @@ class ProbeRunnerTests(unittest.TestCase):
         self.assertTrue(all(row.grounded_categorical for row in rows))
         self.assertFalse(any(row.false_absence for row in rows))
         self.assertFalse(any(row.inference_failed for row in rows))
+        for row in rows:
+            with self.subTest(probe_id=row.probe_id):
+                self.assertTrue(row.cited_ids)
+                self.assertTrue(row.cited_durable_ids)
+                self.assertTrue(row.expected_fixture_ids)
+                self.assertTrue(set(row.cited_durable_ids) & set(row.expected_fixture_ids))
+                self.assertTrue(row.cited_confirmed_memory_context)
 
     def test_available_fixture_honest_decline_fails_grounding_not_categorical(self):
         from scripts.brain_bench.probe_runner import build_probe_run

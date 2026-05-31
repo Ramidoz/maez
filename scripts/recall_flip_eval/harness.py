@@ -21,6 +21,7 @@ class ProbeArmResult:
     receipt: str
     focused_elapsed_ms: int
     citation_coverage: float | None
+    cited_ids: tuple[str, ...] = ()
     cited_durable_ids: tuple[str, ...] = ()
     cited_confirmed_memory_context: bool = False
     working_set_source_types: tuple[str, ...] = ()
@@ -166,6 +167,7 @@ def run_probe(text: str, *, flag_on: bool) -> ProbeArmResult:
         receipt="consulted",
         focused_elapsed_ms=elapsed,
         citation_coverage=verdict.citation_coverage,
+        cited_ids=tuple(result.cited_ids),
         cited_durable_ids=durable_ids,
         cited_confirmed_memory_context=grounded,
         working_set_source_types=tuple(item.source_type for item in working_set.items),

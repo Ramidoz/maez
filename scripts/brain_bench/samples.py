@@ -23,3 +23,7 @@ class ProbeSample:
     fail_code: str | None = None
     latency_ms: int | None = None
     synthesized: bool = True
+    cited_ids: tuple[str, ...] = ()
+    cited_durable_ids: tuple[str, ...] = ()
+    expected_fixture_ids: tuple[str, ...] = ()
+    cited_confirmed_memory_context: bool = False

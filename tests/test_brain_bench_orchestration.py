@@ -609,6 +609,34 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(latency["sample_n"], 2)
         self.assertEqual(latency["synthesized_sample_n"], 1)
 
+    def test_raw_records_include_grounding_diagnostics(self):
+        raw_records = []
+
+        def probe(_variant):
+            return [
+                _sample(
+                    probe_id="dated_hit",
+                    sample_id="dated-hit-s1",
+                    cited_ids=("E1",),
+                    cited_durable_ids=("fixture-expected",),
+                    expected_fixture_ids=("fixture-expected",),
+                    cited_confirmed_memory_context=True,
+                )
+            ]
+
+        packet = run_benchmark(
+            _registry(),
+            fixture_manifest_hash="f" * 64,
+            probe_run=probe,
+            raw_records_sink=raw_records,
+        )
+
+        self.assertEqual(packet.screen_result, ScreenResult.PASSES_SCREEN)
+        self.assertEqual(raw_records[0]["cited_ids"], ["E1"])
+        self.assertEqual(raw_records[0]["cited_durable_ids"], ["fixture-expected"])
+        self.assertEqual(raw_records[0]["expected_fixture_ids"], ["fixture-expected"])
+        self.assertTrue(raw_records[0]["cited_confirmed_memory_context"])
+
 
 def _ops(**overrides):
     data = {
