@@ -65,6 +65,7 @@ class RecallOutcome:
     latency_ms: int
     focused_elapsed_ms: int | None
     reply_path: ReplyPath
+    shadow_pair_id: str = "na"
 
     def __post_init__(self) -> None:
         if isinstance(self.reply_path, ReplyPath):

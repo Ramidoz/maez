@@ -164,6 +164,8 @@ CALENDAR_MODE = resolve_calendar_mode(os.environ)
 CALENDAR_STORE_DB_PATH = Path(
     os.environ.get("MAEZ_CALENDAR_STORE_DB") or (MEMORY_DIR / "calendar_v1.db")
 )
+RECALL_SHADOW_FLAG = "MAEZ_RECALL_SHADOW_ENABLED"
+RECALL_SHADOW_BUDGET_MS = 250
 
 # --- Constants ---
 from core.model_config import PRIMARY_MODEL as MODEL  # single source of truth — /etc/maez/model.env
@@ -1147,7 +1149,7 @@ def _log_recall_outcome(*, rec) -> None:
     logger.info(
         "recall_outcome schema_version=%s mode=%s turn_kind=%s outcome_class=%s "
         "denial_kind=%s had_confirmed=%s citation_coverage=%s receipt_or_na=%s "
-        "latency_ms=%s focused_elapsed_ms=%s reply_path=%s",
+        "latency_ms=%s focused_elapsed_ms=%s reply_path=%s shadow_pair_id=%s",
         rec.schema_version,
         rec.mode,
         rec.turn_kind,
@@ -1159,7 +1161,39 @@ def _log_recall_outcome(*, rec) -> None:
         rec.latency_ms,
         format_log_value(rec.focused_elapsed_ms),
         rec.reply_path.value,
+        format_log_value(getattr(rec, "shadow_pair_id", "na")),
     )
+
+
+def _log_shadow_outcome(*, rec) -> None:
+    """Emit one content-free shadow_outcome record."""
+    logger.info(
+        "shadow_outcome schema_version=%s shadow_pair_id=%s legacy_outcome=%s "
+        "shadow_reach=%s rescuable_candidate=%s false_absence_candidate=%s "
+        "legacy_false_absence_rescuable=%s latency_delta_ms=%s receipt_state=%s "
+        "ts=%s boot_id=%s shadow_skipped=%s",
+        rec.schema_version,
+        rec.shadow_pair_id,
+        rec.legacy_outcome.value,
+        rec.shadow_reach.value,
+        "true" if rec.rescuable_candidate else "false",
+        "true" if rec.false_absence_candidate else "false",
+        "true" if rec.legacy_false_absence_rescuable else "false",
+        rec.latency_delta_ms,
+        rec.receipt_state.value,
+        rec.ts,
+        rec.boot_id,
+        rec.shadow_skipped,
+    )
+
+
+def _recall_shadow_enabled() -> bool:
+    return str(os.environ.get(RECALL_SHADOW_FLAG, "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def _focused_working_set_had_confirmed(working_set) -> bool:
@@ -1667,6 +1701,8 @@ class MaezDaemon:
         # if the sensor blocks, Maez records presence as unavailable
         # and keeps the daemon heartbeat moving.
         self._presence_worker = BoundedSingletonWorker(name="presence-observe")
+        self._recall_shadow_worker = BoundedSingletonWorker(name="recall-shadow")
+        self._last_shadow_receipt = None
         self._presence_native_initialized = False
         self._camera_presence_state = resolve_camera_presence_state(os.environ)
         self._last_alert_time = 0.0
@@ -3414,6 +3450,111 @@ class MaezDaemon:
         finally:
             self._ollama_lock.release()
 
+    def _ensure_recall_shadow_worker(self):
+        worker = getattr(self, "_recall_shadow_worker", None)
+        if worker is None:
+            from core.health.bounded_worker import BoundedSingletonWorker
+
+            worker = BoundedSingletonWorker(name="recall-shadow")
+            self._recall_shadow_worker = worker
+        return worker
+
+    def _shadow_worker_join_for_test(self, timeout: float | None = None) -> bool:
+        return self._ensure_recall_shadow_worker().join(timeout=timeout)
+
+    def _record_last_shadow_receipt(self, rec) -> None:
+        self._last_shadow_receipt = {
+            "at_ts": getattr(rec, "ts", int(time.time())),
+            "boot_id": getattr(rec, "boot_id", str(getattr(self, "boot_time", "") or "")),
+            "state": (
+                rec.shadow_skipped
+                if getattr(rec, "shadow_skipped", "na") != "na"
+                else rec.receipt_state.value
+            ),
+        }
+
+    def _run_recall_shadow(
+        self,
+        *,
+        text: str,
+        legacy_rec,
+        date_addressed: bool,
+        shadow_pair_id: str,
+        boot_id: str,
+    ) -> None:
+        start = time.monotonic()
+        ts = int(time.time())
+        try:
+            from core.brain.brain_loop import recall_partitions_to_items
+            from core.routing.focused_cognition import assemble_working_set
+            from core.routing.recall_shadow import (
+                ShadowSkip,
+                derive_shadow_outcome,
+                derive_shadow_reach,
+                derive_shadow_skipped,
+            )
+
+            fresh_memory = MemoryManager()
+            evidence, context = fresh_memory.recall_for_telegram_living(
+                text,
+                record_recalls=False,
+            )
+            items = (
+                recall_partitions_to_items(evidence, role_source_type="memory_evidence")
+                + recall_partitions_to_items(context, role_source_type="memory_context")
+            )
+            working_set = assemble_working_set(
+                transcript="",
+                web_context="",
+                owner_question=text,
+                recall_items=items,
+            )
+            latency_ms = int((time.monotonic() - start) * 1000)
+            if latency_ms > RECALL_SHADOW_BUDGET_MS:
+                rec = derive_shadow_skipped(
+                    legacy_rec=legacy_rec,
+                    skip_reason=ShadowSkip.BUDGET_EXCEEDED,
+                    shadow_pair_id=shadow_pair_id,
+                    latency_delta_ms=latency_ms,
+                    ts=ts,
+                    boot_id=boot_id,
+                )
+            else:
+                rec = derive_shadow_outcome(
+                    legacy_rec=legacy_rec,
+                    shadow_reach=derive_shadow_reach(
+                        working_set,
+                        date_addressed=date_addressed,
+                    ),
+                    date_addressed=date_addressed,
+                    shadow_pair_id=shadow_pair_id,
+                    latency_delta_ms=latency_ms,
+                    ts=ts,
+                    boot_id=boot_id,
+                )
+            _log_shadow_outcome(rec=rec)
+            self._record_last_shadow_receipt(rec)
+        except Exception as exc:  # noqa: BLE001 - shadow must never affect reply
+            try:
+                from core.routing.recall_shadow import ShadowSkip, derive_shadow_skipped
+
+                rec = derive_shadow_skipped(
+                    legacy_rec=legacy_rec,
+                    skip_reason=ShadowSkip.EXCEPTION,
+                    shadow_pair_id=shadow_pair_id,
+                    latency_delta_ms=int((time.monotonic() - start) * 1000),
+                    ts=ts,
+                    boot_id=boot_id,
+                )
+                _log_shadow_outcome(rec=rec)
+                self._record_last_shadow_receipt(rec)
+                logger.warning("recall_shadow_exception class=%s", type(exc).__name__)
+            except Exception as log_exc:
+                logger.warning(
+                    "recall_shadow_exception_log_failed class=%s",
+                    type(log_exc).__name__,
+                )
+
     def handle_message(
         self,
         text: str,
@@ -4165,6 +4306,8 @@ class MaezDaemon:
         _reply_path = reply_path_from_mode(_reply_decision.mode.value.lower())
         _focused_used = False
         _focused_answer_used = False
+        _recall_outcome_rec = None
+        _recall_shadow_attempt = False
         _recall_status_reply = None
         if _recall_status_intercept_enabled():
             try:
@@ -4611,6 +4754,7 @@ class MaezDaemon:
         try:
             from core.routing.recall_outcome import RecallOutcome, classify_outcome
             from core.routing.recall_self_status import RecallStatusReceipt
+            from core.routing.recall_shadow import compute_shadow_pair_id
 
             if not _focused_answer_used:
                 _rk_cited_grounded = False
@@ -4669,25 +4813,41 @@ class MaezDaemon:
                     at_ts=time.time(),
                     boot_id=str(getattr(self, "boot_time", "") or ""),
                 )
-            _log_recall_outcome(
-                rec=RecallOutcome(
-                    mode=_rk_mode,
-                    turn_kind=_rk_turn_kind,
-                    outcome_class=_rk_outcome,
-                    denial_kind=_dated_denial_kind_for_turn,
-                    had_confirmed=(
-                        _had_confirmed if _recall_stack_config.triad_on else None
-                    ),
-                    citation_coverage=_rk_coverage,
-                    receipt_or_na=(
-                        _recall_carrier_receipt
-                        if _recall_stack_config.triad_on
-                        else "na"
-                    ),
-                    latency_ms=int((time.time() - _trace_t_start) * 1000),
-                    focused_elapsed_ms=_rk_focused_elapsed,
-                    reply_path=_reply_path,
+            _shadow_should_attempt = bool(
+                _recall_shadow_enabled()
+                and _date_addressed_turn
+                and not _recall_stack_config.triad_on
+            )
+            _recall_shadow_attempt = _shadow_should_attempt
+            _shadow_pair_id = (
+                compute_shadow_pair_id(
+                    boot_id=str(getattr(self, "boot_time", "") or ""),
+                    trace_id=getattr(_trace, "trace_id", None),
                 )
+                if _shadow_should_attempt
+                else "na"
+            )
+            _recall_outcome_rec = RecallOutcome(
+                mode=_rk_mode,
+                turn_kind=_rk_turn_kind,
+                outcome_class=_rk_outcome,
+                denial_kind=_dated_denial_kind_for_turn,
+                had_confirmed=(
+                    _had_confirmed if _recall_stack_config.triad_on else None
+                ),
+                citation_coverage=_rk_coverage,
+                receipt_or_na=(
+                    _recall_carrier_receipt
+                    if _recall_stack_config.triad_on
+                    else "na"
+                ),
+                latency_ms=int((time.time() - _trace_t_start) * 1000),
+                focused_elapsed_ms=_rk_focused_elapsed,
+                reply_path=_reply_path,
+                shadow_pair_id=_shadow_pair_id,
+            )
+            _log_recall_outcome(
+                rec=_recall_outcome_rec
             )
         except Exception as _recall_outcome_exc:
             logger.warning(
@@ -4910,6 +5070,40 @@ class MaezDaemon:
             default_writer().write(_trace)
         except Exception as _trace_exc:
             logger.warning("trace emission failed (skipping): %s", _trace_exc)
+
+        if (
+            _recall_outcome_rec is not None
+            and _recall_shadow_attempt
+        ):
+            try:
+                from core.routing.recall_shadow import ShadowSkip, derive_shadow_skipped
+
+                _shadow_boot_id = str(getattr(self, "boot_time", "") or "")
+                _shadow_submitted = self._ensure_recall_shadow_worker().submit(
+                    lambda: self._run_recall_shadow(
+                        text=text,
+                        legacy_rec=_recall_outcome_rec,
+                        date_addressed=bool(_date_addressed_turn),
+                        shadow_pair_id=_recall_outcome_rec.shadow_pair_id,
+                        boot_id=_shadow_boot_id,
+                    )
+                )
+                if not _shadow_submitted:
+                    _shadow_skip = derive_shadow_skipped(
+                        legacy_rec=_recall_outcome_rec,
+                        skip_reason=ShadowSkip.QUEUE_FULL,
+                        shadow_pair_id=_recall_outcome_rec.shadow_pair_id,
+                        latency_delta_ms=0,
+                        ts=int(time.time()),
+                        boot_id=_shadow_boot_id,
+                    )
+                    _log_shadow_outcome(rec=_shadow_skip)
+                    self._record_last_shadow_receipt(_shadow_skip)
+            except Exception as _shadow_submit_exc:
+                logger.warning(
+                    "recall_shadow_submit_failed class=%s",
+                    type(_shadow_submit_exc).__name__,
+                )
 
         try:
             from core.cognition.moment_assembly_diagnostic import (
@@ -7362,6 +7556,11 @@ class MaezDaemon:
                 )
         except Exception as e:
             logger.debug("Presence worker shutdown failed: %s", e)
+        try:
+            if not self._ensure_recall_shadow_worker().shutdown(timeout=1.0):
+                logger.warning("Recall shadow worker did not finish within shutdown timeout")
+        except Exception as e:
+            logger.debug("Recall shadow worker shutdown failed: %s", e)
         try:
             if self._presence_native_initialized:
                 from skills.presence_perception import shutdown as presence_shutdown
