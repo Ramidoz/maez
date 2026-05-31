@@ -1,14 +1,16 @@
-# Codex Handoff — Brain Benchmark (Recall-Flip Slice 2) — v3
+# Codex Handoff — Brain Benchmark (Recall-Flip Slice 2) — v3.1
 
 **From:** Claude (covenant axis) · **To:** Codex (surface-truth axis) · **Date:** 2026-05-31
-**Branch base:** `main` (latest — spec v3 + plan v3 + this brief committed; flag-off, no live wiring)
+**Branch base:** `main` (latest — spec v3.1 + plan v3.1 + this brief committed; flag-off, no live wiring)
+
+> **v3.1 (after a THIRD pre-code pass).** Pass #3 found mechanical caller-can-smuggle-trust pockets, now folded. **Read the plan's "v3.1 mechanical contract additions" section — those deltas WIN over the task bodies.** Highlights: voice-lint is a **deterministic `voice_lint()`**, not a caller bool; `getaddrinfo` post-filter + IPv6 tuples + phase-scoped (variant/judge ports never open together) + restoration tests; config **fail-closed + no `model_config` fallback + source/hash + pathless** validation (`/api/chat` pinned by code); adapter sends **`think=False`** + asserts response shape + normalizes all exceptions to closed codes; judge carries `sample_id`; **sort is ops-before-speed**; **non-vacuous** sentinel + `OpsRubric` closed enums + `screen_result` constructor validation + compound-name rejection + **written-file** quarantine metadata.
 
 > **v3 (after TWO pre-code passes).** Pass #1 folded 9 blockers (→ v2). Pass #2 found 7 executable-contract gaps in v2, now folded into **v3**: (1) judge is **advisory only** (`fails_voice_or_quality` removed; sole mechanical voice gate = voice-lint); (2) **judge endpoint** validated localhost-only + in the allowlist only during judging; (3) packet content-free is **recursive (nested dataclasses) + non-vacuous sentinel + quarantined debug dump**; (4) streaming injects a `chat_fn` adapter into the **real `focused_synthesize`** (`/api/chat` pinned, payload merge, partial-output scrub); (5) ops cost derived in-substrate (no caller `ops_cost_value`), grounding strictly **bool** (reject `0.99`); (6) sandbox tests cover all 5 APIs + connect/connect_ex + getaddrinfo loopback-only + import-guard; (7) no identity-overclaim. **Build v3.** The folds are a floor, not a substitute — your six-agent pass must still independently pressure them, and a THIRD pre-code pass reruns against your diff before any merge.
 
 ---
 
 ## What you're building
-A hermetic, send-path-free benchmark (`scripts/brain_bench/`) that runs real local model variants over the recall battery and emits a content-free, advisory `BenchPacket` recommending whether any variant is *honest-enough AND fast-enough* for the 2b re-run. It does **not** flip anything, touch any surface, or change the live brain.
+A hermetic, send-path-free benchmark (`scripts/brain_bench/`) that runs real local model variants over the recall battery and emits a content-free **producer-evidence** `BenchPacket` **reporting** whether each variant *passes the recall-benchmark screen* (honest + fast + voice-lint-clean). It does **not** flip anything, touch any surface, change the live brain, recommend, or certify identity — owner decides, S5 voice-continuity gate separate.
 
 **Read first (authoritative — do not re-litigate):**
 - Plan (task-by-task, with code): `docs/superpowers/plans/2026-05-31-brain-benchmark-slice2.md`
