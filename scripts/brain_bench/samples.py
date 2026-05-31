@@ -28,3 +28,4 @@ class ProbeSample:
     expected_fixture_ids: tuple[str, ...] = ()
     cited_confirmed_memory_context: bool = False
     available_label_map: tuple[dict[str, object], ...] = ()
+    citation_render_version: str = "v1"

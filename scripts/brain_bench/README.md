@@ -17,6 +17,25 @@ local model endpoints. Its `BenchPacket` is producer evidence only. Rohit's
 owner verdict and the separate S5 voice-continuity gate are still required
 before any 2b re-run or default-on decision.
 
+## Citation render v1/v2 paired run
+
+For the recall citation-accuracy slice, verification is an owner/Claude-operated
+paired benchmark, not a unit test and not a live flip. Run the same variants in
+the same session twice:
+
+1. v1 baseline: leave `MAEZ_RECALL_CITATION_RENDER_V2` unset or `0`.
+2. v2 candidate: set `MAEZ_RECALL_CITATION_RENDER_V2=1` for the launcher
+   process.
+
+Compare v2 against the same-session v1 packet and the pre-registered floors:
+`multi_year` must improve materially from the 6/10 baseline, `dated_hit` must
+stay at least 9/10, `both_shaped` must stay at least 8/10, overall
+answered-grounded rate must not regress, and any new false-absence or
+wrong-absence is a blocker. The debug dump records `citation_render_version`
+for each raw sample so reviewers can prove the prompt actually used v1 or v2;
+the producer `BenchPacket` stays content-free and does not carry raw answer or
+evidence text.
+
 Minimal owner-run shape:
 
 ```bash

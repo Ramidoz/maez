@@ -14,6 +14,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import sqlite3
@@ -67,10 +68,17 @@ _AUTHORITY_LABEL: dict[str, str] = {
 _CITE_RE = re.compile(r"\[E(\d+)\]")
 _RECALLED_RE = re.compile(r"<RECALLED\b([^>]*)>(.*?)</RECALLED>", re.DOTALL)
 _DATE_MATCH_ATTR = re.compile(r'date_match="([a-z_]+)"')
+_DATE_MATCH_LABEL_ATTR = re.compile(r'date_match_label="([^"]+)"')
+_ISO_DATE_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 _FAITHFUL_INSTRUCTION = (
     "Answer the owner's question ONLY from the evidence below. Cite the [E#] "
     "labels you use, inline. If the evidence does not cover the question, say so "
     "plainly. Do not add claims unsupported by the evidence."
+)
+_FAITHFUL_INSTRUCTION_V2 = (
+    _FAITHFUL_INSTRUCTION
+    + " Cite the exact [E#] your fact came from; if a fact came from [E2], "
+    "cite [E2], not [E1]; do not default to the first item."
 )
 _TRUST_TIER_INSTRUCTION = (
     "Each [E#] is tagged with its authority. Cite the [E#] you use — including "
@@ -107,6 +115,26 @@ _FORBIDDEN_EMPTY_VOCAB: tuple[str, ...] = (
 )
 
 
+def _citation_render_v2_enabled() -> bool:
+    return (
+        (os.environ.get("MAEZ_RECALL_CITATION_RENDER_V2", "") or "")
+        .strip()
+        .lower()
+        in {"1", "true", "yes"}
+    )
+
+
+def _citation_render_version() -> str:
+    return "v2" if _citation_render_v2_enabled() else "v1"
+
+
+def _citation_instruction(render_version: str | None = None) -> str:
+    version = render_version or _citation_render_version()
+    if version == "v2":
+        return _FAITHFUL_INSTRUCTION_V2
+    return _FAITHFUL_INSTRUCTION
+
+
 def is_empty_search_result(sr: dict) -> bool:
     """True when a search produced no usable results."""
     if not isinstance(sr, dict):
@@ -136,8 +164,42 @@ def _authority_label(source_type: str) -> str:
     return _AUTHORITY_LABEL.get(source_type, "unverified")
 
 
-def _render_evidence_lines(items: list[EvidenceItem]) -> list[str]:
+def _temporal_date_label(temporal_provenance: dict | None) -> str:
+    if not temporal_provenance:
+        return "(none)"
+    date_value = temporal_provenance.get("date")
+    if date_value:
+        return str(date_value)
+    label = str(temporal_provenance.get("label") or "")
+    match = _ISO_DATE_RE.search(label)
+    return match.group(0) if match else "(none)"
+
+
+def _temporal_provenance_label(temporal_provenance: dict | None) -> str:
+    if not temporal_provenance:
+        return "none"
+    method = str(temporal_provenance.get("method") or "unknown")
+    status = "confirmed" if temporal_provenance.get("confirmed") else "unconfirmed"
+    return f"{method}/{status}"
+
+
+def _render_evidence_lines(
+    items: list[EvidenceItem],
+    *,
+    render_version: str | None = None,
+) -> list[str]:
     """Render evidence with authority labels while preserving [E#] tokens."""
+    version = render_version or _citation_render_version()
+    if version == "v2":
+        return [
+            (
+                f"[{item.local_label}] · date: {_temporal_date_label(item.temporal_provenance)} "
+                f"· provenance: {_temporal_provenance_label(item.temporal_provenance)} "
+                f"· source: {item.source_type} · authority: {_authority_label(item.source_type)}\n"
+                f"{item.text}"
+            )
+            for item in items
+        ]
     lines = [
         f"[{item.local_label}] ({_authority_label(item.source_type)}) {item.text}"
         for item in items
@@ -162,6 +224,7 @@ class WorkingSet:
     owner_question: str
     working_set_chars: int
     working_set_tokens_est: int
+    citation_render_version: str = "v1"
 
 
 @dataclass(frozen=True)
@@ -441,7 +504,15 @@ def _temporal_provenance_from_attrs(attrs: str) -> dict | None:
     if not match:
         return None
     method = match.group(1)
-    return {"method": method, "confirmed": method in ("exact_date", "month_window")}
+    label_match = _DATE_MATCH_LABEL_ATTR.search(attrs or "")
+    label = label_match.group(1) if label_match else None
+    out = {"method": method, "confirmed": method in ("exact_date", "month_window")}
+    if label:
+        out["label"] = label
+        date_match = _ISO_DATE_RE.search(label)
+        if date_match:
+            out["date"] = date_match.group(0)
+    return out
 
 
 def _memory_items_with_provenance(body: str) -> list[tuple[str, dict | None]]:
@@ -511,21 +582,30 @@ def _budget_items_for_prompt(
     *,
     owner_question: str,
     max_chars: int | None,
+    render_version: str | None = None,
 ) -> list[EvidenceItem]:
+    version = render_version or _citation_render_version()
     if max_chars is None:
         max_chars = _DEFAULT_WORKING_SET_CHAR_BUDGET
     if max_chars <= 0 or not items:
         return items
-    rendered_chars = len("\n".join(_render_evidence_lines(items))) + len(owner_question or "")
+    rendered_chars = len(
+        "\n".join(_render_evidence_lines(items, render_version=version))
+    ) + len(owner_question or "")
     if rendered_chars <= max_chars:
         return items
 
     empty_text_items = [replace(item, text="") for item in items]
-    overhead = len("\n".join(_render_evidence_lines(empty_text_items))) + len(owner_question or "")
+    overhead = len(
+        "\n".join(_render_evidence_lines(empty_text_items, render_version=version))
+    ) + len(owner_question or "")
     text_budget = max(max_chars - overhead, 0)
-    # The first item's text is rendered twice by _render_evidence_lines
-    # ("most important, repeated"), so count it twice in the budget.
-    weights = [2 if index == 0 else 1 for index, _item in enumerate(items)]
+    if version == "v2":
+        weights = [1 for _item in items]
+    else:
+        # The first item's text is rendered twice by _render_evidence_lines
+        # ("most important, repeated"), so count it twice in the budget.
+        weights = [2 if index == 0 else 1 for index, _item in enumerate(items)]
     unit_budget = text_budget // max(sum(weights), 1)
     budgeted: list[EvidenceItem] = []
     for item, _weight in zip(items, weights, strict=True):
@@ -654,13 +734,15 @@ def assemble_working_set(
             temporal_provenance,
         ) in enumerate(raw_items)
     ]
+    render_version = _citation_render_version()
     items = _budget_items_for_prompt(
         items,
         owner_question=owner_question,
         max_chars=max_working_set_chars,
+        render_version=render_version,
     )
 
-    ordered = "\n".join(_render_evidence_lines(items))
+    ordered = "\n".join(_render_evidence_lines(items, render_version=render_version))
 
     total_chars = len(ordered) + len(owner_question or "")
     return WorkingSet(
@@ -669,6 +751,7 @@ def assemble_working_set(
         owner_question=owner_question,
         working_set_chars=total_chars,
         working_set_tokens_est=total_chars // 4,
+        citation_render_version=render_version,
     )
 
 
@@ -695,7 +778,7 @@ def focused_synthesize(
 
     system = (
         f"{_voice_card(surface)}\n\n"
-        f"{_FAITHFUL_INSTRUCTION}\n\n"
+        f"{_citation_instruction(working_set.citation_render_version)}\n\n"
         f"{_TRUST_TIER_INSTRUCTION}\n\n"
         f"=== EVIDENCE (cite [E#]) ===\n"
         f"{working_set.ordered_evidence_text}"

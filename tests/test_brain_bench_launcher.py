@@ -34,6 +34,24 @@ class LauncherEnvTests(unittest.TestCase):
             os.environ.clear()
             os.environ.update(prior)
 
+    def test_launcher_preserves_citation_render_v2_flag_before_exec(self):
+        prior = os.environ.copy()
+        os.environ["MAEZ_RECALL_CITATION_RENDER_V2"] = "1"
+        try:
+            with mock.patch.object(launcher.os, "execv", side_effect=RuntimeError("stop")):
+                with self.assertRaises(RuntimeError):
+                    launcher.main(
+                        [
+                            "/tmp/brain-bench-sandbox",
+                            "--x",
+                        ]
+                    )
+
+            self.assertEqual(os.environ["MAEZ_RECALL_CITATION_RENDER_V2"], "1")
+        finally:
+            os.environ.clear()
+            os.environ.update(prior)
+
     def test_launcher_rejects_real_home_before_exec(self):
         for root in ("/home/rohit/maez", "/home/rohit", "/home"):
             with self.subTest(root=root):

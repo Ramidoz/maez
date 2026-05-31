@@ -98,6 +98,8 @@ class BrainBenchLauncherSmokeTests(unittest.TestCase):
                     )
                 )
 
+                env = _subprocess_env(Path(__file__).resolve().parents[1])
+                env["MAEZ_RECALL_CITATION_RENDER_V2"] = "1"
                 result = subprocess.run(
                     [
                         sys.executable,
@@ -110,7 +112,7 @@ class BrainBenchLauncherSmokeTests(unittest.TestCase):
                         str(packet_path),
                     ],
                     cwd=Path(__file__).resolve().parents[1],
-                    env=_subprocess_env(Path(__file__).resolve().parents[1]),
+                    env=env,
                     text=True,
                     capture_output=True,
                     timeout=90,
@@ -129,12 +131,26 @@ class BrainBenchLauncherSmokeTests(unittest.TestCase):
                 )
                 debug_path = Path(debug_line.split("=", 1)[1])
                 try:
+                    debug_dump = json.loads(debug_path.read_text())
+                    debug_blob = json.dumps(debug_dump)
                     self.assertEqual(packet["variants"][0]["label"], "owner-run-smoke")
                     self.assertTrue(_OpenAICompatStub.requests_seen)
                     self.assertTrue(
                         all(path == "/v1/chat/completions" for path, _body in _OpenAICompatStub.requests_seen)
                     )
                     self.assertIn("stub-model", _OpenAICompatStub.requests_seen[0][1])
+                    request_prompts = [
+                        json.loads(body)["messages"][0]["content"]
+                        for _path, body in _OpenAICompatStub.requests_seen
+                    ]
+                    self.assertTrue(request_prompts)
+                    self.assertTrue(
+                        all(" · date:" in prompt for prompt in request_prompts)
+                    )
+                    self.assertFalse(
+                        any("most important, repeated" in prompt for prompt in request_prompts)
+                    )
+                    self.assertIn('"citation_render_version": "v2"', debug_blob)
                     self.assertNotIn("probe_run must return ProbeSample rows", result.stderr)
                     fail_reasons = packet["variants"][0]["fail_reasons"]
                     self.assertNotIn("inference_failed", fail_reasons)

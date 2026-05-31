@@ -1,7 +1,9 @@
 import json
+import os
 import re
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
@@ -9,6 +11,22 @@ from scripts.brain_bench.samples import ProbeSample
 from scripts.brain_bench.variants import load_variants
 from scripts.recall_flip_eval import probes as eval_probes
 from scripts.recall_flip_eval import sandbox
+
+
+@contextmanager
+def _citation_render_flag(value: str | None):
+    old = os.environ.get("MAEZ_RECALL_CITATION_RENDER_V2")
+    if value is None:
+        os.environ.pop("MAEZ_RECALL_CITATION_RENDER_V2", None)
+    else:
+        os.environ["MAEZ_RECALL_CITATION_RENDER_V2"] = value
+    try:
+        yield
+    finally:
+        if old is None:
+            os.environ.pop("MAEZ_RECALL_CITATION_RENDER_V2", None)
+        else:
+            os.environ["MAEZ_RECALL_CITATION_RENDER_V2"] = old
 
 
 def _variant():
@@ -128,6 +146,65 @@ class ProbeRunnerTests(unittest.TestCase):
         self.assertEqual(session.post.call_args.args[0], "http://127.0.0.1:8080/v1/chat/completions")
         self.assertFalse(rows[0].inference_failed)
         self.assertIsNone(rows[0].fail_code)
+
+    def test_citation_render_version_matches_actual_prompt_shape(self):
+        from scripts.brain_bench.probe_runner import build_probe_run
+
+        selected = (eval_probes.get_probe("dated_hit"),)
+
+        def run_once(flag_value):
+            payloads = []
+
+            def stream_factory(*, variant, payload):
+                del variant
+                payloads.append(payload)
+                return iter([{"content": "The April 27 note cites [E1]."}])
+
+            with tempfile.TemporaryDirectory() as tmp:
+                with _citation_render_flag(flag_value), sandbox.sandbox_env(Path(tmp)):
+                    with mock.patch.object(eval_probes, "PROBES", selected):
+                        rows = list(
+                            build_probe_run(
+                                k=1,
+                                stream_factory=stream_factory,
+                            )(_variant())
+                        )
+            return rows[0], payloads[0]["messages"][0]["content"]
+
+        v1_row, v1_system = run_once(None)
+        v2_row, v2_system = run_once("1")
+
+        self.assertEqual(v1_row.citation_render_version, "v1")
+        self.assertIn("most important, repeated", v1_system)
+        self.assertNotIn(" · date:", v1_system)
+
+        self.assertEqual(v2_row.citation_render_version, "v2")
+        self.assertIn(" · date: 2026-04-27", v2_system)
+        self.assertIn("provenance: exact_date/confirmed", v2_system)
+        self.assertNotIn("most important, repeated", v2_system)
+
+    def test_citation_render_version_is_from_working_set_not_late_env(self):
+        from scripts.brain_bench.probe_runner import build_probe_run
+
+        selected = (eval_probes.get_probe("dated_hit"),)
+
+        def stream_factory_flip_off(*, variant, payload):
+            del variant, payload
+            os.environ["MAEZ_RECALL_CITATION_RENDER_V2"] = "0"
+            return iter([{"content": "The April 27 note cites [E1]."}])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with _citation_render_flag("1"), sandbox.sandbox_env(Path(tmp)):
+                with mock.patch.object(eval_probes, "PROBES", selected):
+                    rows = list(
+                        build_probe_run(
+                            k=1,
+                            stream_factory=stream_factory_flip_off,
+                        )(_variant())
+                    )
+
+        self.assertEqual(rows[0].citation_render_version, "v2")
+        self.assertIn(" · date: 2026-04-27", rows[0].evidence)
 
     def test_answerable_dated_probes_synthesize_and_ground_on_fixture_content(self):
         from scripts.brain_bench.probe_runner import build_probe_run
