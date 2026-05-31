@@ -1515,6 +1515,60 @@ def _pair_history_for_chat_threading(raw_history) -> list[dict]:
     return out
 
 
+def _chat_history_message_count(messages: list[dict]) -> int:
+    """Count substantive prior chat messages already threaded into messages[]."""
+    count = 0
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") not in {"user", "assistant"}:
+            continue
+        if str(message.get("content") or "").strip():
+            count += 1
+    return count
+
+
+def _continuity_fallback_reply(owner_question: str) -> str:
+    phrase = (owner_question or "that").strip().strip('"\\u201c\\u201d') or "that"
+    if len(phrase) > 120:
+        phrase = phrase[:117].rstrip() + "..."
+    return f"I'm not sure what you mean by {phrase!r} from the chat I can see right now."
+
+
+def _continuity_shape_instruction() -> str:
+    return (
+        "CONTINUITY SHAPE: This is a recent-conversation continuity turn. "
+        "Answer from the recent chat that is already in this prompt. If the "
+        "referenced phrase is ambiguous or was not established in the recent "
+        "conversation, say that conversationally. Do not reinterpret embedded "
+        "tokens such as '3 may' as calendar dates. Do not use archival 'no "
+        "record' or dated-memory absence language unless the current turn is "
+        "actually a dated-recall question."
+    )
+
+
+def _resolve_continuity_fallback_shape(
+    *,
+    owner_question: str,
+    continuity_turn: bool,
+    date_addressed: bool,
+    fresh_context_present: bool,
+    prior_chat_message_count: int,
+    lived_brief: str,
+    temporal_anchor_brief: str,
+) -> tuple[str | None, str]:
+    """Return (deterministic_reply, instruction) for continuity fallback shape."""
+    if not continuity_turn or date_addressed:
+        return None, ""
+    if prior_chat_message_count > 0:
+        return None, _continuity_shape_instruction()
+    if fresh_context_present:
+        return None, ""
+    if (lived_brief or "").strip() or (temporal_anchor_brief or "").strip():
+        return None, ""
+    return _continuity_fallback_reply(owner_question), ""
+
+
 # Stable cycle instructions — appended to the SOUL system prompt at every
 # _reason() call. Kept byte-identical across cycles so llama.cpp's KV cache
 # reuses the ~600 tokens on each subsequent request. Everything referenced

@@ -320,6 +320,83 @@ class DaemonHandleMessageContract(unittest.TestCase):
         self.assertIn("_consolidate_system_messages", handle_src)
         self.assertIn("final_system_part=turn_final_context", handle_src)
 
+    def test_continuity_shape_resolver_distinguishes_empty_chat_and_dated_turns(self):
+        from daemon.maez_daemon import _resolve_continuity_fallback_shape
+
+        reply, instruction = _resolve_continuity_fallback_shape(
+            owner_question="What were we just talking about, the 3 may bugs?",
+            continuity_turn=True,
+            date_addressed=False,
+            fresh_context_present=False,
+            prior_chat_message_count=0,
+            lived_brief="",
+            temporal_anchor_brief="",
+        )
+
+        self.assertIsNotNone(reply)
+        self.assertEqual(instruction, "")
+        lowered = reply.lower()
+        self.assertIn("not sure", lowered)
+        self.assertIn("3 may bugs", lowered)
+        self.assertNotIn("record", lowered)
+        self.assertNotIn("dated memory", lowered)
+        self.assertNotIn("may 3", lowered)
+
+        reply, instruction = _resolve_continuity_fallback_shape(
+            owner_question="What were we just talking about, the 3 may bugs?",
+            continuity_turn=True,
+            date_addressed=False,
+            fresh_context_present=False,
+            prior_chat_message_count=2,
+            lived_brief="",
+            temporal_anchor_brief="",
+        )
+
+        self.assertIsNone(reply)
+        self.assertIn("CONTINUITY SHAPE", instruction)
+        self.assertIn("Do not reinterpret embedded tokens such as '3 may'", instruction)
+        self.assertNotIn("think", instruction.lower())
+        self.assertNotIn("ponder", instruction.lower())
+
+        reply, instruction = _resolve_continuity_fallback_shape(
+            owner_question="What happened on May 3?",
+            continuity_turn=True,
+            date_addressed=True,
+            fresh_context_present=False,
+            prior_chat_message_count=2,
+            lived_brief="",
+            temporal_anchor_brief="",
+        )
+
+        self.assertIsNone(reply)
+        self.assertEqual(instruction, "")
+
+        reply, instruction = _resolve_continuity_fallback_shape(
+            owner_question="What were we just talking about?",
+            continuity_turn=True,
+            date_addressed=False,
+            fresh_context_present=True,
+            prior_chat_message_count=0,
+            lived_brief="",
+            temporal_anchor_brief="",
+        )
+
+        self.assertIsNone(reply)
+        self.assertEqual(instruction, "")
+
+        reply, instruction = _resolve_continuity_fallback_shape(
+            owner_question="What were we just talking about?",
+            continuity_turn=True,
+            date_addressed=False,
+            fresh_context_present=True,
+            prior_chat_message_count=2,
+            lived_brief="",
+            temporal_anchor_brief="",
+        )
+
+        self.assertIsNone(reply)
+        self.assertIn("CONTINUITY SHAPE", instruction)
+
     def _build_daemon_for_handle_message(self):
         from daemon import maez_daemon
 
