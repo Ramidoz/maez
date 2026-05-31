@@ -31,6 +31,10 @@ def _registry():
 
 
 class DebugDumpTests(unittest.TestCase):
+    def test_debug_dump_directory_is_gitignored(self):
+        gitignore = Path(".gitignore").read_text()
+        self.assertIn("logs/brain_bench_debug/", gitignore)
+
     def test_debug_dump_is_quarantine_tagged_in_written_file(self):
         with tempfile.TemporaryDirectory() as root:
             path = write_debug_dump(
