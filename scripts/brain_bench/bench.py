@@ -172,6 +172,10 @@ def run_benchmark(
                     "answer": sample.answer,
                     "evidence": sample.evidence,
                     "fail_code": sample.fail_code,
+                    "cited_ids": list(sample.cited_ids),
+                    "cited_durable_ids": list(sample.cited_durable_ids),
+                    "expected_fixture_ids": list(sample.expected_fixture_ids),
+                    "cited_confirmed_memory_context": sample.cited_confirmed_memory_context,
                 }
             )
         fail_reasons: list[FailReason] = []

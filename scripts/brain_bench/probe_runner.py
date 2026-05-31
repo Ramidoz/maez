@@ -96,6 +96,7 @@ class ProbeRun:
                 ops_evidence=variant.ops_evidence,
                 latency_ms=measurement.total_ms,
                 synthesized=True,
+                expected_fixture_ids=expected_fixture_ids,
             )
 
         _codes, unsafe = probes.assert_probe_result(
@@ -126,6 +127,10 @@ class ProbeRun:
             ops_evidence=variant.ops_evidence,
             latency_ms=focused_latency_ms,
             synthesized=measurement is not None,
+            cited_ids=result.cited_ids,
+            cited_durable_ids=result.cited_durable_ids,
+            expected_fixture_ids=expected_fixture_ids,
+            cited_confirmed_memory_context=result.cited_confirmed_memory_context,
         )
 
 
@@ -258,6 +263,7 @@ def _run_focused_probe(
             receipt="consulted",
             focused_elapsed_ms=elapsed,
             citation_coverage=verdict.citation_coverage,
+            cited_ids=tuple(result.cited_ids),
             cited_durable_ids=durable_ids,
             cited_confirmed_memory_context=grounded,
             working_set_source_types=tuple(item.source_type for item in working_set.items),
