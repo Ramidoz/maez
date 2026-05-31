@@ -268,9 +268,13 @@ def _fingerprint_path(path: Path) -> tuple:
 
 
 def teardown(root: str | os.PathLike) -> None:
+    restore_memory_patches()
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def restore_memory_patches() -> None:
     import memory.memory_manager as mm_mod
 
     _reset_dispatcher_memory_manager()
     if _ORIGINAL_BASE_DB is not None:
         mm_mod.BASE_DB = _ORIGINAL_BASE_DB
-    shutil.rmtree(root, ignore_errors=True)

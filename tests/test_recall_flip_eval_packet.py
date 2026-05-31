@@ -1,6 +1,8 @@
 import dataclasses
 import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from scripts.recall_flip_eval.proof_packet import (
     ProbeResult,
@@ -150,6 +152,31 @@ class ProofPacketTest(unittest.TestCase):
         self.assertFalse(
             self._packet(probe, expected_commit_sha="abc", actual_commit_sha="def").overall_pass
         )
+
+    def test_harness_run_emits_content_free_packet(self):
+        from scripts.recall_flip_eval import harness, sandbox
+
+        with tempfile.TemporaryDirectory() as root, sandbox.sandbox_env(root):
+            packet = harness.run_eval(
+                sandbox_root=root,
+                expect_commit=harness.current_commit_sha(),
+                probe_ids=("dated_hit",),
+                variants_per_probe=1,
+                allow_dirty=True,
+            )
+            packet_path = Path(root) / "proof" / "eval_packet.json"
+            self.assertTrue(packet_path.exists())
+            blob = packet_path.read_text()
+            self.assertEqual(json.loads(blob)["schema_version"], "eval_packet.v1")
+            self.assertNotIn("SANDBOX", blob)
+            self.assertNotIn("What did we note", blob)
+            self.assertEqual(packet.run_id, json.loads(blob)["run_id"])
+
+    def test_harness_aborts_on_commit_mismatch(self):
+        from scripts.recall_flip_eval import harness
+
+        with self.assertRaises(harness.HarnessAbort):
+            harness.assert_run_parity(expect_commit="definitely-not-head", allow_dirty=True)
 
     def _packet(self, *results, **overrides):
         kwargs = {

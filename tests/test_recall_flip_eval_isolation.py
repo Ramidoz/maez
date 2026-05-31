@@ -22,6 +22,7 @@ class IsolationTest(unittest.TestCase):
     def test_assert_sandbox_passes_under_sandbox_root(self):
         with tempfile.TemporaryDirectory() as root:
             with sandbox.sandbox_env(root):
+                sandbox.patch_memory_manager_base_db(root)
                 sandbox.assert_sandbox()
 
     def test_rejects_inherited_real_path_overrides(self):
