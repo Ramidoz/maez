@@ -112,3 +112,56 @@ class BrainBenchCliTests(unittest.TestCase):
                         str(bench.DEFAULT_DEBUG_DUMP_DIR / "packet.json"),
                     ]
                 )
+
+    def test_main_packet_is_content_free_and_debug_dump_carries_raw_records(self):
+        variants = [
+            {
+                "label": "cli-v",
+                "base_url": "http://127.0.0.1:11434",
+                "model": "m",
+            }
+        ]
+
+        def fake_probe_run(_variant):
+            from scripts.brain_bench.bench import ProbeSample
+
+            return [
+                ProbeSample(
+                    probe_id="dated_hit",
+                    sample_id="sample-1",
+                    answer="Maez answered with FABRICATED_SENTINEL from context [E1].",
+                    evidence="[E1] FABRICATED_SENTINEL",
+                    false_absence=False,
+                    grounded_categorical=True,
+                    wrong_absence=False,
+                    p95_ms=3000,
+                    max_ms=3000,
+                    latency_ms=3000,
+                    ttft_ms=100,
+                    tokens_per_sec=20.0,
+                    ops_evidence=_packet().variants[0].ops,
+                )
+            ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "variants.json"
+            out_path = Path(tmp) / "packet.json"
+            config_path.write_text(json.dumps(variants))
+            stdout = io.StringIO()
+
+            with mock.patch(
+                "scripts.brain_bench.probe_runner.build_probe_run",
+                return_value=fake_probe_run,
+            ), contextlib.redirect_stdout(stdout):
+                bench.main(["--variants-config", str(config_path), "--out", str(out_path)])
+
+            debug_line = next(line for line in stdout.getvalue().splitlines() if line.startswith("debug_dump="))
+            debug_path = Path(debug_line.split("=", 1)[1])
+            try:
+                packet_blob = out_path.read_text()
+                debug_blob = debug_path.read_text()
+                self.assertNotIn("FABRICATED_SENTINEL", packet_blob)
+                self.assertIn("FABRICATED_SENTINEL", debug_blob)
+                self.assertIn('"provenance": "UNTRUSTED"', debug_blob)
+            finally:
+                debug_path.unlink(missing_ok=True)

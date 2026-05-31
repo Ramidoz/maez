@@ -161,6 +161,7 @@ def run_benchmark(
     call_judge: Callable | None = None,
     judge_base_url: str = "http://127.0.0.1:8081",
     write_debug: bool = False,
+    raw_records_sink: list[dict] | None = None,
 ) -> BenchPacket:
     reports: list[VariantReport] = []
     screen_rows: list[dict] = []
@@ -303,6 +304,8 @@ def run_benchmark(
             fixture_manifest_hash=fixture_manifest_hash,
             variant_config_hash=registry.variant_config_hash,
         )
+    if raw_records_sink is not None:
+        raw_records_sink.extend(raw_records)
 
     return BenchPacket(
         schema_version="bench_packet.v3",
@@ -322,6 +325,7 @@ def run_full_battery(
     call_judge: Callable | None = None,
     judge_base_url: str = "http://127.0.0.1:8081",
     finalist_k: int = FINALIST_K,
+    raw_records_sink: list[dict] | None = None,
 ) -> BenchPacket:
     if call_judge is not None:
         judge_port = resolve_judge_endpoint(judge_base_url)
@@ -336,6 +340,7 @@ def run_full_battery(
         probe_run=screen_probe_run,
         call_judge=None,
         judge_base_url=judge_base_url,
+        raw_records_sink=raw_records_sink,
     )
     screen_reports = {report.label: report for report in screen_packet.variants}
     survivors = [
@@ -372,6 +377,7 @@ def run_full_battery(
         probe_run=finalist_probe_run,
         call_judge=call_judge,
         judge_base_url=judge_base_url,
+        raw_records_sink=raw_records_sink,
     )
     final_reports = {report.label: report for report in finalist_packet.variants}
     merged_reports = tuple(
@@ -458,16 +464,18 @@ def main(argv: list[str] | None = None) -> int:
     out_path = _safe_out_path(args.out)
     from scripts.brain_bench.probe_runner import build_probe_run
 
+    raw_records: list[dict] = []
     packet = run_full_battery(
         registry,
         build_probe_run_fn=build_probe_run,
         judge_base_url=args.judge_base_url,
         finalist_k=args.finalist_k,
+        raw_records_sink=raw_records,
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(packet.to_dict(), indent=2, sort_keys=True) + "\n")
     debug_path = write_debug_dump(
-        records=[],
+        records=raw_records,
         fixture_manifest_hash=packet.fixture_manifest_hash,
         variant_config_hash=packet.variant_config_hash,
     )
