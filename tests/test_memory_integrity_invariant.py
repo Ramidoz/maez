@@ -580,10 +580,11 @@ class DaemonHandleMessageContract(unittest.TestCase):
                 "core.ledger.writer.try_write_turn",
                 return_value="turn-1",
             ))
-            stack.enter_context(mock.patch(
+            persist_model_reply_mock = stack.enter_context(mock.patch(
                 "core.ledger.model_reply_persistence.persist_model_reply",
                 return_value=None,
             ))
+            captured["persist_model_reply_mock"] = persist_model_reply_mock
             stack.enter_context(mock.patch(
                 "core.llm_client.chat",
                 side_effect=fake_chat,
@@ -748,6 +749,92 @@ class DaemonHandleMessageContract(unittest.TestCase):
         self.assertIn("What happened on January 3?", prompt_text)
         self.assertNotIn("I don't have a record", reply)
         self.assertNotIn("May 3rd", reply)
+
+    def test_continuity_with_recall_items_does_not_use_truly_empty_guard(self):
+        from core.dispatcher.layer1 import RecallItem
+        from daemon import maez_daemon
+
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+        recall_items = [
+            RecallItem(
+                text="The structured recall channel has material for this turn.",
+                source_type="memory_context",
+                durable_id="structured-context-1",
+                temporal_provenance={},
+            )
+        ]
+
+        with self._handle_message_mock_stack(
+            maez_daemon,
+            captured,
+            reply="legacy synthesis saw this was not truly empty",
+        ), mock.patch.dict(
+            os.environ,
+            {"MAEZ_RECALL_TRIAD_ENABLED": "0"},
+            clear=False,
+        ):
+            reply = maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                "What were we just talking about?",
+                source="telegram_surface",
+                chat_history=None,
+                recall_items=recall_items,
+            )
+
+        self.assertEqual(reply, "legacy synthesis saw this was not truly empty")
+        self.assertIn("messages", captured)
+        self.assertNotIn("not sure what you mean", reply.lower())
+
+    def test_real_may_3_prompt_stays_dated_and_bypasses_continuity_shape(self):
+        from daemon import maez_daemon
+
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+
+        with self.assertLogs(maez_daemon.logger, level="INFO") as logs:
+            with self._handle_message_mock_stack(
+                maez_daemon,
+                captured,
+                reply="legacy should not be used",
+            ), mock.patch.dict(
+                os.environ,
+                {"MAEZ_RECALL_TRIAD_ENABLED": "0"},
+                clear=False,
+            ):
+                reply = maez_daemon.MaezDaemon.handle_message(
+                    daemon,
+                    "What happened on May 3?",
+                    source="telegram_surface",
+                    chat_history=[
+                        {
+                            "content": (
+                                "Rohit: We were discussing the 3 may bugs.\n"
+                                "Maez: We were keeping that as continuity."
+                            )
+                        }
+                    ],
+                )
+
+        self.assertEqual(
+            reply,
+            "I can't reach my dated memory from here right now. "
+            "I won't answer it from recent chat or guesswork.",
+        )
+        self.assertNotIn("messages", captured, "dated legacy-off denial must not call synthesis")
+        persist_model_reply = captured["persist_model_reply_mock"]
+        persist_model_reply.assert_called()
+        prompt_material = persist_model_reply.call_args.kwargs["prompt_material"]
+        prompt_text = "\n".join(
+            str(m.get("content") or "")
+            for m in prompt_material["messages"]
+            if isinstance(m, dict)
+        )
+        self.assertNotIn("CONTINUITY SHAPE", prompt_text)
+        joined = "\n".join(logs.output)
+        self.assertIn("dated_recall_denial", joined)
+        self.assertIn("reply_mode=LEGACY", joined)
+        self.assertIn("recall_stack_mode=legacy", joined)
 
     def test_fast_synthesis_fires_no_progress_receipt(self):
         from daemon import maez_daemon

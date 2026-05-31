@@ -4328,7 +4328,9 @@ class MaezDaemon:
                 owner_question=text,
                 continuity_turn=bool(_dialogue_needs_or_uncertain),
                 date_addressed=bool(_date_addressed_turn),
-                fresh_context_present=bool((turn_final_context or "").strip()),
+                fresh_context_present=bool(
+                    (turn_final_context or "").strip() or recall_items
+                ),
                 prior_chat_message_count=_prior_chat_message_count,
                 lived_brief=_lived_brief,
                 temporal_anchor_brief=_temporal_anchor_brief_text,
