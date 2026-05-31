@@ -130,3 +130,56 @@ Same-session verdict rule for this abbreviated live witness:
   override and re-look date.
 
 This is deliberately stricter on human verdict than on sample size because the window is same-session.
+
+## Step 1–4 — Owner-Authorized Same-Session Flip Result
+
+Owner authorized the flip in-chat. Set `MAEZ_RECALL_TRIAD_ENABLED=1`, restarted `maez.service`, and
+confirmed posture:
+
+- `recall_stack mode=recall_triad reason=bundle_enabled`
+- Code commit: `25160b5`
+
+Live probe outcomes:
+
+| Probe | Outcome | Receipt | Confirmed | Coverage | Latency |
+| --- | --- | --- | --- | --- | --- |
+| `What did we note around April 27 about the infrastructure?` | `answered_grounded` | `consulted` | `true` | `0.4286` | `7883ms` |
+| `Remind me what we were doing around April 27.` | `answered_ungrounded` | `consulted` | `true` | `0.2857` | `9734ms` |
+| `What happened on January 3?` | `declined_absence` | `consulted` | `false` | `0.6667` | `5797ms` |
+| `What did we note around May 12?` | `answered_grounded` | `consulted` | `true` | `0.5` | `12326ms` |
+| `Are you practicing recall quietly?` | `ordinary_answered` / self-status | `not_consulted` | `false` | `na` | `1409ms` |
+| `Is your dated recall reachable right now?` | `ordinary_answered` / self-status | `not_consulted` | `false` | `na` | `1420ms` |
+
+Safety reading:
+
+- False absence: `0` observed by receipt/outcome criteria.
+- Dated miss (`January 3`) correctly returned `declined_absence`.
+- Shadow rows while triad live: `0` (shadow suppressed while triad on).
+- Self-status live:
+  - practice status: `off` because triad-on suppresses shadow.
+  - dated recall status: `on_ok`, receipt `consulted`.
+
+Benefit reading:
+
+- At least two distinct dated turns were served as `answered_grounded` (`April 27 infrastructure`,
+  `May 12`).
+- The both-shaped April 27 turn answered substantively from the dated frame, but the telemetry classified
+  it `answered_ungrounded` because the final citations did not satisfy the current strict grounded-context
+  classifier.
+
+Hard-gate result:
+
+- **Latency gate failed.** Frozen recall ceiling was `4328ms`; live recall latencies were
+  `7883ms`, `9734ms`, `5797ms`, and `12326ms`.
+- Therefore the same-session flip is **NO-GO** under the pre-registered rule, despite good recall quality.
+
+Action taken:
+
+- Reverted `MAEZ_RECALL_TRIAD_ENABLED` to `0`, restarted, and confirmed legacy posture.
+- Then completed teardown by removing `MAEZ_RECALL_TRIAD_ENABLED`, `MAEZ_RECALL_SHADOW_ENABLED`, and
+  `MAEZ_RECALL_STATUS_INTERCEPT_ENABLED` from `config/.env`, restarting, and confirming:
+  `recall_stack mode=legacy reason=off raw_flags=[bundle=unset dispatcher=unset focused=unset living=unset]`.
+- Shadow rows after teardown: `0`.
+
+Disposition: **reverted**. The recall triad is safe and useful enough to continue work, but not fast enough
+to keep default-on under this same-session gate.
