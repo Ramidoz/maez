@@ -629,6 +629,7 @@ class OrchestrationTests(unittest.TestCase):
                             "confirmed": True,
                         },
                     ),
+                    citation_render_version="v2",
                 )
             ]
 
@@ -659,6 +660,8 @@ class OrchestrationTests(unittest.TestCase):
             {"text", "content", "evidence", "answer"} & set(raw_records[0]["available_label_map"][0]),
             "available label map must remain content-free",
         )
+        self.assertEqual(raw_records[0]["citation_render_version"], "v2")
+        self.assertNotIn("citation_render_version", json.dumps(packet.to_dict()))
 
 
 def _ops(**overrides):

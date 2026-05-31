@@ -26,6 +26,7 @@ class ProbeArmResult:
     cited_confirmed_memory_context: bool = False
     working_set_source_types: tuple[str, ...] = ()
     available_label_map: tuple[dict[str, object], ...] = ()
+    citation_render_version: str = "v1"
 
 
 class HarnessAbort(RuntimeError):
@@ -187,6 +188,7 @@ def run_probe(text: str, *, flag_on: bool) -> ProbeArmResult:
         cited_confirmed_memory_context=grounded,
         working_set_source_types=tuple(item.source_type for item in working_set.items),
         available_label_map=citation_label_map(working_set),
+        citation_render_version=working_set.citation_render_version,
     )
 
 

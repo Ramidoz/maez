@@ -98,6 +98,7 @@ class ProbeRun:
                 synthesized=True,
                 expected_fixture_ids=expected_fixture_ids,
                 available_label_map=result.available_label_map,
+                citation_render_version=result.citation_render_version,
             )
 
         _codes, unsafe = probes.assert_probe_result(
@@ -133,6 +134,7 @@ class ProbeRun:
             expected_fixture_ids=expected_fixture_ids,
             cited_confirmed_memory_context=result.cited_confirmed_memory_context,
             available_label_map=result.available_label_map,
+            citation_render_version=result.citation_render_version,
         )
 
 
@@ -191,6 +193,7 @@ def _run_focused_probe(
                     receipt="not_consulted",
                     focused_elapsed_ms=elapsed,
                     citation_coverage=None,
+                    citation_render_version=focused_cognition._citation_render_version(),
                 ),
                 None,
                 "",
@@ -202,6 +205,7 @@ def _run_focused_probe(
                 receipt="consulted",
                 focused_elapsed_ms=elapsed,
                 citation_coverage=None,
+                citation_render_version=focused_cognition._citation_render_version(),
             ),
             None,
             "",
@@ -223,6 +227,7 @@ def _run_focused_probe(
                 citation_coverage=None,
                 working_set_source_types=tuple(item.source_type for item in working_set.items),
                 available_label_map=harness.citation_label_map(working_set),
+                citation_render_version=working_set.citation_render_version,
             ),
             None,
             evidence,
@@ -271,6 +276,7 @@ def _run_focused_probe(
             cited_confirmed_memory_context=grounded,
             working_set_source_types=tuple(item.source_type for item in working_set.items),
             available_label_map=harness.citation_label_map(working_set),
+            citation_render_version=working_set.citation_render_version,
         ),
         measurement,
         evidence,
