@@ -36,7 +36,7 @@ The **one shared change** to 2a's modules: `sandbox.py`'s socket guard becomes p
 
 **4.4 Recall battery (reused probes).** The same 2a probes (multi-year collision, type-rule >14d, dated-miss, incidental, both-shaped re-witness, smoke) — now answered by **real inference per variant**, not the 2a deterministic stub. Quality/honesty are thus measured identically to how 2a/2b measured them.
 
-**4.5 Blind judge.** A **fixed** `MAEZ_JUDGE_MODEL`, identical across all variants, scores **answer-quality + voice-fidelity** seeing only `(probe, answer, evidence)` with the **variant label withheld and answers shuffled**. Comparative score, never a gate. Runs on the allowed localhost endpoint, after all variants' answers are collected (so it cannot drift per-variant). Judge-blindness is asserted by test.
+**4.5 Blind judge — pairwise.** A **fixed** `MAEZ_JUDGE_MODEL` with **fixed settings** (temperature/seed/kwargs pinned), identical across all variants. Soft axes are judged **pairwise per probe**, not by absolute score: for a given probe, answer A vs answer B with **variant labels hidden and presentation order randomized**; **quality and voice scored separately**. Pairwise comparison avoids absolute-scoring drift and per-call mood variance. Runs on the allowed localhost endpoint after all variants' answers are collected (so it cannot drift per-variant). Pairwise results aggregate to a per-variant ranking (e.g. win-rate / Bradley-Terry-style). Never a gate. Judge-blindness (labels withheld, order randomized) is asserted by test.
 
 ## 5. Gates — two tiers, lexicographic ranking
 
@@ -46,10 +46,10 @@ The **one shared change** to 2a's modules: `sandbox.py`'s socket guard becomes p
 - Declined-absence correct (honest empty where appropriate).
 - Voice-lint pass (length band, no cognition verbs, genderless).
 
-**Latency gate (A7-shaped full-answer ceiling, NOT the old 4.3s line):**
-- **Hard full-answer ceiling:** p95 ≈ **10–12s** — this is the pass/fail line. Over it → fail.
-- **Strong candidate:** p95 **< 8s**.
-- **Excellent / hardware-not-needed:** p95 ≈ **4–6s**.
+**Latency gate (A7-shaped full-answer ceiling, NOT the old 4.3s line). Frozen constants — pre-registered before the first run:**
+- `answer_ceiling_ms = 12000` (**default hard pass/fail line** on p95; over it → fail). An owner override to a tighter ceiling is allowed but **must be recorded before running**.
+- `strong_ms = 8000` (p95 below this = strong candidate).
+- `excellent_band_ms = 4000–6000` (p95 here = excellent / hardware-not-needed).
 - The old `4.3s` is retained only as an *aspirational "excellent" mark*, never the gate (it came from the flawed fast-refusal-vs-real-answer comparison).
 - **TTFT** is measured and reported but is **not** the primary pass/fail unless/until streaming ships (Slice 1b). With receipts (Slice 1a), total answer time matters more than first token.
 
@@ -59,19 +59,21 @@ The **one shared change** to 2a's modules: `sandbox.py`'s socket guard becomes p
 1. Hard gates pass (honest + grounded + correct-absence + voice-lint).
 2. Voice and quality survive blind judging.
 3. Latency improves enough to justify switching.
-4. Operational complexity is acceptable.
+4. Operational complexity is acceptable (per the rubric below).
 
 *Don't crown the fastest brain — crown the fastest brain that is still Maez.*
 
+**Operational-complexity rubric (scored per variant, closed fields).** Not a vibe — each variant is scored on: **memory footprint** (RAM/VRAM required), **launch flags** (how much non-default configuration), **separate-server?** (does it need its own inference server process alongside the default, or reuse the existing endpoint), **MTP/speculative setup complexity** (draft-model pairing, extra runtime support), **crash/retry behavior** (does it fail clean and restart, or wedge), and **non-disturbance** (can it run without disturbing the live daemon — distinct hardware/port/process). Each is a small closed-scale field in the packet; a variant that is marginally faster but operationally heavy ranks below a simpler one of equal honesty/quality.
+
 ## 6. Statistics — two-stage, tail-aware
 
-- **Screening:** `k = 3` per probe per variant. Cheaply eliminates dishonest, broken, or obviously-slow variants.
-- **Finalists:** `k = 7` (or `10`) per probe for the top 2–3 surviving variants. Report **p50, p90/p95, max, and variance**.
+- **Screening:** `screen_k = 3` per probe per variant (frozen). Cheaply eliminates dishonest, broken, or obviously-slow variants.
+- **Finalists:** `finalist_k = 7` per probe (frozen default) for the top 2–3 surviving variants. Report **p50, p90/p95, max, and variance**. An owner override to `finalist_k = 10` is allowed but **must be recorded before running** (pre-registration).
 - **Tail risk is first-class:** a single wildly-slow run is **not** averaged away — it is reported as **tail risk**. Maez's lived feel is hurt by occasional ~20s stalls, so a variant with a good median but a bad tail is flagged, not smoothed.
 
 ## 7. Decision artifact — `BenchPacket` (content-free, advisory)
 
-Per-variant: `{hard_gate: pass/fail + reasons, latency: {p50, p90, p95, max, variance, tail_flags}, tokens_per_sec, judge: {quality, voice}, quality_per_second}`, plus `fixture_manifest_hash`, the variant config hash, and a top-level recommendation string. **Metrics + verdicts + hashes only** — no probe/answer text in the persisted packet (the content-free telemetry discipline). Raw per-variant answers go to an **ephemeral, gitignored debug dump** for the judge audit / optional human tiebreak, never the committed packet. Schema-versioned (`bench_packet.v1`).
+Per-variant: `{hard_gate: pass/fail + fail_reasons, latency: {p50, p90, p95, max, variance, tail_flags}, tokens_per_sec, judge: {quality_rank, voice_rank}, quality_per_second, ops: {<closed rubric fields>}}`, plus `fixture_manifest_hash`, the variant config hash, and a top-level recommendation (a closed enum: `go_2b_rerun` / `not_yet_too_slow` / `not_yet_dishonest` / `not_yet_voice_loss`). **`fail_reasons` is a list of CLOSED reason codes only** (e.g. `false_absence`, `grounding_below_bar`, `wrong_absence`, `voice_lint`, `over_answer_ceiling`) — **never free text**, so the packet cannot accidentally leak probe/answer content and stop being content-free. **Metrics + verdicts + hashes only** — no probe/answer/evidence text in the persisted packet (the content-free telemetry discipline). Raw per-variant answers + evidence go to an **ephemeral, gitignored debug dump** for the judge audit / optional human tiebreak, never the committed packet. Schema-versioned (`bench_packet.v1`).
 
 ## 8. Covenant / honesty invariants
 
