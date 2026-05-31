@@ -98,14 +98,22 @@ def recall_partitions_to_items(partition: dict, *, role_source_type: str):
     for row in rows:
         meta = row.get("metadata") or {}
         method = meta.get("temporal_match_method")
-        temporal_provenance = (
-            {
+        temporal_provenance = None
+        if method:
+            label = meta.get("temporal_match_label")
+            date_value = meta.get("date")
+            if not date_value and label:
+                match = _re.search(r"\b\d{4}-\d{2}-\d{2}\b", str(label))
+                if match:
+                    date_value = match.group(0)
+            temporal_provenance = {
                 "method": method,
                 "confirmed": method in ("exact_date", "month_window"),
             }
-            if method
-            else None
-        )
+            if label:
+                temporal_provenance["label"] = str(label)
+            if date_value:
+                temporal_provenance["date"] = str(date_value)[:10]
         text = _llm_client.sanitize_prompt_text(str(row.get("content") or ""))
         items.append(
             RecallItem(
