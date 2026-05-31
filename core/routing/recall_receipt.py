@@ -130,6 +130,8 @@ def resolve_ack_status(
             # to the timer/surface completion path. Score it as an ack miss.
             return AckStatus.SEND_TIMEOUT.value
         return AckStatus.NOT_REQUIRED_FAST_ANSWER.value
+    if send_result is None:
+        return AckStatus.SEND_TIMEOUT.value
     return {
         "ok": AckStatus.EMITTED.value,
         "failed": AckStatus.SEND_FAILED.value,

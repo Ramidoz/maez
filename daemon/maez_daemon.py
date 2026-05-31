@@ -1005,10 +1005,19 @@ def _focused_cognition_enabled(*, recall_stack_config=None) -> bool:
 
 
 RECALL_STATUS_INTERCEPT_FLAG = "MAEZ_RECALL_STATUS_INTERCEPT_ENABLED"
+RECALL_RECEIPT_FLAG = "MAEZ_RECALL_RECEIPT_ENABLED"
 
 
 def _recall_status_intercept_enabled() -> bool:
     return (os.environ.get(RECALL_STATUS_INTERCEPT_FLAG, "") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
+def _recall_receipt_enabled() -> bool:
+    return (os.environ.get(RECALL_RECEIPT_FLAG, "") or "").strip().lower() in {
         "1",
         "true",
         "yes",
@@ -1149,7 +1158,9 @@ def _log_recall_outcome(*, rec) -> None:
     logger.info(
         "recall_outcome schema_version=%s mode=%s turn_kind=%s outcome_class=%s "
         "denial_kind=%s had_confirmed=%s citation_coverage=%s receipt_or_na=%s "
-        "latency_ms=%s focused_elapsed_ms=%s reply_path=%s shadow_pair_id=%s",
+        "latency_ms=%s focused_elapsed_ms=%s reply_path=%s shadow_pair_id=%s "
+        "receipt_eligible=%s receipt_after_ms=%s ack_required=%s "
+        "ack_status=%s ack_emit_ms=%s",
         rec.schema_version,
         rec.mode,
         rec.turn_kind,
@@ -1162,6 +1173,11 @@ def _log_recall_outcome(*, rec) -> None:
         format_log_value(rec.focused_elapsed_ms),
         rec.reply_path.value,
         format_log_value(getattr(rec, "shadow_pair_id", "na")),
+        format_log_value(getattr(rec, "receipt_eligible", False)),
+        format_log_value(getattr(rec, "receipt_after_ms", None)),
+        format_log_value(getattr(rec, "ack_required", False)),
+        format_log_value(getattr(rec, "ack_status", "not_eligible")),
+        format_log_value(getattr(rec, "ack_emit_ms", None)),
     )
 
 
@@ -3566,6 +3582,7 @@ class MaezDaemon:
         tool_calls: "list[dict] | None" = None,
         recall_items: "list | tuple | None" = None,
         subjective_duration_owner_auth: "SubjectiveDurationOwnerAuth | None" = None,
+        send_intermediate=None,
     ) -> str:
         """Process an incoming message through full reasoning context. Returns reply string.
 
@@ -3668,6 +3685,7 @@ class MaezDaemon:
         # circuits the reply path.
         _trace = Trace.start(surface=source, user_text=text)
         _trace_t_start = time.time()
+        _turn_started_mono = time.monotonic()
         _trace_pre_audit_text: str = ""
 
         # Slice 2.5b — shadow-write the user_message turn to the
@@ -4307,6 +4325,84 @@ class MaezDaemon:
         _recall_outcome_rec = None
         _recall_shadow_attempt = False
         _recall_status_reply = None
+        _receipt_box = None
+        _receipt_timer = None
+        _receipt_eligible_for_turn = False
+        _receipt_after_ms = None
+
+        def _close_receipt_watchdog() -> None:
+            nonlocal _receipt_timer
+            try:
+                if _receipt_box is not None:
+                    _receipt_box.cancel()
+                if _receipt_timer is not None:
+                    _receipt_timer.cancel()
+            except Exception as _receipt_close_exc:
+                logger.debug(
+                    "recall receipt watchdog close skipped: %s",
+                    type(_receipt_close_exc).__name__,
+                )
+
+        def _arm_recall_receipt() -> None:
+            nonlocal _receipt_box, _receipt_timer, _receipt_eligible_for_turn, _receipt_after_ms
+            try:
+                from core.routing.recall_receipt import (
+                    RECEIPT_AFTER_MS,
+                    ReceiptAckBox,
+                    WORKING_RECEIPT_TEXT,
+                    receipt_eligible,
+                )
+
+                _receipt_after_ms = RECEIPT_AFTER_MS
+                _receipt_eligible_for_turn = receipt_eligible(
+                    flag_on=_recall_receipt_enabled(),
+                    focused_carrier_engaged=True,
+                    surface_sink_available=send_intermediate is not None,
+                )
+                if not _receipt_eligible_for_turn or send_intermediate is None:
+                    return
+                _receipt_box = ReceiptAckBox(turn_started_mono=_turn_started_mono)
+
+                def _mark_send_result(result: str, completed_mono=None) -> None:
+                    _completed = time.monotonic() if completed_mono is None else completed_mono
+                    if result == "ok":
+                        _receipt_box.mark_ok(completed_mono=_completed)
+                    elif result == "timeout":
+                        _receipt_box.mark_timeout(completed_mono=_completed)
+                    else:
+                        _receipt_box.mark_failed(completed_mono=_completed)
+
+                def _should_send_receipt() -> bool:
+                    _snap = _receipt_box.snapshot(now_mono=time.monotonic())
+                    return bool(_snap.fired and not _snap.cancelled)
+
+                def _fire_receipt() -> None:
+                    if not _receipt_box.try_mark_fired():
+                        return
+                    try:
+                        send_intermediate(
+                            WORKING_RECEIPT_TEXT,
+                            on_complete=_mark_send_result,
+                            should_send=_should_send_receipt,
+                        )
+                    except Exception as _receipt_send_exc:
+                        _receipt_box.mark_failed(completed_mono=time.monotonic())
+                        logger.debug(
+                            "recall receipt send skipped: %s",
+                            type(_receipt_send_exc).__name__,
+                        )
+
+                _elapsed_ms = (time.monotonic() - _turn_started_mono) * 1000
+                _delay_s = max(0.0, (RECEIPT_AFTER_MS - _elapsed_ms) / 1000.0)
+                _receipt_timer = threading.Timer(_delay_s, _fire_receipt)
+                _receipt_timer.daemon = True
+                _receipt_timer.start()
+            except Exception as _receipt_arm_exc:
+                logger.debug(
+                    "recall receipt watchdog arm skipped: %s",
+                    type(_receipt_arm_exc).__name__,
+                )
+
         if _recall_status_intercept_enabled():
             try:
                 from core.routing.recall_self_status import (
@@ -4429,6 +4525,7 @@ class MaezDaemon:
                     )
                     if _date_addressed_turn and _focused_working_set is not None:
                         _recall_carrier_receipt = RECALL_CARRIER_CONSULTED
+                        _arm_recall_receipt()
                     if (
                         _focused_working_set is None
                         and _dialogue_needs_or_uncertain
@@ -4449,10 +4546,13 @@ class MaezDaemon:
                             working_set=_focused_working_set,
                             legacy_prompt_chars=_legacy_prompt_chars,
                         )
-                        _focused_result = _focused_synthesize(
-                            _focused_working_set,
-                            surface=source,
-                        )
+                        try:
+                            _focused_result = _focused_synthesize(
+                                _focused_working_set,
+                                surface=source,
+                            )
+                        finally:
+                            _close_receipt_watchdog()
                         _focused_verdict = _check_groundedness(
                             _focused_result,
                             _focused_working_set,
@@ -4522,6 +4622,7 @@ class MaezDaemon:
                     except Exception:
                         pass
                 finally:
+                    _close_receipt_watchdog()
                     _rk_focused_elapsed = int((time.monotonic() - _focused_started) * 1000)
 
             if _date_addressed_turn and not _focused_used and reply is None:
@@ -4775,9 +4876,15 @@ class MaezDaemon:
         )
         try:
             from core.routing.recall_outcome import RecallOutcome, classify_outcome
+            from core.routing.recall_receipt import (
+                RECEIPT_AFTER_MS,
+                resolve_ack_status,
+            )
             from core.routing.recall_self_status import RecallStatusReceipt
             from core.routing.recall_shadow import compute_shadow_pair_id
 
+            if _receipt_after_ms is None:
+                _receipt_after_ms = RECEIPT_AFTER_MS
             if not _focused_answer_used:
                 _rk_cited_grounded = False
                 _rk_unmatched = 0
@@ -4849,6 +4956,35 @@ class MaezDaemon:
                 if _shadow_should_attempt
                 else "na"
             )
+            _receipt_snapshot = (
+                _receipt_box.snapshot(now_mono=time.monotonic())
+                if _receipt_box is not None
+                else None
+            )
+            _turn_elapsed_ms = int((time.monotonic() - _turn_started_mono) * 1000)
+            _receipt_ack_required = bool(
+                _receipt_eligible_for_turn
+                and _receipt_after_ms is not None
+                and _turn_elapsed_ms >= _receipt_after_ms
+            )
+            _receipt_send_result = (
+                _receipt_snapshot.send_result if _receipt_snapshot is not None else None
+            )
+            _receipt_fired = bool(
+                _receipt_snapshot is not None and _receipt_snapshot.fired
+            )
+            _receipt_ack_status = resolve_ack_status(
+                eligible=_receipt_eligible_for_turn,
+                fired=_receipt_fired,
+                send_result=_receipt_send_result,
+                disabled=not _recall_receipt_enabled(),
+                ack_required=_receipt_ack_required,
+            )
+            _receipt_ack_emit_ms = (
+                _receipt_snapshot.ack_emit_ms
+                if _receipt_snapshot is not None and _receipt_snapshot.send_result == "ok"
+                else None
+            )
             _recall_outcome_rec = RecallOutcome(
                 mode=_rk_mode,
                 turn_kind=_rk_turn_kind,
@@ -4867,6 +5003,11 @@ class MaezDaemon:
                 focused_elapsed_ms=_rk_focused_elapsed,
                 reply_path=_reply_path,
                 shadow_pair_id=_shadow_pair_id,
+                receipt_eligible=_receipt_eligible_for_turn,
+                receipt_after_ms=_receipt_after_ms,
+                ack_required=_receipt_ack_required,
+                ack_status=_receipt_ack_status,
+                ack_emit_ms=_receipt_ack_emit_ms,
             )
             _log_recall_outcome(
                 rec=_recall_outcome_rec
