@@ -73,9 +73,14 @@ class RecallOutcome:
     ack_emit_ms: int | None = None
 
     def __post_init__(self) -> None:
-        if isinstance(self.reply_path, ReplyPath):
-            return
-        object.__setattr__(self, "reply_path", ReplyPath(str(self.reply_path)))
+        if not isinstance(self.reply_path, ReplyPath):
+            object.__setattr__(self, "reply_path", ReplyPath(str(self.reply_path)))
+        from core.routing.recall_receipt import AckStatus
+
+        if isinstance(self.ack_status, AckStatus):
+            object.__setattr__(self, "ack_status", self.ack_status.value)
+        else:
+            object.__setattr__(self, "ack_status", AckStatus(str(self.ack_status)).value)
 
 
 def format_log_value(value) -> str:

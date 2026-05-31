@@ -12,6 +12,7 @@ from core.routing.recall_outcome import (
     is_false_absence,
     reply_path_from_mode,
 )
+from core.routing.recall_receipt import AckStatus
 
 
 class ClassifyOutcomeTest(unittest.TestCase):
@@ -279,6 +280,32 @@ class ReplyPathTest(unittest.TestCase):
                 focused_elapsed_ms=5,
                 reply_path="bogus",
             )
+
+
+class AckStatusBoundaryTest(unittest.TestCase):
+    def _rec(self, **kw):
+        base = dict(
+            mode="recall_triad",
+            turn_kind="dated",
+            outcome_class=OutcomeClass.ANSWERED_GROUNDED,
+            denial_kind="na",
+            had_confirmed=True,
+            citation_coverage=1.0,
+            receipt_or_na="consulted",
+            latency_ms=10,
+            focused_elapsed_ms=5,
+            reply_path=ReplyPath.FOCUSED,
+        )
+        base.update(kw)
+        return RecallOutcome(**base)
+
+    def test_recall_outcome_normalizes_ack_status_enum(self):
+        rec = self._rec(ack_status=AckStatus.EMITTED)
+        self.assertEqual(rec.ack_status, AckStatus.EMITTED.value)
+
+    def test_recall_outcome_rejects_unknown_ack_status(self):
+        with self.assertRaises(ValueError):
+            self._rec(ack_status="bogus")
 
 
 class GroundedContextHelperTest(unittest.TestCase):
