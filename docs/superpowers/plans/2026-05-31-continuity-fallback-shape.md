@@ -27,7 +27,7 @@
   - Add daemon-shaped regression for a real dated `May 3` prompt.
 - Existing parser guards stay in:
   - `tests/test_memory_manager.py::AbsoluteRecallCueTests.test_address_intent_battery`
-  - `tests/test_recall_flip_eval_probes.py::RecallFlipEvalProbeTests.test_dated_miss_and_incidental_variants_match_their_cue_contract`
+  - `tests/test_recall_flip_eval_probes.py::RecallFlipEvalProbeDefinitionTest.test_dated_miss_and_incidental_variants_match_their_cue_contract`
 
 ---
 
@@ -669,7 +669,7 @@ Run:
 .venv/bin/python -m unittest \
   tests.test_memory_integrity_invariant.DaemonHandleMessageContract.test_real_may_3_prompt_stays_dated_and_bypasses_continuity_shape \
   tests.test_memory_manager.AbsoluteRecallCueTests.test_address_intent_battery \
-  tests.test_recall_flip_eval_probes.RecallFlipEvalProbeTests.test_dated_miss_and_incidental_variants_match_their_cue_contract
+  tests.test_recall_flip_eval_probes.RecallFlipEvalProbeDefinitionTest.test_dated_miss_and_incidental_variants_match_their_cue_contract
 ```
 
 Expected: PASS.
