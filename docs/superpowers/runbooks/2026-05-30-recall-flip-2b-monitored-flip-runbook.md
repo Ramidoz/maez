@@ -10,9 +10,10 @@
 > only**. Claude witnesses and records; Claude does **not** flip. Codex verifies this runbook is
 > executable before it is run (commands exist, metrics emit, thresholds pinned, kill-switch real).
 >
-> Operational facts (Codex confirm at verification): daemon unit = `maez.service` controlled via
-> `systemctl --user`; log =
-> `logs/maez.log`; flags load from `config/.env`; posture log line = `recall_stack mode=…`.
+> Operational facts (Codex verified in 2a executability pass): daemon unit = `maez.service` controlled via
+> `systemctl --user`; logs =
+> `logs/maez.log*` (RotatingFileHandler, 50MB × 10; use `grep -a[h]` because historical log files can
+> contain NUL bytes); flags load from `config/.env`; posture log line = `recall_stack mode=…`.
 
 ## Step 0 — Pre-flip preconditions (ALL must pass; any fail blocks the flip)
 1. **2a proof packet = PASS.** Run the offline harness at the flip commit; every correctness/safety probe
@@ -25,20 +26,20 @@
    the heaviest turns, so *absence of bad rows is not proof*; read the false-absence count only at
    coverage ≥ 80% (the coverage reading-rule). Commands:
    ```
-   grep "shadow_outcome" logs/maez.log | grep "false_absence_candidate=true"   # must be empty/root-caused
-   grep -c "shadow_outcome" logs/maez.log                                       # completed
-   grep "shadow_skipped" logs/maez.log | sort | uniq -c                         # skipped, by reason
-   grep "recall_outcome" logs/maez.log | grep "shadow_pair_id=" | grep -v "shadow_pair_id=na" | wc -l
+   grep -ah "shadow_outcome" logs/maez.log* | grep "false_absence_candidate=true"   # must be empty/root-caused
+   grep -ah "shadow_outcome" logs/maez.log* | wc -l                                 # completed
+   grep -ah "shadow_skipped" logs/maez.log* | sort | uniq -c                        # skipped, by reason
+   grep -ah "recall_outcome" logs/maez.log* | grep "shadow_pair_id=" | grep -v "shadow_pair_id=na" | wc -l
                                                                                  # attempted denominator
    ```
-   (Codex confirm: log retention spans the full shadow window; if `shadow_outcome` is log-only, pin this
-   aggregation as the source-of-truth or land the content-free sink first.)
+   Current log retention is about 500MB by configuration; before the actual soak, confirm the
+   `logs/maez.log*` mtime range covers the entire shadow window. If not, land the content-free sink first.
 3. **Live legacy baseline.** With the triad **off**, capture p95 latency on recall turns AND ordinary
    turns separately over a representative window; **freeze** `K` (default 1.5) and `ceiling_ms = round(
    live_legacy_recall_p95 × K)` and record them **before** the flip (latency gate uses the LIVE baseline,
    not the sandbox — A6). Record `recall_outcome` class distribution as the legacy benefit baseline.
    ```
-   grep "recall_outcome" logs/maez.log | grep "mode=legacy"   # baseline distribution + latency_ms
+   grep -ah "recall_outcome" logs/maez.log* | grep "mode=legacy"   # baseline distribution + latency_ms
    ```
 4. **Pre-register the verdict rule.** Write down, before the flip, the exact **"better overall"
    aggregation** (e.g. "≥2/3 of paired live dated turns judged 'better' AND zero judged 'worse'") and the
@@ -53,7 +54,7 @@ grep -q '^MAEZ_RECALL_TRIAD_ENABLED=' config/.env \
   || printf '\nMAEZ_RECALL_TRIAD_ENABLED=1\n' >> config/.env
 systemctl --user restart maez.service
 # Confirm posture:
-grep "recall_stack mode=" logs/maez.log | tail -1        # MUST show mode=recall_triad reason=bundle_enabled
+grep -ah "recall_stack mode=" logs/maez.log* | tail -1   # MUST show mode=recall_triad reason=bundle_enabled
 ```
 If the posture log does not show `mode=recall_triad`, **revert immediately** (Step 4 kill-switch) and
 root-cause — do not soak on an unconfirmed flip.
@@ -70,10 +71,12 @@ honest-empty, ≥1 both-shaped, ≥10 ordinary non-recall turns.
   # OFF block:
   sed -i 's/^MAEZ_RECALL_TRIAD_ENABLED=.*/MAEZ_RECALL_TRIAD_ENABLED=0/' config/.env
   systemctl --user restart maez.service
-  grep "recall_stack mode=" logs/maez.log | tail -1        # mode=legacy
+  grep -ah "recall_stack mode=" logs/maez.log* | tail -1   # mode=legacy
   # (ask Maez "is your dated recall reachable?" → expect the off-by-config self-status reply)
-  # Orphan check (Codex confirms DB path/query in 2a executability pass):
-  # sqlite3 <focused-runs-db> "select count(*) from focused_cognition_runs where created_at >= '<off-block-start>';"
+  # Orphan check (DB verified in 2a executability pass; created_at is UNIX seconds):
+  OFF_START_EPOCH=$(date +%s)
+  sqlite3 memory/routing_observation.db \
+    "select count(*) from focused_cognition_runs where created_at >= ${OFF_START_EPOCH};"
   # back ON:
   sed -i 's/^MAEZ_RECALL_TRIAD_ENABLED=.*/MAEZ_RECALL_TRIAD_ENABLED=1/' config/.env
   systemctl --user restart maez.service
@@ -110,7 +113,7 @@ absolute `C_floor` coverage.
 ```
 sed -i 's/^MAEZ_RECALL_TRIAD_ENABLED=.*/MAEZ_RECALL_TRIAD_ENABLED=0/' config/.env  # or delete the line
 systemctl --user restart maez.service
-grep "recall_stack mode=" logs/maez.log | tail -1        # MUST show mode=legacy
+grep -ah "recall_stack mode=" logs/maez.log* | tail -1   # MUST show mode=legacy
 ```
 
 ## Step 5 — Decision artifact (Visionary audit fields)
@@ -127,7 +130,7 @@ After the disposition is recorded:
 sed -i '/^MAEZ_RECALL_SHADOW_ENABLED=/d' config/.env     # shadow off
 OFF=$(stat -c%s logs/maez.log 2>/dev/null || echo 0)
 systemctl --user restart maez.service
-tail -c +$((OFF+1)) logs/maez.log | grep -c "shadow_outcome"   # after restart: confirm 0 new shadow rows
+tail -c +$((OFF+1)) logs/maez.log | grep -ac "shadow_outcome"  # after restart: confirm 0 new shadow rows
 ```
 Record the teardown verification beside the disposition; **schedule code removal**. **Forgotten-teardown
 guard:** a check (CI or log-grep) that flags any `shadow_outcome` row appearing **after** the recorded
@@ -135,6 +138,6 @@ disposition date — so the rehearsal can't silently outlive its purpose.
 
 ## Notes
 - The over-consultation gate clause is observational (no field) until a signal is added — named, not silent.
-- "Codex confirm" markers: exact log-rotation/retention, the orphaned-`focused_cognition_runs` query, and
-  that `shadow_outcome` aggregation is queryable over the full window — Codex's executability pass resolves
-  these before the runbook is run.
+- The 2a executability pass resolved the concrete DB path/query for focused runs and the log command shape.
+  The only live-time check left is whether the current rotated log mtime range covers the chosen shadow
+  window; if not, land the content-free sink before the soak.
