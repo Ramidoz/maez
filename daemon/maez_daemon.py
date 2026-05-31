@@ -4334,6 +4334,13 @@ class MaezDaemon:
                 temporal_anchor_brief=_temporal_anchor_brief_text,
             )
         )
+        if _continuity_shape_instruction_text:
+            messages.append(
+                {"role": "system", "content": _continuity_shape_instruction_text}
+            )
+            system_part_capture.append(
+                ("continuity_shape", _continuity_shape_instruction_text)
+            )
         messages = _consolidate_system_messages(
             messages,
             final_system_part=turn_final_context,

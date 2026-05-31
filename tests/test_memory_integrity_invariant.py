@@ -694,6 +694,61 @@ class DaemonHandleMessageContract(unittest.TestCase):
         self.assertNotIn("messages", captured, "truly-empty guard must bypass legacy LLM")
         self.assertTrue(captured.get("trace_written"), "normal tail must still run")
 
+    def test_continuity_with_chat_gets_shape_instruction_not_deterministic_guard(self):
+        from daemon import maez_daemon
+
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+
+        with self._handle_message_mock_stack(
+            maez_daemon,
+            captured,
+            reply=(
+                "We were going through the dated recall S5 checks; "
+                "the 3 may bugs phrase was not established yet."
+            ),
+        ), mock.patch.dict(
+            os.environ,
+            {"MAEZ_RECALL_TRIAD_ENABLED": "0"},
+            clear=False,
+        ):
+            reply = maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                "What were we just talking about, the 3 may bugs?",
+                source="telegram_surface",
+                chat_history=[
+                    {
+                        "content": (
+                            "Rohit: What happened on January 3?\n"
+                            "Maez: I won't answer it from recent chat or guesswork."
+                        )
+                    },
+                    {
+                        "content": (
+                            "Rohit: What did we note around May 12?\n"
+                            "Maez: I won't answer it from recent chat or guesswork."
+                        )
+                    },
+                ],
+            )
+
+        self.assertIn("dated recall S5 checks", reply)
+        self.assertNotIn("not sure what you mean", reply.lower())
+        self.assertIn("messages", captured)
+        prompt_text = "\n".join(str(m.get("content") or "") for m in captured["messages"])
+        system_messages = [
+            m for m in captured["messages"] if m.get("role") == "system"
+        ]
+        self.assertEqual(len(system_messages), 1)
+        self.assertIn("CONTINUITY SHAPE", prompt_text)
+        self.assertIn(
+            "Do not reinterpret embedded tokens such as '3 may' as calendar dates",
+            prompt_text,
+        )
+        self.assertIn("What happened on January 3?", prompt_text)
+        self.assertNotIn("I don't have a record", reply)
+        self.assertNotIn("May 3rd", reply)
+
     def test_fast_synthesis_fires_no_progress_receipt(self):
         from daemon import maez_daemon
         from core.routing.focused_cognition import FocusedResult, GroundednessVerdict
