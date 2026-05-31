@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import argparse
 import json
 import math
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -25,10 +27,13 @@ from scripts.brain_bench.gates import (
     voice_lint,
 )
 from scripts.brain_bench.judge import BlindAnswer, judge_pairwise
-from scripts.brain_bench.variants import VariantRegistry, resolve_judge_endpoint
+from scripts.brain_bench.variants import ConfigSource, VariantRegistry, load_variants, resolve_judge_endpoint
+from scripts.recall_flip_eval import harness as eval_harness
 from scripts.recall_flip_eval.sandbox import no_egress
 
-DEFAULT_DEBUG_DUMP_DIR = Path("logs/brain_bench_debug")
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_DEBUG_DUMP_DIR = REPO_ROOT / "logs" / "brain_bench_debug"
+DEFAULT_PACKET_DIR = REPO_ROOT / "logs" / "brain_bench_packets"
 
 
 class BenchmarkConfigError(ValueError):
@@ -85,7 +90,7 @@ def write_debug_dump(
     if directory != DEFAULT_DEBUG_DUMP_DIR:
         raise BenchmarkConfigError("debug dumps must stay in logs/brain_bench_debug")
     directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"brain-bench-debug-{int(time.time() * 1000)}.json"
+    path = directory / f"brain-bench-debug-{int(time.time() * 1000)}-{uuid.uuid4().hex}.json"
     path.write_text(
         json.dumps(
             {
@@ -312,7 +317,7 @@ def run_benchmark(
 def run_full_battery(
     registry: VariantRegistry,
     *,
-    fixture_manifest_hash: str,
+    fixture_manifest_hash: str | None = None,
     build_probe_run_fn: Callable[..., Callable],
     call_judge: Callable | None = None,
     judge_base_url: str = "http://127.0.0.1:8081",
@@ -323,10 +328,11 @@ def run_full_battery(
         if judge_port in {variant.port for variant in registry}:
             raise BenchmarkConfigError("judge port must be distinct from variant ports")
 
+    internal_fixture_hash = fixture_manifest_hash or ("0" * 64)
     screen_probe_run = build_probe_run_fn(k=SCREEN_K)
     screen_packet = run_benchmark(
         registry,
-        fixture_manifest_hash=fixture_manifest_hash,
+        fixture_manifest_hash=internal_fixture_hash,
         probe_run=screen_probe_run,
         call_judge=None,
         judge_base_url=judge_base_url,
@@ -338,6 +344,9 @@ def run_full_battery(
         if report.hard_pass and not report.over_ceiling
     ]
     if not survivors:
+        if fixture_manifest_hash is None:
+            fixture_manifest_hash = _fixture_manifest_hash_from_runs(screen_probe_run)
+            return _replace_packet_fixture_hash(screen_packet, fixture_manifest_hash)
         return screen_packet
 
     ranked = rank_variants(
@@ -359,7 +368,7 @@ def run_full_battery(
     finalist_probe_run = build_probe_run_fn(k=finalist_k)
     finalist_packet = run_benchmark(
         finalist_registry,
-        fixture_manifest_hash=fixture_manifest_hash,
+        fixture_manifest_hash=internal_fixture_hash,
         probe_run=finalist_probe_run,
         call_judge=call_judge,
         judge_base_url=judge_base_url,
@@ -369,6 +378,11 @@ def run_full_battery(
         final_reports.get(variant.label, screen_reports[variant.label])
         for variant in registry
     )
+    if fixture_manifest_hash is None:
+        fixture_manifest_hash = _fixture_manifest_hash_from_runs(
+            screen_probe_run,
+            finalist_probe_run,
+        )
     return BenchPacket(
         schema_version="bench_packet.v3",
         fixture_manifest_hash=fixture_manifest_hash,
@@ -389,3 +403,78 @@ def run_full_battery(
             ]
         ),
     )
+
+
+def _fixture_manifest_hash_from_runs(*probe_runs) -> str:
+    entries = []
+    for probe_run in probe_runs:
+        entries.extend(getattr(probe_run, "fixture_manifest", ()) or ())
+    if not entries:
+        return "0" * 64
+    return eval_harness._fixture_manifest_hash(entries)
+
+
+def _replace_packet_fixture_hash(packet: BenchPacket, fixture_manifest_hash: str) -> BenchPacket:
+    return BenchPacket(
+        schema_version=packet.schema_version,
+        fixture_manifest_hash=fixture_manifest_hash,
+        variant_config_hash=packet.variant_config_hash,
+        variant_config_source=packet.variant_config_source,
+        variants=packet.variants,
+        screen_result=packet.screen_result,
+    )
+
+
+def _default_packet_path() -> Path:
+    return DEFAULT_PACKET_DIR / f"brain-bench-packet-{int(time.time() * 1000)}-{uuid.uuid4().hex}.json"
+
+
+def _safe_out_path(raw: str | None) -> Path:
+    path = Path(raw).expanduser().resolve() if raw else _default_packet_path()
+    try:
+        path.relative_to(DEFAULT_DEBUG_DUMP_DIR.resolve())
+    except ValueError:
+        return path
+    raise BenchmarkConfigError("packet output must not be inside logs/brain_bench_debug")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--variants-config")
+    parser.add_argument("--judge-base-url", default="http://127.0.0.1:8081")
+    parser.add_argument("--finalist-k", type=int, default=FINALIST_K)
+    parser.add_argument("--out")
+    args = parser.parse_args(argv)
+    if not args.variants_config:
+        raise BenchmarkConfigError("--variants-config is required")
+
+    config_path = Path(args.variants_config).expanduser().resolve()
+    try:
+        raw_config = config_path.read_text()
+    except OSError as exc:
+        raise BenchmarkConfigError(f"cannot read variants config: {config_path}") from exc
+
+    registry = load_variants(raw_config, source=ConfigSource.FILE)
+    out_path = _safe_out_path(args.out)
+    from scripts.brain_bench.probe_runner import build_probe_run
+
+    packet = run_full_battery(
+        registry,
+        build_probe_run_fn=build_probe_run,
+        judge_base_url=args.judge_base_url,
+        finalist_k=args.finalist_k,
+    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(packet.to_dict(), indent=2, sort_keys=True) + "\n")
+    debug_path = write_debug_dump(
+        records=[],
+        fixture_manifest_hash=packet.fixture_manifest_hash,
+        variant_config_hash=packet.variant_config_hash,
+    )
+    print(f"packet={out_path}")
+    print(f"debug_dump={debug_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

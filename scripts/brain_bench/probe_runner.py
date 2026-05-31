@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -40,6 +40,7 @@ class ProbeRun:
     clock: Callable[[], float] | None = None
     run_id: str = "brain-bench"
     ops_evidence: OpsRubric = DEFAULT_OPS_EVIDENCE
+    fixture_manifest: list[dict] = field(default_factory=list)
 
     def __call__(self, variant: Variant) -> tuple[ProbeSample, ...]:
         root = Path(os.environ.get("MAEZ_HOME", "")).resolve()
@@ -61,11 +62,12 @@ class ProbeRun:
             with sandbox.sandbox_env(probe_root):
                 sandbox.patch_memory_manager_base_db(probe_root)
                 sandbox.assert_sandbox(probe_root)
-                expected_fixture_ids, _fixture_manifest = harness._seed_for_probe(
+                expected_fixture_ids, fixture_manifest = harness._seed_for_probe(
                     probe_root,
                     probe,
                     self.run_id,
                 )
+                self.fixture_manifest.extend(fixture_manifest)
                 rows = []
                 for index in range(self.k):
                     text = probe.variants[index % len(probe.variants)]

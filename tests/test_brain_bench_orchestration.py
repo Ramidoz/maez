@@ -1,5 +1,6 @@
 import contextlib
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -126,6 +127,42 @@ class DebugDumpTests(unittest.TestCase):
                 fixture_manifest_hash="f" * 64,
                 variant_config_hash="c" * 64,
             )
+
+    def test_debug_dump_stays_repo_quarantined_from_other_cwd(self):
+        prior = Path.cwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                os.chdir(tmp)
+                path = write_debug_dump(
+                    records=[],
+                    fixture_manifest_hash="f" * 64,
+                    variant_config_hash="c" * 64,
+                )
+            finally:
+                os.chdir(prior)
+        path.unlink()
+
+        self.assertTrue(path.resolve().is_relative_to(DEFAULT_DEBUG_DUMP_DIR.resolve()))
+
+    def test_debug_dump_names_do_not_collide_in_same_millisecond(self):
+        with mock.patch("scripts.brain_bench.bench.time.time", return_value=1.234):
+            first = write_debug_dump(
+                records=[{"answer": "first"}],
+                fixture_manifest_hash="f" * 64,
+                variant_config_hash="c" * 64,
+            )
+            second = write_debug_dump(
+                records=[{"answer": "second"}],
+                fixture_manifest_hash="f" * 64,
+                variant_config_hash="c" * 64,
+            )
+        try:
+            self.assertNotEqual(first, second)
+            self.assertIn("first", first.read_text())
+            self.assertIn("second", second.read_text())
+        finally:
+            first.unlink(missing_ok=True)
+            second.unlink(missing_ok=True)
 
 
 class ScreenResultPrecedenceTests(unittest.TestCase):
