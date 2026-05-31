@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from datetime import date
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -240,6 +241,48 @@ class RecallFlipEvalProbeDefinitionTest(unittest.TestCase):
 
         self.assertTrue(unsafe)
         self.assertIn("wrong_fixture_id", codes)
+
+    def test_harness_seeds_specific_answerable_fixture_content(self):
+        from memory.memory_manager import MemoryManager
+        from scripts.recall_flip_eval import harness, probes
+
+        with tempfile.TemporaryDirectory() as root, sandbox.sandbox_env(root):
+            sandbox.patch_memory_manager_base_db(root)
+            manifests = []
+            for probe_id in ("multi_year", "type_rule", "both_shaped", "dated_hit"):
+                _expected_ids, fixture_manifest = harness._seed_for_probe(
+                    Path(root),
+                    probes.get_probe(probe_id),
+                    "answerable-fixtures-test",
+                )
+                manifests.extend(fixture_manifest)
+
+            fixture_ids = [entry["durable_id"] for entry in manifests]
+            stored = MemoryManager().core.get(ids=fixture_ids, include=["documents", "metadatas"])
+
+        by_id = dict(zip(stored["ids"], stored["documents"], strict=True))
+        self.assertEqual(set(by_id), set(fixture_ids))
+        combined = "\n".join(by_id.values())
+        self.assertNotIn("SANDBOX", combined)
+        self.assertNotIn("TOKEN", combined)
+        self.assertIn("root disk crossed a watch threshold", combined)
+        self.assertIn("router failover stayed stable", combined)
+        self.assertIn("dated answer should mention April 27", combined)
+        self.assertIn("historical backup-log", combined)
+        self.assertIn("not current-state evidence", combined)
+
+        multi_year_entries = [entry for entry in manifests if entry["probe_id"] == "multi_year"]
+        self.assertEqual(len(multi_year_entries), 2)
+        right_doc = by_id[
+            next(entry["durable_id"] for entry in multi_year_entries if entry["variant_id"] == "right_year")
+        ]
+        wrong_doc = by_id[
+            next(entry["durable_id"] for entry in multi_year_entries if entry["variant_id"] == "wrong_year")
+        ]
+        self.assertIn("April 27, 2026", right_doc)
+        self.assertIn("current-year", right_doc)
+        self.assertIn("April 27, 2025", wrong_doc)
+        self.assertIn("decoy", wrong_doc)
 
     def test_over_citing_unknown_evidence_is_not_grounded(self):
         from core.routing.focused_cognition import (

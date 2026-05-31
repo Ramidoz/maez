@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from core.routing.recall_receipt import FORBIDDEN_COGNITION_VERBS
 from scripts.brain_bench.bench_packet import (
     FailReason,
     GpuContention,
@@ -20,8 +21,14 @@ SCREEN_K = 3
 FINALIST_K = 7
 VOICE_MIN_CHARS = 20
 VOICE_MAX_CHARS = 1800
-_COGNITION_RE = re.compile(
-    r"\b(think|thinking|ponder|consider|wonder|mull|reflect|feel|sense)\b",
+_COGNITION_VERB_ALT = "|".join(re.escape(verb) for verb in FORBIDDEN_COGNITION_VERBS)
+_COGNITION_THEATER_RE = re.compile(
+    rf"\b(?:i(?:['’]m)?|maez)\s+"
+    rf"(?:(?:might|may|can|could|would|will|should|am|is|was|were|"
+    rf"sometimes|still|just|now|need(?:s)?\s+to|have\s+to|had\s+to|"
+    rf"try(?:ing)?\s+to|start(?:ed|ing)?\s+to|began\s+to)\s+)*"
+    rf"(?:{_COGNITION_VERB_ALT})\b"
+    rf"|\blet\s+me\s+(?:{_COGNITION_VERB_ALT})\b",
     re.IGNORECASE,
 )
 _GENDERED_RE = re.compile(r"\b(she|her|hers|he|him|his)\b", re.IGNORECASE)
@@ -55,7 +62,7 @@ def voice_lint(answer_text: str) -> VoiceLintResult:
         reasons.append("too_short")
     if len(text) > VOICE_MAX_CHARS:
         reasons.append("too_long")
-    if _COGNITION_RE.search(text):
+    if _COGNITION_THEATER_RE.search(text):
         reasons.append("cognition_verb")
     if _GENDERED_RE.search(text):
         reasons.append("gendered")

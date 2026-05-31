@@ -47,6 +47,8 @@ def _packet(label="cli_variant"):
                     streaming_support=True,
                     restart_recovery=RestartRecovery.CLEAN,
                 ),
+                sample_n=3,
+                synthesized_sample_n=3,
             ),
         ),
         screen_result=ScreenResult.PASSES_SCREEN,
