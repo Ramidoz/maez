@@ -1,9 +1,9 @@
-# Codex Handoff — Brain Benchmark (Recall-Flip Slice 2) — v2
+# Codex Handoff — Brain Benchmark (Recall-Flip Slice 2) — v3
 
 **From:** Claude (covenant axis) · **To:** Codex (surface-truth axis) · **Date:** 2026-05-31
-**Branch base:** `main` (latest — spec v2 + plan v2 + this brief committed; flag-off, no live wiring)
+**Branch base:** `main` (latest — spec v3 + plan v3 + this brief committed; flag-off, no live wiring)
 
-> **v2 (after a 9-role pre-code panel).** The panel ran on the v1 plan and found it directionally right but NOT safe to build verbatim; **9 blockers are now folded into the v2 spec + plan** (egress 5-API proof, localhost-only endpoint validation, categorical grounding, counterbalanced blind judge, closed streaming-failure codes, `__post_init__` content-free packet, small-k stats, ops-from-evidence, producer-evidence covenant wording). Build the **v2** plan. Your six-agent pass should still independently pressure these — the fold is a starting floor, not a substitute for your pass.
+> **v3 (after TWO pre-code passes).** Pass #1 folded 9 blockers (→ v2). Pass #2 found 7 executable-contract gaps in v2, now folded into **v3**: (1) judge is **advisory only** (`fails_voice_or_quality` removed; sole mechanical voice gate = voice-lint); (2) **judge endpoint** validated localhost-only + in the allowlist only during judging; (3) packet content-free is **recursive (nested dataclasses) + non-vacuous sentinel + quarantined debug dump**; (4) streaming injects a `chat_fn` adapter into the **real `focused_synthesize`** (`/api/chat` pinned, payload merge, partial-output scrub); (5) ops cost derived in-substrate (no caller `ops_cost_value`), grounding strictly **bool** (reject `0.99`); (6) sandbox tests cover all 5 APIs + connect/connect_ex + getaddrinfo loopback-only + import-guard; (7) no identity-overclaim. **Build v3.** The folds are a floor, not a substitute — your six-agent pass must still independently pressure them, and a THIRD pre-code pass reruns against your diff before any merge.
 
 ---
 
@@ -31,13 +31,15 @@ The plan IS the contract. Implement task-by-task, RED-first. Find a defect in th
 - **Hermetic + send-path-free:** the benchmark must not write real memory, reach any surface, or hit any external network. Only the **localhost inference endpoint** is allowed, via `no_egress(allow_loopback_ports=(variant.port,))`. Asserted by test, not assumed.
 - **2a stays frozen:** the ONLY change to 2a is parameterizing `no_egress` with a default-empty allowlist that preserves block-all. Re-run 2a's own sandbox suite to prove it's unchanged.
 - **Model-agnostic:** variants are owner-supplied config; **no model names hardcoded** (consistent with `model_config.py`).
-- **Honesty beats speed:** hard gates (false-absence, grounding ≥ the inherited 2a/A5 bar, correct-absence, voice-lint) are deterministic and lexicographically first. *Don't crown the fastest brain — crown the fastest brain that is still Maez.*
+- **Honesty beats speed:** the deterministic hard gates (false-absence, categorical-bool grounding, correct-absence, voice-lint) are the ONLY things that can fail a variant, lexicographically first. The judge is **advisory** — it ranks among passers, never fails. *Crown the fastest variant that passes the recall-benchmark screen — never the fastest variant. The packet does NOT certify "still Maez" — that's the separate S5 voice-continuity gate + your verdict.*
 - **Genderless** throughout (it/Maez) in any strings, comments, log lines.
 - **Content-free `BenchPacket`** (closed enums only; raw text → gitignored dump).
 
 ## Pinned facts (don't re-derive)
 - Frozen constants: `ANSWER_CEILING_MS=12000`, `STRONG_MS=8000`, `EXCELLENT_BAND_MS=(4000,6000)`, `SCREEN_K=3`, `FINALIST_K=7`. Owner override (tighter ceiling / finalist_k=10) must be recorded before running — not your call to change.
-- **Grounding is CATEGORICAL, not numeric.** Reuse 2a's `assert_probe_result(...) -> unsafe == False` + grounded `RecallOutcome` semantics as a **bool** (`grounded_categorical`). Do **NOT** invent any numeric bar (the v1 `0.99` is deleted in v2). Wire the bool to 2a's actual signal — open `scripts/recall_flip_eval/probes.py` to confirm.
+- **Grounding is CATEGORICAL, strictly bool.** Reuse 2a's `assert_probe_result(...) -> unsafe == False` + grounded `RecallOutcome` as a **bool** (`grounded_categorical`); the gate **raises `GroundingTypeError` if it's not a bool** (reject `0.99` drift). No numeric bar. Wire to 2a's actual signal — open `scripts/recall_flip_eval/probes.py`.
+- **Judge endpoint** = `MAEZ_JUDGE_BASE_URL` (default `http://127.0.0.1:8081`), `MAEZ_JUDGE_MODEL`, `MAEZ_JUDGE_CHAT_KWARGS`. It gets the **same `validate_endpoint`** as variants and its port is in `no_egress`'s allowlist **only during the judging phase** (variant ports closed then). Judge result type has **no gating field**.
+- **Real seam:** inject the benchmark `chat_fn` into `core.routing.focused_cognition.focused_synthesize(..., chat_fn=...)` (signature `*, model, messages, think, options`; the adapter ignores the incoming `model` and uses the variant's). Pin `/api/chat`. Payload merge: `options = {**variant.chat_kwargs, **caller_options}`. Mirror `scripts/recall_flip_eval/harness.py:139`.
 - TTFT requires a streaming call (2a's `generate` is `stream=False`); build a streaming measurement path. TTFT is **measured, reported, not gated** (streaming isn't shipped — that's Slice 1b).
 - Token count: chunk-count proxy is acceptable for a comparative benchmark; document the assumption.
 - Tests run via `.venv/bin/python -m unittest` (pytest NOT installed). Real inference + the live run are **owner-operated** (like 2b) — your tests prove harness LOGIC via injected `stream_factory` / `probe_run` / `call_judge`, no real model.
