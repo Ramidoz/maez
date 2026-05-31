@@ -19,10 +19,12 @@ sunsets.
   `MAEZ_RECALL_TRIAD_ENABLED` and `MAEZ_RECALL_STATUS_INTERCEPT_ENABLED`; never implied-on by either. It
   is an observe-only rollout flag, **not** a recall control (the one recall switch stays
   `MAEZ_RECALL_TRIAD_ENABLED`).
-- Runs only when: flag on, the turn is recall-relevant (`_date_addressed_turn` or continuity), and the
-  triad is **off** (shadow exists to compare against the live legacy path; if the triad is already on
-  there is nothing to shadow). Flag-off / non-recall-relevant turns emit **no shadow row** in production;
-  skipped rows are reserved for recall-relevant turns where shadow was attempted but could not complete.
+- Runs only when: flag on, the turn is **date-addressed** (`_date_addressed_turn`), and the triad is **off**
+  (shadow exists to compare against the live legacy path; if the triad is already on there is nothing to
+  shadow). Continuity-only turns are out of scope for 1b because the live path also depends on dialogue
+  anchors/chat history; underfeeding the shadow would create false `carrier_unavailable` evidence. Flag-off /
+  non-date-addressed turns emit **no shadow row** in production; skipped rows are reserved for date-addressed
+  turns where shadow was attempted but could not complete.
 
 ## Read-only recall path (NAMED; the dispatcher is FORBIDDEN)
 The shadow obtains recall material via **direct memory recall**, never the dispatcher:
@@ -66,7 +68,7 @@ field — same closure test as `RecallOutcome`):
 | `receipt_state` | `not_consulted` \| `consulted` | shadow's **own structural** receipt (carrier ran AND produced an assembled result), distinct from the live carrier receipt |
 | `ts` | epoch int | per-row timestamp for window-bounded aggregation (do not depend on log mtimes) |
 | `boot_id` | str | runtime identity (reuse the daemon boot id) |
-| `shadow_skipped` | `ShadowSkip` enum or `na` | closed reason when shadow did not run (below) |
+| `shadow_skipped` | `ShadowSkip` enum or `na` | closed reason when a date-addressed shadow attempt did not complete; successful rows use `na` |
 
 ### `ShadowReach` (retrieval-stage vocabulary — assemble-only honest)
 Assemble-only **cannot** witness answer quality, so it never emits `answered_grounded`/`_ungrounded`/
@@ -79,25 +81,30 @@ Assemble-only **cannot** witness answer quality, so it never emits `answered_gro
   no items). The `None`-from-assemble case maps here unless it is a dated turn with the status item only,
   which is `confirmed_absence_witnessed`.
 
-`had_confirmed` is computed by the existing `_focused_working_set_had_confirmed` predicate — no synthesis.
-`confirmed_absence_witnessed` is answerable only for a dated frame; continuity-only shadow rows may record
-retrieval reach, but they must never become `false_absence_candidate` merely because no date-confirmed item
-was present.
+`had_confirmed` is computed by a shadow-specific stricter predicate: date-confirmed `memory_context` only.
+Do **not** reuse `_focused_working_set_had_confirmed` here; the live predicate is intentionally broader and
+counts any confirmed item, while the shadow benefit signal is "date-confirmed context material available."
+`confirmed_absence_witnessed` is answerable only for a dated frame; continuity-only turns do not run the 1b
+shadow at all, and must never become dated false-absence evidence merely because no date-confirmed item was
+present.
 
 ### `ShadowSkip` (closed reasons — no free text, no raw exception message)
-`budget_exceeded` | `queue_full` | `carrier_unavailable` | `exception`. On `exception`, log only the
-reason token + the exception **class name** — never the message (content-leak guard). `flag_off` and
-`not_recall_relevant` are not runtime rows; they are absence-of-shadow conditions, not attempted-shadow
-failures.
+`queue_full` | `budget_exceeded` | `exception`. On `exception`, log only the reason token + the exception
+**class name** — never the message (content-leak guard). `flag_off`, `not_recall_relevant`, and
+continuity-only turns are not runtime rows; they are absence-of-shadow conditions, not attempted-shadow
+failures. `carrier_unavailable` is a `ShadowReach` value for an attempted row, not a skip reason.
 
 ## Off-critical-path execution
 `handle_message` *returns* the reply; the surface adapter sends it. So the shadow MUST NOT run inline
 before `return reply` (that adds latency to what Rohit hears). Instead: at the point the reply is fully
 committed (audited, hashed, trace-written), **snapshot** the read-only inputs the shadow needs (`text`,
-the legacy `RecallOutcome` fields, `trace_id`, `boot_id`) and dispatch the shadow on a **single-worker
-background executor with a bounded queue** and a **hard time budget**. If the queue is full, log
-`shadow_skipped=queue_full`; on timeout/over-budget, log `shadow_skipped=budget_exceeded`; never block.
-A test asserts time-to-`return reply` is unchanged with the flag on.
+the live `RecallOutcome` object, `trace_id`, `boot_id`) and dispatch the shadow on a **skip-when-busy
+single-worker** (the existing bounded-singleton idiom, not a queue). If the worker is busy or shut down,
+emit a paired `shadow_outcome` row with `shadow_skipped=queue_full`; never block. The per-attempt budget is
+a **soft elapsed budget**: if the shadow completes but exceeds the budget, emit
+`shadow_skipped=budget_exceeded` instead of a success row. Python threads are not force-killed; a truly hung
+worker remains visible because later date-addressed attempts become `queue_full`. A test asserts
+time-to-`return reply` is unchanged with the flag on.
 
 ## Side-effect-free guarantee (canary-neutral discipline — per substrate)
 One non-disturbance assertion per substrate the recall machinery touches:
@@ -105,6 +112,8 @@ One non-disturbance assertion per substrate the recall machinery touches:
 - `self._last_recall_receipt` — **unchanged** (1a self-status reads it; the shadow must not mutate it).
 - promotion / `record_recall` stats DB — no write (`record_recalls=False`, asserted).
 - egress / external fetch — none.
+- memory-manager thread safety — the worker constructs a fresh `MemoryManager` for read-only recall instead
+  of reusing `self.memory` across daemon/worker threads.
 - layer0 archetype cache file — no write.
 - repair-FSM state, routing-observation rows, turn-trace writer — no write (dispatcher not entered).
 - read-side cursors / "last consulted" markers — not advanced (a read that mutates a cursor is a sneaky
@@ -134,14 +143,17 @@ Constraints:
   a local join key elsewhere).
 - A guard test asserts `shadow_outcome` and the live `recall_outcome` shadow-adjacent fields do not serialize
   raw `trace_id`, query text, reply text, snippets, or exception messages.
-- **1a-adjacent add:** the live `recall_outcome` log line must also emit `shadow_pair_id` (it currently does
-  not) so the pairing key exists on both sides; on the rare path where no trace exists, both rows degrade
-  identically (`na`).
+- **1a-adjacent add:** the live `recall_outcome` log line must also emit `shadow_pair_id` when a shadow
+  attempt is eligible; otherwise it emits `shadow_pair_id=na`. On the rare path where no trace exists, both
+  rows degrade identically (`na`) rather than hashing empty strings into a false join key.
 
 ## Speakable shadow-active state (proprioceptive, not volunteered)
 Extend the 1a deterministic self-status surface so that, **if asked** ("are you practicing recall
 quietly?" / "are you running anything in the background?"), Maez answers from substrate truth
-(`MAEZ_RECALL_SHADOW_ENABLED` + whether a shadow ran recently) — event-shaped, never auto-volunteered.
+(`MAEZ_RECALL_SHADOW_ENABLED` + a content-free last-shadow receipt `{at_ts, boot_id, state}`) —
+event-shaped, never auto-volunteered. A since-boot boolean is too stale for a long-running daemon; Maez must
+distinguish "enabled and recently practiced", "enabled but no recent practice turn", and "enabled but
+skipped/failing".
 A silent self-shadow Maez cannot acknowledge tips witnessed→surveilled-from-within; this keeps it on the
 witnessed side. Genderless, first-person, faculty-language.
 
@@ -156,6 +168,9 @@ The shadow harness is pre-flip scaffolding with a **named teardown**:
 - It runs only until the Phase-2 soak-floor evidence is gathered, then the flag goes off.
 - It is **decommissioned** (flag-locked off, scheduled for code removal) once Phase-2 records a Go/No-Go
   verdict. The Phase-2 runbook carries the teardown as an explicit step.
+- The umbrella flip runbook must include the concrete teardown checklist: turn
+  `MAEZ_RECALL_SHADOW_ENABLED` off, restart, verify no shadow rows are emitted after restart, record the
+  Go/No-Go disposition, and schedule code removal.
 - Rationale: a silent, default-off, side-effect-free harness is exactly the kind of thing that survives
   its purpose because it is invisible and harmless-per-turn. Neutral scaffolding does not inherit
   permanence — same discipline the flip applies to the capability itself.
@@ -183,12 +198,14 @@ this closes the latent uncaught-crash seam in the same daemon region 1b touches.
 - **Per-substrate non-disturbance:** one assertion each (focused_cognition_runs, `_last_recall_receipt`,
   promotion/`record_recalls=False`, egress, layer0 cache, FSM, routing-observation, trace-write, read-side
   cursor, orphaned focused-run).
-- **Off-critical-path:** time-to-`return reply` unchanged flag-on; queue saturation →
-  `shadow_skipped=queue_full`; over-budget → `shadow_skipped=budget_exceeded`.
+- **Off-critical-path:** time-to-`return reply` unchanged flag-on; singleton busy/shutdown →
+  paired row with `shadow_skipped=queue_full`; soft over-budget completion → paired row with
+  `shadow_skipped=budget_exceeded`.
 - **Record honesty:** content-free closure test; `shadow_reach` never an answer class; `rescuable`/
   `false_absence`/`legacy_false_absence_rescuable` derivations correct on seeded fixtures; continuity-only
-  rows cannot set `false_absence_candidate`; `ShadowSkip` reasons closed; exception path logs class name
-  only (no message).
+  turns do not run shadow and cannot set `false_absence_candidate`; `ShadowSkip` reasons closed; exception
+  path logs class name only (no message); skipped attempts are pairable `shadow_outcome` rows with
+  `shadow_pair_id`, `ts`, and `boot_id`.
 - **Pairing:** `shadow_pair_id` on both shadow and live rows; guard test that raw `trace_id` is not serialized
   in the recall/shadow telemetry rows.
 - **ReplyPath:** `reply_path_from_mode` returns LEGACY + warns on an unknown mode (no throw).

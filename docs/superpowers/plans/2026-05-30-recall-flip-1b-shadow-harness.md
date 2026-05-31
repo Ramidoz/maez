@@ -4,7 +4,7 @@
 
 **Goal:** A silent, read-only, off-critical-path "second opinion" that, on flag-off recall-relevant turns, records whether the not-yet-live recall stack would have had useful dated material — content-free, side-effect-free, never served — to gather pre-flip safety + benefit evidence.
 
-**Architecture:** A new pure module `core/routing/recall_shadow.py` (the `ShadowOutcome` record + `ShadowReach`/`ShadowSkip` enums + `derive_*` functions + `compute_shadow_pair_id`). The daemon runs the shadow on a **bounded single-worker background executor** after the reply is committed, via **direct read-only memory recall** (`recall_for_telegram_living(record_recalls=False)` → reused partition→RecallItem conversion → `assemble_working_set`) — **never** the dispatcher. The carried 1a ReplyPath brittleness is closed here.
+**Architecture:** A new pure module `core/routing/recall_shadow.py` (the `ShadowOutcome` record + `ShadowReach`/`ShadowSkip`/`ShadowReceipt` enums + `derive_*` functions + `compute_shadow_pair_id`). The daemon runs the shadow on a **skip-when-busy single-worker** after the reply is committed, on **date-addressed turns only**, via **direct read-only memory recall** using a fresh read-only `MemoryManager` (`recall_for_telegram_living(record_recalls=False)` → reused partition→RecallItem conversion → `assemble_working_set`) — **never** the dispatcher. The carried 1a ReplyPath brittleness is closed here.
 
 **Tech Stack:** Python 3, stdlib `enum`/`dataclasses`/`hashlib`, `unittest` via `.venv/bin/python -m unittest`.
 
@@ -13,17 +13,18 @@
 **Discipline reminders:**
 - Lands **flag-off + shadow-off** (`MAEZ_RECALL_SHADOW_ENABLED` default-absent). The shadow is observe-only; it must NEVER change the served reply, write any substrate, or egress.
 - Content-free telemetry — no query/snippet/reply text, no raw `trace_id`, no exception message. Enforced by tests.
+- Every attempted shadow emits one schema-shaped, pairable row: successful rows have `shadow_skipped=na`; skipped/failed rows carry `shadow_pair_id`, `ts`, `boot_id`, and a closed skip reason.
 - Do NOT touch `config/.env`. Flags via launch-env / `mock.patch.dict` in tests.
 - Genderless self-reference in any speakable string.
 
 ---
 
 ## File Structure
-- **Create** `core/routing/recall_shadow.py` — `ShadowReach`, `ShadowSkip`, `ShadowOutcome` (frozen, content-free, `shadow_outcome.v1`), `compute_shadow_pair_id`, `derive_shadow_reach`, `derive_shadow_outcome`.
+- **Create** `core/routing/recall_shadow.py` — `ShadowReach`, `ShadowSkip`, `ShadowReceipt`, `ShadowOutcome` (frozen, content-free, `shadow_outcome.v1`), `compute_shadow_pair_id`, `derive_shadow_reach`, `derive_shadow_outcome`, `derive_shadow_skipped`.
 - **Create** `tests/test_recall_shadow.py` — pure derivations + content-free closure + closed-enum tests.
 - **Modify** `core/routing/recall_outcome.py` — add `reply_path_from_mode(mode) -> ReplyPath` (ReplyPath hardening).
 - **Modify** `core/brain/brain_loop.py` — extract the partition→RecallItem conversion to a reusable module-level `recall_partitions_to_items(...)`; the live adapter calls it (refactor, no behavior change).
-- **Modify** `daemon/maez_daemon.py` — `_shadow_worker` (bounded singleton); `_recall_shadow_enabled()`; post-reply-commit snapshot + submit; the read-only shadow run; emit `shadow_pair_id` on the live `recall_outcome` row; swap the ReplyPath coercion to `reply_path_from_mode`.
+- **Modify** `daemon/maez_daemon.py` — `_shadow_worker` (bounded singleton); `_recall_shadow_enabled()`; post-reply-commit snapshot + submit on dated turns only; the read-only shadow run using a fresh `MemoryManager`; emit `shadow_pair_id` on the live `recall_outcome` row only when shadow is eligible; swap the ReplyPath coercion to `reply_path_from_mode`.
 - **Modify** `core/routing/recall_self_status.py` — speakable shadow-active state.
 - **Modify** `tests/test_memory_integrity_invariant.py` — daemon-shaped tests (off-critical-path, no-dispatcher, per-substrate non-disturbance, pairing, queue_full) in the harness-hosting class.
 
@@ -118,14 +119,16 @@ git commit -m "fix(recall): total crash-safe reply_path_from_mode (closes 1a coe
 import dataclasses
 import unittest
 
-from core.routing.recall_outcome import OutcomeClass
+from core.routing.recall_outcome import OutcomeClass, RecallOutcome, is_false_absence
 from core.routing.recall_shadow import (
     ShadowOutcome,
     ShadowReach,
+    ShadowReceipt,
     ShadowSkip,
     compute_shadow_pair_id,
     derive_shadow_outcome,
     derive_shadow_reach,
+    derive_shadow_skipped,
 )
 
 
@@ -143,6 +146,9 @@ class _FakeWS:
 
 
 class PairIdTest(unittest.TestCase):
+    def test_absent_trace_id_degrades_to_na(self):
+        self.assertEqual(compute_shadow_pair_id(boot_id="boot1", trace_id=""), "na")
+        self.assertEqual(compute_shadow_pair_id(boot_id="boot1", trace_id=None), "na")
     def test_deterministic_and_not_raw_trace_id(self):
         a = compute_shadow_pair_id(boot_id="boot1", trace_id="abc123")
         b = compute_shadow_pair_id(boot_id="boot1", trace_id="abc123")
@@ -166,52 +172,80 @@ class ShadowReachTest(unittest.TestCase):
     def test_semantic_or_web_does_not_count_as_grounded(self):
         ws = _FakeWS([_FakeItem("web_context", True), _FakeItem("memory_context", False)])
         self.assertIs(derive_shadow_reach(ws, date_addressed=True), ShadowReach.CONFIRMED_ABSENCE_WITNESSED)
+    def test_confirmed_memory_evidence_does_not_count_as_grounded(self):
+        ws = _FakeWS([_FakeItem("memory_evidence", True)])
+        self.assertIs(derive_shadow_reach(ws, date_addressed=True), ShadowReach.CONFIRMED_ABSENCE_WITNESSED)
+    def test_non_dated_turn_cannot_witness_dated_absence(self):
+        ws = _FakeWS([_FakeItem("memory_context", False)])
+        self.assertIs(derive_shadow_reach(ws, date_addressed=False), ShadowReach.CARRIER_UNAVAILABLE)
     def test_none_working_set_is_carrier_unavailable(self):
         self.assertIs(derive_shadow_reach(None, date_addressed=True), ShadowReach.CARRIER_UNAVAILABLE)
 
 
 class ShadowOutcomeDeriveTest(unittest.TestCase):
+    def _legacy_rec(self, outcome, *, false_absence=False):
+        from core.routing.recall_outcome import RecallOutcome, ReplyPath
+        return RecallOutcome(
+            mode="legacy",
+            turn_kind="dated",
+            outcome_class=outcome,
+            denial_kind="na",
+            had_confirmed=None,
+            citation_coverage=None,
+            receipt_or_na="na",
+            latency_ms=1,
+            focused_elapsed_ms=None,
+            reply_path=ReplyPath.LEGACY,
+        )
+
     def test_rescuable_when_legacy_declined_and_shadow_grounded(self):
         rec = derive_shadow_outcome(
-            legacy_outcome=OutcomeClass.DECLINED_UNAVAILABLE,
-            legacy_is_false_absence=False,
+            legacy_rec=self._legacy_rec(OutcomeClass.DECLINED_UNAVAILABLE),
             shadow_reach=ShadowReach.GROUNDED_MATERIAL_AVAILABLE,
-            legacy_was_decline=True,
             date_addressed=True,
             shadow_pair_id="p", latency_delta_ms=3, ts=1, boot_id="b",
         )
         self.assertTrue(rec.rescuable_candidate)
         self.assertFalse(rec.false_absence_candidate)
+        self.assertEqual(rec.shadow_skipped, "na")
+        self.assertIs(rec.receipt_state, ShadowReceipt.CONSULTED)
     def test_false_absence_candidate_when_shadow_absent_but_legacy_answered(self):
         rec = derive_shadow_outcome(
-            legacy_outcome=OutcomeClass.ANSWERED_UNVERIFIABLE,
-            legacy_is_false_absence=False,
+            legacy_rec=self._legacy_rec(OutcomeClass.ANSWERED_UNVERIFIABLE),
             shadow_reach=ShadowReach.CONFIRMED_ABSENCE_WITNESSED,
-            legacy_was_decline=False,
             date_addressed=True,
             shadow_pair_id="p", latency_delta_ms=3, ts=1, boot_id="b",
         )
         self.assertTrue(rec.false_absence_candidate)
     def test_continuity_only_cannot_be_false_absence_candidate(self):
         rec = derive_shadow_outcome(
-            legacy_outcome=OutcomeClass.ANSWERED_UNVERIFIABLE,
-            legacy_is_false_absence=False,
+            legacy_rec=self._legacy_rec(OutcomeClass.ANSWERED_UNVERIFIABLE),
             shadow_reach=ShadowReach.CONFIRMED_ABSENCE_WITNESSED,
-            legacy_was_decline=False,
             date_addressed=False,
             shadow_pair_id="p", latency_delta_ms=3, ts=1, boot_id="b",
         )
         self.assertFalse(rec.false_absence_candidate)
     def test_legacy_false_absence_rescuable(self):
+        false_absence = self._legacy_rec(OutcomeClass.DECLINED_UNVERIFIED)
+        object.__setattr__(false_absence, "denial_kind", "no_dated_memory")
+        object.__setattr__(false_absence, "receipt_or_na", "na")
         rec = derive_shadow_outcome(
-            legacy_outcome=OutcomeClass.DECLINED_UNVERIFIED,
-            legacy_is_false_absence=True,
+            legacy_rec=false_absence,
             shadow_reach=ShadowReach.GROUNDED_MATERIAL_AVAILABLE,
-            legacy_was_decline=True,
             date_addressed=True,
             shadow_pair_id="p", latency_delta_ms=3, ts=1, boot_id="b",
         )
         self.assertTrue(rec.legacy_false_absence_rescuable)
+    def test_skipped_rows_are_pairable_and_content_free(self):
+        rec = derive_shadow_skipped(
+            legacy_rec=self._legacy_rec(OutcomeClass.DECLINED_UNAVAILABLE),
+            skip_reason=ShadowSkip.QUEUE_FULL,
+            shadow_pair_id="p", latency_delta_ms=0, ts=1, boot_id="b",
+        )
+        self.assertEqual(rec.shadow_skipped, ShadowSkip.QUEUE_FULL.value)
+        self.assertEqual(rec.shadow_pair_id, "p")
+        self.assertEqual(rec.ts, 1)
+        self.assertEqual(rec.boot_id, "b")
 
 
 class ContentFreeAndClosedEnumTest(unittest.TestCase):
@@ -223,8 +257,10 @@ class ContentFreeAndClosedEnumTest(unittest.TestCase):
     def test_skip_reasons_closed(self):
         self.assertEqual(
             {s.value for s in ShadowSkip},
-            {"budget_exceeded", "queue_full", "carrier_unavailable", "exception"},
+            {"budget_exceeded", "queue_full", "exception"},
         )
+    def test_receipt_state_closed(self):
+        self.assertEqual({s.value for s in ShadowReceipt}, {"consulted", "not_consulted"})
     def test_schema_version(self):
         self.assertEqual(ShadowOutcome.schema_version, "shadow_outcome.v1")
 
@@ -267,8 +303,12 @@ class ShadowReach(Enum):
 class ShadowSkip(Enum):
     BUDGET_EXCEEDED = "budget_exceeded"
     QUEUE_FULL = "queue_full"
-    CARRIER_UNAVAILABLE = "carrier_unavailable"
     EXCEPTION = "exception"
+
+
+class ShadowReceipt(Enum):
+    CONSULTED = "consulted"
+    NOT_CONSULTED = "not_consulted"
 
 
 _LEGACY_RESCUABLE_FROM = {
@@ -290,14 +330,17 @@ class ShadowOutcome:
     false_absence_candidate: bool
     legacy_false_absence_rescuable: bool
     latency_delta_ms: int
-    receipt_state: str             # "consulted" | "not_consulted"
+    receipt_state: ShadowReceipt
     ts: int
     boot_id: str
+    shadow_skipped: str = "na"     # "na" or ShadowSkip.value
 
 
 def compute_shadow_pair_id(*, boot_id: str, trace_id: str) -> str:
     """Derived, non-authoritative pairing key. NOT the raw trace_id (which other
     stores key owner labels by) and NOT the ledger turn_id (which reaches raw_text)."""
+    if not trace_id:
+        return "na"
     digest = hashlib.sha256(
         ("recall_shadow.v1\0" + (boot_id or "") + "\0" + (trace_id or "")).encode("utf-8")
     )
@@ -314,6 +357,8 @@ def _item_confirmed_memory_context(item) -> bool:
 def derive_shadow_reach(working_set, *, date_addressed: bool) -> ShadowReach:
     """Retrieval-stage reach. grounded only on a date-confirmed memory_context item
     (not semantic fallback / web / temporal_recall_status). No synthesis."""
+    if not date_addressed:
+        return ShadowReach.CARRIER_UNAVAILABLE
     items = list(getattr(working_set, "items", ()) or []) if working_set is not None else []
     if working_set is None or not items:
         return ShadowReach.CARRIER_UNAVAILABLE
@@ -324,16 +369,16 @@ def derive_shadow_reach(working_set, *, date_addressed: bool) -> ShadowReach:
 
 def derive_shadow_outcome(
     *,
-    legacy_outcome: OutcomeClass,
-    legacy_is_false_absence: bool,
+    legacy_rec: RecallOutcome,
     shadow_reach: ShadowReach,
-    legacy_was_decline: bool,
     date_addressed: bool,
     shadow_pair_id: str,
     latency_delta_ms: int,
     ts: int,
     boot_id: str,
 ) -> ShadowOutcome:
+    legacy_outcome = legacy_rec.outcome_class
+    legacy_was_decline = str(legacy_outcome.value).startswith("declined_")
     grounded = shadow_reach is ShadowReach.GROUNDED_MATERIAL_AVAILABLE
     rescuable = bool(legacy_outcome in _LEGACY_RESCUABLE_FROM and grounded)
     false_absence = bool(
@@ -341,9 +386,11 @@ def derive_shadow_outcome(
         and shadow_reach is ShadowReach.CONFIRMED_ABSENCE_WITNESSED
         and not legacy_was_decline
     )
-    legacy_false_absence_rescuable = bool(legacy_is_false_absence and grounded)
+    legacy_false_absence_rescuable = bool(is_false_absence(legacy_rec) and grounded)
     receipt_state = (
-        "not_consulted" if shadow_reach is ShadowReach.CARRIER_UNAVAILABLE else "consulted"
+        ShadowReceipt.NOT_CONSULTED
+        if shadow_reach is ShadowReach.CARRIER_UNAVAILABLE
+        else ShadowReceipt.CONSULTED
     )
     return ShadowOutcome(
         shadow_pair_id=shadow_pair_id,
@@ -356,6 +403,30 @@ def derive_shadow_outcome(
         receipt_state=receipt_state,
         ts=ts,
         boot_id=boot_id,
+    )
+
+
+def derive_shadow_skipped(
+    *,
+    legacy_rec: RecallOutcome,
+    skip_reason: ShadowSkip,
+    shadow_pair_id: str,
+    latency_delta_ms: int,
+    ts: int,
+    boot_id: str,
+) -> ShadowOutcome:
+    return ShadowOutcome(
+        shadow_pair_id=shadow_pair_id,
+        legacy_outcome=legacy_rec.outcome_class,
+        shadow_reach=ShadowReach.CARRIER_UNAVAILABLE,
+        rescuable_candidate=False,
+        false_absence_candidate=False,
+        legacy_false_absence_rescuable=False,
+        latency_delta_ms=latency_delta_ms,
+        receipt_state=ShadowReceipt.NOT_CONSULTED,
+        ts=ts,
+        boot_id=boot_id,
+        shadow_skipped=skip_reason.value,
     )
 ```
 
@@ -490,6 +561,20 @@ Add to the harness-hosting class (reuse `_build_daemon_for_handle_message` / `_h
                 daemon._shadow_worker_join_for_test(timeout=2.0)
         disp.assert_not_called()
 
+    def test_shadow_does_not_run_for_continuity_only_turn(self):
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+        with self.assertLogs("maez", level="INFO") as logs:
+            with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+                os.environ, {"MAEZ_RECALL_SHADOW_ENABLED": "1"}, clear=False
+            ):
+                os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
+                maez_daemon.MaezDaemon.handle_message(
+                    daemon, "what were we just talking about?",
+                    chat_id="c1", user_id="u1", source="telegram")
+                daemon._shadow_worker_join_for_test(timeout=2.0)
+        self.assertEqual(self._shadow_lines(logs), [])
+
     def test_shadow_leaves_last_recall_receipt_unchanged(self):
         captured = {}
         daemon = self._build_daemon_for_handle_message()
@@ -504,19 +589,51 @@ Add to the harness-hosting class (reuse `_build_daemon_for_handle_message` / `_h
             daemon._shadow_worker_join_for_test(timeout=2.0)
         self.assertEqual(daemon._last_recall_receipt, "SENTINEL")  # unchanged
 
-    def test_live_recall_outcome_emits_shadow_pair_id(self):
+    def test_live_recall_outcome_emits_shadow_pair_id_only_when_shadow_eligible(self):
         captured = {}
         daemon = self._build_daemon_for_handle_message()
         with self.assertLogs("maez", level="INFO") as logs:
             with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
-                os.environ, {}, clear=False
+                os.environ, {"MAEZ_RECALL_SHADOW_ENABLED": "1"}, clear=False
             ):
+                os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
                 maez_daemon.MaezDaemon.handle_message(
                     daemon, "what did we decide around April 27?",
                     chat_id="c1", user_id="u1", source="telegram")
         outcome = [ln for ln in logs.output if "recall_outcome " in ln][-1]
         self.assertIn("shadow_pair_id=", outcome)
-        # content-free: the raw trace id must not appear on the shadow-adjacent fields
+        self.assertNotIn("TRACE_SENTINEL_RAW", outcome)
+
+    def test_known_dated_memory_yields_grounded_material_available(self):
+        # Seed/patch recall_for_telegram_living to return a context partition with
+        # temporal_match_method=exact_date. The shadow must produce
+        # shadow_reach=grounded_material_available, proving the partition→RecallItem
+        # structured channel carries temporal provenance into assemble_working_set.
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+        dated_context = {
+            "core": [{
+                "id": "core-apr27",
+                "content": "April 27 infrastructure ground truth.",
+                "metadata": {"temporal_match_method": "exact_date"},
+            }]
+        }
+        with self.assertLogs("maez", level="INFO") as logs:
+            with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+                os.environ, {"MAEZ_RECALL_SHADOW_ENABLED": "1"}, clear=False
+            ), mock.patch(
+                "memory.memory_manager.MemoryManager.recall_for_telegram_living",
+                return_value=({}, dated_context),
+            ):
+                os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
+                maez_daemon.MaezDaemon.handle_message(
+                    daemon, "what did we decide around April 27?",
+                    chat_id="c1", user_id="u1", source="telegram")
+                daemon._shadow_worker_join_for_test(timeout=2.0)
+        joined = "\n".join(self._shadow_lines(logs))
+        self.assertIn("shadow_outcome", joined)
+        self.assertIn("shadow_reach=grounded_material_available", joined)
+        self.assertIn("shadow_skipped=na", joined)
 ```
 
 - [ ] **Step 2: Run to verify they fail**
@@ -534,44 +651,56 @@ def _recall_shadow_enabled() -> bool:
     return (os.environ.get("MAEZ_RECALL_SHADOW_ENABLED", "") or "").strip().lower() in {"1", "true", "yes"}
 ```
 
-(b) `MaezDaemon.__init__`: add a bounded single-worker executor mirroring the existing `_dream_worker`/`_presence_worker` pattern (a singleton worker whose `submit()` refuses when busy → `queue_full`). Add a `_shadow_worker_join_for_test(timeout)` that joins/drains the worker (test-only synchronization).
+(b) `MaezDaemon.__init__`: add a bounded singleton worker mirroring the existing `_dream_worker`/`_presence_worker` pattern (skip-when-busy; no queue). Add `_last_shadow_receipt = None`. Add `_shadow_worker_join_for_test(timeout)` that joins/drains the worker (test-only synchronization). Add `_shadow_worker.shutdown(timeout=1.0)` to daemon stop/shutdown beside dream/presence; a post-shutdown submit emits a paired skipped row with `shadow_skipped=queue_full`, not an exception.
 
-(c) On the live `recall_outcome` emit (Task-1a site, ~4612+): compute `shadow_pair_id = compute_shadow_pair_id(boot_id=str(self.boot_time or ""), trace_id=getattr(_trace, "trace_id", "") or "")` and add `shadow_pair_id=%s` to `_log_recall_outcome` (extend `RecallOutcome` with a `shadow_pair_id` field OR log it alongside — prefer adding the field so it's part of the content-free schema, and update the 1a content-free test forbidden-set check still passes since it's a derived hex, not content).
+(c) On the live `recall_outcome` emit (Task-1a site, ~4612+): build a named `_recall_outcome_rec = RecallOutcome(...)` before logging. Add an optional/defaulted `shadow_pair_id: str = "na"` field to `RecallOutcome`; set it to a derived value only when shadow is enabled, triad is off, and the turn is date-addressed. Otherwise keep `shadow_pair_id="na"`. `_log_recall_outcome` emits the field. This named object is the only object passed into the shadow snapshot; if construction/logging fails, no orphan shadow row is submitted.
 
-(d) After the reply is committed (the trace is written ~4910, before `return reply` ~4931): if `_recall_shadow_enabled()` and the turn is recall-relevant and the triad is off, snapshot `(text, legacy RecallOutcome fields, shadow_pair_id, str(self.boot_time))` and `submit` the shadow job to `_shadow_worker`. If submit refuses (busy), `logger.info("shadow_skipped reason=queue_full")`. Do NOT block; `return reply` proceeds immediately.
+(d) After the reply is committed (the trace is written ~4910, before `return reply` ~4931): if `_recall_shadow_enabled()` and `_date_addressed_turn` and the triad is off and `_recall_outcome_rec` exists, snapshot `(text, _recall_outcome_rec, shadow_pair_id, str(self.boot_time))` and `submit` the shadow job to `_shadow_worker`. If submit refuses (busy/shutdown), emit `_log_shadow_outcome(rec=derive_shadow_skipped(legacy_rec=_recall_outcome_rec, skip_reason=ShadowSkip.QUEUE_FULL, shadow_pair_id=shadow_pair_id, latency_delta_ms=0, ts=int(time.time()), boot_id=str(self.boot_time or "")))`. Do NOT block; `return reply` proceeds immediately.
 
 (e) The shadow job (runs on the worker):
 ```python
-def _run_recall_shadow(self, *, text, legacy_outcome, legacy_is_false_absence,
-                       legacy_was_decline, date_addressed, shadow_pair_id, boot_id):
+def _run_recall_shadow(self, *, text, legacy_rec, date_addressed, shadow_pair_id, boot_id):
     import time
     from core.routing.recall_shadow import (
-        ShadowSkip, derive_shadow_outcome, derive_shadow_reach,
+        ShadowSkip, derive_shadow_outcome, derive_shadow_reach, derive_shadow_skipped,
     )
     from core.routing.focused_cognition import assemble_working_set
     from core.brain.brain_loop import recall_partitions_to_items
+    from memory.memory_manager import MemoryManager
     t0 = time.monotonic()
     try:
-        evidence, context = self.memory.recall_for_telegram_living(text, record_recalls=False)
+        memory = MemoryManager()  # fresh manager: do not share self.memory across daemon/worker threads
+        evidence, context = memory.recall_for_telegram_living(text, record_recalls=False)
         items = (recall_partitions_to_items(evidence, role_source_type="memory_evidence")
                  + recall_partitions_to_items(context, role_source_type="memory_context"))
         ws = assemble_working_set(transcript="", web_context="", owner_question=text,
                                   recall_items=items)
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+        if elapsed_ms > RECALL_SHADOW_BUDGET_MS:
+            _log_shadow_outcome(rec=derive_shadow_skipped(
+                legacy_rec=legacy_rec, skip_reason=ShadowSkip.BUDGET_EXCEEDED,
+                shadow_pair_id=shadow_pair_id, latency_delta_ms=elapsed_ms,
+                ts=int(time.time()), boot_id=boot_id))
+            return
         reach = derive_shadow_reach(ws, date_addressed=date_addressed)
         rec = derive_shadow_outcome(
-            legacy_outcome=legacy_outcome, legacy_is_false_absence=legacy_is_false_absence,
-            shadow_reach=reach, legacy_was_decline=legacy_was_decline,
+            legacy_rec=legacy_rec,
+            shadow_reach=reach,
             date_addressed=date_addressed,
             shadow_pair_id=shadow_pair_id,
-            latency_delta_ms=int((time.monotonic() - t0) * 1000),
+            latency_delta_ms=elapsed_ms,
             ts=int(time.time()), boot_id=boot_id)
         _log_shadow_outcome(rec=rec)
     except Exception as exc:
-        logger.info("shadow_skipped reason=%s error_class=%s",
-                    ShadowSkip.EXCEPTION.value, type(exc).__name__)
+        _log_shadow_outcome(rec=derive_shadow_skipped(
+            legacy_rec=legacy_rec, skip_reason=ShadowSkip.EXCEPTION,
+            shadow_pair_id=shadow_pair_id,
+            latency_delta_ms=int((time.monotonic() - t0) * 1000),
+            ts=int(time.time()), boot_id=boot_id))
+        logger.info("shadow_exception_class class=%s", type(exc).__name__)
 ```
 
-Add `_log_shadow_outcome` (content-free, mirrors `_log_recall_outcome`, emits enum `.value`s + `shadow_pair_id` + ts/boot_id, NEVER text). The `legacy_was_decline` flag = legacy outcome_class in the declined_* family (compute at snapshot). **Note on the marker-producer check (spec, load-bearing):** verify a known dated memory yields `grounded_material_available` here — if `recall_for_telegram_living` partitions carry `temporal_match_method`, `recall_partitions_to_items` sets `confirmed`, and `assemble_working_set` preserves it via `recall_items`. The dated-fixture test in Step 1 (extend it) must prove this end-to-end; if it shows `carrier_unavailable` on a known dated memory, the partition→items shape is wrong and must be fixed before landing.
+Add `_log_shadow_outcome` (content-free, mirrors `_log_recall_outcome`, emits enum `.value`s + `shadow_pair_id` + ts/boot_id + `shadow_skipped`, NEVER text or raw trace_id). Add `_last_shadow_receipt = {at_ts, boot_id, state}` update after every success/skip row for speakable state. **Note on the marker-producer check (spec, load-bearing):** the dated-fixture test above must prove a known dated memory yields `grounded_material_available`; if it shows `carrier_unavailable`, the partition→items shape is wrong and must be fixed before landing.
 
 - [ ] **Step 4: Run to verify they pass**
 
@@ -600,7 +729,10 @@ Add, each asserting one substrate is untouched by a shadow run (flag on, triad o
 - no egress (spy the external fetch / `external_fanout` entrypoint → assert not called).
 - layer0 cache file mtime unchanged.
 - `_run_dispatcher_pipeline` not called (Task 4 covered; keep).
-- `queue_full`: submit two shadow jobs back-to-back with the worker held busy → second logs `shadow_skipped reason=queue_full`.
+- `queue_full`: submit two date-addressed shadow jobs back-to-back with the worker held busy → second logs a pairable `shadow_outcome ... shadow_skipped=queue_full ... shadow_pair_id=...`.
+- `budget_exceeded`: patch the shadow recall/assemble path to return slowly but complete → logs a pairable `shadow_outcome ... shadow_skipped=budget_exceeded` and does not emit a success row.
+- exception content-free: make recall raise `RuntimeError("OWNER SECRET TEXT")` → logs `error_class=RuntimeError` but never the message text.
+- shutdown: `stop()` shuts down `_shadow_worker`; submit after shutdown is refused and represented as `queue_full` only when a dated shadow attempt occurs.
 - **off-critical-path:** patch the shadow job to sleep; assert `handle_message` returns (time-to-return) without waiting for the sleep (the reply is not delayed by the shadow).
 
 ```python
@@ -632,7 +764,7 @@ Expected: PASS (add minimal seams if a substrate isn't observable — e.g. ensur
 
 ```bash
 git add tests/test_memory_integrity_invariant.py daemon/maez_daemon.py
-git commit -m "test(recall): shadow per-substrate non-disturbance + off-critical-path + queue_full"
+git commit -m "test(recall): shadow per-substrate non-disturbance + off-critical-path + pairable skips"
 ```
 
 ---
@@ -658,15 +790,36 @@ class PracticeStatusTest(unittest.TestCase):
         for q in ("what did we decide on April 27?", "is your dated recall reachable?"):
             self.assertFalse(is_recall_practice_query(q), q)
     def test_reply_reflects_shadow_state(self):
-        on, _ = build_recall_practice_reply(shadow_enabled=True, ran_recently=True)
+        receipt = {"at_ts": 1099.0, "boot_id": "bootA", "state": "consulted"}
+        on, _ = build_recall_practice_reply(
+            shadow_enabled=True,
+            last_shadow_receipt=receipt,
+            current_boot_id="bootA",
+            now_ts=1100.0,
+        )
         self.assertIn("quietly", on.lower())
-        off, _ = build_recall_practice_reply(shadow_enabled=False, ran_recently=False)
+        off, _ = build_recall_practice_reply(
+            shadow_enabled=False,
+            last_shadow_receipt=None,
+            current_boot_id="bootA",
+            now_ts=1100.0,
+        )
         self.assertNotIn("quietly practicing", off.lower())
+    def test_stale_shadow_receipt_does_not_sound_current(self):
+        receipt = {"at_ts": 1000.0, "boot_id": "bootA", "state": "consulted"}
+        reply, _ = build_recall_practice_reply(
+            shadow_enabled=True,
+            last_shadow_receipt=receipt,
+            current_boot_id="bootA",
+            now_ts=4000.0,
+        )
+        self.assertIn("reachable", reply.lower())
+        self.assertNotIn("just practiced", reply.lower())
 ```
 
 - [ ] **Step 2: Run → fails → implement**
 
-Add `is_recall_practice_query` (narrow, hard-FP boundary — must NOT match the 1a reachability query or ordinary dated queries) + `build_recall_practice_reply(shadow_enabled, ran_recently)` (event-shaped, faculty-language, genderless, never auto-volunteered). Wire into the daemon self-status branch (gated like 1a self-status; reads `_recall_shadow_enabled()` + a content-free "shadow ran since boot" flag). Run → PASS.
+Add `is_recall_practice_query` (narrow, hard-FP boundary — must NOT match the 1a reachability query or ordinary dated queries) + `build_recall_practice_reply(shadow_enabled, last_shadow_receipt, current_boot_id, now_ts)` (event-shaped, faculty-language, genderless, never auto-volunteered). Wire into the daemon self-status branch (gated like 1a self-status; reads `_recall_shadow_enabled()` + content-free `_last_shadow_receipt` with `{at_ts, boot_id, state}`). Run → PASS.
 
 - [ ] **Step 3: Commit**
 
@@ -702,20 +855,21 @@ git commit -m "test(recall): slice 1b regression sweep green"
 ## Self-Review
 
 **1. Spec coverage:**
-- Read-only via `recall_for_telegram_living(record_recalls=False)` + reused `recall_partitions_to_items` + `assemble_working_set`; dispatcher forbidden (test) → Tasks 3, 4. ✓
-- Assemble-only honest vocabulary (`ShadowReach`, `grounded_material_available`, `rescuable_candidate`) + `legacy_false_absence_rescuable` reusing `is_false_absence`; false-absence gated to dated frames only → Task 2. ✓
-- Off-critical-path bounded single-worker + `queue_full`/`budget_exceeded`/`exception` closed reasons; no rows for flag-off/non-recall → Tasks 4, 5. ✓
+- Read-only via fresh `MemoryManager().recall_for_telegram_living(record_recalls=False)` + reused `recall_partitions_to_items` + `assemble_working_set`; dispatcher forbidden (test) → Tasks 3, 4. ✓
+- Date-addressed-only 1b scope; continuity-only turns do not run shadow and cannot become dated false-absence evidence → Tasks 2, 4. ✓
+- Assemble-only honest vocabulary (`ShadowReach`, `grounded_material_available`, `rescuable_candidate`) + `legacy_false_absence_rescuable` reusing `is_false_absence(legacy_rec)`; false-absence gated to dated frames only; grounded material requires confirmed `memory_context`, not evidence → Task 2. ✓
+- Off-critical-path bounded singleton + pairable `queue_full`/`budget_exceeded`/`exception` skipped rows; no rows for flag-off/non-date-addressed → Tasks 4, 5. ✓
 - Side-effect-free per-substrate (focused_cognition_runs, `_last_recall_receipt`, promotion, egress, layer0, dispatcher) → Tasks 4, 5. ✓
 - `shadow_pair_id` derived (not raw trace_id), non-authoritative, content-free; live `recall_outcome` also emits it → Tasks 2, 4. ✓
-- Speakable shadow-active state → Task 6. ✓
+- Speakable shadow-active state from `_last_shadow_receipt`, not stale since-boot boolean → Task 6. ✓
 - ReplyPath hardening → Task 1. ✓
 - Content-free + closed-enum by test → Tasks 2, 5. ✓
 - Marker-producer check (dated memory → grounded_material_available end-to-end) → Task 4 Step 3 note + fixture test. ✓
-- Sunset + pre-flip blocking gate → **enforced at Phase-2** (defined in spec), not 1b code. ✓
+- Sunset + pre-flip blocking gate → defined in spec and mirrored into the Phase-2 runbook/procedure before completion; enforcement remains Phase-2. ✓
 
-**2. Placeholder scan:** Tasks 1, 2, 3, 6 contain complete code/tests. Task 4's worker construction + the post-reply snapshot site reference the daemon's existing bounded-worker pattern (`_dream_worker`/`_presence_worker`) and the 1a recall_outcome emit site — the implementer matches those existing names; the daemon-shaped tests pin the observable contract (no-dispatcher, receipt-unchanged, pair-id-on-live-row, no-delay, queue_full). Flagged honestly: the exact worker class + the snapshot insertion line are integration points matched to existing daemon idioms, not undefined logic.
+**2. Placeholder scan:** Tasks 1, 2, 3, 6 contain complete code/tests. Task 4's worker construction + the post-reply snapshot site reference the daemon's existing bounded-worker pattern (`_dream_worker`/`_presence_worker`) and the 1a recall_outcome emit site — the implementer matches those existing names; the daemon-shaped tests pin the observable contract (no-dispatcher, receipt-unchanged, pair-id-on-live-row, no-delay, pairable skip rows). Flagged honestly: the exact snapshot insertion line is an integration point matched to existing daemon idioms, not undefined logic.
 
-**3. Type/symbol consistency:** `ShadowReach`, `ShadowSkip`, `ShadowOutcome`, `compute_shadow_pair_id`, `derive_shadow_reach`, `derive_shadow_outcome`, `recall_partitions_to_items`, `reply_path_from_mode` used identically across tasks; `OutcomeClass`/`is_false_absence` reused from 1a; `date_addressed` gates the dated false-absence metric; `shadow_pair_id` derivation identical on live + shadow rows (same `boot_id`+`trace_id`).
+**3. Type/symbol consistency:** `ShadowReach`, `ShadowSkip`, `ShadowReceipt`, `ShadowOutcome`, `compute_shadow_pair_id`, `derive_shadow_reach`, `derive_shadow_outcome`, `derive_shadow_skipped`, `recall_partitions_to_items`, `reply_path_from_mode` used identically across tasks; `OutcomeClass`/`is_false_absence` reused from 1a via `legacy_rec`; `date_addressed` gates the dated false-absence metric; `shadow_pair_id` derivation identical on live + shadow rows (same `boot_id`+`trace_id`, or `na` if trace is absent).
 
 **4. Ordering:** ReplyPath hardening (1) → pure shadow module (2) → shared conversion extract (3) → daemon worker + run + pairing (4) → non-disturbance/off-path tests (5) → speakable state (6) → regression (7). Pure/shared code before daemon wiring; each task independently committable and green.
 

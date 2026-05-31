@@ -189,6 +189,10 @@ trap; 6 is the blast-radius control. Probes 1 & 3 need seeded dated memories in 
    presented in **randomized order with provenance hidden**; Rohit records better/same/worse; de-blinding
    happens only after all verdicts are logged. This is the benefit ground truth, debiased.
 6. **Go/No-Go** on the gates below → default-revert-unless-override.
+7. **Shadow teardown (1b sunset):** after the Go/No-Go disposition is recorded, turn
+   `MAEZ_RECALL_SHADOW_ENABLED` off, restart, verify no `shadow_outcome` rows are emitted after restart,
+   record that verification beside the disposition, and schedule code removal. Shadow-mode is scaffolding for
+   one flip, not a permanent organ.
 
 ### Stratified soak floor (20yr-Maez P0 Q5 — not a flat N)
 The soak does not reach decision until it has covered, at minimum (Rohit may amend):
