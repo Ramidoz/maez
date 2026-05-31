@@ -14,6 +14,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import sqlite3
@@ -105,6 +106,15 @@ _FORBIDDEN_EMPTY_VOCAB: tuple[str, ...] = (
     "database",
     "layer",
 )
+
+
+def _citation_render_v2_enabled() -> bool:
+    return (
+        (os.environ.get("MAEZ_RECALL_CITATION_RENDER_V2", "") or "")
+        .strip()
+        .lower()
+        in {"1", "true", "yes"}
+    )
 
 
 def is_empty_search_result(sr: dict) -> bool:
