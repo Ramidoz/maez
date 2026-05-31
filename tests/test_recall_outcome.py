@@ -326,6 +326,35 @@ class GroundedContextHelperTest(unittest.TestCase):
 
 
 class ContentFreeSchemaTest(unittest.TestCase):
+    def test_schema_bumped_to_v2_with_ack_fields(self):
+        self.assertEqual(RecallOutcome.schema_version, "recall_outcome.v2")
+        names = {f.name for f in dataclasses.fields(RecallOutcome)}
+        self.assertTrue(
+            {
+                "receipt_eligible",
+                "receipt_after_ms",
+                "ack_required",
+                "ack_status",
+                "ack_emit_ms",
+            }
+            <= names
+        )
+
+    def test_ack_fields_are_content_free(self):
+        names = {f.name for f in dataclasses.fields(RecallOutcome)}
+        forbidden = {
+            "query_text",
+            "text",
+            "raw_text",
+            "reply",
+            "recalled_snippet",
+            "content",
+            "receipt_text",
+            "owner_question",
+            "snippet",
+        }
+        self.assertEqual(names & forbidden, set())
+
     def test_no_content_fields(self):
         names = {f.name for f in dataclasses.fields(RecallOutcome)}
         forbidden = {
@@ -345,7 +374,7 @@ class ContentFreeSchemaTest(unittest.TestCase):
         )
 
     def test_schema_version_and_stable_na_serialization(self):
-        self.assertEqual(RecallOutcome.schema_version, "recall_outcome.v1")
+        self.assertEqual(RecallOutcome.schema_version, "recall_outcome.v2")
         self.assertEqual(format_log_value(None), "na")
         self.assertEqual(format_log_value(True), "true")
         self.assertEqual(format_log_value(False), "false")

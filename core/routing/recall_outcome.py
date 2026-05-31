@@ -53,7 +53,7 @@ def reply_path_from_mode(mode_value: str) -> "ReplyPath":
 
 @dataclass(frozen=True)
 class RecallOutcome:
-    schema_version: ClassVar[str] = "recall_outcome.v1"
+    schema_version: ClassVar[str] = "recall_outcome.v2"
 
     mode: str
     turn_kind: str
@@ -66,6 +66,11 @@ class RecallOutcome:
     focused_elapsed_ms: int | None
     reply_path: ReplyPath
     shadow_pair_id: str = "na"
+    receipt_eligible: bool = False
+    receipt_after_ms: int | None = None
+    ack_required: bool = False
+    ack_status: str = "not_eligible"
+    ack_emit_ms: int | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.reply_path, ReplyPath):
