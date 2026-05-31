@@ -43,6 +43,11 @@ the test fails if any free-text/content column like `query_text` or `recalled_sn
 | `receipt_or_na` | `not_consulted` \| `consulted` \| `consult_failed` \| `na` | `na` in legacy (no carrier) |
 | `latency_ms` | int | whole-turn (`_trace.latency_ms`); confound acknowledged — see also `focused_elapsed_ms` |
 | `focused_elapsed_ms` | int or `na` | recall-segment timer, to disentangle recall cost from whole-turn variance |
+| `receipt_eligible` | `true` \| `false` | A7 receipt-slice field; content-free |
+| `receipt_after_ms` | int or `na` | threshold used for the turn (`900` in v1 unless amended before re-run) |
+| `ack_required` | `true` \| `false` | true only when a real wait crossed the receipt threshold |
+| `ack_status` | `not_required_fast_answer` \| `emitted` \| `send_failed` \| `send_timeout` \| `disabled` \| `not_eligible` | closed A7 enum |
+| `ack_emit_ms` | int or `na` | time from turn start to successful surface send completion; content-free |
 
 **`outcome_class` enum (computed for BOTH arms — Logical C2):**
 - `answered_grounded` — answered with ≥1 **matched** citation to an allowed grounded substrate item and
@@ -178,8 +183,10 @@ trap; 6 is the blast-radius control. Probes 1 & 3 need seeded dated memories in 
    latency (recall turns + ordinary turns separately). Shadow-mode (1b) has already gathered the
    real-traffic counterfactual. Rohit records a **blind** per-probe quality note (provenance hidden — see
    blind verdict).
-2. **Flip:** Rohit sets `MAEZ_RECALL_TRIAD_ENABLED=1` in the launch env (owner-authorized; `config/.env`
-   touched only here, only by Rohit), restart, confirm the startup posture log shows `mode=recall_triad`.
+2. **Flip:** Rohit sets `MAEZ_RECALL_TRIAD_ENABLED=1` and `MAEZ_RECALL_RECEIPT_ENABLED=1` in the launch env
+   (owner-authorized; `config/.env` touched only here, only by Rohit), restart, confirm the startup posture
+   log shows `mode=recall_triad` and receipt posture enabled. If receipts are not enabled, A7's ack gate is
+   `not_evaluable` and the felt-latency gate cannot pass.
 3. **Battery flag-ON** + **bounded ordinary-use soak** with the **stratified floor** below.
 4. **Light ABBA + kill-switch drill (Outside-View #4):** one scheduled OFF block mid-soak — controls for
    secular trend AND exercises the kill-switch under live load (confirm clean fallback to legacy on a live
@@ -207,9 +214,11 @@ The soak does not reach decision until it has covered, at minimum (Rohit may ame
 ### Gates (frozen)
 **Hard gates — any fail → kill-switch, no-go:**
 1. **Zero false-absence events** (as defined in 1a, now witnessable via `denial_kind`+`had_confirmed`).
-2. **Latency:** triad p95 ≤ legacy-baseline p95 × **K** AND absolute p95 ≤ **ceiling_ms**, on recall turns
-   AND separately on ordinary turns. K and ceiling_ms frozen from the baseline run before the flip
-   (default K=1.5; ceiling_ms set by Rohit from observed baseline).
+2. **Latency / felt-latency (A7):** on recall turns, p95(`latency_ms`) and p95(`focused_elapsed_ms`) MUST be
+   ≤ frozen absolute `answer_ceiling_ms`; separately, ack-required turns MUST satisfy the A7 ack gate
+   (`ack_status=emitted` and `ack_emit_ms ≤ ack_ceiling_ms`). The former recall-turn p95-vs-legacy `K`
+   comparison is removed because it compared slow real answers to fast refusals. Ordinary-turn latency
+   regression remains under the blast-radius gate below.
 3. **No non-recall-turn regression (blast radius — Outside-View #1, Body-Coherence #1):** ordinary
    (`turn_kind=ordinary`) turns show no `outcome_class` regression and no latency regression vs baseline;
    an **over-consultation** signal (recall consulted on turns that didn't need it) stays at/near zero.
@@ -260,9 +269,10 @@ A5 + A6 below for the corrected rescued definition and the live-soak substrate):
 > trap (probe 3), the type-rule (gate 5, with a fixture memory dated >14 days), the safety-negatives
 > (probes 2 & 4 must NOT change), and the both-shaped re-witness — and emits a content-free **proof
 > packet**. It does NOT decide benefit. **(2) the live soak owns BENEFIT** — the blind owner verdict and
-> the rescued-turn counter are measured on **live soak turns**, latency K is frozen from a **live**
-> legacy baseline (sandbox wall-clock is non-representative), and the blast-radius/non-recall-regression
-> gate is computed from the **live** ≥10 ordinary turns. **(3) shadow (1b) is the PRIOR/denominator only**
+> the rescued-turn counter are measured on **live soak turns**, the latency baseline is frozen from a
+> **live** legacy run (sandbox wall-clock is non-representative), and the blast-radius/non-recall-regression
+> gate is computed from the **live** ≥10 ordinary turns. A7 later supersedes the recall-turn K comparison
+> with an absolute answer ceiling + separate ack gate. **(3) shadow (1b) is the PRIOR/denominator only**
 > — renamed `rescuable_reach_rate` (it witnesses *shelf reachability*, one synthesis-step short of
 > `answered_grounded`); it sizes the opportunity, it is never the rescued counter. **Decoupling:** 2a
 > produces the proof packet; **2b (the owner-run runbook) consumes packet + `rescuable_reach_rate` +
@@ -270,6 +280,26 @@ A5 + A6 below for the corrected rescued definition and the live-soak substrate):
 > over-consultation clause of the blast-radius gate has no emitting field today → it is **observational**
 > in the soak, not a hard-gate sub-clause, unless a field is added. (Logical C1/C3/C4/C5, Creative,
 > Outside-View, 20yr-Maez, Body-Coherence; the detailed pins live in the 2a harness spec + 2b runbook.)
+
+> **Pre-registration amendment A7 (2026-05-31, after the latency No-Go but before the re-run / before any
+> new flag-on data) — gate rewrite.** The original latency gate compared triad's *slow real answer* p95 to
+> legacy's *fast refusal* p95 — a validity error (two different output classes; a faster refusal is not a
+> better outcome). This is a dated post-No-Go analysis-plan amendment, not part of the original
+> pre-registration: old-gate and A7 results must be reported side by side. The latency gate becomes a
+> **felt-latency gate** with FIVE criteria: (1) **absolute full-answer ceiling RETAINED as a HARD gate** —
+> `latency_ms` p95 AND `focused_elapsed_ms` p95 on recall turns ≤ a frozen `answer_ceiling_ms`;
+> **acknowledge-time can NEVER substitute for this**; (2) **acknowledge-time** — on `ack_required=true`
+> turns, `ack_status=emitted` and `ack_emit_ms ≤ ack_ceiling_ms` (`1500ms` in v1 unless Rohit freezes a
+> different value before the re-run); fast turns before the receipt threshold score pass/not-required, not
+> miss; (3) benefit (A5 rescued + blind verdict); (4) groundedness (`citation_coverage` floor); (5) voice
+> continuity (via the blind verdict). `ack_emit_ms`/`ack_status` and `answer_ceiling_ms` are gated
+> **separately** — green-ack may never mask red-answer. A7 **depends on the Slice 1a ack fields** (cannot be
+> evaluated until 1a merges), and the A7 re-run must enable both `MAEZ_RECALL_TRIAD_ENABLED=1` and
+> `MAEZ_RECALL_RECEIPT_ENABLED=1`. **Disposition addition:** a re-flip that passes *only* because receipts
+> make it *feel* responsive (ack green, answer at/near ceiling, benefit "same") → **default-revert to the
+> real speed work (brain benchmark)**; keep-on needs recorded override + reason + dated re-look. The
+> blast-radius (non-recall regression) gate is retained underneath, unchanged. Detail in the 2026-05-31
+> receipt + A7 design spec. (Logical, 20yr-Maez, Outside-View, Body-Coherence, Visionary.)
 
 ## Reusable precedent (Visionary — lock the shape, defer automation)
 This is the FIRST monitored organ flip. Lock as reusable for the Intake Bus and later organs:
@@ -317,8 +347,8 @@ primitives — **Visionary**. Pin-every-threshold + speakable-state-is-a-behavio
 C3/C4/C5**.
 
 ## Self-review
-- **Placeholders:** none — every threshold is pinned or explicitly "frozen from baseline before flip"
-  (latency K/ceiling); the floor is concrete integers; the probe battery is enumerated; the
+- **Placeholders:** none — every threshold is pinned or explicitly frozen before the re-run
+  (A7 answer ceiling and ack ceiling); the floor is concrete integers; the probe battery is enumerated; the
   `outcome_class` enum and false-absence definition are exact.
 - **Consistency:** `outcome_class` enum used identically across 1a/1b/Phase-2; false-absence definition
   references the same `denial_kind`/`had_confirmed` fields the telemetry emits; citation_coverage is a
