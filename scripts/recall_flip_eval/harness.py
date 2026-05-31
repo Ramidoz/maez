@@ -337,13 +337,41 @@ def _run_probe_battery(
     )
 
 
+_ANSWERABLE_FIXTURE_CONTENT = {
+    ("dated_hit", "fixture"): (
+        "On April 27, 2026, the dated answer should mention April 27: "
+        "router failover stayed stable while the root disk crossed a watch threshold. "
+        "Direct answer: router failover stayed stable; root disk crossed a watch threshold."
+    ),
+    ("both_shaped", "fixture"): (
+        "On April 27, 2026, the continuity note says we were tuning the recall gate "
+        "with the cedar-card checklist while checking infrastructure health. "
+        "Direct answer: tuning the recall gate with the cedar-card checklist."
+    ),
+    ("type_rule", "fixture"): (
+        "On April 27, 2026, the historical backup-log says the silver rollback image "
+        "was archived after a router audit. This is historical context and not "
+        "current-state evidence. Direct answer: historical backup-log; silver rollback image archived."
+    ),
+    ("multi_year", "wrong_year"): (
+        "On April 27, 2025, the decoy infrastructure note says the green compass was "
+        "stored on the west shelf. Direct answer: green compass on the west shelf."
+    ),
+    ("multi_year", "right_year"): (
+        "On April 27, 2026, the current-year infrastructure note says router failover "
+        "stayed stable while the root disk crossed a watch threshold. Direct answer: "
+        "router failover stayed stable; root disk crossed a watch threshold."
+    ),
+}
+
+
 def _seed_for_probe(root: Path, probe, run_id: str) -> tuple[tuple[str, ...], tuple[dict, ...]]:
     if probe.probe_id in {"dated_hit", "both_shaped", "type_rule"}:
         fixture_id, manifest = _seed_fixture(
             probe.probe_id,
             "fixture",
             date_value=date(2026, 4, 27),
-            content=f"SANDBOX {probe.probe_id} APRIL27 TOKEN",
+            content=_ANSWERABLE_FIXTURE_CONTENT[(probe.probe_id, "fixture")],
             tier="core",
             run_id=run_id,
         )
@@ -356,7 +384,7 @@ def _seed_for_probe(root: Path, probe, run_id: str) -> tuple[tuple[str, ...], tu
             probe.probe_id,
             "wrong_year",
             date_value=date(2025, 4, 27),
-            content="SANDBOX multi_year WRONG 2025 TOKEN",
+            content=_ANSWERABLE_FIXTURE_CONTENT[("multi_year", "wrong_year")],
             tier="core",
             run_id=run_id,
         )
@@ -364,7 +392,7 @@ def _seed_for_probe(root: Path, probe, run_id: str) -> tuple[tuple[str, ...], tu
             probe.probe_id,
             "right_year",
             date_value=date(2026, 4, 27),
-            content="SANDBOX multi_year RIGHT 2026 TOKEN",
+            content=_ANSWERABLE_FIXTURE_CONTENT[("multi_year", "right_year")],
             tier="core",
             run_id=run_id,
         )

@@ -1,4 +1,5 @@
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -127,6 +128,111 @@ class ProbeRunnerTests(unittest.TestCase):
         self.assertEqual(session.post.call_args.args[0], "http://127.0.0.1:8080/v1/chat/completions")
         self.assertFalse(rows[0].inference_failed)
         self.assertIsNone(rows[0].fail_code)
+
+    def test_answerable_dated_probes_synthesize_and_ground_on_fixture_content(self):
+        from scripts.brain_bench.probe_runner import build_probe_run
+
+        selected = (
+            eval_probes.get_probe("multi_year"),
+            eval_probes.get_probe("both_shaped"),
+            eval_probes.get_probe("dated_hit"),
+        )
+        payloads = []
+
+        def label_for(system: str, phrase: str) -> str:
+            for line in system.splitlines():
+                if phrase not in line:
+                    continue
+                match = re.search(r"\[(E\d+)\]", line)
+                if match:
+                    return match.group(1)
+            self.fail(f"missing phrase in evidence prompt: {phrase}")
+
+        def stream_factory(*, variant, payload):
+            del variant
+            payloads.append(payload)
+            system = payload["messages"][0]["content"]
+            self.assertNotIn("SANDBOX", system)
+            self.assertNotIn("TOKEN", system)
+            if "root disk crossed a watch threshold" in system:
+                label = label_for(system, "root disk crossed a watch threshold")
+                return iter(
+                    [
+                        {
+                            "content": (
+                                "The April 27, 2026 current-year note says router "
+                                f"failover stayed stable and the root disk crossed a watch threshold [{label}]."
+                            )
+                        }
+                    ]
+                )
+            if "cedar-card checklist" in system:
+                label = label_for(system, "cedar-card checklist")
+                return iter(
+                    [
+                        {
+                            "content": (
+                                "Around April 27, we were tuning the recall gate with "
+                                f"the cedar-card checklist [{label}]."
+                            )
+                        }
+                    ]
+                )
+            if "dated answer should mention April 27" in system:
+                label = label_for(system, "dated answer should mention April 27")
+                return iter(
+                    [
+                        {
+                            "content": (
+                                "The April 27 dated note says the dated answer should "
+                                f"mention April 27 and the router watch threshold [{label}]."
+                            )
+                        }
+                    ]
+                )
+            self.fail("answerable fixture content was not present in the prompt")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with sandbox.sandbox_env(Path(tmp)):
+                with mock.patch.object(eval_probes, "PROBES", selected):
+                    rows = list(build_probe_run(k=1, stream_factory=stream_factory)(_variant()))
+
+        self.assertEqual(len(payloads), len(selected))
+        self.assertEqual(len(rows), len(selected))
+        self.assertTrue(all(row.synthesized for row in rows))
+        self.assertTrue(all(row.answer for row in rows))
+        self.assertTrue(all(row.grounded_categorical for row in rows))
+        self.assertFalse(any(row.false_absence for row in rows))
+        self.assertFalse(any(row.inference_failed for row in rows))
+
+    def test_available_fixture_honest_decline_fails_grounding_not_categorical(self):
+        from scripts.brain_bench.probe_runner import build_probe_run
+
+        selected = (eval_probes.get_probe("dated_hit"),)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with sandbox.sandbox_env(Path(tmp)):
+                with mock.patch.object(eval_probes, "PROBES", selected):
+                    rows = list(
+                        build_probe_run(
+                            k=1,
+                            stream_factory=lambda **_kw: iter(
+                                [
+                                    {
+                                        "content": (
+                                            "I do not have enough specific information to answer that."
+                                        )
+                                    }
+                                ]
+                            ),
+                        )(_variant())
+                    )
+
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0].synthesized)
+        self.assertFalse(rows[0].inference_failed)
+        self.assertFalse(rows[0].grounded_categorical)
+        self.assertFalse(rows[0].wrong_absence)
 
     def test_assert_probe_result_is_the_grounding_authority(self):
         from scripts.brain_bench.probe_runner import build_probe_run

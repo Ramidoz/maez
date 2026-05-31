@@ -151,6 +151,7 @@ class VariantReport:
     p95_ms: int
     max_ms: int
     ops: OpsRubric
+    synthesized_sample_n: int
     p50_ms: int = 0
     p90_ms: int = 0
     variance_ms: float = 0.0
@@ -176,6 +177,14 @@ class VariantReport:
             raise ValueError("hard_pass must be bool")
         if type(self.over_ceiling) is not bool:
             raise ValueError("over_ceiling must be bool")
+        if type(self.sample_n) is not int or self.sample_n < 0:
+            raise ValueError("sample_n must be a non-negative int")
+        if (
+            type(self.synthesized_sample_n) is not int
+            or self.synthesized_sample_n < 0
+            or self.synthesized_sample_n > self.sample_n
+        ):
+            raise ValueError("synthesized_sample_n must be an int between 0 and sample_n")
         for reason in self.fail_reasons:
             _require_enum(reason, FailReason, "fail_reasons")
         if not isinstance(self.ops, OpsRubric):
@@ -193,6 +202,7 @@ class VariantReport:
                 "max": self.max_ms,
                 "variance": self.variance_ms,
                 "sample_n": self.sample_n,
+                "synthesized_sample_n": self.synthesized_sample_n,
                 "method": self.method,
                 "tail_flags": list(self.tail_flags),
             },

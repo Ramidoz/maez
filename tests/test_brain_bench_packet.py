@@ -39,6 +39,8 @@ def _report(**overrides):
         "p95_ms": 9000,
         "max_ms": 9000,
         "ops": _ops(),
+        "sample_n": 3,
+        "synthesized_sample_n": 3,
     }
     data.update(overrides)
     return VariantReport(**data)
@@ -98,6 +100,7 @@ class RecursiveContentFreeTests(unittest.TestCase):
                 p95_ms=9000,
                 max_ms=9000,
                 ops=BadNested(),
+                synthesized_sample_n=3,
             )
 
     def test_non_vacuous_sentinel_rejected_by_closed_ops_field(self):
@@ -116,6 +119,16 @@ class RecursiveContentFreeTests(unittest.TestCase):
     def test_post_init_rejects_non_enum_reason(self):
         with self.assertRaises(ValueError):
             _report(fail_reasons=("free text",))
+
+    def test_synthesized_sample_n_is_required_and_bounded(self):
+        for kwargs in (
+            {"synthesized_sample_n": None},
+            {"synthesized_sample_n": "1"},
+            {"synthesized_sample_n": -1},
+            {"sample_n": 2, "synthesized_sample_n": 3},
+        ):
+            with self.assertRaises(ValueError, msg=kwargs):
+                _report(**kwargs)
 
     def test_serialized_packet_is_content_free(self):
         packet = BenchPacket(
@@ -141,7 +154,17 @@ class RecursiveContentFreeTests(unittest.TestCase):
             sample_n=7,
         ).to_dict()["latency"]
 
-        for key in ("p50", "p90", "p95", "max", "variance", "sample_n", "method", "tail_flags"):
+        for key in (
+            "p50",
+            "p90",
+            "p95",
+            "max",
+            "variance",
+            "sample_n",
+            "synthesized_sample_n",
+            "method",
+            "tail_flags",
+        ):
             self.assertIn(key, latency)
 
     def test_unjudged_soft_scores_serialize_as_unmeasured(self):

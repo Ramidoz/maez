@@ -74,6 +74,7 @@ def _report(label="variant", **overrides):
         "max_ms": 3000,
         "ops": _ops(),
         "sample_n": 3,
+        "synthesized_sample_n": 3,
     }
     data.update(overrides)
     from scripts.brain_bench.bench_packet import VariantReport
@@ -569,6 +570,44 @@ class OrchestrationTests(unittest.TestCase):
 
         self.assertTrue(report.hard_pass)
         self.assertEqual(report.fail_reasons, ())
+
+    def test_latency_discloses_synthesized_answer_denominator(self):
+        def probe(_variant):
+            return [
+                _sample(
+                    answer="",
+                    evidence="",
+                    probe_id="dated_miss",
+                    sample_id="dated-miss-s1",
+                    grounded_categorical=True,
+                    latency_ms=100,
+                    p95_ms=100,
+                    max_ms=100,
+                    ttft_ms=None,
+                    tokens_per_sec=0.0,
+                    synthesized=False,
+                ),
+                _sample(
+                    probe_id="dated_hit",
+                    sample_id="dated-hit-s1",
+                    latency_ms=7000,
+                    p95_ms=7000,
+                    max_ms=7000,
+                    synthesized=True,
+                ),
+            ]
+
+        report = run_benchmark(
+            _registry(),
+            fixture_manifest_hash="f" * 64,
+            probe_run=probe,
+        ).variants[0]
+
+        self.assertEqual(report.sample_n, 2)
+        self.assertEqual(report.synthesized_sample_n, 1)
+        latency = report.to_dict()["latency"]
+        self.assertEqual(latency["sample_n"], 2)
+        self.assertEqual(latency["synthesized_sample_n"], 1)
 
 
 def _ops(**overrides):

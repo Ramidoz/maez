@@ -171,6 +171,10 @@ class ProofPacketTest(unittest.TestCase):
             blob = packet_path.read_text()
             self.assertEqual(json.loads(blob)["schema_version"], "eval_packet.v1")
             self.assertNotIn("SANDBOX", blob)
+            self.assertNotIn("root disk crossed", blob)
+            self.assertNotIn("router failover", blob)
+            self.assertNotIn("cedar-card", blob)
+            self.assertNotIn("historical backup-log", blob)
             self.assertNotIn("What did we note", blob)
             self.assertEqual(packet.run_id, json.loads(blob)["run_id"])
 

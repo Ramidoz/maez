@@ -71,6 +71,28 @@ class VoiceLintTests(unittest.TestCase):
                 self.assertFalse(result.ok)
                 self.assertEqual(result.reasons, ("cognition_verb",))
 
+    def test_allows_evidentiary_reflect_phrases(self):
+        for text in (
+            "The records reflect the April 27 context with [E1].",
+            "The April notes reflect the dated memory with [E1].",
+        ):
+            with self.subTest(text=text):
+                result = voice_lint(text)
+                self.assertTrue(result.ok)
+                self.assertEqual(result.reasons, ())
+
+    def test_rejects_first_person_or_maez_cognition_theater(self):
+        for text in (
+            "I reflect on the April note before answering.",
+            "I'm thinking about the April note before answering.",
+            "I’m thinking about the April note before answering.",
+            "Maez might reflect about the dated memory before answering from context.",
+            "I think the note was April.",
+            "Maez could wonder about the dated memory.",
+        ):
+            with self.subTest(text=text):
+                self.assertIn("cognition_verb", voice_lint(text).reasons)
+
 
 class GroundingStrictBoolTests(unittest.TestCase):
     def test_rejects_float_drift(self):

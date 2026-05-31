@@ -213,6 +213,7 @@ def run_benchmark(
                 ttft_ms=next((sample.ttft_ms for sample in samples if sample.ttft_ms is not None), None),
                 tokens_per_sec=sum(sample.tokens_per_sec for sample in samples) / len(samples),
                 sample_n=len(samples),
+                synthesized_sample_n=sum(1 for sample in samples if sample.synthesized),
                 tail_flags=_tail_flags(latency_values, over_ceiling=over_ceiling),
             )
         )
@@ -259,6 +260,7 @@ def run_benchmark(
                     else 0.0
                 ),
                 sample_n=report.sample_n,
+                synthesized_sample_n=report.synthesized_sample_n,
                 method=report.method,
                 tail_flags=report.tail_flags,
             )
