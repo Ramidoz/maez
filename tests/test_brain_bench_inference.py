@@ -14,12 +14,28 @@ from scripts.brain_bench.inference_backend import ollama_stream
 from scripts.brain_bench.variants import load_variants
 
 
+def _ops_config(**overrides):
+    data = {
+        "api_family": "ollama",
+        "topology": "reuse_endpoint",
+        "bind_host_verified": True,
+        "live_daemon_disturbance": False,
+        "gpu_contention": "none",
+        "startup_health": "ok",
+        "streaming_support": True,
+        "restart_recovery": "clean",
+    }
+    data.update(overrides)
+    return data
+
+
 def _loopback_variant(**overrides):
     data = {
         "label": "v",
         "base_url": "http://127.0.0.1:11434",
         "model": "bench-model",
         "chat_kwargs": {"temperature": 0.2, "num_predict": 99},
+        "ops": _ops_config(),
     }
     data.update(overrides)
     return load_variants(json.dumps([data]))[0]

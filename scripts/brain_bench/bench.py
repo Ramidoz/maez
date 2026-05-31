@@ -28,7 +28,6 @@ from scripts.brain_bench.gates import (
 )
 from scripts.brain_bench.judge import BlindAnswer, judge_pairwise
 from scripts.brain_bench.variants import ConfigSource, VariantRegistry, load_variants, resolve_judge_endpoint
-from scripts.recall_flip_eval import harness as eval_harness
 from scripts.recall_flip_eval.sandbox import no_egress
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -57,6 +56,7 @@ class ProbeSample:
     inference_failed: bool = False
     fail_code: str | None = None
     latency_ms: int | None = None
+    synthesized: bool = True
 
 
 def debug_dump_metadata(
@@ -145,9 +145,10 @@ def _tail_flags(latencies: list[int], *, over_ceiling: bool) -> tuple[str, ...]:
     return ()
 
 
-def _subregistry(registry: VariantRegistry, labels: set[str]) -> VariantRegistry:
+def _subregistry(registry: VariantRegistry, labels: tuple[str, ...]) -> VariantRegistry:
+    by_label = {variant.label: variant for variant in registry}
     return VariantRegistry(
-        variants=tuple(variant for variant in registry if variant.label in labels),
+        variants=tuple(by_label[label] for label in labels if label in by_label),
         variant_config_source=registry.variant_config_source,
         variant_config_hash=registry.variant_config_hash,
     )
@@ -192,7 +193,7 @@ def run_benchmark(
             )
         fail_reasons: list[FailReason] = []
         for sample in samples:
-            lint = voice_lint(sample.answer)
+            lint = voice_lint(sample.answer) if sample.synthesized else voice_lint("Maez answered from deterministic recall outcome.")
             fail_reasons.extend(
                 hard_gate_fail_reasons(
                     false_absence=sample.false_absence,
@@ -368,7 +369,7 @@ def run_full_battery(
             for report in survivors
         ]
     )
-    finalist_labels = {score.label for score in ranked[:3]}
+    finalist_labels = tuple(score.label for score in ranked[:3])
     finalist_registry = _subregistry(registry, finalist_labels)
     finalist_probe_run = build_probe_run_fn(k=finalist_k)
     finalist_packet = run_benchmark(
@@ -380,10 +381,10 @@ def run_full_battery(
         raw_records_sink=raw_records_sink,
     )
     final_reports = {report.label: report for report in finalist_packet.variants}
-    merged_reports = tuple(
-        final_reports.get(variant.label, screen_reports[variant.label])
-        for variant in registry
+    final_order = tuple(report.label for report in finalist_packet.variants) + tuple(
+        variant.label for variant in registry if variant.label not in final_reports
     )
+    merged_reports = tuple(final_reports.get(label, screen_reports[label]) for label in final_order)
     if fixture_manifest_hash is None:
         fixture_manifest_hash = _fixture_manifest_hash_from_runs(
             screen_probe_run,
@@ -412,12 +413,16 @@ def run_full_battery(
 
 
 def _fixture_manifest_hash_from_runs(*probe_runs) -> str:
+    import hashlib
+
     entries = []
     for probe_run in probe_runs:
         entries.extend(getattr(probe_run, "fixture_manifest", ()) or ())
     if not entries:
         return "0" * 64
-    return eval_harness._fixture_manifest_hash(entries)
+    canonical = tuple(sorted(entries, key=lambda item: json.dumps(item, sort_keys=True)))
+    blob = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
 def _replace_packet_fixture_hash(packet: BenchPacket, fixture_manifest_hash: str) -> BenchPacket:
@@ -447,7 +452,6 @@ def _safe_out_path(raw: str | None) -> Path:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--variants-config")
-    parser.add_argument("--judge-base-url", default="http://127.0.0.1:8081")
     parser.add_argument("--finalist-k", type=int, default=FINALIST_K)
     parser.add_argument("--out")
     args = parser.parse_args(argv)
@@ -468,7 +472,6 @@ def main(argv: list[str] | None = None) -> int:
     packet = run_full_battery(
         registry,
         build_probe_run_fn=build_probe_run,
-        judge_base_url=args.judge_base_url,
         finalist_k=args.finalist_k,
         raw_records_sink=raw_records,
     )

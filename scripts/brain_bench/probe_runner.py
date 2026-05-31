@@ -8,29 +8,9 @@ from typing import Callable, Iterable
 
 from core.routing import focused_cognition
 from scripts.brain_bench.bench import ProbeSample
-from scripts.brain_bench.bench_packet import (
-    ApiFamily,
-    GpuContention,
-    OpsRubric,
-    RestartRecovery,
-    StartupHealth,
-    Topology,
-)
 from scripts.brain_bench.inference import GenerationMeasurement, make_benchmark_chat_fn
 from scripts.brain_bench.variants import Variant
 from scripts.recall_flip_eval import harness, probes, sandbox
-
-
-DEFAULT_OPS_EVIDENCE = OpsRubric(
-    api_family=ApiFamily.OLLAMA,
-    topology=Topology.REUSE_ENDPOINT,
-    bind_host_verified=True,
-    live_daemon_disturbance=False,
-    gpu_contention=GpuContention.NONE,
-    startup_health=StartupHealth.OK,
-    streaming_support=True,
-    restart_recovery=RestartRecovery.CLEAN,
-)
 
 
 @dataclass
@@ -39,7 +19,6 @@ class ProbeRun:
     stream_factory: Callable[..., Iterable[dict[str, str]]] | None = None
     clock: Callable[[], float] | None = None
     run_id: str = "brain-bench"
-    ops_evidence: OpsRubric = DEFAULT_OPS_EVIDENCE
     fixture_manifest: list[dict] = field(default_factory=list)
 
     def __call__(self, variant: Variant) -> tuple[ProbeSample, ...]:
@@ -114,8 +93,9 @@ class ProbeRun:
                 tokens_per_sec=measurement.tokens_per_sec,
                 inference_failed=True,
                 fail_code=measurement.fail_code,
-                ops_evidence=self.ops_evidence,
+                ops_evidence=variant.ops_evidence,
                 latency_ms=measurement.total_ms,
+                synthesized=True,
             )
 
         _codes, unsafe = probes.assert_probe_result(
@@ -130,7 +110,7 @@ class ProbeRun:
             and probe.probe_id in {"multi_year", "both_shaped", "dated_hit"}
         )
         wrong_absence = probe.probe_id == "dated_miss" and result.outcome_class != "declined_absence"
-        elapsed_ms = measurement.total_ms if measurement is not None else result.focused_elapsed_ms
+        focused_latency_ms = result.focused_elapsed_ms
         return ProbeSample(
             probe_id=probe.probe_id,
             sample_id=f"{probe.probe_id}-s{sample_index + 1}",
@@ -139,12 +119,13 @@ class ProbeRun:
             false_absence=false_absence,
             grounded_categorical=grounded_categorical,
             wrong_absence=wrong_absence,
-            p95_ms=elapsed_ms,
-            max_ms=elapsed_ms,
+            p95_ms=focused_latency_ms,
+            max_ms=focused_latency_ms,
             ttft_ms=measurement.ttft_ms if measurement is not None else None,
             tokens_per_sec=measurement.tokens_per_sec if measurement is not None else 0.0,
-            ops_evidence=self.ops_evidence,
-            latency_ms=elapsed_ms,
+            ops_evidence=variant.ops_evidence,
+            latency_ms=focused_latency_ms,
+            synthesized=measurement is not None,
         )
 
 

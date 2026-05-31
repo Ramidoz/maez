@@ -38,6 +38,7 @@ def _registry():
                     "label": "variant",
                     "base_url": "http://127.0.0.1:11434",
                     "model": "m",
+                    "ops": _ops_config(),
                 }
             ]
         ),
@@ -53,6 +54,7 @@ def _registry_many(labels):
                     "label": label,
                     "base_url": f"http://127.0.0.1:{11434 + index}",
                     "model": "m",
+                    "ops": _ops_config(),
                 }
                 for index, label in enumerate(labels)
             ]
@@ -295,8 +297,18 @@ class OrchestrationTests(unittest.TestCase):
         registry = load_variants(
             json.dumps(
                 [
-                    {"label": "v1", "base_url": "http://127.0.0.1:11434", "model": "m"},
-                    {"label": "v2", "base_url": "http://127.0.0.1:11435", "model": "m"},
+                    {
+                        "label": "v1",
+                        "base_url": "http://127.0.0.1:11434",
+                        "model": "m",
+                        "ops": _ops_config(),
+                    },
+                    {
+                        "label": "v2",
+                        "base_url": "http://127.0.0.1:11435",
+                        "model": "m",
+                        "ops": _ops_config(),
+                    },
                 ]
             ),
             source="file",
@@ -407,7 +419,7 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(build_ks, [SCREEN_K, FINALIST_K])
         self.assertEqual(stage_registries[0][0], ("clean-a", "dishonest", "slow", "clean-b"))
         self.assertIsNone(stage_registries[0][1])
-        self.assertEqual(stage_registries[1][0], ("clean-a", "clean-b"))
+        self.assertEqual(stage_registries[1][0], ("clean-b", "clean-a"))
         self.assertIsNotNone(stage_registries[1][1])
         reports = {report.label: report for report in packet.variants}
         self.assertEqual(reports["dishonest"].sample_n, 3)
@@ -415,6 +427,47 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(reports["clean-a"].sample_n, 7)
         self.assertIn(FailReason.FALSE_ABSENCE, reports["dishonest"].fail_reasons)
         self.assertIn(FailReason.OVER_ANSWER_CEILING, reports["slow"].fail_reasons)
+
+    def test_run_full_battery_preserves_ranked_finalist_order(self):
+        registry = _registry_many(("config-first", "best", "middle", "screenout"))
+        stage_registries = []
+
+        def build_probe_run_fn(*, k):
+            return lambda _variant: []
+
+        def fake_run_benchmark(stage_registry, **_kwargs):
+            stage_registries.append(tuple(variant.label for variant in stage_registry))
+            if len(stage_registries) == 1:
+                return _packet(
+                    stage_registry,
+                    (
+                        _report("config-first", p95_ms=7000, max_ms=7000, tokens_per_sec=20),
+                        _report("best", p95_ms=5000, max_ms=5000, tokens_per_sec=90),
+                        _report("middle", p95_ms=5000, max_ms=5000, tokens_per_sec=50),
+                        _report(
+                            "screenout",
+                            hard_pass=False,
+                            fail_reasons=(FailReason.FALSE_ABSENCE,),
+                        ),
+                    ),
+                )
+            return _packet(
+                stage_registry,
+                tuple(_report(label, sample_n=7) for label in stage_registries[-1]),
+            )
+
+        with mock.patch("scripts.brain_bench.bench.run_benchmark", side_effect=fake_run_benchmark):
+            packet = run_full_battery(
+                registry,
+                fixture_manifest_hash="f" * 64,
+                build_probe_run_fn=build_probe_run_fn,
+            )
+
+        self.assertEqual(stage_registries[1], ("best", "middle", "config-first"))
+        self.assertEqual(
+            tuple(report.label for report in packet.variants),
+            ("best", "middle", "config-first", "screenout"),
+        )
 
     def test_tail_risk_uses_sample_distribution_not_average(self):
         def probe(_variant):
@@ -452,6 +505,33 @@ class OrchestrationTests(unittest.TestCase):
         self.assertTrue(report.over_ceiling)
         self.assertIn(FailReason.OVER_ANSWER_CEILING, report.fail_reasons)
 
+    def test_legal_decline_empty_answer_is_not_voice_linted(self):
+        def probe(_variant):
+            return [
+                _sample(
+                    answer="",
+                    evidence="",
+                    probe_id="dated_miss",
+                    sample_id="dated-miss-s1",
+                    grounded_categorical=True,
+                    latency_ms=1000,
+                    p95_ms=1000,
+                    max_ms=1000,
+                    ttft_ms=None,
+                    tokens_per_sec=0.0,
+                    synthesized=False,
+                )
+            ]
+
+        report = run_benchmark(
+            _registry(),
+            fixture_manifest_hash="f" * 64,
+            probe_run=probe,
+        ).variants[0]
+
+        self.assertTrue(report.hard_pass)
+        self.assertEqual(report.fail_reasons, ())
+
 
 def _ops(**overrides):
     data = {
@@ -466,6 +546,21 @@ def _ops(**overrides):
     }
     data.update(overrides)
     return OpsRubric(**data)
+
+
+def _ops_config(**overrides):
+    data = {
+        "api_family": "ollama",
+        "topology": "reuse_endpoint",
+        "bind_host_verified": True,
+        "live_daemon_disturbance": False,
+        "gpu_contention": "none",
+        "startup_health": "ok",
+        "streaming_support": True,
+        "restart_recovery": "clean",
+    }
+    data.update(overrides)
+    return data
 
 
 def _sample(**overrides):
@@ -484,6 +579,7 @@ def _sample(**overrides):
         "ttft_ms": 100,
         "tokens_per_sec": 20.0,
         "ops_evidence": _ops(),
+        "synthesized": True,
     }
     data.update(overrides)
     return ProbeSample(**data)

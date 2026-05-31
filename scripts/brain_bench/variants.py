@@ -8,6 +8,15 @@ from enum import Enum
 from typing import Any
 from urllib.parse import urlparse
 
+from scripts.brain_bench.bench_packet import (
+    ApiFamily,
+    GpuContention,
+    OpsRubric,
+    RestartRecovery,
+    StartupHealth,
+    Topology,
+)
+
 
 class VariantConfigError(ValueError):
     pass
@@ -26,6 +35,7 @@ class Variant:
     model: str
     port: int
     chat_kwargs: dict[str, Any]
+    ops_evidence: OpsRubric
     draft_model: str | None = None
 
 
@@ -89,6 +99,24 @@ def _normalized_endpoint(url: str) -> tuple[str, int]:
     return f"http://{host}:{parsed.port}", parsed.port
 
 
+def _coerce_ops(raw_ops: Any) -> OpsRubric:
+    if not isinstance(raw_ops, dict):
+        raise VariantConfigError("variant ops evidence is required")
+    try:
+        return OpsRubric(
+            api_family=ApiFamily(raw_ops.get("api_family")),
+            topology=Topology(raw_ops.get("topology")),
+            bind_host_verified=raw_ops.get("bind_host_verified"),
+            live_daemon_disturbance=raw_ops.get("live_daemon_disturbance"),
+            gpu_contention=GpuContention(raw_ops.get("gpu_contention")),
+            startup_health=StartupHealth(raw_ops.get("startup_health")),
+            streaming_support=raw_ops.get("streaming_support"),
+            restart_recovery=RestartRecovery(raw_ops.get("restart_recovery")),
+        )
+    except (TypeError, ValueError) as exc:
+        raise VariantConfigError("variant ops evidence must use closed values") from exc
+
+
 def validate_endpoint(url: str) -> int:
     _normalized, port = _normalized_endpoint(url)
     return port
@@ -135,6 +163,7 @@ def load_variants(
         draft_model = item.get("draft_model")
         if draft_model is not None and not isinstance(draft_model, str):
             raise VariantConfigError("variant draft_model must be a string")
+        ops_evidence = _coerce_ops(item.get("ops"))
 
         normalized, port = _normalized_endpoint(base_url)
         labels.add(label)
@@ -145,6 +174,7 @@ def load_variants(
                 model=model,
                 port=port,
                 chat_kwargs=dict(chat_kwargs),
+                ops_evidence=ops_evidence,
                 draft_model=draft_model,
             )
         )

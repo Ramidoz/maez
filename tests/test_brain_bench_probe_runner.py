@@ -18,6 +18,16 @@ def _variant():
                     "label": "v",
                     "base_url": "http://127.0.0.1:11434",
                     "model": "bench-model",
+                    "ops": {
+                        "api_family": "ollama",
+                        "topology": "reuse_endpoint",
+                        "bind_host_verified": True,
+                        "live_daemon_disturbance": False,
+                        "gpu_contention": "low",
+                        "startup_health": "ok",
+                        "streaming_support": True,
+                        "restart_recovery": "clean",
+                    },
                 }
             ]
         )
@@ -156,3 +166,74 @@ class ProbeRunnerTests(unittest.TestCase):
         self.assertTrue(rows[0].inference_failed)
         self.assertEqual(rows[0].fail_code, "timeout")
         self.assertFalse(rows[0].grounded_categorical)
+
+    def test_outer_audit_path_is_rewritten_inside_per_probe_sandbox(self):
+        from scripts.brain_bench.probe_runner import build_probe_run
+
+        selected = (eval_probes.get_probe("dated_miss"),)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with sandbox.sandbox_env(root):
+                # Mirror the launcher: an outer-sandbox path must not poison
+                # narrower per-probe sandbox assertions.
+                __import__("os").environ["MAEZ_AUDIT_LOG_PATH"] = str(root / "logs" / "audit.jsonl")
+                with mock.patch.object(eval_probes, "PROBES", selected):
+                    rows = list(
+                        build_probe_run(
+                            k=1,
+                            stream_factory=lambda **_kw: iter([{"content": "unused"}]),
+                        )(_variant())
+                    )
+
+        self.assertEqual(len(rows), 1)
+
+    def test_probe_sample_uses_variant_ops_evidence_and_focused_elapsed_latency(self):
+        from scripts.brain_bench.probe_runner import build_probe_run
+
+        selected = (
+            eval_probes.ProbeDefinition(
+                "dated_hit",
+                "smoke",
+                False,
+                ("What did we note around April 27?",),
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with sandbox.sandbox_env(Path(tmp)):
+                from scripts.brain_bench.inference import GenerationMeasurement
+                from scripts.recall_flip_eval.harness import ProbeArmResult
+
+                focused_result = ProbeArmResult(
+                    answer="Citation-shaped [E1].",
+                    outcome_class="answered_grounded",
+                    receipt="consulted",
+                    focused_elapsed_ms=5000,
+                    citation_coverage=1.0,
+                    cited_durable_ids=("fixture-1",),
+                    cited_confirmed_memory_context=True,
+                    working_set_source_types=("memory_context",),
+                )
+                measurement = GenerationMeasurement(
+                    answer="Citation-shaped [E1].",
+                    ttft_ms=50,
+                    total_ms=1000,
+                    output_tokens=1,
+                    tokens_per_sec=1.0,
+                    failed=False,
+                )
+
+                with mock.patch.object(eval_probes, "PROBES", selected), mock.patch(
+                    "scripts.brain_bench.probe_runner._run_focused_probe",
+                    return_value=(focused_result, measurement, "[E1] context"),
+                ):
+                    rows = list(
+                        build_probe_run(
+                            k=1,
+                            stream_factory=lambda **_kw: iter([{"content": "Citation-shaped [E1]."}]),
+                        )(_variant())
+                    )
+
+        self.assertEqual(rows[0].ops_evidence.gpu_contention.value, "low")
+        self.assertEqual(rows[0].latency_ms, 5000)

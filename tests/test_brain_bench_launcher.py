@@ -35,10 +35,12 @@ class LauncherEnvTests(unittest.TestCase):
             os.environ.update(prior)
 
     def test_launcher_rejects_real_home_before_exec(self):
-        with mock.patch.object(launcher.os, "execv") as execv:
-            with self.assertRaises(SystemExit):
-                launcher.main(["/home/rohit/maez", "--x"])
-        execv.assert_not_called()
+        for root in ("/home/rohit/maez", "/home/rohit", "/home"):
+            with self.subTest(root=root):
+                with mock.patch.object(launcher.os, "execv") as execv:
+                    with self.assertRaises(SystemExit):
+                        launcher.main([root, "--x"])
+                execv.assert_not_called()
 
     def test_launcher_rejects_inherited_live_path_override(self):
         prior = os.environ.copy()

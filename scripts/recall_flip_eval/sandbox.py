@@ -36,6 +36,7 @@ _SANDBOX_PATH_OVERRIDES = {
     "MAEZ_LEDGER_DB_PATH": ("memory", "ledger.db"),
     "MAEZ_CALENDAR_STORE_DB": ("memory", "calendar.db"),
     "MAEZ_SELF_AWARENESS_PATH": ("memory", "self_awareness.json"),
+    "MAEZ_AUDIT_LOG_PATH": ("logs", "audit.jsonl"),
 }
 
 

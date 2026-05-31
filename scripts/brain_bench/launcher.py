@@ -29,7 +29,8 @@ def main(argv: list[str] | None = None) -> None:
     if len(args) < 1:
         raise SystemExit("usage: launcher.py SANDBOX_ROOT [bench args...]")
     sandbox_root = Path(args[0]).resolve()
-    if sandbox_root == Path("/home/rohit/maez").resolve():
+    real_home = Path("/home/rohit/maez").resolve()
+    if sandbox_root == real_home or real_home.is_relative_to(sandbox_root):
         raise SystemExit("refusing to use the real Maez home as a brain-bench sandbox")
     _set_sandbox_env(sandbox_root)
     from scripts.recall_flip_eval import sandbox
