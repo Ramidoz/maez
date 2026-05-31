@@ -60,3 +60,73 @@ Current legacy telemetry snapshot from `logs/maez.log*`:
 - Provisional K=1.5 ceiling from current sample: `21ms`
 
 Interpretation: this is a useful initial baseline, but the live flip should still freeze final baseline thresholds immediately before turning on `MAEZ_RECALL_TRIAD_ENABLED=1`.
+
+## Self-Status Repair During 2b
+
+The first live self-status probe exposed a real collision:
+
+- Owner asked: `Are you practicing recall quietly?`
+- Runtime computed: `recall_practice_status state=active_never_run shadow_enabled=True`
+- The semantic self-claim audit rewrote the deterministic status reply to the generic fallback:
+  `I'm not sure about that right now.`
+
+Root cause: the practice/status reply is deterministic substrate state, not model-authored self-knowledge.
+It should pass canary and output-command guards, but skip the semantic self-claim judge.
+
+Fix committed:
+
+- Commit: `13ba0b2 fix(recall): preserve deterministic self-status replies`
+- Verification: `129` recall/audit/shadow tests OK; ruff clean.
+- Daemon restarted on `13ba0b2`.
+- Triad remained OFF: `recall_stack mode=legacy reason=off`.
+
+Post-fix live witness:
+
+- Owner asked: `Are you practicing recall quietly?`
+- Maez replied: `My quiet dated-recall practice path is reachable, but it has not run since I came back up.`
+- Logs:
+  - `recall_practice_status source=telegram_surface state=active_never_run shadow_enabled=True`
+  - `audit_assistant_text: semantic self-claim audit skipped on telegram_surface reason=deterministic_self_status`
+  - `recall_outcome ... mode=legacy ... reply_path=self_status`
+
+Interpretation: the kill-switch/self-status surface is now truthful enough to continue the monitored flip
+procedure. The actual recall triad is still OFF.
+
+## Step 0.2b — Shadow Gate Snapshot After Live Probes
+
+After the owner sent the dated practice battery:
+
+- Unique completed `shadow_outcome` rows: `4`
+- `false_absence_candidate=true`: `0`
+- `rescuable_candidate=true`: `3`
+- `shadow_reach` distribution:
+  - `grounded_material_available`: `3`
+  - `confirmed_absence_witnessed`: `1`
+- `receipt_state=consulted`: `4`
+- `shadow_skipped=na`: `4`
+
+Interpretation: the same-session shadow gate is clean. It is a narrow window, not a 24-hour soak; the
+post-flip soak still owns the lived benefit verdict.
+
+## Step 0.3b — Frozen Same-Session Thresholds Before Any Triad Flip
+
+Frozen before setting `MAEZ_RECALL_TRIAD_ENABLED=1`:
+
+- Evaluated commit: `13ba0b2`.
+- Legacy telemetry rows: `169`.
+- Live legacy recall/non-ordinary baseline: `n=30`, p50 `9ms`, p95 `2885ms`.
+- Live legacy ordinary baseline: `n=139`, p50 `8ms`, p95 `22ms`.
+- K: `1.5`.
+- Recall latency ceiling: `4328ms`.
+- Ordinary latency ceiling: `33ms`.
+
+Same-session verdict rule for this abbreviated live witness:
+
+- Hard fail: any `is_false_absence=true`, any covenant regression, any type-rule regression, or posture not
+  showing `mode=recall_triad reason=bundle_enabled` after the flip.
+- Benefit pass: at least `2` distinct dated/both-shaped turns must be `answered_grounded`, and the owner
+  must judge the live answers overall better than the legacy denials, with zero live answer judged worse.
+- If hard gates pass but benefit is only same, default is revert unless the owner records an explicit
+  override and re-look date.
+
+This is deliberately stricter on human verdict than on sample size because the window is same-session.
