@@ -1,7 +1,9 @@
-# Codex Handoff — Brain Benchmark (Recall-Flip Slice 2)
+# Codex Handoff — Brain Benchmark (Recall-Flip Slice 2) — v2
 
 **From:** Claude (covenant axis) · **To:** Codex (surface-truth axis) · **Date:** 2026-05-31
-**Branch base:** `main` @ `bfa593d` (spec + plan committed; flag-off, no live wiring)
+**Branch base:** `main` (latest — spec v2 + plan v2 + this brief committed; flag-off, no live wiring)
+
+> **v2 (after a 9-role pre-code panel).** The panel ran on the v1 plan and found it directionally right but NOT safe to build verbatim; **9 blockers are now folded into the v2 spec + plan** (egress 5-API proof, localhost-only endpoint validation, categorical grounding, counterbalanced blind judge, closed streaming-failure codes, `__post_init__` content-free packet, small-k stats, ops-from-evidence, producer-evidence covenant wording). Build the **v2** plan. Your six-agent pass should still independently pressure these — the fold is a starting floor, not a substitute for your pass.
 
 ---
 
@@ -35,10 +37,11 @@ The plan IS the contract. Implement task-by-task, RED-first. Find a defect in th
 
 ## Pinned facts (don't re-derive)
 - Frozen constants: `ANSWER_CEILING_MS=12000`, `STRONG_MS=8000`, `EXCELLENT_BAND_MS=(4000,6000)`, `SCREEN_K=3`, `FINALIST_K=7`. Owner override (tighter ceiling / finalist_k=10) must be recorded before running — not your call to change.
-- `GROUNDING_BAR`: **pin to the exact value `scripts/recall_flip_eval/probes.py` `assert_probe_result` already uses** — do NOT invent a number (the plan's `0.99` is a placeholder to replace).
+- **Grounding is CATEGORICAL, not numeric.** Reuse 2a's `assert_probe_result(...) -> unsafe == False` + grounded `RecallOutcome` semantics as a **bool** (`grounded_categorical`). Do **NOT** invent any numeric bar (the v1 `0.99` is deleted in v2). Wire the bool to 2a's actual signal — open `scripts/recall_flip_eval/probes.py` to confirm.
 - TTFT requires a streaming call (2a's `generate` is `stream=False`); build a streaming measurement path. TTFT is **measured, reported, not gated** (streaming isn't shipped — that's Slice 1b).
 - Token count: chunk-count proxy is acceptable for a comparative benchmark; document the assumption.
 - Tests run via `.venv/bin/python -m unittest` (pytest NOT installed). Real inference + the live run are **owner-operated** (like 2b) — your tests prove harness LOGIC via injected `stream_factory` / `probe_run` / `call_judge`, no real model.
+- 2a's real test modules (re-run to prove block-all unchanged → expect `35 OK`): `tests.test_recall_flip_eval_isolation`, `tests.test_recall_flip_eval_packet`, `tests.test_recall_flip_eval_probes`.
 - Known pre-existing broad-suite floor (env/path): cockpit proxies, camera, the temporal-guard DST cluster — not yours; name them, don't chase.
 
 ## What Claude does on return (structure your handback for it)
