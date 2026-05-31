@@ -9,7 +9,6 @@ from unittest import mock
 from scripts.brain_bench.bench import (
     DEFAULT_DEBUG_DUMP_DIR,
     BenchmarkConfigError,
-    ProbeSample,
     debug_dump_metadata,
     derive_screen_result,
     run_full_battery,
@@ -27,6 +26,7 @@ from scripts.brain_bench.bench_packet import (
     Topology,
 )
 from scripts.brain_bench.gates import FINALIST_K, SCREEN_K
+from scripts.brain_bench.samples import ProbeSample
 from scripts.brain_bench.variants import load_variants
 
 

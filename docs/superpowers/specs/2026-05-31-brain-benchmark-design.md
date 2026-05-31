@@ -1,7 +1,7 @@
 # Brain Benchmark (Recall-Flip Slice 2) — Design
 
 **Date:** 2026-05-31
-**Status:** Design approved (Rohit), amended **v2** (9-blocker pre-code panel), amended **v3** (second pre-code pass, 7 contract gaps). Pre-registration for implementation. **No code yet — rerun the pre-code pass after v3.**
+**Status:** Design approved (Rohit), amended **v2** (9-blocker pre-code panel), **v3/v3.1** (contract + mechanical tightening), **v3.2/v3.3** (post-run transport + launcher-path corrections before any trusted real model packet).
 **Predecessors:** 2a offline eval harness (`scripts/recall_flip_eval/`, frozen), the 2b owner-run flip (No-Go on latency), the A7 gate amendment, the recall progress receipt (Slice 1a, merged flag-off @ 190101f).
 
 > **Amendment v2 (panel #1):** 9 blockers — egress 5-API proof, localhost-only endpoints, categorical grounding, counterbalanced blind judge, closed streaming-failure codes, `__post_init__` content-free packet, small-k stats, ops-from-evidence, producer-evidence wording.
@@ -19,7 +19,9 @@
 >
 > **Amendment v3.2 (post-run transport correction):** The first owner-run readiness check exposed a false assumption: Rohit's active local brain is llama-server/OpenAI-compatible on `127.0.0.1:8080`, while the benchmark transport was Ollama `/api/chat` only. The benchmark must not produce an all-fail packet from a wrong wire protocol. Variant config now requires a closed `backend_family` (`ollama` or `openai_compatible`) separate from `ops.api_family`: `backend_family` selects the wire protocol, while `ops.api_family` remains deployment evidence. Config remains pathless host:port; code appends `/api/chat` for `ollama` and `/v1/chat/completions` for `openai_compatible`. OpenAI-compatible means local loopback wire protocol, not external OpenAI/cloud egress. The benchmark uses benchmark-owned clients with proxy/env trust disabled rather than `core.llm_client` singletons, so the measured endpoint is the validated variant endpoint. `draft_model` is rejected for `openai_compatible` until a tested speculative/MTP mapping exists.
 >
-> The original "no code yet" pre-registration note has been superseded by the merged core/driver slices; v3.2 is a post-run transport correction before any real model packet is trusted.
+> **Amendment v3.3 (post-run launcher-path correction):** The second owner-run attempt proved the real launch path still differed from the tested path: `python -m scripts.brain_bench.launcher ...` execs `python -m scripts.brain_bench.bench`, so any shared dataclass owned by `bench.py` is created once as `__main__` and again as `scripts.brain_bench.bench` if another module imports it. `ProbeSample` therefore must live in a library module (`scripts.brain_bench.samples`) imported by both `bench` and `probe_runner`; CLI/entry modules must not own shared dataclasses/enums used in cross-module `isinstance` or enum-identity checks. The suite must include a subprocess smoke that drives the actual launcher `-m` path against a local OpenAI-compatible stub server, proving the owner-run path reaches `/v1/chat/completions`, writes a packet, and does not fail with `probe_run must return ProbeSample rows`.
+>
+> The original "no code yet" pre-registration note has been superseded by the merged core/driver slices; v3.2/v3.3 are post-run corrections before any real model packet is trusted.
 
 ---
 

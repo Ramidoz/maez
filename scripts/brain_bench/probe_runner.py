@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 from core.routing import focused_cognition
-from scripts.brain_bench.bench import ProbeSample
 from scripts.brain_bench.inference import GenerationMeasurement, make_benchmark_chat_fn
+from scripts.brain_bench.samples import ProbeSample
 from scripts.brain_bench.variants import Variant
 from scripts.recall_flip_eval import harness, probes, sandbox
 
