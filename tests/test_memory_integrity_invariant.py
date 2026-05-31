@@ -1470,6 +1470,14 @@ class DaemonHandleMessageContract(unittest.TestCase):
                     "what were we just talking about?",
                     chat_id="c1",
                     source="telegram",
+                    chat_history=[
+                        {
+                            "content": (
+                                "Rohit: We were checking dated recall.\n"
+                                "Maez: I was tracing the recall gate."
+                            )
+                        }
+                    ],
                 )
         lines = self._recall_outcome_lines(logs)
         self.assertEqual(len(lines), 1, lines)
