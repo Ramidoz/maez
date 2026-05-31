@@ -20,6 +20,7 @@ from scripts.brain_bench.bench_packet import (
     Topology,
     VariantReport,
 )
+from scripts.brain_bench.samples import ProbeSample
 from scripts.brain_bench.variants import ConfigSource
 
 
@@ -128,8 +129,6 @@ class BrainBenchCliTests(unittest.TestCase):
         variants = [_variant_config()]
 
         def fake_probe_run(_variant):
-            from scripts.brain_bench.bench import ProbeSample
-
             return [
                 ProbeSample(
                     probe_id="dated_hit",
@@ -186,8 +185,6 @@ class BrainBenchCliTests(unittest.TestCase):
             ]
 
             def __call__(self, _variant):
-                from scripts.brain_bench.bench import ProbeSample
-
                 return [
                     ProbeSample(
                         probe_id="dated_hit",

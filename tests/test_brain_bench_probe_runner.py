@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from scripts.brain_bench.bench import ProbeSample
+from scripts.brain_bench.samples import ProbeSample
 from scripts.brain_bench.variants import load_variants
 from scripts.recall_flip_eval import probes as eval_probes
 from scripts.recall_flip_eval import sandbox
