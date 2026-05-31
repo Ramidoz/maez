@@ -49,6 +49,7 @@ import ast
 import contextlib
 import os
 import sys
+import threading
 import time
 import types
 import unittest
@@ -182,6 +183,7 @@ class DaemonHandleMessageContract(unittest.TestCase):
                       "adapter can pass structured recall provenance.")
         self.assertIn("signals_present", params)
         self.assertIn("signals_absent", params)
+        self.assertIn("send_intermediate", params)
         # Defaults must be safe for legacy callers (no-transcript,
         # no-manifest invocations keep working). Compare via ast.Constant.
         t_default = params["transcript"]
@@ -193,6 +195,9 @@ class DaemonHandleMessageContract(unittest.TestCase):
             self.assertIsInstance(d, ast.Constant)
             self.assertIsNone(d.value,
                               f"{key} default must be None")
+        d = params["send_intermediate"]
+        self.assertIsInstance(d, ast.Constant)
+        self.assertIsNone(d.value, "send_intermediate default must be None")
 
     def test_handle_message_source_uses_audited_output(self):
         """handle_message's body should call audit_assistant_text.
@@ -515,6 +520,253 @@ class DaemonHandleMessageContract(unittest.TestCase):
 
     def _shadow_lines(self, logs):
         return [ln for ln in logs.output if "shadow_outcome" in ln]
+
+    def _dated_transcript(self):
+        return (
+            "[memory context]\n"
+            '<RECALLED id="m-apr27" date_match="exact_date">'
+            "April 27 infrastructure incident was recorded."
+            "</RECALLED>"
+        )
+
+    def test_slow_synthesis_fires_one_progress_receipt(self):
+        from daemon import maez_daemon
+        from core.routing.focused_cognition import FocusedResult, GroundednessVerdict
+        from core.routing.recall_receipt import WORKING_RECEIPT_TEXT
+
+        captured = {}
+        receipts = []
+        receipt_seen = threading.Event()
+        daemon = self._build_daemon_for_handle_message()
+
+        def sink(text, *, on_complete=None, should_send=None):
+            if should_send is not None and not should_send():
+                return
+            receipts.append(text)
+            receipt_seen.set()
+            if on_complete is not None:
+                on_complete("ok", time.monotonic())
+
+        def slow_synthesize(_working_set, *, surface):
+            receipt_seen.wait(timeout=1.0)
+            return FocusedResult("April 27 answer [E1]", ["E1"], 120)
+
+        with self.assertLogs("maez", level="INFO") as logs:
+            with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+                os.environ,
+                {"MAEZ_RECALL_TRIAD_ENABLED": "1", "MAEZ_RECALL_RECEIPT_ENABLED": "1"},
+                clear=False,
+            ), mock.patch(
+                "core.routing.recall_receipt.RECEIPT_AFTER_MS",
+                20,
+            ), mock.patch(
+                "core.routing.focused_cognition.focused_synthesize",
+                side_effect=slow_synthesize,
+            ), mock.patch(
+                "core.routing.focused_cognition.check_groundedness",
+                return_value=GroundednessVerdict("grounded", 1.0, []),
+            ):
+                reply = maez_daemon.MaezDaemon.handle_message(
+                    daemon,
+                    "what did we note around April 27?",
+                    chat_id="c1",
+                    source="telegram",
+                    transcript=self._dated_transcript(),
+                    send_intermediate=sink,
+                )
+
+        self.assertEqual(reply, "April 27 answer [E1]")
+        self.assertEqual(receipts, [WORKING_RECEIPT_TEXT])
+        line = self._recall_outcome_lines(logs)[-1]
+        self.assertIn("receipt_eligible=true", line)
+        self.assertIn("ack_required=true", line)
+        self.assertIn("ack_status=emitted", line)
+        self.assertRegex(line, r"ack_emit_ms=\d+")
+        self.assertNotIn("ack_emit_ms=na", line)
+
+    def test_fast_synthesis_fires_no_progress_receipt(self):
+        from daemon import maez_daemon
+        from core.routing.focused_cognition import FocusedResult, GroundednessVerdict
+
+        captured = {}
+        receipts = []
+        daemon = self._build_daemon_for_handle_message()
+
+        def sink(text, *, on_complete=None, should_send=None):
+            if should_send is not None and not should_send():
+                return
+            receipts.append(text)
+            if on_complete is not None:
+                on_complete("ok", time.monotonic())
+
+        with self.assertLogs("maez", level="INFO") as logs:
+            with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+                os.environ,
+                {"MAEZ_RECALL_TRIAD_ENABLED": "1", "MAEZ_RECALL_RECEIPT_ENABLED": "1"},
+                clear=False,
+            ), mock.patch(
+                "core.routing.recall_receipt.RECEIPT_AFTER_MS",
+                100,
+            ), mock.patch(
+                "core.routing.focused_cognition.focused_synthesize",
+                return_value=FocusedResult("April 27 answer [E1]", ["E1"], 120),
+            ), mock.patch(
+                "core.routing.focused_cognition.check_groundedness",
+                return_value=GroundednessVerdict("grounded", 1.0, []),
+            ):
+                maez_daemon.MaezDaemon.handle_message(
+                    daemon,
+                    "what did we note around April 27?",
+                    chat_id="c1",
+                    source="telegram",
+                    transcript=self._dated_transcript(),
+                    send_intermediate=sink,
+                )
+                time.sleep(0.15)
+
+        self.assertEqual(receipts, [])
+        line = self._recall_outcome_lines(logs)[-1]
+        self.assertIn("ack_required=false", line)
+        self.assertIn("ack_status=not_required_fast_answer", line)
+
+    def test_receipt_send_failure_leaves_reply_byte_identical(self):
+        from daemon import maez_daemon
+        from core.routing.focused_cognition import FocusedResult, GroundednessVerdict
+
+        def run_once(*, receipt_enabled, sink=None):
+            captured = {}
+            daemon = self._build_daemon_for_handle_message()
+
+            def slow_synthesize(_working_set, *, surface):
+                time.sleep(0.05)
+                return FocusedResult("April 27 answer [E1]", ["E1"], 120)
+
+            env = {"MAEZ_RECALL_TRIAD_ENABLED": "1"}
+            if receipt_enabled:
+                env["MAEZ_RECALL_RECEIPT_ENABLED"] = "1"
+            with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+                os.environ,
+                env,
+                clear=False,
+            ), mock.patch(
+                "core.routing.recall_receipt.RECEIPT_AFTER_MS",
+                1,
+            ), mock.patch(
+                "core.routing.focused_cognition.focused_synthesize",
+                side_effect=slow_synthesize,
+            ), mock.patch(
+                "core.routing.focused_cognition.check_groundedness",
+                return_value=GroundednessVerdict("grounded", 1.0, []),
+            ):
+                return maez_daemon.MaezDaemon.handle_message(
+                    daemon,
+                    "what did we note around April 27?",
+                    chat_id="c1",
+                    source="telegram",
+                    transcript=self._dated_transcript(),
+                    send_intermediate=sink,
+                )
+
+        def failing_sink(_text, *, on_complete=None, should_send=None):
+            raise RuntimeError("telegram throttled")
+
+        self.assertEqual(
+            run_once(receipt_enabled=False),
+            run_once(receipt_enabled=True, sink=failing_sink),
+        )
+
+    def test_enqueue_only_sink_is_not_counted_as_emitted(self):
+        from daemon import maez_daemon
+        from core.routing.focused_cognition import FocusedResult, GroundednessVerdict
+
+        captured = {}
+        receipts = []
+        daemon = self._build_daemon_for_handle_message()
+
+        def enqueue_only_sink(text, *, on_complete=None, should_send=None):
+            if should_send is not None and not should_send():
+                return
+            receipts.append(text)
+
+        def slow_synthesize(_working_set, *, surface):
+            time.sleep(0.05)
+            return FocusedResult("April 27 answer [E1]", ["E1"], 120)
+
+        with self.assertLogs("maez", level="INFO") as logs:
+            with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+                os.environ,
+                {"MAEZ_RECALL_TRIAD_ENABLED": "1", "MAEZ_RECALL_RECEIPT_ENABLED": "1"},
+                clear=False,
+            ), mock.patch(
+                "core.routing.recall_receipt.RECEIPT_AFTER_MS",
+                1,
+            ), mock.patch(
+                "core.routing.focused_cognition.focused_synthesize",
+                side_effect=slow_synthesize,
+            ), mock.patch(
+                "core.routing.focused_cognition.check_groundedness",
+                return_value=GroundednessVerdict("grounded", 1.0, []),
+            ):
+                maez_daemon.MaezDaemon.handle_message(
+                    daemon,
+                    "what did we note around April 27?",
+                    chat_id="c1",
+                    source="telegram",
+                    transcript=self._dated_transcript(),
+                    send_intermediate=enqueue_only_sink,
+                )
+
+        self.assertEqual(len(receipts), 1)
+        line = self._recall_outcome_lines(logs)[-1]
+        self.assertIn("ack_required=true", line)
+        self.assertIn("ack_status=send_timeout", line)
+        self.assertIn("ack_emit_ms=na", line)
+
+    def test_receipt_disabled_by_default_even_on_slow_turn(self):
+        from daemon import maez_daemon
+        from core.routing.focused_cognition import FocusedResult, GroundednessVerdict
+
+        captured = {}
+        receipts = []
+        daemon = self._build_daemon_for_handle_message()
+
+        def sink(text, *, on_complete=None, should_send=None):
+            receipts.append(text)
+            if on_complete is not None:
+                on_complete("ok", time.monotonic())
+
+        def slow_synthesize(_working_set, *, surface):
+            time.sleep(0.05)
+            return FocusedResult("April 27 answer [E1]", ["E1"], 120)
+
+        with self.assertLogs("maez", level="INFO") as logs:
+            with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+                os.environ,
+                {"MAEZ_RECALL_TRIAD_ENABLED": "1"},
+                clear=False,
+            ), mock.patch(
+                "core.routing.recall_receipt.RECEIPT_AFTER_MS",
+                1,
+            ), mock.patch(
+                "core.routing.focused_cognition.focused_synthesize",
+                side_effect=slow_synthesize,
+            ), mock.patch(
+                "core.routing.focused_cognition.check_groundedness",
+                return_value=GroundednessVerdict("grounded", 1.0, []),
+            ):
+                os.environ.pop("MAEZ_RECALL_RECEIPT_ENABLED", None)
+                maez_daemon.MaezDaemon.handle_message(
+                    daemon,
+                    "what did we note around April 27?",
+                    chat_id="c1",
+                    source="telegram",
+                    transcript=self._dated_transcript(),
+                    send_intermediate=sink,
+                )
+
+        self.assertEqual(receipts, [])
+        line = self._recall_outcome_lines(logs)[-1]
+        self.assertIn("ack_status=disabled", line)
 
     def test_shadow_off_by_default_emits_no_shadow_row(self):
         from daemon import maez_daemon
@@ -916,7 +1168,7 @@ class DaemonHandleMessageContract(unittest.TestCase):
         lines = self._recall_outcome_lines(logs)
         self.assertEqual(len(lines), 1, lines)
         line = lines[-1]
-        self.assertIn("schema_version=recall_outcome.v1", line)
+        self.assertIn("schema_version=recall_outcome.v2", line)
         self.assertIn("mode=legacy", line)
         self.assertIn("turn_kind=dated", line)
         self.assertIn("outcome_class=declined_unavailable", line)
@@ -2804,6 +3056,35 @@ class AdapterNoLongerDoubleAudits(unittest.TestCase):
                       "adapter must pass structured recall_items into "
                       "handle_message so focused cognition gets "
                       "budget-immune provenance.")
+
+    def test_adapter_passes_nonblocking_progress_sink_to_handle_message(self):
+        src = (_REPO / "skills" / "surface" / "maez_adapter.py").read_text()
+        self.assertIn("send_intermediate=_send_progress_receipt", src)
+
+    def test_progress_receipt_sink_never_blocks_on_future_result(self):
+        src = (_REPO / "skills" / "surface" / "maez_adapter.py").read_text()
+        import ast as _ast
+
+        tree = _ast.parse(src)
+        for node in _ast.walk(tree):
+            if (
+                isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef))
+                and node.name == "__call__"
+            ):
+                for sub in _ast.walk(node):
+                    if (
+                        isinstance(sub, (_ast.FunctionDef, _ast.AsyncFunctionDef))
+                        and sub.name == "_send_progress_receipt"
+                    ):
+                        body = _ast.get_source_segment(src, sub) or ""
+                        self.assertIn("run_coroutine_threadsafe", body)
+                        self.assertIn("asyncio.wait_for", body)
+                        self.assertIn("RECEIPT_SEND_TIMEOUT_MS", body)
+                        self.assertIn("on_complete", body)
+                        self.assertNotIn(".result(", body)
+                        return
+                self.fail("_send_progress_receipt not found in adapter __call__")
+        self.fail("MaezMessageHandler.__call__ not found in maez_adapter")
 
 
 class WebChatAuditsBeforeStore(unittest.TestCase):

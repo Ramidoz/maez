@@ -12,6 +12,7 @@ from core.routing.recall_outcome import (
     is_false_absence,
     reply_path_from_mode,
 )
+from core.routing.recall_receipt import AckStatus
 
 
 class ClassifyOutcomeTest(unittest.TestCase):
@@ -281,6 +282,32 @@ class ReplyPathTest(unittest.TestCase):
             )
 
 
+class AckStatusBoundaryTest(unittest.TestCase):
+    def _rec(self, **kw):
+        base = dict(
+            mode="recall_triad",
+            turn_kind="dated",
+            outcome_class=OutcomeClass.ANSWERED_GROUNDED,
+            denial_kind="na",
+            had_confirmed=True,
+            citation_coverage=1.0,
+            receipt_or_na="consulted",
+            latency_ms=10,
+            focused_elapsed_ms=5,
+            reply_path=ReplyPath.FOCUSED,
+        )
+        base.update(kw)
+        return RecallOutcome(**base)
+
+    def test_recall_outcome_normalizes_ack_status_enum(self):
+        rec = self._rec(ack_status=AckStatus.EMITTED)
+        self.assertEqual(rec.ack_status, AckStatus.EMITTED.value)
+
+    def test_recall_outcome_rejects_unknown_ack_status(self):
+        with self.assertRaises(ValueError):
+            self._rec(ack_status="bogus")
+
+
 class GroundedContextHelperTest(unittest.TestCase):
     def _item(self, label, source_type, confirmed):
         return SimpleNamespace(
@@ -326,6 +353,35 @@ class GroundedContextHelperTest(unittest.TestCase):
 
 
 class ContentFreeSchemaTest(unittest.TestCase):
+    def test_schema_bumped_to_v2_with_ack_fields(self):
+        self.assertEqual(RecallOutcome.schema_version, "recall_outcome.v2")
+        names = {f.name for f in dataclasses.fields(RecallOutcome)}
+        self.assertTrue(
+            {
+                "receipt_eligible",
+                "receipt_after_ms",
+                "ack_required",
+                "ack_status",
+                "ack_emit_ms",
+            }
+            <= names
+        )
+
+    def test_ack_fields_are_content_free(self):
+        names = {f.name for f in dataclasses.fields(RecallOutcome)}
+        forbidden = {
+            "query_text",
+            "text",
+            "raw_text",
+            "reply",
+            "recalled_snippet",
+            "content",
+            "receipt_text",
+            "owner_question",
+            "snippet",
+        }
+        self.assertEqual(names & forbidden, set())
+
     def test_no_content_fields(self):
         names = {f.name for f in dataclasses.fields(RecallOutcome)}
         forbidden = {
@@ -345,7 +401,7 @@ class ContentFreeSchemaTest(unittest.TestCase):
         )
 
     def test_schema_version_and_stable_na_serialization(self):
-        self.assertEqual(RecallOutcome.schema_version, "recall_outcome.v1")
+        self.assertEqual(RecallOutcome.schema_version, "recall_outcome.v2")
         self.assertEqual(format_log_value(None), "na")
         self.assertEqual(format_log_value(True), "true")
         self.assertEqual(format_log_value(False), "false")

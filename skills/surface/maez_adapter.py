@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 from typing import Any, Optional
 
 from core.health.shared_executor import get_shared_executor
@@ -326,6 +327,61 @@ class MaezMessageHandler:
                     e,
                 )
 
+        def _send_progress_receipt(
+            msg_text: str,
+            *,
+            on_complete=None,
+            should_send=None,
+        ) -> None:
+            def _complete(result: str) -> None:
+                if on_complete is None:
+                    return
+                try:
+                    on_complete(result, time.monotonic())
+                except Exception:
+                    logger.debug("recall progress receipt completion callback failed")
+
+            if not adapter or not loop or not chat_id:
+                _complete("failed")
+                return
+
+            async def _send() -> None:
+                try:
+                    if should_send is not None and not should_send():
+                        _complete("failed")
+                        return
+                    from core.egress.provenance import ProvenancedText
+                    from core.routing.recall_receipt import RECEIPT_SEND_TIMEOUT_MS
+
+                    payload = ProvenancedText.maez_authored_owner_third_party_transport(
+                        msg_text,
+                        source_ref=f"{SURFACE_NAME}:recall_progress_receipt",
+                    )
+                    result = await asyncio.wait_for(
+                        adapter.send(chat_id, payload),
+                        timeout=RECEIPT_SEND_TIMEOUT_MS / 1000.0,
+                    )
+                    _complete("ok" if getattr(result, "success", False) else "failed")
+                except asyncio.TimeoutError:
+                    _complete("timeout")
+                except Exception as e:
+                    logger.debug(
+                        "recall progress receipt send failed on %s: %s",
+                        SURFACE_NAME,
+                        type(e).__name__,
+                    )
+                    _complete("failed")
+
+            try:
+                asyncio.run_coroutine_threadsafe(_send(), loop)
+            except Exception as e:
+                logger.debug(
+                    "recall progress receipt scheduling failed on %s: %s",
+                    SURFACE_NAME,
+                    type(e).__name__,
+                )
+                _complete("failed")
+
         # Fetch the last few telegram exchanges so the brain-loop's
         # tool-planner has conversational context. Without this, the
         # planner sees only the current user message and drifts on
@@ -442,6 +498,7 @@ class MaezMessageHandler:
                         chat_id=chat_id,
                         tool_calls=jarvis_tool_calls or None,
                         recall_items=jarvis_recall_items,
+                        send_intermediate=_send_progress_receipt,
                     ),
                 )
             except Exception as e:
