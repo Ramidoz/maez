@@ -1529,7 +1529,7 @@ def _chat_history_message_count(messages: list[dict]) -> int:
 
 
 def _continuity_fallback_reply(owner_question: str) -> str:
-    phrase = (owner_question or "that").strip().strip('"\\u201c\\u201d') or "that"
+    phrase = (owner_question or "that").strip().strip('"\u201c\u201d') or "that"
     if len(phrase) > 120:
         phrase = phrase[:117].rstrip() + "..."
     return f"I'm not sure what you mean by {phrase!r} from the chat I can see right now."

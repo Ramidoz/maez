@@ -343,6 +343,32 @@ class DaemonHandleMessageContract(unittest.TestCase):
         self.assertNotIn("may 3", lowered)
 
         reply, instruction = _resolve_continuity_fallback_shape(
+            owner_question="\u201cdid we say that\u201d",
+            continuity_turn=True,
+            date_addressed=False,
+            fresh_context_present=False,
+            prior_chat_message_count=0,
+            lived_brief="",
+            temporal_anchor_brief="",
+        )
+
+        self.assertEqual(instruction, "")
+        self.assertIn("'did we say that'", reply)
+
+        reply, instruction = _resolve_continuity_fallback_shape(
+            owner_question="do it",
+            continuity_turn=True,
+            date_addressed=False,
+            fresh_context_present=False,
+            prior_chat_message_count=0,
+            lived_brief="",
+            temporal_anchor_brief="",
+        )
+
+        self.assertEqual(instruction, "")
+        self.assertIn("'do it'", reply)
+
+        reply, instruction = _resolve_continuity_fallback_shape(
             owner_question="What were we just talking about, the 3 may bugs?",
             continuity_turn=True,
             date_addressed=False,
