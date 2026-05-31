@@ -1,25 +1,9 @@
 [
   {
-    "label": "current",
-    "base_url": "http://127.0.0.1:11434",
-    "model": "REPLACE_WITH_YOUR_CURRENT_OLLAMA_TAG",
-    "chat_kwargs": {},
-    "ops": {
-      "api_family": "ollama",
-      "topology": "reuse_endpoint",
-      "bind_host_verified": true,
-      "live_daemon_disturbance": false,
-      "gpu_contention": "low",
-      "startup_health": "ok",
-      "streaming_support": true,
-      "restart_recovery": "clean"
-    }
-  },
-  {
-    "label": "current-speculative",
+    "label": "current-llamacpp",
+    "backend_family": "openai_compatible",
     "base_url": "http://127.0.0.1:8080",
-    "model": "REPLACE_WITH_YOUR_TARGET_MODEL",
-    "draft_model": "REPLACE_WITH_YOUR_DRAFT_MODEL_OR_DELETE_THIS_LINE",
+    "model": "qwen36-27b",
     "chat_kwargs": {},
     "ops": {
       "api_family": "llama_cpp",
@@ -33,7 +17,25 @@
     }
   },
   {
+    "label": "ollama-if-running",
+    "backend_family": "ollama",
+    "base_url": "http://127.0.0.1:11434",
+    "model": "REPLACE_WITH_YOUR_OLLAMA_TAG_OR_DELETE_THIS_ENTRY",
+    "chat_kwargs": {},
+    "ops": {
+      "api_family": "ollama",
+      "topology": "reuse_endpoint",
+      "bind_host_verified": true,
+      "live_daemon_disturbance": false,
+      "gpu_contention": "low",
+      "startup_health": "ok",
+      "streaming_support": true,
+      "restart_recovery": "clean"
+    }
+  },
+  {
     "label": "smaller-quant",
+    "backend_family": "ollama",
     "base_url": "http://127.0.0.1:11434",
     "model": "REPLACE_WITH_A_SMALLER_FASTER_QUANT_TAG",
     "chat_kwargs": {},
@@ -49,19 +51,20 @@
     }
   },
   {
-    "label": "alternate",
-    "base_url": "http://127.0.0.1:11434",
-    "model": "REPLACE_WITH_AN_ALTERNATE_LOCAL_MODEL_OR_DELETE_THIS_ENTRY",
+    "label": "alternate-openai-compatible",
+    "backend_family": "openai_compatible",
+    "base_url": "http://127.0.0.1:8081",
+    "model": "REPLACE_WITH_AN_ALTERNATE_LOCAL_ALIAS_OR_DELETE_THIS_ENTRY",
     "chat_kwargs": {},
     "ops": {
-      "api_family": "ollama",
-      "topology": "reuse_endpoint",
+      "api_family": "llama_cpp",
+      "topology": "separate_server",
       "bind_host_verified": true,
       "live_daemon_disturbance": false,
-      "gpu_contention": "low",
+      "gpu_contention": "high",
       "startup_health": "ok",
       "streaming_support": true,
-      "restart_recovery": "clean"
+      "restart_recovery": "manual"
     }
   }
 ]

@@ -25,22 +25,35 @@ Minimal owner-run shape:
   --out logs/brain_bench_packets/packet.json
 ```
 
-Each variant entry must name the endpoint, model, and closed ops evidence:
+Each variant entry must name the closed wire protocol, endpoint, model, and
+closed ops evidence. `backend_family` selects the transport path:
+
+- `ollama` appends `/api/chat`.
+- `openai_compatible` appends `/v1/chat/completions`.
+
+`openai_compatible` means a local loopback server speaking that wire protocol,
+such as llama-server. It is not permission to call external OpenAI/cloud
+endpoints. `base_url` must stay pathless host:port.
 
 ```json
 {
   "label": "current-q4",
-  "base_url": "http://127.0.0.1:11434",
-  "model": "local-model",
+  "backend_family": "openai_compatible",
+  "base_url": "http://127.0.0.1:8080",
+  "model": "qwen36-27b",
   "ops": {
-    "api_family": "ollama",
-    "topology": "reuse_endpoint",
+    "api_family": "llama_cpp",
+    "topology": "separate_server",
     "bind_host_verified": true,
     "live_daemon_disturbance": false,
-    "gpu_contention": "low",
+    "gpu_contention": "high",
     "startup_health": "ok",
     "streaming_support": true,
-    "restart_recovery": "clean"
+    "restart_recovery": "manual"
   }
 }
 ```
+
+`draft_model` is currently only wired for the Ollama payload shape. The
+OpenAI-compatible path rejects it rather than silently ignoring a speculative
+decoding claim.

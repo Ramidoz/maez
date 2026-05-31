@@ -36,6 +36,7 @@ def _registry():
             [
                 {
                     "label": "variant",
+                    "backend_family": "ollama",
                     "base_url": "http://127.0.0.1:11434",
                     "model": "m",
                     "ops": _ops_config(),
@@ -52,6 +53,7 @@ def _registry_many(labels):
             [
                 {
                     "label": label,
+                    "backend_family": "ollama",
                     "base_url": f"http://127.0.0.1:{11434 + index}",
                     "model": "m",
                     "ops": _ops_config(),
@@ -332,12 +334,14 @@ class OrchestrationTests(unittest.TestCase):
                 [
                     {
                         "label": "v1",
+                        "backend_family": "ollama",
                         "base_url": "http://127.0.0.1:11434",
                         "model": "m",
                         "ops": _ops_config(),
                     },
                     {
                         "label": "v2",
+                        "backend_family": "ollama",
                         "base_url": "http://127.0.0.1:11435",
                         "model": "m",
                         "ops": _ops_config(),

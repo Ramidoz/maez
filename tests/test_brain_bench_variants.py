@@ -4,6 +4,7 @@ import sys
 import unittest
 
 from scripts.brain_bench.variants import (
+    BackendFamily,
     ConfigSource,
     VariantConfigError,
     load_variants,
@@ -62,6 +63,7 @@ class RegistryTests(unittest.TestCase):
             [
                 {
                     "label": "current",
+                    "backend_family": "ollama",
                     "base_url": "http://127.0.0.1:11434/",
                     "model": "local-model",
                     "chat_kwargs": {"temperature": 0.2},
@@ -75,6 +77,7 @@ class RegistryTests(unittest.TestCase):
         variant = registry[0]
 
         self.assertEqual(variant.label, "current")
+        self.assertIs(variant.backend_family, BackendFamily.OLLAMA)
         self.assertEqual(variant.base_url, "http://127.0.0.1:11434")
         self.assertEqual(variant.port, 11434)
         self.assertEqual(variant.chat_kwargs["temperature"], 0.2)
@@ -96,8 +99,10 @@ class RegistryTests(unittest.TestCase):
                     [
                         {
                             "label": "x",
+                            "backend_family": "ollama",
                             "base_url": "http://10.0.0.5:11434",
                             "model": "m",
+                            "ops": _ops_config(),
                         }
                     ]
                 )
@@ -110,6 +115,7 @@ class RegistryTests(unittest.TestCase):
                     [
                         {
                             "label": "x",
+                            "backend_family": "ollama",
                             "base_url": "http://127.0.0.1:11434",
                             "model": "m",
                             "ops": _ops_config(gpu_contention="FABRICATED_SENTINEL"),
@@ -142,6 +148,70 @@ class RegistryTests(unittest.TestCase):
                             "label": "x",
                             "base_url": "http://127.0.0.1:11434",
                             "model": "m",
+                        }
+                    ]
+                )
+            )
+
+    def test_backend_family_is_required_and_closed(self):
+        with self.assertRaises(VariantConfigError):
+            load_variants(
+                json.dumps(
+                    [
+                        {
+                            "label": "x",
+                            "base_url": "http://127.0.0.1:11434",
+                            "model": "m",
+                            "ops": _ops_config(),
+                        }
+                    ]
+                )
+            )
+        with self.assertRaises(VariantConfigError):
+            load_variants(
+                json.dumps(
+                    [
+                        {
+                            "label": "x",
+                            "backend_family": "openai",
+                            "base_url": "http://127.0.0.1:11434",
+                            "model": "m",
+                            "ops": _ops_config(),
+                        }
+                    ]
+                )
+            )
+
+    def test_openai_compatible_backend_family_is_wire_protocol_not_ops_claim(self):
+        registry = load_variants(
+            json.dumps(
+                [
+                    {
+                        "label": "llamacpp",
+                        "backend_family": "openai_compatible",
+                        "base_url": "http://127.0.0.1:8080",
+                        "model": "qwen36-27b",
+                        "ops": _ops_config(api_family="llama_cpp"),
+                    }
+                ]
+            )
+        )
+
+        self.assertIs(registry[0].backend_family, BackendFamily.OPENAI_COMPATIBLE)
+        self.assertEqual(registry[0].ops_evidence.api_family.value, "llama_cpp")
+
+    def test_draft_model_is_not_silently_ignored_for_openai_compatible_variants(self):
+        with self.assertRaises(VariantConfigError):
+            load_variants(
+                json.dumps(
+                    [
+                        {
+                            "label": "llamacpp",
+                            "backend_family": "openai_compatible",
+                            "base_url": "http://127.0.0.1:8080",
+                            "model": "qwen36-27b",
+                            "draft_model": "draft-local",
+                            "ops": _ops_config(api_family="llama_cpp"),
                         }
                     ]
                 )
