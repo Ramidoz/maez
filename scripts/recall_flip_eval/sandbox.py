@@ -14,6 +14,8 @@ from typing import Iterator
 
 REAL_HOME = Path("/home/rohit/maez").resolve()
 _ORIGINAL_BASE_DB = None
+_ORIGINAL_SCORING_DB = None
+_ORIGINAL_BIRTH_STATE_PATH = None
 _PATH_ENV_ALLOWLIST = {
     "MAEZ_HOME",
     "MAEZ_DATA",
@@ -122,11 +124,16 @@ def patch_memory_manager_base_db(root: str | os.PathLike):
 
 
 def _patch_loaded_path_modules(sandbox_root: Path) -> None:
+    global _ORIGINAL_BIRTH_STATE_PATH, _ORIGINAL_SCORING_DB
     scoring = sys.modules.get("core.memory.memory_scoring")
     if scoring is not None:
+        if _ORIGINAL_SCORING_DB is None:
+            _ORIGINAL_SCORING_DB = scoring._DB_PATH
         scoring._DB_PATH = sandbox_root / "memory" / "recall_stats.db"
     birth = sys.modules.get("core.memory.birth")
     if birth is not None:
+        if _ORIGINAL_BIRTH_STATE_PATH is None:
+            _ORIGINAL_BIRTH_STATE_PATH = birth.DEFAULT_STATE_PATH
         birth.DEFAULT_STATE_PATH = sandbox_root / "memory" / "self_awareness.json"
 
 
@@ -278,3 +285,9 @@ def restore_memory_patches() -> None:
     _reset_dispatcher_memory_manager()
     if _ORIGINAL_BASE_DB is not None:
         mm_mod.BASE_DB = _ORIGINAL_BASE_DB
+    scoring = sys.modules.get("core.memory.memory_scoring")
+    if scoring is not None and _ORIGINAL_SCORING_DB is not None:
+        scoring._DB_PATH = _ORIGINAL_SCORING_DB
+    birth = sys.modules.get("core.memory.birth")
+    if birth is not None and _ORIGINAL_BIRTH_STATE_PATH is not None:
+        birth.DEFAULT_STATE_PATH = _ORIGINAL_BIRTH_STATE_PATH

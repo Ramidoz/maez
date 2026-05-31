@@ -191,106 +191,108 @@ def run_eval(
 
     sandbox_root = Path(sandbox_root)
     sandbox.patch_memory_manager_base_db(sandbox_root)
-    sandbox.assert_sandbox(sandbox_root)
-    actual_commit, dirty = assert_run_parity(
-        expect_commit=expect_commit,
-        allow_dirty=allow_dirty,
-    )
-    expected_commit = expect_commit or actual_commit
-    run_id = f"eval-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
-    selected = [
-        probe
-        for probe in probes.PROBES
-        if probe_ids is None or probe.probe_id in set(probe_ids)
-    ]
-    probe_results: list[ProbeResult] = []
-    debug_dump_count = 0
-    debug_hash = None
+    try:
+        sandbox.assert_sandbox(sandbox_root)
+        actual_commit, dirty = assert_run_parity(
+            expect_commit=expect_commit,
+            allow_dirty=allow_dirty,
+        )
+        expected_commit = expect_commit or actual_commit
+        run_id = f"eval-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+        selected = [
+            probe
+            for probe in probes.PROBES
+            if probe_ids is None or probe.probe_id in set(probe_ids)
+        ]
+        probe_results: list[ProbeResult] = []
+        debug_dump_count = 0
+        debug_hash = None
 
-    with sandbox.no_egress():
-        for probe in selected:
-            expected_fixture_ids = _seed_for_probe(sandbox_root, probe, run_id)
-            variants = probe.variants[: variants_per_probe or len(probe.variants)]
-            variant_results: list[VariantResult] = []
-            passes = 0
-            unsafe_failures = 0
-            elapsed_values: list[int] = []
-            coverage_values: list[float] = []
-            last_outcome = "declined_unverified"
-            for index, text in enumerate(variants, start=1):
-                legacy = run_probe(text, flag_on=False)
-                triad = run_probe(text, flag_on=True)
-                codes, unsafe = probes.assert_probe_result(
-                    probe,
-                    triad,
-                    expected_fixture_ids=expected_fixture_ids,
-                )
-                if not unsafe:
-                    passes += 1
-                unsafe_failures += int(bool(unsafe))
-                elapsed_values.append(triad.focused_elapsed_ms)
-                if triad.citation_coverage is not None:
-                    coverage_values.append(float(triad.citation_coverage))
-                last_outcome = triad.outcome_class
-                variant_results.append(
-                    VariantResult(
-                        variant_id=f"{probe.probe_id}_v{index}",
-                        legacy_outcome_class=legacy.outcome_class,
-                        triad_outcome_class=triad.outcome_class,
-                        assertion_codes=tuple(codes),
-                        unsafe_failure=bool(unsafe),
-                        focused_elapsed_ms=triad.focused_elapsed_ms,
-                        citation_coverage=triad.citation_coverage,
-                        cited_source_types=triad.working_set_source_types,
-                        cited_temporal_confirmed=triad.cited_confirmed_memory_context,
-                        cited_durable_id_hashes=tuple(
-                            _hash_id(value) for value in triad.cited_durable_ids
+        with sandbox.no_egress():
+            for probe in selected:
+                expected_fixture_ids = _seed_for_probe(sandbox_root, probe, run_id)
+                variants = probe.variants[: variants_per_probe or len(probe.variants)]
+                variant_results: list[VariantResult] = []
+                passes = 0
+                unsafe_failures = 0
+                elapsed_values: list[int] = []
+                coverage_values: list[float] = []
+                last_outcome = "declined_unverified"
+                for index, text in enumerate(variants, start=1):
+                    legacy = run_probe(text, flag_on=False)
+                    triad = run_probe(text, flag_on=True)
+                    codes, unsafe = probes.assert_probe_result(
+                        probe,
+                        triad,
+                        expected_fixture_ids=expected_fixture_ids,
+                    )
+                    if not unsafe:
+                        passes += 1
+                    unsafe_failures += int(bool(unsafe))
+                    elapsed_values.append(triad.focused_elapsed_ms)
+                    if triad.citation_coverage is not None:
+                        coverage_values.append(float(triad.citation_coverage))
+                    last_outcome = triad.outcome_class
+                    variant_results.append(
+                        VariantResult(
+                            variant_id=f"{probe.probe_id}_v{index}",
+                            legacy_outcome_class=legacy.outcome_class,
+                            triad_outcome_class=triad.outcome_class,
+                            assertion_codes=tuple(codes),
+                            unsafe_failure=bool(unsafe),
+                            focused_elapsed_ms=triad.focused_elapsed_ms,
+                            citation_coverage=triad.citation_coverage,
+                            cited_source_types=triad.working_set_source_types,
+                            cited_temporal_confirmed=triad.cited_confirmed_memory_context,
+                            cited_durable_id_hashes=tuple(
+                                _hash_id(value) for value in triad.cited_durable_ids
+                            ),
+                        )
+                    )
+                    if unsafe and debug_dump_dir is not None:
+                        debug_dump_count += 1
+                        _write_debug_dump(debug_dump_dir, run_id, probe.probe_id, index, text, triad)
+                probe_results.append(
+                    ProbeResult(
+                        probe_id=probe.probe_id,
+                        kind=probe.kind,
+                        hard_gate=probe.hard_gate,
+                        k_pass=passes,
+                        k_total=len(variants),
+                        unsafe_failures=unsafe_failures,
+                        outcome_class=last_outcome,
+                        citation_coverage=(
+                            sum(coverage_values) / len(coverage_values)
+                            if coverage_values
+                            else None
                         ),
+                        focused_elapsed_ms=max(elapsed_values or [0]),
+                        variants=tuple(variant_results),
                     )
                 )
-                if unsafe and debug_dump_dir is not None:
-                    debug_dump_count += 1
-                    _write_debug_dump(debug_dump_dir, run_id, probe.probe_id, index, text, triad)
-            probe_results.append(
-                ProbeResult(
-                    probe_id=probe.probe_id,
-                    kind=probe.kind,
-                    hard_gate=probe.hard_gate,
-                    k_pass=passes,
-                    k_total=len(variants),
-                    unsafe_failures=unsafe_failures,
-                    outcome_class=last_outcome,
-                    citation_coverage=(
-                        sum(coverage_values) / len(coverage_values)
-                        if coverage_values
-                        else None
-                    ),
-                    focused_elapsed_ms=max(elapsed_values or [0]),
-                    variants=tuple(variant_results),
-                )
-            )
 
-    if debug_dump_dir is not None and debug_dump_count:
-        debug_hash = _hash_debug_manifest(debug_dump_dir)
-    packet = ProofPacket(
-        run_id=run_id,
-        started_at_utc=datetime.now(timezone.utc).isoformat(),
-        expected_commit_sha=expected_commit,
-        actual_commit_sha=actual_commit,
-        git_dirty=dirty,
-        probe_set_hash=_manifest_hash([probe.probe_id for probe in selected]),
-        fixture_manifest_hash=_manifest_hash([probe.probe_id for probe in selected]),
-        deterministic_chat_id=DETERMINISTIC_CHAT_ID,
-        configured_model_id=str(PRIMARY_MODEL),
-        debug_dump_count=debug_dump_count,
-        debug_dump_manifest_hash=debug_hash,
-        results=tuple(probe_results),
-    )
-    out_dir = sandbox_root / "proof"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "eval_packet.json").write_text(packet.to_json() + "\n")
-    sandbox.restore_memory_patches()
-    return packet
+        if debug_dump_dir is not None and debug_dump_count:
+            debug_hash = _hash_debug_manifest(debug_dump_dir)
+        packet = ProofPacket(
+            run_id=run_id,
+            started_at_utc=datetime.now(timezone.utc).isoformat(),
+            expected_commit_sha=expected_commit,
+            actual_commit_sha=actual_commit,
+            git_dirty=dirty,
+            probe_set_hash=_manifest_hash([probe.probe_id for probe in selected]),
+            fixture_manifest_hash=_manifest_hash([probe.probe_id for probe in selected]),
+            deterministic_chat_id=DETERMINISTIC_CHAT_ID,
+            configured_model_id=str(PRIMARY_MODEL),
+            debug_dump_count=debug_dump_count,
+            debug_dump_manifest_hash=debug_hash,
+            results=tuple(probe_results),
+        )
+        out_dir = sandbox_root / "proof"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "eval_packet.json").write_text(packet.to_json() + "\n")
+        return packet
+    finally:
+        sandbox.restore_memory_patches()
 
 
 def _seed_for_probe(root: Path, probe, run_id: str) -> tuple[str, ...]:

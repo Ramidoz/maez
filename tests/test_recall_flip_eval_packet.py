@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from scripts.recall_flip_eval.proof_packet import (
     ProbeResult,
@@ -177,6 +178,30 @@ class ProofPacketTest(unittest.TestCase):
 
         with self.assertRaises(harness.HarnessAbort):
             harness.assert_run_parity(expect_commit="definitely-not-head", allow_dirty=True)
+
+    def test_harness_restores_sandbox_patches_when_probe_raises(self):
+        import core.memory.memory_scoring as scoring
+        import memory.memory_manager as mm_mod
+        from scripts.recall_flip_eval import harness, sandbox
+
+        original_base_db = mm_mod.BASE_DB
+        original_scoring_db = scoring._DB_PATH
+        with tempfile.TemporaryDirectory() as root, sandbox.sandbox_env(root):
+            with mock.patch.object(harness, "run_probe", side_effect=RuntimeError("boom")):
+                with self.assertRaises(RuntimeError):
+                    harness.run_eval(
+                        sandbox_root=root,
+                        expect_commit=harness.current_commit_sha(),
+                        probe_ids=("dated_hit",),
+                        variants_per_probe=1,
+                        allow_dirty=True,
+                    )
+            restored_base_db = mm_mod.BASE_DB
+            restored_scoring_db = scoring._DB_PATH
+            sandbox.restore_memory_patches()
+
+        self.assertEqual(restored_base_db, original_base_db)
+        self.assertEqual(restored_scoring_db, original_scoring_db)
 
     def _packet(self, *results, **overrides):
         kwargs = {
