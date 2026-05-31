@@ -1019,6 +1019,42 @@ class DaemonHandleMessageContract(unittest.TestCase):
         self.assertIn("recall_self_status", joined)
         self.assertIn("state=unreachable_from_surface", joined)
 
+    def test_recall_practice_status_intercept_is_deterministic_and_tail_runs(self):
+        from daemon import maez_daemon
+
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+        daemon._last_shadow_receipt = {
+            "at_ts": time.time(),
+            "boot_id": "bootA",
+            "state": "consulted",
+        }
+        daemon.memory.store_telegram = mock.Mock(return_value="raw-memory-id")
+        with self.assertLogs("maez", level="INFO") as logs:
+            with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+                os.environ,
+                {
+                    "MAEZ_RECALL_STATUS_INTERCEPT_ENABLED": "1",
+                    "MAEZ_RECALL_SHADOW_ENABLED": "1",
+                },
+                clear=False,
+            ):
+                reply = maez_daemon.MaezDaemon.handle_message(
+                    daemon,
+                    "are you practicing recall quietly?",
+                    chat_id="c1",
+                    source="telegram",
+                )
+
+        self.assertIn("quietly", reply.lower())
+        self.assertNotIn("grounded reply", reply)
+        self.assertNotIn("messages", captured)
+        self.assertTrue(captured.get("trace_written"))
+        daemon.memory.store_telegram.assert_called_once()
+        joined = "\n".join(logs.output)
+        self.assertIn("recall_practice_status", joined)
+        self.assertIn("reply_path=self_status", joined)
+
     def test_handle_message_sends_one_system_message_with_dispatcher_suffix(self):
         """The live daemon prompt assembly must send one system message."""
         from daemon import maez_daemon

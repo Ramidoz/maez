@@ -3,7 +3,9 @@ import unittest
 from core.routing.recall_self_status import (
     RecallLiveness,
     RecallStatusReceipt,
+    build_recall_practice_reply,
     build_recall_status_reply,
+    is_recall_practice_query,
     is_recall_status_query,
     recall_status_query_wants_timestamp,
 )
@@ -181,6 +183,55 @@ class StatusReplyTest(unittest.TestCase):
             low = reply.lower()
             for bad in (" she ", " he ", " her ", " his ", " hers "):
                 self.assertNotIn(bad, f" {low} ")
+
+
+class PracticeStatusTest(unittest.TestCase):
+    def test_practice_query_matches(self):
+        for q in (
+            "are you practicing recall quietly?",
+            "are you running anything in the background?",
+        ):
+            self.assertTrue(is_recall_practice_query(q), q)
+
+    def test_ordinary_not_matched(self):
+        for q in (
+            "what did we decide on April 27?",
+            "is your dated recall reachable?",
+            "are you practicing piano?",
+            "what were we just talking about?",
+        ):
+            self.assertFalse(is_recall_practice_query(q), q)
+
+    def test_reply_reflects_shadow_state(self):
+        receipt = {"at_ts": 1099.0, "boot_id": "bootA", "state": "consulted"}
+        on, state = build_recall_practice_reply(
+            shadow_enabled=True,
+            last_shadow_receipt=receipt,
+            current_boot_id="bootA",
+            now_ts=1100.0,
+        )
+        self.assertEqual(state, "active_recent")
+        self.assertIn("quietly", on.lower())
+        off, state = build_recall_practice_reply(
+            shadow_enabled=False,
+            last_shadow_receipt=None,
+            current_boot_id="bootA",
+            now_ts=1100.0,
+        )
+        self.assertEqual(state, "off")
+        self.assertNotIn("quietly practicing", off.lower())
+
+    def test_stale_shadow_receipt_does_not_sound_current(self):
+        receipt = {"at_ts": 1000.0, "boot_id": "bootA", "state": "consulted"}
+        reply, state = build_recall_practice_reply(
+            shadow_enabled=True,
+            last_shadow_receipt=receipt,
+            current_boot_id="bootA",
+            now_ts=4000.0,
+        )
+        self.assertEqual(state, "active_stale")
+        self.assertIn("reachable", reply.lower())
+        self.assertNotIn("just practiced", reply.lower())
 
 
 if __name__ == "__main__":

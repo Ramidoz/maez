@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from enum import Enum
 
 _STALE_SECONDS = 6 * 3600
+_PRACTICE_STALE_SECONDS = 30 * 60
 
 _RECALL_NOUN = r"(?:dated\s+(?:recall|memory)|recall\s+(?:stack|system))"
 _REACH_PRED = r"(?:reachable|working|online|available|active|up|down|enabled|on|off|broken)"
@@ -25,6 +26,11 @@ _COMPOUND_CONTENT_RE = re.compile(
 )
 _COMPOUND_CONTENT_WHEN_RE = re.compile(
     rf"\b(?:and|,)\b.*\bwhen\b(?!.*\b(?:last\s+)?(?:check|checked|look|looked)\b.*\byour\b.*\b{_RECALL_NOUN}\b)",
+    re.IGNORECASE,
+)
+_PRACTICE_RE = re.compile(
+    r"\b(?:are|is)\b.*\b(?:you|maez)\b.*\b(?:quietly\s+)?"
+    r"(?:practic(?:e|ing)|shadow(?:ing)?|running)\b.*\b(?:recall|background)\b",
     re.IGNORECASE,
 )
 
@@ -59,8 +65,57 @@ def recall_status_query_wants_timestamp(text: str) -> bool:
     return bool(_WHEN_CHECK_RE.search((text or "").strip()))
 
 
+def is_recall_practice_query(text: str) -> bool:
+    # Scope guard: liveness of the quiet shadow-practice harness only. Content
+    # recall and the dated-recall reachability status keep their own routes.
+    t = (text or "").strip()
+    if not t:
+        return False
+    if is_recall_status_query(t):
+        return False
+    if _COMPOUND_CONTENT_RE.search(t) or _COMPOUND_CONTENT_WHEN_RE.search(t):
+        return False
+    return bool(_PRACTICE_RE.search(t))
+
+
 def _format_ts(ts: float) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat(timespec="seconds")
+
+
+def build_recall_practice_reply(
+    *,
+    shadow_enabled: bool,
+    last_shadow_receipt: dict | None,
+    current_boot_id: str,
+    now_ts: float,
+) -> tuple[str, str]:
+    if not shadow_enabled:
+        return (
+            "My quiet dated-recall practice path is off right now.",
+            "off",
+        )
+    if (
+        not last_shadow_receipt
+        or str(last_shadow_receipt.get("boot_id") or "") != str(current_boot_id or "")
+    ):
+        return (
+            "My quiet dated-recall practice path is reachable, but it has not run "
+            "since I came back up.",
+            "active_never_run",
+        )
+    age = max(0.0, float(now_ts) - float(last_shadow_receipt.get("at_ts") or 0.0))
+    if age <= _PRACTICE_STALE_SECONDS:
+        state = str(last_shadow_receipt.get("state") or "unknown")
+        return (
+            f"I'm quietly practicing dated recall in the background; the last "
+            f"practice check reached state {state} just a moment ago.",
+            "active_recent",
+        )
+    return (
+        "My quiet dated-recall practice path is reachable, but it has not run "
+        "recently enough for me to call it fresh.",
+        "active_stale",
+    )
 
 
 def build_recall_status_reply(

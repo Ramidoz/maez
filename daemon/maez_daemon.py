@@ -4312,12 +4312,27 @@ class MaezDaemon:
         if _recall_status_intercept_enabled():
             try:
                 from core.routing.recall_self_status import (
+                    build_recall_practice_reply as _build_recall_practice_reply,
                     build_recall_status_reply as _build_recall_status_reply,
+                    is_recall_practice_query as _is_recall_practice_query,
                     is_recall_status_query as _is_recall_status_query,
                     recall_status_query_wants_timestamp as _recall_status_query_wants_timestamp,
                 )
 
-                if _is_recall_status_query(text) and not _date_addressed_turn:
+                if _is_recall_practice_query(text) and not _date_addressed_turn:
+                    _recall_status_reply, _practice_state = _build_recall_practice_reply(
+                        shadow_enabled=_recall_shadow_enabled(),
+                        last_shadow_receipt=getattr(self, "_last_shadow_receipt", None),
+                        current_boot_id=str(getattr(self, "boot_time", "") or ""),
+                        now_ts=time.time(),
+                    )
+                    logger.info(
+                        "recall_practice_status source=%s state=%s shadow_enabled=%s",
+                        source,
+                        _practice_state,
+                        _recall_shadow_enabled(),
+                    )
+                elif _is_recall_status_query(text) and not _date_addressed_turn:
                     _status_last_receipt = getattr(self, "_last_recall_receipt", None)
                     _status_include_timestamp = _recall_status_query_wants_timestamp(text)
                     _status_carrier_reachable = bool(
