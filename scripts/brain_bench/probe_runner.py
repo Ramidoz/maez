@@ -97,6 +97,7 @@ class ProbeRun:
                 latency_ms=measurement.total_ms,
                 synthesized=True,
                 expected_fixture_ids=expected_fixture_ids,
+                available_label_map=result.available_label_map,
             )
 
         _codes, unsafe = probes.assert_probe_result(
@@ -131,6 +132,7 @@ class ProbeRun:
             cited_durable_ids=result.cited_durable_ids,
             expected_fixture_ids=expected_fixture_ids,
             cited_confirmed_memory_context=result.cited_confirmed_memory_context,
+            available_label_map=result.available_label_map,
         )
 
 
@@ -220,6 +222,7 @@ def _run_focused_probe(
                 focused_elapsed_ms=elapsed,
                 citation_coverage=None,
                 working_set_source_types=tuple(item.source_type for item in working_set.items),
+                available_label_map=harness.citation_label_map(working_set),
             ),
             None,
             evidence,
@@ -267,6 +270,7 @@ def _run_focused_probe(
             cited_durable_ids=durable_ids,
             cited_confirmed_memory_context=grounded,
             working_set_source_types=tuple(item.source_type for item in working_set.items),
+            available_label_map=harness.citation_label_map(working_set),
         ),
         measurement,
         evidence,
