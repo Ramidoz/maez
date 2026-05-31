@@ -20,6 +20,8 @@ class ShadowReach(Enum):
 
 
 class ShadowSkip(Enum):
+    # Schema-only today: shadow soft-budget overruns are observed and logged,
+    # not hard-skipped. Keep the closed value for future telemetry compatibility.
     BUDGET_EXCEEDED = "budget_exceeded"
     QUEUE_FULL = "queue_full"
     EXCEPTION = "exception"
@@ -73,6 +75,9 @@ def compute_shadow_pair_id(*, boot_id: str, trace_id: str | None) -> str:
 
 
 def _item_confirmed_memory_context(item) -> bool:
+    # Dated recall currently routes confirmed memories into memory_context only
+    # (_absolute_date_recall keeps evidence empty). If that partition changes,
+    # widen this with the assembler's confirmed memory_evidence behavior.
     if getattr(item, "source_type", None) != "memory_context":
         return False
     temporal_provenance = getattr(item, "temporal_provenance", None) or {}

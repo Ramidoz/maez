@@ -189,7 +189,8 @@ class PracticeStatusTest(unittest.TestCase):
     def test_practice_query_matches(self):
         for q in (
             "are you practicing recall quietly?",
-            "are you running anything in the background?",
+            "are you running recall practice in the background?",
+            "are you running background recall practice?",
         ):
             self.assertTrue(is_recall_practice_query(q), q)
 
@@ -198,6 +199,7 @@ class PracticeStatusTest(unittest.TestCase):
             "what did we decide on April 27?",
             "is your dated recall reachable?",
             "are you practicing piano?",
+            "are you running anything in the background?",
             "what were we just talking about?",
         ):
             self.assertFalse(is_recall_practice_query(q), q)
@@ -212,6 +214,7 @@ class PracticeStatusTest(unittest.TestCase):
         )
         self.assertEqual(state, "active_recent")
         self.assertIn("quietly", on.lower())
+        self.assertNotIn("consulted", on.lower())
         off, state = build_recall_practice_reply(
             shadow_enabled=False,
             last_shadow_receipt=None,
@@ -231,8 +234,10 @@ class PracticeStatusTest(unittest.TestCase):
         )
         self.assertEqual(state, "active_recent_skipped")
         low = reply.lower()
-        self.assertIn("last quiet practice attempt was skipped", low)
+        self.assertIn("last quiet attempt didn't complete", low)
         self.assertNotIn("quietly practicing dated recall", low)
+        self.assertNotIn("queue_full", low)
+        self.assertNotIn("state", low)
 
     def test_stale_shadow_receipt_does_not_sound_current(self):
         receipt = {"at_ts": 1000.0, "boot_id": "bootA", "state": "consulted"}

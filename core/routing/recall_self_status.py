@@ -29,8 +29,12 @@ _COMPOUND_CONTENT_WHEN_RE = re.compile(
     re.IGNORECASE,
 )
 _PRACTICE_RE = re.compile(
-    r"\b(?:are|is)\b.*\b(?:you|maez)\b.*\b(?:quietly\s+)?"
-    r"(?:practic(?:e|ing)|shadow(?:ing)?|running)\b.*\b(?:recall|background)\b",
+    r"\b(?:are|is)\b.*\b(?:you|maez)\b.*(?:"
+    r"\b(?:quietly\s+)?practic(?:e|ing)\b.*\brecall\b"
+    r"|\bshadow(?:ing)?\b.*\brecall\b"
+    r"|\brunning\b.*\b(?:recall|practice)\b.*\bbackground\b"
+    r"|\brunning\b.*\bbackground\b.*\b(?:recall|practice)\b"
+    r")",
     re.IGNORECASE,
 )
 
@@ -108,14 +112,13 @@ def build_recall_practice_reply(
         state = str(last_shadow_receipt.get("state") or "unknown")
         if state != "consulted":
             return (
-                f"My quiet dated-recall practice path is reachable, but the last "
-                f"quiet practice attempt was skipped with state {state} just a "
-                f"moment ago.",
+                "My quiet dated-recall practice path is reachable, but the last "
+                "quiet attempt didn't complete just a moment ago.",
                 "active_recent_skipped",
             )
         return (
-            f"I'm quietly practicing dated recall in the background; the last "
-            f"practice check reached state {state} just a moment ago.",
+            "I'm quietly practicing dated recall in the background; the last "
+            "quiet check went through a moment ago.",
             "active_recent",
         )
     return (
