@@ -4746,6 +4746,11 @@ class MaezDaemon:
                 signals_present=_chat_signals_present,
                 signals_absent=_chat_signals_absent,
                 evidence_envelope=_evidence_envelope,
+                semantic_self_claim_skip_reason=(
+                    "deterministic_self_status"
+                    if _reply_path is ReplyPath.SELF_STATUS
+                    else None
+                ),
             )
             try:
                 _trace.audit = AuditInfo(

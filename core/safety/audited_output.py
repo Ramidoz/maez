@@ -60,6 +60,7 @@ def audit_assistant_text(
     signals_absent: Optional[list] = None,
     in_tool_continuation: Optional[bool] = None,
     evidence_envelope: Optional[dict] = None,
+    semantic_self_claim_skip_reason: Optional[str] = None,
 ) -> str:
     """Return the audited form of an assistant reply.
 
@@ -80,6 +81,10 @@ def audit_assistant_text(
         in_tool_continuation: override. If None (default), derived from
             `bool(transcript.strip())`. Set explicitly only if a caller
             has a non-transcript reason to skip the audit (rare).
+        semantic_self_claim_skip_reason: content-free reason to skip only
+            the semantic self-claim judge after canary/output-command guards.
+            Use for deterministic substrate status replies that report runtime
+            state rather than model-authored self-knowledge.
 
     Returns:
         The audited text. If the audit rewrote the reply, the returned
@@ -137,6 +142,15 @@ def audit_assistant_text(
     # explicitly forced the value. Single knob, minimal API surface.
     if in_tool_continuation is None:
         in_tool_continuation = bool(transcript.strip())
+
+    if semantic_self_claim_skip_reason:
+        logger.info(
+            "audit_assistant_text: semantic self-claim audit skipped "
+            "on %s reason=%s",
+            surface,
+            semantic_self_claim_skip_reason,
+        )
+        return text
 
     try:
         from core.safety.self_claim_audit import audit as _audit

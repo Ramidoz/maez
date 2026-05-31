@@ -110,6 +110,20 @@ class AuditedOutputHelper(unittest.TestCase):
         self.assertEqual(out_empty, "text")
         self.assertEqual(out_with, "text")
 
+    def test_substrate_status_can_skip_semantic_self_claim_audit(self):
+        """Deterministic substrate status is already grounded by the runtime."""
+        from core.safety.audited_output import audit_assistant_text
+
+        with mock.patch("core.safety.self_claim_audit.audit") as audit_mock:
+            out = audit_assistant_text(
+                "My dated memory is reachable from here.",
+                surface="telegram_surface",
+                semantic_self_claim_skip_reason="deterministic_self_status",
+            )
+
+        self.assertEqual(out, "My dated memory is reachable from here.")
+        audit_mock.assert_not_called()
+
 
 class DaemonHandleMessageContract(unittest.TestCase):
     """MaezDaemon.handle_message must accept the new audit-context kwargs.
@@ -356,6 +370,7 @@ class DaemonHandleMessageContract(unittest.TestCase):
         needs_web_search: bool = False,
         web_context: str = "",
         reply: str = "grounded reply",
+        audit_side_effect=None,
     ):
         trace = types.SimpleNamespace(
             trace_id="trace-harness",
@@ -470,10 +485,15 @@ class DaemonHandleMessageContract(unittest.TestCase):
                 "core.routing.observation.record_legacy_web_search_observation",
                 return_value=None,
             ))
-            stack.enter_context(mock.patch(
+            audit_mock = stack.enter_context(mock.patch(
                 "core.safety.audited_output.audit_assistant_text",
-                side_effect=lambda text, **_kwargs: text,
+                side_effect=(
+                    audit_side_effect
+                    if audit_side_effect is not None
+                    else (lambda text, **_kwargs: text)
+                ),
             ))
+            captured["audit_assistant_text_mock"] = audit_mock
             stack.enter_context(mock.patch(
                 "core.ledger.writer.try_write_turn",
                 return_value="turn-1",
@@ -1118,6 +1138,32 @@ class DaemonHandleMessageContract(unittest.TestCase):
         joined = "\n".join(logs.output)
         self.assertIn("recall_practice_status", joined)
         self.assertIn("reply_path=self_status", joined)
+
+    def test_recall_practice_status_skips_semantic_self_claim_judge(self):
+        from daemon import maez_daemon
+
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+        with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+            os.environ,
+            {
+                "MAEZ_RECALL_STATUS_INTERCEPT_ENABLED": "1",
+                "MAEZ_RECALL_SHADOW_ENABLED": "1",
+            },
+            clear=False,
+        ):
+            maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                "are you practicing recall quietly?",
+                chat_id="c1",
+                source="telegram",
+            )
+
+        audit_mock = captured["audit_assistant_text_mock"]
+        self.assertEqual(
+            audit_mock.call_args.kwargs.get("semantic_self_claim_skip_reason"),
+            "deterministic_self_status",
+        )
 
     def test_recall_practice_status_reports_off_when_triad_on_suppresses_shadow(self):
         from daemon import maez_daemon
