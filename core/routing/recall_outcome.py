@@ -7,9 +7,12 @@ benefit/caution can be measured as baseline-vs-soak deltas.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from enum import Enum
 from typing import ClassVar
+
+logger = logging.getLogger(__name__)
 
 
 class OutcomeClass(Enum):
@@ -33,6 +36,19 @@ class ReplyPath(Enum):
     LEGACY = "legacy"
     DATED_HONESTY = "dated_honesty"
     SELF_STATUS = "self_status"
+
+
+def reply_path_from_mode(mode_value: str) -> "ReplyPath":
+    """Crash-safe coercion of a ReplyMode value to a RecallOutcome path.
+
+    ReplyMode has values such as clinical/camera/backend_error that do not
+    represent a recall outcome path. Those should never crash handle_message.
+    """
+    try:
+        return ReplyPath(str(mode_value))
+    except ValueError:
+        logger.warning("reply_path_unknown_mode mode=%s -> legacy", str(mode_value))
+        return ReplyPath.LEGACY
 
 
 @dataclass(frozen=True)

@@ -3462,7 +3462,7 @@ class MaezDaemon:
                 keyword overlap (incident: meta-harness at 04:42,
                 "it" at 04:53 lost the referent).
         """
-        from core.routing.recall_outcome import ReplyPath
+        from core.routing.recall_outcome import ReplyPath, reply_path_from_mode
         from core.routing.reply_mode import (
             ReplyDecisionSignals,
             ReplyMode,
@@ -4162,7 +4162,7 @@ class MaezDaemon:
         _focused_working_set = None
         _focused_result = None
         _focused_verdict = None
-        _reply_path = ReplyPath(_reply_decision.mode.value.lower())
+        _reply_path = reply_path_from_mode(_reply_decision.mode.value.lower())
         _focused_used = False
         _focused_answer_used = False
         _recall_status_reply = None

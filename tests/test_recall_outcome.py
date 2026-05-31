@@ -10,6 +10,7 @@ from core.routing.recall_outcome import (
     classify_outcome,
     format_log_value,
     is_false_absence,
+    reply_path_from_mode,
 )
 
 
@@ -348,6 +349,17 @@ class ContentFreeSchemaTest(unittest.TestCase):
         self.assertEqual(format_log_value(None), "na")
         self.assertEqual(format_log_value(True), "true")
         self.assertEqual(format_log_value(False), "false")
+
+
+class ReplyPathFromModeTest(unittest.TestCase):
+    def test_known_modes_map(self):
+        self.assertIs(reply_path_from_mode("focused"), ReplyPath.FOCUSED)
+        self.assertIs(reply_path_from_mode("legacy"), ReplyPath.LEGACY)
+        self.assertIs(reply_path_from_mode("tool"), ReplyPath.TOOL)
+
+    def test_unknown_mode_falls_back_to_legacy_no_raise(self):
+        for unknown in ("clinical", "camera", "backend_error", "nonsense"):
+            self.assertIs(reply_path_from_mode(unknown), ReplyPath.LEGACY, unknown)
 
 
 if __name__ == "__main__":
