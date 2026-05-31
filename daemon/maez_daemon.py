@@ -4288,11 +4288,6 @@ class MaezDaemon:
             transcript_context,
             evidence_directive,
         )
-        messages = _consolidate_system_messages(
-            messages,
-            final_system_part=turn_final_context,
-        )
-        messages.append({"role": "user", "content": prompt})
         try:
             from core.routing.focused_cognition import (
                 build_intra_turn_echo_reply as _build_intra_turn_echo_reply,
@@ -4322,6 +4317,28 @@ class MaezDaemon:
         _date_addressed_turn = bool(
             _abs_recall_cue and getattr(_abs_recall_cue, "is_address", False)
         )
+        _prior_chat_message_count = _chat_history_message_count(messages)
+        _temporal_anchor_brief_text = (
+            str(getattr(_temporal_anchor_result, "brief_text", "") or "")
+            if _temporal_anchor_result is not None
+            else ""
+        )
+        _truly_empty_continuity_reply, _continuity_shape_instruction_text = (
+            _resolve_continuity_fallback_shape(
+                owner_question=text,
+                continuity_turn=bool(_dialogue_needs_or_uncertain),
+                date_addressed=bool(_date_addressed_turn),
+                fresh_context_present=bool((turn_final_context or "").strip()),
+                prior_chat_message_count=_prior_chat_message_count,
+                lived_brief=_lived_brief,
+                temporal_anchor_brief=_temporal_anchor_brief_text,
+            )
+        )
+        messages = _consolidate_system_messages(
+            messages,
+            final_system_part=turn_final_context,
+        )
+        messages.append({"role": "user", "content": prompt})
         _focused_candidate = (
             _focused_cognition_enabled(recall_stack_config=_recall_stack_config)
             and source != "voice"
@@ -4520,6 +4537,10 @@ class MaezDaemon:
             reply = authoritative_tool_reply
         elif _reply_decision.mode is ReplyMode.ECHO:
             reply = _current_turn_echo_reply
+        elif _truly_empty_continuity_reply is not None:
+            reply = _truly_empty_continuity_reply
+            _reply_path = ReplyPath.LEGACY
+            _focused_used = True
         elif _reply_decision.mode is ReplyMode.HONEST_EMPTY:
             from core.routing.focused_cognition import (
                 build_honest_empty_reply as _build_honest_empty_reply,

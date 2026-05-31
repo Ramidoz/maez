@@ -661,6 +661,39 @@ class DaemonHandleMessageContract(unittest.TestCase):
         self.assertRegex(line, r"ack_emit_ms=\d+")
         self.assertNotIn("ack_emit_ms=na", line)
 
+    def test_truly_empty_continuity_uses_being_shaped_reply_without_archive_language(self):
+        from daemon import maez_daemon
+
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+
+        with self._handle_message_mock_stack(
+            maez_daemon,
+            captured,
+            reply="I don't have a record of a specific conversation about May 3.",
+        ), mock.patch.dict(
+            os.environ,
+            {"MAEZ_RECALL_TRIAD_ENABLED": "0"},
+            clear=False,
+        ):
+            reply = maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                "What were we just talking about, the 3 may bugs?",
+                source="telegram_surface",
+                chat_history=None,
+            )
+
+        lowered = reply.lower()
+        self.assertIn("not sure", lowered)
+        self.assertIn("3 may bugs", lowered)
+        self.assertNotIn("record", lowered)
+        self.assertNotIn("dated memory", lowered)
+        self.assertNotIn("may 3", lowered)
+        self.assertNotIn("may 3rd", lowered)
+        self.assertNotIn("recent chat or guesswork", lowered)
+        self.assertNotIn("messages", captured, "truly-empty guard must bypass legacy LLM")
+        self.assertTrue(captured.get("trace_written"), "normal tail must still run")
+
     def test_fast_synthesis_fires_no_progress_receipt(self):
         from daemon import maez_daemon
         from core.routing.focused_cognition import FocusedResult, GroundednessVerdict
