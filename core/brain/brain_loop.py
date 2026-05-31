@@ -83,6 +83,41 @@ class _DispatcherPathResult:
     recall_items: tuple[Any, ...] = ()
 
 
+def recall_partitions_to_items(partition: dict, *, role_source_type: str):
+    """Convert recall partitions into structured dispatcher RecallItems.
+
+    Shared by the live recall adapter and the shadow harness so temporal
+    confirmation is computed in exactly one place.
+    """
+    from core.dispatcher.layer1 import RecallItem
+
+    rows: list[dict] = []
+    for tier in ("core", "daily", "raw"):
+        rows.extend((partition or {}).get(tier, []) or [])
+    items = []
+    for row in rows:
+        meta = row.get("metadata") or {}
+        method = meta.get("temporal_match_method")
+        temporal_provenance = (
+            {
+                "method": method,
+                "confirmed": method in ("exact_date", "month_window"),
+            }
+            if method
+            else None
+        )
+        text = _llm_client.sanitize_prompt_text(str(row.get("content") or ""))
+        items.append(
+            RecallItem(
+                text=text,
+                source_type=role_source_type,
+                durable_id=str(row.get("id") or "") or None,
+                temporal_provenance=temporal_provenance,
+            )
+        )
+    return tuple(items)
+
+
 def _summarize(value, *, limit: int) -> str:
     """Stringify-and-truncate. Used to keep tool_call dicts small
     enough that the trace JSONL line stays a single readable line."""
@@ -357,35 +392,11 @@ def _dispatcher_recall_adapters(
                     ],
                 )
 
-        def _partition_rows(partition: dict) -> list[dict]:
-            rows: list[dict] = []
-            for tier in ("core", "daily", "raw"):
-                rows.extend((partition or {}).get(tier, []) or [])
-            return rows
-
         def _items_for(partition: dict, role_source_type: str) -> tuple[RecallItem, ...]:
-            items = []
-            for row in _partition_rows(partition):
-                meta = row.get("metadata") or {}
-                method = meta.get("temporal_match_method")
-                temporal_provenance = (
-                    {
-                        "method": method,
-                        "confirmed": method in ("exact_date", "month_window"),
-                    }
-                    if method
-                    else None
-                )
-                text = _llm_client.sanitize_prompt_text(str(row.get("content") or ""))
-                items.append(
-                    RecallItem(
-                        text=text,
-                        source_type=role_source_type,
-                        durable_id=str(row.get("id") or "") or None,
-                        temporal_provenance=temporal_provenance,
-                    )
-                )
-            return tuple(items)
+            return recall_partitions_to_items(
+                partition,
+                role_source_type=role_source_type,
+            )
 
         def _combined_context_items(*partitions: dict) -> tuple[RecallItem, ...]:
             items: list[RecallItem] = []
