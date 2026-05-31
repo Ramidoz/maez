@@ -221,6 +221,19 @@ class PracticeStatusTest(unittest.TestCase):
         self.assertEqual(state, "off")
         self.assertNotIn("quietly practicing", off.lower())
 
+    def test_recent_skip_does_not_claim_active_practice(self):
+        receipt = {"at_ts": 1099.0, "boot_id": "bootA", "state": "queue_full"}
+        reply, state = build_recall_practice_reply(
+            shadow_enabled=True,
+            last_shadow_receipt=receipt,
+            current_boot_id="bootA",
+            now_ts=1100.0,
+        )
+        self.assertEqual(state, "active_recent_skipped")
+        low = reply.lower()
+        self.assertIn("last quiet practice attempt was skipped", low)
+        self.assertNotIn("quietly practicing dated recall", low)
+
     def test_stale_shadow_receipt_does_not_sound_current(self):
         receipt = {"at_ts": 1000.0, "boot_id": "bootA", "state": "consulted"}
         reply, state = build_recall_practice_reply(

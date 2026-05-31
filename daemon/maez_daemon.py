@@ -3494,8 +3494,10 @@ class MaezDaemon:
                 derive_shadow_skipped,
             )
 
-            fresh_memory = MemoryManager()
-            evidence, context = fresh_memory.recall_for_telegram_living(
+            memory = getattr(self, "memory", None)
+            if memory is None:
+                raise RuntimeError("recall_shadow_missing_memory")
+            evidence, context = memory.recall_for_telegram_living(
                 text,
                 record_recalls=False,
             )
@@ -3511,27 +3513,23 @@ class MaezDaemon:
             )
             latency_ms = int((time.monotonic() - start) * 1000)
             if latency_ms > RECALL_SHADOW_BUDGET_MS:
-                rec = derive_shadow_skipped(
-                    legacy_rec=legacy_rec,
-                    skip_reason=ShadowSkip.BUDGET_EXCEEDED,
-                    shadow_pair_id=shadow_pair_id,
-                    latency_delta_ms=latency_ms,
-                    ts=ts,
-                    boot_id=boot_id,
+                logger.info(
+                    "recall_shadow_soft_budget_exceeded latency_ms=%d budget_ms=%d",
+                    latency_ms,
+                    RECALL_SHADOW_BUDGET_MS,
                 )
-            else:
-                rec = derive_shadow_outcome(
-                    legacy_rec=legacy_rec,
-                    shadow_reach=derive_shadow_reach(
-                        working_set,
-                        date_addressed=date_addressed,
-                    ),
+            rec = derive_shadow_outcome(
+                legacy_rec=legacy_rec,
+                shadow_reach=derive_shadow_reach(
+                    working_set,
                     date_addressed=date_addressed,
-                    shadow_pair_id=shadow_pair_id,
-                    latency_delta_ms=latency_ms,
-                    ts=ts,
-                    boot_id=boot_id,
-                )
+                ),
+                date_addressed=date_addressed,
+                shadow_pair_id=shadow_pair_id,
+                latency_delta_ms=latency_ms,
+                ts=ts,
+                boot_id=boot_id,
+            )
             _log_shadow_outcome(rec=rec)
             self._record_last_shadow_receipt(rec)
         except Exception as exc:  # noqa: BLE001 - shadow must never affect reply
@@ -4320,8 +4318,12 @@ class MaezDaemon:
                 )
 
                 if _is_recall_practice_query(text) and not _date_addressed_turn:
+                    _shadow_status_enabled = bool(
+                        _recall_shadow_enabled()
+                        and not _recall_stack_config.triad_on
+                    )
                     _recall_status_reply, _practice_state = _build_recall_practice_reply(
-                        shadow_enabled=_recall_shadow_enabled(),
+                        shadow_enabled=_shadow_status_enabled,
                         last_shadow_receipt=getattr(self, "_last_shadow_receipt", None),
                         current_boot_id=str(getattr(self, "boot_time", "") or ""),
                         now_ts=time.time(),
@@ -4330,7 +4332,7 @@ class MaezDaemon:
                         "recall_practice_status source=%s state=%s shadow_enabled=%s",
                         source,
                         _practice_state,
-                        _recall_shadow_enabled(),
+                        _shadow_status_enabled,
                     )
                 elif _is_recall_status_query(text) and not _date_addressed_turn:
                     _status_last_receipt = getattr(self, "_last_recall_receipt", None)
@@ -5090,10 +5092,10 @@ class MaezDaemon:
             _recall_outcome_rec is not None
             and _recall_shadow_attempt
         ):
+            _shadow_boot_id = str(getattr(self, "boot_time", "") or "")
             try:
                 from core.routing.recall_shadow import ShadowSkip, derive_shadow_skipped
 
-                _shadow_boot_id = str(getattr(self, "boot_time", "") or "")
                 _shadow_submitted = self._ensure_recall_shadow_worker().submit(
                     lambda: self._run_recall_shadow(
                         text=text,
@@ -5115,6 +5117,24 @@ class MaezDaemon:
                     _log_shadow_outcome(rec=_shadow_skip)
                     self._record_last_shadow_receipt(_shadow_skip)
             except Exception as _shadow_submit_exc:
+                try:
+                    from core.routing.recall_shadow import ShadowSkip, derive_shadow_skipped
+
+                    _shadow_skip = derive_shadow_skipped(
+                        legacy_rec=_recall_outcome_rec,
+                        skip_reason=ShadowSkip.EXCEPTION,
+                        shadow_pair_id=_recall_outcome_rec.shadow_pair_id,
+                        latency_delta_ms=0,
+                        ts=int(time.time()),
+                        boot_id=_shadow_boot_id,
+                    )
+                    _log_shadow_outcome(rec=_shadow_skip)
+                    self._record_last_shadow_receipt(_shadow_skip)
+                except Exception as _shadow_skip_exc:
+                    logger.warning(
+                        "recall_shadow_submit_skip_log_failed class=%s",
+                        type(_shadow_skip_exc).__name__,
+                    )
                 logger.warning(
                     "recall_shadow_submit_failed class=%s",
                     type(_shadow_submit_exc).__name__,

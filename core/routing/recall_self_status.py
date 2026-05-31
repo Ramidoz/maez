@@ -106,6 +106,13 @@ def build_recall_practice_reply(
     age = max(0.0, float(now_ts) - float(last_shadow_receipt.get("at_ts") or 0.0))
     if age <= _PRACTICE_STALE_SECONDS:
         state = str(last_shadow_receipt.get("state") or "unknown")
+        if state != "consulted":
+            return (
+                f"My quiet dated-recall practice path is reachable, but the last "
+                f"quiet practice attempt was skipped with state {state} just a "
+                f"moment ago.",
+                "active_recent_skipped",
+            )
         return (
             f"I'm quietly practicing dated recall in the background; the last "
             f"practice check reached state {state} just a moment ago.",
