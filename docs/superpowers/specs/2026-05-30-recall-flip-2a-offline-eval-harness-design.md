@@ -31,16 +31,20 @@ assertion + test — never "the live daemon with a flag." Enforced (Rohit requir
 
 ## What 2a proves (correctness + safety, automated — NO human blind scoring)
 The benefit blind-verdict moved to the live soak (A6). 2a runs **assertable** correctness/safety probes
-against seeded fixtures, flag-OFF (legacy) then flag-ON (triad) **from the same fixture**, and computes
-pass/fail deterministically. Probes (the sandbox-owned subset of the frozen 6-probe battery + the gate-5
+against seeded fixtures, with a flag-OFF **legacy-control** arm and a flag-ON **real triad recall** arm
+from the same fixture, and computes pass/fail deterministically. The path-equivalence assertion belongs
+to the flag-ON triad arm; the flag-OFF arm is the carrier-unavailable/legacy control, not a second
+adapter/assemble path. Probes (the sandbox-owned subset of the frozen 6-probe battery + the gate-5
 + re-witness additions):
 - **Probe 3 — multi-year same-date collision:** seed two memories on the same month/day in different
   years; triad must return the **right year**, not a collision. (Real traffic can't reliably produce this
   — the fixture is the correct instrument.)
 - **Gate 5 — type-rule:** seed a memory dated **>14 days** before the run; a probe asserts triad cites it
   as `memory_context`, **never** `memory_evidence` (old memory is context, never current-state evidence).
-- **Probe 2 — dated-miss safety negative:** a date with no seeded memory must **still decline**
-  (`declined_absence`), flag-on as flag-off.
+- **Probe 2 — dated-miss safety negative:** a date with no seeded memory must **legally decline**
+  when the triad carrier is on (`declined_absence` / no confirmed material), never hallucinate a grounded
+  answer. The flag-off control may be `declined_unavailable` because the carrier is not reachable; that is
+  not the safety assertion.
 - **Probe 4 — incidental-date safety negative:** an incidental date/quantity must **not** trigger spurious
   recall (stays the evidence/normal path).
 - **Both-shaped re-witness (20yr-Maez P1):** the "remind me what we were doing around April 27"-class
