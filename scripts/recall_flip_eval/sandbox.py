@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import ipaddress
 import os
 import shutil
 import socket
@@ -197,8 +198,35 @@ def assert_sandbox(root: str | os.PathLike | None = None) -> None:
         raise NotSandboxError(f"birth.DEFAULT_STATE_PATH outside sandbox: {birth.DEFAULT_STATE_PATH}")
 
 
+def _port_value(port) -> int | None:
+    try:
+        return int(port)
+    except (TypeError, ValueError):
+        return None
+
+
+def _host_is_loopback(host: object) -> bool:
+    if not isinstance(host, str):
+        return False
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _addr_is_allowed(address: object, ports: set[int]) -> bool:
+    if not ports or not isinstance(address, tuple) or len(address) < 2:
+        return False
+    host = address[0]
+    port = _port_value(address[1])
+    return port in ports and _host_is_loopback(host)
+
+
 @contextlib.contextmanager
-def no_egress() -> Iterator[None]:
+def no_egress(*, allow_loopback_ports: tuple[int, ...] = ()) -> Iterator[None]:
+    allowed_ports = {int(port) for port in allow_loopback_ports}
     original_create_connection = socket.create_connection
     original_connect = socket.socket.connect
     original_connect_ex = socket.socket.connect_ex
@@ -208,11 +236,36 @@ def no_egress() -> Iterator[None]:
     def blocked(*_args, **_kwargs):
         raise EgressBlockedError("offline eval harness blocks socket egress")
 
-    socket.create_connection = blocked
-    socket.socket.connect = blocked
-    socket.socket.connect_ex = blocked
+    def guarded_create_connection(address, *args, **kwargs):
+        if not _addr_is_allowed(address, allowed_ports):
+            blocked()
+        return original_create_connection(address, *args, **kwargs)
+
+    def guarded_connect(sock, address):
+        if not _addr_is_allowed(address, allowed_ports):
+            blocked()
+        return original_connect(sock, address)
+
+    def guarded_connect_ex(sock, address):
+        if not _addr_is_allowed(address, allowed_ports):
+            blocked()
+        return original_connect_ex(sock, address)
+
+    def guarded_getaddrinfo(host, port, *args, **kwargs):
+        address = (host, port)
+        if not _addr_is_allowed(address, allowed_ports):
+            blocked()
+        rows = original_getaddrinfo(host, port, *args, **kwargs)
+        loopback_rows = [row for row in rows if _addr_is_allowed(row[-1], allowed_ports)]
+        if not loopback_rows:
+            blocked()
+        return loopback_rows
+
+    socket.create_connection = guarded_create_connection
+    socket.socket.connect = guarded_connect
+    socket.socket.connect_ex = guarded_connect_ex
     socket.socket.sendto = blocked
-    socket.getaddrinfo = blocked
+    socket.getaddrinfo = guarded_getaddrinfo
     try:
         yield
     finally:
