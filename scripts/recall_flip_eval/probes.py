@@ -39,7 +39,7 @@ PROBES = (
         (
             "What happened on January 3?",
             "What did we record around Jan 3?",
-            "Pull the January 3 note.",
+            "What did we note on January 3?",
         ),
     ),
     ProbeDefinition(
@@ -49,7 +49,7 @@ PROBES = (
         (
             "What were we just talking about, the 3 may bugs?",
             "The 3 may issues we mentioned, what were they?",
-            "What were those 3 May-looking bugs?",
+            "Which of the 3 may issues were bugs?",
         ),
     ),
     ProbeDefinition(
@@ -143,4 +143,3 @@ def assert_probe_result(
 
     codes.append("smoke_observed")
     return tuple(codes), False
-

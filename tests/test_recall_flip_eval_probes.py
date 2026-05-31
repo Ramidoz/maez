@@ -146,6 +146,40 @@ class RecallFlipEvalProbeDefinitionTest(unittest.TestCase):
         for probe_id in ("multi_year", "type_rule", "dated_miss", "incidental", "both_shaped"):
             self.assertTrue(by_id[probe_id].hard_gate, probe_id)
 
+    def test_dated_miss_and_incidental_variants_match_their_cue_contract(self):
+        from datetime import datetime
+
+        from core.routing.temporal_cue import absolute_recall_cue
+        from core.time.temporal_spine import owner_timezone
+        from scripts.recall_flip_eval import probes
+
+        now = datetime(2026, 5, 30, 12, 0, tzinfo=owner_timezone())
+        for text in probes.get_probe("dated_miss").variants:
+            with self.subTest(text=text):
+                self.assertTrue(absolute_recall_cue(text, now).is_address)
+        for text in probes.get_probe("incidental").variants:
+            with self.subTest(text=text):
+                self.assertFalse(absolute_recall_cue(text, now).is_address)
+
+    def test_full_harness_packet_passes_with_isolated_probe_sandboxes(self):
+        import tempfile
+
+        from scripts.recall_flip_eval import harness, sandbox
+
+        with tempfile.TemporaryDirectory() as root, sandbox.sandbox_env(root):
+            with mock.patch.object(
+                harness,
+                "assert_run_parity",
+                return_value=(harness.current_commit_sha(), False),
+            ):
+                packet = harness.run_eval(
+                    sandbox_root=root,
+                    expect_commit=harness.current_commit_sha(),
+                    allow_dirty=True,
+                )
+
+        self.assertTrue(packet.overall_pass)
+
     def test_assertions_use_fixture_ids_source_type_and_temporal_provenance(self):
         from scripts.recall_flip_eval import probes
 
