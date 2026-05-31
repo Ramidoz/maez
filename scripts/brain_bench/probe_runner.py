@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable
@@ -19,6 +20,7 @@ class ProbeRun:
     stream_factory: Callable[..., Iterable[dict[str, str]]] | None = None
     clock: Callable[[], float] | None = None
     run_id: str = "brain-bench"
+    probe_run_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     fixture_manifest: list[dict] = field(default_factory=list)
 
     def __call__(self, variant: Variant) -> tuple[ProbeSample, ...]:
@@ -35,9 +37,16 @@ class ProbeRun:
             sandbox.restore_memory_patch_snapshot(prior_patch_state)
 
     def _run_probe(self, variant: Variant, *, root: Path, probe) -> tuple[ProbeSample, ...]:
-        probe_root = root / "brain_bench_probe_sandboxes" / variant.label / probe.probe_id
+        probe_root = (
+            root
+            / "brain_bench_probe_sandboxes"
+            / self.probe_run_id
+            / variant.label
+            / probe.probe_id
+        )
         prior_patch_state = sandbox.memory_patch_snapshot()
         try:
+            sandbox.assert_sandbox(root)
             with sandbox.sandbox_env(probe_root):
                 sandbox.patch_memory_manager_base_db(probe_root)
                 sandbox.assert_sandbox(probe_root)
