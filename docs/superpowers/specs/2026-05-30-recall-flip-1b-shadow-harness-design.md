@@ -60,7 +60,7 @@ field — same closure test as `RecallOutcome`):
 | `legacy_outcome` | `OutcomeClass` | the actual 1a outcome served this turn (reuse `classify_outcome(mode="legacy", …)`) |
 | `shadow_reach` | `ShadowReach` enum (below) | the retrieval-stage label; **never** an answer-quality class |
 | `rescuable_candidate` | bool | legacy ∈ {declined_unavailable, declined_failed, declined_unverified, answered_unverifiable} AND `shadow_reach == grounded_material_available` |
-| `false_absence_candidate` | bool | `shadow_reach == confirmed_absence_witnessed` WHILE legacy produced a **non-decline** answer (the safety signal — not proof legacy was right) |
+| `false_absence_candidate` | bool | `date_addressed` AND `shadow_reach == confirmed_absence_witnessed` WHILE legacy produced a **non-decline** answer (the dated-recall safety signal — not proof legacy was right) |
 | `legacy_false_absence_rescuable` | bool | `is_false_absence(legacy_rec)` AND `shadow_reach == grounded_material_available` — the headline pre-flip benefit+safety signal, reuses 1a's `is_false_absence` |
 | `latency_delta_ms` | int | shadow assemble time (off critical path) |
 | `receipt_state` | `not_consulted` \| `consulted` | shadow's **own structural** receipt (carrier ran AND produced an assembled result), distinct from the live carrier receipt |
@@ -80,6 +80,9 @@ Assemble-only **cannot** witness answer quality, so it never emits `answered_gro
   which is `confirmed_absence_witnessed`.
 
 `had_confirmed` is computed by the existing `_focused_working_set_had_confirmed` predicate — no synthesis.
+`confirmed_absence_witnessed` is answerable only for a dated frame; continuity-only shadow rows may record
+retrieval reach, but they must never become `false_absence_candidate` merely because no date-confirmed item
+was present.
 
 ### `ShadowSkip` (closed reasons — no free text, no raw exception message)
 `budget_exceeded` | `queue_full` | `carrier_unavailable` | `exception`. On `exception`, log only the
@@ -183,8 +186,9 @@ this closes the latent uncaught-crash seam in the same daemon region 1b touches.
 - **Off-critical-path:** time-to-`return reply` unchanged flag-on; queue saturation →
   `shadow_skipped=queue_full`; over-budget → `shadow_skipped=budget_exceeded`.
 - **Record honesty:** content-free closure test; `shadow_reach` never an answer class; `rescuable`/
-  `false_absence`/`legacy_false_absence_rescuable` derivations correct on seeded fixtures; `ShadowSkip`
-  reasons closed; exception path logs class name only (no message).
+  `false_absence`/`legacy_false_absence_rescuable` derivations correct on seeded fixtures; continuity-only
+  rows cannot set `false_absence_candidate`; `ShadowSkip` reasons closed; exception path logs class name
+  only (no message).
 - **Pairing:** `shadow_pair_id` on both shadow and live rows; guard test that raw `trace_id` is not serialized
   in the recall/shadow telemetry rows.
 - **ReplyPath:** `reply_path_from_mode` returns LEGACY + warns on an unknown mode (no throw).
