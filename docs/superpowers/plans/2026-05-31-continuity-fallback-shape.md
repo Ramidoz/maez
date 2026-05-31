@@ -27,7 +27,7 @@
   - Add daemon-shaped regression for a real dated `May 3` prompt.
 - Existing parser guards stay in:
   - `tests/test_memory_manager.py::AbsoluteRecallCueTests.test_address_intent_battery`
-  - `tests/test_recall_flip_eval_probes.py::RecallFlipEvalProbeTests.test_dated_miss_and_incidental_variants_match_their_cue_contract`
+  - `tests/test_recall_flip_eval_probes.py::RecallFlipEvalProbeDefinitionTest.test_dated_miss_and_incidental_variants_match_their_cue_contract`
 
 ---
 
@@ -348,7 +348,9 @@ Immediately after `_date_addressed_turn = bool(...)`, add:
                 owner_question=text,
                 continuity_turn=bool(_dialogue_needs_or_uncertain),
                 date_addressed=bool(_date_addressed_turn),
-                fresh_context_present=bool((turn_final_context or "").strip()),
+                fresh_context_present=bool(
+                    (turn_final_context or "").strip() or recall_items
+                ),
                 prior_chat_message_count=_prior_chat_message_count,
                 lived_brief=_lived_brief,
                 temporal_anchor_brief=_temporal_anchor_brief_text,
@@ -624,7 +626,11 @@ Add this test to `DaemonHandleMessageContract`:
                     ],
                 )
 
-        self.assertEqual(reply, "I won't answer it from recent chat or guesswork.")
+        self.assertEqual(
+            reply,
+            "I can't reach my dated memory from here right now. "
+            "I won't answer it from recent chat or guesswork.",
+        )
         self.assertNotIn("messages", captured, "dated legacy-off denial must not call synthesis")
         persist_model_reply = captured["persist_model_reply_mock"]
         persist_model_reply.assert_called()
@@ -669,7 +675,7 @@ Run:
 .venv/bin/python -m unittest \
   tests.test_memory_integrity_invariant.DaemonHandleMessageContract.test_real_may_3_prompt_stays_dated_and_bypasses_continuity_shape \
   tests.test_memory_manager.AbsoluteRecallCueTests.test_address_intent_battery \
-  tests.test_recall_flip_eval_probes.RecallFlipEvalProbeTests.test_dated_miss_and_incidental_variants_match_their_cue_contract
+  tests.test_recall_flip_eval_probes.RecallFlipEvalProbeDefinitionTest.test_dated_miss_and_incidental_variants_match_their_cue_contract
 ```
 
 Expected: PASS.

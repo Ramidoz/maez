@@ -320,6 +320,109 @@ class DaemonHandleMessageContract(unittest.TestCase):
         self.assertIn("_consolidate_system_messages", handle_src)
         self.assertIn("final_system_part=turn_final_context", handle_src)
 
+    def test_continuity_shape_resolver_distinguishes_empty_chat_and_dated_turns(self):
+        from daemon.maez_daemon import _resolve_continuity_fallback_shape
+
+        reply, instruction = _resolve_continuity_fallback_shape(
+            owner_question="What were we just talking about, the 3 may bugs?",
+            continuity_turn=True,
+            date_addressed=False,
+            fresh_context_present=False,
+            prior_chat_message_count=0,
+            lived_brief="",
+            temporal_anchor_brief="",
+        )
+
+        self.assertIsNotNone(reply)
+        self.assertEqual(instruction, "")
+        lowered = reply.lower()
+        self.assertIn("not sure", lowered)
+        self.assertIn("3 may bugs", lowered)
+        self.assertNotIn("record", lowered)
+        self.assertNotIn("dated memory", lowered)
+        self.assertNotIn("may 3", lowered)
+
+        reply, instruction = _resolve_continuity_fallback_shape(
+            owner_question="\u201cdid we say that\u201d",
+            continuity_turn=True,
+            date_addressed=False,
+            fresh_context_present=False,
+            prior_chat_message_count=0,
+            lived_brief="",
+            temporal_anchor_brief="",
+        )
+
+        self.assertEqual(instruction, "")
+        self.assertIn("'did we say that'", reply)
+
+        reply, instruction = _resolve_continuity_fallback_shape(
+            owner_question="do it",
+            continuity_turn=True,
+            date_addressed=False,
+            fresh_context_present=False,
+            prior_chat_message_count=0,
+            lived_brief="",
+            temporal_anchor_brief="",
+        )
+
+        self.assertEqual(instruction, "")
+        self.assertIn("'do it'", reply)
+
+        reply, instruction = _resolve_continuity_fallback_shape(
+            owner_question="What were we just talking about, the 3 may bugs?",
+            continuity_turn=True,
+            date_addressed=False,
+            fresh_context_present=False,
+            prior_chat_message_count=2,
+            lived_brief="",
+            temporal_anchor_brief="",
+        )
+
+        self.assertIsNone(reply)
+        self.assertIn("CONTINUITY SHAPE", instruction)
+        self.assertIn("Do not reinterpret embedded tokens such as '3 may'", instruction)
+        self.assertNotIn("think", instruction.lower())
+        self.assertNotIn("ponder", instruction.lower())
+
+        reply, instruction = _resolve_continuity_fallback_shape(
+            owner_question="What happened on May 3?",
+            continuity_turn=True,
+            date_addressed=True,
+            fresh_context_present=False,
+            prior_chat_message_count=2,
+            lived_brief="",
+            temporal_anchor_brief="",
+        )
+
+        self.assertIsNone(reply)
+        self.assertEqual(instruction, "")
+
+        reply, instruction = _resolve_continuity_fallback_shape(
+            owner_question="What were we just talking about?",
+            continuity_turn=True,
+            date_addressed=False,
+            fresh_context_present=True,
+            prior_chat_message_count=0,
+            lived_brief="",
+            temporal_anchor_brief="",
+        )
+
+        self.assertIsNone(reply)
+        self.assertEqual(instruction, "")
+
+        reply, instruction = _resolve_continuity_fallback_shape(
+            owner_question="What were we just talking about?",
+            continuity_turn=True,
+            date_addressed=False,
+            fresh_context_present=True,
+            prior_chat_message_count=2,
+            lived_brief="",
+            temporal_anchor_brief="",
+        )
+
+        self.assertIsNone(reply)
+        self.assertIn("CONTINUITY SHAPE", instruction)
+
     def _build_daemon_for_handle_message(self):
         from daemon import maez_daemon
 
@@ -503,10 +606,11 @@ class DaemonHandleMessageContract(unittest.TestCase):
                 "core.ledger.writer.try_write_turn",
                 return_value="turn-1",
             ))
-            stack.enter_context(mock.patch(
+            persist_model_reply_mock = stack.enter_context(mock.patch(
                 "core.ledger.model_reply_persistence.persist_model_reply",
                 return_value=None,
             ))
+            captured["persist_model_reply_mock"] = persist_model_reply_mock
             stack.enter_context(mock.patch(
                 "core.llm_client.chat",
                 side_effect=fake_chat,
@@ -583,6 +687,180 @@ class DaemonHandleMessageContract(unittest.TestCase):
         self.assertIn("ack_status=emitted", line)
         self.assertRegex(line, r"ack_emit_ms=\d+")
         self.assertNotIn("ack_emit_ms=na", line)
+
+    def test_truly_empty_continuity_uses_being_shaped_reply_without_archive_language(self):
+        from daemon import maez_daemon
+
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+
+        with self._handle_message_mock_stack(
+            maez_daemon,
+            captured,
+            reply="I don't have a record of a specific conversation about May 3.",
+        ), mock.patch.dict(
+            os.environ,
+            {"MAEZ_RECALL_TRIAD_ENABLED": "0"},
+            clear=False,
+        ):
+            reply = maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                "What were we just talking about, the 3 may bugs?",
+                source="telegram_surface",
+                chat_history=None,
+            )
+
+        lowered = reply.lower()
+        self.assertIn("not sure", lowered)
+        self.assertIn("3 may bugs", lowered)
+        self.assertNotIn("record", lowered)
+        self.assertNotIn("dated memory", lowered)
+        self.assertNotIn("may 3", lowered)
+        self.assertNotIn("may 3rd", lowered)
+        self.assertNotIn("recent chat or guesswork", lowered)
+        self.assertNotIn("messages", captured, "truly-empty guard must bypass legacy LLM")
+        self.assertTrue(captured.get("trace_written"), "normal tail must still run")
+
+    def test_continuity_with_chat_gets_shape_instruction_not_deterministic_guard(self):
+        from daemon import maez_daemon
+
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+
+        with self._handle_message_mock_stack(
+            maez_daemon,
+            captured,
+            reply=(
+                "We were going through the dated recall S5 checks; "
+                "the 3 may bugs phrase was not established yet."
+            ),
+        ), mock.patch.dict(
+            os.environ,
+            {"MAEZ_RECALL_TRIAD_ENABLED": "0"},
+            clear=False,
+        ):
+            reply = maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                "What were we just talking about, the 3 may bugs?",
+                source="telegram_surface",
+                chat_history=[
+                    {
+                        "content": (
+                            "Rohit: What happened on January 3?\n"
+                            "Maez: I won't answer it from recent chat or guesswork."
+                        )
+                    },
+                    {
+                        "content": (
+                            "Rohit: What did we note around May 12?\n"
+                            "Maez: I won't answer it from recent chat or guesswork."
+                        )
+                    },
+                ],
+            )
+
+        self.assertIn("dated recall S5 checks", reply)
+        self.assertNotIn("not sure what you mean", reply.lower())
+        self.assertIn("messages", captured)
+        prompt_text = "\n".join(str(m.get("content") or "") for m in captured["messages"])
+        system_messages = [
+            m for m in captured["messages"] if m.get("role") == "system"
+        ]
+        self.assertEqual(len(system_messages), 1)
+        self.assertIn("CONTINUITY SHAPE", prompt_text)
+        self.assertIn(
+            "Do not reinterpret embedded tokens such as '3 may' as calendar dates",
+            prompt_text,
+        )
+        self.assertIn("What happened on January 3?", prompt_text)
+        self.assertNotIn("I don't have a record", reply)
+        self.assertNotIn("May 3rd", reply)
+
+    def test_continuity_with_recall_items_does_not_use_truly_empty_guard(self):
+        from core.dispatcher.layer1 import RecallItem
+        from daemon import maez_daemon
+
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+        recall_items = [
+            RecallItem(
+                text="The structured recall channel has material for this turn.",
+                source_type="memory_context",
+                durable_id="structured-context-1",
+                temporal_provenance={},
+            )
+        ]
+
+        with self._handle_message_mock_stack(
+            maez_daemon,
+            captured,
+            reply="legacy synthesis saw this was not truly empty",
+        ), mock.patch.dict(
+            os.environ,
+            {"MAEZ_RECALL_TRIAD_ENABLED": "0"},
+            clear=False,
+        ):
+            reply = maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                "What were we just talking about?",
+                source="telegram_surface",
+                chat_history=None,
+                recall_items=recall_items,
+            )
+
+        self.assertEqual(reply, "legacy synthesis saw this was not truly empty")
+        self.assertIn("messages", captured)
+        self.assertNotIn("not sure what you mean", reply.lower())
+
+    def test_real_may_3_prompt_stays_dated_and_bypasses_continuity_shape(self):
+        from daemon import maez_daemon
+
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+
+        with self.assertLogs(maez_daemon.logger, level="INFO") as logs:
+            with self._handle_message_mock_stack(
+                maez_daemon,
+                captured,
+                reply="legacy should not be used",
+            ), mock.patch.dict(
+                os.environ,
+                {"MAEZ_RECALL_TRIAD_ENABLED": "0"},
+                clear=False,
+            ):
+                reply = maez_daemon.MaezDaemon.handle_message(
+                    daemon,
+                    "What happened on May 3?",
+                    source="telegram_surface",
+                    chat_history=[
+                        {
+                            "content": (
+                                "Rohit: We were discussing the 3 may bugs.\n"
+                                "Maez: We were keeping that as continuity."
+                            )
+                        }
+                    ],
+                )
+
+        self.assertEqual(
+            reply,
+            "I can't reach my dated memory from here right now. "
+            "I won't answer it from recent chat or guesswork.",
+        )
+        self.assertNotIn("messages", captured, "dated legacy-off denial must not call synthesis")
+        persist_model_reply = captured["persist_model_reply_mock"]
+        persist_model_reply.assert_called()
+        prompt_material = persist_model_reply.call_args.kwargs["prompt_material"]
+        prompt_text = "\n".join(
+            str(m.get("content") or "")
+            for m in prompt_material["messages"]
+            if isinstance(m, dict)
+        )
+        self.assertNotIn("CONTINUITY SHAPE", prompt_text)
+        joined = "\n".join(logs.output)
+        self.assertIn("dated_recall_denial", joined)
+        self.assertIn("reply_mode=LEGACY", joined)
+        self.assertIn("recall_stack_mode=legacy", joined)
 
     def test_fast_synthesis_fires_no_progress_receipt(self):
         from daemon import maez_daemon
@@ -1218,6 +1496,14 @@ class DaemonHandleMessageContract(unittest.TestCase):
                     "what were we just talking about?",
                     chat_id="c1",
                     source="telegram",
+                    chat_history=[
+                        {
+                            "content": (
+                                "Rohit: We were checking dated recall.\n"
+                                "Maez: I was tracing the recall gate."
+                            )
+                        }
+                    ],
                 )
         lines = self._recall_outcome_lines(logs)
         self.assertEqual(len(lines), 1, lines)

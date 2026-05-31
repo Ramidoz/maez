@@ -42,11 +42,11 @@ Record concrete findings and what changed because of them, or record a reasoned 
 - The deterministic continuity reply fires only when:
   - continuity turn;
   - not date-addressed;
-  - no fresh transcript/evidence context;
+  - no fresh transcript/evidence context or structured `recall_items`;
   - no substantive prior chat messages;
   - no lived brief;
   - no temporal-anchor brief.
-- Continuity with chat must still call synthesis, but with the continuity shape instruction folded into the existing consolidated system message. Fresh transcript/evidence context may suppress the deterministic empty guard, but it must not suppress the chat-present instruction.
+- Continuity with chat must still call synthesis, but with the continuity shape instruction folded into the existing consolidated system message. Fresh transcript/evidence context or structured `recall_items` may suppress the deterministic empty guard, but it must not suppress the chat-present instruction.
 - The deterministic reply must not return early; audit, trace, ledger/store, recall_outcome, and the daemon tail still run.
 - No new `MAEZ_...CONTINUITY...` flag.
 - The dated regression must inspect persisted `prompt_material["messages"]`; deterministic dated branches bypass LLM, so `captured["messages"]` alone is not enough proof.

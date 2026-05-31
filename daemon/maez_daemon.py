@@ -1515,6 +1515,60 @@ def _pair_history_for_chat_threading(raw_history) -> list[dict]:
     return out
 
 
+def _chat_history_message_count(messages: list[dict]) -> int:
+    """Count substantive prior chat messages already threaded into messages[]."""
+    count = 0
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") not in {"user", "assistant"}:
+            continue
+        if str(message.get("content") or "").strip():
+            count += 1
+    return count
+
+
+def _continuity_fallback_reply(owner_question: str) -> str:
+    phrase = (owner_question or "that").strip().strip('"\u201c\u201d') or "that"
+    if len(phrase) > 120:
+        phrase = phrase[:117].rstrip() + "..."
+    return f"I'm not sure what you mean by {phrase!r} from the chat I can see right now."
+
+
+def _continuity_shape_instruction() -> str:
+    return (
+        "CONTINUITY SHAPE: This is a recent-conversation continuity turn. "
+        "Answer from the recent chat that is already in this prompt. If the "
+        "referenced phrase is ambiguous or was not established in the recent "
+        "conversation, say that conversationally. Do not reinterpret embedded "
+        "tokens such as '3 may' as calendar dates. Do not use archival 'no "
+        "record' or dated-memory absence language unless the current turn is "
+        "actually a dated-recall question."
+    )
+
+
+def _resolve_continuity_fallback_shape(
+    *,
+    owner_question: str,
+    continuity_turn: bool,
+    date_addressed: bool,
+    fresh_context_present: bool,
+    prior_chat_message_count: int,
+    lived_brief: str,
+    temporal_anchor_brief: str,
+) -> tuple[str | None, str]:
+    """Return (deterministic_reply, instruction) for continuity fallback shape."""
+    if not continuity_turn or date_addressed:
+        return None, ""
+    if prior_chat_message_count > 0:
+        return None, _continuity_shape_instruction()
+    if fresh_context_present:
+        return None, ""
+    if (lived_brief or "").strip() or (temporal_anchor_brief or "").strip():
+        return None, ""
+    return _continuity_fallback_reply(owner_question), ""
+
+
 # Stable cycle instructions — appended to the SOUL system prompt at every
 # _reason() call. Kept byte-identical across cycles so llama.cpp's KV cache
 # reuses the ~600 tokens on each subsequent request. Everything referenced
@@ -4234,11 +4288,6 @@ class MaezDaemon:
             transcript_context,
             evidence_directive,
         )
-        messages = _consolidate_system_messages(
-            messages,
-            final_system_part=turn_final_context,
-        )
-        messages.append({"role": "user", "content": prompt})
         try:
             from core.routing.focused_cognition import (
                 build_intra_turn_echo_reply as _build_intra_turn_echo_reply,
@@ -4268,6 +4317,37 @@ class MaezDaemon:
         _date_addressed_turn = bool(
             _abs_recall_cue and getattr(_abs_recall_cue, "is_address", False)
         )
+        _prior_chat_message_count = _chat_history_message_count(messages)
+        _temporal_anchor_brief_text = (
+            str(getattr(_temporal_anchor_result, "brief_text", "") or "")
+            if _temporal_anchor_result is not None
+            else ""
+        )
+        _truly_empty_continuity_reply, _continuity_shape_instruction_text = (
+            _resolve_continuity_fallback_shape(
+                owner_question=text,
+                continuity_turn=bool(_dialogue_needs_or_uncertain),
+                date_addressed=bool(_date_addressed_turn),
+                fresh_context_present=bool(
+                    (turn_final_context or "").strip() or recall_items
+                ),
+                prior_chat_message_count=_prior_chat_message_count,
+                lived_brief=_lived_brief,
+                temporal_anchor_brief=_temporal_anchor_brief_text,
+            )
+        )
+        if _continuity_shape_instruction_text:
+            messages.append(
+                {"role": "system", "content": _continuity_shape_instruction_text}
+            )
+            system_part_capture.append(
+                ("continuity_shape", _continuity_shape_instruction_text)
+            )
+        messages = _consolidate_system_messages(
+            messages,
+            final_system_part=turn_final_context,
+        )
+        messages.append({"role": "user", "content": prompt})
         _focused_candidate = (
             _focused_cognition_enabled(recall_stack_config=_recall_stack_config)
             and source != "voice"
@@ -4466,6 +4546,10 @@ class MaezDaemon:
             reply = authoritative_tool_reply
         elif _reply_decision.mode is ReplyMode.ECHO:
             reply = _current_turn_echo_reply
+        elif _truly_empty_continuity_reply is not None:
+            reply = _truly_empty_continuity_reply
+            _reply_path = ReplyPath.LEGACY
+            _focused_used = True
         elif _reply_decision.mode is ReplyMode.HONEST_EMPTY:
             from core.routing.focused_cognition import (
                 build_honest_empty_reply as _build_honest_empty_reply,
