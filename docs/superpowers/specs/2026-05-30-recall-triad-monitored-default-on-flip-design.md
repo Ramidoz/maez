@@ -185,9 +185,12 @@ trap; 6 is the blast-radius control. Probes 1 & 3 need seeded dated memories in 
    secular trend AND exercises the kill-switch under live load (confirm clean fallback to legacy on a live
    continuity turn; confirm no orphaned `focused_cognition_runs` state; confirm the self-status branch
    reports `off-by-config`). Then back ON.
-5. **Blind owner verdict (Outside-View #3/#6):** for each battery probe, the legacy and triad answers are
-   presented in **randomized order with provenance hidden**; Rohit records better/same/worse; de-blinding
-   happens only after all verdicts are logged. This is the benefit ground truth, debiased.
+5. **Blind owner verdict (Outside-View #3/#6; substrate corrected by A6):** the benefit verdict is over
+   **live soak turns** (paired legacy-vs-triad on real dated/continuity turns), NOT the seeded battery —
+   the sandbox battery is correctness/safety only. Answers presented in **randomized order with provenance
+   hidden**; Rohit records better/same/worse against a **pre-registered "better overall" rule**; de-blinding
+   only after all verdicts are logged; an intra-rater consistency re-score on a random subset. This is the
+   benefit ground truth, debiased.
 6. **Go/No-Go** on the gates below → default-revert-unless-override.
 7. **Shadow teardown (1b sunset):** after the Go/No-Go disposition is recorded, turn
    `MAEZ_RECALL_SHADOW_ENABLED` off, restart, verify no `shadow_outcome` rows are emitted after restart,
@@ -215,14 +218,21 @@ The soak does not reach decision until it has covered, at minimum (Rohit may ame
    offered as *context*, never cited as current-state evidence (the memory→context type rule). Hard gate,
    witnessed by the probe (not relaxed; the `14` is the reconciled named parameter).
 
-**Benefit gate (the "better, not just more cautious" test — your design + switchboard):**
-- **Rescued-turn counter > 0** (legacy would deny/fabricate; triad `answered_grounded`) AND
-- **Blind owner preference = "better" overall** on the battery, AND
+**Benefit gate (the "better, not just more cautious" test — your design + switchboard; see amendments
+A5 + A6 below for the corrected rescued definition and the live-soak substrate):**
+- **Rescued-turn counter > 0**, where rescued = legacy ∈ {`declined_unavailable`, `declined_failed`,
+  `declined_unverified`, `answered_unverifiable`} AND triad **live-synthesized** `answered_grounded`
+  (`declined_absence` excluded; answered-but-ungrounded = FAIL, not rescue — **A5**). The counter is
+  measured on **live soak turns**, not the sandbox battery (**A6**). AND
+- **Blind owner preference = "better" overall** on **live soak turns** (not the seeded battery — A6);
+  the "better overall" aggregation rule is pre-registered (see the 2b runbook). AND
 - **Caution not inflated:** any rise in `declined_*` is offset by a fall in `answered_unverifiable` (honest
   decline replacing fabrication is a WIN, not a regression — pinned formula, Logical C2), AND
-- **`citation_coverage` did not drop** (guardrail only — Outside-View #7: groundedness is a floor against
-  fabrication, *never* the definition of better; the win must be owner-experienced usefulness, not a
-  coverage number that can be gamed by hedging).
+- **`citation_coverage` did not drop, AND rescued turns clear an absolute coverage floor `C_floor`**
+  (frozen from the live-baseline grounded turns) — guardrail only; the "did not drop" clause is *vacuous*
+  on rescued turns (legacy declined → no baseline), so the absolute floor is what stops a thin-grounding
+  squeak-through (Creative). Groundedness is a floor against fabrication, **never** the definition of
+  better; the win is owner-experienced usefulness, not a coverage number.
 
 ### Disposition (your call, confirmed)
 - Hard gates pass **and** benefit = better → **keep on** (the flip succeeds).
@@ -232,6 +242,34 @@ The soak does not reach decision until it has covered, at minimum (Rohit may ame
 - Any hard-gate fail → kill-switch, revert, root-cause.
 
 ---
+
+> **Pre-registration amendment A5 (2026-05-30, before any flag-on data — legitimate pre-registration;
+> the flip has not occurred, no outcome data seen).** The benefit metric is corrected to match what
+> 1a/1b proved about the real daemon. **Rescued-turn** = a turn where legacy ∈ {`declined_unavailable`,
+> `declined_failed`, `declined_unverified`, `answered_unverifiable`} AND triad produced a **live,
+> synthesized `answered_grounded`** reply (cited a date-confirmed `memory_context` item, zero unmatched
+> citations). `declined_absence` is **excluded** from the rescued numerator (a correct legacy decline
+> that triad "answers" is a regression, not a rescue). **`answered_ungrounded` on a rescue-candidate turn
+> is a benefit-gate FAIL, never a rescue** — Maez gets no credit for answering a dated question it did
+> not ground in a confirmed memory. (Replaces the loose "legacy would deny/fabricate" phrasing; legacy
+> *declines* dated turns, it does not fabricate them — verified in 1a.)
+
+> **Pre-registration amendment A6 (2026-05-30, before any flag-on data) — instrument-role reassignment.**
+> Scoping found the benefit verdict was pinned to the wrong substrate. Corrected three-way epistemology:
+> **(1) the sandbox offline harness (2a) proves CORRECTNESS + SAFETY only** — the multi-year-collision
+> trap (probe 3), the type-rule (gate 5, with a fixture memory dated >14 days), the safety-negatives
+> (probes 2 & 4 must NOT change), and the both-shaped re-witness — and emits a content-free **proof
+> packet**. It does NOT decide benefit. **(2) the live soak owns BENEFIT** — the blind owner verdict and
+> the rescued-turn counter are measured on **live soak turns**, latency K is frozen from a **live**
+> legacy baseline (sandbox wall-clock is non-representative), and the blast-radius/non-recall-regression
+> gate is computed from the **live** ≥10 ordinary turns. **(3) shadow (1b) is the PRIOR/denominator only**
+> — renamed `rescuable_reach_rate` (it witnesses *shelf reachability*, one synthesis-step short of
+> `answered_grounded`); it sizes the opportunity, it is never the rescued counter. **Decoupling:** 2a
+> produces the proof packet; **2b (the owner-run runbook) consumes packet + `rescuable_reach_rate` +
+> the live blind verdict and makes the Go/No-Go** — 2a is not responsible for the flip verdict. The
+> over-consultation clause of the blast-radius gate has no emitting field today → it is **observational**
+> in the soak, not a hard-gate sub-clause, unless a field is added. (Logical C1/C3/C4/C5, Creative,
+> Outside-View, 20yr-Maez, Body-Coherence; the detailed pins live in the 2a harness spec + 2b runbook.)
 
 ## Reusable precedent (Visionary — lock the shape, defer automation)
 This is the FIRST monitored organ flip. Lock as reusable for the Intake Bus and later organs:
