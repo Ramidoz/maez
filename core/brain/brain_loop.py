@@ -33,6 +33,7 @@ from __future__ import annotations
 import json as _json
 import hashlib
 import logging
+import os as _os
 import re as _re
 import time
 import uuid
@@ -83,6 +84,15 @@ class _DispatcherPathResult:
     recall_items: tuple[Any, ...] = ()
 
 
+def _recall_citation_render_v2_enabled() -> bool:
+    return (
+        (_os.environ.get("MAEZ_RECALL_CITATION_RENDER_V2", "") or "")
+        .strip()
+        .lower()
+        in {"1", "true", "yes"}
+    )
+
+
 def recall_partitions_to_items(partition: dict, *, role_source_type: str):
     """Convert recall partitions into structured dispatcher RecallItems.
 
@@ -100,20 +110,21 @@ def recall_partitions_to_items(partition: dict, *, role_source_type: str):
         method = meta.get("temporal_match_method")
         temporal_provenance = None
         if method:
-            label = meta.get("temporal_match_label")
-            date_value = meta.get("date")
-            if not date_value and label:
-                match = _re.search(r"\b\d{4}-\d{2}-\d{2}\b", str(label))
-                if match:
-                    date_value = match.group(0)
             temporal_provenance = {
                 "method": method,
                 "confirmed": method in ("exact_date", "month_window"),
             }
-            if label:
-                temporal_provenance["label"] = str(label)
-            if date_value:
-                temporal_provenance["date"] = str(date_value)[:10]
+            if _recall_citation_render_v2_enabled():
+                label = meta.get("temporal_match_label")
+                date_value = meta.get("date")
+                if not date_value and label:
+                    match = _re.search(r"\b\d{4}-\d{2}-\d{2}\b", str(label))
+                    if match:
+                        date_value = match.group(0)
+                if label:
+                    temporal_provenance["label"] = str(label)
+                if date_value:
+                    temporal_provenance["date"] = str(date_value)[:10]
         text = _llm_client.sanitize_prompt_text(str(row.get("content") or ""))
         items.append(
             RecallItem(

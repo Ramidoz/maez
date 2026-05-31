@@ -128,6 +128,7 @@ def run_probe(text: str, *, flag_on: bool) -> ProbeArmResult:
                 receipt="not_consulted",
                 focused_elapsed_ms=elapsed,
                 citation_coverage=None,
+                citation_render_version=focused_cognition._citation_render_version(),
             )
         return ProbeArmResult(
             answer="",
@@ -135,6 +136,7 @@ def run_probe(text: str, *, flag_on: bool) -> ProbeArmResult:
             receipt="consulted",
             focused_elapsed_ms=elapsed,
             citation_coverage=None,
+            citation_render_version=focused_cognition._citation_render_version(),
         )
 
     had_confirmed = any(
@@ -151,6 +153,7 @@ def run_probe(text: str, *, flag_on: bool) -> ProbeArmResult:
             citation_coverage=None,
             working_set_source_types=tuple(item.source_type for item in working_set.items),
             available_label_map=citation_label_map(working_set),
+            citation_render_version=working_set.citation_render_version,
         )
 
     result = focused_cognition.focused_synthesize(

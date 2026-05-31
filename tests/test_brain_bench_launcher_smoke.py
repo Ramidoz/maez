@@ -143,8 +143,9 @@ class BrainBenchLauncherSmokeTests(unittest.TestCase):
                         json.loads(body)["messages"][0]["content"]
                         for _path, body in _OpenAICompatStub.requests_seen
                     ]
+                    self.assertTrue(request_prompts)
                     self.assertTrue(
-                        any(" · date:" in prompt for prompt in request_prompts)
+                        all(" · date:" in prompt for prompt in request_prompts)
                     )
                     self.assertFalse(
                         any("most important, repeated" in prompt for prompt in request_prompts)

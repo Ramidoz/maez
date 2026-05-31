@@ -93,6 +93,17 @@ class RecallFlipEvalProbeRunnerTest(unittest.TestCase):
         self.assertEqual(result.receipt, "consulted")
         self.assertFalse(result.cited_confirmed_memory_context)
 
+    def test_dated_miss_reports_actual_citation_render_version(self):
+        with tempfile.TemporaryDirectory() as root, sandbox.sandbox_env(root):
+            sandbox.patch_memory_manager_base_db(root)
+            from scripts.recall_flip_eval import harness
+
+            with mock.patch.dict("os.environ", {"MAEZ_RECALL_CITATION_RENDER_V2": "1"}):
+                result = harness.run_probe("What happened on January 3?", flag_on=True)
+
+        self.assertEqual(result.outcome_class, "declined_absence")
+        self.assertEqual(result.citation_render_version, "v2")
+
     def test_incidental_date_quantity_does_not_trigger_dated_absence(self):
         with tempfile.TemporaryDirectory() as root, sandbox.sandbox_env(root):
             sandbox.patch_memory_manager_base_db(root)

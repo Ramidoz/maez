@@ -94,6 +94,46 @@ class FlagOffByteIdentity(unittest.TestCase):
             with self.subTest(value=value), citation_render_flag(value):
                 self.assertTrue(fc._citation_render_v2_enabled())
 
+    def test_structured_recall_to_dict_stays_v1_shaped_when_flag_off(self):
+        from core.brain.brain_loop import recall_partitions_to_items
+        from core.dispatcher.layer1 import RecallBlock
+        from core.dispatcher.spec import SubstrateSource
+
+        partition = {
+            "core": [
+                {
+                    "id": "core-april-27",
+                    "content": "router failover stayed stable",
+                    "metadata": {
+                        "temporal_match_method": "exact_date",
+                        "temporal_match_label": "matched by exact date (2026-04-27)",
+                    },
+                }
+            ]
+        }
+
+        for value in (None, "0"):
+            with self.subTest(value=value), citation_render_flag(value):
+                recall_items = recall_partitions_to_items(
+                    partition,
+                    role_source_type="memory_context",
+                )
+                block = RecallBlock(
+                    source=SubstrateSource.TELEGRAM_TEMPORAL,
+                    text="rendered text",
+                    timestamp=None,
+                    freshness="test",
+                    rationale="test",
+                    prompt_cost=1,
+                    items=recall_items,
+                )
+
+            item_payload = block.to_dict()["items"][0]
+            self.assertEqual(
+                item_payload["temporal_provenance"],
+                {"method": "exact_date", "confirmed": True},
+            )
+
 
 class V2Render(unittest.TestCase):
     def test_v2_golden_format_with_flag_on(self):
@@ -153,12 +193,11 @@ class V2Render(unittest.TestCase):
                 }
             ]
         }
-        recall_items = recall_partitions_to_items(
-            partition,
-            role_source_type="memory_context",
-        )
-
         with citation_render_flag("1"):
+            recall_items = recall_partitions_to_items(
+                partition,
+                role_source_type="memory_context",
+            )
             ws = fc.assemble_working_set(
                 transcript="[memory context]\n(rendered block intentionally truncated)",
                 web_context="",
