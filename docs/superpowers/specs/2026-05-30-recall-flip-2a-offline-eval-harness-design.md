@@ -14,20 +14,30 @@ assertion + test — never "the live daemon with a flag." Enforced (Rohit requir
   fresh interpreter, so no module's import-time path constant can bind to the real root).
 - **Abort-if-not-sandbox:** a pre-flight assertion that `core.paths` resolves `memory`/`logs`/`config`
   under the sandbox root; **abort** if any path points under the real home.
-- **No egress:** a socket guard installed for the harness process (block all outbound network); a test
-  asserts zero network during a battery run. (Maez's egress is otherwise chokepoint-gated, but the
-  harness belt-and-suspenders blocks it.)
+- **No egress:** a socket guard installed for the harness process (block DNS + all outbound network);
+  a test asserts zero network during a battery run. (Maez's egress is otherwise chokepoint-gated, but the
+  harness belt-and-suspenders blocks it.) Because `focused_synthesize` normally reaches a model service,
+  2a injects a deterministic offline `chat_fn` that cites the selected evidence labels. This means 2a
+  proves recall/assembly/citation safety, not real-model answer quality; real-model lived quality belongs
+  to the live 2b soak per A6.
 - **No send path:** the harness drives the cognition path **without a live `MaezDaemon`/Telegram** — it
-  calls the recall path below the daemon (the same `_living_memory_manager_adapter` →
-  `recall_partitions_to_items` → `assemble_working_set` → `focused_synthesize` → `check_groundedness`
-  the live flip uses), so there is no Telegram/send object to fire. **Path-equivalence asserted**
-  (20yr-Maez P2): the harness must drive the SAME adapter/assemble code path as live, differing only in
-  the sandbox memory root + the launch-env flag — never a stubbed retrieval.
+  calls the dispatcher recall-adapter seam below the daemon (`_dispatcher_recall_adapters(...,
+  surface="telegram", recall_stack_config=TRIAD)`), then passes the resulting structured recall items to
+  `assemble_working_set` → `focused_synthesize(chat_fn=deterministic_offline_chat)` →
+  `check_groundedness`, so there is no Telegram/send object to fire. **Path-equivalence is scoped and
+  asserted** (20yr-Maez P2): the harness must drive the same recall carrier, role-gating,
+  `recall_partitions_to_items`, structured `recall_items`, and `assemble_working_set` path as live. It
+  does not claim daemon/network/model equivalence.
 - **Seeded data cannot reach real continuity** (Body-Coherence C1, inverse per-substrate non-disturbance):
   seeded synthetic memories live in a disposable sandbox Chroma/ledger/stats substrate; a test asserts
   nothing seeded flows OUT to the real memory/ledger/promotion path; seeded items are **provenance-tagged
   synthetic** (quarantine tag — "test fixture, never lived experience") so even a leak couldn't be
   absorbed as selfhood; the sandbox is torn down after the run.
+- **Inherited path overrides rejected:** before any core/memory import that can open a substrate, the
+  launcher rejects path-bearing `MAEZ_*` environment variables that point outside the sandbox except an
+  explicit non-path allowlist. The sandbox patch/assertion covers `memory.memory_manager.BASE_DB`,
+  `core.memory.memory_scoring._DB_PATH`, `core.memory.birth.DEFAULT_STATE_PATH` if loaded, and resets the
+  dispatcher memory-manager cache before any `MemoryManager()` construction.
 
 ## What 2a proves (correctness + safety, automated — NO human blind scoring)
 The benefit blind-verdict moved to the live soak (A6). 2a runs **assertable** correctness/safety probes
@@ -59,19 +69,23 @@ free to re-run), and the packet reports per-probe **consistency**. Hard safety/c
 smoke/correctness probes may use the pre-declared threshold in the packet (default **≥2/3 pass with zero
 unsafe failure**) — converting single observations into the replication the single-case standard requires
 without letting one safety miss hide inside an average.
-**Model/commit parity asserted:** the packet records the model build id + code commit SHA, and the run
-aborts if they differ from the intended flip commit.
+**Commit/harness parity asserted:** the packet records `run_id`, timestamps, expected + actual commit
+SHA, clean-worktree state, probe/fixture manifest hashes, harness schema version, and the deterministic
+chat adapter id. The run aborts on dirty worktree or commit mismatch. The configured model id is recorded
+as environment context only; it is not consulted by 2a and is not a 2a pass/fail gate.
 
 ## Artifacts (Rohit requirement 3 — separated)
-- **Proof packet (content-free, `eval_packet.v1`):** per-probe pass/fail + consistency (k/3), the
-  `recall_outcome`-class + `focused_elapsed_ms` + `citation_coverage` per probe, the model/commit SHA, a
-  PASS/FAIL per correctness/safety gate. **No raw answer text, no query text.** This is the durable
-  canon record 2b consumes.
-- **Quarantined debug answer-dump (content-bearing, optional, sandbox-local):** if a probe fails, the
-  raw answer is written to a *separate, named, quarantined* debug artifact (clearly "sandbox synthetic,
-  not lived"), never into the proof packet or the telemetry tree, and torn down with the sandbox. (The
-  human blind **answer sheet** is a 2b/live-soak artifact, not 2a's — 2a's correctness checks are
-  assertable, not blind-judged.)
+- **Proof packet (content-free, `eval_packet.v1`):** run identity + per-probe aggregate + per-variant
+  content-free rows (`variant_id`, arm outcomes, assertion codes, unsafe flag, focused elapsed,
+  citation coverage, cited durable-id hashes/source types/temporal provenance). Hard probes are declared
+  by `probe_id`, not only by kind. **No raw answer text, no query text.** A serializer-level sentinel test
+  proves raw query/answer sentinels never appear anywhere in the JSON.
+- **Quarantined debug answer-dump (content-bearing, optional, sandbox-local):** if a probe fails, raw
+  answers can be retained only when `--keep-failed-sandbox` or `--debug-dump-dir` is provided. The default
+  deletes dumps with the sandbox. If retained, files live under a gitignored quarantine directory named by
+  `run_id/probe_id/variant_id`; the proof packet stores only `debug_dump_count` and
+  `debug_dump_manifest_hash`. (The human blind **answer sheet** is a 2b/live-soak artifact, not 2a's —
+  2a's correctness checks are assertable, not blind-judged.)
 
 ## What 2a does NOT do (A6 decoupling)
 - Does NOT compute the benefit verdict, the rescued-turn counter, the latency K, or the blast-radius gate
@@ -93,6 +107,13 @@ shared tool only after organ #2 proves the overlap** — do not build a generic 
 - Probe assertions: each correctness/safety probe's pass condition (multi-year right-year, type-rule
   context-not-evidence, dated-miss still-declines, incidental no-trigger, both-shaped dated-wins).
 - Proof-packet content-free closure test (no answer/query text fields).
+- Launcher static/subprocess tests: the launcher imports only stdlib before exec, and inherited real-path
+  `MAEZ_*` overrides cause an early sandbox abort.
+- Direct fixture tests: core/daily rows are seeded by explicit sandbox Chroma `add(...)` metadata
+  (`timestamp`, `date`, `synthetic_test_fixture`, fixture ids, `trust_tier=untrusted`); a post-seed
+  `_absolute_date_recall` assertion proves the fixture is visible before the probe battery runs.
+- Runbook executability: pin exact log/DB sources for the 2b commands and flag insufficient log retention
+  as requiring a content-free sink before soak.
 
 ## Self-review
 - **Placeholders:** none — the isolation enforcement (4 mechanisms), the probe set + assertions, the
