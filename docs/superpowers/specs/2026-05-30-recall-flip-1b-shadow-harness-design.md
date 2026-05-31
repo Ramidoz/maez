@@ -89,7 +89,9 @@ shadow at all, and must never become dated false-absence evidence merely because
 present.
 
 ### `ShadowSkip` (closed reasons — no free text, no raw exception message)
-`queue_full` | `budget_exceeded` | `exception`. On `exception`, log only the reason token + the exception
+`queue_full` | `budget_exceeded` | `exception`. `budget_exceeded` is reserved for a future
+pre-execution/interruptible budget mechanism; Slice 1b does **not** discard a successfully assembled row just
+because elapsed time was high. On `exception`, log only the reason token + the exception
 **class name** — never the message (content-leak guard). `flag_off`, `not_recall_relevant`, and
 continuity-only turns are not runtime rows; they are absence-of-shadow conditions, not attempted-shadow
 failures. `carrier_unavailable` is a `ShadowReach` value for an attempted row, not a skip reason.
@@ -100,11 +102,11 @@ before `return reply` (that adds latency to what Rohit hears). Instead: at the p
 committed (audited, hashed, trace-written), **snapshot** the read-only inputs the shadow needs (`text`,
 the live `RecallOutcome` object, `trace_id`, `boot_id`) and dispatch the shadow on a **skip-when-busy
 single-worker** (the existing bounded-singleton idiom, not a queue). If the worker is busy or shut down,
-emit a paired `shadow_outcome` row with `shadow_skipped=queue_full`; never block. The per-attempt budget is
-a **soft elapsed budget**: if the shadow completes but exceeds the budget, emit
-`shadow_skipped=budget_exceeded` instead of a success row. Python threads are not force-killed; a truly hung
-worker remains visible because later date-addressed attempts become `queue_full`. A test asserts
-time-to-`return reply` is unchanged with the flag on.
+emit a paired `shadow_outcome` row with `shadow_skipped=queue_full`; never block. The elapsed budget is
+**observational only** in Slice 1b: if the shadow completes after the budget, log a content-free soft-budget
+notice, but still emit the actual `shadow_reach` row. Python threads are not force-killed; a truly hung worker
+remains visible because later date-addressed attempts become `queue_full`. A test asserts time-to-`return reply`
+is unchanged with the flag on.
 
 ## Side-effect-free guarantee (canary-neutral discipline — per substrate)
 One non-disturbance assertion per substrate the recall machinery touches:
@@ -112,8 +114,9 @@ One non-disturbance assertion per substrate the recall machinery touches:
 - `self._last_recall_receipt` — **unchanged** (1a self-status reads it; the shadow must not mutate it).
 - promotion / `record_recall` stats DB — no write (`record_recalls=False`, asserted).
 - egress / external fetch — none.
-- memory-manager thread safety — the worker constructs a fresh `MemoryManager` for read-only recall instead
-  of reusing `self.memory` across daemon/worker threads.
+- memory-manager inertness — the worker reuses the daemon's already-open memory carrier with
+  `record_recalls=False`; it must not construct a fresh `MemoryManager` (which can create/open Chroma
+  substrate and leak native handles).
 - layer0 archetype cache file — no write.
 - repair-FSM state, routing-observation rows, turn-trace writer — no write (dispatcher not entered).
 - read-side cursors / "last consulted" markers — not advanced (a read that mutates a cursor is a sneaky
@@ -199,8 +202,8 @@ this closes the latent uncaught-crash seam in the same daemon region 1b touches.
   promotion/`record_recalls=False`, egress, layer0 cache, FSM, routing-observation, trace-write, read-side
   cursor, orphaned focused-run).
 - **Off-critical-path:** time-to-`return reply` unchanged flag-on; singleton busy/shutdown →
-  paired row with `shadow_skipped=queue_full`; soft over-budget completion → paired row with
-  `shadow_skipped=budget_exceeded`.
+  paired row with `shadow_skipped=queue_full`; soft over-budget completion keeps the actual reach row and logs
+  latency rather than discarding useful material.
 - **Record honesty:** content-free closure test; `shadow_reach` never an answer class; `rescuable`/
   `false_absence`/`legacy_false_absence_rescuable` derivations correct on seeded fixtures; continuity-only
   turns do not run shadow and cannot set `false_absence_candidate`; `ShadowSkip` reasons closed; exception

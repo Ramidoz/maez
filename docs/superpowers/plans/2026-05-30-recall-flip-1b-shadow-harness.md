@@ -4,7 +4,7 @@
 
 **Goal:** A silent, read-only, off-critical-path "second opinion" that, on flag-off recall-relevant turns, records whether the not-yet-live recall stack would have had useful dated material — content-free, side-effect-free, never served — to gather pre-flip safety + benefit evidence.
 
-**Architecture:** A new pure module `core/routing/recall_shadow.py` (the `ShadowOutcome` record + `ShadowReach`/`ShadowSkip`/`ShadowReceipt` enums + `derive_*` functions + `compute_shadow_pair_id`). The daemon runs the shadow on a **skip-when-busy single-worker** after the reply is committed, on **date-addressed turns only**, via **direct read-only memory recall** using a fresh read-only `MemoryManager` (`recall_for_telegram_living(record_recalls=False)` → reused partition→RecallItem conversion → `assemble_working_set`) — **never** the dispatcher. The carried 1a ReplyPath brittleness is closed here.
+**Architecture:** A new pure module `core/routing/recall_shadow.py` (the `ShadowOutcome` record + `ShadowReach`/`ShadowSkip`/`ShadowReceipt` enums + `derive_*` functions + `compute_shadow_pair_id`). The daemon runs the shadow on a **skip-when-busy single-worker** after the reply is committed, on **date-addressed turns only**, via **direct read-only memory recall** using the daemon's already-open memory carrier (`recall_for_telegram_living(record_recalls=False)` → reused partition→RecallItem conversion → `assemble_working_set`) — **never** the dispatcher. The carried 1a ReplyPath brittleness is closed here.
 
 **Tech Stack:** Python 3, stdlib `enum`/`dataclasses`/`hashlib`, `unittest` via `.venv/bin/python -m unittest`.
 
@@ -24,7 +24,7 @@
 - **Create** `tests/test_recall_shadow.py` — pure derivations + content-free closure + closed-enum tests.
 - **Modify** `core/routing/recall_outcome.py` — add `reply_path_from_mode(mode) -> ReplyPath` (ReplyPath hardening).
 - **Modify** `core/brain/brain_loop.py` — extract the partition→RecallItem conversion to a reusable module-level `recall_partitions_to_items(...)`; the live adapter calls it (refactor, no behavior change).
-- **Modify** `daemon/maez_daemon.py` — `_shadow_worker` (bounded singleton); `_recall_shadow_enabled()`; post-reply-commit snapshot + submit on dated turns only; the read-only shadow run using a fresh `MemoryManager`; emit `shadow_pair_id` on the live `recall_outcome` row only when shadow is eligible; swap the ReplyPath coercion to `reply_path_from_mode`.
+- **Modify** `daemon/maez_daemon.py` — `_shadow_worker` (bounded singleton); `_recall_shadow_enabled()`; post-reply-commit snapshot + submit on dated turns only; the read-only shadow run using `self.memory` with `record_recalls=False` (no fresh `MemoryManager`); emit `shadow_pair_id` on the live `recall_outcome` row only when shadow is eligible; swap the ReplyPath coercion to `reply_path_from_mode`.
 - **Modify** `core/routing/recall_self_status.py` — speakable shadow-active state.
 - **Modify** `tests/test_memory_integrity_invariant.py` — daemon-shaped tests (off-critical-path, no-dispatcher, per-substrate non-disturbance, pairing, queue_full) in the harness-hosting class.
 
@@ -611,19 +611,16 @@ Add to the harness-hosting class (reuse `_build_daemon_for_handle_message` / `_h
         # structured channel carries temporal provenance into assemble_working_set.
         captured = {}
         daemon = self._build_daemon_for_handle_message()
-        dated_context = {
+        daemon.memory.living_recall = ({}, {
             "core": [{
                 "id": "core-apr27",
                 "content": "April 27 infrastructure ground truth.",
                 "metadata": {"temporal_match_method": "exact_date"},
             }]
-        }
+        })
         with self.assertLogs("maez", level="INFO") as logs:
             with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
                 os.environ, {"MAEZ_RECALL_SHADOW_ENABLED": "1"}, clear=False
-            ), mock.patch(
-                "memory.memory_manager.MemoryManager.recall_for_telegram_living",
-                return_value=({}, dated_context),
             ):
                 os.environ.pop("MAEZ_RECALL_TRIAD_ENABLED", None)
                 maez_daemon.MaezDaemon.handle_message(
@@ -666,10 +663,9 @@ def _run_recall_shadow(self, *, text, legacy_rec, date_addressed, shadow_pair_id
     )
     from core.routing.focused_cognition import assemble_working_set
     from core.brain.brain_loop import recall_partitions_to_items
-    from memory.memory_manager import MemoryManager
     t0 = time.monotonic()
     try:
-        memory = MemoryManager()  # fresh manager: do not share self.memory across daemon/worker threads
+        memory = self.memory  # reuse already-open daemon carrier; do not construct Chroma clients in shadow
         evidence, context = memory.recall_for_telegram_living(text, record_recalls=False)
         items = (recall_partitions_to_items(evidence, role_source_type="memory_evidence")
                  + recall_partitions_to_items(context, role_source_type="memory_context"))
@@ -677,11 +673,10 @@ def _run_recall_shadow(self, *, text, legacy_rec, date_addressed, shadow_pair_id
                                   recall_items=items)
         elapsed_ms = int((time.monotonic() - t0) * 1000)
         if elapsed_ms > RECALL_SHADOW_BUDGET_MS:
-            _log_shadow_outcome(rec=derive_shadow_skipped(
-                legacy_rec=legacy_rec, skip_reason=ShadowSkip.BUDGET_EXCEEDED,
-                shadow_pair_id=shadow_pair_id, latency_delta_ms=elapsed_ms,
-                ts=int(time.time()), boot_id=boot_id))
-            return
+            logger.info(
+                "recall_shadow_soft_budget_exceeded latency_ms=%d budget_ms=%d",
+                elapsed_ms, RECALL_SHADOW_BUDGET_MS,
+            )
         reach = derive_shadow_reach(ws, date_addressed=date_addressed)
         rec = derive_shadow_outcome(
             legacy_rec=legacy_rec,
@@ -730,7 +725,7 @@ Add, each asserting one substrate is untouched by a shadow run (flag on, triad o
 - layer0 cache file mtime unchanged.
 - `_run_dispatcher_pipeline` not called (Task 4 covered; keep).
 - `queue_full`: submit two date-addressed shadow jobs back-to-back with the worker held busy → second logs a pairable `shadow_outcome ... shadow_skipped=queue_full ... shadow_pair_id=...`.
-- `budget_exceeded`: patch the shadow recall/assemble path to return slowly but complete → logs a pairable `shadow_outcome ... shadow_skipped=budget_exceeded` and does not emit a success row.
+- soft budget exceeded: patch the shadow recall/assemble path to return slowly but complete → logs the actual reach row (`shadow_skipped=na`) plus content-free soft-budget telemetry; useful material is not discarded.
 - exception content-free: make recall raise `RuntimeError("OWNER SECRET TEXT")` → logs `error_class=RuntimeError` but never the message text.
 - shutdown: `stop()` shuts down `_shadow_worker`; submit after shutdown is refused and represented as `queue_full` only when a dated shadow attempt occurs.
 - **off-critical-path:** patch the shadow job to sleep; assert `handle_message` returns (time-to-return) without waiting for the sleep (the reply is not delayed by the shadow).
@@ -855,10 +850,10 @@ git commit -m "test(recall): slice 1b regression sweep green"
 ## Self-Review
 
 **1. Spec coverage:**
-- Read-only via fresh `MemoryManager().recall_for_telegram_living(record_recalls=False)` + reused `recall_partitions_to_items` + `assemble_working_set`; dispatcher forbidden (test) → Tasks 3, 4. ✓
+- Read-only via daemon memory carrier `recall_for_telegram_living(record_recalls=False)` + reused `recall_partitions_to_items` + `assemble_working_set`; no fresh `MemoryManager`; dispatcher forbidden (test) → Tasks 3, 4. ✓
 - Date-addressed-only 1b scope; continuity-only turns do not run shadow and cannot become dated false-absence evidence → Tasks 2, 4. ✓
 - Assemble-only honest vocabulary (`ShadowReach`, `grounded_material_available`, `rescuable_candidate`) + `legacy_false_absence_rescuable` reusing `is_false_absence(legacy_rec)`; false-absence gated to dated frames only; grounded material requires confirmed `memory_context`, not evidence → Task 2. ✓
-- Off-critical-path bounded singleton + pairable `queue_full`/`budget_exceeded`/`exception` skipped rows; no rows for flag-off/non-date-addressed → Tasks 4, 5. ✓
+- Off-critical-path bounded singleton + pairable `queue_full`/`exception` skipped rows; soft over-budget successes keep the actual reach row; no rows for flag-off/non-date-addressed → Tasks 4, 5. ✓
 - Side-effect-free per-substrate (focused_cognition_runs, `_last_recall_receipt`, promotion, egress, layer0, dispatcher) → Tasks 4, 5. ✓
 - `shadow_pair_id` derived (not raw trace_id), non-authoritative, content-free; live `recall_outcome` also emits it → Tasks 2, 4. ✓
 - Speakable shadow-active state from `_last_shadow_receipt`, not stale since-boot boolean → Task 6. ✓
