@@ -110,6 +110,27 @@ class PairwiseJudgeTests(unittest.TestCase):
         self.assertEqual(result.voice_winrate["v2"], 0.0)
         self.assertEqual(result.invalid_verdicts, 2)
 
+    def test_winrate_denominator_is_per_variant_games(self):
+        def call_judge(*, axis, first, second, prompt):
+            if first.answer == "one":
+                return "A"
+            if second.answer == "one":
+                return "B"
+            return "TIE"
+
+        result = judge_pairwise(
+            {
+                "v1": (_answer("p", "s1", "one"),),
+                "v2": (_answer("p", "s1", "two"),),
+                "v3": (_answer("p", "s1", "three"),),
+            },
+            call_judge=call_judge,
+            seed=1,
+        )
+
+        self.assertEqual(result.quality_winrate["v1"], 1.0)
+        self.assertEqual(result.voice_winrate["v1"], 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()

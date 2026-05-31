@@ -53,6 +53,10 @@ def judge_pairwise(
         "quality": {label: 0 for label in labels},
         "voice": {label: 0 for label in labels},
     }
+    denominators = {
+        "quality": {label: 0 for label in labels},
+        "voice": {label: 0 for label in labels},
+    }
     games = {"quality": 0, "voice": 0}
     invalid = 0
     grouped = _group_answers(answers_by_variant)
@@ -78,6 +82,8 @@ def judge_pairwise(
                         )
                     ).upper()
                     games[axis] += 1
+                    denominators[axis][first_label] += 1
+                    denominators[axis][second_label] += 1
                     if verdict == "A":
                         wins[axis][first_label] += 1
                     elif verdict == "B":
@@ -88,11 +94,19 @@ def judge_pairwise(
                         invalid += 1
 
     quality_winrate = {
-        label: (wins["quality"][label] / games["quality"] if games["quality"] else 0.0)
+        label: (
+            wins["quality"][label] / denominators["quality"][label]
+            if denominators["quality"][label]
+            else 0.0
+        )
         for label in labels
     }
     voice_winrate = {
-        label: (wins["voice"][label] / games["voice"] if games["voice"] else 0.0)
+        label: (
+            wins["voice"][label] / denominators["voice"][label]
+            if denominators["voice"][label]
+            else 0.0
+        )
         for label in labels
     }
     return JudgeResult(

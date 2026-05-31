@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -18,13 +19,39 @@ from scripts.brain_bench.bench_packet import (
     VariantReport,
 )
 from scripts.brain_bench.gates import (
+    VariantScore,
     hard_gate_fail_reasons,
     latency_fail,
+    rank_variants,
     voice_lint,
 )
 from scripts.brain_bench.judge import BlindAnswer, judge_pairwise
 from scripts.brain_bench.variants import VariantRegistry, resolve_judge_endpoint
 from scripts.recall_flip_eval.sandbox import no_egress
+
+DEFAULT_DEBUG_DUMP_DIR = Path("logs/brain_bench_debug")
+
+
+class BenchmarkConfigError(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
+class ProbeSample:
+    probe_id: str
+    sample_id: str
+    answer: str
+    evidence: str
+    false_absence: bool
+    grounded_categorical: bool
+    wrong_absence: bool
+    p95_ms: int
+    max_ms: int
+    ttft_ms: int | None
+    tokens_per_sec: float
+    ops_evidence: OpsRubric
+    inference_failed: bool = False
+    fail_code: str | None = None
 
 
 def debug_dump_metadata(
@@ -49,12 +76,14 @@ def debug_dump_metadata(
 
 
 def write_debug_dump(
-    directory: Path,
+    directory: Path = DEFAULT_DEBUG_DUMP_DIR,
     *,
     records: list[dict],
     fixture_manifest_hash: str,
     variant_config_hash: str,
 ) -> Path:
+    if directory != DEFAULT_DEBUG_DUMP_DIR:
+        raise BenchmarkConfigError("debug dumps must stay in logs/brain_bench_debug")
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"brain-bench-debug-{int(time.time() * 1000)}.json"
     path.write_text(
@@ -81,19 +110,6 @@ def derive_screen_result(rows: list[dict]) -> ScreenResult:
     return ScreenResult.FAILS_DISHONEST
 
 
-def _default_ops() -> OpsRubric:
-    return OpsRubric(
-        api_family=ApiFamily.OLLAMA,
-        topology=Topology.REUSE_ENDPOINT,
-        bind_host_verified=True,
-        live_daemon_disturbance=False,
-        gpu_contention=GpuContention.NONE,
-        startup_health=StartupHealth.OK,
-        streaming_support=True,
-        restart_recovery=RestartRecovery.CLEAN,
-    )
-
-
 def run_benchmark(
     registry: VariantRegistry,
     *,
@@ -101,38 +117,54 @@ def run_benchmark(
     probe_run: Callable,
     call_judge: Callable | None = None,
     judge_base_url: str = "http://127.0.0.1:8081",
-    debug_dump_dir: Path | None = None,
+    write_debug: bool = False,
 ) -> BenchPacket:
     reports: list[VariantReport] = []
     screen_rows: list[dict] = []
     raw_records: list[dict] = []
     blind_answers: dict[str, tuple[BlindAnswer, ...]] = {}
+    judge_port = resolve_judge_endpoint(judge_base_url) if call_judge is not None else None
+    variant_ports = {variant.port for variant in registry}
+    if judge_port is not None and judge_port in variant_ports:
+        raise BenchmarkConfigError("judge port must be distinct from variant ports")
 
     for variant in registry:
         with no_egress(allow_loopback_ports=(variant.port,)):
-            result = probe_run(variant)
-        raw_records.append(
-            {
-                "variant_label": variant.label,
-                "answer": result.get("answer", ""),
-                "evidence": result.get("evidence", ""),
-            }
-        )
-        lint = voice_lint(result.get("answer", ""))
-        fail_reasons = list(
-            hard_gate_fail_reasons(
-                false_absence=bool(result.get("false_absence", False)),
-                grounded_categorical=result.get("grounded_categorical", False),
-                wrong_absence=bool(result.get("wrong_absence", False)),
-                voice_lint_result=lint,
+            samples = tuple(probe_run(variant))
+        if not samples:
+            raise BenchmarkConfigError("probe_run must return at least one ProbeSample")
+        for sample in samples:
+            if not isinstance(sample, ProbeSample):
+                raise BenchmarkConfigError("probe_run must return ProbeSample rows")
+            raw_records.append(
+                {
+                    "variant_label": variant.label,
+                    "probe_id": sample.probe_id,
+                    "sample_id": sample.sample_id,
+                    "answer": sample.answer,
+                    "evidence": sample.evidence,
+                    "fail_code": sample.fail_code,
+                }
             )
-        )
-        over_ceiling = latency_fail(
-            p95_ms=int(result.get("p95_ms", 0)),
-            max_ms=int(result.get("max_ms", 0)),
-        )
+        fail_reasons: list[FailReason] = []
+        for sample in samples:
+            lint = voice_lint(sample.answer)
+            fail_reasons.extend(
+                hard_gate_fail_reasons(
+                    false_absence=sample.false_absence,
+                    grounded_categorical=sample.grounded_categorical,
+                    wrong_absence=sample.wrong_absence,
+                    voice_lint_result=lint,
+                )
+            )
+            if sample.inference_failed:
+                fail_reasons.append(FailReason.INFERENCE_FAILED)
+        p95_ms = max(sample.p95_ms for sample in samples)
+        max_ms = max(sample.max_ms for sample in samples)
+        over_ceiling = latency_fail(p95_ms=p95_ms, max_ms=max_ms)
         if over_ceiling:
             fail_reasons.append(FailReason.OVER_ANSWER_CEILING)
+        fail_reasons = list(dict.fromkeys(fail_reasons))
         honesty_clean = not any(reason is not FailReason.OVER_ANSWER_CEILING for reason in fail_reasons)
         hard_pass = not fail_reasons
         reports.append(
@@ -140,13 +172,13 @@ def run_benchmark(
                 label=variant.label,
                 hard_pass=hard_pass,
                 fail_reasons=tuple(fail_reasons),
-                p95_ms=int(result.get("p95_ms", 0)),
-                max_ms=int(result.get("max_ms", 0)),
-                ops=_default_ops(),
+                p95_ms=p95_ms,
+                max_ms=max_ms,
+                ops=samples[0].ops_evidence,
                 over_ceiling=over_ceiling,
-                ttft_ms=result.get("ttft_ms"),
-                tokens_per_sec=float(result.get("tokens_per_sec", 0.0)),
-                sample_n=1,
+                ttft_ms=next((sample.ttft_ms for sample in samples if sample.ttft_ms is not None), None),
+                tokens_per_sec=sum(sample.tokens_per_sec for sample in samples) / len(samples),
+                sample_n=len(samples),
             )
         )
         screen_rows.append(
@@ -156,23 +188,64 @@ def run_benchmark(
                 "honesty_clean": honesty_clean,
             }
         )
-        blind_answers[variant.label] = (
+        blind_answers[variant.label] = tuple(
             BlindAnswer(
-                probe_id="bench",
-                sample_id="sample-0",
-                answer=result.get("answer", ""),
-                evidence=result.get("evidence", ""),
-            ),
+                probe_id=sample.probe_id,
+                sample_id=sample.sample_id,
+                answer=sample.answer,
+                evidence=sample.evidence,
+            )
+            for sample in samples
         )
 
     if call_judge is not None:
-        judge_port = resolve_judge_endpoint(judge_base_url)
         with no_egress(allow_loopback_ports=(judge_port,)):
-            judge_pairwise(blind_answers, call_judge=call_judge, seed=1)
+            judge_result = judge_pairwise(blind_answers, call_judge=call_judge, seed=1)
+        reports = [
+            VariantReport(
+                label=report.label,
+                hard_pass=report.hard_pass,
+                fail_reasons=report.fail_reasons,
+                p95_ms=report.p95_ms,
+                max_ms=report.max_ms,
+                ops=report.ops,
+                over_ceiling=report.over_ceiling,
+                ttft_ms=report.ttft_ms,
+                tokens_per_sec=report.tokens_per_sec,
+                quality_winrate=judge_result.quality_winrate.get(report.label, 0.0),
+                voice_winrate=judge_result.voice_winrate.get(report.label, 0.0),
+                quality_per_second=(
+                    judge_result.quality_winrate.get(report.label, 0.0)
+                    / (report.p95_ms / 1000)
+                    if report.p95_ms > 0
+                    else 0.0
+                ),
+                sample_n=report.sample_n,
+                method=report.method,
+                tail_flags=report.tail_flags,
+            )
+            for report in reports
+        ]
+        ranked = rank_variants(
+            [
+                # Ranking is advisory order only; packet hard gates remain unchanged.
+                VariantScore(
+                    report.label,
+                    report.hard_pass,
+                    report.p95_ms,
+                    report.quality_winrate,
+                    report.voice_winrate,
+                    report.tokens_per_sec,
+                    report.ops,
+                )
+                for report in reports
+            ]
+        )
+        order = {score.label: index for index, score in enumerate(ranked)}
+        reports.sort(key=lambda report: order[report.label])
 
-    if debug_dump_dir is not None:
+    if write_debug:
         write_debug_dump(
-            debug_dump_dir,
             records=raw_records,
             fixture_manifest_hash=fixture_manifest_hash,
             variant_config_hash=registry.variant_config_hash,

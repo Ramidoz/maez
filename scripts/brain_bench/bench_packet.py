@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -91,6 +92,10 @@ _FORBIDDEN_CONTENT_TOKENS = (
     "raw_reply",
 )
 _CONFIG_SOURCES = {"env", "file", "inline"}
+_SAFE_LABEL_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
+_SAFE_METHODS = {"small_k_conservative_tail"}
+_SAFE_TAIL_FLAGS = {"tail_risk", "over_ceiling"}
+_SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _forbidden_field_name(name: str) -> bool:
@@ -112,6 +117,17 @@ def _validate_content_free(value: Any, *, field_name: str = "") -> None:
     elif isinstance(value, (tuple, list)):
         for item in value:
             _validate_content_free(item)
+
+
+def _require_safe_token(value: str, field_name: str, *, allowed: set[str] | None = None) -> None:
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be string")
+    if allowed is not None and value not in allowed:
+        raise ValueError(f"{field_name} must be closed")
+    if any(token.lower() in value.lower() for token in _FORBIDDEN_CONTENT_TOKENS):
+        raise ValueError(f"{field_name} contains content-like text")
+    if "FABRICATED_SENTINEL" in value:
+        raise ValueError(f"{field_name} contains sentinel text")
 
 
 def _enum_value(value: Any) -> Any:
@@ -147,6 +163,12 @@ class VariantReport:
 
     def __post_init__(self) -> None:
         _validate_content_free(self)
+        _require_safe_token(self.label, "label")
+        if not _SAFE_LABEL_RE.match(self.label):
+            raise ValueError("label must be a safe non-content token")
+        _require_safe_token(self.method, "method", allowed=_SAFE_METHODS)
+        for flag in self.tail_flags:
+            _require_safe_token(flag, "tail_flags", allowed=_SAFE_TAIL_FLAGS)
         if type(self.hard_pass) is not bool:
             raise ValueError("hard_pass must be bool")
         if type(self.over_ceiling) is not bool:
@@ -196,7 +218,7 @@ class BenchPacket:
             raise ValueError("variant_config_source must be closed")
         for name in ("fixture_manifest_hash", "variant_config_hash"):
             value = getattr(self, name)
-            if not isinstance(value, str) or len(value) != 64:
+            if not isinstance(value, str) or not _SHA256_HEX_RE.match(value):
                 raise ValueError(f"{name} must be a sha256 hex string")
         for variant in self.variants:
             if not isinstance(variant, VariantReport):

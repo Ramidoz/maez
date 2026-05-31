@@ -62,6 +62,17 @@ class ScreenResultTests(unittest.TestCase):
                 screen_result="free text",
             )
 
+    def test_packet_hashes_must_be_hex(self):
+        with self.assertRaises(ValueError):
+            BenchPacket(
+                schema_version="bench_packet.v3",
+                fixture_manifest_hash="z" * 64,
+                variant_config_hash="c" * 64,
+                variant_config_source="file",
+                variants=(),
+                screen_result=ScreenResult.FAILS_DISHONEST,
+            )
+
 
 class RecursiveContentFreeTests(unittest.TestCase):
     def test_rejects_compound_content_field_in_nested_dataclass(self):
@@ -82,6 +93,15 @@ class RecursiveContentFreeTests(unittest.TestCase):
     def test_non_vacuous_sentinel_rejected_by_closed_ops_field(self):
         with self.assertRaises(ValueError):
             _ops(api_family="FABRICATED_SENTINEL")
+
+    def test_rejects_sentinel_in_serialized_scalar_fields(self):
+        for kwargs in (
+            {"label": "FABRICATED_SENTINEL"},
+            {"method": "FABRICATED_SENTINEL"},
+            {"tail_flags": ("FABRICATED_SENTINEL",)},
+        ):
+            with self.assertRaises(ValueError, msg=kwargs):
+                _report(**kwargs)
 
     def test_post_init_rejects_non_enum_reason(self):
         with self.assertRaises(ValueError):
