@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 
 
 class FailReason(str, Enum):
@@ -11,6 +13,12 @@ class FailReason(str, Enum):
     VOICE_LINT = "voice_lint"
     OVER_ANSWER_CEILING = "over_answer_ceiling"
     INFERENCE_FAILED = "inference_failed"
+
+
+class ScreenResult(str, Enum):
+    PASSES_SCREEN = "passes_screen"
+    FAILS_TOO_SLOW = "fails_too_slow"
+    FAILS_DISHONEST = "fails_dishonest"
 
 
 class ApiFamily(str, Enum):
@@ -71,3 +79,139 @@ def _require_enum(value, enum_type, field_name: str) -> None:
 def _require_bool(value, field_name: str) -> None:
     if type(value) is not bool:
         raise ValueError(f"{field_name} must be bool")
+
+
+_FORBIDDEN_CONTENT_TOKENS = (
+    "answer",
+    "text",
+    "prompt",
+    "snippet",
+    "reply",
+    "probe_text",
+    "raw_reply",
+)
+_CONFIG_SOURCES = {"env", "file", "inline"}
+
+
+def _forbidden_field_name(name: str) -> bool:
+    low = name.lower()
+    return any(token in low for token in _FORBIDDEN_CONTENT_TOKENS)
+
+
+def _validate_content_free(value: Any, *, field_name: str = "") -> None:
+    if field_name and _forbidden_field_name(field_name):
+        raise ValueError(f"content-bearing field is not allowed: {field_name}")
+    if isinstance(value, Enum):
+        return
+    if dataclasses.is_dataclass(value):
+        for field in dataclasses.fields(value):
+            _validate_content_free(getattr(value, field.name), field_name=field.name)
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            _validate_content_free(item, field_name=str(key))
+    elif isinstance(value, (tuple, list)):
+        for item in value:
+            _validate_content_free(item)
+
+
+def _enum_value(value: Any) -> Any:
+    if isinstance(value, Enum):
+        return value.value
+    return value
+
+
+def _ops_to_dict(ops: OpsRubric) -> dict[str, Any]:
+    return {
+        field.name: _enum_value(getattr(ops, field.name))
+        for field in dataclasses.fields(ops)
+    }
+
+
+@dataclass(frozen=True)
+class VariantReport:
+    label: str
+    hard_pass: bool
+    fail_reasons: tuple[FailReason, ...]
+    p95_ms: int
+    max_ms: int
+    ops: OpsRubric
+    over_ceiling: bool = False
+    ttft_ms: int | None = None
+    tokens_per_sec: float = 0.0
+    quality_winrate: float = 0.0
+    voice_winrate: float = 0.0
+    quality_per_second: float = 0.0
+    sample_n: int = 0
+    method: str = "small_k_conservative_tail"
+    tail_flags: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _validate_content_free(self)
+        if type(self.hard_pass) is not bool:
+            raise ValueError("hard_pass must be bool")
+        if type(self.over_ceiling) is not bool:
+            raise ValueError("over_ceiling must be bool")
+        for reason in self.fail_reasons:
+            _require_enum(reason, FailReason, "fail_reasons")
+        if not isinstance(self.ops, OpsRubric):
+            raise ValueError("ops must be OpsRubric")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "label": self.label,
+            "hard_pass": self.hard_pass,
+            "fail_reasons": [reason.value for reason in self.fail_reasons],
+            "latency": {
+                "p95": self.p95_ms,
+                "max": self.max_ms,
+                "sample_n": self.sample_n,
+                "method": self.method,
+                "tail_flags": list(self.tail_flags),
+            },
+            "over_ceiling": self.over_ceiling,
+            "ttft_ms": self.ttft_ms,
+            "tokens_per_sec": self.tokens_per_sec,
+            "quality_winrate": self.quality_winrate,
+            "voice_winrate": self.voice_winrate,
+            "quality_per_second": self.quality_per_second,
+            "ops": _ops_to_dict(self.ops),
+        }
+
+
+@dataclass(frozen=True)
+class BenchPacket:
+    schema_version: str
+    fixture_manifest_hash: str
+    variant_config_hash: str
+    variant_config_source: str
+    variants: tuple[VariantReport, ...]
+    screen_result: ScreenResult
+
+    def __post_init__(self) -> None:
+        if self.schema_version != "bench_packet.v3":
+            raise ValueError("schema_version must be bench_packet.v3")
+        if not isinstance(self.screen_result, ScreenResult):
+            raise ValueError("screen_result must be ScreenResult")
+        if self.variant_config_source not in _CONFIG_SOURCES:
+            raise ValueError("variant_config_source must be closed")
+        for name in ("fixture_manifest_hash", "variant_config_hash"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or len(value) != 64:
+                raise ValueError(f"{name} must be a sha256 hex string")
+        for variant in self.variants:
+            if not isinstance(variant, VariantReport):
+                raise ValueError("variants must contain VariantReport")
+        _validate_content_free(self)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "fixture_manifest_hash": self.fixture_manifest_hash,
+            "variant_config_hash": self.variant_config_hash,
+            "variant_config_source": self.variant_config_source,
+            "variants": [variant.to_dict() for variant in self.variants],
+            "screen_result": self.screen_result.value,
+            "artifact_role": "producer_evidence_not_verdict",
+            "owner_verdict_required": True,
+            "requires_s5_voice_continuity_gate": True,
+        }
