@@ -25,6 +25,7 @@ class ProbeArmResult:
     cited_durable_ids: tuple[str, ...] = ()
     cited_confirmed_memory_context: bool = False
     working_set_source_types: tuple[str, ...] = ()
+    available_label_map: tuple[dict[str, object], ...] = ()
 
 
 class HarnessAbort(RuntimeError):
@@ -42,6 +43,19 @@ def deterministic_offline_chat(*, model, messages, think=False, options=None):
     label = labels[0] if labels else "E1"
     return SimpleNamespace(
         message=SimpleNamespace(content=f"Offline recall harness cites [{label}].")
+    )
+
+
+def citation_label_map(working_set) -> tuple[dict[str, object], ...]:
+    """Content-free map of citation labels available in the assembled working set."""
+    return tuple(
+        {
+            "label": item.local_label,
+            "durable_id": item.durable_id,
+            "source_type": item.source_type,
+            "confirmed": bool((item.temporal_provenance or {}).get("confirmed")),
+        }
+        for item in getattr(working_set, "items", ())
     )
 
 
@@ -135,6 +149,7 @@ def run_probe(text: str, *, flag_on: bool) -> ProbeArmResult:
             focused_elapsed_ms=elapsed,
             citation_coverage=None,
             working_set_source_types=tuple(item.source_type for item in working_set.items),
+            available_label_map=citation_label_map(working_set),
         )
 
     result = focused_cognition.focused_synthesize(
@@ -171,6 +186,7 @@ def run_probe(text: str, *, flag_on: bool) -> ProbeArmResult:
         cited_durable_ids=durable_ids,
         cited_confirmed_memory_context=grounded,
         working_set_source_types=tuple(item.source_type for item in working_set.items),
+        available_label_map=citation_label_map(working_set),
     )
 
 

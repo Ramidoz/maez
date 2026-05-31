@@ -176,6 +176,7 @@ def run_benchmark(
                     "cited_durable_ids": list(sample.cited_durable_ids),
                     "expected_fixture_ids": list(sample.expected_fixture_ids),
                     "cited_confirmed_memory_context": sample.cited_confirmed_memory_context,
+                    "available_label_map": list(sample.available_label_map),
                 }
             )
         fail_reasons: list[FailReason] = []

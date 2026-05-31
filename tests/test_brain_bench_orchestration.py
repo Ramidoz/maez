@@ -621,6 +621,14 @@ class OrchestrationTests(unittest.TestCase):
                     cited_durable_ids=("fixture-expected",),
                     expected_fixture_ids=("fixture-expected",),
                     cited_confirmed_memory_context=True,
+                    available_label_map=(
+                        {
+                            "label": "E1",
+                            "durable_id": "fixture-expected",
+                            "source_type": "memory_context",
+                            "confirmed": True,
+                        },
+                    ),
                 )
             ]
 
@@ -636,6 +644,21 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(raw_records[0]["cited_durable_ids"], ["fixture-expected"])
         self.assertEqual(raw_records[0]["expected_fixture_ids"], ["fixture-expected"])
         self.assertTrue(raw_records[0]["cited_confirmed_memory_context"])
+        self.assertEqual(
+            raw_records[0]["available_label_map"],
+            [
+                {
+                    "label": "E1",
+                    "durable_id": "fixture-expected",
+                    "source_type": "memory_context",
+                    "confirmed": True,
+                }
+            ],
+        )
+        self.assertFalse(
+            {"text", "content", "evidence", "answer"} & set(raw_records[0]["available_label_map"][0]),
+            "available label map must remain content-free",
+        )
 
 
 def _ops(**overrides):

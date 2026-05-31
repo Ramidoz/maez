@@ -211,6 +211,20 @@ class ProbeRunnerTests(unittest.TestCase):
                 self.assertTrue(row.expected_fixture_ids)
                 self.assertTrue(set(row.cited_durable_ids) & set(row.expected_fixture_ids))
                 self.assertTrue(row.cited_confirmed_memory_context)
+                self.assertTrue(row.available_label_map)
+                self.assertTrue(
+                    set(row.cited_ids)
+                    <= {entry["label"] for entry in row.available_label_map}
+                )
+                self.assertTrue(
+                    set(row.expected_fixture_ids)
+                    & {entry["durable_id"] for entry in row.available_label_map}
+                )
+                for entry in row.available_label_map:
+                    self.assertEqual(
+                        set(entry),
+                        {"label", "durable_id", "source_type", "confirmed"},
+                    )
 
     def test_available_fixture_honest_decline_fails_grounding_not_categorical(self):
         from scripts.brain_bench.probe_runner import build_probe_run
@@ -327,6 +341,11 @@ class ProbeRunnerTests(unittest.TestCase):
         self.assertTrue(rows[0].inference_failed)
         self.assertEqual(rows[0].fail_code, "timeout")
         self.assertFalse(rows[0].grounded_categorical)
+        self.assertTrue(rows[0].available_label_map)
+        self.assertTrue(
+            set(rows[0].expected_fixture_ids)
+            & {entry["durable_id"] for entry in rows[0].available_label_map}
+        )
 
     def test_outer_audit_path_is_rewritten_inside_per_probe_sandbox(self):
         from scripts.brain_bench.probe_runner import build_probe_run

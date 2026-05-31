@@ -27,3 +27,4 @@ class ProbeSample:
     cited_durable_ids: tuple[str, ...] = ()
     expected_fixture_ids: tuple[str, ...] = ()
     cited_confirmed_memory_context: bool = False
+    available_label_map: tuple[dict[str, object], ...] = ()
