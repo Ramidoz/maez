@@ -3491,6 +3491,8 @@ class MaezDaemon:
             # without retry — retrying won't help and would stretch the
             # cycle while the operator investigates. Max one retry total,
             # keeping cycle time bounded.
+            from core.routing.cancellable_brain_call import BrainPreempted
+
             try:
                 from core.routing.brain_gateway import with_purpose as _brain_purpose
 
@@ -3501,6 +3503,8 @@ class MaezDaemon:
                         think=False,
                         options=chat_options,
                     )
+            except BrainPreempted:
+                raise
             except Exception as first_err:
                 try:
                     from core.error_classifier import (
@@ -3531,6 +3535,8 @@ class MaezDaemon:
                                 think=False,
                                 options=chat_options,
                             )
+                    except BrainPreempted:
+                        raise
                     except Exception as retry_err:
                         try:
                             _emit_err(_classify(retry_err), surface="daemon_cycle_retry")
@@ -7174,6 +7180,7 @@ class MaezDaemon:
                                 # Session 11r: via llm_client (was missed in 11p batch)
                                 from core import llm_client as _llm_client
                                 from core.routing.brain_gateway import with_purpose as _brain_purpose
+                                from core.routing.cancellable_brain_call import BrainPreempted
 
                                 # Same stable system content as primary cycle —
                                 # keeps KV cache warm for retries too.
@@ -7257,11 +7264,15 @@ class MaezDaemon:
                                             retry_cog.get("cog_score", 0),
                                             initial_score,
                                         )
+                            except BrainPreempted:
+                                raise
                             except Exception as e:
                                 logger.debug("Retry generation failed: %s", e)
                                 cog_metadata["cog_retried"] = "failed"
                             finally:
                                 self._ollama_lock.release()
+                except BrainPreempted:
+                    raise
                 except Exception as e:
                     logger.debug("Retry check failed: %s", e)
 

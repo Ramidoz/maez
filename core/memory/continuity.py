@@ -316,6 +316,8 @@ def _generate_resume_instructions(mode: str, concerns: list, last_thought: dict,
 
     # Try LLM generation (Session 11r: via llm_client for backend
     # routing; was missed in 11p batch migration)
+    from core.routing.cancellable_brain_call import BrainPreempted
+
     try:
         from core import llm_client as _llm_client
         concern_text = '; '.join(concerns[:3]) if concerns else 'none'
@@ -344,6 +346,8 @@ def _generate_resume_instructions(mode: str, concerns: list, last_thought: dict,
                              'mode': mode, 'candidate': watchdog.get('candidate_id'),
                              'thread': None}
             return text
+    except BrainPreempted:
+        raise
     except Exception as e:
         logger.debug("Resume instruction LLM failed: %s", e)
 

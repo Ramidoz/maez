@@ -95,6 +95,7 @@ from enum import Enum
 from typing import Any, Optional
 
 from core import llm_client
+from core.routing.cancellable_brain_call import BrainPreempted
 # 2026-04-23 Commit 6: audit-model default tracks current primary brain.
 from core.model_config import PRIMARY_MODEL as _PRIMARY_MODEL
 from core.injection_patterns import InjectionMatch
@@ -202,6 +203,8 @@ def _summarize(payload: str, nonce: str, *, timeout_s: float = 15.0) -> str:
             think=False,
         )
         text = (resp.message.content or "").strip()
+    except BrainPreempted:
+        raise
     except Exception as e:
         return f"[summarizer unreachable: {e!r}]"
 
@@ -351,6 +354,8 @@ def _judge(
             think=False,
         )
         text = (resp.message.content or "").strip()
+    except BrainPreempted:
+        raise
     except Exception as e:
         return "", f"judge unreachable: {e!r}"
 
@@ -554,6 +559,8 @@ def audit_action(
                     summary, classification_summary, injection_summary,
                     retry_nudge=True,
                 )
+            except BrainPreempted:
+                raise
             except Exception as e:
                 judge_raw2, judge_err2 = "", f"retry unreachable: {e!r}"
             if not judge_err2:

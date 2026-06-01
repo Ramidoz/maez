@@ -155,6 +155,7 @@ def generate(
     if _backend_is_llamacpp:
         try:
             from core import llm_client as _llm_client
+            from core.routing.cancellable_brain_call import BrainPreempted
             # llm_client.chat adapts both backends to an ollama-shaped
             # response with .message.content. think=False is honored for
             # ollama and ignored for llamacpp (the small model doesn't
@@ -176,6 +177,8 @@ def generate(
                 backend_name='local-llamacpp',
                 model_call_ms=int((time.perf_counter() - t0) * 1000),
             )
+        except BrainPreempted:
+            raise
         except Exception as e:
             return BackendResult(
                 success=False, text='', backend_name='local-llamacpp',

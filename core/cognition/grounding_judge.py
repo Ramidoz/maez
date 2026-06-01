@@ -37,6 +37,7 @@ from typing import Any
 
 from core import llm_client as _llm_client
 from core.cognition.audit_policy import TraceAuditPolicy
+from core.routing.cancellable_brain_call import BrainPreempted
 
 logger = logging.getLogger("maez.grounding_judge")
 
@@ -683,6 +684,8 @@ def judge(
             output = getattr(resp.message, "content", "") or ""
     except JudgeUnavailable:
         # Already classified by an inner caller; let it propagate.
+        raise
+    except BrainPreempted:
         raise
     except Exception as e:
         ec = _classify_exception(e)

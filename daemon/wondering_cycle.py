@@ -26,6 +26,7 @@ from core import llm_client as _llm_client
 from core import tool_loop
 from core import wonderings as _wonderings
 from core.ambient_format import ambient_prompt_block
+from core.routing.cancellable_brain_call import BrainPreempted
 
 logger = logging.getLogger("maez.wondering_cycle")
 # One-line outcome emits land on the cognition logger so all per-cycle
@@ -154,6 +155,8 @@ def _call_llm(system_prompt: str, user_prompt: str,
                 options={"temperature": 0.6, "num_predict": num_predict},
             )
         return (resp.message.content or "").strip()
+    except BrainPreempted:
+        raise
     except Exception as e:
         logger.warning("wondering LLM call failed: %s", e)
         return ""

@@ -1158,6 +1158,7 @@ class ConversationController:
 
             from core import llm_client as _llm_client
             from core.routing.brain_gateway import with_purpose as _brain_purpose
+            from core.routing.cancellable_brain_call import BrainPreempted
 
             with _brain_purpose("owner_reply"):
                 resp = _llm_client.chat(
@@ -1174,6 +1175,8 @@ class ConversationController:
             if raw is None:
                 raw = str(resp)
             raw = raw.strip()
+        except BrainPreempted:
+            raise
         except Exception as e:
             logger.debug("next-step proposer LLM call failed: %s", e)
             return None
