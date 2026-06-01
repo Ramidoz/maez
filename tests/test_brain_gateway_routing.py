@@ -99,6 +99,29 @@ class RoutingTest(unittest.TestCase):
         self.assertIn("copy_current_context_callable", src)
         self.assertGreaterEqual(src.count("with_purpose(BrainPurpose.OWNER_REPLY)"), 2)
 
+    def test_old_dnd_and_ollama_lock_are_not_brain_lane_mechanisms(self):
+        root = Path(__file__).resolve().parents[1]
+        daemon_src = (root / "daemon" / "maez_daemon.py").read_text()
+        wondering_src = (root / "daemon" / "wondering_cycle.py").read_text()
+
+        self.assertNotIn("self._ollama_lock.acquire", daemon_src)
+        self.assertNotIn("ollama_lock.acquire", wondering_src)
+        self.assertNotIn("time.time() < self._rohit_active_until", daemon_src)
+
+    def test_voice_stream_has_no_raw_backend_side_door(self):
+        root = Path(__file__).resolve().parents[1]
+        daemon_src = (root / "daemon" / "maez_daemon.py").read_text()
+        voice_src = daemon_src[
+            daemon_src.index("    def handle_voice_stream")
+            : daemon_src.index("    def _send_morning_briefing")
+        ]
+
+        self.assertIn('with _brain_purpose("voice_reply")', voice_src)
+        self.assertIn("_llm_client.chat", voice_src)
+        self.assertNotIn("_req.post", voice_src)
+        self.assertNotIn("requests.post", voice_src)
+        self.assertNotIn("_ollama_lock", voice_src)
+
 
 if __name__ == "__main__":
     unittest.main()

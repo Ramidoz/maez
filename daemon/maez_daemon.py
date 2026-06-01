@@ -3446,126 +3446,108 @@ class MaezDaemon:
         # Store prompt for potential retry use
         self._last_reasoning_prompt = prompt
 
-        # Session 11m: defer this cycle if the owner is mid-conversation on Telegram.
-        # Gives the GPU a clean window for his reply. The 15s backoff is set by
-        # telegram_voice._process_message right before its ollama.chat call.
-        if time.time() < self._rohit_active_until:
-            logger.info("Reasoning cycle deferred — the owner is talking")
-            return None
+        # Session 11m's _rohit_active_until now stays a UI/activity hint only.
+        # BrainGateway owns the actual arbitration: background cognition enters
+        # the slot and is preempted by a real foreground request event.
+        #
+        # Session 11p: route daemon reasoning through llm_client so the backend
+        # (Ollama or llama.cpp) is env-selectable at call time. When
+        # MAEZ_LLM_BACKEND=llamacpp, this hits the CUDA llama-server on
+        # 127.0.0.1:8080. Default is still ollama — flipping is a service env
+        # var change, rolls back cleanly.
+        #
+        # Stability override: keep daemon reasoning in non-thinking mode on the
+        # llama.cpp path. Gemma-4 thinking traces have previously leaked
+        # channel/control markup into outputs, and those artifacts can get
+        # recycled into future prompts. The daemon path benefits more from
+        # parser stability than hidden scratchpad depth right now.
+        from core import llm_client as _llm_client
+        from core.routing.brain_gateway import with_purpose as _brain_purpose
+        from core.routing.cancellable_brain_call import BrainPreempted
 
-        # Skip reasoning if voice command has the GPU
-        acquired = self._ollama_lock.acquire(timeout=0)
-        if not acquired:
-            logger.info("Reasoning cycle skipped — voice command active")
-            return None
+        # Byte-stable system message (SOUL + static cycle instructions) enables
+        # llama.cpp KV cache reuse across cycles. self.system_prompt is loaded
+        # once at startup; _STATIC_CYCLE_INSTRUCTIONS is a module constant.
+        # Their concatenation is identical every cycle.
+        system_content = self.system_prompt + "\n\n" + _STATIC_CYCLE_INSTRUCTIONS
+        chat_messages = [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": prompt},
+        ]
+        chat_options = {"temperature": 0.7, "num_predict": 300}
+
+        # error_classifier-driven retry: on a TRANSIENT backend error (timeout,
+        # connection refused), wait 2s and try once more. BrainPreempted is not
+        # a backend error and must not enter this retry path.
         try:
-            # Session 11p: route daemon reasoning through llm_client so
-            # the backend (Ollama or llama.cpp) is env-selectable at call
-            # time. When MAEZ_LLM_BACKEND=llamacpp, this hits the CUDA
-            # llama-server on 127.0.0.1:8080 running gemma-4-26B-A4B.
-            # Default is still ollama — flipping is a service env var
-            # change, rolls back cleanly.
-            #
-            # Stability override: keep daemon reasoning in non-thinking
-            # mode on the llama.cpp path. Gemma-4 thinking traces have
-            # previously leaked channel/control markup into outputs, and
-            # those artifacts can get recycled into future prompts. The
-            # daemon path benefits more from parser stability than hidden
-            # scratchpad depth right now.
-            from core import llm_client as _llm_client
-
-            # Byte-stable system message (SOUL + static cycle instructions)
-            # enables llama.cpp KV cache reuse across cycles. self.system_prompt
-            # is loaded once at startup; _STATIC_CYCLE_INSTRUCTIONS is a module
-            # constant. Their concatenation is identical every cycle.
-            system_content = self.system_prompt + "\n\n" + _STATIC_CYCLE_INSTRUCTIONS
-            chat_messages = [
-                {"role": "system", "content": system_content},
-                {"role": "user", "content": prompt},
-            ]
-            chat_options = {"temperature": 0.7, "num_predict": 300}
-
-            # error_classifier-driven retry: on a TRANSIENT backend error
-            # (timeout, connection refused), wait 2s and try once more.
-            # On a STRUCTURAL error (gpu_oom, model_missing), skip cleanly
-            # without retry — retrying won't help and would stretch the
-            # cycle while the operator investigates. Max one retry total,
-            # keeping cycle time bounded.
-            from core.routing.cancellable_brain_call import BrainPreempted
-
+            with _brain_purpose("daemon_cycle_generation"):
+                response = _llm_client.chat(
+                    model=MODEL,
+                    messages=chat_messages,
+                    think=False,
+                    options=chat_options,
+                )
+        except BrainPreempted:
+            raise
+        except Exception as first_err:
             try:
-                from core.routing.brain_gateway import with_purpose as _brain_purpose
+                from core.error_classifier import (
+                    classify as _classify,
+                    emit_telemetry as _emit_err,
+                )
 
-                with _brain_purpose("daemon_cycle_generation"):
-                    response = _llm_client.chat(
-                        model=MODEL,
-                        messages=chat_messages,
-                        think=False,
-                        options=chat_options,
-                    )
-            except BrainPreempted:
-                raise
-            except Exception as first_err:
+                _cls = _classify(first_err)
+                _emit_err(_cls, surface="daemon_cycle")
+            except Exception:
+                _cls = None
+
+            # Transient → one retry after a short backoff.
+            transient = _cls is not None and _cls.likely_transient and _cls.retryable
+            if transient:
+                self._s1b_note_residue_event("retry_triggered")
+                logger.info(
+                    "Cycle %d: %s error, retrying once after 2s backoff",
+                    self.cycle_count,
+                    _cls.error_class.value,
+                )
+                time.sleep(2.0)
                 try:
-                    from core.error_classifier import (
-                        classify as _classify,
-                        emit_telemetry as _emit_err,
-                    )
-
-                    _cls = _classify(first_err)
-                    _emit_err(_cls, surface="daemon_cycle")
-                except Exception:
-                    _cls = None
-
-                # Transient → one retry after a short backoff.
-                transient = _cls is not None and _cls.likely_transient and _cls.retryable
-                if transient:
-                    self._s1b_note_residue_event("retry_triggered")
-                    logger.info(
-                        "Cycle %d: %s error, retrying once after 2s backoff",
-                        self.cycle_count,
-                        _cls.error_class.value,
-                    )
-                    time.sleep(2.0)
-                    try:
-                        with _brain_purpose("daemon_cycle_retry"):
-                            response = _llm_client.chat(
-                                model=MODEL,
-                                messages=chat_messages,
-                                think=False,
-                                options=chat_options,
-                            )
-                    except BrainPreempted:
-                        raise
-                    except Exception as retry_err:
-                        try:
-                            _emit_err(_classify(retry_err), surface="daemon_cycle_retry")
-                        except Exception:
-                            pass
-                        logger.error(
-                            "Cycle %d: retry also failed: %s",
-                            self.cycle_count,
-                            retry_err,
+                    with _brain_purpose("daemon_cycle_retry"):
+                        response = _llm_client.chat(
+                            model=MODEL,
+                            messages=chat_messages,
+                            think=False,
+                            options=chat_options,
                         )
-                        self._s1b_note_residue_event("retry_failed")
-                        return None
-                else:
-                    # Structural / unknown / non-retryable → skip cleanly.
+                except BrainPreempted:
+                    raise
+                except Exception as retry_err:
+                    try:
+                        _emit_err(_classify(retry_err), surface="daemon_cycle_retry")
+                    except Exception:
+                        pass
                     logger.error(
-                        "Cycle %d: reasoning failed (%s): %s",
+                        "Cycle %d: retry also failed: %s",
                         self.cycle_count,
-                        _cls.error_class.value if _cls else "unclassified",
-                        first_err,
+                        retry_err,
                     )
+                    self._s1b_note_residue_event("retry_failed")
                     return None
+            else:
+                # Structural / unknown / non-retryable → skip cleanly.
+                logger.error(
+                    "Cycle %d: reasoning failed (%s): %s",
+                    self.cycle_count,
+                    _cls.error_class.value if _cls else "unclassified",
+                    first_err,
+                )
+                return None
 
-            content = _extract_final((response.message.content or "").strip())
-            thinking = getattr(response.message, "thinking", None)
-            if thinking:
-                logger.debug("Cycle %d thinking: %s", self.cycle_count, thinking.strip()[:500])
-            return content if content else "(empty response)"
-        finally:
-            self._ollama_lock.release()
+        content = _extract_final((response.message.content or "").strip())
+        thinking = getattr(response.message, "thinking", None)
+        if thinking:
+            logger.debug("Cycle %d thinking: %s", self.cycle_count, thinking.strip()[:500])
+        return content if content else "(empty response)"
 
     def _ensure_recall_shadow_worker(self):
         worker = getattr(self, "_recall_shadow_worker", None)
@@ -5522,7 +5504,6 @@ class MaezDaemon:
 
     def handle_voice_stream(self, text: str) -> str:
         """Stream LLM response sentence-by-sentence to TTS. Returns full reply."""
-        import requests as _req
         from skills.voice_output import feed_sentence
         from skills.web_search import (
             search as web_search,
@@ -5602,63 +5583,46 @@ class MaezDaemon:
             num_predict = 200
 
         full_reply = ""
-        sentence_buf = ""
-
-        self._ollama_lock.acquire()
         try:
-            resp = _req.post(
-                "http://localhost:11434/api/chat",
-                json={
-                    "model": MODEL,
-                    "messages": [
+            from core import llm_client as _llm_client
+            from core.routing.brain_gateway import with_purpose as _brain_purpose
+            from core.routing.cancellable_brain_call import BrainPreempted
+
+            with _brain_purpose("voice_reply"):
+                resp = _llm_client.chat(
+                    model=MODEL,
+                    messages=[
                         {"role": "system", "content": self.system_prompt},
                         {"role": "user", "content": prompt},
                     ],
-                    "stream": True,
-                    "options": {"temperature": 0.7, "num_predict": num_predict},
-                },
-                stream=True,
-                timeout=60,
-            )
+                    think=False,
+                    options={"temperature": 0.7, "num_predict": num_predict},
+                )
 
-            for line in resp.iter_lines():
-                if not line:
-                    continue
-                try:
-                    chunk = json.loads(line)
-                    token = chunk.get("message", {}).get("content", "")
-                    if not token:
-                        continue
+            full_reply = _extract_final((resp.message.content or "").strip())
+            sentence_buf = full_reply
 
-                    full_reply += token
-                    sentence_buf += token
+            # Preserve the old TTS sentence batching at the boundary while the
+            # brain call itself now travels through the foreground gateway lane.
+            while True:
+                m = re.search(r"([.!?])\s", sentence_buf)
+                if not m:
+                    break
+                idx = m.end()
+                sentence = sentence_buf[:idx].strip()
+                sentence_buf = sentence_buf[idx:]
+                if sentence:
+                    logger.info("[VOICE STREAM] Speaking: %s", sentence[:80])
+                    feed_sentence(sentence)
 
-                    # Check for sentence boundaries — handles multiple in buffer
-                    while True:
-                        m = re.search(r"([.!?])\s", sentence_buf)
-                        if m:
-                            idx = m.end()
-                            sentence = sentence_buf[:idx].strip()
-                            sentence_buf = sentence_buf[idx:]
-                            if sentence:
-                                logger.info("[VOICE STREAM] Speaking: %s", sentence[:80])
-                                feed_sentence(sentence)
-                        else:
-                            break
-
-                except json.JSONDecodeError:
-                    continue
-
-            # Speak any remaining text in buffer
             if sentence_buf.strip():
                 logger.info("[VOICE STREAM] Speaking remainder: %s", sentence_buf.strip()[:60])
                 feed_sentence(sentence_buf.strip())
-
+        except BrainPreempted:
+            raise
         except Exception as e:
             logger.error("Voice stream error: %s", e)
             full_reply = full_reply or f"Error: {e}"
-        finally:
-            self._ollama_lock.release()
 
         # Store in memory. 5x.B Pass 1: user_utterance/lived; mixed-
         # origin transcript (see 5x.D).
@@ -7172,105 +7136,102 @@ class MaezDaemon:
                             initial_labels,
                         )
 
-                        # One corrective retry — append instruction to existing prompt
+                        # One corrective retry — append instruction to existing prompt.
+                        # The retry is background work and enters the BrainGateway
+                        # lane directly; the old non-blocking ollama lock is no
+                        # longer a second coordinator.
                         last_prompt = getattr(self, "_last_reasoning_prompt", "")
-                        acquired = self._ollama_lock.acquire(timeout=0)
-                        if acquired:
-                            try:
-                                # Session 11r: via llm_client (was missed in 11p batch)
-                                from core import llm_client as _llm_client
-                                from core.routing.brain_gateway import with_purpose as _brain_purpose
-                                from core.routing.cancellable_brain_call import BrainPreempted
+                        try:
+                            # Session 11r: via llm_client (was missed in 11p batch)
+                            from core import llm_client as _llm_client
+                            from core.routing.brain_gateway import with_purpose as _brain_purpose
+                            from core.routing.cancellable_brain_call import BrainPreempted
 
-                                # Same stable system content as primary cycle —
-                                # keeps KV cache warm for retries too.
-                                retry_system = (
-                                    self.system_prompt + "\n\n" + _STATIC_CYCLE_INSTRUCTIONS
+                            # Same stable system content as primary cycle —
+                            # keeps KV cache warm for retries too.
+                            retry_system = self.system_prompt + "\n\n" + _STATIC_CYCLE_INSTRUCTIONS
+                            with _brain_purpose("daemon_cycle_retry"):
+                                retry_response = _llm_client.chat(
+                                    model=MODEL,
+                                    messages=[
+                                        {"role": "system", "content": retry_system},
+                                        {"role": "user", "content": last_prompt},
+                                        {"role": "assistant", "content": result},
+                                        {"role": "user", "content": retry_instruction},
+                                    ],
+                                    think=False,
+                                    options={"temperature": 0.8, "num_predict": 300},
                                 )
-                                with _brain_purpose("daemon_cycle_retry"):
-                                    retry_response = _llm_client.chat(
-                                        model=MODEL,
-                                        messages=[
-                                            {"role": "system", "content": retry_system},
-                                            {"role": "user", "content": last_prompt},
-                                            {"role": "assistant", "content": result},
-                                            {"role": "user", "content": retry_instruction},
-                                        ],
-                                        think=False,
-                                        options={"temperature": 0.8, "num_predict": 300},
+                            retry_content = (retry_response.message.content or "").strip()
+                            if retry_content and retry_content != "(empty response)":
+                                # 2026-04-23 memory-integrity contract:
+                                # audit the retry with the SAME cycle
+                                # signal manifest that gated the first
+                                # audit. The retry is a fresh assistant
+                                # text — it needs the same grounding
+                                # check, otherwise an improved-on-score
+                                # retry could still be fabricated and
+                                # land in raw memory unaudited. Rescore
+                                # the AUDITED retry, not the raw retry,
+                                # so the score reflects the actual text
+                                # that will be stored.
+                                try:
+                                    from core.safety.audited_output import (
+                                        audit_assistant_text as _aud_txt,
                                     )
-                                retry_content = (retry_response.message.content or "").strip()
-                                if retry_content and retry_content != "(empty response)":
-                                    # 2026-04-23 memory-integrity contract:
-                                    # audit the retry with the SAME cycle
-                                    # signal manifest that gated the first
-                                    # audit. The retry is a fresh assistant
-                                    # text — it needs the same grounding
-                                    # check, otherwise an improved-on-score
-                                    # retry could still be fabricated and
-                                    # land in raw memory unaudited. Rescore
-                                    # the AUDITED retry, not the raw retry,
-                                    # so the score reflects the actual text
-                                    # that will be stored.
-                                    try:
-                                        from core.safety.audited_output import (
-                                            audit_assistant_text as _aud_txt,
-                                        )
 
-                                        retry_content = _aud_txt(
-                                            retry_content,
-                                            surface="daemon_cycle_retry",
-                                            signals_present=_cycle_signals_present,
-                                            signals_absent=_cycle_signals_absent,
-                                            evidence_envelope=getattr(
-                                                self,
-                                                "_last_cycle_evidence_envelope",
-                                                None,
-                                            ),
-                                        )
-                                    except Exception as _retry_aud_exc:
-                                        logger.warning(
-                                            "retry audit fail-open: %s",
-                                            _retry_aud_exc,
-                                        )
+                                    retry_content = _aud_txt(
+                                        retry_content,
+                                        surface="daemon_cycle_retry",
+                                        signals_present=_cycle_signals_present,
+                                        signals_absent=_cycle_signals_absent,
+                                        evidence_envelope=getattr(
+                                            self,
+                                            "_last_cycle_evidence_envelope",
+                                            None,
+                                        ),
+                                    )
+                                except Exception as _retry_aud_exc:
+                                    logger.warning(
+                                        "retry audit fail-open: %s",
+                                        _retry_aud_exc,
+                                    )
 
-                                    # Re-score the (audited) retry
-                                    retry_thought = retry_content + screen_note
-                                    retry_cog = cog_score_and_classify(retry_thought)
+                                # Re-score the (audited) retry
+                                retry_thought = retry_content + screen_note
+                                retry_cog = cog_score_and_classify(retry_thought)
 
-                                    if retry_cog.get("cog_score", 0) > initial_score:
-                                        # Retry is better — use it
-                                        full_thought = retry_thought
-                                        result = retry_content
-                                        cog_metadata = retry_cog
-                                        cog_metadata["cog_retried"] = "improved"
-                                        cog_metadata["cog_initial_score"] = initial_score
-                                        cog_metadata["cog_initial_labels"] = initial_labels
-                                        logger.info(
-                                            "Cycle %d: retry improved %d → %d",
-                                            self.cycle_count,
-                                            initial_score,
-                                            retry_cog.get("cog_score", 0),
-                                        )
-                                    else:
-                                        # Retry didn't help — keep original
-                                        cog_metadata["cog_retried"] = "kept_original"
-                                        cog_metadata["cog_retry_score"] = retry_cog.get(
-                                            "cog_score", 0
-                                        )
-                                        logger.info(
-                                            "Cycle %d: retry not better (%d vs %d), keeping original",
-                                            self.cycle_count,
-                                            retry_cog.get("cog_score", 0),
-                                            initial_score,
-                                        )
-                            except BrainPreempted:
-                                raise
-                            except Exception as e:
-                                logger.debug("Retry generation failed: %s", e)
-                                cog_metadata["cog_retried"] = "failed"
-                            finally:
-                                self._ollama_lock.release()
+                                if retry_cog.get("cog_score", 0) > initial_score:
+                                    # Retry is better — use it
+                                    full_thought = retry_thought
+                                    result = retry_content
+                                    cog_metadata = retry_cog
+                                    cog_metadata["cog_retried"] = "improved"
+                                    cog_metadata["cog_initial_score"] = initial_score
+                                    cog_metadata["cog_initial_labels"] = initial_labels
+                                    logger.info(
+                                        "Cycle %d: retry improved %d → %d",
+                                        self.cycle_count,
+                                        initial_score,
+                                        retry_cog.get("cog_score", 0),
+                                    )
+                                else:
+                                    # Retry didn't help — keep original
+                                    cog_metadata["cog_retried"] = "kept_original"
+                                    cog_metadata["cog_retry_score"] = retry_cog.get(
+                                        "cog_score", 0
+                                    )
+                                    logger.info(
+                                        "Cycle %d: retry not better (%d vs %d), keeping original",
+                                        self.cycle_count,
+                                        retry_cog.get("cog_score", 0),
+                                        initial_score,
+                                    )
+                        except BrainPreempted:
+                            raise
+                        except Exception as e:
+                            logger.debug("Retry generation failed: %s", e)
+                            cog_metadata["cog_retried"] = "failed"
                 except BrainPreempted:
                     raise
                 except Exception as e:

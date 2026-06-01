@@ -241,31 +241,12 @@ def advance_one(daemon, deadline: Optional[float] = None) -> Optional[dict]:
     if not wondering:
         return None
 
-    # Invariant #1: non-blocking acquire of the daemon's LLM lane lock.
-    # If we can't get it instantly, the primary cycle / voice / retry
-    # path is using the backend — yield this cycle entirely rather than
-    # compete. A held lock also means llama-server/ollama is already
-    # busy; waiting would just stretch the heartbeat.
-    ollama_lock = getattr(daemon, "_ollama_lock", None)
-    acquired = True
-    if ollama_lock is not None:
-        acquired = ollama_lock.acquire(timeout=0)
-    if not acquired:
-        _emit_outcome(wondering=wondering, action="skipped_lock_busy")
-        return {"wondering_id": wondering["id"],
-                "action": "skipped_lock_busy"}
-
-    try:
-        return _advance_one_locked(
-            daemon, store, wondering, effective_deadline,
-        )
-    finally:
-        if ollama_lock is not None and acquired:
-            try:
-                ollama_lock.release()
-            except RuntimeError:
-                # Already released somewhere in error recovery.
-                pass
+    # BrainGateway now owns the LLM lane. Wondering enters as background work
+    # and yields to owner foreground by preemption instead of by a stale lock
+    # check before the request starts.
+    return _advance_one_locked(
+        daemon, store, wondering, effective_deadline,
+    )
 
 
 def _advance_one_locked(daemon, store, wondering, effective_deadline):
