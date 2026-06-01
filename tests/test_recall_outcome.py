@@ -268,6 +268,51 @@ class CitationSupportTest(unittest.TestCase):
         self.assertEqual(citation_support(result, working_set, turn_kind="both"), "grounded")
         self.assertEqual(citation_support(result, working_set, turn_kind="dated"), "grounded")
 
+    def test_continuity_dialogue_anchor_only_is_grounded(self):
+        result = SimpleNamespace(cited_ids=["E1"])
+        working_set = SimpleNamespace(items=[self._item("E1", "dialogue_anchor", None)])
+        self.assertEqual(
+            citation_support(result, working_set, turn_kind="continuity"),
+            "grounded",
+        )
+
+    def test_continuity_memory_only_is_ungrounded(self):
+        result = SimpleNamespace(cited_ids=["E1"])
+        working_set = SimpleNamespace(items=[self._item("E1", "memory_context", True)])
+        self.assertEqual(
+            citation_support(result, working_set, turn_kind="continuity"),
+            "ungrounded",
+        )
+
+    def test_continuity_dialogue_plus_memory_is_ungrounded(self):
+        result = SimpleNamespace(cited_ids=["E1", "E2"])
+        working_set = SimpleNamespace(
+            items=[
+                self._item("E1", "dialogue_anchor", None),
+                self._item("E2", "memory_context", True),
+            ]
+        )
+        self.assertEqual(
+            citation_support(result, working_set, turn_kind="continuity"),
+            "ungrounded",
+        )
+
+    def test_continuity_invalid_label_is_ungrounded(self):
+        result = SimpleNamespace(cited_ids=["E9"])
+        working_set = SimpleNamespace(items=[self._item("E1", "dialogue_anchor", None)])
+        self.assertEqual(
+            citation_support(result, working_set, turn_kind="continuity"),
+            "ungrounded",
+        )
+
+    def test_continuity_empty_is_ungrounded(self):
+        result = SimpleNamespace(cited_ids=[])
+        working_set = SimpleNamespace(items=[self._item("E1", "dialogue_anchor", None)])
+        self.assertEqual(
+            citation_support(result, working_set, turn_kind="continuity"),
+            "ungrounded",
+        )
+
     def test_both_memory_plus_dialogue_is_mixed(self):
         result = SimpleNamespace(cited_ids=["E1", "E7"])
         working_set = SimpleNamespace(

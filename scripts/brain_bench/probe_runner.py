@@ -268,7 +268,7 @@ def _run_focused_probe(
         receipt="consulted",
         denial_kind="none",
         had_confirmed=had_confirmed,
-        cited_grounded_context=grounded,
+        cited_grounded_context=(support == "grounded"),
         unmatched_citations=len(verdict.unmatched),
         cited_mixed_support=support == "mixed",
     )

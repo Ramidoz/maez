@@ -125,9 +125,15 @@ def derive_shadow_outcome(
         shadow_pair_id=shadow_pair_id,
         legacy_outcome=legacy_rec.outcome_class,
         shadow_reach=shadow_reach,
-        rescuable_candidate=bool(legacy_rec.outcome_class in _LEGACY_RESCUABLE_FROM and grounded),
+        rescuable_candidate=bool(
+            date_addressed
+            and legacy_rec.outcome_class in _LEGACY_RESCUABLE_FROM
+            and grounded
+        ),
         false_absence_candidate=false_absence,
-        legacy_false_absence_rescuable=bool(is_false_absence(legacy_rec) and grounded),
+        legacy_false_absence_rescuable=bool(
+            date_addressed and is_false_absence(legacy_rec) and grounded
+        ),
         latency_delta_ms=latency_delta_ms,
         receipt_state=receipt_state,
         ts=ts,

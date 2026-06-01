@@ -161,6 +161,24 @@ class ShadowOutcomeDeriveTest(unittest.TestCase):
         )
         self.assertTrue(rec.legacy_false_absence_rescuable)
 
+    def test_non_dated_grounded_is_never_rescuable(self):
+        legacy = _legacy_rec(
+            OutcomeClass.DECLINED_UNVERIFIED,
+            denial_kind="no_dated_memory",
+            receipt_or_na="na",
+        )
+        rec = derive_shadow_outcome(
+            legacy_rec=legacy,
+            shadow_reach=ShadowReach.GROUNDED_MATERIAL_AVAILABLE,
+            date_addressed=False,
+            shadow_pair_id="p",
+            latency_delta_ms=3,
+            ts=1,
+            boot_id="b",
+        )
+        self.assertFalse(rec.rescuable_candidate)
+        self.assertFalse(rec.legacy_false_absence_rescuable)
+
     def test_skipped_rows_are_pairable_and_content_free(self):
         rec = derive_shadow_skipped(
             legacy_rec=_legacy_rec(OutcomeClass.DECLINED_UNAVAILABLE),
