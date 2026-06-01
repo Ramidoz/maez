@@ -1224,20 +1224,33 @@ def _focused_working_set_had_confirmed(working_set) -> bool:
 
 
 def _reply_asserts_dated_absence(reply: str) -> bool:
-    low = (reply or "").lower()
-    return any(
-        phrase in low
-        for phrase in (
-            "don't have a dated memory",
-            "do not have a dated memory",
-            "no dated memory",
-            "don't remember",
-            "do not remember",
-            "don't recall",
-            "do not recall",
-            "no record",
-        )
+    low = (reply or "").lower().replace("’", "'")
+    patterns = (
+        r"\b(?:don't|do not) have (?:a )?dated memor(?:y|ies)\b"
+        r"(?:\s+(?:for|of|from|about|on|around|that)\b[^.;,]*)?",
+        r"\bno dated memor(?:y|ies)\b"
+        r"(?:\s+(?:for|of|from|about|on|around|that)\b[^.;,]*)?",
+        r"\b(?:don't|do not) (?:remember|recall)\b"
+        r"(?:\s+(?:that|this|it|anything|any)\b[^.;,]*)?",
+        r"\b(?:don't|do not) have any records?\b"
+        r"(?:\s+(?:for|of|from|about|on|around|that)\b[^.;,]*)?",
+        r"\bhave no records?\b"
+        r"(?:\s+(?:for|of|from|about|on|around|that)\b[^.;,]*)?",
+        r"^\s*no records?\s*[.!?]?\s*$",
+        r"\bno records?\b"
+        r"(?:\s+(?:for|of|from|about|on|around|matched|found|available|exist|exists)\b[^.;,]*)?",
     )
+    match = next((m for pattern in patterns if (m := re.search(pattern, low))), None)
+    if match is None:
+        return False
+
+    tail = low[match.end():].strip()
+    if not tail.strip(".,;:!?- "):
+        return True
+    # A recognized absence phrase with a substantive or contrastive continuation
+    # is not a clean decline. Err toward answered/ungrounded, never toward
+    # laundering content as honest absence.
+    return False
 
 
 def _is_dated_denial_reply(reply: str) -> bool:

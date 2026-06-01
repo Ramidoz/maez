@@ -329,6 +329,40 @@ class CitationSupportTest(unittest.TestCase):
         self.assertEqual(citation_support(result, working_set), "ungrounded")
 
 
+class DatedAbsenceMatcherTest(unittest.TestCase):
+    def test_honest_absence_phrasings_match(self):
+        from daemon.maez_daemon import _reply_asserts_dated_absence
+
+        for reply in [
+            "I don't have any records for January 3.",
+            "I don’t have any record of that.",
+            "I have no records for that window.",
+            "I have no record of that conversation.",
+            "I do not have any records from then.",
+            "I don't have a dated memory for that window.",
+            "no record",
+        ]:
+            with self.subTest(reply=reply):
+                self.assertTrue(_reply_asserts_dated_absence(reply))
+
+    def test_non_absence_and_absence_plus_content_do_not_match(self):
+        from daemon.maez_daemon import _reply_asserts_dated_absence
+
+        for reply in [
+            "Sure, I can help you with that.",
+            "On January 3 you fixed the parser bug.",
+            "Do you have any record of that meeting?",
+            "I recorded the meeting notes in your file.",
+            "I don't have any records for January 3, but you fixed the parser bug.",
+            "I don't have any records for January 3; you fixed the parser bug.",
+            "I don't have any records for January 3. You fixed the parser bug.",
+            "I don't have any records for January 3, though you fixed the parser bug.",
+            "No records were changed on January 3.",
+        ]:
+            with self.subTest(reply=reply):
+                self.assertFalse(_reply_asserts_dated_absence(reply))
+
+
 class FalseAbsenceTest(unittest.TestCase):
     def _rec(self, **kw):
         base = dict(
