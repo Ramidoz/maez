@@ -26,6 +26,7 @@ from core import llm_client as _llm_client
 from core import tool_loop
 from core import wonderings as _wonderings
 from core.ambient_format import ambient_prompt_block
+from core.routing.cancellable_brain_call import BrainPreempted
 
 logger = logging.getLogger("maez.wondering_cycle")
 # One-line outcome emits land on the cognition logger so all per-cycle
@@ -141,16 +142,21 @@ def _synthesis_prompt(wondering: dict, cmd: str, stdout: str, stderr: str,
 def _call_llm(system_prompt: str, user_prompt: str,
                num_predict: int, model: str) -> str:
     try:
-        resp = _llm_client.chat(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            think=False,
-            options={"temperature": 0.6, "num_predict": num_predict},
-        )
+        from core.routing.brain_gateway import with_purpose as _brain_purpose
+
+        with _brain_purpose("daemon_cycle_generation"):
+            resp = _llm_client.chat(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                think=False,
+                options={"temperature": 0.6, "num_predict": num_predict},
+            )
         return (resp.message.content or "").strip()
+    except BrainPreempted:
+        raise
     except Exception as e:
         logger.warning("wondering LLM call failed: %s", e)
         return ""
@@ -235,31 +241,12 @@ def advance_one(daemon, deadline: Optional[float] = None) -> Optional[dict]:
     if not wondering:
         return None
 
-    # Invariant #1: non-blocking acquire of the daemon's LLM lane lock.
-    # If we can't get it instantly, the primary cycle / voice / retry
-    # path is using the backend — yield this cycle entirely rather than
-    # compete. A held lock also means llama-server/ollama is already
-    # busy; waiting would just stretch the heartbeat.
-    ollama_lock = getattr(daemon, "_ollama_lock", None)
-    acquired = True
-    if ollama_lock is not None:
-        acquired = ollama_lock.acquire(timeout=0)
-    if not acquired:
-        _emit_outcome(wondering=wondering, action="skipped_lock_busy")
-        return {"wondering_id": wondering["id"],
-                "action": "skipped_lock_busy"}
-
-    try:
-        return _advance_one_locked(
-            daemon, store, wondering, effective_deadline,
-        )
-    finally:
-        if ollama_lock is not None and acquired:
-            try:
-                ollama_lock.release()
-            except RuntimeError:
-                # Already released somewhere in error recovery.
-                pass
+    # BrainGateway now owns the LLM lane. Wondering enters as background work
+    # and yields to owner foreground by preemption instead of by a stale lock
+    # check before the request starts.
+    return _advance_one_locked(
+        daemon, store, wondering, effective_deadline,
+    )
 
 
 def _advance_one_locked(daemon, store, wondering, effective_deadline):

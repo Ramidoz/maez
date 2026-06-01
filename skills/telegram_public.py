@@ -456,11 +456,14 @@ Respond naturally. Be present. Be real."""
             # Session 11p: route through llm_client so the backend (Ollama
             # or llama.cpp CUDA) is env-selectable at MAEZ_LLM_BACKEND.
             from core import llm_client as _llm_client
-            response = _llm_client.chat(
-                model=_PRIMARY_MODEL, messages=messages,
-                think=False,  # 11m parity — no thinking on conversational paths
-                options={'temperature': 0.85, 'num_predict': 4096},
-            )
+            from core.routing.brain_gateway import with_purpose as _brain_purpose
+
+            with _brain_purpose("owner_reply"):
+                response = _llm_client.chat(
+                    model=_PRIMARY_MODEL, messages=messages,
+                    think=False,  # 11m parity — no thinking on conversational paths
+                    options={'temperature': 0.85, 'num_predict': 4096},
+                )
             reply = (response.message.content or '').strip()
             if not reply:
                 reply = "Give me a moment."

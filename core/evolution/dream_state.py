@@ -342,14 +342,19 @@ class DreamState:
         # think=False for fast synthesis, no scratchpad needed for pattern work.
         try:
             from core import llm_client as _llm_client
+            from core.routing.brain_gateway import with_purpose as _brain_purpose
+            from core.routing.cancellable_brain_call import BrainPreempted
 
-            response = _llm_client.chat(
-                model=MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                think=False,
-                options={"temperature": 0.7, "num_predict": 200},
-            )
+            with _brain_purpose("daemon_cycle_generation"):
+                response = _llm_client.chat(
+                    model=MODEL,
+                    messages=[{"role": "user", "content": prompt}],
+                    think=False,
+                    options={"temperature": 0.7, "num_predict": 200},
+                )
             insight = (response.message.content or "").strip()
+        except BrainPreempted:
+            raise
         except Exception as e:
             logger.error("dream: llm_client call failed: %s", e)
             return None

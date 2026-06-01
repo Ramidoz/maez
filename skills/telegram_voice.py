@@ -3401,19 +3401,22 @@ class TelegramVoice:
             f"invent an alternative to propose.\n"
         )
         try:
-            resp = _llm_client.chat(
-                model=MODEL,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are Maez. Your replies are honest, grounded, and short.",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                stream=False,
-                think=False,
-                options={"temperature": 0.3, "num_predict": 220},
-            )
+            from core.routing.brain_gateway import with_purpose as _brain_purpose
+
+            with _brain_purpose("voice_reply"):
+                resp = _llm_client.chat(
+                    model=MODEL,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are Maez. Your replies are honest, grounded, and short.",
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                    stream=False,
+                    think=False,
+                    options={"temperature": 0.3, "num_predict": 220},
+                )
             return (resp.message.content or "").strip()
         except Exception as e:
             logger.warning("recovery synthesis LLM call failed: %s", e)
@@ -3928,13 +3931,16 @@ class TelegramVoice:
 
             from core import llm_client as _llm_client
 
-            resp = _llm_client.chat(
-                model=MODEL,
-                messages=messages,
-                stream=False,
-                think=False,
-                options={"temperature": 0.5, "num_predict": 600},
-            )
+            from core.routing.brain_gateway import with_purpose as _brain_purpose
+
+            with _brain_purpose("voice_reply"):
+                resp = _llm_client.chat(
+                    model=MODEL,
+                    messages=messages,
+                    stream=False,
+                    think=False,
+                    options={"temperature": 0.5, "num_predict": 600},
+                )
             full_reply = (resp.message.content or "").strip()
             # Strip grounding block echoes if model reflected them back
             full_reply = _re.sub(

@@ -2154,13 +2154,19 @@ def run_brain_loop(
             {"role": "user", "content": convo},
         ]
         try:
-            resp = _llm_client.chat(
-                model=model,
-                messages=_planner_messages,
-                stream=False, think=False,
-                options={"temperature": 0.15, "num_predict": 512},
-            )
+            from core.routing.brain_gateway import with_purpose as _brain_purpose
+            from core.routing.cancellable_brain_call import BrainPreempted
+
+            with _brain_purpose("owner_reply"):
+                resp = _llm_client.chat(
+                    model=model,
+                    messages=_planner_messages,
+                    stream=False, think=False,
+                    options={"temperature": 0.15, "num_predict": 512},
+                )
             text = (resp.message.content or "").strip()
+        except BrainPreempted:
+            raise
         except Exception as e:
             logger.warning("jarvis loop LLM call failed at step %d: %s", step, e)
             break

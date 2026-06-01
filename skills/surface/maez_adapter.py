@@ -31,6 +31,11 @@ import time
 from typing import Any, Optional
 
 from core.health.shared_executor import get_shared_executor
+from core.routing.brain_gateway import (
+    BrainPurpose,
+    copy_current_context_callable,
+    with_purpose,
+)
 from core.safety.clinical_boundary import PrivateThoughtsCrisisSignalWriter, guard_owner_text
 from skills.surface.platform_base import MessageEvent
 from skills.surface.platform_config import PlatformConfig
@@ -452,21 +457,24 @@ class MaezMessageHandler:
                     # actual tool trajectory, not just the synthesis
                     # text. Falls back to a string + empty tool_calls
                     # if a future change reverts the structured API.
-                    _result = await loop.run_in_executor(
-                        get_shared_executor(),
-                        lambda: _brain_loop.run_brain_loop(
-                            text,
-                            action_engine=action_engine,
-                            get_pipeline=get_pipeline,
-                            user_id="rohit",
-                            chat_id=chat_id,
-                            surface=SURFACE_NAME,
-                            send_intermediate=_send_intermediate,
-                            chat_history=chat_history,
-                            turn=turn,
-                            return_structured=True,
-                        ),
-                    )
+                    with with_purpose(BrainPurpose.OWNER_REPLY):
+                        _result = await loop.run_in_executor(
+                            get_shared_executor(),
+                            copy_current_context_callable(
+                                lambda: _brain_loop.run_brain_loop(
+                                    text,
+                                    action_engine=action_engine,
+                                    get_pipeline=get_pipeline,
+                                    user_id="rohit",
+                                    chat_id=chat_id,
+                                    surface=SURFACE_NAME,
+                                    send_intermediate=_send_intermediate,
+                                    chat_history=chat_history,
+                                    turn=turn,
+                                    return_structured=True,
+                                )
+                            ),
+                        )
                     if hasattr(_result, "transcript"):
                         jarvis_transcript = _result.transcript or ""
                         jarvis_tool_calls = list(getattr(_result, "tool_calls", []) or [])
@@ -488,19 +496,22 @@ class MaezMessageHandler:
             # in_tool_continuation. Adapter no longer double-audits the
             # returned reply.
             try:
-                reply = await loop.run_in_executor(
-                    get_shared_executor(),
-                    lambda: self.daemon.handle_message(
-                        text,
-                        SURFACE_NAME,
-                        transcript=jarvis_transcript or "",
-                        chat_history=chat_history,
-                        chat_id=chat_id,
-                        tool_calls=jarvis_tool_calls or None,
-                        recall_items=jarvis_recall_items,
-                        send_intermediate=_send_progress_receipt,
-                    ),
-                )
+                with with_purpose(BrainPurpose.OWNER_REPLY):
+                    reply = await loop.run_in_executor(
+                        get_shared_executor(),
+                        copy_current_context_callable(
+                            lambda: self.daemon.handle_message(
+                                text,
+                                SURFACE_NAME,
+                                transcript=jarvis_transcript or "",
+                                chat_history=chat_history,
+                                chat_id=chat_id,
+                                tool_calls=jarvis_tool_calls or None,
+                                recall_items=jarvis_recall_items,
+                                send_intermediate=_send_progress_receipt,
+                            )
+                        ),
+                    )
             except Exception as e:
                 logger.warning("daemon dispatch failed on %s: %s", SURFACE_NAME, e)
                 turn.update(output=f"(internal error: {e})")
