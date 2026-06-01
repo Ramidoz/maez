@@ -4680,6 +4680,23 @@ class MaezDaemon:
                                 _focused_working_set,
                                 surface=source,
                             )
+                            logger.info(
+                                "focused_synthesis_timing prompt_build_ms=%s "
+                                "chat_total_ms=%s reply_token_est=%s "
+                                "working_set_chars=%s evidence_item_count=%s "
+                                "citation_render_version=%s turn_kind=%s",
+                                getattr(_focused_result, "prompt_build_ms", None),
+                                getattr(_focused_result, "chat_total_ms", None),
+                                getattr(_focused_result, "reply_token_est", None),
+                                getattr(_focused_working_set, "working_set_chars", None),
+                                len(getattr(_focused_working_set, "items", ()) or ()),
+                                getattr(
+                                    _focused_working_set,
+                                    "citation_render_version",
+                                    None,
+                                ),
+                                _rk_turn_kind,
+                            )
                         finally:
                             _close_receipt_watchdog()
                         _focused_verdict = _check_groundedness(

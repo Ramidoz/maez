@@ -232,6 +232,9 @@ class FocusedResult:
     reply: str
     cited_ids: list[str]
     working_set_chars: int
+    prompt_build_ms: int | None = None
+    chat_total_ms: int | None = None
+    reply_token_est: int | None = None
 
 
 @dataclass(frozen=True)
@@ -767,6 +770,8 @@ def focused_synthesize(
     chat_fn=None,
     model=None,
 ) -> FocusedResult:
+    import time as _time
+
     if chat_fn is None:
         from core import llm_client as _llm_client
 
@@ -776,6 +781,7 @@ def focused_synthesize(
 
         model = PRIMARY_MODEL
 
+    _t0 = _time.monotonic()
     system = (
         f"{_voice_card(surface)}\n\n"
         f"{_citation_instruction(working_set.citation_render_version)}\n\n"
@@ -787,18 +793,23 @@ def focused_synthesize(
         {"role": "system", "content": system},
         {"role": "user", "content": working_set.owner_question},
     ]
+    _t1 = _time.monotonic()
     response = chat_fn(
         model=model,
         messages=messages,
         think=False,
         options={"temperature": 0.7, "num_predict": 4096},
     )
+    _t2 = _time.monotonic()
     reply = (getattr(getattr(response, "message", None), "content", None) or "").strip()
     cited_ids = sorted({f"E{match.group(1)}" for match in _CITE_RE.finditer(reply)})
     return FocusedResult(
         reply=reply,
         cited_ids=cited_ids,
         working_set_chars=working_set.working_set_chars,
+        prompt_build_ms=int((_t1 - _t0) * 1000),
+        chat_total_ms=int((_t2 - _t1) * 1000),
+        reply_token_est=len(reply) // 4,
     )
 
 
