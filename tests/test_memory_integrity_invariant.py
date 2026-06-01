@@ -1500,8 +1500,8 @@ class DaemonHandleMessageContract(unittest.TestCase):
                 )
 
         timing = [line for line in logs.output if "focused_synthesis_timing" in line]
-        self.assertTrue(timing, "expected a focused_synthesis_timing line")
-        line = timing[-1]
+        self.assertEqual(len(timing), 1, "expected exactly one focused_synthesis_timing line")
+        line = timing[0]
         fields = {
             "prompt_build_ms",
             "chat_total_ms",

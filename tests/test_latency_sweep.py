@@ -1,3 +1,4 @@
+import inspect
 import unittest
 from types import SimpleNamespace
 
@@ -23,13 +24,20 @@ class LatencySweepTest(unittest.TestCase):
         self.assertTrue(rows)
         self.assertEqual(len(rows), 6)
         row = rows[0]
-        for key in (
+        expected_keys = {
             "ws_items",
             "input_tokens",
             "output_tokens",
             "ttft_ms",
             "total_ms",
             "tok_s",
-        ):
-            self.assertIn(key, row)
+        }
+        self.assertEqual(set(row), expected_keys)
+        self.assertTrue(all(isinstance(row[key], int | float) for key in expected_keys))
+        self.assertFalse({"answer", "reply", "evidence", "question", "messages"} & set(row))
 
+    def test_sweep_does_not_import_live_focused_path(self):
+        source = inspect.getsource(latency_sweep)
+        self.assertNotIn("core.routing.focused_cognition", source)
+        self.assertNotIn("focused_synthesize", source)
+        self.assertNotIn("assemble_working_set", source)

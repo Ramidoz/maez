@@ -61,4 +61,3 @@ def run_sweep(
                 }
             )
     return rows
-
