@@ -1365,6 +1365,61 @@ class DaemonHandleMessageContract(unittest.TestCase):
         self.assertIn("had_confirmed=true", line)
         self.assertNotIn("declined_absence", line)
 
+    def test_both_shaped_memory_plus_dialogue_logs_mixed_support(self):
+        from daemon import maez_daemon
+        from core.routing.focused_cognition import FocusedResult, GroundednessVerdict
+
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+        transcript = (
+            "[memory context]\n"
+            '<RECALLED id="m-apr27" date_match="exact_date">'
+            "April 27 infrastructure incident was recorded."
+            "</RECALLED>"
+        )
+        focused_result = FocusedResult(
+            reply=(
+                "I don't have any records for that side thread, but the April 27 "
+                "memory and our recent thread belong together [E1] [E2]."
+            ),
+            cited_ids=["E1", "E2"],
+            working_set_chars=10,
+        )
+        with self.assertLogs("maez", level="INFO") as logs:
+            with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+                os.environ, {"MAEZ_RECALL_TRIAD_ENABLED": "1"}, clear=False
+            ), mock.patch(
+                "core.routing.focused_cognition.focused_synthesize",
+                return_value=focused_result,
+            ), mock.patch(
+                "core.routing.focused_cognition.check_groundedness",
+                return_value=GroundednessVerdict("grounded", 0.5, []),
+            ):
+                maez_daemon.MaezDaemon.handle_message(
+                    daemon,
+                    "remind me what we were doing around April 27",
+                    chat_id="c1",
+                    source="telegram",
+                    transcript=transcript,
+                    chat_history=[
+                        {
+                            "content": (
+                                "Rohit: We were checking the recall smoke.\n"
+                                "Maez: I tied the result back to the live gate."
+                            )
+                        }
+                    ],
+                )
+
+        lines = self._recall_outcome_lines(logs)
+        self.assertEqual(len(lines), 1, lines)
+        line = lines[-1]
+        self.assertIn("turn_kind=both", line)
+        self.assertIn("outcome_class=answered_mixed_support", line)
+        self.assertIn("denial_kind=na", line)
+        self.assertIn("had_confirmed=true", line)
+        self.assertNotIn("declined_absence", line)
+
     def test_discarded_focused_draft_does_not_contribute_coverage(self):
         from daemon import maez_daemon
         from core.routing.focused_cognition import FocusedResult, GroundednessVerdict

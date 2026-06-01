@@ -55,6 +55,9 @@ the test fails if any free-text/content column like `query_text` or `recalled_sn
   `memory_context`** item, **never `memory_evidence`** — old memory stays context, citing it AS
   current-state evidence is a type-rule violation, not grounding (Rohit amendment 2: the benefit metric
   must not pressure laundering old context into evidence).
+- `answered_mixed_support` — answered with ≥1 matched date-confirmed `memory_context` citation and all
+  citations valid, but a `dialogue_anchor` was also cited on a **both-shaped** turn. This is observed as
+  mixed support, **not proof of dated recall**: it is not counted as rescue and is not a hard fail.
 - `answered_ungrounded` — answered but with unmatched/uncited claims.
 - `answered_unverifiable` — **dated/continuity turn answered with no consulted/confirmed evidence** (this is
   the *legacy fabrication bucket* — legacy never declines, so without this class the benefit gate is
@@ -184,7 +187,7 @@ trap; 6 is the blast-radius control. Probes 1 & 3 need seeded dated memories in 
    real-traffic counterfactual. Rohit records a **blind** per-probe quality note (provenance hidden — see
    blind verdict).
 2. **Flip:** Rohit sets `MAEZ_RECALL_TRIAD_ENABLED=1` and `MAEZ_RECALL_RECEIPT_ENABLED=1` in the launch env
-   (owner-authorized; `config/.env` touched only here, only by Rohit), restart, confirm the startup posture
+   (owner-authorized; `/home/rohit/.config/maez/model.env` touched only here, only by Rohit), restart, confirm the startup posture
    log shows `mode=recall_triad` and receipt posture enabled. If receipts are not enabled, A7's ack gate is
    `not_evaluable` and the felt-latency gate cannot pass.
 3. **Battery flag-ON** + **bounded ordinary-use soak** with the **stratified floor** below.
@@ -231,8 +234,9 @@ The soak does not reach decision until it has covered, at minimum (Rohit may ame
 A5 + A6 below for the corrected rescued definition and the live-soak substrate):**
 - **Rescued-turn counter > 0**, where rescued = legacy ∈ {`declined_unavailable`, `declined_failed`,
   `declined_unverified`, `answered_unverifiable`} AND triad **live-synthesized** `answered_grounded`
-  (`declined_absence` excluded; answered-but-ungrounded = FAIL, not rescue — **A5**). The counter is
-  measured on **live soak turns**, not the sandbox battery (**A6**). AND
+  (`declined_absence` excluded; answered-but-ungrounded = FAIL, not rescue; `answered_mixed_support` =
+  observed mixed support, not rescue, not hard fail — **A5**). The counter is measured on **live soak
+  turns**, not the sandbox battery (**A6**). AND
 - **Blind owner preference = "better" overall** on **live soak turns** (not the seeded battery — A6);
   the "better overall" aggregation rule is pre-registered (see the 2b runbook). AND
 - **Caution not inflated:** any rise in `declined_*` is offset by a fall in `answered_unverifiable` (honest
@@ -260,8 +264,10 @@ A5 + A6 below for the corrected rescued definition and the live-soak substrate):
 > citations). `declined_absence` is **excluded** from the rescued numerator (a correct legacy decline
 > that triad "answers" is a regression, not a rescue). **`answered_ungrounded` on a rescue-candidate turn
 > is a benefit-gate FAIL, never a rescue** — Maez gets no credit for answering a dated question it did
-> not ground in a confirmed memory. (Replaces the loose "legacy would deny/fabricate" phrasing; legacy
-> *declines* dated turns, it does not fabricate them — verified in 1a.)
+> not ground in a confirmed memory. **`answered_mixed_support` is observed mixed support: not rescue, not
+> hard fail** — labels prove citation shape, not semantic support, so mixed cannot be banked as benefit.
+> (Replaces the loose "legacy would deny/fabricate" phrasing; legacy *declines* dated turns, it does not
+> fabricate them — verified in 1a.)
 
 > **Pre-registration amendment A6 (2026-05-30, before any flag-on data) — instrument-role reassignment.**
 > Scoping found the benefit verdict was pinned to the wrong substrate. Corrected three-way epistemology:

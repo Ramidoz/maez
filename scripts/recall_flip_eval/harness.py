@@ -78,7 +78,7 @@ def assert_run_parity(*, expect_commit: str | None, allow_dirty: bool = False) -
     return actual, dirty
 
 
-def run_probe(text: str, *, flag_on: bool) -> ProbeArmResult:
+def run_probe(text: str, *, flag_on: bool, turn_kind: str = "dated") -> ProbeArmResult:
     if not flag_on:
         return ProbeArmResult(
             answer="",
@@ -92,6 +92,7 @@ def run_probe(text: str, *, flag_on: bool) -> ProbeArmResult:
     from core.dispatcher.spec import SubstrateSource
     from core.routing import focused_cognition
     from core.routing.recall_outcome import (
+        citation_support,
         cites_confirmed_memory_context,
         classify_outcome,
     )
@@ -164,15 +165,17 @@ def run_probe(text: str, *, flag_on: bool) -> ProbeArmResult:
     verdict = focused_cognition.check_groundedness(result, working_set)
     elapsed = int((time.time() - start) * 1000)
     grounded = cites_confirmed_memory_context(result, working_set)
+    support = citation_support(result, working_set, turn_kind=turn_kind)
     outcome = classify_outcome(
         mode="recall_triad",
-        turn_kind="dated",
+        turn_kind=turn_kind,
         answered=bool(result.reply),
         receipt="consulted",
         denial_kind="none",
         had_confirmed=had_confirmed,
         cited_grounded_context=grounded,
         unmatched_citations=len(verdict.unmatched),
+        cited_mixed_support=support == "mixed",
     )
     cited = set(result.cited_ids)
     durable_ids = tuple(
@@ -301,9 +304,10 @@ def _run_probe_battery(
             elapsed_values: list[int] = []
             coverage_values: list[float] = []
             last_outcome = "declined_unverified"
+            turn_kind = probes.probe_turn_kind(probe.probe_id)
             for index, text in enumerate(variants, start=1):
-                legacy = run_probe(text, flag_on=False)
-                triad = run_probe(text, flag_on=True)
+                legacy = run_probe(text, flag_on=False, turn_kind=turn_kind)
+                triad = run_probe(text, flag_on=True, turn_kind=turn_kind)
                 codes, unsafe = probes.assert_probe_result(
                     probe,
                     triad,

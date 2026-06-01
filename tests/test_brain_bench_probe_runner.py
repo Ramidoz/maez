@@ -548,3 +548,59 @@ class ProbeRunnerTests(unittest.TestCase):
 
         self.assertEqual(rows[0].ops_evidence.gpu_contention.value, "low")
         self.assertEqual(rows[0].latency_ms, 5000)
+
+    def test_probe_runner_threads_probe_turn_kind_to_focused_probe(self):
+        from scripts.brain_bench.inference import GenerationMeasurement
+        from scripts.brain_bench.probe_runner import build_probe_run
+        from scripts.recall_flip_eval.harness import ProbeArmResult
+
+        selected = (
+            eval_probes.get_probe("both_shaped"),
+            eval_probes.get_probe("dated_hit"),
+        )
+        seen_turn_kinds = []
+
+        def fake_run_focused_probe(_text, *, variant, stream_factory, clock, turn_kind):
+            del variant, stream_factory, clock
+            seen_turn_kinds.append(turn_kind)
+            return (
+                ProbeArmResult(
+                    answer="Citation-shaped [E1].",
+                    outcome_class="answered_mixed_support",
+                    receipt="consulted",
+                    focused_elapsed_ms=5000,
+                    citation_coverage=0.5,
+                    cited_ids=("E1",),
+                    cited_durable_ids=("fixture-1",),
+                    cited_confirmed_memory_context=False,
+                    working_set_source_types=("memory_context", "dialogue_anchor"),
+                ),
+                GenerationMeasurement(
+                    answer="Citation-shaped [E1].",
+                    ttft_ms=50,
+                    total_ms=1000,
+                    output_tokens=1,
+                    tokens_per_sec=1.0,
+                    failed=False,
+                ),
+                "[E1] context",
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with sandbox.sandbox_env(Path(tmp)):
+                with mock.patch.object(eval_probes, "PROBES", selected), mock.patch(
+                    "scripts.brain_bench.probe_runner._run_focused_probe",
+                    side_effect=fake_run_focused_probe,
+                ), mock.patch(
+                    "scripts.brain_bench.probe_runner.probes.assert_probe_result",
+                    return_value=(("forced_safe",), False),
+                ):
+                    rows = list(
+                        build_probe_run(
+                            k=1,
+                            stream_factory=lambda **_kw: iter([{"content": "Citation-shaped [E1]."}]),
+                        )(_variant())
+                    )
+
+        self.assertEqual(seen_turn_kinds, ["both", "dated"])
+        self.assertEqual([row.probe_id for row in rows], ["both_shaped", "dated_hit"])

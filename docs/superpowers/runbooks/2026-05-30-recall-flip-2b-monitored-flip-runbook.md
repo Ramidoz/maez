@@ -6,14 +6,15 @@
 > decide; this runbook decides.** Frozen pre-registration: [flip spec](../specs/2026-05-30-recall-triad-monitored-default-on-flip-design.md)
 > (gates, soak floor, disposition, amendments A4/A5/A6 @ 209682f).
 >
-> **Authority:** the flip touches `config/.env` and changes live cognition. It is **owner-run by Rohit
-> only**. Claude witnesses and records; Claude does **not** flip. Codex verifies this runbook is
+> **Authority:** the flip touches `/home/rohit/.config/maez/model.env` and changes live cognition. It is
+> **owner-run by Rohit only**. Claude witnesses and records; Claude does **not** flip. Codex verifies this runbook is
 > executable before it is run (commands exist, metrics emit, thresholds pinned, kill-switch real).
 >
 > Operational facts (Codex verified in 2a executability pass): daemon unit = `maez.service` controlled via
 > `systemctl --user`; logs =
 > `logs/maez.log*` (RotatingFileHandler, 50MB × 10; use `grep -a[h]` because historical log files can
-> contain NUL bytes); flags load from `config/.env`; posture log line = `recall_stack mode=…`.
+> contain NUL bytes); flags load from `/home/rohit/.config/maez/model.env`; posture log line =
+> `recall_stack mode=…`.
 
 ## Step 0 — Pre-flip preconditions (ALL must pass; any fail blocks the flip)
 1. **2a proof packet = PASS.** Run the offline harness at the flip commit; every correctness/safety probe
@@ -51,9 +52,9 @@
 ## Step 1 — The flip (owner-authorized)
 ```
 # Rohit only. Set the single bundle flag in the launch env without duplicating keys.
-grep -q '^MAEZ_RECALL_TRIAD_ENABLED=' config/.env \
-  && sed -i 's/^MAEZ_RECALL_TRIAD_ENABLED=.*/MAEZ_RECALL_TRIAD_ENABLED=1/' config/.env \
-  || printf '\nMAEZ_RECALL_TRIAD_ENABLED=1\n' >> config/.env
+grep -q '^MAEZ_RECALL_TRIAD_ENABLED=' /home/rohit/.config/maez/model.env \
+  && sed -i 's/^MAEZ_RECALL_TRIAD_ENABLED=.*/MAEZ_RECALL_TRIAD_ENABLED=1/' /home/rohit/.config/maez/model.env \
+  || printf '\nMAEZ_RECALL_TRIAD_ENABLED=1\n' >> /home/rohit/.config/maez/model.env
 systemctl --user restart maez.service
 # Confirm posture:
 grep -ah "recall_stack mode=" logs/maez.log* | tail -1   # MUST show mode=recall_triad reason=bundle_enabled
@@ -71,7 +72,7 @@ honest-empty, ≥1 both-shaped, ≥10 ordinary non-recall turns.
   kill-switch under live load.
   ```
   # OFF block:
-  sed -i 's/^MAEZ_RECALL_TRIAD_ENABLED=.*/MAEZ_RECALL_TRIAD_ENABLED=0/' config/.env
+  sed -i 's/^MAEZ_RECALL_TRIAD_ENABLED=.*/MAEZ_RECALL_TRIAD_ENABLED=0/' /home/rohit/.config/maez/model.env
   systemctl --user restart maez.service
   grep -ah "recall_stack mode=" logs/maez.log* | tail -1   # mode=legacy
   # (ask Maez "is your dated recall reachable?" → expect the off-by-config self-status reply)
@@ -80,7 +81,7 @@ honest-empty, ≥1 both-shaped, ≥10 ordinary non-recall turns.
   sqlite3 memory/routing_observation.db \
     "select count(*) from focused_cognition_runs where created_at >= ${OFF_START_EPOCH};"
   # back ON:
-  sed -i 's/^MAEZ_RECALL_TRIAD_ENABLED=.*/MAEZ_RECALL_TRIAD_ENABLED=1/' config/.env
+  sed -i 's/^MAEZ_RECALL_TRIAD_ENABLED=.*/MAEZ_RECALL_TRIAD_ENABLED=1/' /home/rohit/.config/maez/model.env
   systemctl --user restart maez.service
   ```
 
@@ -103,7 +104,8 @@ the verdict) — never folded into the telemetry stream.
 
 **Benefit gate (A5):** rescued-turn counter > 0 across **≥N distinct dated turns** (rescued =
 legacy∈{declined_*/answered_unverifiable} → triad **live answered_grounded**; declined_absence excluded;
-**answered-ungrounded = FAIL**) AND blind preference = "better overall" per the pre-registered rule AND
+**answered-ungrounded = FAIL**; `answered_mixed_support` = observed mixed support, **not rescue, not hard
+fail**) AND blind preference = "better overall" per the pre-registered rule AND
 caution not inflated (declined_* rise offset by answered_unverifiable fall) AND rescued turns clear the
 absolute `C_floor` coverage.
 
@@ -113,7 +115,7 @@ absolute `C_floor` coverage.
 
 **Kill-switch (the revert):**
 ```
-sed -i 's/^MAEZ_RECALL_TRIAD_ENABLED=.*/MAEZ_RECALL_TRIAD_ENABLED=0/' config/.env  # or delete the line
+sed -i 's/^MAEZ_RECALL_TRIAD_ENABLED=.*/MAEZ_RECALL_TRIAD_ENABLED=0/' /home/rohit/.config/maez/model.env  # or delete the line
 systemctl --user restart maez.service
 grep -ah "recall_stack mode=" logs/maez.log* | tail -1   # MUST show mode=legacy
 ```
@@ -129,7 +131,7 @@ swappable; a flip proof must record which brain was live).
 ## Step 6 — Shadow teardown (1b sunset) + forgotten-teardown guard
 After the disposition is recorded:
 ```
-sed -i '/^MAEZ_RECALL_SHADOW_ENABLED=/d' config/.env     # shadow off
+sed -i '/^MAEZ_RECALL_SHADOW_ENABLED=/d' /home/rohit/.config/maez/model.env     # shadow off
 OFF=$(stat -c%s logs/maez.log 2>/dev/null || echo 0)
 systemctl --user restart maez.service
 tail -c +$((OFF+1)) logs/maez.log | grep -ac "shadow_outcome"  # after restart: confirm 0 new shadow rows
