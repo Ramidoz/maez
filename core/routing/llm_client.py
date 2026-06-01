@@ -47,6 +47,7 @@ import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 
 # ── backend selection ────────────────────────────────────────────────
@@ -273,6 +274,39 @@ def _openai_stream_content(data: dict) -> str:
     delta = first.get("delta") or {}
     message = first.get("message") or {}
     return delta.get("content") or message.get("content") or ""
+
+
+def _connect_llamacpp_socket(
+    base_url: str,
+    body: bytes,
+    *,
+    timeout_s: float = 90,
+):
+    parsed = urlparse(base_url)
+    if parsed.scheme != "http":
+        raise BackendError(f"socket transport requires http, got {parsed.scheme!r}")
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or 80
+    base_path = parsed.path.rstrip("/")
+    path = f"{base_path}/chat/completions" if base_path else "/chat/completions"
+    sock = _socket.create_connection((host, port), timeout=timeout_s)
+    request_head = (
+        f"POST {path} HTTP/1.1\r\n"
+        f"Host: {host}:{port}\r\n"
+        "Authorization: Bearer llamacpp\r\n"
+        "Content-Type: application/json\r\n"
+        f"Content-Length: {len(body)}\r\n"
+        "Connection: close\r\n\r\n"
+    ).encode("utf-8")
+    try:
+        sock.sendall(request_head + body)
+    except Exception:
+        try:
+            sock.close()
+        except OSError:
+            pass
+        raise
+    return sock
 
 
 def _strip_special_tokens(text: str) -> str:
@@ -523,18 +557,22 @@ def _start_llamacpp_stream(
     extra_body: dict,
     timeout_s: Optional[float] = None,
 ):
-    raw_stream = _get_openai_client().chat.completions.create(
-        model=model,
-        messages=messages,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        extra_body=extra_body if extra_body else None,
-        stream=True,
-        timeout=timeout_s,
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "stream": True,
+    }
+    if extra_body:
+        payload.update(extra_body)
+    body = json.dumps(payload).encode("utf-8")
+    sock = _connect_llamacpp_socket(
+        LLAMACPP_BASE_URL,
+        body,
+        timeout_s=timeout_s if timeout_s is not None else 90,
     )
-    if not hasattr(raw_stream, "close"):
-        raise BackendError("llamacpp stream does not expose close()")
-    return _LlamaCppStreamAdapter(raw_stream)
+    return _LlamaCppSocketStream(sock=sock)
 
 
 def start_cancellable_chat(

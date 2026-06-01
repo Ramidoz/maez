@@ -1,7 +1,9 @@
 import threading
 import time
 import unittest
+from unittest import mock
 
+import core.routing.llm_client as llm_client
 from core.routing.llm_client import BackendError, _LlamaCppSocketStream
 
 
@@ -115,6 +117,30 @@ class SocketStreamTest(unittest.TestCase):
 
         with self.assertRaises(BackendError):
             list(stream)
+
+    def test_https_base_url_rejected(self):
+        with self.assertRaises(BackendError):
+            llm_client._connect_llamacpp_socket("https://127.0.0.1:8443/v1", b"{}")
+
+    def test_endpoint_path_from_base_url(self):
+        fake_socket = _FakeSocket([])
+
+        with mock.patch.object(
+            llm_client._socket,
+            "create_connection",
+            return_value=fake_socket,
+        ) as create_connection:
+            sock = llm_client._connect_llamacpp_socket(
+                "http://127.0.0.1:8080/v1",
+                b"{}",
+            )
+
+        self.assertIs(sock, fake_socket)
+        create_connection.assert_called_once_with(("127.0.0.1", 8080), timeout=90)
+        self.assertIn(b"POST /v1/chat/completions HTTP/1.1", fake_socket.sent)
+        self.assertIn(b"Host: 127.0.0.1:8080\r\n", fake_socket.sent)
+        self.assertIn(b"Content-Length: 2\r\n", fake_socket.sent)
+        self.assertTrue(fake_socket.sent.endswith(b"\r\n\r\n{}"))
 
 
 if __name__ == "__main__":
