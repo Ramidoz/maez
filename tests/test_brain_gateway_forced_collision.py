@@ -3,7 +3,28 @@ import time
 import unittest
 
 from core.routing.brain_gateway import BrainGateway, BrainPurpose
-from core.routing.cancellable_brain_call import BrainPreempted
+from core.routing.cancellable_brain_call import BrainPreempted, CancellableBrainCall
+from core.routing.llm_client import _LlamaCppSocketStream
+
+
+class _BlockingSocket:
+    def __init__(self):
+        self.recv_started = threading.Event()
+        self.release = threading.Event()
+        self.closed = False
+        self.shutdown_calls = 0
+
+    def recv(self, _n):
+        self.recv_started.set()
+        self.release.wait(timeout=2.0)
+        raise OSError("closed")
+
+    def shutdown(self, _how):
+        self.shutdown_calls += 1
+
+    def close(self):
+        self.closed = True
+        self.release.set()
 
 
 class ForcedCollisionTest(unittest.TestCase):
@@ -60,6 +81,51 @@ class ForcedCollisionTest(unittest.TestCase):
         self.assertTrue(any(event["preempted"] for event in events))
         self.assertFalse(any(event["preempt_timeout"] for event in events))
         self.assertIn(1, [event["preempted_count"] for event in events])
+
+    def test_foreground_preempts_socket_backed_background(self):
+        gateway = BrainGateway(preempt_timeout_s=0.5)
+        fake_socket = _BlockingSocket()
+        bg_outcome = {}
+
+        def bg_stream():
+            return CancellableBrainCall(
+                raw_stream=_LlamaCppSocketStream(sock=fake_socket),
+                preempt_timeout_s=0.5,
+            )
+
+        def run_bg():
+            try:
+                gateway.submit(
+                    purpose=BrainPurpose.DAEMON_CYCLE_GENERATION,
+                    run_streaming_fn=bg_stream,
+                )
+            except BrainPreempted:
+                bg_outcome["preempted"] = True
+
+        worker = threading.Thread(target=run_bg)
+        worker.start()
+        self.assertTrue(fake_socket.recv_started.wait(timeout=2.0))
+
+        t0 = time.monotonic()
+        foreground_reply = gateway.submit(
+            purpose=BrainPurpose.OWNER_RECALL,
+            run_streaming_fn=lambda: iter([{"content": "fast [E1]"}]),
+        )
+        foreground_ms = (time.monotonic() - t0) * 1000
+        worker.join(timeout=2.0)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(foreground_reply, "fast [E1]")
+        self.assertLess(foreground_ms, 1500)
+        self.assertTrue(bg_outcome.get("preempted"))
+        self.assertTrue(fake_socket.closed)
+        self.assertEqual(fake_socket.shutdown_calls, 1)
+        events = [
+            event
+            for event in gateway.events
+            if event.get("event") == "brain_gateway_event"
+        ]
+        self.assertFalse(any(event["preempt_timeout"] for event in events))
 
 
 if __name__ == "__main__":
