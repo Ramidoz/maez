@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import functools
+import logging
 import threading
 import time
 from collections import deque
@@ -15,6 +16,8 @@ from core.routing.cancellable_brain_call import (
     BrainPreempted,
     CancellableBrainCall,
 )
+
+logger = logging.getLogger("brain_gateway")
 
 
 class BrainPurpose(str, Enum):
@@ -240,6 +243,19 @@ class BrainGateway:
             "preempt_timeout": bool(preempt_timeout),
         }
         self.events.append(event)
+        logger.info(
+            "brain_gateway_event schema_version=%s purpose=%s priority=%s "
+            "wait_ms=%s preempted=%s preempted_count=%s "
+            "slot_busy_before=%s preempt_timeout=%s",
+            event["schema_version"],
+            event["purpose"],
+            event["priority"],
+            event["wait_ms"],
+            event["preempted"],
+            event["preempted_count"],
+            event["slot_busy_before"],
+            event["preempt_timeout"],
+        )
         if self._telemetry_sink is not None:
             self._telemetry_sink(dict(event))
 

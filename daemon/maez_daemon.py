@@ -1239,6 +1239,8 @@ def _reply_asserts_dated_absence(reply: str) -> bool:
         "don't have any records",
         "do not have any record",
         "do not have any records",
+        "got nothing",
+        "have got nothing",
         "have no record",
         "have no records",
     )
@@ -6643,6 +6645,8 @@ class MaezDaemon:
 
     def _loop(self):
         """Main reasoning loop — runs every LOOP_INTERVAL seconds."""
+        from core.routing.cancellable_brain_call import BrainPreempted
+
         logger.info("Reasoning loop started (interval: %ds)", LOOP_INTERVAL)
 
         while self.running:
@@ -6667,6 +6671,7 @@ class MaezDaemon:
             self.cycle_count += 1
             self.last_cycle_time = datetime.now(timezone.utc).isoformat()
             self._mark_cycle_stage("cycle_start")
+            cycle_preempted = False
 
             logger.info("--- Cycle %d ---", self.cycle_count)
             self._mark_cycle_stage("m1_flush_due_windows")
@@ -6999,7 +7004,16 @@ class MaezDaemon:
                         sorted(stale),
                     )
                 self._mark_cycle_stage("reasoning_model")
-                result = self._reason(snap, stale_fields=stale)
+                try:
+                    result = self._reason(snap, stale_fields=stale)
+                except BrainPreempted:
+                    cycle_preempted = True
+                    logger.info(
+                        "Cycle %d: brain preempted by foreground; yielding cycle",
+                        self.cycle_count,
+                    )
+                    self._s1b_flush_residue_events()
+                    result = None
             if result is None:
                 # Either gate skipped, or _reason couldn't run. No-op.
                 self._s1b_flush_residue_events()
@@ -7285,12 +7299,18 @@ class MaezDaemon:
             try:
                 self._mark_cycle_stage("wondering")
                 cycle_deadline = cycle_start + LOOP_INTERVAL - 2.0
-                if time.time() < cycle_deadline - 10:
+                if not cycle_preempted and time.time() < cycle_deadline - 10:
                     from daemon.wondering_cycle import advance_one
 
                     w_result = advance_one(self, deadline=cycle_deadline)
                     if w_result:
                         logger.info("Wondering advance: %s", w_result)
+            except BrainPreempted:
+                logger.info(
+                    "Cycle %d: wondering preempted by foreground; yielding cycle",
+                    self.cycle_count,
+                )
+                cycle_preempted = True
             except Exception as e:
                 logger.debug("wondering cycle failed: %s", e)
 
@@ -7417,7 +7437,7 @@ class MaezDaemon:
 
             # Proactive opinion — every 50 cycles
             self._mark_cycle_stage("proactive_opinion")
-            if self.cycle_count % 50 == 0:
+            if not cycle_preempted and self.cycle_count % 50 == 0:
                 self._check_proactive_opinion()
 
             # Session 11o: dream cycle trigger. Fires when the owner has been
@@ -7431,7 +7451,11 @@ class MaezDaemon:
             try:
                 self._mark_cycle_stage("dream_check")
                 _now = time.time()
-                if self.dream.is_idle(None, 0.0) and self.dream.should_run_now(_now):
+                if (
+                    not cycle_preempted
+                    and self.dream.is_idle(None, 0.0)
+                    and self.dream.should_run_now(_now)
+                ):
                     logger.info("Dream cycle triggered — idle gate open")
 
                     def _run_dream_bg():

@@ -1,5 +1,7 @@
 import unittest
+from unittest import mock
 
+from core.routing import brain_gateway as brain_gateway_module
 from core.routing.cancellable_brain_call import BrainPreempted
 from core.routing.brain_gateway import (
     BrainGateway,
@@ -90,6 +92,27 @@ class BrainGatewayTest(unittest.TestCase):
         self.assertEqual(event["purpose"], "owner_recall")
         self.assertFalse(event["preempted"])
         self.assertFalse(event["slot_busy_before"])
+
+    def test_gateway_event_is_logged_content_free(self):
+        gateway = BrainGateway()
+        canary = "SECRET_REPLY_TEXT_SHOULD_NOT_BE_LOGGED"
+
+        with mock.patch.object(brain_gateway_module.logger, "info") as m_info:
+            reply = gateway.submit(
+                purpose=BrainPurpose.OWNER_RECALL,
+                run_streaming_fn=lambda: iter([{"content": canary}]),
+            )
+
+        self.assertEqual(reply, canary)
+        self.assertEqual(m_info.call_count, 1)
+        rendered_log_call = " ".join(
+            str(part)
+            for call in m_info.call_args_list
+            for part in (*call.args, *call.kwargs.values())
+        )
+        self.assertIn("brain_gateway_event", rendered_log_call)
+        self.assertIn("owner_recall", rendered_log_call)
+        self.assertNotIn(canary, rendered_log_call)
 
     def test_brain_preempted_is_propagated_not_buffered(self):
         class _PreemptingStream:

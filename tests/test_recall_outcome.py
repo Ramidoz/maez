@@ -385,6 +385,7 @@ class DatedAbsenceMatcherTest(unittest.TestCase):
             "I have no record of that conversation.",
             "I do not have any records from then.",
             "I don't have a dated memory for that window.",
+            "I've got nothing on January 3, so I won't pretend otherwise.",
             "no record",
         ]:
             with self.subTest(reply=reply):
@@ -408,6 +409,7 @@ class DatedAbsenceMatcherTest(unittest.TestCase):
             "Do you have any record of that meeting?",
             "I recorded the meeting notes in your file.",
             "I don't have any records for January 3, but you fixed the parser bug.",
+            "I've got nothing on January 3, but you fixed the parser bug.",
             "No records were changed on January 3.",
         ]:
             with self.subTest(reply=reply):

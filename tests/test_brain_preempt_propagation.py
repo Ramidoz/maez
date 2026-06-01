@@ -1,5 +1,6 @@
 import unittest
 from unittest import mock
+from pathlib import Path
 
 from core.routing.cancellable_brain_call import BrainPreempted
 
@@ -40,6 +41,23 @@ class PreemptPropagationTest(unittest.TestCase):
         with mock.patch.object(wondering_cycle._llm_client, "chat", side_effect=BrainPreempted):
             with self.assertRaises(BrainPreempted):
                 wondering_cycle._call_llm("system", "user", 8, "m")
+
+    def test_daemon_reasoning_model_preempt_yields_cycle_without_optional_brain_work(self):
+        src = (
+            Path(__file__).resolve().parents[1] / "daemon" / "maez_daemon.py"
+        ).read_text()
+        block = src[
+            src.index('self._mark_cycle_stage("reasoning_model")')
+            : src.index('self._mark_cycle_stage("threshold_alerts")')
+        ]
+
+        self.assertIn("except BrainPreempted:", block)
+        self.assertIn("cycle_preempted = True", block)
+        self.assertIn("if not cycle_preempted", block)
+        self.assertLess(
+            block.index("except BrainPreempted:"),
+            block.index("except Exception"),
+        )
 
 
 if __name__ == "__main__":
