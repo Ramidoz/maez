@@ -58,7 +58,7 @@ class RoutingTest(unittest.TestCase):
             )
 
         self.assertIs(got, legacy_stream)
-        self.assertEqual(gateway.events, [])
+        self.assertEqual(list(gateway.events), [])
 
     def test_llm_client_explicit_purpose_overrides_neutral_context(self):
         gateway = BrainGateway()

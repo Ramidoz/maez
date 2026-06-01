@@ -7,6 +7,7 @@ import contextvars
 import functools
 import threading
 import time
+from collections import deque
 from enum import Enum
 from typing import Callable, Iterable
 
@@ -103,12 +104,20 @@ class BrainGateway:
         *,
         preempt_timeout_s: float = 1.5,
         telemetry_sink: Callable[[dict], None] | None = None,
+        max_events: int = 512,
     ):
         self._preempt_timeout_s = preempt_timeout_s
         self._telemetry_sink = telemetry_sink
         self._condition = threading.Condition(threading.RLock())
         self._in_flight: _InFlight | None = None
-        self.events: list[dict] = []
+        self.events = deque(maxlen=max(1, int(max_events)))
+
+    def reset_for_tests(self) -> None:
+        """Clear retained singleton state between hermetic tests."""
+        with self._condition:
+            self.events.clear()
+            self._in_flight = None
+            self._condition.notify_all()
 
     def submit(self, *, purpose, run_streaming_fn: Callable[[], Iterable]) -> str:
         purpose = _coerce_purpose(purpose)
@@ -236,3 +245,9 @@ class BrainGateway:
 
 
 GATEWAY = BrainGateway()
+
+
+def reset_gateway_state_for_tests() -> None:
+    """Reset process-local gateway state for order-independent tests."""
+    _CURRENT_PURPOSE.set(BrainPurpose.NEUTRAL)
+    GATEWAY.reset_for_tests()

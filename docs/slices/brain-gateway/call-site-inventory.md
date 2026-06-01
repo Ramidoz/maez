@@ -69,3 +69,12 @@ near the brain call and must let `BrainPreempted` outrank generic handling:
 
 Every listed broad handler either catches `BrainPreempted` first or re-raises it
 after Task 5.
+
+## Recorded follow-up
+
+The legacy `handle_voice_stream` raw HTTP path was a Brain Gateway side door, so
+this slice routes it through `llm_client.chat` under `voice_reply`. That closes
+the no-bypass invariant, but it also buffers the full reply before sentence/TTS
+handling instead of preserving token-synchronous first audio. Treat a streaming
+gateway for voice as the follow-up if owner-facing voice latency needs to regain
+that shape.

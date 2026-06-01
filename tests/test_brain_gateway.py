@@ -6,6 +6,7 @@ from core.routing.brain_gateway import (
     BrainPurpose,
     current_purpose,
     priority_of,
+    reset_gateway_state_for_tests,
     with_purpose,
 )
 
@@ -27,8 +28,39 @@ class BrainPurposeTest(unittest.TestCase):
             self.assertEqual(current_purpose(), BrainPurpose.OWNER_REPLY)
         self.assertEqual(current_purpose(), BrainPurpose.NEUTRAL)
 
+    def test_reset_gateway_state_for_tests_restores_current_purpose(self):
+        with with_purpose(BrainPurpose.OWNER_REPLY):
+            reset_gateway_state_for_tests()
+            self.assertEqual(current_purpose(), BrainPurpose.NEUTRAL)
+
 
 class BrainGatewayTest(unittest.TestCase):
+    def test_retained_events_are_bounded(self):
+        gateway = BrainGateway(max_events=3)
+
+        for idx in range(5):
+            gateway.submit(
+                purpose=BrainPurpose.OWNER_RECALL,
+                run_streaming_fn=lambda idx=idx: iter([{"content": str(idx)}]),
+            )
+
+        self.assertEqual(len(gateway.events), 3)
+        self.assertEqual(
+            [event["purpose"] for event in gateway.events],
+            ["owner_recall", "owner_recall", "owner_recall"],
+        )
+
+    def test_reset_for_tests_clears_retained_singleton_state(self):
+        gateway = BrainGateway(max_events=3)
+        gateway.submit(
+            purpose=BrainPurpose.OWNER_RECALL,
+            run_streaming_fn=lambda: iter([{"content": "first"}]),
+        )
+
+        gateway.reset_for_tests()
+
+        self.assertEqual(list(gateway.events), [])
+
     def test_submit_buffers_stream_and_records_content_free_event(self):
         gateway = BrainGateway()
 
