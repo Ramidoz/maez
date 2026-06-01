@@ -30,13 +30,13 @@ class FocusedSynthesisTimingTest(unittest.TestCase):
         return fn
 
     def test_reply_and_cited_ids_byte_stable(self):
-        reply = "On April 27 we noted the incident [E1]."
+        reply = "\n On April 27 we noted the incident [E1].  "
         res = focused_synthesize(
             self._ws(),
             surface="telegram",
             chat_fn=self._chat_fn(reply),
         )
-        self.assertEqual(res.reply, reply)
+        self.assertEqual(res.reply, reply.strip())
         self.assertEqual(res.cited_ids, ["E1"])
 
     def test_timing_fields_populated(self):
@@ -58,4 +58,3 @@ class FocusedSynthesisTimingTest(unittest.TestCase):
 
         res = focused_synthesize(self._ws(), surface="telegram", chat_fn=slow_fn)
         self.assertGreater(res.chat_total_ms, res.prompt_build_ms)
-

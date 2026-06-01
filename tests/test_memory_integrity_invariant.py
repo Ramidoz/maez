@@ -1460,6 +1460,68 @@ class DaemonHandleMessageContract(unittest.TestCase):
         self.assertIn("turn_kind=continuity", line)
         self.assertIn("outcome_class=answered_grounded", line)
 
+    def test_focused_synthesis_timing_is_content_free(self):
+        from daemon import maez_daemon
+        from core.routing.focused_cognition import FocusedResult, GroundednessVerdict
+
+        sentinel = "ZZSECRETREPLYZZ"
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+        transcript = (
+            "[memory context]\n"
+            '<RECALLED id="m" date_match="exact_date">'
+            "TIMINGSECRET_EVIDENCE"
+            "</RECALLED>"
+        )
+        focused_result = FocusedResult(
+            reply=f"{sentinel} [E1]",
+            cited_ids=["E1"],
+            working_set_chars=10,
+            prompt_build_ms=2,
+            chat_total_ms=5000,
+            reply_token_est=4,
+        )
+        with self.assertLogs("maez", level="INFO") as logs:
+            with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+                os.environ, {"MAEZ_RECALL_TRIAD_ENABLED": "1"}, clear=False
+            ), mock.patch(
+                "core.routing.focused_cognition.focused_synthesize",
+                return_value=focused_result,
+            ), mock.patch(
+                "core.routing.focused_cognition.check_groundedness",
+                return_value=GroundednessVerdict("grounded", 1.0, []),
+            ):
+                maez_daemon.MaezDaemon.handle_message(
+                    daemon,
+                    "what did we note around April 27?",
+                    chat_id="c1",
+                    source="telegram",
+                    transcript=transcript,
+                )
+
+        timing = [line for line in logs.output if "focused_synthesis_timing" in line]
+        self.assertTrue(timing, "expected a focused_synthesis_timing line")
+        line = timing[-1]
+        fields = {
+            "prompt_build_ms",
+            "chat_total_ms",
+            "reply_token_est",
+            "working_set_chars",
+            "evidence_item_count",
+            "citation_render_version",
+            "turn_kind",
+        }
+        payload = line.split("focused_synthesis_timing ", 1)[1]
+        observed_fields = {part.split("=", 1)[0] for part in payload.split()}
+        self.assertEqual(observed_fields, fields)
+        for field in fields:
+            self.assertIn(field, line)
+        self.assertNotIn(sentinel, line)
+        self.assertNotIn("RECALLED", line)
+        self.assertNotIn("date_match", line)
+        self.assertNotIn("TIMINGSECRET_EVIDENCE", line)
+        self.assertNotIn("what did we note", line)
+
     def test_discarded_focused_draft_does_not_contribute_coverage(self):
         from daemon import maez_daemon
         from core.routing.focused_cognition import FocusedResult, GroundednessVerdict
