@@ -29,7 +29,7 @@ from core.routing.cancellable_brain_call import BrainPreempted
 
 
 FILLER = "The history of computing is long and detailed. " * 1800
-DEFAULT_SLOT_RELEASE_THRESHOLD_MS = 1500.0
+DEFAULT_GATEWAY_HANDOFF_THRESHOLD_MS = 1500.0
 
 
 def _messages(content: str) -> list[dict[str, str]]:
@@ -60,7 +60,7 @@ def summarize_events(
     events: list[dict[str, Any]],
     *,
     foreground_wall_ms: float,
-    threshold_ms: float = DEFAULT_SLOT_RELEASE_THRESHOLD_MS,
+    threshold_ms: float = DEFAULT_GATEWAY_HANDOFF_THRESHOLD_MS,
 ) -> dict[str, Any]:
     probes = [e for e in events if e.get("event") == "brain_gateway_preempt_probe"]
     gateway_events = [e for e in events if e.get("event") == "brain_gateway_event"]
@@ -76,7 +76,7 @@ def summarize_events(
         for e in gateway_events
     )
     preempt_timeout = any(bool(e.get("preempt_timeout")) for e in gateway_events)
-    slot_release_pass = (
+    gateway_handoff_pass = (
         handle_present
         and background_preempted
         and not preempt_timeout
@@ -90,8 +90,8 @@ def summarize_events(
         "preempt_timeout": preempt_timeout,
         "owner_wait_ms": owner_wait_ms,
         "foreground_wall_ms": round(foreground_wall_ms, 3),
-        "threshold_ms": threshold_ms,
-        "slot_release_pass": slot_release_pass,
+        "gateway_handoff_threshold_ms": threshold_ms,
+        "gateway_handoff_pass": gateway_handoff_pass,
     }
 
 
@@ -99,7 +99,7 @@ def run_probe(
     *,
     background_warmup_s: float = 0.25,
     handle_timeout_s: float = 5.0,
-    threshold_ms: float = DEFAULT_SLOT_RELEASE_THRESHOLD_MS,
+    threshold_ms: float = DEFAULT_GATEWAY_HANDOFF_THRESHOLD_MS,
 ) -> dict[str, Any]:
     os.environ["MAEZ_LLM_BACKEND"] = llm_client.BACKEND_LLAMACPP
     gateway = BrainGateway(preempt_timeout_s=threshold_ms / 1000.0)
@@ -166,7 +166,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--background-warmup-s", type=float, default=0.25)
     parser.add_argument("--handle-timeout-s", type=float, default=5.0)
-    parser.add_argument("--threshold-ms", type=float, default=DEFAULT_SLOT_RELEASE_THRESHOLD_MS)
+    parser.add_argument(
+        "--threshold-ms",
+        type=float,
+        default=DEFAULT_GATEWAY_HANDOFF_THRESHOLD_MS,
+        help=(
+            "Gateway handoff threshold in ms. This is not physical server "
+            "slot-release time; compare foreground_wall_ms against A7."
+        ),
+    )
     args = parser.parse_args()
 
     result = run_probe(
@@ -175,7 +183,7 @@ def main() -> int:
         threshold_ms=args.threshold_ms,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
-    return 0 if result.get("slot_release_pass") else 1
+    return 0 if result.get("gateway_handoff_pass") else 1
 
 
 if __name__ == "__main__":

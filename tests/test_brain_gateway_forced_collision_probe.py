@@ -36,7 +36,8 @@ class ProbeSummaryTest(unittest.TestCase):
         self.assertTrue(summary["background_preempted"])
         self.assertFalse(summary["preempt_timeout"])
         self.assertEqual(summary["owner_wait_ms"], 1300.0)
-        self.assertTrue(summary["slot_release_pass"])
+        self.assertTrue(summary["gateway_handoff_pass"])
+        self.assertNotIn("slot_release_pass", summary)
 
     def test_summary_fails_on_missing_handle_or_slow_wait(self):
         events = [
@@ -63,7 +64,8 @@ class ProbeSummaryTest(unittest.TestCase):
         self.assertFalse(summary["background_preempted"])
         self.assertFalse(summary["preempt_timeout"])
         self.assertEqual(summary["owner_wait_ms"], 2200.0)
-        self.assertFalse(summary["slot_release_pass"])
+        self.assertFalse(summary["gateway_handoff_pass"])
+        self.assertNotIn("slot_release_pass", summary)
 
 
 if __name__ == "__main__":

@@ -3,9 +3,9 @@
 Date: 2026-06-01
 
 This is the owner-run gate after the socket-level transport lands. It verifies
-that foreground owner recall can make an in-flight background llama.cpp eval
-yield the single llama-server slot quickly. This is not a recall default-on
-flip.
+that foreground owner recall can preempt an in-flight background llama.cpp eval
+through the Brain Gateway and then measures whether the resulting full answer
+clears the A7 ceiling. This is not a recall default-on flip.
 
 ## Procedure
 
@@ -20,8 +20,11 @@ flip.
 
 ## Pass Bar
 
-- Background socket abort releases the slot within about 1.5 seconds.
-- Background cycle logs `preempted=true`.
+- Gateway handoff is fast: `brain_gateway_preempt_probe` reports
+  `handle_state=present`, the background cycle logs `preempted=true`, and the
+  foreground `owner_recall` `wait_ms` stays within about 1.5 seconds.
+- Physical server release is not the same metric as gateway handoff; read it
+  from the collision turn's full latency / `foreground_wall_ms` against A7.
 - No `preempt_timeout=true`.
 - No background retry caused by `BrainPreempted`.
 - No partial cancelled cognition is stored.
