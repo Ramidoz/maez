@@ -1157,16 +1157,19 @@ class ConversationController:
             )
 
             from core import llm_client as _llm_client
-            resp = _llm_client.chat(
-                model=model,
-                messages=[
-                    {"role": "system", "content": system_msg},
-                    {"role": "user", "content": user_msg},
-                ],
-                stream=False,
-                think=False,
-                options={"temperature": 0.2, "num_predict": 120},
-            )
+            from core.routing.brain_gateway import with_purpose as _brain_purpose
+
+            with _brain_purpose("owner_reply"):
+                resp = _llm_client.chat(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system_msg},
+                        {"role": "user", "content": user_msg},
+                    ],
+                    stream=False,
+                    think=False,
+                    options={"temperature": 0.2, "num_predict": 120},
+                )
             raw = getattr(getattr(resp, "message", None), "content", None)
             if raw is None:
                 raw = str(resp)

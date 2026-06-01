@@ -835,16 +835,19 @@ def classify_reply(
             raw_output = llm_fn(prompt)
         else:
             from core import llm_client  # lazy; avoids import at module load
-            resp = llm_client.chat(
-                model=os.environ.get("MAEZ_SELF_MOD_CLASSIFIER_MODEL")
-                      or _PRIMARY_MODEL,
-                messages=[
-                    {"role": "system", "content": _CLASSIFIER_SYSTEM},
-                    {"role": "user", "content": prompt},
-                ],
-                options={"temperature": 0.0, "num_predict": 120},
-                think=False,
-            )
+            from core.routing.brain_gateway import with_purpose as _brain_purpose
+
+            with _brain_purpose("owner_reply"):
+                resp = llm_client.chat(
+                    model=os.environ.get("MAEZ_SELF_MOD_CLASSIFIER_MODEL")
+                          or _PRIMARY_MODEL,
+                    messages=[
+                        {"role": "system", "content": _CLASSIFIER_SYSTEM},
+                        {"role": "user", "content": prompt},
+                    ],
+                    options={"temperature": 0.0, "num_predict": 120},
+                    think=False,
+                )
             raw_output = (resp.message.content or "").strip()
     except Exception:
         return {"engagement": "unclear", "progress": "new_understanding"}
@@ -1001,16 +1004,19 @@ def generate_opening_turn(
                 return result.strip()
         else:
             from core import llm_client
-            resp = llm_client.chat(
-                model=os.environ.get("MAEZ_SELF_MOD_OPENER_MODEL")
-                      or _PRIMARY_MODEL,
-                messages=[
-                    {"role": "system", "content": _OPENING_SYSTEM},
-                    {"role": "user", "content": context},
-                ],
-                options={"temperature": 0.4, "num_predict": 500},
-                think=False,
-            )
+            from core.routing.brain_gateway import with_purpose as _brain_purpose
+
+            with _brain_purpose("owner_reply"):
+                resp = llm_client.chat(
+                    model=os.environ.get("MAEZ_SELF_MOD_OPENER_MODEL")
+                          or _PRIMARY_MODEL,
+                    messages=[
+                        {"role": "system", "content": _OPENING_SYSTEM},
+                        {"role": "user", "content": context},
+                    ],
+                    options={"temperature": 0.4, "num_predict": 500},
+                    think=False,
+                )
             text = (resp.message.content or "").strip()
             if text:
                 return text
@@ -1124,16 +1130,19 @@ def generate_response_turn(
                 return result.strip(), should_prompt
         else:
             from core import llm_client
-            resp = llm_client.chat(
-                model=os.environ.get("MAEZ_SELF_MOD_RESPONDER_MODEL")
-                      or _PRIMARY_MODEL,
-                messages=[
-                    {"role": "system", "content": _RESPONSE_SYSTEM},
-                    {"role": "user", "content": context},
-                ],
-                options={"temperature": 0.4, "num_predict": 400},
-                think=False,
-            )
+            from core.routing.brain_gateway import with_purpose as _brain_purpose
+
+            with _brain_purpose("owner_reply"):
+                resp = llm_client.chat(
+                    model=os.environ.get("MAEZ_SELF_MOD_RESPONDER_MODEL")
+                          or _PRIMARY_MODEL,
+                    messages=[
+                        {"role": "system", "content": _RESPONSE_SYSTEM},
+                        {"role": "user", "content": context},
+                    ],
+                    options={"temperature": 0.4, "num_predict": 400},
+                    think=False,
+                )
             text = (resp.message.content or "").strip()
             if text:
                 return text, should_prompt

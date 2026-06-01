@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import functools
 import threading
 import time
 from enum import Enum
@@ -67,6 +68,13 @@ def priority_of(purpose) -> int:
 
 def current_purpose() -> BrainPurpose:
     return _CURRENT_PURPOSE.get()
+
+
+def copy_current_context_callable(fn, /, *args, **kwargs):
+    """Return a callable that preserves the current context across executors."""
+    ctx = contextvars.copy_context()
+    bound = functools.partial(fn, *args, **kwargs)
+    return functools.partial(ctx.run, bound)
 
 
 @contextlib.contextmanager

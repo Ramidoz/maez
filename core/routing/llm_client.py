@@ -261,34 +261,14 @@ def _chat_llamacpp(
 
     try:
         if stream:
-            # Session 11p: streaming adapter for llamacpp backend.
-            # OpenAI stream yields ChatCompletionChunk objects where the
-            # new delta content lives at chunk.choices[0].delta.content.
-            # We wrap each chunk in an ollama-shaped _LlmResponse so
-            # consumers iterating `for chunk in response:` still read
-            # `chunk.message.content` exactly the same way.
-            raw_stream = client.chat.completions.create(
+            return iter(_start_llamacpp_stream(
                 model=effective_model,
                 messages=messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
-                extra_body=extra_body if extra_body else None,
-                stream=True,
-                timeout=timeout_s,
-            )
-
-            def _stream_adapter():
-                for raw_chunk in raw_stream:
-                    try:
-                        delta = raw_chunk.choices[0].delta
-                        token = getattr(delta, 'content', None) or ''
-                        token = _strip_special_tokens(token)
-                    except Exception:
-                        token = ''
-                    yield _LlmResponse(
-                        message=_LlmMessage(content=token, thinking=None)
-                    )
-            return _stream_adapter()
+                extra_body=extra_body,
+                timeout_s=timeout_s,
+            ))
 
         completion = client.chat.completions.create(
             model=effective_model,
@@ -311,6 +291,99 @@ def _chat_llamacpp(
     return _LlmResponse(message=_LlmMessage(content=content, thinking=None))
 
 
+class _LlamaCppStreamAdapter:
+    """Ollama-shaped iterator that preserves the raw OpenAI stream close handle."""
+
+    def __init__(self, raw_stream):
+        self._raw_stream = raw_stream
+
+    def close(self):
+        closer = getattr(self._raw_stream, "close", None)
+        if closer is not None:
+            closer()
+
+    def __iter__(self):
+        for raw_chunk in self._raw_stream:
+            try:
+                delta = raw_chunk.choices[0].delta
+                token = getattr(delta, 'content', None) or ''
+                token = _strip_special_tokens(token)
+            except Exception:
+                token = ''
+            yield _LlmResponse(message=_LlmMessage(content=token, thinking=None))
+
+
+def _start_llamacpp_stream(
+    *,
+    model: str,
+    messages: list[dict],
+    temperature: float,
+    max_tokens: int,
+    extra_body: dict,
+    timeout_s: Optional[float] = None,
+):
+    raw_stream = _get_openai_client().chat.completions.create(
+        model=model,
+        messages=messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        extra_body=extra_body if extra_body else None,
+        stream=True,
+        timeout=timeout_s,
+    )
+    if not hasattr(raw_stream, "close"):
+        raise BackendError("llamacpp stream does not expose close()")
+    return _LlamaCppStreamAdapter(raw_stream)
+
+
+def start_cancellable_chat(
+    model: str,
+    messages: list[dict],
+    think: Optional[bool] = None,
+    options: Optional[dict] = None,
+):
+    """Start a cancellable streaming call for gateway-owned buffered chat."""
+    from core.routing.cancellable_brain_call import CancellableBrainCall
+
+    backend = active_backend()
+    if backend == BACKEND_LLAMACPP:
+        messages = _sanitize_messages_for_llamacpp(messages)
+        temperature = 0.7
+        max_tokens = 512
+        if options:
+            temperature = float(options.get('temperature', temperature))
+            max_tokens = int(options.get('num_predict', max_tokens))
+        from core.model_config import PRIMARY_CHAT_KWARGS as _cfg_kwargs
+
+        extra_body: dict = {}
+        if _cfg_kwargs or think is not None:
+            merged = dict(_cfg_kwargs)
+            if think is False:
+                merged['enable_thinking'] = False
+            elif think is True:
+                merged['enable_thinking'] = True
+            if merged:
+                extra_body['chat_template_kwargs'] = merged
+        stream = _start_llamacpp_stream(
+            model=LLAMACPP_MODEL,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            extra_body=extra_body,
+        )
+        return CancellableBrainCall(raw_stream=stream)
+
+    return CancellableBrainCall(
+        raw_stream=_chat_ollama(
+            model=model,
+            messages=messages,
+            stream=True,
+            think=think,
+            options=options,
+        )
+    )
+
+
 # ── public API ───────────────────────────────────────────────────────
 def chat(
     model: str,
@@ -318,6 +391,7 @@ def chat(
     stream: bool = False,
     think: Optional[bool] = None,
     options: Optional[dict] = None,
+    purpose: Any = None,
 ) -> Any:
     """Unified chat entry point. Dispatches to the backend chosen by the
     MAEZ_LLM_BACKEND env var at call time.
@@ -330,22 +404,36 @@ def chat(
     wrap ollama.chat(...) in a try/except can wrap llm_client.chat(...) the
     same way and the exception surface is equivalent.
     """
-    backend = active_backend()
-    if backend == BACKEND_LLAMACPP:
-        return _chat_llamacpp(
+    if stream:
+        backend = active_backend()
+        if backend == BACKEND_LLAMACPP:
+            return _chat_llamacpp(
+                model=model,
+                messages=messages,
+                stream=True,
+                think=think,
+                options=options,
+            )
+        return _chat_ollama(
             model=model,
             messages=messages,
-            stream=stream,
+            stream=True,
             think=think,
             options=options,
         )
-    return _chat_ollama(
-        model=model,
-        messages=messages,
-        stream=stream,
-        think=think,
-        options=options,
+
+    from core.routing import brain_gateway
+
+    reply = brain_gateway.GATEWAY.submit(
+        purpose=purpose if purpose is not None else brain_gateway.current_purpose(),
+        run_streaming_fn=lambda: start_cancellable_chat(
+            model=model,
+            messages=messages,
+            think=think,
+            options=options,
+        ),
     )
+    return _LlmResponse(message=_LlmMessage(content=reply, thinking=None))
 
 
 # ── prompt-completion entry point (for /api/generate callers) ──────

@@ -79,6 +79,9 @@ class CancellableBrainCall:
 
 def _chunk_content(chunk: Any) -> str:
     if isinstance(chunk, dict):
+        message = chunk.get("message")
+        if isinstance(message, dict):
+            return str(message.get("content") or "")
         return str(chunk.get("content") or "")
     message = getattr(chunk, "message", None)
     if message is not None:

@@ -556,15 +556,18 @@ def _llm_fallback(
         f"Classify the user's intent."
     )
     try:
-        resp = llm_client.chat(
-            model=os.environ.get("MAEZ_AUDIT_MODEL") or _PRIMARY_MODEL,
-            messages=[
-                {"role": "system", "content": _LLM_SYSTEM},
-                {"role": "user", "content": user_msg},
-            ],
-            options={"temperature": 0.0, "num_predict": 120},
-            think=False,
-        )
+        from core.routing.brain_gateway import with_purpose as _brain_purpose
+
+        with _brain_purpose("owner_reply"):
+            resp = llm_client.chat(
+                model=os.environ.get("MAEZ_AUDIT_MODEL") or _PRIMARY_MODEL,
+                messages=[
+                    {"role": "system", "content": _LLM_SYSTEM},
+                    {"role": "user", "content": user_msg},
+                ],
+                options={"temperature": 0.0, "num_predict": 120},
+                think=False,
+            )
         raw = (resp.message.content or "").strip()
     except Exception as e:
         return ReplyClassification(

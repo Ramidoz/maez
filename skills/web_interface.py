@@ -6705,13 +6705,15 @@ def chat():
         # Local path: always generates the user-facing reply.
         if not reply:
             from core import llm_client as _llm_client
+            from core.routing.brain_gateway import with_purpose as _brain_purpose
 
-            resp = _llm_client.chat(
-                model=MODEL,
-                messages=messages_list,
-                think=False,
-                options={"temperature": 0.7, "num_predict": 4096},
-            )
+            with _brain_purpose("owner_reply"):
+                resp = _llm_client.chat(
+                    model=MODEL,
+                    messages=messages_list,
+                    think=False,
+                    options={"temperature": 0.7, "num_predict": 4096},
+                )
             reply = (resp.message.content or "").strip()
         logger.debug("Web chat raw response: %r", reply[:100] if reply else "EMPTY")
         if not reply:
@@ -6724,12 +6726,13 @@ def chat():
             ]
             if _envelope_block:
                 simple_msgs.insert(-1, {"role": "system", "content": _envelope_block})
-            resp2 = _llm_client.chat(
-                model=MODEL,
-                messages=simple_msgs,
-                think=False,
-                options={"temperature": 0.7, "num_predict": 150},
-            )
+            with _brain_purpose("owner_reply"):
+                resp2 = _llm_client.chat(
+                    model=MODEL,
+                    messages=simple_msgs,
+                    think=False,
+                    options={"temperature": 0.7, "num_predict": 150},
+                )
             reply = (resp2.message.content or "").strip() or "I'm here. What's on your mind?"
     except Exception as e:
         logger.error("Web chat error: %s", e)

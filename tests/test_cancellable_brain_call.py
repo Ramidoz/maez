@@ -109,6 +109,18 @@ class CancellableBrainCallTest(unittest.TestCase):
         self.assertTrue(timed_out)
         self.assertTrue(call.cancelled)
 
+    def test_collect_reads_ollama_nested_message_chunks(self):
+        call = CancellableBrainCall(
+            raw_stream=iter(
+                [
+                    {"message": {"content": "nested "}},
+                    {"message": {"content": "chunk"}},
+                ]
+            )
+        )
+
+        self.assertEqual(call.collect(), "nested chunk")
+
 
 if __name__ == "__main__":
     unittest.main()

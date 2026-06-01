@@ -774,8 +774,11 @@ def focused_synthesize(
 
     if chat_fn is None:
         from core import llm_client as _llm_client
+        from core.routing.brain_gateway import BrainPurpose, with_purpose
 
-        chat_fn = _llm_client.chat
+        def chat_fn(**kwargs):
+            with with_purpose(BrainPurpose.OWNER_RECALL):
+                return _llm_client.chat(**kwargs)
     if model is None:
         from core.model_config import PRIMARY_MODEL
 
@@ -824,8 +827,11 @@ def build_honest_empty_reply(
     """Answer an empty search from a one-fact focused working set."""
     if chat_fn is None:
         from core import llm_client as _llm_client
+        from core.routing.brain_gateway import BrainPurpose, with_purpose
 
-        chat_fn = _llm_client.chat
+        def chat_fn(**kwargs):
+            with with_purpose(BrainPurpose.OWNER_RECALL):
+                return _llm_client.chat(**kwargs)
     if model is None:
         from core.model_config import PRIMARY_MODEL
 

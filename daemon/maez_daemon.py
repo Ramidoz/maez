@@ -2797,13 +2797,15 @@ class MaezDaemon:
 
             # Session 11r: via llm_client (was missed in 11p batch)
             from core import llm_client as _llm_client
+            from core.routing.brain_gateway import with_purpose as _brain_purpose
 
-            response = _llm_client.chat(
-                model=MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                think=False,
-                options={"temperature": 0.8, "num_predict": 100},
-            )
+            with _brain_purpose("daemon_cycle_rewrite"):
+                response = _llm_client.chat(
+                    model=MODEL,
+                    messages=[{"role": "user", "content": prompt}],
+                    think=False,
+                    options={"temperature": 0.8, "num_predict": 100},
+                )
             result = (response.message.content or "").strip()
             if not (
                 result
@@ -3490,12 +3492,15 @@ class MaezDaemon:
             # cycle while the operator investigates. Max one retry total,
             # keeping cycle time bounded.
             try:
-                response = _llm_client.chat(
-                    model=MODEL,
-                    messages=chat_messages,
-                    think=False,
-                    options=chat_options,
-                )
+                from core.routing.brain_gateway import with_purpose as _brain_purpose
+
+                with _brain_purpose("daemon_cycle_generation"):
+                    response = _llm_client.chat(
+                        model=MODEL,
+                        messages=chat_messages,
+                        think=False,
+                        options=chat_options,
+                    )
             except Exception as first_err:
                 try:
                     from core.error_classifier import (
@@ -3519,12 +3524,13 @@ class MaezDaemon:
                     )
                     time.sleep(2.0)
                     try:
-                        response = _llm_client.chat(
-                            model=MODEL,
-                            messages=chat_messages,
-                            think=False,
-                            options=chat_options,
-                        )
+                        with _brain_purpose("daemon_cycle_retry"):
+                            response = _llm_client.chat(
+                                model=MODEL,
+                                messages=chat_messages,
+                                think=False,
+                                options=chat_options,
+                            )
                     except Exception as retry_err:
                         try:
                             _emit_err(_classify(retry_err), surface="daemon_cycle_retry")
@@ -4801,13 +4807,15 @@ class MaezDaemon:
                 try:
                     # Session 11r: via llm_client (was missed in 11p batch)
                     from core import llm_client as _llm_client
+                    from core.routing.brain_gateway import with_purpose as _brain_purpose
 
-                    response = _llm_client.chat(
-                        model=MODEL,
-                        messages=messages,
-                        think=False,
-                        options={"temperature": 0.7, "num_predict": 4096},
-                    )
+                    with _brain_purpose("owner_reply"):
+                        response = _llm_client.chat(
+                            model=MODEL,
+                            messages=messages,
+                            think=False,
+                            options={"temperature": 0.7, "num_predict": 4096},
+                        )
                     reply = (response.message.content or "").strip() or "(no response)"
                     _reply_path = ReplyPath.LEGACY
                     if _focused_candidate and (transcript_context or evidence_directive):
@@ -5768,17 +5776,19 @@ class MaezDaemon:
 
             # Session 11r: via llm_client (was missed in 11p batch)
             from core import llm_client as _llm_client
+            from core.routing.brain_gateway import with_purpose as _brain_purpose
 
             _messages = [{"role": "system", "content": self.system_prompt}]
             if _envelope_block:
                 _messages.append({"role": "system", "content": _envelope_block})
             _messages.append({"role": "user", "content": briefing_prompt})
-            response = _llm_client.chat(
-                model=MODEL,
-                messages=_messages,
-                think=False,
-                options={"temperature": 0.5, "num_predict": 4096},
-            )
+            with _brain_purpose("daemon_cycle_generation"):
+                response = _llm_client.chat(
+                    model=MODEL,
+                    messages=_messages,
+                    think=False,
+                    options={"temperature": 0.5, "num_predict": 4096},
+                )
             briefing = (response.message.content or "").strip()
             if briefing:
                 # 2026-04-24: audit before send. Same contract as the
@@ -6445,16 +6455,18 @@ class MaezDaemon:
         try:
             # Session 11r: via llm_client (was missed in 11p batch)
             from core import llm_client as _llm_client
+            from core.routing.brain_gateway import with_purpose as _brain_purpose
 
-            response = _llm_client.chat(
-                model=MODEL,
-                messages=[
-                    {"role": "system", "content": self.system_prompt},
-                    {"role": "user", "content": summary_prompt},
-                ],
-                think=False,
-                options={"temperature": 0.3, "num_predict": 4096},
-            )
+            with _brain_purpose("daemon_cycle_generation"):
+                response = _llm_client.chat(
+                    model=MODEL,
+                    messages=[
+                        {"role": "system", "content": self.system_prompt},
+                        {"role": "user", "content": summary_prompt},
+                    ],
+                    think=False,
+                    options={"temperature": 0.3, "num_predict": 4096},
+                )
             summary = (response.message.content or "").strip()
             if not summary:
                 summary = (
@@ -6619,17 +6631,19 @@ class MaezDaemon:
 
         try:
             from core import llm_client as _llm_client
+            from core.routing.brain_gateway import with_purpose as _brain_purpose
 
             _messages = [{"role": "system", "content": self.system_prompt}]
             if _envelope_block:
                 _messages.append({"role": "system", "content": _envelope_block})
             _messages.append({"role": "user", "content": build_prompt(evidence)})
-            response = _llm_client.chat(
-                model=MODEL,
-                messages=_messages,
-                think=False,
-                options={"temperature": 0.2, "num_predict": 700},
-            )
+            with _brain_purpose("daemon_cycle_generation"):
+                response = _llm_client.chat(
+                    model=MODEL,
+                    messages=_messages,
+                    think=False,
+                    options={"temperature": 0.2, "num_predict": 700},
+                )
             heartbeat = normalize_heartbeat(
                 (response.message.content or "").strip(),
                 evidence,
@@ -7159,23 +7173,25 @@ class MaezDaemon:
                             try:
                                 # Session 11r: via llm_client (was missed in 11p batch)
                                 from core import llm_client as _llm_client
+                                from core.routing.brain_gateway import with_purpose as _brain_purpose
 
                                 # Same stable system content as primary cycle —
                                 # keeps KV cache warm for retries too.
                                 retry_system = (
                                     self.system_prompt + "\n\n" + _STATIC_CYCLE_INSTRUCTIONS
                                 )
-                                retry_response = _llm_client.chat(
-                                    model=MODEL,
-                                    messages=[
-                                        {"role": "system", "content": retry_system},
-                                        {"role": "user", "content": last_prompt},
-                                        {"role": "assistant", "content": result},
-                                        {"role": "user", "content": retry_instruction},
-                                    ],
-                                    think=False,
-                                    options={"temperature": 0.8, "num_predict": 300},
-                                )
+                                with _brain_purpose("daemon_cycle_retry"):
+                                    retry_response = _llm_client.chat(
+                                        model=MODEL,
+                                        messages=[
+                                            {"role": "system", "content": retry_system},
+                                            {"role": "user", "content": last_prompt},
+                                            {"role": "assistant", "content": result},
+                                            {"role": "user", "content": retry_instruction},
+                                        ],
+                                        think=False,
+                                        options={"temperature": 0.8, "num_predict": 300},
+                                    )
                                 retry_content = (retry_response.message.content or "").strip()
                                 if retry_content and retry_content != "(empty response)":
                                     # 2026-04-23 memory-integrity contract:

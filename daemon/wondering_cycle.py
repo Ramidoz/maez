@@ -141,15 +141,18 @@ def _synthesis_prompt(wondering: dict, cmd: str, stdout: str, stderr: str,
 def _call_llm(system_prompt: str, user_prompt: str,
                num_predict: int, model: str) -> str:
     try:
-        resp = _llm_client.chat(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            think=False,
-            options={"temperature": 0.6, "num_predict": num_predict},
-        )
+        from core.routing.brain_gateway import with_purpose as _brain_purpose
+
+        with _brain_purpose("daemon_cycle_generation"):
+            resp = _llm_client.chat(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                think=False,
+                options={"temperature": 0.6, "num_predict": num_predict},
+            )
         return (resp.message.content or "").strip()
     except Exception as e:
         logger.warning("wondering LLM call failed: %s", e)
