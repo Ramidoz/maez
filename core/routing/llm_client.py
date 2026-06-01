@@ -39,6 +39,7 @@ Staging-only
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import time
@@ -122,6 +123,154 @@ class _LlmResponse:
     """Minimal ollama.ChatResponse-shaped object so consumers can call
     resp.message.content without caring which backend produced it."""
     message: _LlmMessage
+
+
+class _LlamaCppStreamParser:
+    """Incremental HTTP/1.1 chunked SSE parser for llama-server streaming."""
+
+    def __init__(self):
+        self._buf = bytearray()
+        self._phase = "status"
+        self._chunk_left = 0
+        self._sse = bytearray()
+        self._yielded = False
+        self.cancelled = False
+
+    @property
+    def done(self) -> bool:
+        return self._phase == "done"
+
+    def feed(self, data: bytes) -> list[str]:
+        if data:
+            self._buf.extend(data)
+        tokens: list[str] = []
+        advanced = True
+        while advanced and self._phase != "done":
+            advanced = False
+            if self._phase == "status":
+                advanced = self._parse_status()
+            elif self._phase == "headers":
+                advanced = self._parse_header_line()
+            elif self._phase == "size":
+                advanced = self._parse_chunk_size()
+            elif self._phase == "body":
+                advanced = self._parse_chunk_body()
+            elif self._phase == "trailer":
+                advanced = self._parse_chunk_trailer()
+            tokens.extend(self._drain_sse())
+        if self.done and not self._yielded and not self.cancelled:
+            raise BackendError("llamacpp empty stream")
+        return tokens
+
+    def _parse_status(self) -> bool:
+        idx = self._buf.find(b"\r\n")
+        if idx < 0:
+            return False
+        line = bytes(self._buf[:idx])
+        del self._buf[: idx + 2]
+        parts = line.split(b" ", 2)
+        code = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+        if code != 200:
+            if self.cancelled:
+                self._phase = "done"
+                return True
+            raise BackendError(f"llamacpp non-200: {code}")
+        self._phase = "headers"
+        return True
+
+    def _parse_header_line(self) -> bool:
+        idx = self._buf.find(b"\r\n")
+        if idx < 0:
+            return False
+        if idx == 0:
+            del self._buf[:2]
+            self._phase = "size"
+            return True
+        del self._buf[: idx + 2]
+        return True
+
+    def _parse_chunk_size(self) -> bool:
+        idx = self._buf.find(b"\r\n")
+        if idx < 0:
+            return False
+        size_line = bytes(self._buf[:idx]).split(b";", 1)[0].strip()
+        del self._buf[: idx + 2]
+        try:
+            size = int(size_line, 16)
+        except ValueError as exc:
+            if self.cancelled:
+                self._phase = "done"
+                return True
+            raise BackendError("llamacpp bad chunk size") from exc
+        if size == 0:
+            self._phase = "done"
+        else:
+            self._chunk_left = size
+            self._phase = "body"
+        return True
+
+    def _parse_chunk_body(self) -> bool:
+        if not self._buf:
+            return False
+        take = min(self._chunk_left, len(self._buf))
+        self._sse.extend(self._buf[:take])
+        del self._buf[:take]
+        self._chunk_left -= take
+        if self._chunk_left == 0:
+            self._phase = "trailer"
+        return True
+
+    def _parse_chunk_trailer(self) -> bool:
+        if len(self._buf) < 2:
+            return False
+        trailer = bytes(self._buf[:2])
+        del self._buf[:2]
+        if trailer != b"\r\n":
+            if self.cancelled:
+                self._phase = "done"
+                return True
+            raise BackendError("llamacpp bad chunk trailer")
+        self._phase = "size"
+        return True
+
+    def _drain_sse(self) -> list[str]:
+        tokens: list[str] = []
+        while True:
+            idx = self._sse.find(b"\n\n")
+            if idx < 0:
+                break
+            event = bytes(self._sse[:idx])
+            del self._sse[: idx + 2]
+            for line in event.split(b"\n"):
+                line = line.strip()
+                if not line.startswith(b"data:"):
+                    continue
+                payload = line[len(b"data:") :].strip()
+                if payload == b"[DONE]":
+                    self._phase = "done"
+                    continue
+                try:
+                    data = json.loads(payload)
+                    content = _openai_stream_content(data)
+                except Exception as exc:
+                    if self.cancelled:
+                        return tokens
+                    raise BackendError("llamacpp malformed SSE json") from exc
+                content = _strip_special_tokens(content or "")
+                if content:
+                    self._yielded = True
+                    tokens.append(content)
+        return tokens
+
+
+def _openai_stream_content(data: dict) -> str:
+    choices = data.get("choices") or ()
+    if not choices:
+        return ""
+    first = choices[0] or {}
+    delta = first.get("delta") or {}
+    message = first.get("message") or {}
+    return delta.get("content") or message.get("content") or ""
 
 
 def _strip_special_tokens(text: str) -> str:
