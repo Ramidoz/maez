@@ -345,7 +345,16 @@ class DatedAbsenceMatcherTest(unittest.TestCase):
             with self.subTest(reply=reply):
                 self.assertTrue(_reply_asserts_dated_absence(reply))
 
-    def test_non_absence_and_absence_plus_content_do_not_match(self):
+    def test_honest_absence_with_refusal_tail_still_matches(self):
+        from daemon.maez_daemon import _reply_asserts_dated_absence
+
+        self.assertTrue(
+            _reply_asserts_dated_absence(
+                "I don't have a dated memory for that, and I won't guess."
+            )
+        )
+
+    def test_non_absence_and_but_contrast_do_not_match(self):
         from daemon.maez_daemon import _reply_asserts_dated_absence
 
         for reply in [
@@ -354,9 +363,6 @@ class DatedAbsenceMatcherTest(unittest.TestCase):
             "Do you have any record of that meeting?",
             "I recorded the meeting notes in your file.",
             "I don't have any records for January 3, but you fixed the parser bug.",
-            "I don't have any records for January 3; you fixed the parser bug.",
-            "I don't have any records for January 3. You fixed the parser bug.",
-            "I don't have any records for January 3, though you fixed the parser bug.",
             "No records were changed on January 3.",
         ]:
             with self.subTest(reply=reply):

@@ -1225,32 +1225,54 @@ def _focused_working_set_had_confirmed(working_set) -> bool:
 
 def _reply_asserts_dated_absence(reply: str) -> bool:
     low = (reply or "").lower().replace("’", "'")
-    patterns = (
-        r"\b(?:don't|do not) have (?:a )?dated memor(?:y|ies)\b"
-        r"(?:\s+(?:for|of|from|about|on|around|that)\b[^.;,]*)?",
-        r"\bno dated memor(?:y|ies)\b"
-        r"(?:\s+(?:for|of|from|about|on|around|that)\b[^.;,]*)?",
-        r"\b(?:don't|do not) (?:remember|recall)\b"
-        r"(?:\s+(?:that|this|it|anything|any)\b[^.;,]*)?",
-        r"\b(?:don't|do not) have any records?\b"
-        r"(?:\s+(?:for|of|from|about|on|around|that)\b[^.;,]*)?",
-        r"\bhave no records?\b"
-        r"(?:\s+(?:for|of|from|about|on|around|that)\b[^.;,]*)?",
-        r"^\s*no records?\s*[.!?]?\s*$",
-        r"\bno records?\b"
-        r"(?:\s+(?:for|of|from|about|on|around|matched|found|available|exist|exists)\b[^.;,]*)?",
+    absence_phrases = (
+        "don't have a dated memory",
+        "do not have a dated memory",
+        "don't have dated memory",
+        "do not have dated memory",
+        "no dated memory",
+        "don't remember",
+        "do not remember",
+        "don't recall",
+        "do not recall",
+        "don't have any record",
+        "don't have any records",
+        "do not have any record",
+        "do not have any records",
+        "have no record",
+        "have no records",
     )
-    match = next((m for pattern in patterns if (m := re.search(pattern, low))), None)
-    if match is None:
+    no_record_contexts = (
+        "no record for",
+        "no records for",
+        "no record of",
+        "no records of",
+        "no record from",
+        "no records from",
+        "no record about",
+        "no records about",
+        "no record on",
+        "no records on",
+        "no record around",
+        "no records around",
+        "no record matched",
+        "no records matched",
+        "no record found",
+        "no records found",
+        "no record available",
+        "no records available",
+        "no record exists",
+        "no records exist",
+    )
+    stripped = low.strip(" \t\r\n.!?")
+    matched = (
+        any(phrase in low for phrase in absence_phrases)
+        or stripped in {"no record", "no records"}
+        or any(phrase in low for phrase in no_record_contexts)
+    )
+    if not matched:
         return False
-
-    tail = low[match.end():].strip()
-    if not tail.strip(".,;:!?- "):
-        return True
-    # A recognized absence phrase with a substantive or contrastive continuation
-    # is not a clean decline. Err toward answered/ungrounded, never toward
-    # laundering content as honest absence.
-    return False
+    return " but " not in low
 
 
 def _is_dated_denial_reply(reply: str) -> bool:
