@@ -6,6 +6,7 @@ from core.routing.recall_outcome import (
     OutcomeClass,
     RecallOutcome,
     ReplyPath,
+    citation_support,
     cites_confirmed_memory_context,
     classify_outcome,
     format_log_value,
@@ -175,6 +176,157 @@ class ClassifyOutcomeTest(unittest.TestCase):
             unmatched_citations=0,
         )
         self.assertIs(oc, OutcomeClass.ORDINARY_ANSWERED)
+
+    def test_mixed_support_when_flagged(self):
+        oc = classify_outcome(
+            mode="recall_triad",
+            turn_kind="both",
+            answered=True,
+            receipt="consulted",
+            denial_kind="na",
+            had_confirmed=True,
+            cited_grounded_context=False,
+            unmatched_citations=0,
+            cited_mixed_support=True,
+        )
+        self.assertIs(oc, OutcomeClass.ANSWERED_MIXED_SUPPORT)
+        self.assertEqual(oc.value, "answered_mixed_support")
+
+    def test_grounded_wins_over_mixed(self):
+        oc = classify_outcome(
+            mode="recall_triad",
+            turn_kind="both",
+            answered=True,
+            receipt="consulted",
+            denial_kind="na",
+            had_confirmed=True,
+            cited_grounded_context=True,
+            unmatched_citations=0,
+            cited_mixed_support=True,
+        )
+        self.assertIs(oc, OutcomeClass.ANSWERED_GROUNDED)
+
+    def test_mixed_with_unmatched_is_ungrounded(self):
+        oc = classify_outcome(
+            mode="recall_triad",
+            turn_kind="both",
+            answered=True,
+            receipt="consulted",
+            denial_kind="na",
+            had_confirmed=True,
+            cited_grounded_context=False,
+            unmatched_citations=1,
+            cited_mixed_support=True,
+        )
+        self.assertIs(oc, OutcomeClass.ANSWERED_UNGROUNDED)
+
+    def test_ordinary_ignores_mixed_flag(self):
+        oc = classify_outcome(
+            mode="recall_triad",
+            turn_kind="ordinary",
+            answered=True,
+            receipt="not_consulted",
+            denial_kind="na",
+            had_confirmed=False,
+            cited_grounded_context=False,
+            unmatched_citations=0,
+            cited_mixed_support=True,
+        )
+        self.assertIs(oc, OutcomeClass.ORDINARY_ANSWERED)
+
+    def test_legacy_ignores_mixed_flag(self):
+        oc = classify_outcome(
+            mode="legacy",
+            turn_kind="both",
+            answered=True,
+            receipt="na",
+            denial_kind="na",
+            had_confirmed=None,
+            cited_grounded_context=False,
+            unmatched_citations=0,
+            cited_mixed_support=True,
+        )
+        self.assertIs(oc, OutcomeClass.ANSWERED_UNVERIFIABLE)
+
+
+class CitationSupportTest(unittest.TestCase):
+    def _item(self, label, source_type, confirmed):
+        return SimpleNamespace(
+            local_label=label,
+            source_type=source_type,
+            temporal_provenance={"confirmed": confirmed} if confirmed is not None else None,
+        )
+
+    def test_all_confirmed_memory_is_grounded(self):
+        result = SimpleNamespace(cited_ids=["E1", "E2"])
+        working_set = SimpleNamespace(
+            items=[
+                self._item("E1", "memory_context", True),
+                self._item("E2", "memory_context", True),
+            ]
+        )
+        self.assertEqual(citation_support(result, working_set, turn_kind="both"), "grounded")
+        self.assertEqual(citation_support(result, working_set, turn_kind="dated"), "grounded")
+
+    def test_both_memory_plus_dialogue_is_mixed(self):
+        result = SimpleNamespace(cited_ids=["E1", "E7"])
+        working_set = SimpleNamespace(
+            items=[
+                self._item("E1", "memory_context", True),
+                self._item("E7", "dialogue_anchor", None),
+            ]
+        )
+        self.assertEqual(citation_support(result, working_set, turn_kind="both"), "mixed")
+
+    def test_dated_memory_plus_dialogue_is_ungrounded(self):
+        result = SimpleNamespace(cited_ids=["E1", "E7"])
+        working_set = SimpleNamespace(
+            items=[
+                self._item("E1", "memory_context", True),
+                self._item("E7", "dialogue_anchor", None),
+            ]
+        )
+        self.assertEqual(citation_support(result, working_set, turn_kind="dated"), "ungrounded")
+
+    def test_both_dialogue_only_is_ungrounded(self):
+        result = SimpleNamespace(cited_ids=["E7"])
+        working_set = SimpleNamespace(
+            items=[
+                self._item("E1", "memory_context", True),
+                self._item("E7", "dialogue_anchor", None),
+            ]
+        )
+        self.assertEqual(citation_support(result, working_set, turn_kind="both"), "ungrounded")
+
+    def test_both_unconfirmed_memory_is_ungrounded(self):
+        result = SimpleNamespace(cited_ids=["E1"])
+        working_set = SimpleNamespace(items=[self._item("E1", "memory_context", False)])
+        self.assertEqual(citation_support(result, working_set, turn_kind="both"), "ungrounded")
+
+    def test_both_disallowed_source_is_ungrounded(self):
+        result = SimpleNamespace(cited_ids=["E1", "E5"])
+        working_set = SimpleNamespace(
+            items=[
+                self._item("E1", "memory_context", True),
+                self._item("E5", "memory_evidence", True),
+            ]
+        )
+        self.assertEqual(citation_support(result, working_set, turn_kind="both"), "ungrounded")
+
+    def test_both_unmatched_label_is_ungrounded(self):
+        result = SimpleNamespace(cited_ids=["E1", "E9"])
+        working_set = SimpleNamespace(items=[self._item("E1", "memory_context", True)])
+        self.assertEqual(citation_support(result, working_set, turn_kind="both"), "ungrounded")
+
+    def test_turn_kind_omitted_never_mixed(self):
+        result = SimpleNamespace(cited_ids=["E1", "E7"])
+        working_set = SimpleNamespace(
+            items=[
+                self._item("E1", "memory_context", True),
+                self._item("E7", "dialogue_anchor", None),
+            ]
+        )
+        self.assertEqual(citation_support(result, working_set), "ungrounded")
 
 
 class FalseAbsenceTest(unittest.TestCase):

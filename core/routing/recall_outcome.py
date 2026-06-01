@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 class OutcomeClass(Enum):
     ANSWERED_GROUNDED = "answered_grounded"
     ANSWERED_UNGROUNDED = "answered_ungrounded"
+    ANSWERED_MIXED_SUPPORT = "answered_mixed_support"
     ANSWERED_UNVERIFIABLE = "answered_unverifiable"
     DECLINED_ABSENCE = "declined_absence"
     DECLINED_UNAVAILABLE = "declined_unavailable"
@@ -103,6 +104,7 @@ def classify_outcome(
     cited_grounded_context: bool,
     unmatched_citations: int,
     asserts_absence: bool = False,
+    cited_mixed_support: bool = False,
 ) -> OutcomeClass:
     """Classify a turn's outcome, for either arm.
 
@@ -131,6 +133,8 @@ def classify_outcome(
             return OutcomeClass.ANSWERED_UNVERIFIABLE
         if cited_grounded_context and unmatched_citations == 0:
             return OutcomeClass.ANSWERED_GROUNDED
+        if cited_mixed_support and unmatched_citations == 0:
+            return OutcomeClass.ANSWERED_MIXED_SUPPORT
         return OutcomeClass.ANSWERED_UNGROUNDED
 
     if mode == "legacy":
@@ -178,3 +182,47 @@ def cites_confirmed_memory_context(result, working_set) -> bool:
         if not bool(provenance.get("confirmed")):
             return False
     return True
+
+
+def citation_support(result, working_set, turn_kind: str = "dated") -> str:
+    """Content-free three-state citation-support classification.
+
+    grounded is exactly the existing strict confirmed-memory predicate. mixed is
+    only allowed for both-shaped turns where confirmed memory is present and the
+    only extra citations are dialogue anchors; labels still cannot prove which
+    source carried the dated fact, so mixed never counts as grounded.
+    """
+    if cites_confirmed_memory_context(result, working_set):
+        return "grounded"
+    if turn_kind != "both":
+        return "ungrounded"
+
+    cited = {str(label) for label in (getattr(result, "cited_ids", None) or [])}
+    if not cited:
+        return "ungrounded"
+
+    items_by_label = {
+        str(getattr(item, "local_label", "")): item
+        for item in (getattr(working_set, "items", ()) or ())
+    }
+    if not cited.issubset(items_by_label):
+        return "ungrounded"
+
+    cited_items = [items_by_label[label] for label in cited]
+
+    def _is_confirmed_memory_context(item) -> bool:
+        if getattr(item, "source_type", None) != "memory_context":
+            return False
+        provenance = getattr(item, "temporal_provenance", None) or {}
+        return bool(provenance.get("confirmed"))
+
+    if not any(_is_confirmed_memory_context(item) for item in cited_items):
+        return "ungrounded"
+
+    for item in cited_items:
+        if _is_confirmed_memory_context(item):
+            continue
+        if getattr(item, "source_type", None) == "dialogue_anchor":
+            continue
+        return "ungrounded"
+    return "mixed"
