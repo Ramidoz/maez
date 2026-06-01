@@ -126,6 +126,12 @@ class ForcedCollisionTest(unittest.TestCase):
             if event.get("event") == "brain_gateway_event"
         ]
         self.assertFalse(any(event["preempt_timeout"] for event in events))
+        probes = [
+            event
+            for event in gateway.events
+            if event.get("event") == "brain_gateway_preempt_probe"
+        ]
+        self.assertTrue(any(probe["handle_state"] == "present" for probe in probes))
 
 
 if __name__ == "__main__":
