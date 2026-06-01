@@ -117,6 +117,18 @@ class SocketStreamTest(unittest.TestCase):
 
         with self.assertRaises(BackendError):
             list(stream)
+        self.assertTrue(fake_socket.closed)
+        self.assertEqual(fake_socket.shutdown_calls, 1)
+
+    def test_malformed_stream_error_closes_socket(self):
+        wire = _wire(b"data: {not json}\n\n")
+        fake_socket = _FakeSocket(_slices(wire))
+        stream = _LlamaCppSocketStream(sock=fake_socket)
+
+        with self.assertRaises(BackendError):
+            list(stream)
+        self.assertTrue(fake_socket.closed)
+        self.assertEqual(fake_socket.shutdown_calls, 1)
 
     def test_https_base_url_rejected(self):
         with self.assertRaises(BackendError):

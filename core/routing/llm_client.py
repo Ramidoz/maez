@@ -372,8 +372,7 @@ class _LlamaCppSocketStream:
                         message=_LlmMessage(content=token, thinking=None)
                     )
         finally:
-            if self._parser.done:
-                self._close(mark_cancelled=False)
+            self._close(mark_cancelled=False)
 
 
 def sanitize_prompt_text(text: str) -> str:
@@ -527,28 +526,6 @@ def _chat_llamacpp(
         raise BackendError(f'llamacpp response parse failed: {e!r}') from e
 
     return _LlmResponse(message=_LlmMessage(content=content, thinking=None))
-
-
-class _LlamaCppStreamAdapter:
-    """Ollama-shaped iterator that preserves the raw OpenAI stream close handle."""
-
-    def __init__(self, raw_stream):
-        self._raw_stream = raw_stream
-
-    def close(self):
-        closer = getattr(self._raw_stream, "close", None)
-        if closer is not None:
-            closer()
-
-    def __iter__(self):
-        for raw_chunk in self._raw_stream:
-            try:
-                delta = raw_chunk.choices[0].delta
-                token = getattr(delta, 'content', None) or ''
-                token = _strip_special_tokens(token)
-            except Exception:
-                token = ''
-            yield _LlmResponse(message=_LlmMessage(content=token, thinking=None))
 
 
 def _start_llamacpp_stream(
