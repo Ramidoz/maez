@@ -289,7 +289,10 @@ def _connect_llamacpp_socket(
     port = parsed.port or 80
     base_path = parsed.path.rstrip("/")
     path = f"{base_path}/chat/completions" if base_path else "/chat/completions"
-    sock = _socket.create_connection((host, port), timeout=timeout_s)
+    try:
+        sock = _socket.create_connection((host, port), timeout=timeout_s)
+    except OSError as exc:
+        raise BackendError(f"llamacpp socket connect failed: {exc!r}") from exc
     request_head = (
         f"POST {path} HTTP/1.1\r\n"
         f"Host: {host}:{port}\r\n"
@@ -300,12 +303,12 @@ def _connect_llamacpp_socket(
     ).encode("utf-8")
     try:
         sock.sendall(request_head + body)
-    except Exception:
+    except OSError as exc:
         try:
             sock.close()
         except OSError:
             pass
-        raise
+        raise BackendError(f"llamacpp socket send failed: {exc!r}") from exc
     return sock
 
 

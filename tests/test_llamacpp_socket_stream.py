@@ -122,6 +122,31 @@ class SocketStreamTest(unittest.TestCase):
         with self.assertRaises(BackendError):
             llm_client._connect_llamacpp_socket("https://127.0.0.1:8443/v1", b"{}")
 
+    def test_socket_connect_failure_is_backend_error(self):
+        with mock.patch.object(
+            llm_client._socket,
+            "create_connection",
+            side_effect=OSError("refused"),
+        ):
+            with self.assertRaises(BackendError):
+                llm_client._connect_llamacpp_socket("http://127.0.0.1:8080/v1", b"{}")
+
+    def test_socket_send_failure_is_backend_error_and_closes(self):
+        fake_socket = _FakeSocket([])
+
+        def fail_send(_data):
+            raise OSError("broken pipe")
+
+        fake_socket.sendall = fail_send
+        with mock.patch.object(
+            llm_client._socket,
+            "create_connection",
+            return_value=fake_socket,
+        ):
+            with self.assertRaises(BackendError):
+                llm_client._connect_llamacpp_socket("http://127.0.0.1:8080/v1", b"{}")
+        self.assertTrue(fake_socket.closed)
+
     def test_endpoint_path_from_base_url(self):
         fake_socket = _FakeSocket([])
 
