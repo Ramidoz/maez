@@ -1420,6 +1420,46 @@ class DaemonHandleMessageContract(unittest.TestCase):
         self.assertIn("had_confirmed=true", line)
         self.assertNotIn("declined_absence", line)
 
+    def test_continuity_dialogue_anchor_logs_answered_grounded(self):
+        from daemon import maez_daemon
+        from core.routing.focused_cognition import FocusedResult, GroundednessVerdict
+
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+        focused_result = FocusedResult(
+            reply="We were just talking about the blue notebook and the copper key [E1].",
+            cited_ids=["E1"],
+            working_set_chars=10,
+        )
+        with self.assertLogs("maez", level="INFO") as logs:
+            with self._handle_message_mock_stack(maez_daemon, captured), mock.patch.dict(
+                os.environ, {"MAEZ_RECALL_TRIAD_ENABLED": "1"}, clear=False
+            ), mock.patch(
+                "core.routing.focused_cognition.focused_synthesize",
+                return_value=focused_result,
+            ), mock.patch(
+                "core.routing.focused_cognition.check_groundedness",
+                return_value=GroundednessVerdict("grounded", 1.0, []),
+            ):
+                maez_daemon.MaezDaemon.handle_message(
+                    daemon,
+                    "what were we just talking about?",
+                    chat_id="c1",
+                    source="telegram",
+                    chat_history=[
+                        {
+                            "content": (
+                                "Rohit: let's anchor a blue notebook and a copper key\n"
+                                "Maez: got it, blue notebook and copper key"
+                            ),
+                        },
+                    ],
+                )
+
+        line = self._recall_outcome_lines(logs)[-1]
+        self.assertIn("turn_kind=continuity", line)
+        self.assertIn("outcome_class=answered_grounded", line)
+
     def test_discarded_focused_draft_does_not_contribute_coverage(self):
         from daemon import maez_daemon
         from core.routing.focused_cognition import FocusedResult, GroundednessVerdict
