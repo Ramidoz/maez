@@ -92,6 +92,15 @@ def get_probe(probe_id: str) -> ProbeDefinition:
     raise KeyError(probe_id)
 
 
+def probe_turn_kind(probe_id: str) -> str:
+    """Map a probe to the turn_kind used by recall outcome classification."""
+    if probe_id == "both_shaped":
+        return "both"
+    if probe_id in {"incidental", "continuity"}:
+        return "continuity"
+    return "dated"
+
+
 def assert_probe_result(
     probe: ProbeDefinition,
     result,

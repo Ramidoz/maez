@@ -86,6 +86,7 @@ class ProbeRun:
             variant=variant,
             stream_factory=self.stream_factory,
             clock=self.clock,
+            turn_kind=probes.probe_turn_kind(probe.probe_id),
         )
         if measurement is not None and measurement.failed:
             return ProbeSample(
@@ -162,10 +163,12 @@ def _run_focused_probe(
     variant: Variant,
     stream_factory: Callable[..., Iterable[dict[str, str]]] | None,
     clock: Callable[[], float] | None,
+    turn_kind: str,
 ) -> tuple[harness.ProbeArmResult, GenerationMeasurement | None, str]:
     from core.brain import brain_loop
     from core.dispatcher.spec import SubstrateSource
     from core.routing.recall_outcome import (
+        citation_support,
         cites_confirmed_memory_context,
         classify_outcome,
     )
@@ -257,15 +260,17 @@ def _run_focused_probe(
     verdict = focused_cognition.check_groundedness(result, working_set)
     elapsed = int((time.time() - start) * 1000)
     grounded = cites_confirmed_memory_context(result, working_set)
+    support = citation_support(result, working_set, turn_kind=turn_kind)
     outcome = classify_outcome(
         mode="recall_triad",
-        turn_kind="dated",
+        turn_kind=turn_kind,
         answered=bool(result.reply),
         receipt="consulted",
         denial_kind="none",
         had_confirmed=had_confirmed,
         cited_grounded_context=grounded,
         unmatched_citations=len(verdict.unmatched),
+        cited_mixed_support=support == "mixed",
     )
     cited = set(result.cited_ids)
     durable_ids = tuple(

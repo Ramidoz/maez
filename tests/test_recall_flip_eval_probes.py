@@ -9,6 +9,15 @@ from scripts.recall_flip_eval import sandbox
 
 
 class RecallFlipEvalProbeRunnerTest(unittest.TestCase):
+    def test_probe_turn_kind_mapping(self):
+        from scripts.recall_flip_eval import probes
+
+        self.assertEqual(probes.probe_turn_kind("both_shaped"), "both")
+        self.assertEqual(probes.probe_turn_kind("incidental"), "continuity")
+        self.assertEqual(probes.probe_turn_kind("continuity"), "continuity")
+        self.assertEqual(probes.probe_turn_kind("dated_hit"), "dated")
+        self.assertEqual(probes.probe_turn_kind("multi_year"), "dated")
+
     def test_flag_on_uses_dispatcher_adapter_structured_recall_and_offline_chat(self):
         with tempfile.TemporaryDirectory() as root, sandbox.sandbox_env(root):
             sandbox.patch_memory_manager_base_db(root)
