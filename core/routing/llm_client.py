@@ -42,6 +42,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import socket as _socket
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -285,6 +287,56 @@ def _strip_framing_tokens(text: str) -> str:
     if not text:
         return text
     return _FRAMING_TOKEN_RE.sub("", text)
+
+
+class _LlamaCppSocketStream:
+    """Ollama-shaped iterator backed by a raw socket cancellation handle."""
+
+    def __init__(self, *, sock):
+        self._sock = sock
+        self._parser = _LlamaCppStreamParser()
+        self._closed = False
+        self._close_lock = threading.Lock()
+
+    def close(self):
+        self._close(mark_cancelled=True)
+
+    def _close(self, *, mark_cancelled: bool) -> None:
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+            if mark_cancelled:
+                self._parser.cancelled = True
+            try:
+                self._sock.shutdown(_socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                self._sock.close()
+            except OSError:
+                pass
+
+    def __iter__(self):
+        try:
+            while not self._parser.done:
+                try:
+                    data = self._sock.recv(65536)
+                except OSError as exc:
+                    if self._closed:
+                        return
+                    raise BackendError("llamacpp socket read failed") from exc
+                if not data:
+                    if self._closed or self._parser.cancelled:
+                        return
+                    raise BackendError("llamacpp stream ended before DONE")
+                for token in self._parser.feed(data):
+                    yield _LlmResponse(
+                        message=_LlmMessage(content=token, thinking=None)
+                    )
+        finally:
+            if self._parser.done:
+                self._close(mark_cancelled=False)
 
 
 def sanitize_prompt_text(text: str) -> str:
