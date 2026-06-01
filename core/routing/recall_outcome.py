@@ -184,6 +184,26 @@ def cites_confirmed_memory_context(result, working_set) -> bool:
     return True
 
 
+def _continuity_support(result, working_set) -> str:
+    """Continuity grounds only in cited dialogue_anchor items."""
+    cited = {str(label) for label in (getattr(result, "cited_ids", None) or [])}
+    if not cited:
+        return "ungrounded"
+    items_by_label = {
+        str(getattr(item, "local_label", "")): item
+        for item in (getattr(working_set, "items", ()) or ())
+    }
+    if not cited.issubset(items_by_label):
+        return "ungrounded"
+    cited_items = [items_by_label[label] for label in cited]
+    if not any(getattr(item, "source_type", None) == "dialogue_anchor" for item in cited_items):
+        return "ungrounded"
+    for item in cited_items:
+        if getattr(item, "source_type", None) != "dialogue_anchor":
+            return "ungrounded"
+    return "grounded"
+
+
 def citation_support(result, working_set, turn_kind: str = "dated") -> str:
     """Content-free three-state citation-support classification.
 
@@ -192,6 +212,8 @@ def citation_support(result, working_set, turn_kind: str = "dated") -> str:
     only extra citations are dialogue anchors; labels still cannot prove which
     source carried the dated fact, so mixed never counts as grounded.
     """
+    if turn_kind == "continuity":
+        return _continuity_support(result, working_set)
     if cites_confirmed_memory_context(result, working_set):
         return "grounded"
     if turn_kind != "both":
