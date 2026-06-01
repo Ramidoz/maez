@@ -4393,9 +4393,19 @@ class MaezDaemon:
         _had_confirmed = False
         _dated_denial_kind_for_turn = "na"
         _rk_cited_grounded = False
+        _rk_cited_mixed = False
         _rk_unmatched = 0
         _rk_coverage = None
         _rk_focused_elapsed = None
+        _rk_turn_kind = (
+            "both"
+            if (_date_addressed_turn and _dialogue_needs_or_uncertain)
+            else "dated"
+            if _date_addressed_turn
+            else "continuity"
+            if _dialogue_needs_or_uncertain
+            else "ordinary"
+        )
         _focused_working_set = None
         _focused_result = None
         _focused_verdict = None
@@ -4642,13 +4652,16 @@ class MaezDaemon:
                             _focused_working_set,
                         )
                         from core.routing.recall_outcome import (
-                            cites_confirmed_memory_context as _cites_confirmed_memory_context,
+                            citation_support as _citation_support,
                         )
 
-                        _rk_cited_grounded = _cites_confirmed_memory_context(
+                        _rk_support = _citation_support(
                             _focused_result,
                             _focused_working_set,
+                            turn_kind=_rk_turn_kind,
                         )
+                        _rk_cited_grounded = _rk_support == "grounded"
+                        _rk_cited_mixed = _rk_support == "mixed"
                         _rk_unmatched = len(getattr(_focused_verdict, "unmatched", []) or [])
                         _rk_coverage = getattr(_focused_verdict, "citation_coverage", None)
                         _focused_reply = (_focused_result.reply or "").strip()
@@ -4971,18 +4984,10 @@ class MaezDaemon:
                 _receipt_after_ms = RECEIPT_AFTER_MS
             if not _focused_answer_used:
                 _rk_cited_grounded = False
+                _rk_cited_mixed = False
                 _rk_unmatched = 0
                 _rk_coverage = None
                 _rk_focused_elapsed = None
-            _rk_turn_kind = (
-                "both"
-                if (_date_addressed_turn and _dialogue_needs_or_uncertain)
-                else "dated"
-                if _date_addressed_turn
-                else "continuity"
-                if _dialogue_needs_or_uncertain
-                else "ordinary"
-            )
             _rk_mode = "recall_triad" if _recall_stack_config.triad_on else "legacy"
             if _recall_stack_config.triad_on and _focused_working_set is not None:
                 _had_confirmed = _focused_working_set_had_confirmed(
@@ -5019,6 +5024,7 @@ class MaezDaemon:
                 cited_grounded_context=_rk_cited_grounded,
                 unmatched_citations=_rk_unmatched,
                 asserts_absence=_rk_legacy_absence,
+                cited_mixed_support=_rk_cited_mixed,
             )
             if _recall_stack_config.triad_on and _date_addressed_turn:
                 self._last_recall_receipt = RecallStatusReceipt(
