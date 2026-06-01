@@ -180,6 +180,64 @@ class RecallFlipEvalProbeRunnerTest(unittest.TestCase):
         self.assertEqual(result.outcome_class, "answered_grounded")
         self.assertIn(fixture_id, result.cited_durable_ids)
 
+    def test_continuity_dialogue_anchor_outcome_uses_support_not_strict_memory_field(self):
+        from core.dispatcher.spec import SubstrateSource
+        from core.routing.focused_cognition import (
+            EvidenceItem,
+            FocusedResult,
+            GroundednessVerdict,
+            WorkingSet,
+        )
+        from scripts.recall_flip_eval import harness
+
+        working_set = WorkingSet(
+            items=[
+                EvidenceItem(
+                    local_label="E1",
+                    source_type="dialogue_anchor",
+                    text="We were talking about a blue notebook and a copper key.",
+                    durable_id="dialogue-anchor-1",
+                    temporal_provenance=None,
+                )
+            ],
+            ordered_evidence_text="[E1] We were talking about a blue notebook and a copper key.",
+            owner_question="What were we just talking about?",
+            working_set_chars=72,
+            working_set_tokens_est=18,
+        )
+        with tempfile.TemporaryDirectory() as root, sandbox.sandbox_env(root):
+            sandbox.patch_memory_manager_base_db(root)
+            with (
+                mock.patch(
+                    "core.brain.brain_loop._dispatcher_recall_adapters",
+                    return_value={SubstrateSource.TELEGRAM_TEMPORAL: lambda _source: ()},
+                ),
+                mock.patch(
+                    "core.routing.focused_cognition.assemble_working_set",
+                    return_value=working_set,
+                ),
+                mock.patch(
+                    "core.routing.focused_cognition.focused_synthesize",
+                    return_value=FocusedResult(
+                        reply="We were talking about a blue notebook and a copper key [E1].",
+                        cited_ids=["E1"],
+                        working_set_chars=72,
+                    ),
+                ),
+                mock.patch(
+                    "core.routing.focused_cognition.check_groundedness",
+                    return_value=GroundednessVerdict("grounded", 1.0, []),
+                ),
+            ):
+                result = harness.run_probe(
+                    "What were we just talking about?",
+                    flag_on=True,
+                    turn_kind="continuity",
+                )
+
+        self.assertEqual(result.outcome_class, "answered_grounded")
+        self.assertFalse(result.cited_confirmed_memory_context)
+
 
 class RecallFlipEvalProbeDefinitionTest(unittest.TestCase):
     def test_probe_set_has_required_variants_and_hard_gates(self):

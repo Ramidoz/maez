@@ -549,6 +549,57 @@ class ProbeRunnerTests(unittest.TestCase):
         self.assertEqual(rows[0].ops_evidence.gpu_contention.value, "low")
         self.assertEqual(rows[0].latency_ms, 5000)
 
+    def test_focused_probe_continuity_outcome_uses_support_not_strict_memory_field(self):
+        from core.dispatcher.spec import SubstrateSource
+        from core.routing.focused_cognition import EvidenceItem, WorkingSet
+        from scripts.brain_bench.probe_runner import _run_focused_probe
+
+        working_set = WorkingSet(
+            items=[
+                EvidenceItem(
+                    local_label="E1",
+                    source_type="dialogue_anchor",
+                    text="We were talking about a blue notebook and a copper key.",
+                    durable_id="dialogue-anchor-1",
+                    temporal_provenance=None,
+                )
+            ],
+            ordered_evidence_text="[E1] We were talking about a blue notebook and a copper key.",
+            owner_question="What were we just talking about?",
+            working_set_chars=72,
+            working_set_tokens_est=18,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            with sandbox.sandbox_env(Path(tmp)):
+                sandbox.patch_memory_manager_base_db(tmp)
+                with mock.patch(
+                    "core.brain.brain_loop._dispatcher_recall_adapters",
+                    return_value={SubstrateSource.TELEGRAM_TEMPORAL: lambda _source: ()},
+                ), mock.patch(
+                    "core.routing.focused_cognition.assemble_working_set",
+                    return_value=working_set,
+                ):
+                    result, measurement, _evidence = _run_focused_probe(
+                        "What were we just talking about?",
+                        variant=_variant(),
+                        stream_factory=lambda **_kw: iter(
+                            [
+                                {
+                                    "content": (
+                                        "We were talking about a blue notebook "
+                                        "and a copper key [E1]."
+                                    )
+                                }
+                            ]
+                        ),
+                        clock=None,
+                        turn_kind="continuity",
+                    )
+
+        self.assertEqual(result.outcome_class, "answered_grounded")
+        self.assertFalse(result.cited_confirmed_memory_context)
+        self.assertIsNotNone(measurement)
+
     def test_probe_runner_threads_probe_turn_kind_to_focused_probe(self):
         from scripts.brain_bench.inference import GenerationMeasurement
         from scripts.brain_bench.probe_runner import build_probe_run
