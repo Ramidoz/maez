@@ -52,9 +52,14 @@ class ForcedCollisionTest(unittest.TestCase):
         self.assertTrue(bg_outcome.get("preempted"))
         self.assertEqual(foreground_reply, "fast reply [E1]")
         self.assertLess(foreground_ms, 1500)
-        self.assertTrue(any(event["preempted"] for event in gateway.events))
-        self.assertFalse(any(event["preempt_timeout"] for event in gateway.events))
-        self.assertIn(1, [event["preempted_count"] for event in gateway.events])
+        events = [
+            event
+            for event in gateway.events
+            if event.get("event") == "brain_gateway_event"
+        ]
+        self.assertTrue(any(event["preempted"] for event in events))
+        self.assertFalse(any(event["preempt_timeout"] for event in events))
+        self.assertIn(1, [event["preempted_count"] for event in events])
 
 
 if __name__ == "__main__":

@@ -35,6 +35,7 @@ class EquivalenceTest(unittest.TestCase):
         self.assertEqual(
             set(event),
             {
+                "event",
                 "schema_version",
                 "purpose",
                 "priority",
@@ -45,6 +46,7 @@ class EquivalenceTest(unittest.TestCase):
                 "preempt_timeout",
             },
         )
+        self.assertEqual(event["event"], "brain_gateway_event")
         serialized = json.dumps(event, sort_keys=True)
         forbidden = (
             "PRIVATE QUESTION",

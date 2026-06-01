@@ -194,6 +194,7 @@ class BrainGateway:
         preempted_count: int,
         preempt_timeout: bool,
     ) -> tuple[_InFlight, bool, int, bool]:
+        probe_started = time.monotonic()
         while True:
             call_to_cancel = None
             with self._condition:
@@ -207,6 +208,13 @@ class BrainGateway:
                     current.cancel_requested = True
                     call_to_cancel = current.call
                     preempted_count += 1
+                    self._emit_preempt_probe(
+                        purpose=purpose,
+                        current_purpose=current.purpose,
+                        handle_state="missing" if current.call is None else "present",
+                        wait_ms=(time.monotonic() - probe_started) * 1000.0,
+                        preempt_attempts=preempted_count,
+                    )
                 else:
                     self._condition.wait(timeout=0.05)
                     continue
@@ -233,6 +241,7 @@ class BrainGateway:
         preempt_timeout: bool,
     ) -> None:
         event = {
+            "event": "brain_gateway_event",
             "schema_version": 1,
             "purpose": purpose.value,
             "priority": priority,
@@ -255,6 +264,38 @@ class BrainGateway:
             event["preempted_count"],
             event["slot_busy_before"],
             event["preempt_timeout"],
+        )
+        if self._telemetry_sink is not None:
+            self._telemetry_sink(dict(event))
+
+    def _emit_preempt_probe(
+        self,
+        *,
+        purpose: BrainPurpose,
+        current_purpose: BrainPurpose,
+        handle_state: str,
+        wait_ms: float,
+        preempt_attempts: int,
+    ) -> None:
+        event = {
+            "event": "brain_gateway_preempt_probe",
+            "schema_version": 1,
+            "purpose": purpose.value,
+            "current_purpose": current_purpose.value,
+            "handle_state": handle_state,
+            "wait_ms": round(wait_ms, 3),
+            "preempt_attempts": int(preempt_attempts),
+        }
+        self.events.append(event)
+        logger.info(
+            "brain_gateway_preempt_probe schema_version=%s purpose=%s "
+            "current_purpose=%s handle_state=%s wait_ms=%s preempt_attempts=%s",
+            event["schema_version"],
+            event["purpose"],
+            event["current_purpose"],
+            event["handle_state"],
+            event["wait_ms"],
+            event["preempt_attempts"],
         )
         if self._telemetry_sink is not None:
             self._telemetry_sink(dict(event))

@@ -79,6 +79,7 @@ class BrainGatewayTest(unittest.TestCase):
         self.assertEqual(
             set(event),
             {
+                "event",
                 "schema_version",
                 "purpose",
                 "priority",
@@ -89,6 +90,7 @@ class BrainGatewayTest(unittest.TestCase):
                 "preempt_timeout",
             },
         )
+        self.assertEqual(event["event"], "brain_gateway_event")
         self.assertEqual(event["purpose"], "owner_recall")
         self.assertFalse(event["preempted"])
         self.assertFalse(event["slot_busy_before"])
