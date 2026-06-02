@@ -189,6 +189,95 @@ class EpisodeStoreNoDelete(unittest.TestCase):
             )
 
 
+class EpisodeStoreSupersede(unittest.TestCase):
+    """supersede() is the covenant-grade "retire a memory" operation:
+    status flip plus provenance, never delete."""
+
+    def setUp(self):
+        from core.memory.episodes import EpisodeStore
+
+        self._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self._tmp.close()
+        self.store = EpisodeStore(self._tmp.name)
+        self.ep_id = self.store.add(
+            title="t",
+            summary="s",
+            participants=["Maez"],
+            source_memory_ids=["raw-1"],
+            source_kind="reflection",
+        )
+
+    def tearDown(self):
+        Path(self._tmp.name).unlink(missing_ok=True)
+
+    def test_supersede_unknown_id_raises_keyerror(self):
+        with self.assertRaises(KeyError):
+            self.store.supersede("ep-doesnotexist", reason="x")
+
+    def test_supersede_active_stamps_provenance_and_excludes_from_active(self):
+        ok = self.store.supersede(self.ep_id, reason="mislabeled provenance")
+        self.assertTrue(ok)
+        row = self.store.get(self.ep_id)
+        self.assertIsNotNone(row, "superseded episode must NOT be deleted")
+        self.assertEqual(row["status"], "superseded")
+        self.assertEqual(row["superseded_reason"], "mislabeled provenance")
+        self.assertIsNotNone(row["superseded_at"])
+        self.assertIsNone(row["superseded_by"])
+        active_ids = {e["id"] for e in self.store.list_active()}
+        self.assertNotIn(self.ep_id, active_ids)
+
+    def test_supersede_blank_reason_raises_valueerror_no_mutation(self):
+        with self.assertRaises(ValueError):
+            self.store.supersede(self.ep_id, reason="   ")
+        self.assertEqual(self.store.get(self.ep_id)["status"], "active")
+
+    def test_supersede_unknown_successor_raises_valueerror(self):
+        with self.assertRaises(ValueError):
+            self.store.supersede(self.ep_id, reason="r", superseded_by="ep-nope")
+        self.assertEqual(self.store.get(self.ep_id)["status"], "active")
+
+    def test_supersede_self_successor_raises_valueerror(self):
+        with self.assertRaises(ValueError):
+            self.store.supersede(self.ep_id, reason="r", superseded_by=self.ep_id)
+        self.assertEqual(self.store.get(self.ep_id)["status"], "active")
+
+    def test_supersede_with_valid_successor_stores_it(self):
+        succ = self.store.add(
+            title="t2",
+            summary="s2",
+            participants=["Maez"],
+            source_memory_ids=["raw-2"],
+            source_kind="reflection",
+        )
+        ok = self.store.supersede(self.ep_id, reason="replaced", superseded_by=succ)
+        self.assertTrue(ok)
+        self.assertEqual(self.store.get(self.ep_id)["superseded_by"], succ)
+
+    def test_resupersede_returns_false_and_preserves_all_three_provenance_fields(self):
+        succ = self.store.add(
+            title="t2",
+            summary="s2",
+            participants=["Maez"],
+            source_memory_ids=["raw-2"],
+            source_kind="reflection",
+        )
+        self.assertTrue(
+            self.store.supersede(self.ep_id, reason="first reason", superseded_by=succ)
+        )
+        first = self.store.get(self.ep_id)
+
+        # Second call with a different reason/successor must be a no-op.
+        self.assertFalse(
+            self.store.supersede(self.ep_id, reason="SECOND reason", superseded_by=None)
+        )
+        second = self.store.get(self.ep_id)
+
+        self.assertEqual(second["status"], "superseded")
+        self.assertEqual(second["superseded_reason"], first["superseded_reason"])
+        self.assertEqual(second["superseded_at"], first["superseded_at"])
+        self.assertEqual(second["superseded_by"], first["superseded_by"])
+
+
 class EpisodeStoreIdempotentInit(unittest.TestCase):
     """Re-initializing the store on an existing DB must preserve data
     and must not error. This is what lets the daemon and the nightly

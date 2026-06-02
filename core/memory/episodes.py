@@ -43,7 +43,10 @@ CREATE TABLE IF NOT EXISTS episodes (
     source_kind TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active',
     authorship TEXT,
-    memory_voice TEXT
+    memory_voice TEXT,
+    superseded_at TEXT,
+    superseded_reason TEXT,
+    superseded_by TEXT
 );
 
 CREATE INDEX IF NOT EXISTS episodes_status_idx ON episodes(status);
@@ -52,13 +55,17 @@ CREATE INDEX IF NOT EXISTS episodes_created_idx ON episodes(created_at);
 CREATE INDEX IF NOT EXISTS episodes_source_kind_idx ON episodes(source_kind);
 """
 
-# Provenance columns added 2026-04-27 for followup-doc ingestion.
-# Existing rows keep authorship/memory_voice NULL — readers must
-# treat NULL as "Maez-authored, first-person" (the only mode that
-# existed before).
+# Provenance columns added after the v1 schema:
+# - 2026-04-27: authorship/memory_voice for followup-doc ingestion.
+# - 2026-06-02: supersession provenance for labeled retirements.
+# Existing rows keep new fields NULL — readers must preserve the
+# historical meaning of NULL rather than inferring a fresh label.
 _MIGRATIONS: tuple[str, ...] = (
     "ALTER TABLE episodes ADD COLUMN authorship TEXT",
     "ALTER TABLE episodes ADD COLUMN memory_voice TEXT",
+    "ALTER TABLE episodes ADD COLUMN superseded_at TEXT",
+    "ALTER TABLE episodes ADD COLUMN superseded_reason TEXT",
+    "ALTER TABLE episodes ADD COLUMN superseded_by TEXT",
 )
 
 
@@ -149,6 +156,44 @@ class EpisodeStore:
         with closing(self._connect()) as c:
             row = c.execute("SELECT * FROM episodes WHERE id = ?", (episode_id,)).fetchone()
         return None if row is None else self._row_to_dict(row)
+
+    def supersede(
+        self,
+        episode_id: str,
+        *,
+        reason: str,
+        superseded_by: Optional[str] = None,
+    ) -> bool:
+        """Retire an episode without deleting it.
+
+        Returns True when an active row is newly superseded. Returns False when
+        the row is already non-active, preserving its existing supersession
+        provenance. Raises KeyError for an unknown episode, and ValueError for
+        a blank reason or unverifiable successor.
+        """
+        row = self.get(episode_id)
+        if row is None:
+            raise KeyError(f"Cannot supersede unknown episode: {episode_id}")
+        if row["status"] != "active":
+            return False
+        if not (reason or "").strip():
+            raise ValueError("supersede requires a non-blank reason")
+        if superseded_by is not None:
+            if superseded_by == episode_id:
+                raise ValueError("superseded_by must not be the episode itself")
+            if self.get(superseded_by) is None:
+                raise ValueError(
+                    f"superseded_by must resolve to an existing episode: {superseded_by}"
+                )
+        with closing(self._connect()) as c:
+            with c:
+                c.execute(
+                    "UPDATE episodes SET status = 'superseded', "
+                    "superseded_at = ?, superseded_reason = ?, superseded_by = ? "
+                    "WHERE id = ?",
+                    (_now_iso(), reason, superseded_by, episode_id),
+                )
+        return True
 
     def list_active(self) -> list[dict]:
         with closing(self._connect()) as c:
