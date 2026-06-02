@@ -36,7 +36,7 @@ In `scripts/memory_reflection/nightly_lived_memory.py` `_default_llm_call`, add 
 "chat_template_kwargs": {"enable_thinking": False},
 ```
 
-That is the entire functional change. **No other payload field changes** — `model`, `messages`/prompt, `max_tokens`, `temperature`, and the request timeout all stay byte-identical (see §4 negative assertion).
+That is the entire functional change. **No other field changes** — `model`, `messages`/prompt, `max_tokens`, `temperature` (all in the JSON body) and the request **timeout** (which lives *outside* the body, on the `urllib.request.urlopen(req, timeout=timeout_s)` call) all stay byte-identical. The body and the timeout are asserted *separately* in §4, because the timeout is on the envelope, not in the request package.
 
 **Scoped to reflection by construction.** `_default_llm_call` is the reflection-synthesis caller only — its sole callers are the daemon reflection hook (`maez_daemon.py:1753`) and the CLI reflection pass (`nightly_lived_memory.py:645`); no other organ uses it. So the cap touches only this organ, exactly as required. No global "Maez thinks less" — one digestion organ stops over-deliberating on a structured-extraction task.
 
@@ -55,7 +55,8 @@ Nothing from the prior slices is touched: input hygiene, the voice/altitude prom
 ## 4. Tests
 
 - **Positive:** `_default_llm_call`'s request body contains `chat_template_kwargs == {"enable_thinking": False}` (the knob is present and correctly valued). Capture the body via a `urllib.request.urlopen` mock and assert on the decoded JSON.
-- **Negative (owner-required):** on that same captured body, assert **no other field drifted** — `model == "qwen36-27b"`, `max_tokens == 8192`, `temperature == 0.4`, `messages` is the single user prompt unchanged, and the set of body keys is exactly `{model, messages, max_tokens, temperature, chat_template_kwargs}`. This protects against a future "small cleanup" silently moving the model, token budget, temperature, prompt, or timeout.
+- **Negative — body (owner-required):** on that same captured body, assert **no other body field drifted** — `model == "qwen36-27b"`, `max_tokens == 8192`, `temperature == 0.4`, `messages` is the single user prompt unchanged, and the set of body keys is exactly `{model, messages, max_tokens, temperature, chat_template_kwargs}`. This protects against a future "small cleanup" silently moving the model, token budget, temperature, or prompt.
+- **Negative — envelope (the timeout lives outside the body):** the timeout is **not** a body field — it is the `timeout=` argument to `urllib.request.urlopen(req, timeout=timeout_s)`. So assert it *separately*: capture the `urlopen` call (e.g. via the mock's `call_args`) and assert it was invoked with `timeout=240` (the value `_default_llm_call` was built with). The body key-set assertion cannot see the timeout; this assertion is what actually guards it.
 - **Regression:** the existing terminal-state tests (`stop`/`length`/`llm_timeout`, derived properties, invalid-witness mapping, channel wall) stay green — this slice adds a field, it does not alter terminal-state handling.
 
 ---
