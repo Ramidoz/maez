@@ -1654,9 +1654,9 @@ def _cycle_action_failure_count(results: object) -> int:
         return 0
 
 
-def _cycle_signal_availability_key(*, screen_obs: object, presence_state: object) -> str:
+def _cycle_signal_availability_key(*, screen_obs: object, camera_state: object) -> str:
     screen_available = bool(getattr(screen_obs, "success", False))
-    sensor_state = str(getattr(presence_state, "sensor_state", "unknown") or "unknown").lower()
+    sensor_state = str(getattr(camera_state, "sensor_state", "unknown") or "unknown").lower()
     camera_available = sensor_state not in {
         "off",
         "disabled",
@@ -7449,7 +7449,7 @@ class MaezDaemon:
             )
             _cycle_signal_key = _cycle_signal_availability_key(
                 screen_obs=self._last_screen_obs,
-                presence_state=self._camera_presence_state,
+                camera_state=self._camera_presence_state,
             )
             _cycle_signal_availability_delta = _cycle_signal_availability_changed(
                 getattr(self, "_last_cycle_signal_availability_key", None),

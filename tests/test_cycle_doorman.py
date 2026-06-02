@@ -299,15 +299,15 @@ class DoormanDaemonSeamTest(unittest.TestCase):
 
         absent = _cycle_signal_availability_key(
             screen_obs=SimpleNamespace(success=False),
-            presence_state=SimpleNamespace(sensor_state="unavailable"),
+            camera_state=SimpleNamespace(sensor_state="unavailable"),
         )
         still_absent = _cycle_signal_availability_key(
             screen_obs=SimpleNamespace(success=False),
-            presence_state=SimpleNamespace(sensor_state="unavailable"),
+            camera_state=SimpleNamespace(sensor_state="unavailable"),
         )
         present = _cycle_signal_availability_key(
             screen_obs=SimpleNamespace(success=True),
-            presence_state=SimpleNamespace(sensor_state="available"),
+            camera_state=SimpleNamespace(sensor_state="available"),
         )
 
         self.assertFalse(_cycle_signal_availability_changed(absent, still_absent))
