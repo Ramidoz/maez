@@ -234,6 +234,8 @@ def _write_log(report: ReflectionReport, log_path: Path) -> None:
 
 
 def _reflection_witness_reason(report: ReflectionReport) -> str:
+    if not report.finish_reason:
+        return "no_input"
     if report.finish_reason == "length":
         return "truncated"
     if report.finish_reason == "llm_timeout":

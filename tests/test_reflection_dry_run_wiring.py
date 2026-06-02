@@ -156,6 +156,37 @@ class ReflectionDryRunScriptTest(unittest.TestCase):
         self.assertEqual(rows[1]["reason"], "truncated")
         self.assertNotEqual(rows[1]["reason"], "no_candidates")
 
+    def test_artifact_marks_no_llm_call_as_no_input_not_no_candidates(self):
+        from scripts.memory_reflection.nightly_lived_memory import (
+            ReflectionReport,
+            write_reflection_dry_run_artifact,
+        )
+
+        report = ReflectionReport(
+            dry_run=True,
+            started_at="2026-06-02T04:00:00+00:00",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_reflection_dry_run_artifact(
+                report,
+                artifact_dir=Path(tmp),
+                timestamp_slug="no-input",
+            )
+            rows = [
+                json.loads(line)
+                for line in path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+
+        self.assertEqual(rows[0]["kind"], "run")
+        self.assertEqual(rows[0]["finish_reason"], "")
+        self.assertFalse(rows[0]["valid_witness"])
+        self.assertEqual(rows[0]["reason"], "no_input")
+        self.assertEqual(rows[1]["kind"], "summary")
+        self.assertEqual(rows[1]["reason"], "no_input")
+        self.assertNotEqual(rows[1]["reason"], "no_candidates")
+
 
 class ReflectionDryRunDaemonHookTest(unittest.TestCase):
     def test_flag_off_is_noop(self):
