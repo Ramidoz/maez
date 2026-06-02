@@ -21,15 +21,10 @@ class ReflectionInputHygieneTest(unittest.TestCase):
 
     def _run_hygiene_assertion(self, tmp: Path) -> None:
         store = EpisodeStore(str(tmp / "ep.db"))
-        # One prior reflection (must be EXCLUDED) and one real-evidence
-        # episode (must remain: the stomach still eats original food).
-        refl_id = store.add(
-            title="prior reflection",
-            summary="an earlier synthesized thought",
-            participants=["maez"],
-            source_memory_ids=["core-1"],
-            source_kind="reflection",
-        )
+        # One real-evidence episode plus enough newer prior reflections to
+        # fill the default recent window. This proves the filter happens
+        # BEFORE the window slice; if slicing happened first, reflections
+        # would crowd out the core memory.
         core_id = store.add(
             title="core memory",
             summary="a real evidence episode",
@@ -37,6 +32,16 @@ class ReflectionInputHygieneTest(unittest.TestCase):
             source_memory_ids=["raw-1"],
             source_kind="core_memory",
         )
+        reflection_ids = [
+            store.add(
+                title=f"prior reflection {idx}",
+                summary="an earlier synthesized thought",
+                participants=["maez"],
+                source_memory_ids=["core-1"],
+                source_kind="reflection",
+            )
+            for idx in range(31)
+        ]
         daemon = _FakeDaemon(store)
 
         captured: dict = {}
@@ -69,7 +74,10 @@ class ReflectionInputHygieneTest(unittest.TestCase):
         ids = {ep.get("id") for ep in captured["recent_episodes"]}
         kinds = {ep.get("source_kind") for ep in captured["recent_episodes"]}
         self.assertIn(core_id, ids, "real-evidence episode must still be fed to synthesis")
-        self.assertNotIn(refl_id, ids, "prior reflection must NOT be fed to synthesis")
+        self.assertTrue(
+            ids.isdisjoint(reflection_ids),
+            "prior reflections must NOT be fed to synthesis",
+        )
         self.assertNotIn("reflection", kinds, "no reflection episode may reach the synthesis input pool")
 
 
