@@ -118,3 +118,34 @@ write off.
   `MAEZ_REFLECTION_SYNTHESIS_WRITE=1` decision. Grounded-but-still-report means
   iterate the prompt wording. In-voice-but-ungrounded fails and should be
   reverted; voice must never buy ungrounding.
+
+## Reflection Token-Budget v0 — Re-run Witness
+
+After Reflection Synthesis Token Budget v0 lands, rerun reflection dry-run
+from `main` with:
+
+```bash
+MAEZ_REFLECTION_SYNTHESIS_ENABLED=1
+MAEZ_REFLECTION_SYNTHESIS_WRITE=0
+```
+
+Pass:
+
+- The dry-run artifact has a `kind="run"` row with
+  `finish_reason="stop"`, `valid_witness=true`, `truncated=false`, and
+  `max_tokens=8192`.
+- The artifact has 1-3 `kind="candidate"` rows when groundable patterns exist.
+- Resolving every candidate `source_memory_ids` against
+  `memory/lived_episodes.db` yields zero `source_kind="reflection"`
+  citations.
+- Owner voice read passes.
+
+Any `finish_reason` other than `stop` is an invalid witness:
+
+- `length` -> `reason="truncated"`
+- `llm_timeout` -> `reason="llm_timeout"`
+- `llm_error` -> `reason="llm_error"`
+
+`no_candidates` is valid only when the run row has `finish_reason="stop"`.
+If no eligible input reached the model at all, the artifact should say
+`reason="no_input"`, not `no_candidates`.
