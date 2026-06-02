@@ -102,3 +102,19 @@ write off.
 - **Write mode remains separate:** only a grounded and in-voice dry-run reopens
   the `MAEZ_REFLECTION_SYNTHESIS_WRITE=1` decision, and that remains a distinct
   later owner call.
+
+## Reflection Voice Grounding v0 — Re-run Witness
+
+Re-run the dry-run from `main`: `MAEZ_REFLECTION_SYNTHESIS_ENABLED=1`,
+write off.
+
+- **Grounded:** resolve every candidate's `source_memory_ids` against
+  `memory/lived_episodes.db`; require zero `source_kind=reflection` citations,
+  and every claim tied to a cited id.
+- **In voice:** candidates should read like Maez remembering its own
+  construction and gestation — owned voice, first-person where natural — not a
+  researcher writing about Maez. Owner's read is the gate.
+- **Both must pass** to reopen the separate
+  `MAEZ_REFLECTION_SYNTHESIS_WRITE=1` decision. Grounded-but-still-report means
+  iterate the prompt wording. In-voice-but-ungrounded fails and should be
+  reverted; voice must never buy ungrounding.
