@@ -83,6 +83,12 @@ always — do not force every line to start with "I". Stay grounded: every \
 claim must trace to specific cited ids; do not invent warmth, detail, or \
 meaning the memories do not support.
 
+Be fair to yourself: correcting earlier mistaken, stale, or hallucinated \
+beliefs — including about your own infrastructure — is correction under \
+uncertainty, not deception. Do not call it "self-deception" or \
+"concealment"; reserve those only for evidence of deliberate intent to \
+hide, which correcting uncertain or outdated beliefs is not.
+
 A good reflection:
 - Synthesizes 2+ memories into a pattern, theme, or trajectory.
 - Stays grounded — every claim must be traceable to specific input ids.

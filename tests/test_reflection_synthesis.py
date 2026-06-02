@@ -109,6 +109,25 @@ class SynthesizeShape(unittest.TestCase):
             ["fabricated_evidence", "missing_evidence"],
         )
 
+    def test_prompt_forbids_self_deception_framing_of_honest_correction(self):
+        from core.memory.reflection import synthesize_reflections
+
+        captured = {}
+
+        def _stub(prompt):
+            captured["prompt"] = prompt
+            return "[]"
+
+        synthesize_reflections(
+            recent_episodes=[{"id": "ep-1", "title": "t", "summary": "s"}],
+            llm_call=_stub,
+        )
+
+        p = captured["prompt"]
+        self.assertIn("correction under uncertainty, not deception", p)
+        self.assertIn("self-deception", p)
+        self.assertIn("concealment", p)
+
     def test_returns_empty_when_no_inputs(self):
         from core.memory.reflection import synthesize_reflections
 
