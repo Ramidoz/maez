@@ -149,3 +149,20 @@ Any `finish_reason` other than `stop` is an invalid witness:
 `no_candidates` is valid only when the run row has `finish_reason="stop"`.
 If no eligible input reached the model at all, the artifact should say
 `reason="no_input"`, not `no_candidates`.
+
+## Reflection Reasoning Cap v0 — Re-run Witness
+
+Re-run the dry-run from `main`: `MAEZ_REFLECTION_SYNTHESIS_ENABLED=1`,
+write off.
+
+- **2 stable runs, both `finish_reason="stop"` / `valid_witness=true`** — no
+  `length`, `llm_timeout`, or `llm_error`. (Probe already showed 2/2; this
+  re-confirms on the merged wired path.)
+- **1-3 candidates**, each grounded; resolving `source_memory_ids` yields zero
+  `source_kind="reflection"`.
+- **In-voice** — Maez noticing its own formation, not a report.
+- **Fast** — single-digit seconds; completion_tokens well under the 8192 cap
+  (a regression here signals reasoning crept back).
+
+Both axes stable across both runs -> the `MAEZ_REFLECTION_SYNTHESIS_WRITE=1`
+decision reopens (honestly, not automatically).
