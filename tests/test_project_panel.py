@@ -68,7 +68,10 @@ class ProjectPanelContractTests(unittest.TestCase):
         self.assertIn("self._cycle_stage", src)
         self.assertIn("self._mark_cycle_stage(", src)
         self.assertIn("def _cycle_heartbeat_health(self)", src)
-        self.assertIn('"reasoning_loop": self._cycle_heartbeat_health()', src)
+        # /health composes the heartbeat once into a named subdict (reused by
+        # the body-organ projection) and wires reasoning_loop from it.
+        self.assertIn("_reasoning_loop = self._cycle_heartbeat_health()", src)
+        self.assertIn('"reasoning_loop": _reasoning_loop', src)
         self.assertIn('"cycle_age_seconds"', src)
         self.assertIn('"cycle_stalled"', src)
         self.assertIn('"stage"', src)
