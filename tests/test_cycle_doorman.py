@@ -495,6 +495,96 @@ class DoormanDaemonSeamTest(unittest.TestCase):
         self.assertFalse(signals.perception_changed)
         self.assertFalse(decide(signals).wake)
 
+    def test_doorman_perception_delta_ignores_legacy_metric_drift(self):
+        from daemon.maez_daemon import _cycle_doorman_signals
+
+        current_axes = {
+            "disk": 70.9,
+            "presence": "active",
+            "git": 3,
+            "procs": ("python", "llama-server", "bash"),
+        }
+        last_axes = {
+            "disk": 70.1,
+            "presence": "active",
+            "git": 0,
+            "procs": ("python", "llama-server"),
+        }
+
+        signals = _cycle_doorman_signals(
+            current_axes=current_axes,
+            last_thought_axes=last_axes,
+            quiet_skips=0,
+            min_floor=10,
+            new_failures=0,
+            open_wants=0,
+            memory_delta=False,
+            signal_availability_changed=False,
+            scheduled_due=False,
+            presence="active",
+        )
+
+        self.assertFalse(signals.perception_changed)
+        self.assertFalse(decide(signals).wake)
+
+    def test_doorman_perception_delta_wakes_on_salient_screen_activity(self):
+        from daemon.maez_daemon import _cycle_doorman_signals
+
+        signals = _cycle_doorman_signals(
+            current_axes={"disk": 70.9, "git": 3, "procs": ("bash",)},
+            last_thought_axes={"disk": 70.1, "git": 0, "procs": ("python",)},
+            current_salient_perception={
+                "screen_state": "ok",
+                "screen_activity": "reviewing test output",
+                "signal_availability": "screen=available|camera=absent",
+            },
+            last_salient_perception={
+                "screen_state": "ok",
+                "screen_activity": "editing code",
+                "signal_availability": "screen=available|camera=absent",
+            },
+            quiet_skips=0,
+            min_floor=10,
+            new_failures=0,
+            open_wants=0,
+            memory_delta=False,
+            signal_availability_changed=False,
+            scheduled_due=False,
+            presence="active",
+        )
+
+        self.assertTrue(signals.perception_changed)
+        self.assertEqual(decide(signals).reason_code, ReasonCode.WAKE_PERCEPTION_CHANGED)
+
+    def test_cycle_salient_perception_state_uses_screen_and_availability_only(self):
+        from daemon.maez_daemon import _cycle_salient_perception_state
+
+        state = _cycle_salient_perception_state(
+            screen_obs=SimpleNamespace(
+                success=True,
+                state="ok",
+                activity="Editing Code",
+                application="VS Code",
+                focus_level="deep_work",
+            ),
+            signal_availability_key="screen=available|camera=absent",
+        )
+
+        self.assertEqual(
+            state,
+            {
+                "screen_state": "ok",
+                "screen_success": True,
+                "screen_activity": "Editing Code",
+                "screen_application": "VS Code",
+                "screen_focus_level": "deep_work",
+                "signal_availability": "screen=available|camera=absent",
+            },
+        )
+        self.assertNotIn("disk", state)
+        self.assertNotIn("git", state)
+        self.assertNotIn("procs", state)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -114,6 +114,7 @@ from core.cognition.cycle_doorman import (
     DoormanVerdict,
     ReasonCode as DoormanReasonCode,
     decide as _decide_cycle_doorman,
+    salient_perception_changed,
 )
 from skills.telegram_voice import TelegramVoice
 from skills.telegram_public import MaezPublicBot
@@ -1680,10 +1681,34 @@ def _axis_signature_without_presence(axes: dict | None) -> str | None:
     return json.dumps(stable, sort_keys=True)
 
 
+def _cycle_salient_perception_state(
+    *,
+    screen_obs: object,
+    signal_availability_key: str,
+) -> dict[str, object]:
+    screen_success = bool(getattr(screen_obs, "success", False))
+    return {
+        "screen_state": str(getattr(screen_obs, "state", "unknown") or "unknown"),
+        "screen_success": screen_success,
+        "screen_activity": str(
+            getattr(screen_obs, "activity", "unknown") or "unknown"
+        ),
+        "screen_application": str(
+            getattr(screen_obs, "application", "unknown") or "unknown"
+        ),
+        "screen_focus_level": str(
+            getattr(screen_obs, "focus_level", "unknown") or "unknown"
+        ),
+        "signal_availability": str(signal_availability_key or "unknown"),
+    }
+
+
 def _cycle_doorman_signals(
     *,
     current_axes: dict,
     last_thought_axes: dict | None,
+    current_salient_perception: object | None = None,
+    last_salient_perception: object | None = None,
     quiet_skips: int,
     min_floor: int,
     new_failures: int,
@@ -1693,11 +1718,12 @@ def _cycle_doorman_signals(
     scheduled_due: bool,
     presence: str,
 ) -> DoormanSignals:
-    current_without_presence = _axis_signature_without_presence(current_axes)
-    last_without_presence = _axis_signature_without_presence(last_thought_axes)
-    perception_changed = (
-        last_without_presence is None
-        or current_without_presence != last_without_presence
+    if current_salient_perception is None and last_salient_perception is None:
+        current_salient_perception = current_axes
+        last_salient_perception = last_thought_axes
+    perception_changed = salient_perception_changed(
+        last_salient_perception,
+        current_salient_perception,
     )
     return DoormanSignals(
         perception_changed=perception_changed,
@@ -2360,6 +2386,7 @@ class MaezDaemon:
         self._recent_thought_axes: deque = deque(maxlen=5)
         self._cycles_since_last_thought = 0
         self._last_cycle_signal_availability_key = None
+        self._last_cycle_doorman_salient_perception = None
         self._last_cycle_open_wants_count = None
         self._pending_cleanup = None
         self._ollama_lock = threading.Lock()
@@ -7476,6 +7503,10 @@ class MaezDaemon:
                 _cycle_signal_key,
             )
             self._last_cycle_signal_availability_key = _cycle_signal_key
+            _cycle_salient_perception = _cycle_salient_perception_state(
+                screen_obs=self._last_screen_obs,
+                signal_availability_key=_cycle_signal_key,
+            )
 
             _cycle_open_wants_count = 0
             try:
@@ -7503,6 +7534,12 @@ class MaezDaemon:
             _cycle_doorman_signals_bundle = _cycle_doorman_signals(
                 current_axes=current_axes,
                 last_thought_axes=(self._recent_thought_axes[-1] if self._recent_thought_axes else None),
+                current_salient_perception=_cycle_salient_perception,
+                last_salient_perception=getattr(
+                    self,
+                    "_last_cycle_doorman_salient_perception",
+                    None,
+                ),
                 quiet_skips=self._cycles_since_last_thought,
                 min_floor=DEFAULT_MIN_THOUGHT_FLOOR,
                 new_failures=_cycle_action_failure_count(tier1_results + tier2_results),
@@ -7520,6 +7557,8 @@ class MaezDaemon:
                 min_floor=DEFAULT_MIN_THOUGHT_FLOOR,
                 signals=_cycle_doorman_signals_bundle,
             )
+            if _cycle_doorman_gate.doorman_enabled:
+                self._last_cycle_doorman_salient_perception = _cycle_salient_perception
             if _cycle_doorman_gate.doorman_enabled and _cycle_doorman_gate.verdict is not None:
                 _log_cycle_doorman_verdict(
                     verdict=_cycle_doorman_gate.verdict,
