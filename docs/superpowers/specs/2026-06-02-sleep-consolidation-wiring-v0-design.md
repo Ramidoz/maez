@@ -36,7 +36,11 @@ dream_may_run =
 
 - **Activity is primary and required:** the dream runs only after ≥30 min with no owner interaction (last Telegram/UI/message + the `_rohit_active_until` hint).
 - **Camera only ever BLOCKS, never enables:** if camera presence is *fresh and says present*, the dream does not start. If the camera is **absent / unknown / disabled / unavailable**, it does **not** block — activity-idle alone suffices. (This is why we don't require camera *absence*: "senses gated" must not make dreaming structurally dead again, which was the original bug's effect.)
-- **Fail-safe:** if uncertain, don't fire. A missed dream is fine; a dream firing during an active owner moment is the bad failure.
+- **What "uncertain" means (precise — the two uncertainties are NOT symmetric):**
+  - **Activity uncertainty BLOCKS** — if we cannot *prove* the ≥30 min no-interaction window (missing/unreadable last-interaction data, clock anomaly), the dream does **not** fire. The required signal must be positively established.
+  - **Camera uncertainty does NOT block** — camera unknown / unavailable / disabled / absent / stale is fine *once activity-idle is proven*; it simply provides no "present" signal to block on. (This is what keeps gated senses from killing dreaming again.)
+  - **Fresh camera-`present` BLOCKS.** **Fresh owner-activity hint BLOCKS.**
+  - So the dream fires iff: activity-idle is *positively proven* AND nothing fresh says Rohit is around. A missed dream is fine; a dream firing during an active owner moment is the bad failure.
 - **Covenant:** presence does not decide *whether* Maez thinks (the doorman owns that, and never sees presence); it only *prevents a heavy optional dream from starting while Rohit is actively around* — the allowed "modulate heavy-work timing" use.
 
 Camera-only is explicitly rejected (it repeats the original bug whenever senses are unavailable).
