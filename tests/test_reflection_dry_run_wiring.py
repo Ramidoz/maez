@@ -279,6 +279,40 @@ class ReflectionDryRunDaemonHookTest(unittest.TestCase):
         self.assertEqual(summary["finish_reason"], "stop")
         self.assertFalse(summary["truncated"])
 
+    def test_summary_marks_no_llm_call_as_no_input(self):
+        from daemon.maez_daemon import _reflection_synthesis_summary
+        from scripts.memory_reflection.nightly_lived_memory import ReflectionReport
+
+        report = ReflectionReport(dry_run=True)
+
+        summary = _reflection_synthesis_summary(
+            status="dry_run",
+            reason="write_flag_off",
+            report=report,
+        )
+
+        self.assertEqual(summary["status"], "dry_run")
+        self.assertEqual(summary["reason"], "no_input")
+        self.assertEqual(summary["finish_reason"], "")
+        self.assertFalse(summary["truncated"])
+
+    def test_summary_maps_llm_error_to_invalid_witness(self):
+        from daemon.maez_daemon import _reflection_synthesis_summary
+        from scripts.memory_reflection.nightly_lived_memory import ReflectionReport
+
+        report = ReflectionReport(dry_run=True, finish_reason="llm_error", max_tokens=8192)
+
+        summary = _reflection_synthesis_summary(
+            status="dry_run",
+            reason="write_flag_off",
+            report=report,
+        )
+
+        self.assertEqual(summary["status"], "invalid_witness")
+        self.assertEqual(summary["reason"], "llm_error")
+        self.assertEqual(summary["finish_reason"], "llm_error")
+        self.assertFalse(summary["truncated"])
+
     def test_flag_on_timeout_writes_invalid_witness_artifact_and_summary(self):
         from daemon.maez_daemon import _run_reflection_synthesis_nightly
 

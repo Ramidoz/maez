@@ -1645,6 +1645,8 @@ def _reflection_synthesis_write_enabled(environ: object | None = None) -> bool:
 
 def _reflection_terminal_reason(report: object | None, fallback: str) -> tuple[str, str]:
     finish_reason = str(getattr(report, "finish_reason", "") or "")
+    if not finish_reason and fallback != "error":
+        return str(fallback), "no_input"
     if finish_reason == "length":
         return "invalid_witness", "truncated"
     if finish_reason == "llm_timeout":
