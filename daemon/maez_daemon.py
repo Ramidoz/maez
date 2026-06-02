@@ -2264,15 +2264,21 @@ import logging.handlers as _logging_handlers
 # log's write rate; a plain FileHandler would grow unbounded.
 # 50MB × 10 files = 500MB ceiling — preserves cockpit history,
 # bounded enough to never fill disk.
-file_handler = _logging_handlers.RotatingFileHandler(
-    LOG_PATH,
-    maxBytes=50 * 1024 * 1024,
-    backupCount=10,
-)
-file_handler.setFormatter(
-    logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
-)
-logger.addHandler(file_handler)
+# Test-hermeticity (2026-06-02): skip the production-log file handler when
+# MAEZ_DISABLE_FILE_LOG is set (the test harness sets it in tests/__init__.py),
+# so importing the daemon in a test never opens / writes logs/maez.log. The
+# stderr stream_handler below stays unconditional. Live daemon (env unset) is
+# byte-identical — the handler attaches exactly as before.
+if not (os.environ.get("MAEZ_DISABLE_FILE_LOG", "") or "").strip():
+    file_handler = _logging_handlers.RotatingFileHandler(
+        LOG_PATH,
+        maxBytes=50 * 1024 * 1024,
+        backupCount=10,
+    )
+    file_handler.setFormatter(
+        logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+    )
+    logger.addHandler(file_handler)
 
 stream_handler = logging.StreamHandler()
 stream_handler.setFormatter(

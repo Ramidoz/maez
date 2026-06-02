@@ -13,3 +13,9 @@ os.environ.setdefault(
     "MAEZ_ROUTING_OBSERVATION_DB_PATH",
     str(Path(_routing_observation_dir) / "routing_observation.db"),
 )
+
+# Test-hermeticity: keep the test suite out of Maez's real diary. The daemon
+# attaches a RotatingFileHandler to logs/maez.log at import; this env var makes
+# it skip that handler so test runs cannot pollute the production log. Live
+# daemon never sets this, so its logging is unchanged.
+os.environ.setdefault("MAEZ_DISABLE_FILE_LOG", "1")
