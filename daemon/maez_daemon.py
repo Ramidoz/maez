@@ -1633,6 +1633,84 @@ def _dream_idle_gate_open(daemon: object, *, now: float | None = None) -> bool:
     return dream_may_run(**_dream_idle_inputs(daemon, now=now))
 
 
+def _reflection_synthesis_enabled(environ: object | None = None) -> bool:
+    env = os.environ if environ is None else environ
+    return (env.get("MAEZ_REFLECTION_SYNTHESIS_ENABLED", "") or "").strip() == "1"
+
+
+def _reflection_synthesis_write_enabled(environ: object | None = None) -> bool:
+    env = os.environ if environ is None else environ
+    return (env.get("MAEZ_REFLECTION_SYNTHESIS_WRITE", "") or "").strip() == "1"
+
+
+def _reflection_synthesis_summary(
+    *,
+    status: str,
+    reason: str,
+    report: object | None = None,
+    artifact_path: Path | None = None,
+) -> dict[str, object]:
+    return {
+        "status": str(status),
+        "reason": str(reason),
+        "candidates_count": int(len(getattr(report, "reflection_candidates", []) or [])),
+        "drops_count": int(len(getattr(report, "reflection_drops", []) or [])),
+        "reflections_attempted": int(getattr(report, "reflections_attempted", 0) or 0),
+        "reflections_added": int(getattr(report, "reflections_added", 0) or 0),
+        "artifact_path": str(artifact_path) if artifact_path is not None else "",
+    }
+
+
+def _log_reflection_synthesis_summary(summary: dict[str, object]) -> None:
+    logger.info(
+        "reflection_synthesis summary=%s",
+        json.dumps(summary, sort_keys=True),
+    )
+
+
+def _run_reflection_synthesis_nightly(
+    daemon: object,
+    *,
+    llm_call=None,
+    artifact_dir: Path | None = None,
+) -> dict[str, object]:
+    if not _reflection_synthesis_enabled():
+        return {"status": "disabled", "reason": "flag_off"}
+
+    from scripts.memory_reflection.nightly_lived_memory import (
+        ReflectionReport,
+        _default_llm_call,
+        run_synthesis_pass,
+        write_reflection_dry_run_artifact,
+    )
+
+    dry_run = not _reflection_synthesis_write_enabled()
+    report = ReflectionReport(dry_run=dry_run, started_at=datetime.now(timezone.utc).isoformat())
+    if llm_call is None:
+        llm_call = _default_llm_call("qwen36-27b", 120)
+    run_synthesis_pass(
+        episode_store=getattr(daemon, "lived_episodes"),
+        llm_call=llm_call,
+        report=report,
+        dry_run=dry_run,
+    )
+    artifact_path = None
+    status = "write"
+    reason = "persist_enabled"
+    if dry_run:
+        artifact_path = write_reflection_dry_run_artifact(report, artifact_dir=artifact_dir)
+        status = "dry_run"
+        reason = "write_flag_off"
+    summary = _reflection_synthesis_summary(
+        status=status,
+        reason=reason,
+        report=report,
+        artifact_path=artifact_path,
+    )
+    _log_reflection_synthesis_summary(summary)
+    return summary
+
+
 def _cycle_doorman_verdict_summary(
     verdict: DoormanVerdict,
     *,
@@ -6583,6 +6661,11 @@ class MaezDaemon:
                     )
             except Exception as e:
                 logger.error("Daily consolidation error: %s", e)
+
+            try:
+                _run_reflection_synthesis_nightly(self)
+            except Exception as e:
+                logger.warning("Reflection synthesis dry-run failed: %s", e)
 
             # Self-analysis after consolidation
             try:

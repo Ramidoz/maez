@@ -125,6 +125,8 @@ def _format_raw_block(raw: Sequence[dict]) -> str:
 def _parse_reflections(
     raw_text: str,
     valid_ids: set[str],
+    *,
+    drop_sink: list[dict] | None = None,
 ) -> list[Reflection]:
     """Extract reflection objects from the model's JSON. Tolerant of
     leading/trailing prose around the array; strict on shape."""
@@ -155,11 +157,19 @@ def _parse_reflections(
         # An id the model invented (not in valid_ids) is a fabrication
         # signal — drop it from the citation. If nothing is left, drop
         # the reflection entirely (evidence-required contract).
-        cited = tuple(
-            eid for eid in evidence
-            if isinstance(eid, str) and (not valid_ids or eid in valid_ids)
-        )
+        raw_evidence = tuple(eid for eid in evidence if isinstance(eid, str))
+        cited = tuple(eid for eid in raw_evidence if not valid_ids or eid in valid_ids)
         if not cited:
+            if drop_sink is not None:
+                drop_sink.append(
+                    {
+                        "text": text.strip(),
+                        "source_memory_ids": list(raw_evidence),
+                        "reason": "missing_evidence"
+                        if not raw_evidence
+                        else "fabricated_evidence",
+                    }
+                )
             continue
         out.append(Reflection(text=text.strip(), source_memory_ids=cited))
     return out
@@ -171,6 +181,7 @@ def synthesize_reflections(
     recent_raw: Sequence[dict] | None = None,
     llm_call: Callable[[str], str],
     max_reflections: int = 3,
+    drop_sink: list[dict] | None = None,
 ) -> list[Reflection]:
     """Draw up to ``max_reflections`` high-level reflections from the
     recent lived-memory window. Returns an empty list when there is
@@ -209,7 +220,7 @@ def synthesize_reflections(
         logger.debug("reflection synthesis LLM failed: %s", exc)
         return []
 
-    parsed = _parse_reflections(text or "", valid_ids)
+    parsed = _parse_reflections(text or "", valid_ids, drop_sink=drop_sink)
     return parsed[:max_reflections]
 
 

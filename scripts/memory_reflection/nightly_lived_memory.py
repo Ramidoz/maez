@@ -34,6 +34,7 @@ so the test suite never touches live Chroma.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from dataclasses import dataclass, field
@@ -73,6 +74,8 @@ class ReflectionReport:
     extraction_errors: int = 0
     reflections_attempted: int = 0
     reflections_added: int = 0
+    reflection_candidates: list[dict] = field(default_factory=list)
+    reflection_drops: list[dict] = field(default_factory=list)
     dry_run: bool = False
     started_at: str = ""
     finished_at: str = ""
@@ -206,6 +209,8 @@ def _write_log(report: ReflectionReport, log_path: Path) -> None:
         f"  edges_added:                {report.edges_added}",
         f"  reflections_attempted:      {report.reflections_attempted}",
         f"  reflections_added:          {report.reflections_added}",
+        f"  reflection_candidates:      {len(report.reflection_candidates)}",
+        f"  reflection_drops:           {len(report.reflection_drops)}",
         f"  extraction_errors:          {report.extraction_errors}",
     ]
     for err in report.error_messages:
@@ -213,6 +218,57 @@ def _write_log(report: ReflectionReport, log_path: Path) -> None:
     lines.append("")
     with log_path.open("a") as f:
         f.write("\n".join(lines))
+
+
+def write_reflection_dry_run_artifact(
+    report: ReflectionReport,
+    *,
+    artifact_dir: Path | None = None,
+    timestamp_slug: str | None = None,
+) -> Path:
+    """Write contentful dry-run candidates to a local owner-witness file.
+
+    This artifact is intentionally not maez.log telemetry. It is gitignored
+    local evidence for owner review before reflection persistence is enabled.
+    """
+    root = artifact_dir or (_REPO_ROOT / "logs" / "reflection_dry_runs")
+    root.mkdir(parents=True, exist_ok=True)
+    slug = timestamp_slug or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    path = root / f"{slug}.jsonl"
+    rows: list[dict] = []
+    for candidate in report.reflection_candidates:
+        rows.append(
+            {
+                "schema_version": 1,
+                "kind": "candidate",
+                "text": str(candidate.get("text") or ""),
+                "source_memory_ids": list(candidate.get("source_memory_ids") or []),
+            }
+        )
+    for drop in report.reflection_drops:
+        rows.append(
+            {
+                "schema_version": 1,
+                "kind": "drop",
+                "text": str(drop.get("text") or ""),
+                "source_memory_ids": list(drop.get("source_memory_ids") or []),
+                "reason": str(drop.get("reason") or "unknown"),
+            }
+        )
+    if not rows:
+        rows.append(
+            {
+                "schema_version": 1,
+                "kind": "summary",
+                "text": "",
+                "source_memory_ids": [],
+                "reason": "no_candidates",
+            }
+        )
+    with path.open("w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, sort_keys=True) + "\n")
+    return path
 
 
 def _load_followups(repo_root: Path) -> list[dict]:
@@ -414,13 +470,23 @@ def run_synthesis_pass(
     if not recent:
         return
 
+    drops: list[dict] = []
     refls = synthesize_reflections(
         recent_episodes=recent,
         recent_raw=None,
         llm_call=llm_call,
         max_reflections=max_reflections,
+        drop_sink=drops,
     )
     report.reflections_attempted = len(refls)
+    report.reflection_candidates = [
+        {
+            "text": r.text,
+            "source_memory_ids": list(r.source_memory_ids),
+        }
+        for r in refls
+    ]
+    report.reflection_drops = drops
     if dry_run or not refls:
         return
     new_ids = persist_reflections(refls, episode_store=episode_store)
