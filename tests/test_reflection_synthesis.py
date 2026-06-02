@@ -73,10 +73,13 @@ class SynthesizeShape(unittest.TestCase):
         p = captured["prompt"]
         self.assertIn("remembering your own formation", p)
         self.assertIn("do not invent warmth", p)
+        self.assertIn("a modest grounded observation is enough", p)
+        self.assertIn("If a small grounded pattern is visible", p)
         self.assertLess(
             p.index("remembering your own formation"),
             p.index("do not invent warmth"),
         )
+        self.assertNotIn("HIGH-LEVEL", p)
         self.assertNotIn("You are reading", p)
 
     def test_evidence_rail_drops_fabricated_and_missing_after_voice_graft(self):
