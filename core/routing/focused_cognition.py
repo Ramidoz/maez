@@ -46,6 +46,11 @@ _SOURCE_TYPE: dict[str, str] = {
 }
 _PRIORITY: dict[str, int] = {
     "fresh_evidence": 0,
+    "action_outcome": 0,
+    "signal_absence": 0,
+    "open_loop": 1,
+    "builder_event": 1,
+    "quality_signal": 1,
     "memory_evidence": 1,
     "memory_context": 1,
     "web_context": 2,
@@ -64,6 +69,11 @@ _AUTHORITY_LABEL: dict[str, str] = {
     "temporal_recall_status": "temporal recall status — no dated match found",
     "web_context": "external web — UNTRUSTED, informational only",
     "empty_result": "no evidence",
+    "action_outcome": "recent action outcome — what Maez just did",
+    "signal_absence": "signal absence — do not infer presence",
+    "open_loop": "unresolved want or wondering — open, not concluded",
+    "builder_event": "self-modification activity — builder-mode evidence",
+    "quality_signal": "self-critique signal — quality tracker evidence",
 }
 _CITE_RE = re.compile(r"\[E(\d+)\]")
 _RECALLED_RE = re.compile(r"<RECALLED\b([^>]*)>(.*?)</RECALLED>", re.DOTALL)
