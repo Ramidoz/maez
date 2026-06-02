@@ -181,3 +181,21 @@ for one pass only, then back to off):
 
 A well-provenanced, grounded, fair bite -> then the SEPARATE decision on
 whether reflection becomes a regular write organ.
+
+## Dream idle-gate — witness-scoping note (2026-06-02, read-only diagnostic)
+
+Before running the dream AFK witness, the live integration means:
+
+- `activity_known` is **wired and not structurally dead** — `_last_owner_interaction_ts`
+  is boot-initialized (daemon `__init__`) + updated by ~13 producers (Telegram + cockpit/S7
+  owner-control routes). The dream **can** fire.
+- Current live meaning is **"no Maez-directed interaction for 30 min," NOT "Rohit is
+  physically away."** Producers track explicit Maez interactions, not general desk presence.
+- The camera/presence backstop is **unavailable while `llama-server-vision` is inactive** —
+  so activity is currently the **sole** signal (no fresh-present block).
+- Therefore a dream witness with vision down is valid **only if (a) you are genuinely away,
+  or (b) you explicitly accept activity-only gating.** A dream firing while you are silently
+  working is a **known limitation, not a surprise regression** (Maez can tell you stopped
+  talking to it; it cannot currently tell you left the room).
+- **Not a code slice.** Right next action when witnessing: **restore `llama-server-vision`
+  before the witness, OR run the witness during real AFK.**
