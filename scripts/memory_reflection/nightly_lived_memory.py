@@ -461,11 +461,13 @@ def run_synthesis_pass(
     # focus reflection on what's been happening lately rather than
     # ancient state.
     # Decision 25 / ADR 0030: M1 telegram_exchange episodes are structural
-    # biography pointers in v1, not synthesis material. Reflection over bonded
-    # conversation episodes needs its own reviewed reflection-quality slice.
+    # biography pointers in v1, not synthesis material. Reflection Input Hygiene
+    # v0: prior reflection episodes are excluded too; synthesis must digest
+    # original evidence, never its own earlier output. Filter before the window
+    # slice so real source episodes are not crowded out.
     recent = [
         ep for ep in active
-        if ep.get("source_kind") != "telegram_exchange"
+        if ep.get("source_kind") not in ("telegram_exchange", "reflection")
     ][:recent_window_episodes]
     if not recent:
         return
