@@ -182,3 +182,29 @@ class BodyHealthWiringTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BodyOrganViewFrontendTests(unittest.TestCase):
+    """Source-text contract for the Slice B organ dashboard (the visual is owner-witnessed)."""
+
+    def setUp(self):
+        self.page = _read("ui/dashboard_local.html")
+
+    def test_reads_health_body_and_renders_organs(self):
+        self.assertIn("renderBody(d.body)", self.page)
+        self.assertIn('id="organView"', self.page)
+        for key in ("eyes", "stomach", "memory", "dreaming", "attention",
+                    "cycle_mind", "recall", "brain", "heartbeat", "covenant_perimeter"):
+            self.assertIn(f"'{key}'", self.page, f"organ {key} not rendered")
+
+    def test_stays_local_only_and_read_only(self):
+        # local-only banner preserved
+        self.assertIn("NOT exposed through nginx", self.page)
+        # lens-not-hand: the organ renderer must not POST/toggle/edit organs
+        organ_js = self.page.split("renderBody(d.body)", 1)[1]
+        self.assertNotIn("method: 'POST'", organ_js)
+        self.assertNotIn('method:"POST"', organ_js)
+
+    def test_no_fake_glow_when_body_absent(self):
+        # honest: no body -> "awaiting" message, not a fabricated organ grid
+        self.assertIn("awaiting /health.body", self.page)

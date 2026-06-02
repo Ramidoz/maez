@@ -158,6 +158,30 @@ svg { display: block; width: 100%; overflow: visible; }
 .callout.blue { background: rgba(106,140,90,0.06); border-left-color: var(--blue); }
 .callout.red { background: rgba(240,96,96,0.06); border-left-color: var(--red); }
 .flag { display: inline-block; background: rgba(240,96,96,0.12); color: var(--red); border: 1px solid rgba(240,96,96,0.3); border-radius: 3px; padding: 1px 6px; font-family: "JetBrains Mono", monospace; font-size: 10px; margin-left: 4px; }
+
+/* ── Maez Body · Organ View (Slice B) ─────────────────── */
+.organ-sec { margin: 14px 0 26px; }
+.organ-head { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
+.organ-title { font-size:16px; font-weight:600; letter-spacing:0.3px; }
+.organ-sub { color: var(--ink-dim); font-size:11px; }
+.organ-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(208px,1fr)); gap:10px; margin-top:13px; }
+.organ-tile { background: var(--panel); border:1px solid var(--border); border-radius:8px; padding:11px 13px; transition: border-color .5s; }
+.organ-tile .o-top { display:flex; align-items:center; gap:8px; }
+.organ-dot { width:9px; height:9px; border-radius:50%; background: var(--ink-fade); flex:none; transition: background .5s, box-shadow .5s; }
+.organ-tile.awake { border-color: rgba(141,191,106,0.40); }
+.organ-tile.awake .organ-dot { background: var(--green); box-shadow:0 0 7px 1px rgba(141,191,106,0.55); }
+.organ-tile.off .organ-dot { background: var(--ink-fade); }
+.organ-tile.staged { border-color: rgba(196,163,216,0.32); }
+.organ-tile.staged .organ-dot { background: var(--purple); box-shadow:0 0 6px 1px rgba(196,163,216,0.35); }
+.organ-tile.warn .organ-dot { background: var(--amber); box-shadow:0 0 7px 1px rgba(232,163,58,0.40); }
+.organ-tile.alert { border-color: rgba(232,106,106,0.5); }
+.organ-tile.alert .organ-dot { background: var(--red); box-shadow:0 0 7px 1px rgba(232,106,106,0.55); }
+.o-name { font-size:12px; font-weight:600; }
+.o-organ { color: var(--ink-fade); font-size:9.5px; margin-left:auto; font-family:"JetBrains Mono",monospace; text-transform:uppercase; letter-spacing:0.5px; }
+.o-state { font-size:13px; margin-top:8px; font-weight:600; color: var(--ink); }
+.o-detail { color: var(--ink-dim); font-size:10.5px; margin-top:3px; font-family:"JetBrains Mono",monospace; line-height:1.5; word-break:break-word; }
+.o-tag { display:inline-block; font-size:9px; font-family:"JetBrains Mono",monospace; padding:1px 5px; border-radius:3px; margin-top:7px; background:rgba(196,163,216,0.12); color:var(--purple); border:1px solid rgba(196,163,216,0.3); }
+.organ-note { color: var(--ink-fade); font-size:10px; margin-top:11px; font-style:italic; }
 </style>
 </head>
 <body>
@@ -199,6 +223,18 @@ svg { display: block; width: 100%; overflow: visible; }
   <div class="header">
     <div class="brand">MAEZ · LOCAL</div>
     <div class="tagline">interactive mission control · architect view</div>
+  </div>
+
+  <!-- ── MAEZ BODY · ORGAN VIEW (Slice B) ── -->
+  <div class="section organ-sec">
+    <div class="organ-head">
+      <div class="organ-title">Maez · Body</div>
+      <div class="organ-sub">live organ state · read-only · nothing glows that isn't true</div>
+    </div>
+    <div class="organ-grid" id="organView">
+      <div class="organ-note">awaiting /health.body — restart the daemon to light the organs.</div>
+    </div>
+    <div class="organ-note" id="organNote"></div>
   </div>
 
   <!-- ── INTERACTIVE MINDMAP ── -->
@@ -395,6 +431,7 @@ async function poll() {
       document.getElementById('h-cpu').textContent =
         (cpu != null ? cpu.toFixed(0) : '—') + '% / ' + (ram != null ? ram.toFixed(0) : '—') + '%';
     }
+    renderBody(d.body);
   } catch (e) {
     document.getElementById('h-status').innerHTML = '<span class="live-blink" style="background:var(--red)"></span>offline';
     document.getElementById('h-status').className = 'live-val err';
@@ -402,6 +439,84 @@ async function poll() {
 }
 poll();
 setInterval(poll, 10000);
+
+// ── Maez Body · Organ View renderer (read-only; every tile = real /health.body state) ──
+function _st(v){ return (v==null||v==='')?'—':v; }
+function _shortTs(s){ if(!s) return null; const t=String(s).replace('T',' '); return t.slice(11,16); }
+function _pct(v){ return v==null?'—':(Number(v).toFixed(0)+'%'); }
+
+// Each organ maps its content-free body.<key> fields to a tile {cls,state,detail,tag}.
+// cls ∈ awake | off | staged | warn | alert. Proprioception: no real state → no glow.
+const ORGANS = [
+  ['eyes','Eyes','camera', e=>{
+    const av=e.sensor_state==='available', present=e.presence_state==='present';
+    return { cls: !av ? (e.mode==='observe'?'warn':'off') : 'awake',
+      state: !av ? _st(e.sensor_state) : (present?'present':'absent'),
+      detail: `${_st(e.mode)} · ${_st(e.confidence_bucket)} conf` + (e.enabled_until?` · until ${_shortTs(e.enabled_until)}`:'') };
+  }],
+  ['stomach','Stomach','reflection', s=>{
+    const on=s.reflection_enabled, wr=s.write_enabled;
+    return { cls: on?'awake':'off',
+      state: on ? (wr?'writing':'dry-run') : 'off',
+      detail: `${on?'on':'off'} · ${wr?'write':'no-write'} · ${_st(s.max_reflections)}/night`,
+      tag: s.activity_state==='not_yet_wired' ? 'activity staged' : null };
+  }],
+  ['memory','Memory','episodes', m=>{
+    const unk=m.episode_counts_state==='unknown';
+    return { cls: unk?'warn':'awake', state: unk?'counts unknown':`${_st(m.total)} memories`,
+      detail: `raw ${_st(m.raw)} · daily ${_st(m.daily)} · core ${_st(m.core)} · refl ${_st(m.reflection)}\nepisodes ${_st(m.episodes_active)} active · ${_st(m.episodes_superseded)} superseded` };
+  }],
+  ['dreaming','Dreaming','dream', d=>({
+    cls: d.available?'staged':'off', state: d.available?'armed':'unavailable',
+    detail: 'idle-gated · owner-proposal only', tag: d.activity_state==='not_yet_wired'?'activity staged':null })],
+  ['attention','Attention','doorman', a=>({
+    cls: a.enabled?'awake':'off', state: a.enabled?'awake':'off',
+    detail: 'salience gate · wakes when worthy', tag: a.activity_state==='not_yet_wired'?'quiet-skips staged':null })],
+  ['cycle_mind','Cycle mind','packet', c=>({
+    cls: c.enabled?'awake':'off', state: c.enabled?'focused':'off',
+    detail: 'bounded evidence packet', tag: c.activity_state==='not_yet_wired'?'timing staged':null })],
+  ['recall','Recall','triad', r=>({
+    cls: r.enabled?'awake':'off', state: r.enabled?'on':'OFF',
+    detail: `${_st(r.mode)} · ${_st(r.reason)}` })],
+  ['brain','Brain','model', b=>{
+    const drift = b.served_model_alias && b.configured_model && b.served_model_alias!==b.configured_model;
+    return { cls:'awake', state:_st(b.served_model_alias),
+      detail: drift ? `serving (label says ${b.configured_model})` : `served · label ${_st(b.configured_model)}` };
+  }],
+  ['heartbeat','Heartbeat','cycle', h=>({
+    cls: h.cycle_stalled?'alert':'awake', state: h.cycle_stalled?'stalled':_st(h.stage),
+    detail: `cycle ${_st(h.cycle_count)} · ${h.cycle_age_seconds!=null?h.cycle_age_seconds+'s':'—'} old` })],
+  ['body','Hardware','rtx4090', s=>({
+    cls:'awake', state:`gpu ${_pct(s.gpu_percent)} · ${s.gpu_temp_c!=null?s.gpu_temp_c+'°C':'—'}`,
+    detail: `cpu ${_pct(s.cpu_percent)} · ram ${_pct(s.ram_percent)}` })],
+  ['covenant_perimeter','Covenant','perimeter', c=>({
+    cls:(c.public_exposure||c.screen_vision_enabled)?'alert':'awake', state:'held',
+    detail: `never-delete ${c.never_delete_memory?'✓':'✗'} · local-only ${c.local_only?'✓':'✗'}\nno-public ${!c.public_exposure?'✓':'✗'} · screen-vision ${c.screen_vision_enabled?'ON':'off'}` })],
+];
+
+function renderBody(body){
+  const el = document.getElementById('organView');
+  const note = document.getElementById('organNote');
+  if(!el) return;
+  if(!body){
+    el.innerHTML = '<div class="organ-note">awaiting /health.body — restart the daemon to light the organs (Slice A lands on next restart).</div>';
+    if(note) note.textContent='';
+    return;
+  }
+  let html='';
+  for(const [key,name,organ,fn] of ORGANS){
+    let t={cls:'off',state:'—',detail:'',tag:null};
+    try{ if(body[key]) t={...t, ...fn(body[key])}; }catch(_){ t={cls:'warn',state:'read error',detail:''}; }
+    const tag = t.tag ? `<div class="o-tag">${t.tag}</div>` : '';
+    html += `<div class="organ-tile ${t.cls}">`
+      + `<div class="o-top"><span class="organ-dot"></span><span class="o-name">${name}</span><span class="o-organ">${organ}</span></div>`
+      + `<div class="o-state">${t.state}</div>`
+      + (t.detail?`<div class="o-detail">${t.detail.replace(/\n/g,'<br>')}</div>`:'')
+      + tag + `</div>`;
+  }
+  el.innerHTML = html;
+  if(note) note.textContent = 'schema ' + (body.schema_version||'?') + ' · read-only proprioception · staged = wired but no live activity feed yet';
+}
 
 
 // ═════════════════════════════════════════════════════════
