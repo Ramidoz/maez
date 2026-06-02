@@ -23,7 +23,7 @@ The owner builds Maez extensively with Claude/Codex and has no window into what'
 
 Two parts, one data contract.
 
-**(A) Backend — compose a content-free `body` view into `/health`.** The browser can't read env vars or local files, so the organ truth must arrive through the endpoint. Extend the existing `/health` (daemon, `HEALTH_PORT=11435`) with a `body` object: one content-free sub-dict per organ (states / flags / counts / enums / timestamps — **never** memory or reflection text). `/health` already carries eyes/memory/brain/body/cycle; this adds the missing organs from env flags + counts + readily-available state. Additive, non-breaking, local-only.
+**(A) Backend — compose a content-free `body` view into `/health`.** The browser can't read env vars or local files, so the organ truth must arrive through the endpoint. Extend the existing `/health` (daemon, `HEALTH_PORT=11435`) with a `body` object: one content-free sub-dict per organ (states / flags / counts / enums / timestamps — **never** memory or reflection text). `/health` already carries eyes/memory/brain/body/cycle; this adds the missing organs from env flags + counts + readily-available state. Additive, non-breaking, local-only. Any public web aggregate that proxies daemon health must strip `body`, the same way it already strips camera presence and other owner-local health fields.
 
 **(B) Frontend — rebuild `ui/dashboard_local.html` into the Body/Organ View.** A central Maez form with radial organ callouts (the image's *language*, calmer execution), each tile bound to its `body.<organ>` fields, polling `/health` on the existing cadence. Read-only. Keeps the existing local-only warn banner.
 
@@ -35,7 +35,7 @@ Two parts, one data contract.
 |---|---|---|---|
 | **Eyes** (camera presence) | `/health.camera_presence` | mode, sensor_state, presence_state, confidence_bucket, enabled_until, last_observed_at | **v0 (ready)** |
 | **Memory** | `/health.memory` {raw,daily,core,total} + episode store | raw/daily/core counts; reflection count; active vs superseded | **v0 (ready + small count add)** |
-| **Brain** | `/health.model` | served model alias (qwen36-27b) | **v0 (ready)** |
+| **Brain** | `/health.model` + `served_model_alias(...)` observation | configured model label + observational served model alias (e.g. qwen36-27b, or `llamacpp:unknown` if the live server cannot be read) | **v0 (small truth-in-reporting add)** |
 | **Body** (hardware) | `/health.system` | cpu%, gpu%, gpu_temp_c, ram% | **v0 (ready)** |
 | **Heartbeat** (cycle) | `/health.reasoning_loop` + `cycle_count` + `uptime` | current stage, cycle age, stalled?, cycle count, uptime | **v0 (ready)** |
 | **Attention** (doorman) | env `MAEZ_CYCLE_DOORMAN_ENABLED` (+ quiet-skips/last-wake) | enabled (flag) — v0; quiet_skips, last wake/skip reason — v0.1 | **v0 flag / v0.1 activity** |
