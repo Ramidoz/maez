@@ -30,6 +30,14 @@ class _FakeEpisodeStore:
         raise AssertionError("dry-run reflection synthesis must not persist")
 
 
+class _WritingFakeEpisodeStore(_FakeEpisodeStore):
+    """Fake episode store whose add() persists by returning deterministic ids."""
+
+    def add(self, *args, **kwargs):
+        self.add_calls.append((args, kwargs))
+        return f"ep-written-{len(self.add_calls)}"
+
+
 def _reflection_json(_prompt: str) -> str:
     return json.dumps(
         [
@@ -55,6 +63,42 @@ def _reflection_json_with_metadata(prompt: str) -> str:
     _reflection_json_with_metadata.max_tokens = 8192
     _reflection_json_with_metadata.last_raw_content = raw
     return raw
+
+
+class ReflectionPersistedIdsTest(unittest.TestCase):
+    def test_run_synthesis_pass_captures_persisted_episode_ids(self):
+        from scripts.memory_reflection.nightly_lived_memory import (
+            ReflectionReport,
+            run_synthesis_pass,
+        )
+
+        store = _WritingFakeEpisodeStore()
+        report = ReflectionReport(dry_run=False)
+        run_synthesis_pass(
+            episode_store=store,
+            llm_call=_reflection_json_with_metadata,
+            report=report,
+            dry_run=False,
+        )
+
+        self.assertEqual(report.reflections_added, 1)
+        self.assertEqual(report.persisted_episode_ids, ["ep-written-1"])
+
+    def test_dry_run_leaves_persisted_ids_empty(self):
+        from scripts.memory_reflection.nightly_lived_memory import (
+            ReflectionReport,
+            run_synthesis_pass,
+        )
+
+        report = ReflectionReport(dry_run=True)
+        run_synthesis_pass(
+            episode_store=_FakeEpisodeStore(),
+            llm_call=_reflection_json_with_metadata,
+            report=report,
+            dry_run=True,
+        )
+
+        self.assertEqual(report.persisted_episode_ids, [])
 
 
 class ReflectionDryRunScriptTest(unittest.TestCase):
@@ -402,6 +446,100 @@ class ReflectionDryRunDaemonHookTest(unittest.TestCase):
         self.assertEqual(payload["status"], "error")
         self.assertEqual(payload["reason"], "synthesis_failed")
         self.assertNotIn("private reflection text", telemetry[0])
+
+
+class ReflectionWriteReceiptTest(unittest.TestCase):
+    def _drive_write_hook(self, tmp, store=None):
+        from daemon.maez_daemon import _run_reflection_synthesis_nightly
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "MAEZ_REFLECTION_SYNTHESIS_ENABLED": "1",
+                "MAEZ_REFLECTION_SYNTHESIS_WRITE": "1",
+            },
+            clear=False,
+        ):
+            return _run_reflection_synthesis_nightly(
+                SimpleNamespace(lived_episodes=store or _WritingFakeEpisodeStore()),
+                llm_call=_reflection_json_with_metadata,
+                artifact_dir=Path(tmp),
+            )
+
+    def test_write_mode_drops_persisted_reflection_receipt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = self._drive_write_hook(tmp)
+            files = list(Path(tmp).glob("*.jsonl"))
+            self.assertEqual(len(files), 1)
+            rows = [
+                json.loads(line)
+                for line in files[0].read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+
+        self.assertEqual(summary["status"], "write")
+        kinds = [row["kind"] for row in rows]
+        self.assertEqual(kinds[0], "run")
+        self.assertEqual(rows[0]["status"], "write")
+        self.assertEqual(rows[0]["reflections_added"], 1)
+        persisted = [row for row in rows if row["kind"] == "persisted_reflection"]
+        self.assertEqual(len(persisted), 1)
+        self.assertEqual(persisted[0]["episode_id"], "ep-written-1")
+        self.assertIn("live witness", persisted[0]["text"])
+        self.assertEqual(persisted[0]["source_memory_ids"], ["core-1"])
+        self.assertEqual(persisted[0]["authorship"], "reflection_synthesis")
+        self.assertEqual(persisted[0]["memory_voice"], "maez_self")
+        self.assertNotIn("candidate", kinds)
+        self.assertNotIn("drop", kinds)
+
+    def test_episode_ids_not_in_content_free_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = self._drive_write_hook(tmp)
+
+        blob = json.dumps(summary, sort_keys=True)
+        self.assertNotIn("ep-written-1", blob)
+        self.assertNotIn("live witness", blob)
+
+    def test_receipt_failure_keeps_write_success(self):
+        import daemon.maez_daemon as md
+
+        records = []
+
+        class _Logger:
+            def info(self, fmt, payload):
+                records.append(fmt % payload)
+
+            def warning(self, fmt, *args):
+                records.append(fmt % args if args else fmt)
+
+            def debug(self, *_args, **_kwargs):
+                pass
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "scripts.memory_reflection.nightly_lived_memory.write_reflection_write_artifact",
+            side_effect=OSError("disk full"),
+        ), mock.patch.object(md, "logger", _Logger()):
+            summary = self._drive_write_hook(tmp)
+
+        self.assertEqual(summary["status"], "write")
+        self.assertEqual(summary.get("artifact_path", ""), "")
+        warning = [record for record in records if record.startswith("reflection write receipt failed")]
+        self.assertEqual(warning, ["reflection write receipt failed: OSError"])
+        joined = "\n".join(records)
+        self.assertNotIn("ep-written-1", joined)
+        self.assertNotIn("live witness", joined)
+
+    def test_zero_persisted_writes_no_receipt_and_empty_artifact_path(self):
+        class _EmptyStore(_WritingFakeEpisodeStore):
+            def list_active(self):
+                return []
+
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = self._drive_write_hook(tmp, store=_EmptyStore())
+            files = list(Path(tmp).glob("*.jsonl"))
+
+        self.assertEqual(files, [])
+        self.assertEqual(summary.get("artifact_path", ""), "")
 
 
 class ReflectionMaxReflectionsDialTest(unittest.TestCase):

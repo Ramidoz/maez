@@ -1754,6 +1754,7 @@ def _run_reflection_synthesis_nightly(
         _default_llm_call,
         run_synthesis_pass,
         write_reflection_dry_run_artifact,
+        write_reflection_write_artifact,
     )
 
     dry_run = not _reflection_synthesis_write_enabled()
@@ -1797,6 +1798,11 @@ def _run_reflection_synthesis_nightly(
             return summary
         status = "dry_run"
         reason = "write_flag_off"
+    elif report.reflections_added >= 1:
+        try:
+            artifact_path = write_reflection_write_artifact(report, artifact_dir=artifact_dir)
+        except Exception as exc:
+            logger.warning("reflection write receipt failed: %s", type(exc).__name__)
     summary = _reflection_synthesis_summary(
         status=status,
         reason=reason,

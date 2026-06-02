@@ -78,6 +78,7 @@ class ReflectionReport:
     reflections_added: int = 0
     reflection_candidates: list[dict] = field(default_factory=list)
     reflection_drops: list[dict] = field(default_factory=list)
+    persisted_episode_ids: list[str] = field(default_factory=list)
     finish_reason: str | None = None
     max_tokens: int | None = None
     raw_model_content: str = ""
@@ -305,6 +306,54 @@ def write_reflection_dry_run_artifact(
                 "text": "",
                 "source_memory_ids": [],
                 "reason": reason,
+            }
+        )
+    with path.open("w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, sort_keys=True) + "\n")
+    return path
+
+
+def write_reflection_write_artifact(
+    report: ReflectionReport,
+    *,
+    artifact_dir: Path | None = None,
+    timestamp_slug: str | None = None,
+) -> Path:
+    """Write an owner-eyes receipt of reflections durably persisted this pass.
+
+    Unlike the dry-run artifact, this records only what Maez actually kept.
+    Callers write it after persistence; failure here must never undo memory.
+    """
+    root = artifact_dir or (_REPO_ROOT / "logs" / "reflection_writes")
+    root.mkdir(parents=True, exist_ok=True)
+    slug = timestamp_slug or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    path = root / f"{slug}.jsonl"
+    rows: list[dict] = [
+        {
+            "schema_version": 1,
+            "kind": "run",
+            "finish_reason": report.finish_reason or "",
+            "max_tokens": report.max_tokens,
+            "truncated": report.truncated,
+            "valid_witness": report.valid_witness,
+            "reflections_added": report.reflections_added,
+            "status": "write",
+        }
+    ]
+    candidates = list(report.reflection_candidates or [])
+    for index, episode_id in enumerate(list(report.persisted_episode_ids or [])):
+        candidate = candidates[index] if index < len(candidates) else {}
+        rows.append(
+            {
+                "schema_version": 1,
+                "kind": "persisted_reflection",
+                "episode_id": str(episode_id),
+                "text": str(candidate.get("text") or ""),
+                "source_memory_ids": list(candidate.get("source_memory_ids") or []),
+                "authorship": "reflection_synthesis",
+                "memory_voice": "maez_self",
+                "status": "write",
             }
         )
     with path.open("w", encoding="utf-8") as f:
@@ -565,6 +614,7 @@ def run_synthesis_pass(
         return
     new_ids = persist_reflections(refls, episode_store=episode_store)
     report.reflections_added = len(new_ids)
+    report.persisted_episode_ids = list(new_ids)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
