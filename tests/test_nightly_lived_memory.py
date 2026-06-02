@@ -24,10 +24,12 @@ Tests cover:
 
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _REPO = Path(__file__).resolve().parent.parent
 if str(_REPO) not in sys.path:
@@ -499,6 +501,136 @@ class M1EpisodesExcludedFromReflectionSynthesis(unittest.TestCase):
             self.assertEqual(report.reflections_attempted, 0)
             self.assertEqual(report.reflections_added, 0)
             self.assertEqual(len(store.list_active()), 1)
+        finally:
+            cleanup()
+
+
+class ReflectionSynthesisTerminalMetadataTests(unittest.TestCase):
+    def test_report_derives_truncated_and_valid_witness_from_finish_reason(self):
+        from scripts.memory_reflection.nightly_lived_memory import ReflectionReport
+
+        report = ReflectionReport(finish_reason="length")
+        self.assertTrue(report.truncated)
+        self.assertFalse(report.valid_witness)
+
+        report.finish_reason = "stop"
+        self.assertFalse(report.truncated)
+        self.assertTrue(report.valid_witness)
+
+        report.finish_reason = "llm_timeout"
+        self.assertFalse(report.truncated)
+        self.assertFalse(report.valid_witness)
+
+    def test_default_llm_call_records_stop_finish_reason_budget_and_raw_content(self):
+        from scripts.memory_reflection import nightly_lived_memory as nlm
+
+        class _Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return json.dumps(
+                    {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"content": "[{}]"},
+                            }
+                        ]
+                    }
+                ).encode("utf-8")
+
+        with mock.patch("urllib.request.urlopen", return_value=_Resp()):
+            llm_call = nlm._default_llm_call("qwen36-27b", 240)
+            text = llm_call("prompt")
+
+        self.assertEqual(text, "[{}]")
+        self.assertEqual(llm_call.last_finish_reason, "stop")
+        self.assertEqual(llm_call.max_tokens, 8192)
+        self.assertEqual(llm_call.last_raw_content, "[{}]")
+
+    def test_default_llm_call_records_length_finish_reason(self):
+        from scripts.memory_reflection import nightly_lived_memory as nlm
+
+        class _Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return json.dumps(
+                    {
+                        "choices": [
+                            {
+                                "finish_reason": "length",
+                                "message": {"content": ""},
+                            }
+                        ]
+                    }
+                ).encode("utf-8")
+
+        with mock.patch("urllib.request.urlopen", return_value=_Resp()):
+            llm_call = nlm._default_llm_call("qwen36-27b", 240)
+            text = llm_call("prompt")
+
+        self.assertEqual(text, "")
+        self.assertEqual(llm_call.last_finish_reason, "length")
+        self.assertEqual(llm_call.max_tokens, 8192)
+        self.assertEqual(llm_call.last_raw_content, "")
+
+    def test_default_llm_call_records_timeout_as_terminal_reason(self):
+        from scripts.memory_reflection import nightly_lived_memory as nlm
+
+        with mock.patch("urllib.request.urlopen", side_effect=TimeoutError("timed out")):
+            llm_call = nlm._default_llm_call("qwen36-27b", 240)
+            text = llm_call("prompt")
+
+        self.assertEqual(text, "")
+        self.assertEqual(llm_call.last_finish_reason, "llm_timeout")
+        self.assertEqual(llm_call.max_tokens, 8192)
+        self.assertEqual(llm_call.last_raw_content, "")
+
+    def test_run_synthesis_pass_copies_terminal_metadata_from_llm_call(self):
+        from scripts.memory_reflection.nightly_lived_memory import (
+            ReflectionReport,
+            run_synthesis_pass,
+        )
+
+        store, _graph, cleanup = _stores()
+        try:
+            store.add(
+                title="Runtime correction",
+                summary="Maez corrected an earlier false claim about its runtime.",
+                participants=["Maez", "Rohit"],
+                source_memory_ids=["core-runtime-correction"],
+                source_kind="core_memory",
+                occurred_at="2026-06-02T00:00:00+00:00",
+            )
+
+            def fake_llm(_prompt: str) -> str:
+                fake_llm.last_finish_reason = "length"
+                fake_llm.max_tokens = 8192
+                fake_llm.last_raw_content = ""
+                return ""
+
+            report = ReflectionReport(dry_run=True)
+            run_synthesis_pass(
+                episode_store=store,
+                llm_call=fake_llm,
+                report=report,
+                dry_run=True,
+            )
+
+            self.assertEqual(report.finish_reason, "length")
+            self.assertEqual(report.max_tokens, 8192)
+            self.assertEqual(report.raw_model_content, "")
+            self.assertTrue(report.truncated)
+            self.assertFalse(report.valid_witness)
         finally:
             cleanup()
 

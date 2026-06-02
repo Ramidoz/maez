@@ -53,6 +53,8 @@ from core.memory.relationship_graph import RelationshipGraph
 
 logger = logging.getLogger("maez.lived_memory.nightly")
 
+_REFLECTION_SYNTHESIS_MAX_TOKENS = 8192
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -76,10 +78,21 @@ class ReflectionReport:
     reflections_added: int = 0
     reflection_candidates: list[dict] = field(default_factory=list)
     reflection_drops: list[dict] = field(default_factory=list)
+    finish_reason: str | None = None
+    max_tokens: int | None = None
+    raw_model_content: str = ""
     dry_run: bool = False
     started_at: str = ""
     finished_at: str = ""
     error_messages: list[str] = field(default_factory=list)
+
+    @property
+    def truncated(self) -> bool:
+        return self.finish_reason == "length"
+
+    @property
+    def valid_witness(self) -> bool:
+        return self.finish_reason == "stop"
 
 
 def run_reflection(
@@ -408,14 +421,24 @@ def _default_llm_call(model: str, timeout_s: int):
     import urllib.error
     import json as _json
 
+    def _is_timeout_error(exc: BaseException) -> bool:
+        if isinstance(exc, TimeoutError):
+            return True
+        if isinstance(exc, urllib.error.URLError):
+            return isinstance(getattr(exc, "reason", None), TimeoutError)
+        return False
+
     def _call(prompt: str) -> str:
+        _call.last_finish_reason = None
+        _call.last_raw_content = ""
         body = _json.dumps({
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
             # Reasoning models (Qwen 3.6) emit a long chain-of-thought
-            # before the JSON. 4096 leaves room for the trace plus the
-            # final array even on a busy reflection set.
-            "max_tokens": 4096,
+            # before the JSON. The reflection dry-run witness showed
+            # 4096 can cut off before the final array; 8192 gives the
+            # trace room without changing prompt/model/routing.
+            "max_tokens": _REFLECTION_SYNTHESIS_MAX_TOKENS,
             "temperature": 0.4,
         }).encode("utf-8")
         req = urllib.request.Request(
@@ -428,13 +451,25 @@ def _default_llm_call(model: str, timeout_s: int):
             with urllib.request.urlopen(req, timeout=timeout_s) as resp:
                 payload = _json.loads(resp.read().decode("utf-8"))
         except (urllib.error.URLError, _json.JSONDecodeError, OSError) as exc:
+            _call.last_finish_reason = (
+                "llm_timeout" if _is_timeout_error(exc) else "llm_error"
+            )
             logger.warning("reflection LLM call failed: %s", exc)
             return ""
         try:
-            return payload["choices"][0]["message"]["content"] or ""
+            choice = payload["choices"][0]
+            _call.last_finish_reason = str(choice.get("finish_reason") or "unknown")
+            content = choice["message"]["content"] or ""
+            _call.last_raw_content = content
+            return content
         except (KeyError, IndexError, TypeError):
+            _call.last_finish_reason = "llm_error"
+            _call.last_raw_content = ""
             return ""
 
+    _call.last_finish_reason = None
+    _call.max_tokens = _REFLECTION_SYNTHESIS_MAX_TOKENS
+    _call.last_raw_content = ""
     return _call
 
 
@@ -480,6 +515,9 @@ def run_synthesis_pass(
         max_reflections=max_reflections,
         drop_sink=drops,
     )
+    report.finish_reason = getattr(llm_call, "last_finish_reason", None)
+    report.max_tokens = getattr(llm_call, "max_tokens", None)
+    report.raw_model_content = str(getattr(llm_call, "last_raw_content", "") or "")
     report.reflections_attempted = len(refls)
     report.reflection_candidates = [
         {
