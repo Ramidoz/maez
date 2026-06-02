@@ -166,3 +166,18 @@ write off.
 
 Both axes stable across both runs -> the `MAEZ_REFLECTION_SYNTHESIS_WRITE=1`
 decision reopens (honestly, not automatically).
+
+## Reflection Write Provenance + Voice Fairness v0 — capped canary
+
+After this slice lands, re-run ONE capped (max 1) write canary (write enabled
+for one pass only, then back to off):
+
+- New episode carries `authorship="reflection_synthesis"`,
+  `memory_voice="maez_self"`, `source_kind="reflection"`.
+- Citations resolve to non-reflection sources (zero recursion).
+- Fair-toned: no "self-deception"/"concealment"-class mislabel of honest
+  correction (owner voice read).
+- Write returns to off; append-only; superseder-recoverable if wrong.
+
+A well-provenanced, grounded, fair bite -> then the SEPARATE decision on
+whether reflection becomes a regular write organ.
