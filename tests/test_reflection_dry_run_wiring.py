@@ -49,6 +49,14 @@ def _reflection_json(_prompt: str) -> str:
     )
 
 
+def _reflection_json_with_metadata(prompt: str) -> str:
+    raw = _reflection_json(prompt)
+    _reflection_json_with_metadata.last_finish_reason = "stop"
+    _reflection_json_with_metadata.max_tokens = 8192
+    _reflection_json_with_metadata.last_raw_content = raw
+    return raw
+
+
 class ReflectionDryRunScriptTest(unittest.TestCase):
     def test_dry_run_captures_candidates_and_drops_to_local_artifact(self):
         from scripts.memory_reflection.nightly_lived_memory import (
@@ -62,7 +70,7 @@ class ReflectionDryRunScriptTest(unittest.TestCase):
 
         run_synthesis_pass(
             episode_store=store,
-            llm_call=_reflection_json,
+            llm_call=_reflection_json_with_metadata,
             max_reflections=3,
             report=report,
             dry_run=True,
@@ -84,6 +92,9 @@ class ReflectionDryRunScriptTest(unittest.TestCase):
             {drop["reason"] for drop in report.reflection_drops},
             {"missing_evidence", "fabricated_evidence"},
         )
+        self.assertEqual(report.finish_reason, "stop")
+        self.assertEqual(report.max_tokens, 8192)
+        self.assertTrue(report.valid_witness)
 
         with tempfile.TemporaryDirectory() as tmp:
             path = write_reflection_dry_run_artifact(
@@ -98,10 +109,52 @@ class ReflectionDryRunScriptTest(unittest.TestCase):
             ]
 
         self.assertEqual(path.name, "fixed.jsonl")
-        self.assertEqual(rows[0]["kind"], "candidate")
-        self.assertEqual(rows[0]["source_memory_ids"], ["core-1"])
-        self.assertIn("live witness", rows[0]["text"])
-        self.assertEqual({row["kind"] for row in rows[1:]}, {"drop"})
+        self.assertEqual(rows[0]["kind"], "run")
+        self.assertEqual(rows[0]["finish_reason"], "stop")
+        self.assertEqual(rows[0]["max_tokens"], 8192)
+        self.assertFalse(rows[0]["truncated"])
+        self.assertTrue(rows[0]["valid_witness"])
+        self.assertIn("live witness", rows[0]["raw_model_content"])
+        self.assertEqual(rows[1]["kind"], "candidate")
+        self.assertEqual(rows[1]["source_memory_ids"], ["core-1"])
+        self.assertIn("live witness", rows[1]["text"])
+        self.assertEqual({row["kind"] for row in rows[2:]}, {"drop"})
+
+    def test_artifact_marks_truncated_run_as_invalid_witness_not_no_candidates(self):
+        from scripts.memory_reflection.nightly_lived_memory import (
+            ReflectionReport,
+            write_reflection_dry_run_artifact,
+        )
+
+        report = ReflectionReport(
+            dry_run=True,
+            started_at="2026-06-02T04:00:00+00:00",
+            finish_reason="length",
+            max_tokens=8192,
+            raw_model_content="private truncated reasoning tail",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_reflection_dry_run_artifact(
+                report,
+                artifact_dir=Path(tmp),
+                timestamp_slug="truncated",
+            )
+            rows = [
+                json.loads(line)
+                for line in path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+
+        self.assertEqual(rows[0]["kind"], "run")
+        self.assertEqual(rows[0]["finish_reason"], "length")
+        self.assertTrue(rows[0]["truncated"])
+        self.assertFalse(rows[0]["valid_witness"])
+        self.assertEqual(rows[0]["reason"], "truncated")
+        self.assertIn("private truncated reasoning tail", rows[0]["raw_model_content"])
+        self.assertEqual(rows[1]["kind"], "summary")
+        self.assertEqual(rows[1]["reason"], "truncated")
+        self.assertNotEqual(rows[1]["reason"], "no_candidates")
 
 
 class ReflectionDryRunDaemonHookTest(unittest.TestCase):
@@ -129,7 +182,7 @@ class ReflectionDryRunDaemonHookTest(unittest.TestCase):
         ):
             summary = _run_reflection_synthesis_nightly(
                 SimpleNamespace(lived_episodes=_FakeEpisodeStore()),
-                llm_call=_reflection_json,
+                llm_call=_reflection_json_with_metadata,
                 artifact_dir=Path(tmp),
             )
             artifact_path = Path(str(summary["artifact_path"]))
@@ -145,8 +198,55 @@ class ReflectionDryRunDaemonHookTest(unittest.TestCase):
         self.assertEqual(summary["status"], "dry_run")
         self.assertEqual(summary["candidates_count"], 1)
         self.assertEqual(summary["drops_count"], 2)
-        self.assertEqual(rows[0]["kind"], "candidate")
-        self.assertIn("live witness before belief", rows[0]["text"])
+        self.assertEqual(summary["finish_reason"], "stop")
+        self.assertEqual(summary["max_tokens"], 8192)
+        self.assertEqual(rows[0]["kind"], "run")
+        self.assertEqual(rows[1]["kind"], "candidate")
+        self.assertIn("live witness before belief", rows[1]["text"])
+
+    def test_summary_marks_truncation_as_invalid_witness_without_content_leak(self):
+        from daemon.maez_daemon import _reflection_synthesis_summary
+        from scripts.memory_reflection.nightly_lived_memory import ReflectionReport
+
+        report = ReflectionReport(
+            dry_run=True,
+            finish_reason="length",
+            max_tokens=8192,
+            raw_model_content="private truncated reasoning tail",
+        )
+
+        summary = _reflection_synthesis_summary(
+            status="dry_run",
+            reason="write_flag_off",
+            report=report,
+        )
+
+        self.assertEqual(summary["status"], "invalid_witness")
+        self.assertEqual(summary["reason"], "truncated")
+        self.assertEqual(summary["finish_reason"], "length")
+        self.assertEqual(summary["max_tokens"], 8192)
+        self.assertTrue(summary["truncated"])
+        self.assertNotIn(
+            "private truncated reasoning tail",
+            json.dumps(summary, sort_keys=True),
+        )
+
+    def test_summary_allows_no_candidates_only_for_stop_finish_reason(self):
+        from daemon.maez_daemon import _reflection_synthesis_summary
+        from scripts.memory_reflection.nightly_lived_memory import ReflectionReport
+
+        report = ReflectionReport(dry_run=True, finish_reason="stop", max_tokens=8192)
+
+        summary = _reflection_synthesis_summary(
+            status="dry_run",
+            reason="write_flag_off",
+            report=report,
+        )
+
+        self.assertEqual(summary["status"], "dry_run")
+        self.assertEqual(summary["reason"], "write_flag_off")
+        self.assertEqual(summary["finish_reason"], "stop")
+        self.assertFalse(summary["truncated"])
 
     def test_synthesis_failure_emits_content_free_telemetry(self):
         from daemon import maez_daemon

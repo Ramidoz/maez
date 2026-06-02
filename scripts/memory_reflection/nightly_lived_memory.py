@@ -233,6 +233,18 @@ def _write_log(report: ReflectionReport, log_path: Path) -> None:
         f.write("\n".join(lines))
 
 
+def _reflection_witness_reason(report: ReflectionReport) -> str:
+    if report.finish_reason == "length":
+        return "truncated"
+    if report.finish_reason == "llm_timeout":
+        return "llm_timeout"
+    if report.finish_reason == "llm_error":
+        return "llm_error"
+    if report.finish_reason and report.finish_reason != "stop":
+        return "llm_error"
+    return "no_candidates"
+
+
 def write_reflection_dry_run_artifact(
     report: ReflectionReport,
     *,
@@ -248,34 +260,49 @@ def write_reflection_dry_run_artifact(
     root.mkdir(parents=True, exist_ok=True)
     slug = timestamp_slug or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     path = root / f"{slug}.jsonl"
-    rows: list[dict] = []
+    reason = _reflection_witness_reason(report)
+    rows: list[dict] = [
+        {
+            "schema_version": 2,
+            "kind": "run",
+            "finish_reason": report.finish_reason or "",
+            "max_tokens": report.max_tokens,
+            "truncated": report.truncated,
+            "valid_witness": report.valid_witness,
+            "reason": "completed" if report.valid_witness else reason,
+            "raw_model_content": report.raw_model_content,
+        }
+    ]
+    detail_rows = 0
     for candidate in report.reflection_candidates:
+        detail_rows += 1
         rows.append(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "kind": "candidate",
                 "text": str(candidate.get("text") or ""),
                 "source_memory_ids": list(candidate.get("source_memory_ids") or []),
             }
         )
     for drop in report.reflection_drops:
+        detail_rows += 1
         rows.append(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "kind": "drop",
                 "text": str(drop.get("text") or ""),
                 "source_memory_ids": list(drop.get("source_memory_ids") or []),
                 "reason": str(drop.get("reason") or "unknown"),
             }
         )
-    if not rows:
+    if detail_rows == 0:
         rows.append(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "kind": "summary",
                 "text": "",
                 "source_memory_ids": [],
-                "reason": "no_candidates",
+                "reason": reason,
             }
         )
     with path.open("w", encoding="utf-8") as f:
@@ -581,8 +608,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument(
         "--synthesis-timeout",
         type=int,
-        default=120,
-        help="seconds to wait for the reflection LLM (default: 120)",
+        default=240,
+        help="seconds to wait for the reflection LLM (default: 240)",
     )
     ap.add_argument(
         "--synthesis-max",

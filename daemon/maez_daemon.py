@@ -1643,6 +1643,19 @@ def _reflection_synthesis_write_enabled(environ: object | None = None) -> bool:
     return (env.get("MAEZ_REFLECTION_SYNTHESIS_WRITE", "") or "").strip() == "1"
 
 
+def _reflection_terminal_reason(report: object | None, fallback: str) -> tuple[str, str]:
+    finish_reason = str(getattr(report, "finish_reason", "") or "")
+    if finish_reason == "length":
+        return "invalid_witness", "truncated"
+    if finish_reason == "llm_timeout":
+        return "invalid_witness", "llm_timeout"
+    if finish_reason == "llm_error":
+        return "invalid_witness", "llm_error"
+    if finish_reason and finish_reason != "stop":
+        return "invalid_witness", "llm_error"
+    return str(fallback), ""
+
+
 def _reflection_synthesis_summary(
     *,
     status: str,
@@ -1650,14 +1663,18 @@ def _reflection_synthesis_summary(
     report: object | None = None,
     artifact_path: Path | None = None,
 ) -> dict[str, object]:
+    mapped_status, mapped_reason = _reflection_terminal_reason(report, status)
     return {
-        "status": str(status),
-        "reason": str(reason),
+        "status": mapped_status,
+        "reason": mapped_reason or str(reason),
         "candidates_count": int(len(getattr(report, "reflection_candidates", []) or [])),
         "drops_count": int(len(getattr(report, "reflection_drops", []) or [])),
         "reflections_attempted": int(getattr(report, "reflections_attempted", 0) or 0),
         "reflections_added": int(getattr(report, "reflections_added", 0) or 0),
         "artifact_path": str(artifact_path) if artifact_path is not None else "",
+        "finish_reason": str(getattr(report, "finish_reason", "") or ""),
+        "max_tokens": getattr(report, "max_tokens", None),
+        "truncated": bool(getattr(report, "truncated", False)),
     }
 
 
@@ -1731,7 +1748,7 @@ def _run_reflection_synthesis_nightly(
     started_mono = time.monotonic()
     report = ReflectionReport(dry_run=dry_run, started_at=datetime.now(timezone.utc).isoformat())
     if llm_call is None:
-        llm_call = _default_llm_call("qwen36-27b", 120)
+        llm_call = _default_llm_call("qwen36-27b", 240)
     try:
         run_synthesis_pass(
             episode_store=getattr(daemon, "lived_episodes"),
