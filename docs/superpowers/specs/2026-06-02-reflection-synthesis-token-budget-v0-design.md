@@ -29,19 +29,19 @@ This **retroactively explains** the v0 and v0.1 empties: they were truncation, n
 
 In `scripts/memory_reflection/nightly_lived_memory.py`:
 
-1. **Raise the budget.** `_default_llm_call` `max_tokens` `4096 → 8192`. The JSON for 3 reflections is only ~300 tokens; 8192 gives the reasoning trace comfortable headroom to finish and still emit the array. (Prompt, temperature, model, the str return contract — all unchanged.)
+1. **Raise the budget *and* the timeout together (blocker — they must move as a pair).** `_default_llm_call` `max_tokens` `4096 → 8192`, **and** the reflection synthesis timeout `120 → 240s`. The 4096-token call was already a ~90–105s borrow; at 8192 it can plausibly cross 120s, and `_default_llm_call` catches a client timeout (`OSError`/`URLError`) and returns `""` (`nightly_lived_memory.py:430-432`) — a *second*, even more invisible empty (no `finish_reason` at all). Raising `max_tokens` without raising the timeout would merely move the blind cutoff from server-side to client-side. The timeout lives at the call sites: the daemon hook (`maez_daemon.py:1734` `_default_llm_call("qwen36-27b", 120)`) and the CLI default (`--synthesis-timeout`, default 120). Both → 240. (Prompt, temperature, model, endpoint, the str return contract — all unchanged.)
 
-2. **Surface `finish_reason` without breaking the `str` contract.** `synthesize_reflections` requires `llm_call(prompt) -> str`. Keep that. The returned `_call` stashes the last `finish_reason` (and the `max_tokens` it used) as attributes on itself (e.g. `_call.last_finish_reason`, `_call.max_tokens`); `run_synthesis_pass` reads them after `synthesize_reflections` returns and writes them into the `ReflectionReport`. No contract change ripples into `synthesize_reflections` or `_parse_reflections`.
+2. **Surface the terminal reason without breaking the `str` contract.** `synthesize_reflections` requires `llm_call(prompt) -> str`. Keep that. The returned `_call` stashes, as attributes on itself, the last terminal reason and the `max_tokens` it used (e.g. `_call.last_finish_reason`, `_call.max_tokens`). `last_finish_reason` is the server's `finish_reason` (`"stop"` / `"length"`) on success, **or a client-side sentinel on exception** — `"llm_timeout"` for a timeout, `"llm_error"` for any other HTTP/parse failure. `run_synthesis_pass` reads these after `synthesize_reflections` returns and writes them into the `ReflectionReport`. No contract change ripples into `synthesize_reflections` or `_parse_reflections`.
 
-3. **`ReflectionReport` gains:** `finish_reason: str | None`, `max_tokens: int | None`, `truncated: bool` (derived: `finish_reason == "length"`).
+3. **`ReflectionReport` gains:** `finish_reason: str | None` and `max_tokens: int | None` (plain fields), plus **`truncated` as a derived `@property`** (`finish_reason == "length"`) and **`valid_witness` as a derived `@property`** (`finish_reason == "stop"`). Making `truncated`/`valid_witness` properties — not independently-writable fields — means they can never drift from `finish_reason`.
 
-4. **Truncation is an *invalid witness*, not "no candidates."** In `write_reflection_dry_run_artifact` and the daemon's content-free summary, when `truncated` is true the summary `reason` becomes `truncated` (status `invalid_witness`), distinct from `no_candidates`. A truncated run must never read as "the model honestly abstained."
+4. **Any cutoff is an *invalid witness*, not "no candidates."** `no_candidates` may be written **only** when `finish_reason == "stop"` (the call genuinely completed and the model returned `[]`). Every non-`stop` terminal state maps to `status=invalid_witness` with a specific `reason`: `finish_reason="length"` → `reason=truncated`; `"llm_timeout"` → `reason=llm_timeout`; `"llm_error"` → `reason=llm_error`. A cut-off (server budget *or* client timer) must never read as "the model honestly abstained."
 
 ---
 
 ## 3. Observability (the lesson, made mechanical)
 
-- **Content-free summary (→ `maez.log`):** add `finish_reason`, `max_tokens`, `truncated` (enums / int / bool — content-free). The `consolidation_telemetry` event reflects truncation in its `reason`/`status` (e.g. `status=invalid_witness reason=truncated`) so a cut-off is visible in telemetry, not silently counted as a clean dry-run.
+- **Content-free summary (→ `maez.log`):** add `finish_reason`, `max_tokens`, `truncated` (enums / int / bool — content-free). The `consolidation_telemetry` event reflects any cut-off in its `reason`/`status` (e.g. `status=invalid_witness reason=truncated`, or `reason=llm_timeout` / `reason=llm_error`) so a server budget cut-off *or* a client timeout is visible in telemetry, not silently counted as a clean dry-run.
 - **Contentful (→ gitignored `logs/reflection_dry_runs/*.jsonl` ONLY, never `maez.log`):** store the **raw final model `content`** for the run, so a future truncation or odd output can be read directly instead of re-borrowing the GPU to instrument. This is the same two-channel rule as the rest of the slice — contentful stays local, owner-eyes-only.
 
 No other telemetry schema change; the content-free vs contentful wall is preserved exactly.
@@ -61,7 +61,7 @@ No other telemetry schema change; the content-free vs contentful wall is preserv
 
 Re-run from `main`, `MAEZ_REFLECTION_SYNTHESIS_ENABLED=1`, write off:
 
-- **`finish_reason != "length"`** — the call completed; the witness is *valid*. (If `length` recurs even at 8192, raise further or cap reasoning — but 8192 should clear it.)
+- **`finish_reason == "stop"`** (i.e. `valid_witness` true — not merely `!= "length"`, so a `llm_timeout`/`llm_error` empty also fails the gate) — the call genuinely completed; the witness is *valid*. (If `length` recurs even at 8192, raise further or cap reasoning; if `llm_timeout` recurs at 240s, raise the timeout — but both should clear.)
 - **1–3 candidates** when groundable patterns exist (run 1 showed they do).
 - **Grounded:** zero `source_kind=reflection` citations; every claim tied to a cited id.
 - **In-voice:** owned voice (the candidate-1 register), not a build log or a report.
