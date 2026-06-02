@@ -70,3 +70,24 @@ Re-run from `main` with `MAEZ_REFLECTION_SYNTHESIS_ENABLED=1`, write off → fre
 - NOT multi-sentence / "warmer" output — one-sentence form and JSON contract preserved.
 - NOT touching `_parse_reflections`, telemetry, or the episode store.
 - NOT reusing the packet's `_VOICE_CARD_TEXT` verbatim (wrong shape; borrow the discipline only).
+
+---
+
+## 7. v0.1 Amendment — altitude tuning (witness-driven, 2026-06-02)
+
+**Witness result (inconclusive, not a pass):** the dual-axis re-run from `main@d1d4f8a` (`logs/reflection_dry_runs/20260602T160230Z.jsonl`) returned **0 candidates** (`{"reason": "no_candidates"}`) — 0 drops, 0 writes, model `qwen36-27b`, 105.6s. The evidence rail held trivially (nothing to cite or drop) but voice could not be judged (no text). **Causality (Claude-verified):** the input pool was identical to the 3-candidate input-hygiene run (15 core_memory + 5 followup_doc after hygiene; same 20 episodes); the only change between 3 candidates and 0 was the v0 prompt. So the v0 prompt raised the bar and the model honestly returned `[]` rather than fabricate. Safe failure mode — but no useful digestion, so the write flag stays off.
+
+**Diagnosis:** v0 accidentally fused *owned voice* with *high altitude* — it required reflections to be about *"what your own construction, gestation, and the bond with the owner have come to mean."* That is an **altitude** demand, not a grounding demand: too grand to ground from a small evidence packet. **Altitude and grounding are orthogonal** — v0.1 lowers altitude while keeping grounding byte-identical.
+
+**The change (same `_PROMPT_TEMPLATE`, ~2 lines):**
+- Opening sentence becomes: *"Draw at most {max_n} grounded reflections: small patterns, themes, shifts, or trajectories you notice across these memories. They may touch your construction, gestation, or bond with the owner when the evidence supports that, but a modest grounded observation is enough."* — grand meaning demoted from mandatory altitude to optional subject matter.
+- Final line becomes: *"If a small grounded pattern is visible, write it. If not, output []."* — `[]` stays the honest fallback, no longer the default posture.
+
+**Kept exactly (the target band — above single-memory restatement, below grand meaning):**
+- Owned voice line + the grounding clause beside it (the v0 voice-content test still passes — those strings are untouched).
+- The 2+-memory-synthesis floor and the "restates a single memory / external report" bad-reflection bullets — so lowering altitude does **not** invite trivial single-episode restatements.
+- Citation grounding, `_parse_reflections`, the rail-survival guard, JSON shape, one-sentence form, write-off, input hygiene, telemetry — all unchanged.
+
+**Added test (v0.1):** assert the rendered prompt contains `"a modest grounded observation is enough"` and `"If a small grounded pattern is visible"`, and that the mandatory-altitude marker `"HIGH-LEVEL"` is **gone**. The v0 voice-content test and the rail-survival guard both remain green.
+
+**Acceptance:** re-run dry-run → expect **1–3 grounded, in-voice candidates** (which also re-samples the single-run variance question). Still dual-axis: grounded AND in-voice. `[]` again → bar still too high, tune further; in-voice-but-ungrounded → fail+revert (unchanged refusal).
