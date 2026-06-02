@@ -444,15 +444,20 @@ setInterval(poll, 10000);
 function _st(v){ return (v==null||v==='')?'—':v; }
 function _shortTs(s){ if(!s) return null; const t=String(s).replace('T',' '); return t.slice(11,16); }
 function _pct(v){ return v==null?'—':(Number(v).toFixed(0)+'%'); }
+function _ageSec(iso){ if(!iso) return null; const t=Date.parse(String(iso)); return isNaN(t)?null:Math.max(0,Math.round((Date.now()-t)/1000)); }
 
 // Each organ maps its content-free body.<key> fields to a tile {cls,state,detail,tag}.
 // cls ∈ awake | off | staged | warn | alert. Proprioception: no real state → no glow.
 const ORGANS = [
   ['eyes','Eyes','camera', e=>{
     const av=e.sensor_state==='available', present=e.presence_state==='present';
-    return { cls: !av ? (e.mode==='observe'?'warn':'off') : 'awake',
-      state: !av ? _st(e.sensor_state) : (present?'present':'absent'),
-      detail: `${_st(e.mode)} · ${_st(e.confidence_bucket)} conf` + (e.enabled_until?` · until ${_shortTs(e.enabled_until)}`:'') };
+    const age=_ageSec(e.last_observed_at);
+    // The camera SAMPLES every ~60s — it is not live video. Surface the reading's
+    // age so a stale "present" reads as a periodic sample, not a frozen feed.
+    const stale = age!=null && age>90;
+    return { cls: !av ? (e.mode==='observe'?'warn':'off') : (stale?'warn':(present?'awake':'off')),
+      state: (!av ? _st(e.sensor_state) : (present?'present':'absent')) + (stale?' · stale':''),
+      detail: (age!=null?`seen ${age}s ago`:'no look yet') + ` · samples ~60s · ${_st(e.confidence_bucket)} conf` + (e.enabled_until?` · until ${_shortTs(e.enabled_until)}`:'') };
   }],
   ['stomach','Stomach','reflection', s=>{
     const on=s.reflection_enabled, wr=s.write_enabled;
