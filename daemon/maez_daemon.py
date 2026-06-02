@@ -1763,11 +1763,31 @@ def _cycle_next_quiet_skips(
         # A doorman wake is a wake opportunity even if the deep brain later
         # says HEARTBEAT_OK. Reset to keep the floor periodic, not latched.
         return 0
+    if not gate_decision.wake and result is None:
+        return int(current_quiet_skips) + 1
     if result is not None and str(result).strip() != _HEARTBEAT_OK:
         return 0
     if result is not None and str(result).strip() == _HEARTBEAT_OK:
         return int(current_quiet_skips) + 1
     return int(current_quiet_skips)
+
+
+def _cycle_apply_quiet_counter_result(
+    daemon: object,
+    *,
+    gate_decision: _CycleDoormanGateDecision,
+    result: str | None,
+) -> None:
+    current = int(getattr(daemon, "_cycles_since_last_thought", 0))
+    setattr(
+        daemon,
+        "_cycles_since_last_thought",
+        _cycle_next_quiet_skips(
+            gate_decision=gate_decision,
+            current_quiet_skips=current,
+            result=result,
+        ),
+    )
 
 
 def _build_cycle_focused_prompt(
@@ -7516,17 +7536,11 @@ class MaezDaemon:
                         self.cycle_count,
                         _cycle_doorman_gate.reason_code,
                     )
-                    self._cycles_since_last_thought = _cycle_next_quiet_skips(
-                        gate_decision=_cycle_doorman_gate,
-                        current_quiet_skips=self._cycles_since_last_thought,
-                        result=None,
-                    )
                 else:
                     logger.info(
                         "Cycle %d: HEARTBEAT_OK — perception unchanged (gated)",
                         self.cycle_count,
                     )
-                    self._cycles_since_last_thought += 1
                 result = None
             else:
                 # Patch A: which axes have been stable across the
@@ -7555,13 +7569,22 @@ class MaezDaemon:
                     result = None
             if result is None:
                 # Either gate skipped, or _reason couldn't run. No-op.
+                _cycle_apply_quiet_counter_result(
+                    self,
+                    gate_decision=_cycle_doorman_gate,
+                    result=result,
+                )
                 self._s1b_flush_residue_events()
                 pass
             elif result.strip() == _HEARTBEAT_OK:
                 # Nothing noteworthy this cycle — skip audit, storage, broadcast.
                 # Storing fabricated prose is worse than storing nothing.
                 logger.info("Cycle %d: HEARTBEAT_OK — silent cycle", self.cycle_count)
-                self._cycles_since_last_thought += 1
+                _cycle_apply_quiet_counter_result(
+                    self,
+                    gate_decision=_cycle_doorman_gate,
+                    result=result,
+                )
                 self._s1b_flush_residue_events()
                 result = None
             else:
@@ -7830,7 +7853,11 @@ class MaezDaemon:
                 # axes into history (Patch A's stale-field detector)
                 # and reset the floor counter (Patch B's gate).
                 self._recent_thought_axes.append(current_axes)
-                self._cycles_since_last_thought = 0
+                _cycle_apply_quiet_counter_result(
+                    self,
+                    gate_decision=_cycle_doorman_gate,
+                    result=result,
+                )
 
             # Exploratory mind — advance one wondering with remaining budget.
             # _reason() ran first. If there's no room left in the cycle, the

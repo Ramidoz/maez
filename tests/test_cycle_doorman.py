@@ -279,6 +279,90 @@ class DoormanDaemonSeamTest(unittest.TestCase):
             4,
         )
 
+    def test_live_counter_field_resets_after_doorman_wake_heartbeat(self):
+        from daemon.maez_daemon import (
+            _HEARTBEAT_OK,
+            _cycle_apply_quiet_counter_result,
+            _cycle_doorman_gate_decision,
+        )
+
+        daemon = SimpleNamespace(_cycles_since_last_thought=10)
+        gate = _cycle_doorman_gate_decision(
+            doorman_enabled=True,
+            current_signature="A",
+            last_thought_signature="A",
+            quiet_skips=10,
+            min_floor=10,
+            signals=DoormanSignals(
+                perception_changed=False,
+                new_failures=0,
+                open_wants=0,
+                memory_delta=False,
+                signal_availability_changed=False,
+                scheduled_due=False,
+                quiet_skips=10,
+                min_floor=10,
+                presence="active",
+            ),
+        )
+
+        _cycle_apply_quiet_counter_result(
+            daemon,
+            gate_decision=gate,
+            result=_HEARTBEAT_OK,
+        )
+
+        self.assertEqual(daemon._cycles_since_last_thought, 0)
+
+    def test_live_counter_field_increments_after_doorman_skip(self):
+        from daemon.maez_daemon import (
+            _cycle_apply_quiet_counter_result,
+            _cycle_doorman_gate_decision,
+        )
+
+        daemon = SimpleNamespace(_cycles_since_last_thought=3)
+        gate = _cycle_doorman_gate_decision(
+            doorman_enabled=True,
+            current_signature="A",
+            last_thought_signature="A",
+            quiet_skips=3,
+            min_floor=10,
+            signals=_quiet(),
+        )
+
+        _cycle_apply_quiet_counter_result(
+            daemon,
+            gate_decision=gate,
+            result=None,
+        )
+
+        self.assertEqual(daemon._cycles_since_last_thought, 4)
+
+    def test_live_counter_field_preserves_legacy_heartbeat_increment_flag_off(self):
+        from daemon.maez_daemon import (
+            _HEARTBEAT_OK,
+            _cycle_apply_quiet_counter_result,
+            _cycle_doorman_gate_decision,
+        )
+
+        daemon = SimpleNamespace(_cycles_since_last_thought=3)
+        gate = _cycle_doorman_gate_decision(
+            doorman_enabled=False,
+            current_signature="B",
+            last_thought_signature="A",
+            quiet_skips=3,
+            min_floor=10,
+            signals=_quiet(),
+        )
+
+        _cycle_apply_quiet_counter_result(
+            daemon,
+            gate_decision=gate,
+            result=_HEARTBEAT_OK,
+        )
+
+        self.assertEqual(daemon._cycles_since_last_thought, 4)
+
     def test_action_failure_count_is_content_free_count(self):
         from daemon.maez_daemon import _cycle_action_failure_count
 
