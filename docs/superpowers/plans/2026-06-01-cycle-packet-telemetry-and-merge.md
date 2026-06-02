@@ -19,7 +19,7 @@ Two timings; do **1a first** (trivial, always works, alone fixes the complaint),
 **Files:** `daemon/maez_daemon.py` (`_reason`, the cycle `chat` call ~`:3720`; `_log_cycle_packet_shape` ~`:3680`); telemetry helper ~`:1505-1543`.
 
 - [ ] **Step 1 (test):** assert `cycle_packet_shape` carries a numeric `chat_total_ms` after a (faked) cycle chat — content-free (number only).
-- [ ] **Step 2:** wrap the cycle's `response = _llm_client.chat(...)` in a `time.monotonic()` timer; pass `chat_total_ms=int(elapsed*1000)` into `_log_cycle_packet_shape`. Add `chat_total_ms` to the shape dict (alongside the existing `prefill_ms`). Content-free.
+- [ ] **Step 2:** wrap the cycle's `response = _llm_client.chat(...)` in a `time.monotonic()` timer; pass `chat_total_ms=int(elapsed*1000)` into `_log_cycle_packet_shape`. Add `chat_total_ms` as its **own cycle-telemetry field** in the `cycle_packet_shape` dict (alongside `prefill_ms`). **NOT** borrowed from focused-recall's existing `chat_total_ms` — that's a different surface; the cycle field is independent. Content-free.
 - [ ] **Step 3:** Run → PASS. Commit `feat(cycle): self-report chat_total_ms in cycle_packet_shape`.
 
 ### Task 1b: server `prefill_ms` (precise; llama.cpp socket path)
@@ -28,7 +28,11 @@ The server's `timings.prompt_ms` (true prefill) rides in the final SSE chunk, wh
 
 **Files:** `core/routing/llm_client.py` (`_LlamaCppStreamParser`, `_LlamaCppSocketStream`, `_LlmResponse`, `chat`); `core/routing/cancellable_brain_call.py` (surface the captured timings); `daemon/maez_daemon.py` (`_reason`).
 
-- [ ] **Step 1 (test):** feed `_LlamaCppStreamParser` a wire whose final `data:` chunk includes `"timings":{"prompt_ms":1234,...}`; assert the parser exposes `prompt_ms=1234` after iteration (and `None` when no timings present).
+- [ ] **Step 1 (tests — assert BOTH paths explicitly):**
+  - **Parser, timings present:** feed `_LlamaCppStreamParser` a wire whose final `data:` chunk includes `"timings":{"prompt_ms":1234,...}`; assert it exposes `server_prompt_ms=1234` after iteration. **Add this timings chunk to the FRAGMENTATION torture** (1-byte + adversarial slices) so the timings block is captured even when split across `recv()`s.
+  - **Parser, no timings:** a wire with no `timings` block → `server_prompt_ms is None`.
+  - **Socket/SSE chat path:** `server_prompt_ms == 1234` surfaces on `_LlmResponse`.
+  - **Generic/buffered (non-llamacpp / ollama / non-streaming) path:** `_LlmResponse.server_prompt_ms is None`, with **no behavioral change** — existing return shape + content unchanged.
 - [ ] **Step 2:** in `_LlamaCppStreamParser._drain_sse`, when a parsed `data` dict has a `timings` block, stash `self.server_prompt_ms = timings.get("prompt_ms")` (and optionally `predicted_ms`). Expose it on `_LlamaCppSocketStream` (read-through to the parser). `CancellableBrainCall.collect()` returns the buffered text as today; add a way to read the stream's `server_prompt_ms` after collect (e.g. a property).
 - [ ] **Step 3:** add an **optional** `server_prompt_ms: int | None = None` field to `_LlmResponse` (additive; default None so every existing consumer is unaffected); populate it in `chat()` from the cancellable call when the llama.cpp socket path is used. Non-llamacpp / buffered / ollama paths leave it `None` (graceful).
 - [ ] **Step 4:** in `_reason`, pass `getattr(response, "server_prompt_ms", None)` as `prefill_ms` to `_log_cycle_packet_shape`. Now `prefill_ms` is the real server prefill when available, `None` otherwise (and `chat_total_ms` always covers it).
@@ -44,6 +48,16 @@ The server's `timings.prompt_ms` (true prefill) rides in the final SSE chunk, wh
 - [ ] **Step 4:** Optional re-witness: with the flag on for a short window, confirm `cycle_packet_shape` now self-reports `prefill_ms` + `chat_total_ms` (no more hand-reading llama.cpp logs). Revert flag off.
 
 ---
+
+## Execution bar (Codex acceptance checklist — all must hold)
+
+- [ ] Parser fragmentation test **includes the `timings` chunk** (captured even when split across `recv()`s).
+- [ ] `_LlamaCppStreamParser` exposes `server_prompt_ms` (int when timings present, `None` otherwise).
+- [ ] `_LlmResponse.server_prompt_ms` is **additive / default `None`**; **every existing `_LlmResponse(...)` construction + test still passes** (no positional-arg breakage).
+- [ ] `cycle_packet_shape` carries **`chat_total_ms` always** and **`prefill_ms` only when available** (socket/SSE path); `None` on buffered/non-llamacpp paths.
+- [ ] Generic/buffered chat path: **no behavioral change** (same return shape + content).
+- [ ] **Flag-off remains a true no-op.**
+- [ ] **No content text leaks into telemetry** (numbers / bools / closed enums only — assert the field set).
 
 ## Out of scope (separate, later slices)
 
