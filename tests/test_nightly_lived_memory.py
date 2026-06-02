@@ -635,5 +635,50 @@ class ReflectionSynthesisTerminalMetadataTests(unittest.TestCase):
             cleanup()
 
 
+class ReflectionReasoningCapTests(unittest.TestCase):
+    def test_default_llm_call_disables_thinking_without_other_payload_drift(self):
+        from scripts.memory_reflection import nightly_lived_memory as nlm
+
+        class _Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return json.dumps(
+                    {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"content": "[]"},
+                            }
+                        ]
+                    }
+                ).encode("utf-8")
+
+        with mock.patch("urllib.request.urlopen", return_value=_Resp()) as urlopen:
+            llm_call = nlm._default_llm_call("qwen36-27b", 240)
+            llm_call("PROMPT-TEXT")
+
+        self.assertEqual(urlopen.call_args.kwargs.get("timeout"), 240)
+
+        request = urlopen.call_args.args[0]
+        body = json.loads(request.data.decode("utf-8"))
+
+        self.assertEqual(body["chat_template_kwargs"], {"enable_thinking": False})
+        self.assertEqual(
+            set(body.keys()),
+            {"model", "messages", "max_tokens", "temperature", "chat_template_kwargs"},
+        )
+        self.assertEqual(body["model"], "qwen36-27b")
+        self.assertEqual(body["max_tokens"], 8192)
+        self.assertEqual(body["temperature"], 0.4)
+        self.assertEqual(
+            body["messages"], [{"role": "user", "content": "PROMPT-TEXT"}]
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

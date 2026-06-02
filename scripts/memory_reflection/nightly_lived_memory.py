@@ -469,6 +469,11 @@ def _default_llm_call(model: str, timeout_s: int):
             # trace room without changing prompt/model/routing.
             "max_tokens": _REFLECTION_SYNTHESIS_MAX_TOKENS,
             "temperature": 0.4,
+            # Reflection synthesis is structured extraction with citations, not
+            # deliberation. Disable Qwen 3.6 thinking for this reflection-only
+            # caller so the model emits JSON directly; Token Budget v0 guards
+            # still surface truncation honestly if reasoning ever returns.
+            "chat_template_kwargs": {"enable_thinking": False},
         }).encode("utf-8")
         req = urllib.request.Request(
             "http://127.0.0.1:8080/v1/chat/completions",
