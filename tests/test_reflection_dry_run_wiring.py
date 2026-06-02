@@ -404,5 +404,50 @@ class ReflectionDryRunDaemonHookTest(unittest.TestCase):
         self.assertNotIn("private reflection text", telemetry[0])
 
 
+class ReflectionMaxReflectionsDialTest(unittest.TestCase):
+    def _run_hook_capturing_max(self, env):
+        import daemon.maez_daemon as md
+
+        captured = {}
+
+        def _fake_pass(*, episode_store, llm_call, report, dry_run, max_reflections=3):
+            captured["max_reflections"] = max_reflections
+
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch(
+            "scripts.memory_reflection.nightly_lived_memory.run_synthesis_pass",
+            _fake_pass,
+        ):
+            md._run_reflection_synthesis_nightly(
+                SimpleNamespace(lived_episodes=_FakeEpisodeStore()),
+                llm_call=lambda *a, **k: "[]",
+                artifact_dir=Path(tempfile.mkdtemp()),
+            )
+        return captured.get("max_reflections")
+
+    def test_env_max_one_reaches_hook(self):
+        got = self._run_hook_capturing_max(
+            {
+                "MAEZ_REFLECTION_SYNTHESIS_ENABLED": "1",
+                "MAEZ_REFLECTION_SYNTHESIS_MAX_REFLECTIONS": "1",
+            }
+        )
+        self.assertEqual(got, 1)
+
+    def test_unset_keeps_default_three(self):
+        got = self._run_hook_capturing_max(
+            {"MAEZ_REFLECTION_SYNTHESIS_ENABLED": "1"}
+        )
+        self.assertEqual(got, 3)
+
+    def test_invalid_falls_back_to_three(self):
+        got = self._run_hook_capturing_max(
+            {
+                "MAEZ_REFLECTION_SYNTHESIS_ENABLED": "1",
+                "MAEZ_REFLECTION_SYNTHESIS_MAX_REFLECTIONS": "0",
+            }
+        )
+        self.assertEqual(got, 3)
+
+
 if __name__ == "__main__":
     unittest.main()

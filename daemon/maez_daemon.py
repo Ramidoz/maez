@@ -1643,6 +1643,16 @@ def _reflection_synthesis_write_enabled(environ: object | None = None) -> bool:
     return (env.get("MAEZ_REFLECTION_SYNTHESIS_WRITE", "") or "").strip() == "1"
 
 
+def _reflection_synthesis_max_reflections(environ: object | None = None) -> int:
+    env = os.environ if environ is None else environ
+    raw = (env.get("MAEZ_REFLECTION_SYNTHESIS_MAX_REFLECTIONS", "") or "").strip()
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return 3
+    return value if value >= 1 else 3
+
+
 def _reflection_terminal_reason(report: object | None, fallback: str) -> tuple[str, str]:
     finish_reason = str(getattr(report, "finish_reason", "") or "")
     if not finish_reason and fallback != "error":
@@ -1757,6 +1767,7 @@ def _run_reflection_synthesis_nightly(
             llm_call=llm_call,
             report=report,
             dry_run=dry_run,
+            max_reflections=_reflection_synthesis_max_reflections(),
         )
     except Exception as exc:
         logger.warning("reflection synthesis pass failed: %s", type(exc).__name__)
