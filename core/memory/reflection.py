@@ -102,7 +102,7 @@ Output ONLY a JSON array. Each element:
   "evidence": ["<input_id>", "<input_id>"]
 }}
 
-If nothing rises above per-episode restating, output [].
+If nothing rises above per-memory restating, output [].
 """
 
 
