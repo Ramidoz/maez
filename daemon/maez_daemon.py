@@ -1510,6 +1510,7 @@ def _cycle_packet_shape_summary(
     working_set: object,
     legacy_prompt_chars: int,
     prefill_ms: int | None = None,
+    chat_total_ms: int | None = None,
     cycle_outcome: str = "pending",
 ) -> dict[str, object]:
     items = list(getattr(working_set, "items", []) or [])
@@ -1522,6 +1523,7 @@ def _cycle_packet_shape_summary(
         "evidence_item_count": len(items),
         "source_types": ",".join(source_types),
         "prefill_ms": None if prefill_ms is None else int(prefill_ms),
+        "chat_total_ms": None if chat_total_ms is None else int(chat_total_ms),
         "cycle_outcome": str(cycle_outcome),
     }
 
@@ -1531,6 +1533,7 @@ def _log_cycle_packet_shape(
     working_set: object,
     legacy_prompt_chars: int,
     prefill_ms: int | None = None,
+    chat_total_ms: int | None = None,
     cycle_outcome: str = "pending",
 ) -> None:
     logger.info(
@@ -1540,6 +1543,7 @@ def _log_cycle_packet_shape(
                 working_set=working_set,
                 legacy_prompt_chars=legacy_prompt_chars,
                 prefill_ms=prefill_ms,
+                chat_total_ms=chat_total_ms,
                 cycle_outcome=cycle_outcome,
             ),
             sort_keys=True,
@@ -3676,11 +3680,8 @@ class MaezDaemon:
         prompt = _cycle_prompt_decision.prompt
         # Store the actual prompt sent to the model for corrective retry use.
         self._last_reasoning_prompt = prompt
-        if _cycle_prompt_decision.working_set is not None:
-            _log_cycle_packet_shape(
-                working_set=_cycle_prompt_decision.working_set,
-                legacy_prompt_chars=len(legacy_prompt),
-            )
+        _cycle_working_set = _cycle_prompt_decision.working_set
+        _cycle_legacy_prompt_chars = len(legacy_prompt)
 
         # Session 11m's _rohit_active_until now stays a UI/activity hint only.
         # BrainGateway owns the actual arbitration: background cognition enters
@@ -3711,6 +3712,7 @@ class MaezDaemon:
             {"role": "user", "content": prompt},
         ]
         chat_options = {"temperature": 0.7, "num_predict": 300}
+        _cycle_chat_started = time.monotonic()
 
         # error_classifier-driven retry: on a TRANSIENT backend error (timeout,
         # connection refused), wait 2s and try once more. BrainPreempted is not
@@ -3778,6 +3780,16 @@ class MaezDaemon:
                     first_err,
                 )
                 return None
+
+        _cycle_chat_total_ms = int((time.monotonic() - _cycle_chat_started) * 1000)
+        if _cycle_working_set is not None:
+            _log_cycle_packet_shape(
+                working_set=_cycle_working_set,
+                legacy_prompt_chars=_cycle_legacy_prompt_chars,
+                prefill_ms=getattr(response, "server_prompt_ms", None),
+                chat_total_ms=_cycle_chat_total_ms,
+                cycle_outcome="completed",
+            )
 
         content = _extract_final((response.message.content or "").strip())
         thinking = getattr(response.message, "thinking", None)

@@ -67,10 +67,12 @@ class SocketStreamTest(unittest.TestCase):
         wire = _wire(
             b'data: {"choices":[{"delta":{"content":"O"}}]}\n\n',
             b'data: {"choices":[{"delta":{"content":"K"}}]}\n\n',
+            b'data: {"choices":[],"timings":{"prompt_ms":1234}}\n\n',
             b"data: [DONE]\n\n",
         )
         stream = _LlamaCppSocketStream(sock=_FakeSocket(_slices(wire)))
         self.assertEqual("".join(chunk.message.content for chunk in stream), "OK")
+        self.assertEqual(stream.server_prompt_ms, 1234)
 
     def test_close_is_idempotent_and_shuts_down(self):
         fake_socket = _FakeSocket([])

@@ -36,7 +36,35 @@ class RoutingTest(unittest.TestCase):
             )
 
         self.assertEqual(response.message.content, "gateway reply")
+        self.assertIsNone(response.server_prompt_ms)
         self.assertEqual(gateway.events[-1]["purpose"], "owner_recall")
+
+    def test_llm_client_buffered_chat_surfaces_socket_server_prompt_ms(self):
+        gateway = BrainGateway()
+
+        class TimedStream:
+            server_prompt_ms = 1234
+
+            def __iter__(self):
+                yield {"content": "timed reply"}
+
+        def fake_start(**_kwargs):
+            return CancellableBrainCall(raw_stream=TimedStream())
+
+        with (
+            mock.patch("core.routing.brain_gateway.GATEWAY", gateway),
+            mock.patch.object(llm_client, "start_cancellable_chat", side_effect=fake_start),
+            with_purpose(BrainPurpose.OWNER_RECALL),
+        ):
+            response = llm_client.chat(
+                model="m",
+                messages=[{"role": "user", "content": "hi"}],
+                think=False,
+                options={"temperature": 0.1},
+            )
+
+        self.assertEqual(response.message.content, "timed reply")
+        self.assertEqual(response.server_prompt_ms, 1234)
 
     def test_llm_client_stream_true_preserves_legacy_iterator_shape(self):
         legacy_stream = iter(

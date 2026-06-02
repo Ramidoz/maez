@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import types
 import unittest
 from unittest import mock
 
@@ -242,6 +243,7 @@ class CyclePacketDaemonSeamTest(unittest.TestCase):
             working_set=working_set,
             legacy_prompt_chars=120_000,
             prefill_ms=1234,
+            chat_total_ms=5678,
             cycle_outcome="pending",
         )
 
@@ -253,7 +255,26 @@ class CyclePacketDaemonSeamTest(unittest.TestCase):
                 "evidence_item_count",
                 "source_types",
                 "prefill_ms",
+                "chat_total_ms",
                 "cycle_outcome",
             },
         )
+        self.assertEqual(summary["chat_total_ms"], 5678)
         self.assertNotIn(secret, str(summary))
+
+    def test_cycle_packet_shape_summary_allows_missing_prefill_but_not_missing_chat_total(self):
+        from daemon.maez_daemon import _cycle_packet_shape_summary
+
+        working_set = types.SimpleNamespace(
+            items=[types.SimpleNamespace(source_type="signal_absence")],
+            working_set_tokens_est=25,
+        )
+        summary = _cycle_packet_shape_summary(
+            working_set=working_set,
+            legacy_prompt_chars=4000,
+            prefill_ms=None,
+            chat_total_ms=42,
+        )
+
+        self.assertIsNone(summary["prefill_ms"])
+        self.assertEqual(summary["chat_total_ms"], 42)

@@ -33,6 +33,10 @@ class CancellableBrainCall:
     def preempt_timeout(self) -> bool:
         return self._preempt_timeout
 
+    @property
+    def server_prompt_ms(self) -> int | None:
+        return getattr(self._raw_stream, "server_prompt_ms", None)
+
     def cancel(self) -> bool:
         """Cancel the stream.
 

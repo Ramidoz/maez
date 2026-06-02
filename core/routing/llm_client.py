@@ -126,6 +126,7 @@ class _LlmResponse:
     """Minimal ollama.ChatResponse-shaped object so consumers can call
     resp.message.content without caring which backend produced it."""
     message: _LlmMessage
+    server_prompt_ms: Optional[int] = None
 
 
 class _LlamaCppStreamParser:
@@ -138,6 +139,7 @@ class _LlamaCppStreamParser:
         self._sse = bytearray()
         self._yielded = False
         self.cancelled = False
+        self.server_prompt_ms: int | None = None
 
     @property
     def done(self) -> bool:
@@ -254,6 +256,12 @@ class _LlamaCppStreamParser:
                     continue
                 try:
                     data = json.loads(payload)
+                    timings = data.get("timings")
+                    if isinstance(timings, dict) and timings.get("prompt_ms") is not None:
+                        try:
+                            self.server_prompt_ms = int(float(timings["prompt_ms"]))
+                        except (TypeError, ValueError):
+                            pass
                     content = _openai_stream_content(data)
                 except Exception as exc:
                     if self.cancelled:
@@ -337,6 +345,10 @@ class _LlamaCppSocketStream:
 
     def close(self):
         self._close(mark_cancelled=True)
+
+    @property
+    def server_prompt_ms(self) -> int | None:
+        return self._parser.server_prompt_ms
 
     def _close(self, *, mark_cancelled: bool) -> None:
         with self._close_lock:
@@ -643,16 +655,27 @@ def chat(
 
     from core.routing import brain_gateway
 
-    reply = brain_gateway.GATEWAY.submit(
-        purpose=purpose if purpose is not None else brain_gateway.current_purpose(),
-        run_streaming_fn=lambda: start_cancellable_chat(
+    call_box: dict[str, Any] = {}
+
+    def _start_gateway_call():
+        call = start_cancellable_chat(
             model=model,
             messages=messages,
             think=think,
             options=options,
-        ),
+        )
+        call_box["call"] = call
+        return call
+
+    reply = brain_gateway.GATEWAY.submit(
+        purpose=purpose if purpose is not None else brain_gateway.current_purpose(),
+        run_streaming_fn=_start_gateway_call,
     )
-    return _LlmResponse(message=_LlmMessage(content=reply, thinking=None))
+    server_prompt_ms = getattr(call_box.get("call"), "server_prompt_ms", None)
+    return _LlmResponse(
+        message=_LlmMessage(content=reply, thinking=None),
+        server_prompt_ms=server_prompt_ms,
+    )
 
 
 # ── prompt-completion entry point (for /api/generate callers) ──────

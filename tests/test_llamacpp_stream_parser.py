@@ -20,6 +20,7 @@ WIRE = _build_wire(
     b'data: {"choices":[{"delta":{"role":"assistant","content":null}}]}\n\n',
     b'data: {"choices":[{"delta":{"content":"On April "}}]}\n\n',
     b'data: {"choices":[{"delta":{"content":"27 [E1]"}}]}\n\n',
+    b'data: {"choices":[],"timings":{"prompt_ms":1234,"predicted_ms":56}}\n\n',
     b"data: [DONE]\n\n",
 )
 
@@ -36,16 +37,29 @@ class ParserTest(unittest.TestCase):
         parser = _LlamaCppStreamParser()
         self.assertEqual(_feed_in_slices(parser, WIRE, len(WIRE)), "On April 27 [E1]")
         self.assertTrue(parser.done)
+        self.assertEqual(parser.server_prompt_ms, 1234)
 
     def test_fragmentation_1_byte_at_a_time(self):
         parser = _LlamaCppStreamParser()
         self.assertEqual(_feed_in_slices(parser, WIRE, 1), "On April 27 [E1]")
+        self.assertEqual(parser.server_prompt_ms, 1234)
 
     def test_fragmentation_adversarial_slices(self):
         for n in (2, 3, 5, 7, 13, 17, 64, 100):
             with self.subTest(n=n):
                 parser = _LlamaCppStreamParser()
                 self.assertEqual(_feed_in_slices(parser, WIRE, n), "On April 27 [E1]")
+                self.assertEqual(parser.server_prompt_ms, 1234)
+
+    def test_server_prompt_ms_is_none_without_timings(self):
+        parser = _LlamaCppStreamParser()
+        wire = _build_wire(
+            b'data: {"choices":[{"delta":{"content":"OK"}}]}\n\n',
+            b"data: [DONE]\n\n",
+        )
+
+        self.assertEqual(_feed_in_slices(parser, wire, len(wire)), "OK")
+        self.assertIsNone(parser.server_prompt_ms)
 
     def test_non_200_raises(self):
         parser = _LlamaCppStreamParser()
