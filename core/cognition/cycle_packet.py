@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 import hashlib
+import re
 from typing import Iterable
 
 from core.routing.focused_cognition import (
@@ -37,6 +38,8 @@ _SOURCE_PRIORITY = {
     "memory_context": 7,
     "web_context": 8,
 }
+_RECALLED_BLOCK_RE = re.compile(r"<RECALLED\b[^>]*>.*?</RECALLED>", re.DOTALL)
+_MAX_CANDIDATE_CHARS = 1200
 
 
 @dataclass(frozen=True)
@@ -77,6 +80,55 @@ def _to_item(candidate: CycleEvidenceCandidate, index: int) -> EvidenceItem:
         durable_id=candidate.durable_id or _content_hash(text),
         temporal_provenance=candidate.temporal_provenance,
     )
+
+
+def _chunk_text(text: str, *, max_chars: int = _MAX_CANDIDATE_CHARS) -> list[str]:
+    clean = str(text or "").strip()
+    if not clean:
+        return []
+    recalled = [match.group(0).strip() for match in _RECALLED_BLOCK_RE.finditer(clean)]
+    units = recalled or [part.strip() for part in clean.splitlines() if part.strip()]
+    chunks: list[str] = []
+    current = ""
+    for unit in units:
+        if len(unit) > max_chars:
+            if current:
+                chunks.append(current)
+                current = ""
+            for start in range(0, len(unit), max_chars):
+                chunks.append(unit[start : start + max_chars].strip())
+            continue
+        if not current:
+            current = unit
+        elif len(current) + 1 + len(unit) <= max_chars:
+            current += "\n" + unit
+        else:
+            chunks.append(current)
+            current = unit
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def candidates_from_text(
+    source_type: str,
+    text: str,
+    *,
+    durable_prefix: str,
+    salience: int,
+    temporal_provenance: dict | None = None,
+    max_chars: int = _MAX_CANDIDATE_CHARS,
+) -> list[CycleEvidenceCandidate]:
+    return [
+        CycleEvidenceCandidate(
+            source_type=source_type,
+            text=chunk,
+            durable_id=f"{durable_prefix}:{index}:{_content_hash(chunk)}",
+            temporal_provenance=temporal_provenance,
+            salience=salience,
+        )
+        for index, chunk in enumerate(_chunk_text(text, max_chars=max_chars))
+    ]
 
 
 def select_cycle_evidence(

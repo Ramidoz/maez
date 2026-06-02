@@ -3340,6 +3340,7 @@ class MaezDaemon:
             render_envelope_for_prompt,
             resolve_recall_cap_chars,
         )
+        from core.cognition import cycle_packet as _cycle_packet
         from core.cognition.cycle_packet import CycleEvidenceCandidate as _CycleCandidate
 
         memory_block = self.memory.format_for_prompt(
@@ -3374,30 +3375,42 @@ class MaezDaemon:
             )
         ]
 
+        def _extend_cycle_candidates(
+            source_type: str,
+            text: str,
+            *,
+            durable_prefix: str,
+            salience: int,
+        ) -> None:
+            _cycle_candidates.extend(
+                _cycle_packet.candidates_from_text(
+                    source_type,
+                    text,
+                    durable_prefix=durable_prefix,
+                    salience=salience,
+                )
+            )
+
         # Add circadian context
         circadian_context = self._get_circadian_context()
         prompt += f"\n{circadian_context}\n"
         if circadian_context:
-            _cycle_candidates.append(
-                _CycleCandidate(
-                    source_type="fresh_evidence",
-                    text=circadian_context,
-                    durable_id="cycle_circadian_context",
-                    salience=55,
-                )
+            _extend_cycle_candidates(
+                "fresh_evidence",
+                circadian_context,
+                durable_prefix="cycle_circadian_context",
+                salience=55,
             )
 
         # Add screen context if available
         if self._last_screen_obs is not None:
             screen_context = self._last_screen_obs.format_for_context()
             prompt += f"\n{screen_context}\n"
-            _cycle_candidates.append(
-                _CycleCandidate(
-                    source_type="fresh_evidence",
-                    text=screen_context,
-                    durable_id="cycle_screen_context",
-                    salience=80,
-                )
+            _extend_cycle_candidates(
+                "fresh_evidence",
+                screen_context,
+                durable_prefix="cycle_screen_context",
+                salience=80,
             )
 
         # Add git context if available — same gating for the AWCC
@@ -3405,37 +3418,31 @@ class MaezDaemon:
         # uncommitted-files state).
         if self._last_git_context and "git" not in _stale:
             prompt += f"\n{self._last_git_context}\n"
-            _cycle_candidates.append(
-                _CycleCandidate(
-                    source_type="fresh_evidence",
-                    text=self._last_git_context,
-                    durable_id="cycle_git_context",
-                    salience=65,
-                )
+            _extend_cycle_candidates(
+                "fresh_evidence",
+                self._last_git_context,
+                durable_prefix="cycle_git_context",
+                salience=65,
             )
 
         # Add GitHub context if available
         if self._last_github_block:
             prompt += f"\n{self._last_github_block}\n"
-            _cycle_candidates.append(
-                _CycleCandidate(
-                    source_type="fresh_evidence",
-                    text=self._last_github_block,
-                    durable_id="cycle_github_context",
-                    salience=65,
-                )
+            _extend_cycle_candidates(
+                "fresh_evidence",
+                self._last_github_block,
+                durable_prefix="cycle_github_context",
+                salience=65,
             )
 
         # Add Reddit context if available
         if self._last_reddit_block:
             prompt += f"\n{self._last_reddit_block}\n"
-            _cycle_candidates.append(
-                _CycleCandidate(
-                    source_type="web_context",
-                    text=self._last_reddit_block,
-                    durable_id="cycle_reddit_context",
-                    salience=50,
-                )
+            _extend_cycle_candidates(
+                "web_context",
+                self._last_reddit_block,
+                durable_prefix="cycle_reddit_context",
+                salience=50,
             )
 
         # R3.5 (2026-05-04 symphony audit, S4 BLOCKER F7): consult
@@ -3455,13 +3462,11 @@ class MaezDaemon:
             )
             if _action_outcomes_block:
                 prompt += f"\n{_action_outcomes_block}\n"
-                _cycle_candidates.append(
-                    _CycleCandidate(
-                        source_type="action_outcome",
-                        text=_action_outcomes_block,
-                        durable_id="cycle_recent_action_outcomes",
-                        salience=100,
-                    )
+                _extend_cycle_candidates(
+                    "action_outcome",
+                    _action_outcomes_block,
+                    durable_prefix="cycle_recent_action_outcomes",
+                    salience=100,
                 )
         except Exception as _rac_e:
             # Codex R3.5 review (2026-05-04): WARNING not DEBUG.
@@ -3481,25 +3486,21 @@ class MaezDaemon:
         # Add public bot context if available
         if self._last_public_context:
             prompt += f"\n{self._last_public_context}\n"
-            _cycle_candidates.append(
-                _CycleCandidate(
-                    source_type="fresh_evidence",
-                    text=self._last_public_context,
-                    durable_id="cycle_public_context",
-                    salience=45,
-                )
+            _extend_cycle_candidates(
+                "fresh_evidence",
+                self._last_public_context,
+                durable_prefix="cycle_public_context",
+                salience=45,
             )
 
         # Add proactive search results if available
         if self._proactive_search_context:
             prompt += f"\n{self._proactive_search_context}\n"
-            _cycle_candidates.append(
-                _CycleCandidate(
-                    source_type="web_context",
-                    text=self._proactive_search_context,
-                    durable_id="cycle_proactive_search",
-                    salience=70,
-                )
+            _extend_cycle_candidates(
+                "web_context",
+                self._proactive_search_context,
+                durable_prefix="cycle_proactive_search",
+                salience=70,
             )
             self._proactive_search_context = ""  # Clear after use
 
@@ -3507,26 +3508,22 @@ class MaezDaemon:
         reflection_context = self._quality_tracker.format_for_context()
         if reflection_context:
             prompt += f"\n{reflection_context}\n"
-            _cycle_candidates.append(
-                _CycleCandidate(
-                    source_type="quality_signal",
-                    text=reflection_context,
-                    durable_id="cycle_quality_signal",
-                    salience=75,
-                )
+            _extend_cycle_candidates(
+                "quality_signal",
+                reflection_context,
+                durable_prefix="cycle_quality_signal",
+                salience=75,
             )
 
         # Add active cognition block — always populated once data exists
         cog_context = cog_format_active_prompt()
         if cog_context:
             prompt += f"\n{cog_context}\n"
-            _cycle_candidates.append(
-                _CycleCandidate(
-                    source_type="open_loop",
-                    text=cog_context,
-                    durable_id="cycle_active_cognition",
-                    salience=85,
-                )
+            _extend_cycle_candidates(
+                "open_loop",
+                cog_context,
+                durable_prefix="cycle_active_cognition",
+                salience=85,
             )
 
         # Add continuity block during orientation window
@@ -3534,13 +3531,11 @@ class MaezDaemon:
             cont_block = continuity_format(self._continuity_capsule)
             if cont_block:
                 prompt += f"\n{cont_block}\n"
-                _cycle_candidates.append(
-                    _CycleCandidate(
-                        source_type="memory_context",
-                        text=cont_block,
-                        durable_id="cycle_continuity_context",
-                        salience=70,
-                    )
+                _extend_cycle_candidates(
+                    "memory_context",
+                    cont_block,
+                    durable_prefix="cycle_continuity_context",
+                    salience=70,
                 )
 
         # A-core #3 Step 3: builder-mode events block. Reads direct-
@@ -3560,13 +3555,11 @@ class MaezDaemon:
             )
             if builder_block:
                 prompt += f"\n{builder_block}\n"
-                _cycle_candidates.append(
-                    _CycleCandidate(
-                        source_type="builder_event",
-                        text=builder_block,
-                        durable_id="cycle_builder_event",
-                        salience=80,
-                    )
+                _extend_cycle_candidates(
+                    "builder_event",
+                    builder_block,
+                    durable_prefix="cycle_builder_event",
+                    salience=80,
                 )
                 self._builder_hwm = new_builder_hwm
                 save_high_water_mark(self._builder_hwm_file, new_builder_hwm)
@@ -3577,13 +3570,11 @@ class MaezDaemon:
 
         if memory_block:
             prompt += memory_block + "\n\n"
-            _cycle_candidates.append(
-                _CycleCandidate(
-                    source_type="memory_context",
-                    text=memory_block,
-                    durable_id="cycle_recalled_memory",
-                    salience=50,
-                )
+            _extend_cycle_candidates(
+                "memory_context",
+                memory_block,
+                durable_prefix="cycle_recalled_memory",
+                salience=50,
             )
 
         # Build an honest "signals present this cycle" manifest. This is
@@ -3670,13 +3661,11 @@ class MaezDaemon:
         prompt += signal_manifest
         if _cycle_envelope_block:
             prompt += _cycle_envelope_block + "\n\n"
-            _cycle_candidates.append(
-                _CycleCandidate(
-                    source_type="fresh_evidence",
-                    text=_cycle_envelope_block,
-                    durable_id="cycle_evidence_envelope",
-                    salience=70,
-                )
+            _extend_cycle_candidates(
+                "fresh_evidence",
+                _cycle_envelope_block,
+                durable_prefix="cycle_evidence_envelope",
+                salience=70,
             )
 
         legacy_prompt = prompt

@@ -78,6 +78,30 @@ class CyclePacketSelectorTest(unittest.TestCase):
         self.assertIn("signal_absence", kinds)
         self.assertIn("open_loop", kinds)
 
+    def test_large_memory_block_is_chunked_so_some_memory_survives(self):
+        from core.cognition.cycle_packet import candidates_from_text, select_cycle_evidence
+
+        candidates = candidates_from_text(
+            "memory_context",
+            "\n".join(f"<RECALLED id=\"m{idx}\">memory {idx} {'m' * 500}</RECALLED>" for idx in range(30)),
+            durable_prefix="memory",
+            salience=50,
+        )
+        candidates.append(
+            _candidate(
+                "signal_absence",
+                "screen observation unavailable; do not infer user activity",
+                salience=100,
+            )
+        )
+
+        items = select_cycle_evidence(candidates, budget_tokens=1200)
+        kinds = {item.source_type for item in items}
+
+        self.assertIn("signal_absence", kinds)
+        self.assertIn("memory_context", kinds)
+        self.assertLessEqual(_est_tokens(items), 1200)
+
     def test_signal_absence_survives_selection_under_tight_budget(self):
         from core.cognition.cycle_packet import select_cycle_evidence
 
