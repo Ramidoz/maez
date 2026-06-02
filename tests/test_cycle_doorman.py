@@ -3,7 +3,13 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
-from core.cognition.cycle_doorman import DoormanSignals, DoormanVerdict, ReasonCode, decide
+from core.cognition.cycle_doorman import (
+    DoormanSignals,
+    DoormanVerdict,
+    ReasonCode,
+    decide,
+    salient_perception_changed,
+)
 
 
 def _quiet() -> DoormanSignals:
@@ -117,6 +123,66 @@ class DoormanTest(unittest.TestCase):
         verdict = decide(signals)
 
         self.assertEqual(verdict.signals_present, ("new_failure",))
+
+    def test_salient_perception_ignores_system_metric_drift(self):
+        previous = {
+            "screen_state": "disabled",
+            "screen_activity": "unknown",
+            "signal_availability": "screen=absent|camera=absent",
+            "disk": 70.1,
+            "procs": ("python", "llama-server"),
+            "git": 0,
+            "timestamp": 123.0,
+        }
+        current = {
+            "screen_state": "disabled",
+            "screen_activity": "unknown",
+            "signal_availability": "screen=absent|camera=absent",
+            "disk": 70.6,
+            "procs": ("python", "llama-server", "bash"),
+            "git": 2,
+            "timestamp": 456.0,
+        }
+
+        self.assertFalse(salient_perception_changed(previous, current))
+
+    def test_salient_perception_wakes_on_screen_activity_change(self):
+        previous = {
+            "screen_state": "ok",
+            "screen_activity": "editing code",
+            "signal_availability": "screen=available|camera=absent",
+        }
+        current = {
+            "screen_state": "ok",
+            "screen_activity": "reviewing test output",
+            "signal_availability": "screen=available|camera=absent",
+        }
+
+        self.assertTrue(salient_perception_changed(previous, current))
+
+    def test_salient_perception_wakes_on_signal_availability_transition(self):
+        previous = {
+            "screen_state": "unavailable",
+            "screen_activity": "unknown",
+            "signal_availability": "screen=absent|camera=absent",
+        }
+        current = {
+            "screen_state": "ok",
+            "screen_activity": "unknown",
+            "signal_availability": "screen=available|camera=absent",
+        }
+
+        self.assertTrue(salient_perception_changed(previous, current))
+
+    def test_salient_perception_fail_opens_on_missing_or_malformed_state(self):
+        current = {
+            "screen_state": "disabled",
+            "screen_activity": "unknown",
+            "signal_availability": "screen=absent|camera=absent",
+        }
+
+        self.assertTrue(salient_perception_changed(None, current))
+        self.assertTrue(salient_perception_changed(object(), current))
 
 
 class DoormanDaemonSeamTest(unittest.TestCase):

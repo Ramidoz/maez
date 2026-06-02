@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import Mapping
 
 
 class ReasonCode(str, Enum):
@@ -54,6 +55,47 @@ def _bool(value: object) -> bool:
 
 def _fail_open() -> DoormanVerdict:
     return DoormanVerdict(True, ReasonCode.WAKE_FAIL_OPEN, ())
+
+
+_SALIENT_PERCEPTION_KEYS = (
+    "screen_state",
+    "screen_success",
+    "screen_activity",
+    "screen_application",
+    "screen_focus_level",
+    "signal_availability",
+)
+
+
+def _normalize_salient_value(value: object) -> str | bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() or None
+
+
+def _salient_perception_view(state: object) -> tuple[tuple[str, str | bool | None], ...] | None:
+    if not isinstance(state, Mapping):
+        return None
+    return tuple(
+        (key, _normalize_salient_value(state.get(key)))
+        for key in _SALIENT_PERCEPTION_KEYS
+    )
+
+
+def salient_perception_changed(previous: object, current: object) -> bool:
+    """Return whether sourced perception changed in a way worth waking the cycle.
+
+    This is deliberately narrower than the legacy fixation signature. Disk
+    percentages, process counts, git dirtiness, timestamps, and similar runtime
+    drift are not meaningful "moments" for the doorman.
+    """
+    previous_view = _salient_perception_view(previous)
+    current_view = _salient_perception_view(current)
+    if previous_view is None or current_view is None:
+        return True
+    return previous_view != current_view
 
 
 def decide(signals: object) -> DoormanVerdict:
