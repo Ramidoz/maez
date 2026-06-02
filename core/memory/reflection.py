@@ -259,6 +259,8 @@ def persist_reflections(
                 source_memory_ids=list(r.source_memory_ids),
                 source_kind="reflection",
                 importance=4,
+                authorship="reflection_synthesis",
+                memory_voice="maez_self",
             )
             out.append(ep_id)
         except Exception as exc:

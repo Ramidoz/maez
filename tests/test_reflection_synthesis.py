@@ -261,6 +261,12 @@ class PersistShape(unittest.TestCase):
         active = store.list_active()
         kinds = {ep["source_kind"] for ep in active}
         self.assertEqual(kinds, {"reflection"})
+        # Provenance: reflections are machine-synthesized by the reflection
+        # organ in Maez's own voice, not raw dialogue or owner-authored memory.
+        for ep in active:
+            self.assertEqual(ep["source_kind"], "reflection")
+            self.assertEqual(ep["authorship"], "reflection_synthesis")
+            self.assertEqual(ep["memory_voice"], "maez_self")
         summaries = {ep["summary"] for ep in active}
         self.assertIn("The owner consistently prioritizes truth over speed", summaries)
         # Title carries the reflection text so the lived_recall brief
