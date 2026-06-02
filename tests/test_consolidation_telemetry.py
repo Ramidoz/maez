@@ -186,6 +186,31 @@ class OrganTelemetryHookTest(unittest.TestCase):
         self.assertEqual(summary["outputs_count"], 1)
         self.assertEqual(summary["rails_blocked"], 2)
 
+    def test_reflection_invalid_witness_telemetry_preserves_reason(self):
+        from daemon.maez_daemon import _reflection_consolidation_telemetry
+
+        summary = _reflection_consolidation_telemetry(
+            {
+                "status": "invalid_witness",
+                "reason": "llm_timeout",
+                "candidates_count": 0,
+                "drops_count": 0,
+                "finish_reason": "llm_timeout",
+                "max_tokens": 8192,
+                "truncated": False,
+            },
+            model="qwen36-27b",
+            duration_ms=42,
+        )
+
+        self.assertEqual(summary["organ"], "reflection")
+        self.assertEqual(summary["status"], "invalid_witness")
+        self.assertEqual(summary["reason"], "llm_timeout")
+        self.assertEqual(summary["inputs_count"], 0)
+        self.assertEqual(summary["outputs_count"], 0)
+        self.assertEqual(summary["rails_blocked"], 0)
+        self.assertNotIn("private reflection text", json.dumps(summary, sort_keys=True))
+
 
 if __name__ == "__main__":
     unittest.main()

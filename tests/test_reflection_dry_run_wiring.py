@@ -248,6 +248,46 @@ class ReflectionDryRunDaemonHookTest(unittest.TestCase):
         self.assertEqual(summary["finish_reason"], "stop")
         self.assertFalse(summary["truncated"])
 
+    def test_flag_on_timeout_writes_invalid_witness_artifact_and_summary(self):
+        from daemon.maez_daemon import _run_reflection_synthesis_nightly
+
+        def timeout_llm(_prompt: str) -> str:
+            timeout_llm.last_finish_reason = "llm_timeout"
+            timeout_llm.max_tokens = 8192
+            timeout_llm.last_raw_content = ""
+            return ""
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+            os.environ,
+            {
+                "MAEZ_REFLECTION_SYNTHESIS_ENABLED": "1",
+                "MAEZ_REFLECTION_SYNTHESIS_WRITE": "0",
+            },
+            clear=True,
+        ):
+            summary = _run_reflection_synthesis_nightly(
+                SimpleNamespace(lived_episodes=_FakeEpisodeStore()),
+                llm_call=timeout_llm,
+                artifact_dir=Path(tmp),
+            )
+            rows = [
+                json.loads(line)
+                for line in Path(str(summary["artifact_path"]))
+                .read_text(encoding="utf-8")
+                .splitlines()
+                if line.strip()
+            ]
+
+        self.assertEqual(summary["status"], "invalid_witness")
+        self.assertEqual(summary["reason"], "llm_timeout")
+        self.assertEqual(summary["finish_reason"], "llm_timeout")
+        self.assertEqual(summary["max_tokens"], 8192)
+        self.assertFalse(summary["truncated"])
+        self.assertEqual(rows[0]["kind"], "run")
+        self.assertEqual(rows[0]["reason"], "llm_timeout")
+        self.assertEqual(rows[1]["kind"], "summary")
+        self.assertEqual(rows[1]["reason"], "llm_timeout")
+
     def test_synthesis_failure_emits_content_free_telemetry(self):
         from daemon import maez_daemon
         from daemon.maez_daemon import _run_reflection_synthesis_nightly
