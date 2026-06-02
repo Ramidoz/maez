@@ -1,6 +1,6 @@
 # Maez Brain Bakeoff
 
-**Status:** Ready to run. Owner-operated. Reversible. Maez's live service untouched.
+**Status:** Ready to run. Owner-operated. Reversible. **No committed live mutation; owner-operated offline window required** (the live primary is stopped to free VRAM for the candidates, then restored — see §3).
 **Date:** 2026-06-01
 **Artifact role:** producer-evidence, not verdict. Every dimension emits content-free telemetry + raw-quarantine; **Rohit adjudicates**. No auto-judge ever crowns a brain.
 **Parent harness:** `/home/rohit/maez/scripts/brain_bench/` · `/home/rohit/maez/docs/superpowers/specs/2026-05-31-brain-benchmark-design.md`
@@ -38,7 +38,7 @@ The covenant ordering is lexicographic: **honesty + covenant first, then voice +
 | Label | Candidate | Trust posture |
 |---|---|---|
 | **A** | **Qwen3.6-27B** (current resident brain; dense, hybrid Gated-DeltaNet recurrent attention) | Baseline. The lived voice and the honesty bar B/C are judged against. Known systemic latency pathology (see §1.5 below). |
-| **B** | **official `google/gemma-4-31B-it`** (clean GGUF quant, dense + Sliding-Window-Attention) | Inherits trust from Google's model card. Conservative candidate. |
+| **B** | **official `google/gemma-4-31B-it`** (clean GGUF quant, dense + Sliding-Window-Attention) | Inherits **provenance** trust only from Google's card (origin/legitimacy of the weights — **NOT** Maez-resident trust). Still earns resident status from **zero** on voice/covenant/agency/honesty. Conservative candidate. |
 | **C** | **`SuperGemma4-31B-abliterated`** (Q4_K_M, ~18.7GB) | **Inherits NO trust from Google's card.** Abliteration strips refusal directions — the exact pathways that produce honest decline, honest "let me check," and the action-gate. Its honesty/covenant must be earned from zero in these probes, never assumed. |
 
 **Official-vs-abliterated trust separation is explicit and load-bearing.** B and C share a base architecture, so latency/cache behavior will likely score the same — **that is expected and is NOT a reason to treat them as interchangeable on any other axis.** A fast-caching abliterated model that fabricates, helps with harm, or loses the spine is still **OUT** as a resident. The community model's coincidental agreement with a fact (e.g. "I'm Gemma") is the same epistemic failure as a wrong guess — we score *posture*, not lucky strings.
