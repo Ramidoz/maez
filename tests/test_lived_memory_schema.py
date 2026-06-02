@@ -527,3 +527,42 @@ class RelationshipGraphNodeUpsertIdempotent(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EpisodeStoreBodyCounts(unittest.TestCase):
+    def setUp(self):
+        from core.memory.episodes import EpisodeStore
+
+        self._tmp = tempfile.NamedTemporaryFile(delete=False)
+        self._tmp.close()
+        self.store = EpisodeStore(self._tmp.name)
+
+    def tearDown(self):
+        Path(self._tmp.name).unlink(missing_ok=True)
+
+    def _add(self, *, source_kind: str) -> str:
+        return self.store.add(
+            title=f"{source_kind} title",
+            summary=f"{source_kind} summary",
+            participants=["Maez"],
+            source_memory_ids=[f"mem-{source_kind}"],
+            source_kind=source_kind,
+        )
+
+    def test_counts_by_status_and_source_kind_are_aggregate_only(self):
+        active_reflection = self._add(source_kind="reflection")
+        self._add(source_kind="core_memory")
+        retired = self._add(source_kind="reflection")
+        self.store.supersede(retired, reason="test retirement")
+
+        counts = self.store.counts_by_status_and_source_kind()
+
+        self.assertEqual(counts["total"], 3)
+        self.assertEqual(counts["active"], 2)
+        self.assertEqual(counts["superseded"], 1)
+        self.assertEqual(counts["by_status"], {"active": 2, "superseded": 1})
+        self.assertEqual(counts["by_source_kind"], {"core_memory": 1, "reflection": 2})
+        self.assertEqual(counts["reflection"], 2)
+        self.assertNotIn(active_reflection, repr(counts))
+        self.assertNotIn(retired, repr(counts))
+        self.assertNotIn("reflection summary", repr(counts))

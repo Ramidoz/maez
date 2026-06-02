@@ -7073,6 +7073,7 @@ def api_maez_state():
     daemon_health = dict(_daemon_health())
     daemon_health.pop("credentials", None)
     daemon_health.pop("camera_presence", None)
+    daemon_health.pop("body", None)
     daemon_health.pop("temporal_spine", None)
     daemon_health.pop("clinical_boundary", None)
     daemon_health.pop("voice_continuity", None)
@@ -9686,6 +9687,7 @@ def api_debug_services():
     for svc in ("maez", "maez-web", "llama-server"):
         services[svc] = _service_state_cached(svc)
     daemon_health = dict(_daemon_health())
+    daemon_health.pop("body", None)
     daemon_health.pop("temporal_spine", None)
     daemon_health.pop("clinical_boundary", None)
     daemon_health.pop("voice_continuity", None)

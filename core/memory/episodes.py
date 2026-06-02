@@ -213,6 +213,32 @@ class EpisodeStore:
             return 0, None
         return int(row["n"] or 0), row["newest"]
 
+    def counts_by_status_and_source_kind(self) -> dict:
+        """Return content-free aggregate counts for body/health surfaces."""
+        with closing(self._connect()) as c:
+            rows = c.execute(
+                "SELECT status, source_kind, COUNT(*) AS n "
+                "FROM episodes GROUP BY status, source_kind"
+            ).fetchall()
+        by_status: dict[str, int] = {}
+        by_source_kind: dict[str, int] = {}
+        total = 0
+        for row in rows:
+            status = str(row["status"] or "unknown")
+            source_kind = str(row["source_kind"] or "unknown")
+            n = int(row["n"] or 0)
+            total += n
+            by_status[status] = by_status.get(status, 0) + n
+            by_source_kind[source_kind] = by_source_kind.get(source_kind, 0) + n
+        return {
+            "total": total,
+            "active": by_status.get("active", 0),
+            "superseded": by_status.get("superseded", 0),
+            "reflection": by_source_kind.get("reflection", 0),
+            "by_status": by_status,
+            "by_source_kind": by_source_kind,
+        }
+
     def list_active_in_window(
         self,
         *,

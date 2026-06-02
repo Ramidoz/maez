@@ -97,6 +97,8 @@ from core.safety.clinical_boundary import (
     guard_owner_text,
 )
 from core.time.temporal_spine import temporal_spine_health
+from core.routing.llm_client import served_model_alias
+from core.routing.recall_stack_config import resolve_recall_stack
 from core.voice_continuity import voice_continuity_health
 from core.governance.successor_governance import successor_governance_health
 from core.governance.operator_user_boundary import (
@@ -1577,6 +1579,41 @@ def _cycle_doorman_enabled() -> bool:
     return (os.environ.get("MAEZ_CYCLE_DOORMAN_ENABLED", "") or "").strip() == "1"
 
 
+def _env_flag(name: str, *, environ: object | None = None) -> bool:
+    env = os.environ if environ is None else environ
+    return (env.get(name, "") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _safe_episode_body_counts(episode_store: object | None) -> dict[str, object]:
+    if episode_store is None:
+        return {
+            "episode_counts_state": "unknown",
+            "episode_counts_error_class": "missing_store",
+            "episodes_total": 0,
+            "episodes_active": 0,
+            "episodes_superseded": 0,
+            "reflection": 0,
+        }
+    try:
+        counts = episode_store.counts_by_status_and_source_kind()
+        return {
+            "episode_counts_state": "available",
+            "episodes_total": int(counts.get("total", 0) or 0),
+            "episodes_active": int(counts.get("active", 0) or 0),
+            "episodes_superseded": int(counts.get("superseded", 0) or 0),
+            "reflection": int(counts.get("reflection", 0) or 0),
+        }
+    except Exception as exc:
+        return {
+            "episode_counts_state": "unknown",
+            "episode_counts_error_class": type(exc).__name__,
+            "episodes_total": 0,
+            "episodes_active": 0,
+            "episodes_superseded": 0,
+            "reflection": 0,
+        }
+
+
 def _record_owner_interaction(daemon: object, *, now: float | None = None) -> None:
     setattr(daemon, "_last_owner_interaction_ts", time.time() if now is None else float(now))
 
@@ -2837,6 +2874,88 @@ class MaezDaemon:
             mode=self._calendar_mode.value,
             auth_ready=False,
         )
+
+    def _body_health(
+        self,
+        *,
+        camera_presence: dict,
+        memory_stats: dict,
+        reasoning_loop: dict,
+        system: dict,
+    ) -> dict:
+        """Content-free organ map for the local owner dashboard."""
+        episode_counts = _safe_episode_body_counts(getattr(self, "lived_episodes", None))
+        recall_config = resolve_recall_stack()
+        reflection_enabled = _reflection_synthesis_enabled()
+        reflection_write = _reflection_synthesis_write_enabled()
+        try:
+            reflection_max = _reflection_synthesis_max_reflections()
+        except Exception:
+            reflection_max = 3
+        return {
+            "schema_version": "maez_body.v0",
+            "eyes": {
+                "mode": camera_presence.get("mode", "unknown"),
+                "sensor_state": camera_presence.get("sensor_state", "unknown"),
+                "presence_state": camera_presence.get("presence_state", "unknown"),
+                "confidence_bucket": camera_presence.get("confidence_bucket", "unknown"),
+                "enabled_until": camera_presence.get("enabled_until"),
+                "last_observed_at": camera_presence.get("last_observed_at"),
+            },
+            "memory": {
+                "raw": int(memory_stats.get("raw", 0) or 0),
+                "daily": int(memory_stats.get("daily", 0) or 0),
+                "core": int(memory_stats.get("core", 0) or 0),
+                "total": int(memory_stats.get("total", 0) or 0),
+                **episode_counts,
+            },
+            "brain": {
+                "configured_model": MODEL,
+                "served_model_alias": served_model_alias(default=MODEL, timeout_s=0.25),
+            },
+            "body": {
+                "cpu_percent": system.get("cpu_percent"),
+                "ram_percent": system.get("ram_percent"),
+                "gpu_percent": system.get("gpu_percent"),
+                "gpu_temp_c": system.get("gpu_temp_c"),
+            },
+            "heartbeat": {
+                "cycle_count": int(getattr(self, "cycle_count", 0) or 0),
+                "stage": reasoning_loop.get("stage", "unknown"),
+                "cycle_age_seconds": reasoning_loop.get("cycle_age_seconds"),
+                "stage_age_seconds": reasoning_loop.get("stage_age_seconds"),
+                "cycle_stalled": bool(reasoning_loop.get("cycle_stalled", False)),
+            },
+            "attention": {
+                "enabled": _cycle_doorman_enabled(),
+                "activity_state": "not_yet_wired",
+            },
+            "cycle_mind": {
+                "enabled": _cycle_focused_enabled(),
+                "activity_state": "not_yet_wired",
+            },
+            "stomach": {
+                "reflection_enabled": reflection_enabled,
+                "write_enabled": reflection_write,
+                "max_reflections": int(reflection_max),
+                "activity_state": "not_yet_wired",
+            },
+            "dreaming": {
+                "available": getattr(self, "dream", None) is not None,
+                "activity_state": "not_yet_wired",
+            },
+            "recall": {
+                "enabled": bool(recall_config.triad_on),
+                "mode": recall_config.mode.value,
+                "reason": recall_config.reason,
+            },
+            "covenant_perimeter": {
+                "never_delete_memory": True,
+                "local_only": True,
+                "public_exposure": False,
+                "screen_vision_enabled": _env_flag("MAEZ_SCREEN_PERCEPTION"),
+            },
+        }
 
     def _camera_presence_health(self) -> dict:
         """Content-free Camera Presence v1 state for /health."""
@@ -8891,6 +9010,15 @@ class MaezDaemon:
         def health():
             snap = perception_snapshot()
             gpu = snap.get("gpu") or {}
+            _memory_stats = self.memory.memory_stats()
+            _reasoning_loop = self._cycle_heartbeat_health()
+            _camera_presence = self._camera_presence_health()
+            _system = {
+                "cpu_percent": snap["cpu"]["percent"],
+                "ram_percent": snap["ram"]["percent"],
+                "gpu_percent": gpu.get("utilization_pct"),
+                "gpu_temp_c": gpu.get("temperature_c"),
+            }
             return jsonify(
                 {
                     "status": "alive",
@@ -8898,29 +9026,30 @@ class MaezDaemon:
                     "boot_time": self.boot_time,
                     "cycle_count": self.cycle_count,
                     "last_cycle": self.last_cycle_time,
-                    "reasoning_loop": self._cycle_heartbeat_health(),
+                    "reasoning_loop": _reasoning_loop,
                     "metacognitive_watchdog": self._watchdog_health(),
                     "uptime_seconds": int(
                         time.time() - datetime.fromisoformat(self.boot_time).timestamp()
                     ),
-                    "memory": self.memory.memory_stats(),
+                    "memory": _memory_stats,
                     "lived_episodes": {
                         "staleness": self._m1_staleness_health(),
                         "m1": self._m1_status_health(),
                     },
                     "calendar": self._calendar_health(),
-                    "camera_presence": self._camera_presence_health(),
+                    "camera_presence": _camera_presence,
                     "credentials": _credential_health(),
                     "temporal_spine": temporal_spine_health(),
                     "clinical_boundary": clinical_boundary_health(),
                     "voice_continuity": self._voice_continuity_health(),
                     "successor_governance": successor_governance_health(),
-                    "system": {
-                        "cpu_percent": snap["cpu"]["percent"],
-                        "ram_percent": snap["ram"]["percent"],
-                        "gpu_percent": gpu.get("utilization_pct"),
-                        "gpu_temp_c": gpu.get("temperature_c"),
-                    },
+                    "system": _system,
+                    "body": self._body_health(
+                        camera_presence=_camera_presence,
+                        memory_stats=_memory_stats,
+                        reasoning_loop=_reasoning_loop,
+                        system=_system,
+                    ),
                 }
             )
 
