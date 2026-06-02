@@ -315,3 +315,7 @@ Only after Obs 16 crosses does `MAEZ_FOCUSED_COGNITION_ENABLED` become eligible 
 - Dialogue evidence is query-scoped, not ambient biography. It enters only when the current owner question asks for it or depends on it.
 - The existing `history_to_messages` parser is the canonical adapter-cleaned history parser. Reuse it; do not duplicate it.
 - v1 is synthesis-time continuity, not retrieval-time query rewriting. It solves the observed Obs 15 failure without adding a new retrieval loop.
+
+## Addendum — `echo_reply` primitive (added during Obs 16, on the record)
+
+Not in the original tier-4 scope; added during the Obs-16 witness and shipped with this slice. `build_intra_turn_echo_reply(text)` (`core/routing/focused_cognition.py`) returns a direct echo of the clause preceding an explicit imperative — trigger patterns: `say that back`, `repeat that back`, `read that back`, `say that in`, `repeat that in`. When it fires, `handle_message` returns the echo directly (`call_purpose="echo_reply"`) and **gates focused cognition off** (`not _current_turn_echo_reply`), so the echo seeds a clean substantive dialogue turn without a focused row or stale-evidence hijack. Verified narrow (no accidental firing on normal input) and covered by tests (`test_build_intra_turn_echo_reply_*`, `test_daemon_intra_turn_echo_with_stale_evidence_uses_echo_reply`). Recorded here so it is not invisible scope creep; if it grows beyond a seed/echo primitive it earns its own spec.

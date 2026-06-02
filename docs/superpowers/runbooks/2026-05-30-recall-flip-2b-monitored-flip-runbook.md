@@ -15,6 +15,14 @@
 > `logs/maez.log*` (RotatingFileHandler, 50MB × 10; use `grep -a[h]` because historical log files can
 > contain NUL bytes); flags load from `/home/rohit/.config/maez/model.env`; posture log line =
 > `recall_stack mode=…`.
+>
+> **Correction (2026-05-31):** an earlier version of this runbook pointed the flip/kill-switch at the
+> repo's `config/.env`. That file is **not** the daemon's env source — `maez.service` reads
+> `EnvironmentFile=/home/rohit/.config/maez/model.env`. On the first live recall-on attempt, flipping a
+> flag in `config/.env` was a no-op (the daemon never read it), confirmed via `/proc/<pid>/environ`, and
+> cost a debugging detour. All flip/kill-switch/off-block/teardown commands below now target
+> `model.env`. The historical witness records of that attempt are left intact — this note preserves the
+> lesson without rewriting the evidence trail.
 
 ## Step 0 — Pre-flip preconditions (ALL must pass; any fail blocks the flip)
 1. **2a proof packet = PASS.** Run the offline harness at the flip commit; every correctness/safety probe

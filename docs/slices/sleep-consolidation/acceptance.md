@@ -199,3 +199,14 @@ Before running the dream AFK witness, the live integration means:
   talking to it; it cannot currently tell you left the room).
 - **Not a code slice.** Right next action when witnessing: **restore `llama-server-vision`
   before the witness, OR run the witness during real AFK.**
+
+### CORRECTION (2026-06-02): camera presence ≠ the old vision LLM
+
+Claude's first scoping note wrongly said "restore llama-server-vision." That was a
+misdiagnosis. The dream's presence backstop is **MediaPipe `blaze_face.tflite`** (CPU,
+content-free, timeboxed per ADR 0029), enabled via `MAEZ_CAMERA_PRESENCE_MODE=observe`
++ `MAEZ_CAMERA_PRESENCE_ENABLED_UNTIL=<ISO ts with tz>` — it was OFF, not broken
+(owner probe: presence_detected, ~0.95 confidence). The retired `llama-server-vision`
+(screen/multimodal LLM) is a DIFFERENT, retired system (port 8081 = 4B judge now). Do
+NOT revive it. To make the dream backstop work: enable camera-presence observe mode
+(needs a restart — which ALSO activates the staged reflection flags; do it intentionally).
