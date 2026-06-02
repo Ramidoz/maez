@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 
 def _candidate(source_type: str, text: str, *, salience: int = 10, durable_id: str = ""):
@@ -139,3 +140,96 @@ class CyclePacketSelectorTest(unittest.TestCase):
         self.assertIn("signal_absence", lowered)
         self.assertTrue("nothing" in lowered or "say so" in lowered)
         self.assertNotIn("always produce", lowered)
+
+
+class CyclePacketDaemonSeamTest(unittest.TestCase):
+    def test_flag_off_returns_legacy_prompt_unchanged(self):
+        from core.cognition.cycle_packet import CycleEvidenceCandidate
+        from daemon.maez_daemon import _build_cycle_focused_prompt
+
+        legacy = "Daemon cycle: 7\nSECRET_LEGACY_MARKER"
+        with mock.patch.dict("os.environ", {"MAEZ_CYCLE_FOCUSED_ENABLED": "0"}):
+            decision = _build_cycle_focused_prompt(
+                legacy_prompt=legacy,
+                candidates=[
+                    CycleEvidenceCandidate(
+                        source_type="signal_absence",
+                        text="screen unavailable",
+                    )
+                ],
+            )
+
+        self.assertEqual(decision.prompt, legacy)
+        self.assertIsNone(decision.working_set)
+        self.assertIsNone(decision.fallback_reason)
+
+    def test_flag_on_uses_packet_and_fallback_on_assembly_error(self):
+        from core.cognition.cycle_packet import CycleEvidenceCandidate
+        from daemon.maez_daemon import _build_cycle_focused_prompt
+
+        legacy = "Daemon cycle: 8\nlegacy prompt"
+        candidates = [
+            CycleEvidenceCandidate(
+                source_type="signal_absence",
+                text="screen observation unavailable",
+            )
+        ]
+        with mock.patch.dict("os.environ", {"MAEZ_CYCLE_FOCUSED_ENABLED": "1"}):
+            packet = _build_cycle_focused_prompt(
+                legacy_prompt=legacy,
+                candidates=candidates,
+            )
+        self.assertNotEqual(packet.prompt, legacy)
+        self.assertIn("=== CYCLE EVIDENCE", packet.prompt)
+        self.assertIn("[E1]", packet.prompt)
+        self.assertIsNotNone(packet.working_set)
+        self.assertIsNone(packet.fallback_reason)
+
+        with mock.patch.dict("os.environ", {"MAEZ_CYCLE_FOCUSED_ENABLED": "1"}):
+            with mock.patch(
+                "core.cognition.cycle_packet.select_cycle_evidence",
+                side_effect=RuntimeError("selector broke"),
+            ):
+                fallback = _build_cycle_focused_prompt(
+                    legacy_prompt=legacy,
+                    candidates=candidates,
+                )
+        self.assertEqual(fallback.prompt, legacy)
+        self.assertIsNone(fallback.working_set)
+        self.assertEqual(fallback.fallback_reason, "cycle_packet_failed")
+
+    def test_cycle_packet_shape_summary_is_content_free(self):
+        from core.cognition.cycle_packet import CycleEvidenceCandidate, build_cycle_packet
+        from core.cognition.cycle_packet import select_cycle_evidence
+        from daemon.maez_daemon import _cycle_packet_shape_summary
+
+        secret = "SECRET_PACKET_TEXT_123"
+        items = select_cycle_evidence(
+            [
+                CycleEvidenceCandidate(
+                    source_type="signal_absence",
+                    text=f"screen unavailable {secret}",
+                )
+            ],
+            budget_tokens=3000,
+        )
+        working_set = build_cycle_packet(items)
+        summary = _cycle_packet_shape_summary(
+            working_set=working_set,
+            legacy_prompt_chars=120_000,
+            prefill_ms=1234,
+            cycle_outcome="pending",
+        )
+
+        self.assertEqual(
+            set(summary),
+            {
+                "packet_tokens_est",
+                "legacy_tokens_est",
+                "evidence_item_count",
+                "source_types",
+                "prefill_ms",
+                "cycle_outcome",
+            },
+        )
+        self.assertNotIn(secret, str(summary))

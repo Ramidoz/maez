@@ -1489,6 +1489,98 @@ def _log_focused_cognition_prompt_shape(
     )
 
 
+@dataclass(frozen=True)
+class CycleFocusedPromptDecision:
+    prompt: str
+    working_set: object | None = None
+    fallback_reason: str | None = None
+
+
+def _cycle_focused_enabled() -> bool:
+    return (
+        (os.environ.get("MAEZ_CYCLE_FOCUSED_ENABLED", "") or "")
+        .strip()
+        .lower()
+        in {"1", "true", "yes", "on"}
+    )
+
+
+def _cycle_packet_shape_summary(
+    *,
+    working_set: object,
+    legacy_prompt_chars: int,
+    prefill_ms: int | None = None,
+    cycle_outcome: str = "pending",
+) -> dict[str, object]:
+    items = list(getattr(working_set, "items", []) or [])
+    source_types = sorted({str(getattr(item, "source_type", "")) for item in items})
+    return {
+        "packet_tokens_est": int(
+            getattr(working_set, "working_set_tokens_est", 0) or 0
+        ),
+        "legacy_tokens_est": int(legacy_prompt_chars // 4),
+        "evidence_item_count": len(items),
+        "source_types": ",".join(source_types),
+        "prefill_ms": None if prefill_ms is None else int(prefill_ms),
+        "cycle_outcome": str(cycle_outcome),
+    }
+
+
+def _log_cycle_packet_shape(
+    *,
+    working_set: object,
+    legacy_prompt_chars: int,
+    prefill_ms: int | None = None,
+    cycle_outcome: str = "pending",
+) -> None:
+    logger.info(
+        "cycle_packet_shape summary=%s",
+        json.dumps(
+            _cycle_packet_shape_summary(
+                working_set=working_set,
+                legacy_prompt_chars=legacy_prompt_chars,
+                prefill_ms=prefill_ms,
+                cycle_outcome=cycle_outcome,
+            ),
+            sort_keys=True,
+        ),
+    )
+
+
+def _build_cycle_focused_prompt(
+    *,
+    legacy_prompt: str,
+    candidates,
+    budget_tokens: int = 3000,
+) -> CycleFocusedPromptDecision:
+    if not _cycle_focused_enabled():
+        return CycleFocusedPromptDecision(prompt=legacy_prompt)
+    try:
+        from core.cognition import cycle_packet as _cycle_packet
+
+        items = _cycle_packet.select_cycle_evidence(
+            candidates,
+            budget_tokens=budget_tokens,
+        )
+        working_set = _cycle_packet.build_cycle_packet(items)
+        prompt = (
+            "=== CYCLE EVIDENCE (cite [E#]) ===\n"
+            f"{working_set.ordered_evidence_text}\n\n"
+            "=== CYCLE REFLECTION INSTRUCTION ===\n"
+            f"{working_set.owner_question}\n"
+        )
+        return CycleFocusedPromptDecision(prompt=prompt, working_set=working_set)
+    except Exception as exc:
+        logger.warning(
+            "cycle focused packet failed, falling back to legacy megaprompt: %s",
+            exc,
+        )
+        return CycleFocusedPromptDecision(
+            prompt=legacy_prompt,
+            fallback_reason="cycle_packet_failed",
+        )
+
+
 # Sentinel the model emits when nothing noteworthy to report this cycle.
 # Storing fabricated prose is worse than storing nothing — HEARTBEAT_OK
 # short-circuits audit, storage, and broadcast so the cycle is silent.
@@ -3248,6 +3340,7 @@ class MaezDaemon:
             render_envelope_for_prompt,
             resolve_recall_cap_chars,
         )
+        from core.cognition.cycle_packet import CycleEvidenceCandidate as _CycleCandidate
 
         memory_block = self.memory.format_for_prompt(
             recalled,
@@ -3272,27 +3365,78 @@ class MaezDaemon:
             f"Current time: {day_of_week} {time_of_day}\n\n"
             f"{system_state}\n"
         )
+        _cycle_candidates: list[_CycleCandidate] = [
+            _CycleCandidate(
+                source_type="fresh_evidence",
+                text=system_state,
+                durable_id="cycle_system_state",
+                salience=60,
+            )
+        ]
 
         # Add circadian context
-        prompt += f"\n{self._get_circadian_context()}\n"
+        circadian_context = self._get_circadian_context()
+        prompt += f"\n{circadian_context}\n"
+        if circadian_context:
+            _cycle_candidates.append(
+                _CycleCandidate(
+                    source_type="fresh_evidence",
+                    text=circadian_context,
+                    durable_id="cycle_circadian_context",
+                    salience=55,
+                )
+            )
 
         # Add screen context if available
         if self._last_screen_obs is not None:
-            prompt += f"\n{self._last_screen_obs.format_for_context()}\n"
+            screen_context = self._last_screen_obs.format_for_context()
+            prompt += f"\n{screen_context}\n"
+            _cycle_candidates.append(
+                _CycleCandidate(
+                    source_type="fresh_evidence",
+                    text=screen_context,
+                    durable_id="cycle_screen_context",
+                    salience=80,
+                )
+            )
 
         # Add git context if available — same gating for the AWCC
         # fixation pattern (3+ thoughts mentioning the same
         # uncommitted-files state).
         if self._last_git_context and "git" not in _stale:
             prompt += f"\n{self._last_git_context}\n"
+            _cycle_candidates.append(
+                _CycleCandidate(
+                    source_type="fresh_evidence",
+                    text=self._last_git_context,
+                    durable_id="cycle_git_context",
+                    salience=65,
+                )
+            )
 
         # Add GitHub context if available
         if self._last_github_block:
             prompt += f"\n{self._last_github_block}\n"
+            _cycle_candidates.append(
+                _CycleCandidate(
+                    source_type="fresh_evidence",
+                    text=self._last_github_block,
+                    durable_id="cycle_github_context",
+                    salience=65,
+                )
+            )
 
         # Add Reddit context if available
         if self._last_reddit_block:
             prompt += f"\n{self._last_reddit_block}\n"
+            _cycle_candidates.append(
+                _CycleCandidate(
+                    source_type="web_context",
+                    text=self._last_reddit_block,
+                    durable_id="cycle_reddit_context",
+                    salience=50,
+                )
+            )
 
         # R3.5 (2026-05-04 symphony audit, S4 BLOCKER F7): consult
         # recent card outcomes BEFORE the cycle narration runs. Cycle
@@ -3311,6 +3455,14 @@ class MaezDaemon:
             )
             if _action_outcomes_block:
                 prompt += f"\n{_action_outcomes_block}\n"
+                _cycle_candidates.append(
+                    _CycleCandidate(
+                        source_type="action_outcome",
+                        text=_action_outcomes_block,
+                        durable_id="cycle_recent_action_outcomes",
+                        salience=100,
+                    )
+                )
         except Exception as _rac_e:
             # Codex R3.5 review (2026-05-04): WARNING not DEBUG.
             # The recent-actions block is a grounding rail; silent
@@ -3329,27 +3481,67 @@ class MaezDaemon:
         # Add public bot context if available
         if self._last_public_context:
             prompt += f"\n{self._last_public_context}\n"
+            _cycle_candidates.append(
+                _CycleCandidate(
+                    source_type="fresh_evidence",
+                    text=self._last_public_context,
+                    durable_id="cycle_public_context",
+                    salience=45,
+                )
+            )
 
         # Add proactive search results if available
         if self._proactive_search_context:
             prompt += f"\n{self._proactive_search_context}\n"
+            _cycle_candidates.append(
+                _CycleCandidate(
+                    source_type="web_context",
+                    text=self._proactive_search_context,
+                    durable_id="cycle_proactive_search",
+                    salience=70,
+                )
+            )
             self._proactive_search_context = ""  # Clear after use
 
         # Add self-reflection context
         reflection_context = self._quality_tracker.format_for_context()
         if reflection_context:
             prompt += f"\n{reflection_context}\n"
+            _cycle_candidates.append(
+                _CycleCandidate(
+                    source_type="quality_signal",
+                    text=reflection_context,
+                    durable_id="cycle_quality_signal",
+                    salience=75,
+                )
+            )
 
         # Add active cognition block — always populated once data exists
         cog_context = cog_format_active_prompt()
         if cog_context:
             prompt += f"\n{cog_context}\n"
+            _cycle_candidates.append(
+                _CycleCandidate(
+                    source_type="open_loop",
+                    text=cog_context,
+                    durable_id="cycle_active_cognition",
+                    salience=85,
+                )
+            )
 
         # Add continuity block during orientation window
         if self._continuity_active and self._continuity_capsule:
             cont_block = continuity_format(self._continuity_capsule)
             if cont_block:
                 prompt += f"\n{cont_block}\n"
+                _cycle_candidates.append(
+                    _CycleCandidate(
+                        source_type="memory_context",
+                        text=cont_block,
+                        durable_id="cycle_continuity_context",
+                        salience=70,
+                    )
+                )
 
         # A-core #3 Step 3: builder-mode events block. Reads direct-
         # edit events from audit_log.db since the last HWM, formats
@@ -3368,6 +3560,14 @@ class MaezDaemon:
             )
             if builder_block:
                 prompt += f"\n{builder_block}\n"
+                _cycle_candidates.append(
+                    _CycleCandidate(
+                        source_type="builder_event",
+                        text=builder_block,
+                        durable_id="cycle_builder_event",
+                        salience=80,
+                    )
+                )
                 self._builder_hwm = new_builder_hwm
                 save_high_water_mark(self._builder_hwm_file, new_builder_hwm)
         except Exception as e:
@@ -3377,6 +3577,14 @@ class MaezDaemon:
 
         if memory_block:
             prompt += memory_block + "\n\n"
+            _cycle_candidates.append(
+                _CycleCandidate(
+                    source_type="memory_context",
+                    text=memory_block,
+                    durable_id="cycle_recalled_memory",
+                    salience=50,
+                )
+            )
 
         # Build an honest "signals present this cycle" manifest. This is
         # the difference between the LLM narrating invented activity
@@ -3408,6 +3616,24 @@ class MaezDaemon:
                 "SIGNALS ABSENT THIS CYCLE (do NOT fabricate content for these):\n"
                 + "\n".join(f"  ✗ {s}" for s in signals_absent)
                 + "\n"
+            )
+        for _signal in signals_present:
+            _cycle_candidates.append(
+                _CycleCandidate(
+                    source_type="fresh_evidence",
+                    text=_signal,
+                    durable_id=f"cycle_signal_present:{_signal}",
+                    salience=70,
+                )
+            )
+        for _signal in signals_absent:
+            _cycle_candidates.append(
+                _CycleCandidate(
+                    source_type="signal_absence",
+                    text=_signal,
+                    durable_id=f"cycle_signal_absent:{_signal}",
+                    salience=100,
+                )
             )
 
         try:
@@ -3444,9 +3670,28 @@ class MaezDaemon:
         prompt += signal_manifest
         if _cycle_envelope_block:
             prompt += _cycle_envelope_block + "\n\n"
+            _cycle_candidates.append(
+                _CycleCandidate(
+                    source_type="fresh_evidence",
+                    text=_cycle_envelope_block,
+                    durable_id="cycle_evidence_envelope",
+                    salience=70,
+                )
+            )
 
-        # Store prompt for potential retry use
+        legacy_prompt = prompt
+        _cycle_prompt_decision = _build_cycle_focused_prompt(
+            legacy_prompt=legacy_prompt,
+            candidates=_cycle_candidates,
+        )
+        prompt = _cycle_prompt_decision.prompt
+        # Store the actual prompt sent to the model for corrective retry use.
         self._last_reasoning_prompt = prompt
+        if _cycle_prompt_decision.working_set is not None:
+            _log_cycle_packet_shape(
+                working_set=_cycle_prompt_decision.working_set,
+                legacy_prompt_chars=len(legacy_prompt),
+            )
 
         # Session 11m's _rohit_active_until now stays a UI/activity hint only.
         # BrainGateway owns the actual arbitration: background cognition enters
