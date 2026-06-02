@@ -13,6 +13,7 @@ import json
 import logging
 import math
 import re
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -284,6 +285,8 @@ class TopicRouter:
 
 
 _topic_router = TopicRouter()
+# Requested-label constant retained for byte-equivalent routing. Under the
+# llama.cpp backend, llm_client reports the actually served model in telemetry.
 MODEL = "gemma4:26b"
 SOUL_PATH = Path("/home/rohit/maez/config/soul.md")
 
@@ -307,6 +310,59 @@ _CONSOLIDATE_INSTRUCTIONS = (
     "Be concise but complete. This summary replaces the raw entries\n"
     "in your active reasoning context.\n\n"
 )
+
+
+def _daily_consolidation_telemetry(
+    *,
+    inputs_count: int,
+    outputs_count: int,
+    model: str,
+    duration_ms: float | int,
+    rails_blocked: int,
+    status: str,
+    reason: str,
+) -> dict[str, object]:
+    from core.cognition.consolidation_telemetry import consolidation_telemetry_summary
+
+    return consolidation_telemetry_summary(
+        organ="raw_daily",
+        inputs_count=inputs_count,
+        outputs_count=outputs_count,
+        model=model,
+        duration_ms=duration_ms,
+        rails_blocked=rails_blocked,
+        status=status,
+        reason=reason,
+    )
+
+
+def _emit_daily_consolidation_telemetry(
+    *,
+    started_mono: float,
+    inputs_count: int,
+    outputs_count: int,
+    rails_blocked: int,
+    status: str,
+    reason: str,
+) -> None:
+    try:
+        from core.cognition.consolidation_telemetry import emit_consolidation_telemetry
+        from core.routing.llm_client import served_model_alias
+
+        emit_consolidation_telemetry(
+            logger,
+            **_daily_consolidation_telemetry(
+                inputs_count=inputs_count,
+                outputs_count=outputs_count,
+                model=served_model_alias(default=MODEL),
+                duration_ms=(time.monotonic() - started_mono) * 1000.0,
+                rails_blocked=rails_blocked,
+                status=status,
+                reason=reason,
+            ),
+        )
+    except Exception as exc:
+        logger.debug("daily consolidation telemetry skipped: %s", exc)
 
 
 def _consolidate_with_chunking(*, memory_texts: list[str], soul: str,
@@ -1009,6 +1065,7 @@ class MemoryManager:
 
     def consolidate_daily(self) -> str | None:
         """Distill raw memories since last consolidation into a daily summary."""
+        started_mono = time.monotonic()
         last = self._get_last_consolidation()
         cutoff = last.isoformat() if last.tzinfo else last.replace(tzinfo=timezone.utc).isoformat()
 
@@ -1019,6 +1076,14 @@ class MemoryManager:
         total = self.raw.count()
         if total == 0:
             logger.info("Daily consolidation: no raw memories to consolidate")
+            _emit_daily_consolidation_telemetry(
+                started_mono=started_mono,
+                inputs_count=0,
+                outputs_count=0,
+                rails_blocked=0,
+                status="skipped",
+                reason="no_raw",
+            )
             return None
 
         batch_size = min(total, 500)
@@ -1062,6 +1127,14 @@ class MemoryManager:
 
         if not candidates:
             logger.info("Daily consolidation: no memories since last consolidation")
+            _emit_daily_consolidation_telemetry(
+                started_mono=started_mono,
+                inputs_count=0,
+                outputs_count=0,
+                rails_blocked=0,
+                status="skipped",
+                reason="no_candidates",
+            )
             return None
 
         # 5x.E: filter untrusted rows out of the consolidation input
@@ -1085,6 +1158,14 @@ class MemoryManager:
             logger.info(
                 "Daily consolidation: input empty after 5x.E filter "
                 "(every row was untrusted); skipping write"
+            )
+            _emit_daily_consolidation_telemetry(
+                started_mono=started_mono,
+                inputs_count=len(candidates),
+                outputs_count=0,
+                rails_blocked=filtered_n,
+                status="skipped",
+                reason="all_untrusted",
             )
             return None
 
@@ -1123,6 +1204,14 @@ class MemoryManager:
             memory_texts=memory_texts, soul=soul, logger_=logger,
         )
         if not summary:
+            _emit_daily_consolidation_telemetry(
+                started_mono=started_mono,
+                inputs_count=len(kept),
+                outputs_count=0,
+                rails_blocked=filtered_n,
+                status="failed",
+                reason="empty_summary",
+            )
             return None
 
         # Store the consolidation
@@ -1178,6 +1267,14 @@ class MemoryManager:
             "Daily consolidation stored: %s (%d chars from %d raw "
             "memories, %d untrusted filtered)",
             consolidation_id, len(summary), len(kept), filtered_n,
+        )
+        _emit_daily_consolidation_telemetry(
+            started_mono=started_mono,
+            inputs_count=len(kept),
+            outputs_count=1,
+            rails_blocked=filtered_n,
+            status="success",
+            reason="stored",
         )
         self._save_last_consolidation()
 

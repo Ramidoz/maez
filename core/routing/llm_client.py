@@ -45,6 +45,7 @@ import re
 import socket as _socket
 import threading
 import time
+import urllib.request
 from dataclasses import dataclass
 from typing import Any, Optional
 from urllib.parse import urlparse
@@ -108,6 +109,37 @@ def active_backend() -> str:
     """
     v = (os.environ.get('MAEZ_LLM_BACKEND') or BACKEND_OLLAMA).strip().lower()
     return v if v in VALID_BACKENDS else BACKEND_OLLAMA
+
+
+def _llamacpp_props_url() -> str:
+    base = LLAMACPP_BASE_URL.rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-3].rstrip("/")
+    return f"{base}/props"
+
+
+def served_model_alias(*, default: str | None = None, timeout_s: float = 1.0) -> str:
+    """Return the actually served model alias for telemetry.
+
+    This is observational only: it does not affect routing. Under llama.cpp,
+    the requested model label may be ignored when one model is loaded, so
+    telemetry reads `/props` to report the server's resident alias.
+    """
+    fallback = default or LLAMACPP_MODEL
+    if active_backend() != BACKEND_LLAMACPP:
+        return fallback
+    try:
+        with urllib.request.urlopen(_llamacpp_props_url(), timeout=timeout_s) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        alias = payload.get("model_alias")
+        if alias:
+            return str(alias)
+        model_path = payload.get("model_path")
+        if model_path:
+            return str(model_path).rsplit("/", 1)[-1]
+    except Exception:
+        return fallback
+    return fallback
 
 
 class BackendError(Exception):

@@ -242,15 +242,16 @@ class T2_3_PollAndPlanConcurrentRace(unittest.TestCase):
             self.assertEqual(len(rows), 1)
 
 
-# ── T2.5 — camera presence no longer drives dream arrival state ──────
+# ── T2.5 — camera presence no longer drives arrival state ────────────
 
 
 class T2_5_DepartureClearedOnArrival(unittest.TestCase):
     """REGRESSION GUARDS for T2.5 after Camera Presence v1.
 
-    The old daemon path used camera arrival/departure transitions to drive
-    dream-idle timing. Decision 24's camera-presence v1 implementation removes
-    that behavioral consumer: camera state is health/panel-only.
+    The old daemon path used camera arrival/departure transitions as behavioral
+    state. The sleep-consolidation wiring keeps that removed: dream scheduling
+    goes through an explicit activity-primary idle helper, not arrival/leave
+    state or prompt/signature context.
     """
 
     def test_camera_presence_does_not_drive_dream_arrival_state(self):
@@ -262,12 +263,8 @@ class T2_5_DepartureClearedOnArrival(unittest.TestCase):
         self.assertNotIn("just_arrived", loop_body)
         self.assertNotIn("just_left", loop_body)
         self.assertNotIn("_last_departure_time", loop_body)
-        self.assertIn(
-            "self.dream.is_idle(None, 0.0)",
-            loop_body,
-            "Camera Presence v1 must not feed presence or absence duration "
-            "into dream-idle timing.",
-        )
+        self.assertNotIn("self.dream.is_idle(None, 0.0)", loop_body)
+        self.assertIn("_dream_idle_gate_open(self, now=_now)", loop_body)
 
 
 # ── T2.6 — capability-planning loop bounded backoff + exception log ─

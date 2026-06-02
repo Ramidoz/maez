@@ -1668,6 +1668,28 @@ def _log_reflection_synthesis_summary(summary: dict[str, object]) -> None:
     )
 
 
+def _reflection_consolidation_telemetry(
+    summary: dict[str, object],
+    *,
+    model: str,
+    duration_ms: float | int,
+) -> dict[str, object]:
+    from core.cognition.consolidation_telemetry import consolidation_telemetry_summary
+
+    candidates = int(summary.get("candidates_count", 0) or 0)
+    drops = int(summary.get("drops_count", 0) or 0)
+    return consolidation_telemetry_summary(
+        organ="reflection",
+        inputs_count=candidates + drops,
+        outputs_count=candidates,
+        model=model,
+        duration_ms=duration_ms,
+        rails_blocked=drops,
+        status=str(summary.get("status", "unknown")),
+        reason=str(summary.get("reason", "unknown")),
+    )
+
+
 def _run_reflection_synthesis_nightly(
     daemon: object,
     *,
@@ -1685,6 +1707,7 @@ def _run_reflection_synthesis_nightly(
     )
 
     dry_run = not _reflection_synthesis_write_enabled()
+    started_mono = time.monotonic()
     report = ReflectionReport(dry_run=dry_run, started_at=datetime.now(timezone.utc).isoformat())
     if llm_call is None:
         llm_call = _default_llm_call("qwen36-27b", 120)
@@ -1708,6 +1731,20 @@ def _run_reflection_synthesis_nightly(
         artifact_path=artifact_path,
     )
     _log_reflection_synthesis_summary(summary)
+    try:
+        from core.cognition.consolidation_telemetry import emit_consolidation_telemetry
+        from core.routing.llm_client import served_model_alias
+
+        emit_consolidation_telemetry(
+            logger,
+            **_reflection_consolidation_telemetry(
+                summary,
+                model=served_model_alias(default="qwen36-27b"),
+                duration_ms=(time.monotonic() - started_mono) * 1000.0,
+            ),
+        )
+    except Exception as _telemetry_exc:
+        logger.debug("reflection consolidation telemetry skipped: %s", _telemetry_exc)
     return summary
 
 
@@ -7453,9 +7490,10 @@ class MaezDaemon:
                     except Exception as e:
                         logger.warning("Calendar legacy-dev perception error: %s", e)
 
-            # Camera Presence v1 — health/panel-only body sensor. It never
+            # Camera Presence v1 — health/panel body sensor. It never
             # triggers greetings, prompt context, memory, audit grounding, or
-            # dream cadence.
+            # doorman salience. Dream scheduling may read a fresh-present
+            # state through the explicit activity-primary idle helper below.
             self._mark_cycle_stage("presence_perception")
             self._presence_cycle_counter += 1
             if (

@@ -145,6 +145,34 @@ def dream_may_run(
     return str(camera or "unknown").lower() != "present_fresh"
 
 
+def _emit_dream_consolidation_telemetry(
+    *,
+    started_mono: float,
+    inputs_count: int,
+    outputs_count: int,
+    rails_blocked: int,
+    status: str,
+    reason: str,
+) -> None:
+    try:
+        from core.cognition.consolidation_telemetry import emit_consolidation_telemetry
+        from core.routing.llm_client import served_model_alias
+
+        emit_consolidation_telemetry(
+            logger,
+            organ="dream",
+            inputs_count=inputs_count,
+            outputs_count=outputs_count,
+            model=served_model_alias(default=MODEL),
+            duration_ms=(time.monotonic() - started_mono) * 1000.0,
+            rails_blocked=rails_blocked,
+            status=status,
+            reason=reason,
+        )
+    except Exception as exc:
+        logger.debug("dream consolidation telemetry skipped: %s", exc)
+
+
 TRAINING_EVAL_COOLDOWN_S = 86400.0  # 24 hours between training proposals
 
 S7_DREAM_APPLY_ENVELOPE_TTL = timedelta(days=30)
@@ -322,6 +350,7 @@ class DreamState:
         is still responsible for the idle gate (run_dream_cycle doesn't
         check presence on its own — that's the daemon's job).
         """
+        started_mono = time.monotonic()
         now = time.time()
         # Claim the cooldown slot IMMEDIATELY so should_run_now() starts
         # returning False the moment this cycle begins — even if we spawn
@@ -346,10 +375,26 @@ class DreamState:
             recent = self.memory.recent_raw(n=DREAM_MEMORY_WINDOW)
         except Exception as e:
             logger.error("dream: recent_raw failed: %s", e)
+            _emit_dream_consolidation_telemetry(
+                started_mono=started_mono,
+                inputs_count=0,
+                outputs_count=0,
+                rails_blocked=0,
+                status="failed",
+                reason="recent_raw_error",
+            )
             return None
         docs = recent.get("documents") or []
         if len(docs) < 10:
             logger.info("dream: skipped — only %d raw memories available", len(docs))
+            _emit_dream_consolidation_telemetry(
+                started_mono=started_mono,
+                inputs_count=len(docs),
+                outputs_count=0,
+                rails_blocked=0,
+                status="skipped",
+                reason="insufficient_raw",
+            )
             return None
 
         # 2. Build dream prompt
@@ -389,22 +434,62 @@ class DreamState:
             raise
         except Exception as e:
             logger.error("dream: llm_client call failed: %s", e)
+            _emit_dream_consolidation_telemetry(
+                started_mono=started_mono,
+                inputs_count=len(docs),
+                outputs_count=0,
+                rails_blocked=0,
+                status="failed",
+                reason="llm_error",
+            )
             return None
 
         # 4. Sentinel / length filter
         if not insight:
             logger.info("dream: empty response")
+            _emit_dream_consolidation_telemetry(
+                started_mono=started_mono,
+                inputs_count=len(docs),
+                outputs_count=0,
+                rails_blocked=1,
+                status="skipped",
+                reason="empty_response",
+            )
             return None
         if insight.upper().strip() == "NOTHING":
             logger.info("dream: model returned NOTHING (no pattern detected)")
+            _emit_dream_consolidation_telemetry(
+                started_mono=started_mono,
+                inputs_count=len(docs),
+                outputs_count=0,
+                rails_blocked=1,
+                status="skipped",
+                reason="nothing",
+            )
             return None
         if len(insight) < MIN_INSIGHT_CHARS:
             logger.info("dream: insight too short (%d chars), skipping", len(insight))
+            _emit_dream_consolidation_telemetry(
+                started_mono=started_mono,
+                inputs_count=len(docs),
+                outputs_count=0,
+                rails_blocked=1,
+                status="skipped",
+                reason="too_short",
+            )
             return None
 
         # 5. Novelty check
         if not self._is_novel(insight):
             logger.info("dream: insight too similar to prior notes, skipping")
+            _emit_dream_consolidation_telemetry(
+                started_mono=started_mono,
+                inputs_count=len(docs),
+                outputs_count=0,
+                rails_blocked=1,
+                status="skipped",
+                reason="not_novel",
+            )
             return None
 
         # 6. Store as proposal
@@ -450,6 +535,14 @@ class DreamState:
             except Exception as e:
                 logger.debug("dream: telegram send failed: %s", e)
 
+        _emit_dream_consolidation_telemetry(
+            started_mono=started_mono,
+            inputs_count=len(docs),
+            outputs_count=1,
+            rails_blocked=0,
+            status="success",
+            reason="proposal_stored",
+        )
         return insight
 
     # ── training self-evaluation ───────────────────────────────────
