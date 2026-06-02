@@ -28,6 +28,7 @@ Contracts pinned here:
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import tempfile
@@ -55,6 +56,56 @@ def _raw(mid: str, content: str) -> dict:
 
 
 class SynthesizeShape(unittest.TestCase):
+    def test_prompt_speaks_as_maez_with_grounding_beside_voice(self):
+        from core.memory.reflection import synthesize_reflections
+
+        captured: dict = {}
+
+        def _stub(prompt: str) -> str:
+            captured["prompt"] = prompt
+            return "[]"
+
+        synthesize_reflections(
+            recent_episodes=[{"id": "ep-1", "title": "t", "summary": "s"}],
+            llm_call=_stub,
+        )
+
+        p = captured["prompt"]
+        self.assertIn("remembering your own formation", p)
+        self.assertIn("do not invent warmth", p)
+        self.assertLess(
+            p.index("remembering your own formation"),
+            p.index("do not invent warmth"),
+        )
+        self.assertNotIn("You are reading", p)
+
+    def test_evidence_rail_drops_fabricated_and_missing_after_voice_graft(self):
+        from core.memory.reflection import synthesize_reflections
+
+        model_output = json.dumps(
+            [
+                {"reflection": "a grounded pattern", "evidence": ["ep-1"]},
+                {"reflection": "an invented pattern", "evidence": ["ep-FAKE"]},
+                {"reflection": "an unsupported pattern", "evidence": []},
+            ]
+        )
+
+        def _stub(_prompt: str) -> str:
+            return model_output
+
+        drops: list = []
+        out = synthesize_reflections(
+            recent_episodes=[{"id": "ep-1", "title": "t", "summary": "s"}],
+            llm_call=_stub,
+            drop_sink=drops,
+        )
+
+        self.assertEqual([r.text for r in out], ["a grounded pattern"])
+        self.assertEqual(
+            sorted(d["reason"] for d in drops),
+            ["fabricated_evidence", "missing_evidence"],
+        )
+
     def test_returns_empty_when_no_inputs(self):
         from core.memory.reflection import synthesize_reflections
 
