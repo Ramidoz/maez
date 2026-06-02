@@ -3895,7 +3895,9 @@ class TelegramVoice:
 
             if self.daemon is not None:
                 try:
-                    self.daemon._rohit_active_until = _time.time() + 15.0
+                    _owner_now = _time.time()
+                    self.daemon._rohit_active_until = _owner_now + 15.0
+                    self.daemon._last_owner_interaction_ts = _owner_now
                 except Exception:
                     pass
 

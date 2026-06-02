@@ -1577,6 +1577,62 @@ def _cycle_doorman_enabled() -> bool:
     return (os.environ.get("MAEZ_CYCLE_DOORMAN_ENABLED", "") or "").strip() == "1"
 
 
+def _record_owner_interaction(daemon: object, *, now: float | None = None) -> None:
+    setattr(daemon, "_last_owner_interaction_ts", time.time() if now is None else float(now))
+
+
+def _dream_camera_idle_state(camera_state: object | None, *, now: float) -> str:
+    if camera_state is None:
+        return "unknown"
+    try:
+        now_dt = datetime.fromtimestamp(float(now), tz=timezone.utc)
+        with_freshness = getattr(camera_state, "with_freshness", None)
+        if callable(with_freshness):
+            camera_state = with_freshness(now=now_dt)
+    except Exception:
+        pass
+    sensor_state = str(getattr(camera_state, "sensor_state", "unknown") or "unknown").lower()
+    presence_state = str(getattr(camera_state, "presence_state", "unknown") or "unknown").lower()
+    if presence_state == "present" and sensor_state == "available":
+        return "present_fresh"
+    if presence_state == "absent":
+        return "absent"
+    if sensor_state in {"disabled", "stale", "unavailable"}:
+        return "unavailable"
+    return "unknown"
+
+
+def _dream_idle_inputs(daemon: object, *, now: float | None = None) -> dict[str, object]:
+    current = time.time() if now is None else float(now)
+    last_interaction = getattr(daemon, "_last_owner_interaction_ts", None)
+    try:
+        no_interaction_secs = max(0.0, current - float(last_interaction))
+        activity_known = True
+    except (TypeError, ValueError):
+        no_interaction_secs = 0.0
+        activity_known = False
+    try:
+        active_until_future = float(getattr(daemon, "_rohit_active_until", 0.0) or 0.0) > current
+    except (TypeError, ValueError):
+        active_until_future = False
+    camera_state = (
+        getattr(daemon, "_last_presence_snap", None)
+        or getattr(daemon, "_camera_presence_state", None)
+    )
+    return {
+        "no_interaction_secs": no_interaction_secs,
+        "camera": _dream_camera_idle_state(camera_state, now=current),
+        "active_until_future": active_until_future,
+        "activity_known": activity_known,
+    }
+
+
+def _dream_idle_gate_open(daemon: object, *, now: float | None = None) -> bool:
+    from core.evolution.dream_state import dream_may_run
+
+    return dream_may_run(**_dream_idle_inputs(daemon, now=now))
+
+
 def _cycle_doorman_verdict_summary(
     verdict: DoormanVerdict,
     *,
@@ -2118,6 +2174,7 @@ class MaezDaemon:
         # Session 11m: pass daemon ref so the Telegram bot can signal
         # "the owner is talking" and defer our next reasoning cycle.
         self._rohit_active_until = 0.0
+        self._last_owner_interaction_ts = time.time()
         self.telegram = TelegramVoice(self.memory, daemon=self)
         self.public_bot = MaezPublicBot()
         # 5x.F.B: pass `daemon=self` so ActionEngine handlers can
@@ -4217,6 +4274,11 @@ class MaezDaemon:
                 keyword overlap (incident: meta-harness at 04:42,
                 "it" at 04:53 lost the referent).
         """
+        try:
+            _record_owner_interaction(self)
+        except Exception as _activity_exc:
+            logger.debug("owner interaction tracker skipped: %s", _activity_exc)
+
         from core.routing.recall_outcome import ReplyPath, reply_path_from_mode
         from core.routing.reply_mode import (
             ReplyDecisionSignals,
@@ -8058,7 +8120,7 @@ class MaezDaemon:
                 _now = time.time()
                 if (
                     not cycle_preempted
-                    and self.dream.is_idle(None, 0.0)
+                    and _dream_idle_gate_open(self, now=_now)
                     and self.dream.should_run_now(_now)
                 ):
                     logger.info("Dream cycle triggered — idle gate open")
@@ -9042,6 +9104,10 @@ class MaezDaemon:
             text = (data.get("text") or "").strip()
             if not text:
                 return jsonify({"transcript": "", "error": "empty text"}), 400
+            try:
+                _record_owner_interaction(self)
+            except Exception as _activity_exc:
+                logger.debug("owner interaction tracker skipped: %s", _activity_exc)
             try:
                 telegram = getattr(self, "telegram", None)
                 get_pipeline_fn = telegram._get_pipeline if telegram else None

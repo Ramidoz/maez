@@ -119,6 +119,32 @@ NOVELTY_TOPIC_JACCARD_MIN = 0.10
 NOVELTY_DREAM_LOOKBACK = 20
 
 
+def dream_may_run(
+    *,
+    no_interaction_secs: float,
+    camera: str,
+    active_until_future: bool,
+    activity_known: bool,
+) -> bool:
+    """Return whether a dream may run under the hybrid idle contract.
+
+    Activity is primary: if we cannot prove the no-interaction window,
+    the dream does not fire. Camera uncertainty does not block, but a
+    fresh present reading does.
+    """
+    if not activity_known:
+        return False
+    try:
+        idle_secs = float(no_interaction_secs)
+    except (TypeError, ValueError):
+        return False
+    if idle_secs < IDLE_THRESHOLD_S:
+        return False
+    if active_until_future:
+        return False
+    return str(camera or "unknown").lower() != "present_fresh"
+
+
 TRAINING_EVAL_COOLDOWN_S = 86400.0  # 24 hours between training proposals
 
 S7_DREAM_APPLY_ENVELOPE_TTL = timedelta(days=30)
@@ -274,7 +300,13 @@ class DreamState:
         if presence_snap is None:
             return False
         rohit_present = getattr(presence_snap, "rohit_present", True)
-        return (not rohit_present) and absence_secs >= IDLE_THRESHOLD_S
+        camera = "present_fresh" if rohit_present else "absent"
+        return dream_may_run(
+            no_interaction_secs=absence_secs,
+            camera=camera,
+            active_until_future=False,
+            activity_known=True,
+        )
 
     def should_run_now(self, now: float) -> bool:
         """True if the cooldown since the last dream cycle has elapsed."""
