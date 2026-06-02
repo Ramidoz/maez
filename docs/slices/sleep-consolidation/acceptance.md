@@ -84,3 +84,21 @@ Fail:
 - Enabling `MAEZ_REFLECTION_SYNTHESIS_WRITE=1` is not part of this slice.
 - Consolidating wants, wonderings, lessons, and daily-to-core promotion are not
   part of this slice.
+
+## Reflection Input Hygiene v0 — Re-run Witness
+
+Re-run the dry-run from `main`: `MAEZ_REFLECTION_SYNTHESIS_ENABLED=1`,
+write off.
+
+- **Recursion closed:** a fresh `logs/reflection_dry_runs/*.jsonl`; resolve
+  every candidate's `source_memory_ids` against `memory/lived_episodes.db`
+  with `EpisodeStore.get(id)["source_kind"]` and require zero
+  `source_kind=reflection` citations. Candidates should ground only in
+  `core_memory`, `followup_doc`, and other real evidence.
+- **Voice as a natural experiment:** if the harsh "suppresses technical
+  novelty"-class framing is gone, recursion caused it and the input hygiene
+  fixed it for free. If it survives clean inputs, open a separate voice/prompt
+  slice; this slice changes no synthesis prompt.
+- **Write mode remains separate:** only a grounded and in-voice dry-run reopens
+  the `MAEZ_REFLECTION_SYNTHESIS_WRITE=1` decision, and that remains a distinct
+  later owner call.
