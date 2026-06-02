@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
 
-from core.cognition.cycle_doorman import DoormanSignals, ReasonCode, decide
+from core.cognition.cycle_doorman import DoormanSignals, DoormanVerdict, ReasonCode, decide
 
 
 def _quiet() -> DoormanSignals:
@@ -116,6 +117,233 @@ class DoormanTest(unittest.TestCase):
         verdict = decide(signals)
 
         self.assertEqual(verdict.signals_present, ("new_failure",))
+
+
+class DoormanDaemonSeamTest(unittest.TestCase):
+    def test_flag_off_uses_legacy_signature_gate(self):
+        from daemon.maez_daemon import _cycle_doorman_gate_decision
+
+        quiet = _quiet()
+
+        skip = _cycle_doorman_gate_decision(
+            doorman_enabled=False,
+            current_signature="A",
+            last_thought_signature="A",
+            quiet_skips=5,
+            min_floor=10,
+            signals=quiet,
+        )
+        wake = _cycle_doorman_gate_decision(
+            doorman_enabled=False,
+            current_signature="B",
+            last_thought_signature="A",
+            quiet_skips=5,
+            min_floor=10,
+            signals=quiet,
+        )
+
+        self.assertFalse(skip.wake)
+        self.assertTrue(skip.legacy_skip)
+        self.assertIsNone(skip.verdict)
+        self.assertTrue(wake.wake)
+        self.assertFalse(wake.legacy_skip)
+        self.assertIsNone(wake.verdict)
+
+    def test_flag_on_doorman_skip_blocks_deep_call(self):
+        from daemon.maez_daemon import _cycle_doorman_gate_decision
+
+        gate = _cycle_doorman_gate_decision(
+            doorman_enabled=True,
+            current_signature="A",
+            last_thought_signature="A",
+            quiet_skips=0,
+            min_floor=10,
+            signals=_quiet(),
+        )
+
+        self.assertFalse(gate.wake)
+        self.assertFalse(gate.should_call_deep_brain)
+        self.assertFalse(gate.legacy_skip)
+        self.assertEqual(gate.reason_code, ReasonCode.SKIP_NOTHING_SALIENT.value)
+
+    def test_flag_on_fail_open_wakes(self):
+        from daemon.maez_daemon import _cycle_doorman_gate_decision
+
+        gate = _cycle_doorman_gate_decision(
+            doorman_enabled=True,
+            current_signature="A",
+            last_thought_signature="A",
+            quiet_skips=0,
+            min_floor=10,
+            signals=None,
+        )
+
+        self.assertTrue(gate.wake)
+        self.assertTrue(gate.should_call_deep_brain)
+        self.assertEqual(gate.reason_code, ReasonCode.WAKE_FAIL_OPEN.value)
+
+    def test_doorman_verdict_summary_is_content_free(self):
+        from daemon.maez_daemon import _cycle_doorman_verdict_summary
+
+        summary = _cycle_doorman_verdict_summary(
+            DoormanVerdict(
+                wake=True,
+                reason_code=ReasonCode.WAKE_NEW_FAILURE,
+                signals_present=("new_failure",),
+            ),
+            quiet_skips=3,
+        )
+
+        self.assertEqual(
+            set(summary),
+            {"wake", "reason_code", "signals_present", "quiet_skips"},
+        )
+        self.assertEqual(summary["reason_code"], "wake_new_failure")
+        self.assertNotIn("SECRET", str(summary))
+
+    def test_doorman_skip_summary_is_content_free(self):
+        from daemon.maez_daemon import _cycle_doorman_gate_decision, _cycle_doorman_skip_summary
+
+        gate = _cycle_doorman_gate_decision(
+            doorman_enabled=True,
+            current_signature="A",
+            last_thought_signature="A",
+            quiet_skips=0,
+            min_floor=10,
+            signals=_quiet(),
+        )
+
+        summary = _cycle_doorman_skip_summary(gate, quiet_skips=4)
+
+        self.assertEqual(
+            set(summary),
+            {"reason_code", "signals_present", "quiet_skips"},
+        )
+        self.assertEqual(summary["reason_code"], "skip_nothing_salient")
+        self.assertNotIn("SECRET", str(summary))
+
+    def test_floor_wake_heartbeat_resets_counter_instead_of_latching(self):
+        from daemon.maez_daemon import (
+            _HEARTBEAT_OK,
+            _cycle_doorman_gate_decision,
+            _cycle_next_quiet_skips,
+        )
+
+        gate = _cycle_doorman_gate_decision(
+            doorman_enabled=True,
+            current_signature="A",
+            last_thought_signature="A",
+            quiet_skips=10,
+            min_floor=10,
+            signals=DoormanSignals(
+                perception_changed=False,
+                new_failures=0,
+                open_wants=0,
+                memory_delta=False,
+                signal_availability_changed=False,
+                scheduled_due=False,
+                quiet_skips=10,
+                min_floor=10,
+                presence="active",
+            ),
+        )
+        self.assertTrue(gate.floor_wake)
+
+        self.assertEqual(
+            _cycle_next_quiet_skips(
+                gate_decision=gate,
+                current_quiet_skips=10,
+                result=_HEARTBEAT_OK,
+            ),
+            0,
+        )
+
+    def test_doorman_skip_increments_quiet_counter(self):
+        from daemon.maez_daemon import _cycle_doorman_gate_decision, _cycle_next_quiet_skips
+
+        gate = _cycle_doorman_gate_decision(
+            doorman_enabled=True,
+            current_signature="A",
+            last_thought_signature="A",
+            quiet_skips=3,
+            min_floor=10,
+            signals=_quiet(),
+        )
+
+        self.assertEqual(
+            _cycle_next_quiet_skips(
+                gate_decision=gate,
+                current_quiet_skips=3,
+                result=None,
+            ),
+            4,
+        )
+
+    def test_action_failure_count_is_content_free_count(self):
+        from daemon.maez_daemon import _cycle_action_failure_count
+
+        results = [
+            SimpleNamespace(success=False),
+            SimpleNamespace(status="failed"),
+            SimpleNamespace(outcome="approved_and_failed"),
+            SimpleNamespace(success=True, status="done"),
+        ]
+
+        self.assertEqual(_cycle_action_failure_count(results), 3)
+
+    def test_signal_availability_change_is_transition_not_steady_absence(self):
+        from daemon.maez_daemon import (
+            _cycle_signal_availability_changed,
+            _cycle_signal_availability_key,
+        )
+
+        absent = _cycle_signal_availability_key(
+            screen_obs=SimpleNamespace(success=False),
+            presence_state=SimpleNamespace(sensor_state="unavailable"),
+        )
+        still_absent = _cycle_signal_availability_key(
+            screen_obs=SimpleNamespace(success=False),
+            presence_state=SimpleNamespace(sensor_state="unavailable"),
+        )
+        present = _cycle_signal_availability_key(
+            screen_obs=SimpleNamespace(success=True),
+            presence_state=SimpleNamespace(sensor_state="available"),
+        )
+
+        self.assertFalse(_cycle_signal_availability_changed(absent, still_absent))
+        self.assertTrue(_cycle_signal_availability_changed(absent, present))
+
+    def test_doorman_perception_delta_ignores_presence_axis(self):
+        from daemon.maez_daemon import _cycle_doorman_signals
+
+        current_axes = {
+            "disk": 70,
+            "presence": "absent",
+            "git": 0,
+            "procs": ("python",),
+        }
+        last_axes = {
+            "disk": 70,
+            "presence": "active",
+            "git": 0,
+            "procs": ("python",),
+        }
+
+        signals = _cycle_doorman_signals(
+            current_axes=current_axes,
+            last_thought_axes=last_axes,
+            quiet_skips=0,
+            min_floor=10,
+            new_failures=0,
+            open_wants=0,
+            memory_delta=False,
+            signal_availability_changed=False,
+            scheduled_due=False,
+            presence="absent",
+        )
+
+        self.assertFalse(signals.perception_changed)
+        self.assertFalse(decide(signals).wake)
 
 
 if __name__ == "__main__":

@@ -109,6 +109,12 @@ from core.governance.operator_user_boundary import (
 from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
 from core.governance.s7_webauthn_verifier import S7ProductionWebAuthnVerifier
+from core.cognition.cycle_doorman import (
+    DoormanSignals,
+    DoormanVerdict,
+    ReasonCode as DoormanReasonCode,
+    decide as _decide_cycle_doorman,
+)
 from skills.telegram_voice import TelegramVoice
 from skills.telegram_public import MaezPublicBot
 from core.action_engine import ActionEngine
@@ -1551,6 +1557,219 @@ def _log_cycle_packet_shape(
     )
 
 
+@dataclass(frozen=True)
+class _CycleDoormanGateDecision:
+    doorman_enabled: bool
+    wake: bool
+    reason_code: str | None = None
+    signals_present: tuple[str, ...] = ()
+    legacy_skip: bool = False
+    floor_wake: bool = False
+    verdict: DoormanVerdict | None = None
+
+    @property
+    def should_call_deep_brain(self) -> bool:
+        return self.wake
+
+
+def _cycle_doorman_enabled() -> bool:
+    return (os.environ.get("MAEZ_CYCLE_DOORMAN_ENABLED", "") or "").strip() == "1"
+
+
+def _cycle_doorman_verdict_summary(
+    verdict: DoormanVerdict,
+    *,
+    quiet_skips: int,
+) -> dict[str, object]:
+    reason_code = (
+        verdict.reason_code.value if hasattr(verdict.reason_code, "value") else str(verdict.reason_code)
+    )
+    return {
+        "wake": bool(verdict.wake),
+        "reason_code": reason_code,
+        "signals_present": tuple(str(item) for item in verdict.signals_present),
+        "quiet_skips": int(quiet_skips),
+    }
+
+
+def _log_cycle_doorman_verdict(
+    *,
+    verdict: DoormanVerdict,
+    quiet_skips: int,
+) -> None:
+    logger.info(
+        "doorman_verdict summary=%s",
+        json.dumps(
+            _cycle_doorman_verdict_summary(verdict, quiet_skips=quiet_skips),
+            sort_keys=True,
+        ),
+    )
+
+
+def _cycle_doorman_skip_summary(
+    gate_decision: _CycleDoormanGateDecision,
+    *,
+    quiet_skips: int,
+) -> dict[str, object]:
+    return {
+        "reason_code": str(gate_decision.reason_code),
+        "signals_present": tuple(str(item) for item in gate_decision.signals_present),
+        "quiet_skips": int(quiet_skips),
+    }
+
+
+def _log_cycle_doorman_skip(
+    *,
+    gate_decision: _CycleDoormanGateDecision,
+    quiet_skips: int,
+) -> None:
+    logger.info(
+        "doorman_skip summary=%s",
+        json.dumps(
+            _cycle_doorman_skip_summary(gate_decision, quiet_skips=quiet_skips),
+            sort_keys=True,
+        ),
+    )
+
+
+def _cycle_action_result_failed(result: object) -> bool:
+    if getattr(result, "success", None) is False:
+        return True
+    for attr in ("status", "outcome", "state"):
+        value = getattr(result, attr, None)
+        if value is None:
+            continue
+        lowered = str(getattr(value, "value", value)).lower()
+        if lowered in {"failed", "error", "errored", "approved_and_failed"}:
+            return True
+    if getattr(result, "error", None):
+        return True
+    return False
+
+
+def _cycle_action_failure_count(results: object) -> int:
+    try:
+        return sum(1 for result in list(results or []) if _cycle_action_result_failed(result))
+    except Exception:
+        return 0
+
+
+def _cycle_signal_availability_key(*, screen_obs: object, presence_state: object) -> str:
+    screen_available = bool(getattr(screen_obs, "success", False))
+    sensor_state = str(getattr(presence_state, "sensor_state", "unknown") or "unknown").lower()
+    camera_available = sensor_state not in {
+        "off",
+        "disabled",
+        "unavailable",
+        "sensor_unavailable",
+    }
+    return (
+        f"screen={'available' if screen_available else 'absent'}"
+        f"|camera={'available' if camera_available else 'absent'}"
+    )
+
+
+def _cycle_signal_availability_changed(previous: str | None, current: str) -> bool:
+    return previous is not None and previous != current
+
+
+def _axis_signature_without_presence(axes: dict | None) -> str | None:
+    if axes is None:
+        return None
+    stable = {key: value for key, value in dict(axes).items() if key != "presence"}
+    return json.dumps(stable, sort_keys=True)
+
+
+def _cycle_doorman_signals(
+    *,
+    current_axes: dict,
+    last_thought_axes: dict | None,
+    quiet_skips: int,
+    min_floor: int,
+    new_failures: int,
+    open_wants: int,
+    memory_delta: bool,
+    signal_availability_changed: bool,
+    scheduled_due: bool,
+    presence: str,
+) -> DoormanSignals:
+    current_without_presence = _axis_signature_without_presence(current_axes)
+    last_without_presence = _axis_signature_without_presence(last_thought_axes)
+    perception_changed = (
+        last_without_presence is None
+        or current_without_presence != last_without_presence
+    )
+    return DoormanSignals(
+        perception_changed=perception_changed,
+        new_failures=int(new_failures),
+        open_wants=int(open_wants),
+        memory_delta=bool(memory_delta),
+        signal_availability_changed=bool(signal_availability_changed),
+        scheduled_due=bool(scheduled_due),
+        quiet_skips=int(quiet_skips),
+        min_floor=int(min_floor),
+        presence=str(presence or "unknown"),
+    )
+
+
+def _cycle_doorman_gate_decision(
+    *,
+    doorman_enabled: bool,
+    current_signature: str,
+    last_thought_signature: str | None,
+    quiet_skips: int,
+    min_floor: int,
+    signals: object,
+) -> _CycleDoormanGateDecision:
+    from core.cognition.perception_signature import should_skip_reasoning
+
+    if not doorman_enabled:
+        legacy_skip = should_skip_reasoning(
+            current_signature=current_signature,
+            last_thought_signature=last_thought_signature,
+            cycles_since_last_thought=quiet_skips,
+            min_thought_floor=min_floor,
+        )
+        return _CycleDoormanGateDecision(
+            doorman_enabled=False,
+            wake=not legacy_skip,
+            reason_code="legacy_perception_unchanged" if legacy_skip else "legacy_wake",
+            legacy_skip=legacy_skip,
+        )
+
+    verdict = _decide_cycle_doorman(signals)
+    reason_code = (
+        verdict.reason_code.value if hasattr(verdict.reason_code, "value") else str(verdict.reason_code)
+    )
+    return _CycleDoormanGateDecision(
+        doorman_enabled=True,
+        wake=bool(verdict.wake),
+        reason_code=reason_code,
+        signals_present=tuple(str(item) for item in verdict.signals_present),
+        floor_wake=verdict.reason_code == DoormanReasonCode.WAKE_MIN_FLOOR,
+        verdict=verdict,
+    )
+
+
+def _cycle_next_quiet_skips(
+    *,
+    gate_decision: _CycleDoormanGateDecision,
+    current_quiet_skips: int,
+    result: str | None,
+) -> int:
+    if gate_decision.doorman_enabled:
+        if not gate_decision.wake:
+            return int(current_quiet_skips) + 1
+        # A doorman wake is a wake opportunity even if the deep brain later
+        # says HEARTBEAT_OK. Reset to keep the floor periodic, not latched.
+        return 0
+    if result is not None and str(result).strip() != _HEARTBEAT_OK:
+        return 0
+    if result is not None and str(result).strip() == _HEARTBEAT_OK:
+        return int(current_quiet_skips) + 1
+    return int(current_quiet_skips)
+
+
 def _build_cycle_focused_prompt(
     *,
     legacy_prompt: str,
@@ -2120,6 +2339,8 @@ class MaezDaemon:
         self._last_git_dirty_count = 0
         self._recent_thought_axes: deque = deque(maxlen=5)
         self._cycles_since_last_thought = 0
+        self._last_cycle_signal_availability_key = None
+        self._last_cycle_open_wants_count = None
         self._pending_cleanup = None
         self._ollama_lock = threading.Lock()
         self.followup_queue = FollowUpQueue()
@@ -7092,6 +7313,7 @@ class MaezDaemon:
             # gap; both sides of the fix have to land for the audit
             # path to see the signal.
             self._mark_cycle_stage("reddit_context")
+            _cycle_memory_delta = False
             self._reddit_counter += 1
             if self._reddit_counter >= 15:
                 self._reddit_counter = 0
@@ -7105,6 +7327,7 @@ class MaezDaemon:
                         cycle=self.cycle_count,
                     )
                     if written:
+                        _cycle_memory_delta = True
                         logger.info(
                             "reddit persistence: %d new posts to raw memory",
                             written,
@@ -7207,9 +7430,9 @@ class MaezDaemon:
             #     prompt so the model can't fixate on what it can't
             #     see.
             from core.cognition.perception_signature import (
+                DEFAULT_MIN_THOUGHT_FLOOR,
                 extract_axes,
                 signature_from_axes,
-                should_skip_reasoning,
                 stale_fields,
             )
 
@@ -7224,16 +7447,86 @@ class MaezDaemon:
                 if self._recent_thought_axes
                 else None
             )
-            if should_skip_reasoning(
+            _cycle_signal_key = _cycle_signal_availability_key(
+                screen_obs=self._last_screen_obs,
+                presence_state=self._camera_presence_state,
+            )
+            _cycle_signal_availability_delta = _cycle_signal_availability_changed(
+                getattr(self, "_last_cycle_signal_availability_key", None),
+                _cycle_signal_key,
+            )
+            self._last_cycle_signal_availability_key = _cycle_signal_key
+
+            _cycle_open_wants_count = 0
+            try:
+                if getattr(self, "wants", None) is not None and hasattr(self.wants, "active_wants"):
+                    _cycle_open_wants_count = len(self.wants.active_wants(limit=50) or [])
+            except Exception as _wants_exc:
+                logger.debug("cycle doorman wants-count skipped: %s", _wants_exc)
+                _cycle_open_wants_count = 0
+            _last_open_wants_count = getattr(self, "_last_cycle_open_wants_count", None)
+            if _last_open_wants_count is None:
+                _cycle_open_wants_delta = _cycle_open_wants_count
+            else:
+                _cycle_open_wants_delta = max(0, _cycle_open_wants_count - int(_last_open_wants_count))
+            self._last_cycle_open_wants_count = _cycle_open_wants_count
+
+            _cycle_scheduled_due = (
+                self.cycle_count % 20 == 0
+                or self._cognition_critique_counter == 0
+                or self._reflection_cycle_counter == 0
+                or (
+                    self.cycle_count % 240 == 0
+                    and snap["disk"].get("/", {}).get("percent", 0) > 75
+                )
+            )
+            _cycle_doorman_signals_bundle = _cycle_doorman_signals(
+                current_axes=current_axes,
+                last_thought_axes=(self._recent_thought_axes[-1] if self._recent_thought_axes else None),
+                quiet_skips=self._cycles_since_last_thought,
+                min_floor=DEFAULT_MIN_THOUGHT_FLOOR,
+                new_failures=_cycle_action_failure_count(tier1_results + tier2_results),
+                open_wants=_cycle_open_wants_delta,
+                memory_delta=_cycle_memory_delta,
+                signal_availability_changed=_cycle_signal_availability_delta,
+                scheduled_due=_cycle_scheduled_due,
+                presence=str(current_axes.get("presence", "unknown")),
+            )
+            _cycle_doorman_gate = _cycle_doorman_gate_decision(
+                doorman_enabled=_cycle_doorman_enabled(),
                 current_signature=current_sig,
                 last_thought_signature=last_sig,
-                cycles_since_last_thought=self._cycles_since_last_thought,
-            ):
-                logger.info(
-                    "Cycle %d: HEARTBEAT_OK — perception unchanged (gated)",
-                    self.cycle_count,
+                quiet_skips=self._cycles_since_last_thought,
+                min_floor=DEFAULT_MIN_THOUGHT_FLOOR,
+                signals=_cycle_doorman_signals_bundle,
+            )
+            if _cycle_doorman_gate.doorman_enabled and _cycle_doorman_gate.verdict is not None:
+                _log_cycle_doorman_verdict(
+                    verdict=_cycle_doorman_gate.verdict,
+                    quiet_skips=self._cycles_since_last_thought,
                 )
-                self._cycles_since_last_thought += 1
+            if not _cycle_doorman_gate.wake:
+                if _cycle_doorman_gate.doorman_enabled:
+                    _log_cycle_doorman_skip(
+                        gate_decision=_cycle_doorman_gate,
+                        quiet_skips=self._cycles_since_last_thought,
+                    )
+                    logger.info(
+                        "Cycle %d: HEARTBEAT_OK — doorman skipped (%s)",
+                        self.cycle_count,
+                        _cycle_doorman_gate.reason_code,
+                    )
+                    self._cycles_since_last_thought = _cycle_next_quiet_skips(
+                        gate_decision=_cycle_doorman_gate,
+                        current_quiet_skips=self._cycles_since_last_thought,
+                        result=None,
+                    )
+                else:
+                    logger.info(
+                        "Cycle %d: HEARTBEAT_OK — perception unchanged (gated)",
+                        self.cycle_count,
+                    )
+                    self._cycles_since_last_thought += 1
                 result = None
             else:
                 # Patch A: which axes have been stable across the
