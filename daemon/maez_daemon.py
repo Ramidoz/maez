@@ -1690,6 +1690,27 @@ def _reflection_consolidation_telemetry(
     )
 
 
+def _emit_reflection_consolidation_telemetry(
+    summary: dict[str, object],
+    *,
+    started_mono: float,
+) -> None:
+    try:
+        from core.cognition.consolidation_telemetry import emit_consolidation_telemetry
+        from core.routing.llm_client import served_model_alias
+
+        emit_consolidation_telemetry(
+            logger,
+            **_reflection_consolidation_telemetry(
+                summary,
+                model=served_model_alias(default="qwen36-27b"),
+                duration_ms=(time.monotonic() - started_mono) * 1000.0,
+            ),
+        )
+    except Exception as _telemetry_exc:
+        logger.debug("reflection consolidation telemetry skipped: %s", _telemetry_exc)
+
+
 def _run_reflection_synthesis_nightly(
     daemon: object,
     *,
@@ -1711,17 +1732,39 @@ def _run_reflection_synthesis_nightly(
     report = ReflectionReport(dry_run=dry_run, started_at=datetime.now(timezone.utc).isoformat())
     if llm_call is None:
         llm_call = _default_llm_call("qwen36-27b", 120)
-    run_synthesis_pass(
-        episode_store=getattr(daemon, "lived_episodes"),
-        llm_call=llm_call,
-        report=report,
-        dry_run=dry_run,
-    )
+    try:
+        run_synthesis_pass(
+            episode_store=getattr(daemon, "lived_episodes"),
+            llm_call=llm_call,
+            report=report,
+            dry_run=dry_run,
+        )
+    except Exception as exc:
+        logger.warning("reflection synthesis pass failed: %s", type(exc).__name__)
+        summary = _reflection_synthesis_summary(
+            status="error",
+            reason="synthesis_failed",
+            report=report,
+        )
+        _log_reflection_synthesis_summary(summary)
+        _emit_reflection_consolidation_telemetry(summary, started_mono=started_mono)
+        return summary
     artifact_path = None
     status = "write"
     reason = "persist_enabled"
     if dry_run:
-        artifact_path = write_reflection_dry_run_artifact(report, artifact_dir=artifact_dir)
+        try:
+            artifact_path = write_reflection_dry_run_artifact(report, artifact_dir=artifact_dir)
+        except Exception as exc:
+            logger.warning("reflection dry-run artifact write failed: %s", type(exc).__name__)
+            summary = _reflection_synthesis_summary(
+                status="error",
+                reason="artifact_failed",
+                report=report,
+            )
+            _log_reflection_synthesis_summary(summary)
+            _emit_reflection_consolidation_telemetry(summary, started_mono=started_mono)
+            return summary
         status = "dry_run"
         reason = "write_flag_off"
     summary = _reflection_synthesis_summary(
@@ -1731,20 +1774,7 @@ def _run_reflection_synthesis_nightly(
         artifact_path=artifact_path,
     )
     _log_reflection_synthesis_summary(summary)
-    try:
-        from core.cognition.consolidation_telemetry import emit_consolidation_telemetry
-        from core.routing.llm_client import served_model_alias
-
-        emit_consolidation_telemetry(
-            logger,
-            **_reflection_consolidation_telemetry(
-                summary,
-                model=served_model_alias(default="qwen36-27b"),
-                duration_ms=(time.monotonic() - started_mono) * 1000.0,
-            ),
-        )
-    except Exception as _telemetry_exc:
-        logger.debug("reflection consolidation telemetry skipped: %s", _telemetry_exc)
+    _emit_reflection_consolidation_telemetry(summary, started_mono=started_mono)
     return summary
 
 
@@ -8872,6 +8902,7 @@ class MaezDaemon:
             if live_webauthn_ceremony_enabled():
                 if not _s7_internal_channel_trusted(request):
                     return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
+                _record_owner_interaction(self)
                 now = datetime.now(timezone.utc).isoformat()
                 store = S7WebAuthnBootstrapStore(_s7_webauthn_store_root())
                 authorization = _s7_backup_registration_authorization(
@@ -8904,6 +8935,7 @@ class MaezDaemon:
             if live_webauthn_ceremony_enabled():
                 if not _s7_internal_channel_trusted(request):
                     return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
+                _record_owner_interaction(self)
                 service = S7LocalWebAuthnCeremonyService(
                     verifier=S7ProductionWebAuthnVerifier(),
                     store_factory=lambda: S7WebAuthnBootstrapStore(_s7_webauthn_store_root()),
@@ -8925,6 +8957,7 @@ class MaezDaemon:
             if live_webauthn_ceremony_enabled():
                 if not _s7_internal_channel_trusted(request):
                     return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
+                _record_owner_interaction(self)
                 result = _s7_create_backup_registration_card(self)
                 return jsonify(result.body), result.status_code
             return jsonify(
@@ -8939,6 +8972,7 @@ class MaezDaemon:
             if live_webauthn_ceremony_enabled():
                 if not _s7_internal_channel_trusted(request):
                     return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
+                _record_owner_interaction(self)
                 if not _s7_webauthn_proof_routes_enabled():
                     return jsonify({"ok": False, "error": "s7_proof_route_disabled"}), 404
                 result = _s7_create_disable_credential_card(
@@ -8959,6 +8993,7 @@ class MaezDaemon:
             if live_webauthn_ceremony_enabled():
                 if not _s7_internal_channel_trusted(request):
                     return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
+                _record_owner_interaction(self)
                 if not _s7_webauthn_proof_routes_enabled():
                     return jsonify({"ok": False, "error": "s7_proof_route_disabled"}), 404
                 store = S7WebAuthnBootstrapStore(_s7_webauthn_store_root())
@@ -8981,6 +9016,7 @@ class MaezDaemon:
             if live_webauthn_ceremony_enabled():
                 if not _s7_internal_channel_trusted(request):
                     return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
+                _record_owner_interaction(self)
                 now = datetime.now(timezone.utc).isoformat()
                 store = S7WebAuthnBootstrapStore(_s7_webauthn_store_root())
                 material = _s7_authorization_route_material(
@@ -9036,6 +9072,7 @@ class MaezDaemon:
             if live_webauthn_ceremony_enabled():
                 if not _s7_internal_channel_trusted(request):
                     return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
+                _record_owner_interaction(self)
                 now = datetime.now(timezone.utc).isoformat()
                 store = S7WebAuthnBootstrapStore(_s7_webauthn_store_root())
                 material = _s7_authorization_route_material(
@@ -9118,6 +9155,7 @@ class MaezDaemon:
             if live_webauthn_ceremony_enabled():
                 if not _s7_internal_channel_trusted(request):
                     return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
+                _record_owner_interaction(self)
                 now = datetime.now(timezone.utc).isoformat()
                 store = S7WebAuthnBootstrapStore(_s7_webauthn_store_root())
                 authorization = _s7_guarded_card_execution_authorization(
@@ -9290,6 +9328,7 @@ class MaezDaemon:
             execution path."""
             if request.method == "OPTIONS":
                 return ("", 204)
+            _record_owner_interaction(self)
             try:
                 telegram = getattr(self, "telegram", None)
                 pipe = telegram._get_pipeline() if telegram else None

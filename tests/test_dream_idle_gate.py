@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import unittest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -155,3 +156,42 @@ class DreamDaemonInputTest(unittest.TestCase):
                 inputs = _dream_idle_inputs(daemon, now=now_dt.timestamp())
 
                 self.assertNotEqual(inputs["camera"], "present_fresh")
+
+    def test_telegram_authorized_command_marks_owner_interaction(self):
+        from skills.telegram_voice import TelegramVoice
+
+        daemon = SimpleNamespace(_last_owner_interaction_ts=None)
+        voice = TelegramVoice.__new__(TelegramVoice)
+        voice.authorized_user = 42
+        voice.daemon = daemon
+
+        self.assertTrue(voice._is_authorized(42))
+
+        self.assertIsNotNone(daemon._last_owner_interaction_ts)
+
+    def test_owner_control_routes_record_activity(self):
+        from daemon.maez_daemon import MaezDaemon
+
+        source = inspect.getsource(MaezDaemon._run_health_server)
+
+        def route_body(route: str) -> str:
+            marker = f'@app.route("{route}"'
+            start = source.index(marker)
+            next_route = source.find("@app.route(", start + len(marker))
+            if next_route == -1:
+                return source[start:]
+            return source[start:next_route]
+
+        for route in [
+            "/internal/s7/webauthn/register/begin",
+            "/internal/s7/webauthn/register/finish",
+            "/internal/s7/webauthn/register/backup-card",
+            "/internal/s7/webauthn/proof/disable-card",
+            "/internal/s7/webauthn/proof/disable-credential",
+            "/internal/s7/cards/<request_id>/webauthn/begin",
+            "/internal/s7/cards/<request_id>/webauthn/finish",
+            "/internal/s7/cards/<request_id>/execute",
+            "/internal/approve_card/<request_id>",
+        ]:
+            with self.subTest(route=route):
+                self.assertIn("_record_owner_interaction(self)", route_body(route))

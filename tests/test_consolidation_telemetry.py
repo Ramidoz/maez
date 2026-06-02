@@ -85,6 +85,19 @@ class ServedModelReportingTest(unittest.TestCase):
         self.assertNotEqual(model, "gemma4:26b")
         self.assertIn("/props", urlopen.call_args.args[0])
 
+    def test_llamacpp_served_model_alias_does_not_fallback_to_requested_label(self):
+        from core.routing import llm_client
+
+        with mock.patch.dict(
+            "os.environ",
+            {"MAEZ_LLM_BACKEND": "llamacpp", "MAEZ_PRIMARY_MODEL": "qwen36-27b"},
+            clear=True,
+        ), mock.patch("urllib.request.urlopen", side_effect=OSError("props down")):
+            model = llm_client.served_model_alias(default="gemma4:26b")
+
+        self.assertEqual(model, "llamacpp:unknown")
+        self.assertNotEqual(model, "gemma4:26b")
+
 
 class OrganTelemetryHookTest(unittest.TestCase):
     def test_daily_consolidation_telemetry_uses_exact_schema(self):

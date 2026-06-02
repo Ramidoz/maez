@@ -148,6 +148,56 @@ class ReflectionDryRunDaemonHookTest(unittest.TestCase):
         self.assertEqual(rows[0]["kind"], "candidate")
         self.assertIn("live witness before belief", rows[0]["text"])
 
+    def test_synthesis_failure_emits_content_free_telemetry(self):
+        from daemon import maez_daemon
+        from daemon.maez_daemon import _run_reflection_synthesis_nightly
+
+        records = []
+
+        def boom(**_kwargs):
+            raise RuntimeError("private reflection text must not leak")
+
+        class _Logger:
+            def info(self, fmt, payload):
+                records.append(fmt % payload)
+
+            def warning(self, fmt, *args):
+                records.append(fmt % args if args else fmt)
+
+            def debug(self, *_args, **_kwargs):
+                pass
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "MAEZ_REFLECTION_SYNTHESIS_ENABLED": "1",
+                "MAEZ_REFLECTION_SYNTHESIS_WRITE": "0",
+            },
+            clear=True,
+        ), mock.patch(
+            "scripts.memory_reflection.nightly_lived_memory.run_synthesis_pass",
+            boom,
+        ), mock.patch.object(maez_daemon, "logger", _Logger()):
+            summary = _run_reflection_synthesis_nightly(
+                SimpleNamespace(lived_episodes=_FakeEpisodeStore()),
+                llm_call=_reflection_json,
+            )
+
+        self.assertEqual(summary["status"], "error")
+        self.assertEqual(summary["reason"], "synthesis_failed")
+        encoded_summary = json.dumps(summary, sort_keys=True)
+        self.assertNotIn("private reflection text", encoded_summary)
+
+        telemetry = [
+            record for record in records if record.startswith("consolidation_telemetry")
+        ]
+        self.assertEqual(len(telemetry), 1)
+        payload = json.loads(telemetry[0].split("summary=", 1)[1])
+        self.assertEqual(payload["organ"], "reflection")
+        self.assertEqual(payload["status"], "error")
+        self.assertEqual(payload["reason"], "synthesis_failed")
+        self.assertNotIn("private reflection text", telemetry[0])
+
 
 if __name__ == "__main__":
     unittest.main()

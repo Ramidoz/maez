@@ -1977,8 +1977,22 @@ class TelegramVoice:
     def enabled(self) -> bool:
         return bool(self.token and self.authorized_user)
 
+    def _mark_owner_interaction(self) -> None:
+        daemon = getattr(self, "daemon", None)
+        if daemon is None:
+            return
+        try:
+            now = time.time()
+            daemon._rohit_active_until = now + 15.0
+            daemon._last_owner_interaction_ts = now
+        except Exception as exc:
+            logger.debug("telegram owner interaction tracker skipped: %s", exc)
+
     def _is_authorized(self, user_id: int) -> bool:
-        return user_id == self.authorized_user
+        authorized = user_id == self.authorized_user
+        if authorized:
+            self._mark_owner_interaction()
+        return authorized
 
     # ═════════════════════════════════════════════════════════════════════
     #  Session 11x: natural-language approval for self-edit proposals

@@ -125,9 +125,8 @@ def served_model_alias(*, default: str | None = None, timeout_s: float = 1.0) ->
     the requested model label may be ignored when one model is loaded, so
     telemetry reads `/props` to report the server's resident alias.
     """
-    fallback = default or LLAMACPP_MODEL
     if active_backend() != BACKEND_LLAMACPP:
-        return fallback
+        return default or LLAMACPP_MODEL
     try:
         with urllib.request.urlopen(_llamacpp_props_url(), timeout=timeout_s) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
@@ -138,8 +137,8 @@ def served_model_alias(*, default: str | None = None, timeout_s: float = 1.0) ->
         if model_path:
             return str(model_path).rsplit("/", 1)[-1]
     except Exception:
-        return fallback
-    return fallback
+        return "llamacpp:unknown"
+    return "llamacpp:unknown"
 
 
 class BackendError(Exception):
