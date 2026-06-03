@@ -130,6 +130,7 @@ class TestFlagOffByteIdentical(unittest.TestCase):
             ep, g = _build_stores(Path(td))
             eid = _seed_episode_with_maya(ep)
             ix, _, _ = _seed_index_with_maya_mentions(eid)
+            self.addCleanup(ix.close)
 
             env = dict(os.environ)
             env.pop(_FLAG_NAME, None)
@@ -162,6 +163,7 @@ class TestFlagOffByteIdentical(unittest.TestCase):
             ep, g = _build_stores(Path(td))
             eid = _seed_episode_with_maya(ep)
             ix, _, _ = _seed_index_with_maya_mentions(eid)
+            self.addCleanup(ix.close)
 
             for v in ("0", "false", "", "no"):
                 with mock.patch.dict(os.environ, {_FLAG_NAME: v}):
@@ -182,6 +184,7 @@ class TestFlagOnSectionRender(unittest.TestCase):
             ep, g = _build_stores(Path(td))
             eid = _seed_episode_with_maya(ep)
             ix, _, _ = _seed_index_with_maya_mentions(eid)
+            self.addCleanup(ix.close)
 
             with mock.patch.dict(os.environ, {_FLAG_NAME: "1"}):
                 out = build_lived_recall_brief(
@@ -204,6 +207,7 @@ class TestFlagOnSectionRender(unittest.TestCase):
             ep, g = _build_stores(Path(td))
             _seed_episode_with_maya(ep)
             empty_ix = EntityIndex(":memory:")
+            self.addCleanup(empty_ix.close)
             with mock.patch.dict(os.environ, {_FLAG_NAME: "1"}):
                 out = build_lived_recall_brief(
                     "tell me about Maya",
@@ -218,6 +222,7 @@ class TestFlagOnSectionRender(unittest.TestCase):
             ep, g = _build_stores(Path(td))
             eid = _seed_episode_with_maya(ep)
             ix, _, _ = _seed_index_with_maya_mentions(eid)
+            self.addCleanup(ix.close)
             # Add a mention for the second Maya so it's not zero-mention.
             ix.add_mention(
                 entity_id=ix.find_entities("Maya Anjali")[0].entity_id,
@@ -250,6 +255,7 @@ class TestSectionCaps(unittest.TestCase):
             ep, g = _build_stores(Path(td))
             _seed_episode_with_maya(ep)
             ix = EntityIndex(":memory:")
+            self.addCleanup(ix.close)
             # Five entities all aliased "X" — all at confidence 0.2.
             ents = []
             for i in range(5):
@@ -289,6 +295,7 @@ class TestSectionCaps(unittest.TestCase):
             ep, g = _build_stores(Path(td))
             _seed_episode_with_maya(ep)
             ix = EntityIndex(":memory:")
+            self.addCleanup(ix.close)
             eid_e = ix.upsert_entity(
                 "Solo Person", kind="person", aliases=["solo"],
             )
@@ -327,6 +334,7 @@ class TestSectionCaps(unittest.TestCase):
             ep, g = _build_stores(Path(td))
             _seed_episode_with_maya(ep)
             ix = EntityIndex(":memory:")
+            self.addCleanup(ix.close)
             for i in range(3):
                 eid_e = ix.upsert_entity(
                     f"VeryLongCanonicalNameNumber{i:02d}"
@@ -391,6 +399,7 @@ class TestFailClosed(unittest.TestCase):
             ep, g = _build_stores(Path(td))
             _seed_episode_with_maya(ep)
             ix = EntityIndex(":memory:")
+            self.addCleanup(ix.close)
 
             with mock.patch.dict(os.environ, {_FLAG_NAME: "1"}), \
                  mock.patch(
@@ -422,6 +431,7 @@ class TestNoSubprocessOrNetwork(unittest.TestCase):
             ep, g = _build_stores(Path(td))
             eid = _seed_episode_with_maya(ep)
             ix, _, _ = _seed_index_with_maya_mentions(eid)
+            self.addCleanup(ix.close)
             with mock.patch.dict(os.environ, {_FLAG_NAME: "1"}):
                 build_lived_recall_brief(
                     "Maya", episode_store=ep, graph=g, ix=ix,

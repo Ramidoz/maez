@@ -324,6 +324,7 @@ class TestExpandQuery(unittest.TestCase):
     def _setup_with_two_sessions(self):
         from core.memory.entity_index import EntityIndex
         ix = EntityIndex(":memory:")
+        self.addCleanup(ix.close)
         eid = ix.upsert_entity(
             "Maya Ananthan", kind="person", aliases=["Maya"],
         )
@@ -369,6 +370,7 @@ class TestExpandQuery(unittest.TestCase):
     def test_limit_caps_to_most_recent_n(self):
         from core.memory.entity_index import EntityIndex, expand_query
         ix = EntityIndex(":memory:")
+        self.addCleanup(ix.close)
         eid = ix.upsert_entity(
             "Maya Ananthan", kind="person", aliases=["Maya"],
         )
@@ -404,6 +406,7 @@ class TestExpandQuery(unittest.TestCase):
     def test_confidence_is_max_of_matched_entity_confidences(self):
         from core.memory.entity_index import EntityIndex, expand_query
         ix = EntityIndex(":memory:")
+        self.addCleanup(ix.close)
         ix.upsert_entity(
             "Maya Ananthan", kind="person", aliases=["Maya"],
         )
@@ -435,6 +438,7 @@ class TestExpandQueryNaturalText(unittest.TestCase):
     def _ix_with_maez_and_rohit(self):
         from core.memory.entity_index import EntityIndex
         ix = EntityIndex(":memory:")
+        self.addCleanup(ix.close)
         eid_maez = ix.upsert_entity(
             "Maez", kind="project", aliases=["the Maez"],
         )
@@ -495,6 +499,7 @@ class TestExpandQueryNaturalText(unittest.TestCase):
         layer regardless of whether the surface arrived capitalized."""
         from core.memory.entity_index import EntityIndex, expand_query
         ix = EntityIndex(":memory:")
+        self.addCleanup(ix.close)
         eid = ix.upsert_entity("José", kind="person")
         out = expand_query("did josé call today", ix=ix)
         self.assertIn(eid, [e.entity_id for e in out.matched_entities])

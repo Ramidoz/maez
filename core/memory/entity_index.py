@@ -385,6 +385,32 @@ class EntityIndex:
         finally:
             con.close()
 
+    def close(self) -> None:
+        """Release the instance-owned connection. In file mode every
+        ``_connect()`` opens and closes its own connection, so there is
+        nothing instance-owned to release. In ``:memory:`` mode the store
+        holds ONE shared connection for its lifetime (closing it per call
+        would discard the database) — this closes it. Idempotent."""
+        con = getattr(self, "_memory_con", None)
+        if con is not None:
+            con.close()
+            self._memory_con = None
+
+    def __enter__(self) -> "EntityIndex":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        # Best-effort safety net so a forgotten ``:memory:`` instance does
+        # not emit ResourceWarning("unclosed database") at GC. Explicit
+        # close()/`with EntityIndex(...)` is preferred and deterministic.
+        try:
+            self.close()
+        except Exception:
+            pass
+
     # ── writes ────────────────────────────────────────────────────
 
     def upsert_entity(
