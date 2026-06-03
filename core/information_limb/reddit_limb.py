@@ -13,6 +13,8 @@ Spec: docs/superpowers/specs/2026-06-03-reddit-limb-v0-design.md
 from __future__ import annotations
 
 import datetime
+import hmac
+import os
 import time
 from dataclasses import dataclass
 from urllib.parse import urlencode
@@ -174,3 +176,48 @@ class RedditLimb:
             "scopes": list(self._session.scopes) if self._session else [],
             "expires_in_bucket": _expires_bucket(self._session, n),
         }
+
+
+REDDIT_HANDOFF_HEADER = "X-Maez-Reddit-Handoff"
+REDDIT_HANDOFF_TOKEN_ENV = "MAEZ_REDDIT_HANDOFF_TOKEN"
+
+
+def _secrets_compare(expected: str, presented: str) -> bool:
+    return hmac.compare_digest(expected.encode("utf-8"), presented.encode("utf-8"))
+
+
+def handoff_trusted(headers) -> bool:
+    """True only for a loopback caller presenting the dedicated handoff secret.
+    Mirrors daemon._s7_internal_channel_trusted but with the Reddit-specific,
+    isolated secret. A browser (any Origin header) is rejected."""
+    expected = os.environ.get(REDDIT_HANDOFF_TOKEN_ENV, "")
+    presented = headers.get(REDDIT_HANDOFF_HEADER, "")
+    if not expected or not presented:
+        return False
+    if headers.get("Origin"):
+        return False
+    return _secrets_compare(expected, presented)
+
+
+def handle_handoff(*, headers, body_loader, limb: "RedditLimb") -> tuple[dict, int]:
+    """Auth-before-envelope: verify the secret FIRST; only call body_loader()
+    (which reads/parses the token-bearing body) once trusted. Returns
+    (content-free tile dict, http_status). Never echoes the token."""
+    if not handoff_trusted(headers):
+        return {"ok": False, "error": "reddit_handoff_untrusted"}, 403
+    body = body_loader() or {}
+    token = body.get("access_token")
+    if not token:
+        return {"ok": False, "error": "missing_access_token"}, 400
+    now = time.time()
+    limb.set_session(RedditSession(
+        access_token=token,
+        scopes=list(body.get("scopes") or ["identity"]),
+        obtained_at=now,
+        expires_at=now + float(body.get("expires_in", 3600)),
+    ))
+    state = fetch_identity(limb._session)
+    limb.mark_state(state, now=now)
+    tile = limb.health(now=now)
+    tile["ok"] = state == STATE_AVAILABLE
+    return tile, (200 if state == STATE_AVAILABLE else 502)
