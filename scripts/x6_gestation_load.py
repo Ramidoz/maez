@@ -15,6 +15,7 @@ import json
 import os
 import sqlite3
 import sys
+from contextlib import closing
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -56,7 +57,7 @@ HASH_PREFIXES = (
 
 def _has_turns_table(path: Path) -> bool:
     try:
-        with sqlite3.connect(path) as conn:
+        with closing(sqlite3.connect(path)) as conn, conn:
             row = conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='turns'"
             ).fetchone()
@@ -155,7 +156,7 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def _all_turn_rows(db_path: Path) -> list[dict[str, Any]]:
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute("SELECT * FROM turns ORDER BY rowid ASC").fetchall()
     return [dict(row) for row in rows]
@@ -678,7 +679,7 @@ def _path_size(path: Path) -> int:
 
 def _count_production_rehearsal_rows(db_path: Path) -> int:
     try:
-        with sqlite3.connect(db_path) as conn:
+        with closing(sqlite3.connect(db_path)) as conn, conn:
             return int(
                 conn.execute(
                     "SELECT COUNT(*) FROM turns WHERE lifecycle_stage='rehearsal'"
@@ -711,7 +712,7 @@ def select_moment_arc(
 ) -> list[dict[str, Any]]:
     if not ledger_path.exists():
         return []
-    with sqlite3.connect(ledger_path) as conn:
+    with closing(sqlite3.connect(ledger_path)) as conn, conn:
         conn.row_factory = sqlite3.Row
         columns = {
             str(row["name"])

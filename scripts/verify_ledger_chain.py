@@ -50,7 +50,7 @@ def _open_readonly(db_path: str) -> sqlite3.Connection:
     uri = f"file:{db_path}?mode=ro"
     conn = sqlite3.connect(uri, uri=True)
     conn.row_factory = sqlite3.Row
-    return conn
+    return conn  # sqlite-raw-ok: read-only URI handle; sole caller owns it and closes in finally
 
 
 def _check_required_tables(conn: sqlite3.Connection) -> list[str]:

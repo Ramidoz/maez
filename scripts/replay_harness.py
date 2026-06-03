@@ -326,7 +326,7 @@ def _run_interleaving_probe(
         finally:
             w.close()
 
-    with sqlite3.connect(probe_db_path) as conn:
+    with contextlib.closing(sqlite3.connect(probe_db_path)) as conn, conn:
         rows = conn.execute(
             "SELECT surface, COUNT(*) FROM turns "
             "WHERE turn_kind='user_message' "
@@ -497,7 +497,7 @@ def _run_concurrency_probe(
             {"none_count": none_count},
         )
 
-    with sqlite3.connect(probe_db_path) as conn:
+    with contextlib.closing(sqlite3.connect(probe_db_path)) as conn, conn:
         conn.row_factory = sqlite3.Row
         rows = [dict(r) for r in conn.execute(
             "SELECT * FROM turns WHERE turn_kind=? "
@@ -510,7 +510,7 @@ def _run_concurrency_probe(
             {"rows_count": len(rows)},
         )
     # Chain verifier wants ALL rows, not just user_message.
-    with sqlite3.connect(probe_db_path) as conn:
+    with contextlib.closing(sqlite3.connect(probe_db_path)) as conn, conn:
         conn.row_factory = sqlite3.Row
         all_rows = [dict(r) for r in conn.execute(
             "SELECT * FROM turns ORDER BY rowid ASC"
@@ -562,7 +562,7 @@ def _run_multi_turn_self_history_probe(
             w.close()
 
         # Phase 2: set birth, write lived rows.
-        with sqlite3.connect(probe_db_path) as conn:
+        with contextlib.closing(sqlite3.connect(probe_db_path)) as conn, conn:
             conn.execute(
                 "INSERT OR REPLACE INTO meta(key, value) "
                 "VALUES('birth_event_turn_id', 'probe-birth-marker')"

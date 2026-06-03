@@ -23,6 +23,8 @@ import logging
 import os
 import sqlite3
 import time
+from collections.abc import Iterator
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -70,7 +72,7 @@ def _approval_rate_from_audit_log(days: int) -> Optional[float]:
         return None
     cutoff = time.time() - days * 86400.0
     try:
-        with sqlite3.connect(audit_db) as con:
+        with closing(sqlite3.connect(audit_db)) as con, con:
             rows = con.execute(
                 "SELECT outcome, COUNT(*) FROM audit_log "
                 "WHERE outcome IS NOT NULL AND outcome_ts >= ? "
@@ -99,10 +101,15 @@ class QualityTracker:
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         self._init_db()
 
-    def _get_conn(self) -> sqlite3.Connection:
+    @contextmanager
+    def _get_conn(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            with conn:  # transaction: commit on success / rollback on error
+                yield conn
+        finally:
+            conn.close()
 
     def _init_db(self):
         with self._get_conn() as conn:

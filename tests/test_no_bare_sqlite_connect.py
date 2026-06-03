@@ -18,6 +18,7 @@ context manager reappears.
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -29,17 +30,71 @@ if str(_REPO) not in sys.path:
 # matches `with sqlite3.connect(<anything-without-parens>) as <var>` — the footgun.
 _BARE = re.compile(r"with\s+sqlite3\.connect\([^)]*\)\s+as\s+\w+")
 
+# Non-source tooling dirs, for the no-git fallback walk only.
+_SKIP_TOP = {
+    "tests", "docs", "backups", "superpowers", "__pycache__", ".git",
+    ".venv", "venv", "env", "node_modules", "build", "dist",
+    ".mypy_cache", ".ruff_cache", ".pytest_cache", ".agents", ".claude",
+    ".vscode", ".idea", "htmlcov",
+}
+
+
+def _production_py_files():
+    """Every git-TRACKED production .py (all roots, recursively), excluding
+    tests/. This is the guard's coverage: the earlier "core/daemon/skills"
+    allowlist forgot tracked rooms like `memory/` (imported by `core` on the
+    live path) and `scripts/`. Scoping to git-tracked files means every tracked
+    room is covered AND untracked archival dirs (backups/, plugin copies) are
+    not. `tests/` is excluded on purpose — tests may intentionally probe raw
+    connections (e.g. the FD-leak probes themselves). Falls back to a
+    filesystem walk when run outside a git checkout."""
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "*.py"],
+            cwd=_REPO, capture_output=True, text=True, check=True,
+        ).stdout
+        rels = [r for r in out.splitlines() if r and not r.startswith("tests/")]
+        if rels:
+            for r in rels:
+                yield _REPO / r
+            return
+    except (OSError, subprocess.SubprocessError):
+        pass
+    # Fallback (no git): walk the filesystem, skipping non-source dirs.
+    for entry in sorted(_REPO.iterdir()):
+        if entry.name in _SKIP_TOP or entry.name.startswith("."):
+            continue
+        if entry.is_file() and entry.suffix == ".py":
+            yield entry
+        elif entry.is_dir():
+            for f in entry.rglob("*.py"):
+                if "__pycache__" not in str(f):
+                    yield f
+
 
 class NoBareSqliteConnectTests(unittest.TestCase):
+    def test_scan_roots_cover_all_production_code(self):
+        # Pins the guard's coverage so a tracked production room can never be
+        # silently forgotten again (the bug that let memory/quality_tracker's
+        # leak through the first pass). If a new top-level prod dir appears,
+        # it is auto-scanned; this test just asserts the critical rooms are in.
+        scanned = {str(f.relative_to(_REPO)) for f in _production_py_files()}
+        for must in ("core/", "daemon/", "skills/", "memory/", "scripts/"):
+            self.assertTrue(
+                any(p.startswith(must) for p in scanned),
+                f"guard must scan {must} (production code can leak there)",
+            )
+        self.assertFalse(
+            any(p.startswith("tests/") for p in scanned),
+            "guard intentionally excludes tests/ (they may probe raw connections)",
+        )
+
     def test_no_unclosed_sqlite_connect_context_managers(self):
         offenders: list[str] = []
-        for top in ("core", "daemon", "skills"):
-            for f in (_REPO / top).rglob("*.py"):
-                if "__pycache__" in str(f):
-                    continue
-                for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
-                    if _BARE.search(line) and "closing(" not in line:
-                        offenders.append(f"{f.relative_to(_REPO)}:{i}: {line.strip()}")
+        for f in _production_py_files():
+            for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+                if _BARE.search(line) and "closing(" not in line:
+                    offenders.append(f"{f.relative_to(_REPO)}:{i}: {line.strip()}")
         self.assertEqual(
             offenders,
             [],
@@ -76,10 +131,7 @@ class NoBareSqliteConnectTests(unittest.TestCase):
 
         offenders: list[str] = []
         tracked: set[str] = set()
-        for top in ("core", "daemon", "skills"):
-            for f in (_REPO / top).rglob("*.py"):
-                if "__pycache__" in str(f):
-                    continue
+        for f in _production_py_files():
                 src = f.read_text(encoding="utf-8")
                 src_lines = src.splitlines()
                 try:

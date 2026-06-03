@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
@@ -268,7 +269,7 @@ def read_chroma_sqlite_collection_metadata(
     collection_name: str,
 ) -> dict:
     path = Path(db_path)
-    with sqlite3.connect(path) as db:
+    with closing(sqlite3.connect(path)) as db, db:
         row = db.execute(
             "SELECT id, dimension FROM collections WHERE name = ?",
             (collection_name,),
@@ -322,7 +323,7 @@ def stamp_chroma_sqlite_collection(
     `hnsw:space=cosine` evidence and does not touch embeddings.
     """
     path = Path(db_path)
-    with sqlite3.connect(path) as db:
+    with closing(sqlite3.connect(path)) as db, db:
         row = db.execute(
             "SELECT id FROM collections WHERE name = ?",
             (collection_name,),

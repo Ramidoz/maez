@@ -29,6 +29,7 @@ if str(_REPO) not in sys.path:
 from core.actions.action_engine import ActionTrustTracker  # noqa: E402
 from core.decision.pending_cards import PendingCardStore  # noqa: E402
 from core.memory.episodes import EpisodeStore  # noqa: E402
+from memory.quality_tracker import QualityTracker  # noqa: E402
 from skills.self_mod_dialog import SelfModDialogStore  # noqa: E402
 from skills.user_accounts import UserAccounts  # noqa: E402
 
@@ -98,6 +99,16 @@ class SqliteFactoryFdLeakTests(unittest.TestCase):
         db = Path(tmp.name) / "accounts.db"
         growth = self._probe_named(UserAccounts(db_path=str(db)), db, "_conn")
         self.assertLessEqual(growth, 2, f"user_accounts _conn leaked {growth} handles over 30 uses")
+
+    def test_quality_tracker_conn_factory_does_not_leak(self):
+        # memory/quality_tracker is imported by core.actions.action_engine at
+        # import time and is hot enough to show ResourceWarnings in ordinary
+        # action tests (Codex caught this leak the first guard pass missed).
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        db = Path(tmp.name) / "quality.db"
+        growth = self._probe_named(QualityTracker(db_path=str(db)), db, "_get_conn")
+        self.assertLessEqual(growth, 2, f"quality_tracker _get_conn leaked {growth} handles over 30 uses")
 
 
 if __name__ == "__main__":

@@ -18,6 +18,16 @@ The authoritative AST scan found **24** remaining factories. Per-caller classifi
 
 **Verification:** 411 + 25 affected-module tests green; ruff clean; all changed files compile. **Honest scope:** 19 of 24 converted, 4 safe exemptions, entity_index (the 24th) is the only remaining real leak — loudly tracked, not silently dropped.
 
+### Codex review block + remediation (2026-06-03)
+
+Codex blocked the first pass: **the guard's scan roots were too narrow** (`core/daemon/skills`). `memory/` is tracked code imported by `core` on the live path, and `memory/quality_tracker.py` `_get_conn` was an **active Pattern A leak** (`QualityTracker()` constructed at `action_engine` import; traced via `PYTHONTRACEMALLOC` to `quality_tracker.py:103`). The narrow roots also missed direct bare-connect sites under `memory/` + `scripts/`. Remediation:
+
+- **Guard scan roots widened to all git-TRACKED production `.py`** (excludes `tests/` + untracked archival dirs like `backups/`), via a `_production_py_files()` walker. Added `test_scan_roots_cover_all_production_code` that **pins** coverage of core/daemon/skills/memory/scripts so a room can't be silently forgotten again.
+- `memory/quality_tracker._get_conn` → `@contextmanager` (Pattern A); `memory/quality_tracker.py:73` bare site → `closing()`.
+- Bare sites wrapped: `memory/embedding_contract.py` ×2, `scripts/replay_harness.py` ×4, `scripts/x6_gestation_load.py` ×4.
+- `scripts/verify_ledger_chain._open_readonly` → `# sqlite-raw-ok` (read-only handle; sole caller closes in finally).
+- Added a **QualityTracker FD-leak probe**; confirmed `-W error::ResourceWarning` now passes on the action path (the traced warning is gone).
+
 ---
 
 ---
