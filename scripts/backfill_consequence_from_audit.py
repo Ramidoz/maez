@@ -199,7 +199,7 @@ def _ensure_schema(cm_db: Path) -> None:
     skew under fresh-DB tests."""
     cm_db.parent.mkdir(parents=True, exist_ok=True)
     from core import consequence_memory as _cm
-    with contextlib.closing(_cm._connect()):
+    with _cm._connect():
         pass
 
 

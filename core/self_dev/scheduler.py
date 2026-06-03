@@ -158,8 +158,7 @@ def _age_of_last_review(rel_path: str):
             return _PERSISTENCE_UNAVAILABLE
 
     try:
-        import contextlib
-        with contextlib.closing(_cached_persistence._connect()) as con:
+        with _cached_persistence._connect() as con:
             # target_ref is "module:<rel>" for review_module and
             # "<git-ref>" for review. Match the module form directly.
             row = con.execute(
