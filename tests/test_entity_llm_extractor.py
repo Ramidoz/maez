@@ -87,20 +87,23 @@ class TestValidExtractionPlansEntitiesAndMentions(unittest.TestCase):
             report = batch_extract(
                 episodes=ep, ix=ix, extract_fn=extract_fn, write=True,
             )
-            ents = ix._connect().execute(
-                "SELECT canonical_name, kind FROM entities"
-            ).fetchall()
+            with ix._connect() as con:
+                ents = con.execute(
+                    "SELECT canonical_name, kind FROM entities"
+                ).fetchall()
             self.assertEqual(len(ents), 1)
             self.assertEqual(ents[0]["canonical_name"], "Maya Ananthan")
             self.assertEqual(ents[0]["kind"], "person")
-            ali = ix._connect().execute(
-                "SELECT alias FROM aliases"
-            ).fetchall()
+            with ix._connect() as con:
+                ali = con.execute(
+                    "SELECT alias FROM aliases"
+                ).fetchall()
             self.assertEqual([r["alias"] for r in ali], ["Maya"])
-            mentions = ix._connect().execute(
-                "SELECT session_id, source_id, source_kind FROM "
-                "entity_mentions"
-            ).fetchall()
+            with ix._connect() as con:
+                mentions = con.execute(
+                    "SELECT session_id, source_id, source_kind FROM "
+                    "entity_mentions"
+                ).fetchall()
             self.assertEqual(len(mentions), 1)
             self.assertEqual(mentions[0]["session_id"], ids[0])
             self.assertEqual(
@@ -304,12 +307,14 @@ class TestDryRunAndIdempotency(unittest.TestCase):
             report = batch_extract(
                 episodes=ep, ix=ix, extract_fn=extract_fn,  # write=False
             )
-            n_ent = ix._connect().execute(
-                "SELECT COUNT(*) FROM entities"
-            ).fetchone()[0]
-            n_men = ix._connect().execute(
-                "SELECT COUNT(*) FROM entity_mentions"
-            ).fetchone()[0]
+            with ix._connect() as con:
+                n_ent = con.execute(
+                    "SELECT COUNT(*) FROM entities"
+                ).fetchone()[0]
+            with ix._connect() as con:
+                n_men = con.execute(
+                    "SELECT COUNT(*) FROM entity_mentions"
+                ).fetchone()[0]
             self.assertEqual(n_ent, 0)
             self.assertEqual(n_men, 0)
             # Dry-run report still computes the would-write counts.
@@ -340,24 +345,30 @@ class TestDryRunAndIdempotency(unittest.TestCase):
             batch_extract(
                 episodes=ep, ix=ix, extract_fn=extract_fn, write=True,
             )
-            n_ent_before = ix._connect().execute(
-                "SELECT COUNT(*) FROM entities"
-            ).fetchone()[0]
-            n_men_before = ix._connect().execute(
-                "SELECT COUNT(*) FROM entity_mentions"
-            ).fetchone()[0]
+            with ix._connect() as con:
+                n_ent_before = con.execute(
+                    "SELECT COUNT(*) FROM entities"
+                ).fetchone()[0]
+            with ix._connect() as con:
+                n_men_before = con.execute(
+                    "SELECT COUNT(*) FROM entity_mentions"
+                ).fetchone()[0]
             r2 = batch_extract(
                 episodes=ep, ix=ix, extract_fn=extract_fn, write=True,
             )
-            self.assertEqual(
-                ix._connect().execute(
+            with ix._connect() as con:
+                n_ent_after = con.execute(
                     "SELECT COUNT(*) FROM entities"
-                ).fetchone()[0], n_ent_before,
-            )
+                ).fetchone()[0]
             self.assertEqual(
-                ix._connect().execute(
+                n_ent_after, n_ent_before,
+            )
+            with ix._connect() as con:
+                n_men_after = con.execute(
                     "SELECT COUNT(*) FROM entity_mentions"
-                ).fetchone()[0], n_men_before,
+                ).fetchone()[0]
+            self.assertEqual(
+                n_men_after, n_men_before,
             )
             self.assertEqual(r2.entities_new, 0)
             self.assertEqual(r2.mentions_new, 0)

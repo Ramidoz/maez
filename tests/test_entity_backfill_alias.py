@@ -75,10 +75,11 @@ class TestAliasCreatesCanonicalMention(unittest.TestCase):
                 occurred_at="2026-04-12T09:00:00+00:00",
             )
             backfill(episodes=ep, ix=ix, write=True)
-            rows = ix._connect().execute(
-                "SELECT entity_id, confidence FROM entity_mentions "
-                "WHERE session_id = ?", (ep_id,),
-            ).fetchall()
+            with ix._connect() as con:
+                rows = con.execute(
+                    "SELECT entity_id, confidence FROM entity_mentions "
+                    "WHERE session_id = ?", (ep_id,),
+                ).fetchall()
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["entity_id"], rivera)
             # Unique alias = full confidence.
@@ -106,10 +107,11 @@ class TestAmbiguousAliasCreatesSplitMentions(unittest.TestCase):
                 occurred_at="2026-04-12T09:00:00+00:00",
             )
             report = backfill(episodes=ep, ix=ix, write=True)
-            rows = ix._connect().execute(
-                "SELECT entity_id, confidence FROM entity_mentions "
-                "WHERE session_id = ?", (ep_id,),
-            ).fetchall()
+            with ix._connect() as con:
+                rows = con.execute(
+                    "SELECT entity_id, confidence FROM entity_mentions "
+                    "WHERE session_id = ?", (ep_id,),
+                ).fetchall()
             ents = sorted(r["entity_id"] for r in rows)
             self.assertEqual(ents, sorted([a, b]))
             for r in rows:
@@ -143,11 +145,12 @@ class TestWordBoundary(unittest.TestCase):
                 occurred_at="2026-04-12T09:00:00+00:00",
             )
             backfill(episodes=ep, ix=ix, write=True)
-            rows = ix._connect().execute(
-                "SELECT entity_id FROM entity_mentions "
-                "WHERE session_id = ? AND entity_id = ?",
-                (ep_id, ann_eid),
-            ).fetchall()
+            with ix._connect() as con:
+                rows = con.execute(
+                    "SELECT entity_id FROM entity_mentions "
+                    "WHERE session_id = ? AND entity_id = ?",
+                    (ep_id, ann_eid),
+                ).fetchall()
             self.assertEqual(rows, [])
 
     def test_alias_ann_matches_at_word_boundary(self):
@@ -171,11 +174,12 @@ class TestWordBoundary(unittest.TestCase):
                 occurred_at="2026-04-12T09:00:00+00:00",
             )
             backfill(episodes=ep, ix=ix, write=True)
-            rows = ix._connect().execute(
-                "SELECT entity_id FROM entity_mentions "
-                "WHERE session_id = ? AND entity_id = ?",
-                (ep_id, ann_eid),
-            ).fetchall()
+            with ix._connect() as con:
+                rows = con.execute(
+                    "SELECT entity_id FROM entity_mentions "
+                    "WHERE session_id = ? AND entity_id = ?",
+                    (ep_id, ann_eid),
+                ).fetchall()
             self.assertEqual(len(rows), 1)
 
 
@@ -211,10 +215,11 @@ class TestLongerAliasPriority(unittest.TestCase):
                 occurred_at="2026-04-12T09:00:00+00:00",
             )
             backfill(episodes=ep, ix=ix, write=True)
-            ents = sorted(r["entity_id"] for r in ix._connect().execute(
-                "SELECT entity_id FROM entity_mentions "
-                "WHERE session_id = ?", (ep_id,),
-            ).fetchall())
+            with ix._connect() as con:
+                ents = sorted(r["entity_id"] for r in con.execute(
+                    "SELECT entity_id FROM entity_mentions "
+                    "WHERE session_id = ?", (ep_id,),
+                ).fetchall())
             self.assertIn(track_a_id, ents)
             self.assertNotIn(other_id, ents)
 
@@ -250,10 +255,11 @@ class TestExtractorWinsOnOverlap(unittest.TestCase):
                 occurred_at="2026-04-12T09:00:00+00:00",
             )
             backfill(episodes=ep, ix=ix, write=True)
-            rows = ix._connect().execute(
-                "SELECT entity_id FROM entity_mentions "
-                "WHERE session_id = ?", (ep_id,),
-            ).fetchall()
+            with ix._connect() as con:
+                rows = con.execute(
+                    "SELECT entity_id FROM entity_mentions "
+                    "WHERE session_id = ?", (ep_id,),
+                ).fetchall()
             ents = {r["entity_id"] for r in rows}
             # Only the canonical match should produce a mention.
             self.assertIn(ananthan_id, ents)
@@ -284,11 +290,12 @@ class TestExtractorWinsOnOverlap(unittest.TestCase):
                 occurred_at="2026-04-12T09:00:00+00:00",
             )
             backfill(episodes=ep, ix=ix, write=True)
-            rows = ix._connect().execute(
-                "SELECT entity_id FROM entity_mentions "
-                "WHERE session_id = ? AND entity_id = ?",
-                (ep_id, anjali_id),
-            ).fetchall()
+            with ix._connect() as con:
+                rows = con.execute(
+                    "SELECT entity_id FROM entity_mentions "
+                    "WHERE session_id = ? AND entity_id = ?",
+                    (ep_id, anjali_id),
+                ).fetchall()
             # Anjali alias hit in title is outside any extractor span
             # (title has no multi-token capitalized run because 'Maya'
             # alone isn't extractable). Should be kept.
@@ -407,13 +414,15 @@ class TestIdempotencyAndDryRun(unittest.TestCase):
                 occurred_at="2026-04-12T09:00:00+00:00",
             )
             backfill(episodes=ep, ix=ix, write=True)
-            n_before = ix._connect().execute(
-                "SELECT COUNT(*) FROM entity_mentions"
-            ).fetchone()[0]
+            with ix._connect() as con:
+                n_before = con.execute(
+                    "SELECT COUNT(*) FROM entity_mentions"
+                ).fetchone()[0]
             r2 = backfill(episodes=ep, ix=ix, write=True)
-            n_after = ix._connect().execute(
-                "SELECT COUNT(*) FROM entity_mentions"
-            ).fetchone()[0]
+            with ix._connect() as con:
+                n_after = con.execute(
+                    "SELECT COUNT(*) FROM entity_mentions"
+                ).fetchone()[0]
             self.assertEqual(n_before, n_after)
             self.assertEqual(r2.alias_mentions_new, 0)
             self.assertGreaterEqual(r2.alias_mentions_existing, 1)
@@ -435,9 +444,10 @@ class TestIdempotencyAndDryRun(unittest.TestCase):
                 occurred_at="2026-04-12T09:00:00+00:00",
             )
             report = backfill(episodes=ep, ix=ix)  # write=False default
-            n = ix._connect().execute(
-                "SELECT COUNT(*) FROM entity_mentions"
-            ).fetchone()[0]
+            with ix._connect() as con:
+                n = con.execute(
+                    "SELECT COUNT(*) FROM entity_mentions"
+                ).fetchone()[0]
             self.assertEqual(n, 0)
             # Report still computes the would-be counts.
             self.assertGreaterEqual(report.alias_mentions_new, 1)

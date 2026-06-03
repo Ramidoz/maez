@@ -253,11 +253,12 @@ def _lookup_entity(ix: "EntityIndex", canonical_name: str, kind: str) -> dict | 
     from core.memory.entity_index import normalize_entity_name
 
     normalized = normalize_entity_name(canonical_name)
-    row = ix._connect().execute(
-        "SELECT id, canonical_name, kind FROM entities "
-        "WHERE normalized_name = ? AND kind = ?",
-        (normalized, kind),
-    ).fetchone()
+    with ix._connect() as con:
+        row = con.execute(
+            "SELECT id, canonical_name, kind FROM entities "
+            "WHERE normalized_name = ? AND kind = ?",
+            (normalized, kind),
+        ).fetchone()
     return dict(row) if row else None
 
 

@@ -271,9 +271,10 @@ def _load_aliases_sorted_long_first(ix) -> list[dict]:
     overlap-drop rule reliably prefers longer aliases over shorter
     when they apply to the same span. Returns dicts shaped for the
     matcher: ``{alias, normalized_alias, entity_id}``."""
-    rows = ix._connect().execute(
-        "SELECT alias, normalized_alias, entity_id FROM aliases"
-    ).fetchall()
+    with ix._connect() as con:
+        rows = con.execute(
+            "SELECT alias, normalized_alias, entity_id FROM aliases"
+        ).fetchall()
     out = [dict(r) for r in rows]
     out.sort(key=lambda r: len(r["alias"]), reverse=True)
     return out
@@ -427,7 +428,13 @@ def backfill(
     # already-present without committing anything. The keyset is
     # cheap: normalized name + kind for entities, (entity_id,
     # session_id, source_id) for mentions.
-    con = ix._connect()
+    with ix._connect() as con:
+        _entity_rows = con.execute(
+            "SELECT id, normalized_name, kind FROM entities"
+        ).fetchall()
+        _mention_rows = con.execute(
+            "SELECT entity_id, session_id, source_id FROM entity_mentions"
+        ).fetchall()
     existing_entities: dict[tuple[str, str], str] = {}
     # Reverse map by normalized_name only — when the deterministic
     # pass finds 'Maya Ananthan' and an alias-seeded entity already
@@ -436,9 +443,7 @@ def backfill(
     # ('maya ananthan', 'unknown') row. Owner-curated kind wins
     # over the extractor's default.
     existing_by_normalized: dict[str, tuple[str, str]] = {}
-    for row in con.execute(
-        "SELECT id, normalized_name, kind FROM entities"
-    ).fetchall():
+    for row in _entity_rows:
         existing_entities[(row["normalized_name"], row["kind"])] = row["id"]
         prior = existing_by_normalized.get(row["normalized_name"])
         # Prefer a non-'unknown' kind when multiple kinds share a
@@ -451,9 +456,7 @@ def backfill(
             )
 
     existing_mentions: set[tuple[str, str, str]] = set()
-    for row in con.execute(
-        "SELECT entity_id, session_id, source_id FROM entity_mentions"
-    ).fetchall():
+    for row in _mention_rows:
         existing_mentions.add(
             (row["entity_id"], row["session_id"], row["source_id"]),
         )

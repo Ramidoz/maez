@@ -201,16 +201,20 @@ class TestSeedDryRun(unittest.TestCase):
             entries = load_seed_file(_write_yaml(tdp))
             ix = _fresh_index(tdp)
             report = seed_aliases(ix=ix, entries=entries)  # write=False
-            self.assertEqual(
-                ix._connect().execute(
+            with ix._connect() as con:
+                n_entities = con.execute(
                     "SELECT COUNT(*) FROM entities"
-                ).fetchone()[0],
+                ).fetchone()[0]
+            self.assertEqual(
+                n_entities,
                 0,
             )
-            self.assertEqual(
-                ix._connect().execute(
+            with ix._connect() as con:
+                n_aliases = con.execute(
                     "SELECT COUNT(*) FROM aliases"
-                ).fetchone()[0],
+                ).fetchone()[0]
+            self.assertEqual(
+                n_aliases,
                 0,
             )
             self.assertEqual(report.entities_seen, 3)
@@ -235,16 +239,18 @@ class TestSeedWrite(unittest.TestCase):
             ix = _fresh_index(tdp)
             seed_aliases(ix=ix, entries=entries, write=True)
 
-            ent_rows = ix._connect().execute(
-                "SELECT canonical_name, kind FROM entities"
-            ).fetchall()
+            with ix._connect() as con:
+                ent_rows = con.execute(
+                    "SELECT canonical_name, kind FROM entities"
+                ).fetchall()
             self.assertEqual(len(ent_rows), 3)
             kinds = sorted(r["kind"] for r in ent_rows)
             self.assertEqual(kinds, ["person", "person", "project"])
 
-            ali_rows = ix._connect().execute(
-                "SELECT alias, normalized_alias FROM aliases"
-            ).fetchall()
+            with ix._connect() as con:
+                ali_rows = con.execute(
+                    "SELECT alias, normalized_alias FROM aliases"
+                ).fetchall()
             self.assertGreater(len(ali_rows), 0)
             # 'Maya' present twice (one per entity).
             mayas = [r for r in ali_rows if r["normalized_alias"] == "maya"]
@@ -260,22 +266,28 @@ class TestSeedWrite(unittest.TestCase):
             entries = load_seed_file(_write_yaml(tdp))
             ix = _fresh_index(tdp)
             seed_aliases(ix=ix, entries=entries, write=True)
-            n_ent = ix._connect().execute(
-                "SELECT COUNT(*) FROM entities"
-            ).fetchone()[0]
-            n_ali = ix._connect().execute(
-                "SELECT COUNT(*) FROM aliases"
-            ).fetchone()[0]
-            r2 = seed_aliases(ix=ix, entries=entries, write=True)
-            self.assertEqual(
-                ix._connect().execute(
+            with ix._connect() as con:
+                n_ent = con.execute(
                     "SELECT COUNT(*) FROM entities"
-                ).fetchone()[0], n_ent,
-            )
-            self.assertEqual(
-                ix._connect().execute(
+                ).fetchone()[0]
+            with ix._connect() as con:
+                n_ali = con.execute(
                     "SELECT COUNT(*) FROM aliases"
-                ).fetchone()[0], n_ali,
+                ).fetchone()[0]
+            r2 = seed_aliases(ix=ix, entries=entries, write=True)
+            with ix._connect() as con:
+                n_ent_after = con.execute(
+                    "SELECT COUNT(*) FROM entities"
+                ).fetchone()[0]
+            self.assertEqual(
+                n_ent_after, n_ent,
+            )
+            with ix._connect() as con:
+                n_ali_after = con.execute(
+                    "SELECT COUNT(*) FROM aliases"
+                ).fetchone()[0]
+            self.assertEqual(
+                n_ali_after, n_ali,
             )
             self.assertEqual(r2.entities_created, 0)
             self.assertEqual(r2.entities_existing, 3)

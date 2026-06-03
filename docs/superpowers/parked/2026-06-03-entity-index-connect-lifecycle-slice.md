@@ -1,6 +1,13 @@
 # EntityIndex._connect() lifecycle slice — NAMED FOLLOW-UP
 
 **Date:** 2026-06-03
+**Status:** ✅ DONE (branch `entity-index-connect-lifecycle`, Claude-implemented, awaiting Codex review; NOT merged). `_connect()` is now a conditional-close `@contextmanager`; all 53 callers (8 internal + 10 core sibling + 3 scripts + 32 test) converted; the `# sqlite-leak-tracked` marker and `_EXPECTED_TRACKED` pin removed; a file-mode `EntityIndex` FD-leak probe added (mutation-proven: yield-without-close → 30 leaked → FAIL). Full suite: **5742 tests, 0 new failures.**
+
+**⚠ Regression discovery (this slice's full-suite run):** running the WHOLE `unittest discover` (which the factory sweep + its two review rounds never did — all used scoped module suites) revealed the merged factory sweep had left **10 broken tests on `main`** — cross-module external callers of converted factories that the scoped runs missed: `scripts/backfill_consequence_from_audit.py` (`closing(_cm._connect())` via the `core.consequence_memory` shim, 9 tests) and `tests/test_entity_backfill.py` (`ep._connect().execute()`, 1 test) — plus a LATENT production break in `core/self_dev/scheduler.py:162` (`closing(_cached_persistence._connect())`, no failing test but breaks at runtime). All three fixed here (pre-sweep `5cd4b92` vs `main` isolated diff confirmed these 10 are the sweep's, not pre-existing; the m1/cockpit failures fail at `5cd4b92` too). Lesson: scoped tests are not the integration witness — run the full suite.
+
+---
+(original plan below)
+
 **Status:** NAMED FOLLOW-UP (own slice). Carved out of the SQLite connection-factory leak sweep ([factory sweep doc](2026-06-03-sqlite-connection-factory-leak-sweep.md)) because the blast radius is an API-surface change, not factory hygiene.
 
 ---

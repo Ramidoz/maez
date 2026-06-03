@@ -263,21 +263,21 @@ def suggest_aliases(
     existing_zero_alias: dict[tuple[str, str], dict] = {}
     existing_any_alias: set[tuple[str, str]] = set()
     if ix is not None:
-        con = ix._connect()
-        ent_rows = con.execute(
-            "SELECT id, canonical_name, normalized_name, kind "
-            "FROM entities"
-        ).fetchall()
-        for r in ent_rows:
-            key = (r["normalized_name"], r["kind"])
-            alias_count = con.execute(
-                "SELECT COUNT(*) FROM aliases WHERE entity_id = ?",
-                (r["id"],),
-            ).fetchone()[0]
-            if alias_count > 0:
-                existing_any_alias.add(key)
-            else:
-                existing_zero_alias[key] = dict(r)
+        with ix._connect() as con:
+            ent_rows = con.execute(
+                "SELECT id, canonical_name, normalized_name, kind "
+                "FROM entities"
+            ).fetchall()
+            for r in ent_rows:
+                key = (r["normalized_name"], r["kind"])
+                alias_count = con.execute(
+                    "SELECT COUNT(*) FROM aliases WHERE entity_id = ?",
+                    (r["id"],),
+                ).fetchone()[0]
+                if alias_count > 0:
+                    existing_any_alias.add(key)
+                else:
+                    existing_zero_alias[key] = dict(r)
 
     suggestions: list[Suggestion] = []
 

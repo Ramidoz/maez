@@ -84,11 +84,13 @@ class TestBackfillExtractsExpectedEntities(unittest.TestCase):
             ix = _fresh_index(tdp)
             report = backfill(episodes=ep, ix=ix, write=True)
 
-            ix_normalized = sorted(
-                row["normalized_name"]
-                for row in ix._connect().execute(
+            with ix._connect() as con:
+                _rows = con.execute(
                     "SELECT normalized_name FROM entities"
                 ).fetchall()
+            ix_normalized = sorted(
+                row["normalized_name"]
+                for row in _rows
             )
             self.assertIn("maya ananthan", ix_normalized)
             self.assertIn("new york", ix_normalized)
@@ -107,10 +109,11 @@ class TestBackfillExtractsExpectedEntities(unittest.TestCase):
             ix = _fresh_index(tdp)
             backfill(episodes=ep, ix=ix, write=True)
 
-            rows = ix._connect().execute(
-                "SELECT session_id, source_id, source_kind FROM "
-                "entity_mentions"
-            ).fetchall()
+            with ix._connect() as con:
+                rows = con.execute(
+                    "SELECT session_id, source_id, source_kind FROM "
+                    "entity_mentions"
+                ).fetchall()
             self.assertGreater(len(rows), 0)
             for r in rows:
                 self.assertEqual(r["session_id"], r["source_id"])
@@ -128,9 +131,10 @@ class TestBackfillExtractsExpectedEntities(unittest.TestCase):
             ep, _ids = _seed_episodes(tdp)
             ix = _fresh_index(tdp)
             backfill(episodes=ep, ix=ix, write=True)
-            rows = ix._connect().execute(
-                "SELECT session_id, observed_at FROM entity_mentions"
-            ).fetchall()
+            with ix._connect() as con:
+                rows = con.execute(
+                    "SELECT session_id, observed_at FROM entity_mentions"
+                ).fetchall()
             seen = {r["session_id"]: r["observed_at"] for r in rows}
             # The two seeded occurred_at values; both should appear.
             seeded = {"2026-04-12T09:00:00+00:00", "2026-04-20T09:00:00+00:00"}
@@ -153,10 +157,11 @@ class TestBackfillExtractsExpectedEntities(unittest.TestCase):
             )
             ix = _fresh_index(tdp)
             backfill(episodes=ep, ix=ix, write=True)
-            row = ix._connect().execute(
-                "SELECT observed_at FROM entity_mentions "
-                "WHERE session_id = ?", (eid,),
-            ).fetchone()
+            with ix._connect() as con:
+                row = con.execute(
+                    "SELECT observed_at FROM entity_mentions "
+                    "WHERE session_id = ?", (eid,),
+                ).fetchone()
             # Whatever the fallback resolved to, it must be a
             # non-empty ISO-ish string (the episode's created_at).
             self.assertTrue(row["observed_at"])
@@ -170,9 +175,10 @@ class TestBackfillExtractsExpectedEntities(unittest.TestCase):
             ep, _ = _seed_episodes(tdp)
             ix = _fresh_index(tdp)
             backfill(episodes=ep, ix=ix, write=True)
-            rows = ix._connect().execute(
-                "SELECT kind FROM entities"
-            ).fetchall()
+            with ix._connect() as con:
+                rows = con.execute(
+                    "SELECT kind FROM entities"
+                ).fetchall()
             self.assertGreater(len(rows), 0)
             for r in rows:
                 self.assertEqual(r["kind"], "unknown")
@@ -190,10 +196,11 @@ class TestSnippetRule(unittest.TestCase):
             ep, _ = _seed_episodes(tdp)
             ix = _fresh_index(tdp)
             backfill(episodes=ep, ix=ix, write=True)
-            rows = ix._connect().execute(
-                "SELECT snippet FROM entity_mentions "
-                "WHERE snippet LIKE '%Maya Ananthan%'"
-            ).fetchall()
+            with ix._connect() as con:
+                rows = con.execute(
+                    "SELECT snippet FROM entity_mentions "
+                    "WHERE snippet LIKE '%Maya Ananthan%'"
+                ).fetchall()
             # Maya appears in BOTH title and summary of e1 — at
             # least one snippet should be the full title.
             self.assertTrue(
@@ -223,9 +230,10 @@ class TestSnippetRule(unittest.TestCase):
             )
             ix = _fresh_index(tdp)
             backfill(episodes=ep, ix=ix, write=True)
-            row = ix._connect().execute(
-                "SELECT snippet FROM entity_mentions"
-            ).fetchone()
+            with ix._connect() as con:
+                row = con.execute(
+                    "SELECT snippet FROM entity_mentions"
+                ).fetchone()
             self.assertIsNotNone(row)
             self.assertIn("Maya Ananthan", row["snippet"])
             # 60-char window centred on the span — actual length
@@ -245,19 +253,21 @@ class TestIdempotency(unittest.TestCase):
             ep, _ = _seed_episodes(tdp)
             ix = _fresh_index(tdp)
             backfill(episodes=ep, ix=ix, write=True)
-            ent_before = ix._connect().execute(
-                "SELECT COUNT(*) FROM entities"
-            ).fetchone()[0]
-            men_before = ix._connect().execute(
-                "SELECT COUNT(*) FROM entity_mentions"
-            ).fetchone()[0]
+            with ix._connect() as con:
+                ent_before = con.execute(
+                    "SELECT COUNT(*) FROM entities"
+                ).fetchone()[0]
+                men_before = con.execute(
+                    "SELECT COUNT(*) FROM entity_mentions"
+                ).fetchone()[0]
             report = backfill(episodes=ep, ix=ix, write=True)
-            ent_after = ix._connect().execute(
-                "SELECT COUNT(*) FROM entities"
-            ).fetchone()[0]
-            men_after = ix._connect().execute(
-                "SELECT COUNT(*) FROM entity_mentions"
-            ).fetchone()[0]
+            with ix._connect() as con:
+                ent_after = con.execute(
+                    "SELECT COUNT(*) FROM entities"
+                ).fetchone()[0]
+                men_after = con.execute(
+                    "SELECT COUNT(*) FROM entity_mentions"
+                ).fetchone()[0]
             self.assertEqual(ent_before, ent_after)
             self.assertEqual(men_before, men_after)
             self.assertEqual(report.new_entities, 0)
@@ -275,16 +285,20 @@ class TestDryRun(unittest.TestCase):
             ep, _ = _seed_episodes(tdp)
             ix = _fresh_index(tdp)
             report = backfill(episodes=ep, ix=ix)  # write=False default
-            self.assertEqual(
-                ix._connect().execute(
+            with ix._connect() as con:
+                _ent_count = con.execute(
                     "SELECT COUNT(*) FROM entities"
-                ).fetchone()[0],
+                ).fetchone()[0]
+            self.assertEqual(
+                _ent_count,
                 0,
             )
-            self.assertEqual(
-                ix._connect().execute(
+            with ix._connect() as con:
+                _men_count = con.execute(
                     "SELECT COUNT(*) FROM entity_mentions"
-                ).fetchone()[0],
+                ).fetchone()[0]
+            self.assertEqual(
+                _men_count,
                 0,
             )
             # Report still computes "would-insert" counts honestly.
@@ -386,9 +400,10 @@ class TestBackfillIsReadOnlyOverEpisodes(unittest.TestCase):
             backfill(episodes=ep, ix=ix, write=True)
             # Reading via SQLite shouldn't bump the mtime, but
             # verify no INSERT/UPDATE has changed the row count.
-            n = ep._connect().execute(
-                "SELECT COUNT(*) FROM episodes"
-            ).fetchone()[0]
+            with ep._connect() as con:
+                n = con.execute(
+                    "SELECT COUNT(*) FROM episodes"
+                ).fetchone()[0]
             self.assertEqual(n, 3)
             after_mtime = ep_path.stat().st_mtime_ns
             self.assertEqual(before_mtime, after_mtime)

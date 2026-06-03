@@ -437,11 +437,15 @@ def batch_extract(
     report.episodes_scanned = len(rows)
 
     # Snapshot existing keys for new-vs-existing accounting.
-    con = ix._connect()
+    with ix._connect() as con:
+        _entity_rows = con.execute(
+            "SELECT id, normalized_name, kind FROM entities"
+        ).fetchall()
+        _mention_rows = con.execute(
+            "SELECT entity_id, session_id, source_id FROM entity_mentions"
+        ).fetchall()
     existing_entities_by_norm: dict[str, tuple[str, str]] = {}
-    for row in con.execute(
-        "SELECT id, normalized_name, kind FROM entities"
-    ).fetchall():
+    for row in _entity_rows:
         prior = existing_entities_by_norm.get(row["normalized_name"])
         if prior is None or (
             prior[1] == "unknown" and row["kind"] != "unknown"
@@ -450,9 +454,7 @@ def batch_extract(
                 row["id"], row["kind"],
             )
     existing_mentions: set[tuple[str, str, str]] = set()
-    for row in con.execute(
-        "SELECT entity_id, session_id, source_id FROM entity_mentions"
-    ).fetchall():
+    for row in _mention_rows:
         existing_mentions.add(
             (row["entity_id"], row["session_id"], row["source_id"]),
         )

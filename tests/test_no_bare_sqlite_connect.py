@@ -118,13 +118,12 @@ class NoBareSqliteConnectTests(unittest.TestCase):
     #   `# sqlite-leak-tracked: <follow-up doc>`
     # plus an entry in _EXPECTED_TRACKED below — so a real leak can neither
     # be added nor silently disappear without a reviewed edit to both.
-    _EXPECTED_TRACKED = {
-        # entity_index._connect() is used as a chained read-handle across
-        # ~50 sites (core + scripts + tests); converting it to a context
-        # manager is its own slice. See:
-        # docs/superpowers/parked/2026-06-03-entity-index-connect-lifecycle-slice.md
-        "core/memory/entity_index.py",
-    }
+    # No KNOWN-tracked leaks: entity_index._connect() was converted to a
+    # conditional-close @contextmanager (2026-06-03), so this set is empty.
+    # Re-pinning a leak here requires a `# sqlite-leak-tracked` marker on the
+    # offending return AND a reviewed edit to this set — it can never grow
+    # silently.
+    _EXPECTED_TRACKED: set[str] = set()
 
     def test_no_connection_returning_factories(self):
         import ast

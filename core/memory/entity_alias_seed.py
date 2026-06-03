@@ -246,11 +246,11 @@ def _count_ambiguous_aliases(ix: "EntityIndex") -> int:
     The MSEL-precision pressure metric: high count means the index's
     resolution surface is ambiguous and expand_query will split
     confidence on those queries."""
-    con = ix._connect()
-    rows = con.execute(
-        "SELECT normalized_alias, COUNT(DISTINCT entity_id) AS n "
-        "FROM aliases GROUP BY normalized_alias HAVING n >= 2"
-    ).fetchall()
+    with ix._connect() as con:
+        rows = con.execute(
+            "SELECT normalized_alias, COUNT(DISTINCT entity_id) AS n "
+            "FROM aliases GROUP BY normalized_alias HAVING n >= 2"
+        ).fetchall()
     return len(rows)
 
 
@@ -262,11 +262,12 @@ def _alias_already_present(
     normalized = normalize_entity_name(alias)
     if not normalized:
         return False
-    row = ix._connect().execute(
-        "SELECT id FROM aliases "
-        "WHERE entity_id = ? AND normalized_alias = ?",
-        (entity_id, normalized),
-    ).fetchone()
+    with ix._connect() as con:
+        row = con.execute(
+            "SELECT id FROM aliases "
+            "WHERE entity_id = ? AND normalized_alias = ?",
+            (entity_id, normalized),
+        ).fetchone()
     return row is not None
 
 
@@ -287,16 +288,18 @@ def seed_aliases(
 
     # Snapshot existing entity keyset and per-entity alias keyset
     # so dry-run accounting matches what a write would do.
-    con = ix._connect()
+    with ix._connect() as con:
+        _entity_rows = con.execute(
+            "SELECT id, normalized_name, kind FROM entities"
+        ).fetchall()
+        _alias_rows = con.execute(
+            "SELECT entity_id, normalized_alias FROM aliases"
+        ).fetchall()
     existing_entities: dict[tuple[str, str], str] = {}
-    for row in con.execute(
-        "SELECT id, normalized_name, kind FROM entities"
-    ).fetchall():
+    for row in _entity_rows:
         existing_entities[(row["normalized_name"], row["kind"])] = row["id"]
     existing_aliases: set[tuple[str, str]] = set()
-    for row in con.execute(
-        "SELECT entity_id, normalized_alias FROM aliases"
-    ).fetchall():
+    for row in _alias_rows:
         existing_aliases.add((row["entity_id"], row["normalized_alias"]))
 
     # Plan first; execute only when write=True.

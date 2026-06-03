@@ -37,6 +37,8 @@ import re
 import sqlite3
 import time
 import unicodedata
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -367,12 +369,21 @@ class EntityIndex:
                 con.executescript(self._SCHEMA)
                 con.commit()
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        # Dual-mode: in-memory stores share ONE long-lived connection
+        # (closing it would discard the database), so yield it WITHOUT
+        # closing. File-mode opens a fresh connection per call and must
+        # close it deterministically — leaving it open was the FD leak.
         if self._memory_con is not None:
-            return self._memory_con
+            yield self._memory_con
+            return
         con = sqlite3.connect(str(self.db_path))
         con.row_factory = sqlite3.Row
-        return con  # sqlite-leak-tracked: KNOWN file-mode FD leak — _connect() is used as a chained read-handle across ~50 sites (core+scripts+tests); context-manager conversion is its own slice (docs/superpowers/parked/2026-06-03-entity-index-connect-lifecycle-slice.md). NOT a safe pattern; do not copy.
+        try:
+            yield con
+        finally:
+            con.close()
 
     # ── writes ────────────────────────────────────────────────────
 
@@ -397,25 +408,25 @@ class EntityIndex:
                 f"canonical_name {canonical_name!r} normalizes to empty"
             )
 
-        con = self._connect()
-        existing = con.execute(
-            "SELECT id FROM entities "
-            "WHERE normalized_name = ? AND kind = ?",
-            (normalized, kind),
-        ).fetchone()
-        if existing is not None:
-            entity_id = existing["id"]
-        else:
-            entity_id = "ent-" + uuid4().hex[:12]
-            con.execute(
-                "INSERT INTO entities ("
-                "id, canonical_name, normalized_name, kind, created_at"
-                ") VALUES (?,?,?,?,?)",
-                (entity_id, canonical_name.strip(), normalized,
-                 kind, time.time()),
-            )
-            if self._memory_con is None:
-                con.commit()
+        with self._connect() as con:
+            existing = con.execute(
+                "SELECT id FROM entities "
+                "WHERE normalized_name = ? AND kind = ?",
+                (normalized, kind),
+            ).fetchone()
+            if existing is not None:
+                entity_id = existing["id"]
+            else:
+                entity_id = "ent-" + uuid4().hex[:12]
+                con.execute(
+                    "INSERT INTO entities ("
+                    "id, canonical_name, normalized_name, kind, created_at"
+                    ") VALUES (?,?,?,?,?)",
+                    (entity_id, canonical_name.strip(), normalized,
+                     kind, time.time()),
+                )
+                if self._memory_con is None:
+                    con.commit()
 
         if aliases:
             for a in aliases:
@@ -435,23 +446,23 @@ class EntityIndex:
         normalized = normalize_entity_name(alias)
         if not normalized:
             return
-        con = self._connect()
-        existing = con.execute(
-            "SELECT id FROM aliases "
-            "WHERE entity_id = ? AND normalized_alias = ?",
-            (entity_id, normalized),
-        ).fetchone()
-        if existing is not None:
-            return
-        con.execute(
-            "INSERT INTO aliases ("
-            "id, entity_id, alias, normalized_alias, created_at"
-            ") VALUES (?,?,?,?,?)",
-            ("ali-" + uuid4().hex[:12], entity_id, alias.strip(),
-             normalized, time.time()),
-        )
-        if self._memory_con is None:
-            con.commit()
+        with self._connect() as con:
+            existing = con.execute(
+                "SELECT id FROM aliases "
+                "WHERE entity_id = ? AND normalized_alias = ?",
+                (entity_id, normalized),
+            ).fetchone()
+            if existing is not None:
+                return
+            con.execute(
+                "INSERT INTO aliases ("
+                "id, entity_id, alias, normalized_alias, created_at"
+                ") VALUES (?,?,?,?,?)",
+                ("ali-" + uuid4().hex[:12], entity_id, alias.strip(),
+                 normalized, time.time()),
+            )
+            if self._memory_con is None:
+                con.commit()
 
     def add_mention(
         self,
@@ -471,51 +482,51 @@ class EntityIndex:
             raise ValueError(
                 "entity_id, session_id, source_id, source_kind all required"
             )
-        con = self._connect()
-        existing = con.execute(
-            "SELECT id FROM entity_mentions "
-            "WHERE entity_id = ? AND session_id = ? AND source_id = ?",
-            (entity_id, session_id, source_id),
-        ).fetchone()
-        if existing is not None:
-            return existing["id"]
-        mid = "men-" + uuid4().hex[:12]
-        con.execute(
-            "INSERT INTO entity_mentions ("
-            "id, entity_id, session_id, source_id, source_kind, "
-            "observed_at, snippet, confidence, created_at"
-            ") VALUES (?,?,?,?,?,?,?,?,?)",
-            (mid, entity_id, session_id, source_id, source_kind,
-             observed_at, snippet, float(confidence), time.time()),
-        )
-        if self._memory_con is None:
-            con.commit()
-        return mid
+        with self._connect() as con:
+            existing = con.execute(
+                "SELECT id FROM entity_mentions "
+                "WHERE entity_id = ? AND session_id = ? AND source_id = ?",
+                (entity_id, session_id, source_id),
+            ).fetchone()
+            if existing is not None:
+                return existing["id"]
+            mid = "men-" + uuid4().hex[:12]
+            con.execute(
+                "INSERT INTO entity_mentions ("
+                "id, entity_id, session_id, source_id, source_kind, "
+                "observed_at, snippet, confidence, created_at"
+                ") VALUES (?,?,?,?,?,?,?,?,?)",
+                (mid, entity_id, session_id, source_id, source_kind,
+                 observed_at, snippet, float(confidence), time.time()),
+            )
+            if self._memory_con is None:
+                con.commit()
+            return mid
 
     # ── reads ─────────────────────────────────────────────────────
 
     def get_entity(self, entity_id: str) -> dict | None:
-        con = self._connect()
-        row = con.execute(
-            "SELECT * FROM entities WHERE id = ?", (entity_id,),
-        ).fetchone()
+        with self._connect() as con:
+            row = con.execute(
+                "SELECT * FROM entities WHERE id = ?", (entity_id,),
+            ).fetchone()
         return dict(row) if row else None
 
     def list_aliases(self, entity_id: str) -> list[str]:
-        con = self._connect()
-        rows = con.execute(
-            "SELECT alias FROM aliases WHERE entity_id = ?",
-            (entity_id,),
-        ).fetchall()
+        with self._connect() as con:
+            rows = con.execute(
+                "SELECT alias FROM aliases WHERE entity_id = ?",
+                (entity_id,),
+            ).fetchall()
         return [r["alias"] for r in rows]
 
     def list_mentions(self, entity_id: str) -> list[dict]:
-        con = self._connect()
-        rows = con.execute(
-            "SELECT * FROM entity_mentions WHERE entity_id = ? "
-            "ORDER BY observed_at DESC",
-            (entity_id,),
-        ).fetchall()
+        with self._connect() as con:
+            rows = con.execute(
+                "SELECT * FROM entity_mentions WHERE entity_id = ? "
+                "ORDER BY observed_at DESC",
+                (entity_id,),
+            ).fetchall()
         return [dict(r) for r in rows]
 
     def find_entities(self, query: str) -> list[EntityMatch]:
@@ -529,21 +540,20 @@ class EntityIndex:
         normalized = normalize_entity_name(query)
         if not normalized:
             return []
-        con = self._connect()
+        with self._connect() as con:
+            canonical_hits = con.execute(
+                "SELECT id, canonical_name, kind FROM entities "
+                "WHERE normalized_name = ?",
+                (normalized,),
+            ).fetchall()
 
-        canonical_hits = con.execute(
-            "SELECT id, canonical_name, kind FROM entities "
-            "WHERE normalized_name = ?",
-            (normalized,),
-        ).fetchall()
-
-        alias_hits = con.execute(
-            "SELECT e.id AS id, e.canonical_name AS canonical_name, "
-            "e.kind AS kind "
-            "FROM aliases a JOIN entities e ON a.entity_id = e.id "
-            "WHERE a.normalized_alias = ?",
-            (normalized,),
-        ).fetchall()
+            alias_hits = con.execute(
+                "SELECT e.id AS id, e.canonical_name AS canonical_name, "
+                "e.kind AS kind "
+                "FROM aliases a JOIN entities e ON a.entity_id = e.id "
+                "WHERE a.normalized_alias = ?",
+                (normalized,),
+            ).fetchall()
 
         # Merge by entity_id, preserving canonical match precedence.
         matched_via: dict[str, str] = {}
@@ -655,14 +665,14 @@ def _expand(
     # Pull mentions for every matched entity, ordered most-recent-
     # first across the union, capped at limit_sessions distinct
     # session_ids.
-    con = ix._connect()
     placeholders = ",".join("?" for _ in matches)
-    rows = con.execute(
-        f"SELECT * FROM entity_mentions "
-        f"WHERE entity_id IN ({placeholders}) "
-        "ORDER BY observed_at DESC",
-        tuple(m.entity_id for m in matches),
-    ).fetchall()
+    with ix._connect() as con:
+        rows = con.execute(
+            f"SELECT * FROM entity_mentions "
+            f"WHERE entity_id IN ({placeholders}) "
+            "ORDER BY observed_at DESC",
+            tuple(m.entity_id for m in matches),
+        ).fetchall()
 
     seen_sessions: list[str] = []
     seen_sources: list[str] = []

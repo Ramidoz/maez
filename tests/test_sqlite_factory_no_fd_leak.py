@@ -27,6 +27,7 @@ if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
 from core.actions.action_engine import ActionTrustTracker  # noqa: E402
+from core.memory.entity_index import EntityIndex  # noqa: E402
 from core.decision.pending_cards import PendingCardStore  # noqa: E402
 from core.memory.episodes import EpisodeStore  # noqa: E402
 from memory.quality_tracker import QualityTracker  # noqa: E402
@@ -99,6 +100,19 @@ class SqliteFactoryFdLeakTests(unittest.TestCase):
         db = Path(tmp.name) / "accounts.db"
         growth = self._probe_named(UserAccounts(db_path=str(db)), db, "_conn")
         self.assertLessEqual(growth, 2, f"user_accounts _conn leaked {growth} handles over 30 uses")
+
+    def test_entity_index_file_mode_connect_does_not_leak(self):
+        # entity_index._connect was the deferred/tracked leak: file-mode opened
+        # a fresh connection per call and no caller closed it. It is now a
+        # conditional-close @contextmanager (the shared :memory: con is yielded
+        # without closing; file-mode opens + closes per call). This probe uses
+        # FILE mode (a real db_path, not ":memory:") so it exercises the path
+        # that leaked.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        db = Path(tmp.name) / "entities.db"
+        growth = self._probe_named(EntityIndex(db_path=str(db)), db, "_connect")
+        self.assertLessEqual(growth, 2, f"entity_index file-mode _connect leaked {growth} handles over 30 uses")
 
     def test_quality_tracker_conn_factory_does_not_leak(self):
         # memory/quality_tracker is imported by core.actions.action_engine at

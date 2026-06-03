@@ -199,16 +199,17 @@ def default_queries_from_index(ix, *, top_n: int = 5) -> list[str]:
     """Pull the top-N entities by mention count and turn each into
     a "tell me about <canonical_name>" query. Guarantees default
     queries actually hit the user's data."""
-    rows = ix._connect().execute(
-        "SELECT e.canonical_name AS canonical_name, "
-        "COUNT(m.id) AS n "
-        "FROM entities e LEFT JOIN entity_mentions m "
-        "ON m.entity_id = e.id "
-        "GROUP BY e.id HAVING n > 0 "
-        "ORDER BY n DESC, e.created_at ASC "
-        "LIMIT ?",
-        (int(top_n),),
-    ).fetchall()
+    with ix._connect() as con:
+        rows = con.execute(
+            "SELECT e.canonical_name AS canonical_name, "
+            "COUNT(m.id) AS n "
+            "FROM entities e LEFT JOIN entity_mentions m "
+            "ON m.entity_id = e.id "
+            "GROUP BY e.id HAVING n > 0 "
+            "ORDER BY n DESC, e.created_at ASC "
+            "LIMIT ?",
+            (int(top_n),),
+        ).fetchall()
     return [f"tell me about {r['canonical_name']}" for r in rows]
 
 
@@ -342,12 +343,13 @@ def main(argv: list[str] | None = None) -> int:
     graph = RelationshipGraph(str(graph_path))
 
     # Empty-index guard. Warn + exit 0 — automation friendly.
-    n_entities = ix._connect().execute(
-        "SELECT COUNT(*) FROM entities"
-    ).fetchone()[0]
-    n_mentions = ix._connect().execute(
-        "SELECT COUNT(*) FROM entity_mentions"
-    ).fetchone()[0]
+    with ix._connect() as con:
+        n_entities = con.execute(
+            "SELECT COUNT(*) FROM entities"
+        ).fetchone()[0]
+        n_mentions = con.execute(
+            "SELECT COUNT(*) FROM entity_mentions"
+        ).fetchone()[0]
     if n_entities == 0 or n_mentions == 0:
         print(
             f"warning: entity index is empty "

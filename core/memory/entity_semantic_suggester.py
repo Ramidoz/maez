@@ -107,19 +107,20 @@ def suggest_semantic_drafts(
     count DESC. Filters out entities with fewer than
     ``min_sessions`` distinct mention sessions (default 2 — the
     cross-session-evidence floor MSEL is built around)."""
-    rows = ix._connect().execute(
-        "SELECT e.canonical_name AS canonical_name, "
-        "       e.kind AS kind, "
-        "       COUNT(m.id) AS mention_count, "
-        "       COUNT(DISTINCT m.session_id) AS distinct_sessions "
-        "FROM entities e LEFT JOIN entity_mentions m "
-        "  ON m.entity_id = e.id "
-        "GROUP BY e.id "
-        "HAVING distinct_sessions >= ? "
-        "ORDER BY mention_count DESC, e.canonical_name ASC "
-        "LIMIT ?",
-        (int(min_sessions), int(top_n)),
-    ).fetchall()
+    with ix._connect() as con:
+        rows = con.execute(
+            "SELECT e.canonical_name AS canonical_name, "
+            "       e.kind AS kind, "
+            "       COUNT(m.id) AS mention_count, "
+            "       COUNT(DISTINCT m.session_id) AS distinct_sessions "
+            "FROM entities e LEFT JOIN entity_mentions m "
+            "  ON m.entity_id = e.id "
+            "GROUP BY e.id "
+            "HAVING distinct_sessions >= ? "
+            "ORDER BY mention_count DESC, e.canonical_name ASC "
+            "LIMIT ?",
+            (int(min_sessions), int(top_n)),
+        ).fetchall()
     drafts: list[SemanticDraft] = []
     for r in rows:
         canonical = r["canonical_name"]
@@ -211,11 +212,12 @@ def _lookup_canonical_only(ix, canonical_name: str) -> list[dict]:
     from core.memory.entity_index import normalize_entity_name
 
     normalized = normalize_entity_name(canonical_name)
-    rows = ix._connect().execute(
-        "SELECT id, canonical_name, kind FROM entities "
-        "WHERE normalized_name = ?",
-        (normalized,),
-    ).fetchall()
+    with ix._connect() as con:
+        rows = con.execute(
+            "SELECT id, canonical_name, kind FROM entities "
+            "WHERE normalized_name = ?",
+            (normalized,),
+        ).fetchall()
     return [dict(r) for r in rows]
 
 
