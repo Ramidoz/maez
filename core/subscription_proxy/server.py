@@ -663,6 +663,36 @@ async def chat_completions(request: Request):
     prompt_preview = _safe_prompt_preview(egress_decision)
     reply_preview = ""
 
+    # Personal Data Limb Runtime, Slice 1 ENFORCEMENT. owner_account_context is the
+    # ONE gate class enforced today: personal-account data does not reach a cloud
+    # model. Born-enforced (no shadow period — nothing tags this class yet, so this
+    # changes zero existing flows). Every OTHER gate decision stays in the
+    # deliberate observe rollout below (egress_shadow_mode=True). Flipping the
+    # reserved-denied classes (soul/private_thoughts/credential_material), which
+    # also flow today, is a named follow-up slice with its own witness.
+    if (
+        egress_decision.decision == "block"
+        and "owner_account_context_blocked_default" in egress_decision.reason_codes
+    ):
+        _record(
+            adapter=adapter.name, caller=caller, model=model_in,
+            model_used=None, prompt=prompt, reply="",
+            input_toks=None, output_toks=None,
+            duration_s=0.0, status="blocked_egress",
+            egress_decision=egress_decision.decision,
+            egress_reason_codes=",".join(egress_decision.reason_codes),
+            egress_content_digest=egress_telemetry["content_digest"],
+            egress_shadow_mode=False,
+            egress_origin_classes=",".join(egress_decision.origin_classes),
+            egress_provenance_mode=egress_provenance_mode,
+            prompt_preview_override=prompt_preview,
+            reply_preview_override="",
+        )
+        raise HTTPException(
+            403,
+            "egress blocked: owner_account_context may not leave to a cloud model",
+        )
+
     result: Optional[CallResult] = None
     async with _budget_lock(adapter.name):
         # T1.5: the budget gate, adapter call, and budget tick are one
