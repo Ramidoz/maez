@@ -80,6 +80,7 @@ COMPOSITION WITH OTHER A-CORE ITEMS
 """
 
 from __future__ import annotations
+from contextlib import closing
 
 import json
 import logging
@@ -195,7 +196,7 @@ class Temperament:
         self._initialize()
 
     def _initialize(self) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.executescript(_SCHEMA_TABLE)
             conn.executescript(_SCHEMA_INDEXES)
 
@@ -245,7 +246,7 @@ class Temperament:
 
         prior = self.current_value(parameter)
 
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             cur = conn.execute(
                 "INSERT INTO temperament_events "
                 "(ts, parameter, value, prior_value, source, reason, evidence_json) "
@@ -287,7 +288,7 @@ class Temperament:
         the acceptance test. NULL values are legitimate — they mean
         "not yet observed" per the no-fixed-floors rule, not an error.
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             rows = conn.execute(
                 "SELECT parameter, value FROM temperament_events "
                 "WHERE event_id IN ("
@@ -305,7 +306,7 @@ class Temperament:
                 f"unknown parameter {parameter!r} "
                 f"(allowed: {list(PARAMETER_NAMES)})"
             )
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             row = conn.execute(
                 "SELECT value FROM temperament_events "
                 "WHERE parameter = ? "
@@ -324,7 +325,7 @@ class Temperament:
                 f"unknown parameter {parameter!r} "
                 f"(allowed: {list(PARAMETER_NAMES)})"
             )
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT * FROM temperament_events "
@@ -336,7 +337,7 @@ class Temperament:
 
     def recent(self, limit: int = 20) -> list[dict]:
         """Recent events across all parameters, newest first."""
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT * FROM temperament_events "
@@ -363,7 +364,7 @@ class Temperament:
                 f"(allowed: {list(PARAMETER_NAMES)})"
             )
         as_of_f = float(time.time() if as_of is None else as_of)
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             rows = conn.execute(
                 "SELECT ts, value FROM temperament_events "
                 "WHERE parameter = ? AND ts <= ? "

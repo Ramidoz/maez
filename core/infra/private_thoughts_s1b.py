@@ -8,6 +8,7 @@ signals and exposes only a content-free recency bit to behavior.
 """
 
 from __future__ import annotations
+from contextlib import closing
 
 import json
 import logging
@@ -437,7 +438,7 @@ class PrivateThoughtsS1bProducer:
 
     def _rate_limit_summary_exists(self, *, audit_db_path: Path, window_start: int) -> bool:
         try:
-            with sqlite3.connect(audit_db_path) as conn:
+            with closing(sqlite3.connect(audit_db_path)) as conn, conn:
                 rows = conn.execute(
                     """
                     SELECT params_json FROM audit_log
@@ -667,7 +668,7 @@ class PrivateThoughtsS1bConsumer:
             return (0, 0)
         cutoff = now - cfg.duty_cycle_window_seconds
         try:
-            with sqlite3.connect(audit_db_path) as conn:
+            with closing(sqlite3.connect(audit_db_path)) as conn, conn:
                 rows = conn.execute(
                     """
                     SELECT params_json FROM audit_log

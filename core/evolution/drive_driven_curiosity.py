@@ -956,7 +956,7 @@ def _count_owner_bond_meaningful_events(
     if db_path is None:
         return 0
     cutoff = now_utc - timedelta(hours=max(1, int(guard.rolling_window_hours)))
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         rows = conn.execute(
             """
             SELECT ts_utc, producer_event_id FROM subjective_duration_salience_events

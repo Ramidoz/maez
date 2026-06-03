@@ -80,6 +80,7 @@ Module shape:
 """
 
 from __future__ import annotations
+from contextlib import closing
 
 import json
 import os
@@ -311,7 +312,7 @@ class SelfModDialogStore:
     def __init__(self, db_path: Path | str | None = None):
         self.db_path = Path(db_path) if db_path else DEFAULT_DB_PATH
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             # 1. Create the table if it doesn't exist. On existing DBs
             #    this is a no-op; CREATE TABLE IF NOT EXISTS won't add
             #    new columns to an existing table.

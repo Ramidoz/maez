@@ -53,6 +53,7 @@ Design notes
 """
 
 from __future__ import annotations
+from contextlib import closing
 
 import hashlib
 import json
@@ -361,7 +362,7 @@ class PendingCardStore:
     def __init__(self, db_path: Path | str | None = None):
         self.db_path = Path(db_path) if db_path else DEFAULT_DB_PATH
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.executescript(_SCHEMA)
             try:
                 conn.execute("ALTER TABLE pending_cards ADD COLUMN plain_english TEXT")

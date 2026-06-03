@@ -1852,7 +1852,7 @@ def build_audit_log_projection(
             row_count=0,
         )
     try:
-        with sqlite3.connect(path) as conn:
+        with closing(sqlite3.connect(path)) as conn, conn:
             exists = conn.execute(
                 """
                 SELECT 1
@@ -3494,11 +3494,11 @@ class WebAuthnChallengeStore:
     def __init__(self, db_path: str | Path):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.executescript(_WEBAUTHN_CHALLENGE_SCHEMA)
 
     def put(self, challenge: WebAuthnChallenge) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute(
                 """
                 INSERT INTO s7_webauthn_challenges (
@@ -3514,7 +3514,7 @@ class WebAuthnChallengeStore:
 
     def consume(self, challenge: WebAuthnChallenge, *, now: str) -> bool:
         now_text = _timestamp_text(now, field="now")
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             cur = conn.execute(
                 """
                 UPDATE s7_webauthn_challenges
@@ -3576,11 +3576,11 @@ class WebAuthnCredentialRegistry:
     def __init__(self, db_path: str | Path):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.executescript(_WEBAUTHN_CREDENTIAL_SCHEMA)
 
     def put(self, record: WebAuthnCredentialRecord) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute(
                 """
                 INSERT INTO s7_webauthn_credentials (
@@ -3604,7 +3604,7 @@ class WebAuthnCredentialRegistry:
             )
 
     def get(self, credential_ref: str) -> WebAuthnCredentialRecord | None:
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             row = conn.execute(
                 """
                 SELECT credential_ref, actor_handle_hmac, role_names_json,
@@ -3620,7 +3620,7 @@ class WebAuthnCredentialRegistry:
         return _credential_record_from_row(row)
 
     def all_records(self) -> tuple[WebAuthnCredentialRecord, ...]:
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             rows = conn.execute(
                 """
                 SELECT credential_ref, actor_handle_hmac, role_names_json,
@@ -3639,7 +3639,7 @@ class WebAuthnCredentialRegistry:
         if not credential_ref:
             return False
         _timestamp_text(disabled_at, field="disabled_at")
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             cur = conn.execute(
                 """
                 UPDATE s7_webauthn_credentials
@@ -3654,7 +3654,7 @@ class WebAuthnCredentialRegistry:
     def advance_sign_count(self, credential_ref: str, *, new_sign_count: int) -> bool:
         if not isinstance(new_sign_count, int) or new_sign_count < 0:
             return False
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             cur = conn.execute(
                 """
                 UPDATE s7_webauthn_credentials

@@ -47,6 +47,7 @@ because they ARE the learned immunity.
 """
 
 from __future__ import annotations
+from contextlib import closing
 
 import json
 import os
@@ -195,7 +196,7 @@ class AuditLog:
         self._initialize()
 
     def _initialize(self) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             # 1. Create the table if it doesn't exist. On existing DBs
             #    this is a no-op (CREATE TABLE IF NOT EXISTS won't add
             #    new columns to an existing table).
@@ -447,7 +448,7 @@ class AuditLog:
             "user_id": user_id,
             "opened_at": ts,
         }
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute(
                 """
                 INSERT INTO audit_log (
@@ -516,7 +517,7 @@ class AuditLog:
             "commit_hash": commit_hash,
             "reason": reason,
         }
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute(
                 """
                 INSERT INTO audit_log (
@@ -566,7 +567,7 @@ class AuditLog:
         request_id = secrets.token_hex(12)
         ts = time.time()
         params = {"closed_at": ts}
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute(
                 """
                 INSERT INTO audit_log (
@@ -599,7 +600,7 @@ class AuditLog:
     # -------------------------------------------------------------- #
 
     def get(self, request_id: str) -> Optional[dict]:
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 "SELECT * FROM audit_log WHERE request_id = ?",
@@ -608,7 +609,7 @@ class AuditLog:
         return dict(row) if row else None
 
     def recent(self, limit: int = 50) -> list[dict]:
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT * FROM audit_log ORDER BY ts DESC LIMIT ?",
@@ -651,7 +652,7 @@ class AuditLog:
             + " AND ".join(where)
             + " ORDER BY ts ASC LIMIT ?"
         )
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(q, args).fetchall()
         return [dict(r) for r in rows]
@@ -682,13 +683,13 @@ class AuditLog:
             + " AND ".join(where)
             + " ORDER BY ts DESC LIMIT ?"
         )
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(q, args).fetchall()
         return [dict(r) for r in rows]
 
     def stats(self) -> dict:
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.row_factory = sqlite3.Row
             total = conn.execute("SELECT COUNT(*) AS n FROM audit_log").fetchone()["n"]
             by_decision = {

@@ -63,6 +63,7 @@ the anchoring conversation for A-core #3 in the session snapshot for
 """
 
 from __future__ import annotations
+from contextlib import closing
 
 import time
 from pathlib import Path
@@ -175,7 +176,7 @@ def _closed_session_ids(audit_log: AuditLog) -> set[str]:
     considered currently open.
     """
     import sqlite3
-    with sqlite3.connect(audit_log.db_path) as conn:
+    with closing(sqlite3.connect(audit_log.db_path)) as conn, conn:
         rows = conn.execute(
             "SELECT DISTINCT session_id FROM audit_log WHERE action = ? AND session_id IS NOT NULL",
             (DIRECT_EDIT_SESSION_END,),
@@ -189,7 +190,7 @@ def _find_open_session_start_events(audit_log: AuditLog) -> list[dict]:
     """
     closed = _closed_session_ids(audit_log)
     import sqlite3
-    with sqlite3.connect(audit_log.db_path) as conn:
+    with closing(sqlite3.connect(audit_log.db_path)) as conn, conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             "SELECT * FROM audit_log WHERE action = ? ORDER BY ts ASC",
@@ -378,7 +379,7 @@ def format_recent_builder_events(
                 DIRECT_EDIT,
                 DIRECT_EDIT_SESSION_END,
             ]
-            with sqlite3.connect(audit_log.db_path) as conn:
+            with closing(sqlite3.connect(audit_log.db_path)) as conn, conn:
                 conn.row_factory = sqlite3.Row
                 rows = conn.execute(q, args).fetchall()
             supplemental_events = [dict(r) for r in rows]
