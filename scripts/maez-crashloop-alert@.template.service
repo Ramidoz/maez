@@ -1,0 +1,17 @@
+[Unit]
+Description=Maez crashloop alert for %i
+Documentation=file://__MAEZ_HOME__/docs/DAEMON_SURVIVABILITY.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=__MAEZ_HOME__
+Environment=PYTHONUNBUFFERED=1
+Environment=MAEZ_HOME=__MAEZ_HOME__
+EnvironmentFile=-__MAEZ_HOME__/config/secrets.local.env
+EnvironmentFile=-/home/__MAEZ_USER__/.config/maez/model.env
+ExecStart=__MAEZ_HOME__/.venv/bin/python __MAEZ_HOME__/scripts/maez_crashloop_alert.py %i
+
+[Install]
+WantedBy=default.target

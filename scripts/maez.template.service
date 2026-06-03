@@ -3,6 +3,9 @@ Description=Maez AI Agent Daemon
 Documentation=file://__MAEZ_HOME__/docs/ARCHITECTURE.md
 After=network-online.target llama-server.service ollama.service
 Wants=network-online.target
+StartLimitIntervalSec=10min
+StartLimitBurst=3
+OnFailure=maez-crashloop-alert@%N.service
 # Maez probes the LLM backend at startup and aborts if it can't reach
 # it. The in-code probe retries with backoff (~14s window) so a brief
 # llama-server restart or 503 blip self-heals. `llama-server.service`
