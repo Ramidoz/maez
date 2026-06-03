@@ -12,7 +12,11 @@ Spec: docs/superpowers/specs/2026-06-03-reddit-limb-v0-design.md
 
 from __future__ import annotations
 
+import time
+from dataclasses import dataclass
 from urllib.parse import urlencode
+
+import requests
 
 # v0 is identity-only. history/read are explicitly deferred to v0.1 behind a
 # separate acceptance gate — do NOT add them here.
@@ -31,3 +35,56 @@ def build_authorize_url(*, client_id: str, redirect_uri: str, state: str) -> str
         "scope": " ".join(_V0_SCOPES),
     }
     return f"{_AUTHORIZE_URL}?{urlencode(params)}"
+
+
+_TOKEN_URL = "https://www.reddit.com/api/v1/access_token"
+_USER_AGENT = "maez-personal-limb/0.0 (local, read-only)"
+_HTTP_TIMEOUT = 10  # seconds
+
+
+class RedditLimbError(Exception):
+    """Base for limb errors."""
+
+
+class RedditAuthError(RedditLimbError):
+    """Token exchange / auth failure."""
+
+
+@dataclass
+class RedditSession:
+    access_token: str
+    scopes: list[str]
+    obtained_at: float
+    expires_at: float
+
+    def is_expired(self, *, now: float | None = None) -> bool:
+        return (now if now is not None else time.time()) >= self.expires_at
+
+
+def exchange_code_for_token(*, client_id: str, code: str, redirect_uri: str) -> RedditSession:
+    """Exchange an authorization code for a short-lived access token.
+
+    Installed apps are public clients: HTTP Basic auth with the client_id as
+    username and an EMPTY password (no client secret exists).
+    """
+    resp = requests.post(
+        _TOKEN_URL,
+        auth=(client_id, ""),
+        data={"grant_type": "authorization_code", "code": code, "redirect_uri": redirect_uri},
+        headers={"User-Agent": _USER_AGENT},
+        timeout=_HTTP_TIMEOUT,
+    )
+    if resp.status_code != 200:
+        raise RedditAuthError(f"token exchange failed: HTTP {resp.status_code}")
+    body = resp.json()
+    token = body.get("access_token")
+    if not token:
+        raise RedditAuthError("token exchange returned no access_token")
+    now = time.time()
+    scope = body.get("scope", "identity")
+    return RedditSession(
+        access_token=token,
+        scopes=scope.split() if isinstance(scope, str) else list(scope),
+        obtained_at=now,
+        expires_at=now + float(body.get("expires_in", 3600)),
+    )

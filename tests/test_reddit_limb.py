@@ -2,6 +2,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 from urllib.parse import urlparse, parse_qs
 
 _REPO = Path(__file__).resolve().parent.parent
@@ -35,6 +36,43 @@ class BuildAuthorizeUrlTests(unittest.TestCase):
             client_id="CID", redirect_uri="http://localhost:65010/reddit/callback", state="S",
         )
         self.assertNotIn("secret", url.lower())
+
+
+class ExchangeCodeTests(unittest.TestCase):
+    def _fake_response(self, status=200, payload=None):
+        resp = mock.Mock()
+        resp.status_code = status
+        resp.json.return_value = payload or {
+            "access_token": "TOK", "token_type": "bearer",
+            "expires_in": 3600, "scope": "identity",
+        }
+        return resp
+
+    def test_exchange_uses_basic_auth_empty_password_and_grant(self):
+        with mock.patch.object(reddit_limb.requests, "post") as post:
+            post.return_value = self._fake_response()
+            session = reddit_limb.exchange_code_for_token(
+                client_id="CID", code="CODE",
+                redirect_uri="http://localhost:65010/reddit/callback",
+            )
+        # installed app: HTTP Basic with client_id and EMPTY password
+        _, kwargs = post.call_args
+        self.assertEqual(kwargs["auth"], ("CID", ""))
+        self.assertEqual(kwargs["data"]["grant_type"], "authorization_code")
+        self.assertEqual(kwargs["data"]["code"], "CODE")
+        self.assertIn("User-Agent", kwargs["headers"])
+        self.assertEqual(session.access_token, "TOK")
+        self.assertEqual(session.scopes, ["identity"])
+        self.assertGreater(session.expires_at, session.obtained_at)
+
+    def test_exchange_raises_on_non_200(self):
+        with mock.patch.object(reddit_limb.requests, "post") as post:
+            post.return_value = self._fake_response(status=401, payload={"error": "x"})
+            with self.assertRaises(reddit_limb.RedditAuthError):
+                reddit_limb.exchange_code_for_token(
+                    client_id="CID", code="BAD",
+                    redirect_uri="http://localhost:65010/reddit/callback",
+                )
 
 
 if __name__ == "__main__":
