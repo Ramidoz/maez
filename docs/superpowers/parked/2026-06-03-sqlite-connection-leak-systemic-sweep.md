@@ -3,6 +3,8 @@
 **Date:** 2026-06-03
 **Status:** NAMED FOLLOW-UP (hygiene / defense-in-depth). Discovered while root-causing the recurring `daemon-cycle-stuck` FD-storm wound. The *dominant* leak (`identity_ledger`) is FIXED on `main` (commit `58bfdbf`); this captures the same footgun elsewhere.
 
+**UPDATE 2026-06-03 — IMPLEMENTED** (branch `sqlite-connection-leak-sweep`, commit `77b10e4`, Claude-implemented, awaiting Codex review; NOT merged). All **34** bare sites across **8 modules** (temperament, audit_log, operator_user_boundary, builder_mode_perception, private_thoughts_s1b, pending_cards, self_mod_dialog, drive_driven_curiosity) wrapped in `closing()`, **escape-checked per-site first** (the flagged `return`s were materialized bools/rows — no live connection escapes). Added a **source-contract guard** (`tests/test_no_bare_sqlite_connect.py`, mutation-proven) that scans core/daemon/skills and fails if a bare `connect-as` reappears. **298 affected-module behavior tests pass**, ruff + compile clean. **SEPARATE side-finding (NOT fixed here):** `core/decision/pending_cards.py` and `skills/self_mod_dialog.py` expose a `_conn()` **factory** returning an open connection — its callers must close it — a different pattern needing a caller audit.
+
 ---
 
 ## The footgun
