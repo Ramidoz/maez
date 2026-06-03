@@ -53,7 +53,8 @@ Design notes
 """
 
 from __future__ import annotations
-from contextlib import closing
+from collections.abc import Iterator
+from contextlib import closing, contextmanager
 
 import hashlib
 import json
@@ -381,10 +382,15 @@ class PendingCardStore:
             except Exception:
                 pass  # column already exists
 
-    def _conn(self) -> sqlite3.Connection:
+    @contextmanager
+    def _conn(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            with conn:  # transaction: commit on success / rollback on error
+                yield conn
+        finally:
+            conn.close()
 
     # -------------------------------------------------------------- #
     #  Create                                                         #

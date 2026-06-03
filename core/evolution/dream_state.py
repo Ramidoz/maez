@@ -40,6 +40,8 @@ Design notes
 """
 
 from __future__ import annotations
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 import logging
 import re
@@ -269,10 +271,15 @@ class DreamState:
         send_envelope(envelope)
 
     # ── SQLite schema ───────────────────────────────────────────────
-    def _conn(self) -> sqlite3.Connection:
+    @contextmanager
+    def _conn(self) -> Iterator[sqlite3.Connection]:
         c = sqlite3.connect(self.db_path, check_same_thread=False)
         c.execute("PRAGMA journal_mode=WAL")
-        return c
+        try:
+            with c:  # transaction: commit on success / rollback on error
+                yield c
+        finally:
+            c.close()
 
     def _init_schema(self) -> None:
         with self._lock, self._conn() as c:
