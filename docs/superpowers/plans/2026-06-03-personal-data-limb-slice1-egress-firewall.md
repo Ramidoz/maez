@@ -12,6 +12,8 @@
 
 **Covenant note:** This is the centerpiece rail — personal life does not silently leave the local body to a cloud model. It mirrors the existing *inbound* `external_llm_tainted` taint (`core/policies/sandbox_witnesses.py`) in the *outbound* direction.
 
+**Amendment (2026-06-03, post-Codex-review):** The original plan claimed the gate was "enforced live at `subscription_proxy:658`." That was a static-trace error — the proxy was **shadow-mode** (computed the verdict, then sent the original prompt regardless). Corrected: a dedicated enforcement (commit `d4fa588`) now honors the `owner_account_context` block at the proxy (no adapter call, HTTP 403, content-free record, `egress_shadow_mode=False`), with an end-to-end integration witness (`tests/test_subscription_proxy_owner_account_enforcement.py`). The broader shadow→enforce flip for the reserved classes (soul/credentials, which also flow today) is the named urgent follow-up: [reserved-denied-cloud-enforcement-followup](../parked/2026-06-03-reserved-denied-cloud-enforcement-followup.md).
+
 ---
 
 ## File Structure
