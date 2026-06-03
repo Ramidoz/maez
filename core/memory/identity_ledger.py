@@ -121,6 +121,7 @@ import os
 import secrets
 import sqlite3
 import time
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -310,7 +311,7 @@ class IdentityLedger:
     # -------------------------------------------------------------- #
 
     def _initialize(self) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.executescript(_SCHEMA_TABLE)
             conn.executescript(_SCHEMA_INDEXES)
 
@@ -318,7 +319,7 @@ class IdentityLedger:
         """On first init (empty ledger), write exactly one
         'gestation_boot' row so `latest()` always returns something
         post-init. This is bootstrap option (b)."""
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             row = conn.execute(
                 "SELECT COUNT(*) FROM identity_ledger"
             ).fetchone()
@@ -430,7 +431,7 @@ class IdentityLedger:
         if fingerprint is None:
             fingerprint = compute_identity_fingerprint()
 
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute(
                 "INSERT INTO identity_ledger "
                 "(ts, event_type, continuity_id, parent_continuity_id, "
@@ -464,7 +465,7 @@ class IdentityLedger:
         """Return the most recent event as a dict, or None if the
         ledger is empty. (Post-init the ledger should never be empty;
         returns None only as a defensive fallback.)"""
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 "SELECT * FROM identity_ledger "
@@ -482,7 +483,7 @@ class IdentityLedger:
 
     def recent(self, limit: int = 20) -> list[dict]:
         """Return up to `limit` most recent events, newest first."""
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT * FROM identity_ledger "
