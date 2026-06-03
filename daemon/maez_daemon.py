@@ -82,6 +82,9 @@ from core.perception import snapshot as perception_snapshot, format_snapshot
 from core.information_limb.calendar_v1 import build_calendar_health
 from core.information_limb.calendar_store import CalendarStore, CalendarStoreError
 from core.information_limb.calendar_v1_config import CalendarMode, resolve_calendar_mode
+from core.information_limb import reddit_limb as _reddit_limb_mod
+
+_REDDIT_LIMB = _reddit_limb_mod.RedditLimb()
 from core.body.camera_presence_state import (
     CameraPresenceReading,
     CameraPresenceState,
@@ -2918,6 +2921,7 @@ class MaezDaemon:
                 "total": int(memory_stats.get("total", 0) or 0),
                 **episode_counts,
             },
+            "reddit_limb": _REDDIT_LIMB.health(),
             "brain": {
                 "configured_model": MODEL,
                 "served_model_alias": served_model_alias(default=MODEL, timeout_s=0.25),
@@ -9642,6 +9646,18 @@ class MaezDaemon:
                     route=f"/internal/s7/cards/{request_id}/execute",
                 )
             ), 503
+
+        @app.route("/internal/limb/reddit/session", methods=["POST"])
+        def reddit_limb_session():
+            # auth-before-envelope: handle_handoff checks the secret BEFORE
+            # body_loader() is ever called, so the token-bearing JSON body is
+            # not read on an auth failure.
+            tile, status = _reddit_limb_mod.handle_handoff(
+                headers=request.headers,
+                body_loader=lambda: request.get_json(silent=True) or {},
+                limb=_REDDIT_LIMB,
+            )
+            return jsonify(tile), status
 
         @app.route("/message", methods=["POST"])
         def message():
