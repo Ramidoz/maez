@@ -43,8 +43,13 @@ class NoEgressNoLLMTests(unittest.TestCase):
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 imported += [a.name for a in node.names]
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                imported.append(node.module)
+            elif isinstance(node, ast.ImportFrom):
+                # check BOTH the module path AND the imported names, so
+                # `from core.routing import llm_client` is caught (the name is
+                # banned even though the module path "core.routing" is not).
+                if node.module:
+                    imported.append(node.module)
+                imported += [a.name for a in node.names]
         for mod in imported:
             for b in banned:
                 self.assertNotIn(b, mod, f"reddit_limb must not import {mod}")
