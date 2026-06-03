@@ -46,12 +46,20 @@ INTENTIONAL_OUTBOUND = {
     "maez_authored_public_third_party_transport",
 }
 
+# Personal-account-derived data (Reddit/Gmail/Spotify/calendar/saved posts).
+# Categorical cloud-egress block by default — the outbound mirror of the
+# inbound external_llm_tainted taint. Slice 1 of the Personal Data Limb Runtime.
+OWNER_ACCOUNT_CONTEXT = {
+    "owner_account_context",
+}
+
 KNOWN_ORIGINS = (
     RESERVED_DENIED_RAW
     | MINIMIZABLE_PRIVATE_CONTEXT
     | NON_PRIVATE
     | UNTRUSTED_EXTERNAL_OUTPUT
     | INTENTIONAL_OUTBOUND
+    | OWNER_ACCOUNT_CONTEXT
     | {"unclassified"}
 )
 
@@ -199,6 +207,16 @@ def _decide_cloud_model_inference(request: EgressRequest) -> EgressDecision:
 
     for segment in request.segments:
         origin = segment.origin_class
+        if origin in OWNER_ACCOUNT_CONTEXT:
+            # Personal-account-derived data does not leave the local body to a
+            # cloud model by default — categorical, ignores redaction_allowed.
+            # The lock; producer-side tagging with this class is a later slice.
+            return _block(
+                reason_codes=("owner_account_context_blocked_default",),
+                request=request,
+                origin_classes=origins,
+                original_char_count=original_chars,
+            )
         if origin in RESERVED_DENIED_RAW:
             return _block(
                 reason_codes=("reserved_denied_raw",),
