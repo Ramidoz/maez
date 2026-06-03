@@ -18,6 +18,8 @@ def _maez_home() -> Path:
 MAEZ_HOME = _maez_home()
 sys.path.insert(0, str(MAEZ_HOME))
 
+from core.infra.secrets import load_ordinary_config_for_process
+from core.memory import identity
 from skills.dev_notifier import send_service_card
 
 
@@ -71,10 +73,44 @@ def _details(unit: str, props: dict[str, str]) -> str:
     return "; ".join(parts) + f". Unit held by restart backstop: systemctl --user status {unit}"
 
 
+def _ensure_notifier_recipient_env(maez_home: Path | None = None) -> bool:
+    """Populate the dev-notifier recipient from local non-secret owner config.
+
+    The alert unit receives secrets from systemd/local secret files, but the
+    owner chat id is ordinary config. Load only that non-secret side here so the
+    unit template does not have to treat config/.env as a systemd EnvironmentFile.
+    """
+
+    if os.environ.get("MAEZ_TELEGRAM_USER_ID"):
+        return bool(os.environ.get("MAEZ_DEV_TOKEN"))
+
+    root = Path(maez_home) if maez_home is not None else MAEZ_HOME
+    try:
+        load_ordinary_config_for_process(env_file=root / "config" / ".env")
+    except Exception:
+        pass
+
+    if not os.environ.get("MAEZ_TELEGRAM_USER_ID"):
+        try:
+            identity.reload()
+            owner_id = identity.telegram_user_id().strip()
+        except Exception:
+            owner_id = ""
+        if owner_id:
+            os.environ["MAEZ_TELEGRAM_USER_ID"] = owner_id
+
+    return bool(os.environ.get("MAEZ_DEV_TOKEN") and os.environ.get("MAEZ_TELEGRAM_USER_ID"))
+
+
 def main(argv: list[str] | None = None) -> int:
     args = list(argv if argv is not None else sys.argv[1:])
     unit = _normalize_unit(args[0] if args else "maez.service")
     props = _unit_properties(unit)
+    if not _ensure_notifier_recipient_env():
+        print(
+            "maez crashloop alert: notifier credentials incomplete; alert may be dropped",
+            file=sys.stderr,
+        )
     send_service_card(
         unit,
         "restart backstop tripped",
