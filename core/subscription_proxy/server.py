@@ -586,6 +586,14 @@ async def budget() -> dict:
     return out
 
 
+def _reserved_denied_enforced() -> bool:
+    """Reserved-denied classes (soul/private_thoughts/credential_material/...) are
+    enforced at the cloud chokepoint by DEFAULT. MAEZ_EGRESS_RESERVED_DENIED_SHADOW=1
+    is the rollback kill-switch that reverts them to the legacy shadow behavior.
+    Read dynamically so the flag can be toggled without a code change."""
+    return (os.environ.get("MAEZ_EGRESS_RESERVED_DENIED_SHADOW", "") or "").strip() != "1"
+
+
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
     try:
@@ -663,17 +671,28 @@ async def chat_completions(request: Request):
     prompt_preview = _safe_prompt_preview(egress_decision)
     reply_preview = ""
 
-    # Personal Data Limb Runtime, Slice 1 ENFORCEMENT. owner_account_context is the
-    # ONE gate class enforced today: personal-account data does not reach a cloud
-    # model. Born-enforced (no shadow period — nothing tags this class yet, so this
-    # changes zero existing flows). Every OTHER gate decision stays in the
-    # deliberate observe rollout below (egress_shadow_mode=True). Flipping the
-    # reserved-denied classes (soul/private_thoughts/credential_material), which
-    # also flow today, is a named follow-up slice with its own witness.
-    if (
-        egress_decision.decision == "block"
-        and "owner_account_context_blocked_default" in egress_decision.reason_codes
-    ):
+    # Personal Data Limb Runtime ENFORCEMENT at the cloud chokepoint. Two gate
+    # classes are honored here (no adapter call, HTTP 403, content-free record,
+    # egress_shadow_mode=False); every OTHER decision stays in the deliberate
+    # observe rollout below (egress_shadow_mode=True).
+    #   - owner_account_context: born-enforced (Slice 1; nothing tags it yet, so
+    #     it changed zero existing flows).
+    #   - reserved_denied_raw (soul/private_thoughts/credential_material/...):
+    #     enforced by DEFAULT; MAEZ_EGRESS_RESERVED_DENIED_SHADOW=1 is the
+    #     rollback kill-switch that reverts those to shadow. The proxy-telemetry
+    #     survey showed this is a latent hole (only deliberate canaries ever
+    #     drove a reserved class to cloud), so default-on with a kill-switch is
+    #     the right deliberate flip.
+    _enforced_reason: str | None = None
+    if egress_decision.decision == "block":
+        if "owner_account_context_blocked_default" in egress_decision.reason_codes:
+            _enforced_reason = "owner_account_context_blocked_default"
+        elif (
+            "reserved_denied_raw" in egress_decision.reason_codes
+            and _reserved_denied_enforced()
+        ):
+            _enforced_reason = "reserved_denied_raw"
+    if _enforced_reason is not None:
         _record(
             adapter=adapter.name, caller=caller, model=model_in,
             model_used=None, prompt=prompt, reply="",
@@ -688,10 +707,7 @@ async def chat_completions(request: Request):
             prompt_preview_override=prompt_preview,
             reply_preview_override="",
         )
-        raise HTTPException(
-            403,
-            "egress blocked: owner_account_context may not leave to a cloud model",
-        )
+        raise HTTPException(403, f"egress blocked by policy: {_enforced_reason}")
 
     result: Optional[CallResult] = None
     async with _budget_lock(adapter.name):

@@ -298,7 +298,10 @@ class SubscriptionProxyEgressShadowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row[3], "redact")
         self.assertIn("minimized_private_context", row[4])
 
-    async def test_reserved_canary_blocks_in_shadow_but_call_still_flows(self):
+    async def test_reserved_canary_shadow_under_killswitch_still_flows(self):
+        # Reserved-denied is ENFORCED by default now; this asserts the rollback
+        # kill-switch (MAEZ_EGRESS_RESERVED_DENIED_SHADOW=1) reverts to the legacy
+        # shadow behavior (block recorded, call still flows).
         from starlette.requests import Request
 
         canary = "SYNTH_SOUL_CANARY_R42"
@@ -324,7 +327,10 @@ class SubscriptionProxyEgressShadowTests(unittest.IsolatedAsyncioTestCase):
             receive,
         )
 
-        response = await self.server.chat_completions(req)
+        with mock.patch.dict(
+            os.environ, {"MAEZ_EGRESS_RESERVED_DENIED_SHADOW": "1"}
+        ):
+            response = await self.server.chat_completions(req)
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.adapter.prompts, [canary])
