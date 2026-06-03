@@ -21,16 +21,27 @@ class TokenNeverLeaksTests(unittest.TestCase):
     def test_token_absent_from_logs_and_health(self):
         os.environ[reddit_limb.REDDIT_HANDOFF_TOKEN_ENV] = "GOODSECRET"
         self.addCleanup(os.environ.pop, reddit_limb.REDDIT_HANDOFF_TOKEN_ENV, None)
+        # Capture EVERY log record emitted during the handoff via a root handler,
+        # independent of whatever logger levels other tests may have left set
+        # (assertLogs requires >=1 record and is order-sensitive — this is not).
+        records: list[logging.LogRecord] = []
+        handler = logging.Handler()
+        handler.emit = records.append  # type: ignore[method-assign]
+        root = logging.getLogger()
+        prev_level = root.level
+        root.addHandler(handler)
+        root.setLevel(logging.DEBUG)
+        self.addCleanup(root.setLevel, prev_level)
+        self.addCleanup(root.removeHandler, handler)
+
         limb = reddit_limb.RedditLimb()
-        with self.assertLogs(level="DEBUG") as logs:
-            logging.getLogger("maez").debug("driving handoff")
-            with mock.patch.object(reddit_limb, "fetch_identity", return_value="available"):
-                tile, _ = reddit_limb.handle_handoff(
-                    headers={reddit_limb.REDDIT_HANDOFF_HEADER: "GOODSECRET"},
-                    body_loader=lambda: {"access_token": SENTINEL, "scopes": ["identity"]},
-                    limb=limb,
-                )
-        blob = repr(tile) + "\n".join(logs.output)
+        with mock.patch.object(reddit_limb, "fetch_identity", return_value="available"):
+            tile, _ = reddit_limb.handle_handoff(
+                headers={reddit_limb.REDDIT_HANDOFF_HEADER: "GOODSECRET"},
+                body_loader=lambda: {"access_token": SENTINEL, "scopes": ["identity"]},
+                limb=limb,
+            )
+        blob = repr(tile) + "\n".join(r.getMessage() for r in records)
         self.assertNotIn(SENTINEL, blob)
 
 
