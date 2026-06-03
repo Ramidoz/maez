@@ -100,6 +100,7 @@ from core.time.temporal_spine import temporal_spine_health
 from core.routing.llm_client import served_model_alias
 from core.routing.recall_stack_config import resolve_recall_stack
 from core.voice_continuity import voice_continuity_health
+from core.health.fd_forensics import fd_forensics_snapshot
 from core.governance.successor_governance import successor_governance_health
 from core.governance.operator_user_boundary import (
     GUARDED_SELF_MODIFICATION_PAUSED_MODE,
@@ -2445,6 +2446,14 @@ class MaezDaemon:
         self._watchdog_halted_at = None
         self._watchdog_halt_summary = {}
         self._watchdog_operator_resume_required = False
+        self._cycle_failure_stage = ""
+        self._cycle_failure_count = 0
+        self._cycle_failure_threshold = 3
+        self._last_cycle_exception_summary = {}
+        self._last_fd_forensics = {}
+        self._reasoning_loop_thread = None
+        self._liveness_sentinel_thread = None
+        self._liveness_exit_requested = False
         # Native camera / MediaPipe calls can wedge below Python.
         # Isolate presence observation from the main reasoning loop:
         # if the sensor blocks, Maez records presence as unavailable
@@ -2925,6 +2934,9 @@ class MaezDaemon:
                 "cycle_age_seconds": reasoning_loop.get("cycle_age_seconds"),
                 "stage_age_seconds": reasoning_loop.get("stage_age_seconds"),
                 "cycle_stalled": bool(reasoning_loop.get("cycle_stalled", False)),
+                "last_fd_forensics_state": (
+                    getattr(self, "_last_fd_forensics", {}) or {}
+                ).get("state", "none"),
             },
             "attention": {
                 "enabled": _cycle_doorman_enabled(),
@@ -3037,11 +3049,21 @@ class MaezDaemon:
         self._cycle_stage_started_at = datetime.now(timezone.utc).isoformat()
         logger.debug("Cycle %d stage: %s", self.cycle_count, stage)
 
+    def _cycle_thread_alive(self) -> bool:
+        thread = getattr(self, "_reasoning_loop_thread", None)
+        if thread is None:
+            return False
+        try:
+            return bool(thread.is_alive())
+        except Exception:
+            return False
+
     def _cycle_heartbeat_health(self) -> dict:
         """Content-free reasoning-loop heartbeat for /health and the project panel."""
         now = time.time()
         cycle_age_seconds = None
         stage_age_seconds = None
+        thread_alive = self._cycle_thread_alive()
         if self.last_cycle_time:
             try:
                 cycle_age_seconds = int(
@@ -3057,11 +3079,16 @@ class MaezDaemon:
             except Exception:
                 stage_age_seconds = None
 
-        stalled_after_seconds = max(LOOP_INTERVAL * 3, 90)
+        stalled_after_seconds = self._cycle_liveness_stale_after_seconds()
         cycle_stalled = (
             bool(self.running)
-            and cycle_age_seconds is not None
-            and cycle_age_seconds > stalled_after_seconds
+            and (
+                not thread_alive
+                or (
+                    cycle_age_seconds is not None
+                    and cycle_age_seconds > stalled_after_seconds
+                )
+            )
         )
         return {
             "stage": self._cycle_stage,
@@ -3069,7 +3096,205 @@ class MaezDaemon:
             "cycle_age_seconds": cycle_age_seconds,
             "cycle_stalled": cycle_stalled,
             "stalled_after_seconds": stalled_after_seconds,
+            "thread_alive": thread_alive,
         }
+
+    def _cycle_liveness_stale_after_seconds(self) -> int:
+        """Threshold for declaring the reasoning loop stale.
+
+        This must be much longer than ordinary brain calls and nightly
+        reflection, but much shorter than the observed 10-hour dead-thread
+        failure. Values below five minutes are treated as misconfiguration.
+        """
+
+        raw = os.environ.get("MAEZ_COGNITION_STALE_AFTER_SECONDS", "").strip()
+        if raw:
+            try:
+                value = int(raw)
+                if value >= 300:
+                    return value
+            except ValueError:
+                pass
+        return 600
+
+    def _health_status_from_reasoning_loop(self, reasoning_loop: dict) -> str:
+        """Top-line /health status derived from the mind's heartbeat."""
+
+        if getattr(self, "watchdog_state", "") == "safe_standby":
+            return "safe_standby"
+        if bool(reasoning_loop.get("cycle_stalled")):
+            return "stalled"
+        if not bool(getattr(self, "running", False)):
+            return "stopped"
+        return "alive"
+
+    def _cycle_exception_threshold(self) -> int:
+        raw = os.environ.get("MAEZ_CYCLE_EXCEPTION_THRESHOLD", "").strip()
+        if raw:
+            try:
+                value = int(raw)
+                if value >= 1:
+                    return value
+            except ValueError:
+                pass
+        return int(getattr(self, "_cycle_failure_threshold", 3) or 3)
+
+    def _exception_summary(self, exc: BaseException, *, stage: str, count: int) -> dict:
+        return {
+            "stage": stage,
+            "error_class": type(exc).__name__,
+            "errno": getattr(exc, "errno", None),
+            "consecutive_count": int(count),
+        }
+
+    def _reset_cycle_failure_counter(self) -> None:
+        self._cycle_failure_stage = ""
+        self._cycle_failure_count = 0
+
+    def _capture_fd_forensics_if_relevant(self, exc: BaseException | None = None) -> None:
+        errno_value = getattr(exc, "errno", None) if exc is not None else None
+        text = str(exc or "")
+        if exc is not None and errno_value != 24 and "Too many open files" not in text:
+            return
+        try:
+            self._last_fd_forensics = fd_forensics_snapshot()
+        except Exception as capture_exc:
+            self._last_fd_forensics = {
+                "state": "unavailable",
+                "error_class": type(capture_exc).__name__,
+            }
+
+    def _enter_cycle_exception_safe_standby(self, exc: BaseException, *, stage: str) -> None:
+        self.watchdog_state = "safe_standby"
+        self._watchdog_halted_at = datetime.now(timezone.utc).isoformat()
+        self._watchdog_operator_resume_required = True
+        self._watchdog_halt_summary = {
+            "halt_signal_id": "cycle-exception-circuit-breaker",
+            "halt_detector": "cycle_exception_circuit_breaker",
+            "halt_reason_code": "repeated_stage_failure",
+            "window_ref": "current_process",
+            "threshold_ref": f"{self._cycle_exception_threshold()} consecutive stage failures",
+            "observed_metrics": {
+                "stage": stage,
+                "error_class": type(exc).__name__,
+                "consecutive_count": int(getattr(self, "_cycle_failure_count", 0) or 0),
+            },
+        }
+        self.running = False
+        logger.error(
+            "Cycle exception circuit breaker entered safe_standby: stage=%s error_class=%s count=%d",
+            stage,
+            type(exc).__name__,
+            int(getattr(self, "_cycle_failure_count", 0) or 0),
+        )
+
+    def _handle_cycle_exception(self, exc: BaseException) -> bool:
+        """Record a cycle failure and return True when the loop should stop."""
+
+        stage = getattr(self, "_cycle_stage", "unknown") or "unknown"
+        if getattr(self, "_cycle_failure_stage", "") == stage:
+            self._cycle_failure_count = int(getattr(self, "_cycle_failure_count", 0) or 0) + 1
+        else:
+            self._cycle_failure_stage = stage
+            self._cycle_failure_count = 1
+        self._last_cycle_exception_summary = self._exception_summary(
+            exc,
+            stage=stage,
+            count=self._cycle_failure_count,
+        )
+        self._capture_fd_forensics_if_relevant(exc)
+        threshold = self._cycle_exception_threshold()
+        logger.error(
+            "Cycle stage failed-neutral: stage=%s error_class=%s errno=%s count=%d/%d",
+            stage,
+            type(exc).__name__,
+            getattr(exc, "errno", None),
+            self._cycle_failure_count,
+            threshold,
+        )
+        if self._cycle_failure_count >= threshold:
+            self._enter_cycle_exception_safe_standby(exc, stage=stage)
+            return True
+        try:
+            self._mark_cycle_stage("cycle_error_recovered")
+        except Exception:
+            self._cycle_stage = "cycle_error_recovered"
+            self._cycle_stage_started_at = datetime.now(timezone.utc).isoformat()
+        return False
+
+    def _trip_process_for_liveness_failure(
+        self,
+        *,
+        reason: str,
+        exit_fn=os._exit,
+    ) -> None:
+        """Exit non-zero so systemd restarts the whole daemon cleanly."""
+
+        if getattr(self, "_liveness_exit_requested", False):
+            return
+        self._liveness_exit_requested = True
+        logger.critical("Cognition liveness trip: reason=%s", reason)
+        stop_error = []
+
+        def _graceful_stop():
+            try:
+                self.stop()
+            except Exception as exc:
+                stop_error.append(type(exc).__name__)
+
+        stop_thread = threading.Thread(
+            target=_graceful_stop,
+            daemon=True,
+            name="cognition-liveness-stop",
+        )
+        stop_thread.start()
+        stop_thread.join(timeout=15.0)
+        if stop_error:
+            logger.error("Liveness graceful stop failed: %s", stop_error[0])
+        if stop_thread.is_alive():
+            logger.error("Liveness graceful stop timed out; exiting for systemd restart")
+        logging.shutdown()
+        exit_fn(75)
+
+    def _start_cognition_liveness_sentinel(self) -> None:
+        """Watch reasoning-loop freshness from outside the reasoning thread."""
+
+        if getattr(self, "_liveness_sentinel_thread", None) is not None:
+            return
+
+        def _sentinel():
+            while bool(getattr(self, "running", False)) and not bool(
+                getattr(self, "_liveness_exit_requested", False)
+            ):
+                threshold = self._cycle_liveness_stale_after_seconds()
+                time.sleep(max(5.0, min(30.0, threshold / 3.0)))
+                heartbeat = self._cycle_heartbeat_health()
+                if self._health_status_from_reasoning_loop(heartbeat) == "stalled":
+                    self._capture_fd_forensics_if_relevant(None)
+                    self._trip_process_for_liveness_failure(
+                        reason="reasoning_loop_stalled",
+                    )
+                    return
+
+        self._liveness_sentinel_thread = threading.Thread(
+            target=_sentinel,
+            daemon=True,
+            name="cognition-liveness",
+        )
+        self._liveness_sentinel_thread.start()
+
+    def _run_reasoning_loop_supervised(self) -> None:
+        """Run the existing loop body under an outside exception boundary."""
+
+        while bool(getattr(self, "running", False)):
+            try:
+                self._loop()
+                return
+            except Exception as exc:
+                if self._handle_cycle_exception(exc):
+                    return
+                if not bool(getattr(self, "running", False)):
+                    return
 
     def _watchdog_health(self, *, operator: bool = False) -> dict:
         """Content-free metacognitive watchdog health projection."""
@@ -8495,6 +8720,7 @@ class MaezDaemon:
                 logger.debug("Dream cycle check failed: %s", e)
 
             # Sleep in small increments so shutdown is responsive
+            self._reset_cycle_failure_counter()
             self._mark_cycle_stage("cycle_sleep")
             for _ in range(LOOP_INTERVAL):
                 if not self.running:
@@ -8660,9 +8886,17 @@ class MaezDaemon:
                     self._missed_consolidation = True
                     logger.info("Missed consolidation for %s — will run on startup", missed_date)
 
-        # Start reasoning loop in background thread
-        loop_thread = threading.Thread(target=self._loop, daemon=True, name="reasoning-loop")
+        # Start reasoning loop in background thread. The target is an external
+        # supervisor around the historical loop body, so a stage exception
+        # cannot kill cognition while leaving the daemon process alive.
+        loop_thread = threading.Thread(
+            target=self._run_reasoning_loop_supervised,
+            daemon=True,
+            name="reasoning-loop",
+        )
+        self._reasoning_loop_thread = loop_thread
         loop_thread.start()
+        self._start_cognition_liveness_sentinel()
 
         # Start daily consolidation thread (3:00 AM)
         consol_thread = threading.Thread(
@@ -9046,12 +9280,13 @@ class MaezDaemon:
             }
             return jsonify(
                 {
-                    "status": "alive",
+                    "status": self._health_status_from_reasoning_loop(_reasoning_loop),
                     "model": MODEL,
                     "boot_time": self.boot_time,
                     "cycle_count": self.cycle_count,
                     "last_cycle": self.last_cycle_time,
                     "reasoning_loop": _reasoning_loop,
+                    "resource_forensics": getattr(self, "_last_fd_forensics", {}) or {},
                     "metacognitive_watchdog": self._watchdog_health(),
                     "uptime_seconds": int(
                         time.time() - datetime.fromisoformat(self.boot_time).timestamp()

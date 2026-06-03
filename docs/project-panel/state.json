@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "updated_at": "2026-05-18",
+  "updated_at": "2026-06-03",
   "purpose": "Small owner-facing board for what is live, observing, wounded, queued, and intentionally held.",
   "observation_gates": [
     {
@@ -41,8 +41,8 @@
       "id": "daemon-cycle-stuck",
       "severity": "high",
       "label": "Daemon background cycle stuck",
-      "summary": "Health is alive and Telegram works, but cycle_count is stuck at 2 after Cycle 2 began.",
-      "next_action": "Queue daemon-cycle diagnostic. Add instrumentation around silent per-cycle calls before patching."
+      "summary": "Root cause identified: reasoning-loop thread can die under a transient resource storm while the daemon stays up. Cognition Liveness Contract v0 is staged in code; live restart/witness still required.",
+      "next_action": "Deploy the liveness contract, restart onto the new code, and verify /health status derives from heartbeat freshness."
     },
     {
       "id": "sigterm-sigkill-shutdown",
@@ -81,8 +81,8 @@
     },
     {
       "rank": 2,
-      "label": "Draft daemon-cycle diagnostic slice",
-      "why": "The stuck cycle is now the highest active runtime wound."
+      "label": "Witness cognition liveness contract",
+      "why": "The stuck-cycle wound has a code fix staged; closure requires a restart and a live health/readiness witness."
     },
     {
       "rank": 3,
