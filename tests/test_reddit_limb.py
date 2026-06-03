@@ -75,5 +75,37 @@ class ExchangeCodeTests(unittest.TestCase):
                 )
 
 
+class FetchIdentityTests(unittest.TestCase):
+    def _session(self):
+        now = 1000.0
+        return reddit_limb.RedditSession(
+            access_token="TOK", scopes=["identity"], obtained_at=now, expires_at=now + 3600
+        )
+
+    def _patch_get(self, status):
+        resp = mock.Mock()
+        resp.status_code = status
+        resp.json.return_value = {"name": "rohit_secret_username", "id": "abc"}
+        return mock.patch.object(reddit_limb.requests, "get", return_value=resp)
+
+    def test_200_maps_to_available_and_returns_no_identity(self):
+        with self._patch_get(200):
+            state = reddit_limb.fetch_identity(self._session())
+        self.assertEqual(state, "available")
+        # fetch_identity returns ONLY a state string — never identity fields
+        self.assertNotIn("rohit_secret_username", str(state))
+
+    def test_status_to_state_mapping(self):
+        cases = {401: "auth_error", 403: "revoked", 429: "rate_limited"}
+        for status, expected in cases.items():
+            with self._patch_get(status):
+                self.assertEqual(reddit_limb.fetch_identity(self._session()), expected)
+
+    def test_network_error_maps_to_unreachable(self):
+        with mock.patch.object(reddit_limb.requests, "get",
+                               side_effect=reddit_limb.requests.RequestException("boom")):
+            self.assertEqual(reddit_limb.fetch_identity(self._session()), "unreachable")
+
+
 if __name__ == "__main__":
     unittest.main()

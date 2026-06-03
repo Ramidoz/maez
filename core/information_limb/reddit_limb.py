@@ -88,3 +88,37 @@ def exchange_code_for_token(*, client_id: str, code: str, redirect_uri: str) -> 
         obtained_at=now,
         expires_at=now + float(body.get("expires_in", 3600)),
     )
+
+
+_ME_URL = "https://oauth.reddit.com/api/v1/me"
+
+# tile states (content-free)
+STATE_NEEDS_AUTH = "needs_auth"
+STATE_AVAILABLE = "available"
+STATE_AUTH_ERROR = "auth_error"
+STATE_REVOKED = "revoked"
+STATE_RATE_LIMITED = "rate_limited"
+STATE_UNREACHABLE = "unreachable"
+
+
+def fetch_identity(session: RedditSession) -> str:
+    """GET /api/v1/me. Returns ONLY a tile-state string; discards the body
+    (never returns or stores the username/id). Fail-closed: any error → a
+    non-available state, never raises into the caller."""
+    try:
+        resp = requests.get(
+            _ME_URL,
+            headers={"Authorization": f"bearer {session.access_token}", "User-Agent": _USER_AGENT},
+            timeout=_HTTP_TIMEOUT,
+        )
+    except requests.RequestException:
+        return STATE_UNREACHABLE
+    if resp.status_code == 200:
+        return STATE_AVAILABLE          # body intentionally NOT read
+    if resp.status_code == 401:
+        return STATE_AUTH_ERROR
+    if resp.status_code == 403:
+        return STATE_REVOKED
+    if resp.status_code == 429:
+        return STATE_RATE_LIMITED
+    return STATE_AUTH_ERROR
