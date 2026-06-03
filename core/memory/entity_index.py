@@ -372,7 +372,7 @@ class EntityIndex:
             return self._memory_con
         con = sqlite3.connect(str(self.db_path))
         con.row_factory = sqlite3.Row
-        return con
+        return con  # sqlite-leak-tracked: KNOWN file-mode FD leak — _connect() is used as a chained read-handle across ~50 sites (core+scripts+tests); context-manager conversion is its own slice (docs/superpowers/parked/2026-06-03-entity-index-connect-lifecycle-slice.md). NOT a safe pattern; do not copy.
 
     # ── writes ────────────────────────────────────────────────────
 

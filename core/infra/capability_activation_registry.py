@@ -35,6 +35,8 @@ import os
 import sqlite3
 import subprocess
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -126,10 +128,15 @@ class ActivationRegistry:
             con.executescript(self._SCHEMA)
             con.commit()
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         con = sqlite3.connect(str(self.db_path))
         con.row_factory = sqlite3.Row
-        return con
+        try:
+            with con:  # transaction: commit on success / rollback on error
+                yield con
+        finally:
+            con.close()
 
     # ── reads ──────────────────────────────────────────────────────
 

@@ -373,9 +373,15 @@ class EvolutionTracker:
             conn.commit()
         logger.info("EvolutionTracker initialized")
 
+    @contextmanager
     def _conn(self):
         import sqlite3
-        return sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path)
+        try:
+            with conn:  # transaction: commit on success / rollback on error
+                yield conn
+        finally:
+            conn.close()
 
     def record_deployment(self, target_file: str, weakness: str,
                           baseline_rate: float, backup_path: str):

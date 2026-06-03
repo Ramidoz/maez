@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+from collections.abc import Iterator
 import logging
 import os
 import sqlite3
@@ -101,7 +102,8 @@ _KNOWN_CLASSES = frozenset({
 
 # ── connection / schema ───────────────────────────────────────────────
 
-def _connect() -> sqlite3.Connection:
+@contextlib.contextmanager
+def _connect() -> Iterator[sqlite3.Connection]:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(DB_PATH, timeout=5.0, check_same_thread=False)
     con.execute(
@@ -125,7 +127,10 @@ def _connect() -> sqlite3.Connection:
         "CREATE INDEX IF NOT EXISTS idx_events_class_ts ON events(class, ts)"
     )
     con.commit()
-    return con
+    try:
+        yield con
+    finally:
+        con.close()
 
 
 # ── dataclass ─────────────────────────────────────────────────────────
@@ -193,7 +198,7 @@ def record_event(
         # manager only commits/rolls back — it does NOT close the
         # connection. Wrap in contextlib.closing so file descriptors
         # are deterministically released.
-        with contextlib.closing(_connect()) as con:
+        with _connect() as con:
             cur = con.execute(
                 "INSERT INTO events (ts, class, surface, context, "
                 "outcome, feedback, tags, extra_json) "
@@ -224,7 +229,7 @@ def mark_heeded(event_id: int) -> bool:
         # manager only commits/rolls back — it does NOT close the
         # connection. Wrap in contextlib.closing so file descriptors
         # are deterministically released.
-        with contextlib.closing(_connect()) as con:
+        with _connect() as con:
             cur = con.execute(
                 "UPDATE events SET heeded = 1 WHERE id = ?",
                 (event_id,),
@@ -251,7 +256,7 @@ def recent(
         # manager only commits/rolls back — it does NOT close the
         # connection. Wrap in contextlib.closing so file descriptors
         # are deterministically released.
-        with contextlib.closing(_connect()) as con:
+        with _connect() as con:
             q = (
                 "SELECT id, ts, class, surface, context, outcome, "
                 "feedback, tags, extra_json, heeded FROM events WHERE 1=1"
@@ -345,7 +350,7 @@ def stats(*, window_hours: Optional[int] = None) -> dict:
         # manager only commits/rolls back — it does NOT close the
         # connection. Wrap in contextlib.closing so file descriptors
         # are deterministically released.
-        with contextlib.closing(_connect()) as con:
+        with _connect() as con:
             where = ""
             params: tuple = ()
             # self-dev review on 261a8db (concern #4): `if

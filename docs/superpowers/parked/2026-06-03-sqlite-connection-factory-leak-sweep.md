@@ -5,6 +5,23 @@
 
 ---
 
+## UPDATE 2026-06-03 — IMPLEMENTED (branch `sqlite-factory-leak-sweep`, Claude; awaiting Codex review; NOT merged)
+
+The authoritative AST scan found **24** remaining factories. Per-caller classification changed the picture from "24 mechanical wraps" to four cases:
+
+- **13 Pattern A** (callers `with f() as c:` — commit-only, no close → **real leak**): converted to `@contextmanager` (`with conn:` inside preserves the commit, `finally: close()` adds the close). Callers unchanged. Files: action_engine, capability_acquisition_queue, capability_activation_registry, capability_integration_plans, fast_conversation_log, relationship_graph, evolution_engine, followup_queue, user_accounts, capability_gap_detector, self_dev/persistence, self_dev/workshop, subscription_proxy/server.
+- **6 Pattern B** (callers `with closing(f()) as c:` — safe but flagged): converted to **close-only** `@contextmanager` (no auto-commit, exact `closing()` semantics) + stripped `closing()` from callers → safe-by-construction. Files: episodes, m1_lived_episode_promotion, focused_cognition, routing/observation/__init__, consequence_memory, baseline_observations.
+- **4 sqlite-raw-ok exemptions** (conversion would break a load-bearing contract; callers provably own + close the connection): the 3 Optional/None-on-failure `_ensure_db` factories (fabrication_memory, inner_residue, memory_scoring — callers close via `closing(db)`/`try-finally`) and s7_webauthn_bootstrap `_conn` (pass-or-create, `owns_conn` + finally close). Marked `# sqlite-raw-ok: <reason>` at the return.
+- **1 deferred (entity_index)**: `_connect()` is a real file-mode leak BUT used as a chained read-handle across **~53 sites** (10 core + 3 scripts + 40 tests) — an API-surface change, its own slice. Reverted; marked `# sqlite-leak-tracked` and **pinned** in the guard. See [entity-index lifecycle slice](2026-06-03-entity-index-connect-lifecycle-slice.md).
+
+**AST guard landed** as `tests/test_no_bare_sqlite_connect.py::test_no_connection_returning_factories`: flags any raw-connection-returning factory except `@contextmanager`, `# sqlite-raw-ok`, or the pinned `_EXPECTED_TRACKED` set. **Mutation-proven** (stripping a marker → RED naming the exact site). **FD-leak probes** added for action_engine (`_conn`, hot), episodes (`_connect`, Pattern B), user_accounts (`_conn`) — 30 calls, handle growth ≤ 2.
+
+**Verification:** 411 + 25 affected-module tests green; ruff clean; all changed files compile. **Honest scope:** 19 of 24 converted, 4 safe exemptions, entity_index (the 24th) is the only remaining real leak — loudly tracked, not silently dropped.
+
+---
+
+---
+
 ## The discovery
 
 Codex's block on the direct-site sweep was right: the `_conn()` factory pattern is the *same* footgun, routed through a helper. A method like

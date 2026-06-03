@@ -39,6 +39,8 @@ from __future__ import annotations
 import sqlite3
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -65,12 +67,17 @@ class FastConversationLog:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_schema()
 
-    def _conn(self) -> sqlite3.Connection:
+    @contextmanager
+    def _conn(self) -> Iterator[sqlite3.Connection]:
         # check_same_thread=False because we hold our own RLock around all
         # access; sqlite3 itself is fine with multi-thread under that pattern.
         c = sqlite3.connect(self.db_path, check_same_thread=False)
         c.execute('PRAGMA journal_mode=WAL')
-        return c
+        try:
+            with c:  # transaction: commit on success / rollback on error
+                yield c
+        finally:
+            c.close()
 
     def _init_schema(self) -> None:
         with self._lock, self._conn() as c:

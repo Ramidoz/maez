@@ -112,7 +112,7 @@ def _ensure_db() -> Optional[sqlite3.Connection]:
                 # back to writing without it.
                 pass
             _initialized = True
-        return db
+        return db  # sqlite-raw-ok: Optional None-on-failure contract; every caller closes via `with contextlib.closing(db)`
     except Exception:
         return None
 

@@ -21,6 +21,8 @@ import os
 import sqlite3
 import time
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 logger = logging.getLogger("maez")
 
@@ -63,8 +65,14 @@ class FollowUpQueue:
             conn.commit()
         logger.info("FollowUpQueue initialized")
 
-    def _conn(self):
-        return sqlite3.connect(self.db_path)
+    @contextmanager
+    def _conn(self) -> Iterator[sqlite3.Connection]:
+        conn = sqlite3.connect(self.db_path)
+        try:
+            with conn:  # transaction: commit on success / rollback on error
+                yield conn
+        finally:
+            conn.close()
 
     def add(self, task: str, original_msg: str = "", action_id: str = ""):
         """Register a commitment. In the post-11y world, callers SHOULD

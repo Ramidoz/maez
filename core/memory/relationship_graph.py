@@ -31,6 +31,8 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Optional, Sequence
 
 _SCHEMA = """
@@ -120,10 +122,15 @@ class RelationshipGraph:
             # only updates rows that haven't been migrated yet.
             c.execute("UPDATE edges SET valid_from = created_at WHERE valid_from IS NULL")
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         c = sqlite3.connect(str(self._path))
         c.row_factory = sqlite3.Row
-        return c
+        try:
+            with c:  # transaction: commit on success / rollback on error
+                yield c
+        finally:
+            c.close()
 
     def upsert_node(self, *, label: str, kind: str) -> str:
         now = _now_iso()

@@ -29,6 +29,8 @@ import os
 import sqlite3
 import time
 from pathlib import Path
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -137,7 +139,8 @@ def _budget_lock(adapter_name: str) -> asyncio.Lock:
 
 # ── sqlite sidecar ─────────────────────────────────────────────────────
 
-def _db() -> sqlite3.Connection:
+@contextmanager
+def _db() -> Iterator[sqlite3.Connection]:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(DB_PATH, timeout=5.0, check_same_thread=False)
     con.execute(
@@ -206,7 +209,11 @@ def _db() -> sqlite3.Connection:
         "ON calls(training_eligible, caller)"
     )
     con.commit()
-    return con
+    try:
+        with con:  # transaction: commit on success / rollback on error
+            yield con
+    finally:
+        con.close()
 
 
 def _count_calls(*, adapter: str, seconds: float) -> int:

@@ -190,7 +190,7 @@ def _ensure_db() -> Optional[sqlite3.Connection]:
             """
         )
         db.commit()
-        return db
+        return db  # sqlite-raw-ok: Optional None-on-failure contract; every caller closes via try/finally db.close()
     except Exception as e:
         logger.debug("recall_stats db unavailable: %s", e)
         return None

@@ -337,7 +337,7 @@ class S7WebAuthnBootstrapStore:
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, isolation_level=None)
         conn.row_factory = sqlite3.Row
-        return conn
+        return conn  # sqlite-raw-ok: pass-or-create handle; callers track owns_conn and close in finally
 
     def _hmac_key(self, conn: sqlite3.Connection) -> bytes:
         row = conn.execute(

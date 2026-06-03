@@ -9,7 +9,8 @@ megaprompt.
 
 from __future__ import annotations
 
-from contextlib import closing
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from enum import Enum
 import hashlib
@@ -948,13 +949,17 @@ class FocusedCognitionStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_schema()
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            yield conn
+        finally:
+            conn.close()
 
     def _init_schema(self) -> None:
-        with closing(self._connect()) as conn:
+        with self._connect() as conn:
             with conn:
                 conn.execute(
                     """
@@ -1029,7 +1034,7 @@ class FocusedCognitionStore:
         }
         columns = tuple(row.keys())
         placeholders = ", ".join("?" for _ in columns)
-        with closing(self._connect()) as conn:
+        with self._connect() as conn:
             with conn:
                 conn.execute(
                     f"INSERT INTO focused_cognition_runs ({', '.join(columns)}) "
@@ -1039,7 +1044,7 @@ class FocusedCognitionStore:
         return row_id
 
     def get(self, row_id: str) -> sqlite3.Row:
-        with closing(self._connect()) as conn:
+        with self._connect() as conn:
             row = conn.execute(
                 "SELECT * FROM focused_cognition_runs WHERE id = ?",
                 (row_id,),

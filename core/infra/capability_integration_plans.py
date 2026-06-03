@@ -36,6 +36,8 @@ import os
 import sqlite3
 import time
 from dataclasses import asdict, is_dataclass
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
@@ -89,10 +91,15 @@ class IntegrationPlanStore:
             con.executescript(self._SCHEMA)
             con.commit()
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         con = sqlite3.connect(str(self.db_path), timeout=2.0)
         con.row_factory = sqlite3.Row
-        return con
+        try:
+            with con:  # transaction: commit on success / rollback on error
+                yield con
+        finally:
+            con.close()
 
     def claim(
         self,

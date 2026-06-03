@@ -19,6 +19,8 @@ import subprocess
 import threading
 import time
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -419,8 +421,14 @@ class ActionTrustTracker:
             """)
             conn.commit()
 
-    def _conn(self):
-        return sqlite3.connect(self.db_path)
+    @contextmanager
+    def _conn(self) -> Iterator[sqlite3.Connection]:
+        conn = sqlite3.connect(self.db_path)
+        try:
+            with conn:  # transaction: commit on success / rollback on error
+                yield conn
+        finally:
+            conn.close()
 
     def record_outcome(self, action_type: str, outcome: str):
         """Update trust counters for an action type."""

@@ -13,6 +13,8 @@ import os
 import secrets
 import sqlite3
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Optional
 
 logger = logging.getLogger("maez")
@@ -113,8 +115,14 @@ class UserAccounts:
                     conn.execute(f"ALTER TABLE users ADD COLUMN {col} {typedef}")
             conn.commit()
 
-    def _conn(self):
-        return sqlite3.connect(self.db_path)
+    @contextmanager
+    def _conn(self) -> Iterator[sqlite3.Connection]:
+        conn = sqlite3.connect(self.db_path)
+        try:
+            with conn:  # transaction: commit on success / rollback on error
+                yield conn
+        finally:
+            conn.close()
 
     def register(self, username: str, password: str, display_name: str = "") -> dict:
         username = username.lower().strip()

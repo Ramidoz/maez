@@ -64,6 +64,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+from collections.abc import Iterator
 import logging
 import os
 import sqlite3
@@ -128,7 +129,8 @@ MIN_MATCH_LEN = 20
 # ── connection / schema ─────────────────────────────────────────────
 
 
-def _connect() -> sqlite3.Connection:
+@contextlib.contextmanager
+def _connect() -> Iterator[sqlite3.Connection]:
     path = _db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(path, timeout=5.0, check_same_thread=False)
@@ -170,7 +172,10 @@ def _connect() -> sqlite3.Connection:
         "ON baseline_observations(has_untrusted, ts)"
     )
     con.commit()
-    return con
+    try:
+        yield con
+    finally:
+        con.close()
 
 
 # ── dataclass ───────────────────────────────────────────────────────
@@ -379,7 +384,7 @@ def record_observation(
         # the thread-local check is off; the lock is what makes
         # that safe.
         has_untrusted = 1 if untrusted_ids else 0
-        with _write_lock, contextlib.closing(_connect()) as con:
+        with _write_lock, _connect() as con:
             cur = con.execute(
                 "INSERT INTO baseline_observations ("
                 "ts, observation, audited_observation, surface, "
@@ -430,7 +435,7 @@ def recent(
     Returns ``[]`` on DB error rather than raising (fail-soft
     consistent with the write path)."""
     try:
-        with contextlib.closing(_connect()) as con:
+        with _connect() as con:
             sql = (
                 "SELECT id, ts, observation, audited_observation, "
                 "surface, action, recall_ids_json, recall_tiers_json, "

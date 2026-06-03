@@ -38,6 +38,8 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Optional
 
 logger = logging.getLogger("maez.workshop")
@@ -199,7 +201,8 @@ _WORKSHOP_SYSTEM_PROMPT = _default_system_prompt()
 
 # ── storage ───────────────────────────────────────────────────────────
 
-def _connect() -> sqlite3.Connection:
+@contextmanager
+def _connect() -> Iterator[sqlite3.Connection]:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(DB_PATH, timeout=5.0, check_same_thread=False)
     con.execute("PRAGMA foreign_keys = ON")
@@ -230,7 +233,11 @@ def _connect() -> sqlite3.Connection:
             ON turns(session_id, ts);
     """)
     con.commit()
-    return con
+    try:
+        with con:  # transaction: commit on success / rollback on error
+            yield con
+    finally:
+        con.close()
 
 
 # ── dataclasses ───────────────────────────────────────────────────────

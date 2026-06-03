@@ -19,7 +19,8 @@ import re
 import sqlite3
 import time
 import uuid
-from contextlib import closing
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 from core.dispatcher.spec import (
@@ -119,13 +120,17 @@ class RoutingObservationStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_schema()
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            yield conn
+        finally:
+            conn.close()
 
     def _init_schema(self) -> None:
-        with closing(self._connect()) as conn:
+        with self._connect() as conn:
             with conn:
                 conn.execute(
                     """
@@ -183,21 +188,21 @@ class RoutingObservationStore:
                 )
 
     def table_names(self) -> set[str]:
-        with closing(self._connect()) as conn:
+        with self._connect() as conn:
             rows = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()
         return {row["name"] for row in rows}
 
     def index_names(self) -> set[str]:
-        with closing(self._connect()) as conn:
+        with self._connect() as conn:
             rows = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='index'"
             ).fetchall()
         return {row["name"] for row in rows}
 
     def get(self, row_id: str) -> sqlite3.Row:
-        with closing(self._connect()) as conn:
+        with self._connect() as conn:
             row = conn.execute(
                 "SELECT * FROM routing_observations WHERE id = ?",
                 (row_id,),
@@ -339,7 +344,7 @@ class RoutingObservationStore:
         }
         columns = tuple(row.keys())
         placeholders = ", ".join("?" for _ in columns)
-        with closing(self._connect()) as conn:
+        with self._connect() as conn:
             with conn:
                 conn.execute(
                     f"INSERT INTO routing_observations ({', '.join(columns)}) VALUES ({placeholders})",

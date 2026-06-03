@@ -17,7 +17,8 @@ import json
 import re
 import sqlite3
 import threading
-from contextlib import closing
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -325,18 +326,22 @@ class M1PromotionStore:
     def __init__(self, db_path: str):
         self.path = Path(db_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with closing(self._connect()) as conn:
+        with self._connect() as conn:
             with conn:
                 conn.executescript(_SCHEMA)
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(str(self.path), timeout=0.15)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout = 150")
-        return conn
+        try:
+            yield conn
+        finally:
+            conn.close()
 
     def load_pending_window(self) -> PendingWindow:
-        with closing(self._connect()) as conn:
+        with self._connect() as conn:
             row = conn.execute("SELECT window_json FROM pending_window WHERE id = 1").fetchone()
         if row is None:
             return PendingWindow(
@@ -373,7 +378,7 @@ class M1PromotionStore:
             "eligibility_reasons": list(window.eligibility_reasons),
             "s4_skip_reasons": list(window.s4_skip_reasons),
         }
-        with closing(self._connect()) as conn:
+        with self._connect() as conn:
             with conn:
                 conn.execute(
                     "INSERT INTO pending_window (id, window_json) VALUES (1, ?) "
@@ -382,7 +387,7 @@ class M1PromotionStore:
                 )
 
     def clear_pending_window(self) -> None:
-        with closing(self._connect()) as conn:
+        with self._connect() as conn:
             with conn:
                 conn.execute("DELETE FROM pending_window WHERE id = 1")
 
@@ -391,7 +396,7 @@ class M1PromotionStore:
         if not ids:
             return set()
         placeholders = ",".join("?" for _ in ids)
-        with closing(self._connect()) as conn:
+        with self._connect() as conn:
             rows = conn.execute(
                 f"SELECT source_memory_id FROM source_index WHERE source_memory_id IN ({placeholders})",
                 ids,
@@ -409,7 +414,7 @@ class M1PromotionStore:
             active = episode_store.list_active()
         except Exception:
             return
-        with closing(self._connect()) as conn:
+        with self._connect() as conn:
             with conn:
                 for ep in active:
                     if ep.get("source_kind") != "telegram_exchange":
@@ -437,7 +442,7 @@ class M1PromotionStore:
         promoted_at: str,
         provenance: dict,
     ) -> None:
-        with closing(self._connect()) as conn:
+        with self._connect() as conn:
             with conn:
                 for sid in source_memory_ids:
                     conn.execute(
@@ -454,7 +459,7 @@ class M1PromotionStore:
 
     def count_promotions_since(self, since_iso: str) -> int:
         since = _parse_iso(since_iso).astimezone(timezone.utc)
-        with closing(self._connect()) as conn:
+        with self._connect() as conn:
             rows = conn.execute("SELECT episode_id, promoted_at FROM source_index").fetchall()
         counted: set[str] = set()
         for row in rows:
@@ -467,7 +472,7 @@ class M1PromotionStore:
         return len(counted)
 
     def get_provenance(self, episode_id: str) -> dict:
-        with closing(self._connect()) as conn:
+        with self._connect() as conn:
             row = conn.execute(
                 "SELECT provenance_json FROM promotion_provenance WHERE episode_id = ?",
                 (episode_id,),

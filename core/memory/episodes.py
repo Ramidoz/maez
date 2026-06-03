@@ -23,7 +23,8 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from contextlib import closing
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, Sequence
@@ -89,7 +90,7 @@ class EpisodeStore:
     def __init__(self, db_path: str):
         self._path = Path(db_path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        with closing(self._connect()) as c:
+        with self._connect() as c:
             with c:
                 c.executescript(_SCHEMA)
                 for stmt in _MIGRATIONS:
@@ -99,10 +100,14 @@ class EpisodeStore:
                         # Column already exists. Idempotent re-run.
                         pass
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         c = sqlite3.connect(str(self._path))
         c.row_factory = sqlite3.Row
-        return c
+        try:
+            yield c
+        finally:
+            c.close()
 
     def add(
         self,
@@ -124,7 +129,7 @@ class EpisodeStore:
                 "Episode requires at least one source_memory_id (ADR 0019 evidence requirement)"
             )
         episode_id = f"ep-{uuid.uuid4().hex[:12]}"
-        with closing(self._connect()) as c:
+        with self._connect() as c:
             with c:
                 c.execute(
                     "INSERT INTO episodes ("
@@ -153,7 +158,7 @@ class EpisodeStore:
         return episode_id
 
     def get(self, episode_id: str) -> Optional[dict]:
-        with closing(self._connect()) as c:
+        with self._connect() as c:
             row = c.execute("SELECT * FROM episodes WHERE id = ?", (episode_id,)).fetchone()
         return None if row is None else self._row_to_dict(row)
 
@@ -185,7 +190,7 @@ class EpisodeStore:
                 raise ValueError(
                     f"superseded_by must resolve to an existing episode: {superseded_by}"
                 )
-        with closing(self._connect()) as c:
+        with self._connect() as c:
             with c:
                 c.execute(
                     "UPDATE episodes SET status = 'superseded', "
@@ -196,7 +201,7 @@ class EpisodeStore:
         return True
 
     def list_active(self) -> list[dict]:
-        with closing(self._connect()) as c:
+        with self._connect() as c:
             rows = c.execute(
                 "SELECT * FROM episodes WHERE status = 'active' ORDER BY created_at DESC"
             ).fetchall()
@@ -204,7 +209,7 @@ class EpisodeStore:
 
     def active_count_and_newest_time(self) -> tuple[int, Optional[str]]:
         """Return active count and newest event/create timestamp without row scans."""
-        with closing(self._connect()) as c:
+        with self._connect() as c:
             row = c.execute(
                 "SELECT COUNT(*) AS n, MAX(COALESCE(occurred_at, created_at)) AS newest "
                 "FROM episodes WHERE status = 'active'"
@@ -215,7 +220,7 @@ class EpisodeStore:
 
     def counts_by_status_and_source_kind(self) -> dict:
         """Return content-free aggregate counts for body/health surfaces."""
-        with closing(self._connect()) as c:
+        with self._connect() as c:
             rows = c.execute(
                 "SELECT status, source_kind, COUNT(*) AS n "
                 "FROM episodes GROUP BY status, source_kind"
@@ -261,7 +266,7 @@ class EpisodeStore:
             return []
         candidate_start_day = (start_utc - timedelta(days=2)).date().isoformat()
         candidate_end_day = (end_utc + timedelta(days=2)).date().isoformat()
-        with closing(self._connect()) as c:
+        with self._connect() as c:
             timeout = max(0, int(busy_timeout_ms))
             c.execute(f"PRAGMA busy_timeout = {timeout}")
             rows = c.execute(

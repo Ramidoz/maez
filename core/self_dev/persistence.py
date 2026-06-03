@@ -39,6 +39,8 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Optional
 
 logger = logging.getLogger("maez.self_dev_persistence")
@@ -62,7 +64,8 @@ DB_PATH = Path(_default_self_dev_db())
 
 # ── low-level connection ──────────────────────────────────────────────
 
-def _connect() -> sqlite3.Connection:
+@contextmanager
+def _connect() -> Iterator[sqlite3.Connection]:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(DB_PATH, timeout=5.0, check_same_thread=False)
     con.execute("PRAGMA foreign_keys = ON")
@@ -105,7 +108,11 @@ def _connect() -> sqlite3.Connection:
             ON concerns(status, severity);
     """)
     con.commit()
-    return con
+    try:
+        with con:  # transaction: commit on success / rollback on error
+            yield con
+    finally:
+        con.close()
 
 
 # ── dataclasses (convenience for query consumers) ─────────────────────

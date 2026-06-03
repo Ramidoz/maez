@@ -39,6 +39,8 @@ import sqlite3
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any, Optional
 
 from core.infra.capability_gap_matcher import match_gap
@@ -76,7 +78,8 @@ class DetectorResult:
     cooldown_blocked: list[str] = field(default_factory=list)
 
 
-def _connect() -> sqlite3.Connection:
+@contextmanager
+def _connect() -> Iterator[sqlite3.Connection]:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(DB_PATH, timeout=2.0)
     # WAL allows concurrent readers + a writer without "database
@@ -92,7 +95,11 @@ def _connect() -> sqlite3.Connection:
         """
     )
     con.commit()
-    return con
+    try:
+        with con:  # transaction: commit on success / rollback on error
+            yield con
+    finally:
+        con.close()
 
 
 def _last_fired_at(capability_id: str) -> Optional[float]:
