@@ -28,6 +28,7 @@ SECRET_NAMES: frozenset[str] = frozenset(
         "MAEZ_GITHUB_TOKEN",
         "MAEZ_IPHONE_INGEST_TOKEN",
         "MAEZ_PUBLIC_TELEGRAM_TOKEN",
+        "MAEZ_REDDIT_HANDOFF_TOKEN",
         "MAEZ_TELEGRAM_TOKEN",
         "OLLAMA_API_KEY",
         "OPENAI_API_KEY",

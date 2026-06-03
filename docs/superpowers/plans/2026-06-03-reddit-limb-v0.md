@@ -1016,14 +1016,17 @@ Expected: no NEW failures vs the known pre-existing/environmental set (live-judg
 
 - [ ] **Step 4: Provision the secrets (owner, one-time)**
 
-Document for Rohit:
+Document for Rohit (CORRECTED after Codex review — the handoff token is a *secret* and must go through Maez's credential path, not `config/.env`):
 1. Create an **installed app** at https://www.reddit.com/prefs/apps (redirect `http://localhost:65010/reddit/callback`); copy the `client_id`.
-2. Add to the daemon env (where other `MAEZ_*` secrets live) AND `config/.env`:
+2. `MAEZ_REDDIT_CLIENT_ID` is **not** a secret → put it in `config/.env`:
    ```
    MAEZ_REDDIT_CLIENT_ID=<client_id>
+   ```
+3. `MAEZ_REDDIT_HANDOFF_TOKEN` **is** a secret (matches the `TOKEN` marker; it is now allowlisted in `core/infra/secrets.py::SECRET_NAMES`). It must go in `config/secrets.local.env` (the credential store the loader reads) — NOT `config/.env` (which scrubs secret-looking names):
+   ```
    MAEZ_REDDIT_HANDOFF_TOKEN=<run: python -c "import secrets;print(secrets.token_urlsafe(32))">
    ```
-3. Restart the daemon so it reads `MAEZ_REDDIT_HANDOFF_TOKEN` (deliberate, owner-timed).
+4. Restart the daemon so its credential loader (`optional=set(SECRET_NAMES)`) pulls `MAEZ_REDDIT_HANDOFF_TOKEN` into the daemon env (deliberate, owner-timed). The ceremony reads the same two values via `load_ordinary_config_for_process()` + `load_secrets_for_process()`.
 
 - [ ] **Step 5: Manual integration smoke (the v0 witness)**
 

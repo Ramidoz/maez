@@ -209,10 +209,16 @@ def handle_handoff(*, headers, body_loader, limb: "RedditLimb") -> tuple[dict, i
     token = body.get("access_token")
     if not token:
         return {"ok": False, "error": "missing_access_token"}, 400
+    # v0 covenant pin — identity-only, enforced HERE at the trust boundary, not
+    # just in the authorize URL. Reject any token carrying a broader scope so a
+    # buggy/compromised ceremony cannot hand Maez a history/read-scoped token.
+    scopes = list(body.get("scopes") or ["identity"])
+    if set(scopes) - {"identity"}:
+        return {"ok": False, "error": "non_identity_scope_rejected"}, 400
     now = time.time()
     limb.set_session(RedditSession(
         access_token=token,
-        scopes=list(body.get("scopes") or ["identity"]),
+        scopes=scopes,
         obtained_at=now,
         expires_at=now + float(body.get("expires_in", 3600)),
     ))

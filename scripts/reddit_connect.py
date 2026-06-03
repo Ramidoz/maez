@@ -40,12 +40,25 @@ DAEMON_HANDOFF_URL = "http://127.0.0.1:11435/internal/limb/reddit/session"
 
 
 def _read_env() -> tuple[str, str]:
+    # Load through Maez's credential system so we read the SAME values the daemon
+    # has: MAEZ_REDDIT_HANDOFF_TOKEN is a secret (lives in config/secrets.local.env,
+    # allowlisted in core.infra.secrets.SECRET_NAMES); MAEZ_REDDIT_CLIENT_ID is
+    # ordinary config (config/.env). A bare os.environ read would miss both,
+    # because the secret loader purges unmanaged secret-looking names.
+    from core.infra.secrets import (
+        load_ordinary_config_for_process,
+        load_secrets_for_process,
+    )
+    load_ordinary_config_for_process()                       # client_id from config/.env
+    load_secrets_for_process(                                 # handoff token from secrets.local.env
+        required={"MAEZ_REDDIT_HANDOFF_TOKEN"}, optional=set(), populate_environ=True,
+    )
     cid = os.environ.get("MAEZ_REDDIT_CLIENT_ID", "").strip()
     handoff = os.environ.get("MAEZ_REDDIT_HANDOFF_TOKEN", "").strip()
     if not cid:
-        sys.exit("MAEZ_REDDIT_CLIENT_ID not set (create an installed app at reddit.com/prefs/apps).")
+        sys.exit("MAEZ_REDDIT_CLIENT_ID not set in config/.env (create an installed app at reddit.com/prefs/apps).")
     if not handoff:
-        sys.exit("MAEZ_REDDIT_HANDOFF_TOKEN not set (must match the daemon's value).")
+        sys.exit("MAEZ_REDDIT_HANDOFF_TOKEN not set in config/secrets.local.env (must match the daemon's value).")
     return cid, handoff
 
 

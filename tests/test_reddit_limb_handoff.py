@@ -68,5 +68,58 @@ class HandoffAuthTests(unittest.TestCase):
         self.assertNotIn(SENTINEL, repr(result))         # token never echoed back
 
 
+class HandoffSecretLoadableTests(unittest.TestCase):
+    """Codex review blocker 1: the handoff secret must survive Maez's credential
+    path. MAEZ_REDDIT_HANDOFF_TOKEN matches the 'TOKEN' marker (treated as a
+    secret), so it is scrubbed from config/.env and purged from env unless it is
+    in the SECRET_NAMES allowlist that the daemon loads as `optional`."""
+
+    def test_handoff_token_is_a_classified_secret(self):
+        from core.infra.secrets import is_secret_name
+        self.assertTrue(is_secret_name(reddit_limb.REDDIT_HANDOFF_TOKEN_ENV))
+
+    def test_handoff_token_is_allowlisted_so_it_loads(self):
+        from core.infra.secrets import SECRET_NAMES
+        self.assertIn(reddit_limb.REDDIT_HANDOFF_TOKEN_ENV, SECRET_NAMES)
+
+
+class IdentityOnlyPinTests(unittest.TestCase):
+    """Codex review blocker 2: identity-only must be enforced at the handoff
+    trust boundary, not only in the authorize URL."""
+
+    def setUp(self):
+        os.environ[reddit_limb.REDDIT_HANDOFF_TOKEN_ENV] = "GOODSECRET"
+        self.addCleanup(os.environ.pop, reddit_limb.REDDIT_HANDOFF_TOKEN_ENV, None)
+
+    def _handoff(self, scopes):
+        limb = reddit_limb.RedditLimb()
+        with mock.patch.object(reddit_limb, "fetch_identity", return_value="available"):
+            result, status = reddit_limb.handle_handoff(
+                headers=_Headers({reddit_limb.REDDIT_HANDOFF_HEADER: "GOODSECRET"}),
+                body_loader=lambda: {"access_token": "T", "scopes": scopes, "expires_in": 3600},
+                limb=limb,
+            )
+        return limb, result, status
+
+    def test_non_identity_scope_rejected(self):
+        limb, result, status = self._handoff(["identity", "history", "read"])
+        self.assertEqual(status, 400)
+        self.assertEqual(result["error"], "non_identity_scope_rejected")
+        self.assertEqual(limb.health()["state"], "needs_auth")   # session NOT set
+
+    def test_any_non_identity_scope_rejected(self):
+        _, _, status = self._handoff(["history"])
+        self.assertEqual(status, 400)
+
+    def test_identity_only_accepted(self):
+        limb, _, status = self._handoff(["identity"])
+        self.assertEqual(status, 200)
+        self.assertEqual(limb.health()["scopes"], ["identity"])
+
+    def test_empty_scopes_defaults_to_identity(self):
+        _, _, status = self._handoff([])
+        self.assertEqual(status, 200)
+
+
 if __name__ == "__main__":
     unittest.main()
