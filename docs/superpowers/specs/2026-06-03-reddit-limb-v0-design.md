@@ -58,8 +58,19 @@ Three units, each independently testable:
 - Prints a content-free result (`ok` / the tile state) and exits — the ceremony's copy of the token dies with the process.
 
 ### 4.3 Daemon hardened intake endpoint — `POST /limb/reddit/session`
-- Added to the daemon's existing local API surface, reusing `core/infra/http_security.py` (loopback-only bind + the existing local-auth gate; reject non-127.0.0.1 and unauthenticated callers).
-- Body: `{access_token, scopes, expires_in}`. The daemon calls `reddit_limb.set_session(...)`, immediately performs `fetch_identity`, sets the tile, and returns the content-free tile state (never echoes the token).
+This endpoint carries a live token, so it needs real **authentication**, not just a browser-origin check.
+
+**CORRECTION (Codex review, 2026-06-03):** `core/infra/http_security.py` is an **Origin/Referer guard, NOT an auth gate** — `reject_untrusted_browser_write` deliberately *allows* non-browser local callers with no `Origin` header (`"No Origin/Referer means a non-browser local caller such as urllib"`). On its own it would let *any* local process POST a token here. Insufficient for a token-bearing endpoint.
+
+**Required auth — BOTH must hold:**
+1. **Loopback-only** — bound to `127.0.0.1`; reject any non-loopback peer.
+2. **A valid local secret header** — a dedicated shared secret compared in constant time (`hmac.compare_digest`), following the existing `skills/iphone_ingest.py` shared-secret pattern (`X-Maez-Token`-style dedicated header + env-var secret). Proposed: header `X-Maez-Reddit-Handoff`, secret `MAEZ_REDDIT_HANDOFF_TOKEN` (generated once into `config/.env`, read by both the owner-launched ceremony and the daemon). A missing/empty/wrong secret → 403, before any body parsing.
+
+`reject_untrusted_browser_write` (Origin/Referer) MAY stay as defense-in-depth, but **it is not the authentication authority** — the shared-secret check is.
+
+**Why a dedicated secret, not the S7 internal-channel** (`X-Maez-S7-Internal-Channel` / `S7_INTERNAL_CHANNEL_TOKEN`): the S7 channel is the WebAuthn *governance* ceremony's trust domain. Overloading it for a Reddit token handoff couples two unrelated security domains (a rotation or leak in one would silently affect the other). A dedicated Reddit handoff secret keeps the limb's trust boundary isolated — the right unit boundary. (S7-reuse was considered and rejected for this reason; the plan may revisit only with explicit justification.)
+
+- Body (after auth passes): `{access_token, scopes, expires_in}`. The daemon calls `reddit_limb.set_session(...)`, immediately performs `fetch_identity`, sets the tile, and returns the content-free tile state (never echoes the token).
 - This is the daemon's *only* token-bearing surface; the token lives in the daemon's process memory thereafter (session-scoped).
 
 ### 4.4 Body tile — `_body_health` addition
@@ -99,7 +110,7 @@ No username, no id, no post content, no token, no counts of personal items — e
 - **No ingestion / no digestion** — the limb persists nothing durable and never feeds memory or an LLM in this slice. `fetch_identity` discards the response body.
 - **No cloud egress** — no Reddit-derived bytes reach any cloud-model path. (When v0.1+ ingests, that data is tagged `owner_account_context` and the live egress firewall blocks cloud inference by default.)
 - **Fail closed** — any error → a tile state + no egress, never a silent "succeeded."
-- **Loopback + auth only** — the intake endpoint binds 127.0.0.1 and rejects unauthenticated/non-loopback callers.
+- **Loopback + real auth** — the intake endpoint binds 127.0.0.1 AND requires a dedicated constant-time-compared shared secret (§4.3); an Origin/Referer browser guard is NOT sufficient authentication for a token-bearing endpoint.
 - **Content-free telemetry** — only the tile-state enum + timestamps + scope names; no Reddit content, no token.
 
 ## 8. Error handling (every failure → a tile state, fail-closed)
@@ -121,7 +132,7 @@ No username, no id, no post content, no token, no counts of personal items — e
 - `build_authorize_url` emits exactly `response_type=code`, `duration=temporary`, `scope=identity`, the configured `redirect_uri`, and a non-empty `state`; no secret present.
 - `exchange_code_for_token` sends HTTP Basic `client_id:` (empty password), `grant_type=authorization_code`, the `User-Agent`; parses the token; builds a `RedditSession` with `expires_at`.
 - `fetch_identity` maps 200→`available`, 401→`auth_error`, 403→`revoked`, 429→`rate_limited`, timeout→`unreachable`; and **returns/stores no identity fields**.
-- Intake endpoint: rejects non-loopback origin; rejects unauthenticated; accepts a valid loopback+auth POST and never echoes the token.
+- Intake endpoint auth (§4.3): rejects non-loopback peer; **rejects a loopback POST with a missing/empty/wrong `X-Maez-Reddit-Handoff` secret with 403 before parsing the body** (the load-bearing test — proves a browser-origin guard alone wouldn't have stopped it); accepts a valid loopback + correct-secret POST and never echoes the token. Uses `hmac.compare_digest` (constant-time).
 
 **Covenant guard tests (the load-bearing ones):**
 - **Token never leaks:** drive the full mocked flow with a sentinel token value, assert the sentinel appears in **no** log record, telemetry payload, `health()` output, or stringified exception.
