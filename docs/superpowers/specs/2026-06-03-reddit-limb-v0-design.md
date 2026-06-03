@@ -68,6 +68,8 @@ This endpoint carries a live token, so it needs real **authentication**, not jus
 
 `reject_untrusted_browser_write` (Origin/Referer) MAY stay as defense-in-depth, but **it is not the authentication authority** — the shared-secret check is.
 
+**Strict ordering — auth before envelope:** the loopback + shared-secret checks run **first**, and a failure returns 403 **before the request body is read or JSON-parsed**. The body carries the live access token, so a parse-then-auth handler could log/process the token before rejecting. The handler must never touch the body on an auth failure.
+
 **Why a dedicated secret, not the S7 internal-channel** (`X-Maez-S7-Internal-Channel` / `S7_INTERNAL_CHANNEL_TOKEN`): the S7 channel is the WebAuthn *governance* ceremony's trust domain. Overloading it for a Reddit token handoff couples two unrelated security domains (a rotation or leak in one would silently affect the other). A dedicated Reddit handoff secret keeps the limb's trust boundary isolated — the right unit boundary. (S7-reuse was considered and rejected for this reason; the plan may revisit only with explicit justification.)
 
 - Body (after auth passes): `{access_token, scopes, expires_in}`. The daemon calls `reddit_limb.set_session(...)`, immediately performs `fetch_identity`, sets the tile, and returns the content-free tile state (never echoes the token).
@@ -132,7 +134,8 @@ No username, no id, no post content, no token, no counts of personal items — e
 - `build_authorize_url` emits exactly `response_type=code`, `duration=temporary`, `scope=identity`, the configured `redirect_uri`, and a non-empty `state`; no secret present.
 - `exchange_code_for_token` sends HTTP Basic `client_id:` (empty password), `grant_type=authorization_code`, the `User-Agent`; parses the token; builds a `RedditSession` with `expires_at`.
 - `fetch_identity` maps 200→`available`, 401→`auth_error`, 403→`revoked`, 429→`rate_limited`, timeout→`unreachable`; and **returns/stores no identity fields**.
-- Intake endpoint auth (§4.3): rejects non-loopback peer; **rejects a loopback POST with a missing/empty/wrong `X-Maez-Reddit-Handoff` secret with 403 before parsing the body** (the load-bearing test — proves a browser-origin guard alone wouldn't have stopped it); accepts a valid loopback + correct-secret POST and never echoes the token. Uses `hmac.compare_digest` (constant-time).
+- Intake endpoint auth (§4.3): rejects non-loopback peer; accepts a valid loopback + correct-secret POST and never echoes the token. Uses `hmac.compare_digest` (constant-time).
+- **Auth-before-envelope (load-bearing):** send a POST whose JSON body contains a **sentinel access-token value**, with a missing/empty/wrong `X-Maez-Reddit-Handoff` secret. Assert the handler returns **403** AND that the sentinel value appears in **no** log/telemetry/processing — proving the body was never read or parsed on auth failure (a parse-then-auth handler would fail this). This is the test that proves the door checks the key before opening the envelope.
 
 **Covenant guard tests (the load-bearing ones):**
 - **Token never leaks:** drive the full mocked flow with a sentinel token value, assert the sentinel appears in **no** log record, telemetry payload, `health()` output, or stringified exception.
