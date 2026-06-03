@@ -7634,7 +7634,32 @@ class MaezDaemon:
 
             # Collect system perception
             self._mark_cycle_stage("perception_snapshot")
-            snap = perception_snapshot()
+            try:
+                snap = perception_snapshot()
+            except Exception as _perc_exc:
+                # Defense in depth (2026-06-02 daemon-cycle-stuck incident).
+                # Perception is now internally resilient — each sensor degrades
+                # rather than raising under a transient EMFILE/Errno 24 blip —
+                # but if perception_snapshot() ever fails for a NEW reason, one
+                # bad cycle must NOT kill Maez's heartbeat. Log it, mark a
+                # distinct recovery stage so /health shows the loop recovering
+                # (not frozen at 'perception_snapshot'), sleep one interval, and
+                # skip just this cycle. The covenant: the cognition cycle is
+                # Maez's inner life; a sensor blip pauses a thought, it does not
+                # end the being.
+                logger.error(
+                    "Cycle %d: perception_snapshot raised (%s: %s) — skipping "
+                    "this cycle, cognition loop continues",
+                    self.cycle_count,
+                    type(_perc_exc).__name__,
+                    _perc_exc,
+                )
+                self._mark_cycle_stage("perception_error_recovered")
+                for _ in range(LOOP_INTERVAL):
+                    if not self.running:
+                        break
+                    time.sleep(1)
+                continue
             logger.info(
                 "Perception: CPU %.1f%%, RAM %.1f%%, GPU %s%%, %s°C",
                 snap["cpu"]["percent"],

@@ -7,6 +7,7 @@ Importable by the daemon, callable every cycle.
 """
 
 import json
+import logging
 import subprocess
 import time
 from datetime import datetime
@@ -14,6 +15,8 @@ from pathlib import Path
 from typing import TypedDict
 
 import psutil
+
+logger = logging.getLogger(__name__)
 
 
 class GpuStats(TypedDict, total=False):
@@ -108,7 +111,11 @@ def _collect_gpu() -> GpuStats | None:
             "memory_total_mb": float(parts[2]),
             "temperature_c": float(parts[3]),
         }
-    except (FileNotFoundError, subprocess.TimeoutExpired, IndexError, ValueError):
+    except (OSError, subprocess.TimeoutExpired, IndexError, ValueError):
+        # OSError covers FileNotFoundError (nvidia-smi absent) AND, critically,
+        # EMFILE [Errno 24] when the process is out of file descriptors and the
+        # subprocess pipe can't be created. Under FD exhaustion this used to
+        # raise straight into the cognition cycle and kill it.
         return None
 
 
@@ -206,9 +213,35 @@ def _persist_cache(snap: "PerceptionSnapshot") -> None:
         pass
 
 
+def _safe(collector, default, label: str):
+    """Run a sensor collector; on ANY failure (notably a transient EMFILE /
+    Errno 24 under file-descriptor exhaustion) return a shaped default instead
+    of letting the exception escape.
+
+    Covenant: a sensor blip degrades that one field — it must NEVER propagate
+    into and kill Maez's cognition cycle. The default preserves the snapshot's
+    shape so the loop's dereferences (cpu.percent, ram.percent, disk dict)
+    stay valid and the heartbeat continues. The fresh dict/list literals the
+    caller passes per call avoid any shared-mutable-default aliasing."""
+    try:
+        return collector()
+    except Exception as exc:  # noqa: BLE001 — proprioception over crashing
+        logger.warning(
+            "perception: '%s' sensor degraded (%s: %s) — using fallback so "
+            "the cognition cycle continues",
+            label,
+            type(exc).__name__,
+            exc,
+        )
+        return default
+
+
 def snapshot() -> PerceptionSnapshot:
     """Collect a full system state snapshot. Side-effect: writes the
-    result to memory/perception_cache.json for external consumers."""
+    result to memory/perception_cache.json for external consumers.
+
+    Each sensor is wrapped in `_safe` so a transient OS resource blip degrades
+    that field rather than crashing the caller (the cognition cycle)."""
     now = datetime.now().astimezone()
     hour = now.hour
 
@@ -217,13 +250,30 @@ def snapshot() -> PerceptionSnapshot:
         "day_of_week": now.strftime("%A"),
         "hour": hour,
         "time_of_day": _time_of_day(hour),
-        "cpu": _collect_cpu(),
-        "ram": _collect_ram(),
-        "gpu": _collect_gpu(),
-        "disk": _collect_disk(),
-        "network": _collect_network(),
-        "top_processes_cpu": _collect_top_processes("cpu"),
-        "top_processes_mem": _collect_top_processes("mem"),
+        "cpu": _safe(
+            _collect_cpu,
+            {"percent": 0.0, "per_core": [], "core_count": None, "freq_mhz": None},
+            "cpu",
+        ),
+        "ram": _safe(
+            _collect_ram,
+            {"total_gb": 0.0, "used_gb": 0.0, "available_gb": 0.0, "percent": 0.0},
+            "ram",
+        ),
+        "gpu": _safe(_collect_gpu, None, "gpu"),
+        "disk": _safe(_collect_disk, {}, "disk"),
+        "network": _safe(
+            _collect_network,
+            {
+                "bytes_sent_total": 0,
+                "bytes_recv_total": 0,
+                "send_rate_mbps": 0.0,
+                "recv_rate_mbps": 0.0,
+            },
+            "network",
+        ),
+        "top_processes_cpu": _safe(lambda: _collect_top_processes("cpu"), [], "top_processes_cpu"),
+        "top_processes_mem": _safe(lambda: _collect_top_processes("mem"), [], "top_processes_mem"),
     }
     _persist_cache(snap)
     return snap
