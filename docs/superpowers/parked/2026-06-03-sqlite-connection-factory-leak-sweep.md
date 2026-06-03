@@ -28,6 +28,16 @@ Codex blocked the first pass: **the guard's scan roots were too narrow** (`core/
 - `scripts/verify_ledger_chain._open_readonly` → `# sqlite-raw-ok` (read-only handle; sole caller closes in finally).
 - Added a **QualityTracker FD-leak probe**; confirmed `-W error::ResourceWarning` now passes on the action path (the traced warning is gone).
 
+### Codex review block #2 + remediation (2026-06-03)
+
+Codex re-review caught a **third leak shape** neither guard covered: a plain assigned connection used and never closed — `db = sqlite3.connect(...)` with no `with`/`closing`/`finally`. Live path: `maez_daemon.handle_message → self_model.describe() → _wonderings_snapshot()` (`core/infra/self_model.py:125`). Remediation:
+
+- Wrapped the connect in `with closing(...) as db:`.
+- New guard `test_no_unclosed_assigned_connections`: flags any function opening a connection into a NAME without `v.close()`/`closing(v)`/`return`/`yield`. Covers three value forms — `v = connect()`, `v: T = connect()` (AnnAssign), and pass-or-create `v = x or connect()` (BoolOp). Attribute targets (`self._conn`) are out of scope (instance-owned, closed in a separate `close()`). Honors `# sqlite-raw-ok`. Mutation-proven.
+- **Exhaustive close:** a repo-wide static scan classified every `sqlite3.connect(` site in tracked production; the 10 non-trivial ones (s7 pass-or-create ×8 → close in finally; `core/ledger/writer` long-lived managed `close()`; `entity_index` tracked `:memory:`) were verified safe. An empirical sweep of **59** governance/ledger/daemon/memory/learning test modules under `-W always::ResourceWarning` emits **no** production "unclosed database" beyond the tracked `entity_index`.
+
+**Three leak shapes now guarded:** (1) `with sqlite3.connect() as` direct-CM, (2) factory `return` of a raw connection, (3) assigned-and-abandoned connection. Scan covers all git-tracked production roots.
+
 ---
 
 ---

@@ -198,6 +198,107 @@ class NoBareSqliteConnectTests(unittest.TestCase):
             f"entry. Got {sorted(tracked)}, expected {sorted(self._EXPECTED_TRACKED)}.",
         )
 
+    def test_no_unclosed_assigned_connections(self):
+        # The THIRD shape: `v = sqlite3.connect(...)` assigned, used, and never
+        # closed — no `v.close()`, no `closing(v)`, not returned/yielded. The
+        # first guard catches `with sqlite3.connect(...) as v:`; the second
+        # catches factories that `return` a raw connection. This one catches the
+        # assigned-and-abandoned leak (e.g. self_model._wonderings_snapshot, on
+        # the live daemon describe() path — Codex traced its ResourceWarning).
+        # Escape with `# sqlite-raw-ok` on the assignment line when the
+        # connection is provably closed elsewhere (e.g. a passed-in handle).
+        import ast
+
+        offenders: list[str] = []
+        for f in _production_py_files():
+            src = f.read_text(encoding="utf-8")
+            src_lines = src.splitlines()
+            try:
+                tree = ast.parse(src)
+            except SyntaxError:
+                continue
+            rel = str(f.relative_to(_REPO))
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                def _is_connect(call: ast.AST) -> bool:
+                    return (
+                        isinstance(call, ast.Call)
+                        and isinstance(call.func, ast.Attribute)
+                        and call.func.attr == "connect"
+                        and getattr(call.func.value, "id", None) == "sqlite3"
+                    )
+
+                def _opens_conn(val: ast.AST) -> bool:
+                    # direct `sqlite3.connect(...)` OR pass-or-create
+                    # `connection or sqlite3.connect(...)` (a BoolOp).
+                    if _is_connect(val):
+                        return True
+                    return isinstance(val, ast.BoolOp) and any(
+                        _is_connect(x) for x in val.values
+                    )
+
+                # Covers `v = ...`, `v: T = ...`, and the pass-or-create
+                # `v = x or sqlite3.connect(...)`. Only NAME targets: attribute
+                # targets like `self._conn = sqlite3.connect(...)` are
+                # instance-owned, long-lived connections closed in a separate
+                # close()/__del__ — out of scope for a single-function guard.
+                assigned: dict[str, int] = {}
+                for n in ast.walk(node):
+                    if isinstance(n, ast.Assign) and _opens_conn(n.value):
+                        for t in n.targets:
+                            if isinstance(t, ast.Name):
+                                assigned.setdefault(t.id, n.lineno)
+                    elif (
+                        isinstance(n, ast.AnnAssign)
+                        and n.value is not None
+                        and _opens_conn(n.value)
+                        and isinstance(n.target, ast.Name)
+                    ):
+                        assigned.setdefault(n.target.id, n.lineno)
+                if not assigned:
+                    continue
+                for v, ln in assigned.items():
+                    handled = False
+                    for n in ast.walk(node):
+                        # v.close()
+                        if (
+                            isinstance(n, ast.Call)
+                            and isinstance(n.func, ast.Attribute)
+                            and n.func.attr == "close"
+                            and isinstance(n.func.value, ast.Name)
+                            and n.func.value.id == v
+                        ):
+                            handled = True
+                        # return v / yield v — handed off (other guards' job)
+                        if isinstance(n, ast.Return) and isinstance(n.value, ast.Name) and n.value.id == v:
+                            handled = True
+                        if isinstance(n, ast.Yield) and isinstance(n.value, ast.Name) and n.value.id == v:
+                            handled = True
+                        # closing(v) / contextlib.closing(v)
+                        if isinstance(n, ast.Call):
+                            cf = n.func
+                            nm = cf.attr if isinstance(cf, ast.Attribute) else getattr(cf, "id", None)
+                            if nm == "closing" and any(
+                                isinstance(a, ast.Name) and a.id == v for a in n.args
+                            ):
+                                handled = True
+                    if handled:
+                        continue
+                    line = src_lines[ln - 1] if ln <= len(src_lines) else ""
+                    if "sqlite-raw-ok" in line:
+                        continue
+                    offenders.append(f"{rel}:{ln}")
+
+        self.assertEqual(
+            offenders,
+            [],
+            "assigned-but-never-closed sqlite connections leak FDs (no v.close(), no "
+            "closing(v), not handed off). Wrap the connect in closing(...) or add a "
+            "try/finally v.close(); or — if a caller owns it — mark the assignment "
+            "`# sqlite-raw-ok: <reason>`:\n  " + "\n  ".join(offenders),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

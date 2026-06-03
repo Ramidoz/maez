@@ -31,6 +31,7 @@ import re
 import sqlite3
 import time
 from collections import Counter
+from contextlib import closing
 from pathlib import Path
 from typing import Any, Optional
 
@@ -122,14 +123,14 @@ def _wonderings_snapshot() -> dict[str, Any]:
     if not _WONDERINGS_DB.exists():
         return {"open_count": 0, "sample_question": None}
     try:
-        db = sqlite3.connect(_WONDERINGS_DB, timeout=1.5)
-        rows = list(db.execute(
-            "SELECT id, question, status FROM wonderings "
-            "WHERE status NOT IN ('resolved', 'abandoned') "
-            # SQLite's NULLS ordering differs from Postgres — use COALESCE
-            # to treat NULL last_advanced as epoch-zero (oldest first).
-            "ORDER BY COALESCE(last_advanced, 0) DESC, created_at DESC"
-        ))
+        with closing(sqlite3.connect(_WONDERINGS_DB, timeout=1.5)) as db:
+            rows = list(db.execute(
+                "SELECT id, question, status FROM wonderings "
+                "WHERE status NOT IN ('resolved', 'abandoned') "
+                # SQLite's NULLS ordering differs from Postgres — use COALESCE
+                # to treat NULL last_advanced as epoch-zero (oldest first).
+                "ORDER BY COALESCE(last_advanced, 0) DESC, created_at DESC"
+            ))
     except Exception:
         return {"open_count": 0, "sample_question": None}
     if not rows:
