@@ -3,6 +3,11 @@
 **Date:** 2026-06-03
 **Status:** **NAMED FOLLOW-UP — urgent, not optional.** Discovered during Codex's review of Personal Data Limb Slice 1 (egress firewall). NOT bundled into Slice 1 (it changes *existing* live behavior). Needs its own witness. Owner (Rohit) decision: "owner_account now, reserved classes next — treat the broader discovery as urgent, not optional."
 
+**UPDATE 2026-06-03 — survey done + IMPLEMENTED** (branch `reserved-denied-cloud-enforcement`, commit `9c8838e`, Claude-implemented, awaiting Codex review; NOT merged, NOT live).
+- **Survey verdict: LATENT hole.** Content-free query of `memory/subscription_proxy.db`: of 21 egress-decided rows, only **2** touched a reserved class — both `soul`, both shadow, both to `claude`, from deliberate probe callers (`egress-provenance-observe` 2026-05-22, `live-canary-soul-v2` 2026-05-23). No real cognition flow drove a reserved class to cloud; `credential_material`/`private_thoughts` were never even probed; the db has been idle since 2026-05-24 and the proxy appears dormant. So this is a **deliberate flip, not stop-the-bleeding** — the canaries proved the hole is real, but nothing has bled through it.
+- **Implemented:** reserved-denied (`reserved_denied_raw`) now ENFORCED by default at the `subscription_proxy` chokepoint (no `adapter.call`, HTTP 403, content-free record, `egress_shadow_mode=False`), mirroring the `owner_account_context` path. Rollback kill-switch `MAEZ_EGRESS_RESERVED_DENIED_SHADOW=1` reverts to legacy shadow. Integration witness drives real `soul` + `credential_material` spans end-to-end (adapter never receives the canary); mutation-proven; the old "reserved canary still flows in shadow" test now runs under the kill-switch. `owner_account_context` enforcement unchanged.
+- **Still deferred (deliberately out of scope):** policy for the *other* shadow classes (`MINIMIZABLE_PRIVATE_CONTEXT` redact-vs-block, `UNTRUSTED_EXTERNAL_OUTPUT`) — redaction may be right there, blocking is right for reserved. Not touched.
+
 ---
 
 ## The discovery
