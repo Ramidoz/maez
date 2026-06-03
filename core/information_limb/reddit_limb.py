@@ -12,6 +12,7 @@ Spec: docs/superpowers/specs/2026-06-03-reddit-limb-v0-design.md
 
 from __future__ import annotations
 
+import datetime
 import time
 from dataclasses import dataclass
 from urllib.parse import urlencode
@@ -122,3 +123,54 @@ def fetch_identity(session: RedditSession) -> str:
     if resp.status_code == 429:
         return STATE_RATE_LIMITED
     return STATE_AUTH_ERROR
+
+
+def _expires_bucket(session: RedditSession | None, now: float) -> str:
+    if session is None:
+        return "none"
+    remaining = session.expires_at - now
+    if remaining <= 0:
+        return "expired"
+    if remaining < 1800:
+        return "<30m"
+    return "fresh"
+
+
+class RedditLimb:
+    """In-memory session + content-free health. One instance per daemon.
+    The session (token) lives only in process memory — never serialized."""
+
+    def __init__(self) -> None:
+        self._session: RedditSession | None = None
+        self._state: str = STATE_NEEDS_AUTH
+        self._last_success_at: str | None = None
+
+    def set_session(self, session: RedditSession) -> None:
+        self._session = session
+
+    def clear_session(self) -> None:
+        self._session = None
+        self._state = STATE_NEEDS_AUTH
+
+    def mark_state(self, state: str, *, now: float | None = None) -> None:
+        self._state = state
+        if state == STATE_AVAILABLE:
+            ts = now if now is not None else time.time()
+            self._last_success_at = datetime.datetime.fromtimestamp(
+                ts, tz=datetime.timezone.utc
+            ).isoformat()
+
+    def effective_state(self, *, now: float | None = None) -> str:
+        n = now if now is not None else time.time()
+        if self._session is None or self._session.is_expired(now=n):
+            return STATE_NEEDS_AUTH
+        return self._state
+
+    def health(self, *, now: float | None = None) -> dict:
+        n = now if now is not None else time.time()
+        return {
+            "state": self.effective_state(now=n),
+            "last_success_at": self._last_success_at,
+            "scopes": list(self._session.scopes) if self._session else [],
+            "expires_in_bucket": _expires_bucket(self._session, n),
+        }

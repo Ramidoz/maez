@@ -107,5 +107,40 @@ class FetchIdentityTests(unittest.TestCase):
             self.assertEqual(reddit_limb.fetch_identity(self._session()), "unreachable")
 
 
+class RedditLimbStateTests(unittest.TestCase):
+    def test_fresh_limb_is_needs_auth_and_content_free(self):
+        limb = reddit_limb.RedditLimb()
+        h = limb.health()
+        self.assertEqual(h["state"], "needs_auth")
+        self.assertIsNone(h["last_success_at"])
+        # content-free: keys are a fixed allowlist, no token/identity fields
+        self.assertEqual(set(h.keys()), {"state", "last_success_at", "scopes", "expires_in_bucket"})
+
+    def test_set_session_then_available_records_no_token(self):
+        limb = reddit_limb.RedditLimb()
+        now = 2000.0
+        limb.set_session(reddit_limb.RedditSession("SECRET_TOK", ["identity"], now, now + 3600))
+        limb.mark_state("available", now=now)
+        h = limb.health(now=now)
+        self.assertEqual(h["state"], "available")
+        self.assertIsNotNone(h["last_success_at"])
+        self.assertEqual(h["scopes"], ["identity"])
+        # the token must never appear anywhere in the health output
+        self.assertNotIn("SECRET_TOK", repr(h))
+
+    def test_expired_session_reports_needs_auth(self):
+        limb = reddit_limb.RedditLimb()
+        now = 3000.0
+        limb.set_session(reddit_limb.RedditSession("T", ["identity"], now, now + 10))
+        self.assertEqual(limb.health(now=now + 999)["state"], "needs_auth")
+
+    def test_clear_session_returns_to_needs_auth(self):
+        limb = reddit_limb.RedditLimb()
+        now = 4000.0
+        limb.set_session(reddit_limb.RedditSession("T", ["identity"], now, now + 3600))
+        limb.clear_session()
+        self.assertEqual(limb.health(now=now)["state"], "needs_auth")
+
+
 if __name__ == "__main__":
     unittest.main()
