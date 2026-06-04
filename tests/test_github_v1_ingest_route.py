@@ -142,6 +142,7 @@ class GithubV1IngestRouteTests(unittest.TestCase):
                 "staged": True,
                 "admitted": True,
                 "state": "admitted",
+                "resumed": True,
                 "repo_count": 7,
                 "login": "SECRET_LOGIN",
             },
@@ -164,8 +165,17 @@ class GithubV1IngestRouteTests(unittest.TestCase):
         )
         self.assertEqual(
             set(result),
-            {"ok", "ingest_record_id", "fetch_batch_id", "staged", "admitted", "state"},
+            {
+                "ok",
+                "ingest_record_id",
+                "fetch_batch_id",
+                "staged",
+                "admitted",
+                "state",
+                "resumed",
+            },
         )
+        self.assertTrue(result["resumed"])
         self.assertNotIn("SECRET_LOGIN", repr(result))
         self.assertNotIn("SESSION_SECRET", repr(result))
 

@@ -45,7 +45,7 @@ class GithubV1Error(ValueError):
 GITHUB_INGEST_HEADER = "X-Maez-Github-Ingest"
 GITHUB_INGEST_TOKEN_ENV = "MAEZ_GITHUB_INGEST_TOKEN"
 _INGEST_RESPONSE_KEYS = frozenset(
-    {"ok", "ingest_record_id", "fetch_batch_id", "staged", "admitted", "state"}
+    {"ok", "ingest_record_id", "fetch_batch_id", "staged", "admitted", "state", "resumed"}
 )
 
 
@@ -180,10 +180,40 @@ def ingest_repo_count(
 def run_ingest(*, limb_session, store, memory, fetch_batch_id: str) -> dict:
     """Owner-triggered GitHub v1 ingest.
 
-    Fetches the one allowed account fact, stages it, and admits it to raw memory
-    at most once per durable ingest_record_id. The returned value is deliberately
-    content-free: ids and state only.
+    Resumes any interrupted staged observation before fetching from GitHub,
+    then admits at most once per durable ingest_record_id. The returned value
+    is deliberately content-free: ids and state only.
     """
+    pending = store.oldest_pending()
+    if pending is not None:
+        ingest_record_id = pending.ingest_record_id
+        existing_body_id = memory.owner_account_row_id_by_source_ref(
+            f"github.s2:{ingest_record_id}"
+        )
+        if existing_body_id is not None:
+            store.mark_admitted(ingest_record_id, body_memory_id=str(existing_body_id))
+            return _ingest_result(
+                ingest_record_id=ingest_record_id,
+                fetch_batch_id=pending.fetch_batch_id,
+                admitted=False,
+                resumed=True,
+            )
+
+        body_memory_id = admit_repo_count_to_body(
+            memory=memory,
+            repo_count=pending.repo_count,
+            count_field=pending.count_field,
+            ingest_record_id=ingest_record_id,
+            fetch_batch_id=pending.fetch_batch_id,
+        )
+        store.mark_admitted(ingest_record_id, body_memory_id=str(body_memory_id))
+        return _ingest_result(
+            ingest_record_id=ingest_record_id,
+            fetch_batch_id=pending.fetch_batch_id,
+            admitted=True,
+            resumed=True,
+        )
+
     repo_count = github_limb.fetch_repo_count(limb_session)
     count_field = "public_repos"
     staged = ingest_repo_count(
@@ -194,14 +224,12 @@ def run_ingest(*, limb_session, store, memory, fetch_batch_id: str) -> dict:
     ingest_record_id = staged["ingest_record_id"]
     state = store.promotion_state(ingest_record_id)
     if state == "admitted":
-        return {
-            "ok": True,
-            "ingest_record_id": ingest_record_id,
-            "fetch_batch_id": fetch_batch_id,
-            "staged": True,
-            "admitted": False,
-            "state": "admitted",
-        }
+        return _ingest_result(
+            ingest_record_id=ingest_record_id,
+            fetch_batch_id=fetch_batch_id,
+            admitted=False,
+            resumed=False,
+        )
 
     body_memory_id = admit_repo_count_to_body(
         memory=memory,
@@ -211,13 +239,29 @@ def run_ingest(*, limb_session, store, memory, fetch_batch_id: str) -> dict:
         fetch_batch_id=fetch_batch_id,
     )
     store.mark_admitted(ingest_record_id, body_memory_id=str(body_memory_id))
+    return _ingest_result(
+        ingest_record_id=ingest_record_id,
+        fetch_batch_id=fetch_batch_id,
+        admitted=True,
+        resumed=False,
+    )
+
+
+def _ingest_result(
+    *,
+    ingest_record_id: str,
+    fetch_batch_id: str,
+    admitted: bool,
+    resumed: bool,
+) -> dict:
     return {
         "ok": True,
         "ingest_record_id": ingest_record_id,
         "fetch_batch_id": fetch_batch_id,
         "staged": True,
-        "admitted": True,
+        "admitted": bool(admitted),
         "state": "admitted",
+        "resumed": bool(resumed),
     }
 
 

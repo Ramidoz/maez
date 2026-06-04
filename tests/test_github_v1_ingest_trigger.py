@@ -174,6 +174,7 @@ class GithubIngestScriptTests(unittest.TestCase):
                 "staged": True,
                 "admitted": True,
                 "state": "admitted",
+                "resumed": True,
             }
             post.return_value = response
             self.assertEqual(github_ingest.main(), 0)
@@ -207,6 +208,7 @@ class GithubIngestScriptTests(unittest.TestCase):
                 "staged": True,
                 "admitted": True,
                 "state": "admitted",
+                "resumed": True,
                 "repo_count": 7,
                 "count_field": "public_repos",
                 "login": "SECRET_LOGIN",
@@ -220,6 +222,7 @@ class GithubIngestScriptTests(unittest.TestCase):
 
         printed = out.getvalue()
         self.assertIn("ingest_record_id", printed)
+        self.assertIn("resumed", printed)
         for forbidden in (
             "repo_count",
             "count_field",

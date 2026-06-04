@@ -35,6 +35,7 @@ _CONTENT_FREE_RESULT_KEYS = (
     "staged",
     "admitted",
     "state",
+    "resumed",
     "error",
 )
 
