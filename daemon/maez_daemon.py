@@ -82,6 +82,7 @@ from core.perception import snapshot as perception_snapshot, format_snapshot
 from core.information_limb.calendar_v1 import build_calendar_health
 from core.information_limb.calendar_store import CalendarStore, CalendarStoreError
 from core.information_limb.calendar_v1_config import CalendarMode, resolve_calendar_mode
+from core.information_limb.github_v1_config import GithubMode, resolve_github_mode
 from core.information_limb import reddit_limb as _reddit_limb_mod
 from core.information_limb import github_limb as _github_limb_mod
 
@@ -176,6 +177,7 @@ SHUTDOWN_FILE = BASE_DIR / "daemon" / "last_shutdown"
 LEDGER_DB_PATH = Path(os.environ.get("MAEZ_LEDGER_DB_PATH") or (MEMORY_DIR / "ledger.db"))
 M1_ALLOWED_PROMOTION_SOURCES = frozenset({"telegram_surface", "telegram_text"})
 CALENDAR_MODE = resolve_calendar_mode(os.environ)
+GITHUB_MODE = resolve_github_mode(os.environ)
 CALENDAR_STORE_DB_PATH = Path(
     os.environ.get("MAEZ_CALENDAR_STORE_DB") or (MEMORY_DIR / "calendar_v1.db")
 )
@@ -2671,6 +2673,8 @@ class MaezDaemon:
         self._git_cycle_counter = 0
         self.GIT_EVERY_N_CYCLES = 10  # every ~5 minutes
         self._last_git_context = ""
+        self._github_mode = GITHUB_MODE
+        self._github_legacy_enabled = self._github_mode == GithubMode.LEGACY_DEV_ONLY
         # 2026-04-25 disk-fixation patch state. See
         # core/cognition/perception_signature.py.
         # Patch B: signature gate. Patch A: stale-field redaction.
@@ -2686,11 +2690,15 @@ class MaezDaemon:
         self._pending_cleanup = None
         self._ollama_lock = threading.Lock()
         self.followup_queue = FollowUpQueue()
-        self.github = GitHubSkill()
+        # Legacy broad-PAT GitHub reader is dev-test-only. GitHub v1 S2 ingest
+        # replaces this path; normal/v1 mode must not read MAEZ_GITHUB_TOKEN.
+        self.github = None
+        if self._github_legacy_enabled:
+            self.github = GitHubSkill()
         self.reddit = RedditSkill()
         self._github_counter = 0
         self._reddit_counter = 0
-        self._last_github_block = ""
+        self._last_github_block = None
         self._public_context_counter = 0
         self._last_public_context = ""
         # Write startup timestamp to file (survives in-memory state issues)
@@ -4292,12 +4300,10 @@ class MaezDaemon:
                 salience=65,
             )
 
-        # Add GitHub context if available. Dual view: .text feeds the local
-        # 27B prompt + cycle candidate (string ops); the ProvenancedText handle
-        # on self._last_github_block carries owner_account_context to any
-        # cloud-bound assembly. That class is categorically blocked at cloud
-        # egress; this material does not leave the body to a cloud model.
-        if self._last_github_block:
+        # Add GitHub context only for the legacy broad-PAT reader, which is
+        # dev-test-only. GitHub v1 replaces this raw prompt-injection path with
+        # S2-bounded staging and taint-railed body admission.
+        if self._github_legacy_enabled and self._last_github_block:
             prompt += f"\n{self._last_github_block.text}\n"
             _extend_cycle_candidates(
                 "fresh_evidence",
@@ -4469,6 +4475,10 @@ class MaezDaemon:
                 "screen observation — UNAVAILABLE this cycle (vision source down or capture failed)"
             )
         signals_absent.append("calendar — UNAVAILABLE this cycle (Calendar v1 not enabled)")
+        if not self._github_legacy_enabled:
+            signals_absent.append(
+                "GitHub — UNAVAILABLE this cycle (GitHub v1 S2 ingest; legacy reader off)"
+            )
 
         signal_manifest = (
             "SIGNALS PRESENT THIS CYCLE:\n" + "\n".join(f"  ✓ {s}" for s in signals_present) + "\n"
@@ -7967,15 +7977,16 @@ class MaezDaemon:
                 except Exception as e:
                     logger.debug("git dirty count update failed: %s", e)
 
-            # GitHub — every 10 cycles
+            # GitHub legacy raw reader — every 10 cycles, dev-test-only.
             self._mark_cycle_stage("github_context")
-            self._github_counter += 1
-            if self._github_counter >= 10:
-                self._github_counter = 0
-                try:
-                    self._last_github_block = self.github.get_context_block()
-                except Exception as e:
-                    logger.debug("GitHub context failed: %s", e)
+            if self._github_legacy_enabled and self.github is not None:
+                self._github_counter += 1
+                if self._github_counter >= 10:
+                    self._github_counter = 0
+                    try:
+                        self._last_github_block = self.github.get_context_block()
+                    except Exception as e:
+                        logger.debug("GitHub context failed: %s", e)
 
             # Reddit — every 15 cycles. After fetching the in-cycle
             # context block, persist newly-cached posts to raw memory
