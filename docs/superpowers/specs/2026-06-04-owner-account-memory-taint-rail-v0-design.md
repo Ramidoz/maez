@@ -208,3 +208,14 @@ The implementation plan should include at least these tests:
 This slice does not teach Maez more about Rohit's GitHub yet. It builds the memory wristband first.
 
 If future account-derived data becomes memory, that memory will carry "this came from Rohit's account" as it is recalled. If the web cloud consult tries to send it out, the proxy refuses it. Old memories keep behaving exactly as they do today.
+
+---
+
+## 9. Carried forward to the digestion slice — the "cloud refuses it" witness fork (owner-decided 2026-06-04)
+
+The taint rail v0 canary proved the door **hermetically** (real assembly → `chat_completions` directly), because `maez-subscription-proxy.service` is a **dormant, non-launched** service. The future digestion slice — which will store a real account-derived fact with `egress_origin_class="owner_account_context"` and prove cloud refuses it — inherits an explicit fork for that final proof. **Make it explicit in the digestion spec; do not let it be an accident:**
+
+- **Hermetic witness (the default / owner lean):** drive the real assembly path (`format_for_prompt_provenanced` → `build_claude_router_cloud_payload` → `claude_tier.call_messages` body → `chat_completions`) and assert `403` / adapter-not-called, exactly as the taint rail v0 canary did. Proves the actual door + rail logic **without waking an extra service**. The covenant claim is "account memory cannot leave," and the hermetic path tests that door logic directly.
+- **Live witness (only if deliberately chosen):** start / route through the actual `maez-subscription-proxy.service` and confirm the live `403`. Operationally stronger, but a **bigger deployment act** — and proxy deployment is a *separate decision*, not a thing to smuggle into a memory-ingestion slice.
+
+**Owner decision:** **hermetic-first.** A live-proxy witness is in scope for the digestion slice **only if** we deliberately decide the proxy *itself* is part of what that slice is validating. Otherwise keep the digestion slice small and boring (fetch a tiny account-derived fact → store tagged → prove recall carries the taint → prove the door refuses it hermetically), and do **not** bundle proxy bring-up into it.
