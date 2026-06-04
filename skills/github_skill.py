@@ -13,6 +13,8 @@ from typing import Optional
 
 import requests
 
+from core.egress.provenance import ProvenancedText
+
 try:
     from core.infra import paths as _paths
     from core.infra.secrets import load_ordinary_config_for_process, load_secrets_for_process
@@ -158,9 +160,12 @@ class GitHubSkill:
                 activity.append(f"Starred {repo}")
         return activity[:6]
 
-    def get_context_block(self) -> str:
+    def get_context_block(self) -> ProvenancedText:
         if not self.enabled:
-            return ""
+            return ProvenancedText.owner_account_context(
+                "",
+                source_ref="github:disabled",
+            )
         try:
             repos = self.get_user_repos()
             active = sorted(repos, key=lambda r: r.get('updated_at', ''), reverse=True)[:5]
@@ -189,13 +194,19 @@ class GitHubSkill:
                 for t in trending[:4]:
                     lines.append(f"  {t['name']} ({t['stars']:,} stars) — {t['description'][:60]}")
 
-            return "\n".join(lines)
+            return ProvenancedText.owner_account_context(
+                "\n".join(lines),
+                source_ref="github:context_block",
+            )
         except Exception as e:
             logger.error("GitHub context failed: %s", e)
-            return "[GITHUB] Unavailable."
+            return ProvenancedText.owner_account_context(
+                "[GITHUB] Unavailable.",
+                source_ref="github:error",
+            )
 
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
     g = GitHubSkill()
-    print(g.get_context_block())
+    print(g.get_context_block().text)
