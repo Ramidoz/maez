@@ -74,5 +74,51 @@ class EgressProvenancePrimitiveTests(unittest.TestCase):
         self.assertTrue(derived.spans[0].redaction_allowed)
 
 
+class OwnerAccountRestrictivenessTests(unittest.TestCase):
+    def test_owner_account_context_has_explicit_restrictiveness_score(self):
+        import core.egress.provenance as provenance
+
+        self.assertIn("owner_account_context", provenance._RESTRICTIVENESS)
+        self.assertEqual(provenance._RESTRICTIVENESS["owner_account_context"], 3)
+
+    def test_owner_account_context_dominates_memory_in_blended_summary(self):
+        from core.egress.provenance import ProvenancedText
+
+        owner = ProvenancedText.owner_account_context(
+            "private account fact",
+            source_ref="test:owner_account",
+        )
+        memory = ProvenancedText.memory(
+            "ordinary recalled memory",
+            source_ref="test:memory",
+        )
+
+        summary = ProvenancedText.blended_summary(
+            "summary of both",
+            sources=[memory, owner],
+            source_ref="test:blend",
+        )
+
+        self.assertEqual(summary.spans[0].origin_class, "owner_account_context")
+        self.assertFalse(summary.spans[0].redaction_allowed)
+
+    def test_owner_account_context_dominates_memory_in_derived_output(self):
+        from core.egress.provenance import ProvenancedText
+
+        source = ProvenancedText.owner_account_context(
+            "private account fact",
+            source_ref="test:owner_account",
+        )
+
+        derived = ProvenancedText.derived_output(
+            "derived private account observation",
+            source=source,
+            source_ref="test:derived",
+        )
+
+        self.assertEqual(derived.spans[0].origin_class, "owner_account_context")
+        self.assertFalse(derived.spans[0].redaction_allowed)
+
+
 if __name__ == "__main__":
     unittest.main()

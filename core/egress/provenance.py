@@ -9,6 +9,7 @@ from core.egress.gate import (
     KNOWN_ORIGINS,
     MINIMIZABLE_PRIVATE_CONTEXT,
     NON_PRIVATE,
+    OWNER_ACCOUNT_CONTEXT,
     RESERVED_DENIED_RAW,
     UNTRUSTED_EXTERNAL_OUTPUT,
 )
@@ -16,6 +17,7 @@ from core.egress.gate import (
 
 _RESTRICTIVENESS = {
     **{origin: 3 for origin in RESERVED_DENIED_RAW},
+    **{origin: 3 for origin in OWNER_ACCOUNT_CONTEXT},
     **{origin: 2 for origin in MINIMIZABLE_PRIVATE_CONTEXT},
     **{origin: 2 for origin in UNTRUSTED_EXTERNAL_OUTPUT},
     **{origin: 1 for origin in INTENTIONAL_OUTBOUND},
