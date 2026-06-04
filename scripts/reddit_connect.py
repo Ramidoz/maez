@@ -51,7 +51,10 @@ def _read_env() -> tuple[str, str]:
     )
     load_ordinary_config_for_process()                       # client_id from config/.env
     load_secrets_for_process(                                 # handoff token from secrets.local.env
-        required={"MAEZ_REDDIT_HANDOFF_TOKEN"}, optional=set(), populate_environ=True,
+        # optional (not required) so a missing token falls through to the
+        # friendly sys.exit below instead of raising SecretLoadError at the
+        # owner-run ceremony.
+        required=set(), optional={"MAEZ_REDDIT_HANDOFF_TOKEN"}, populate_environ=True,
     )
     cid = os.environ.get("MAEZ_REDDIT_CLIENT_ID", "").strip()
     handoff = os.environ.get("MAEZ_REDDIT_HANDOFF_TOKEN", "").strip()
