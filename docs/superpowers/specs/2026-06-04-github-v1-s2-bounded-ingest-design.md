@@ -43,6 +43,12 @@ Per ADR 0033, a new information limb must name what it inherits and state every 
 
 **The owner's repo count** — a single integer from `GET https://api.github.com/user` (the `read:user` identity response already returns `public_repos`; a private/total count is used only if confirmed available under `read:user`, else public count). One number. **No** repo names, descriptions, commit messages, activity, stars, gists, followers, visibility breakdown, or third-party data. This is the smallest useful proof that GitHub v1 can digest account data without importing the account world.
 
+**Honest wording (load-bearing — the first account-derived memory must not overclaim):** the stored content string must say exactly *what the integer counts*. The wording is **derived from the field actually used**, never a generic "N repositories":
+- if the count is `public_repos` (the safe fallback): `GitHub reports N public repositories on the owner's profile`;
+- only if a total/owned count is **confirmed available under `read:user`**: `GitHub reports N repositories owned by the owner`.
+
+The connector picks the wording from the resolved field; it must never store a total-implying phrase when it only read `public_repos`.
+
 The fact is owner-account-derived → it wears `egress_origin_class="owner_account_context"` from the moment it lands in the body.
 
 ---
@@ -72,7 +78,9 @@ GET /user (read:user, v0 limb token)  ── auth/onboarding = separate operator
    → github_store (staging): minimized provider-mirror row, content-free sidecars
    → ONE reviewed flow admits the fact to the BODY:
        MemoryManager.store(
-         content="the owner has N repositories",
+         content=<honest wording from §2: "GitHub reports N public repositories
+                  on the owner's profile" for public_repos, or "...N repositories
+                  owned by the owner" only if a total is confirmed>,
          provenance_source=TOOL_OBSERVATION,        # → trust_tier OBSERVED (existing mapping)
          egress_origin_class="owner_account_context",
          metadata={ source_ref: "github.s2:<ingest_record_id>",
@@ -147,7 +155,7 @@ No `maez-subscription-proxy.service` is started; the live-proxy 403 is out of sc
 
 1. **S2 gate real:** provider data reaches the staging store only through `github_connector_policy` (owner-only, `read:user`, no-fields-beyond-count); a broad scope or extra field is rejected.
 2. **Staging-first + minimized:** the fact lands in `github_store` as a minimized row (integer + hashes + record_state), content-free telemetry; no raw provider response persisted.
-3. **One body-admission, narrow:** exactly the repo-count fact is admitted to **raw** memory with `trust_tier=OBSERVED` + `egress_origin_class="owner_account_context"`; nothing else is admitted; no core promotion.
+3. **One body-admission, narrow + honest:** exactly the repo-count fact is admitted to **raw** memory with `trust_tier=OBSERVED` + `egress_origin_class="owner_account_context"`; nothing else is admitted; no core promotion. **The stored content must not overclaim** — it states what the integer counts (public-only phrasing for `public_repos`; a total-implying phrase only if a total was confirmed read). A test asserts the content wording matches the resolved field (public read → no "owned"/total phrasing).
 4. **Traceability:** the body row carries a `source_ref` resolving to the staging `ingest_record_id` (→ `fetch_batch_id`).
 5. **Egress refused (hermetic):** the admitted fact, recalled and routed through the real assembly into `chat_completions`, is **403 / adapter-not-called / content-free / `owner_account_context_blocked_default`**.
 6. **Legacy replaced:** in `V1`/`DISABLED` mode the daemon does not wire `github_skill`'s raw injection; legacy is dev-test-only behind `MAEZ_GITHUB_ALLOW_LEGACY_TEST_MODE=1`; the broad PAT is not read on the normal path.
