@@ -150,5 +150,41 @@ class RunIngestTests(unittest.TestCase):
         self.assertEqual(memory.store.call_count, 2)
 
 
+class GithubIngestScriptTests(unittest.TestCase):
+    def test_script_uses_ingest_secret_and_content_free_route(self):
+        import scripts.github_ingest as github_ingest
+        from core.information_limb import github_v1
+
+        with (
+            mock.patch.object(
+                github_ingest,
+                "_read_ingest_token",
+                return_value="INGEST_SECRET",
+            ),
+            mock.patch.object(github_ingest.requests, "post") as post,
+        ):
+            response = mock.Mock()
+            response.status_code = 200
+            response.json.return_value = {
+                "ok": True,
+                "ingest_record_id": "ir-1",
+                "fetch_batch_id": "fb-1",
+                "staged": True,
+                "admitted": True,
+                "state": "admitted",
+            }
+            post.return_value = response
+            self.assertEqual(github_ingest.main(), 0)
+
+        _, kwargs = post.call_args
+        self.assertEqual(
+            kwargs["headers"],
+            {github_v1.GITHUB_INGEST_HEADER: "INGEST_SECRET"},
+        )
+        self.assertEqual(kwargs["json"], {})
+        self.assertNotIn("repo_count", repr(response.json.return_value))
+        self.assertNotIn("login", repr(response.json.return_value))
+
+
 if __name__ == "__main__":
     unittest.main()
