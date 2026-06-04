@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
@@ -19,7 +20,7 @@ from core.information_limb.github_connector_policy import (
 )
 
 
-GITHUB_STORE_SCHEMA_VERSION = "2"
+GITHUB_STORE_SCHEMA_VERSION = "3"
 SOURCE_KIND = "github.repo_count"
 
 _EXPECTED_COLUMNS = {
@@ -33,6 +34,7 @@ _EXPECTED_COLUMNS = {
         "promotion_state",
         "body_memory_id",
         "github_store_schema_version",
+        "created_at",
         "updated_at",
     },
     "github_policy_versions": {
@@ -46,6 +48,15 @@ _EXPECTED_COLUMNS = {
 
 class GithubStoreError(RuntimeError):
     """Raised when GitHub v1 staging storage would violate its contract."""
+
+
+@dataclass(frozen=True)
+class PendingRecord:
+    ingest_record_id: str
+    fetch_batch_id: str
+    repo_count: int
+    count_field: str
+    created_at: str
 
 
 class GithubStore:
@@ -69,6 +80,7 @@ class GithubStore:
                     promotion_state TEXT NOT NULL DEFAULT 'pending',
                     body_memory_id TEXT,
                     github_store_schema_version TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
 
@@ -126,6 +138,20 @@ class GithubStore:
                 """
                 ALTER TABLE github_provider_mirror
                 ADD COLUMN body_memory_id TEXT
+                """
+            )
+        if "created_at" not in columns:
+            conn.execute(
+                """
+                ALTER TABLE github_provider_mirror
+                ADD COLUMN created_at TEXT
+                """
+            )
+            conn.execute(
+                """
+                UPDATE github_provider_mirror
+                SET created_at=updated_at
+                WHERE created_at IS NULL
                 """
             )
         conn.execute(
@@ -199,9 +225,10 @@ class GithubStore:
                     count_hash,
                     record_state,
                     promotion_state,
-                    github_store_schema_version
+                    github_store_schema_version,
+                    created_at
                 )
-                VALUES (?, ?, ?, ?, ?, 'active', 'pending', ?)
+                VALUES (?, ?, ?, ?, ?, 'active', 'pending', ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(ingest_record_id)
                 DO UPDATE SET
                     fetch_batch_id=excluded.fetch_batch_id,
@@ -271,6 +298,34 @@ class GithubStore:
                 (ingest_record_id,),
             ).fetchone()
         return str(row[0]) if row is not None and row[0] is not None else None
+
+    def oldest_pending(self) -> PendingRecord | None:
+        self.validate_schema()
+        with self._connection() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    ingest_record_id,
+                    fetch_batch_id,
+                    repo_count,
+                    count_field,
+                    created_at
+                FROM github_provider_mirror
+                WHERE promotion_state='pending'
+                    AND record_state='active'
+                ORDER BY created_at ASC, ingest_record_id ASC
+                LIMIT 1
+                """
+            ).fetchone()
+        if row is None:
+            return None
+        return PendingRecord(
+            ingest_record_id=str(row[0]),
+            fetch_batch_id=str(row[1]),
+            repo_count=int(row[2]),
+            count_field=str(row[3]),
+            created_at=str(row[4]),
+        )
 
     def health(self) -> dict[str, int | str]:
         self.validate_schema()
