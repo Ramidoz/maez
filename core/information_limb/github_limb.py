@@ -180,6 +180,33 @@ def fetch_identity(session: GithubSession) -> str:
     return STATE_AUTH_ERROR
 
 
+def fetch_repo_count(session: GithubSession) -> int:
+    """GET /user; return ONLY public_repos.
+
+    GitHub v1 ingests one minimized fact. This boundary discards the provider
+    body after extracting that integer; login/id/email/repo names never cross
+    into the v1 orchestrator.
+    """
+    try:
+        resp = requests.get(
+            _USER_URL,
+            headers={
+                "Authorization": f"Bearer {session.access_token}",
+                "User-Agent": _USER_AGENT,
+                "Accept": "application/vnd.github+json",
+            },
+            timeout=_HTTP_TIMEOUT,
+        )
+    except requests.RequestException as exc:
+        raise GithubAuthError("GitHub /user unreachable") from exc
+    if resp.status_code != 200:
+        raise GithubAuthError(f"GitHub /user HTTP {resp.status_code}")
+    count = resp.json().get("public_repos")
+    if type(count) is not int or count < 0:
+        raise GithubAuthError("GitHub /user missing integer public_repos")
+    return count
+
+
 def _expires_bucket(session: GithubSession | None, now: float) -> str:
     if session is None:
         return "none"
