@@ -32,6 +32,8 @@ A **dedicated** `MAEZ_GITHUB_INGEST_TOKEN`, NOT the handoff token. Rationale: se
   - the body admission is **guarded by the staging record's promotion state** — if `ingest_record_id` is already admitted (S2 `promotion_state` set), `run_ingest` does **not** re-admit (returns `admitted=False`/already). One `ingest_record_id` ⇒ at most one body row.
 - No hidden delete/dedupe policy; repeated triggers with new `fetch_batch_id` intentionally accumulate as distinct observations (supersede-able later via the traceability `source_ref`).
 
+**Accepted residual (owner-decided 2026-06-04, after review of the merged implementation):** the durable guard fully covers the *named* case — a crash **after staging, before admission** → retry sees `promotion_state="pending"` and finishes the admission (no double-write). A **narrower** sub-window remains: a crash **mid-admission** — after `memory.store` returns the body row but *before* the durable `store.mark_admitted` — would leave the body row written with state still `pending`, so a retry re-admits → a **second** body row. This is a sub-second window on a manual one-shot trigger, and the outcome is a *duplicate observation* (supersede-able via `source_ref`; no leak, no corruption). Fully closing it requires **body-side idempotency** keyed on `ingest_record_id`/`source_ref` (a deterministic body memory id, or check-`source_ref`-before-admit so a re-admit is a no-op) — a `MemoryManager`-touching follow-up, not a cheap reorder. Owner accepted the residual and parked the hardening: `docs/superpowers/parked/2026-06-04-github-v1-ingest-body-side-idempotency.md`.
+
 ## 4. Covenant rails
 
 - Owner-gated **explicit** trigger only; no scheduler / auto / proactive ingest (Calendar's rule).
