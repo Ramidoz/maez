@@ -12,7 +12,8 @@ class OldestPendingTests(unittest.TestCase):
         from core.information_limb.github_store import GithubStore
 
         with tempfile.TemporaryDirectory() as d:
-            store = GithubStore(Path(d) / "github_v1.db")
+            db = Path(d) / "github_v1.db"
+            store = GithubStore(db)
             store.initialize()
             store.stage_repo_count(
                 ingest_record_id="ir-A",
@@ -26,18 +27,34 @@ class OldestPendingTests(unittest.TestCase):
                 repo_count=8,
                 count_field="public_repos",
             )
+            with closing(sqlite3.connect(db)) as conn:
+                conn.execute(
+                    """
+                    UPDATE github_provider_mirror
+                    SET created_at='2026-06-04T02:00:00+00:00'
+                    WHERE ingest_record_id='ir-A'
+                    """
+                )
+                conn.execute(
+                    """
+                    UPDATE github_provider_mirror
+                    SET created_at='2026-06-04T01:00:00+00:00'
+                    WHERE ingest_record_id='ir-B'
+                    """
+                )
+                conn.commit()
 
             pending = store.oldest_pending()
             self.assertIsNotNone(pending)
-            self.assertEqual(pending.ingest_record_id, "ir-A")
-            self.assertEqual(pending.repo_count, 7)
+            self.assertEqual(pending.ingest_record_id, "ir-B")
+            self.assertEqual(pending.repo_count, 8)
             self.assertEqual(pending.count_field, "public_repos")
-            self.assertEqual(pending.fetch_batch_id, "fb-A")
-
-            store.mark_admitted("ir-A", body_memory_id="mem-A")
-            self.assertEqual(store.oldest_pending().ingest_record_id, "ir-B")
+            self.assertEqual(pending.fetch_batch_id, "fb-B")
 
             store.mark_admitted("ir-B", body_memory_id="mem-B")
+            self.assertEqual(store.oldest_pending().ingest_record_id, "ir-A")
+
+            store.mark_admitted("ir-A", body_memory_id="mem-A")
             self.assertIsNone(store.oldest_pending())
 
     def test_created_at_migrates_for_existing_rows(self):
