@@ -48,6 +48,44 @@ class GithubV1ConnectorTests(unittest.TestCase):
         self.assertEqual(available["state"], "available")
         self.assertNotIn("SECRET_LOGIN", repr(available))
 
+    def test_body_admission_honest_wording_taint_and_traceability(self):
+        memory = mock.Mock()
+        memory.store.return_value = "mem-1"
+
+        github_v1.admit_repo_count_to_body(
+            memory=memory,
+            repo_count=7,
+            count_field="public_repos",
+            ingest_record_id="ir-1",
+            fetch_batch_id="fb-1",
+        )
+
+        _, kwargs = memory.store.call_args
+        self.assertIn("public repositories", kwargs["content"])
+        self.assertNotIn("owned by the owner", kwargs["content"])
+        self.assertEqual(kwargs["cycle"], 0)
+        self.assertEqual(kwargs["egress_origin_class"], "owner_account_context")
+        self.assertTrue(str(kwargs["provenance_source"]).lower().endswith("tool_observation"))
+        self.assertEqual(kwargs["metadata"]["source_ref"], "github.s2:ir-1")
+        self.assertEqual(kwargs["metadata"]["fetch_batch_id"], "fb-1")
+
+    def test_total_field_uses_owned_wording(self):
+        memory = mock.Mock()
+        memory.store.return_value = "mem-2"
+
+        github_v1.admit_repo_count_to_body(
+            memory=memory,
+            repo_count=9,
+            count_field="total",
+            ingest_record_id="ir-2",
+            fetch_batch_id="fb-2",
+        )
+
+        self.assertIn(
+            "repositories owned by the owner",
+            memory.store.call_args.kwargs["content"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

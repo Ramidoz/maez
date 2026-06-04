@@ -118,6 +118,44 @@ def ingest_repo_count(
     }
 
 
+def admit_repo_count_to_body(
+    *,
+    memory,
+    repo_count: int,
+    count_field: str,
+    ingest_record_id: str,
+    fetch_batch_id: str,
+) -> str:
+    """Write the single reviewed GitHub fact to raw memory with owner taint."""
+
+    try:
+        policy.assert_fact_minimized({"repo_count": repo_count, "count_field": count_field})
+    except policy.GithubPolicyError as exc:
+        raise GithubV1Error(str(exc)) from exc
+
+    from memory.memory_manager import ProvenanceSource
+
+    content = _honest_repo_count_content(repo_count=repo_count, count_field=count_field)
+    return memory.store(
+        content=content,
+        cycle=0,
+        provenance_source=ProvenanceSource.TOOL_OBSERVATION,
+        egress_origin_class="owner_account_context",
+        metadata={
+            "source_ref": f"github.s2:{ingest_record_id}",
+            "fetch_batch_id": fetch_batch_id,
+        },
+    )
+
+
+def _honest_repo_count_content(*, repo_count: int, count_field: str) -> str:
+    if count_field == "public_repos":
+        return f"GitHub reports {repo_count} public repositories on the owner's profile"
+    if count_field == "total":
+        return f"GitHub reports {repo_count} repositories owned by the owner"
+    raise GithubV1Error(f"unknown GitHub count_field: {count_field!r}")
+
+
 def _extract_public_repo_count(user_response: dict) -> int:
     count = user_response.get("public_repos") if isinstance(user_response, dict) else None
     if type(count) is not int or count < 0:
