@@ -20,7 +20,12 @@ from enum import Enum
 from pathlib import Path
 
 from core.birth import memory_phase_tag as _memory_phase_tag
-from core.egress.gate import KNOWN_ORIGINS
+from core.egress.gate import (
+    KNOWN_ORIGINS,
+    MINIMIZABLE_PRIVATE_CONTEXT,
+    UNTRUSTED_EXTERNAL_OUTPUT,
+)
+from core.egress.provenance import ProvenanceSpan, ProvenancedText
 from core.llm_client import sanitize_prompt_text
 from core.routing.temporal_cue import (
     AbsoluteRecallWindow,
@@ -285,6 +290,24 @@ def _egress_origin_metadata(egress_origin_class) -> dict:
     return {
         "egress_origin_class": _coerce_egress_origin_class(egress_origin_class)
     }
+
+
+def _redaction_allowed_for_origin(origin_class: str) -> bool:
+    return (
+        origin_class in MINIMIZABLE_PRIVATE_CONTEXT
+        or origin_class in UNTRUSTED_EXTERNAL_OUTPUT
+    )
+
+
+def _memory_row_origin(meta: dict | None) -> str:
+    raw = (meta or {}).get("egress_origin_class")
+    if not raw:
+        return "memory"
+    return _coerce_egress_origin_class(raw)
+
+
+def _memory_row_source_ref(tier: str, mem_id: str) -> str:
+    return f"memory:{tier}:{mem_id}"
 
 # ── Topic Router ──
 
@@ -2515,6 +2538,75 @@ class MemoryManager:
 
         lines.extend(tail_lines)
         return "\n".join(lines)
+
+    def format_for_prompt_provenanced(
+        self,
+        recalled: dict,
+        max_chars: "int | None" = None,
+    ) -> ProvenancedText:
+        """Format recalled memories as text plus per-row egress provenance.
+
+        ``format_for_prompt`` remains the text authority. This method splits
+        the already-rendered RECALLED blocks and assigns spans from the source
+        row metadata, so cloud-bound recall can preserve owner-account taint
+        without changing local prompt bytes.
+        """
+        rendered = self.format_for_prompt(recalled, max_chars=max_chars)
+        if not rendered:
+            return ProvenancedText.from_spans(())
+
+        rows_by_tier: dict[str, list[dict]] = {
+            "core": list(recalled.get("core", []) or []),
+            "daily": list(recalled.get("daily", []) or []),
+            "raw": list(recalled.get("raw", []) or []),
+        }
+        spans: list[ProvenanceSpan] = []
+        pos = 0
+        pattern = re.compile(
+            r'<RECALLED\s+[^>]*tier="(?P<tier>[^"]+)"[^>]*'
+            r'id="(?P<id>[^"]+)"[^>]*>.*?</RECALLED>\n*',
+            re.DOTALL,
+        )
+
+        def append_span(text: str, origin: str, source_ref: str) -> None:
+            if not text:
+                return
+            spans.append(ProvenanceSpan(
+                text=text,
+                origin_class=origin,
+                source_ref=source_ref,
+                redaction_allowed=_redaction_allowed_for_origin(origin),
+            ))
+
+        for match in pattern.finditer(rendered):
+            append_span(
+                rendered[pos:match.start()],
+                "system_bounded_query",
+                "memory:recall_renderer:framing",
+            )
+            tier = match.group("tier")
+            mem_id = match.group("id")
+            row_meta: dict | None = None
+            tier_rows = rows_by_tier.get(tier, [])
+            for idx, row in enumerate(tier_rows):
+                candidate_id = str(row.get("id", ""))[:16]
+                if candidate_id == mem_id:
+                    row_meta = row.get("metadata") or {}
+                    del tier_rows[idx]
+                    break
+            origin = _memory_row_origin(row_meta)
+            append_span(
+                match.group(0),
+                origin,
+                _memory_row_source_ref(tier, mem_id),
+            )
+            pos = match.end()
+        append_span(
+            rendered[pos:],
+            "system_bounded_query",
+            "memory:recall_renderer:framing",
+        )
+        return ProvenancedText.from_spans(spans)
 
     def format_living_context(self, recalled: dict, max_chars: "int | None" = None) -> str:
         """Compact renderer for role-hinted living ``[memory context]``.
