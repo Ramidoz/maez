@@ -569,6 +569,7 @@ class WebInterfaceCloudAsToolTests(unittest.TestCase):
             clear=False,
         ):
             from skills.web_interface import build_claude_router_cloud_payload
+        from core.egress.provenance import ProvenancedText
 
         _, messages = build_claude_router_cloud_payload(
             owner_bridge=True,
@@ -577,7 +578,10 @@ class WebInterfaceCloudAsToolTests(unittest.TestCase):
                 {"role": "user", "content": "raw prior turn"},
                 {"role": "user", "content": "What does this code do?"},
             ],
-            owner_memory="owner memory",
+            owner_memory=ProvenancedText.owner_account_context(
+                "OWNER_ACCOUNT_MEMORY_CANARY",
+                source_ref="memory:raw:owner-canary",
+            ),
             lived_brief="lived recall",
             envelope={"status": "ok", "sources": []},
             envelope_block="Evidence envelope",
@@ -585,9 +589,11 @@ class WebInterfaceCloudAsToolTests(unittest.TestCase):
         )
 
         origins = [
-            message["content"].spans[0].origin_class
+            span.origin_class
             for message in messages
+            for span in message["content"].spans
         ]
+        self.assertIn("owner_account_context", origins)
         self.assertIn("memory", origins)
         self.assertIn("unclassified", origins)
         self.assertIn("lived_store", origins)

@@ -6074,7 +6074,7 @@ def build_claude_router_cloud_payload(
     owner_bridge: bool,
     message: str,
     history: list,
-    owner_memory: str = "",
+    owner_memory: object = "",
     lived_brief: str = "",
     envelope: dict | None = None,
     envelope_block: str = "",
@@ -6096,13 +6096,25 @@ def build_claude_router_cloud_payload(
     )
     cloud_messages: list[dict] = []
     if owner_bridge and owner_memory:
+        owner_prefix = (
+            "Shared continuity with the owner from the long-running private channel:\n\n"
+        )
+        if isinstance(owner_memory, ProvenancedText):
+            owner_memory_content = (
+                ProvenancedText.memory(
+                    owner_prefix,
+                    source_ref="web_interface:owner_memory_prefix",
+                )
+                + owner_memory
+            )
+        else:
+            owner_memory_content = ProvenancedText.memory(
+                owner_prefix + str(owner_memory),
+                source_ref="web_interface:owner_memory",
+            )
         cloud_messages.append({
             "role": "user",
-            "content": ProvenancedText.memory(
-                "Shared continuity with the owner from the long-running private channel:\n\n"
-                f"{owner_memory}",
-                source_ref="web_interface:owner_memory",
-            ),
+            "content": owner_memory_content,
         })
     for item in history[:-1]:
         if isinstance(item, dict) and item.get("role") and item.get("content"):
@@ -6279,8 +6291,13 @@ def chat():
         # high-recall query can't push past the llama-server ctx.
         from core.cognition.envelope_builder import resolve_recall_cap_chars
 
+        owner_recalled = memory.recall_for_telegram(message)
         owner_memory = memory.format_for_prompt(
-            memory.recall_for_telegram(message),
+            owner_recalled,
+            max_chars=resolve_recall_cap_chars(),
+        )
+        owner_memory_cloud = memory.format_for_prompt_provenanced(
+            owner_recalled,
             max_chars=resolve_recall_cap_chars(),
         )
         if owner_memory:
@@ -6660,7 +6677,7 @@ def chat():
                 owner_bridge=owner_bridge,
                 message=message,
                 history=history,
-                owner_memory=owner_memory if owner_bridge else "",
+                owner_memory=owner_memory_cloud if owner_bridge else "",
                 lived_brief=_lived_brief if owner_bridge else "",
                 envelope=_evidence_envelope,
                 envelope_block=_envelope_block,
