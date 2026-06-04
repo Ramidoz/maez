@@ -28,7 +28,7 @@ set -uo pipefail
 REPO="${MAEZ_REPO:-/home/rohit/maez}"
 KEYFILE="${MAEZ_BACKUP_KEY:-$HOME/.config/maez/maez_backup.key}"
 DEST_ROOT="${MAEZ_BACKUP_DEST:-/run/media/rohit/Lexar/MAEZ/MAEZ_CONTINUITY_BACKUPS}"
-SERVICE="maez.service"
+SERVICE="${MAEZ_SERVICE:-maez.service}"
 
 fail() { echo "ERROR: $*" >&2; exit 1; }
 note() { echo "  $*"; }
@@ -78,8 +78,20 @@ restart_daemon() { systemctl --user start "$SERVICE" >/dev/null 2>&1 || true; }
 trap restart_daemon EXIT
 echo "Pausing $SERVICE for a consistent snapshot…"
 systemctl --user stop "$SERVICE" >/dev/null 2>&1 || true
-sleep 2
-note "daemon: $(systemctl --user is-active "$SERVICE" 2>/dev/null | head -1)"
+# Witness the stop — never trust that "asked to stop" means "stopped". A
+# consistent snapshot REQUIRES the daemon quiescent (no process mutating the
+# SQLite state mid-tar), so poll for 'inactive' and FAIL before archiving if it
+# is still running. The EXIT trap restarts it on the way out. (systemctl stop is
+# synchronous, but a failed/timed-out stop is swallowed above, so the gate — not
+# the stop's exit code — is what actually proves quiescence.)
+stopped=""; tries=0
+while [ "$tries" -lt 15 ]; do
+  st="$(systemctl --user is-active "$SERVICE" 2>/dev/null | head -1)"
+  [ "$st" = "inactive" ] && { stopped=1; break; }
+  tries=$((tries + 1)); sleep 1
+done
+[ -n "$stopped" ] || fail "daemon is still '$(systemctl --user is-active "$SERVICE" 2>/dev/null | head -1)' after stop — refusing to archive live, mutating state (the trap will restart it)."
+note "daemon: inactive (stop witnessed)"
 
 echo "Building encrypted archive → $ARCHIVE"
 tar --exclude='maez/models' --exclude='maez/.venv' --exclude='maez/logs' \
