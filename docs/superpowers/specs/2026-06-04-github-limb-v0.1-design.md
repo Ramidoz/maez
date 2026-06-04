@@ -159,3 +159,24 @@ missing producer factory in `core/egress/provenance.py`. Also noted:
 `core/egress/provenance.py` (blend scoring treats it via the `unclassified=4`
 fallback) — fine for the direct stamp, to be made explicit in the digestion
 slice.
+
+---
+
+## 10. §9 re-scoped — DEFERRED and FOLDED into the digestion slice (2026-06-04 trace + owner decision)
+
+A pre-build trace (Claude, brainstorm exploration) **corrected and refined** §9's path description and concluded §9 should not be built as a standalone slice now. Owner decision: **defer §9; fold the taint-inheritance requirement into the future digestion/ingestion slice.** No code landed for this; this section is the actionable record.
+
+**Verified path map (corrects §9's wording):**
+- The **daemon** cognition path is **local** — the GitHub block becomes a *transient* cycle candidate (`core/cognition/cycle_packet.py`, `CycleEvidenceCandidate` has `source_type` but **no `origin_class`**) feeding the local 27B cycle prompt. It is **never persisted to durable memory** and **never routed to cloud**. (§9 implied a daemon cycle→memory→cloud route; there isn't one.)
+- The **real cloud path** is the **web owner-bridge consult**: `skills/web_interface.py` (`build_claude_router_cloud_payload`, the `route_external`/jarvis-tier branch, ~web_interface.py:6659) → `skills/claude_router.py:call_claude` → `core/routing/claude_tier.py:call_messages` → subscription proxy → `core/egress/gate.py`.
+- That consult **does** include recalled memory (`owner_memory`, `lived_brief`) **and already tags it** — but as `ProvenancedText.memory()` / `ProvenancedText.lived_store()` (origin classes `memory` / `lived_store`), which are **`redact-and-send`** to cloud (regex redactor scrubs keys/emails/IPs, then sends), **not** the categorical `owner_account_context` block. So recalled memory is provenanced, just not *as owner-account*.
+- **There is no owner-account-tainted durable memory today.** The only owner-account producer (GitHub `get_context_block`) feeds the transient-local cycle path; nothing writes owner-account data into a durable store, and the memory schema carries `trust_tier`/`provenance_source` (lineage) but **no egress `origin_class` column**. So §9's leak path is **structurally open but empty** — the mechanism to make memory *inherit* owner-account taint belongs WITH the code that first writes owner-account data into memory (build the lock with the door, avoid drift).
+
+**Folded requirement — the digestion/ingestion slice MUST satisfy (acceptance criteria carried forward):**
+1. When owner-account data is first written to **durable memory**, the stored record carries (or can derive) the `owner_account_context` egress class — taint-inheritance, per the parked sketch's "metadata inherits taint."
+2. That taint must **survive recall** into the web owner-bridge cloud consult: recalled owner-account-derived memory reaches `claude_tier`/the proxy as an `owner_account_context` span, not as generic `memory`/`lived_store`.
+3. **Witness (no tag-then-flatten):** a canary owner-account memory, stored → recalled → assembled into the *real* web-owner-bridge consult path, is refused at the proxy (403, adapter not called). Same discipline as v0.1's canary.
+4. Add `owner_account_context` to `_RESTRICTIVENESS` (core/egress/provenance.py) so blend/derived scoring treats it explicitly (currently `unclassified=4` fallback) — needed once owner-account memory blends with other content.
+5. Consider whether the memory schema needs an egress `origin_class` column (vs deriving it from `source_kind`/producer at recall time) — a digestion-slice design decision.
+
+**Thin live watch-item (documented, not closed):** a Maez *reflection* that digests the GitHub block could mention an owner-account specific (e.g., a private repo name), be stored as a generic reflection (no taint), and later recall into the web owner-bridge consult as `memory` → redact-and-send → leak. Narrow (reflection-write organ is gated; requires web + jarvis-external + the reflection surfacing an owner-account specific), but real. The digestion slice closes it via taint-inheritance; until then it is a known, accepted thin gap — not a claim of closure.
