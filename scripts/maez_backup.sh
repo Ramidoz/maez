@@ -57,6 +57,20 @@ src_disk="$(lsblk -no PKNAME "$src_src" 2>/dev/null | grep -v '^$' | head -1)"; 
 dst_disk="$(lsblk -no PKNAME "$dst_src" 2>/dev/null | grep -v '^$' | head -1)"; dst_disk="${dst_disk:-$dst_src}"
 [ "$src_disk" != "$dst_disk" ] || fail "destination is on the SAME physical disk as the repo ($src_disk) — that is not a backup. Attach an external drive."
 
+# The encryption key must NOT live on the backup media — otherwise the disk
+# alone could decrypt the archive and "encrypted off-disk backup" is theater.
+# Make the claim below true-by-construction: resolve the key's physical disk
+# (via its nearest existing ancestor, since the key may not exist yet) and
+# refuse if it is the backup disk. Checked BEFORE we would mint a key, so we
+# never write one onto the media and then reject it.
+key_probe="$KEYFILE"
+while [ ! -e "$key_probe" ] && [ "$key_probe" != "/" ] && [ "$key_probe" != "." ]; do
+  key_probe="$(dirname "$key_probe")"
+done
+key_src="$(df --output=source "$key_probe" 2>/dev/null | tail -1)"
+key_disk="$(lsblk -no PKNAME "$key_src" 2>/dev/null | grep -v '^$' | head -1)"; key_disk="${key_disk:-$key_src}"
+[ "$key_disk" != "$dst_disk" ] || fail "the backup key ($KEYFILE) is on the SAME disk as the backup destination ($dst_disk) — the media alone could then decrypt the archive. Put MAEZ_BACKUP_KEY on a different disk (default: ~/.config/maez/maez_backup.key)."
+
 # The key: generate once (first run), then reuse. Warn loudly on a new key —
 # it must be copied to a durable store or the backup is unrecoverable.
 if [ ! -s "$KEYFILE" ]; then
