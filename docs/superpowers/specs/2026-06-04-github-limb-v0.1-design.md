@@ -134,3 +134,28 @@ Local cognition (the 27B cycle) consumes the block unchanged — egress is the o
 
 ## 8. Plain-English summary
 This slice makes GitHub data wear a wristband all the way to the door, and proves the door refuses it. Separately, it removes the unattended "Maez pushes itself to public GitHub at night" behavior. That's clean boundary honesty — not digestion. How Maez *digests* what's inside is a later, separately-witnessed slice.
+
+---
+
+## 9. Residual gap — verified at implementation (acceptance rule 4)
+
+**What v0.1 closed:** the producer (`github_skill.get_context_block`) now emits
+`ProvenancedText(owner_account_context)`; a canary driven through the real
+subscription-proxy path is refused (403, adapter not called, content-free) —
+`tests/test_github_owner_account_provenance.py`.
+
+**Named residual gap (deferred to the digestion slice):** the daemon's GitHub
+paths are local (the 27B cycle). The cycle-candidate -> memory -> recall route is
+text-only (`_cycle_packet.candidates_from_text`), so it flattens provenance:
+GitHub content that reaches a cloud-routed query via recalled memory would arrive
+as untagged text (falling back to `owner_message_context`, which is not
+categorically blocked). v0.1 does not thread `owner_account_context` through the
+memory/recall substrate — that is the digestion slice. This is a named, known
+gap, not a claim of full closure.
+
+Implementation note: v0.1 left `core/egress/gate.py` untouched, but did add the
+missing producer factory in `core/egress/provenance.py`. Also noted:
+`owner_account_context` is absent from `_RESTRICTIVENESS` in
+`core/egress/provenance.py` (blend scoring treats it via the `unclassified=4`
+fallback) — fine for the direct stamp, to be made explicit in the digestion
+slice.
