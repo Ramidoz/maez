@@ -20,6 +20,7 @@ from enum import Enum
 from pathlib import Path
 
 from core.birth import memory_phase_tag as _memory_phase_tag
+from core.egress.gate import KNOWN_ORIGINS
 from core.llm_client import sanitize_prompt_text
 from core.routing.temporal_cue import (
     AbsoluteRecallWindow,
@@ -259,6 +260,31 @@ def _provenance_metadata(provenance_source, trust_tier) -> dict:
     if trust_tier is not None:
         extra["trust_tier"] = _coerce_trust_tier(trust_tier).value
     return extra
+
+
+def _coerce_egress_origin_class(value) -> str:
+    """Validate the cloud-egress origin class for a memory row.
+
+    This is separate from provenance_source/trust_tier. Unknown values
+    raise before write so typoed owner_account_context cannot launder
+    into generic memory.
+    """
+    origin = str(value)
+    if origin not in KNOWN_ORIGINS:
+        valid = ", ".join(sorted(KNOWN_ORIGINS))
+        raise ValueError(
+            f"unknown egress_origin_class {value!r}; expected one of: {valid}"
+        )
+    return origin
+
+
+def _egress_origin_metadata(egress_origin_class) -> dict:
+    """Return write-through egress metadata for durable memory rows."""
+    if egress_origin_class is None:
+        return {}
+    return {
+        "egress_origin_class": _coerce_egress_origin_class(egress_origin_class)
+    }
 
 # ── Topic Router ──
 
@@ -958,7 +984,8 @@ class MemoryManager:
 
     def store(self, content: str, cycle: int, snapshot: dict | None = None,
               metadata: dict | None = None, *,
-              provenance_source=None, trust_tier=None) -> str:
+              provenance_source=None, trust_tier=None,
+              egress_origin_class=None) -> str:
         """Store a reasoning cycle output with its full perception snapshot.
 
         ``provenance_source`` / ``trust_tier`` are the Step 5x.A
@@ -970,6 +997,7 @@ class MemoryManager:
         provenance_extra = _provenance_metadata(
             provenance_source, trust_tier
         )
+        egress_origin_extra = _egress_origin_metadata(egress_origin_class)
 
         if not content or content == "(empty response)":
             return ""
@@ -986,6 +1014,7 @@ class MemoryManager:
         if metadata:
             doc_metadata.update(metadata)
         doc_metadata.update(provenance_extra)
+        doc_metadata.update(egress_origin_extra)
 
         # Tag with topic wing
         doc_metadata["wing"] = _topic_router.detect_wing(content)
@@ -1014,7 +1043,8 @@ class MemoryManager:
         return memory_id
 
     def store_telegram(self, content: str, *,
-                       provenance_source=None, trust_tier=None) -> str:
+                       provenance_source=None, trust_tier=None,
+                       egress_origin_class=None) -> str:
         """Store a Telegram exchange in the raw archive.
 
         ``provenance_source`` / ``trust_tier`` are the Step 5x.A
@@ -1022,6 +1052,7 @@ class MemoryManager:
         provenance_extra = _provenance_metadata(
             provenance_source, trust_tier
         )
+        egress_origin_extra = _egress_origin_metadata(egress_origin_class)
         if not content:
             return ""
         memory_id = str(uuid.uuid4())
@@ -1034,6 +1065,7 @@ class MemoryManager:
             "memory_phase": _memory_phase_tag(),
         }
         meta.update(provenance_extra)
+        meta.update(egress_origin_extra)
         self._assert_embedding_writes_allowed()
         self.raw.add(
             ids=[memory_id],
@@ -1353,6 +1385,7 @@ class MemoryManager:
 
     def store_core(self, content: str, source: str = "reasoning", *,
                    provenance_source=None, trust_tier=None,
+                   egress_origin_class=None,
                    promoted_from: list[str] | None = None,
                    allow_untrusted_ancestors: bool = False) -> str:
         """Store a significant long-term observation as a core memory.
@@ -1438,6 +1471,7 @@ class MemoryManager:
         provenance_extra = _provenance_metadata(
             provenance_source, trust_tier
         )
+        egress_origin_extra = _egress_origin_metadata(egress_origin_class)
         memory_id = f"core-{uuid.uuid4().hex[:12]}"
         now = datetime.now(timezone.utc).isoformat()
 
@@ -1448,6 +1482,7 @@ class MemoryManager:
             "memory_phase": _memory_phase_tag(),
         }
         meta.update(provenance_extra)
+        meta.update(egress_origin_extra)
         meta.update(ancestor_extra)
         self._assert_embedding_writes_allowed()
         self.core.add(

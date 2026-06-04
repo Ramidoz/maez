@@ -100,6 +100,40 @@ class ProvenanceWriteApiTests(unittest.TestCase):
         self.assertEqual(meta["provenance_source"], "claude_tier_response")
         self.assertEqual(meta["trust_tier"], "untrusted")
 
+    def test_store_accepts_egress_origin_class(self):
+        mm = _mm_with_fakes()
+        mid = mm.store(
+            "owner-account memory canary",
+            cycle=11,
+            egress_origin_class="owner_account_context",
+        )
+
+        self.assertTrue(mid)
+        meta = mm.raw.add_calls[-1]["metadatas"][0]
+        self.assertEqual(meta["egress_origin_class"], "owner_account_context")
+
+    def test_store_telegram_accepts_egress_origin_class(self):
+        mm = _mm_with_fakes()
+        mid = mm.store_telegram(
+            "owner account exchange canary",
+            egress_origin_class="owner_account_context",
+        )
+
+        self.assertTrue(mid)
+        meta = mm.raw.add_calls[-1]["metadatas"][0]
+        self.assertEqual(meta["egress_origin_class"], "owner_account_context")
+
+    def test_store_core_accepts_egress_origin_class(self):
+        mm = _mm_with_fakes()
+        mid = mm.store_core(
+            "owner-account-derived core canary",
+            egress_origin_class="owner_account_context",
+        )
+
+        self.assertTrue(mid.startswith("core-"))
+        meta = mm.core.add_calls[-1]["metadatas"][0]
+        self.assertEqual(meta["egress_origin_class"], "owner_account_context")
+
     def test_unmigrated_entries_have_no_provenance_and_prompt_is_unchanged(self):
         from memory.memory_manager import MemoryManager
 
@@ -126,6 +160,16 @@ class ProvenanceWriteApiTests(unittest.TestCase):
         mm = _mm_with_fakes()
         with self.assertRaises(ValueError):
             mm.store("bad tier", cycle=1, trust_tier="probably_fine")
+        self.assertEqual(mm.raw.add_calls, [])
+
+    def test_invalid_egress_origin_class_raises_before_write(self):
+        mm = _mm_with_fakes()
+        with self.assertRaises(ValueError):
+            mm.store(
+                "bad egress origin",
+                cycle=1,
+                egress_origin_class="owner_account_contex",
+            )
         self.assertEqual(mm.raw.add_calls, [])
 
 
