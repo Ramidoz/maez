@@ -83,8 +83,10 @@ from core.information_limb.calendar_v1 import build_calendar_health
 from core.information_limb.calendar_store import CalendarStore, CalendarStoreError
 from core.information_limb.calendar_v1_config import CalendarMode, resolve_calendar_mode
 from core.information_limb import reddit_limb as _reddit_limb_mod
+from core.information_limb import github_limb as _github_limb_mod
 
 _REDDIT_LIMB = _reddit_limb_mod.RedditLimb()
+_GITHUB_LIMB = _github_limb_mod.GithubLimb()
 from core.body.camera_presence_state import (
     CameraPresenceReading,
     CameraPresenceState,
@@ -2922,6 +2924,7 @@ class MaezDaemon:
                 **episode_counts,
             },
             "reddit_limb": _REDDIT_LIMB.health(),
+            "github_limb": _GITHUB_LIMB.health(),
             "brain": {
                 "configured_model": MODEL,
                 "served_model_alias": served_model_alias(default=MODEL, timeout_s=0.25),
@@ -9656,6 +9659,17 @@ class MaezDaemon:
                 headers=request.headers,
                 body_loader=lambda: request.get_json(silent=True) or {},
                 limb=_REDDIT_LIMB,
+            )
+            return jsonify(tile), status
+
+        @app.route("/internal/limb/github/session", methods=["POST"])
+        def github_limb_session():
+            # auth-before-envelope (same as reddit): handle_handoff verifies the
+            # secret BEFORE body_loader() reads the token-bearing JSON body.
+            tile, status = _github_limb_mod.handle_handoff(
+                headers=request.headers,
+                body_loader=lambda: request.get_json(silent=True) or {},
+                limb=_GITHUB_LIMB,
             )
             return jsonify(tile), status
 

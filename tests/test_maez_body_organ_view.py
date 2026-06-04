@@ -104,6 +104,7 @@ class BodyHealthProjectionTests(unittest.TestCase):
                 "recall",
                 "covenant_perimeter",
                 "reddit_limb",
+                "github_limb",
             },
         )
         self.assertEqual(body["schema_version"], "maez_body.v0")
