@@ -84,10 +84,17 @@ def exchange_code_for_token(*, client_id: str, code: str, redirect_uri: str) -> 
     if not token:
         raise RedditAuthError("token exchange returned no access_token")
     now = time.time()
-    scope = body.get("scope", "identity")
+    # Fail closed on scope: Reddit's token response always includes `scope`. A
+    # missing/empty/broader scope is abnormal and is NOT identity proof — abort
+    # rather than fabricate ["identity"].
+    scope = body.get("scope")
+    scopes = [s for s in (scope or "").split() if s]
+    if set(scopes) != {"identity"}:
+        raise RedditAuthError(
+            f"unexpected token scope {scope!r}; v0 requires exactly identity")
     return RedditSession(
         access_token=token,
-        scopes=scope.split() if isinstance(scope, str) else list(scope),
+        scopes=scopes,
         obtained_at=now,
         expires_at=now + float(body.get("expires_in", 3600)),
     )
@@ -212,9 +219,13 @@ def handle_handoff(*, headers, body_loader, limb: "RedditLimb") -> tuple[dict, i
     # v0 covenant pin — identity-only, enforced HERE at the trust boundary, not
     # just in the authorize URL. Reject any token carrying a broader scope so a
     # buggy/compromised ceremony cannot hand Maez a history/read-scoped token.
-    scopes = list(body.get("scopes") or ["identity"])
-    if set(scopes) - {"identity"}:
+    # FAIL CLOSED: the scope label must be PRESENT and exactly identity. A
+    # missing/empty scope is abnormal (Reddit always returns scope), so it is
+    # rejected — never treated as identity proof.
+    scopes = body.get("scopes")
+    if not scopes or set(scopes) != {"identity"}:
         return {"ok": False, "error": "non_identity_scope_rejected"}, 400
+    scopes = list(scopes)
     now = time.time()
     limb.set_session(RedditSession(
         access_token=token,

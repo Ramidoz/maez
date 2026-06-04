@@ -74,6 +74,19 @@ class ExchangeCodeTests(unittest.TestCase):
                     redirect_uri="http://localhost:65010/reddit/callback",
                 )
 
+    def test_exchange_raises_on_missing_or_broader_scope(self):
+        # fail closed: a token response with no scope, or a broader scope, is
+        # not identity proof
+        for payload in ({"access_token": "T", "expires_in": 3600},                       # no scope
+                        {"access_token": "T", "scope": "identity history", "expires_in": 3600}):
+            with mock.patch.object(reddit_limb.requests, "post") as post:
+                post.return_value = self._fake_response(payload=payload)
+                with self.assertRaises(reddit_limb.RedditAuthError):
+                    reddit_limb.exchange_code_for_token(
+                        client_id="CID", code="C",
+                        redirect_uri="http://localhost:65010/reddit/callback",
+                    )
+
 
 class FetchIdentityTests(unittest.TestCase):
     def _session(self):

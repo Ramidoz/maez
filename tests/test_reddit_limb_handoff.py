@@ -116,9 +116,22 @@ class IdentityOnlyPinTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(limb.health()["scopes"], ["identity"])
 
-    def test_empty_scopes_defaults_to_identity(self):
-        _, _, status = self._handoff([])
-        self.assertEqual(status, 200)
+    def test_empty_scopes_rejected(self):
+        # fail closed: a blank scope label is NOT identity proof
+        limb, _, status = self._handoff([])
+        self.assertEqual(status, 400)
+        self.assertEqual(limb.health()["state"], "needs_auth")
+
+    def test_missing_scopes_field_rejected(self):
+        limb = reddit_limb.RedditLimb()
+        with mock.patch.object(reddit_limb, "fetch_identity", return_value="available"):
+            _, status = reddit_limb.handle_handoff(
+                headers=_Headers({reddit_limb.REDDIT_HANDOFF_HEADER: "GOODSECRET"}),
+                body_loader=lambda: {"access_token": "T"},   # no 'scopes' key
+                limb=limb,
+            )
+        self.assertEqual(status, 400)
+        self.assertEqual(limb.health()["state"], "needs_auth")
 
 
 if __name__ == "__main__":

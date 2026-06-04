@@ -77,6 +77,21 @@ class PollForTokenTests(unittest.TestCase):
                 sleep=lambda s: None, now=lambda: clock.__setitem__("t", clock["t"] + 1) or clock["t"])
         self.assertEqual(session.access_token, "TOK")
 
+    def test_missing_scope_in_token_response_raises(self):
+        # fail closed: token with no scope field is abnormal, not identity proof
+        with mock.patch.object(github_limb.requests, "post",
+                               return_value=self._resp({"access_token": "TOK"})):
+            with self.assertRaises(github_limb.GithubAuthError):
+                github_limb.poll_for_token(client_id="CID", grant=self._grant(),
+                                           sleep=lambda s: None, now=lambda: 0.0)
+
+    def test_broader_scope_in_token_response_raises(self):
+        with mock.patch.object(github_limb.requests, "post",
+                               return_value=self._resp({"access_token": "TOK", "scope": "read:user repo"})):
+            with self.assertRaises(github_limb.GithubAuthError):
+                github_limb.poll_for_token(client_id="CID", grant=self._grant(),
+                                           sleep=lambda s: None, now=lambda: 0.0)
+
     def test_access_denied_raises(self):
         with mock.patch.object(github_limb.requests, "post",
                                return_value=self._resp({"error": "access_denied"})):

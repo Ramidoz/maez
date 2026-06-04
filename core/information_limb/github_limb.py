@@ -119,8 +119,14 @@ def poll_for_token(
         body = resp.json() if resp.content else {}
         token = body.get("access_token")
         if token:
-            scope = body.get("scope", "read:user")
-            scopes = [s for s in scope.replace(",", " ").split() if s] or ["read:user"]
+            # Fail closed on scope: GitHub's device-flow token response always
+            # includes `scope`. A missing/empty/broader scope is abnormal and is
+            # NOT identity proof — abort rather than fabricate ["read:user"].
+            scope = body.get("scope")
+            scopes = [s for s in (scope or "").replace(",", " ").split() if s]
+            if set(scopes) != {"read:user"}:
+                raise GithubAuthError(
+                    f"unexpected token scope {scope!r}; v0 requires exactly read:user")
             t = time.time()
             # OAuth-App device-flow user tokens do not expire in v0 — use a long
             # horizon; the limb is in-memory only so a restart re-auths anyway.
@@ -259,10 +265,14 @@ def handle_handoff(*, headers, body_loader, limb: "GithubLimb") -> tuple[dict, i
     if not token:
         return {"ok": False, "error": "missing_access_token"}, 400
     # v0 covenant pin — read:user only, enforced HERE at the trust boundary, not
-    # just at the device-code request. Reject any token carrying a broader scope.
-    scopes = list(body.get("scopes") or ["read:user"])
-    if set(scopes) - {"read:user"}:
+    # just at the device-code request. FAIL CLOSED: the scope label must be
+    # PRESENT and exactly read:user. A missing/empty scope is abnormal (GitHub
+    # always returns scope in the token response), so it is rejected — never
+    # treated as identity proof. Broader scopes are likewise rejected.
+    scopes = body.get("scopes")
+    if not scopes or set(scopes) != {"read:user"}:
         return {"ok": False, "error": "non_identity_scope_rejected"}, 400
+    scopes = list(scopes)
     now = time.time()
     limb.set_session(GithubSession(
         access_token=token,

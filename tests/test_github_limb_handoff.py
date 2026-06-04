@@ -109,9 +109,22 @@ class IdentityOnlyPinTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(limb.health()["scopes"], ["read:user"])
 
-    def test_empty_scopes_defaults_to_read_user(self):
-        _, _, status = self._handoff([])
-        self.assertEqual(status, 200)
+    def test_empty_scopes_rejected(self):
+        # fail closed: a blank scope label is NOT identity proof
+        limb, _, status = self._handoff([])
+        self.assertEqual(status, 400)
+        self.assertEqual(limb.health()["state"], "needs_auth")
+
+    def test_missing_scopes_field_rejected(self):
+        limb = github_limb.GithubLimb()
+        with mock.patch.object(github_limb, "fetch_identity", return_value="available"):
+            _, status = github_limb.handle_handoff(
+                headers=_Headers({github_limb.GITHUB_HANDOFF_HEADER: "GOODSECRET"}),
+                body_loader=lambda: {"access_token": "T"},   # no 'scopes' key at all
+                limb=limb,
+            )
+        self.assertEqual(status, 400)
+        self.assertEqual(limb.health()["state"], "needs_auth")
 
 
 if __name__ == "__main__":
