@@ -445,6 +445,24 @@ function _st(v){ return (v==null||v==='')?'—':v; }
 function _shortTs(s){ if(!s) return null; const t=String(s).replace('T',' '); return t.slice(11,16); }
 function _pct(v){ return v==null?'—':(Number(v).toFixed(0)+'%'); }
 function _ageSec(iso){ if(!iso) return null; const t=Date.parse(String(iso)); return isNaN(t)?null:Math.max(0,Math.round((Date.now()-t)/1000)); }
+function _stateLabel(s){ return _st(s).replace(/_/g, ' '); }
+function _limbRenderer(connectCmd, identityScope){
+  return limb=>{
+    const state = limb.state || 'needs_auth';
+    const scopes = Array.isArray(limb.scopes) ? limb.scopes.join(' ') : '';
+    const seen = _shortTs(limb.last_success_at);
+    if(state==='available') return { cls:'awake', state:'available',
+      detail:`scopes ${scopes||identityScope}` + (seen?` · seen ${seen}`:''),
+      tag:'identity-only' };
+    if(state==='needs_auth') return { cls:'staged', state:'needs auth',
+      detail:`awaiting consent · ${connectCmd}` };
+    if(state==='auth_error'||state==='revoked') return { cls:'alert',
+      state:_stateLabel(state), detail: seen ? `last ok ${seen}` : 'no prior success' };
+    if(state==='rate_limited'||state==='unreachable') return { cls:'warn',
+      state:_stateLabel(state), detail: seen ? `last ok ${seen}` : 'retry later' };
+    return { cls:'warn', state:_stateLabel(state), detail:'state unknown' };
+  };
+}
 
 // Each organ maps its content-free body.<key> fields to a tile {cls,state,detail,tag}.
 // cls ∈ awake | off | staged | warn | alert. Proprioception: no real state → no glow.
@@ -459,6 +477,8 @@ const ORGANS = [
       state: (!av ? _st(e.sensor_state) : (present?'present':'absent')) + (stale?' · stale':''),
       detail: (age!=null?`seen ${age}s ago`:'no look yet') + ` · samples ~60s · ${_st(e.confidence_bucket)} conf` + (e.enabled_until?` · until ${_shortTs(e.enabled_until)}`:'') };
   }],
+  ['github_limb','GitHub','limb', _limbRenderer('scripts/github_connect.py','read:user')],
+  ['reddit_limb','Reddit','limb', _limbRenderer('scripts/reddit_connect.py','identity')],
   ['stomach','Stomach','reflection', s=>{
     const on=s.reflection_enabled, wr=s.write_enabled;
     return { cls: on?'awake':'off',

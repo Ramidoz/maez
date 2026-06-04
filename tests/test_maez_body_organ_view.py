@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -196,8 +199,39 @@ class BodyOrganViewFrontendTests(unittest.TestCase):
         self.assertIn("renderBody(d.body)", self.page)
         self.assertIn('id="organView"', self.page)
         for key in ("eyes", "stomach", "memory", "dreaming", "attention",
-                    "cycle_mind", "recall", "brain", "heartbeat", "covenant_perimeter"):
+                    "cycle_mind", "recall", "brain", "heartbeat", "covenant_perimeter",
+                    "github_limb", "reddit_limb"):
             self.assertIn(f"'{key}'", self.page, f"organ {key} not rendered")
+
+    def test_personal_data_limb_tiles_are_content_free(self):
+        self.assertIn("function _limbRenderer", self.page)
+        self.assertIn("function _stateLabel", self.page)
+        self.assertIn("scripts/github_connect.py", self.page)
+        self.assertIn("scripts/reddit_connect.py", self.page)
+        self.assertIn("identity-only", self.page)
+        self.assertIn("read:user", self.page)
+        self.assertIn("awaiting consent", self.page)
+        self.assertIn("state:_stateLabel(state)", self.page)
+        limb_js = self.page.split("function _limbRenderer", 1)[1].split("function renderBody", 1)[0]
+        for forbidden in ("access_token", "token", "login", "username", "email", "repo"):
+            self.assertNotIn(forbidden, limb_js)
+
+    def test_dashboard_javascript_syntax_is_checked_when_node_is_available(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node not available")
+        script = self.page.split("<script>", 1)[1].split("</script>", 1)[0]
+        with tempfile.NamedTemporaryFile("w", suffix=".js", encoding="utf-8") as handle:
+            handle.write(script)
+            handle.flush()
+            result = subprocess.run(
+                [node, "--check", handle.name],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_stays_local_only_and_read_only(self):
         # local-only banner preserved
