@@ -7624,17 +7624,8 @@ class MaezDaemon:
         except Exception as e:
             logger.warning("Developmental heartbeat failed: %s", e)
 
-        # Publish to GitHub after journal
-        try:
-            from skills.github_publish import GitHubPublisher
-
-            publisher = GitHubPublisher()
-            if publisher.publish_nightly():
-                logger.info("GitHub publish completed after journal")
-            else:
-                logger.warning("GitHub publish failed")
-        except Exception as e:
-            logger.error("GitHub publish error: %s", e)
+        # GitHub auto-publish retired (v0.1, 2026-06-04). Public exposure is
+        # a deliberate owner action, not a nightly daemon side effect.
 
     def _write_developmental_heartbeat(
         self,
