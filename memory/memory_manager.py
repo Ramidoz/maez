@@ -1074,14 +1074,10 @@ class MemoryManager:
         """
         if not source_ref:
             return None
-        try:
-            got = self.raw.get(
-                where={"source_ref": source_ref},
-                include=["metadatas"],
-            )
-        except Exception as exc:  # noqa: BLE001 - lookup is best-effort/read-only
-            logger.debug("owner-account source_ref lookup skipped: %s", exc)
-            return None
+        got = self.raw.get(
+            where={"source_ref": source_ref},
+            include=["metadatas"],
+        )
 
         ids = got.get("ids") or []
         metadatas = got.get("metadatas") or []

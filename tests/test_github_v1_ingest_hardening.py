@@ -151,6 +151,19 @@ class SourceRefLookupTests(unittest.TestCase):
             memory.owner_account_row_id_by_source_ref("github.s2:ir-generic")
         )
 
+    def test_lookup_failure_raises_instead_of_laundering_to_absent(self):
+        from memory.memory_manager import MemoryManager
+
+        class FailingRaw:
+            def get(self, **_kwargs):
+                raise RuntimeError("raw collection unavailable")
+
+        memory = MemoryManager.__new__(MemoryManager)
+        memory.raw = FailingRaw()
+
+        with self.assertRaises(RuntimeError):
+            memory.owner_account_row_id_by_source_ref("github.s2:ir-1")
+
 
 class ResumeTests(unittest.TestCase):
     def _store(self):
