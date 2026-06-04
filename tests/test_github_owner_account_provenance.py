@@ -181,16 +181,20 @@ class GithubCanaryReachesProxyAndIsRefused(unittest.IsolatedAsyncioTestCase):
         skill.get_trending_ai_repos = lambda n=5: []
         return skill.get_context_block()
 
-    def _proxy_request(self, block):
+    def _proxy_request(self, block, *, redaction_allowed: bool | None = None):
         from starlette.requests import Request
 
+        wire = block.to_wire()
+        if redaction_allowed is not None:
+            for span in wire:
+                span["redaction_allowed"] = redaction_allowed
         body = json.dumps(
             {
                 "model": "shadow-test",
                 "stream": False,
                 "maez_egress_segments": {
                     "schema_version": "maez-egress-provenance-v1",
-                    "parts": {"user": block.to_wire()},
+                    "parts": {"user": wire},
                 },
                 "messages": [{"role": "user", "content": block.text}],
             }
@@ -225,7 +229,9 @@ class GithubCanaryReachesProxyAndIsRefused(unittest.IsolatedAsyncioTestCase):
     async def test_block_holds_with_redaction_allowed_and_records_content_free(self):
         block = self._github_block_with_canary()
         try:
-            await self.server.chat_completions(self._proxy_request(block))
+            await self.server.chat_completions(
+                self._proxy_request(block, redaction_allowed=True)
+            )
         except HTTPException:
             pass
         with sqlite3.connect(self.db_path) as con:
