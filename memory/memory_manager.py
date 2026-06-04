@@ -1065,6 +1065,32 @@ class MemoryManager:
         logger.info("Raw stored: %s (cycle %d, %d chars)", memory_id[:8], cycle, len(doc_text))
         return memory_id
 
+    def owner_account_row_id_by_source_ref(self, source_ref: str) -> str | None:
+        """Return the raw memory row id for an owner-account source ref.
+
+        This is a read-only recovery helper for account-limb admission. A
+        same-source generic memory row must not satisfy the lookup; the row has
+        to carry both the source_ref and owner_account_context taint.
+        """
+        if not source_ref:
+            return None
+        try:
+            got = self.raw.get(
+                where={"source_ref": source_ref},
+                include=["metadatas"],
+            )
+        except Exception as exc:  # noqa: BLE001 - lookup is best-effort/read-only
+            logger.debug("owner-account source_ref lookup skipped: %s", exc)
+            return None
+
+        ids = got.get("ids") or []
+        metadatas = got.get("metadatas") or []
+        for idx, row_id in enumerate(ids):
+            meta = metadatas[idx] if idx < len(metadatas) else {}
+            if (meta or {}).get("egress_origin_class") == "owner_account_context":
+                return str(row_id)
+        return None
+
     def store_telegram(self, content: str, *,
                        provenance_source=None, trust_tier=None,
                        egress_origin_class=None) -> str:
