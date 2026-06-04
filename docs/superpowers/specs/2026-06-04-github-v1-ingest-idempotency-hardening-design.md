@@ -48,8 +48,8 @@ run_ingest(*, limb_session, store, memory, fetch_batch_id):
 
 ## 2. Components (contained — no change to shared `MemoryManager.store`)
 
-1. **`core/information_limb/github_store.py` — `oldest_pending() -> PendingRecord | None`.** Returns the oldest `promotion_state="pending"` row (by `created_at`) with its `ingest_record_id`, `fetch_batch_id`, `repo_count`, `count_field` (the staged count is already persisted). `None` if no pending.
-2. **A narrow read-only MemoryManager lookup** — `MemoryManager.owner_account_row_id_by_source_ref(source_ref) -> str | None`: returns the body row's `memory_id` if a raw row with that `source_ref` exists (so the resume can `mark_admitted` with the real id), else `None`. A metadata query on the raw collection (`where={"source_ref": …}`), **read-only** — it does **not** touch `store()` / the write path. (If the chroma metadata filter is awkward, a minimal id/source_ref lookup is acceptable — but no write-path change.)
+1. **`core/information_limb/github_store.py` — add a `created_at` column + `oldest_pending() -> PendingRecord | None`.** `updated_at` is unstable for ordering (it moves on `mark_admitted`/upsert), so add a stable **`created_at`** column to `github_provider_mirror` (migration: `created_at = updated_at` for existing rows; bump `github_store_schema_version`). `oldest_pending()` returns the oldest `promotion_state="pending"` row ordered by **`(created_at, ingest_record_id)`** (deterministic tiebreak) with its `ingest_record_id`, `fetch_batch_id`, `repo_count`, `count_field` (the staged count is already persisted). `None` if no pending.
+2. **A narrow read-only MemoryManager lookup** — `MemoryManager.owner_account_row_id_by_source_ref(source_ref) -> str | None`: returns the body row's `memory_id` only if a raw row exists with **both** `source_ref == …` **and** `egress_origin_class == "owner_account_context"` (so an accidental same-`source_ref` *generic* row cannot satisfy the body-side admit check), else `None`. A metadata query on the raw collection (`where={"source_ref": …, "egress_origin_class": "owner_account_context"}`), **read-only** — it does **not** touch `store()` / the write path. (If the chroma metadata filter is awkward, a minimal lookup is acceptable — but no write-path change, and both conditions must hold.)
 3. **`core/information_limb/github_v1.py` — `run_ingest`** rewritten as §1 (resume-first).
 
 ## 3. Covenant rails (unchanged + sharpened)
@@ -70,7 +70,7 @@ run_ingest(*, limb_session, store, memory, fetch_batch_id):
 
 ## 5. Scope
 
-**In:** `github_store.oldest_pending`, the read-only `has_owner_account_row_by_source_ref` lookup, `run_ingest` resume-first rewrite, the hermetic crash-window tests, the external-fetch inventory re-check if `run_ingest`/daemon lines move.
+**In:** the `github_store` `created_at` column + `oldest_pending`, the read-only `owner_account_row_id_by_source_ref` lookup (source_ref **and** owner_account_context), `run_ingest` resume-first rewrite, the hermetic crash-window tests, the external-fetch inventory re-check if `run_ingest`/daemon lines move.
 **Out:** any change to `MemoryManager.store`; deterministic-body-id/upsert (Option A); multi-fact; scheduling; the `web_interface` lazy-init debt.
 
 ## 6. Plain-English
