@@ -2560,6 +2560,11 @@ class MemoryManager:
             "daily": list(recalled.get("daily", []) or []),
             "raw": list(recalled.get("raw", []) or []),
         }
+        unmatched_owner_rows: list[tuple[str, dict]] = []
+        for tier, rows in rows_by_tier.items():
+            for row in rows:
+                if _memory_row_origin(row.get("metadata") or {}) == "owner_account_context":
+                    unmatched_owner_rows.append((tier, row))
         spans: list[ProvenanceSpan] = []
         pos = 0
         pattern = re.compile(
@@ -2592,6 +2597,10 @@ class MemoryManager:
                 candidate_id = str(row.get("id", ""))[:16]
                 if candidate_id == mem_id:
                     row_meta = row.get("metadata") or {}
+                    if _memory_row_origin(row_meta) == "owner_account_context":
+                        unmatched_owner_rows = [
+                            item for item in unmatched_owner_rows if item[1] is not row
+                        ]
                     del tier_rows[idx]
                     break
             origin = _memory_row_origin(row_meta)
@@ -2606,6 +2615,14 @@ class MemoryManager:
             "system_bounded_query",
             "memory:recall_renderer:framing",
         )
+        for tier, row in unmatched_owner_rows:
+            content = str(row.get("content") or "")
+            row_id = str(row.get("id") or "")[:16]
+            if (content and content in rendered) or (row_id and row_id in rendered):
+                raise ValueError(
+                    "owner-account recalled row was rendered without a matching "
+                    f"RECALLED span (tier={tier}, id={row_id})"
+                )
         return ProvenancedText.from_spans(spans)
 
     def format_living_context(self, recalled: dict, max_chars: "int | None" = None) -> str:

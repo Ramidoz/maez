@@ -88,6 +88,28 @@ class ProvenancedRecallRendererTests(unittest.TestCase):
         )
         self.assertTrue(all(not span.redaction_allowed for span in owner_spans))
 
+    def test_rendered_owner_account_row_must_match_recalled_block(self):
+        recalled = {
+            "core": [],
+            "daily": [],
+            "raw": [
+                _raw_row(
+                    "raw-owner",
+                    "OWNER_ACCOUNT_MEMORY_CANARY",
+                    egress_origin_class="owner_account_context",
+                )
+            ],
+        }
+        mm = _mm()
+
+        with mock.patch.object(
+            mm,
+            "format_for_prompt",
+            return_value="drifted renderer leaked OWNER_ACCOUNT_MEMORY_CANARY",
+        ):
+            with self.assertRaisesRegex(ValueError, "owner-account recalled row"):
+                mm.format_for_prompt_provenanced(recalled)
+
     def test_mixed_recall_uses_per_row_spans(self):
         recalled = {
             "core": [],
