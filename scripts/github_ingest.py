@@ -28,6 +28,15 @@ from core.information_limb import github_v1  # noqa: E402
 
 
 DAEMON_INGEST_URL = "http://127.0.0.1:11435/internal/limb/github/ingest"
+_CONTENT_FREE_RESULT_KEYS = (
+    "ok",
+    "ingest_record_id",
+    "fetch_batch_id",
+    "staged",
+    "admitted",
+    "state",
+    "error",
+)
 
 
 def _read_ingest_token() -> str:
@@ -55,8 +64,15 @@ def main() -> int:
         json={},
         timeout=15,
     )
-    print(f"daemon github ingest -> HTTP {response.status_code}: {response.json()}")
+    result = _content_free_result(response.json())
+    print(f"daemon github ingest -> HTTP {response.status_code}: {result}")
     return 0 if response.status_code == 200 else 1
+
+
+def _content_free_result(payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        return {"ok": False, "error": "invalid_daemon_response"}
+    return {key: payload[key] for key in _CONTENT_FREE_RESULT_KEYS if key in payload}
 
 
 if __name__ == "__main__":

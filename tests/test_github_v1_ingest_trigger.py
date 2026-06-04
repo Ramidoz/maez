@@ -1,7 +1,9 @@
 import unittest
 from unittest import mock
 import tempfile
+import io
 from pathlib import Path
+from contextlib import redirect_stdout
 
 
 class IngestTokenLoadableTests(unittest.TestCase):
@@ -184,6 +186,48 @@ class GithubIngestScriptTests(unittest.TestCase):
         self.assertEqual(kwargs["json"], {})
         self.assertNotIn("repo_count", repr(response.json.return_value))
         self.assertNotIn("login", repr(response.json.return_value))
+
+    def test_script_filters_hostile_response_before_printing(self):
+        import scripts.github_ingest as github_ingest
+
+        with (
+            mock.patch.object(
+                github_ingest,
+                "_read_ingest_token",
+                return_value="INGEST_SECRET",
+            ),
+            mock.patch.object(github_ingest.requests, "post") as post,
+        ):
+            response = mock.Mock()
+            response.status_code = 200
+            response.json.return_value = {
+                "ok": True,
+                "ingest_record_id": "ir-1",
+                "fetch_batch_id": "fb-1",
+                "staged": True,
+                "admitted": True,
+                "state": "admitted",
+                "repo_count": 7,
+                "count_field": "public_repos",
+                "login": "SECRET_LOGIN",
+                "access_token": "SECRET_TOKEN",
+                "raw_body": {"private": "SECRET_RAW"},
+            }
+            post.return_value = response
+            out = io.StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(github_ingest.main(), 0)
+
+        printed = out.getvalue()
+        self.assertIn("ingest_record_id", printed)
+        for forbidden in (
+            "repo_count",
+            "count_field",
+            "SECRET_LOGIN",
+            "SECRET_TOKEN",
+            "SECRET_RAW",
+        ):
+            self.assertNotIn(forbidden, printed)
 
 
 if __name__ == "__main__":
