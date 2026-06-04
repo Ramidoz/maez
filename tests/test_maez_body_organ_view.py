@@ -53,6 +53,13 @@ class BodyHealthProjectionTests(unittest.TestCase):
             cycle_count=42,
             lived_episodes=_CountingEpisodes(),
             dream=object(),
+            _github_health=lambda: {
+                "mode": "v1",
+                "source_kind": "github.repo_count",
+                "state": "needs_auth",
+                "staged_records": 0,
+                "error_class": "auth_access_expired",
+            },
         )
         env = {
             "MAEZ_CYCLE_DOORMAN_ENABLED": "1",
@@ -108,6 +115,7 @@ class BodyHealthProjectionTests(unittest.TestCase):
                 "covenant_perimeter",
                 "reddit_limb",
                 "github_limb",
+                "github_v1",
             },
         )
         self.assertEqual(body["schema_version"], "maez_body.v0")
@@ -117,6 +125,8 @@ class BodyHealthProjectionTests(unittest.TestCase):
         self.assertEqual(body["memory"]["episodes_superseded"], 1)
         self.assertEqual(body["brain"]["configured_model"], md.MODEL)
         self.assertEqual(body["brain"]["served_model_alias"], "qwen36-27b")
+        self.assertEqual(body["github_v1"]["source_kind"], "github.repo_count")
+        self.assertEqual(body["github_v1"]["state"], "needs_auth")
         self.assertTrue(body["attention"]["enabled"])
         self.assertTrue(body["cycle_mind"]["enabled"])
         self.assertEqual(body["stomach"]["max_reflections"], 1)
@@ -137,7 +147,18 @@ class BodyHealthProjectionTests(unittest.TestCase):
             def counts_by_status_and_source_kind(self):
                 raise RuntimeError("private db unavailable")
 
-        daemon = SimpleNamespace(cycle_count=1, lived_episodes=BrokenEpisodes(), dream=None)
+        daemon = SimpleNamespace(
+            cycle_count=1,
+            lived_episodes=BrokenEpisodes(),
+            dream=None,
+            _github_health=lambda: {
+                "mode": "disabled",
+                "source_kind": "github.repo_count",
+                "state": "disabled",
+                "staged_records": 0,
+                "error_class": "",
+            },
+        )
 
         with mock.patch.dict(os.environ, {}, clear=True), mock.patch(
             "daemon.maez_daemon.served_model_alias", return_value="llamacpp:unknown"

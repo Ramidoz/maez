@@ -82,7 +82,9 @@ from core.perception import snapshot as perception_snapshot, format_snapshot
 from core.information_limb.calendar_v1 import build_calendar_health
 from core.information_limb.calendar_store import CalendarStore, CalendarStoreError
 from core.information_limb.calendar_v1_config import CalendarMode, resolve_calendar_mode
+from core.information_limb.github_v1 import build_github_health
 from core.information_limb.github_v1_config import GithubMode, resolve_github_mode
+from core.information_limb.github_store import GithubStore, GithubStoreError
 from core.information_limb import reddit_limb as _reddit_limb_mod
 from core.information_limb import github_limb as _github_limb_mod
 
@@ -181,6 +183,7 @@ GITHUB_MODE = resolve_github_mode(os.environ)
 CALENDAR_STORE_DB_PATH = Path(
     os.environ.get("MAEZ_CALENDAR_STORE_DB") or (MEMORY_DIR / "calendar_v1.db")
 )
+GITHUB_STORE_DB_PATH = Path(os.environ.get("MAEZ_GITHUB_STORE_DB") or (MEMORY_DIR / "github_v1.db"))
 RECALL_SHADOW_FLAG = "MAEZ_RECALL_SHADOW_ENABLED"
 RECALL_SHADOW_BUDGET_MS = 250
 
@@ -2479,6 +2482,10 @@ class MaezDaemon:
         self._calendar_observe = None
         self._calendar_store = None
         self._calendar_store_error_class = ""
+        self._github_mode = GITHUB_MODE
+        self._github_legacy_enabled = self._github_mode == GithubMode.LEGACY_DEV_ONLY
+        self._github_store = None
+        self._github_store_error_class = ""
         if self._calendar_mode == CalendarMode.V1:
             try:
                 self._calendar_store = CalendarStore(CALENDAR_STORE_DB_PATH)
@@ -2489,6 +2496,16 @@ class MaezDaemon:
             except Exception as exc:
                 self._calendar_store_error_class = "source_unavailable"
                 logger.warning("Calendar v1 store unavailable: %s", exc)
+        if self._github_mode == GithubMode.V1:
+            try:
+                self._github_store = GithubStore(GITHUB_STORE_DB_PATH)
+                self._github_store.initialize()
+            except GithubStoreError as exc:
+                self._github_store_error_class = "github_store_schema_mismatch"
+                logger.warning("GitHub v1 store unavailable: %s", exc)
+            except Exception as exc:
+                self._github_store_error_class = "source_unavailable"
+                logger.warning("GitHub v1 store unavailable: %s", exc)
         if self._calendar_legacy_enabled:
             from skills.calendar_perception import observe as _legacy_calendar_observe
 
@@ -2673,8 +2690,6 @@ class MaezDaemon:
         self._git_cycle_counter = 0
         self.GIT_EVERY_N_CYCLES = 10  # every ~5 minutes
         self._last_git_context = ""
-        self._github_mode = GITHUB_MODE
-        self._github_legacy_enabled = self._github_mode == GithubMode.LEGACY_DEV_ONLY
         # 2026-04-25 disk-fixation patch state. See
         # core/cognition/perception_signature.py.
         # Patch B: signature gate. Patch A: stale-field redaction.
@@ -2897,6 +2912,37 @@ class MaezDaemon:
             auth_ready=False,
         )
 
+    def _github_health(self) -> dict:
+        """Content-free GitHub v1 state for /health."""
+
+        limb_health = _GITHUB_LIMB.health()
+        auth_ready = limb_health.get("state") == "available"
+        if self._github_mode == GithubMode.V1 and self._github_store is not None:
+            try:
+                store_health = self._github_store.health()
+                return build_github_health(
+                    mode=self._github_mode.value,
+                    auth_ready=auth_ready,
+                    staged_records=int(store_health.get("staged_records", 0) or 0),
+                )
+            except Exception as exc:
+                logger.warning("GitHub v1 health degraded: %s", exc)
+                return build_github_health(
+                    mode=self._github_mode.value,
+                    state_override="source_unavailable",
+                    error_class="source_unavailable",
+                )
+        if self._github_store_error_class:
+            return build_github_health(
+                mode=self._github_mode.value,
+                state_override="source_unavailable",
+                error_class=self._github_store_error_class,
+            )
+        return build_github_health(
+            mode=self._github_mode.value,
+            auth_ready=auth_ready,
+        )
+
     def _body_health(
         self,
         *,
@@ -2933,6 +2979,7 @@ class MaezDaemon:
             },
             "reddit_limb": _REDDIT_LIMB.health(),
             "github_limb": _GITHUB_LIMB.health(),
+            "github_v1": self._github_health(),
             "brain": {
                 "configured_model": MODEL,
                 "served_model_alias": served_model_alias(default=MODEL, timeout_s=0.25),
@@ -9310,6 +9357,7 @@ class MaezDaemon:
                         "m1": self._m1_status_health(),
                     },
                     "calendar": self._calendar_health(),
+                    "github_v1": self._github_health(),
                     "camera_presence": _camera_presence,
                     "credentials": _credential_health(),
                     "temporal_spine": temporal_spine_health(),
