@@ -16,14 +16,14 @@ DIRECT_CALLER_INVENTORY = {
     ("gui.py", 195),
     ("cli.py", 224),
     ("cli/maez_chat.py", 854),
-    ("daemon/maez_daemon.py", 4864),
-    ("daemon/maez_daemon.py", 6617),
-    ("daemon/maez_daemon.py", 6807),
-    ("daemon/maez_daemon.py", 8584),
+    ("daemon/maez_daemon.py", 4875),
+    ("daemon/maez_daemon.py", 6628),
+    ("daemon/maez_daemon.py", 6818),
+    ("daemon/maez_daemon.py", 8586),
     ("skills/telegram_voice.py", 47),
     ("skills/telegram_voice.py", 2728),
     ("skills/telegram_voice.py", 2782),
-    ("core/actions/action_engine.py", 1570),
+    ("core/actions/action_engine.py", 1578),
 }
 
 
