@@ -257,6 +257,12 @@ class GithubLimb:
             "expires_in_bucket": _expires_bucket(self._session, n),
         }
 
+    def available_session(self, *, now: float | None = None) -> GithubSession | None:
+        """Return the in-memory session only when the limb is presently available."""
+        if self.effective_state(now=now) != STATE_AVAILABLE:
+            return None
+        return self._session
+
 
 # ── hardened handoff (mirrors reddit_limb; dedicated GitHub secret) ────
 

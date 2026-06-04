@@ -19,6 +19,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -87,6 +88,7 @@ from core.information_limb.github_v1_config import GithubMode, resolve_github_mo
 from core.information_limb.github_store import GithubStore, GithubStoreError
 from core.information_limb import reddit_limb as _reddit_limb_mod
 from core.information_limb import github_limb as _github_limb_mod
+from core.information_limb import github_v1 as _github_v1_mod
 
 _REDDIT_LIMB = _reddit_limb_mod.RedditLimb()
 _GITHUB_LIMB = _github_limb_mod.GithubLimb()
@@ -9726,6 +9728,18 @@ class MaezDaemon:
                 limb=_GITHUB_LIMB,
             )
             return jsonify(tile), status
+
+        @app.route("/internal/limb/github/ingest", methods=["POST"])
+        def github_limb_ingest():
+            result, status = _github_v1_mod.handle_ingest(
+                headers=request.headers,
+                mode=self._github_mode,
+                limb=_GITHUB_LIMB,
+                store=self._github_store,
+                memory=self.memory,
+                fetch_batch_id_factory=lambda: f"fb-{uuid.uuid4().hex[:12]}",
+            )
+            return jsonify(result), status
 
         @app.route("/message", methods=["POST"])
         def message():
