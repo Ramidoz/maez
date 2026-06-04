@@ -12,6 +12,7 @@ import hashlib
 from datetime import datetime, timezone
 from typing import Literal, TypedDict
 
+from core.information_limb import github_limb
 from core.information_limb import github_connector_policy as policy
 from core.information_limb import github_s2_envelope as envelope_guard
 
@@ -115,6 +116,50 @@ def ingest_repo_count(
         "ingest_record_id": str(staged.get("ingest_record_id", ingest_record_id)),
         "fetch_batch_id": str(staged.get("fetch_batch_id", fetch_batch_id)),
         "record_state": str(staged.get("record_state", "active")),
+    }
+
+
+def run_ingest(*, limb_session, store, memory, fetch_batch_id: str) -> dict:
+    """Owner-triggered GitHub v1 ingest.
+
+    Fetches the one allowed account fact, stages it, and admits it to raw memory
+    at most once per durable ingest_record_id. The returned value is deliberately
+    content-free: ids and state only.
+    """
+    repo_count = github_limb.fetch_repo_count(limb_session)
+    count_field = "public_repos"
+    staged = ingest_repo_count(
+        user_response={count_field: repo_count},
+        store=store,
+        fetch_batch_id=fetch_batch_id,
+    )
+    ingest_record_id = staged["ingest_record_id"]
+    state = store.promotion_state(ingest_record_id)
+    if state == "admitted":
+        return {
+            "ok": True,
+            "ingest_record_id": ingest_record_id,
+            "fetch_batch_id": fetch_batch_id,
+            "staged": True,
+            "admitted": False,
+            "state": "admitted",
+        }
+
+    body_memory_id = admit_repo_count_to_body(
+        memory=memory,
+        repo_count=repo_count,
+        count_field=count_field,
+        ingest_record_id=ingest_record_id,
+        fetch_batch_id=fetch_batch_id,
+    )
+    store.mark_admitted(ingest_record_id, body_memory_id=str(body_memory_id))
+    return {
+        "ok": True,
+        "ingest_record_id": ingest_record_id,
+        "fetch_batch_id": fetch_batch_id,
+        "staged": True,
+        "admitted": True,
+        "state": "admitted",
     }
 
 

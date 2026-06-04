@@ -81,5 +81,74 @@ class DurablePromotionTests(unittest.TestCase):
             self.assertEqual(reopened.admitted_body_memory_id("ir-1"), "mem-1")
 
 
+class RunIngestTests(unittest.TestCase):
+    def _real_store(self):
+        from core.information_limb.github_store import GithubStore
+
+        tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tempdir.cleanup)
+        store = GithubStore(Path(tempdir.name) / "github_v1.db")
+        store.initialize()
+        return store
+
+    def test_same_batch_admits_once_durably(self):
+        from core.information_limb import github_v1
+
+        store = self._real_store()
+        memory = mock.Mock()
+        memory.store.return_value = "mem-1"
+
+        with mock.patch(
+            "core.information_limb.github_v1.github_limb.fetch_repo_count",
+            return_value=7,
+        ):
+            first = github_v1.run_ingest(
+                limb_session=object(),
+                store=store,
+                memory=memory,
+                fetch_batch_id="fb-1",
+            )
+            second = github_v1.run_ingest(
+                limb_session=object(),
+                store=store,
+                memory=memory,
+                fetch_batch_id="fb-1",
+            )
+
+        self.assertTrue(first["admitted"])
+        self.assertFalse(second["admitted"])
+        self.assertEqual(memory.store.call_count, 1)
+        self.assertEqual(first["ingest_record_id"], second["ingest_record_id"])
+        for key in ("repo_count", "count_field", "login"):
+            self.assertNotIn(key, first)
+            self.assertNotIn(key, second)
+
+    def test_different_batch_is_a_new_observation(self):
+        from core.information_limb import github_v1
+
+        store = self._real_store()
+        memory = mock.Mock()
+        memory.store.return_value = "mem"
+
+        with mock.patch(
+            "core.information_limb.github_v1.github_limb.fetch_repo_count",
+            return_value=7,
+        ):
+            github_v1.run_ingest(
+                limb_session=object(),
+                store=store,
+                memory=memory,
+                fetch_batch_id="fb-1",
+            )
+            github_v1.run_ingest(
+                limb_session=object(),
+                store=store,
+                memory=memory,
+                fetch_batch_id="fb-2",
+            )
+
+        self.assertEqual(memory.store.call_count, 2)
+
+
 if __name__ == "__main__":
     unittest.main()
