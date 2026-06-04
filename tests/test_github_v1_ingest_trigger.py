@@ -1,5 +1,7 @@
 import unittest
 from unittest import mock
+import tempfile
+from pathlib import Path
 
 
 class IngestTokenLoadableTests(unittest.TestCase):
@@ -54,6 +56,29 @@ class FetchRepoCountTests(unittest.TestCase):
         with mock.patch.object(github_limb.requests, "get", return_value=response):
             with self.assertRaises(github_limb.GithubAuthError):
                 github_limb.fetch_repo_count(self._session())
+
+
+class DurablePromotionTests(unittest.TestCase):
+    def test_promotion_state_persists_across_reinstantiation(self):
+        from core.information_limb.github_store import GithubStore
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "github_v1.db"
+            store = GithubStore(path)
+            store.initialize()
+            store.stage_repo_count(
+                ingest_record_id="ir-1",
+                fetch_batch_id="fb-1",
+                repo_count=7,
+                count_field="public_repos",
+            )
+            self.assertEqual(store.promotion_state("ir-1"), "pending")
+            store.mark_admitted("ir-1", body_memory_id="mem-1")
+
+            reopened = GithubStore(path)
+            reopened.initialize()
+            self.assertEqual(reopened.promotion_state("ir-1"), "admitted")
+            self.assertEqual(reopened.admitted_body_memory_id("ir-1"), "mem-1")
 
 
 if __name__ == "__main__":

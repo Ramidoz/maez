@@ -19,7 +19,7 @@ from core.information_limb.github_connector_policy import (
 )
 
 
-GITHUB_STORE_SCHEMA_VERSION = "1"
+GITHUB_STORE_SCHEMA_VERSION = "2"
 SOURCE_KIND = "github.repo_count"
 
 _EXPECTED_COLUMNS = {
@@ -30,6 +30,8 @@ _EXPECTED_COLUMNS = {
         "count_field",
         "count_hash",
         "record_state",
+        "promotion_state",
+        "body_memory_id",
         "github_store_schema_version",
         "updated_at",
     },
@@ -64,6 +66,8 @@ class GithubStore:
                     count_field TEXT NOT NULL,
                     count_hash TEXT NOT NULL,
                     record_state TEXT NOT NULL DEFAULT 'active',
+                    promotion_state TEXT NOT NULL DEFAULT 'pending',
+                    body_memory_id TEXT,
                     github_store_schema_version TEXT NOT NULL,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
@@ -88,7 +92,58 @@ class GithubStore:
                 """,
                 ("github_store", GITHUB_STORE_SCHEMA_VERSION, GITHUB_STORE_SCHEMA_VERSION),
             )
+            self._migrate_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO github_policy_versions (
+                    policy_name,
+                    policy_version,
+                    github_store_schema_version
+                )
+                VALUES (?, ?, ?)
+                ON CONFLICT(policy_name) DO UPDATE SET
+                    policy_version=excluded.policy_version,
+                    github_store_schema_version=excluded.github_store_schema_version,
+                    updated_at=CURRENT_TIMESTAMP
+                """,
+                ("github_store", GITHUB_STORE_SCHEMA_VERSION, GITHUB_STORE_SCHEMA_VERSION),
+            )
         self.validate_schema()
+
+    def _migrate_schema(self, conn: sqlite3.Connection) -> None:
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(github_provider_mirror)")
+        }
+        if "promotion_state" not in columns:
+            conn.execute(
+                """
+                ALTER TABLE github_provider_mirror
+                ADD COLUMN promotion_state TEXT NOT NULL DEFAULT 'pending'
+                """
+            )
+        if "body_memory_id" not in columns:
+            conn.execute(
+                """
+                ALTER TABLE github_provider_mirror
+                ADD COLUMN body_memory_id TEXT
+                """
+            )
+        conn.execute(
+            """
+            UPDATE github_provider_mirror
+            SET github_store_schema_version=?
+            WHERE github_store_schema_version != ?
+            """,
+            (GITHUB_STORE_SCHEMA_VERSION, GITHUB_STORE_SCHEMA_VERSION),
+        )
+        conn.execute(
+            """
+            UPDATE github_policy_versions
+            SET github_store_schema_version=?
+            WHERE github_store_schema_version != ?
+            """,
+            (GITHUB_STORE_SCHEMA_VERSION, GITHUB_STORE_SCHEMA_VERSION),
+        )
 
     def validate_schema(self) -> None:
         with self._connection() as conn:
@@ -143,9 +198,10 @@ class GithubStore:
                     count_field,
                     count_hash,
                     record_state,
+                    promotion_state,
                     github_store_schema_version
                 )
-                VALUES (?, ?, ?, ?, ?, 'active', ?)
+                VALUES (?, ?, ?, ?, ?, 'active', 'pending', ?)
                 ON CONFLICT(ingest_record_id)
                 DO UPDATE SET
                     fetch_batch_id=excluded.fetch_batch_id,
@@ -171,6 +227,50 @@ class GithubStore:
             "record_state": "active",
             "count_hash": count_hash,
         }
+
+    def promotion_state(self, ingest_record_id: str) -> str:
+        self.validate_schema()
+        with self._connection() as conn:
+            row = conn.execute(
+                """
+                SELECT promotion_state
+                FROM github_provider_mirror
+                WHERE ingest_record_id=?
+                """,
+                (ingest_record_id,),
+            ).fetchone()
+        return str(row[0]) if row is not None else "absent"
+
+    def mark_admitted(self, ingest_record_id: str, *, body_memory_id: str) -> None:
+        self.validate_schema()
+        with self._connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE github_provider_mirror
+                SET promotion_state='admitted',
+                    body_memory_id=?,
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE ingest_record_id=?
+                """,
+                (body_memory_id, ingest_record_id),
+            )
+            if cursor.rowcount != 1:
+                raise GithubStoreError(
+                    f"github ingest record absent: {ingest_record_id}"
+                )
+
+    def admitted_body_memory_id(self, ingest_record_id: str) -> str | None:
+        self.validate_schema()
+        with self._connection() as conn:
+            row = conn.execute(
+                """
+                SELECT body_memory_id
+                FROM github_provider_mirror
+                WHERE ingest_record_id=?
+                """,
+                (ingest_record_id,),
+            ).fetchone()
+        return str(row[0]) if row is not None and row[0] is not None else None
 
     def health(self) -> dict[str, int | str]:
         self.validate_schema()
