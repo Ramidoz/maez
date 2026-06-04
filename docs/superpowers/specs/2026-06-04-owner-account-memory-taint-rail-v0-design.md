@@ -91,6 +91,8 @@ Add `owner_account_context` explicitly to `_RESTRICTIVENESS` in `core/egress/pro
 
 The recommended score is `3`, same tier as reserved-denied raw classes, so it outranks normal memory/lived-store material during `derived_output(...)` or `blended_summary(...)`. `unclassified=4` remains the fail-safe top value.
 
+Residual to name, not solve in v0: `owner_account_context=3` still loses to `unclassified=4` in a future blend of owner-account plus unclassified content, and `unclassified` is not categorically blocked by the gate. v0 is safe because the cloud path emits per-row spans and does not blend recall rows. A later blend/derived-output hardening slice must ensure categorical-block classes cannot be laundered by an `unclassified` sibling.
+
 ### 3.3 Provenanced recall renderer
 
 Add a new renderer beside the existing string renderer:
