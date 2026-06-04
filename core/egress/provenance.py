@@ -182,6 +182,20 @@ class ProvenancedText:
         ])
 
     @classmethod
+    def owner_account_context(
+        cls,
+        text: str,
+        *,
+        source_ref: str,
+    ) -> "ProvenancedText":
+        # Personal-account-derived data (GitHub/Reddit/Gmail/...).
+        # Categorical cloud-egress block by default; the gate ignores
+        # redaction_allowed for this class, so fail closed here too.
+        return cls.from_spans([
+            ProvenanceSpan(text, "owner_account_context", source_ref, False)
+        ])
+
+    @classmethod
     def third_party_private_context(
         cls,
         text: str,
