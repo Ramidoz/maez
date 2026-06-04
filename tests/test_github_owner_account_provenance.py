@@ -84,5 +84,18 @@ class GithubProducerTests(unittest.TestCase):
         self.assertEqual(block.text, "")
 
 
+class DaemonDualViewTests(unittest.TestCase):
+    """Daemon local paths use .text; the ProvenancedText handle remains intact."""
+
+    def test_github_injection_uses_text_view_for_local_paths(self):
+        import inspect
+        from daemon import maez_daemon
+
+        src = inspect.getsource(maez_daemon)
+        self.assertIn("self._last_github_block.text", src)
+        self.assertNotIn("{self._last_github_block}", src)
+        self.assertNotIn("self._last_github_block,", src)
+
+
 if __name__ == "__main__":
     unittest.main()

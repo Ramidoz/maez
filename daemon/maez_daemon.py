@@ -4292,12 +4292,16 @@ class MaezDaemon:
                 salience=65,
             )
 
-        # Add GitHub context if available
+        # Add GitHub context if available. Dual view: .text feeds the local
+        # 27B prompt + cycle candidate (string ops); the ProvenancedText handle
+        # on self._last_github_block carries owner_account_context to any
+        # cloud-bound assembly. That class is categorically blocked at cloud
+        # egress; this material does not leave the body to a cloud model.
         if self._last_github_block:
-            prompt += f"\n{self._last_github_block}\n"
+            prompt += f"\n{self._last_github_block.text}\n"
             _extend_cycle_candidates(
                 "fresh_evidence",
-                self._last_github_block,
+                self._last_github_block.text,
                 durable_prefix="cycle_github_context",
                 salience=65,
             )
