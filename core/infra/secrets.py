@@ -26,6 +26,7 @@ SECRET_NAMES: frozenset[str] = frozenset(
         "LANGFUSE_SECRET_KEY",
         "MAEZ_DEV_TOKEN",
         "MAEZ_GITHUB_HANDOFF_TOKEN",
+        "MAEZ_GITHUB_INGEST_TOKEN",
         "MAEZ_GITHUB_TOKEN",
         "MAEZ_IPHONE_INGEST_TOKEN",
         "MAEZ_PUBLIC_TELEGRAM_TOKEN",
