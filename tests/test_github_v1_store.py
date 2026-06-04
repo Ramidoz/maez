@@ -1,6 +1,7 @@
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 from core.information_limb.github_store import GithubStore, GithubStoreError
@@ -44,7 +45,7 @@ class GithubStoreTests(unittest.TestCase):
             db = Path(d) / "github_v1.db"
             store = GithubStore(db)
             store.initialize()
-            with sqlite3.connect(db) as conn:
+            with closing(sqlite3.connect(db)) as conn:
                 conn.execute("ALTER TABLE github_provider_mirror ADD COLUMN raw_response TEXT")
             with self.assertRaises(GithubStoreError):
                 store.validate_schema()

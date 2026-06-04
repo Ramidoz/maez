@@ -17,6 +17,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest import mock
 
@@ -234,7 +235,7 @@ class GithubCanaryReachesProxyAndIsRefused(unittest.IsolatedAsyncioTestCase):
             )
         except HTTPException:
             pass
-        with sqlite3.connect(self.db_path) as con:
+        with closing(sqlite3.connect(self.db_path)) as con:
             row = con.execute(
                 "SELECT egress_decision, egress_reason_codes, egress_shadow_mode, "
                 "prompt_preview, egress_origin_classes FROM calls"
