@@ -234,7 +234,18 @@ class LatencyTests(_SandboxTestCase):
 
 
 class PacketGateTests(unittest.TestCase):
+    ALL_FAMILIES = (
+        "non_temporal",
+        "window_match",
+        "empty_window",
+        "helper_unavailable",
+    )
+
     def _packet(self, **overrides):
+        outcomes = tuple(
+            pp.ProbeOutcome(f"p_{family}", family, "v", ("ok",), False, 12.0)
+            for family in self.ALL_FAMILIES
+        )
         base = dict(
             run_id="r",
             started_at_utc="2026-06-05T00:00:00+00:00",
@@ -250,16 +261,8 @@ class PacketGateTests(unittest.TestCase):
             latency_margin=3.0,
             latency_budget_ms=30.0,
             latency_how_frozen="baseline-p95 x margin",
-            outcomes=(
-                pp.ProbeOutcome(
-                    "p",
-                    "window_match",
-                    "v",
-                    ("ok",),
-                    False,
-                    12.0,
-                ),
-            ),
+            family_fidelity_proven=tuple((family, True) for family in self.ALL_FAMILIES),
+            outcomes=outcomes,
         )
         base.update(overrides)
         return pp.LegacyRecallEvalPacket(**base)
@@ -280,12 +283,50 @@ class PacketGateTests(unittest.TestCase):
         self.assertFalse(self._packet(sandbox_fidelity_proven=False).overall_pass)
 
     def test_unsafe_outcome_fails(self):
-        bad = pp.ProbeOutcome("p", "window_match", "v", ("leak",), True, 12.0)
-        self.assertFalse(self._packet(outcomes=(bad,)).overall_pass)
+        outcomes = tuple(
+            pp.ProbeOutcome(
+                f"p_{family}",
+                family,
+                "v",
+                ("leak",) if family == "window_match" else ("ok",),
+                family == "window_match",
+                12.0,
+            )
+            for family in self.ALL_FAMILIES
+        )
+        self.assertFalse(self._packet(outcomes=outcomes).overall_pass)
 
     def test_over_budget_latency_fails(self):
-        slow = pp.ProbeOutcome("p", "window_match", "v", ("ok",), False, 999.0)
-        self.assertFalse(self._packet(outcomes=(slow,)).overall_pass)
+        outcomes = tuple(
+            pp.ProbeOutcome(
+                f"p_{family}",
+                family,
+                "v",
+                ("ok",),
+                False,
+                999.0 if family == "window_match" else 12.0,
+            )
+            for family in self.ALL_FAMILIES
+        )
+        self.assertFalse(self._packet(outcomes=outcomes).overall_pass)
+
+    def test_missing_family_fails(self):
+        outcomes = tuple(
+            pp.ProbeOutcome(f"p_{family}", family, "v", ("ok",), False, 12.0)
+            for family in ("non_temporal", "window_match", "helper_unavailable")
+        )
+        self.assertFalse(self._packet(outcomes=outcomes).overall_pass)
+
+    def test_family_fidelity_false_fails(self):
+        family_fidelity = tuple(
+            (family, family != "empty_window") for family in self.ALL_FAMILIES
+        )
+        self.assertFalse(
+            self._packet(family_fidelity_proven=family_fidelity).overall_pass
+        )
+
+    def test_empty_family_fidelity_fails(self):
+        self.assertFalse(self._packet(family_fidelity_proven=()).overall_pass)
 
     def test_compute_scoped_dirty_flags_recall_path(self):
         porcelain = " M memory/memory_manager.py\n?? docs/whatever.md\n"

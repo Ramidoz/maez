@@ -14,6 +14,10 @@ SCOPED_PATHS = (
     "scripts/legacy_recall_eval/",
 )
 
+EXPECTED_FAMILIES = frozenset(
+    {"non_temporal", "window_match", "empty_window", "helper_unavailable"}
+)
+
 
 def _porcelain_path(line: str) -> str:
     path = line[3:].strip() if len(line) > 3 else line.strip()
@@ -65,6 +69,7 @@ class LegacyRecallEvalPacket:
     latency_margin: float
     latency_budget_ms: float
     latency_how_frozen: str
+    family_fidelity_proven: tuple[tuple[str, bool], ...] = ()
     outcomes: tuple[ProbeOutcome, ...] = field(default_factory=tuple)
 
     @property
@@ -79,6 +84,9 @@ class LegacyRecallEvalPacket:
                 outcome.retrieval_render_ms <= self.latency_budget_ms
                 for outcome in self.outcomes
             )
+            and {outcome.family for outcome in self.outcomes} == EXPECTED_FAMILIES
+            and bool(self.family_fidelity_proven)
+            and all(proven for _name, proven in self.family_fidelity_proven)
         )
 
     def to_dict(self) -> dict:
