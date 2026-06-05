@@ -442,7 +442,7 @@ def _build_egress_request(
     destination: str,
     caller: str,
     request_id: str,
-) -> tuple[EgressRequest, str]:
+) -> tuple[EgressRequest, str, list[tuple[str, int]]]:
     bundle = body.get("maez_egress_segments")
     if not isinstance(bundle, dict):
         return (
@@ -461,6 +461,7 @@ def _build_egress_request(
                 ],
             ),
             "legacy_conservative",
+            [("legacy_prompt", 1)],
         )
 
     declared_destination = bundle.get("destination")
@@ -480,6 +481,7 @@ def _build_egress_request(
                 text=joined_text,
             ),
             "span_bundle_invalid",
+            [],
         )
 
     raw_parts = bundle.get("parts")
@@ -493,6 +495,7 @@ def _build_egress_request(
                 text=joined_text,
             ),
             "span_bundle_invalid",
+            [],
         )
 
     segments: list[EgressSegment] = []
@@ -508,8 +511,10 @@ def _build_egress_request(
                 text=joined_text,
             ),
             "span_bundle_invalid",
+            [],
         )
 
+    part_counts: list[tuple[str, int]] = []
     for key, expected_text in rendered_parts.items():
         if not expected_text:
             continue
@@ -524,8 +529,10 @@ def _build_egress_request(
                     text=joined_text,
                 ),
                 "span_bundle_invalid",
+                [],
             )
         segments.extend(part_spans)
+        part_counts.append((key, len(part_spans)))
 
     return (
         EgressRequest(
@@ -536,7 +543,42 @@ def _build_egress_request(
             segments=segments,
         ),
         "span_bundle",
+        part_counts,
     )
+
+
+def _sanitized_forward_payload(
+    decision,
+    part_counts: list[tuple[str, int]],
+    *,
+    system_prompt: str | None,
+    prompt: str,
+) -> tuple[str | None, str] | None:
+    """Reconstruct cloud-bound text from the gate's sanitized segments.
+
+    Single source of truth: the gate's output. If the counts cannot prove a
+    faithful reconstruction, callers fail closed rather than forwarding raw.
+    """
+    sanitized = list(decision.sanitized_segments or [])
+    if not part_counts or sum(count for _key, count in part_counts) != len(sanitized):
+        return None
+
+    grouped: dict[str, str] = {}
+    idx = 0
+    for key, count in part_counts:
+        grouped[key] = "".join(sanitized[idx : idx + count])
+        idx += count
+
+    if part_counts == [("legacy_prompt", 1)]:
+        return system_prompt, grouped["legacy_prompt"]
+
+    forward_system = grouped.get("system", system_prompt)
+    forward_prompt = "\n\n".join(
+        grouped[key]
+        for key in ("assistant_history", "role_history", "user")
+        if key in grouped
+    ).strip()
+    return forward_system, forward_prompt
 
 
 def _safe_prompt_preview(decision) -> str:
@@ -673,7 +715,7 @@ async def chat_completions(request: Request):
         "role_history": "\n\n".join(p for p in role_history_parts if p),
         "user": "\n\n".join(p for p in user_prompt_parts if p),
     }
-    egress_request, egress_provenance_mode = _build_egress_request(
+    egress_request, egress_provenance_mode, part_counts = _build_egress_request(
         body=body,
         rendered_parts=rendered_parts,
         prompt=prompt,
