@@ -128,6 +128,29 @@ class RelativeAddressRecallTests(unittest.TestCase):
         )
         self.assertTrue(all(r.get("id") != "c1" for r in out["daily"] + out["raw"]))
 
+    def test_timing_uncertain_fallback_does_not_replace_empty_status(self):
+        win = _window(7, 0)
+        mm = self._mm(daily_in=[], raw_in=[])
+        mm._query_collection = lambda *a, **k: [{
+            "id": "fallback-daily",
+            "content": "Related but older daily context.",
+            "metadata": {"timestamp": "2026-01-01T00:00:00+00:00"},
+        }]
+        out = mm._relative_temporal_address_recall(
+            "what were we working on last week?",
+            win,
+        )
+        self.assertEqual(
+            out["temporal_status"]["status"],
+            "no_date_confirmed_event_memories",
+        )
+        self.assertEqual(out["daily"][0]["id"], "fallback-daily")
+        self.assertFalse(out["daily"][0]["metadata"]["date_confirmed"])
+        self.assertEqual(
+            out["daily"][0]["metadata"]["temporal_match_label"],
+            "semantic match, timing uncertain (not date-confirmed)",
+        )
+
 
 class RecallRoutingTests(unittest.TestCase):
     def _legacy_mm(self):
