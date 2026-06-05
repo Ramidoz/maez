@@ -61,5 +61,70 @@ class RawWindowHelperProofTests(unittest.TestCase):
         self.assertEqual(rows, [])
 
 
+class RelativeAddressRecallTests(unittest.TestCase):
+    def _mm(self, daily_in=(), raw_in=(), core_in=()):
+        from unittest import mock
+
+        from memory.memory_manager import MemoryManager
+
+        mm = MemoryManager.__new__(MemoryManager)
+        mm.get_all_core = lambda: [
+            {"id": row_id, "content": row_id, "metadata": {"timestamp": ts}}
+            for row_id, ts in core_in
+        ]
+        mm._all_daily_rows = lambda: [
+            {"id": row_id, "content": row_id, "metadata": {"timestamp": ts}}
+            for row_id, ts in daily_in
+        ]
+        mm._raw_rows_in_window = lambda window: [
+            {"id": row_id, "content": row_id, "metadata": {"timestamp": ts}}
+            for row_id, ts in raw_in
+        ]
+        mm._query_collection = lambda *a, **k: []
+        mm.core = mock.Mock()
+        mm.daily = mock.Mock()
+        return mm
+
+    def test_in_window_daily_surfaces_and_empty_status_is_absent(self):
+        now = datetime.now(timezone.utc)
+        win = _window(7, 0)
+        mm = self._mm(daily_in=[("d_in", (now - timedelta(days=4)).isoformat())])
+        out = mm._relative_temporal_address_recall(
+            "what did we do last week?",
+            win,
+        )
+        self.assertTrue(any(r.get("id") == "d_in" for r in out["daily"]))
+        self.assertEqual(out["temporal_status"], None)
+
+    def test_empty_window_yields_typed_empty_status_over_event_memories(self):
+        win = _window(7, 0)
+        mm = self._mm(daily_in=[], raw_in=[])
+        out = mm._relative_temporal_address_recall(
+            "what did we do last week?",
+            win,
+        )
+        self.assertEqual(out["daily"], [])
+        self.assertEqual(out["raw"], [])
+        self.assertEqual(
+            out["temporal_status"]["status"],
+            "no_date_confirmed_event_memories",
+        )
+        self.assertIn("last week", out["temporal_status"]["label"])
+
+    def test_core_in_window_does_not_fill_address_or_suppress_empty(self):
+        now = datetime.now(timezone.utc)
+        win = _window(7, 0)
+        mm = self._mm(core_in=[("c1", (now - timedelta(days=3)).isoformat())])
+        out = mm._relative_temporal_address_recall(
+            "what did we do last week?",
+            win,
+        )
+        self.assertEqual(
+            out["temporal_status"]["status"],
+            "no_date_confirmed_event_memories",
+        )
+        self.assertTrue(all(r.get("id") != "c1" for r in out["daily"] + out["raw"]))
+
+
 if __name__ == "__main__":
     unittest.main()

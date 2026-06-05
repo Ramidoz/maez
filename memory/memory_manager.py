@@ -938,6 +938,15 @@ def _humanize_daily_age(date_str: str, now: datetime) -> str:
 
 
 class MemoryManager:
+    _RELATIVE_ANCHOR_LABEL = {
+        "yesterday": "yesterday",
+        "last_week": "last week",
+        "this_morning": "this morning",
+        "earlier_today": "earlier today",
+    }
+    _TEMPORAL_EMPTY_EVENT_STATUS = "no_date_confirmed_event_memories"
+    _TEMPORAL_HELPER_UNAVAILABLE_STATUS = "temporal_helper_unavailable"
+
     def __init__(self):
         # Tier 1 — Raw Archive
         self._raw_client = _make_client("raw")
@@ -2121,6 +2130,88 @@ class MemoryManager:
         semantic matches. A future numeric timestamp index can replace this.
         """
         return []
+
+    @classmethod
+    def _bridge_relative_window(
+        cls,
+        anchor_kind: str,
+        start_utc: datetime,
+        end_utc: datetime,
+    ) -> AbsoluteRecallWindow:
+        """Bridge TRF relative-window bounds into the recall window shape."""
+        label = cls._RELATIVE_ANCHOR_LABEL.get(anchor_kind, anchor_kind)
+        return AbsoluteRecallWindow(
+            start_utc=start_utc,
+            end_utc=end_utc,
+            method=f"relative_{anchor_kind}",
+            confidence="high",
+            label=label,
+        )
+
+    def _relative_temporal_address_recall(
+        self,
+        query: str,
+        window: AbsoluteRecallWindow,
+    ) -> dict:
+        """Window-first recall for relative temporal addresses.
+
+        Daily and raw are event tiers that can fill the address. Core remains
+        timeless self-context: useful to the brain, but never evidence of what
+        happened inside the requested window and never counted for emptiness.
+        """
+        daily_in = [
+            row
+            for row in self._all_daily_rows()
+            if _row_in_window(row.get("metadata") or {}, window)
+        ]
+        raw_in = self._raw_rows_in_window(window)
+        core = self.get_all_core()
+
+        if daily_in or raw_in:
+            return {
+                "core": core,
+                "daily": self._tag_temporal_rows(
+                    daily_in[:3],
+                    method=window.method,
+                    label=window.label,
+                    confirmed=True,
+                    window=window,
+                ),
+                "raw": self._tag_temporal_rows(
+                    raw_in[:10],
+                    method=window.method,
+                    label=window.label,
+                    confirmed=True,
+                    window=window,
+                ),
+                "temporal_status": None,
+            }
+
+        status = {
+            "label": window.label,
+            "status": self._TEMPORAL_EMPTY_EVENT_STATUS,
+            "text": f"No date-confirmed event memories found for {window.label}.",
+        }
+        topic = _temporal_topic_signal(query)
+        fallback = []
+        if topic:
+            fallback = self._tag_temporal_rows(
+                self._query_collection(
+                    self.daily,
+                    topic,
+                    n=2,
+                    record_recalls=False,
+                ),
+                method="semantic_fallback",
+                label="semantic match, timing uncertain (not date-confirmed)",
+                confirmed=False,
+            )
+        return {
+            "core": core,
+            "daily": fallback,
+            "raw": [],
+            "temporal_status": status,
+        }
 
     def _absolute_date_recall(
         self,
