@@ -260,34 +260,6 @@ def _ingest_result(
     }
 
 
-def admit_repo_count_to_body(
-    *,
-    memory,
-    repo_count: int,
-    count_field: str,
-    ingest_record_id: str,
-    fetch_batch_id: str,
-) -> str:
-    """Write the single reviewed GitHub fact to raw memory with owner taint."""
-
-    try:
-        policy.assert_fact_minimized({"repo_count": repo_count, "count_field": count_field})
-    except policy.GithubPolicyError as exc:
-        raise GithubV1Error(str(exc)) from exc
-
-    content = _honest_repo_count_content(repo_count=repo_count, count_field=count_field)
-    return memory.store(
-        content=content,
-        cycle=0,
-        provenance_source=ProvenanceSource.TOOL_OBSERVATION,
-        egress_origin_class="owner_account_context",
-        metadata={
-            "source_ref": f"github.s2:{ingest_record_id}",
-            "fetch_batch_id": fetch_batch_id,
-        },
-    )
-
-
 def _source_ref(ingest_record_id: str) -> str:
     return f"{_SOURCE_REF_PREFIX}{ingest_record_id}"
 

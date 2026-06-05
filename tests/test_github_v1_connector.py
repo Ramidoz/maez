@@ -1,10 +1,23 @@
 import unittest
 from unittest import mock
 
+from core.intake_bus import PromotionPosture
 from core.information_limb import github_v1
+from core.information_limb.github_store import PendingRecord
 
 
 class GithubV1ConnectorTests(unittest.TestCase):
+    def _adapter_fact(self, *, repo_count=7, count_field="public_repos"):
+        store = mock.Mock()
+        store.oldest_pending.return_value = PendingRecord(
+            ingest_record_id="ir-1",
+            fetch_batch_id="fb-1",
+            repo_count=repo_count,
+            count_field=count_field,
+            created_at="2026-06-04T00:00:00+00:00",
+        )
+        return github_v1.GithubStoreAdapter(store).oldest_pending()
+
     def test_repo_count_staged_from_user_response(self):
         user_payload = {"public_repos": 7, "login": "SECRET_LOGIN", "id": 1}
         store = mock.Mock()
@@ -49,41 +62,22 @@ class GithubV1ConnectorTests(unittest.TestCase):
         self.assertNotIn("SECRET_LOGIN", repr(available))
 
     def test_body_admission_honest_wording_taint_and_traceability(self):
-        memory = mock.Mock()
-        memory.store.return_value = "mem-1"
+        fact = self._adapter_fact(repo_count=7, count_field="public_repos")
 
-        github_v1.admit_repo_count_to_body(
-            memory=memory,
-            repo_count=7,
-            count_field="public_repos",
-            ingest_record_id="ir-1",
-            fetch_batch_id="fb-1",
-        )
-
-        _, kwargs = memory.store.call_args
-        self.assertIn("public repositories", kwargs["content"])
-        self.assertNotIn("owned by the owner", kwargs["content"])
-        self.assertEqual(kwargs["cycle"], 0)
-        self.assertEqual(kwargs["egress_origin_class"], "owner_account_context")
-        self.assertTrue(str(kwargs["provenance_source"]).lower().endswith("tool_observation"))
-        self.assertEqual(kwargs["metadata"]["source_ref"], "github.s2:ir-1")
-        self.assertEqual(kwargs["metadata"]["fetch_batch_id"], "fb-1")
+        self.assertIn("public repositories", fact.content)
+        self.assertNotIn("owned by the owner", fact.content)
+        self.assertEqual(fact.egress_origin_class, "owner_account_context")
+        self.assertTrue(str(fact.provenance_source).lower().endswith("tool_observation"))
+        self.assertEqual(fact.source_ref, "github.s2:ir-1")
+        self.assertEqual(fact.fetch_batch_id, "fb-1")
+        self.assertEqual(fact.promotion_posture, PromotionPosture.ADMIT_TO_BODY)
 
     def test_total_field_uses_owned_wording(self):
-        memory = mock.Mock()
-        memory.store.return_value = "mem-2"
-
-        github_v1.admit_repo_count_to_body(
-            memory=memory,
-            repo_count=9,
-            count_field="total",
-            ingest_record_id="ir-2",
-            fetch_batch_id="fb-2",
-        )
+        fact = self._adapter_fact(repo_count=9, count_field="total")
 
         self.assertIn(
             "repositories owned by the owner",
-            memory.store.call_args.kwargs["content"],
+            fact.content,
         )
 
 

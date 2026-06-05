@@ -150,17 +150,24 @@ class GithubV1EgressCanaryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_ingested_repo_count_memory_recalled_to_cloud_is_refused(self):
         from core.information_limb import github_v1
+        from core.information_limb.github_store import GithubStore
         from core.routing import claude_tier
         from skills.web_interface import build_claude_router_cloud_payload
 
         memory = _memory_manager_with_fake_collections()
-        github_v1.admit_repo_count_to_body(
-            memory=memory,
-            repo_count=7,
-            count_field="public_repos",
-            ingest_record_id="ir-1",
-            fetch_batch_id="fb-1",
-        )
+        store = GithubStore(Path(self._tmp.name) / "github_v1.db")
+        store.initialize()
+        with mock.patch(
+            "core.information_limb.github_v1.github_limb.fetch_repo_count",
+            return_value=7,
+        ):
+            result = github_v1.run_ingest(
+                limb_session=object(),
+                store=store,
+                memory=memory,
+                fetch_batch_id="fb-1",
+            )
+        self.assertTrue(result["admitted"])
         recalled = memory.recall_for_telegram("GitHub public repositories owner profile")
         self.assertEqual(len(recalled["raw"]), 1)
         self.assertEqual(
