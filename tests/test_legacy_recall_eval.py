@@ -208,5 +208,29 @@ class LiveEmptyAndHelperTests(_SandboxTestCase):
         self.assertEqual(recalled["raw"], [])
 
 
+class LatencyTests(_SandboxTestCase):
+    def test_temporal_path_within_smuggle_budget(self):
+        root = self._enter_sandbox()
+        harness.prove_sandbox_fidelity(root, run_id="t-lat-fidelity")
+        harness.seed_window_match_fixtures("t-lat")
+        baseline = [
+            harness.measure_probe_latency_ms("what is the capital of France?"),
+            harness.measure_probe_latency_ms("tell me about photosynthesis"),
+        ]
+        _p95, budget = harness.latency_budget_ms(baseline)
+        temporal = harness.measure_probe_latency_ms("what were we working on last week?")
+        self.assertLessEqual(
+            temporal,
+            budget,
+            f"temporal-address latency {temporal:.1f}ms smuggled past budget "
+            f"{budget:.1f}ms (baseline-driven, margin "
+            f"{harness.LATENCY_SMUGGLE_MARGIN}x)",
+        )
+
+    def test_budget_formula(self):
+        p95, budget = harness.latency_budget_ms([10.0, 20.0, 30.0])
+        self.assertAlmostEqual(budget, p95 * harness.LATENCY_SMUGGLE_MARGIN)
+
+
 if __name__ == "__main__":
     unittest.main()

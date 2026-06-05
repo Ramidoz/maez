@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import time
 from datetime import date as Date
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -35,6 +36,8 @@ _FIXTURE_CONTENT = {
         "Synthetic fixture."
     ),
 }
+
+LATENCY_SMUGGLE_MARGIN = 3.0
 
 
 def patch_fixed_now():
@@ -171,3 +174,32 @@ def force_helper_unavailable():
         yield
     finally:
         tar.detect_temporal_anchor = original
+
+
+def _percentile(values, pct: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(float(value) for value in values)
+    if len(ordered) == 1:
+        return ordered[0]
+    rank = (pct / 100.0) * (len(ordered) - 1)
+    low = int(rank)
+    high = min(low + 1, len(ordered) - 1)
+    frac = rank - low
+    return ordered[low] * (1 - frac) + ordered[high] * frac
+
+
+def measure_probe_latency_ms(query: str, *, repeats: int = 3) -> float:
+    """Median retrieval+render latency for a legacy recall query."""
+    samples: list[float] = []
+    for _ in range(repeats):
+        start = time.perf_counter()
+        run_probe(query)
+        samples.append((time.perf_counter() - start) * 1000.0)
+    return _percentile(samples, 50)
+
+
+def latency_budget_ms(baseline_samples) -> tuple[float, float]:
+    """Return (baseline_p95_ms, baseline_p95_ms * frozen margin)."""
+    baseline_p95 = _percentile(list(baseline_samples), 95)
+    return baseline_p95, baseline_p95 * LATENCY_SMUGGLE_MARGIN
