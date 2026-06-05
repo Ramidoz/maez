@@ -15,6 +15,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -75,6 +76,13 @@ _AUTHORITY_LABEL: dict[str, str] = {
     "open_loop": "unresolved want or wondering — open, not concluded",
     "builder_event": "self-modification activity — builder-mode evidence",
     "quality_signal": "self-critique signal — quality tracker evidence",
+}
+logger = logging.getLogger("maez.focused")
+_ORIGIN_TRUST_LABEL: dict[str, str] = {
+    "covenant": "covenant",
+    "lived": "lived",
+    "observed": "observed/tool",
+    "untrusted": "untrusted",
 }
 _CITE_RE = re.compile(r"\[E(\d+)\]")
 _RECALLED_RE = re.compile(r"<RECALLED\b([^>]*)>(.*?)</RECALLED>", re.DOTALL)
@@ -169,10 +177,25 @@ class EvidenceItem:
     text: str
     durable_id: str
     temporal_provenance: dict | None = None
+    origin_trust: str | None = None
 
 
 def _authority_label(source_type: str) -> str:
     return _AUTHORITY_LABEL.get(source_type, "unverified")
+
+
+def _origin_trust_segment(origin_trust: str | None) -> str:
+    """Render a known origin trust tier, omitting unknown values fail-closed."""
+    if origin_trust is None:
+        return ""
+    label = _ORIGIN_TRUST_LABEL.get(origin_trust)
+    if label is None:
+        logger.warning(
+            "focused_cognition: unknown origin trust_tier %r — omitted from render",
+            origin_trust,
+        )
+        return ""
+    return f" · origin trust: {label}"
 
 
 def _temporal_date_label(temporal_provenance: dict | None) -> str:
@@ -206,13 +229,15 @@ def _render_evidence_lines(
             (
                 f"[{item.local_label}] · date: {_temporal_date_label(item.temporal_provenance)} "
                 f"· provenance: {_temporal_provenance_label(item.temporal_provenance)} "
-                f"· source: {item.source_type} · authority: {_authority_label(item.source_type)}\n"
+                f"· source: {item.source_type} · authority: {_authority_label(item.source_type)}"
+                f"{_origin_trust_segment(item.origin_trust)}\n"
                 f"{item.text}"
             )
             for item in items
         ]
     lines = [
-        f"[{item.local_label}] ({_authority_label(item.source_type)}) {item.text}"
+        f"[{item.local_label}] ({_authority_label(item.source_type)}"
+        f"{_origin_trust_segment(item.origin_trust)}) {item.text}"
         for item in items
     ]
     if items:
