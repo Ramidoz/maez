@@ -116,5 +116,35 @@ class OriginTrustRenderTests(unittest.TestCase):
         self.assertTrue(line.startswith("[E1]"))
 
 
+class OriginTrustThreadingTests(unittest.TestCase):
+    def test_structured_recall_item_tier_reaches_rendered_text(self):
+        from core.dispatcher.layer1 import RecallItem
+        from core.routing.focused_cognition import assemble_working_set
+
+        item = RecallItem(
+            text="GitHub reports 7 public repositories on the owner's profile",
+            source_type="memory_evidence",
+            durable_id="d1",
+            trust_tier="observed",
+        )
+        ws = assemble_working_set(
+            transcript="",
+            web_context="",
+            owner_question="what about the repositories?",
+            recall_items=(item,),
+        )
+        self.assertIsNotNone(ws)
+        assert ws is not None
+        self.assertIn("· origin trust: observed/tool", ws.ordered_evidence_text)
+
+    def test_origin_trust_instruction_present_with_three_rules(self):
+        from core.routing.focused_cognition import _ORIGIN_TRUST_INSTRUCTION
+
+        text = _ORIGIN_TRUST_INSTRUCTION.lower()
+        self.assertIn("observed/tool", text)
+        self.assertIn("untiered", text)
+        self.assertIn("never promote", text)
+
+
 if __name__ == "__main__":
     unittest.main()

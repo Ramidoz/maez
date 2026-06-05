@@ -108,6 +108,15 @@ _TRUST_TIER_INSTRUCTION = (
     "'recent dialogue' is authoritative for continuity (what we were discussing), "
     "not for general facts; 'external web — UNTRUSTED' must be hedged."
 )
+_ORIGIN_TRUST_INSTRUCTION = (
+    "Some [E#] also carry 'origin trust:' — where the evidence's origin sits on "
+    "Maez's trust spine. covenant = Maez's own core self/values; lived = real lived "
+    "interaction with the owner; observed/tool = an external tool/account observation "
+    "(true about the source, NOT Maez's lived self); untrusted = unverified/external, "
+    "hedge it. If origin trust is present, use it as the origin-trust signal. If absent, "
+    "treat the item as untiered legacy/unstamped evidence — not covenant/lived, and not "
+    "untrusted. Never promote observed/tool into Maez's lived selfhood."
+)
 _VOICE_CARD_TEXT = (
     "Speak as Maez: dense, opinionated, useful. 3-5 sentences. Give your read "
     "and connect it to what the owner cares about (local AI, what's being built). "
@@ -572,12 +581,12 @@ def _memory_items_with_provenance(body: str) -> list[tuple[str, dict | None]]:
 
 
 def _ranked_items_for_state(
-    raw_items: list[tuple[str, str, str | None, dict | None]],
+    raw_items: list[tuple[str, str, str | None, dict | None, str | None]],
     dialogue_state: DialogueContinuityState,
     date_cue: bool = False,
-) -> list[tuple[str, str, str | None, dict | None]]:
-    def rank(item: tuple[str, str, str | None, dict | None]) -> int:
-        source_type, _text, _durable_id, temporal_provenance = item
+) -> list[tuple[str, str, str | None, dict | None, str | None]]:
+    def rank(item: tuple[str, str, str | None, dict | None, str | None]) -> int:
+        source_type, _text, _durable_id, temporal_provenance, _origin_trust = item
         if date_cue:
             if (
                 source_type in ("memory_context", "memory_evidence")
@@ -700,7 +709,7 @@ def assemble_working_set(
     ):
         return None
 
-    raw_items: list[tuple[str, str, str | None, dict | None]] = []
+    raw_items: list[tuple[str, str, str | None, dict | None, str | None]] = []
     if not dialogue_authoritative:
         if structured_recall_items is not None:
             for item in structured_recall_items:
@@ -712,43 +721,51 @@ def assemble_working_set(
                     continue
                 durable_id = getattr(item, "durable_id", None)
                 temporal_provenance = getattr(item, "temporal_provenance", None)
+                origin_trust = getattr(item, "trust_tier", None)
                 raw_items.append(
-                    (source_type, item_text, durable_id, temporal_provenance)
+                    (
+                        source_type,
+                        item_text,
+                        durable_id,
+                        temporal_provenance,
+                        origin_trust,
+                    )
                 )
             for marker, body in _split_blocks(transcript or ""):
                 source_type = _SOURCE_TYPE[marker]
                 if source_type in ("memory_context", "memory_evidence"):
                     continue
                 for item_text in _atomic_items(body):
-                    raw_items.append((source_type, item_text, None, None))
+                    raw_items.append((source_type, item_text, None, None, None))
         else:
             for marker, body in _split_blocks(transcript or ""):
                 source_type = _SOURCE_TYPE[marker]
                 if source_type in ("memory_context", "memory_evidence"):
                     for item_text, provenance in _memory_items_with_provenance(body):
-                        raw_items.append((source_type, item_text, None, provenance))
+                        raw_items.append((source_type, item_text, None, provenance, None))
                 else:
                     for item_text in _atomic_items(body):
-                        raw_items.append((source_type, item_text, None, None))
+                        raw_items.append((source_type, item_text, None, None, None))
 
         web_context = web_context or ""
         if web_context.strip() and _WEB_NO_RESULTS not in web_context:
             for item_text in _atomic_items(web_context):
-                raw_items.append(("web_context", item_text, None, None))
+                raw_items.append(("web_context", item_text, None, None, None))
 
     for anchor in anchors:
-        raw_items.append((anchor.source_type, anchor.text, anchor.durable_id, None))
+        raw_items.append((anchor.source_type, anchor.text, anchor.durable_id, None, None))
 
     if date_cue:
         has_confirmed = any(
             provenance and provenance.get("confirmed")
-            for _source_type, _text, _durable_id, provenance in raw_items
+            for _source_type, _text, _durable_id, provenance, _origin_trust in raw_items
         )
         if not has_confirmed:
             raw_items.append(
                 (
                     "temporal_recall_status",
                     "No dated memory matched the explicit date cue in the question.",
+                    None,
                     None,
                     None,
                 )
@@ -765,12 +782,14 @@ def assemble_working_set(
             text=text,
             durable_id=durable_id or _content_hash(text),
             temporal_provenance=temporal_provenance,
+            origin_trust=origin_trust,
         )
         for index, (
             source_type,
             text,
             durable_id,
             temporal_provenance,
+            origin_trust,
         ) in enumerate(raw_items)
     ]
     render_version = _citation_render_version()
@@ -825,6 +844,7 @@ def focused_synthesize(
         f"{_voice_card(surface)}\n\n"
         f"{_citation_instruction(working_set.citation_render_version)}\n\n"
         f"{_TRUST_TIER_INSTRUCTION}\n\n"
+        f"{_ORIGIN_TRUST_INSTRUCTION}\n\n"
         f"=== EVIDENCE (cite [E#]) ===\n"
         f"{working_set.ordered_evidence_text}"
     )
