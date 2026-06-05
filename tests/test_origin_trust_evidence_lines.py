@@ -146,5 +146,35 @@ class OriginTrustThreadingTests(unittest.TestCase):
         self.assertIn("never promote", text)
 
 
+class OriginTrustLivePathWitness(unittest.TestCase):
+    def test_real_observed_row_through_recall_builder_and_focused_render(self):
+        from core.brain.brain_loop import recall_partitions_to_items
+        from core.routing.focused_cognition import assemble_working_set
+
+        row = {
+            "content": "GitHub reports 7 public repositories on the owner's profile",
+            "metadata": {
+                "trust_tier": "observed",
+                "egress_origin_class": "owner_account_context",
+            },
+            "id": "be9e8cf5",
+        }
+        items = recall_partitions_to_items({"raw": [row]}, role_source_type="memory_evidence")
+        self.assertEqual(items[0].trust_tier, "observed")
+
+        ws = assemble_working_set(
+            transcript="",
+            web_context="",
+            owner_question="what about the repositories?",
+            recall_items=items,
+        )
+        self.assertIsNotNone(ws)
+        assert ws is not None
+        self.assertIn("· origin trust: observed/tool", ws.ordered_evidence_text)
+        self.assertIn("recalled memory", ws.ordered_evidence_text)
+        self.assertIn("past authority", ws.ordered_evidence_text)
+        self.assertNotIn("origin trust: lived", ws.ordered_evidence_text)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -84,6 +84,7 @@ class DispatcherLayer1Tests(unittest.TestCase):
                     "durable_id": "core-1",
                     "source_type": "memory_context",
                     "temporal_provenance": None,
+                    "trust_tier": None,
                 }
             ],
         )
