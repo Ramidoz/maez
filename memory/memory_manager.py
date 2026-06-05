@@ -2135,14 +2135,21 @@ class MemoryManager:
     def _bridge_relative_window(
         cls,
         anchor_kind: str,
-        start_utc: datetime,
-        end_utc: datetime,
+        start: datetime,
+        end: datetime,
     ) -> AbsoluteRecallWindow:
         """Bridge TRF relative-window bounds into the recall window shape."""
+        zone = owner_timezone()
+
+        def _as_utc(value: datetime) -> datetime:
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=zone)
+            return value.astimezone(timezone.utc)
+
         label = cls._RELATIVE_ANCHOR_LABEL.get(anchor_kind, anchor_kind)
         return AbsoluteRecallWindow(
-            start_utc=start_utc,
-            end_utc=end_utc,
+            start_utc=_as_utc(start),
+            end_utc=_as_utc(end),
             method=f"relative_{anchor_kind}",
             confidence="high",
             label=label,
@@ -2407,6 +2414,40 @@ class MemoryManager:
 
     def recall_for_telegram(self, query: str) -> dict:
         """Build context for a Telegram response with topic-aware retrieval."""
+        from core.memory.temporal_anchor_recall import detect_temporal_anchor
+
+        anchor = detect_temporal_anchor(query)
+        anchor_kind = getattr(anchor, "anchor_kind", None)
+        if (
+            getattr(anchor, "anchor_detected", False)
+            and anchor_kind in self._RELATIVE_ANCHOR_LABEL
+        ):
+            if (
+                getattr(anchor, "search_status", None) == "helper_unavailable"
+                or getattr(anchor, "window_start", None) is None
+                or getattr(anchor, "window_end", None) is None
+            ):
+                label = self._RELATIVE_ANCHOR_LABEL[anchor_kind]
+                return {
+                    "core": self.get_all_core(),
+                    "daily": [],
+                    "raw": [],
+                    "temporal_status": {
+                        "label": label,
+                        "status": self._TEMPORAL_HELPER_UNAVAILABLE_STATUS,
+                        "text": (
+                            "Temporal reference recognized but could not be "
+                            "resolved to a window."
+                        ),
+                    },
+                }
+            window = self._bridge_relative_window(
+                anchor_kind,
+                anchor.window_start,
+                anchor.window_end,
+            )
+            return self._relative_temporal_address_recall(query, window)
+
         core = self.get_all_core()
         daily = self._query_collection(self.daily, query, n=3)
         raw = self._query_collection(self.raw, query, n=20)

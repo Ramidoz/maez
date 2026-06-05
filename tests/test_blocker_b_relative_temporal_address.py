@@ -11,6 +11,7 @@ absent-with-an-honest-status. "Empty" is over daily/raw event memories only.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 import unittest
 
 from core.routing.temporal_cue import AbsoluteRecallWindow
@@ -124,6 +125,92 @@ class RelativeAddressRecallTests(unittest.TestCase):
             "no_date_confirmed_event_memories",
         )
         self.assertTrue(all(r.get("id") != "c1" for r in out["daily"] + out["raw"]))
+
+
+class RecallRoutingTests(unittest.TestCase):
+    def _legacy_mm(self):
+        from unittest import mock
+
+        from memory.memory_manager import MemoryManager
+
+        mm = MemoryManager.__new__(MemoryManager)
+        mm.get_all_core = lambda: [{"id": "core", "content": "core", "metadata": {}}]
+        mm.daily = mock.Mock(name="daily")
+        mm.raw = mock.Mock(name="raw")
+
+        def _query(collection, query, n, **kwargs):
+            if collection is mm.daily:
+                return [{"id": "daily", "content": query, "metadata": {}}]
+            if collection is mm.raw:
+                return [{"id": "raw", "content": query, "metadata": {}}]
+            return []
+
+        mm._query_collection = _query
+        mm._recent_reddit_source_rows = lambda *a, **k: []
+        mm._recent_telegram_exchange_rows = lambda *a, **k: []
+        mm._merge_recall_candidates = lambda rows, extra: list(rows) + list(extra)
+        mm._topic_rerank = lambda query, raw, n: raw[:n]
+        return mm
+
+    def test_non_temporal_query_is_byte_identical_legacy(self):
+        mm = self._legacy_mm()
+        out = mm.recall_for_telegram("what is the capital of France?")
+        self.assertEqual([row["id"] for row in out["core"]], ["core"])
+        self.assertEqual([row["id"] for row in out["daily"]], ["daily"])
+        self.assertEqual([row["id"] for row in out["raw"]], ["raw"])
+        self.assertNotIn("temporal_status", out)
+
+    def test_helper_unavailable_yields_status_not_semantic(self):
+        from unittest import mock
+
+        from memory.memory_manager import MemoryManager
+
+        mm = MemoryManager.__new__(MemoryManager)
+        mm.get_all_core = lambda: []
+        mm.daily = mock.Mock()
+        mm.raw = mock.Mock()
+        mm._query_collection = mock.Mock(side_effect=AssertionError("semantic called"))
+        with mock.patch("core.memory.temporal_anchor_recall.detect_temporal_anchor") as detect:
+            detect.return_value = SimpleNamespace(
+                anchor_kind="last_week",
+                anchor_detected=True,
+                window_start=None,
+                window_end=None,
+                search_status="helper_unavailable",
+            )
+            out = mm.recall_for_telegram("what did we do last week?")
+        self.assertEqual(out["daily"], [])
+        self.assertEqual(out["raw"], [])
+        self.assertEqual(out["temporal_status"]["status"], "temporal_helper_unavailable")
+
+    def test_relative_anchor_routes_local_window_to_window_first_branch(self):
+        from unittest import mock
+        from zoneinfo import ZoneInfo
+
+        from memory.memory_manager import MemoryManager
+
+        zone = ZoneInfo("America/Chicago")
+        start_local = datetime(2026, 6, 1, 0, 0, tzinfo=zone)
+        end_local = datetime(2026, 6, 2, 0, 0, tzinfo=zone)
+        mm = MemoryManager.__new__(MemoryManager)
+        mm._relative_temporal_address_recall = mock.Mock(return_value={
+            "core": [],
+            "daily": [],
+            "raw": [],
+            "temporal_status": None,
+        })
+        with mock.patch("core.memory.temporal_anchor_recall.detect_temporal_anchor") as detect:
+            detect.return_value = SimpleNamespace(
+                anchor_kind="yesterday",
+                anchor_detected=True,
+                window_start=start_local,
+                window_end=end_local,
+                search_status="bounded_search_no_match",
+            )
+            mm.recall_for_telegram("what did we do yesterday?")
+        window = mm._relative_temporal_address_recall.call_args.args[1]
+        self.assertEqual(window.start_utc, start_local.astimezone(timezone.utc))
+        self.assertEqual(window.end_utc, end_local.astimezone(timezone.utc))
 
 
 if __name__ == "__main__":
