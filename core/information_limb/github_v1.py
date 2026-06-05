@@ -15,10 +15,12 @@ import os
 from datetime import datetime, timezone
 from typing import Literal, TypedDict
 
+from core.intake_bus import IntakeFact, PromotionPosture, admit
 from core.information_limb import github_limb
 from core.information_limb import github_connector_policy as policy
 from core.information_limb import github_s2_envelope as envelope_guard
 from core.information_limb.github_v1_config import GithubMode
+from memory.memory_manager import ProvenanceSource
 
 
 GithubState = Literal[
@@ -44,9 +46,40 @@ class GithubV1Error(ValueError):
 
 GITHUB_INGEST_HEADER = "X-Maez-Github-Ingest"
 GITHUB_INGEST_TOKEN_ENV = "MAEZ_GITHUB_INGEST_TOKEN"
+_SOURCE_REF_PREFIX = "github.s2:"
 _INGEST_RESPONSE_KEYS = frozenset(
     {"ok", "ingest_record_id", "fetch_batch_id", "staged", "admitted", "state", "resumed"}
 )
+
+
+class GithubStoreAdapter:
+    """Expose GitHub's staging store through the generic intake-bus contract."""
+
+    def __init__(self, store) -> None:
+        self._store = store
+
+    def oldest_pending(self) -> IntakeFact | None:
+        pending = self._store.oldest_pending()
+        if pending is None:
+            return None
+        return IntakeFact(
+            source_kind="github.repo_count",
+            source_ref=_source_ref(pending.ingest_record_id),
+            content=_honest_repo_count_content(
+                repo_count=pending.repo_count,
+                count_field=pending.count_field,
+            ),
+            provenance_source=ProvenanceSource.TOOL_OBSERVATION,
+            egress_origin_class="owner_account_context",
+            promotion_posture=PromotionPosture.ADMIT_TO_BODY,
+            fetch_batch_id=pending.fetch_batch_id,
+        )
+
+    def mark_admitted(self, source_ref: str, *, body_memory_id: str) -> None:
+        self._store.mark_admitted(
+            _ingest_record_id_from_source_ref(source_ref),
+            body_memory_id=body_memory_id,
+        )
 
 
 def ingest_trusted(headers) -> bool:
@@ -185,65 +218,27 @@ def run_ingest(*, limb_session, store, memory, fetch_batch_id: str) -> dict:
     is deliberately content-free: ids and state only.
     """
     pending = store.oldest_pending()
+    resumed = pending is not None
     if pending is not None:
         ingest_record_id = pending.ingest_record_id
-        existing_body_id = memory.owner_account_row_id_by_source_ref(
-            f"github.s2:{ingest_record_id}"
-        )
-        if existing_body_id is not None:
-            store.mark_admitted(ingest_record_id, body_memory_id=str(existing_body_id))
-            return _ingest_result(
-                ingest_record_id=ingest_record_id,
-                fetch_batch_id=pending.fetch_batch_id,
-                admitted=False,
-                resumed=True,
-            )
-
-        body_memory_id = admit_repo_count_to_body(
-            memory=memory,
-            repo_count=pending.repo_count,
-            count_field=pending.count_field,
-            ingest_record_id=ingest_record_id,
-            fetch_batch_id=pending.fetch_batch_id,
-        )
-        store.mark_admitted(ingest_record_id, body_memory_id=str(body_memory_id))
-        return _ingest_result(
-            ingest_record_id=ingest_record_id,
-            fetch_batch_id=pending.fetch_batch_id,
-            admitted=True,
-            resumed=True,
-        )
-
-    repo_count = github_limb.fetch_repo_count(limb_session)
-    count_field = "public_repos"
-    staged = ingest_repo_count(
-        user_response={count_field: repo_count},
-        store=store,
-        fetch_batch_id=fetch_batch_id,
-    )
-    ingest_record_id = staged["ingest_record_id"]
-    state = store.promotion_state(ingest_record_id)
-    if state == "admitted":
-        return _ingest_result(
-            ingest_record_id=ingest_record_id,
+        result_fetch_batch_id = pending.fetch_batch_id
+    else:
+        repo_count = github_limb.fetch_repo_count(limb_session)
+        count_field = "public_repos"
+        staged = ingest_repo_count(
+            user_response={count_field: repo_count},
+            store=store,
             fetch_batch_id=fetch_batch_id,
-            admitted=False,
-            resumed=False,
         )
+        ingest_record_id = staged["ingest_record_id"]
+        result_fetch_batch_id = fetch_batch_id
 
-    body_memory_id = admit_repo_count_to_body(
-        memory=memory,
-        repo_count=repo_count,
-        count_field=count_field,
-        ingest_record_id=ingest_record_id,
-        fetch_batch_id=fetch_batch_id,
-    )
-    store.mark_admitted(ingest_record_id, body_memory_id=str(body_memory_id))
+    outcome = admit(GithubStoreAdapter(store), memory)
     return _ingest_result(
         ingest_record_id=ingest_record_id,
-        fetch_batch_id=fetch_batch_id,
-        admitted=True,
-        resumed=False,
+        fetch_batch_id=result_fetch_batch_id,
+        admitted=outcome.status == "admitted",
+        resumed=resumed,
     )
 
 
@@ -280,8 +275,6 @@ def admit_repo_count_to_body(
     except policy.GithubPolicyError as exc:
         raise GithubV1Error(str(exc)) from exc
 
-    from memory.memory_manager import ProvenanceSource
-
     content = _honest_repo_count_content(repo_count=repo_count, count_field=count_field)
     return memory.store(
         content=content,
@@ -293,6 +286,19 @@ def admit_repo_count_to_body(
             "fetch_batch_id": fetch_batch_id,
         },
     )
+
+
+def _source_ref(ingest_record_id: str) -> str:
+    return f"{_SOURCE_REF_PREFIX}{ingest_record_id}"
+
+
+def _ingest_record_id_from_source_ref(source_ref: str) -> str:
+    if not source_ref.startswith(_SOURCE_REF_PREFIX):
+        raise GithubV1Error(f"unknown GitHub source_ref: {source_ref!r}")
+    ingest_record_id = source_ref.removeprefix(_SOURCE_REF_PREFIX)
+    if not ingest_record_id:
+        raise GithubV1Error("empty GitHub ingest_record_id")
+    return ingest_record_id
 
 
 def _honest_repo_count_content(*, repo_count: int, count_field: str) -> str:

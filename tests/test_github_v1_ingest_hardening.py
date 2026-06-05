@@ -198,7 +198,10 @@ class ResumeTests(unittest.TestCase):
         store = self._store()
         memory = mock.Mock()
         memory.store.return_value = "mem-1"
-        memory.owner_account_row_id_by_source_ref.return_value = None
+        memory.body_row_id_by_source_ref.return_value = None
+        memory.owner_account_row_id_by_source_ref.side_effect = AssertionError(
+            "run_ingest should use the intake bus generic lookup"
+        )
 
         original_mark = store.mark_admitted
         mark_calls = {"count": 0}
@@ -223,7 +226,7 @@ class ResumeTests(unittest.TestCase):
                     memory=memory,
                     fetch_batch_id="fb-A",
                 )
-            memory.owner_account_row_id_by_source_ref.return_value = "mem-1"
+            memory.body_row_id_by_source_ref.return_value = "mem-1"
             result = github_v1.run_ingest(
                 limb_session=object(),
                 store=store,
@@ -242,7 +245,18 @@ class ResumeTests(unittest.TestCase):
         store = self._store()
         memory = mock.Mock()
         memory.store.return_value = "mem-1"
-        memory.owner_account_row_id_by_source_ref.return_value = None
+        memory.body_row_id_by_source_ref.return_value = None
+        memory.owner_account_row_id_by_source_ref.side_effect = AssertionError(
+            "run_ingest should use the intake bus generic lookup"
+        )
+        original_admit = github_v1.admit
+        admit_calls = {"count": 0}
+
+        def flaky_admit(*args, **kwargs):
+            admit_calls["count"] += 1
+            if admit_calls["count"] == 1:
+                raise RuntimeError("crash after stage")
+            return original_admit(*args, **kwargs)
 
         with (
             mock.patch(
@@ -250,8 +264,8 @@ class ResumeTests(unittest.TestCase):
                 return_value=7,
             ),
             mock.patch(
-                "core.information_limb.github_v1.admit_repo_count_to_body",
-                side_effect=RuntimeError("crash after stage"),
+                "core.information_limb.github_v1.admit",
+                side_effect=flaky_admit,
             ),
         ):
             with self.assertRaises(RuntimeError):
@@ -284,7 +298,10 @@ class ResumeTests(unittest.TestCase):
         store = self._store()
         memory = mock.Mock()
         memory.store.return_value = "mem-1"
-        memory.owner_account_row_id_by_source_ref.return_value = None
+        memory.body_row_id_by_source_ref.return_value = None
+        memory.owner_account_row_id_by_source_ref.side_effect = AssertionError(
+            "run_ingest should use the intake bus generic lookup"
+        )
 
         with mock.patch(
             "core.information_limb.github_v1.github_limb.fetch_repo_count",

@@ -99,6 +99,7 @@ class RunIngestTests(unittest.TestCase):
         store = self._real_store()
         memory = mock.Mock()
         memory.store.return_value = "mem-1"
+        memory.body_row_id_by_source_ref.return_value = None
 
         with mock.patch(
             "core.information_limb.github_v1.github_limb.fetch_repo_count",
@@ -131,6 +132,7 @@ class RunIngestTests(unittest.TestCase):
         store = self._real_store()
         memory = mock.Mock()
         memory.store.return_value = "mem"
+        memory.body_row_id_by_source_ref.return_value = None
 
         with mock.patch(
             "core.information_limb.github_v1.github_limb.fetch_repo_count",
