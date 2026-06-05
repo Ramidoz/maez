@@ -331,7 +331,6 @@ def run_eval(sandbox_root, *, expect_commit: str | None = None):
     from scripts.legacy_recall_eval.proof_packet import (
         SCOPED_PATHS,
         LegacyRecallEvalPacket,
-        ProbeOutcome,
         compute_scoped_dirty,
         git_dirty,
     )
@@ -348,63 +347,27 @@ def run_eval(sandbox_root, *, expect_commit: str | None = None):
         expected = expect_commit or actual
 
         with sandbox.no_egress():
-            fidelity = bool(prove_sandbox_fidelity(sandbox_root, run_id="legacy-recall-eval"))
-
-            outcomes: list[ProbeOutcome] = []
-            baseline_samples: list[float] = []
-
-            fx_ctrl = seed_window_match_fixtures("legacy-recall-eval-ctrl")
-            for variant in ("what is the capital of France?", "tell me about photosynthesis"):
-                recalled, rendered = run_probe(variant)
-                codes, unsafe = probes.assert_non_temporal(recalled, rendered, fx_ctrl)
-                elapsed_ms = measure_probe_latency_ms(variant)
-                baseline_samples.append(elapsed_ms)
-                outcomes.append(
-                    ProbeOutcome(
-                        "non_temporal_control",
-                        "non_temporal",
-                        variant,
-                        codes,
-                        unsafe,
-                        elapsed_ms,
-                    )
-                )
-
-            baseline_p95, budget = latency_budget_ms(baseline_samples)
-
-            fx_wm = seed_window_match_fixtures("legacy-recall-eval-wm")
-            for variant in (
-                "what were we working on last week?",
-                "remind me what we did last week",
-            ):
-                recalled, rendered = run_probe(variant)
-                codes, unsafe = probes.assert_window_match(recalled, rendered, fx_wm)
-                elapsed_ms = measure_probe_latency_ms(variant)
-                outcomes.append(
-                    ProbeOutcome(
-                        "last_week_match",
-                        "window_match",
-                        variant,
-                        codes,
-                        unsafe,
-                        elapsed_ms,
-                    )
-                )
-
-            with force_helper_unavailable():
-                recalled, rendered = run_probe("what were we working on last week?")
-                codes, unsafe = probes.assert_helper_unavailable(recalled, rendered, fx_wm)
-                elapsed_ms = measure_probe_latency_ms("what were we working on last week?")
-            outcomes.append(
-                ProbeOutcome(
-                    "last_week_helper_unavailable",
-                    "helper_unavailable",
-                    "forced",
-                    codes,
-                    unsafe,
-                    elapsed_ms,
+            outer_fidelity = bool(
+                prove_sandbox_fidelity(
+                    sandbox_root,
+                    run_id="legacy-recall-eval-outer",
                 )
             )
+
+            outcomes = []
+            family_fidelity: list[tuple[str, bool]] = []
+            baseline_samples: list[float] = []
+            for family in _FAMILY_ORDER:
+                family_outcomes, fidelity, _probe_root, samples = _run_family(
+                    sandbox_root,
+                    family,
+                )
+                outcomes.extend(family_outcomes)
+                family_fidelity.append((family, fidelity))
+                if family == "non_temporal":
+                    baseline_samples = samples
+
+            baseline_p95, budget = latency_budget_ms(baseline_samples)
 
         porcelain = _porcelain()
         packet = LegacyRecallEvalPacket(
@@ -415,20 +378,14 @@ def run_eval(sandbox_root, *, expect_commit: str | None = None):
             git_dirty=git_dirty(porcelain),
             scoped_dirty=compute_scoped_dirty(porcelain),
             scoped_paths=SCOPED_PATHS,
-            sandbox_fidelity_proven=fidelity,
+            sandbox_fidelity_proven=outer_fidelity,
             probe_set_hash=_hash([probe.probe_id for probe in probes.PROBES]),
-            fixture_manifest_hash=_hash([
-                fx_ctrl.d_in_id,
-                fx_ctrl.d_out_id,
-                fx_ctrl.c_in_id,
-                fx_wm.d_in_id,
-                fx_wm.d_out_id,
-                fx_wm.c_in_id,
-            ]),
+            fixture_manifest_hash=_hash([family for family, _ in family_fidelity]),
             latency_baseline_p95_ms=baseline_p95,
             latency_margin=LATENCY_SMUGGLE_MARGIN,
             latency_budget_ms=budget,
             latency_how_frozen="per-run non-temporal legacy p95 x frozen margin",
+            family_fidelity_proven=tuple(sorted(family_fidelity)),
             outcomes=tuple(outcomes),
         )
         out_dir = sandbox_root / "proof"

@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from scripts.recall_flip_eval import sandbox
 from scripts.legacy_recall_eval import harness
@@ -379,12 +380,21 @@ class FamilyIsolationTests(_SandboxTestCase):
 
 
 class EndToEndTests(unittest.TestCase):
-    def test_run_eval_emits_content_free_packet(self):
+    def test_run_eval_emits_four_family_content_free_packet(self):
         root = Path(tempfile.mkdtemp(prefix="legacy_recall_eval_e2e_"))
         self.addCleanup(sandbox.teardown, root)
-        packet = harness.run_eval(root, expect_commit=None)
-        self.assertTrue(packet.sandbox_fidelity_proven)
+        with mock.patch("scripts.legacy_recall_eval.harness._porcelain", return_value=""):
+            packet = harness.run_eval(root, expect_commit=None)
+        families = {outcome.family for outcome in packet.outcomes}
+        self.assertEqual(
+            families,
+            {"non_temporal", "window_match", "empty_window", "helper_unavailable"},
+        )
+        self.assertEqual(len(packet.outcomes), 6)
+        self.assertEqual({name for name, _ in packet.family_fidelity_proven}, families)
+        self.assertTrue(all(proven for _, proven in packet.family_fidelity_proven))
         self.assertTrue(all(not outcome.unsafe_failure for outcome in packet.outcomes), packet.to_json())
+        self.assertTrue(packet.overall_pass, packet.to_json())
         blob = packet.to_json()
         for fragment in (
             "amber router",
