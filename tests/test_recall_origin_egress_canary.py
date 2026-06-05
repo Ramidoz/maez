@@ -112,5 +112,84 @@ class LocalRenderFidelityTests(unittest.TestCase):
         self.assertIn(_PII_MARKER, provenanced.text)
 
 
+def _seg(origin_class: str, *, text: str, redaction_allowed: bool):
+    from core.egress.gate import EgressSegment
+
+    return EgressSegment(
+        text=text,
+        origin_class=origin_class,
+        source_ref="raw:canary",
+        redaction_allowed=redaction_allowed,
+    )
+
+
+def _cloud_req(segment):
+    from core.egress.gate import EgressRequest
+
+    return EgressRequest(
+        call_class="cloud_model_inference",
+        destination="anthropic",
+        segments=[segment],
+        caller="recall-origin-canary",
+        request_id="canary",
+    )
+
+
+class DecideEgressMatrixTests(unittest.TestCase):
+    def _decide(self, origin_class, *, redaction_allowed):
+        from core.egress.gate import decide_egress
+
+        return decide_egress(
+            _cloud_req(
+                _seg(
+                    origin_class,
+                    text=f"email {_PII_MARKER}",
+                    redaction_allowed=redaction_allowed,
+                )
+            )
+        )
+
+    def test_owner_account_blocks(self):
+        self.assertEqual(
+            self._decide("owner_account_context", redaction_allowed=False).decision,
+            "block",
+        )
+
+    def test_private_minimizable_redacts_pii_free(self):
+        decision = self._decide("third_party_private_context", redaction_allowed=True)
+        self.assertEqual(decision.decision, "redact")
+        self.assertNotIn(_PII_MARKER, decision.sanitized_text())
+
+    def test_owner_message_context_redacts(self):
+        self.assertEqual(
+            self._decide("owner_message_context", redaction_allowed=True).decision,
+            "redact",
+        )
+
+    def test_untrusted_model_output_redacts(self):
+        decision = self._decide("model_output", redaction_allowed=True)
+        self.assertEqual(decision.decision, "redact")
+        self.assertNotIn(_PII_MARKER, decision.sanitized_text())
+
+    def test_non_private_allows(self):
+        self.assertEqual(
+            self._decide("public_fact", redaction_allowed=False).decision,
+            "allow",
+        )
+
+    def test_missing_origin_falls_back_to_memory_redacts(self):
+        # A row with no egress_origin_class renders as "memory" in provenance.
+        self.assertEqual(
+            self._decide("memory", redaction_allowed=True).decision,
+            "redact",
+        )
+
+    def test_unknown_origin_fails_closed_never_allows(self):
+        # The single most important fail-closed assertion.
+        decision = self._decide("some_unrecognized_origin_xyz", redaction_allowed=True)
+        self.assertIn(decision.decision, ("block", "redact"))
+        self.assertNotEqual(decision.decision, "allow")
+
+
 if __name__ == "__main__":
     unittest.main()
