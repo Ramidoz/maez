@@ -1,8 +1,12 @@
 # Parked follow-up: `skills.web_interface` live-MemoryManager import side-effect (lazy-init hygiene debt)
 
 **Date:** 2026-06-04
-**Status:** PARKED follow-up — non-blocking. Flagged by Codex during GitHub v1 S2 ingest review; owner-confirmed (Rohit) to name as a follow-up, NOT fold into the v1 slice.
+**Status:** CLOSED 2026-06-04 — fixed on `main` by `b6564b3` (lazy `_LazyMemory` proxy at `skills/web_interface.py`, double-checked lock) + `ccb6a15` (owner fold-in: subprocess/threaded witness proving concurrent first access constructs exactly one `MemoryManager`). Claude implemented inline with TDD; owner reviewed, added the concurrency witness, fast-forwarded `main`, deleted branch `web-interface-lazy-memory-init`. No push, no restart — lands for future imports/restarts and for the hermetic witness floor in the checkout.
 **Severity:** hygiene debt, not a correctness bug.
+
+## Closure
+
+Replaced the module-level `memory = MemoryManager()` with a `_LazyMemory` proxy that defers construction to first attribute access; ~98 call sites unchanged (transparent delegate); no type/identity assumptions, nothing external imports the object. Witnesses: import constructs zero MemoryManagers; first attribute access constructs exactly one; **concurrent first access constructs exactly one (lock witnessed, not just present)**. Zero new failures across focused (756) + full discover (5889), apples-to-apples vs clean main + per-test isolation; `ruff` + `py_compile` clean.
 
 ## The debt
 
