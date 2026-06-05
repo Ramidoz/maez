@@ -150,5 +150,29 @@ class AssertionLogicTests(unittest.TestCase):
         self.assertIn("non_temporal_no_status", codes)
 
 
+class LiveWindowMatchTests(_SandboxTestCase):
+    def test_window_match_honesty_on_real_path(self):
+        root = self._enter_sandbox()
+        harness.prove_sandbox_fidelity(root, run_id="t-wm-fidelity")
+        fx = harness.seed_window_match_fixtures("t-wm")
+        recalled, rendered = harness.run_probe("what were we working on last week?")
+        codes, unsafe = probes.assert_window_match(recalled, rendered, fx)
+        self.assertFalse(unsafe, (codes, recalled.get("temporal_status"), rendered))
+        self.assertIn(fx.d_in_id, {r.get("id") for r in recalled["daily"]})
+        self.assertNotIn(fx.d_out_id, {r.get("id") for r in recalled["daily"]})
+        self.assertIn(fx.c_in_id, {r.get("id") for r in recalled["core"]})
+        self.assertNotIn(fx.c_in_id, {r.get("id") for r in recalled["daily"]})
+
+    def test_non_temporal_control_has_no_temporal_status(self):
+        root = self._enter_sandbox()
+        harness.prove_sandbox_fidelity(root, run_id="t-nt-fidelity")
+        fx = harness.seed_window_match_fixtures("t-nt")
+        recalled, rendered = harness.run_probe("what is the capital of France?")
+        codes, unsafe = probes.assert_non_temporal(recalled, rendered, fx)
+        self.assertFalse(unsafe, codes)
+        self.assertIsNone(recalled.get("temporal_status"))
+        self.assertNotIn("<TEMPORAL_RECALL_STATUS", rendered)
+
+
 if __name__ == "__main__":
     unittest.main()
