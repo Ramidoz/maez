@@ -10,7 +10,18 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import importlib
+import json
+import os
+import sqlite3
+from contextlib import closing
 from pathlib import Path
+from unittest import mock
+
+from fastapi import HTTPException
+from starlette.requests import Request
+
+from core.subscription_proxy.adapters.base import CallResult
 
 _PII_MARKER = "canary-pii-7c1f@example.test"
 
@@ -189,6 +200,133 @@ class DecideEgressMatrixTests(unittest.TestCase):
         decision = self._decide("some_unrecognized_origin_xyz", redaction_allowed=True)
         self.assertIn(decision.decision, ("block", "redact"))
         self.assertNotEqual(decision.decision, "allow")
+
+
+class _CapturingAdapter:
+    name = "recall-origin-canary"
+
+    def __init__(self):
+        self.prompts = []
+
+    def handles_model(self, model: str) -> bool:
+        return model == "recall-origin-canary-model"
+
+    def health(self) -> dict:
+        return {"adapter": self.name, "ok": True}
+
+    async def call(self, *, prompt, system_prompt, model):
+        self.prompts.append(prompt)
+        return CallResult(reply="captured", model_used=model, input_toks=1, output_toks=1)
+
+
+def _make_proxy_request(body: dict):
+    raw = json.dumps(body).encode("utf-8")
+
+    async def receive():
+        return {"type": "http.request", "body": raw, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "headers": [(b"x-maez-caller", b"recall-origin-canary")],
+        },
+        receive,
+    )
+
+
+def _drive_to_proxy(*, recalled):
+    """Recalled dict -> provenanced render -> payload -> call_messages capture."""
+    from core.routing import claude_tier
+    from skills.web_interface import build_claude_router_cloud_payload
+
+    owner_memory = _mm().format_for_prompt_provenanced(recalled)
+    system_prompt, web_messages = build_claude_router_cloud_payload(
+        owner_bridge=True,
+        message="can you reason about this?",
+        history=[{"role": "user", "content": "can you reason about this?"}],
+        owner_memory=owner_memory,
+    )
+    cloud_messages = [
+        claude_tier.CloudMessage(role=message["role"], content=message["content"])
+        for message in web_messages
+    ]
+    captured: dict = {}
+
+    def _capture(*, body_payload, model, caller, timeout_s=None):
+        captured["body"] = body_payload
+        from core.claude_tier import TierReply
+
+        return TierReply("not used", model, 1, 1, {})
+
+    with mock.patch("core.routing.claude_tier._post_chat_payload", side_effect=_capture):
+        claude_tier.call_messages(
+            system_prompt=system_prompt,
+            messages=cloud_messages,
+            model="recall-origin-canary-model",
+            caller="recall-origin-canary",
+        )
+    return captured["body"]
+
+
+class _ProxyCanaryBase(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db_path = Path(self._tmp.name) / "proxy.db"
+        self._env = mock.patch.dict(
+            os.environ,
+            {
+                "MAEZ_SUBSCRIPTION_PROXY_DB": str(self.db_path),
+                "MAEZ_EGRESS_TELEMETRY_KEY": "recall-origin-canary-test",
+                "MAEZ_SECRETS_DISABLE_NEW_LOADER": "1",
+                "MAEZ_IPHONE_INGEST_TOKEN": "dummy",
+            },
+            clear=False,
+        )
+        self._env.start()
+        from core.subscription_proxy import server
+
+        importlib.reload(server)
+        self.server = server
+        self.adapter = _CapturingAdapter()
+        self._adapters = mock.patch.object(server, "ADAPTERS", [self.adapter])
+        self._adapters.start()
+
+    def tearDown(self):
+        self._adapters.stop()
+        self._env.stop()
+        self._tmp.cleanup()
+
+    def _audit_row(self):
+        with closing(sqlite3.connect(self.db_path)) as con:
+            return con.execute(
+                "SELECT egress_decision, prompt_preview, egress_shadow_mode, "
+                "egress_origin_classes FROM calls"
+            ).fetchone()
+
+
+class ProxyBlockClassTests(_ProxyCanaryBase):
+    async def test_owner_account_recalled_memory_is_blocked(self):
+        recalled = {
+            "core": [],
+            "daily": [],
+            "raw": [
+                _raw_row(
+                    "raw-owner",
+                    f"owner note {_PII_MARKER}",
+                    egress_origin_class="owner_account_context",
+                )
+            ],
+        }
+        body = _drive_to_proxy(recalled=recalled)
+        with self.assertRaises(HTTPException) as ctx:
+            await self.server.chat_completions(_make_proxy_request(body))
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertEqual(self.adapter.prompts, [])
+        decision, _preview, _shadow, origins = self._audit_row()
+        self.assertEqual(decision, "block")
+        self.assertIn("owner_account_context", origins)
 
 
 if __name__ == "__main__":
