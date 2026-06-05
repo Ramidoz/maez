@@ -58,7 +58,31 @@ logging.basicConfig(level=logging.INFO)
 
 app = Flask("maez-web")
 accounts = UserAccounts()
-memory = MemoryManager()
+
+
+class _LazyMemory:
+    """Defer MemoryManager construction to first use.
+
+    Importing this module (e.g. build_claude_router_cloud_payload in a hermetic
+    egress witness) must not, as a side effect, boot a live MemoryManager +
+    chromadb. The first real attribute access wakes exactly one instance;
+    double-checked locking keeps concurrent first requests from building two.
+    """
+
+    _inst = None
+    _lock = threading.Lock()
+
+    def __getattr__(self, name):
+        inst = _LazyMemory._inst
+        if inst is None:
+            with _LazyMemory._lock:
+                if _LazyMemory._inst is None:
+                    _LazyMemory._inst = MemoryManager()
+                inst = _LazyMemory._inst
+        return getattr(inst, name)
+
+
+memory = _LazyMemory()
 
 SOUL_PATH = "/home/rohit/maez/config/soul.md"
 from core.model_config import PRIMARY_MODEL as MODEL  # /etc/maez/model.env
