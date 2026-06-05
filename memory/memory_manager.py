@@ -2590,8 +2590,9 @@ class MemoryManager:
         core = recalled.get("core", []) or []
         daily = recalled.get("daily", []) or []
         raw = recalled.get("raw", []) or []
+        temporal_status = recalled.get("temporal_status")
 
-        if not (core or daily or raw):
+        if not (core or daily or raw or temporal_status):
             return ""
 
         now = datetime.now(timezone.utc)
@@ -2620,6 +2621,20 @@ class MemoryManager:
                 "verification."
             )
         lines.append("")
+
+        if temporal_status:
+            label = sanitize_prompt_text(str(temporal_status.get("label", "")))
+            status = sanitize_prompt_text(str(temporal_status.get("status", "")))
+            text = sanitize_prompt_text(str(temporal_status.get("text", "")))
+            label_attr = label.replace('"', "'")
+            status_attr = status.replace('"', "'")
+            lines.append(
+                f'<TEMPORAL_RECALL_STATUS label="{label_attr}" '
+                f'status="{status_attr}">'
+            )
+            lines.append(text)
+            lines.append("</TEMPORAL_RECALL_STATUS>")
+            lines.append("")
 
         # Core — permanent, no timestamp (age="permanent")
         for i, mem in enumerate(core, 1):

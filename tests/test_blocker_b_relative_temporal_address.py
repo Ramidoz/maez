@@ -213,5 +213,32 @@ class RecallRoutingTests(unittest.TestCase):
         self.assertEqual(window.end_utc, end_local.astimezone(timezone.utc))
 
 
+class StatusRenderTests(unittest.TestCase):
+    def _mm(self):
+        from memory.memory_manager import MemoryManager
+
+        return MemoryManager.__new__(MemoryManager)
+
+    def test_empty_with_status_still_renders_typed_status_not_recalled_row(self):
+        mm = self._mm()
+        block = mm.format_for_prompt({
+            "core": [],
+            "daily": [],
+            "raw": [],
+            "temporal_status": {
+                "label": "last week",
+                "status": "no_date_confirmed_event_memories",
+                "text": "No date-confirmed event memories found for last week.",
+            },
+        })
+        self.assertIn("TEMPORAL_RECALL_STATUS", block)
+        self.assertIn("last week", block)
+        self.assertNotIn("<RECALLED", block)
+
+    def test_no_status_and_no_rows_stays_empty(self):
+        mm = self._mm()
+        self.assertEqual(mm.format_for_prompt({"core": [], "daily": [], "raw": []}), "")
+
+
 if __name__ == "__main__":
     unittest.main()
