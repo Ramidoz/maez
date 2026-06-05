@@ -41,5 +41,25 @@ class RecallItemTrustTierTests(unittest.TestCase):
         self.assertEqual(block.to_dict()["items"][0]["trust_tier"], "observed")
 
 
+class RecallPartitionsTrustTierTests(unittest.TestCase):
+    def test_builder_reads_trust_tier_from_row_metadata(self):
+        from core.brain.brain_loop import recall_partitions_to_items
+
+        row = {
+            "content": "GitHub reports 7 public repositories on the owner's profile",
+            "metadata": {"trust_tier": "observed"},
+            "id": "be9e8cf5",
+        }
+        items = recall_partitions_to_items({"raw": [row]}, role_source_type="memory_evidence")
+        self.assertEqual(items[0].trust_tier, "observed")
+
+    def test_builder_missing_trust_tier_is_none(self):
+        from core.brain.brain_loop import recall_partitions_to_items
+
+        row = {"content": "legacy memory", "metadata": {}, "id": "old-1"}
+        items = recall_partitions_to_items({"raw": [row]}, role_source_type="memory_evidence")
+        self.assertIsNone(items[0].trust_tier)
+
+
 if __name__ == "__main__":
     unittest.main()
