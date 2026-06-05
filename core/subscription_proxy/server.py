@@ -643,9 +643,9 @@ def _reserved_denied_enforced() -> bool:
     return (os.environ.get("MAEZ_EGRESS_RESERVED_DENIED_SHADOW", "") or "").strip() != "1"
 
 
-# "1" = shadow (forward original). Default-SHADOW during rollout; the
-# default flips to "0" only after the owner-authorized survey clears.
-_REDACT_SHADOW_DEFAULT = "1"
+# "1" = shadow (forward original). Default-enforce after the owner-authorized
+# survey cleared; MAEZ_EGRESS_REDACT_SHADOW=1 is the rollback kill-switch.
+_REDACT_SHADOW_DEFAULT = "0"
 
 
 def _redact_enforced() -> bool:

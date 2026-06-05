@@ -62,7 +62,7 @@ class SubscriptionProxyEgressShadowTests(unittest.IsolatedAsyncioTestCase):
         self._env.stop()
         self._tmp.cleanup()
 
-    async def test_shadow_mode_records_decision_without_mutating_adapter_payload(self):
+    async def test_redact_default_enforces_sanitized_adapter_payload(self):
         from starlette.requests import Request
 
         body = (
@@ -88,14 +88,14 @@ class SubscriptionProxyEgressShadowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
             self.adapter.prompts,
-            ["Owner said email rohit@example.com and memory_id_123"],
-            "shadow mode must not mutate the adapter payload",
+            ["Owner said email [pii:email] and [internal:memory_id]"],
+            "redact enforcement must forward the sanitized adapter payload",
         )
         with sqlite3.connect(self.db_path) as con:
             row = con.execute(
                 "SELECT prompt_preview, reply_preview, prompt_hash, "
                 "egress_decision, egress_reason_codes, egress_content_digest, "
-                "egress_provenance_mode "
+                "egress_provenance_mode, egress_shadow_mode "
                 "FROM calls"
             ).fetchone()
 
@@ -108,6 +108,7 @@ class SubscriptionProxyEgressShadowTests(unittest.IsolatedAsyncioTestCase):
             reason_codes,
             digest,
             mode,
+            shadow_mode,
         ) = row
         self.assertNotIn("rohit@example.com", prompt_preview)
         self.assertNotIn("memory_id_123", prompt_preview)
@@ -118,6 +119,43 @@ class SubscriptionProxyEgressShadowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("minimized_private_context", reason_codes)
         self.assertTrue(digest.startswith("hmac-sha256:"))
         self.assertEqual(mode, "legacy_conservative")
+        self.assertEqual(shadow_mode, 0)
+
+    async def test_shadow_kill_switch_records_decision_without_mutating_adapter_payload(self):
+        from starlette.requests import Request
+
+        body = (
+            b'{"model":"shadow-test","stream":false,"messages":['
+            b'{"role":"user","content":"Owner said email rohit@example.com and memory_id_123"}]}'
+        )
+
+        async def receive():
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        req = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/v1/chat/completions",
+                "headers": [(b"x-maez-caller", b"shadow-test")],
+            },
+            receive,
+        )
+
+        with mock.patch.dict(os.environ, {"MAEZ_EGRESS_REDACT_SHADOW": "1"}, clear=False):
+            response = await self.server.chat_completions(req)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            self.adapter.prompts,
+            ["Owner said email rohit@example.com and memory_id_123"],
+            "shadow kill-switch must not mutate the adapter payload",
+        )
+        with sqlite3.connect(self.db_path) as con:
+            shadow_mode = con.execute(
+                "SELECT egress_shadow_mode FROM calls"
+            ).fetchone()[0]
+        self.assertEqual(shadow_mode, 1)
 
     async def test_role_aware_public_spans_allow_and_cover_system_user_history(self):
         from starlette.requests import Request

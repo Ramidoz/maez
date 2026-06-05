@@ -389,7 +389,7 @@ class ClaudeRouterProvenanceTests(unittest.TestCase):
             "role_history": "",
             "user": "Question",
         }
-        request, mode = _build_egress_request(
+        request, mode, part_counts = _build_egress_request(
             body=body,
             rendered_parts=rendered_parts,
             prompt="Question",
@@ -399,6 +399,7 @@ class ClaudeRouterProvenanceTests(unittest.TestCase):
             request_id="system-renderer",
         )
         self.assertEqual(mode, "span_bundle")
+        self.assertEqual(part_counts, [("system", 3), ("user", 1)])
         self.assertEqual(
             [segment.origin_class for segment in request.segments],
             [

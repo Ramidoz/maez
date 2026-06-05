@@ -350,12 +350,11 @@ class ProxyRedactClassTests(_ProxyCanaryBase):
         self.assertNotIn(_PII_MARKER, prompt_preview or "")
         self.assertIn("third_party_private_context", origins)
 
-        # SHADOW TRUTH: redact-class forwarding is observe/shadow today. The
-        # adapter may still receive the original prompt; this canary asserts the
-        # decision and audit are correct, not that adapter-forwarding is scrubbed.
-        self.assertEqual(shadow_mode, 1)
+        # GRADUATED: redact-class forwarding is enforced by default. The
+        # adapter receives the gate's sanitized prompt, not the original.
+        self.assertEqual(shadow_mode, 0)
         self.assertEqual(len(self.adapter.prompts), 1)
-        self.assertIn(_PII_MARKER, self.adapter.prompts[0])
+        self.assertNotIn(_PII_MARKER, self.adapter.prompts[0])
 
 
 if __name__ == "__main__":

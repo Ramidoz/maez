@@ -26,11 +26,11 @@ class RedactEnforcedHelperTests(unittest.TestCase):
 
         return server
 
-    def test_default_is_shadow(self):
+    def test_default_is_enforce(self):
         server = self._helper()
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("MAEZ_EGRESS_REDACT_SHADOW", None)
-            self.assertFalse(server._redact_enforced())
+            self.assertTrue(server._redact_enforced())
 
     def test_enforce_opt_in(self):
         server = self._helper()
