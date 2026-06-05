@@ -601,6 +601,18 @@ def _reserved_denied_enforced() -> bool:
     return (os.environ.get("MAEZ_EGRESS_RESERVED_DENIED_SHADOW", "") or "").strip() != "1"
 
 
+# "1" = shadow (forward original). Default-SHADOW during rollout; the
+# default flips to "0" only after the owner-authorized survey clears.
+_REDACT_SHADOW_DEFAULT = "1"
+
+
+def _redact_enforced() -> bool:
+    return (
+        os.environ.get("MAEZ_EGRESS_REDACT_SHADOW", _REDACT_SHADOW_DEFAULT)
+        != "1"
+    )
+
+
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
     try:
