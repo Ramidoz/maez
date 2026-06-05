@@ -40,7 +40,7 @@ This is a **honesty** bug as much as an accuracy one: the system implies "this i
 
 **Three temporal-status cases — all RENDERED, never silent:**
 1. **Window has date-confirmed matches** → render as past-context with temporal labels (reuse `_absolute_date_recall`: `method/label/confirmed/window` on metadata *copies*; Chroma source unaltered; "date-confirmed, past context, never current-state evidence").
-2. **Window resolved but empty** → an explicit status: `No date-confirmed main memories found for <window label>` (e.g. *last week*).
+2. **Window resolved but empty** → an explicit status: `No date-confirmed event memories found for <window label>` (e.g. *last week*). **Definition of empty: no date-confirmed `daily` or `raw` (event) in-window rows.** Core is timeless self-context by contract and **never counts toward filling the temporal address or toward the empty determination** — a core row whose timestamp happens to fall in the window is still self-context, *not* event evidence; it may sit beside the answer, never as the answer, and never suppresses the empty status.
 3. **Helper unavailable** (anchor detected, window unresolved) → `Temporal reference recognized but could not be resolved to a window` — explicitly not a semantic answer.
 
 **The fallback — the single permitted door for outside-window content (precise):**
@@ -55,8 +55,8 @@ This is a **honesty** bug as much as an accuracy one: the system implies "this i
 The status renders as a **first-class, typed recall-system element** — its own tag, distinct from a `<RECALLED>` memory row — carried from the `recall_for_telegram` branch into `format_for_prompt`'s `PAST OBSERVATIONS` block:
 
 ```
-<TEMPORAL_RECALL_STATUS label="last week" status="no_date_confirmed_main_memories">
-No date-confirmed main memories found for last week.
+<TEMPORAL_RECALL_STATUS label="last week" status="no_date_confirmed_event_memories">
+No date-confirmed event memories found for last week.
 </TEMPORAL_RECALL_STATUS>
 ```
 
@@ -78,9 +78,9 @@ If Chroma cannot satisfy correctness **and** cost, v1 degrades to **dated-daily 
 
 **The must-prove (both obligations):** `_raw_rows_in_window(window)` returns exactly the in-window rows (correctness); a timing-guard test proves over-budget retrieval **degrades** to dated-daily/core + status rather than blocking, and the degraded path returns **no** outside-window semantic rows as answers (cost + honest degradation).
 
-**Typed status (not faux memory):** empty window → `<TEMPORAL_RECALL_STATUS status="no_date_confirmed_main_memories">` renders **and** is asserted not in `{core,daily,raw}`, not stored, not cited as lived `[E#]` evidence; helper-unavailable → its own typed status.
+**Typed status (not faux memory):** empty window → `<TEMPORAL_RECALL_STATUS status="no_date_confirmed_event_memories">` renders **and** is asserted not in `{core,daily,raw}`, not stored, not cited as lived `[E#]` evidence; helper-unavailable → its own typed status.
 
-**Always-render-empty:** a window that is empty **but** shows optional fallback context → the empty status **still renders above** the fallback (fallback never replaces it).
+**Always-render-empty + core-doesn't-count:** a window with no in-window `daily`/`raw` rows **but** with optional fallback context → the empty status **still renders above** the fallback (fallback never replaces it). And a window where a **core** row's timestamp falls inside it but no `daily`/`raw` rows do → still **empty** (the core in-window row neither suppresses the empty status nor renders as the address answer; it may appear only as timeless self-context).
 
 **Authority + coexistence:** date-confirmed matches render past-context-not-current-state; core renders timeless self-context, not window-evidence; B's empty status is main-store-scoped (no global "found nothing" when TRF found a lived episode).
 
@@ -93,9 +93,9 @@ If Chroma cannot satisfy correctness **and** cost, v1 degrades to **dated-daily 
 3. Window-first retrieval; an out-of-window row never reaches the brain as an answer (only as labeled not-from-window context).
 4. `_raw_rows_in_window` proven for **correctness AND cost**; a timing guard degrades honestly (never blocks) when over budget; degradation never returns outside-window semantic rows as answers.
 5. Three typed status cases render in the block; the status is not a memory row (not in `{core,daily,raw}`, not stored, not cited as lived evidence).
-6. The empty status always renders when no date-confirmed main-store rows exist, even if fallback context is shown.
+6. **Empty is defined over event memories only: the empty status always renders when no date-confirmed `daily`/`raw` in-window rows exist** — even if core self-context or fallback context is shown. A core row whose timestamp falls in the window does **not** count toward the empty determination and does **not** fill the address.
 7. Outside-window semantic content appears only if visibly labeled "timing uncertain / not date-confirmed."
-8. Core renders as timeless self-context, never window-evidence.
+8. Core renders as timeless self-context, never as temporal-address (window) evidence.
 9. B's statuses are main-store-scoped (coexist with TRF, no global "found nothing").
 10. Full suite green (zero new failures, apples-to-apples); no living-recall-wholesale; no recency weighting; no recent-bias.
 
