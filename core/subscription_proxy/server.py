@@ -792,10 +792,42 @@ async def chat_completions(request: Request):
                 f"{adapter.name}: daily cap reached ({day_used}/{d_cap})",
             )
 
+        forward_system, forward_prompt = system_prompt, prompt
+        enforced_redact = False
+        if egress_decision.decision == "redact" and _redact_enforced():
+            reconstructed = _sanitized_forward_payload(
+                egress_decision,
+                part_counts,
+                system_prompt=system_prompt,
+                prompt=prompt,
+            )
+            if reconstructed is None:
+                _record(
+                    adapter=adapter.name, caller=caller, model=model_in,
+                    model_used=None, prompt=prompt, reply="",
+                    input_toks=None, output_toks=None,
+                    duration_s=0.0, status="blocked_egress",
+                    egress_decision=egress_decision.decision,
+                    egress_reason_codes=",".join(egress_decision.reason_codes),
+                    egress_content_digest=egress_telemetry["content_digest"],
+                    egress_shadow_mode=False,
+                    egress_origin_classes=",".join(
+                        egress_decision.origin_classes
+                    ),
+                    egress_provenance_mode=egress_provenance_mode,
+                    prompt_preview_override=prompt_preview,
+                    reply_preview_override="",
+                )
+                raise HTTPException(
+                    403, "egress blocked: redact reconstruction failed"
+                )
+            forward_system, forward_prompt = reconstructed
+            enforced_redact = True
+
         t0 = time.time()
         try:
             result = await adapter.call(
-                prompt=prompt, system_prompt=system_prompt, model=model_in,
+                prompt=forward_prompt, system_prompt=forward_system, model=model_in,
             )
         except Exception as e:
             error_msg = str(e)
@@ -810,7 +842,7 @@ async def chat_completions(request: Request):
                 egress_decision=egress_decision.decision,
                 egress_reason_codes=",".join(egress_decision.reason_codes),
                 egress_content_digest=egress_telemetry["content_digest"],
-                egress_shadow_mode=True,
+                egress_shadow_mode=not enforced_redact,
                 egress_origin_classes=",".join(
                     egress_decision.origin_classes
                 ),
@@ -830,7 +862,7 @@ async def chat_completions(request: Request):
             egress_decision=egress_decision.decision,
             egress_reason_codes=",".join(egress_decision.reason_codes),
             egress_content_digest=egress_telemetry["content_digest"],
-            egress_shadow_mode=True,
+            egress_shadow_mode=not enforced_redact,
             egress_origin_classes=",".join(egress_decision.origin_classes),
             egress_provenance_mode=egress_provenance_mode,
             prompt_preview_override=prompt_preview,
