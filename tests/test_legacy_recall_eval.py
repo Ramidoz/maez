@@ -308,5 +308,23 @@ class PacketGateTests(unittest.TestCase):
         )
 
 
+class EndToEndTests(unittest.TestCase):
+    def test_run_eval_emits_content_free_packet(self):
+        root = Path(tempfile.mkdtemp(prefix="legacy_recall_eval_e2e_"))
+        self.addCleanup(sandbox.teardown, root)
+        packet = harness.run_eval(root, expect_commit=None)
+        self.assertTrue(packet.sandbox_fidelity_proven)
+        self.assertTrue(all(not outcome.unsafe_failure for outcome in packet.outcomes), packet.to_json())
+        blob = packet.to_json()
+        for fragment in (
+            "amber router",
+            "bronze ledger",
+            "violet lighthouse",
+            "keeps its promises",
+        ):
+            self.assertNotIn(fragment, blob)
+        self.assertTrue((root / "proof" / "legacy_recall_eval_packet.json").exists())
+
+
 if __name__ == "__main__":
     unittest.main()
