@@ -62,8 +62,14 @@ _ANCHOR_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("last_week", re.compile(r"\blast\s+week\b", re.IGNORECASE)),
 )
 
+# The "what were we ..." stems mirror the continuity classifier vocabulary
+# (core/routing/focused_cognition.py) — copied here, NOT imported, to avoid a
+# core.memory -> core.routing dependency. Anchor + negative/self-memory guards
+# still gate every match, so a statement ("I was working on X yesterday") never
+# becomes a recall ask. Keep aligned via the shared test corpus, not an import.
 _MEMORY_INTENT_RE = re.compile(
-    r"\b(remember|recall|what\s+happened|what\s+did|what\s+do\s+you\s+remember)\b",
+    r"\b(remember|recall|what\s+happened|what\s+did|what\s+do\s+you\s+remember"
+    r"|what\s+were\s+we\s+(working\s+on|talking\s+about|discussing|doing))\b",
     re.IGNORECASE,
 )
 
