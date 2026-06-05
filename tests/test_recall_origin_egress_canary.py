@@ -54,5 +54,63 @@ class RecallFidelityTests(unittest.TestCase):
         self.assertIn(_PII_MARKER, match[0].get("content", ""))
 
 
+def _mm():
+    from memory.memory_manager import MemoryManager
+
+    return MemoryManager.__new__(MemoryManager)
+
+
+def _raw_row(row_id: str, content: str, *, egress_origin_class: str | None = None):
+    meta = {
+        "cycle": 7,
+        "timestamp": "2026-06-04T12:00:00+00:00",
+        "type": "reasoning",
+    }
+    if egress_origin_class:
+        meta["egress_origin_class"] = egress_origin_class
+    return {"id": row_id, "content": content, "metadata": meta, "distance": 0.123}
+
+
+class LocalRenderFidelityTests(unittest.TestCase):
+    def test_local_render_keeps_full_content(self):
+        # COVENANT: local-first means the local render is full-fidelity; refusal
+        # lives at the cloud door, never here. This asserts we do NOT lobotomize.
+        recalled = {
+            "core": [],
+            "daily": [],
+            "raw": [
+                _raw_row(
+                    "raw-priv",
+                    f"email {_PII_MARKER}",
+                    egress_origin_class="third_party_private_context",
+                )
+            ],
+        }
+        rendered = _mm().format_for_prompt(recalled)
+        self.assertIn(_PII_MARKER, rendered)
+
+    def test_provenanced_render_carries_origin_span(self):
+        recalled = {
+            "core": [],
+            "daily": [],
+            "raw": [
+                _raw_row(
+                    "raw-priv",
+                    f"email {_PII_MARKER}",
+                    egress_origin_class="third_party_private_context",
+                )
+            ],
+        }
+        provenanced = _mm().format_for_prompt_provenanced(recalled)
+        priv = [
+            span
+            for span in provenanced.spans
+            if span.origin_class == "third_party_private_context"
+        ]
+        self.assertTrue(priv, "private-origin span missing from provenanced render")
+        self.assertTrue(all(span.redaction_allowed for span in priv))
+        self.assertIn(_PII_MARKER, provenanced.text)
+
+
 if __name__ == "__main__":
     unittest.main()
