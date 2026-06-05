@@ -34,13 +34,13 @@ This is a **honesty** bug as much as an accuracy one: the system implies "this i
 - **raw** (large): new helper `_raw_rows_in_window(window)` — **window-first**, then optionally semantic-rank *within* the bounded set. This is the **must-prove** piece (§5).
 - **core**: `get_all_core()` stays available, but for an address query it is **timeless self-context, not window-evidence** (origin-trust covenant-tier = "who Maez is," never "what happened last week").
 
-**Coexistence with TRF:** TRF supplements the daemon chat path over the **lived-episode** store; Blocker-B bounds the **main** store (core/daily/raw). They compose; B's statuses are **main-store-scoped** ("no date-confirmed *main* memories for last week") so they never read as a global "found nothing" when TRF found a lived episode.
+**Coexistence with TRF:** TRF supplements the daemon chat path over the **lived-episode** store; Blocker-B bounds the **main** store (core/daily/raw). They compose; B's statuses are **main-store-scoped** ("no date-confirmed *dated/consolidated main-store* memories for last week") so they never read as a global "found nothing" when TRF found a lived episode.
 
 ## 4. The honest-empty status + authority contract
 
 **Three temporal-status cases — all RENDERED, never silent:**
 1. **Window has date-confirmed matches** → render as past-context with temporal labels (reuse `_absolute_date_recall`: `method/label/confirmed/window` on metadata *copies*; Chroma source unaltered; "date-confirmed, past context, never current-state evidence").
-2. **Window resolved but empty** → an explicit status: `No date-confirmed event memories found for <window label>` (e.g. *last week*). **Definition of empty: no date-confirmed `daily` or `raw` (event) in-window rows.** Core is timeless self-context by contract and **never counts toward filling the temporal address or toward the empty determination** — a core row whose timestamp happens to fall in the window is still self-context, *not* event evidence; it may sit beside the answer, never as the answer, and never suppresses the empty status.
+2. **Window resolved but empty** → an explicit status: `No date-confirmed dated/consolidated main-store memories found for <window label>` (e.g. *last week*). **Definition of empty: no date-confirmed `daily` or `raw` (event) in-window rows.** In v1 Variant B, raw cannot be timestamp-range searched without a numeric index, so the rendered status names the dated/consolidated record that was actually checked rather than claiming a confirmed-empty raw firehose. Core is timeless self-context by contract and **never counts toward filling the temporal address or toward the empty determination** — a core row whose timestamp happens to fall in the window is still self-context, *not* event evidence; it may sit beside the answer, never as the answer, and never suppresses the empty status.
 3. **Helper unavailable** (anchor detected, window unresolved) → `Temporal reference recognized but could not be resolved to a window` — explicitly not a semantic answer.
 
 **The fallback — the single permitted door for outside-window content (precise):**
@@ -56,7 +56,7 @@ The status renders as a **first-class, typed recall-system element** — its own
 
 ```
 <TEMPORAL_RECALL_STATUS label="last week" status="no_date_confirmed_event_memories">
-No date-confirmed event memories found for last week.
+No date-confirmed dated/consolidated main-store memories found for last week.
 </TEMPORAL_RECALL_STATUS>
 ```
 
@@ -93,7 +93,7 @@ If Chroma cannot satisfy correctness **and** cost, v1 degrades to **dated-daily 
 3. Window-first retrieval; an out-of-window row never reaches the brain as an answer (only as labeled not-from-window context).
 4. `_raw_rows_in_window` proven for **correctness AND cost**; a timing guard degrades honestly (never blocks) when over budget; degradation never returns outside-window semantic rows as answers.
 5. Three typed status cases render in the block; the status is not a memory row (not in `{core,daily,raw}`, not stored, not cited as lived evidence).
-6. **Empty is defined over event memories only: the empty status always renders when no date-confirmed `daily`/`raw` in-window rows exist** — even if core self-context or fallback context is shown. A core row whose timestamp falls in the window does **not** count toward the empty determination and does **not** fill the address.
+6. **Empty is defined over event memories only: the empty status always renders when no date-confirmed `daily`/`raw` in-window rows exist** — even if core self-context or fallback context is shown. In Variant B, the human-facing text says "dated/consolidated main-store memories" so the brain does not read raw-firehose degradation as a confirmed-empty week. A core row whose timestamp falls in the window does **not** count toward the empty determination and does **not** fill the address.
 7. Outside-window semantic content appears only if visibly labeled "timing uncertain / not date-confirmed."
 8. Core renders as timeless self-context, never as temporal-address (window) evidence.
 9. B's statuses are main-store-scoped (coexist with TRF, no global "found nothing").

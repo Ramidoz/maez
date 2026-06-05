@@ -113,6 +113,8 @@ class RelativeAddressRecallTests(unittest.TestCase):
             "no_date_confirmed_event_memories",
         )
         self.assertIn("last week", out["temporal_status"]["label"])
+        self.assertIn("dated/consolidated", out["temporal_status"]["text"])
+        self.assertNotIn("event memories", out["temporal_status"]["text"])
 
     def test_core_in_window_does_not_fill_address_or_suppress_empty(self):
         now = datetime.now(timezone.utc)
@@ -126,6 +128,7 @@ class RelativeAddressRecallTests(unittest.TestCase):
             out["temporal_status"]["status"],
             "no_date_confirmed_event_memories",
         )
+        self.assertIn("dated/consolidated", out["temporal_status"]["text"])
         self.assertTrue(all(r.get("id") != "c1" for r in out["daily"] + out["raw"]))
 
     def test_timing_uncertain_fallback_does_not_replace_empty_status(self):
@@ -144,6 +147,7 @@ class RelativeAddressRecallTests(unittest.TestCase):
             out["temporal_status"]["status"],
             "no_date_confirmed_event_memories",
         )
+        self.assertIn("dated/consolidated", out["temporal_status"]["text"])
         self.assertEqual(out["daily"][0]["id"], "fallback-daily")
         self.assertFalse(out["daily"][0]["metadata"]["date_confirmed"])
         self.assertEqual(
@@ -253,7 +257,10 @@ class StatusRenderTests(unittest.TestCase):
             "temporal_status": {
                 "label": "last week",
                 "status": "no_date_confirmed_event_memories",
-                "text": "No date-confirmed event memories found for last week.",
+                "text": (
+                    "No date-confirmed dated/consolidated main-store "
+                    "memories found for last week."
+                ),
             },
         })
         self.assertIn("TEMPORAL_RECALL_STATUS", block)

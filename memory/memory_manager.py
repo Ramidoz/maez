@@ -2204,7 +2204,10 @@ class MemoryManager:
         status = {
             "label": window.label,
             "status": self._TEMPORAL_EMPTY_EVENT_STATUS,
-            "text": f"No date-confirmed event memories found for {window.label}.",
+            "text": (
+                "No date-confirmed dated/consolidated main-store "
+                f"memories found for {window.label}."
+            ),
         }
         topic = _temporal_topic_signal(query)
         fallback = []
