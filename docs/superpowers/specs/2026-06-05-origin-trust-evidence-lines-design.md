@@ -50,16 +50,18 @@ Add a distinct `_ORIGIN_TRUST_INSTRUCTION`, appended to the focused-synthesis sy
 
 ```
 bus stamps trust_tier at admission  →  raw memory metadata
-   →  recall returns it per item in metadata
-   →  seed builder (core/dispatcher/merge.py) reads meta["trust_tier"]
-   →  EvidenceItemSeed.trust_tier        (NEW field, default None)
-   →  assemble_working_set: seed → raw_items tuple (one new element) → EvidenceItem.origin_trust   (NEW field, default None)
+   →  recall partitions carry it per row in metadata
+   →  brain_loop.recall_partitions_to_items reads meta["trust_tier"] while the row metadata is still in hand
+   →  layer1.RecallItem.trust_tier        (NEW field, default None)
+   →  passed through merge.py on RenderedTurn.recall_items (NO transform there)
+   →  focused_cognition.assemble_working_set reads getattr(item, "trust_tier") → raw_items tuple (one new element) → EvidenceItem.origin_trust   (NEW field, default None)
    →  _render_evidence_lines appends the suffix when the strict map knows the tier
 ```
 
-**Two files (the honest footprint — not single-file):**
-- `core/dispatcher/merge.py` — where `recall_items` seeds are built from recalled memory (the metadata is still attached there): populate `EvidenceItemSeed.trust_tier` from `meta.get("trust_tier")`. Reading it here, not in `focused_cognition`, avoids re-deriving it after the seed is flattened (the tag-then-flatten failure this arc exists to prevent).
-- `core/routing/focused_cognition.py` — add `trust_tier` to `EvidenceItemSeed`, `origin_trust` to `EvidenceItem`, thread through the `raw_items` tuple, render the suffix (strict map), add `_ORIGIN_TRUST_INSTRUCTION`.
+**Three files (the honest footprint — verified against the live path, not a static trace):**
+- `core/dispatcher/layer1.py` — add `trust_tier: str | None = None` to `RecallItem`; include it in `to_dict()` (where items are serialized).
+- `core/brain/brain_loop.py` — in `recall_partitions_to_items`, read `meta.get("trust_tier")` and set it on the built `RecallItem`. **This is the room where the recalled row's metadata is still attached to the structured item** — reading it here, not in `focused_cognition` after the shape is flattened, is the no-tag-then-flatten discipline. `merge.py:146` only passes the already-built `RecallItem`s through on `RenderedTurn.recall_items`; it is **not** the builder.
+- `core/routing/focused_cognition.py` — read `getattr(item, "trust_tier", None)` off the structured recall items, thread it through the `raw_items` tuple to a new `EvidenceItem.origin_trust`, render the suffix (strict map), add `_ORIGIN_TRUST_INSTRUCTION`. **No `EvidenceItemSeed` change** — the structured items the organ consumes are `RecallItem`s, read duck-typed (`EvidenceItemSeed` is a different, internal dialogue-anchor seed).
 
 **Structured vs transcript path (correctly scoped, no overreach):**
 - **Structured `recall_items` path** (the modern path; where the GitHub fact flows) — carries origin-trust via the seed.
@@ -67,12 +69,12 @@ bus stamps trust_tier at admission  →  raw memory metadata
 
 ## 4. Flag
 
-**No new flag.** The render lives inside the focused organ, gated by the existing focused-cognition flag. The `merge.py` field-population is inert when focused cognition is off (it attaches a field nothing reads). Rollback is the existing flag.
+**No new flag.** The render lives inside the focused organ, gated by the existing focused-cognition flag. The `brain_loop`/`RecallItem` tier-population is inert when focused cognition is off (it attaches a field nothing reads). Rollback is the existing flag.
 
 ## 5. Tests
 
 **Unit (hermetic, RED-first):**
-- `merge.py`: a recalled memory with `meta["trust_tier"]="observed"` → built `EvidenceItemSeed.trust_tier == "observed"`; absent metadata → `None`.
+- `brain_loop.recall_partitions_to_items`: a recalled row with `meta["trust_tier"]="observed"` → built `RecallItem.trust_tier == "observed"`; absent metadata → `None`.
 - render: `origin_trust="observed"` → line contains `· origin trust: observed/tool`; `covenant`/`lived`/`untrusted` → their labels; `None` → **no** segment.
 - **unknown value:** `origin_trust="banana"` → **no** segment **and** a warning is logged (the fail-closed guard; this test failing on a leak is the point).
 - `[E#]` tokens byte-identical with and without the suffix; `check_groundedness` coverage ≥ pre-change baseline.
@@ -80,7 +82,7 @@ bus stamps trust_tier at admission  →  raw memory metadata
 - acceptance: a recalled `observed` memory renders `recalled memory — past authority` **and** `· origin trust: observed/tool` (both axes, no collision).
 
 **Live integration witness (the load-bearing proof — real path, not synthetic):**
-- A **real GitHub-`observed` memory row** (stored in a test memory store the way the bus stamps it) → **real `merge.py` seed-build (`recall_items`)** → **real `focused_cognition` render** → the rendered working-set text contains `· origin trust: observed/tool`. **No synthetic `EvidenceItem`; no daemon-live Telegram turn required** — the proof is the actual structured-recall → merge-seed → focused-render path with the real memory row. (Owner may additionally run a daemon-live turn, but the required witness is this real-path integration test.)
+- A **real GitHub-`observed` memory row** (stored the way the bus stamps it) → **real `brain_loop.recall_partitions_to_items` `RecallItem` build** → **real `focused_cognition` render** → the rendered working-set text contains `· origin trust: observed/tool`. **No synthetic `EvidenceItem`/`RecallItem`; no daemon-live Telegram turn required** — the proof is the actual recall-partition → `RecallItem` → focused-render path with the real memory row. (Owner may additionally run a daemon-live turn, but the required witness is this real-path integration test.)
 - Run the full `.venv/bin/python -B -m unittest discover` before done (schema-pin lesson); cross-lane review apples-to-apples in the asset-rich checkout ([[feedback_worktree_floor_confound]]).
 
 ## 6. Acceptance rules
@@ -90,17 +92,17 @@ bus stamps trust_tier at admission  →  raw memory metadata
 3. Absence is rendered as untiered (omitted), **never** as `untrusted`.
 4. `[E#]` tokens byte-identical; groundedness coverage not reduced.
 5. `_ORIGIN_TRUST_INSTRUCTION` present with the three rules + tier glosses; `observed/tool` never to be promoted into lived selfhood.
-6. `EvidenceItemSeed.trust_tier` populated at `merge.py` from memory metadata; threaded to `EvidenceItem.origin_trust`.
+6. `RecallItem.trust_tier` populated in `brain_loop.recall_partitions_to_items` from memory metadata (and in `layer1.RecallItem.to_dict`); threaded to `EvidenceItem.origin_trust` in `focused_cognition`.
 7. The legacy transcript path omits origin-trust (no false signal from `tier="raw"`).
-8. No new flag; `merge.py` population inert when focused cognition is off.
+8. No new flag; the `RecallItem`/`brain_loop` tier-population is inert when focused cognition is off (it attaches a field nothing reads).
 9. The live integration witness passes: real GitHub-`observed` row → real merge→focused render → `· origin trust: observed/tool`.
 10. Full suite green (zero new failures, apples-to-apples vs main); no bus-tier-assignment change; no `_TRUST_TIER_INSTRUCTION` rename; no transcript-path change.
 
 ## 7. Scope
 
-**In:** `EvidenceItemSeed.trust_tier` + its population in `merge.py`; `EvidenceItem.origin_trust`; the strict label map + fail-closed render; `_ORIGIN_TRUST_INSTRUCTION`; unit tests + the real-path integration witness.
+**In:** `RecallItem.trust_tier` (`layer1.py`) + its population in `brain_loop.recall_partitions_to_items` + `to_dict`; `EvidenceItem.origin_trust` (`focused_cognition.py`); the strict label map + fail-closed render; `_ORIGIN_TRUST_INSTRUCTION`; unit tests + the real-path integration witness.
 **Out:** transcript-path (`<RECALLED>`) origin-trust; renaming `_TRUST_TIER_INSTRUCTION`; the cycle-recall consumer (`core/memory/cycle_recall_context.py`); any change to how the bus assigns tiers; any new flag; new tier values.
 
 ## 8. Lane
 
-Codex implements the two files + unit tests / Claude reviews / owner runs the live-path witness. Cross-lane verification mandatory ([[feedback_cross_lane_verification_mandatory]]); the `[E#]`-byte-identical + groundedness-coverage bar is the primary review anchor.
+Codex implements the three files + unit tests / Claude reviews / owner runs the live-path witness. Cross-lane verification mandatory ([[feedback_cross_lane_verification_mandatory]]); the `[E#]`-byte-identical + groundedness-coverage bar is the primary review anchor.
