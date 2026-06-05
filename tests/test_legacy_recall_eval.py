@@ -7,6 +7,7 @@ from pathlib import Path
 from scripts.recall_flip_eval import sandbox
 from scripts.legacy_recall_eval import harness
 from scripts.legacy_recall_eval import probes
+from scripts.legacy_recall_eval import proof_packet as pp
 
 
 class _SandboxTestCase(unittest.TestCase):
@@ -230,6 +231,81 @@ class LatencyTests(_SandboxTestCase):
     def test_budget_formula(self):
         p95, budget = harness.latency_budget_ms([10.0, 20.0, 30.0])
         self.assertAlmostEqual(budget, p95 * harness.LATENCY_SMUGGLE_MARGIN)
+
+
+class PacketGateTests(unittest.TestCase):
+    def _packet(self, **overrides):
+        base = dict(
+            run_id="r",
+            started_at_utc="2026-06-05T00:00:00+00:00",
+            expected_commit_sha="abc",
+            actual_commit_sha="abc",
+            git_dirty=False,
+            scoped_dirty=False,
+            scoped_paths=pp.SCOPED_PATHS,
+            sandbox_fidelity_proven=True,
+            probe_set_hash="h",
+            fixture_manifest_hash="f",
+            latency_baseline_p95_ms=10.0,
+            latency_margin=3.0,
+            latency_budget_ms=30.0,
+            latency_how_frozen="baseline-p95 x margin",
+            outcomes=(
+                pp.ProbeOutcome(
+                    "p",
+                    "window_match",
+                    "v",
+                    ("ok",),
+                    False,
+                    12.0,
+                ),
+            ),
+        )
+        base.update(overrides)
+        return pp.LegacyRecallEvalPacket(**base)
+
+    def test_clean_packet_passes(self):
+        self.assertTrue(self._packet().overall_pass)
+
+    def test_commit_mismatch_fails(self):
+        self.assertFalse(self._packet(actual_commit_sha="zzz").overall_pass)
+
+    def test_scoped_dirty_fails(self):
+        self.assertFalse(self._packet(scoped_dirty=True).overall_pass)
+
+    def test_unrelated_git_dirt_still_passes_cry_wolf_guard(self):
+        self.assertTrue(self._packet(git_dirty=True, scoped_dirty=False).overall_pass)
+
+    def test_fidelity_unproven_fails(self):
+        self.assertFalse(self._packet(sandbox_fidelity_proven=False).overall_pass)
+
+    def test_unsafe_outcome_fails(self):
+        bad = pp.ProbeOutcome("p", "window_match", "v", ("leak",), True, 12.0)
+        self.assertFalse(self._packet(outcomes=(bad,)).overall_pass)
+
+    def test_over_budget_latency_fails(self):
+        slow = pp.ProbeOutcome("p", "window_match", "v", ("ok",), False, 999.0)
+        self.assertFalse(self._packet(outcomes=(slow,)).overall_pass)
+
+    def test_compute_scoped_dirty_flags_recall_path(self):
+        porcelain = " M memory/memory_manager.py\n?? docs/whatever.md\n"
+        self.assertTrue(pp.compute_scoped_dirty(porcelain))
+        self.assertTrue(pp.git_dirty(porcelain))
+
+    def test_compute_scoped_dirty_flags_sandbox_substrate(self):
+        self.assertTrue(pp.compute_scoped_dirty(" M scripts/recall_flip_eval/sandbox.py\n"))
+
+    def test_compute_scoped_dirty_ignores_unrelated_dirt(self):
+        porcelain = "?? docs/handoffs/x.md\n M memory/project_planner.json\n"
+        self.assertFalse(pp.compute_scoped_dirty(porcelain))
+        self.assertTrue(pp.git_dirty(porcelain))
+
+    def test_compute_scoped_dirty_handles_rename(self):
+        self.assertTrue(
+            pp.compute_scoped_dirty(
+                "R  old/path.py -> scripts/legacy_recall_eval/harness.py\n"
+            )
+        )
 
 
 if __name__ == "__main__":
