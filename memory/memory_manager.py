@@ -2171,7 +2171,14 @@ class MemoryManager:
             for row in self._all_daily_rows()
             if _row_in_window(row.get("metadata") or {}, window)
         ]
-        raw_in = self._raw_rows_in_window(window)
+        raw_in = self._merge_recall_candidates(
+            self._raw_rows_in_window(window),
+            [
+                row
+                for row in self._recent_telegram_exchange_rows(self.raw, query)
+                if _row_in_window(row.get("metadata") or {}, window)
+            ],
+        )
         core = self.get_all_core()
 
         if daily_in or raw_in:
@@ -2416,7 +2423,8 @@ class MemoryManager:
         """Build context for a Telegram response with topic-aware retrieval."""
         from core.memory.temporal_anchor_recall import detect_temporal_anchor
 
-        anchor = detect_temporal_anchor(query)
+        reference_time = datetime.fromtimestamp(_now_seconds(), tz=owner_timezone())
+        anchor = detect_temporal_anchor(query, reference_time=reference_time)
         anchor_kind = getattr(anchor, "anchor_kind", None)
         if (
             getattr(anchor, "anchor_detected", False)

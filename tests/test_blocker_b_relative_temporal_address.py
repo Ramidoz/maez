@@ -81,9 +81,11 @@ class RelativeAddressRecallTests(unittest.TestCase):
             {"id": row_id, "content": row_id, "metadata": {"timestamp": ts}}
             for row_id, ts in raw_in
         ]
+        mm._recent_telegram_exchange_rows = lambda *a, **k: []
         mm._query_collection = lambda *a, **k: []
         mm.core = mock.Mock()
         mm.daily = mock.Mock()
+        mm.raw = mock.Mock()
         return mm
 
     def test_in_window_daily_surfaces_and_empty_status_is_absent(self):
