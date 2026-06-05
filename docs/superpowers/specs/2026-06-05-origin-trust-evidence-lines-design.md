@@ -95,7 +95,7 @@ bus stamps trust_tier at admission  →  raw memory metadata
 6. `RecallItem.trust_tier` populated in `brain_loop.recall_partitions_to_items` from memory metadata (and in `layer1.RecallItem.to_dict`); threaded to `EvidenceItem.origin_trust` in `focused_cognition`.
 7. The legacy transcript path omits origin-trust (no false signal from `tier="raw"`).
 8. No new flag; the `RecallItem`/`brain_loop` tier-population is inert when focused cognition is off (it attaches a field nothing reads).
-9. The live integration witness passes: real GitHub-`observed` row → real merge→focused render → `· origin trust: observed/tool`.
+9. The live integration witness passes: real GitHub-`observed` row → real `recall_partitions_to_items` → `RecallItem` → focused render → `· origin trust: observed/tool`.
 10. Full suite green (zero new failures, apples-to-apples vs main); no bus-tier-assignment change; no `_TRUST_TIER_INSTRUCTION` rename; no transcript-path change.
 
 ## 7. Scope
