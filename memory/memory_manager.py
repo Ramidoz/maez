@@ -1065,12 +1065,20 @@ class MemoryManager:
         logger.info("Raw stored: %s (cycle %d, %d chars)", memory_id[:8], cycle, len(doc_text))
         return memory_id
 
-    def owner_account_row_id_by_source_ref(self, source_ref: str) -> str | None:
-        """Return the raw memory row id for an owner-account source ref.
+    def body_row_id_by_source_ref(
+        self,
+        source_ref: str,
+        *,
+        egress_origin_class: str,
+    ) -> str | None:
+        """Return the raw memory row id for ``source_ref`` wearing ``egress_origin_class``.
 
-        This is a read-only recovery helper for account-limb admission. A
-        same-source generic memory row must not satisfy the lookup; the row has
-        to carry both the source_ref and owner_account_context taint.
+        Read-only recovery helper for intake-bus admission idempotency. A
+        same-source row with a different origin class must not satisfy the
+        lookup; the row has to carry both the source_ref and the expected taint.
+
+        Fails closed: backend errors propagate. Callers must never treat "I
+        can't tell the body's state" as "absent, safe to admit."
         """
         if not source_ref:
             return None
@@ -1083,9 +1091,16 @@ class MemoryManager:
         metadatas = got.get("metadatas") or []
         for idx, row_id in enumerate(ids):
             meta = metadatas[idx] if idx < len(metadatas) else {}
-            if (meta or {}).get("egress_origin_class") == "owner_account_context":
+            if (meta or {}).get("egress_origin_class") == egress_origin_class:
                 return str(row_id)
         return None
+
+    def owner_account_row_id_by_source_ref(self, source_ref: str) -> str | None:
+        """Thin wrapper over body_row_id_by_source_ref for owner-account rows."""
+        return self.body_row_id_by_source_ref(
+            source_ref,
+            egress_origin_class="owner_account_context",
+        )
 
     def store_telegram(self, content: str, *,
                        provenance_source=None, trust_tier=None,
