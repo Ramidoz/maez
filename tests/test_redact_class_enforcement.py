@@ -255,5 +255,25 @@ class ShadowKillSwitchTests(_ProxyBase):
         self.assertEqual(shadow, 1)
 
 
+class SurveyTests(unittest.TestCase):
+    def test_survey_is_content_free_and_structured(self):
+        from scripts.redact_enforcement_survey import survey
+
+        out = survey(db_path=None)
+        blob = json.dumps(out)
+        for fragment in ("owner@x.test", "sk-aaaa1111", "secret.txt", "555-0101"):
+            self.assertNotIn(fragment, blob)
+        self.assertIn(out["provisional_verdict"], ("CLEAN", "NO_GO"))
+        self.assertIn("masking_ratio", out["prose"])
+        self.assertIn("near_empty", out["prose"])
+
+    def test_prose_masks_lightly(self):
+        from scripts.redact_enforcement_survey import survey
+
+        out = survey(db_path=None)
+        self.assertLessEqual(out["prose"]["masking_ratio"], 0.25, out["prose"])
+        self.assertFalse(out["prose"]["near_empty"])
+
+
 if __name__ == "__main__":
     unittest.main()
