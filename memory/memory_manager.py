@@ -2110,6 +2110,18 @@ class MemoryManager:
             tagged.append({**row, "metadata": meta})
         return tagged
 
+    def _raw_rows_in_window(self, window: AbsoluteRecallWindow) -> list[dict]:
+        """Return raw rows for a temporal window, or degrade honestly.
+
+        Blocker-B v1 spike (2026-06-05): this Chroma build rejects
+        ``$gte``/``$lte`` over ISO-8601 timestamp strings and raw rows do not
+        carry a numeric timestamp field. A client-side scan of the full raw
+        collection would recreate the living-recall latency No-Go, so v1
+        returns no raw rows instead of blocking or leaking outside-window
+        semantic matches. A future numeric timestamp index can replace this.
+        """
+        return []
+
     def _absolute_date_recall(
         self,
         query: str,
