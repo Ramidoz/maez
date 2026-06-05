@@ -41,10 +41,14 @@ In `chat_completions`, after `decide_egress` and the existing block-class enforc
 
 Before the default-on lands, a content-free survey produces a go/no-go verdict:
 - **Volume:** count redact-class calls in the proxy DB (`egress_decision="redact"`) — real, already recorded. (Expectation: high, since untagged memory falls back to `"memory"` → redactable; that is fine — it bounds *how broad*, not *how harmful*.)
-- **Over-redaction:** run a representative set of recalled-memory shapes (prose-only memory; a PII-dense note; a mixed note) through `redact_for_cloud` and record the **masking ratio** (`redacted_chars/original_chars`) + `pii_counts` — content-free. The failure mode this guards: a prompt scrubbed into uselessness.
-- **Verdict:** prose memory masks lightly (only PII patterns) → safe; if representative shapes mask heavily (a high ratio threshold, named in the plan, e.g. >25% on prose), that is a NO-GO for default-on.
+- **Over-redaction:** run a representative set of recalled-memory shapes (prose-only memory; a PII-dense note; a mixed note) through `redact_for_cloud` and record the **masking ratio** (`redacted_chars/original_chars`) + `pii_counts` + a **coherence flag** (is the sanitized prompt empty/near-empty/semantically useless) — all content-free. The failure mode this guards: a prompt scrubbed into uselessness.
+- **Verdict — PROVISIONAL planning thresholds, NOT covenant numbers (the owner verdict reads the actual survey output):**
+  - **Prose sample `>25%` masked → presumptive NO-GO** for default-on (prose memory should mask lightly — only PII patterns; heavy masking on prose means over-redaction).
+  - **PII-dense sample MAY exceed 25% without blocking** — it exists to *prove* dense PII gets heavily scrubbed; high masking there is the success signal, not a failure.
+  - **Mixed sample must preserve the non-private/public markers and scrub only the PII markers** — a mixed sample that masks public content is a NO-GO (origins smeared).
+  - **HARD NO-GO regardless of ratio:** any sample whose sanitized prompt is **empty / near-empty / semantically useless** (20% retained but incoherent is still bad — the coherence flag, not just the ratio).
 
-The survey is a **script/test that emits counts + ratios only** (never content). The owner reads it and authorizes (or defers) the default-on.
+The survey is a **script/test that emits counts + ratios + the coherence flag only** (never content). The owner reads it and authorizes (or defers) the default-on; the thresholds above are the plan's starting NO-GO lines, refined by the actual numbers.
 
 ## 6. The conditional default-on landing
 
