@@ -1,6 +1,6 @@
 """Content-free survey gating the redact-class default-on.
 
-Emits counts, ratios, and coherence flags only -- never sample content. See
+Emits counts, redaction signals, and coherence flags only -- never sample content. See
 docs/superpowers/specs/2026-06-05-redact-class-enforcement-flip-design.md.
 """
 
@@ -22,20 +22,30 @@ _PII_DENSE = (
 _MIXED = "PUBLIC-CONTEXT-OK reach me at owner@x.test and 555-0199 then continue."
 
 
-def _impact(text: str) -> dict:
+def _impact(text: str, *, public_marker: str | None = None) -> dict:
     from core.safety.cloud_redactor import redact_for_cloud
 
     result = redact_for_cloud(text)
     original = len(text)
-    masked = max(0, original - len(result.text))
-    ratio = (masked / original) if original else 0.0
     stripped = result.text.strip()
     near_empty = len(stripped) < max(8, int(0.15 * original))
-    return {
-        "masking_ratio": round(ratio, 4),
+    total_redactions = int(result.total_redactions())
+    impact = {
+        "changed": bool(result.changed),
         "pii_counts": dict(getattr(result, "pii_counts", {}) or {}),
+        "internal_counts": dict(getattr(result, "internal_counts", {}) or {}),
+        "total_redactions": total_redactions,
+        "redactions_per_1k_chars": (
+            round((total_redactions * 1000) / original, 4) if original else 0.0
+        ),
+        "output_to_input_ratio": (
+            round(len(result.text) / original, 4) if original else 0.0
+        ),
         "near_empty": bool(near_empty),
     }
+    if public_marker is not None:
+        impact["public_marker_survived"] = bool(public_marker in result.text)
+    return impact
 
 
 def survey(db_path: str | None = None) -> dict:
@@ -51,11 +61,16 @@ def survey(db_path: str | None = None) -> dict:
 
     prose = _impact(_PROSE)
     dense = _impact(_PII_DENSE)
-    mixed = _impact(_MIXED)
+    mixed = _impact(_MIXED, public_marker="PUBLIC-CONTEXT-OK")
     no_go = (
-        prose["masking_ratio"] > 0.25
+        prose["changed"]
         or prose["near_empty"]
         or mixed["near_empty"]
+        or not dense["changed"]
+        or not dense["total_redactions"]
+        or not mixed["changed"]
+        or not mixed["total_redactions"]
+        or not mixed["public_marker_survived"]
     )
     return {
         "schema": "redact_enforcement_survey.v1",

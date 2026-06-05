@@ -264,15 +264,29 @@ class SurveyTests(unittest.TestCase):
         for fragment in ("owner@x.test", "sk-aaaa1111", "secret.txt", "555-0101"):
             self.assertNotIn(fragment, blob)
         self.assertIn(out["provisional_verdict"], ("CLEAN", "NO_GO"))
-        self.assertIn("masking_ratio", out["prose"])
+        self.assertNotIn("masking_ratio", out["prose"])
+        self.assertIn("changed", out["prose"])
+        self.assertIn("total_redactions", out["prose"])
         self.assertIn("near_empty", out["prose"])
 
-    def test_prose_masks_lightly(self):
+    def test_prose_is_unchanged(self):
         from scripts.redact_enforcement_survey import survey
 
         out = survey(db_path=None)
-        self.assertLessEqual(out["prose"]["masking_ratio"], 0.25, out["prose"])
+        self.assertFalse(out["prose"]["changed"], out["prose"])
+        self.assertEqual(out["prose"]["total_redactions"], 0, out["prose"])
         self.assertFalse(out["prose"]["near_empty"])
+
+    def test_pii_samples_report_real_redaction_not_length_delta(self):
+        from scripts.redact_enforcement_survey import survey
+
+        out = survey(db_path=None)
+        self.assertTrue(out["pii_dense"]["changed"], out["pii_dense"])
+        self.assertGreater(out["pii_dense"]["total_redactions"], 0, out["pii_dense"])
+        self.assertGreater(sum(out["pii_dense"]["pii_counts"].values()), 0)
+        self.assertTrue(out["mixed"]["changed"], out["mixed"])
+        self.assertGreater(out["mixed"]["total_redactions"], 0, out["mixed"])
+        self.assertTrue(out["mixed"]["public_marker_survived"], out["mixed"])
 
 
 if __name__ == "__main__":
