@@ -153,3 +153,13 @@ The point is **not** abstract speed; it is: **Blocker-B did not smuggle living-r
 ## 12. Lane
 
 Codex implements / Claude reviews (touches the eval discipline + the live recall path; multi-file; not inline). Cross-lane verification mandatory; the **sandbox read-fidelity proof** and the **cry-wolf packet gate** (git_dirty informational, scoped_dirty gating) are the primary review anchors. `.venv/bin/python -B -m unittest`; full `discover`; apples-to-apples in `/home/rohit/maez`. Owner runs the live witness (the packet + the full suite).
+
+## 13. Post-implementation notes (verified in cross-lane review, 2026-06-05)
+
+Two refinements surfaced during Codex's implementation + Claude's review; recorded here so the spec stays the durable reference.
+
+1. **The fidelity proof must not become evidence in the probe world.** The read-fidelity proof (§4) seeds an in-window daily marker to prove the round-trip; if that marker were left in the store, a subsequent empty-window probe would look non-empty. So the harness **deletes the fidelity marker after proving fidelity** (`manager.daily.delete([marker_id])`). This is now part of the harness covenant: proving the harness reads the real road must not plant a fixture the honesty probes then trip over. (A genuine bug in the original plan, caught by the implementing lane.)
+
+2. **The empty-window family is discover-gated, not packet-gated, in v0.** The emitted `legacy_recall_eval_packet.v1` carries **5 outcomes** — `non_temporal` ×2, `window_match` ×2, `helper_unavailable` ×1. The **empty-window** honesty family is covered by the `tests/test_legacy_recall_eval.py` discover subset, **not** the packet, because its seeding (only out-of-window rows) collides with window-match seeding in a single packet run. This is the one intentional v0 coverage boundary: **"packet overall_pass=True" means three families are packeted, not all four** — read the packet and the discover subset together for full coverage. Closing it (a separate empty-window packet run) is a clean v0.1 follow-up.
+
+**Review floor (asset-rich `/home/rohit/maez`, branch code, 2026-06-05):** 5961 tests, 3 failures + 2 errors — all pre-existing main floor, none in `legacy_recall_eval`; the harness's own 28 tests fully green; `memory/db` untouched. The isolated worktree showed 49 fail/error — the missing-owner-asset confound, not regressions.
