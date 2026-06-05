@@ -50,6 +50,35 @@ class WebInterfaceLazyMemoryTests(unittest.TestCase):
             msg=f"rc={r.returncode}\nstdout={r.stdout}\nstderr={r.stderr[-2500:]}",
         )
 
+    def test_concurrent_first_access_constructs_one_memory_manager(self):
+        probe = "\n".join([
+            "import sys, threading, time",
+            f"sys.path.insert(0, {str(_REPO)!r})",
+            "import memory.memory_manager as mm",
+            "constructed = []",
+            "class _Spy:",
+            "    def __init__(self, *a, **k):",
+            "        time.sleep(0.05)",
+            "        constructed.append(1)",
+            "    def __getattr__(self, n):",
+            "        return lambda *a, **k: None",
+            "mm.MemoryManager = _Spy",
+            "import skills.web_interface as wi",
+            "threads = [threading.Thread(target=lambda: wi.memory.recall_for_telegram) for _ in range(12)]",
+            "[t.start() for t in threads]",
+            "[t.join() for t in threads]",
+            "assert len(constructed) == 1, 'concurrent first access constructed %d' % len(constructed)",
+            "print('LAZY_CONCURRENT_OK')",
+        ])
+        r = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True, text=True, cwd=str(_REPO), timeout=180,
+        )
+        self.assertIn(
+            "LAZY_CONCURRENT_OK", r.stdout,
+            msg=f"rc={r.returncode}\nstdout={r.stdout}\nstderr={r.stderr[-2500:]}",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
