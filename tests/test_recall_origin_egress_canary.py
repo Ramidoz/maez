@@ -329,5 +329,34 @@ class ProxyBlockClassTests(_ProxyCanaryBase):
         self.assertIn("owner_account_context", origins)
 
 
+class ProxyRedactClassTests(_ProxyCanaryBase):
+    async def test_redact_class_decision_and_audit_are_scrubbed(self):
+        recalled = {
+            "core": [],
+            "daily": [],
+            "raw": [
+                _raw_row(
+                    "raw-priv",
+                    f"contact {_PII_MARKER} privately",
+                    egress_origin_class="third_party_private_context",
+                )
+            ],
+        }
+        body = _drive_to_proxy(recalled=recalled)
+        await self.server.chat_completions(_make_proxy_request(body))
+        decision, prompt_preview, shadow_mode, origins = self._audit_row()
+
+        self.assertEqual(decision, "redact")
+        self.assertNotIn(_PII_MARKER, prompt_preview or "")
+        self.assertIn("third_party_private_context", origins)
+
+        # SHADOW TRUTH: redact-class forwarding is observe/shadow today. The
+        # adapter may still receive the original prompt; this canary asserts the
+        # decision and audit are correct, not that adapter-forwarding is scrubbed.
+        self.assertEqual(shadow_mode, 1)
+        self.assertEqual(len(self.adapter.prompts), 1)
+        self.assertIn(_PII_MARKER, self.adapter.prompts[0])
+
+
 if __name__ == "__main__":
     unittest.main()
