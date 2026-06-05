@@ -43,6 +43,7 @@ _FIXTURE_CONTENT = {
 }
 
 LATENCY_SMUGGLE_MARGIN = 3.0
+_FAMILY_ORDER = ("non_temporal", "window_match", "empty_window", "helper_unavailable")
 
 
 def patch_fixed_now():
@@ -208,6 +209,107 @@ def latency_budget_ms(baseline_samples) -> tuple[float, float]:
     """Return (baseline_p95_ms, baseline_p95_ms * frozen margin)."""
     baseline_p95 = _percentile(list(baseline_samples), 95)
     return baseline_p95, baseline_p95 * LATENCY_SMUGGLE_MARGIN
+
+
+def _probe_family(family: str, run_id: str):
+    """Seed, probe, assert, and time one family in the active sandbox."""
+    from scripts.legacy_recall_eval import probes
+    from scripts.legacy_recall_eval.proof_packet import ProbeOutcome
+
+    outcomes: list[ProbeOutcome] = []
+    samples: list[float] = []
+
+    if family == "non_temporal":
+        fx = seed_window_match_fixtures(run_id)
+        for variant in ("what is the capital of France?", "tell me about photosynthesis"):
+            recalled, rendered = run_probe(variant)
+            codes, unsafe = probes.assert_non_temporal(recalled, rendered, fx)
+            elapsed_ms = measure_probe_latency_ms(variant)
+            samples.append(elapsed_ms)
+            outcomes.append(
+                ProbeOutcome(
+                    "non_temporal_control",
+                    "non_temporal",
+                    variant,
+                    codes,
+                    unsafe,
+                    elapsed_ms,
+                )
+            )
+    elif family == "window_match":
+        fx = seed_window_match_fixtures(run_id)
+        for variant in (
+            "what were we working on last week?",
+            "what did we do last week?",
+        ):
+            recalled, rendered = run_probe(variant)
+            codes, unsafe = probes.assert_window_match(recalled, rendered, fx)
+            elapsed_ms = measure_probe_latency_ms(variant)
+            outcomes.append(
+                ProbeOutcome(
+                    "last_week_match",
+                    "window_match",
+                    variant,
+                    codes,
+                    unsafe,
+                    elapsed_ms,
+                )
+            )
+    elif family == "empty_window":
+        fx = seed_empty_window_fixtures(run_id)
+        query = "what were we working on last week?"
+        recalled, rendered = run_probe(query)
+        codes, unsafe = probes.assert_empty_window(recalled, rendered, fx)
+        elapsed_ms = measure_probe_latency_ms(query)
+        outcomes.append(
+            ProbeOutcome(
+                "last_week_empty",
+                "empty_window",
+                query,
+                codes,
+                unsafe,
+                elapsed_ms,
+            )
+        )
+    elif family == "helper_unavailable":
+        fx = seed_window_match_fixtures(run_id)
+        query = "what were we working on last week?"
+        with force_helper_unavailable():
+            recalled, rendered = run_probe(query)
+            codes, unsafe = probes.assert_helper_unavailable(recalled, rendered, fx)
+            elapsed_ms = measure_probe_latency_ms(query)
+        outcomes.append(
+            ProbeOutcome(
+                "last_week_helper_unavailable",
+                "helper_unavailable",
+                "forced",
+                codes,
+                unsafe,
+                elapsed_ms,
+            )
+        )
+    else:
+        raise ValueError(f"unknown family: {family}")
+
+    return outcomes, samples
+
+
+def _run_family(outer_root, family: str):
+    """Run a family in its own probe_sandboxes/<family> sub-sandbox."""
+    probe_root = Path(outer_root) / "probe_sandboxes" / family
+    prior = sandbox.memory_patch_snapshot()
+    ctx = sandbox.sandbox_env(probe_root)
+    ctx.__enter__()
+    try:
+        sandbox.patch_memory_manager_base_db(probe_root)
+        sandbox.assert_sandbox(probe_root)
+        run_id = f"legacy-recall-eval-{family}"
+        fidelity = bool(prove_sandbox_fidelity(probe_root, run_id=run_id))
+        outcomes, samples = _probe_family(family, run_id)
+        return outcomes, fidelity, probe_root, samples
+    finally:
+        sandbox.restore_memory_patch_snapshot(prior)
+        ctx.__exit__(None, None, None)
 
 
 def _commit_sha() -> str:

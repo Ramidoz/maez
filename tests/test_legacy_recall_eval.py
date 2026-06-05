@@ -349,6 +349,35 @@ class PacketGateTests(unittest.TestCase):
         )
 
 
+class FamilyIsolationTests(_SandboxTestCase):
+    def test_family_roots_differ_and_under_outer(self):
+        root = self._enter_sandbox()
+        out_wm, fid_wm, root_wm, _samples_wm = harness._run_family(
+            root, "window_match"
+        )
+        out_ew, fid_ew, root_ew, _samples_ew = harness._run_family(
+            root, "empty_window"
+        )
+
+        self.assertNotEqual(root_wm, root_ew)
+        self.assertTrue(Path(root_wm).resolve().is_relative_to(Path(root).resolve()))
+        self.assertTrue(Path(root_ew).resolve().is_relative_to(Path(root).resolve()))
+        self.assertTrue(fid_wm)
+        self.assertTrue(fid_ew)
+        self.assertEqual([outcome.family for outcome in out_wm], ["window_match", "window_match"])
+        self.assertEqual([outcome.family for outcome in out_ew], ["empty_window"])
+        self.assertFalse(any(outcome.unsafe_failure for outcome in out_wm + out_ew))
+
+    def test_empty_window_isolated_from_window_match_seeding(self):
+        root = self._enter_sandbox()
+        outcomes, fidelity, _family_root, _samples = harness._run_family(
+            root, "empty_window"
+        )
+        self.assertTrue(fidelity)
+        self.assertEqual(len(outcomes), 1)
+        self.assertFalse(outcomes[0].unsafe_failure, outcomes[0].verdict_codes)
+
+
 class EndToEndTests(unittest.TestCase):
     def test_run_eval_emits_content_free_packet(self):
         root = Path(tempfile.mkdtemp(prefix="legacy_recall_eval_e2e_"))
