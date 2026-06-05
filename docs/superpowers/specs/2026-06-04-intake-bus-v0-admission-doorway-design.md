@@ -118,7 +118,7 @@ The current `owner_account_row_id_by_source_ref` is hardcoded to `egress_origin_
 - **`run_ingest`** becomes: `was_pending = store.oldest_pending() is not None`; if not pending → `fetch_repo_count` + `ingest_repo_count` (stage — limb code, unchanged); then `outcome = intake_bus.admit(GithubStoreAdapter(store), memory)`; **translate `outcome` → the existing content-free result dict** (`{ok, ingest_record_id, fetch_batch_id, staged, admitted, resumed}`) so the daemon route + `scripts/github_ingest.py` allowlists and their tests are unchanged. **`resumed` is computed by `run_ingest`** (`= was_pending`, the limb's own knowledge — §2), `admitted = outcome.status == "admitted"`.
 - `admit_repo_count_to_body`'s body-write + idempotency move into the bus; if a thin GitHub shim is kept it only builds the `IntakeFact` (no immune logic).
 
-**Correctness bar (the zero-change proof):** the existing `tests/test_github_v1_egress_canary.py` and the GitHub idempotency tests pass **unchanged** — same body row (`owner_account_context` taint, `source_ref`, OBSERVED tier, verbatim honest content), same content-free outcome. **If those tests need editing to pass, the extraction changed behavior and is wrong** — that is the strongest evidence and must be preserved.
+**Correctness bar (the zero-change proof):** the existing `tests/test_github_v1_egress_canary.py` and GitHub idempotency tests keep their **behavioral assertions unchanged** — same body row (`owner_account_context` taint, `source_ref`, OBSERVED tier, verbatim honest content), same content-free outcome. **Test doubles may be updated _only_ to expose the new generic lookup seam** — e.g. a fake `memory` that mocks `body_row_id_by_source_ref` (the form the bus now calls), not only `owner_account_row_id_by_source_ref` — since a stub on the old wrapper alone would simply not be hit (a plumbing reason, not a behavior change). **If an _assertion_ must change to pass, the extraction changed behavior and is wrong** — that behavioral bar is the strongest evidence and must be preserved.
 
 ## 6. Rider 2 — the synthetic rider (test-only, N=2)
 
@@ -145,7 +145,7 @@ The synthetic rider is never shipped and never touches real personal data.
 
 - `tests/test_intake_bus_admit.py` — the synthetic rider above (admit / idempotency / `STAGE_ONLY` / `refused` / substrate-raise / tier authority / content-blindness / parameterized-lookup).
 - `body_row_id_by_source_ref` tests — honors the passed `egress_origin_class`; fail-closed (raises, never `None`-launders); the `owner_account_row_id_by_source_ref` wrapper still resolves owner-account rows.
-- **GitHub regression net** — existing `tests/test_github_v1_egress_canary.py` + GitHub idempotency tests pass **unchanged**.
+- **GitHub regression net** — the existing `tests/test_github_v1_egress_canary.py` + GitHub idempotency **behavioral assertions** pass unchanged; test doubles may be updated only to expose the generic-lookup seam (§5).
 - Run the **full** `.venv/bin/python -B -m unittest discover -s tests -p 'test_*.py' -t .` before done (the schema-pin lesson). Cross-lane review runs branch code in the **asset-rich main checkout** apples-to-apples, not the worktree ([[feedback_worktree_floor_confound]]).
 
 ## 9. Acceptance rules
@@ -157,7 +157,7 @@ The synthetic rider is never shipped and never touches real personal data.
 5. `admit` enforces posture: `STAGE_ONLY` → `staged_not_admitted` (no body row); `ADMIT_TO_BODY` → body-write with the declared taint.
 6. `admit` is idempotent on `(source_ref, egress_origin_class)`: a pre-existing body row → `already_admitted`, exactly one row.
 7. `body_row_id_by_source_ref(source_ref, *, egress_origin_class)` exists, fail-closed; `owner_account_row_id_by_source_ref` is a thin wrapper; `store` untouched.
-8. GitHub rides the bus: `run_ingest` stages-then-`admit`; the existing GitHub canary + idempotency tests pass **unchanged**; the daemon route / script content-free result is unchanged.
+8. GitHub rides the bus: `run_ingest` stages-then-`admit`; the existing GitHub canary + idempotency **behavioral assertions** pass unchanged (test doubles may learn the new generic-lookup seam only); the daemon route / script content-free result is unchanged.
 9. The synthetic rider proves admission of a non-`owner_account` (`memory`) fact, idempotency, `STAGE_ONLY`, `refused`, substrate-raise, tier authority, and content-blindness — without touching real data.
 10. Full suite green (zero new failures, apples-to-apples vs main); content-free throughout; no new external deps.
 
@@ -174,4 +174,4 @@ The synthetic rider is never shipped and never touches real personal data.
 
 ## 12. Lane
 
-Codex implements / Claude reviews. Cross-lane verification mandatory ([[feedback_cross_lane_verification_mandatory]]); the GitHub zero-change bar (existing tests unedited) is the primary review anchor.
+Codex implements / Claude reviews. Cross-lane verification mandatory ([[feedback_cross_lane_verification_mandatory]]); the GitHub behavioral-assertion bar (assertions unedited; test doubles may expose the new generic-lookup seam only) is the primary review anchor.
