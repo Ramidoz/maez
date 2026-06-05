@@ -107,7 +107,7 @@ The point is **not** abstract speed; it is: **Blocker-B did not smuggle living-r
 - `schema_version`, `run_id`, `started_at_utc`
 - `expected_commit_sha`, `actual_commit_sha`
 - `git_dirty` (whole-repo — **informational, does NOT gate**)
-- `scoped_dirty` (any **harness-relevant** path dirty — **gates**) + `scoped_paths` (the explicit enumerated set: `memory/memory_manager.py`, `core/memory/temporal_anchor_recall.py`, `core/time/temporal_spine.py`, `core/routing/temporal_cue.py`, `scripts/legacy_recall_eval/`)
+- `scoped_dirty` (any **harness-relevant** path dirty — **gates**) + `scoped_paths` (the explicit enumerated set: `memory/memory_manager.py`, `core/memory/temporal_anchor_recall.py`, `core/time/temporal_spine.py`, `core/routing/temporal_cue.py`, **`scripts/recall_flip_eval/sandbox.py`**, `scripts/legacy_recall_eval/`). `sandbox.py` is in the set because v0 **imports it as live harness substrate** (not inspiration) — if it is dirty, the hermeticity and `no_egress` guarantees can change while `overall_pass` still reports scoped-clean, re-opening the cry-wolf hole from the substrate side. The set deliberately **excludes** `tests/test_legacy_recall_eval.py` (tests affect floor verification, not packet runtime) and the rest of `scripts/recall_flip_eval/` (add more only if the implementation imports beyond `sandbox.py`).
 - `sandbox_fidelity_proven` (bool; §4 — packet only emits when True)
 - `probe_set_hash`, `fixture_manifest_hash`
 - `latency_budget_ms`, `latency_how_frozen`
