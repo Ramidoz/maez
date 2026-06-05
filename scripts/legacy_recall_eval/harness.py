@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from datetime import date as Date
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -69,13 +70,15 @@ def prove_sandbox_fidelity(sandbox_root, *, run_id: str) -> bool:
 
     from memory.memory_manager import MemoryManager
 
-    recalled = MemoryManager().recall_for_telegram("what were we working on last week?")
+    manager = MemoryManager()
+    recalled = manager.recall_for_telegram("what were we working on last week?")
     daily_ids = {row.get("id") for row in (recalled.get("daily") or ())}
     if marker_id not in daily_ids:
         raise HarnessAbort(
             "sandbox fidelity: seeded marker did not surface via recall_for_telegram "
             "(harness is not reading the store it seeded)"
         )
+    manager.daily.delete(ids=[marker_id])
     return True
 
 
@@ -137,3 +140,34 @@ def run_probe(query: str):
     recalled = manager.recall_for_telegram(query)
     rendered = manager.format_for_prompt(recalled)
     return recalled, rendered
+
+
+@contextlib.contextmanager
+def force_helper_unavailable():
+    """Force the live temporal-anchor seam into helper-unavailable status."""
+    import core.memory.temporal_anchor_recall as tar
+
+    original = tar.detect_temporal_anchor
+
+    def _forced(_query, *, reference_time=None):
+        del reference_time
+        return tar.TemporalAnchorRecallResult(
+            anchor_detected=True,
+            anchor_kind="last_week",
+            window_start=None,
+            window_end=None,
+            window_searched=False,
+            search_status="helper_unavailable",
+            evidence_ids=(),
+            item_count=0,
+            truncated=False,
+            brief_text="",
+            elapsed_ms=0,
+            memory_absence_established=False,
+        )
+
+    tar.detect_temporal_anchor = _forced
+    try:
+        yield
+    finally:
+        tar.detect_temporal_anchor = original

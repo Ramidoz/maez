@@ -174,5 +174,39 @@ class LiveWindowMatchTests(_SandboxTestCase):
         self.assertNotIn("<TEMPORAL_RECALL_STATUS", rendered)
 
 
+class LiveEmptyAndHelperTests(_SandboxTestCase):
+    def test_empty_window_typed_status_on_real_path(self):
+        root = self._enter_sandbox()
+        harness.prove_sandbox_fidelity(root, run_id="t-ew-fidelity")
+        fx = harness.seed_empty_window_fixtures("t-ew")
+        recalled, rendered = harness.run_probe("what were we working on last week?")
+        codes, unsafe = probes.assert_empty_window(recalled, rendered, fx)
+        self.assertFalse(unsafe, (codes, recalled.get("temporal_status"), rendered))
+        self.assertEqual(
+            recalled["temporal_status"]["status"], "no_date_confirmed_event_memories"
+        )
+        self.assertIn(fx.c_in_id, {r.get("id") for r in recalled["core"]})
+        self.assertNotIn(fx.c_in_id, {r.get("id") for r in recalled["daily"]})
+        self.assertEqual(recalled["raw"], [])
+        for row in recalled["daily"]:
+            meta = row.get("metadata") or {}
+            self.assertNotEqual(meta.get("confirmed"), True)
+            self.assertNotEqual(meta.get("temporal_confirmed"), True)
+
+    def test_helper_unavailable_typed_status_on_real_path(self):
+        root = self._enter_sandbox()
+        harness.prove_sandbox_fidelity(root, run_id="t-hu-fidelity")
+        fx = harness.seed_window_match_fixtures("t-hu")
+        with harness.force_helper_unavailable():
+            recalled, rendered = harness.run_probe("what were we working on last week?")
+        codes, unsafe = probes.assert_helper_unavailable(recalled, rendered, fx)
+        self.assertFalse(unsafe, (codes, recalled.get("temporal_status"), rendered))
+        self.assertEqual(
+            recalled["temporal_status"]["status"], "temporal_helper_unavailable"
+        )
+        self.assertEqual(recalled["daily"], [])
+        self.assertEqual(recalled["raw"], [])
+
+
 if __name__ == "__main__":
     unittest.main()
