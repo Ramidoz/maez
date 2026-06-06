@@ -119,6 +119,88 @@ class NoLeakTests(unittest.TestCase):
 
 
 class PortalWaitTests(unittest.TestCase):
+    def test_portal_request_subscribes_before_calling_fast_method(self):
+        events = []
+        response_callback = None
+
+        class FakeParams:
+            def unpack(self):
+                return (0, {"session_handle": "SESSION"})
+
+        class FakeConnection:
+            def get_unique_name(self):
+                return ":1.234"
+
+            def signal_subscribe(self, *args):
+                nonlocal response_callback
+                events.append(("subscribe", args[3]))
+                response_callback = args[6]
+                return 7
+
+            def signal_unsubscribe(self, sub_id):
+                events.append(("unsubscribe", sub_id))
+
+        class FakeProxy:
+            def __init__(self):
+                self.connection = FakeConnection()
+
+            def get_connection(self):
+                return self.connection
+
+            def call_sync(self, *args):
+                events.append(("call", args[0]))
+                response_callback(None, None, None, None, None, FakeParams(), None)
+
+                class Handle:
+                    def unpack(self):
+                        return (
+                            "/org/freedesktop/portal/desktop/request/1_234/maez_create_TOKEN",
+                        )
+
+                return Handle()
+
+        class FakeLoop:
+            def run(self):
+                events.append(("run", None))
+
+            def quit(self):
+                events.append(("quit", None))
+
+        class FakeGio:
+            class DBusCallFlags:
+                NONE = object()
+
+            class DBusSignalFlags:
+                NONE = object()
+
+        class FakeGLib:
+            @staticmethod
+            def MainLoop():
+                return FakeLoop()
+
+            @staticmethod
+            def timeout_add(_ms, _callback):
+                return 99
+
+            @staticmethod
+            def source_remove(source_id):
+                events.append(("remove", source_id))
+
+        gi = types.ModuleType("gi")
+        repository = types.ModuleType("gi.repository")
+        repository.Gio = FakeGio
+        repository.GLib = FakeGLib
+        with mock.patch.dict(sys.modules, {"gi": gi, "gi.repository": repository}):
+            results = sc._portal_request(
+                FakeProxy(),
+                "CreateSession",
+                object(),
+                handle_token="maez_create_TOKEN",
+            )
+
+        self.assertEqual(results, {"session_handle": "SESSION"})
+        self.assertLess(events.index(("subscribe", "/org/freedesktop/portal/desktop/request/1_234/maez_create_TOKEN")), events.index(("call", "CreateSession")))
+
     def test_timeout_does_not_remove_expired_source(self):
         class FakeConnection:
             def signal_subscribe(self, *args):
@@ -169,7 +251,11 @@ class PortalWaitTests(unittest.TestCase):
         repository.GLib = FakeGLib
         with mock.patch.dict(sys.modules, {"gi": gi, "gi.repository": repository}):
             with self.assertRaises(sc._StageError) as cm:
-                sc._wait_request_response("/org/freedesktop/portal/desktop/request/x/y")
+                sc._wait_request_response(
+                    FakeConnection(),
+                    "/org/freedesktop/portal/desktop/request/x/y",
+                    lambda: None,
+                )
 
         self.assertEqual(cm.exception.stage, "timeout")
         self.assertEqual(removed_sources, [])

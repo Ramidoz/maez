@@ -20,6 +20,7 @@ CURTAIN_PATH = os.path.expanduser("~/.config/maez/screen_perception.curtain")
 TEMP_PREFIX = "maez-screencast-"
 PORTAL_BUS_NAME = "org.freedesktop.portal.Desktop"
 PORTAL_OBJECT_PATH = "/org/freedesktop/portal/desktop"
+PORTAL_REQUEST_PATH = "/org/freedesktop/portal/desktop/request"
 SCREENCAST_IFACE = "org.freedesktop.portal.ScreenCast"
 REQUEST_IFACE = "org.freedesktop.portal.Request"
 PORTAL_TIMEOUT_MS = 120_000
@@ -172,6 +173,15 @@ def _request_token(prefix: str) -> str:
     return f"maez_{prefix}_{uuid.uuid4().hex}"
 
 
+def _request_path(connection, handle_token: str) -> str:
+    unique_name = connection.get_unique_name()
+    if not unique_name:
+        raise _StageError("portal")
+    sender = unique_name[1:] if unique_name.startswith(":") else unique_name
+    sender = sender.replace(".", "_")
+    return f"{PORTAL_REQUEST_PATH}/{sender}/{handle_token}"
+
+
 def _unwrap_variant(value):
     if hasattr(value, "unpack"):
         return value.unpack()
@@ -197,10 +207,9 @@ def _call_portal(proxy, method: str, params, *, stage: str = "portal"):
         raise _StageError(stage) from None
 
 
-def _wait_request_response(request_path: str) -> dict:
+def _wait_request_response(connection, request_path: str, call):
     from gi.repository import Gio, GLib
 
-    connection = Gio.bus_get_sync(Gio.BusType.SESSION, None)
     loop = GLib.MainLoop()
     state: dict = {"seen": False, "response": 2, "results": {}, "timeout_fired": False}
 
@@ -230,6 +239,7 @@ def _wait_request_response(request_path: str) -> dict:
 
     timeout_id = GLib.timeout_add(PORTAL_TIMEOUT_MS, _on_timeout)
     try:
+        call()
         loop.run()
     finally:
         connection.signal_unsubscribe(sub_id)
@@ -248,10 +258,24 @@ def _wait_request_response(request_path: str) -> dict:
     return state["results"]
 
 
-def _portal_request(proxy, method: str, params, *, stage: str = "portal") -> dict:
-    out = _call_portal(proxy, method, params, stage=stage)
-    handle = out.unpack()[0]
-    return _wait_request_response(handle)
+def _portal_request(
+    proxy,
+    method: str,
+    params,
+    *,
+    handle_token: str,
+    stage: str = "portal",
+) -> dict:
+    connection = proxy.get_connection()
+    request_path = _request_path(connection, handle_token)
+
+    def _call():
+        out = _call_portal(proxy, method, params, stage=stage)
+        returned_handle = out.unpack()[0]
+        if returned_handle != request_path:
+            raise _StageError("portal")
+
+    return _wait_request_response(connection, request_path, _call)
 
 
 def _portal_screencast_session(restore_token: str | None):
@@ -260,21 +284,24 @@ def _portal_screencast_session(restore_token: str | None):
 
     proxy = _portal_proxy()
 
+    create_token = _request_token("create")
     create_options = {
-        "handle_token": GLib.Variant("s", _request_token("create")),
+        "handle_token": GLib.Variant("s", create_token),
         "session_handle_token": GLib.Variant("s", _request_token("session")),
     }
     create_results = _portal_request(
         proxy,
         "CreateSession",
         GLib.Variant("(a{sv})", (create_options,)),
+        handle_token=create_token,
     )
     session_handle = _unwrap_variant(create_results.get("session_handle"))
     if not session_handle:
         raise _StageError("portal")
 
+    select_token = _request_token("select")
     select_options = {
-        "handle_token": GLib.Variant("s", _request_token("select")),
+        "handle_token": GLib.Variant("s", select_token),
         "types": GLib.Variant("u", 1),  # MONITOR
         "multiple": GLib.Variant("b", False),
         "cursor_mode": GLib.Variant("u", 1),  # hidden
@@ -286,13 +313,16 @@ def _portal_screencast_session(restore_token: str | None):
         proxy,
         "SelectSources",
         GLib.Variant("(oa{sv})", (session_handle, select_options)),
+        handle_token=select_token,
     )
 
-    start_options = {"handle_token": GLib.Variant("s", _request_token("start"))}
+    start_token = _request_token("start")
+    start_options = {"handle_token": GLib.Variant("s", start_token)}
     start_results = _portal_request(
         proxy,
         "Start",
         GLib.Variant("(osa{sv})", (session_handle, "", start_options)),
+        handle_token=start_token,
     )
     streams = _unwrap_variant(start_results.get("streams")) or []
     new_token = _unwrap_variant(start_results.get("restore_token"))
