@@ -67,7 +67,7 @@ class PreflightExclusionTests(unittest.TestCase):
                 {"MAEZ_SCREEN_PERCEPTION": "1", "MAEZ_SCREEN_PAUSE_FILE": pause},
                 clear=False,
             ), mock.patch(
-                "core.memory.ambient.active_window",
+                "core.memory.ambient.active_window_for_preflight",
                 return_value={"class": "KeePassXC", "title": "vault"},
             ), mock.patch.object(sp, "_vision_endpoint_probe") as probe, mock.patch.object(
                 sp, "_capture_screenshot"
@@ -87,7 +87,7 @@ class PreflightExclusionTests(unittest.TestCase):
                 {"MAEZ_SCREEN_PERCEPTION": "1", "MAEZ_SCREEN_PAUSE_FILE": pause},
                 clear=False,
             ), mock.patch(
-                "core.memory.ambient.active_window",
+                "core.memory.ambient.active_window_for_preflight",
                 return_value={"class": "code", "title": "plan.md"},
             ), mock.patch.object(sp, "_vision_endpoint_probe", return_value=False) as probe:
                 obs = sp.observe()

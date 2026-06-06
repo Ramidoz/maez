@@ -58,19 +58,19 @@ class SessionTypeTests(unittest.TestCase):
 
 class PreflightFailSafeTests(unittest.TestCase):
     def test_undetermined_window_is_excluded(self):
-        with mock.patch("core.memory.ambient.active_window", return_value=None):
+        with mock.patch("core.memory.ambient.active_window_for_preflight", return_value=None):
             self.assertTrue(sp._is_excluded_active_window())
 
     def test_known_safe_window_not_excluded(self):
         with mock.patch(
-            "core.memory.ambient.active_window",
+            "core.memory.ambient.active_window_for_preflight",
             return_value={"class": "Gnome-terminal", "title": "bash"},
         ):
             self.assertFalse(sp._is_excluded_active_window())
 
     def test_known_sensitive_window_excluded(self):
         with mock.patch(
-            "core.memory.ambient.active_window",
+            "core.memory.ambient.active_window_for_preflight",
             return_value={"class": "Bitwarden", "title": "Vault"},
         ):
             self.assertTrue(sp._is_excluded_active_window())
@@ -78,13 +78,29 @@ class PreflightFailSafeTests(unittest.TestCase):
     def test_observe_excludes_before_capture_when_window_unreadable(self):
         with mock.patch.object(sp, "_is_enabled", return_value=True), \
              mock.patch.object(sp, "_is_paused", return_value=False), \
-             mock.patch("core.memory.ambient.active_window", return_value=None), \
+             mock.patch("core.memory.ambient.active_window_for_preflight", return_value=None), \
              mock.patch.object(sp, "_capture_screenshot") as cap, \
              mock.patch.object(sp, "_vision_endpoint_probe") as probe:
             obs = sp.observe()
         self.assertEqual(obs.state, "excluded")
         cap.assert_not_called()
         probe.assert_not_called()
+
+
+class PreflightUsesTitleSurfaceTests(unittest.TestCase):
+    def test_preflight_reads_title_bearing_surface(self):
+        with mock.patch(
+            "core.memory.ambient.active_window_for_preflight",
+            return_value={"title": "Bank of X — Login", "class": "firefox"},
+        ), \
+             mock.patch("core.memory.ambient.active_window", return_value={"class": "firefox"}), \
+             mock.patch.object(sp, "_exclusion_terms", return_value=("bank",)):
+            self.assertTrue(sp._is_excluded_active_window())
+
+    def test_preflight_none_excludes_even_if_public_surface_has_class(self):
+        with mock.patch("core.memory.ambient.active_window_for_preflight", return_value=None), \
+             mock.patch("core.memory.ambient.active_window", return_value={"class": "firefox"}):
+            self.assertTrue(sp._is_excluded_active_window())
 
 
 class CaptureSelectionTests(unittest.TestCase):

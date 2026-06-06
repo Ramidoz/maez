@@ -224,9 +224,9 @@ def _is_excluded_active_window() -> bool:
     Lens v0 fail-safe: if the focused window cannot be read, do not capture.
     The never-looked guarantee must hold even when the window is unknown.
     """
-    from core.memory.ambient import active_window
+    from core.memory.ambient import active_window_for_preflight
 
-    win = active_window()
+    win = active_window_for_preflight()
     if not win:
         return True
     haystack = f"{win.get('class', '')} {win.get('title', '')}".lower()
