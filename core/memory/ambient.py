@@ -266,11 +266,8 @@ def _wayland_active_window(timeout: float = 1.0) -> dict | None:
         return None
 
 
-def active_window(timeout: float = 1.0) -> dict | None:
-    """What app/window the owner is looking at on the Linux box right now.
-
-    X11 only (via xdotool). Returns None on Wayland or if xdotool missing.
-    """
+def _raw_active_window(timeout: float = 1.0) -> dict | None:
+    """Raw focused-window read: title/class for internal surface selection only."""
     if _session_is_wayland():
         return _wayland_active_window(timeout)
     if not shutil.which("xdotool"):
@@ -299,6 +296,23 @@ def active_window(timeout: float = 1.0) -> dict | None:
     except Exception as e:
         logger.debug("active_window failed: %s", e)
         return None
+
+
+def active_window_for_preflight(timeout: float = 1.0) -> dict | None:
+    """Title-bearing focused-window read for the exclusion gate only.
+
+    The title is used to decide whether the screen eye should avert. It must
+    not be persisted, injected, or egressed via general ambient surfaces.
+    """
+    return _raw_active_window(timeout)
+
+
+def active_window(timeout: float = 1.0) -> dict | None:
+    """Class-only focused-window read for ambient/dashboard/web consumers."""
+    raw = _raw_active_window(timeout)
+    if not raw:
+        return None
+    return {"class": raw.get("class", "")}
 
 
 # ── combined snapshot ──────────────────────────────────────────────────

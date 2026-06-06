@@ -10,11 +10,12 @@ class WaylandActiveWindowTests(unittest.TestCase):
              mock.patch.object(ambient, "_wayland_active_window", return_value=None):
             self.assertIsNone(ambient.active_window())
 
-    def test_wayland_route_present_returns_window(self):
+    def test_wayland_route_present_returns_class_only_window(self):
         window = {"class": "firefox", "title": "x"}
         with mock.patch.object(ambient, "_session_is_wayland", return_value=True), \
              mock.patch.object(ambient, "_wayland_active_window", return_value=window):
-            self.assertEqual(ambient.active_window(), window)
+            self.assertEqual(ambient.active_window(), {"class": "firefox"})
+            self.assertEqual(ambient.active_window_for_preflight(), window)
 
 
 class ParseFocusedWindowTests(unittest.TestCase):
@@ -59,6 +60,30 @@ class WaylandRouteTests(unittest.TestCase):
         self.assertEqual(out, {"title": "T", "class": "firefox"})
         self.assertIn("/org/gnome/shell/extensions/FocusedWindow", captured["cmd"])
         self.assertIn("org.gnome.shell.extensions.FocusedWindow.Get", captured["cmd"])
+
+
+class SurfaceSplitTests(unittest.TestCase):
+    def test_active_window_is_class_only(self):
+        with mock.patch.object(
+            ambient, "_raw_active_window", return_value={"title": "secret doc", "class": "Code"}
+        ):
+            out = ambient.active_window()
+
+        self.assertEqual(out, {"class": "Code"})
+        self.assertNotIn("title", out)
+
+    def test_preflight_surface_keeps_title(self):
+        with mock.patch.object(
+            ambient, "_raw_active_window", return_value={"title": "secret doc", "class": "Code"}
+        ):
+            out = ambient.active_window_for_preflight()
+
+        self.assertEqual(out, {"title": "secret doc", "class": "Code"})
+
+    def test_both_none_when_raw_none(self):
+        with mock.patch.object(ambient, "_raw_active_window", return_value=None):
+            self.assertIsNone(ambient.active_window())
+            self.assertIsNone(ambient.active_window_for_preflight())
 
 
 if __name__ == "__main__":
