@@ -63,6 +63,18 @@ def _load_token() -> str | None:
     return token or None
 
 
+def revoke() -> dict:
+    """Hard revoke: withdraw the eye by deleting the token and drawing curtain."""
+    try:
+        os.unlink(TOKEN_PATH)
+    except FileNotFoundError:
+        pass
+    os.makedirs(os.path.dirname(CURTAIN_PATH), exist_ok=True)
+    with open(CURTAIN_PATH, "a", encoding="utf-8"):
+        pass
+    return _result(status="curtain_drawn")
+
+
 def capture() -> dict:
     """Capture one frame, unless the privacy curtain is drawn."""
     if _curtain_drawn():

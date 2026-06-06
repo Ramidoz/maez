@@ -80,3 +80,20 @@ class TokenTests(unittest.TestCase):
             self.assertIsNone(sc._load_token())
             sc._save_token("T")
             self.assertEqual(sc._load_token(), "T")
+
+
+class RevokeTests(unittest.TestCase):
+    def test_revoke_deletes_token_and_draws_curtain(self):
+        d = tempfile.mkdtemp()
+        tok = os.path.join(d, "tok")
+        cur = os.path.join(d, "curtain")
+        with mock.patch.object(sc, "TOKEN_PATH", tok), mock.patch.object(
+            sc,
+            "CURTAIN_PATH",
+            cur,
+        ):
+            sc._save_token("T")
+            out = sc.revoke()
+            self.assertFalse(os.path.exists(tok))
+            self.assertTrue(os.path.exists(cur))
+        self.assertEqual(out["status"], "curtain_drawn")
