@@ -283,10 +283,41 @@ def _run_capture_cmd(cmd, tmp: str) -> bool:
 
 
 def _capture_gnome_shell_dbus(tmp: str) -> bool:
-    return False
+    """Try GNOME Shell's no-prompt screenshot D-Bus method.
+
+    GNOME may reject external callers. Rejection is an honest False, not a
+    fallback to a prompting route.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "gdbus",
+                "call",
+                "--session",
+                "--dest",
+                "org.gnome.Shell",
+                "--object-path",
+                "/org/gnome/Shell/Screenshot",
+                "--method",
+                "org.gnome.Shell.Screenshot.Screenshot",
+                "false",
+                "false",
+                tmp,
+            ],
+            env=DISPLAY_ENV,
+            capture_output=True,
+            text=True,
+            timeout=SCREENSHOT_TIMEOUT,
+        )
+        ok = result.returncode == 0 and "true" in (result.stdout or "").lower()
+        return ok and os.path.exists(tmp) and os.path.getsize(tmp) > 0
+    except Exception as e:
+        logger.debug("gnome-shell dbus capture failed: %s", e)
+        return False
 
 
 def _capture_portal_noprompt(tmp: str) -> bool:
+    """Portal capture is disabled until proven no-prompt on this backend."""
     return False
 
 

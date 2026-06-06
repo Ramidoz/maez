@@ -1,3 +1,5 @@
+import subprocess
+import tempfile
 import unittest
 from unittest import mock
 
@@ -105,6 +107,27 @@ class CaptureSelectionTests(unittest.TestCase):
                  return_value=[{"name": "x", "fn": lambda tmp: False}],
              ):
             self.assertIsNone(sp._capture_screenshot())
+
+
+class GnomeShellCaptureTests(unittest.TestCase):
+    def test_dbus_success_writes_file(self):
+        def fake_run(cmd, **kw):
+            path = cmd[-1]
+            with open(path, "wb") as f:
+                f.write(b"\x89PNG")
+            return mock.Mock(returncode=0, stdout=f"(true, '{path}')")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = f"{tmpdir}/x.png"
+            with mock.patch("subprocess.run", side_effect=fake_run):
+                self.assertTrue(sp._capture_gnome_shell_dbus(path))
+
+    def test_dbus_rejected_returns_false(self):
+        with mock.patch(
+            "subprocess.run",
+            side_effect=subprocess.CalledProcessError(1, "gdbus"),
+        ):
+            self.assertFalse(sp._capture_gnome_shell_dbus("/tmp/x.png"))
 
 
 if __name__ == "__main__":
