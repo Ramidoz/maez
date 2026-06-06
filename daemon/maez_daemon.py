@@ -8434,20 +8434,17 @@ class MaezDaemon:
                     raise
 
                 logger.info("Cycle %d response:\n%s", self.cycle_count, result)
-                # Store response with full perception snapshot + screen context
+                # Store response with full perception snapshot. Screen context
+                # is v1a ephemeral-only: it may shape the in-cycle prompt, but
+                # it is not appended to durable memory or metadata here.
                 self._mark_cycle_stage("cognition_score")
-                screen_note = ""
                 screen_activity = "unknown"
                 focus_level = "unknown"
-                if self._last_screen_obs and self._last_screen_obs.success:
-                    screen_note = f" | {self._last_screen_obs.format_for_memory()}"
-                    screen_activity = self._last_screen_obs.activity
-                    focus_level = self._last_screen_obs.focus_level
 
                 next_event = "calendar_unavailable"
 
                 # Score and classify BEFORE storage — enriched metadata in one write
-                full_thought = result + screen_note
+                full_thought = result
                 cog_metadata = cog_score_and_classify(full_thought)
                 self._last_cog_metadata = cog_metadata
 
@@ -8528,7 +8525,7 @@ class MaezDaemon:
                                     )
 
                                 # Re-score the (audited) retry
-                                retry_thought = retry_content + screen_note
+                                retry_thought = retry_content
                                 retry_cog = cog_score_and_classify(retry_thought)
 
                                 if retry_cog.get("cog_score", 0) > initial_score:

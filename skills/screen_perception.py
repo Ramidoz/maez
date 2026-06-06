@@ -73,6 +73,7 @@ ACTIVITY: [one line — what the owner appears to be doing right now]
 APPLICATION: [the primary application visible]
 DETAIL: [any specific detail worth noting — file names, error messages, code language, website, terminal commands visible, etc. Write 'none' if nothing notable]
 FOCUS_LEVEL: [deep_work | browsing | idle | entertainment | system_task]
+THIRD_PARTY: [yes | no — is private content authored by OTHER people visible, such as a message, email, chat, or call from someone other than the owner? Answer yes if unsure.]
 
 Be precise and factual. Do not speculate beyond what is visible."""
 
@@ -92,9 +93,13 @@ class ScreenObservation:
     # "deliberately off." Values:
     #   "ok"           — success=True, observation is real
     #   "disabled"     — MAEZ_SCREEN_PERCEPTION is unset/0, by owner policy
+    #   "paused"       — owner pause file present; no capture attempted
+    #   "excluded"     — sensitive active window; no capture attempted
     #   "unavailable"  — vision endpoint probe failed, backing off
     #   "error"        — screenshot or vision call failed at runtime
     state: str = "error"
+    third_party_content_present: bool = False
+    egress_origin_class: str = "owner_screen_context"
 
     def format_for_context(self) -> str:
         """Format for injection into Maez reasoning prompt."""
@@ -104,6 +109,10 @@ class ScreenObservation:
                 "(set MAEZ_SCREEN_PERCEPTION=1 and run a vision server "
                 "on 127.0.0.1:8081 to enable)"
             )
+        if self.state == "paused":
+            return "[SCREEN] paused by owner (no capture)"
+        if self.state == "excluded":
+            return "[SCREEN] excluded — sensitive app in focus (not captured)"
         if self.state == "unavailable":
             return "[SCREEN] unavailable — vision endpoint not reachable"
         if not self.success:
@@ -141,6 +150,59 @@ def _is_enabled() -> bool:
     and the current config/model_state.json (vision_model=null)."""
     val = os.environ.get("MAEZ_SCREEN_PERCEPTION", "").strip().lower()
     return val not in ("", "0", "false", "no", "off")
+
+
+def _pause_file() -> str:
+    return os.environ.get(
+        "MAEZ_SCREEN_PAUSE_FILE",
+        os.path.expanduser("~/.config/maez/screen_perception.paused"),
+    )
+
+
+def _is_paused() -> bool:
+    # Deterministic, no-restart control: touch the file to close the eye,
+    # remove it to reopen.
+    return os.path.exists(_pause_file())
+
+
+_DEFAULT_EXCLUDE = (
+    "keepassxc",
+    "bitwarden",
+    "1password",
+    "gnome-keyring",
+    "signal",
+    "whatsapp",
+    "telegram",
+    "slack",
+    "zoom",
+    "meet.google",
+    "teams",
+    "bank",
+    "chase",
+    "wellsfargo",
+    "fidelity",
+    "vanguard",
+    "mychart",
+    "health",
+    "patient",
+)
+
+
+def _exclusion_terms() -> tuple[str, ...]:
+    extra = os.environ.get("MAEZ_SCREEN_EXCLUDE", "")
+    extra_terms = tuple(term.strip().lower() for term in extra.split(",") if term.strip())
+    return _DEFAULT_EXCLUDE + extra_terms
+
+
+def _is_excluded_active_window() -> bool:
+    """Return True when the active window is known-sensitive before capture."""
+    from core.memory.ambient import active_window
+
+    win = active_window()
+    if not win:
+        return False
+    haystack = f"{win.get('class', '')} {win.get('title', '')}".lower()
+    return any(term in haystack for term in _exclusion_terms())
 
 
 def _vision_endpoint_probe() -> bool:
@@ -246,6 +308,7 @@ def _parse_vision_response(text: str) -> dict:
         "application": "unknown",
         "detail": "none",
         "focus_level": "unknown",
+        "third_party": "",
     }
 
     for line in text.strip().split('\n'):
@@ -258,8 +321,61 @@ def _parse_vision_response(text: str) -> dict:
             result['detail'] = line[7:].strip()
         elif line.startswith('FOCUS_LEVEL:'):
             result['focus_level'] = line[12:].strip()
+        elif line.startswith('THIRD_PARTY:'):
+            result['third_party'] = line[12:].strip().lower()
 
     return result
+
+
+_THIRD_PARTY_APP_HINTS = (
+    "signal",
+    "whatsapp",
+    "telegram",
+    "slack",
+    "mail",
+    "thunderbird",
+    "gmail",
+    "outlook",
+    "messages",
+    "discord",
+)
+
+
+def _looks_third_party(parsed: dict) -> bool:
+    flag = (parsed.get("third_party") or "").strip().lower()
+    app = (parsed.get("application") or "").strip().lower()
+    if any(hint in app for hint in _THIRD_PARTY_APP_HINTS):
+        return True
+    if flag in ("no", "false"):
+        return False
+    # Fail-safe: missing, uncertain, or unrecognized means minimize.
+    return True
+
+
+def _apply_screen_governance(
+    parsed: dict,
+    *,
+    timestamp: float,
+    raw: str,
+) -> ScreenObservation:
+    third_party = _looks_third_party(parsed)
+    detail = parsed.get("detail") or "none"
+    origin = "owner_screen_context"
+    if third_party:
+        detail = "[minimized: third-party content present]"
+        origin = "third_party_private_context"
+    return ScreenObservation(
+        activity=parsed.get("activity") or "unknown",
+        application=parsed.get("application") or "unknown",
+        detail=detail,
+        focus_level=parsed.get("focus_level") or "unknown",
+        raw_response=raw,
+        timestamp=timestamp,
+        success=True,
+        state="ok",
+        third_party_content_present=third_party,
+        egress_origin_class=origin,
+    )
 
 
 def observe() -> ScreenObservation:
@@ -277,6 +393,14 @@ def observe() -> ScreenObservation:
     """
     timestamp = time.time()
 
+    if _is_paused():
+        return ScreenObservation(
+            activity="", application="", detail="", focus_level="",
+            raw_response="", timestamp=timestamp, success=False,
+            state="paused",
+            error="screen perception paused by owner",
+        )
+
     # Stage 1: explicit opt-in. Default off — no screenshot, no probe,
     # no network call. Matches the owner's current body state (no
     # vision endpoint running) and prevents the per-cycle 45-second
@@ -287,6 +411,14 @@ def observe() -> ScreenObservation:
             raw_response="", timestamp=timestamp, success=False,
             state="disabled",
             error="screen perception disabled (MAEZ_SCREEN_PERCEPTION unset)",
+        )
+
+    if _is_excluded_active_window():
+        return ScreenObservation(
+            activity="", application="", detail="", focus_level="",
+            raw_response="", timestamp=timestamp, success=False,
+            state="excluded",
+            error="sensitive app in focus (preflight exclusion)",
         )
 
     # Stage 2: fast availability probe. If the vision endpoint isn't
@@ -346,17 +478,7 @@ def observe() -> ScreenObservation:
 
         raw = resp.json()['choices'][0]['message']['content']
         parsed = _parse_vision_response(raw)
-
-        return ScreenObservation(
-            activity=parsed['activity'],
-            application=parsed['application'],
-            detail=parsed['detail'],
-            focus_level=parsed['focus_level'],
-            raw_response=raw,
-            timestamp=timestamp,
-            success=True,
-            state="ok",
-        )
+        return _apply_screen_governance(parsed, timestamp=timestamp, raw=raw)
 
     except requests.Timeout:
         return ScreenObservation(
