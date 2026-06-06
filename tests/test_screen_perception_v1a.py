@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import os
+import tempfile
 import unittest
+from unittest import mock
 
+import skills.screen_perception as sp
 from skills.screen_perception import ScreenObservation
 
 
@@ -30,6 +34,27 @@ class ScreenObservationShapeTests(unittest.TestCase):
                 o = self._obs(state=state, detail="SHOULD_NOT_APPEAR")
                 ctx = o.format_for_context()
                 self.assertNotIn("SHOULD_NOT_APPEAR", ctx)
+
+
+class PausePrimitiveTests(unittest.TestCase):
+    def test_paused_skips_capture_probe_vision(self):
+        tmp = tempfile.mkdtemp()
+        pause = os.path.join(tmp, "paused")
+        open(pause, "w").close()
+
+        with mock.patch.dict(
+            os.environ,
+            {"MAEZ_SCREEN_PERCEPTION": "1", "MAEZ_SCREEN_PAUSE_FILE": pause},
+            clear=False,
+        ), mock.patch.object(sp, "_capture_screenshot") as cap, mock.patch.object(
+            sp, "_vision_endpoint_probe"
+        ) as probe, mock.patch.object(sp.requests, "post") as post:
+            obs = sp.observe()
+
+        self.assertEqual(obs.state, "paused")
+        cap.assert_not_called()
+        probe.assert_not_called()
+        post.assert_not_called()
 
 
 if __name__ == "__main__":

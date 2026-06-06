@@ -151,6 +151,19 @@ def _is_enabled() -> bool:
     return val not in ("", "0", "false", "no", "off")
 
 
+def _pause_file() -> str:
+    return os.environ.get(
+        "MAEZ_SCREEN_PAUSE_FILE",
+        os.path.expanduser("~/.config/maez/screen_perception.paused"),
+    )
+
+
+def _is_paused() -> bool:
+    # Deterministic, no-restart control: touch the file to close the eye,
+    # remove it to reopen.
+    return os.path.exists(_pause_file())
+
+
 def _vision_endpoint_probe() -> bool:
     """Fast TCP-connect probe for the vision endpoint.
 
@@ -284,6 +297,14 @@ def observe() -> ScreenObservation:
          capture + 45-second HTTP timeout on every cycle.
     """
     timestamp = time.time()
+
+    if _is_paused():
+        return ScreenObservation(
+            activity="", application="", detail="", focus_level="",
+            raw_response="", timestamp=timestamp, success=False,
+            state="paused",
+            error="screen perception paused by owner",
+        )
 
     # Stage 1: explicit opt-in. Default off — no screenshot, no probe,
     # no network call. Matches the owner's current body state (no
