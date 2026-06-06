@@ -84,3 +84,23 @@ def capture() -> dict:
 
 def _capture_live() -> dict:
     return _result(status="capture_failed", error_class="gst")
+
+
+def safe_capture() -> dict:
+    """Last-resort wrapper: never leak raw exception text or tracebacks."""
+    try:
+        return capture()
+    except Exception:
+        return _result(status="capture_failed", error_class="gst")
+
+
+def main(argv: list[str] | None = None) -> None:
+    argv = sys.argv[1:] if argv is None else argv
+    if "--revoke" in argv:
+        _emit(revoke())
+        return
+    _emit(safe_capture())
+
+
+if __name__ == "__main__":
+    main()

@@ -97,3 +97,20 @@ class RevokeTests(unittest.TestCase):
             self.assertFalse(os.path.exists(tok))
             self.assertTrue(os.path.exists(cur))
         self.assertEqual(out["status"], "curtain_drawn")
+
+
+class NoLeakTests(unittest.TestCase):
+    def test_live_exception_maps_to_stage_no_traceback(self):
+        secret = "RAW-PORTAL-HANDLE-9d2f"
+        with mock.patch.object(
+            sc,
+            "_capture_live",
+            side_effect=RuntimeError(secret),
+        ), mock.patch.object(sc, "_curtain_drawn", return_value=False):
+            out = sc.safe_capture()
+        self.assertEqual(out["status"], "capture_failed")
+        self.assertIn(
+            out["error_class"],
+            {"portal", "pipewire", "gst", "timeout", "permission_denied"},
+        )
+        self.assertNotIn(secret, json.dumps(out))
