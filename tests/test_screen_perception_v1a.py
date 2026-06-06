@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import skills.screen_perception as sp
@@ -182,6 +183,21 @@ class ScreenEgressOriginTests(unittest.TestCase):
         self.assertEqual(
             self._decide("third_party_private_context").decision,
             "redact",
+        )
+
+
+class NoDurableScreenStorageTests(unittest.TestCase):
+    def test_format_for_memory_not_appended_in_daemon(self):
+        src = Path("daemon/maez_daemon.py").read_text()
+        self.assertNotIn(
+            "format_for_memory()",
+            src,
+            "v1a must not append screen observations to durable memory",
+        )
+        self.assertNotIn(
+            "screen_activity = self._last_screen_obs.activity",
+            src,
+            "v1a must not persist screen activity into memory metadata",
         )
 
 
