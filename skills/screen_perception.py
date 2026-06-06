@@ -259,11 +259,66 @@ def _vision_endpoint_probe() -> bool:
         return False
 
 
+def _run_capture_cmd(cmd, tmp: str) -> bool:
+    """Run a capture command and return True iff it wrote an image file."""
+    try:
+        result = subprocess.run(
+            cmd,
+            env=DISPLAY_ENV,
+            capture_output=True,
+            timeout=SCREENSHOT_TIMEOUT,
+        )
+        return (
+            result.returncode == 0
+            and os.path.exists(tmp)
+            and os.path.getsize(tmp) > 0
+        )
+    except FileNotFoundError:
+        return False
+    except subprocess.TimeoutExpired:
+        return False
+    except Exception as e:
+        logger.debug("capture command %s failed: %s", cmd[0], e)
+        return False
+
+
+def _capture_gnome_shell_dbus(tmp: str) -> bool:
+    return False
+
+
+def _capture_portal_noprompt(tmp: str) -> bool:
+    return False
+
+
+def _capture_candidates() -> list[dict]:
+    """Ordered no-prompt-only capture candidates for the current session."""
+    session = _session_type()
+    if session == "wayland-gnome":
+        return [
+            {"name": "gnome-shell-dbus", "fn": _capture_gnome_shell_dbus},
+            {"name": "portal", "fn": _capture_portal_noprompt},
+        ]
+    if session == "wayland-wlroots":
+        return [
+            {"name": "grim", "fn": lambda tmp: _run_capture_cmd(["grim", tmp], tmp)}
+        ]
+    return [
+        {"name": "scrot", "fn": lambda tmp: _run_capture_cmd(["scrot", "-z", tmp], tmp)},
+        {
+            "name": "gnome-screenshot",
+            "fn": lambda tmp: _run_capture_cmd(["gnome-screenshot", "-f", tmp], tmp),
+        },
+        {
+            "name": "import",
+            "fn": lambda tmp: _run_capture_cmd(["import", "-window", "root", tmp], tmp),
+        },
+    ]
+
+
 def _capture_screenshot() -> Optional[str]:
     """
     Capture a screenshot, downscale to max dim VISION_MAX_DIM, return as
-    base64 PNG string. Tries scrot first, then gnome-screenshot, then
-    ImageMagick import. Returns None if all methods fail.
+    base64 PNG string. Returns None if all session-appropriate candidates fail.
 
     Session 11r: added PIL downscaling to prevent the vision server from
     OOMing on the vision-encoder's image tensor allocation. Full 2560×1440
@@ -272,21 +327,9 @@ def _capture_screenshot() -> Optional[str]:
     """
     tmp = tempfile.mktemp(suffix='.png')
 
-    methods = [
-        ['scrot', '-z', tmp],
-        ['gnome-screenshot', '-f', tmp],
-        ['import', '-window', 'root', tmp],
-    ]
-
-    for cmd in methods:
-        try:
-            result = subprocess.run(
-                cmd,
-                env=DISPLAY_ENV,
-                capture_output=True,
-                timeout=SCREENSHOT_TIMEOUT
-            )
-            if result.returncode == 0 and os.path.exists(tmp):
+    try:
+        for candidate in _capture_candidates():
+            if candidate["fn"](tmp):
                 # Downscale via PIL before base64-encoding
                 try:
                     from PIL import Image
@@ -297,7 +340,7 @@ def _capture_screenshot() -> Optional[str]:
                     data = base64.b64encode(buf.getvalue()).decode()
                     logger.debug(
                         "Screenshot captured via %s (downscaled to %dx%d)",
-                        cmd[0], img.size[0], img.size[1],
+                        candidate["name"], img.size[0], img.size[1],
                     )
                     return data
                 except Exception as e:
@@ -306,21 +349,14 @@ def _capture_screenshot() -> Optional[str]:
                     with open(tmp, 'rb') as f:
                         data = base64.b64encode(f.read()).decode()
                     return data
-        except FileNotFoundError:
-            continue
-        except subprocess.TimeoutExpired:
-            continue
-        except Exception as e:
-            logger.debug("Screenshot method %s failed: %s", cmd[0], e)
-            continue
-        finally:
-            if os.path.exists(tmp):
-                try:
-                    os.unlink(tmp)
-                except Exception:
-                    pass
 
-    return None
+        return None
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.unlink(tmp)
+            except Exception:
+                pass
 
 
 def _parse_vision_response(text: str) -> dict:

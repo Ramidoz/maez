@@ -83,5 +83,29 @@ class PreflightFailSafeTests(unittest.TestCase):
         probe.assert_not_called()
 
 
+class CaptureSelectionTests(unittest.TestCase):
+    def test_x11_uses_x11_methods(self):
+        with mock.patch.object(sp, "_session_type", return_value="x11"):
+            names = [method["name"] for method in sp._capture_candidates()]
+        self.assertIn("scrot", names)
+        self.assertNotIn("gnome-shell-dbus", names)
+
+    def test_gnome_wayland_prefers_noprompt_dbus_first(self):
+        with mock.patch.object(sp, "_session_type", return_value="wayland-gnome"):
+            names = [method["name"] for method in sp._capture_candidates()]
+        self.assertEqual(names[0], "gnome-shell-dbus")
+        self.assertIn("portal", names)
+        self.assertNotIn("scrot", names)
+
+    def test_no_candidate_succeeds_returns_none(self):
+        with mock.patch.object(sp, "_session_type", return_value="wayland-gnome"), \
+             mock.patch.object(
+                 sp,
+                 "_capture_candidates",
+                 return_value=[{"name": "x", "fn": lambda tmp: False}],
+             ):
+            self.assertIsNone(sp._capture_screenshot())
+
+
 if __name__ == "__main__":
     unittest.main()
