@@ -43,6 +43,26 @@ def _curtain_drawn() -> bool:
     return os.path.exists(CURTAIN_PATH)
 
 
+def _save_token(token: str) -> None:
+    os.makedirs(os.path.dirname(TOKEN_PATH), exist_ok=True)
+    fd = os.open(TOKEN_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(token)
+            f.write("\n")
+    finally:
+        os.chmod(TOKEN_PATH, 0o600)
+
+
+def _load_token() -> str | None:
+    try:
+        with open(TOKEN_PATH, encoding="utf-8") as f:
+            token = f.read().strip()
+    except FileNotFoundError:
+        return None
+    return token or None
+
+
 def capture() -> dict:
     """Capture one frame, unless the privacy curtain is drawn."""
     if _curtain_drawn():

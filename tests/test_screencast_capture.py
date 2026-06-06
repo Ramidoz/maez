@@ -1,4 +1,7 @@
 import json
+import os
+import stat
+import tempfile
 from unittest import mock
 import unittest
 
@@ -59,3 +62,21 @@ class CurtainTests(unittest.TestCase):
         ):
             sc.capture()
         self.assertNotIn("gi", sys.modules)
+
+
+class TokenTests(unittest.TestCase):
+    def test_save_token_is_0600(self):
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "tok")
+        with mock.patch.object(sc, "TOKEN_PATH", path):
+            sc._save_token("SECRET-RESTORE-TOKEN")
+            mode = stat.S_IMODE(os.stat(path).st_mode)
+        self.assertEqual(mode, 0o600)
+
+    def test_load_token_roundtrip_and_absent(self):
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "tok")
+        with mock.patch.object(sc, "TOKEN_PATH", path):
+            self.assertIsNone(sc._load_token())
+            sc._save_token("T")
+            self.assertEqual(sc._load_token(), "T")
