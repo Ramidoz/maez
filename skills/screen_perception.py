@@ -26,6 +26,7 @@ is the user doing" — that's a 480p task at worst.
 
 import base64
 import io
+import json
 import logging
 import os
 import subprocess
@@ -43,6 +44,11 @@ VISION_MODEL = "qwen2.5-vl-3b"
 VISION_MAX_DIM = 1024     # downscale screenshots to max side = 1024 px
 SCREENSHOT_TIMEOUT = 10   # seconds for screenshot capture
 VISION_TIMEOUT = 45       # seconds for vision call
+
+_ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_SCREENCAST_HELPER = os.path.join(_ROOT_DIR, "scripts", "screencast_capture.py")
+_SCREENCAST_PYTHON = "/usr/bin/python3"
+_SCREENCAST_PREFIX = "maez-screencast-"
 
 # 2026-04-23 Commit 2: vision-server availability probe.
 # Port 8081 has been dead for weeks (used to host a multimodal endpoint,
@@ -321,11 +327,73 @@ def _capture_portal_noprompt(tmp: str) -> bool:
     return False
 
 
+def _valid_helper_temp(path: str) -> bool:
+    """Only read regular maez-screencast temp files under the temp directory."""
+    if not path:
+        return False
+    try:
+        tmpdir = os.path.realpath(tempfile.gettempdir())
+        real = os.path.realpath(path)
+        if os.path.commonpath([tmpdir, real]) != tmpdir:
+            return False
+        if not os.path.basename(real).startswith(_SCREENCAST_PREFIX):
+            return False
+        return os.path.isfile(real) and not os.path.islink(path)
+    except Exception:
+        return False
+
+
+def _capture_via_screencast(tmp: str) -> bool:
+    """Capture via the system-python ScreenCast helper.
+
+    The helper owns portal/Gst and returns content-free JSON. On success the
+    daemon copies the helper temp into its own capture temp, then unlinks the
+    helper temp. Non-ok statuses are honest misses.
+    """
+    helper_path = None
+    try:
+        result = subprocess.run(
+            [_SCREENCAST_PYTHON, _SCREENCAST_HELPER],
+            env=DISPLAY_ENV,
+            capture_output=True,
+            text=True,
+            timeout=SCREENSHOT_TIMEOUT,
+        )
+        if result.returncode != 0:
+            return False
+        lines = [line for line in (result.stdout or "").splitlines() if line.strip()]
+        if not lines:
+            return False
+        data = json.loads(lines[-1])
+        if data.get("status") != "ok":
+            return False
+        helper_path = data.get("temp_path")
+        if not _valid_helper_temp(helper_path):
+            return False
+        with open(helper_path, "rb") as src:
+            payload = src.read()
+        if not payload:
+            return False
+        with open(tmp, "wb") as dst:
+            dst.write(payload)
+        return True
+    except Exception as e:
+        logger.debug("screencast helper failed: %s", e)
+        return False
+    finally:
+        if helper_path:
+            try:
+                os.unlink(helper_path)
+            except Exception:
+                pass
+
+
 def _capture_candidates() -> list[dict]:
     """Ordered no-prompt-only capture candidates for the current session."""
     session = _session_type()
     if session == "wayland-gnome":
         return [
+            {"name": "screencast", "fn": lambda tmp: _capture_via_screencast(tmp)},
             {"name": "gnome-shell-dbus", "fn": _capture_gnome_shell_dbus},
             {"name": "portal", "fn": _capture_portal_noprompt},
         ]

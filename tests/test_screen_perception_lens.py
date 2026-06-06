@@ -1,6 +1,8 @@
 import subprocess
 import tempfile
 import unittest
+import json
+import os
 from unittest import mock
 
 import skills.screen_perception as sp
@@ -95,7 +97,8 @@ class CaptureSelectionTests(unittest.TestCase):
     def test_gnome_wayland_prefers_noprompt_dbus_first(self):
         with mock.patch.object(sp, "_session_type", return_value="wayland-gnome"):
             names = [method["name"] for method in sp._capture_candidates()]
-        self.assertEqual(names[0], "gnome-shell-dbus")
+        self.assertEqual(names[0], "screencast")
+        self.assertIn("gnome-shell-dbus", names)
         self.assertIn("portal", names)
         self.assertNotIn("scrot", names)
 
@@ -178,6 +181,76 @@ class TempCleanupTests(unittest.TestCase):
             self.assertIsNone(sp._capture_screenshot())
 
         self.assertFalse(sp.os.path.exists(created["path"]), "temp not cleaned up")
+
+
+class ScreencastCandidateTests(unittest.TestCase):
+    def test_screencast_first_on_wayland_gnome(self):
+        with mock.patch.object(sp, "_session_type", return_value="wayland-gnome"):
+            names = [c["name"] for c in sp._capture_candidates()]
+        self.assertEqual(names[0], "screencast")
+
+    def test_helper_ok_writes_dest_and_unlinks_helper_temp(self):
+        helper_tmp = tempfile.mktemp(prefix="maez-screencast-", suffix=".png")
+        with open(helper_tmp, "wb") as f:
+            f.write(b"\x89PNG-fake")
+        dest = tempfile.mktemp(suffix=".png")
+        fake = json.dumps(
+            {
+                "status": "ok",
+                "temp_path": helper_tmp,
+                "bytes": 9,
+                "duration_ms": 5,
+                "error_class": "",
+            }
+        )
+        with mock.patch.object(
+            sp.subprocess,
+            "run",
+            return_value=mock.Mock(returncode=0, stdout=fake),
+        ):
+            ok = sp._capture_via_screencast(dest)
+        self.assertTrue(ok)
+        self.assertTrue(os.path.exists(dest))
+        with open(dest, "rb") as f:
+            self.assertEqual(f.read(), b"\x89PNG-fake")
+        self.assertFalse(os.path.exists(helper_tmp))
+        os.unlink(dest)
+
+    def test_foreign_path_rejected(self):
+        fake = json.dumps(
+            {
+                "status": "ok",
+                "temp_path": "/etc/passwd",
+                "bytes": 9,
+                "duration_ms": 1,
+                "error_class": "",
+            }
+        )
+        with mock.patch.object(
+            sp.subprocess,
+            "run",
+            return_value=mock.Mock(returncode=0, stdout=fake),
+        ):
+            ok = sp._capture_via_screencast("/tmp/dest.png")
+        self.assertFalse(ok)
+
+    def test_non_ok_status_returns_false(self):
+        for status in ("needs_grant", "curtain_drawn", "capture_failed"):
+            fake = json.dumps(
+                {
+                    "status": status,
+                    "temp_path": None,
+                    "bytes": 0,
+                    "duration_ms": 0,
+                    "error_class": "portal",
+                }
+            )
+            with mock.patch.object(
+                sp.subprocess,
+                "run",
+                return_value=mock.Mock(returncode=0, stdout=fake),
+            ):
+                self.assertFalse(sp._capture_via_screencast("/tmp/dest.png"))
 
 
 if __name__ == "__main__":
