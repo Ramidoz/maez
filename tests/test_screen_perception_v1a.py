@@ -95,5 +95,62 @@ class PreflightExclusionTests(unittest.TestCase):
         self.assertEqual(obs.state, "unavailable")
 
 
+class ThirdPartyMinimizationTests(unittest.TestCase):
+    def test_vision_prompt_requests_third_party_flag(self):
+        self.assertIn("THIRD_PARTY:", sp.VISION_PROMPT)
+
+    def test_parse_vision_response_carries_third_party_field(self):
+        parsed = sp._parse_vision_response(
+            "ACTIVITY: reading\n"
+            "APPLICATION: mail\n"
+            "DETAIL: inbox\n"
+            "FOCUS_LEVEL: browsing\n"
+            "THIRD_PARTY: yes\n"
+        )
+        self.assertEqual(parsed["third_party"], "yes")
+
+    def test_third_party_detail_is_minimized(self):
+        parsed = {
+            "activity": "reading email",
+            "application": "thunderbird",
+            "detail": "Email from Jane Doe about the lawsuit settlement",
+            "focus_level": "browsing",
+            "third_party": "yes",
+        }
+        obs = sp._apply_screen_governance(parsed, timestamp=0.0, raw="r")
+        self.assertTrue(obs.third_party_content_present)
+        self.assertEqual(obs.egress_origin_class, "third_party_private_context")
+        self.assertNotIn("Jane", obs.detail)
+        self.assertNotIn("lawsuit", obs.detail)
+        self.assertNotIn("Jane", obs.format_for_context())
+
+    def test_uncertain_or_missing_is_third_party(self):
+        parsed = {
+            "activity": "x",
+            "application": "unknown",
+            "detail": "d",
+            "focus_level": "x",
+            "third_party": "",
+        }
+        self.assertTrue(sp._looks_third_party(parsed))
+        self.assertTrue(sp._looks_third_party({**parsed, "third_party": "unsure"}))
+        self.assertTrue(
+            sp._looks_third_party({**parsed, "application": "Signal", "third_party": "no"})
+        )
+
+    def test_owner_only_keeps_detail(self):
+        parsed = {
+            "activity": "coding",
+            "application": "code",
+            "detail": "editing plan.md",
+            "focus_level": "deep_work",
+            "third_party": "no",
+        }
+        obs = sp._apply_screen_governance(parsed, timestamp=0.0, raw="r")
+        self.assertFalse(obs.third_party_content_present)
+        self.assertEqual(obs.egress_origin_class, "owner_screen_context")
+        self.assertIn("plan.md", obs.detail)
+
+
 if __name__ == "__main__":
     unittest.main()

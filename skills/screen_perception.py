@@ -73,6 +73,7 @@ ACTIVITY: [one line — what the owner appears to be doing right now]
 APPLICATION: [the primary application visible]
 DETAIL: [any specific detail worth noting — file names, error messages, code language, website, terminal commands visible, etc. Write 'none' if nothing notable]
 FOCUS_LEVEL: [deep_work | browsing | idle | entertainment | system_task]
+THIRD_PARTY: [yes | no — is private content authored by OTHER people visible, such as a message, email, chat, or call from someone other than the owner? Answer yes if unsure.]
 
 Be precise and factual. Do not speculate beyond what is visible."""
 
@@ -307,6 +308,7 @@ def _parse_vision_response(text: str) -> dict:
         "application": "unknown",
         "detail": "none",
         "focus_level": "unknown",
+        "third_party": "",
     }
 
     for line in text.strip().split('\n'):
@@ -319,8 +321,61 @@ def _parse_vision_response(text: str) -> dict:
             result['detail'] = line[7:].strip()
         elif line.startswith('FOCUS_LEVEL:'):
             result['focus_level'] = line[12:].strip()
+        elif line.startswith('THIRD_PARTY:'):
+            result['third_party'] = line[12:].strip().lower()
 
     return result
+
+
+_THIRD_PARTY_APP_HINTS = (
+    "signal",
+    "whatsapp",
+    "telegram",
+    "slack",
+    "mail",
+    "thunderbird",
+    "gmail",
+    "outlook",
+    "messages",
+    "discord",
+)
+
+
+def _looks_third_party(parsed: dict) -> bool:
+    flag = (parsed.get("third_party") or "").strip().lower()
+    app = (parsed.get("application") or "").strip().lower()
+    if any(hint in app for hint in _THIRD_PARTY_APP_HINTS):
+        return True
+    if flag in ("no", "false"):
+        return False
+    # Fail-safe: missing, uncertain, or unrecognized means minimize.
+    return True
+
+
+def _apply_screen_governance(
+    parsed: dict,
+    *,
+    timestamp: float,
+    raw: str,
+) -> ScreenObservation:
+    third_party = _looks_third_party(parsed)
+    detail = parsed.get("detail") or "none"
+    origin = "owner_screen_context"
+    if third_party:
+        detail = "[minimized: third-party content present]"
+        origin = "third_party_private_context"
+    return ScreenObservation(
+        activity=parsed.get("activity") or "unknown",
+        application=parsed.get("application") or "unknown",
+        detail=detail,
+        focus_level=parsed.get("focus_level") or "unknown",
+        raw_response=raw,
+        timestamp=timestamp,
+        success=True,
+        state="ok",
+        third_party_content_present=third_party,
+        egress_origin_class=origin,
+    )
 
 
 def observe() -> ScreenObservation:
@@ -423,17 +478,7 @@ def observe() -> ScreenObservation:
 
         raw = resp.json()['choices'][0]['message']['content']
         parsed = _parse_vision_response(raw)
-
-        return ScreenObservation(
-            activity=parsed['activity'],
-            application=parsed['application'],
-            detail=parsed['detail'],
-            focus_level=parsed['focus_level'],
-            raw_response=raw,
-            timestamp=timestamp,
-            success=True,
-            state="ok",
-        )
+        return _apply_screen_governance(parsed, timestamp=timestamp, raw=raw)
 
     except requests.Timeout:
         return ScreenObservation(
