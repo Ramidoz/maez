@@ -57,5 +57,43 @@ class PausePrimitiveTests(unittest.TestCase):
         post.assert_not_called()
 
 
+class PreflightExclusionTests(unittest.TestCase):
+    def test_excluded_app_is_never_looked_at(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pause = os.path.join(tmp, "absent")
+            with mock.patch.dict(
+                os.environ,
+                {"MAEZ_SCREEN_PERCEPTION": "1", "MAEZ_SCREEN_PAUSE_FILE": pause},
+                clear=False,
+            ), mock.patch(
+                "core.memory.ambient.active_window",
+                return_value={"class": "KeePassXC", "title": "vault"},
+            ), mock.patch.object(sp, "_vision_endpoint_probe") as probe, mock.patch.object(
+                sp, "_capture_screenshot"
+            ) as cap, mock.patch.object(sp.requests, "post") as post:
+                obs = sp.observe()
+
+        self.assertEqual(obs.state, "excluded")
+        probe.assert_not_called()
+        cap.assert_not_called()
+        post.assert_not_called()
+
+    def test_non_excluded_app_proceeds_to_probe(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pause = os.path.join(tmp, "absent")
+            with mock.patch.dict(
+                os.environ,
+                {"MAEZ_SCREEN_PERCEPTION": "1", "MAEZ_SCREEN_PAUSE_FILE": pause},
+                clear=False,
+            ), mock.patch(
+                "core.memory.ambient.active_window",
+                return_value={"class": "code", "title": "plan.md"},
+            ), mock.patch.object(sp, "_vision_endpoint_probe", return_value=False) as probe:
+                obs = sp.observe()
+
+        probe.assert_called_once()
+        self.assertEqual(obs.state, "unavailable")
+
+
 if __name__ == "__main__":
     unittest.main()

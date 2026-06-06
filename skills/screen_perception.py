@@ -164,6 +164,46 @@ def _is_paused() -> bool:
     return os.path.exists(_pause_file())
 
 
+_DEFAULT_EXCLUDE = (
+    "keepassxc",
+    "bitwarden",
+    "1password",
+    "gnome-keyring",
+    "signal",
+    "whatsapp",
+    "telegram",
+    "slack",
+    "zoom",
+    "meet.google",
+    "teams",
+    "bank",
+    "chase",
+    "wellsfargo",
+    "fidelity",
+    "vanguard",
+    "mychart",
+    "health",
+    "patient",
+)
+
+
+def _exclusion_terms() -> tuple[str, ...]:
+    extra = os.environ.get("MAEZ_SCREEN_EXCLUDE", "")
+    extra_terms = tuple(term.strip().lower() for term in extra.split(",") if term.strip())
+    return _DEFAULT_EXCLUDE + extra_terms
+
+
+def _is_excluded_active_window() -> bool:
+    """Return True when the active window is known-sensitive before capture."""
+    from core.memory.ambient import active_window
+
+    win = active_window()
+    if not win:
+        return False
+    haystack = f"{win.get('class', '')} {win.get('title', '')}".lower()
+    return any(term in haystack for term in _exclusion_terms())
+
+
 def _vision_endpoint_probe() -> bool:
     """Fast TCP-connect probe for the vision endpoint.
 
@@ -316,6 +356,14 @@ def observe() -> ScreenObservation:
             raw_response="", timestamp=timestamp, success=False,
             state="disabled",
             error="screen perception disabled (MAEZ_SCREEN_PERCEPTION unset)",
+        )
+
+    if _is_excluded_active_window():
+        return ScreenObservation(
+            activity="", application="", detail="", focus_level="",
+            raw_response="", timestamp=timestamp, success=False,
+            state="excluded",
+            error="sensitive app in focus (preflight exclusion)",
         )
 
     # Stage 2: fast availability probe. If the vision endpoint isn't
