@@ -144,8 +144,8 @@ def _format(ctx: dict[str, Any]) -> str:
         )
 
     win = ctx.get("active_window") or {}
-    if win.get("title"):
-        lines.append(f"Active desktop window: {win['title']} ({win.get('class', '?')})")
+    if win.get("class"):
+        lines.append(f"Active desktop window: {win['class']}")
 
     sigs = ctx.get("signals_latest") or {}
     # Only surface the most relevant recent signals — not everything, not old.

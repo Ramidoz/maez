@@ -2,6 +2,7 @@ import unittest
 from unittest import mock
 
 import core.memory.ambient as ambient
+import core.memory.ambient_format as ambient_format
 
 
 class WaylandActiveWindowTests(unittest.TestCase):
@@ -84,6 +85,20 @@ class SurfaceSplitTests(unittest.TestCase):
         with mock.patch.object(ambient, "_raw_active_window", return_value=None):
             self.assertIsNone(ambient.active_window())
             self.assertIsNone(ambient.active_window_for_preflight())
+
+
+class TitleLeakRegressionTests(unittest.TestCase):
+    def test_confidential_title_never_renders_in_ambient(self):
+        rendered = ambient_format._format(
+            {
+                "now": "2026-06-06T00:00:00+00:00",
+                "active_window": {"title": "Re: confidential salary — Gmail", "class": "firefox"},
+                "signals_latest": {},
+            }
+        )
+        self.assertIn("Active desktop window: firefox", rendered)
+        for leak in ("confidential", "salary", "Gmail"):
+            self.assertNotIn(leak, rendered)
 
 
 if __name__ == "__main__":
