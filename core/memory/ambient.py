@@ -183,11 +183,56 @@ def current_weather(lat: float | None = None, lon: float | None = None,
 
 
 # ── desktop active window ──────────────────────────────────────────────
+def _session_is_wayland() -> bool:
+    return (
+        os.environ.get("XDG_SESSION_TYPE", "").strip().lower() == "wayland"
+        or bool(os.environ.get("WAYLAND_DISPLAY"))
+    )
+
+
+def _parse_window_calls_focused(raw: str) -> dict | None:
+    # The exact extension payload is empirical. Until an already-installed
+    # no-prompt route is proven, this deliberately returns None.
+    return None
+
+
+def _wayland_active_window(timeout: float = 1.0) -> dict | None:
+    """Try existing no-prompt focused-window routes on Wayland.
+
+    Does not install or enable a GNOME extension. If no already-present route
+    answers, return None so screen preflight fails safe.
+    """
+    if not shutil.which("gdbus"):
+        return None
+    try:
+        out = subprocess.check_output(
+            [
+                "gdbus",
+                "call",
+                "--session",
+                "--dest",
+                "org.gnome.Shell",
+                "--object-path",
+                "/org/gnome/Shell/Extensions/Windows",
+                "--method",
+                "org.gnome.Shell.Extensions.Windows.List",
+            ],
+            timeout=timeout,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+        return _parse_window_calls_focused(out)
+    except Exception:
+        return None
+
+
 def active_window(timeout: float = 1.0) -> dict | None:
     """What app/window the owner is looking at on the Linux box right now.
 
     X11 only (via xdotool). Returns None on Wayland or if xdotool missing.
     """
+    if _session_is_wayland():
+        return _wayland_active_window(timeout)
     if not shutil.which("xdotool"):
         return None
     try:

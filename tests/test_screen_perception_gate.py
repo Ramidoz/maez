@@ -101,7 +101,9 @@ class EnabledButUnavailable(unittest.TestCase):
 
     def test_unavailable_endpoint_short_circuits_before_screenshot(self):
         from skills import screen_perception as sp
-        with patch("skills.screen_perception._vision_endpoint_probe",
+        with patch("core.memory.ambient.active_window",
+                   return_value={"class": "code", "title": "safe"}), \
+             patch("skills.screen_perception._vision_endpoint_probe",
                    return_value=False) as m_probe, \
              patch("skills.screen_perception._capture_screenshot") as m_cap, \
              patch("skills.screen_perception.requests.post") as m_post:

@@ -165,6 +165,24 @@ def _is_paused() -> bool:
     return os.path.exists(_pause_file())
 
 
+_GNOME_DESKTOPS = ("gnome", "ubuntu:gnome")
+_WLROOTS_DESKTOPS = ("sway", "hyprland", "wlroots", "river", "wayfire")
+
+
+def _session_type() -> str:
+    """Honest display/session classification for lens selection."""
+    session_type = os.environ.get("XDG_SESSION_TYPE", "").strip().lower()
+    desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").strip().lower()
+    if session_type == "x11" or (not session_type and os.environ.get("DISPLAY")):
+        return "x11"
+    if session_type == "wayland" or os.environ.get("WAYLAND_DISPLAY"):
+        if any(name in desktop for name in _GNOME_DESKTOPS):
+            return "wayland-gnome"
+        if any(name in desktop for name in _WLROOTS_DESKTOPS):
+            return "wayland-wlroots"
+    return "unknown"
+
+
 _DEFAULT_EXCLUDE = (
     "keepassxc",
     "bitwarden",
@@ -195,12 +213,16 @@ def _exclusion_terms() -> tuple[str, ...]:
 
 
 def _is_excluded_active_window() -> bool:
-    """Return True when the active window is known-sensitive before capture."""
+    """Return True when the active window is sensitive or undetermined.
+
+    Lens v0 fail-safe: if the focused window cannot be read, do not capture.
+    The never-looked guarantee must hold even when the window is unknown.
+    """
     from core.memory.ambient import active_window
 
     win = active_window()
     if not win:
-        return False
+        return True
     haystack = f"{win.get('class', '')} {win.get('title', '')}".lower()
     return any(term in haystack for term in _exclusion_terms())
 
@@ -237,11 +259,97 @@ def _vision_endpoint_probe() -> bool:
         return False
 
 
+def _run_capture_cmd(cmd, tmp: str) -> bool:
+    """Run a capture command and return True iff it wrote an image file."""
+    try:
+        result = subprocess.run(
+            cmd,
+            env=DISPLAY_ENV,
+            capture_output=True,
+            timeout=SCREENSHOT_TIMEOUT,
+        )
+        return (
+            result.returncode == 0
+            and os.path.exists(tmp)
+            and os.path.getsize(tmp) > 0
+        )
+    except FileNotFoundError:
+        return False
+    except subprocess.TimeoutExpired:
+        return False
+    except Exception as e:
+        logger.debug("capture command %s failed: %s", cmd[0], e)
+        return False
+
+
+def _capture_gnome_shell_dbus(tmp: str) -> bool:
+    """Try GNOME Shell's no-prompt screenshot D-Bus method.
+
+    GNOME may reject external callers. Rejection is an honest False, not a
+    fallback to a prompting route.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "gdbus",
+                "call",
+                "--session",
+                "--dest",
+                "org.gnome.Shell",
+                "--object-path",
+                "/org/gnome/Shell/Screenshot",
+                "--method",
+                "org.gnome.Shell.Screenshot.Screenshot",
+                "false",
+                "false",
+                tmp,
+            ],
+            env=DISPLAY_ENV,
+            capture_output=True,
+            text=True,
+            timeout=SCREENSHOT_TIMEOUT,
+        )
+        ok = result.returncode == 0 and "true" in (result.stdout or "").lower()
+        return ok and os.path.exists(tmp) and os.path.getsize(tmp) > 0
+    except Exception as e:
+        logger.debug("gnome-shell dbus capture failed: %s", e)
+        return False
+
+
+def _capture_portal_noprompt(tmp: str) -> bool:
+    """Portal capture is disabled until proven no-prompt on this backend."""
+    return False
+
+
+def _capture_candidates() -> list[dict]:
+    """Ordered no-prompt-only capture candidates for the current session."""
+    session = _session_type()
+    if session == "wayland-gnome":
+        return [
+            {"name": "gnome-shell-dbus", "fn": _capture_gnome_shell_dbus},
+            {"name": "portal", "fn": _capture_portal_noprompt},
+        ]
+    if session == "wayland-wlroots":
+        return [
+            {"name": "grim", "fn": lambda tmp: _run_capture_cmd(["grim", tmp], tmp)}
+        ]
+    return [
+        {"name": "scrot", "fn": lambda tmp: _run_capture_cmd(["scrot", "-z", tmp], tmp)},
+        {
+            "name": "gnome-screenshot",
+            "fn": lambda tmp: _run_capture_cmd(["gnome-screenshot", "-f", tmp], tmp),
+        },
+        {
+            "name": "import",
+            "fn": lambda tmp: _run_capture_cmd(["import", "-window", "root", tmp], tmp),
+        },
+    ]
+
+
 def _capture_screenshot() -> Optional[str]:
     """
     Capture a screenshot, downscale to max dim VISION_MAX_DIM, return as
-    base64 PNG string. Tries scrot first, then gnome-screenshot, then
-    ImageMagick import. Returns None if all methods fail.
+    base64 PNG string. Returns None if all session-appropriate candidates fail.
 
     Session 11r: added PIL downscaling to prevent the vision server from
     OOMing on the vision-encoder's image tensor allocation. Full 2560×1440
@@ -250,21 +358,9 @@ def _capture_screenshot() -> Optional[str]:
     """
     tmp = tempfile.mktemp(suffix='.png')
 
-    methods = [
-        ['scrot', '-z', tmp],
-        ['gnome-screenshot', '-f', tmp],
-        ['import', '-window', 'root', tmp],
-    ]
-
-    for cmd in methods:
-        try:
-            result = subprocess.run(
-                cmd,
-                env=DISPLAY_ENV,
-                capture_output=True,
-                timeout=SCREENSHOT_TIMEOUT
-            )
-            if result.returncode == 0 and os.path.exists(tmp):
+    try:
+        for candidate in _capture_candidates():
+            if candidate["fn"](tmp):
                 # Downscale via PIL before base64-encoding
                 try:
                     from PIL import Image
@@ -275,7 +371,7 @@ def _capture_screenshot() -> Optional[str]:
                     data = base64.b64encode(buf.getvalue()).decode()
                     logger.debug(
                         "Screenshot captured via %s (downscaled to %dx%d)",
-                        cmd[0], img.size[0], img.size[1],
+                        candidate["name"], img.size[0], img.size[1],
                     )
                     return data
                 except Exception as e:
@@ -284,21 +380,14 @@ def _capture_screenshot() -> Optional[str]:
                     with open(tmp, 'rb') as f:
                         data = base64.b64encode(f.read()).decode()
                     return data
-        except FileNotFoundError:
-            continue
-        except subprocess.TimeoutExpired:
-            continue
-        except Exception as e:
-            logger.debug("Screenshot method %s failed: %s", cmd[0], e)
-            continue
-        finally:
-            if os.path.exists(tmp):
-                try:
-                    os.unlink(tmp)
-                except Exception:
-                    pass
 
-    return None
+        return None
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.unlink(tmp)
+            except Exception:
+                pass
 
 
 def _parse_vision_response(text: str) -> dict:
