@@ -152,5 +152,38 @@ class ThirdPartyMinimizationTests(unittest.TestCase):
         self.assertIn("plan.md", obs.detail)
 
 
+class ScreenEgressOriginTests(unittest.TestCase):
+    def _decide(self, origin):
+        from core.egress.gate import EgressRequest, EgressSegment, decide_egress
+
+        return decide_egress(
+            EgressRequest(
+                call_class="cloud_model_inference",
+                destination="anthropic",
+                segments=[
+                    EgressSegment(
+                        text="email a@b.test",
+                        origin_class=origin,
+                        source_ref="raw:screen",
+                        redaction_allowed=True,
+                    )
+                ],
+                caller="screen-v1a",
+                request_id="t",
+            )
+        )
+
+    def test_owner_screen_context_redacts(self):
+        decision = self._decide("owner_screen_context")
+        self.assertEqual(decision.decision, "redact")
+        self.assertNotIn("a@b.test", decision.sanitized_text())
+
+    def test_third_party_private_context_redacts(self):
+        self.assertEqual(
+            self._decide("third_party_private_context").decision,
+            "redact",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

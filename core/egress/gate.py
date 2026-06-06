@@ -26,6 +26,7 @@ MINIMIZABLE_PRIVATE_CONTEXT = {
     "lived_store",
     "owner_message_context",
     "third_party_private_context",
+    "owner_screen_context",
 }
 
 NON_PRIVATE = {
