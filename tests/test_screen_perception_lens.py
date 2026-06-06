@@ -103,6 +103,33 @@ class PreflightUsesTitleSurfaceTests(unittest.TestCase):
             self.assertTrue(sp._is_excluded_active_window())
 
 
+class ExclusionSetTests(unittest.TestCase):
+    def test_sensitive_classes_and_titles_excluded(self):
+        cases = [
+            {"class": "Bitwarden", "title": "Vault"},
+            {"class": "firefox", "title": "Online Banking — Chase"},
+            {"class": "Signal", "title": "Alice"},
+            {"class": "firefox", "title": "MyChart — Patient Portal"},
+            {"class": "1Password", "title": ""},
+            {"class": "firefox", "title": "Re: confidential salary — Gmail"},
+            {"class": "Zoom", "title": "Weekly call"},
+        ]
+        for win in cases:
+            with self.subTest(win=win), \
+                 mock.patch("core.memory.ambient.active_window_for_preflight", return_value=win):
+                self.assertTrue(sp._is_excluded_active_window(), win)
+
+    def test_ordinary_windows_not_excluded(self):
+        cases = (
+            {"class": "Gnome-terminal", "title": "bash"},
+            {"class": "Code", "title": "ambient.py"},
+        )
+        for win in cases:
+            with self.subTest(win=win), \
+                 mock.patch("core.memory.ambient.active_window_for_preflight", return_value=win):
+                self.assertFalse(sp._is_excluded_active_window(), win)
+
+
 class CaptureSelectionTests(unittest.TestCase):
     def test_x11_uses_x11_methods(self):
         with mock.patch.object(sp, "_session_type", return_value="x11"):
