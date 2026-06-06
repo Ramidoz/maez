@@ -1,4 +1,5 @@
 import json
+from unittest import mock
 import unittest
 
 import scripts.screencast_capture as sc
@@ -34,3 +35,27 @@ class OutputContractTests(unittest.TestCase):
         )
         s = json.dumps(out)
         self.assertNotIn("token", s.lower())
+
+
+class CurtainTests(unittest.TestCase):
+    def test_curtain_drawn_short_circuits(self):
+        with mock.patch.object(
+            sc.os.path,
+            "exists",
+            lambda p: p == sc.CURTAIN_PATH,
+        ):
+            out = sc.capture()
+        self.assertEqual(out["status"], "curtain_drawn")
+        self.assertIsNone(out["temp_path"])
+
+    def test_no_gi_import_when_curtain_drawn(self):
+        import sys
+
+        sys.modules.pop("gi", None)
+        with mock.patch.object(
+            sc.os.path,
+            "exists",
+            lambda p: p == sc.CURTAIN_PATH,
+        ):
+            sc.capture()
+        self.assertNotIn("gi", sys.modules)

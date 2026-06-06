@@ -37,3 +37,18 @@ def _result(
 def _emit(result: dict) -> None:
     sys.stdout.write(json.dumps(result) + "\n")
     sys.stdout.flush()
+
+
+def _curtain_drawn() -> bool:
+    return os.path.exists(CURTAIN_PATH)
+
+
+def capture() -> dict:
+    """Capture one frame, unless the privacy curtain is drawn."""
+    if _curtain_drawn():
+        return _result(status="curtain_drawn")
+    return _capture_live()
+
+
+def _capture_live() -> dict:
+    return _result(status="capture_failed", error_class="gst")
