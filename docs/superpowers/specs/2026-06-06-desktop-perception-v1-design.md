@@ -31,7 +31,7 @@ The screen-perception organ exists and *works* (backend alive) but predates ever
 
 **B. Egress origin + tagging.** Add `owner_screen_context` to `MINIMIZABLE_PRIVATE_CONTEXT` (`core/egress/gate.py`); `decide_egress` already redacts that class and the door now enforces. Screen-derived spans entering the cycle prompt carry this origin (→ `third_party_private_context` on the third-party flag). **The closed door only protects screen content if screen content is tagged — this is the link to this morning's activation.**
 
-**C. Third-party minimization (before prompt).** The write-time policy runs on the `ScreenObservation` *before* `format_for_context()` reaches the prompt: detect third-party content (vision `THIRD_PARTY` flag + app/title heuristic; uncertain → third-party); on flag, minimize/drop `detail`, set `third_party_content_present`, escalate origin, never persist a person-model. Provenance label `"seen on desktop"` (+ `"third_party_content_present"`).
+**C. Third-party minimization (before prompt).** The **prompt-bound screen-governance policy** (named so deliberately — v1a has NO durable write; this policy gates what reaches the *prompt*, never persists) runs on the `ScreenObservation` *before* `format_for_context()` reaches the prompt: detect third-party content (vision `THIRD_PARTY` flag + app/title heuristic; uncertain → third-party); on flag, minimize/drop `detail`, set `third_party_content_present`, escalate origin, never persist a person-model. Provenance label `"seen on desktop"` (+ `"third_party_content_present"`).
 
 **D. Pause primitive.** A deterministic switch (pause-state file/env/CLI) checked at the very top of `observe()`; paused → `state="paused"`, no capture/probe/call. Testable without a daemon.
 
