@@ -477,6 +477,14 @@ const ORGANS = [
       state: (!av ? _st(e.sensor_state) : (present?'present':'absent')) + (stale?' · stale':''),
       detail: (age!=null?`seen ${age}s ago`:'no look yet') + ` · samples ~60s · ${_st(e.confidence_bucket)} conf` + (e.enabled_until?` · until ${_shortTs(e.enabled_until)}`:'') };
   }],
+  ['desktop','Desktop','desktop', d=>{
+    if(d.sensor_state==='disabled') return { cls:'off', state:'disabled', detail:'opt-in off' };
+    if(d.sensor_state==='unavailable') return { cls:'warn', state:'blind',
+      detail: _st(d.reason||'unavailable') };
+    const age=d.age_seconds;
+    return { cls:'awake', state:_st(d.app_class||'unknown'),
+      detail: (age!=null?`seen ${age}s ago`:'fresh sample') + ' · app class only' };
+  }],
   ['github_limb','GitHub','limb', _limbRenderer('scripts/github_connect.py','read:user')],
   ['reddit_limb','Reddit','limb', _limbRenderer('scripts/reddit_connect.py','identity')],
   ['stomach','Stomach','reflection', s=>{
