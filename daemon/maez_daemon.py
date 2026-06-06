@@ -97,6 +97,10 @@ from core.body.camera_presence_state import (
     CameraPresenceState,
     resolve_camera_presence_state,
 )
+from core.body.desktop_presence_state import (
+    DesktopPresenceState,
+    sample_desktop_presence,
+)
 from core.body.camera_presence_voice import (
     answer_camera_presence_question,
     camera_presence_voice_health,
@@ -2475,6 +2479,7 @@ class MaezDaemon:
         self._last_shadow_receipt = None
         self._presence_native_initialized = False
         self._camera_presence_state = resolve_camera_presence_state(os.environ)
+        self._desktop_presence_state = sample_desktop_presence(os.environ)
         self._last_alert_time = 0.0
         self._last_screen_obs: ScreenObservation | None = None
         self._screen_cycle_counter = 0
@@ -2949,6 +2954,7 @@ class MaezDaemon:
         self,
         *,
         camera_presence: dict,
+        desktop_presence: dict,
         memory_stats: dict,
         reasoning_loop: dict,
         system: dict,
@@ -2971,6 +2977,16 @@ class MaezDaemon:
                 "confidence_bucket": camera_presence.get("confidence_bucket", "unknown"),
                 "enabled_until": camera_presence.get("enabled_until"),
                 "last_observed_at": camera_presence.get("last_observed_at"),
+            },
+            "desktop": {
+                "schema_version": desktop_presence.get(
+                    "schema_version",
+                    "desktop_presence.v1",
+                ),
+                "sensor_state": desktop_presence.get("sensor_state", "unknown"),
+                "app_class": desktop_presence.get("app_class"),
+                "reason": desktop_presence.get("reason", ""),
+                "age_seconds": desktop_presence.get("age_seconds"),
             },
             "memory": {
                 "raw": int(memory_stats.get("raw", 0) or 0),
@@ -3032,6 +3048,19 @@ class MaezDaemon:
                 "screen_vision_enabled": _env_flag("MAEZ_SCREEN_PERCEPTION"),
             },
         }
+
+    def _desktop_presence_health(self) -> dict:
+        """Content-free desktop presence state for /health.body."""
+
+        try:
+            self._desktop_presence_state = sample_desktop_presence(os.environ)
+        except Exception as exc:
+            logger.warning("Desktop presence health degraded: %s", exc)
+            self._desktop_presence_state = DesktopPresenceState(
+                sensor_state="unavailable",
+                reason="session_unreachable",
+            )
+        return self._desktop_presence_state.to_health()
 
     def _camera_presence_health(self) -> dict:
         """Content-free Camera Presence v1 state for /health."""
@@ -9334,6 +9363,7 @@ class MaezDaemon:
             _memory_stats = self.memory.memory_stats()
             _reasoning_loop = self._cycle_heartbeat_health()
             _camera_presence = self._camera_presence_health()
+            _desktop_presence = self._desktop_presence_health()
             _system = {
                 "cpu_percent": snap["cpu"]["percent"],
                 "ram_percent": snap["ram"]["percent"],
@@ -9369,6 +9399,7 @@ class MaezDaemon:
                     "system": _system,
                     "body": self._body_health(
                         camera_presence=_camera_presence,
+                        desktop_presence=_desktop_presence,
                         memory_stats=_memory_stats,
                         reasoning_loop=_reasoning_loop,
                         system=_system,
