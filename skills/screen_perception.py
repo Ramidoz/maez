@@ -213,12 +213,16 @@ def _exclusion_terms() -> tuple[str, ...]:
 
 
 def _is_excluded_active_window() -> bool:
-    """Return True when the active window is known-sensitive before capture."""
+    """Return True when the active window is sensitive or undetermined.
+
+    Lens v0 fail-safe: if the focused window cannot be read, do not capture.
+    The never-looked guarantee must hold even when the window is unknown.
+    """
     from core.memory.ambient import active_window
 
     win = active_window()
     if not win:
-        return False
+        return True
     haystack = f"{win.get('class', '')} {win.get('title', '')}".lower()
     return any(term in haystack for term in _exclusion_terms())
 
