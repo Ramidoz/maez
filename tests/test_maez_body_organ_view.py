@@ -83,6 +83,13 @@ class BodyHealthProjectionTests(unittest.TestCase):
                     "enabled_until": "2026-06-03T12:00:00-05:00",
                     "last_observed_at": "2026-06-02T16:06:00-05:00",
                 },
+                desktop_presence={
+                    "schema_version": "desktop_presence.v1",
+                    "sensor_state": "available",
+                    "app_class": "firefox",
+                    "reason": "",
+                    "age_seconds": 3,
+                },
                 memory_stats={"raw": 10, "daily": 2, "core": 5, "total": 17},
                 reasoning_loop={
                     "stage": "self_reflection",
@@ -103,6 +110,7 @@ class BodyHealthProjectionTests(unittest.TestCase):
             {
                 "schema_version",
                 "eyes",
+                "desktop",
                 "memory",
                 "brain",
                 "body",
@@ -120,6 +128,9 @@ class BodyHealthProjectionTests(unittest.TestCase):
         )
         self.assertEqual(body["schema_version"], "maez_body.v0")
         self.assertEqual(body["eyes"]["presence_state"], "present")
+        self.assertEqual(body["desktop"]["sensor_state"], "available")
+        self.assertEqual(body["desktop"]["app_class"], "firefox")
+        self.assertEqual(body["desktop"]["age_seconds"], 3)
         self.assertEqual(body["memory"]["reflection"], 2)
         self.assertEqual(body["memory"]["episodes_active"], 3)
         self.assertEqual(body["memory"]["episodes_superseded"], 1)
@@ -139,6 +150,8 @@ class BodyHealthProjectionTests(unittest.TestCase):
         self.assertNotIn("ep-", encoded)
         self.assertNotIn("source_memory_ids", encoded)
         self.assertNotIn("summary", encoded)
+        self.assertNotIn("confidential", encoded)
+        self.assertNotIn("Gmail", encoded)
 
     def test_body_health_fails_closed_to_unknown_counts(self):
         import daemon.maez_daemon as md
@@ -166,6 +179,7 @@ class BodyHealthProjectionTests(unittest.TestCase):
             body = md.MaezDaemon._body_health(
                 daemon,
                 camera_presence={},
+                desktop_presence={},
                 memory_stats={"raw": 0, "daily": 0, "core": 0, "total": 0},
                 reasoning_loop={},
                 system={},
@@ -182,6 +196,7 @@ class BodyHealthWiringTests(unittest.TestCase):
         src = _read("daemon/maez_daemon.py")
         self.assertIn('"body": self._body_health(', src)
         self.assertIn("camera_presence=_camera_presence", src)
+        self.assertIn("desktop_presence=_desktop_presence", src)
         self.assertIn("memory_stats=_memory_stats", src)
         self.assertIn("reasoning_loop=_reasoning_loop", src)
         self.assertIn("system=_system", src)
