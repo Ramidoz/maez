@@ -44,5 +44,22 @@ class ParseFocusedWindowTests(unittest.TestCase):
                 self.assertIsNone(ambient._parse_focused_window_dbus(raw))
 
 
+class WaylandRouteTests(unittest.TestCase):
+    def test_calls_focused_window_interface(self):
+        captured = {}
+
+        def fake_check_output(cmd, **_kwargs):
+            captured["cmd"] = cmd
+            return '(\'{"title":"T","wm_class":"firefox"}\',)'
+
+        with mock.patch.object(ambient.shutil, "which", return_value="/usr/bin/gdbus"), \
+             mock.patch.object(ambient.subprocess, "check_output", side_effect=fake_check_output):
+            out = ambient._wayland_active_window()
+
+        self.assertEqual(out, {"title": "T", "class": "firefox"})
+        self.assertIn("/org/gnome/shell/extensions/FocusedWindow", captured["cmd"])
+        self.assertIn("org.gnome.shell.extensions.FocusedWindow.Get", captured["cmd"])
+
+
 if __name__ == "__main__":
     unittest.main()

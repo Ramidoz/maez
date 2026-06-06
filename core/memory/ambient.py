@@ -253,15 +253,15 @@ def _wayland_active_window(timeout: float = 1.0) -> dict | None:
                 "--dest",
                 "org.gnome.Shell",
                 "--object-path",
-                "/org/gnome/Shell/Extensions/Windows",
+                "/org/gnome/shell/extensions/FocusedWindow",
                 "--method",
-                "org.gnome.Shell.Extensions.Windows.List",
+                "org.gnome.shell.extensions.FocusedWindow.Get",
             ],
             timeout=timeout,
             text=True,
             stderr=subprocess.DEVNULL,
         )
-        return _parse_window_calls_focused(out)
+        return _parse_focused_window_dbus(out)
     except Exception:
         return None
 
