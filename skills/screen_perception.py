@@ -92,9 +92,13 @@ class ScreenObservation:
     # "deliberately off." Values:
     #   "ok"           — success=True, observation is real
     #   "disabled"     — MAEZ_SCREEN_PERCEPTION is unset/0, by owner policy
+    #   "paused"       — owner pause file present; no capture attempted
+    #   "excluded"     — sensitive active window; no capture attempted
     #   "unavailable"  — vision endpoint probe failed, backing off
     #   "error"        — screenshot or vision call failed at runtime
     state: str = "error"
+    third_party_content_present: bool = False
+    egress_origin_class: str = "owner_screen_context"
 
     def format_for_context(self) -> str:
         """Format for injection into Maez reasoning prompt."""
@@ -104,6 +108,10 @@ class ScreenObservation:
                 "(set MAEZ_SCREEN_PERCEPTION=1 and run a vision server "
                 "on 127.0.0.1:8081 to enable)"
             )
+        if self.state == "paused":
+            return "[SCREEN] paused by owner (no capture)"
+        if self.state == "excluded":
+            return "[SCREEN] excluded — sensitive app in focus (not captured)"
         if self.state == "unavailable":
             return "[SCREEN] unavailable — vision endpoint not reachable"
         if not self.success:
