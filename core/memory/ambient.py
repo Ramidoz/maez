@@ -16,6 +16,7 @@ the daemon's reasoning loop — a pull that fails returns None for that field.
 """
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import os
@@ -190,10 +191,49 @@ def _session_is_wayland() -> bool:
     )
 
 
-def _parse_window_calls_focused(raw: str) -> dict | None:
-    # The exact extension payload is empirical. Until an already-installed
-    # no-prompt route is proven, this deliberately returns None.
-    return None
+def _parse_focused_window_dbus(raw: str) -> dict | None:
+    """Normalize Focused Window D-Bus output to title/class or None.
+
+    `gdbus call` prints the method result as a Python-ish tuple whose first
+    element is a JSON string, e.g. ('{"title":"...","wm_class":"..."}',).
+    Tests also feed raw JSON directly. Keep only the read nerve's useful fields;
+    action-affordance metadata from the extension is deliberately discarded.
+    """
+    if not raw:
+        return None
+
+    text = raw.strip()
+    obj = None
+    if text.startswith("("):
+        try:
+            parsed = ast.literal_eval(text)
+            if isinstance(parsed, tuple) and parsed and isinstance(parsed[0], str):
+                obj = json.loads(parsed[0])
+        except Exception:
+            obj = None
+
+    if obj is None:
+        try:
+            obj = json.loads(text)
+        except Exception:
+            return None
+
+    if not isinstance(obj, dict) or not obj:
+        return None
+
+    title = obj.get("title") or ""
+    klass = obj.get("class") or obj.get("wm_class") or ""
+    if not title and not klass:
+        return None
+
+    out: dict[str, Any] = {"title": str(title), "class": str(klass)}
+    for key in ("pid", "id"):
+        if key in obj:
+            out[key] = obj[key]
+    return out
+
+
+_parse_window_calls_focused = _parse_focused_window_dbus
 
 
 def _wayland_active_window(timeout: float = 1.0) -> dict | None:
