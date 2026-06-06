@@ -130,5 +130,55 @@ class GnomeShellCaptureTests(unittest.TestCase):
             self.assertFalse(sp._capture_gnome_shell_dbus("/tmp/x.png"))
 
 
+class TempCleanupTests(unittest.TestCase):
+    def test_capture_removes_temp_on_success(self):
+        created = {}
+        real_mktemp = sp.tempfile.mktemp
+
+        def tracking_mktemp(*args, **kwargs):
+            path = real_mktemp(*args, **kwargs)
+            created["path"] = path
+            return path
+
+        def write_png(tmp):
+            with open(tmp, "wb") as f:
+                f.write(b"\x89PNG")
+            return True
+
+        with mock.patch.object(sp.tempfile, "mktemp", side_effect=tracking_mktemp), \
+             mock.patch.object(
+                 sp,
+                 "_capture_candidates",
+                 return_value=[{"name": "fake", "fn": write_png}],
+             ):
+            sp._capture_screenshot()
+
+        self.assertFalse(sp.os.path.exists(created["path"]), "temp not cleaned up")
+
+    def test_capture_removes_temp_on_failure_after_write(self):
+        created = {}
+        real_mktemp = sp.tempfile.mktemp
+
+        def tracking_mktemp(*args, **kwargs):
+            path = real_mktemp(*args, **kwargs)
+            created["path"] = path
+            return path
+
+        def write_then_fail(tmp):
+            with open(tmp, "wb") as f:
+                f.write(b"partial")
+            return False
+
+        with mock.patch.object(sp.tempfile, "mktemp", side_effect=tracking_mktemp), \
+             mock.patch.object(
+                 sp,
+                 "_capture_candidates",
+                 return_value=[{"name": "fake", "fn": write_then_fail}],
+             ):
+            self.assertIsNone(sp._capture_screenshot())
+
+        self.assertFalse(sp.os.path.exists(created["path"]), "temp not cleaned up")
+
+
 if __name__ == "__main__":
     unittest.main()
