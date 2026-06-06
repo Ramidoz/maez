@@ -202,7 +202,7 @@ def _wait_request_response(request_path: str) -> dict:
 
     connection = Gio.bus_get_sync(Gio.BusType.SESSION, None)
     loop = GLib.MainLoop()
-    state: dict = {"seen": False, "response": 2, "results": {}}
+    state: dict = {"seen": False, "response": 2, "results": {}, "timeout_fired": False}
 
     def _on_response(_conn, _sender, _path, _iface, _signal, params, _data):
         response, results = params.unpack()
@@ -224,6 +224,7 @@ def _wait_request_response(request_path: str) -> dict:
 
     def _on_timeout():
         if not state["seen"]:
+            state["timeout_fired"] = True
             loop.quit()
         return False
 
@@ -232,10 +233,11 @@ def _wait_request_response(request_path: str) -> dict:
         loop.run()
     finally:
         connection.signal_unsubscribe(sub_id)
-        try:
-            GLib.source_remove(timeout_id)
-        except Exception:
-            pass
+        if not state["timeout_fired"]:
+            try:
+                GLib.source_remove(timeout_id)
+            except Exception:
+                pass
 
     if not state["seen"]:
         raise _StageError("timeout")

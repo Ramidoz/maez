@@ -1,7 +1,9 @@
 import json
 import os
 import stat
+import sys
 import tempfile
+import types
 from unittest import mock
 import unittest
 
@@ -114,3 +116,60 @@ class NoLeakTests(unittest.TestCase):
             {"portal", "pipewire", "gst", "timeout", "permission_denied"},
         )
         self.assertNotIn(secret, json.dumps(out))
+
+
+class PortalWaitTests(unittest.TestCase):
+    def test_timeout_does_not_remove_expired_source(self):
+        class FakeConnection:
+            def signal_subscribe(self, *args):
+                return 44
+
+            def signal_unsubscribe(self, sub_id):
+                self.unsubscribed = sub_id
+
+        class FakeLoop:
+            def run(self):
+                timeout_callback()
+
+            def quit(self):
+                self.quit_called = True
+
+        timeout_callback = None
+        removed_sources = []
+
+        class FakeGio:
+            class BusType:
+                SESSION = object()
+
+            class DBusSignalFlags:
+                NONE = object()
+
+            @staticmethod
+            def bus_get_sync(_bus_type, _cancellable):
+                return FakeConnection()
+
+        class FakeGLib:
+            @staticmethod
+            def MainLoop():
+                return FakeLoop()
+
+            @staticmethod
+            def timeout_add(_ms, callback):
+                nonlocal timeout_callback
+                timeout_callback = callback
+                return 99
+
+            @staticmethod
+            def source_remove(source_id):
+                removed_sources.append(source_id)
+
+        gi = types.ModuleType("gi")
+        repository = types.ModuleType("gi.repository")
+        repository.Gio = FakeGio
+        repository.GLib = FakeGLib
+        with mock.patch.dict(sys.modules, {"gi": gi, "gi.repository": repository}):
+            with self.assertRaises(sc._StageError) as cm:
+                sc._wait_request_response("/org/freedesktop/portal/desktop/request/x/y")
+
+        self.assertEqual(cm.exception.stage, "timeout")
+        self.assertEqual(removed_sources, [])
