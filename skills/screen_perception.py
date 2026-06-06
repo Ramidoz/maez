@@ -165,6 +165,24 @@ def _is_paused() -> bool:
     return os.path.exists(_pause_file())
 
 
+_GNOME_DESKTOPS = ("gnome", "ubuntu:gnome")
+_WLROOTS_DESKTOPS = ("sway", "hyprland", "wlroots", "river", "wayfire")
+
+
+def _session_type() -> str:
+    """Honest display/session classification for lens selection."""
+    session_type = os.environ.get("XDG_SESSION_TYPE", "").strip().lower()
+    desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").strip().lower()
+    if session_type == "x11" or (not session_type and os.environ.get("DISPLAY")):
+        return "x11"
+    if session_type == "wayland" or os.environ.get("WAYLAND_DISPLAY"):
+        if any(name in desktop for name in _GNOME_DESKTOPS):
+            return "wayland-gnome"
+        if any(name in desktop for name in _WLROOTS_DESKTOPS):
+            return "wayland-wlroots"
+    return "unknown"
+
+
 _DEFAULT_EXCLUDE = (
     "keepassxc",
     "bitwarden",
