@@ -22,6 +22,7 @@ SECRET_PATTERNS = (
     "screen content",
     "BEGIN PRIVATE",
 )
+SAFE_STEM_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 def _ensure_content_free(packet: dict[str, Any]) -> None:
@@ -30,6 +31,18 @@ def _ensure_content_free(packet: dict[str, Any]) -> None:
     for pattern in SECRET_PATTERNS:
         if pattern.lower() in lower:
             raise ValueError(f"packet contains forbidden content marker: {pattern}")
+
+
+def _validated_timestamp(timestamp: str | None) -> str:
+    if timestamp is None:
+        return time.strftime("%Y%m%dT%H%M%S")
+    if not timestamp:
+        raise ValueError("timestamp must not be empty")
+    if "/" in timestamp or "\\" in timestamp or ".." in timestamp:
+        raise ValueError(f"unsafe timestamp: {timestamp}")
+    if not SAFE_STEM_RE.fullmatch(timestamp):
+        raise ValueError(f"unsafe timestamp: {timestamp}")
+    return timestamp
 
 
 def build_packet(
@@ -79,7 +92,7 @@ def build_packet(
 
 def write_packet(packet: dict[str, Any], *, root: Path, timestamp: str | None = None) -> Path:
     _ensure_content_free(packet)
-    ts = timestamp or time.strftime("%Y%m%dT%H%M%S")
+    ts = _validated_timestamp(timestamp)
     candidate = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(packet["candidate"])).strip("-")
     out_dir = root / "logs" / "model_refresh"
     out_dir.mkdir(parents=True, exist_ok=True)

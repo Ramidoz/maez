@@ -83,6 +83,23 @@ class PacketTests(unittest.TestCase):
             self.assertTrue(out.exists())
             self.assertEqual(packet, json.loads(out.read_text()))
 
+    def test_write_packet_rejects_unsafe_explicit_timestamp(self):
+        unsafe_timestamps = [
+            "",
+            "../escape",
+            "..\\escape",
+            "../../escape",
+            "/tmp/escape",
+            "C:\\tmp\\escape",
+            "20260606T120000:escape",
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            packet = {"candidate": "qwen3vl-4b", "decision": "candidate"}
+            for timestamp in unsafe_timestamps:
+                with self.subTest(timestamp=timestamp):
+                    with self.assertRaises(ValueError):
+                        model_refresh.write_packet(packet, root=Path(tmp), timestamp=timestamp)
+
 
 if __name__ == "__main__":
     unittest.main()
