@@ -362,7 +362,9 @@ class VisionSmokeTests(unittest.TestCase):
 
     def test_parse_smoke_result_content_free(self):
         response = {"choices": [{"message": {"content": "The square is red."}}]}
-        result = model_refresh.parse_vision_smoke_response(response, status_code=200, latency_ms=321)
+        result = model_refresh.parse_vision_smoke_response(
+            response, status_code=200, latency_ms=321
+        )
         self.assertEqual({"status": "ok", "latency_ms": 321}, result)
 
     def test_parse_smoke_error_does_not_include_raw_body(self):

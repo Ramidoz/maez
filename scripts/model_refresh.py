@@ -156,7 +156,10 @@ def build_vision_smoke_payload(*, model: str, png_base64: str, prompt: str) -> d
                 "role": "user",
                 "content": [
                     {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{png_base64}"}},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{png_base64}"},
+                    },
                 ],
             }
         ],
