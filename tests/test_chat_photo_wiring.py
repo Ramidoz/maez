@@ -51,7 +51,7 @@ class ChatPhotoWiringTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("+1 more image not analyzed", event.text)
         self.assertIn("caption", event.text)
 
-    async def test_photo_analysis_failure_does_not_fabricate_description(self):
+    async def test_photo_analysis_failure_injects_honest_no_vision_fallback(self):
         adapter = TelegramAdapter(PlatformConfig())
         event = MessageEvent(
             text="caption",
@@ -81,8 +81,8 @@ class ChatPhotoWiringTests(unittest.IsolatedAsyncioTestCase):
             await adapter._flush_photo_batch("batch")
 
         self.assertEqual(len(handled), 1)
-        self.assertEqual(event.text, "caption")
-        self.assertNotIn("Image 1:", event.text)
+        self.assertIn("Image 1: [Maez could not see this image.]", event.text)
+        self.assertIn("caption", event.text)
         self.assertNotIn("analysis", event.text)
 
 
