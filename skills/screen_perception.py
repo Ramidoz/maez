@@ -30,20 +30,47 @@ import requests
 
 logger = logging.getLogger("maez")
 
+_DEFAULT_VISION_URL = "http://127.0.0.1:8082/v1/chat/completions"
+_DEFAULT_VISION_MODEL = "maez-vision"
+_DEFAULT_VISION_MAX_DIM = 640
+
 
 def _env_or_default(name: str, default: str) -> str:
     val = os.environ.get(name, "").strip()
     return val or default
 
 
-VISION_URL = _env_or_default(
-    "MAEZ_VISION_URL",
-    "http://127.0.0.1:8082/v1/chat/completions",
+def _normalize_vision_url(url: str) -> str:
+    raw = url.strip()
+    if not raw:
+        return _DEFAULT_VISION_URL
+    candidate = raw if "://" in raw else f"http://{raw}"
+    parsed = urlparse(candidate)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return _DEFAULT_VISION_URL
+    try:
+        parsed.port
+    except ValueError:
+        return _DEFAULT_VISION_URL
+    return candidate
+
+
+def _positive_int_or_default(raw: str, default: int) -> int:
+    try:
+        val = int(raw)
+    except ValueError:
+        return default
+    return val if val > 0 else default
+
+
+VISION_URL = _normalize_vision_url(_env_or_default("MAEZ_VISION_URL", _DEFAULT_VISION_URL))
+VISION_MODEL = _env_or_default("MAEZ_VISION_MODEL", _DEFAULT_VISION_MODEL)
+VISION_MAX_DIM = _positive_int_or_default(
+    _env_or_default("MAEZ_VISION_MAX_DIM", str(_DEFAULT_VISION_MAX_DIM)),
+    _DEFAULT_VISION_MAX_DIM,
 )
-VISION_MODEL = _env_or_default("MAEZ_VISION_MODEL", "maez-vision")
-VISION_MAX_DIM = int(_env_or_default("MAEZ_VISION_MAX_DIM", "640"))
-SCREENSHOT_TIMEOUT = 10   # seconds for screenshot capture
-VISION_TIMEOUT = 45       # seconds for vision call
+SCREENSHOT_TIMEOUT = 10  # seconds for screenshot capture
+VISION_TIMEOUT = 45  # seconds for vision call
 
 _ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SCREENCAST_HELPER = os.path.join(_ROOT_DIR, "scripts", "screencast_capture.py")
@@ -62,14 +89,18 @@ _SCREENCAST_PREFIX = "maez-screencast-"
 def _probe_host_port(url: str) -> tuple[str, int]:
     parsed = urlparse(url)
     host = parsed.hostname or "127.0.0.1"
-    if parsed.port:
-        return host, parsed.port
+    try:
+        port = parsed.port
+    except ValueError:
+        return "127.0.0.1", 8082
+    if port:
+        return host, port
     return host, 443 if parsed.scheme == "https" else 80
 
 
 _VISION_PROBE_HOST, _VISION_PROBE_PORT = _probe_host_port(VISION_URL)
-_VISION_PROBE_TIMEOUT_S = 1.0      # fast: 1-second TCP connect
-_VISION_PROBE_COOLDOWN_S = 300.0   # 5 minutes of "unavailable" before re-probing
+_VISION_PROBE_TIMEOUT_S = 1.0  # fast: 1-second TCP connect
+_VISION_PROBE_COOLDOWN_S = 300.0  # 5 minutes of "unavailable" before re-probing
 _vision_probe_cache: dict = {"last_result": None, "last_check": 0.0}
 
 # Display environment — needed because maez.service has no DISPLAY by default
@@ -269,6 +300,7 @@ def _vision_endpoint_probe() -> bool:
     cycle when the server is known-dead.
     """
     import socket
+
     now = time.time()
     cached = _vision_probe_cache.get("last_result")
     last = _vision_probe_cache.get("last_check", 0.0)
@@ -301,11 +333,7 @@ def _run_capture_cmd(cmd, tmp: str) -> bool:
             capture_output=True,
             timeout=SCREENSHOT_TIMEOUT,
         )
-        return (
-            result.returncode == 0
-            and os.path.exists(tmp)
-            and os.path.getsize(tmp) > 0
-        )
+        return result.returncode == 0 and os.path.exists(tmp) and os.path.getsize(tmp) > 0
     except FileNotFoundError:
         return False
     except subprocess.TimeoutExpired:
@@ -425,9 +453,7 @@ def _capture_candidates() -> list[dict]:
             {"name": "portal", "fn": _capture_portal_noprompt},
         ]
     if session == "wayland-wlroots":
-        return [
-            {"name": "grim", "fn": lambda tmp: _run_capture_cmd(["grim", tmp], tmp)}
-        ]
+        return [{"name": "grim", "fn": lambda tmp: _run_capture_cmd(["grim", tmp], tmp)}]
     return [
         {"name": "scrot", "fn": lambda tmp: _run_capture_cmd(["scrot", "-z", tmp], tmp)},
         {
@@ -451,7 +477,7 @@ def _capture_screenshot() -> Optional[str]:
     frames need ~1.9 GB of VRAM to encode; 1024-max-dim needs ~500 MB.
     Activity/application detection doesn't need full resolution.
     """
-    tmp = tempfile.mktemp(suffix='.png')
+    tmp = tempfile.mktemp(suffix=".png")
 
     try:
         for candidate in _capture_candidates():
@@ -459,20 +485,23 @@ def _capture_screenshot() -> Optional[str]:
                 # Downscale via PIL before base64-encoding
                 try:
                     from PIL import Image
+
                     img = Image.open(tmp)
                     img.thumbnail((VISION_MAX_DIM, VISION_MAX_DIM), Image.LANCZOS)
                     buf = io.BytesIO()
-                    img.save(buf, format='PNG', optimize=True)
+                    img.save(buf, format="PNG", optimize=True)
                     data = base64.b64encode(buf.getvalue()).decode()
                     logger.debug(
                         "Screenshot captured via %s (downscaled to %dx%d)",
-                        candidate["name"], img.size[0], img.size[1],
+                        candidate["name"],
+                        img.size[0],
+                        img.size[1],
                     )
                     return data
                 except Exception as e:
                     # PIL unavailable or resize failed — fall back to raw bytes
                     logger.debug("PIL downscale failed (%s) — sending full-res", e)
-                    with open(tmp, 'rb') as f:
+                    with open(tmp, "rb") as f:
                         data = base64.b64encode(f.read()).decode()
                     return data
 
@@ -495,18 +524,18 @@ def _parse_vision_response(text: str) -> dict:
         "third_party": "",
     }
 
-    for line in text.strip().split('\n'):
+    for line in text.strip().split("\n"):
         line = line.strip()
-        if line.startswith('ACTIVITY:'):
-            result['activity'] = line[9:].strip()
-        elif line.startswith('APPLICATION:'):
-            result['application'] = line[12:].strip()
-        elif line.startswith('DETAIL:'):
-            result['detail'] = line[7:].strip()
-        elif line.startswith('FOCUS_LEVEL:'):
-            result['focus_level'] = line[12:].strip()
-        elif line.startswith('THIRD_PARTY:'):
-            result['third_party'] = line[12:].strip().lower()
+        if line.startswith("ACTIVITY:"):
+            result["activity"] = line[9:].strip()
+        elif line.startswith("APPLICATION:"):
+            result["application"] = line[12:].strip()
+        elif line.startswith("DETAIL:"):
+            result["detail"] = line[7:].strip()
+        elif line.startswith("FOCUS_LEVEL:"):
+            result["focus_level"] = line[12:].strip()
+        elif line.startswith("THIRD_PARTY:"):
+            result["third_party"] = line[12:].strip().lower()
 
     return result
 
@@ -579,8 +608,13 @@ def observe() -> ScreenObservation:
 
     if _is_paused():
         return ScreenObservation(
-            activity="", application="", detail="", focus_level="",
-            raw_response="", timestamp=timestamp, success=False,
+            activity="",
+            application="",
+            detail="",
+            focus_level="",
+            raw_response="",
+            timestamp=timestamp,
+            success=False,
             state="paused",
             error="screen perception paused by owner",
         )
@@ -591,16 +625,26 @@ def observe() -> ScreenObservation:
     # timeout loop observed 2026-04-23.
     if not _is_enabled():
         return ScreenObservation(
-            activity="", application="", detail="", focus_level="",
-            raw_response="", timestamp=timestamp, success=False,
+            activity="",
+            application="",
+            detail="",
+            focus_level="",
+            raw_response="",
+            timestamp=timestamp,
+            success=False,
             state="disabled",
             error="screen perception disabled (MAEZ_SCREEN_PERCEPTION unset)",
         )
 
     if _is_excluded_active_window():
         return ScreenObservation(
-            activity="", application="", detail="", focus_level="",
-            raw_response="", timestamp=timestamp, success=False,
+            activity="",
+            application="",
+            detail="",
+            focus_level="",
+            raw_response="",
+            timestamp=timestamp,
+            success=False,
             state="excluded",
             error="sensitive app in focus (preflight exclusion)",
         )
@@ -611,23 +655,30 @@ def observe() -> ScreenObservation:
     # aren't re-probing every 60 seconds when the port is known dead.
     if not _vision_endpoint_probe():
         return ScreenObservation(
-            activity="", application="", detail="", focus_level="",
-            raw_response="", timestamp=timestamp, success=False,
+            activity="",
+            application="",
+            detail="",
+            focus_level="",
+            raw_response="",
+            timestamp=timestamp,
+            success=False,
             state="unavailable",
-            error=(
-                f"vision endpoint {_VISION_PROBE_HOST}:"
-                f"{_VISION_PROBE_PORT} not reachable"
-            ),
+            error=(f"vision endpoint {_VISION_PROBE_HOST}:{_VISION_PROBE_PORT} not reachable"),
         )
 
     # Capture screenshot
     img_b64 = _capture_screenshot()
     if img_b64 is None:
         return ScreenObservation(
-            activity="", application="", detail="", focus_level="",
-            raw_response="", timestamp=timestamp, success=False,
+            activity="",
+            application="",
+            detail="",
+            focus_level="",
+            raw_response="",
+            timestamp=timestamp,
+            success=False,
             state="error",
-            error="Screenshot capture failed — no display method succeeded"
+            error="Screenshot capture failed — no display method succeeded",
         )
 
     # Call the configured local multimodal vision endpoint. The model alias
@@ -638,15 +689,20 @@ def observe() -> ScreenObservation:
             VISION_URL,
             json={
                 "model": VISION_MODEL,
-                "messages": [{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": VISION_PROMPT},
-                        {"type": "image_url", "image_url": {
-                            "url": f"data:image/png;base64,{img_b64}",
-                        }},
-                    ],
-                }],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": VISION_PROMPT},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/png;base64,{img_b64}",
+                                },
+                            },
+                        ],
+                    }
+                ],
                 "temperature": 0.1,
                 "max_tokens": 500,
             },
@@ -655,29 +711,44 @@ def observe() -> ScreenObservation:
 
         if resp.status_code != 200:
             return ScreenObservation(
-                activity="", application="", detail="", focus_level="",
-                raw_response="", timestamp=timestamp, success=False,
+                activity="",
+                application="",
+                detail="",
+                focus_level="",
+                raw_response="",
+                timestamp=timestamp,
+                success=False,
                 state="error",
                 error=f"Vision server returned {resp.status_code}: {resp.text[:200]}",
             )
 
-        raw = resp.json()['choices'][0]['message']['content']
+        raw = resp.json()["choices"][0]["message"]["content"]
         parsed = _parse_vision_response(raw)
         return _apply_screen_governance(parsed, timestamp=timestamp, raw=raw)
 
     except requests.Timeout:
         return ScreenObservation(
-            activity="", application="", detail="", focus_level="",
-            raw_response="", timestamp=timestamp, success=False,
+            activity="",
+            application="",
+            detail="",
+            focus_level="",
+            raw_response="",
+            timestamp=timestamp,
+            success=False,
             state="error",
-            error="Vision call timed out after 45s"
+            error="Vision call timed out after 45s",
         )
     except Exception as e:
         return ScreenObservation(
-            activity="", application="", detail="", focus_level="",
-            raw_response="", timestamp=timestamp, success=False,
+            activity="",
+            application="",
+            detail="",
+            focus_level="",
+            raw_response="",
+            timestamp=timestamp,
+            success=False,
             state="error",
-            error=str(e)
+            error=str(e),
         )
 
 
@@ -694,9 +765,10 @@ def test():
     return obs.success
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     import sys
     from pathlib import Path as _Path
+
     sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
     logging.basicConfig(level=logging.DEBUG)
     success = test()
