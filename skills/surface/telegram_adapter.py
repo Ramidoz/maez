@@ -43,6 +43,11 @@ from typing import Dict, List, Optional, Any
 
 logger = logging.getLogger(__name__)
 
+PHOTO_VISION_PROMPT = (
+    "Describe the owner-sent photo plainly and factually. Mention visible text "
+    "when readable. Do not invent details that are not visible."
+)
+
 
 @dataclass(frozen=True)
 class TelegramDraftPresenceConfig:
@@ -62,6 +67,27 @@ def _parse_positive_float_env(var_name: str, default: float) -> float:
         return default
     try:
         value = float(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid value for %s=%r; using default %s",
+            var_name, raw, default,
+        )
+        return default
+    if value <= 0:
+        logger.warning(
+            "Non-positive value for %s=%r; using default %s",
+            var_name, raw, default,
+        )
+        return default
+    return value
+
+
+def _parse_positive_int_env(var_name: str, default: int) -> int:
+    raw = os.environ.get(var_name)
+    if raw is None or raw == "":
+        return default
+    try:
+        value = int(raw)
     except (TypeError, ValueError):
         logger.warning(
             "Invalid value for %s=%r; using default %s",
@@ -2861,11 +2887,41 @@ class TelegramAdapter(BasePlatformAdapter):
             if not event:
                 return
             logger.info("[Telegram] Flushing photo batch %s with %d image(s)", batch_key, len(event.media_urls))
+            await self._analyze_photo_event(event)
             await self.handle_message(event)
         finally:
             if self._pending_photo_batch_tasks.get(batch_key) is current_task:
                 self._pending_photo_batch_tasks.pop(batch_key, None)
             self._batch_last_touched.get("photo", {}).pop(batch_key, None)
+
+    async def _analyze_photo_event(self, event: MessageEvent) -> None:
+        """Analyze owner-sent cached photos and fold text into the message."""
+        if not event.media_urls:
+            return
+        max_images = _parse_positive_int_env("MAEZ_CHAT_PHOTO_MAX_IMAGES", 3)
+        analyses: list[str] = []
+        from tools.vision_tools import vision_analyze_tool
+
+        for index, image_path in enumerate(event.media_urls[:max_images], start=1):
+            try:
+                result_json = await vision_analyze_tool(
+                    image_url=image_path,
+                    user_prompt=PHOTO_VISION_PROMPT,
+                )
+                result = json.loads(result_json)
+            except Exception as exc:
+                logger.warning("[Telegram] Photo vision analysis failed: %s", exc, exc_info=True)
+                continue
+            if result.get("success") and result.get("analysis"):
+                analyses.append(f"Image {index}: {result['analysis']}")
+        overflow = max(0, len(event.media_urls) - max_images)
+        if overflow:
+            plural = "s" if overflow != 1 else ""
+            analyses.append(f"+{overflow} more image{plural} not analyzed")
+        if not analyses:
+            return
+        injection = "[Photo vision]\n" + "\n".join(analyses)
+        event.text = f"{injection}\n\n{event.text}" if event.text else injection
 
     def _enqueue_photo_event(self, batch_key: str, event: MessageEvent) -> None:
         """Merge photo events into a pending batch and schedule flush."""
@@ -3115,6 +3171,8 @@ class TelegramAdapter(BasePlatformAdapter):
             await asyncio.sleep(self.MEDIA_GROUP_WAIT_SECONDS)
             event = self._media_group_events.pop(media_group_id, None)
             if event is not None:
+                if event.message_type == MessageType.PHOTO:
+                    await self._analyze_photo_event(event)
                 await self.handle_message(event)
         except asyncio.CancelledError:
             return
