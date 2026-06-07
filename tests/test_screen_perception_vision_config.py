@@ -98,6 +98,13 @@ class VisionConfigTests(unittest.TestCase):
             self.assertEqual("127.0.0.1", sp._VISION_PROBE_HOST)
             self.assertEqual(8082, sp._VISION_PROBE_PORT)
 
+    def test_malformed_ipv6_url_falls_back_to_default_without_crashing(self):
+        for raw in ("http://[::1", "http://[v"):
+            with self.subTest(raw=raw), self._load({"MAEZ_VISION_URL": raw}) as sp:
+                self.assertEqual(DEFAULT_VISION_URL, sp.VISION_URL)
+                self.assertEqual("127.0.0.1", sp._VISION_PROBE_HOST)
+                self.assertEqual(8082, sp._VISION_PROBE_PORT)
+
     def test_load_helper_restores_module_after_patched_reload(self):
         snapshot = _snapshot_vision_env()
         try:

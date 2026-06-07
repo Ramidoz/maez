@@ -45,14 +45,23 @@ def _normalize_vision_url(url: str) -> str:
     if not raw:
         return _DEFAULT_VISION_URL
     candidate = raw if "://" in raw else f"http://{raw}"
-    parsed = urlparse(candidate)
-    if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        return _DEFAULT_VISION_URL
     try:
+        parsed = urlparse(candidate)
         parsed.port
     except ValueError:
         return _DEFAULT_VISION_URL
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return _DEFAULT_VISION_URL
     return candidate
+
+
+def _safe_urlparse(url: str):
+    try:
+        parsed = urlparse(url)
+        parsed.port
+    except ValueError:
+        return urlparse(_DEFAULT_VISION_URL)
+    return parsed
 
 
 def _positive_int_or_default(raw: str, default: int) -> int:
@@ -87,12 +96,9 @@ _SCREENCAST_PREFIX = "maez-screencast-"
 
 
 def _probe_host_port(url: str) -> tuple[str, int]:
-    parsed = urlparse(url)
+    parsed = _safe_urlparse(url)
     host = parsed.hostname or "127.0.0.1"
-    try:
-        port = parsed.port
-    except ValueError:
-        return "127.0.0.1", 8082
+    port = parsed.port
     if port:
         return host, port
     return host, 443 if parsed.scheme == "https" else 80
