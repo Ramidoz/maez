@@ -37,7 +37,7 @@ from core.routing.brain_gateway import (
     with_purpose,
 )
 from core.safety.clinical_boundary import PrivateThoughtsCrisisSignalWriter, guard_owner_text
-from skills.surface.platform_base import MessageEvent
+from skills.surface.platform_base import MessageEvent, MessageType
 from skills.surface.platform_config import PlatformConfig
 from skills.surface.telegram_adapter import TelegramAdapter
 
@@ -228,6 +228,11 @@ class MaezMessageHandler:
         except Exception:
             pass
         reply_to_msg_id = getattr(event, "reply_to_message_id", None)
+        has_local_photo_context = bool(
+            event.message_type == MessageType.PHOTO
+            and event.channel_prompt
+            and "Local Maez vision analysis" in str(event.channel_prompt)
+        )
 
         # Card-reply intent check — if there's an open approval card
         # and this message looks like a yes/no/defer, route through
@@ -450,7 +455,11 @@ class MaezMessageHandler:
             try:
                 from core import brain_loop as _brain_loop
 
-                if action_engine is not None and get_pipeline is not None:
+                if (
+                    action_engine is not None
+                    and get_pipeline is not None
+                    and not has_local_photo_context
+                ):
                     # Slice 3 of trace work: ask for the structured
                     # result so we can pass tool_calls into
                     # handle_message and the per-turn trace records the

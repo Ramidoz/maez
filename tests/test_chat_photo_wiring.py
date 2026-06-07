@@ -145,6 +145,54 @@ class ChatPhotoWiringTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("context_note", captured["kwargs"])
         self.assertIn("Local Maez vision analysis", str(captured["kwargs"]["context_note"]))
 
+    async def test_photo_context_turn_skips_generic_brain_loop(self):
+        event = MessageEvent(
+            text="Check this",
+            message_type=MessageType.PHOTO,
+            channel_prompt=ProvenancedText.owner_message_context(
+                "Local Maez vision analysis of the attached owner-sent photo(s).\n"
+                "Image 1: a Reddit page is visible.",
+                source_ref="telegram:photo_vision",
+            ),
+        )
+        captured = {}
+
+        class FakeMemory:
+            def get_telegram_exchanges(self, limit=None):
+                return []
+
+        class FakeCardStore:
+            def get_open_for_channel(self, channel, chat_id):
+                return []
+
+        class FakePipeline:
+            card_store = FakeCardStore()
+
+        class FakeTelegram:
+            def _get_pipeline(self):
+                return FakePipeline()
+
+        class FakeDaemon:
+            memory = FakeMemory()
+            actions = object()
+            telegram = FakeTelegram()
+
+            def handle_message(self, text, source, **kwargs):
+                captured["text"] = text
+                captured["source"] = source
+                captured["kwargs"] = kwargs
+                return "ok"
+
+        handler = MaezMessageHandler(FakeDaemon())
+        with mock.patch("core.brain_loop.run_brain_loop") as run_brain_loop:
+            reply = await handler(event)
+
+        self.assertEqual(reply, "ok")
+        run_brain_loop.assert_not_called()
+        self.assertEqual(captured["text"], "Check this")
+        self.assertEqual(captured["kwargs"].get("transcript"), "")
+        self.assertIs(captured["kwargs"].get("context_note"), event.channel_prompt)
+
 
 if __name__ == "__main__":
     unittest.main()
