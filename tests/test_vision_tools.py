@@ -4,6 +4,7 @@ import io
 import json
 import os
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from tools import vision_tools
@@ -159,6 +160,85 @@ class CallTests(unittest.TestCase):
             self.assertFalse(out["success"])
             self.assertEqual(out["analysis"], "")
             self.assertEqual(out["error"], "vision_call_failed")
+        finally:
+            os.unlink(path)
+
+
+class HeadlineRailTests(unittest.TestCase):
+    def _cache(self):
+        from skills.surface.platform_base import get_image_cache_dir
+
+        return get_image_cache_dir()
+
+    def _img(self):
+        from PIL import Image
+
+        path = os.path.join(self._cache(), "vt_rail_unique.png")
+        Image.new("RGB", (32, 32), (121, 33, 17)).save(path)
+        return path
+
+    def _memory_files_outside_image_cache(self):
+        cache = self._cache().resolve()
+        root = Path("memory").resolve()
+        if not root.exists():
+            return set()
+        files = set()
+        for path in root.rglob("*"):
+            if not path.is_file():
+                continue
+            try:
+                path.resolve().relative_to(cache)
+                continue
+            except ValueError:
+                files.add(path.resolve())
+        return files
+
+    def test_image_payload_posts_only_to_loopback_vision_endpoint(self):
+        calls = []
+
+        class Resp:
+            status_code = 200
+
+            def json(self):
+                return {"choices": [{"message": {"content": "small square"}}]}
+
+        def fake_post(url, json=None, timeout=None):
+            calls.append((url, json))
+            return Resp()
+
+        path = self._img()
+        try:
+            with mock.patch.object(vision_tools, "requests") as rq:
+                rq.post.side_effect = fake_post
+                out = json.loads(run(vision_tools.vision_analyze_tool(path, "describe")))
+
+            self.assertTrue(out["success"])
+            self.assertEqual(len(calls), 1)
+            self.assertTrue(vision_tools._is_loopback_url(calls[0][0]))
+            content = calls[0][1]["messages"][0]["content"]
+            self.assertTrue(content[1]["image_url"]["url"].startswith("data:image/png;base64,"))
+        finally:
+            os.unlink(path)
+
+    def test_analysis_creates_no_durable_image_copy(self):
+        before = self._memory_files_outside_image_cache()
+
+        class Resp:
+            status_code = 200
+
+            def json(self):
+                return {"choices": [{"message": {"content": "small square"}}]}
+
+        path = self._img()
+        try:
+            with mock.patch.object(vision_tools, "requests") as rq:
+                rq.post.return_value = Resp()
+                out = json.loads(run(vision_tools.vision_analyze_tool(path, "describe")))
+
+            after = self._memory_files_outside_image_cache()
+            self.assertTrue(out["success"])
+            self.assertEqual(after, before)
+            self.assertTrue(os.path.exists(path))
         finally:
             os.unlink(path)
 
