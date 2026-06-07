@@ -307,7 +307,7 @@ class DaemonHandleMessageContract(unittest.TestCase):
         self.assertEqual(consolidated[0]["role"], "system")
         self.assertEqual(consolidated[1]["role"], "user")
         self.assertEqual(consolidated[2]["role"], "assistant")
-        self.assertTrue(system_messages[0]["content"].endswith(transcript_context))
+        self.assertTrue(system_messages[0]["content"].text.endswith(transcript_context))
 
         handle_src = ast.get_source_segment(
             (_REPO / "daemon" / "maez_daemon.py").read_text(),
@@ -318,7 +318,8 @@ class DaemonHandleMessageContract(unittest.TestCase):
             ),
         ) or ""
         self.assertIn("_consolidate_system_messages", handle_src)
-        self.assertIn("final_system_part=turn_final_context", handle_src)
+        self.assertIn("_compose_turn_final_system_part", handle_src)
+        self.assertIn("final_system_part=final_system_part", handle_src)
 
     def test_continuity_shape_resolver_distinguishes_empty_chat_and_dated_turns(self):
         from daemon.maez_daemon import _resolve_continuity_fallback_shape

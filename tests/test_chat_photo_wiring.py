@@ -61,6 +61,8 @@ class ChatPhotoWiringTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Image 2: analysis for b", prompt_text)
         self.assertIn("Image 3: analysis for c", prompt_text)
         self.assertIn("+1 more image not analyzed", prompt_text)
+        self.assertIn("owner-sent photo vision is separate from desktop screen observation", prompt_text)
+        self.assertIn("desktop screen observation is disabled", prompt_text)
         self.assertNotIn("analysis for", event.text)
         self.assertNotIn("I don't have vision", prompt_text)
         self.assertNotIn("System is healthy", prompt_text)

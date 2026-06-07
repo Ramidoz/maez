@@ -1386,6 +1386,52 @@ def _consolidate_system_messages(
     return [{"role": "system", "content": joined}] + non_system_messages
 
 
+def _compose_turn_final_system_part(
+    turn_final_context: str | ProvenancedText | None,
+    *,
+    context_note: str | ProvenancedText | None = None,
+) -> ProvenancedText | None:
+    """Compose the closest turn-specific system context.
+
+    Generic evidence context may say desktop screen observation is absent.
+    Caller-provided local perception, such as Telegram photo vision, must land
+    after that generic context so the model does not confuse "no desktop eye"
+    with "no owner-sent photo analysis".
+    """
+    parts: list[ProvenancedText] = []
+    if turn_final_context and str(turn_final_context).strip():
+        if isinstance(turn_final_context, ProvenancedText):
+            parts.append(turn_final_context)
+        else:
+            parts.append(
+                ProvenancedText.system_bounded_query(
+                    str(turn_final_context),
+                    source_ref="daemon:system:turn_final_context",
+                )
+            )
+    if context_note and str(context_note).strip():
+        if isinstance(context_note, ProvenancedText):
+            parts.append(context_note)
+        else:
+            parts.append(
+                ProvenancedText.system_bounded_query(
+                    str(context_note).strip(),
+                    source_ref="daemon:system:context_note",
+                )
+            )
+    if not parts:
+        return None
+    joined = ProvenancedText.from_spans(())
+    for index, part in enumerate(parts):
+        if index:
+            joined = joined + ProvenancedText.system_bounded_query(
+                "\n\n",
+                source_ref="daemon:system:turn_final_separator",
+            )
+        joined = joined + part
+    return joined
+
+
 def _plain_llm_messages(messages: list[dict]) -> list[dict]:
     """Flatten provenance-bearing prompt content before local LLM calls."""
     plain: list[dict] = []
@@ -5543,14 +5589,13 @@ class MaezDaemon:
         if _premise_flag:
             messages.append({"role": "system", "content": _premise_flag})
             system_part_capture.append(("premise_flag", _premise_flag))
+        _context_note: str | ProvenancedText | None = None
         if context_note and str(context_note).strip():
             _context_note = (
                 context_note
                 if isinstance(context_note, ProvenancedText)
                 else str(context_note).strip()
             )
-            messages.append({"role": "system", "content": _context_note})
-            system_part_capture.append(("context_note", _context_note))
         # Slice 3a - Evidence Precedence Steer. Compute from the raw
         # dispatcher transcript, never transcript_context; the latter includes
         # instruction examples that contain the marker strings.
@@ -5632,9 +5677,15 @@ class MaezDaemon:
             system_part_capture.append(
                 ("continuity_shape", _continuity_shape_instruction_text)
             )
+        final_system_part = _compose_turn_final_system_part(
+            turn_final_context,
+            context_note=_context_note,
+        )
+        if _context_note:
+            system_part_capture.append(("context_note", _context_note))
         messages = _consolidate_system_messages(
             messages,
-            final_system_part=turn_final_context,
+            final_system_part=final_system_part,
         )
         messages.append({"role": "user", "content": prompt})
         _focused_candidate = (

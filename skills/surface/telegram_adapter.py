@@ -2775,7 +2775,11 @@ class TelegramAdapter(BasePlatformAdapter):
 
         async def _send(text_out: str) -> None:
             if chat_id:
-                await self.send(chat_id, text_out)
+                payload = ProvenancedText.maez_authored_owner_third_party_transport(
+                    text_out,
+                    source_ref="telegram:dream_command_reply",
+                )
+                await self.send(chat_id, payload)
 
         if dream is None:
             await _send("Dream state not available.")
@@ -3002,8 +3006,11 @@ class TelegramAdapter(BasePlatformAdapter):
             "This is Maez's own local perception result, not text authored by "
             "the owner. Use it as visual evidence when answering the owner's "
             "caption. Do not say you cannot see the image when this note is "
-            "present. Do not answer with unrelated system-health status unless "
-            "the photo or caption specifically asks about system health.\n"
+            "present. The owner-sent photo vision is separate from desktop screen "
+            "observation; if desktop screen observation is disabled, that does "
+            "not mean this attached photo is unavailable. Do not answer with unrelated "
+            "system-health status unless the photo or caption specifically asks "
+            "about system health.\n"
             + "\n".join(analyses)
         )
         photo_context = ProvenancedText.owner_message_context(

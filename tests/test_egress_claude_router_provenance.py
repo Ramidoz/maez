@@ -497,6 +497,34 @@ class ClaudeRouterProvenanceTests(unittest.TestCase):
         self.assertEqual(decision.decision, "redact")
         self.assertNotIn(private_marker, decision.sanitized_text())
 
+    def test_photo_context_note_is_last_turn_specific_system_part(self):
+        from core.egress.provenance import ProvenancedText
+        from daemon.maez_daemon import _compose_turn_final_system_part
+
+        note = ProvenancedText.owner_message_context(
+            "Local Maez vision analysis: the owner-sent photo shows a Reddit page.",
+            source_ref="telegram:photo_vision",
+        )
+
+        final_part = _compose_turn_final_system_part(
+            "screen observation (disabled by policy)",
+            context_note=note,
+        )
+
+        self.assertIsInstance(final_part, ProvenancedText)
+        text = final_part.text
+        self.assertIn("screen observation (disabled by policy)", text)
+        self.assertIn("Local Maez vision analysis", text)
+        self.assertLess(
+            text.index("screen observation (disabled by policy)"),
+            text.index("Local Maez vision analysis"),
+        )
+        self.assertTrue(text.rstrip().endswith("Reddit page."))
+        self.assertIn(
+            "owner_message_context",
+            {span.origin_class for span in final_part.spans},
+        )
+
     def test_no_wrap_maez_voice_shell_remains(self):
         src = CLAUDE_ROUTER_SRC.read_text(encoding="utf-8")
         self.assertNotIn("def wrap_maez_voice", src)
