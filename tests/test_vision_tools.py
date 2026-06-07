@@ -1,4 +1,6 @@
 import asyncio
+import base64
+import io
 import json
 import os
 import unittest
@@ -97,6 +99,68 @@ class CacheContainmentTests(unittest.TestCase):
         self.assertFalse(out["success"])
         self.assertEqual(out["error"], "image_not_in_cache")
         mocked_open.assert_not_called()
+
+
+class CallTests(unittest.TestCase):
+    def _img(self, name="vt_big.png", size=(2000, 1500)):
+        from PIL import Image
+
+        path = os.path.join(self._cache(), name)
+        Image.new("RGB", size, (10, 20, 30)).save(path)
+        return path
+
+    def _cache(self):
+        from skills.surface.platform_base import get_image_cache_dir
+
+        return get_image_cache_dir()
+
+    def test_success_path_downscales_and_returns_analysis(self):
+        from PIL import Image
+
+        sent = {}
+
+        class Resp:
+            status_code = 200
+
+            def json(self):
+                return {"choices": [{"message": {"content": "a dark rectangle"}}]}
+
+        def fake_post(url, json=None, timeout=None):
+            sent["url"] = url
+            sent["model"] = json["model"]
+            image_url = json["messages"][0]["content"][1]["image_url"]["url"]
+            sent["image_url"] = image_url
+            raw = base64.b64decode(image_url.split(",", 1)[1])
+            sent["size"] = Image.open(io.BytesIO(raw)).size
+            return Resp()
+
+        path = self._img()
+        try:
+            with mock.patch.object(vision_tools, "requests") as rq:
+                rq.post.side_effect = fake_post
+                out = json.loads(run(vision_tools.vision_analyze_tool(path, "describe")))
+
+            self.assertTrue(out["success"])
+            self.assertEqual(out["analysis"], "a dark rectangle")
+            self.assertIn("127.0.0.1", sent["url"])
+            self.assertEqual(sent["model"], vision_tools.VISION_MODEL)
+            self.assertLessEqual(max(sent["size"]), 1024)
+            self.assertTrue(sent["image_url"].startswith("data:image/png;base64,"))
+        finally:
+            os.unlink(path)
+
+    def test_vision_down_is_honest(self):
+        path = self._img("vt_down.png")
+        try:
+            with mock.patch.object(vision_tools, "requests") as rq:
+                rq.post.side_effect = Exception("conn refused")
+                out = json.loads(run(vision_tools.vision_analyze_tool(path, "describe")))
+
+            self.assertFalse(out["success"])
+            self.assertEqual(out["analysis"], "")
+            self.assertEqual(out["error"], "vision_call_failed")
+        finally:
+            os.unlink(path)
 
 
 if __name__ == "__main__":
