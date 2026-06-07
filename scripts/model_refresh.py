@@ -148,6 +148,35 @@ def response_has_model_alias(response: dict[str, Any], alias: str) -> bool:
     return False
 
 
+def build_vision_smoke_payload(*, model: str, png_base64: str, prompt: str) -> dict[str, Any]:
+    return {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{png_base64}"}},
+                ],
+            }
+        ],
+        "temperature": 0.0,
+        "max_tokens": 64,
+    }
+
+
+def parse_vision_smoke_response(
+    response: dict[str, Any], *, status_code: int, latency_ms: int
+) -> dict[str, Any]:
+    if status_code != 200:
+        return {"status": "error", "status_code": status_code, "latency_ms": latency_ms}
+    choices = response.get("choices") or []
+    content = ""
+    if choices:
+        content = ((choices[0].get("message") or {}).get("content") or "").strip()
+    return {"status": "ok" if content else "empty", "latency_ms": latency_ms}
+
+
 def _contains_control_char(value: str) -> bool:
     return any(ord(char) < 32 or ord(char) == 127 for char in value)
 

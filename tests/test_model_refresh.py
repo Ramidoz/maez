@@ -346,5 +346,35 @@ class VisionServiceTemplateTests(unittest.TestCase):
         self.assertNotIn("ExecStart=", stdout.getvalue())
 
 
+class VisionSmokeTests(unittest.TestCase):
+    def test_build_tiny_image_payload_is_openai_compatible_and_small(self):
+        payload = model_refresh.build_vision_smoke_payload(
+            model="maez-vision",
+            png_base64="abc123",
+            prompt="Name the color.",
+        )
+        self.assertEqual("maez-vision", payload["model"])
+        content = payload["messages"][0]["content"]
+        self.assertEqual("text", content[0]["type"])
+        self.assertEqual("image_url", content[1]["type"])
+        self.assertIn("data:image/png;base64,abc123", content[1]["image_url"]["url"])
+        self.assertLessEqual(payload["max_tokens"], 64)
+
+    def test_parse_smoke_result_content_free(self):
+        response = {"choices": [{"message": {"content": "The square is red."}}]}
+        result = model_refresh.parse_vision_smoke_response(response, status_code=200, latency_ms=321)
+        self.assertEqual({"status": "ok", "latency_ms": 321}, result)
+
+    def test_parse_smoke_error_does_not_include_raw_body(self):
+        result = model_refresh.parse_vision_smoke_response(
+            {"error": "secret screen content"},
+            status_code=500,
+            latency_ms=123,
+        )
+        self.assertEqual("error", result["status"])
+        self.assertEqual(500, result["status_code"])
+        self.assertNotIn("secret", str(result).lower())
+
+
 if __name__ == "__main__":
     unittest.main()
