@@ -147,13 +147,72 @@ def response_has_model_alias(response: dict[str, Any], alias: str) -> bool:
     return False
 
 
+def render_vision_service(
+    *,
+    runtime: str,
+    model: str,
+    mmproj: str,
+    alias: str,
+    port: int,
+    ctx_size: int,
+) -> str:
+    if port == 8081:
+        raise ValueError("vision service must not use the judge port 8081")
+    if port == 8080:
+        raise ValueError("vision service must not use the main brain port 8080")
+    return f"""[Unit]
+Description=llama.cpp vision server (Maez local multimodal endpoint)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/rohit/maez
+ExecStart={runtime} \\
+  -m {model} \\
+  --mmproj {mmproj} \\
+  --alias {alias} \\
+  --host 127.0.0.1 \\
+  --port {port} \\
+  --ctx-size {ctx_size} \\
+  --n-gpu-layers 999 \\
+  --flash-attn on \\
+  --cache-type-k q4_0 \\
+  --cache-type-v q4_0 \\
+  --image-max-tokens 1024
+Restart=on-failure
+Environment=GGML_VK_VISIBLE_DEVICES=0
+
+[Install]
+WantedBy=default.target
+"""
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--write-empty-packet", action="store_true")
     parser.add_argument("--candidate", default="qwen3vl-4b")
     parser.add_argument("--llama-server", help="Path to llama-server for help/version discovery")
     parser.add_argument("--nvidia-smi-row", help="Parse one nvidia-smi CSV row and print JSON")
+    parser.add_argument("--render-vision-service", action="store_true")
+    parser.add_argument("--runtime", default="")
+    parser.add_argument("--model-path", default="")
+    parser.add_argument("--mmproj-path", default="")
+    parser.add_argument("--alias", default="maez-vision")
+    parser.add_argument("--port", type=int, default=8082)
+    parser.add_argument("--ctx-size", type=int, default=4096)
     args = parser.parse_args()
+    if args.render_vision_service:
+        print(
+            render_vision_service(
+                runtime=args.runtime,
+                model=args.model_path,
+                mmproj=args.mmproj_path,
+                alias=args.alias,
+                port=args.port,
+                ctx_size=args.ctx_size,
+            )
+        )
+        return 0
     if args.llama_server:
         proc = subprocess.run(
             [args.llama_server, "--help"],

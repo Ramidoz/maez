@@ -196,5 +196,67 @@ class RuntimeDiscoveryTests(unittest.TestCase):
         )
 
 
+class VisionServiceTemplateTests(unittest.TestCase):
+    def test_render_vision_service_uses_8082_and_does_not_touch_judge(self):
+        text = model_refresh.render_vision_service(
+            runtime="/home/rohit/llama.cpp-release/llama-deadbeef/llama-server",
+            model="/home/rohit/maez/models/llamacpp/vision/Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+            mmproj="/home/rohit/maez/models/llamacpp/vision/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf",
+            alias="maez-vision",
+            port=8082,
+            ctx_size=4096,
+        )
+        self.assertIn("Description=llama.cpp vision server", text)
+        self.assertIn("--port 8082", text)
+        self.assertIn("--alias maez-vision", text)
+        self.assertIn(
+            "--mmproj /home/rohit/maez/models/llamacpp/vision/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf",
+            text,
+        )
+        self.assertNotIn("--port 8081", text)
+        self.assertNotIn("llama-judge", text)
+
+    def test_render_vision_service_rejects_judge_and_main_ports(self):
+        for port in (8080, 8081):
+            with self.subTest(port=port):
+                with self.assertRaises(ValueError):
+                    model_refresh.render_vision_service(
+                        runtime="/bin/llama-server",
+                        model="/models/v.gguf",
+                        mmproj="/models/mmproj.gguf",
+                        alias="maez-vision",
+                        port=port,
+                        ctx_size=4096,
+                    )
+
+    def test_cli_render_vision_service_prints_template(self):
+        stdout = io.StringIO()
+        argv = [
+            "model_refresh.py",
+            "--render-vision-service",
+            "--runtime",
+            "/bin/llama-server",
+            "--model-path",
+            "/models/v.gguf",
+            "--mmproj-path",
+            "/models/mmproj.gguf",
+            "--alias",
+            "maez-vision",
+            "--port",
+            "8082",
+            "--ctx-size",
+            "4096",
+        ]
+        with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(stdout):
+            self.assertEqual(0, model_refresh.main())
+        text = stdout.getvalue()
+        self.assertIn("ExecStart=/bin/llama-server", text)
+        self.assertIn("-m /models/v.gguf", text)
+        self.assertIn("--mmproj /models/mmproj.gguf", text)
+        self.assertIn("--alias maez-vision", text)
+        self.assertIn("--port 8082", text)
+        self.assertIn("--ctx-size 4096", text)
+
+
 if __name__ == "__main__":
     unittest.main()
