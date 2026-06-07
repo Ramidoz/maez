@@ -4,24 +4,14 @@
 """
 screen_perception.py — Screen awareness for Maez
 
-Captures a screenshot of the owner's display and uses a dedicated vision model
-(Qwen2.5-VL-3B via llama-server-vision.service on port 8081) to understand
-what he is working on. Returns a structured description that gets injected
-into every reasoning cycle.
+Captures a governed screenshot of the owner's display and sends it to a
+dedicated local multimodal endpoint. The endpoint is configured by
+MAEZ_VISION_URL / MAEZ_VISION_MODEL and defaults to a separate local vision
+server on 127.0.0.1:8082, not the grounding judge on 8081.
 
-Called by the daemon every N cycles. Runs asynchronously so it never blocks
-the reasoning loop.
-
-Session 11r: migrated from ollama gemma4 mmproj to dedicated Qwen2.5-VL-3B
-server. The old gemma4 path used `/api/chat` with `images=[base64]` (ollama
-native format). The new path uses OpenAI-compat `/v1/chat/completions` on
-127.0.0.1:8081 with the multimodal message shape
-`content: [{type: text, ...}, {type: image_url, image_url: {url: ...}}]`.
-
-Also downsamples screenshots to max-dim 1024 before sending — Qwen2.5-VL's
-vision tower needs ~1.88 GB to process a 2560×1440 image but only ~500 MiB
-for 1024×576. 1024 is plenty of resolution for "what app is open and what
-is the user doing" — that's a 480p task at worst.
+Screen perception remains default-off under ADR 0009 and is guarded by the
+privacy curtain, active-window preflight, third-party minimization, and
+egress-origin tagging.
 """
 
 import base64
@@ -34,14 +24,24 @@ import tempfile
 import time
 from dataclasses import dataclass
 from typing import Optional
+from urllib.parse import urlparse
 
 import requests
 
 logger = logging.getLogger("maez")
 
-VISION_URL = "http://127.0.0.1:8081/v1/chat/completions"
-VISION_MODEL = "qwen2.5-vl-3b"
-VISION_MAX_DIM = 1024     # downscale screenshots to max side = 1024 px
+
+def _env_or_default(name: str, default: str) -> str:
+    val = os.environ.get(name, "").strip()
+    return val or default
+
+
+VISION_URL = _env_or_default(
+    "MAEZ_VISION_URL",
+    "http://127.0.0.1:8082/v1/chat/completions",
+)
+VISION_MODEL = _env_or_default("MAEZ_VISION_MODEL", "maez-vision")
+VISION_MAX_DIM = int(_env_or_default("MAEZ_VISION_MAX_DIM", "640"))
 SCREENSHOT_TIMEOUT = 10   # seconds for screenshot capture
 VISION_TIMEOUT = 45       # seconds for vision call
 
@@ -50,15 +50,24 @@ _SCREENCAST_HELPER = os.path.join(_ROOT_DIR, "scripts", "screencast_capture.py")
 _SCREENCAST_PYTHON = "/usr/bin/python3"
 _SCREENCAST_PREFIX = "maez-screencast-"
 
-# 2026-04-23 Commit 2: vision-server availability probe.
-# Port 8081 has been dead for weeks (used to host a multimodal endpoint,
-# was later reassigned to the retired grounding judge, now has nothing
-# bound). `observe()` must not call requests.post() there when:
+# Fast-fail before screenshot capture when the configured local vision
+# endpoint is unavailable. The endpoint must be a real multimodal server;
+# the grounding judge is text-only and is deliberately not used for vision.
+# `observe()` must not call requests.post() when:
 #   - MAEZ_SCREEN_PERCEPTION is unset or "0" (hard default: vision off)
 #   - the host:port probe fails (fast-fail before screenshot capture)
 # Probe result is cached with backoff so we don't hammer the port.
-_VISION_PROBE_HOST = "127.0.0.1"
-_VISION_PROBE_PORT = 8081
+
+
+def _probe_host_port(url: str) -> tuple[str, int]:
+    parsed = urlparse(url)
+    host = parsed.hostname or "127.0.0.1"
+    if parsed.port:
+        return host, parsed.port
+    return host, 443 if parsed.scheme == "https" else 80
+
+
+_VISION_PROBE_HOST, _VISION_PROBE_PORT = _probe_host_port(VISION_URL)
 _VISION_PROBE_TIMEOUT_S = 1.0      # fast: 1-second TCP connect
 _VISION_PROBE_COOLDOWN_S = 300.0   # 5 minutes of "unavailable" before re-probing
 _vision_probe_cache: dict = {"last_result": None, "last_check": 0.0}
@@ -113,7 +122,7 @@ class ScreenObservation:
             return (
                 "[SCREEN] disabled by policy "
                 "(set MAEZ_SCREEN_PERCEPTION=1 and run a vision server "
-                "on 127.0.0.1:8081 to enable)"
+                f"on {_VISION_PROBE_HOST}:{_VISION_PROBE_PORT} to enable)"
             )
         if self.state == "paused":
             return "[SCREEN] paused by owner (no capture)"
@@ -621,8 +630,9 @@ def observe() -> ScreenObservation:
             error="Screenshot capture failed — no display method succeeded"
         )
 
-    # Call the dedicated Qwen2.5-VL-3B vision server (Session 11r).
-    # OpenAI-compat endpoint on port 8081, multimodal message shape.
+    # Call the configured local multimodal vision endpoint. The model alias
+    # must match /v1/models on that endpoint; stale aliases are caught by the
+    # model refresh witness before live activation.
     try:
         resp = requests.post(
             VISION_URL,
