@@ -24,14 +24,16 @@ Pin source URLs and record hashes. The model GGUF is not currently on disk; only
 
 Codex prepares files, tests, and service text. Rohit authorizes downloads, starts/stops user services, restarts Maez, and admits any live model.
 
-## Witness order
+## Owner-run witness order
 
-1. Verify latest or candidate `llama.cpp` side-by-side.
-2. Start `llama-vision.service` on `:8082`.
-3. Verify `/v1/models` exposes `maez-vision`.
-4. Run a tiny image smoke.
-5. Run Full Lens witness through `observe()`.
-6. Measure VRAM after load and after real image inference.
+These are Rohit's live witness steps after he authorizes the owner breaths. Codex does not download models, start services, restart Maez, run live smoke, or run the Full Lens `observe()` witness.
+
+1. Rohit verifies latest or candidate `llama.cpp` side-by-side.
+2. Rohit starts `llama-vision.service` on `:8082`.
+3. Rohit verifies `/v1/models` exposes `maez-vision`.
+4. Rohit runs a tiny image smoke.
+5. Rohit runs the Full Lens witness through `observe()`.
+6. Rohit measures VRAM after load and after real image inference.
 7. Only then consider judge retirement benchmark.
 
 ## Owner-run candidate commands
