@@ -121,7 +121,7 @@ def parse_nvidia_smi_csv(row: str) -> dict[str, int]:
         raise ValueError(f"expected 4 nvidia-smi csv fields, got {len(parts)}")
 
     def mib(text: str) -> int:
-        match = re.search(r"(\d+)\s*MiB", text)
+        match = re.fullmatch(r"(\d+)\s*MiB", text)
         if not match:
             raise ValueError(f"missing MiB value: {text}")
         return int(match.group(1))

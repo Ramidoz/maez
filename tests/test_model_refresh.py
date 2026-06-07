@@ -83,7 +83,9 @@ class PacketTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             packet = {"candidate": "qwen3vl-4b", "decision": "candidate"}
             out = model_refresh.write_packet(packet, root=Path(tmp), timestamp="20260606T120000")
-            self.assertEqual(Path(tmp) / "logs" / "model_refresh" / "20260606T120000-qwen3vl-4b.json", out)
+            self.assertEqual(
+                Path(tmp) / "logs" / "model_refresh" / "20260606T120000-qwen3vl-4b.json", out
+            )
             self.assertTrue(out.exists())
             self.assertEqual(packet, json.loads(out.read_text()))
 
@@ -123,12 +125,34 @@ class RuntimeDiscoveryTests(unittest.TestCase):
         self.assertTrue(support["mmproj"])
         self.assertFalse(support["mtp"])
 
+    def test_parse_llama_help_ignores_mtp_outside_spec_type_line(self):
+        help_text = """
+        --mmproj FILE
+        --spec-type none,draft,eagle3,ngram-simple
+        example: mtp draft models are configured elsewhere
+        """
+        support = model_refresh.parse_llama_help(help_text)
+        self.assertTrue(support["mmproj"])
+        self.assertFalse(support["mtp"])
+
     def test_parse_nvidia_smi_csv(self):
         row = "NVIDIA GeForce RTX 4090, 24564 MiB, 20053 MiB, 3975 MiB"
         parsed = model_refresh.parse_nvidia_smi_csv(row)
         self.assertEqual(24564, parsed["total_mib"])
         self.assertEqual(20053, parsed["used_mib"])
         self.assertEqual(3975, parsed["free_mib"])
+
+    def test_parse_nvidia_smi_csv_rejects_malformed_rows(self):
+        malformed_rows = [
+            "NVIDIA GeForce RTX 4090, 24564 MiB, 20053 MiB",
+            "NVIDIA GeForce RTX 4090, 24564, 20053 MiB, 3975 MiB",
+            "NVIDIA GeForce RTX 4090, -24564 MiB, 20053 MiB, 3975 MiB",
+            "NVIDIA GeForce RTX 4090, 24564 MiB trailing, 20053 MiB, 3975 MiB",
+        ]
+        for row in malformed_rows:
+            with self.subTest(row=row):
+                with self.assertRaises(ValueError):
+                    model_refresh.parse_nvidia_smi_csv(row)
 
     def test_verify_model_alias_from_models_response(self):
         response = {"data": [{"id": "maez-vision", "aliases": ["maez-vision"]}]}
