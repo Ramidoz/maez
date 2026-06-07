@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import ipaddress
+import os
 import socket
 from urllib.parse import urlparse
 
@@ -40,7 +41,24 @@ def _is_loopback_url(url: str) -> bool:
     return bool(infos) and all(_addr_is_loopback(info[4][0]) for info in infos)
 
 
+def _valid_cache_image(path: str) -> bool:
+    if not path or "://" in path:
+        return False
+    try:
+        from skills.surface.platform_base import get_image_cache_dir
+
+        cache_dir = os.path.realpath(get_image_cache_dir())
+        real_path = os.path.realpath(path)
+        if os.path.commonpath([cache_dir, real_path]) != cache_dir:
+            return False
+        return os.path.isfile(real_path) and not os.path.islink(path)
+    except (OSError, ValueError):
+        return False
+
+
 async def vision_analyze_tool(image_url: str, user_prompt: str) -> str:
     if not _is_loopback_url(VISION_URL):
         return _emit(_result(False, error="non_local_vision_endpoint"))
+    if not _valid_cache_image(image_url):
+        return _emit(_result(False, error="image_not_in_cache"))
     return _emit(_result(False, error="not_implemented"))
