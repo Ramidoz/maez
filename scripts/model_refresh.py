@@ -24,6 +24,7 @@ SECRET_PATTERNS = (
     "BEGIN PRIVATE",
 )
 SAFE_STEM_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+SAFE_ALIAS_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 def _ensure_content_free(packet: dict[str, Any]) -> None:
@@ -147,6 +148,26 @@ def response_has_model_alias(response: dict[str, Any], alias: str) -> bool:
     return False
 
 
+def _contains_control_char(value: str) -> bool:
+    return any(ord(char) < 32 or ord(char) == 127 for char in value)
+
+
+def _validate_service_path(name: str, value: str) -> None:
+    if not value:
+        raise ValueError(f"{name} must not be empty")
+    if _contains_control_char(value):
+        raise ValueError(f"{name} must not contain control characters")
+    if any(char.isspace() for char in value):
+        raise ValueError(f"{name} must not contain whitespace")
+
+
+def _validate_service_alias(alias: str) -> None:
+    if not alias:
+        raise ValueError("alias must not be empty")
+    if not SAFE_ALIAS_RE.fullmatch(alias):
+        raise ValueError("alias must match [A-Za-z0-9_.-]+")
+
+
 def render_vision_service(
     *,
     runtime: str,
@@ -156,6 +177,12 @@ def render_vision_service(
     port: int,
     ctx_size: int,
 ) -> str:
+    _validate_service_path("runtime", runtime)
+    _validate_service_path("model", model)
+    _validate_service_path("mmproj", mmproj)
+    _validate_service_alias(alias)
+    if not 1 <= port <= 65535:
+        raise ValueError("vision service port must be in 1..65535")
     if port == 8081:
         raise ValueError("vision service must not use the judge port 8081")
     if port == 8080:

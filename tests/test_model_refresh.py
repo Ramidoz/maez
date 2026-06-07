@@ -229,6 +229,74 @@ class VisionServiceTemplateTests(unittest.TestCase):
                         ctx_size=4096,
                     )
 
+    def test_render_vision_service_rejects_empty_required_values(self):
+        valid = {
+            "runtime": "/bin/llama-server",
+            "model": "/models/v.gguf",
+            "mmproj": "/models/mmproj.gguf",
+            "alias": "maez-vision",
+            "port": 8082,
+            "ctx_size": 4096,
+        }
+        for field in ("runtime", "model", "mmproj", "alias"):
+            args = valid | {field: ""}
+            with self.subTest(field=field):
+                with self.assertRaises(ValueError):
+                    model_refresh.render_vision_service(**args)
+
+    def test_render_vision_service_rejects_alias_injection_and_invalid_chars(self):
+        invalid_aliases = [
+            "maez-vision\nExecStart=/bin/false",
+            "maez vision",
+            "maez/vision",
+            "maez:vision",
+            "maez\tvision",
+            "maez\x7fvision",
+        ]
+        for alias in invalid_aliases:
+            with self.subTest(alias=alias):
+                with self.assertRaises(ValueError):
+                    model_refresh.render_vision_service(
+                        runtime="/bin/llama-server",
+                        model="/models/v.gguf",
+                        mmproj="/models/mmproj.gguf",
+                        alias=alias,
+                        port=8082,
+                        ctx_size=4096,
+                    )
+
+    def test_render_vision_service_rejects_invalid_port_range(self):
+        for port in (0, 65536):
+            with self.subTest(port=port):
+                with self.assertRaises(ValueError):
+                    model_refresh.render_vision_service(
+                        runtime="/bin/llama-server",
+                        model="/models/v.gguf",
+                        mmproj="/models/mmproj.gguf",
+                        alias="maez-vision",
+                        port=port,
+                        ctx_size=4096,
+                    )
+
+    def test_render_vision_service_rejects_path_whitespace_and_controls(self):
+        cases = {
+            "runtime": "/bin/llama server",
+            "model": "/models/v model.gguf",
+            "mmproj": "/models/mmproj\rbad.gguf",
+        }
+        for field, value in cases.items():
+            args = {
+                "runtime": "/bin/llama-server",
+                "model": "/models/v.gguf",
+                "mmproj": "/models/mmproj.gguf",
+                "alias": "maez-vision",
+                "port": 8082,
+                "ctx_size": 4096,
+            } | {field: value}
+            with self.subTest(field=field):
+                with self.assertRaises(ValueError):
+                    model_refresh.render_vision_service(**args)
+
     def test_cli_render_vision_service_prints_template(self):
         stdout = io.StringIO()
         argv = [
@@ -256,6 +324,26 @@ class VisionServiceTemplateTests(unittest.TestCase):
         self.assertIn("--alias maez-vision", text)
         self.assertIn("--port 8082", text)
         self.assertIn("--ctx-size 4096", text)
+
+    def test_cli_render_vision_service_bad_input_does_not_print_unit(self):
+        stdout = io.StringIO()
+        argv = [
+            "model_refresh.py",
+            "--render-vision-service",
+            "--runtime",
+            "/bin/llama-server",
+            "--model-path",
+            "/models/v.gguf",
+            "--mmproj-path",
+            "/models/mmproj.gguf",
+            "--alias",
+            "maez-vision\nExecStart=/bin/false",
+        ]
+        with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(stdout):
+            with self.assertRaises(ValueError):
+                model_refresh.main()
+        self.assertNotIn("[Unit]", stdout.getvalue())
+        self.assertNotIn("ExecStart=", stdout.getvalue())
 
 
 if __name__ == "__main__":
