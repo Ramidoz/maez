@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -101,11 +102,71 @@ def write_packet(packet: dict[str, Any], *, root: Path, timestamp: str | None = 
     return out_path
 
 
+def parse_llama_help(help_text: str) -> dict[str, bool]:
+    spec_line = ""
+    for line in help_text.splitlines():
+        if "--spec-type" in line:
+            spec_line = line.lower()
+            break
+    return {
+        "mmproj": "--mmproj" in help_text,
+        "mmproj_offload": "--mmproj-offload" in help_text,
+        "mtp": "mtp" in spec_line,
+    }
+
+
+def parse_nvidia_smi_csv(row: str) -> dict[str, int]:
+    parts = [p.strip() for p in row.split(",")]
+    if len(parts) != 4:
+        raise ValueError(f"expected 4 nvidia-smi csv fields, got {len(parts)}")
+
+    def mib(text: str) -> int:
+        match = re.search(r"(\d+)\s*MiB", text)
+        if not match:
+            raise ValueError(f"missing MiB value: {text}")
+        return int(match.group(1))
+
+    return {
+        "total_mib": mib(parts[1]),
+        "used_mib": mib(parts[2]),
+        "free_mib": mib(parts[3]),
+    }
+
+
+def response_has_model_alias(response: dict[str, Any], alias: str) -> bool:
+    for item in response.get("data", []):
+        names = {item.get("id"), item.get("model"), item.get("name")}
+        names.update(item.get("aliases") or [])
+        if alias in names:
+            return True
+    for item in response.get("models", []):
+        names = {item.get("id"), item.get("model"), item.get("name")}
+        names.update(item.get("aliases") or [])
+        if alias in names:
+            return True
+    return False
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--write-empty-packet", action="store_true")
     parser.add_argument("--candidate", default="qwen3vl-4b")
+    parser.add_argument("--llama-server", help="Path to llama-server for help/version discovery")
+    parser.add_argument("--nvidia-smi-row", help="Parse one nvidia-smi CSV row and print JSON")
     args = parser.parse_args()
+    if args.llama_server:
+        proc = subprocess.run(
+            [args.llama_server, "--help"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+        print(json.dumps(parse_llama_help(proc.stdout), sort_keys=True))
+        return 0
+    if args.nvidia_smi_row:
+        print(json.dumps(parse_nvidia_smi_csv(args.nvidia_smi_row), sort_keys=True))
+        return 0
     if args.write_empty_packet:
         packet = build_packet(
             candidate=args.candidate,

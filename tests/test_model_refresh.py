@@ -1,7 +1,11 @@
+import contextlib
+import io
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from scripts import model_refresh
 
@@ -99,6 +103,73 @@ class PacketTests(unittest.TestCase):
                 with self.subTest(timestamp=timestamp):
                     with self.assertRaises(ValueError):
                         model_refresh.write_packet(packet, root=Path(tmp), timestamp=timestamp)
+
+
+class RuntimeDiscoveryTests(unittest.TestCase):
+    def test_parse_llama_help_detects_mmproj_and_mtp(self):
+        help_text = """
+        --mmproj FILE
+        --mmproj-offload
+        --spec-type none,draft,eagle3,mtp,ngram-simple
+        """
+        support = model_refresh.parse_llama_help(help_text)
+        self.assertTrue(support["mmproj"])
+        self.assertTrue(support["mmproj_offload"])
+        self.assertTrue(support["mtp"])
+
+    def test_parse_llama_help_reports_missing_mtp_without_crash(self):
+        help_text = "--mmproj FILE\n--spec-type none,draft,eagle3,ngram-simple\n"
+        support = model_refresh.parse_llama_help(help_text)
+        self.assertTrue(support["mmproj"])
+        self.assertFalse(support["mtp"])
+
+    def test_parse_nvidia_smi_csv(self):
+        row = "NVIDIA GeForce RTX 4090, 24564 MiB, 20053 MiB, 3975 MiB"
+        parsed = model_refresh.parse_nvidia_smi_csv(row)
+        self.assertEqual(24564, parsed["total_mib"])
+        self.assertEqual(20053, parsed["used_mib"])
+        self.assertEqual(3975, parsed["free_mib"])
+
+    def test_verify_model_alias_from_models_response(self):
+        response = {"data": [{"id": "maez-vision", "aliases": ["maez-vision"]}]}
+        self.assertTrue(model_refresh.response_has_model_alias(response, "maez-vision"))
+        self.assertFalse(model_refresh.response_has_model_alias(response, "qwen2.5-vl-3b"))
+
+    def test_cli_nvidia_smi_row_prints_parsed_json(self):
+        stdout = io.StringIO()
+        argv = [
+            "model_refresh.py",
+            "--nvidia-smi-row",
+            "NVIDIA GeForce RTX 4090, 24564 MiB, 20053 MiB, 3975 MiB",
+        ]
+        with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(stdout):
+            self.assertEqual(0, model_refresh.main())
+        self.assertEqual(
+            {"free_mib": 3975, "total_mib": 24564, "used_mib": 20053},
+            json.loads(stdout.getvalue()),
+        )
+
+    def test_cli_llama_server_prints_help_support_json(self):
+        stdout = io.StringIO()
+        argv = ["model_refresh.py", "--llama-server", "/tmp/llama-server"]
+        completed = mock.Mock(stdout="--mmproj FILE\n--mmproj-offload\n--spec-type mtp\n")
+        with (
+            mock.patch.object(sys, "argv", argv),
+            mock.patch("scripts.model_refresh.subprocess.run", return_value=completed) as run,
+            contextlib.redirect_stdout(stdout),
+        ):
+            self.assertEqual(0, model_refresh.main())
+        run.assert_called_once_with(
+            ["/tmp/llama-server", "--help"],
+            text=True,
+            stdout=model_refresh.subprocess.PIPE,
+            stderr=model_refresh.subprocess.STDOUT,
+            check=False,
+        )
+        self.assertEqual(
+            {"mmproj": True, "mmproj_offload": True, "mtp": True},
+            json.loads(stdout.getvalue()),
+        )
 
 
 if __name__ == "__main__":
