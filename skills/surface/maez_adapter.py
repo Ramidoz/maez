@@ -504,6 +504,7 @@ class MaezMessageHandler:
                                 text,
                                 SURFACE_NAME,
                                 transcript=jarvis_transcript or "",
+                                context_note=event.channel_prompt,
                                 chat_history=chat_history,
                                 chat_id=chat_id,
                                 tool_calls=jarvis_tool_calls or None,
@@ -571,6 +572,7 @@ def build_telegram_adapter(
         extra=merged_extra,
     )
     adapter = TelegramAdapter(cfg)
+    adapter._maez_daemon = daemon
     handler = MaezMessageHandler(daemon)
     adapter.set_message_handler(handler)
     return adapter

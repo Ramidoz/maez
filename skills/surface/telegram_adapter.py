@@ -319,6 +319,7 @@ class TelegramAdapter(BasePlatformAdapter):
         super().__init__(config, Platform.TELEGRAM)
         self._app: Optional[Application] = None
         self._bot: Optional[Bot] = None
+        self._maez_daemon = None
         self._webhook_mode: bool = False
         self._mention_patterns = self._compile_mention_patterns()
         self._reply_to_mode: str = getattr(config, 'reply_to_mode', 'first') or 'first'
@@ -2746,7 +2747,80 @@ class TelegramAdapter(BasePlatformAdapter):
             return
 
         event = self._build_message_event(update.message, MessageType.COMMAND, update_id=update.update_id)
+        if await self._try_handle_dream_command_event(event):
+            return
         await self.handle_message(event)
+
+    async def _try_handle_dream_command_event(self, event: MessageEvent) -> bool:
+        """Handle dream-state slash commands deterministically on surface v2.
+
+        The legacy TelegramVoice path already owned these commands, but the
+        v2 surface otherwise forwards every slash command into the LLM. Dream
+        approval commands mutate soul state, so they must resolve through
+        DreamState directly and fail closed there when S7 authorization is
+        missing.
+        """
+        text = (event.text or "").strip()
+        match = re.match(
+            r"^/\s*(dreams|apply[\s_\-]*dream|reject[\s_\-]*dream)(?:\s+(\d+))?\s*$",
+            text,
+            re.I,
+        )
+        if not match:
+            return False
+
+        daemon = getattr(self, "_maez_daemon", None)
+        dream = getattr(daemon, "dream", None) if daemon is not None else None
+        chat_id = getattr(getattr(event, "source", None), "chat_id", "") or ""
+
+        async def _send(text_out: str) -> None:
+            if chat_id:
+                await self.send(chat_id, text_out)
+
+        if dream is None:
+            await _send("Dream state not available.")
+            return True
+
+        command = match.group(1).lower().replace(" ", "_").replace("-", "_")
+        prop_id_text = match.group(2)
+        if command == "dreams":
+            try:
+                pending = dream.list_pending()
+            except Exception as exc:
+                await _send(f"list_pending failed: {exc}")
+                return True
+            if not pending:
+                await _send("No pending dream insights.")
+                return True
+            lines = [f"{len(pending)} pending dream insight(s):\n"]
+            for pid, created_iso, insight in pending[:10]:
+                snippet = str(insight)[:160].replace("\n", " ")
+                lines.append(f"#{pid} ({created_iso})")
+                lines.append(f"  {snippet}")
+                lines.append(f"  /apply_dream {pid}  ·  /reject_dream {pid}")
+                lines.append("")
+            await _send("\n".join(lines))
+            return True
+
+        if not prop_id_text:
+            usage = "Usage: /apply_dream <id>" if command.startswith("apply") else "Usage: /reject_dream <id>"
+            await _send(usage)
+            return True
+        try:
+            prop_id = int(prop_id_text)
+        except ValueError:
+            await _send("Invalid id — must be an integer.")
+            return True
+        try:
+            if command.startswith("apply"):
+                ok, msg = dream.apply_proposal(prop_id)
+            else:
+                ok, msg = dream.reject_proposal(prop_id)
+        except Exception as exc:
+            await _send(f"dream command failed: {exc}")
+            return True
+        await _send(("✓ " if ok else "✗ ") + str(msg))
+        return True
 
     async def _handle_location_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle incoming location/venue pin messages."""
@@ -2895,7 +2969,7 @@ class TelegramAdapter(BasePlatformAdapter):
             self._batch_last_touched.get("photo", {}).pop(batch_key, None)
 
     async def _analyze_photo_event(self, event: MessageEvent) -> None:
-        """Analyze owner-sent cached photos and fold text into the message."""
+        """Analyze owner-sent cached photos as local perception context."""
         if not event.media_urls:
             return
         max_images = _parse_positive_int_env("MAEZ_CHAT_PHOTO_MAX_IMAGES", 3)
@@ -2923,8 +2997,38 @@ class TelegramAdapter(BasePlatformAdapter):
             analyses.append(f"+{overflow} more image{plural} not analyzed")
         if not analyses:
             return
-        injection = "[Photo vision]\n" + "\n".join(analyses)
-        event.text = f"{injection}\n\n{event.text}" if event.text else injection
+        injection = (
+            "Local Maez vision analysis of the attached owner-sent photo(s). "
+            "This is Maez's own local perception result, not text authored by "
+            "the owner. Use it as visual evidence when answering the owner's "
+            "caption. Do not say you cannot see the image when this note is "
+            "present. Do not answer with unrelated system-health status unless "
+            "the photo or caption specifically asks about system health.\n"
+            + "\n".join(analyses)
+        )
+        photo_context = ProvenancedText.owner_message_context(
+            injection,
+            source_ref="telegram:photo_vision",
+        )
+        if event.channel_prompt:
+            existing_context = (
+                event.channel_prompt
+                if isinstance(event.channel_prompt, ProvenancedText)
+                else ProvenancedText.system_bounded_query(
+                    str(event.channel_prompt),
+                    source_ref="telegram:channel_prompt",
+                )
+            )
+            event.channel_prompt = (
+                existing_context
+                + ProvenancedText.system_bounded_query(
+                    "\n\n",
+                    source_ref="telegram:channel_prompt_separator",
+                )
+                + photo_context
+            )
+        else:
+            event.channel_prompt = photo_context
 
     def _enqueue_photo_event(self, batch_key: str, event: MessageEvent) -> None:
         """Merge photo events into a pending batch and schedule flush."""

@@ -410,6 +410,93 @@ class ClaudeRouterProvenanceTests(unittest.TestCase):
             ],
         )
 
+    def test_consolidated_photo_context_note_remains_owner_private_at_cloud_egress(self):
+        from core.egress.gate import decide_egress
+        from core.egress.provenance import ProvenancedText
+        from core.routing import claude_tier
+        from core.subscription_proxy.server import _build_egress_request
+        from daemon.maez_daemon import _consolidate_system_messages
+
+        private_marker = "owner-photo-marker@example.test"
+        consolidated = _consolidate_system_messages(
+            [
+                {
+                    "role": "system",
+                    "content": ProvenancedText.system_bounded_query(
+                        "Task only.", source_ref="daemon:system"
+                    ),
+                },
+                {
+                    "role": "system",
+                    "content": ProvenancedText.owner_message_context(
+                        f"Local Maez vision analysis: invoice for {private_marker}",
+                        source_ref="telegram:photo_vision",
+                    ),
+                },
+                {"role": "user", "content": "what is in this photo?"},
+            ]
+        )
+
+        system_content = consolidated[0]["content"]
+        self.assertIsInstance(system_content, ProvenancedText)
+        self.assertIn(
+            "owner_message_context",
+            {span.origin_class for span in system_content.spans},
+        )
+
+        response = _make_response({
+            "choices": [{"message": {"content": "ok"}, "index": 0}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            "model": "sonnet",
+        })
+        captured: dict = {}
+
+        def _capture(req, timeout):
+            captured["body"] = json.loads(req.data.decode("utf-8"))
+            return response
+
+        with mock.patch("urllib.request.urlopen", side_effect=_capture):
+            claude_tier.call_messages(
+                system_prompt=system_content,
+                messages=[
+                    claude_tier.CloudMessage(
+                        role="user",
+                        content=ProvenancedText.owner_message_context(
+                            "what is in this photo?",
+                            source_ref="telegram:caption",
+                        ),
+                    ),
+                ],
+                caller="test/photo-context-note",
+            )
+
+        body = captured["body"]
+        rendered_parts = {
+            "system": "\n\n".join(
+                m["content"] for m in body["messages"] if m.get("role") == "system"
+            ),
+            "assistant_history": "",
+            "role_history": "",
+            "user": "what is in this photo?",
+        }
+        request, mode, _part_counts = _build_egress_request(
+            body=body,
+            rendered_parts=rendered_parts,
+            prompt=rendered_parts["user"],
+            system_prompt=rendered_parts["system"],
+            destination="subscription_proxy:claude",
+            caller="test/photo-context-note",
+            request_id="photo-context-note",
+        )
+        self.assertEqual(mode, "span_bundle")
+        self.assertIn(
+            "owner_message_context",
+            {segment.origin_class for segment in request.segments},
+        )
+        decision = decide_egress(request)
+        self.assertEqual(decision.decision, "redact")
+        self.assertNotIn(private_marker, decision.sanitized_text())
+
     def test_no_wrap_maez_voice_shell_remains(self):
         src = CLAUDE_ROUTER_SRC.read_text(encoding="utf-8")
         self.assertNotIn("def wrap_maez_voice", src)

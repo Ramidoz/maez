@@ -1340,26 +1340,64 @@ def _log_recall_self_status(
 def _consolidate_system_messages(
     messages: list[dict],
     *,
-    final_system_part: str | None = None,
+    final_system_part: str | ProvenancedText | None = None,
 ) -> list[dict]:
     """Collapse system-role prompt parts into one leading system message."""
-    system_parts: list[str] = []
+    system_parts: list[ProvenancedText] = []
     non_system_messages: list[dict] = []
-    for message in messages:
+    for index, message in enumerate(messages):
         if not isinstance(message, dict):
             continue
         role = message.get("role")
-        content = str(message.get("content") or "")
+        content = message.get("content") or ""
         if role == "system":
-            if content.strip():
-                system_parts.append(content)
+            if str(content).strip():
+                if isinstance(content, ProvenancedText):
+                    system_parts.append(content)
+                else:
+                    system_parts.append(
+                        ProvenancedText.system_bounded_query(
+                            str(content),
+                            source_ref=f"daemon:system:{index}",
+                        )
+                    )
         else:
             non_system_messages.append(message)
-    if final_system_part and final_system_part.strip():
-        system_parts.append(final_system_part)
+    if final_system_part and str(final_system_part).strip():
+        if isinstance(final_system_part, ProvenancedText):
+            system_parts.append(final_system_part)
+        else:
+            system_parts.append(
+                ProvenancedText.system_bounded_query(
+                    str(final_system_part),
+                    source_ref="daemon:system:final",
+                )
+            )
     if not system_parts:
         return non_system_messages
-    return [{"role": "system", "content": "\n\n".join(system_parts)}] + non_system_messages
+    joined = ProvenancedText.from_spans(())
+    for index, part in enumerate(system_parts):
+        if index:
+            joined = joined + ProvenancedText.system_bounded_query(
+                "\n\n",
+                source_ref="daemon:system:separator",
+            )
+        joined = joined + part
+    return [{"role": "system", "content": joined}] + non_system_messages
+
+
+def _plain_llm_messages(messages: list[dict]) -> list[dict]:
+    """Flatten provenance-bearing prompt content before local LLM calls."""
+    plain: list[dict] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        clone = dict(message)
+        content = clone.get("content")
+        if isinstance(content, ProvenancedText):
+            clone["content"] = content.text
+        plain.append(clone)
+    return plain
 
 
 def _prompt_capture_excerpt(content: str, *, limit: int = 100) -> str:
@@ -4861,6 +4899,7 @@ class MaezDaemon:
         source: str = "unknown",
         *,
         transcript: str = "",
+        context_note: str | ProvenancedText | None = None,
         signals_present: "list | None" = None,
         signals_absent: "list | None" = None,
         chat_history: "list | None" = None,
@@ -4886,6 +4925,11 @@ class MaezDaemon:
                 before this synthesis. When non-empty, the audit skips
                 the judge (real stdout grounds the claim by
                 construction). Default "" for direct LLM-only replies.
+            context_note: caller-supplied system context about this turn.
+                Used for local perception notes such as Telegram photo
+                analysis; not treated as owner-authored text. When it
+                carries ProvenancedText, preserve that egress origin through
+                system-message consolidation.
             signals_present / signals_absent: grounding manifest for
                 the audit. Defaults to None (the audit falls back to
                 its legacy "infer from surface" behavior) when the
@@ -5499,6 +5543,14 @@ class MaezDaemon:
         if _premise_flag:
             messages.append({"role": "system", "content": _premise_flag})
             system_part_capture.append(("premise_flag", _premise_flag))
+        if context_note and str(context_note).strip():
+            _context_note = (
+                context_note
+                if isinstance(context_note, ProvenancedText)
+                else str(context_note).strip()
+            )
+            messages.append({"role": "system", "content": _context_note})
+            system_part_capture.append(("context_note", _context_note))
         # Slice 3a - Evidence Precedence Steer. Compute from the raw
         # dispatcher transcript, never transcript_context; the latter includes
         # instruction examples that contain the marker strings.
@@ -6008,7 +6060,7 @@ class MaezDaemon:
                     with _brain_purpose("owner_reply"):
                         response = _llm_client.chat(
                             model=MODEL,
-                            messages=messages,
+                            messages=_plain_llm_messages(messages),
                             think=False,
                             options={"temperature": 0.7, "num_predict": 4096},
                         )

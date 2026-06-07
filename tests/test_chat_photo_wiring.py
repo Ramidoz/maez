@@ -2,6 +2,8 @@ import json
 import unittest
 from unittest import mock
 
+from core.egress.provenance import ProvenancedText
+from skills.surface.maez_adapter import MaezMessageHandler
 from skills.surface.platform_base import MessageEvent, MessageType, PlatformConfig
 from skills.surface.telegram_adapter import TelegramAdapter
 
@@ -45,11 +47,23 @@ class ChatPhotoWiringTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(calls), 3)
         self.assertEqual(len(handled), 1)
         self.assertIs(handled[0], event)
-        self.assertIn("Image 1: analysis for a", event.text)
-        self.assertIn("Image 2: analysis for b", event.text)
-        self.assertIn("Image 3: analysis for c", event.text)
-        self.assertIn("+1 more image not analyzed", event.text)
-        self.assertIn("caption", event.text)
+        self.assertEqual("caption", event.text)
+        self.assertIsNotNone(event.channel_prompt)
+        assert event.channel_prompt is not None
+        self.assertIsInstance(event.channel_prompt, ProvenancedText)
+        self.assertEqual(
+            {span.origin_class for span in event.channel_prompt.spans},
+            {"owner_message_context"},
+        )
+        prompt_text = event.channel_prompt.text
+        self.assertIn("Local Maez vision analysis", prompt_text)
+        self.assertIn("Image 1: analysis for a", prompt_text)
+        self.assertIn("Image 2: analysis for b", prompt_text)
+        self.assertIn("Image 3: analysis for c", prompt_text)
+        self.assertIn("+1 more image not analyzed", prompt_text)
+        self.assertNotIn("analysis for", event.text)
+        self.assertNotIn("I don't have vision", prompt_text)
+        self.assertNotIn("System is healthy", prompt_text)
 
     async def test_photo_analysis_failure_injects_honest_no_vision_fallback(self):
         adapter = TelegramAdapter(PlatformConfig())
@@ -81,9 +95,53 @@ class ChatPhotoWiringTests(unittest.IsolatedAsyncioTestCase):
             await adapter._flush_photo_batch("batch")
 
         self.assertEqual(len(handled), 1)
-        self.assertIn("Image 1: [Maez could not see this image.]", event.text)
-        self.assertIn("caption", event.text)
+        self.assertEqual("caption", event.text)
+        self.assertIsNotNone(event.channel_prompt)
+        assert event.channel_prompt is not None
+        self.assertIsInstance(event.channel_prompt, ProvenancedText)
+        self.assertEqual(
+            {span.origin_class for span in event.channel_prompt.spans},
+            {"owner_message_context"},
+        )
+        self.assertIn(
+            "Image 1: [Maez could not see this image.]",
+            event.channel_prompt.text,
+        )
         self.assertNotIn("analysis", event.text)
+
+    async def test_channel_prompt_reaches_daemon_as_system_context_note(self):
+        event = MessageEvent(
+            text="Fine check this image",
+            message_type=MessageType.PHOTO,
+            channel_prompt=(
+                "Local Maez vision analysis of the attached owner-sent photo:\n"
+                "Image 1: a Reddit post is visible."
+            ),
+        )
+        captured = {}
+
+        class FakeMemory:
+            def get_telegram_exchanges(self, limit=None):
+                return []
+
+        class FakeDaemon:
+            memory = FakeMemory()
+            actions = None
+            telegram = None
+
+            def handle_message(self, text, source, **kwargs):
+                captured["text"] = text
+                captured["source"] = source
+                captured["kwargs"] = kwargs
+                return "ok"
+
+        handler = MaezMessageHandler(FakeDaemon())
+        reply = await handler(event)
+
+        self.assertEqual(reply, "ok")
+        self.assertEqual(captured["text"], "Fine check this image")
+        self.assertIn("context_note", captured["kwargs"])
+        self.assertIn("Local Maez vision analysis", str(captured["kwargs"]["context_note"]))
 
 
 if __name__ == "__main__":
