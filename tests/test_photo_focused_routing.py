@@ -6,6 +6,7 @@ synthesize_photo_turn (bounded working set), bypassing daemon.handle_message's
 import json
 import os
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 from core.egress.provenance import ProvenancedText
@@ -132,6 +133,35 @@ class PhotoFocusedRouting(unittest.IsolatedAsyncioTestCase):
             reply = await handler(_photo_event())
         self.assertTrue(cap.get("called"))
         self.assertEqual(reply, "MEGAPROMPT_REPLY")
+
+
+    async def test_focused_reply_passes_through_self_claim_audit(self):
+        # Covenant: handle_message owns the anti-fabrication audit; the focused
+        # path bypasses handle_message, so it must apply the audit itself.
+        cap = {}
+
+        def fake_synth(**_k):
+            return FocusedResult(
+                reply="I searched the web and found it.",
+                cited_ids=["E1"],
+                working_set_chars=10,
+            )
+
+        def fake_audit(text, surface=None):
+            return SimpleNamespace(rewritten=True, text="AUDITED_REPLY")
+
+        handler = MaezMessageHandler(_fake_daemon(cap))
+        with mock.patch(
+            "core.routing.focused_cognition.synthesize_photo_turn",
+            side_effect=fake_synth,
+        ), mock.patch(
+            "core.self_claim_audit.audit", side_effect=fake_audit
+        ), mock.patch.dict(
+            os.environ, {"MAEZ_PHOTO_FOCUSED_SYNTH": "1"}
+        ):
+            reply = await handler(_photo_event())
+        self.assertEqual(reply, "AUDITED_REPLY")
+        self.assertNotIn("called", cap)  # still bypassed the megaprompt
 
 
 class PhotoAnalysisStash(unittest.IsolatedAsyncioTestCase):

@@ -224,6 +224,19 @@ class MaezMessageHandler:
         reply = (getattr(result, "reply", "") or "")
         if not reply.strip():
             return None
+        # Self-claim audit (covenant: no fabrication). handle_message owns this
+        # on the legacy path; the focused path bypasses handle_message, so apply
+        # the same audit here before the reply goes out.
+        try:
+            from core.self_claim_audit import audit as _sc_audit
+
+            _audited = _sc_audit(reply, surface=f"{SURFACE_NAME}_photo")
+            if getattr(_audited, "rewritten", False) and getattr(
+                _audited, "text", ""
+            ):
+                reply = _audited.text
+        except Exception:
+            pass
         # Proprioception (content-free): the focused photo path fired.
         logger.info(
             "[Telegram] Photo focused synthesis: working_set_chars=%s "
