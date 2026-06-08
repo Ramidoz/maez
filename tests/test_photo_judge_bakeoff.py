@@ -321,5 +321,58 @@ class RunnerMain(unittest.TestCase):
         self.assertEqual(a0["catch_rate"], 0.5)  # ok1 caught; err1 errored = missed
 
 
+class FetchHelper(unittest.TestCase):
+    def _fake_snapshot(self, repo_id, revision, local_dir, **kw):
+        Path(local_dir).mkdir(parents=True, exist_ok=True)
+        (Path(local_dir) / "weights.bin").write_bytes(b"abc")
+        return local_dir
+
+    def _tmp(self):
+        import tempfile
+        return tempfile.mkdtemp()
+
+    def test_fetch_pins_and_hashes_smoke_skipped_by_default(self):
+        import scripts.photo_judge_bakeoff_fetch as f
+        with mock.patch.object(f, "_snapshot_download", self._fake_snapshot):
+            rec = f.fetch_one(repo_id="vectara/x", revision="deadbeef",
+                              name="hhem", dest_root=self._tmp())
+        self.assertEqual(rec["revision"], "deadbeef")     # PINNED
+        self.assertEqual(len(rec["sha256"]), 64)          # HASH recorded
+        self.assertEqual(rec["smoke"], "skipped")         # honest default
+
+    def test_fetch_runs_smoke_hook_when_given(self):
+        import scripts.photo_judge_bakeoff_fetch as f
+        def boom(dest):
+            raise RuntimeError("bad weights")
+        with mock.patch.object(f, "_snapshot_download", self._fake_snapshot):
+            ok = f.fetch_one(repo_id="x", revision="r", name="n",
+                             dest_root=self._tmp(), smoke_fn=lambda dest: None)
+            bad = f.fetch_one(repo_id="x", revision="r", name="n",
+                              dest_root=self._tmp(), smoke_fn=boom)
+        self.assertEqual(ok["smoke"], "ok")
+        self.assertTrue(bad["smoke"].startswith("failed"))   # honest failure
+
+    def test_fetch_refuses_unpinned_revision(self):
+        import scripts.photo_judge_bakeoff_fetch as f
+        with self.assertRaises(ValueError):
+            f.fetch_one(repo_id="x", revision=None, name="n", dest_root="/tmp/x")
+
+    def test_fetch_helper_is_a_separate_file(self):   # moved from Task 5 (fix #3)
+        self.assertTrue((ROOT / "scripts" / "photo_judge_bakeoff_fetch.py").exists())
+
+    def test_cli_parses_and_calls_fetch_one(self):
+        import scripts.photo_judge_bakeoff_fetch as f
+        seen = {}
+        def fake_fetch_one(**kw):
+            seen.update(kw)
+            return {"name": kw["name"], "smoke": "skipped"}
+        with mock.patch.object(f, "fetch_one", fake_fetch_one):
+            rc = f.main(["--repo-id", "vectara/x", "--revision", "abc",
+                         "--name", "hhem", "--dest-root", "/tmp/bk"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(seen["revision"], "abc")
+        self.assertEqual(seen["name"], "hhem")
+
+
 if __name__ == "__main__":
     unittest.main()
