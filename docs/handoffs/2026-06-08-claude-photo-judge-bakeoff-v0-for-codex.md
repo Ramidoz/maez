@@ -59,10 +59,13 @@ touches NO daemon/live path. Owner picks the winner + placement in a follow-on L
   Branch discover = 15 failures / 35 errors, all in the known ambient worktree-confound
   set (S7-WebAuthn / camera / daemon-proxy / db-path asset gaps + the
   `test_env_only_blocks_against_production_path` order-flake) — NONE in files this slice
-  touches; my 29 new tests produce 0 failures under discover. (The first baseline pass was
-  cut off by a hanging daemon-proxy test and captured empty, falsely attributing the
-  ambient set as branch-only; a clean baseline re-run confirms the same ambient set on
-  `b4833e5`. See [[feedback_worktree_floor_confound]].)
+  touches; my 29 new tests produce 0 failures under discover. **Empirical clean baseline:**
+  `b4833e5` = 14 failures / 34 errors (48 ambient); branch = 15 / 35; the single TRUE
+  branch-only delta is `test_env_only_blocks_against_production_path` — it **passes in
+  isolation** (the documented order-flake), in a file this slice never touched. Net: zero
+  real regressions. (The first baseline pass was cut off by a hanging daemon-proxy test and
+  captured empty; a timeout-guarded re-run confirmed it.) See
+  [[feedback_worktree_floor_confound]].
 - This slice adds only `scripts/*` + a corpus + one test file; no model libs are imported
   in the test suite (every adapter is mocked at its `_load`/`_raw_predict` boundary).
 
