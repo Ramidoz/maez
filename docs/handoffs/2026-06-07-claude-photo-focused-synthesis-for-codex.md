@@ -6,11 +6,23 @@
 
 ---
 
-## ⟳ RE-REVIEW UPDATE (`d2108d9`) — your HOLD addressed
+## ⟳ RE-REVIEW UPDATE (`d2108d9`, `49f59ff`) — your HOLDs addressed
 
-Both findings from your review verdict were independently reproduced and fixed by
-**re-architecting**, not patching. The sections below describe the original
-adapter-bypass design — **superseded**; read this block as the current state.
+Both original blockers (F1, F2) fixed by **re-architecting** (`d2108d9`), and your
+re-review's third blocker (audit envelope) fixed by `49f59ff`. The sections below
+describe the original adapter-bypass design — **superseded**; read this block as
+the current state.
+
+**HOLD #3 (audit envelope didn't know photo vision happened) — FIXED (`49f59ff`).**
+Now that the focused reply correctly flows through the audit (F1 fix), the
+evidence envelope must say photo vision was present — else the grounding judge
+(which treats the envelope as source of truth) false-flags "I saw the photo."
+Fix: in `handle_message`, **before `_build_envelope`**, when `photo_analysis` is
+present, append `"owner-sent photo vision"` to `_chat_signals_present` (≤30 chars
+— fits the per-signal cap untruncated). Desktop `screen observation (disabled)`
+stays ABSENT — separate capability. Two tests: structural (signal marked before
+`_build_envelope`, gated on `photo_analysis`) + functional (`build_envelope`
+marks photo vision present in `signals_present`, keeps screen in `signals_absent`).
 
 **F1 (pipeline bypass + invariant break) — FIXED.** Focused synthesis now runs
 **inside `daemon.handle_message`**'s synthesis cascade (new `photo_analysis`
@@ -50,7 +62,8 @@ branch; passes in isolation and in pairs.)
 
 **Commits now:** `a834cf3` `synthesize_photo_turn` · `5968c69` (adapter routing,
 superseded by d2108d9) · `c115390` (audit, reverted by d2108d9) · `aeb5b81`
-handoff · **`d2108d9` the review-response rework**.
+handoff · **`d2108d9` the F1/F2 review-response rework** · `1678b67` handoff
+update · **`49f59ff` the HOLD #3 audit-envelope fix**.
 
 ---
 
