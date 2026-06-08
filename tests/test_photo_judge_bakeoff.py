@@ -431,5 +431,51 @@ class ReproFingerprint(unittest.TestCase):
         self.assertIsNone(read_bakeoff_manifest(tempfile.mkdtemp()))  # absent → None
 
 
+class ChatJudgeHonesty(unittest.TestCase):
+    """ChatJudge must NOT guess a port (a wrong port could benchmark the vision
+    server under a judge label) and must VERIFY the served alias before running."""
+
+    def test_unavailable_without_base_url(self):
+        from scripts.photo_judge_bakeoff_adapters import ChatJudgeAdapter
+        a = ChatJudgeAdapter()   # no base_url → must not guess
+        self.assertTrue(a._load_failed)
+        self.assertIn("base_url", a.unavailable_reason)
+
+    def test_unavailable_when_alias_not_served(self):
+        from scripts.photo_judge_bakeoff_adapters import ChatJudgeAdapter
+        with mock.patch.object(ChatJudgeAdapter, "_list_models",
+                               return_value=["maez-vision"]):
+            a = ChatJudgeAdapter(base_url="http://127.0.0.1:8082",
+                                 expected_alias="maez-judge")
+        self.assertTrue(a._load_failed)
+        self.assertIn("maez-judge", a.unavailable_reason)   # expected named
+        self.assertIn("maez-vision", a.unavailable_reason)  # actually-served named
+
+    def test_available_when_alias_served_reports_actual(self):
+        from scripts.photo_judge_bakeoff_adapters import ChatJudgeAdapter
+        with mock.patch.object(ChatJudgeAdapter, "_list_models",
+                               return_value=["maez-judge"]):
+            a = ChatJudgeAdapter(base_url="http://127.0.0.1:8081",
+                                 expected_alias="maez-judge")
+        self.assertFalse(a._load_failed)
+        self.assertEqual(a.served_alias, "maez-judge")
+        self.assertIn("maez-judge", a.model_id)   # model_id reflects the served alias
+        self.assertIn("8081", a.model_id)
+
+    def test_runner_meta_carries_base_url_and_served_alias(self):
+        import scripts.photo_judge_bakeoff as r
+        from scripts.photo_judge_bakeoff_adapters import ChatJudgeAdapter
+        with mock.patch.object(ChatJudgeAdapter, "_list_models",
+                               return_value=["maez-judge"]), \
+             mock.patch.object(ChatJudgeAdapter, "_raw_predict",
+                               return_value="grounded"):
+            a = ChatJudgeAdapter(base_url="http://127.0.0.1:8081",
+                                 expected_alias="maez-judge")
+            aggs = r.run_candidate(a, r.load_corpus(str(CORPUS)))
+        meta = aggs[0]["meta"]
+        self.assertEqual(meta["base_url"], "http://127.0.0.1:8081")
+        self.assertEqual(meta["served_alias"], "maez-judge")
+
+
 if __name__ == "__main__":
     unittest.main()

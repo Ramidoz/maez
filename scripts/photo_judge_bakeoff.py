@@ -174,6 +174,10 @@ def run_candidate(adapter, rows):
         "revision": getattr(adapter, "revision", None),
         "adapter_version": ADAPTER_VERSION,
         "device": getattr(adapter, "device", "cpu"),
+        # For server-backed candidates (ChatJudge): the ACTUAL endpoint + the
+        # served alias verified at load — so the report can't mislabel the model.
+        "base_url": getattr(adapter, "base_url", None),
+        "served_alias": getattr(adapter, "served_alias", None),
         "unavailable_reason": adapter.unavailable_reason,
         "sha256": getattr(adapter, "sha256", None),
     }

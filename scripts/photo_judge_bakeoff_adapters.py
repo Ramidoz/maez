@@ -185,14 +185,40 @@ class ThinknCheckAdapter(CandidateAdapter):
 class ChatJudgeAdapter(CandidateAdapter):
     name = "chatjudge"
     score_based = False   # yes/no
-    model_id = "gemma-3-4b-cpu"   # an already-benchmarked chat-server judge
+    model_id = "chatjudge (unconfigured)"  # set to the served alias at load
 
-    def __init__(self, threshold=None, base_url="http://127.0.0.1:8082"):
-        self._base_url = base_url   # a BAKEOFF endpoint, never the live judge
+    def __init__(self, threshold=None, base_url=None, expected_alias="maez-judge"):
+        # NO hardcoded port: a wrong endpoint could benchmark the vision server
+        # under a judge label (e.g. :8082 serves maez-vision here). base_url must
+        # be given explicitly, and the SERVED alias is verified at load.
+        self.base_url = base_url
+        self.expected_alias = expected_alias
+        self.served_alias = None
         super().__init__(threshold=threshold)
 
+    @staticmethod
+    def _list_models(base_url):
+        import json as _json
+        import urllib.request
+        req = urllib.request.Request(base_url.rstrip("/") + "/v1/models")
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = _json.loads(r.read())
+        return [m.get("id") for m in data.get("data", [])]
+
     def _load(self):
-        return self._base_url   # connectivity verified lazily in _raw_predict
+        if not self.base_url:
+            raise RuntimeError(
+                "ChatJudge requires an explicit base_url (a bakeoff judge "
+                "endpoint); refusing to guess a port")
+        served = self._list_models(self.base_url)
+        if self.expected_alias not in served:
+            raise RuntimeError(
+                f"served models {served} at {self.base_url} do not include "
+                f"expected alias '{self.expected_alias}' — refusing to benchmark "
+                f"the wrong model")
+        self.served_alias = self.expected_alias
+        self.model_id = f"chatjudge:{self.expected_alias}@{self.base_url}"
+        return self.base_url
 
     def _raw_predict(self, premise, hypothesis):
         import json as _json
@@ -202,12 +228,12 @@ class ChatJudgeAdapter(CandidateAdapter):
             "Does the claim CONTRADICT the evidence? Answer exactly "
             "'contradicts' or 'grounded'.")
         body = _json.dumps({
-            "model": "maez-judge",
+            "model": self.expected_alias,   # the VERIFIED served alias
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0,
         }).encode()
         req = urllib.request.Request(
-            self._base_url.rstrip("/") + "/v1/chat/completions",
+            self.base_url.rstrip("/") + "/v1/chat/completions",
             data=body, headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=30) as r:
             txt = _json.loads(r.read())["choices"][0]["message"]["content"]
