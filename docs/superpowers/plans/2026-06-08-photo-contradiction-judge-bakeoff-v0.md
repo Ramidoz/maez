@@ -597,6 +597,19 @@ class Aggregator(unittest.TestCase):
         agg = aggregate_candidate("x", rows, verdicts, meta={})
         self.assertEqual(agg["missed_must_catch"], ["c1"])
 
+    def test_error_grade_missed_not_false_flag_and_counted(self):
+        from scripts.photo_judge_bakeoff import aggregate_candidate
+        rows = self._rows()  # c1 numeric/contradicts/must, c2 entity/contra, g1 grounded
+        verdicts = {"c1": ("error", 0.1),       # contradiction + error → missed
+                    "c2": ("contradicts", 0.2),  # caught
+                    "g1": ("error", 0.3)}         # grounded + error → NOT a false flag
+        agg = aggregate_candidate("x", rows, verdicts, meta={})
+        self.assertEqual(agg["error_count"], 2)
+        self.assertEqual(agg["catch_rate"], 0.5)        # c2 caught; c1 errored = missed
+        self.assertEqual(agg["false_flag_rate"], 0.0)   # g1 error is NOT a false flag
+        self.assertIn("c1", agg["missed_must_catch"])   # must_catch + errored = missed
+        self.assertEqual(agg["per_stratum"]["grounded_control"]["errors"], 1)
+
     def test_zero_candidates_report(self):
         from scripts.photo_judge_bakeoff import build_report
         report = build_report([])   # no candidate aggregates
@@ -635,29 +648,37 @@ def _pct(xs: list[float], p: float) -> float | None:
 
 
 def aggregate_candidate(name, rows, verdicts, meta):
-    """verdicts: {id: (label, latency_s)}. rows: corpus rows. Returns one
-    candidate's aggregate. A 'contradicts' case is CAUGHT iff graded
-    'contradicts'. A 'grounded' case is FALSE-FLAGGED iff graded 'contradicts'."""
+    """verdicts: {id: (label, latency_s)}. label ∈ {grounded, contradicts, error}.
+    A 'contradicts' case is CAUGHT iff graded 'contradicts'. A 'grounded' case is
+    FALSE-FLAGGED iff graded 'contradicts'. A per-case 'error' (predict raised for
+    that one case while the candidate is otherwise runnable) is NEITHER caught nor
+    a false flag — it is counted in errors, and for a must_catch contradiction it
+    counts as MISSED (it != 'contradicts')."""
+    def graded(r):
+        return verdicts.get(r["id"], ("", 0))[0]
     contra = [r for r in rows if r["expected"] == "contradicts"]
     grounded = [r for r in rows if r["expected"] == "grounded"]
-    caught = [r for r in contra if verdicts.get(r["id"], ("", 0))[0] == "contradicts"]
-    flagged = [r for r in grounded if verdicts.get(r["id"], ("", 0))[0] == "contradicts"]
+    caught = [r for r in contra if graded(r) == "contradicts"]
+    flagged = [r for r in grounded if graded(r) == "contradicts"]
+    errored = [r for r in rows if graded(r) == "error"]
     missed_must = [r["id"] for r in contra
-                   if r["must_catch"]
-                   and verdicts.get(r["id"], ("", 0))[0] != "contradicts"]
+                   if r["must_catch"] and graded(r) != "contradicts"]
     per_stratum: dict[str, dict] = {}
     for r in rows:
         s = per_stratum.setdefault(r["stratum"], {
             "contradiction_n": 0, "caught": 0, "catch_rate": None,
-            "grounded_n": 0, "false_flags": 0, "false_flag_rate": None})
-        graded = verdicts.get(r["id"], ("", 0))[0]
+            "grounded_n": 0, "false_flags": 0, "false_flag_rate": None,
+            "errors": 0})
+        g = graded(r)
+        if g == "error":
+            s["errors"] += 1
         if r["expected"] == "contradicts":
             s["contradiction_n"] += 1
-            if graded == "contradicts":
+            if g == "contradicts":
                 s["caught"] += 1
         else:  # grounded
             s["grounded_n"] += 1
-            if graded == "contradicts":
+            if g == "contradicts":
                 s["false_flags"] += 1
     for s in per_stratum.values():
         if s["contradiction_n"]:
@@ -670,6 +691,8 @@ def aggregate_candidate(name, rows, verdicts, meta):
         "runnable": True,
         "catch_rate": round(len(caught) / len(contra), 4) if contra else None,
         "false_flag_rate": round(len(flagged) / len(grounded), 4) if grounded else None,
+        "error_count": len(errored),
+        "error_rate": round(len(errored) / len(rows), 4) if rows else None,
         "missed_must_catch": missed_must,
         "per_stratum": per_stratum,
         "latency": {"p50": _pct(lat, 50), "p95": _pct(lat, 95),
@@ -682,13 +705,13 @@ def build_report(aggregates: list[dict]) -> dict:
     """Render the frontier report. aggregates may be empty or all-unavailable."""
     runnable = [a for a in aggregates if a.get("runnable")]
     lines = ["# Photo-Contradiction Judge Bakeoff", ""]
-    lines.append("| candidate | runnable | catch | false-flag | p50 s | p95 s | threshold | device | sha256 |")
-    lines.append("|---|---|---:|---:|---:|---:|---|---|---|")
+    lines.append("| candidate | runnable | catch | false-flag | errors | p50 s | p95 s | threshold | device | sha256 |")
+    lines.append("|---|---|---:|---:|---:|---:|---:|---|---|---|")
     for a in aggregates:
         m = a.get("meta", {})
-        lines.append("| {} | {} | {} | {} | {} | {} | {} | {} | {} |".format(
+        lines.append("| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |".format(
             a["name"], a.get("runnable"),
-            a.get("catch_rate"), a.get("false_flag_rate"),
+            a.get("catch_rate"), a.get("false_flag_rate"), a.get("error_count"),
             a.get("latency", {}).get("p50"), a.get("latency", {}).get("p95"),
             m.get("threshold"), m.get("device"),
             (m.get("sha256") or "")[:12] or m.get("unavailable_reason", "")))
@@ -829,6 +852,35 @@ class RunnerMain(unittest.TestCase):
         self.assertEqual(len(aggs), len(THRESHOLD_GRID))
         self.assertEqual({a["name"] for a in aggs},
                          {f"fakescore@{t}" for t in THRESHOLD_GRID})
+
+    def test_per_case_error_does_not_crash_the_sweep(self):
+        # A per-case predict() failure (score None) must NOT abort the otherwise
+        # runnable candidate's threshold sweep — it is recorded as an error.
+        import scripts.photo_judge_bakeoff as r
+        from scripts.photo_judge_bakeoff_adapters import CandidateAdapter
+
+        class FlakyScore(CandidateAdapter):
+            name = "flaky"
+            score_based = True
+            def _load(self): return object()
+            def _raw_predict(self, premise, hypothesis):
+                if "boom" in hypothesis:
+                    raise RuntimeError("model OOM on this case")
+                return 0.1  # low → contradicts
+
+        rows = [
+            {"id": "ok1", "stratum": "numeric_ocr", "premise": "p", "reply": "x",
+             "hypothesis": "fine", "expected": "contradicts", "must_catch": False,
+             "source": "t"},
+            {"id": "err1", "stratum": "entity_title", "premise": "p", "reply": "x",
+             "hypothesis": "boom", "expected": "contradicts", "must_catch": False,
+             "source": "t"},
+        ]
+        aggs = r.run_candidate(FlakyScore(threshold=None), rows)  # must NOT raise
+        a0 = aggs[0]
+        self.assertTrue(a0["runnable"])          # partial failure ≠ unavailable
+        self.assertEqual(a0["error_count"], 1)   # err1 recorded as a per-case error
+        self.assertEqual(a0["catch_rate"], 0.5)  # ok1 caught; err1 errored = missed
 ```
 
 - [ ] **Step 2: Run to verify it fails**
@@ -874,13 +926,19 @@ def run_candidate(adapter, rows):
     if adapter.score_based:
         aggs = []
         for thr in THRESHOLD_GRID:
-            verdicts = {cid: (score_to_label(score, thr), lat)
-                        for cid, (lbl, score, lat) in raw.items()}
+            verdicts = {}
+            for cid, (lbl, score, lat) in raw.items():
+                if lbl == "unavailable" or score is None:
+                    verdicts[cid] = ("error", lat)   # per-case predict failure
+                else:
+                    verdicts[cid] = (score_to_label(score, thr), lat)
             aggs.append(aggregate_candidate(
                 f"{adapter.name}@{thr}", rows, verdicts,
                 {**base_meta, "threshold": thr}))
         return aggs
-    verdicts = {cid: (lbl, lat) for cid, (lbl, score, lat) in raw.items()}
+    # label-native: a per-case "unavailable" is a per-case error, not a verdict
+    verdicts = {cid: (("error" if lbl == "unavailable" else lbl), lat)
+                for cid, (lbl, score, lat) in raw.items()}
     return [aggregate_candidate(adapter.name, rows, verdicts,
                                 {**base_meta, "threshold": None})]
 
@@ -1165,4 +1223,11 @@ through a red test (the fetch-file assertion moved to Task 6); (4) concrete-adap
 patch `_load` at the CLASS level before instantiation, so no real model lib is imported;
 (5) per-stratum now reports contradiction_n/caught/catch_rate + grounded_n/false_flags/
 false_flag_rate; (6) the fetch helper has a real argparse CLI and an honest smoke field
-(`skipped` by default, `ok`/`failed: …` with a hook) — no "skipped-or-ok" hand-wave.
+(`skipped` by default, `ok`/`failed: …` with a hook) — no "skipped-or-ok" hand-wave;
+(7) per-case predict failures no longer crash the sweep — `run_candidate` maps a
+`None`-score / per-case `unavailable` to the grade `"error"` (never `score_to_label(None)`),
+and `aggregate_candidate` treats `error` as a MISSED contradiction (lowers catch_rate, and
+a must_catch error is in `missed_must_catch`), NOT a false flag on grounded, surfacing it
+as `error_count`/`error_rate` + an `errors` report column. A `test_per_case_error_does_not
+_crash_the_sweep` test locks the path. A candidate is `unavailable` only when EVERY case
+fails (load failure); partial failures stay runnable with recorded errors.
