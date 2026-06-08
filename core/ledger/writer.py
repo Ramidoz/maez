@@ -18,7 +18,7 @@ Enablement:
       - ``"1"`` / ``"true"`` (case-insensitive, whitespace stripped) → enabled.
       - ``"0"`` / ``"false"`` / ``"no"`` / ``"off"`` / empty → disabled, silent.
       - Any other non-empty value → disabled, ONE warning per instance via
-        the ``core.ledger.writer`` logger naming ``MAEZ_LEDGER_WRITES``.
+        the ``core.ledger.writes_flag`` logger naming ``MAEZ_LEDGER_WRITES``.
     A disabled writer is a silent no-op: ``write_turn`` returns ``None``
     without validating the payload and without touching the DB.
 

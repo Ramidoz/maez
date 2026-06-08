@@ -313,13 +313,16 @@ def ledger_is_initialized(db_path: str) -> bool:
     """Strict, read-only proof that db_path is a REAL ledger.
 
     True only if: meta + turns tables exist; the canonical genesis row is
-    present (turns.turn_id='genesis'); meta.genesis_hash and meta.last_chain_hash
-    are present; AND the genesis row's chain_hash equals BOTH meta values (on a
-    freshly-migrated ledger all three are the same canonical genesis hash). This
-    rejects a half-built / corrupt notebook, not merely an empty one.
+    present (turns.turn_id='genesis'); meta.genesis_hash equals the genesis row's
+    chain_hash (the immutable anchor); and meta.last_chain_hash is present AND
+    points to an existing turns.chain_hash. NOTE: last_chain_hash ADVANCES with
+    every write — it must NOT be required to equal the genesis hash (that would
+    falsely mark a written-to ledger uninitialized). This rejects a half-built /
+    corrupt notebook, not merely an empty one.
 
     Opens read-only (never creates the file). Returns False — never raises — on
-    a missing/zero-byte/corrupt DB, missing tables/rows/keys, or a hash mismatch.
+    a missing/zero-byte/corrupt DB, missing tables/rows/keys, a genesis_hash
+    mismatch, or a last_chain_hash that points to no existing turn.
     """
     if not os.path.exists(db_path) or os.path.getsize(db_path) == 0:
         return False
