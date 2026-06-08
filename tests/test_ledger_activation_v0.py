@@ -198,5 +198,16 @@ class InitCLI(unittest.TestCase):
         self.assertTrue(migrate.ledger_is_initialized(db))
 
 
+class NoDaemonAutoInit(unittest.TestCase):
+    def test_daemon_does_not_auto_initialize_the_ledger(self):
+        # Initialization is a deliberate OWNER act (the CLI). The daemon must
+        # never silently build the production ledger at startup. This guard locks
+        # that in so a future change can't quietly start auto-initializing.
+        src = Path("/home/rohit/maez-wt-ledger/daemon/maez_daemon.py").read_text()
+        self.assertNotIn("migrate.run", src)
+        self.assertNotIn("core.ledger.init", src)
+        self.assertNotIn("ledger_init", src)
+
+
 if __name__ == "__main__":
     unittest.main()
