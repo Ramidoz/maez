@@ -5986,11 +5986,13 @@ class MaezDaemon:
                     _reply_path = ReplyPath.FOCUSED
                     logger.info(
                         "photo_focused_synthesis surface=%s working_set_chars=%s "
-                        "cited=%s reply_chars=%d",
+                        "cited=%s reply_chars=%d receipt=%s turn_id=%s",
                         source,
                         getattr(_photo_result, "working_set_chars", "?"),
                         len(getattr(_photo_result, "cited_ids", []) or []),
                         len(reply),
+                        getattr(_photo_result, "receipt_reason", None),
+                        _user_msg_turn_id,
                     )
             if not _focused_used and _reply_decision.mode is ReplyMode.FOCUSED:
                 _focused_started = time.monotonic()

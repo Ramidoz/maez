@@ -136,6 +136,16 @@ class PhotoSynthesisLivesInsideThePipeline(unittest.TestCase):
         )
         self.assertIn("if photo_analysis", body)
 
+    def test_photo_log_is_trace_linked_with_receipt(self):
+        # Photo Honesty Receipt v0: the photo_focused_synthesis log must carry the
+        # receipt reason AND the turn id, so "what happened to this photo reply?"
+        # is answerable by id (telemetry-only, trace-linked).
+        body = _handle_message_body()
+        self.assertIn("receipt=", body)
+        self.assertIn("turn_id=", body)
+        self.assertIn("receipt_reason", body)       # reads it off the result
+        self.assertIn("_user_msg_turn_id", body)    # the trace key
+
 
 class AdapterDoesNotImportLowLevelAudit(unittest.TestCase):
     def test_adapter_has_no_single_line_self_claim_audit_import(self):
