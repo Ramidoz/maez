@@ -150,10 +150,11 @@ class PredicateDoesNotFork(unittest.TestCase):
     def test_writer_and_reconcile_delegate_to_helper(self):
         from core.ledger import reconcile, writes_flag
         from core.ledger.writer import LedgerWriter
+        wp = str(Path(tempfile.mkdtemp()) / "w.db")  # LedgerWriter requires db_path
         for v in ("1", "true", "0", "", "off", "garbage"):
             with mock.patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": v}):
                 expected = writes_flag.ledger_writes_enabled()
-                self.assertEqual(LedgerWriter().is_enabled(), expected, v)
+                self.assertEqual(LedgerWriter(wp).is_enabled(), expected, v)
                 self.assertEqual(reconcile._writes_enabled(), expected, v)
 
     def test_writer_module_no_longer_defines_value_sets(self):
@@ -246,15 +247,40 @@ class LedgerIsInitialized(unittest.TestCase):
         Path(zero).touch()
         self.assertFalse(migrate.ledger_is_initialized(zero))      # 0 bytes
 
-    def test_false_on_hash_mismatch(self):
+    def test_true_after_one_real_write(self):
+        # LIFECYCLE: last_chain_hash advances on write — a written-to ledger must
+        # STILL be initialized. This catches the bug of requiring last==genesis.
+        import os as _os
         from core.ledger import migrate
-        p = self._fresh("tamper")
+        from core.ledger.writer import try_write_turn
+        p = self._fresh("written")
+        migrate.run(p)
+        with mock.patch.dict(_os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            self.assertTrue(try_write_turn(p, "user_message", "hello",
+                                           surface="telegram_surface", parent_turn_id=None))
+        self.assertTrue(migrate.ledger_is_initialized(p))          # still a real ledger
+
+    def test_false_on_last_chain_hash_dangling(self):
+        # Head pointer tampered to reference no existing turn → corrupt → False.
+        from core.ledger import migrate
+        p = self._fresh("dangling")
         migrate.run(p)
         conn = sqlite3.connect(p)
         conn.execute("UPDATE meta SET value='deadbeef' WHERE key='last_chain_hash'")
         conn.commit()
         conn.close()
-        self.assertFalse(migrate.ledger_is_initialized(p))         # half-built/corrupt fails
+        self.assertFalse(migrate.ledger_is_initialized(p))
+
+    def test_false_on_genesis_hash_mismatch(self):
+        # Immutable anchor tampered → False.
+        from core.ledger import migrate
+        p = self._fresh("badanchor")
+        migrate.run(p)
+        conn = sqlite3.connect(p)
+        conn.execute("UPDATE meta SET value='deadbeef' WHERE key='genesis_hash'")
+        conn.commit()
+        conn.close()
+        self.assertFalse(migrate.ledger_is_initialized(p))
 
     def test_false_on_missing_genesis_row(self):
         from core.ledger import migrate
@@ -325,10 +351,18 @@ def ledger_is_initialized(db_path: str) -> bool:
         }
         if "genesis_hash" not in meta or "last_chain_hash" not in meta:
             return False
-        return (
-            meta["genesis_hash"] == genesis_chain_hash
-            and meta["last_chain_hash"] == genesis_chain_hash
-        )
+        # Genesis anchor is immutable: meta.genesis_hash == the genesis row's hash.
+        if meta["genesis_hash"] != genesis_chain_hash:
+            return False
+        # Head pointer MOVES with every write — it must point to a REAL turn, NOT
+        # necessarily the genesis hash. Requiring last_chain_hash == genesis would
+        # falsely mark a written-to ledger uninitialized (verified: after one write
+        # last_chain_hash != genesis but still indexes a real turn).
+        head = conn.execute(
+            "SELECT 1 FROM turns WHERE chain_hash = ?",
+            (meta["last_chain_hash"],),
+        ).fetchone()
+        return head is not None
     except Exception:
         return False
     finally:
@@ -362,6 +396,8 @@ git commit -m "feat(ledger): ledger_is_initialized — strict read-only 'noteboo
 Add to `tests/test_ledger_activation_v0.py`:
 
 ```python
+# evidence_envelope shape is the SAME one tests/test_model_reply_persistence.py uses
+# and is VERIFIED to write on an initialized+enabled ledger (returns a real uuid).
 _PERSIST_KW = dict(
     raw_text="audited reply text",
     surface="telegram_surface",

@@ -53,18 +53,24 @@ At the top of the persistence/marker path, **before** any `sqlite3.connect` or
 A cheap, **read-only** check (`file:{path}?mode=ro`, like `reconcile._read_era`).
 "Some tables exist" must NOT pass. Returns `True` only if ALL hold:
 - `meta` and `turns` tables exist;
-- the canonical **genesis** row is present (`turns.turn_id = 'genesis'`);
-- `meta.genesis_hash` is present;
-- `meta.last_chain_hash` is present;
-- **consistency:** the genesis row's `chain_hash` **equals** `meta.genesis_hash`
-  **and** `meta.last_chain_hash` (on a freshly-migrated ledger all three are the
-  same canonical genesis hash — verified empirically). This rejects a half-built or
-  corrupt notebook, not just an empty one.
+- the canonical **genesis** row is present (`turns.turn_id = 'genesis'`) with a `chain_hash`;
+- **genesis anchor (immutable):** `meta.genesis_hash` **equals** the genesis row's
+  `chain_hash`. This is the consistency proof that it's a real ledger.
+- **head pointer (moves):** `meta.last_chain_hash` is present **and points to an
+  existing `turns.chain_hash`**.
+
+⚠️ **`last_chain_hash` ADVANCES with every write** — it must NOT be required to equal
+the genesis hash. On a fresh ledger it equals the genesis hash; after the first real
+turn it moves to the newest turn's hash. Verified empirically: after one write,
+`last_chain_hash` ≠ genesis but still points to a real turn. Requiring
+`last_chain_hash == genesis_hash` would falsely classify a written-to (healthy)
+ledger as *uninitialized* and silently stop persistence — the bug this correction
+prevents. So the head check is "points to a real turn," not "equals genesis."
 
 Returns `False` — **never raises** — on a zero-byte file, missing tables,
-locked/corrupt DB, missing genesis, missing meta keys, or a hash mismatch. Opens
-**read-only** (must not create the file). Lives in `core/ledger/migrate.py` (it owns
-the schema's shape).
+locked/corrupt DB, missing genesis, missing meta keys, a `genesis_hash` mismatch, or
+a `last_chain_hash` that points to no existing turn. Opens **read-only** (must not
+create the file). Lives in `core/ledger/migrate.py` (it owns the schema's shape).
 
 ### 4. Init CLI: `python -m core.ledger.init`
 The command `python -m core.ledger.init` runs **`core/ledger/init.py`** (NOT
@@ -111,11 +117,13 @@ yes → write marker / model reply with real trace ids (as today).
 4. **`ledger_writes_enabled()`** parses true / false / unrecognized (→ False + one
    warning) consistently; `writer.is_enabled()` and `reconcile._writes_enabled()`
    delegate to it (assert same result — no fork).
-5. **`ledger_is_initialized`:** True on a migrated temp DB; **False** on zero-byte,
-   empty, missing-`genesis`, missing-`meta.genesis_hash`, missing-`meta.last_chain_hash`,
-   and **hash-mismatch** DBs (e.g. a tampered `meta.last_chain_hash` ≠ genesis row
-   `chain_hash` → False, so a half-built/corrupt notebook fails); does **not** raise on
-   a corrupt/zero-byte file; opens read-only (does not create a missing file).
+5. **`ledger_is_initialized`:** True on a migrated temp DB; **True after one real
+   write** (migrate → enable → `try_write_turn` → still True — the lifecycle test that
+   catches the `last_chain_hash`-moves bug); **False** on zero-byte, empty,
+   missing-`genesis`, missing-`meta.genesis_hash`, missing-`meta.last_chain_hash`, a
+   tampered `genesis_hash` (≠ genesis row), and a tampered `last_chain_hash` that points
+   to no existing turn; does **not** raise on a corrupt/zero-byte file; opens read-only
+   (does not create a missing file).
 6. **Init CLI:** running `python -m core.ledger.init <temp>` (i.e. `core/ledger/init.py`)
    creates `meta`/`turns`/genesis, `ledger_is_initialized` is then True, prints
    content-free status, exits 0; idempotent (second run still exit 0, no duplicate
