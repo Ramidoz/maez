@@ -135,5 +135,75 @@ class ConcreteAdapters(unittest.TestCase):
             self.assertIsNone(v.score)  # no threshold for label-native
 
 
+class Aggregator(unittest.TestCase):
+    def _rows(self):
+        return [
+            {"id": "c1", "stratum": "numeric_ocr", "expected": "contradicts", "must_catch": True},
+            {"id": "c2", "stratum": "entity_title", "expected": "contradicts", "must_catch": False},
+            {"id": "g1", "stratum": "grounded_control", "expected": "grounded", "must_catch": False},
+        ]
+
+    def test_catch_falseflag_and_must_catch(self):
+        from scripts.photo_judge_bakeoff import aggregate_candidate
+        rows = self._rows()
+        # verdicts: c1 caught, c2 MISSED (graded grounded), g1 correct
+        verdicts = {
+            "c1": ("contradicts", 0.10),
+            "c2": ("grounded", 0.30),
+            "g1": ("grounded", 0.40),
+        }
+        agg = aggregate_candidate("hhem", rows, verdicts,
+                                  meta={"threshold": 0.5})
+        self.assertAlmostEqual(agg["catch_rate"], 0.5)        # 1 of 2 contradicts caught
+        self.assertEqual(agg["false_flag_rate"], 0.0)         # g1 not flagged
+        self.assertEqual(agg["missed_must_catch"], [])        # c1 (must_catch) WAS caught
+        self.assertEqual(agg["meta"]["threshold"], 0.5)
+        ps = agg["per_stratum"]
+        self.assertEqual(ps["numeric_ocr"]["contradiction_n"], 1)
+        self.assertEqual(ps["numeric_ocr"]["caught"], 1)
+        self.assertEqual(ps["numeric_ocr"]["catch_rate"], 1.0)
+        self.assertEqual(ps["entity_title"]["caught"], 0)       # c2 missed
+        self.assertEqual(ps["grounded_control"]["grounded_n"], 1)
+        self.assertEqual(ps["grounded_control"]["false_flags"], 0)
+        self.assertEqual(ps["grounded_control"]["false_flag_rate"], 0.0)
+
+    def test_missed_must_catch_is_loud(self):
+        from scripts.photo_judge_bakeoff import aggregate_candidate
+        rows = self._rows()
+        verdicts = {"c1": ("grounded", 0.9), "c2": ("contradicts", 0.1),
+                    "g1": ("grounded", 0.4)}  # c1 is must_catch and MISSED
+        agg = aggregate_candidate("x", rows, verdicts, meta={})
+        self.assertEqual(agg["missed_must_catch"], ["c1"])
+
+    def test_error_grade_missed_not_false_flag_and_counted(self):
+        from scripts.photo_judge_bakeoff import aggregate_candidate
+        rows = self._rows()  # c1 numeric/contradicts/must, c2 entity/contra, g1 grounded
+        verdicts = {"c1": ("error", 0.1),       # contradiction + error → missed
+                    "c2": ("contradicts", 0.2),  # caught
+                    "g1": ("error", 0.3)}         # grounded + error → NOT a false flag
+        agg = aggregate_candidate("x", rows, verdicts, meta={})
+        self.assertEqual(agg["error_count"], 2)
+        self.assertEqual(agg["catch_rate"], 0.5)        # c2 caught; c1 errored = missed
+        self.assertEqual(agg["false_flag_rate"], 0.0)   # g1 error is NOT a false flag
+        self.assertIn("c1", agg["missed_must_catch"])   # must_catch + errored = missed
+        self.assertEqual(agg["per_stratum"]["grounded_control"]["errors"], 1)
+
+    def test_zero_candidates_report(self):
+        from scripts.photo_judge_bakeoff import build_report
+        report = build_report([])   # no candidate aggregates
+        self.assertIn("RECOMMENDATION: none", report["text"])
+        self.assertEqual(report["aggregates"], [])
+
+    def test_unavailable_candidate_in_report(self):
+        from scripts.photo_judge_bakeoff import build_report
+        agg = {"name": "hhem", "runnable": False,
+               "meta": {"unavailable_reason": "no weights"},
+               "catch_rate": None, "false_flag_rate": None,
+               "missed_must_catch": [], "per_stratum": {}, "latency": {}}
+        report = build_report([agg])
+        self.assertIn("no weights", report["text"])
+        self.assertIn("RECOMMENDATION: none", report["text"])  # 0 runnable
+
+
 if __name__ == "__main__":
     unittest.main()
