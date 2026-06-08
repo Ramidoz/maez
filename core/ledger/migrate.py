@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 import time
 from pathlib import Path
@@ -211,5 +212,67 @@ def run(db_path: str) -> None:
         _seed_genesis(conn)
 
         conn.commit()
+    finally:
+        conn.close()
+
+
+def ledger_is_initialized(db_path: str) -> bool:
+    """Strict, read-only proof that db_path is a REAL ledger.
+
+    True only if: meta + turns tables exist; the canonical genesis row is
+    present (turns.turn_id='genesis'); meta.genesis_hash equals the genesis
+    row's chain_hash (the immutable anchor); meta.last_chain_hash is present
+    AND points to an existing turns.chain_hash.
+
+    NOTE: meta.last_chain_hash ADVANCES with every write — it must point to a
+    REAL turn, NOT necessarily the genesis hash. Requiring it to equal the
+    genesis hash would falsely mark a written-to (healthy) ledger uninitialized.
+
+    Opens read-only (never creates the file). Returns False — never raises — on
+    a missing/zero-byte/corrupt DB, missing tables/rows/keys, a genesis_hash
+    mismatch, or a last_chain_hash that points to no existing turn.
+    """
+    if not os.path.exists(db_path) or os.path.getsize(db_path) == 0:
+        return False
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except Exception:
+        return False
+    try:
+        names = {
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        if not {"meta", "turns"} <= names:
+            return False
+        gen = conn.execute(
+            "SELECT chain_hash FROM turns WHERE turn_id = 'genesis'"
+        ).fetchone()
+        if not gen or not gen[0]:
+            return False
+        genesis_chain_hash = gen[0]
+        meta = {
+            k: v
+            for (k, v) in conn.execute(
+                "SELECT key, value FROM meta WHERE key IN "
+                "('genesis_hash', 'last_chain_hash')"
+            )
+        }
+        if "genesis_hash" not in meta or "last_chain_hash" not in meta:
+            return False
+        # Genesis anchor is immutable: meta.genesis_hash == the genesis row hash.
+        if meta["genesis_hash"] != genesis_chain_hash:
+            return False
+        # Head pointer MOVES with every write — it must point to a REAL turn,
+        # NOT necessarily the genesis hash.
+        head = conn.execute(
+            "SELECT 1 FROM turns WHERE chain_hash = ?",
+            (meta["last_chain_hash"],),
+        ).fetchone()
+        return head is not None
+    except Exception:
+        return False
     finally:
         conn.close()

@@ -55,5 +55,79 @@ class PredicateDoesNotFork(unittest.TestCase):
         self.assertFalse(hasattr(r, "_TRUE_VALUES"))
 
 
+class LedgerIsInitialized(unittest.TestCase):
+    def _fresh(self, name):
+        return str(Path(tempfile.mkdtemp()) / f"{name}.db")
+
+    def test_true_on_migrated_db(self):
+        from core.ledger import migrate
+        p = self._fresh("ok")
+        migrate.run(p)
+        self.assertTrue(migrate.ledger_is_initialized(p))
+
+    def test_false_on_zero_byte_and_missing(self):
+        from core.ledger import migrate
+        missing = self._fresh("missing")
+        self.assertFalse(migrate.ledger_is_initialized(missing))   # no file
+        self.assertFalse(Path(missing).exists())                   # read-only: not created
+        zero = self._fresh("zero")
+        Path(zero).touch()
+        self.assertFalse(migrate.ledger_is_initialized(zero))      # 0 bytes
+
+    def test_true_after_one_real_write(self):
+        # LIFECYCLE: last_chain_hash advances on write — a written-to ledger must
+        # STILL be initialized. This catches the bug of requiring last==genesis.
+        import os as _os
+        from core.ledger import migrate
+        from core.ledger.writer import try_write_turn
+        p = self._fresh("written")
+        migrate.run(p)
+        with mock.patch.dict(_os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            self.assertTrue(try_write_turn(p, "user_message", "hello",
+                                           surface="telegram_surface", parent_turn_id=None))
+        self.assertTrue(migrate.ledger_is_initialized(p))          # still a real ledger
+
+    def test_false_on_last_chain_hash_dangling(self):
+        from core.ledger import migrate
+        p = self._fresh("dangling")
+        migrate.run(p)
+        conn = sqlite3.connect(p)
+        conn.execute("UPDATE meta SET value='deadbeef' WHERE key='last_chain_hash'")
+        conn.commit()
+        conn.close()
+        self.assertFalse(migrate.ledger_is_initialized(p))
+
+    def test_false_on_genesis_hash_mismatch(self):
+        from core.ledger import migrate
+        p = self._fresh("badanchor")
+        migrate.run(p)
+        conn = sqlite3.connect(p)
+        conn.execute("UPDATE meta SET value='deadbeef' WHERE key='genesis_hash'")
+        conn.commit()
+        conn.close()
+        self.assertFalse(migrate.ledger_is_initialized(p))
+
+    def test_false_on_missing_genesis_row(self):
+        # tables + meta keys exist but NO genesis row (a half-built notebook).
+        # turns is append-only, so construct this with bare tables rather than
+        # DELETE-ing from a migrated DB (which the append-only rule rejects).
+        from core.ledger import migrate
+        p = self._fresh("nogen")
+        conn = sqlite3.connect(p)
+        conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+        conn.execute("CREATE TABLE turns (turn_id TEXT, chain_hash TEXT)")
+        conn.execute("INSERT INTO meta VALUES ('genesis_hash', 'abc')")
+        conn.execute("INSERT INTO meta VALUES ('last_chain_hash', 'abc')")
+        conn.commit()
+        conn.close()
+        self.assertFalse(migrate.ledger_is_initialized(p))
+
+    def test_never_raises_on_garbage(self):
+        from core.ledger import migrate
+        p = self._fresh("garbage")
+        Path(p).write_text("this is not a sqlite database at all")
+        self.assertFalse(migrate.ledger_is_initialized(p))         # no exception
+
+
 if __name__ == "__main__":
     unittest.main()
