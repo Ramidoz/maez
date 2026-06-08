@@ -1,19 +1,32 @@
-"""Direction (b) wiring: maez_adapter routes photo turns through
-synthesize_photo_turn (bounded working set), bypassing daemon.handle_message's
-~megaprompt — with a gate and a safe fallback. Plus the clean-evidence stash.
+"""Direction (b) wiring (post-review architecture): the adapter passes the
+success-only photo analysis into daemon.handle_message, which synthesizes photo
+turns over a BOUNDED working set INSIDE its reply pipeline — so the photo reply
+still flows through strip / self-claim-audit / store_telegram / trace. The
+adapter does NOT bypass handle_message and does NOT import the low-level audit.
 """
 
 import json
 import os
+import re
 import unittest
-from types import SimpleNamespace
+from pathlib import Path
 from unittest import mock
 
 from core.egress.provenance import ProvenancedText
-from core.routing.focused_cognition import FocusedResult
 from skills.surface.maez_adapter import MaezMessageHandler
 from skills.surface.platform_base import MessageEvent, MessageType, PlatformConfig
 from skills.surface.telegram_adapter import TelegramAdapter
+
+_REPO = Path(__file__).resolve().parents[1]
+
+
+def _handle_message_body() -> str:
+    src = (_REPO / "daemon" / "maez_daemon.py").read_text()
+    start = src.find("def handle_message")
+    assert start != -1, "handle_message not found"
+    m = re.search(r"\n    def ", src[start + 20:])
+    end = start + 20 + m.start() if m else len(src)
+    return src[start:end]
 
 
 PHOTO_CHANNEL_PROMPT = ProvenancedText.owner_message_context(
@@ -63,109 +76,62 @@ def _fake_daemon(handle_capture):
             handle_capture["called"] = True
             handle_capture["text"] = text
             handle_capture["kwargs"] = kwargs
-            return "MEGAPROMPT_REPLY"
+            return "PIPELINE_REPLY"
 
     return FakeDaemon()
 
 
-class PhotoFocusedRouting(unittest.IsolatedAsyncioTestCase):
-    async def test_photo_turn_uses_focused_synthesis_not_megaprompt(self):
-        cap = {}
-        synth_calls = {}
-
-        def fake_synth(*, analysis_text, caption, surface, **_k):
-            synth_calls["analysis_text"] = analysis_text
-            synth_calls["caption"] = caption
-            synth_calls["surface"] = surface
-            return FocusedResult(
-                reply="That's the SpaceX IPO Reddit thread [E1].",
-                cited_ids=["E1"],
-                working_set_chars=10,
-            )
-
-        handler = MaezMessageHandler(_fake_daemon(cap))
-        with mock.patch(
-            "core.routing.focused_cognition.synthesize_photo_turn",
-            side_effect=fake_synth,
-        ), mock.patch.dict(os.environ, {"MAEZ_PHOTO_FOCUSED_SYNTH": "1"}):
-            reply = await handler(_photo_event())
-
-        self.assertIn("SpaceX IPO", reply)
-        self.assertNotEqual(reply, "MEGAPROMPT_REPLY")
-        self.assertNotIn("called", cap)  # daemon.handle_message NOT called
-        self.assertEqual(synth_calls["caption"], "check this")
-        self.assertIn("Reddit", synth_calls["analysis_text"])
-        self.assertEqual(synth_calls["surface"], "telegram_surface")
-
-    async def test_gate_off_falls_back_to_megaprompt(self):
+class AdapterPassesPhotoAnalysisToHandleMessage(unittest.IsolatedAsyncioTestCase):
+    async def test_passes_success_analysis_through_handle_message(self):
         cap = {}
         handler = MaezMessageHandler(_fake_daemon(cap))
-        with mock.patch(
-            "core.routing.focused_cognition.synthesize_photo_turn"
-        ) as synth, mock.patch.dict(os.environ, {"MAEZ_PHOTO_FOCUSED_SYNTH": "0"}):
-            reply = await handler(_photo_event())
-        synth.assert_not_called()
+        reply = await handler(
+            _photo_event(photo_analysis_text="Image 1: a Reddit page.")
+        )
+        # The adapter does NOT bypass handle_message — it routes through it.
         self.assertTrue(cap.get("called"))
-        self.assertEqual(reply, "MEGAPROMPT_REPLY")
+        self.assertEqual(reply, "PIPELINE_REPLY")
+        self.assertEqual(cap["kwargs"].get("photo_analysis"), "Image 1: a Reddit page.")
 
-    async def test_focused_failure_falls_back_to_megaprompt(self):
+    async def test_passes_none_when_no_successful_analysis(self):
         cap = {}
         handler = MaezMessageHandler(_fake_daemon(cap))
-        with mock.patch(
-            "core.routing.focused_cognition.synthesize_photo_turn",
-            side_effect=RuntimeError("boom"),
-        ), mock.patch.dict(os.environ, {"MAEZ_PHOTO_FOCUSED_SYNTH": "1"}):
-            reply = await handler(_photo_event())
+        await handler(_photo_event(photo_analysis_text=None))
         self.assertTrue(cap.get("called"))
-        self.assertEqual(reply, "MEGAPROMPT_REPLY")
-
-    async def test_focused_empty_falls_back_to_megaprompt(self):
-        cap = {}
-
-        def empty_synth(**_k):
-            return FocusedResult(reply="   ", cited_ids=[], working_set_chars=0)
-
-        handler = MaezMessageHandler(_fake_daemon(cap))
-        with mock.patch(
-            "core.routing.focused_cognition.synthesize_photo_turn",
-            side_effect=empty_synth,
-        ), mock.patch.dict(os.environ, {"MAEZ_PHOTO_FOCUSED_SYNTH": "1"}):
-            reply = await handler(_photo_event())
-        self.assertTrue(cap.get("called"))
-        self.assertEqual(reply, "MEGAPROMPT_REPLY")
+        self.assertIsNone(cap["kwargs"].get("photo_analysis"))
 
 
-    async def test_focused_reply_passes_through_self_claim_audit(self):
-        # Covenant: handle_message owns the anti-fabrication audit; the focused
-        # path bypasses handle_message, so it must apply the audit itself.
-        cap = {}
+class PhotoSynthesisLivesInsideThePipeline(unittest.TestCase):
+    """Structural guarantees (mirrors test_model_reply_persistence): the photo
+    synthesis runs INSIDE handle_message, before strip + store, so the reply is
+    stripped, audited, stored, traced — never bypassed."""
 
-        def fake_synth(**_k):
-            return FocusedResult(
-                reply="I searched the web and found it.",
-                cited_ids=["E1"],
-                working_set_chars=10,
-            )
+    def test_photo_synth_runs_before_strip_and_store(self):
+        body = _handle_message_body()
+        i_synth = body.find("synthesize_photo_turn")
+        i_strip = body.find("strip_tool_call_leaks")
+        i_store = body.find("store_telegram")
+        self.assertGreater(i_synth, -1, "photo synthesis not wired into handle_message")
+        self.assertGreater(i_strip, -1)
+        self.assertGreater(i_store, -1)
+        self.assertLess(i_synth, i_strip, "photo synth must precede strip")
+        self.assertLess(i_synth, i_store, "photo synth must precede store_telegram")
 
-        def fake_audit(text, surface=None):
-            return SimpleNamespace(rewritten=True, text="AUDITED_REPLY")
+    def test_photo_branch_is_gated_and_evidence_driven(self):
+        body = _handle_message_body()
+        self.assertIn("photo_analysis", body)
+        self.assertIn("photo_focused_synth_enabled", body)
 
-        handler = MaezMessageHandler(_fake_daemon(cap))
-        with mock.patch(
-            "core.routing.focused_cognition.synthesize_photo_turn",
-            side_effect=fake_synth,
-        ), mock.patch(
-            "core.self_claim_audit.audit", side_effect=fake_audit
-        ), mock.patch.dict(
-            os.environ, {"MAEZ_PHOTO_FOCUSED_SYNTH": "1"}
-        ):
-            reply = await handler(_photo_event())
-        self.assertEqual(reply, "AUDITED_REPLY")
-        self.assertNotIn("called", cap)  # still bypassed the megaprompt
+
+class AdapterDoesNotImportLowLevelAudit(unittest.TestCase):
+    def test_adapter_has_no_single_line_self_claim_audit_import(self):
+        src = (_REPO / "skills" / "surface" / "maez_adapter.py").read_text()
+        self.assertNotIn("from core.self_claim_audit import audit", src)
+        self.assertNotIn("core.self_claim_audit import audit as", src)
 
 
 class PhotoAnalysisStash(unittest.IsolatedAsyncioTestCase):
-    async def test_analyze_photo_event_stashes_clean_analysis_text(self):
+    async def test_successful_vision_stashes_clean_analysis_text(self):
         adapter = TelegramAdapter(PlatformConfig())
         event = MessageEvent(
             text="check this",
@@ -174,24 +140,38 @@ class PhotoAnalysisStash(unittest.IsolatedAsyncioTestCase):
             media_types=["image/jpeg"],
         )
 
-        async def fake_vision(image_url, user_prompt):
+        async def ok_vision(image_url, user_prompt):
             return json.dumps(
-                {
-                    "success": True,
-                    "analysis": "a Reddit page about the SpaceX IPO",
-                    "error": "",
-                }
+                {"success": True, "analysis": "a Reddit page about the SpaceX IPO", "error": ""}
             )
 
-        with mock.patch(
-            "tools.vision_tools.vision_analyze_tool", side_effect=fake_vision
-        ):
+        with mock.patch("tools.vision_tools.vision_analyze_tool", side_effect=ok_vision):
             await adapter._analyze_photo_event(event)
 
         self.assertTrue(getattr(event, "photo_analysis_text", None))
         self.assertIn("Reddit", event.photo_analysis_text)
-        # clean evidence: per-image analysis, not the injection preamble
         self.assertNotIn("Local Maez vision analysis", event.photo_analysis_text)
+
+    async def test_failed_vision_leaves_photo_analysis_text_none(self):
+        # Finding 2: a "could not see" failure is NOT evidence — must not route
+        # to focused synthesis. photo_analysis_text stays None → legacy fallback.
+        adapter = TelegramAdapter(PlatformConfig())
+        event = MessageEvent(
+            text="check this",
+            message_type=MessageType.PHOTO,
+            media_urls=["/cache/a.jpg"],
+            media_types=["image/jpeg"],
+        )
+
+        async def fail_vision(image_url, user_prompt):
+            return json.dumps({"success": False, "analysis": "", "error": "vision_call_failed"})
+
+        with mock.patch("tools.vision_tools.vision_analyze_tool", side_effect=fail_vision):
+            await adapter._analyze_photo_event(event)
+
+        self.assertIsNone(event.photo_analysis_text)
+        # the legacy injection still carries the honest "could not see" line
+        self.assertIn("could not see", str(event.channel_prompt).lower())
 
 
 if __name__ == "__main__":

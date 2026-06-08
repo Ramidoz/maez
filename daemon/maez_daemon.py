@@ -4946,6 +4946,7 @@ class MaezDaemon:
         *,
         transcript: str = "",
         context_note: str | ProvenancedText | None = None,
+        photo_analysis: "str | None" = None,
         signals_present: "list | None" = None,
         signals_absent: "list | None" = None,
         chat_history: "list | None" = None,
@@ -5940,7 +5941,47 @@ class MaezDaemon:
                 logger.debug("honest_empty record skipped: %s", _hee)
         else:
             reply = None
-            if _reply_decision.mode is ReplyMode.FOCUSED:
+            # Direction (b): a photo turn with a SUCCESSFUL local vision analysis
+            # is synthesized over a BOUNDED working set (analysis + caption +
+            # voice), NOT the full megaprompt — whose self-diagnostic
+            # "Vision: Maez cannot see" block (web_interface.py:3588) overrode the
+            # present analysis (witnessed 2026-06-07). This runs INSIDE
+            # handle_message so the reply still flows through the strip / audit /
+            # store / trace pipeline below. On empty/error it leaves reply=None
+            # and falls through to the legacy synthesis (honest fallback).
+            _photo_synth = None
+            if photo_analysis:
+                from core.routing.focused_cognition import (
+                    photo_focused_synth_enabled as _photo_focused_synth_enabled,
+                    synthesize_photo_turn as _synthesize_photo_turn,
+                )
+
+                if _photo_focused_synth_enabled():
+                    _photo_synth = _synthesize_photo_turn
+            if _photo_synth is not None:
+                try:
+                    _photo_result = _synthesize_photo_turn(
+                        analysis_text=photo_analysis,
+                        caption=text,
+                        surface=source,
+                    )
+                    _photo_reply = (_photo_result.reply or "").strip()
+                except Exception as _photo_exc:
+                    logger.warning("photo focused synthesis failed: %s", _photo_exc)
+                    _photo_reply = ""
+                if _photo_reply:
+                    reply = _photo_reply
+                    _focused_used = True
+                    _reply_path = ReplyPath.FOCUSED
+                    logger.info(
+                        "photo_focused_synthesis surface=%s working_set_chars=%s "
+                        "cited=%s reply_chars=%d",
+                        source,
+                        getattr(_photo_result, "working_set_chars", "?"),
+                        len(getattr(_photo_result, "cited_ids", []) or []),
+                        len(reply),
+                    )
+            if not _focused_used and _reply_decision.mode is ReplyMode.FOCUSED:
                 _focused_started = time.monotonic()
                 try:
                     from core.routing.focused_cognition import (

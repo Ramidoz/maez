@@ -2978,6 +2978,7 @@ class TelegramAdapter(BasePlatformAdapter):
             return
         max_images = _parse_positive_int_env("MAEZ_CHAT_PHOTO_MAX_IMAGES", 3)
         analyses: list[str] = []
+        successful_analyses: list[str] = []
         from tools.vision_tools import vision_analyze_tool
 
         for index, image_path in enumerate(event.media_urls[:max_images], start=1):
@@ -3007,6 +3008,7 @@ class TelegramAdapter(BasePlatformAdapter):
             )
             if success:
                 analyses.append(f"Image {index}: {analysis}")
+                successful_analyses.append(f"Image {index}: {analysis}")
             else:
                 analyses.append(f"Image {index}: [Maez could not see this image.]")
         overflow = max(0, len(event.media_urls) - max_images)
@@ -3015,10 +3017,12 @@ class TelegramAdapter(BasePlatformAdapter):
             analyses.append(f"+{overflow} more image{plural} not analyzed")
         if not analyses:
             return
-        # Stash the clean per-image analysis as bounded evidence for focused
-        # photo synthesis (direction b). The injection below stays for the
-        # legacy megaprompt path; this is the un-framed evidence.
-        event.photo_analysis_text = "\n".join(analyses)
+        # Stash ONLY successful per-image analyses as bounded evidence for
+        # focused photo synthesis (direction b). A "could not see" failure is
+        # NOT evidence — if no image succeeded, leave photo_analysis_text None so
+        # the turn falls back to the legacy megaprompt path (which honestly
+        # surfaces the failure via the injection below).
+        event.photo_analysis_text = "\n".join(successful_analyses) or None
         injection = (
             "Local Maez vision analysis of the attached owner-sent photo(s). "
             "This is Maez's own local perception result, not text authored by "

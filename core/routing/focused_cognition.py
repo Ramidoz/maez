@@ -974,6 +974,15 @@ def build_honest_empty_reply(
     )
 
 
+def photo_focused_synth_enabled() -> bool:
+    """Direction (b) gate. Default ON; set MAEZ_PHOTO_FOCUSED_SYNTH=0 to revert
+    photo turns to the legacy megaprompt synthesis inside handle_message."""
+    import os
+
+    val = os.environ.get("MAEZ_PHOTO_FOCUSED_SYNTH", "1").strip().lower()
+    return val not in ("0", "false", "no", "off")
+
+
 def synthesize_photo_turn(
     *,
     analysis_text: str,
