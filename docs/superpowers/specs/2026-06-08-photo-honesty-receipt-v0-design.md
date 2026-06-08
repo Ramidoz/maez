@@ -30,18 +30,27 @@ zero added latency on the good path, no memory-schema change.
 The function already does `reply = raw_reply or deterministic`, then computes
 `cited_ids` from the reply text via `_CITE_RE`. The rail slots in right after:
 
-1. **First call cites (`cited_ids` non-empty):** accept. `receipt_reason = "cited_ok"`.
-   *(Common path — no extra cost.)*
-2. **First call `cited=0`** (and the reply was the brain's, not already the
-   deterministic fallback): **retry once** with a forced-citation instruction
+**Valid photo citation** = `cited_ids == ["E1"]` (cites E1 and *only* E1). The
+one-item photo working set contains exactly one evidence item, `E1`; `_CITE_RE`
+extracts any `[E#]` label but does not know which labels exist. So a reply citing
+`[E2]` or `[E1][E2]` is *fake grounding* — it confabulated a citation to a label
+that isn't there — and must be treated as ungrounded, exactly like `cited=0`.
+"Ungrounded" below means **not** a valid photo citation (`cited_ids != ["E1"]`).
+
+1. **First call is a valid photo citation (`cited_ids == ["E1"]`):** accept.
+   `receipt_reason = "cited_ok"`. *(Common path — no extra cost.)*
+2. **First call ungrounded** (`cited_ids != ["E1"]` — empty, `[E2]`, `[E1][E2]`,
+   etc.; and the reply was the brain's, not already the deterministic fallback):
+   **retry once** with a forced-citation instruction
    (`_PHOTO_VISION_RETRY_INSTRUCTION`: "You did not cite the evidence. Every claim
-   about the photo MUST cite [E1]; if you cannot ground a claim in the analysis
-   above, do not make it.").
-   - Retry cites → `receipt_reason = "retry_recovered"`, use the retry reply.
-   - Retry still `cited=0` → **deterministic fallback** (below).
+   about the photo MUST cite [E1] (the only evidence) and no other label; if you
+   cannot ground a claim in the analysis above, do not make it.").
+   - Retry cites `[E1]` and no other evidence label (`cited_ids == ["E1"]`) →
+     `receipt_reason = "retry_recovered"`, use the retry reply.
+   - Retry still ungrounded → **deterministic fallback** (below).
 3. **Brain returned empty on the first call** (`raw_reply == ""` → already the
    deterministic): straight to `deterministic_fallback`, no wasted retry.
-4. **Retry raises / transport fails:** treat as `cited=0` → `deterministic_fallback`.
+4. **Retry raises / transport fails:** treat as ungrounded → `deterministic_fallback`.
    Never crash.
 
 ### Deterministic fallback (the floor)
@@ -93,17 +102,21 @@ house — and we say so rather than overclaiming.
 
 ## Testing (TDD)
 
-1. `cited≥1` on first try → no retry, `receipt_reason=cited_ok`.
-2. `cited=0` first, `cited≥1` on retry → `retry_recovered`, retry reply used.
-3. `cited=0` both times → `deterministic_fallback`; reply is the sight-report
+1. `cited_ids == ["E1"]` on first try → no retry, `receipt_reason=cited_ok`.
+2. Ungrounded first (`cited_ids != ["E1"]`), `cited_ids == ["E1"]` on retry →
+   `retry_recovered`, retry reply used.
+3. Ungrounded both times → `deterministic_fallback`; reply is the sight-report
    (contains `[E1]` + the analysis), **not** the wandering reply; `cited_ids==["E1"]`.
-4. **WWDC case:** a reply contradicting the evidence + `cited=0` → caught
+4. **Fake-citation case:** first reply cites `[E2]` (or `[E1][E2]`) — a label not
+   in the one-item working set → treated as **ungrounded** → retry/fallback, never
+   accepted as `cited_ok`.
+5. **WWDC case:** a reply contradicting the evidence + `cited=0` → caught
    (deterministic fallback); the wandering "2024" reply is never returned.
-5. Brain empty on first call → `deterministic_fallback` (no wasted retry).
-6. Retry raises → `deterministic_fallback` (no crash).
-7. Retry is invoked **at most once** (no infinite retry).
-8. Daemon log carries `receipt=<reason>` and `turn_id=<...>` (trace-linked).
-9. No memory-schema change (no new stored field).
+6. Brain empty on first call → `deterministic_fallback` (no wasted retry).
+7. Retry raises → `deterministic_fallback` (no crash).
+8. Retry is invoked **at most once** (no infinite retry).
+9. Daemon log carries `receipt=<reason>` and `turn_id=<...>` (trace-linked).
+10. No memory-schema change (no new stored field).
 
 ## Out of scope (Lane 2)
 
