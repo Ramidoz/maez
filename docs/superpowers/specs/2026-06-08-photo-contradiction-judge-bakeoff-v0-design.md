@@ -39,6 +39,7 @@ cover distinct failure modes (not just a count). Each case schema:
 ```json
 {
   "id": "photo_wwdc_year_contradiction_001",
+  "stratum": "real_anchor",
   "premise": "local vision analysis text",
   "reply": "full Maez reply",
   "hypothesis": "The screenshot is about WWDC2024.",
@@ -49,6 +50,9 @@ cover distinct failure modes (not just a count). Each case schema:
 }
 ```
 
+- **`stratum`** ∈ {`real_anchor`, `numeric_ocr`, `entity_title`, `grounded_control`,
+  `uncertainty_control`} — an EXPLICIT label. The loader and the "all 5 strata present"
+  test read this field; strata are NEVER inferred from `id`/`notes`.
 - **`premise`** = the local vision analysis (the evidence, E1).
 - **`reply`** = the full Maez reply (context; replies contain multiple claims).
 - **`hypothesis`** = the SINGLE claim extracted from the reply, evaluated against the
@@ -100,38 +104,81 @@ the flat `scripts/judge_bakeoff.py` convention; runner is `scripts/photo_judge_b
 invoked via `python -m scripts.photo_judge_bakeoff`). Each adapter is independently
 unit-testable with a mocked model call.
 
+## Component 2b — Threshold protocol (un-riggable)
+
+Several candidates emit a continuous score (HHEM consistency, reranker relevance, NLI
+contradiction-probability) that needs a threshold to become a `grounded`/`contradicts`
+label. Hand-picking thresholds in code would reduce the bakeoff to "which adapter got the
+friendliest cutoff." So thresholds follow a fixed, visible protocol — never silently
+tuned in code:
+
+- **Published default where one exists** (e.g. HHEM's recommended cutoff; MiniCheck's 0.5;
+  NLI argmax over entailment/neutral/contradiction needs no threshold). Use it verbatim;
+  record the source.
+- **Otherwise, sweep a small fixed grid** (e.g. `{0.3, 0.4, 0.5, 0.6, 0.7}`) and report
+  the per-threshold frontier; the recommendation names the chosen operating point. The
+  grid is fixed in the spec/config, identical for every score-based candidate — not
+  per-candidate-tuned.
+- **Binary/label candidates** (MiniCheck 0/1, ThinknCheck verdict, ChatJudge yes/no)
+  carry no threshold; recorded as `threshold: null (label-native)`.
+- **The report MUST print the threshold used for every candidate** (and, for swept ones,
+  the full grid frontier), so the operating point is visible and reproducible. A
+  candidate's catch-rate is meaningless without its threshold shown beside it.
+
 ## Component 3 — Sibling runner + frontier report (NOT a gate)
 
 A **sibling** `scripts/photo_judge_bakeoff.py` that REUSES the hard contract and report
 conventions of `scripts/judge_bakeoff.py` but **does NOT inherit its pass/fail rule**.
-Hard contract preserved verbatim: does NOT flip `MAEZ_JUDGE_BASE_URL` for the live
-daemon, does NOT edit `model.env`, does NOT start/stop/restart any systemd unit.
+Hard contract preserved verbatim, with `judge_bakeoff.py`'s "does not download models"
+clause kept explicit: the runner does NOT flip `MAEZ_JUDGE_BASE_URL` for the live daemon,
+does NOT edit `model.env`, does NOT start/stop/restart any systemd unit, and **does NOT
+download anything** — it consumes artifacts already present under `models/bakeoff/`. An
+absent artifact is recorded `unavailable`, never fetched. (Downloads live entirely in the
+separate Component 4 helper.)
 
 For each candidate × corpus → per-case `(label, latency_s)`; aggregate to:
-- **catch-rate** on `contradicts` cases, **false-flag-rate** on `grounded` cases,
+- **catch-rate** on `contradicts` cases, **false-flag-rate** on `grounded` cases, plus a
+  **per-stratum breakdown** (catch/false-flag for each of the 5 strata — cheap now that
+  `stratum` is explicit, and it reveals e.g. a verifier strong on numbers but blind to
+  titles),
 - **p50 / p95 / mean latency**,
 - **must_catch report:** if a candidate misses ANY `must_catch` case, the report calls
   it out LOUDLY (a dedicated `MISSED MUST-CATCH: <ids>` line) even if the candidate's
   aggregate looks decent. This is the frontier's conscience — a high average doesn't
   excuse missing the WWDC case or a numeric contradiction.
+- **per-candidate metadata** (recorded for every candidate, every run): `model_id`,
+  `revision`, `sha256`, `adapter_version`, `threshold` (or `null (label-native)`),
+  `device` (cpu/gpu), and `unavailable_reason` if it didn't run. Reproducibility is the
+  point — a number you can't reproduce isn't evidence.
 - a ranked **frontier** (catch × latency) + a written recommendation.
+
+**Zero-candidates-runnable case:** if every candidate is `unavailable` (nothing fetched
+yet, all loads failed), the runner still emits an honest report — the metadata table with
+each `unavailable_reason`, an empty frontier, and an explicit
+`RECOMMENDATION: none — 0/N candidates runnable; see unavailable_reason` — never a crash,
+never an empty/implied recommendation.
 
 Output: `logs/photo_judge_bakeoff/<label>.md` + `.json` (gitignored under `logs/*`).
 No `VERDICT: PASS/REJECT` on latency — latency is reported; the owner decides the bar.
 
-## Component 4 — Candidate obtain + smoke-test (execution step 1, verify-first)
+## Component 4 — Candidate obtain + smoke-test (SEPARATE helper, never the runner)
 
-Before any adapter is trusted, each candidate is obtained + smoke-tested on the box.
+Downloads live entirely OUTSIDE the runner, in a standalone helper
+`scripts/photo_judge_bakeoff_fetch.py` (+ a `docs/handoffs/…-download-runbook.md`). This
+is the ONLY component that touches the network; `scripts/photo_judge_bakeoff.py` never
+imports or invokes it and never fetches. Clean separation: **fetch = network + pinning;
+runner = pure measurement over already-present artifacts.**
+
 **Download policy (owner-set):** agent-managed HuggingFace downloads are permitted ONLY
-if they are (a) **pinned** to a specific revision, (b) **hash-recorded** (sha256 of the
-artifact captured in the runbook), (c) placed in a **non-live model cache** (e.g.
-`models/bakeoff/` — never the live `models/llamacpp/` paths the daemon reads), and
-(d) **never** started as a service or wired into env/systemd. The plan produces a
-`docs/handoffs/…-download-runbook.md` recording each pin + hash. Live wiring stays the
-owner's. (If the owner prefers the strictest breath split, the runbook is the artifact
-and the owner runs the downloads; default per owner: agent may download bakeoff
-artifacts.) A candidate that won't obtain/run is recorded `unavailable` and skipped —
-never blocks the others.
+if they are (a) **pinned** to a specific revision, (b) **hash-recorded** (sha256 of each
+artifact captured in the runbook AND in the per-candidate report metadata), (c) placed in
+a **non-live model cache** `models/bakeoff/` — never the live `models/llamacpp/` paths the
+daemon reads, and (d) **never** started as a service or wired into env/systemd. The fetch
+helper smoke-tests each artifact (one-shot load + a single predict) and records the
+result. Live wiring stays the owner's. (Strictest breath split: the runbook is the
+artifact and the owner runs the downloads; default per owner: agent may download bakeoff
+artifacts.) A candidate whose artifact is absent or fails to load is recorded
+`unavailable` by the runner and skipped — never blocks the others.
 
 ## Data flow
 
@@ -149,18 +196,24 @@ must_catch check) → ranked frontier report (md + json).
 
 ## Testing (TDD, unittest)
 
-1. **Corpus loader** — schema validation (every case has `premise`/`reply`/`hypothesis`/
-   `expected`; `expected ∈ {grounded, contradicts}`; `must_catch` bool); asserts the
-   WWDC2024 anchor case is present with `must_catch: true`; asserts all 5 strata present.
+1. **Corpus loader** — schema validation (every case has `stratum`/`premise`/`reply`/
+   `hypothesis`/`expected`; `stratum ∈` the 5-value enum; `expected ∈ {grounded,
+   contradicts}`; `must_catch` bool); asserts the WWDC2024 anchor is present with
+   `must_catch: true`; asserts **all 5 strata present read from the `stratum` field**
+   (never inferred from `id`/`notes`).
 2. **Each adapter** — mock the model call → correct `(premise, hypothesis)` mapping,
-   correct label mapping (e.g. HHEM low-score → contradicts), latency captured,
-   `unavailable` path on a load failure. No real model in unit tests.
-3. **Aggregator** — catch-rate / false-flag-rate / percentile math on a fixed fixture;
-   **must_catch loud-callout fires when a must_catch case is missed** (the conscience
-   test); frontier ranking order.
-4. **Hard-contract guard** — structural test that `photo_judge_bakeoff.py` contains no
-   `model.env` write, no `systemctl`, no live-`MAEZ_JUDGE_BASE_URL` mutation (mirrors
-   the judge_bakeoff contract).
+   correct label mapping (e.g. HHEM low-score → contradicts), **threshold applied per the
+   protocol** (a score either side of the threshold maps to the right label), latency
+   captured, `unavailable` path on a load failure. No real model in unit tests.
+3. **Aggregator** — catch-rate / false-flag-rate / per-stratum breakdown / percentile
+   math on a fixed fixture; **must_catch loud-callout fires when a must_catch case is
+   missed** (the conscience test); **threshold + sha256 + metadata present in the report
+   for every candidate**; frontier ranking order; **zero-candidates-runnable → honest
+   report** (metadata table + `RECOMMENDATION: none`, no crash).
+4. **Hard-contract guard** — structural test that `photo_judge_bakeoff.py` (the runner)
+   contains no `model.env` write, no `systemctl`, no live-`MAEZ_JUDGE_BASE_URL` mutation,
+   and **no network/download** (no `huggingface_hub` / `requests`-fetch / import of the
+   fetch helper) — downloads live only in `photo_judge_bakeoff_fetch.py`.
 
 Real model runs are an execution + witness step (downloads + a real bakeoff run
 producing the report), not unit tests.
