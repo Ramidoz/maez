@@ -205,5 +205,121 @@ class Aggregator(unittest.TestCase):
         self.assertIn("RECOMMENDATION: none", report["text"])  # 0 runnable
 
 
+class HardContract(unittest.TestCase):
+    """Scopes to the RUNNER FILE ONLY (photo_judge_bakeoff.py). It must NEVER
+    inspect photo_judge_bakeoff_fetch.py, whose job IS huggingface_hub/network.
+    Tests DANGEROUS BEHAVIOR structurally (imports / env-assignment / file-write),
+    not string mentions — the runner docstring legitimately NAMES model.env /
+    MAEZ_JUDGE_BASE_URL / the fetch helper while promising not to TOUCH them."""
+
+    def _runner_ast(self):
+        import ast
+        return ast.parse((ROOT / "scripts" / "photo_judge_bakeoff.py").read_text())
+
+    def test_runner_imports_no_network_or_fetch_or_subprocess(self):
+        import ast
+        mods = set()
+        for n in ast.walk(self._runner_ast()):
+            if isinstance(n, ast.Import):
+                mods |= {a.name.split(".")[0] for a in n.names}
+            elif isinstance(n, ast.ImportFrom) and n.module:
+                mods.add(n.module.split(".")[0])
+                self.assertNotIn("photo_judge_bakeoff_fetch", n.module,
+                                 "runner must not import the fetch helper")
+        self.assertNotIn("huggingface_hub", mods)
+        self.assertNotIn("subprocess", mods)  # → cannot shell out to systemctl
+
+    def test_runner_never_assigns_live_judge_url(self):
+        import ast
+        for n in ast.walk(self._runner_ast()):
+            if isinstance(n, ast.Assign):
+                for t in n.targets:
+                    if (isinstance(t, ast.Subscript)
+                            and isinstance(t.value, ast.Attribute)
+                            and t.value.attr == "environ"):
+                        key = getattr(t.slice, "value", None)
+                        self.assertNotEqual(
+                            key, "MAEZ_JUDGE_BASE_URL",
+                            "runner must not mutate the live judge URL")
+
+    def test_runner_writes_no_model_env(self):
+        import ast
+        for n in ast.walk(self._runner_ast()):
+            if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "open":
+                consts = [a for a in n.args if isinstance(a, ast.Constant)]
+                if (len(consts) >= 2 and isinstance(consts[1].value, str)
+                        and "w" in consts[1].value):
+                    self.assertNotIn("model.env", str(consts[0].value))
+
+
+class RunnerMain(unittest.TestCase):
+    def test_main_runs_corpus_through_a_fake_adapter_and_writes_report(self):
+        import scripts.photo_judge_bakeoff as r
+        from scripts.photo_judge_bakeoff_adapters import CandidateAdapter
+
+        class FakeAll(CandidateAdapter):
+            name = "fakeall"
+            score_based = False
+            def _load(self): return object()
+            def _raw_predict(self, premise, hypothesis): return "contradicts"
+
+        import tempfile
+        outdir = tempfile.mkdtemp()
+        rc = r.main(["--label", "t", "--out-dir", outdir,
+                     "--corpus", str(CORPUS)],
+                    adapters=[FakeAll(threshold=None)])
+        self.assertEqual(rc, 0)
+        md = list(Path(outdir).glob("*.md"))
+        self.assertTrue(md)
+        self.assertIn("RECOMMENDATION", md[0].read_text())
+
+    def test_score_based_candidate_expands_across_grid(self):
+        # un-riggable: a score-based candidate yields ONE row PER grid threshold.
+        import scripts.photo_judge_bakeoff as r
+        from scripts.photo_judge_bakeoff_adapters import (
+            CandidateAdapter, THRESHOLD_GRID)
+
+        class FakeScore(CandidateAdapter):
+            name = "fakescore"
+            score_based = True
+            def _load(self): return object()
+            def _raw_predict(self, premise, hypothesis): return 0.6
+
+        rows = r.load_corpus(str(CORPUS))
+        aggs = r.run_candidate(FakeScore(threshold=None), rows)
+        self.assertEqual(len(aggs), len(THRESHOLD_GRID))
+        self.assertEqual({a["name"] for a in aggs},
+                         {f"fakescore@{t}" for t in THRESHOLD_GRID})
+
+    def test_per_case_error_does_not_crash_the_sweep(self):
+        # A per-case predict() failure (score None) must NOT abort the otherwise
+        # runnable candidate's threshold sweep — it is recorded as an error.
+        import scripts.photo_judge_bakeoff as r
+        from scripts.photo_judge_bakeoff_adapters import CandidateAdapter
+
+        class FlakyScore(CandidateAdapter):
+            name = "flaky"
+            score_based = True
+            def _load(self): return object()
+            def _raw_predict(self, premise, hypothesis):
+                if "boom" in hypothesis:
+                    raise RuntimeError("model OOM on this case")
+                return 0.1  # low → contradicts
+
+        rows = [
+            {"id": "ok1", "stratum": "numeric_ocr", "premise": "p", "reply": "x",
+             "hypothesis": "fine", "expected": "contradicts", "must_catch": False,
+             "source": "t"},
+            {"id": "err1", "stratum": "entity_title", "premise": "p", "reply": "x",
+             "hypothesis": "boom", "expected": "contradicts", "must_catch": False,
+             "source": "t"},
+        ]
+        aggs = r.run_candidate(FlakyScore(threshold=None), rows)  # must NOT raise
+        a0 = aggs[0]
+        self.assertTrue(a0["runnable"])          # partial failure ≠ unavailable
+        self.assertEqual(a0["error_count"], 1)   # err1 recorded as a per-case error
+        self.assertEqual(a0["catch_rate"], 0.5)  # ok1 caught; err1 errored = missed
+
+
 if __name__ == "__main__":
     unittest.main()

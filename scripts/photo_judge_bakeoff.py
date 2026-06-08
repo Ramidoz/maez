@@ -149,3 +149,82 @@ def build_report(aggregates: list[dict]) -> dict:
                          top["false_flag_rate"], top["latency"].get("p95")))
     return {"text": "\n".join(lines), "aggregates": aggregates,
             "recommendation": rec}
+
+
+import argparse
+
+from scripts.photo_judge_bakeoff_adapters import (   # adapters only — never fetch/hf
+    ADAPTER_VERSION, THRESHOLD_GRID, score_to_label)
+
+
+def run_candidate(adapter, rows):
+    """Returns a LIST of aggregates. Score-based candidates are EXPANDED across
+    the FIXED THRESHOLD_GRID (one aggregate per grid point — the un-riggable
+    frontier); label-native candidates yield a single aggregate (threshold=None).
+    The model is called ONCE per case; each grid threshold re-grades the SAME raw
+    score, so the sweep costs no extra model calls."""
+    raw = {}  # id -> (label_at_default, score, latency)
+    for r in rows:
+        v = adapter.predict(r["premise"], r["hypothesis"])
+        raw[r["id"]] = (v.label, v.score, v.latency_s)
+    runnable = any(lbl != "unavailable" for lbl, _, _ in raw.values())
+    base_meta = {
+        "model_id": getattr(adapter, "model_id", adapter.name),
+        "adapter_version": ADAPTER_VERSION,
+        "device": getattr(adapter, "device", "cpu"),
+        "unavailable_reason": adapter.unavailable_reason,
+        "sha256": getattr(adapter, "sha256", None),
+    }
+    if not runnable:
+        return [{"name": adapter.name, "runnable": False, "catch_rate": None,
+                 "false_flag_rate": None, "missed_must_catch": [],
+                 "per_stratum": {}, "latency": {},
+                 "meta": {**base_meta, "threshold": adapter.threshold}}]
+    if adapter.score_based:
+        aggs = []
+        for thr in THRESHOLD_GRID:
+            verdicts = {}
+            for cid, (lbl, score, lat) in raw.items():
+                if lbl == "unavailable" or score is None:
+                    verdicts[cid] = ("error", lat)   # per-case predict failure
+                else:
+                    verdicts[cid] = (score_to_label(score, thr), lat)
+            aggs.append(aggregate_candidate(
+                f"{adapter.name}@{thr}", rows, verdicts,
+                {**base_meta, "threshold": thr}))
+        return aggs
+    # label-native: a per-case "unavailable" is a per-case error, not a verdict
+    verdicts = {cid: (("error" if lbl == "unavailable" else lbl), lat)
+                for cid, (lbl, score, lat) in raw.items()}
+    return [aggregate_candidate(adapter.name, rows, verdicts,
+                                {**base_meta, "threshold": None})]
+
+
+def main(argv=None, adapters=None):
+    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    p.add_argument("--label", default="bakeoff")
+    p.add_argument("--corpus",
+                   default="tests/data/judge_eval_photo_contradiction_v1.jsonl")
+    p.add_argument("--out-dir", default="logs/photo_judge_bakeoff")
+    args = p.parse_args(argv)
+
+    rows = load_corpus(args.corpus)
+    if adapters is None:
+        from scripts.photo_judge_bakeoff_adapters import ALL_ADAPTERS
+        adapters = [cls() for cls in ALL_ADAPTERS]
+    aggregates = [a for adapter in adapters for a in run_candidate(adapter, rows)]
+    report = build_report(aggregates)
+
+    out = Path(args.out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / f"{args.label}.md").write_text(report["text"], encoding="utf-8")
+    (out / f"{args.label}.json").write_text(
+        json.dumps({"recommendation": report["recommendation"],
+                    "aggregates": aggregates}, indent=2, default=str),
+        encoding="utf-8")
+    print(report["text"].splitlines()[-1])  # the RECOMMENDATION line
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
