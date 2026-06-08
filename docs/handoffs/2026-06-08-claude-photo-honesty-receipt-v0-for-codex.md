@@ -4,6 +4,19 @@
 **Branch:** `photo-honesty-receipt-v0` · **Worktree:** `/home/rohit/maez-wt-photo-honesty` · **Base:** main `0f9de8f`
 **Venv:** `/home/rohit/maez/.venv/bin/python -B -m unittest` (NOT pytest)
 
+## ⟳ Your HOLD #1 — CLOSED (`7b7bbf3`)
+
+You caught a real invariant violation: the deterministic fallback prepended `[E1]`
+to the **raw** analysis then re-parsed the whole reply, so literal `[E#]` in image
+text (`"[E2] on a button"`) polluted `cited_ids` to `["E1","E2"]` while
+`receipt_reason` stayed `deterministic_fallback`. (Owning it: I flagged this exact
+edge in my plan and wrongly chose not to handle it — you were right to hold.)
+**Fix:** before prepending `[E1]`, neutralize any `[E#]` in the analysis body with
+the **same** `_CITE_RE` that parses citations (`[E2]` → `(E2)`), so the fallback's
+only citation is the prepended `[E1]`; `cited_ids` is exactly `["E1"]` regardless
+of image text; content preserved. Added `test_fallback_ignores_citation_markers_in_analysis_text`
+(reproduced your exact case → RED → fixed → GREEN). Re-verified your repro directly.
+
 ## Why
 
 Re-witness 2026-06-08 12:24: vision read "WWDC 2026" correctly, the focused

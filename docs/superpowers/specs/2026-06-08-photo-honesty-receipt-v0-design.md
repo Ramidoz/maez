@@ -56,7 +56,7 @@ that isn't there — and must be treated as ungrounded, exactly like `cited=0`.
 ### Deterministic fallback (the floor)
 
 ```
-reply = "Here's what I'm confident I saw [E1]: " + analysis_text
+reply = "Here's what I'm confident I saw [E1]: " + neutralize(analysis_text)
 ```
 
 The `[E1]` marker is **in the text** (Rohit's tightening) so the reply, the
@@ -64,6 +64,16 @@ computed `cited_ids` (which will be `["E1"]`), the log, and any downstream citat
 check all **agree**. `receipt_reason = "deterministic_fallback"` keeps it honest:
 *we* forced the citation, the brain did not. The fallback is grounded by
 construction — it is the vision analysis verbatim.
+
+**Neutralize image-text markers (Codex HOLD, closed):** the vision `analysis_text`
+can itself contain literal `[E#]` (e.g. the photo shows "[E2] on a button"). Since
+the fallback re-parses the whole reply for `cited_ids`, that would pollute it to
+`["E1","E2"]` while `receipt_reason` still said `deterministic_fallback` — breaking
+the `["E1"]` invariant. So before prepending `[E1]`, neutralize any `[E#]` in the
+analysis body using the **same** `_CITE_RE` that parses citations
+(`[E2]` → `(E2)`). The fallback's only citation is then the prepended `[E1]`;
+`cited_ids` is exactly `["E1"]`, regardless of image text. Content is preserved
+(markers rendered as `(E#)`, not dropped).
 
 ## The receipt (telemetry-only in v0, trace-linked)
 
@@ -115,8 +125,12 @@ house — and we say so rather than overclaiming.
 6. Brain empty on first call → `deterministic_fallback` (no wasted retry).
 7. Retry raises → `deterministic_fallback` (no crash).
 8. Retry is invoked **at most once** (no infinite retry).
-9. Daemon log carries `receipt=<reason>` and `turn_id=<...>` (trace-linked).
-10. No memory-schema change (no new stored field).
+9. **Poisoned-analysis case (Codex HOLD):** `analysis_text` contains literal `[E2]`
+   and both model attempts fail → deterministic fallback still reports
+   `cited_ids == ["E1"]` (not `["E1","E2"]`); the analysis content is preserved
+   with the marker neutralized (`(E2)`).
+10. Daemon log carries `receipt=<reason>` and `turn_id=<...>` (trace-linked).
+11. No memory-schema change (no new stored field).
 
 ## Out of scope (Lane 2)
 
