@@ -184,7 +184,9 @@ class FlagTests(unittest.TestCase):
         for v in ("yes", "on", "enable", "TRUE_LIKE", "yep"):
             with self.subTest(value=v):
                 with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": v}):
-                    with self.assertLogs(LOGGER_NAME, level="WARNING") as cm:
+                    # De-fork: the unrecognized-value warning now comes from the
+                    # shared core.ledger.writes_flag helper, not the writer logger.
+                    with self.assertLogs("core.ledger.writes_flag", level="WARNING") as cm:
                         w = writer_mod.LedgerWriter(self.db_path)
                         try:
                             self.assertFalse(w.is_enabled())
@@ -196,7 +198,7 @@ class FlagTests(unittest.TestCase):
 
     def test_warning_emitted_once_per_instance(self):
         with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "yes"}):
-            with self.assertLogs(LOGGER_NAME, level="WARNING") as cm:
+            with self.assertLogs("core.ledger.writes_flag", level="WARNING") as cm:
                 w = writer_mod.LedgerWriter(self.db_path)
                 try:
                     for _ in range(5):
