@@ -180,5 +180,23 @@ class ModelReplyGate(unittest.TestCase):
         self.assertTrue(out)  # initialized + enabled → writes a model_reply turn id
 
 
+class InitCLI(unittest.TestCase):
+    def test_init_creates_and_verifies_idempotent(self):
+        import subprocess
+        from core.ledger import migrate
+        db = str(Path(tempfile.mkdtemp()) / "cli.db")
+        cmd = ["/home/rohit/maez/.venv/bin/python", "-B", "-m", "core.ledger.init", db]
+        r1 = subprocess.run(cmd, cwd="/home/rohit/maez-wt-ledger",
+                            capture_output=True, text=True)
+        self.assertEqual(r1.returncode, 0, r1.stderr)
+        self.assertIn("ledger initialized", r1.stdout.lower())
+        self.assertTrue(migrate.ledger_is_initialized(db))
+        # idempotent: second run still succeeds
+        r2 = subprocess.run(cmd, cwd="/home/rohit/maez-wt-ledger",
+                            capture_output=True, text=True)
+        self.assertEqual(r2.returncode, 0, r2.stderr)
+        self.assertTrue(migrate.ledger_is_initialized(db))
+
+
 if __name__ == "__main__":
     unittest.main()
