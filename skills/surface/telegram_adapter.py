@@ -2988,11 +2988,25 @@ class TelegramAdapter(BasePlatformAdapter):
                 )
                 result = json.loads(result_json)
             except Exception as exc:
+                logger.info(
+                    "[Telegram] Photo vision diagnostic image=%d success=False analysis_chars=0 error=exception:%s",
+                    index,
+                    type(exc).__name__,
+                )
                 logger.warning("[Telegram] Photo vision analysis failed: %s", exc, exc_info=True)
                 analyses.append(f"Image {index}: [Maez could not see this image.]")
                 continue
-            if result.get("success") and result.get("analysis"):
-                analyses.append(f"Image {index}: {result['analysis']}")
+            analysis = str(result.get("analysis") or "")
+            success = bool(result.get("success") and analysis)
+            logger.info(
+                "[Telegram] Photo vision diagnostic image=%d success=%s analysis_chars=%d error=%s",
+                index,
+                success,
+                len(analysis) if success else 0,
+                "none" if success else "vision_failed",
+            )
+            if success:
+                analyses.append(f"Image {index}: {analysis}")
             else:
                 analyses.append(f"Image {index}: [Maez could not see this image.]")
         overflow = max(0, len(event.media_urls) - max_images)

@@ -111,6 +111,57 @@ class ChatPhotoWiringTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("analysis", event.text)
 
+    async def test_photo_analysis_logs_content_free_diagnostic(self):
+        adapter = TelegramAdapter(PlatformConfig())
+        event = MessageEvent(
+            text="caption",
+            message_type=MessageType.PHOTO,
+            media_urls=["/cache/private-a.jpg", "/cache/private-b.jpg"],
+            media_types=["image/jpeg", "image/jpeg"],
+        )
+        adapter._pending_photo_batches["batch"] = event
+
+        async def fake_vision(image_url, user_prompt):
+            if image_url.endswith("private-a.jpg"):
+                return json.dumps(
+                    {
+                        "success": True,
+                        "analysis": "SECRET_ANALYSIS_SHOULD_NOT_APPEAR",
+                        "error": "",
+                    }
+                )
+            return json.dumps(
+                {
+                    "success": False,
+                    "analysis": "",
+                    "error": "SECRET_ERROR_SHOULD_NOT_APPEAR",
+                }
+            )
+
+        async def no_sleep(_delay):
+            return None
+
+        with mock.patch(
+            "skills.surface.telegram_adapter.asyncio.sleep", side_effect=no_sleep
+        ), mock.patch(
+            "tools.vision_tools.vision_analyze_tool", side_effect=fake_vision
+        ):
+            adapter.handle_message = mock.AsyncMock(return_value=None)
+            with self.assertLogs("skills.surface.telegram_adapter", level="INFO") as logs:
+                await adapter._flush_photo_batch("batch")
+
+        output = "\n".join(logs.output)
+        self.assertIn("Photo vision diagnostic image=1 success=True", output)
+        self.assertIn("analysis_chars=33", output)
+        self.assertIn("error=none", output)
+        self.assertIn("Photo vision diagnostic image=2 success=False", output)
+        self.assertIn("analysis_chars=0", output)
+        self.assertIn("error=vision_failed", output)
+        self.assertNotIn("SECRET_ANALYSIS_SHOULD_NOT_APPEAR", output)
+        self.assertNotIn("SECRET_ERROR_SHOULD_NOT_APPEAR", output)
+        self.assertNotIn("private-a.jpg", output)
+        self.assertNotIn("private-b.jpg", output)
+
     async def test_channel_prompt_reaches_daemon_as_system_context_note(self):
         event = MessageEvent(
             text="Fine check this image",
