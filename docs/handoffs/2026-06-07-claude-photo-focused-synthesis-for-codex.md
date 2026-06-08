@@ -4,6 +4,56 @@
 **Branch:** `photo-focused-synthesis` · **Worktree:** `/home/rohit/maez-wt-photo-focused` · **Base:** main `f1f7e9a`
 **Venv:** `/home/rohit/maez/.venv/bin/python` (worktree shares main's venv via cwd)
 
+---
+
+## ⟳ RE-REVIEW UPDATE (`d2108d9`) — your HOLD addressed
+
+Both findings from your review verdict were independently reproduced and fixed by
+**re-architecting**, not patching. The sections below describe the original
+adapter-bypass design — **superseded**; read this block as the current state.
+
+**F1 (pipeline bypass + invariant break) — FIXED.** Focused synthesis now runs
+**inside `daemon.handle_message`**'s synthesis cascade (new `photo_analysis`
+param; a branch sets `reply` via `synthesize_photo_turn` then sets `_focused_used
+= True` so the megaprompt is skipped). Because it sets `reply` *before* the
+existing `strip_tool_call_leaks` (6166) → self-claim audit → `store_telegram`
+(6630) → trace, the photo reply now flows through the **entire** pipeline and is
+stored in lived Telegram memory. The adapter no longer bypasses `handle_message`
+and no longer imports `self_claim_audit` — **`test_memory_integrity_invariant`
+passes again**. (Reverted `_synthesize_photo_focused` and the `c115390` audit.)
+
+**F2 (failed vision treated as evidence) — FIXED.** `_analyze_photo_event` stashes
+**only successful** per-image analyses; if none succeeded, `photo_analysis_text`
+is `None`, so the turn falls back to the legacy megaprompt (which honestly
+surfaces "could not see"). The focused path can no longer answer from a
+"could not see" line.
+
+**New review anchors:**
+1. `daemon/maez_daemon.py` synthesis cascade (~`else:` around 5942): the photo
+   branch is gated on `photo_analysis` (success-only) + `photo_focused_synth_enabled()`,
+   sets `_focused_used`/`_reply_path = ReplyPath.FOCUSED`, and leaves `reply=None`
+   on empty/error to fall through to the legacy synthesis. Confirm `_focused_used`
+   correctly suppresses both the recall-FOCUSED branch (I added `not _focused_used`
+   to its guard) and the megaprompt at 6105.
+2. Structural test `PhotoSynthesisLivesInsideThePipeline.test_photo_synth_runs_
+   before_strip_and_store` asserts ordering inside `handle_message`.
+3. Adapter just passes `photo_analysis=getattr(event, "photo_analysis_text", None)`.
+
+**Tests:** all targeted suites green; `test_memory_integrity_invariant` +
+`test_model_reply_persistence` green in isolation. Full discover vs main `f1f7e9a`:
+1 branch-only delta (`test_fast_backend_cloud_retirement…`) which **passes in
+isolation** and doesn't reference photo/focused code — the same pre-existing
+fast-lane-audit order-flake. (Note: a `test_model_reply_persistence` discontinuity
+-marker test flakes under *some* multi-suite combos — a pre-existing ledger-DB
+order-dependence in `persist_model_reply`/`MAEZ_LEDGER_WRITES`, untouched by this
+branch; passes in isolation and in pairs.)
+
+**Commits now:** `a834cf3` `synthesize_photo_turn` · `5968c69` (adapter routing,
+superseded by d2108d9) · `c115390` (audit, reverted by d2108d9) · `aeb5b81`
+handoff · **`d2108d9` the review-response rework**.
+
+---
+
 ## Why (witnessed live)
 
 Live witness 2026-06-07 22:41 (daemon 81895): vision **worked** —
