@@ -70,7 +70,9 @@ class TryWriteTurnTests(unittest.TestCase):
         db = Path(_TEST_DB_DIR) / f"garbage_flag_{os.urandom(4).hex()}.db"
         self.assertFalse(db.exists())
         with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "yes"}):
-            with self.assertLogs("core.ledger.writer", level="WARNING") as cm:
+            # De-fork: the unrecognized-flag warning now comes from the shared
+            # core.ledger.writes_flag helper, not the writer logger.
+            with self.assertLogs("core.ledger.writes_flag", level="WARNING") as cm:
                 tid = writer.try_write_turn(str(db), "user_message", "hello")
         self.assertIsNone(tid)
         self.assertFalse(db.exists())
