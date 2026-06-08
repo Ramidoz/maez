@@ -76,6 +76,7 @@ _AUTHORITY_LABEL: dict[str, str] = {
     "open_loop": "unresolved want or wondering — open, not concluded",
     "builder_event": "self-modification activity — builder-mode evidence",
     "quality_signal": "self-critique signal — quality tracker evidence",
+    "photo_vision": "first-party local vision — Maez's own eyes on an owner-sent photo",
 }
 logger = logging.getLogger("maez.focused")
 _ORIGIN_TRUST_LABEL: dict[str, str] = {
@@ -128,6 +129,15 @@ _HONEST_EMPTY_INSTRUCTION = (
     "why it was empty. Do NOT describe or propose changes to your own tools, "
     "pipeline, or system. You may offer to try a different source or rephrase. "
     "1-3 sentences."
+)
+_PHOTO_VISION_INSTRUCTION = (
+    "The owner sent you a photo and you looked at it with your own local vision. "
+    "What you saw is below. Answer the owner's caption from what you saw, in your "
+    "voice — describe and engage with what is actually in the photo. This is your "
+    "own first-party perception: speak as someone who has seen it. Never tell the "
+    "owner you are blind to it, that your eyes are offline, or that it arrived as "
+    "empty data — you did see it. If the caption asks about something the photo "
+    "does not show, say what you do see and what is missing. Cite [E1]."
 )
 _FORBIDDEN_EMPTY_VOCAB: tuple[str, ...] = (
     "interceptor",
@@ -961,6 +971,98 @@ def build_honest_empty_reply(
             citation_coverage=0.0,
             unmatched=[],
         ),
+    )
+
+
+def synthesize_photo_turn(
+    *,
+    analysis_text: str,
+    caption: str,
+    surface: str,
+    chat_fn=None,
+    model=None,
+) -> FocusedResult:
+    """Answer an owner-sent photo from Maez's own local vision analysis, over a
+    BOUNDED working set — never the full daemon megaprompt.
+
+    The live witness (2026-06-07) proved vision works (success=True,
+    analysis_chars=342) but the ~megaprompt's "Vision: Maez cannot see"
+    broken-systems block overrode the present analysis. Here the only evidence is
+    the photo analysis (E1); the prompt carries no screen-perception /
+    broken-systems contradiction, so the brain answers from what it actually saw.
+    """
+    import time as _time
+
+    if chat_fn is None:
+        from core import llm_client as _llm_client
+        from core.routing.brain_gateway import BrainPurpose, with_purpose
+
+        def chat_fn(**kwargs):
+            with with_purpose(BrainPurpose.OWNER_REPLY):
+                return _llm_client.chat(**kwargs)
+    if model is None:
+        from core.model_config import PRIMARY_MODEL
+
+        model = PRIMARY_MODEL
+
+    analysis_text = (analysis_text or "").strip()
+    caption = caption or ""
+    item = EvidenceItem(
+        local_label="E1",
+        source_type="photo_vision",
+        text=analysis_text,
+        durable_id=_content_hash(analysis_text),
+    )
+    working_set_chars = len(analysis_text) + len(caption)
+    working_set = WorkingSet(
+        items=[item],
+        ordered_evidence_text=analysis_text,
+        owner_question=caption,
+        working_set_chars=working_set_chars,
+        working_set_tokens_est=working_set_chars // 4,
+    )
+
+    # Honest fallback: surface what was seen, never claim blindness or fabricate.
+    deterministic = (
+        "Here's what I saw in the photo you sent: " + analysis_text
+    ).strip()
+
+    _t0 = _time.monotonic()
+    system = (
+        f"{_voice_card(surface)}\n\n"
+        f"{_PHOTO_VISION_INSTRUCTION}\n\n"
+        f"=== WHAT MAEZ SAW IN THE PHOTO (cite [E1]) ===\n"
+        f"{analysis_text}"
+    )
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": caption},
+    ]
+    _t1 = _time.monotonic()
+    raw_reply = ""
+    try:
+        response = chat_fn(
+            model=model,
+            messages=messages,
+            think=False,
+            options={"temperature": 0.7, "num_predict": 1024},
+        )
+        raw_reply = (
+            getattr(getattr(response, "message", None), "content", None) or ""
+        ).strip()
+    except Exception:
+        raw_reply = ""
+    _t2 = _time.monotonic()
+
+    reply = raw_reply or deterministic
+    cited_ids = sorted({f"E{m.group(1)}" for m in _CITE_RE.finditer(reply)})
+    return FocusedResult(
+        reply=reply,
+        cited_ids=cited_ids,
+        working_set_chars=working_set_chars,
+        prompt_build_ms=int((_t1 - _t0) * 1000),
+        chat_total_ms=int((_t2 - _t1) * 1000),
+        reply_token_est=len(reply) // 4,
     )
 
 
