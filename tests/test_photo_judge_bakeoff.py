@@ -46,5 +46,56 @@ class CorpusSchema(unittest.TestCase):
             sum(1 for r in self.rows if r["stratum"] == "uncertainty_control"), 1)
 
 
+class ThresholdProtocol(unittest.TestCase):
+    def test_grid_is_fixed_and_shared(self):
+        from scripts.photo_judge_bakeoff_adapters import THRESHOLD_GRID
+        self.assertEqual(THRESHOLD_GRID, (0.3, 0.4, 0.5, 0.6, 0.7))
+
+    def test_score_maps_to_label_via_threshold(self):
+        from scripts.photo_judge_bakeoff_adapters import score_to_label
+        # convention: HIGHER score = more grounded; below threshold = contradicts
+        self.assertEqual(score_to_label(0.8, 0.5), "grounded")
+        self.assertEqual(score_to_label(0.2, 0.5), "contradicts")
+        self.assertEqual(score_to_label(0.5, 0.5), "grounded")  # >= is grounded
+
+    def test_verdict_carries_fields(self):
+        from scripts.photo_judge_bakeoff_adapters import Verdict
+        v = Verdict(label="contradicts", score=0.1, latency_s=0.02)
+        self.assertEqual(v.label, "contradicts")
+        self.assertEqual(v.score, 0.1)
+        self.assertEqual(v.latency_s, 0.02)
+
+
+class AdapterBase(unittest.TestCase):
+    def test_predict_applies_threshold_and_times(self):
+        from scripts.photo_judge_bakeoff_adapters import CandidateAdapter, Verdict
+
+        class FakeScore(CandidateAdapter):
+            name = "fake"
+            score_based = True
+            def _load(self): return object()
+            def _raw_predict(self, premise, hypothesis): return 0.2  # low → contradicts
+
+        a = FakeScore(threshold=0.5)
+        v = a.predict("p", "h")
+        self.assertIsInstance(v, Verdict)
+        self.assertEqual(v.label, "contradicts")
+        self.assertGreaterEqual(v.latency_s, 0.0)
+
+    def test_unavailable_on_load_failure(self):
+        from scripts.photo_judge_bakeoff_adapters import CandidateAdapter
+
+        class Broken(CandidateAdapter):
+            name = "broken"
+            score_based = True
+            def _load(self): raise RuntimeError("no weights")
+            def _raw_predict(self, premise, hypothesis): return 0.9
+
+        a = Broken(threshold=0.5)
+        v = a.predict("p", "h")
+        self.assertEqual(v.label, "unavailable")
+        self.assertIn("no weights", a.unavailable_reason)
+
+
 if __name__ == "__main__":
     unittest.main()
