@@ -129,5 +129,56 @@ class LedgerIsInitialized(unittest.TestCase):
         self.assertFalse(migrate.ledger_is_initialized(p))         # no exception
 
 
+# evidence_envelope shape is the SAME one tests/test_model_reply_persistence.py
+# uses and is VERIFIED to write on an initialized+enabled ledger (returns a uuid).
+_PERSIST_KW = dict(
+    raw_text="audited reply text",
+    surface="telegram_surface",
+    parent_turn_id=None,
+    model_id="qwen36-27b",
+    prompt_material={"p": 1},
+    soul_material={"s": 1},
+    evidence_envelope={"claimable": [], "forbidden": []},
+    audit_verdict={"verdict": "grounded"},
+)
+
+
+class ModelReplyGate(unittest.TestCase):
+    def test_disabled_opens_no_sqlite(self):
+        # HEADLINE: ledger off → silent no-op, NO SQLite opened, no warning.
+        from core.ledger import model_reply_persistence as mrp
+        os.environ.pop("MAEZ_LEDGER_WRITES", None)
+        with mock.patch("core.ledger.model_reply_persistence.sqlite3.connect") as conn:
+            out = mrp.persist_model_reply(db_path="/nonexistent/ledger.db", **_PERSIST_KW)
+        self.assertIsNone(out)
+        conn.assert_not_called()
+
+    def test_enabled_uninitialized_warns_once_no_write(self):
+        from core.ledger import model_reply_persistence as mrp
+        from core.ledger import model_reply_persistence_warning as warn
+        warn._WARNED_KEYS.clear()
+        zero = str(Path(tempfile.mkdtemp()) / "z.db")
+        Path(zero).touch()  # enabled but uninitialized
+        with mock.patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            with self.assertLogs("core.ledger.model_reply_persistence", level="WARNING") as logs:
+                out1 = mrp.persist_model_reply(db_path=zero, **_PERSIST_KW)
+                out2 = mrp.persist_model_reply(db_path=zero, **_PERSIST_KW)
+        self.assertIsNone(out1)
+        self.assertIsNone(out2)
+        joined = "\n".join(logs.output).lower()
+        self.assertIn("uninitialized", joined)
+        self.assertIn("run ledger init", joined)
+        self.assertEqual(joined.count("uninitialized"), 1)  # once per process
+
+    def test_enabled_initialized_proceeds(self):
+        from core.ledger import migrate
+        from core.ledger import model_reply_persistence as mrp
+        db = str(Path(tempfile.mkdtemp()) / "real.db")
+        migrate.run(db)
+        with mock.patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            out = mrp.persist_model_reply(db_path=db, **_PERSIST_KW)
+        self.assertTrue(out)  # initialized + enabled → writes a model_reply turn id
+
+
 if __name__ == "__main__":
     unittest.main()

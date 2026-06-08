@@ -160,6 +160,21 @@ def persist_model_reply(
     if not raw_text or evidence_envelope is None:
         return None
 
+    # Ledger state honesty (v0). One switch: is writing allowed? Then: is the
+    # notebook actually built? Gate BEFORE any SQLite open or meta probe.
+    from core.ledger.migrate import ledger_is_initialized
+    from core.ledger.writes_flag import ledger_writes_enabled
+
+    if not ledger_writes_enabled():
+        # Disabled: silent no-op. Do NOT open SQLite or probe meta.
+        return None
+    if not ledger_is_initialized(db_path):
+        _warn_once(
+            "uninitialized",
+            "ledger enabled but uninitialized; run ledger init",
+        )
+        return None
+
     _ensure_persistence_marker(db_path)
     try:
         turn_id = try_write_turn(
