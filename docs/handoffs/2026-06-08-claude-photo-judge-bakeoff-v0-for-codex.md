@@ -34,6 +34,12 @@ touches NO daemon/live path. Owner picks the winner + placement in a follow-on L
   artifact hash), `CandidateAdapter` reads it at load, so the printed revision/sha256 ARE
   the pinned download's, not hand-edited. 4 new tests (revision-in-meta, fingerprint-in-
   report, fetch-writes-manifest, adapter-reads-manifest). Slice suite now **32 OK**.
+- `f4974d3` — **(Codex HOLD #2 addressed)** ChatJudge can no longer benchmark the wrong
+  brain: the hardcoded `:8082` default (which serves `maez-vision` here, not a judge) is
+  gone. ChatJudge now refuses to guess a port (default → `unavailable`), verifies the
+  served alias via `/v1/models` at load (`unavailable` with a served-vs-expected reason on
+  mismatch), labels `model_id` as `chatjudge:<alias>@<base_url>`, and the runner records
+  the actual `base_url` + `served_alias` in metadata. 4 tests. Slice suite now **36 OK**.
 
 ## Review anchors (the things owner review hardened)
 

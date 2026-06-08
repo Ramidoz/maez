@@ -31,6 +31,18 @@ The fetch helper is the ONLY network component. The runner
   too; adjust the adapter body if a real API differs from the best-known form. The
   unit tests mock that boundary, so they stay green across such adjustments.
 
+## ChatJudge baseline (server-backed, opt-in — NOT a download)
+
+ChatJudge is the chat-LLM judge baseline. It takes **no default port** (a wrong port
+could benchmark the wrong brain — on this box `:8082` serves `maez-vision`, `:8081`
+serves `maez-judge`). A default run marks it `unavailable` ("refusing to guess a port").
+To include it, construct it explicitly with the REAL judge endpoint + expected alias,
+e.g. `ChatJudgeAdapter(base_url="http://127.0.0.1:8081", expected_alias="maez-judge")`;
+at load it verifies `/v1/models` actually serves that alias (else `unavailable` with a
+served-vs-expected reason), labels `model_id` as `chatjudge:<alias>@<base_url>`, and the
+report records the actual `base_url` + `served_alias`. Verify the alias with
+`curl -s http://127.0.0.1:8081/v1/models` before configuring.
+
 ## Reproducibility manifest (how revision/sha256 reach the report)
 
 `fetch_one` writes `models/bakeoff/<name>/bakeoff_manifest.json` = `{repo_id, revision,
