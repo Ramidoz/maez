@@ -37,5 +37,23 @@ class LedgerWritesEnabled(unittest.TestCase):
         self.assertIn("unrecognized", "\n".join(logs.output).lower())
 
 
+class PredicateDoesNotFork(unittest.TestCase):
+    def test_writer_and_reconcile_delegate_to_helper(self):
+        from core.ledger import reconcile, writes_flag
+        from core.ledger.writer import LedgerWriter
+        wp = str(Path(tempfile.mkdtemp()) / "w.db")  # LedgerWriter requires db_path
+        for v in ("1", "true", "0", "", "off", "garbage"):
+            with mock.patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": v}):
+                expected = writes_flag.ledger_writes_enabled()
+                self.assertEqual(LedgerWriter(wp).is_enabled(), expected, v)
+                self.assertEqual(reconcile._writes_enabled(), expected, v)
+
+    def test_modules_no_longer_define_value_sets(self):
+        import core.ledger.reconcile as r
+        import core.ledger.writer as w
+        self.assertFalse(hasattr(w, "_TRUE_VALUES"))
+        self.assertFalse(hasattr(r, "_TRUE_VALUES"))
+
+
 if __name__ == "__main__":
     unittest.main()

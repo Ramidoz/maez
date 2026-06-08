@@ -38,12 +38,10 @@ _FK_MAP: tuple[tuple[str, str, str, str], ...] = (
     ("self_mod_dialogs", "created_at", "self_mod_dialog_id", "self_mod_dialogs"),
 )
 
-_TRUE_VALUES = {"1", "true"}
-
-
 def _writes_enabled() -> bool:
-    raw = os.environ.get("MAEZ_LEDGER_WRITES", "")
-    return raw.strip().lower() in _TRUE_VALUES
+    from core.ledger.writes_flag import ledger_writes_enabled
+
+    return ledger_writes_enabled()
 
 
 def _read_era(ledger_db_path: str) -> float:

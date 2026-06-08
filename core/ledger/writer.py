@@ -61,8 +61,6 @@ __all__ = ["LedgerWriter"]
 
 _LOGGER = logging.getLogger("core.ledger.writer")
 
-_TRUE_VALUES = {"1", "true"}
-_FALSE_VALUES = {"0", "false", "no", "off", ""}
 _REHEARSAL_ROOT = Path(__file__).resolve().parents[2] / "logs" / "rehearsal"
 
 # Per-kind contract from docs/ledger/envelope-schema.md §4.2.
@@ -210,19 +208,9 @@ class LedgerWriter:
     # ------------------------------------------------------------------ flag
 
     def _parse_flag(self) -> bool:
-        raw = os.environ.get("MAEZ_LEDGER_WRITES", "")
-        stripped = raw.strip().lower()
-        if stripped in _TRUE_VALUES:
-            return True
-        if stripped in _FALSE_VALUES:
-            return False
-        # Unrecognized non-empty, non-falsy value: disabled + warn once.
-        _LOGGER.warning(
-            "MAEZ_LEDGER_WRITES has unrecognized value %r; "
-            "treating as disabled. Use '1' or 'true' to enable.",
-            raw,
-        )
-        return False
+        from core.ledger.writes_flag import ledger_writes_enabled
+
+        return ledger_writes_enabled()
 
     def is_enabled(self) -> bool:
         return self._enabled
@@ -518,16 +506,9 @@ def try_write_turn(
     Per the architectural invariant: shadow writes only. The user
     reply ships regardless of what happens here.
     """
-    raw_flag = os.environ.get("MAEZ_LEDGER_WRITES", "")
-    stripped_flag = raw_flag.strip().lower()
-    if stripped_flag in _FALSE_VALUES:
-        return None
-    if stripped_flag not in _TRUE_VALUES:
-        _LOGGER.warning(
-            "MAEZ_LEDGER_WRITES has unrecognized value %r; "
-            "treating shadow write as disabled. Use '1' or 'true' to enable.",
-            raw_flag,
-        )
+    from core.ledger.writes_flag import ledger_writes_enabled
+
+    if not ledger_writes_enabled():
         return None
 
     try:
