@@ -97,5 +97,43 @@ class AdapterBase(unittest.TestCase):
         self.assertIn("no weights", a.unavailable_reason)
 
 
+class ConcreteAdapters(unittest.TestCase):
+    def test_all_adapters_registered(self):
+        from scripts.photo_judge_bakeoff_adapters import ALL_ADAPTERS
+        names = {a.name for a in ALL_ADAPTERS}
+        self.assertEqual(names, {
+            "hhem", "minicheck", "thinkncheck", "nli", "reranker", "chatjudge"})
+
+    def test_score_based_vs_label_native_flags(self):
+        from scripts.photo_judge_bakeoff_adapters import (
+            HHEMAdapter, RerankerAdapter, NLIAdapter,
+            MiniCheckAdapter, ThinknCheckAdapter, ChatJudgeAdapter)
+        self.assertTrue(HHEMAdapter.score_based)
+        self.assertTrue(RerankerAdapter.score_based)
+        self.assertTrue(NLIAdapter.score_based)
+        self.assertFalse(MiniCheckAdapter.score_based)   # label-native 0/1
+        self.assertFalse(ThinknCheckAdapter.score_based) # verdict
+        self.assertFalse(ChatJudgeAdapter.score_based)   # yes/no
+
+    def test_hhem_low_score_is_contradiction(self):
+        from scripts.photo_judge_bakeoff_adapters import HHEMAdapter
+        # Patch _load at the CLASS level BEFORE instantiation so __init__'s
+        # _load() never imports transformers or touches disk.
+        with mock.patch.object(HHEMAdapter, "_load", return_value=object()), \
+             mock.patch.object(HHEMAdapter, "_raw_predict", return_value=0.05):
+            a = HHEMAdapter(threshold=0.5)
+            self.assertEqual(a.predict("p", "h").label, "contradicts")
+
+    def test_minicheck_label_native(self):
+        from scripts.photo_judge_bakeoff_adapters import MiniCheckAdapter
+        with mock.patch.object(MiniCheckAdapter, "_load", return_value=object()), \
+             mock.patch.object(MiniCheckAdapter, "_raw_predict",
+                               return_value="contradicts"):
+            a = MiniCheckAdapter()
+            v = a.predict("p", "h")
+            self.assertEqual(v.label, "contradicts")
+            self.assertIsNone(v.score)  # no threshold for label-native
+
+
 if __name__ == "__main__":
     unittest.main()
