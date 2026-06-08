@@ -245,6 +245,20 @@ class CitationRail(unittest.TestCase):
         self.assertEqual(r.cited_ids, ["E1"])
         self.assertEqual(calls["i"], 2)             # at most one retry, then fallback
 
+    def test_fallback_ignores_citation_markers_in_analysis_text(self):
+        # If the vision analysis itself contains literal [E#] (e.g. image text
+        # like "[E2] on a button"), the deterministic fallback must NOT pick it up
+        # as a citation. Fallback cited_ids must stay exactly ["E1"].
+        poisoned = "The image text literally says [E2] on a button."
+        chat, box = _scripted_chat(["no cite", "still no cite"])  # both ungrounded
+        r = synthesize_photo_turn(analysis_text=poisoned, caption="check this",
+                                  surface="telegram_surface", chat_fn=chat, model="m")
+        self.assertEqual(r.receipt_reason, "deterministic_fallback")
+        self.assertEqual(r.cited_ids, ["E1"])        # NOT ["E1", "E2"]
+        self.assertIn("[E1]", r.reply)
+        # the analysis content is still surfaced (markers neutralized, not dropped)
+        self.assertIn("button", r.reply)
+
 
 if __name__ == "__main__":
     unittest.main()

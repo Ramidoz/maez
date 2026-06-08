@@ -1041,7 +1041,14 @@ def synthesize_photo_turn(
     # Deterministic fallback: the vision analysis verbatim, citing [E1] so the
     # reply, cited_ids, log, and downstream checks all agree. Grounded by
     # construction (it IS the evidence). receipt_reason marks it as forced.
-    deterministic = ("Here's what I'm confident I saw [E1]: " + analysis_text).strip()
+    # Neutralize any [E#] already inside the analysis (e.g. image text like
+    # "[E2] on a button") using the SAME regex that parses citations, so the
+    # fallback's only citation is the prepended [E1] and cited_ids stays exactly
+    # ["E1"] — it cannot be polluted by image text.
+    _safe_analysis = _CITE_RE.sub(lambda m: f"(E{m.group(1)})", analysis_text)
+    deterministic = (
+        "Here's what I'm confident I saw [E1]: " + _safe_analysis
+    ).strip()
 
     base_system = (
         f"{_voice_card(surface)}\n\n"
