@@ -370,16 +370,19 @@ class ConcreteAdapters(unittest.TestCase):
 
     def test_hhem_low_score_is_contradiction(self):
         from scripts.photo_judge_bakeoff_adapters import HHEMAdapter
-        a = HHEMAdapter(threshold=0.5)
-        with mock.patch.object(a, "_load_failed", False), \
-             mock.patch.object(a, "_raw_predict", return_value=0.05):
+        # Patch _load at the CLASS level BEFORE instantiation so __init__'s
+        # _load() never imports transformers or touches disk.
+        with mock.patch.object(HHEMAdapter, "_load", return_value=object()), \
+             mock.patch.object(HHEMAdapter, "_raw_predict", return_value=0.05):
+            a = HHEMAdapter(threshold=0.5)
             self.assertEqual(a.predict("p", "h").label, "contradicts")
 
     def test_minicheck_label_native(self):
         from scripts.photo_judge_bakeoff_adapters import MiniCheckAdapter
-        a = MiniCheckAdapter()
-        with mock.patch.object(a, "_load_failed", False), \
-             mock.patch.object(a, "_raw_predict", return_value="contradicts"):
+        with mock.patch.object(MiniCheckAdapter, "_load", return_value=object()), \
+             mock.patch.object(MiniCheckAdapter, "_raw_predict",
+                               return_value="contradicts"):
+            a = MiniCheckAdapter()
             v = a.predict("p", "h")
             self.assertEqual(v.label, "contradicts")
             self.assertIsNone(v.score)  # no threshold for label-native
@@ -576,8 +579,15 @@ class Aggregator(unittest.TestCase):
         self.assertAlmostEqual(agg["catch_rate"], 0.5)        # 1 of 2 contradicts caught
         self.assertEqual(agg["false_flag_rate"], 0.0)         # g1 not flagged
         self.assertEqual(agg["missed_must_catch"], [])        # c1 (must_catch) WAS caught
-        self.assertIn("numeric_ocr", agg["per_stratum"])
         self.assertEqual(agg["meta"]["threshold"], 0.5)
+        ps = agg["per_stratum"]
+        self.assertEqual(ps["numeric_ocr"]["contradiction_n"], 1)
+        self.assertEqual(ps["numeric_ocr"]["caught"], 1)
+        self.assertEqual(ps["numeric_ocr"]["catch_rate"], 1.0)
+        self.assertEqual(ps["entity_title"]["caught"], 0)       # c2 missed
+        self.assertEqual(ps["grounded_control"]["grounded_n"], 1)
+        self.assertEqual(ps["grounded_control"]["false_flags"], 0)
+        self.assertEqual(ps["grounded_control"]["false_flag_rate"], 0.0)
 
     def test_missed_must_catch_is_loud(self):
         from scripts.photo_judge_bakeoff import aggregate_candidate
@@ -637,11 +647,23 @@ def aggregate_candidate(name, rows, verdicts, meta):
                    and verdicts.get(r["id"], ("", 0))[0] != "contradicts"]
     per_stratum: dict[str, dict] = {}
     for r in rows:
-        s = per_stratum.setdefault(r["stratum"], {"n": 0, "correct": 0})
-        s["n"] += 1
+        s = per_stratum.setdefault(r["stratum"], {
+            "contradiction_n": 0, "caught": 0, "catch_rate": None,
+            "grounded_n": 0, "false_flags": 0, "false_flag_rate": None})
         graded = verdicts.get(r["id"], ("", 0))[0]
-        if graded == r["expected"]:
-            s["correct"] += 1
+        if r["expected"] == "contradicts":
+            s["contradiction_n"] += 1
+            if graded == "contradicts":
+                s["caught"] += 1
+        else:  # grounded
+            s["grounded_n"] += 1
+            if graded == "contradicts":
+                s["false_flags"] += 1
+    for s in per_stratum.values():
+        if s["contradiction_n"]:
+            s["catch_rate"] = round(s["caught"] / s["contradiction_n"], 4)
+        if s["grounded_n"]:
+            s["false_flag_rate"] = round(s["false_flags"] / s["grounded_n"], 4)
     lat = [verdicts[r["id"]][1] for r in rows if r["id"] in verdicts]
     return {
         "name": name,
@@ -723,17 +745,50 @@ Append to `tests/test_photo_judge_bakeoff.py`:
 
 ```python
 class HardContract(unittest.TestCase):
-    def test_runner_never_touches_live_or_network(self):
-        # Scopes to the RUNNER FILE ONLY. Must NOT inspect the fetch helper,
-        # whose job IS huggingface_hub/network. (Owner watch-point.)
-        runner = (ROOT / "scripts" / "photo_judge_bakeoff.py").read_text()
-        for forbidden in ("model.env", "systemctl", "huggingface_hub",
-                          "MAEZ_JUDGE_BASE_URL", "photo_judge_bakeoff_fetch"):
-            self.assertNotIn(forbidden, runner,
-                             f"runner must not reference {forbidden!r}")
+    """Scopes to the RUNNER FILE ONLY (photo_judge_bakeoff.py). It must NEVER
+    inspect photo_judge_bakeoff_fetch.py, whose job IS huggingface_hub/network.
+    Tests DANGEROUS BEHAVIOR structurally (imports / env-assignment / file-write),
+    not string mentions — the runner docstring legitimately NAMES model.env /
+    MAEZ_JUDGE_BASE_URL / the fetch helper while promising not to TOUCH them."""
 
-    def test_fetch_helper_is_a_separate_file(self):
-        self.assertTrue((ROOT / "scripts" / "photo_judge_bakeoff_fetch.py").exists())
+    def _runner_ast(self):
+        import ast
+        return ast.parse((ROOT / "scripts" / "photo_judge_bakeoff.py").read_text())
+
+    def test_runner_imports_no_network_or_fetch_or_subprocess(self):
+        import ast
+        mods = set()
+        for n in ast.walk(self._runner_ast()):
+            if isinstance(n, ast.Import):
+                mods |= {a.name.split(".")[0] for a in n.names}
+            elif isinstance(n, ast.ImportFrom) and n.module:
+                mods.add(n.module.split(".")[0])
+                self.assertNotIn("photo_judge_bakeoff_fetch", n.module,
+                                 "runner must not import the fetch helper")
+        self.assertNotIn("huggingface_hub", mods)
+        self.assertNotIn("subprocess", mods)  # → cannot shell out to systemctl
+
+    def test_runner_never_assigns_live_judge_url(self):
+        import ast
+        for n in ast.walk(self._runner_ast()):
+            if isinstance(n, ast.Assign):
+                for t in n.targets:
+                    if (isinstance(t, ast.Subscript)
+                            and isinstance(t.value, ast.Attribute)
+                            and t.value.attr == "environ"):
+                        key = getattr(t.slice, "value", None)
+                        self.assertNotEqual(
+                            key, "MAEZ_JUDGE_BASE_URL",
+                            "runner must not mutate the live judge URL")
+
+    def test_runner_writes_no_model_env(self):
+        import ast
+        for n in ast.walk(self._runner_ast()):
+            if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "open":
+                consts = [a for a in n.args if isinstance(a, ast.Constant)]
+                if (len(consts) >= 2 and isinstance(consts[1].value, str)
+                        and "w" in consts[1].value):
+                    self.assertNotIn("model.env", str(consts[0].value))
 
 
 class RunnerMain(unittest.TestCase):
@@ -756,6 +811,24 @@ class RunnerMain(unittest.TestCase):
         md = list(Path(outdir).glob("*.md"))
         self.assertTrue(md)
         self.assertIn("RECOMMENDATION", md[0].read_text())
+
+    def test_score_based_candidate_expands_across_grid(self):
+        # un-riggable: a score-based candidate yields ONE row PER grid threshold.
+        import scripts.photo_judge_bakeoff as r
+        from scripts.photo_judge_bakeoff_adapters import (
+            CandidateAdapter, THRESHOLD_GRID)
+
+        class FakeScore(CandidateAdapter):
+            name = "fakescore"
+            score_based = True
+            def _load(self): return object()
+            def _raw_predict(self, premise, hypothesis): return 0.6
+
+        rows = r.load_corpus(str(CORPUS))
+        aggs = r.run_candidate(FakeScore(threshold=None), rows)
+        self.assertEqual(len(aggs), len(THRESHOLD_GRID))
+        self.assertEqual({a["name"] for a in aggs},
+                         {f"fakescore@{t}" for t in THRESHOLD_GRID})
 ```
 
 - [ ] **Step 2: Run to verify it fails**
@@ -771,28 +844,45 @@ Append to `scripts/photo_judge_bakeoff.py`:
 import argparse
 
 
+from scripts.photo_judge_bakeoff_adapters import (   # adapters only — never fetch/hf
+    ADAPTER_VERSION, THRESHOLD_GRID, score_to_label)
+
+
 def run_candidate(adapter, rows):
-    verdicts = {}
+    """Returns a LIST of aggregates. Score-based candidates are EXPANDED across
+    the FIXED THRESHOLD_GRID (one aggregate per grid point — the un-riggable
+    frontier); label-native candidates yield a single aggregate (threshold=None).
+    The model is called ONCE per case; each grid threshold re-grades the SAME raw
+    score, so the sweep costs no extra model calls."""
+    raw = {}  # id -> (label_at_default, score, latency)
     for r in rows:
         v = adapter.predict(r["premise"], r["hypothesis"])
-        verdicts[r["id"]] = (v.label, v.latency_s)
-    runnable = any(lbl != "unavailable" for lbl, _ in verdicts.values())
-    meta = {
+        raw[r["id"]] = (v.label, v.score, v.latency_s)
+    runnable = any(lbl != "unavailable" for lbl, _, _ in raw.values())
+    base_meta = {
         "model_id": getattr(adapter, "model_id", adapter.name),
-        "adapter_version": __import__(
-            "scripts.photo_judge_bakeoff_adapters", fromlist=["ADAPTER_VERSION"]
-        ).ADAPTER_VERSION,
-        "threshold": adapter.threshold,
+        "adapter_version": ADAPTER_VERSION,
         "device": getattr(adapter, "device", "cpu"),
         "unavailable_reason": adapter.unavailable_reason,
         "sha256": getattr(adapter, "sha256", None),
     }
     if not runnable:
-        return {"name": adapter.name, "runnable": False, "catch_rate": None,
-                "false_flag_rate": None, "missed_must_catch": [],
-                "per_stratum": {}, "latency": {}, "meta": meta}
-    agg = aggregate_candidate(adapter.name, rows, verdicts, meta)
-    return agg
+        return [{"name": adapter.name, "runnable": False, "catch_rate": None,
+                 "false_flag_rate": None, "missed_must_catch": [],
+                 "per_stratum": {}, "latency": {},
+                 "meta": {**base_meta, "threshold": adapter.threshold}}]
+    if adapter.score_based:
+        aggs = []
+        for thr in THRESHOLD_GRID:
+            verdicts = {cid: (score_to_label(score, thr), lat)
+                        for cid, (lbl, score, lat) in raw.items()}
+            aggs.append(aggregate_candidate(
+                f"{adapter.name}@{thr}", rows, verdicts,
+                {**base_meta, "threshold": thr}))
+        return aggs
+    verdicts = {cid: (lbl, lat) for cid, (lbl, score, lat) in raw.items()}
+    return [aggregate_candidate(adapter.name, rows, verdicts,
+                                {**base_meta, "threshold": None})]
 
 
 def main(argv=None, adapters=None):
@@ -806,8 +896,8 @@ def main(argv=None, adapters=None):
     rows = load_corpus(args.corpus)
     if adapters is None:
         from scripts.photo_judge_bakeoff_adapters import ALL_ADAPTERS
-        adapters = [cls() for cls in ALL_ADAPTERS]   # default thresholds
-    aggregates = [run_candidate(a, rows) for a in adapters]
+        adapters = [cls() for cls in ALL_ADAPTERS]
+    aggregates = [a for adapter in adapters for a in run_candidate(adapter, rows)]
     report = build_report(aggregates)
 
     out = Path(args.out_dir)
@@ -828,7 +918,7 @@ if __name__ == "__main__":
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `/home/rohit/maez/.venv/bin/python -B -m unittest tests.test_photo_judge_bakeoff.HardContract tests.test_photo_judge_bakeoff.RunnerMain`
-Expected: PASS (note: `HardContract.test_fetch_helper_is_a_separate_file` needs Task 6's file — if running this task alone it will fail; it passes after Task 6. Run the full class after Task 6.)
+Expected: PASS — all green this task. (The fetch-helper "separate file" assertion lives in Task 6, so nothing here depends on a not-yet-created file — no committing through red.)
 
 - [ ] **Step 5: Commit**
 
@@ -851,27 +941,56 @@ Append to `tests/test_photo_judge_bakeoff.py`:
 
 ```python
 class FetchHelper(unittest.TestCase):
-    def test_fetch_pins_and_hashes_without_real_download(self):
+    def _fake_snapshot(self, repo_id, revision, local_dir, **kw):
+        Path(local_dir).mkdir(parents=True, exist_ok=True)
+        (Path(local_dir) / "weights.bin").write_bytes(b"abc")
+        return local_dir
+
+    def _tmp(self):
+        import tempfile
+        return tempfile.mkdtemp()
+
+    def test_fetch_pins_and_hashes_smoke_skipped_by_default(self):
         import scripts.photo_judge_bakeoff_fetch as f
-        calls = {}
-        def fake_snapshot(repo_id, revision, local_dir, **kw):
-            calls["repo_id"] = repo_id
-            calls["revision"] = revision
-            Path(local_dir).mkdir(parents=True, exist_ok=True)
-            (Path(local_dir) / "weights.bin").write_bytes(b"abc")
-            return local_dir
-        with mock.patch.object(f, "_snapshot_download", fake_snapshot):
+        with mock.patch.object(f, "_snapshot_download", self._fake_snapshot):
             rec = f.fetch_one(repo_id="vectara/x", revision="deadbeef",
-                              name="hhem", dest_root=str(Path(
-                                  __import__("tempfile").mkdtemp())))
-        self.assertEqual(rec["revision"], "deadbeef")       # PINNED
-        self.assertEqual(len(rec["sha256"]), 64)            # HASH recorded
-        self.assertEqual(rec["smoke"], "skipped-or-ok")     # smoke field present
+                              name="hhem", dest_root=self._tmp())
+        self.assertEqual(rec["revision"], "deadbeef")     # PINNED
+        self.assertEqual(len(rec["sha256"]), 64)          # HASH recorded
+        self.assertEqual(rec["smoke"], "skipped")         # honest default
+
+    def test_fetch_runs_smoke_hook_when_given(self):
+        import scripts.photo_judge_bakeoff_fetch as f
+        def boom(dest):
+            raise RuntimeError("bad weights")
+        with mock.patch.object(f, "_snapshot_download", self._fake_snapshot):
+            ok = f.fetch_one(repo_id="x", revision="r", name="n",
+                             dest_root=self._tmp(), smoke_fn=lambda dest: None)
+            bad = f.fetch_one(repo_id="x", revision="r", name="n",
+                              dest_root=self._tmp(), smoke_fn=boom)
+        self.assertEqual(ok["smoke"], "ok")
+        self.assertTrue(bad["smoke"].startswith("failed"))   # honest failure
 
     def test_fetch_refuses_unpinned_revision(self):
         import scripts.photo_judge_bakeoff_fetch as f
         with self.assertRaises(ValueError):
             f.fetch_one(repo_id="x", revision=None, name="n", dest_root="/tmp/x")
+
+    def test_fetch_helper_is_a_separate_file(self):   # moved from Task 5 (fix #3)
+        self.assertTrue((ROOT / "scripts" / "photo_judge_bakeoff_fetch.py").exists())
+
+    def test_cli_parses_and_calls_fetch_one(self):
+        import scripts.photo_judge_bakeoff_fetch as f
+        seen = {}
+        def fake_fetch_one(**kw):
+            seen.update(kw)
+            return {"name": kw["name"], "smoke": "skipped"}
+        with mock.patch.object(f, "fetch_one", fake_fetch_one):
+            rc = f.main(["--repo-id", "vectara/x", "--revision", "abc",
+                         "--name", "hhem", "--dest-root", "/tmp/bk"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(seen["revision"], "abc")
+        self.assertEqual(seen["name"], "hhem")
 ```
 
 - [ ] **Step 2: Run to verify it fails**
@@ -888,8 +1007,10 @@ Create `scripts/photo_judge_bakeoff_fetch.py`:
 # Licensed under the GNU Affero General Public License v3.0 or later.
 """scripts/photo_judge_bakeoff_fetch.py — the ONLY network component of the
 photo bakeoff. Pinned + sha256-recorded HuggingFace downloads into the NON-live
-models/bakeoff/ cache, plus a one-shot smoke-test. NEVER starts a service, edits
-model.env, or writes to models/llamacpp/. The runner never imports this module.
+models/bakeoff/ cache, with an OPTIONAL one-shot smoke hook (default: skipped —
+the runner's adapter-load is the integration smoke; pass smoke_fn to verify a load
++ predict here). NEVER starts a service, edits model.env, or writes to
+models/llamacpp/. The runner never imports this module.
 """
 
 from __future__ import annotations
@@ -914,19 +1035,43 @@ def _dir_sha256(path: str) -> str:
     return h.hexdigest()
 
 
-def fetch_one(*, repo_id: str, revision: str, name: str, dest_root: str) -> dict:
+def fetch_one(*, repo_id: str, revision: str, name: str, dest_root: str,
+              smoke_fn=None) -> dict:
     if not revision:
         raise ValueError("revision must be PINNED (a specific commit/tag)")
     dest = os.path.join(dest_root, name)
     _snapshot_download(repo_id=repo_id, revision=revision, local_dir=dest)
-    return {"name": name, "repo_id": repo_id, "revision": revision,
-            "path": dest, "sha256": _dir_sha256(dest),
-            "smoke": "skipped-or-ok"}
+    rec = {"name": name, "repo_id": repo_id, "revision": revision,
+           "path": dest, "sha256": _dir_sha256(dest), "smoke": "skipped"}
+    if smoke_fn is not None:
+        try:
+            smoke_fn(dest)            # caller-supplied one load + one predict
+            rec["smoke"] = "ok"
+        except Exception as e:        # honest failure, never a crash
+            rec["smoke"] = f"failed: {type(e).__name__}: {e}"
+    return rec
+
+
+def main(argv=None) -> int:
+    import argparse
+    import json
+    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    p.add_argument("--repo-id", required=True)
+    p.add_argument("--revision", required=True, help="PINNED commit SHA or tag")
+    p.add_argument("--name", required=True,
+                   help="dest subdir under models/bakeoff/")
+    p.add_argument("--dest-root", default=os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "models", "bakeoff"))
+    args = p.parse_args(argv)
+    rec = fetch_one(repo_id=args.repo_id, revision=args.revision,
+                    name=args.name, dest_root=args.dest_root)
+    print(json.dumps(rec, indent=2))   # the runbook records this verbatim
+    return 0
 
 
 if __name__ == "__main__":
-    # Real obtain run is an execution+witness step (see the download runbook).
-    raise SystemExit(0)
+    raise SystemExit(main())
 ```
 
 - [ ] **Step 4: Run to verify it passes**
@@ -963,13 +1108,20 @@ real regressions; the known fabrication-guard order-flake is not ours.
 
 - [ ] **Step 3: Write the download runbook**
 
-Create `docs/handoffs/2026-06-08-photo-judge-bakeoff-download-runbook.md`: the exact
-`python -m scripts.photo_judge_bakeoff_fetch` invocations per candidate with the
-**pinned revision to fill in at obtain-time**, the `models/bakeoff/<name>/` dest, and
-a table to record `repo_id | revision | sha256 | smoke result`. Note the owner policy
-(agent may download bakeoff artifacts; pinned/hashed/non-live; live wiring is owner's),
-and that ThinknCheck's checkpoint obtainability is verified here (paper-only ⇒ recorded
-`unavailable`, not a blocker).
+Create `docs/handoffs/2026-06-08-photo-judge-bakeoff-download-runbook.md` with, per
+candidate, the EXACT CLI (revision filled in at obtain-time):
+
+```
+/home/rohit/maez/.venv/bin/python -B -m scripts.photo_judge_bakeoff_fetch \
+    --repo-id <hf repo> --revision <PINNED sha/tag> \
+    --name <hhem|minicheck|nli|reranker|thinkncheck>
+```
+
+and a table to record `name | repo_id | revision | sha256 | smoke`. The smoke column is
+filled by the runner's adapter-load (or a passed `smoke_fn`). Note the owner policy (agent
+may download bakeoff artifacts; pinned/hashed/non-live `models/bakeoff/`; live wiring is
+owner's), and that ThinknCheck's checkpoint obtainability is verified here (paper-only or
+no released checkpoint ⇒ recorded `unavailable`, not a blocker).
 
 - [ ] **Step 4: Write the Codex handoff** in `docs/handoffs/` — branch, commits, the
 five strata + must_catch conscience, the threshold protocol (un-riggable), the
@@ -984,10 +1136,11 @@ passes.
 ## Self-Review
 
 **Spec coverage:** stratified corpus + explicit `stratum` (Task 1); `predict(premise,
-hypothesis)→Verdict` adapter layer + 6 candidates (Tasks 2–3); threshold protocol
-published-default-or-grid + reported (Tasks 2, 4 meta); sibling runner reusing the hard
-contract but not the pass/fail rule + per-stratum + must_catch loud callout + metadata +
-frontier + zero-candidates honest report (Tasks 4–5); runner-only hard-contract guard
+hypothesis)→Verdict` adapter layer + 6 candidates (Tasks 2–3); threshold protocol —
+fixed grid SWEPT per score-based candidate in `run_candidate` (one row per grid point) +
+threshold reported in every row (Tasks 2, 5); sibling runner reusing the hard
+contract but not the pass/fail rule + rich per-stratum + must_catch loud callout +
+metadata + frontier + zero-candidates honest report (Tasks 4–5); runner-only hard-contract guard
 incl. no-network, with the watch-point explicit (Task 5); separate pinned+hashed fetch
 helper (Task 6); obtain/runbook as execution step (Task 7). All covered.
 
@@ -998,5 +1151,18 @@ they are deterministic now.)
 **Type consistency:** `Verdict(label, score, latency_s)`, `score_to_label(score,
 threshold)`, `CandidateAdapter.predict→Verdict`, `aggregate_candidate(name, rows,
 verdicts, meta)→dict`, `build_report(aggregates)→{text, aggregates, recommendation}`,
-`main(argv, adapters=None)→int`, `fetch_one(*, repo_id, revision, name, dest_root)→dict`
-are used consistently across tasks.
+`run_candidate(adapter, rows)→list[dict]`, `main(argv, adapters=None)→int`,
+`fetch_one(*, repo_id, revision, name, dest_root, smoke_fn=None)→dict` are used
+consistently across tasks.
+
+**HOLD fixes applied (owner review):** (1) the THRESHOLD_GRID is now actually swept —
+`run_candidate` expands each score-based candidate into one report row per grid point
+(`name@thr`), model called once and re-graded, so the frontier is real not single-point;
+(2) the hard-contract test is STRUCTURAL (ast: imports / `os.environ` assignment /
+`open(...,"w")` to model.env), immune to the runner docstring naming those terms, and
+scopes to the runner file ONLY — never the fetch helper; (3) Task 5 no longer commits
+through a red test (the fetch-file assertion moved to Task 6); (4) concrete-adapter tests
+patch `_load` at the CLASS level before instantiation, so no real model lib is imported;
+(5) per-stratum now reports contradiction_n/caught/catch_rate + grounded_n/false_flags/
+false_flag_rate; (6) the fetch helper has a real argparse CLI and an honest smoke field
+(`skipped` by default, `ok`/`failed: …` with a hook) — no "skipped-or-ok" hand-wave.
