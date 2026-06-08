@@ -114,12 +114,13 @@ def build_report(aggregates: list[dict]) -> dict:
     """Render the frontier report. aggregates may be empty or all-unavailable."""
     runnable = [a for a in aggregates if a.get("runnable")]
     lines = ["# Photo-Contradiction Judge Bakeoff", ""]
-    lines.append("| candidate | runnable | catch | false-flag | errors | p50 s | p95 s | threshold | device | sha256 |")
-    lines.append("|---|---|---:|---:|---:|---:|---:|---|---|---|")
+    lines.append("| candidate | model_id | revision | adapter_version | runnable | catch | false-flag | errors | p50 s | p95 s | threshold | device | sha256 |")
+    lines.append("|---|---|---|---|---|---:|---:|---:|---:|---:|---|---|---|")
     for a in aggregates:
         m = a.get("meta", {})
-        lines.append("| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |".format(
-            a["name"], a.get("runnable"),
+        lines.append("| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |".format(
+            a["name"], m.get("model_id"), m.get("revision"),
+            m.get("adapter_version"), a.get("runnable"),
             a.get("catch_rate"), a.get("false_flag_rate"), a.get("error_count"),
             a.get("latency", {}).get("p50"), a.get("latency", {}).get("p95"),
             m.get("threshold"), m.get("device"),
@@ -170,6 +171,7 @@ def run_candidate(adapter, rows):
     runnable = any(lbl != "unavailable" for lbl, _, _ in raw.values())
     base_meta = {
         "model_id": getattr(adapter, "model_id", adapter.name),
+        "revision": getattr(adapter, "revision", None),
         "adapter_version": ADAPTER_VERSION,
         "device": getattr(adapter, "device", "cpu"),
         "unavailable_reason": adapter.unavailable_reason,

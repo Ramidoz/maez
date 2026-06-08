@@ -374,5 +374,62 @@ class FetchHelper(unittest.TestCase):
         self.assertEqual(seen["name"], "hhem")
 
 
+class ReproFingerprint(unittest.TestCase):
+    """Every report row must carry the full fingerprint (model_id / revision /
+    adapter_version / sha256 / threshold / device) — reproducibility is the point."""
+
+    def test_revision_in_meta_and_fingerprint_in_report(self):
+        import scripts.photo_judge_bakeoff as r
+        from scripts.photo_judge_bakeoff_adapters import CandidateAdapter
+
+        class Fake(CandidateAdapter):
+            name = "fake"
+            score_based = False
+            model_id = "vectara/x"
+            revision = "abc123"
+            def _load(self): return object()
+            def _raw_predict(self, p, h): return "contradicts"
+
+        rows = r.load_corpus(str(CORPUS))
+        aggs = r.run_candidate(Fake(threshold=None), rows)
+        self.assertEqual(aggs[0]["meta"]["revision"], "abc123")   # carried into meta
+        rpt = r.build_report(aggs)["text"]
+        self.assertIn("vectara/x", rpt)        # model_id printed
+        self.assertIn("abc123", rpt)           # revision printed
+        self.assertIn("adapter_version", rpt)  # column present
+
+    def test_fetch_writes_manifest_with_revision_and_sha256(self):
+        import json as _json
+        import scripts.photo_judge_bakeoff_fetch as f
+
+        def fake_snap(repo_id, revision, local_dir, **kw):
+            Path(local_dir).mkdir(parents=True, exist_ok=True)
+            (Path(local_dir) / "w.bin").write_bytes(b"abc")
+            return local_dir
+
+        import tempfile
+        root = tempfile.mkdtemp()
+        with mock.patch.object(f, "_snapshot_download", fake_snap):
+            rec = f.fetch_one(repo_id="vectara/x", revision="deadbeef",
+                              name="hhem", dest_root=root)
+        man = Path(root) / "hhem" / "bakeoff_manifest.json"
+        self.assertTrue(man.exists())          # fetch records a manifest
+        m = _json.loads(man.read_text())
+        self.assertEqual(m["revision"], "deadbeef")
+        self.assertEqual(m["sha256"], rec["sha256"])
+
+    def test_adapter_reads_revision_from_manifest(self):
+        import json as _json
+        import tempfile
+        from scripts.photo_judge_bakeoff_adapters import read_bakeoff_manifest
+        d = tempfile.mkdtemp()
+        (Path(d) / "bakeoff_manifest.json").write_text(
+            _json.dumps({"revision": "rev9", "sha256": "f00"}))
+        man = read_bakeoff_manifest(d)
+        self.assertEqual(man["revision"], "rev9")
+        self.assertEqual(man["sha256"], "f00")
+        self.assertIsNone(read_bakeoff_manifest(tempfile.mkdtemp()))  # absent → None
+
+
 if __name__ == "__main__":
     unittest.main()

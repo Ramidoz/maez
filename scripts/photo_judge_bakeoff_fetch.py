@@ -11,6 +11,7 @@ models/llamacpp/. The runner never imports this module.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from pathlib import Path
 
@@ -24,7 +25,7 @@ def _snapshot_download(repo_id, revision, local_dir, **kw):
 def _dir_sha256(path: str) -> str:
     h = hashlib.sha256()
     for p in sorted(Path(path).rglob("*")):
-        if p.is_file():
+        if p.is_file() and p.name != "bakeoff_manifest.json":  # exclude our own
             h.update(p.name.encode())
             h.update(p.read_bytes())
     return h.hexdigest()
@@ -36,8 +37,15 @@ def fetch_one(*, repo_id: str, revision: str, name: str, dest_root: str,
         raise ValueError("revision must be PINNED (a specific commit/tag)")
     dest = os.path.join(dest_root, name)
     _snapshot_download(repo_id=repo_id, revision=revision, local_dir=dest)
+    sha = _dir_sha256(dest)
     rec = {"name": name, "repo_id": repo_id, "revision": revision,
-           "path": dest, "sha256": _dir_sha256(dest), "smoke": "skipped"}
+           "path": dest, "sha256": sha, "smoke": "skipped"}
+    # Record the pinned revision + sha256 so the bakeoff report's fingerprint is
+    # the ACTUAL downloaded artifact (the adapter reads this manifest at load).
+    with open(os.path.join(dest, "bakeoff_manifest.json"), "w",
+              encoding="utf-8") as fh:
+        json.dump({"name": name, "repo_id": repo_id, "revision": revision,
+                   "sha256": sha}, fh, indent=2)
     if smoke_fn is not None:
         try:
             smoke_fn(dest)            # caller-supplied one load + one predict
@@ -49,7 +57,6 @@ def fetch_one(*, repo_id: str, revision: str, name: str, dest_root: str,
 
 def main(argv=None) -> int:
     import argparse
-    import json
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--repo-id", required=True)
     p.add_argument("--revision", required=True, help="PINNED commit SHA or tag")

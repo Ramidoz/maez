@@ -10,6 +10,7 @@ latency + the unavailable path are shared in CandidateAdapter.predict().
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from dataclasses import dataclass
@@ -30,15 +31,35 @@ def score_to_label(score: float, threshold: float) -> str:
     return "grounded" if score >= threshold else "contradicts"
 
 
+def read_bakeoff_manifest(cache_dir: str) -> dict | None:
+    """Read <cache_dir>/bakeoff_manifest.json (written by the fetch helper at
+    download time) → {revision, sha256, ...}, or None if absent/unreadable. This
+    is how a pinned revision + sha256 reach the report after a real download."""
+    path = os.path.join(cache_dir, "bakeoff_manifest.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return None
+
+
 class CandidateAdapter:
     name: str = "base"
     score_based: bool = True   # False → label-native (no threshold)
+    revision: str | None = None   # pinned download revision (read from manifest)
+    sha256: str | None = None     # artifact sha256 (read from manifest)
 
     def __init__(self, threshold: float | None = None):
         self.threshold = threshold
         self.unavailable_reason: str | None = None
         self._model = None
         self._load_failed = False
+        # Pick up the pinned revision + sha256 the fetch helper recorded, so the
+        # report's fingerprint IS the actual downloaded artifact (not hand-edited).
+        man = read_bakeoff_manifest(os.path.join(_BAKEOFF_CACHE, self.name))
+        if man:
+            self.revision = man.get("revision")
+            self.sha256 = man.get("sha256")
         try:
             self._model = self._load()
         except Exception as e:  # unavailable, never crash the bakeoff
