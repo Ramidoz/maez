@@ -31,6 +31,16 @@ The fetch helper is the ONLY network component. The runner
   too; adjust the adapter body if a real API differs from the best-known form. The
   unit tests mock that boundary, so they stay green across such adjustments.
 
+## Reproducibility manifest (how revision/sha256 reach the report)
+
+`fetch_one` writes `models/bakeoff/<name>/bakeoff_manifest.json` = `{repo_id, revision,
+sha256}` (the manifest is excluded from the artifact hash, so re-downloads are stable).
+`CandidateAdapter.__init__` reads that manifest at load and sets `self.revision` /
+`self.sha256`, which the runner carries into per-candidate metadata and the report prints
+(`model_id | revision | adapter_version | … | sha256`). So the report's `revision`/`sha256`
+ARE the pinned download's — no hand-editing. A candidate with no manifest (e.g. ChatJudge,
+or a not-yet-downloaded model) shows `revision=None` honestly.
+
 ## Smoke
 
 The fetch CLI records `smoke: skipped` by default — the **runner's adapter-load is

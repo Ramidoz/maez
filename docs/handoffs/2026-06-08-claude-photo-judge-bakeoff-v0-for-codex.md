@@ -27,6 +27,13 @@ touches NO daemon/live path. Owner picks the winner + placement in a follow-on L
   `error_count`/`error_rate`, zero-candidates honest path).
 - `2cf0c36` — runner `main()` + grid sweep + structural hard-contract + per-case-error.
 - `3edb392` — separate pinned+hashed fetch helper (the only network component).
+- `8fc49cf` — **(Codex HOLD addressed)** full reproducibility fingerprint in EVERY report
+  row: `base_meta` carries `revision`; the report table prints `model_id`/`revision`/
+  `adapter_version` (not just JSON). Closed the loop — `fetch_one` writes
+  `models/bakeoff/<name>/bakeoff_manifest.json {revision, sha256}` (excluded from the
+  artifact hash), `CandidateAdapter` reads it at load, so the printed revision/sha256 ARE
+  the pinned download's, not hand-edited. 4 new tests (revision-in-meta, fingerprint-in-
+  report, fetch-writes-manifest, adapter-reads-manifest). Slice suite now **32 OK**.
 
 ## Review anchors (the things owner review hardened)
 
