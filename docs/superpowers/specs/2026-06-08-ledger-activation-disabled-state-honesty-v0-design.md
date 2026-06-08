@@ -50,21 +50,34 @@ At the top of the persistence/marker path, **before** any `sqlite3.connect` or
 - else proceed as today. → the **initialized** path.
 
 ### 3. `ledger_is_initialized(db_path) -> bool` — the "notebook is built" proof
-A cheap, **read-only** check (`file:{path}?mode=ro`, like `reconcile._read_era`) that
-returns `True` only if the DB is a real ledger: `meta` and `turns` tables exist, the
-canonical **genesis** row is present (`turns.turn_id = 'genesis'`), and a **head**
-chain hash is resolvable (`meta.genesis_hash` / latest `turns.chain_hash`). Returns
-`False` — never raises — on a zero-byte file, missing tables, locked/corrupt DB, or
-missing genesis. Opens **read-only** (must not create the file). Lives in
-`core/ledger/migrate.py` (it owns the schema's shape).
+A cheap, **read-only** check (`file:{path}?mode=ro`, like `reconcile._read_era`).
+"Some tables exist" must NOT pass. Returns `True` only if ALL hold:
+- `meta` and `turns` tables exist;
+- the canonical **genesis** row is present (`turns.turn_id = 'genesis'`);
+- `meta.genesis_hash` is present;
+- `meta.last_chain_hash` is present;
+- **consistency:** the genesis row's `chain_hash` **equals** `meta.genesis_hash`
+  **and** `meta.last_chain_hash` (on a freshly-migrated ledger all three are the
+  same canonical genesis hash — verified empirically). This rejects a half-built or
+  corrupt notebook, not just an empty one.
+
+Returns `False` — **never raises** — on a zero-byte file, missing tables,
+locked/corrupt DB, missing genesis, missing meta keys, or a hash mismatch. Opens
+**read-only** (must not create the file). Lives in `core/ledger/migrate.py` (it owns
+the schema's shape).
 
 ### 4. Init CLI: `python -m core.ledger.init`
-A `core/ledger/__main__.py` (or `init.py` with a CLI) that:
+The command `python -m core.ledger.init` runs **`core/ledger/init.py`** (NOT
+`__main__.py` — that would be `python -m core.ledger`). So: create
+`core/ledger/init.py` with a `if __name__ == "__main__":` CLI that:
 - takes a path (default `memory/ledger.db`), runs `migrate.run(path)` (idempotent),
 - then asserts `ledger_is_initialized(path)` and reads the head,
 - prints **content-free** status, e.g.
   `ledger initialized: <path> | meta=ok turns=ok genesis=ok schema_version=1 head=<8-char hash prefix>`,
 - exits non-zero if verification fails. No secret/owner-content values printed.
+
+An optional `core/ledger/__main__.py` thin wrapper may be added **only** if we also
+want `python -m core.ledger` to work; not required for v0.
 
 ### 5. No automatic production initialization at startup
 The daemon startup path must **not** call `migrate.run` / init. Initialization is a
@@ -98,12 +111,15 @@ yes → write marker / model reply with real trace ids (as today).
 4. **`ledger_writes_enabled()`** parses true / false / unrecognized (→ False + one
    warning) consistently; `writer.is_enabled()` and `reconcile._writes_enabled()`
    delegate to it (assert same result — no fork).
-5. **`ledger_is_initialized`:** True on a migrated temp DB; False on zero-byte, empty,
-   and missing-`genesis` DBs; does **not** raise on a corrupt/zero-byte file; opens
-   read-only (does not create a missing file).
-6. **Init CLI:** running `python -m core.ledger.init <temp>` creates `meta`/`turns`/
-   genesis, prints content-free status, exits 0; idempotent (second run still exit 0,
-   no duplicate genesis).
+5. **`ledger_is_initialized`:** True on a migrated temp DB; **False** on zero-byte,
+   empty, missing-`genesis`, missing-`meta.genesis_hash`, missing-`meta.last_chain_hash`,
+   and **hash-mismatch** DBs (e.g. a tampered `meta.last_chain_hash` ≠ genesis row
+   `chain_hash` → False, so a half-built/corrupt notebook fails); does **not** raise on
+   a corrupt/zero-byte file; opens read-only (does not create a missing file).
+6. **Init CLI:** running `python -m core.ledger.init <temp>` (i.e. `core/ledger/init.py`)
+   creates `meta`/`turns`/genesis, `ledger_is_initialized` is then True, prints
+   content-free status, exits 0; idempotent (second run still exit 0, no duplicate
+   genesis); exits non-zero if verification fails.
 7. **No auto-init at startup** (structural: daemon startup code path does not call
    `migrate.run` / the init entrypoint).
 
