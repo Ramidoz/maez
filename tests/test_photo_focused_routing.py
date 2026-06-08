@@ -122,6 +122,20 @@ class PhotoSynthesisLivesInsideThePipeline(unittest.TestCase):
         self.assertIn("photo_analysis", body)
         self.assertIn("photo_focused_synth_enabled", body)
 
+    def test_photo_vision_signal_marked_present_before_envelope_build(self):
+        # The audit/grounding envelope is built from the signal lists; mark
+        # owner-sent photo vision PRESENT before _build_envelope so the honesty
+        # judge knows photo vision happened and does not false-flag the reply.
+        body = _handle_message_body()
+        i_signal = body.find('"owner-sent photo vision"')
+        i_build = body.find("_build_envelope(")
+        self.assertGreater(i_signal, -1, "photo-vision signal not wired into envelope inputs")
+        self.assertGreater(i_build, -1)
+        self.assertLess(
+            i_signal, i_build, "photo signal must be marked BEFORE the envelope is built"
+        )
+        self.assertIn("if photo_analysis", body)
+
 
 class AdapterDoesNotImportLowLevelAudit(unittest.TestCase):
     def test_adapter_has_no_single_line_self_claim_audit_import(self):
@@ -172,6 +186,33 @@ class PhotoAnalysisStash(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(event.photo_analysis_text)
         # the legacy injection still carries the honest "could not see" line
         self.assertIn("could not see", str(event.channel_prompt).lower())
+
+
+class PhotoVisionSignalInEvidenceEnvelope(unittest.TestCase):
+    """The evidence envelope (source of truth for the grounding judge) must mark
+    owner-sent photo vision PRESENT while keeping desktop screen observation
+    ABSENT — so the audit does not false-flag the focused reply's "I saw it"."""
+
+    def test_envelope_marks_photo_vision_present_and_keeps_screen_absent(self):
+        import tempfile
+        from pathlib import Path
+
+        from core.cognition import envelope_builder
+        from core.ledger import migrate
+
+        db = str(Path(tempfile.mkdtemp(prefix="maez_test_photo_env_")) / "ledger.db")
+        migrate.run(db)
+        env = envelope_builder.build_envelope(
+            ledger_db_path=db,
+            signals_present=["owner-sent photo vision", "system stats"],
+            signals_absent=["screen observation (disabled by policy)"],
+            tool_results=[],
+        )
+        self.assertIn("owner-sent photo vision", env["signals_present"])
+        # photo vision is PRESENT, never absent
+        self.assertTrue(all("photo vision" not in s for s in env["signals_absent"]))
+        # desktop screen observation stays absent — a separate capability
+        self.assertTrue(any("screen observation" in s for s in env["signals_absent"]))
 
 
 if __name__ == "__main__":

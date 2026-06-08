@@ -5266,6 +5266,17 @@ class MaezDaemon:
         # downstream renderer treats None as empty (legacy prompt
         # shape) and audit_assistant_text falls through to the
         # legacy signals path.
+        # Direction (b): record owner-sent photo vision as a PRESENT signal so
+        # the evidence envelope (built next) and the post-generation audit know
+        # photo vision really happened this turn — otherwise the grounding judge
+        # treats the envelope as source of truth and can false-flag the focused
+        # reply's "I saw the photo" as unsupported. Distinct from desktop screen
+        # observation, which stays absent above.
+        if photo_analysis and (
+            "owner-sent photo vision" not in _chat_signals_present
+        ):
+            # ≤30 chars: fits the envelope's per-signal cap (§2) untruncated.
+            _chat_signals_present.append("owner-sent photo vision")
         try:
             _evidence_envelope = _build_envelope(
                 ledger_db_path=str(LEDGER_DB_PATH),
