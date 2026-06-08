@@ -139,6 +139,12 @@ _PHOTO_VISION_INSTRUCTION = (
     "empty data — you did see it. If the caption asks about something the photo "
     "does not show, say what you do see and what is missing. Cite [E1]."
 )
+_PHOTO_VISION_RETRY_INSTRUCTION = (
+    "Your previous answer did not cite the evidence. Every claim you make about "
+    "the photo MUST cite [E1] — the only evidence — and no other label. If you "
+    "cannot ground a statement in the analysis above, do not make it. Answer "
+    "again, citing [E1]."
+)
 _FORBIDDEN_EMPTY_VOCAB: tuple[str, ...] = (
     "interceptor",
     "tool loop",
@@ -290,6 +296,7 @@ class FocusedResult:
     prompt_build_ms: int | None = None
     chat_total_ms: int | None = None
     reply_token_est: int | None = None
+    receipt_reason: str | None = None
 
 
 @dataclass(frozen=True)

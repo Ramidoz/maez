@@ -147,5 +147,16 @@ class SynthesizePhotoTurn(unittest.TestCase):
         self.assertIn("saw", low)
 
 
+class ReceiptReasonField(unittest.TestCase):
+    def test_focused_result_has_receipt_reason_default_none(self):
+        r = FocusedResult(reply="x", cited_ids=["E1"], working_set_chars=1)
+        self.assertIsNone(r.receipt_reason)
+        r2 = FocusedResult(
+            reply="x", cited_ids=["E1"], working_set_chars=1,
+            receipt_reason="cited_ok",
+        )
+        self.assertEqual(r2.receipt_reason, "cited_ok")
+
+
 if __name__ == "__main__":
     unittest.main()
