@@ -158,5 +158,93 @@ class ReceiptReasonField(unittest.TestCase):
         self.assertEqual(r2.receipt_reason, "cited_ok")
 
 
+def _scripted_chat(contents):
+    """A chat_fn that yields each content in order, then '' forever. box['i']
+    counts calls (so tests can assert retry happened exactly once / not at all)."""
+    box = {"i": 0}
+
+    def chat_fn(**_k):
+        i = box["i"]
+        box["i"] += 1
+        text = contents[i] if i < len(contents) else ""
+        return SimpleNamespace(message=SimpleNamespace(content=text))
+
+    return chat_fn, box
+
+
+class CitationRail(unittest.TestCase):
+    A = ANALYSIS
+
+    def test_valid_citation_first_try_is_cited_ok(self):
+        chat, box = _scripted_chat(["That's a Reddit thread [E1]."])
+        r = synthesize_photo_turn(analysis_text=self.A, caption="check this",
+                                  surface="telegram_surface", chat_fn=chat, model="m")
+        self.assertEqual(r.receipt_reason, "cited_ok")
+        self.assertEqual(r.cited_ids, ["E1"])
+        self.assertEqual(box["i"], 1)  # no retry
+
+    def test_ungrounded_then_retry_recovers(self):
+        chat, box = _scripted_chat(["A Reddit thread.",
+                                    "A Reddit thread [E1]."])
+        r = synthesize_photo_turn(analysis_text=self.A, caption="check this",
+                                  surface="telegram_surface", chat_fn=chat, model="m")
+        self.assertEqual(r.receipt_reason, "retry_recovered")
+        self.assertEqual(r.cited_ids, ["E1"])
+        self.assertIn("[E1]", r.reply)
+        self.assertEqual(box["i"], 2)  # exactly one retry
+
+    def test_ungrounded_both_times_is_deterministic_fallback(self):
+        chat, box = _scripted_chat(["WWDC2024 clip, no cite.",
+                                    "Still no citation here."])
+        r = synthesize_photo_turn(analysis_text=self.A, caption="check this",
+                                  surface="telegram_surface", chat_fn=chat, model="m")
+        self.assertEqual(r.receipt_reason, "deterministic_fallback")
+        self.assertEqual(r.cited_ids, ["E1"])
+        self.assertIn("[E1]", r.reply)
+        self.assertIn("Reddit", r.reply)            # the sight-report (analysis)
+        self.assertNotIn("WWDC2024", r.reply)       # NOT the wandering reply
+        self.assertNotIn("Still no citation", r.reply)
+        self.assertEqual(box["i"], 2)
+
+    def test_fake_citation_e2_is_ungrounded(self):
+        chat, box = _scripted_chat(["It shows [E2] a thread.",
+                                    "Now grounded [E1]."])
+        r = synthesize_photo_turn(analysis_text=self.A, caption="check this",
+                                  surface="telegram_surface", chat_fn=chat, model="m")
+        self.assertEqual(r.receipt_reason, "retry_recovered")
+        self.assertEqual(r.cited_ids, ["E1"])
+
+    def test_e1_plus_e2_is_ungrounded(self):
+        chat, box = _scripted_chat(["A thread [E1][E2].",
+                                    "no cite either"])
+        r = synthesize_photo_turn(analysis_text=self.A, caption="check this",
+                                  surface="telegram_surface", chat_fn=chat, model="m")
+        self.assertEqual(r.receipt_reason, "deterministic_fallback")
+        self.assertEqual(r.cited_ids, ["E1"])
+
+    def test_empty_brain_first_call_no_retry(self):
+        chat, box = _scripted_chat([""])
+        r = synthesize_photo_turn(analysis_text=self.A, caption="check this",
+                                  surface="telegram_surface", chat_fn=chat, model="m")
+        self.assertEqual(r.receipt_reason, "deterministic_fallback")
+        self.assertEqual(box["i"], 1)               # NO wasted retry
+        self.assertEqual(r.cited_ids, ["E1"])
+
+    def test_retry_raises_falls_back(self):
+        calls = {"i": 0}
+
+        def chat_fn(**_k):
+            calls["i"] += 1
+            if calls["i"] == 1:
+                return SimpleNamespace(message=SimpleNamespace(content="no cite"))
+            raise RuntimeError("brain down on retry")
+
+        r = synthesize_photo_turn(analysis_text=self.A, caption="check this",
+                                  surface="telegram_surface", chat_fn=chat_fn, model="m")
+        self.assertEqual(r.receipt_reason, "deterministic_fallback")
+        self.assertEqual(r.cited_ids, ["E1"])
+        self.assertEqual(calls["i"], 2)             # at most one retry, then fallback
+
+
 if __name__ == "__main__":
     unittest.main()

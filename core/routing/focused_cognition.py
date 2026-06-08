@@ -1038,39 +1038,57 @@ def synthesize_photo_turn(
         working_set_tokens_est=working_set_chars // 4,
     )
 
-    # Honest fallback: surface what was seen, never claim blindness or fabricate.
-    deterministic = (
-        "Here's what I saw in the photo you sent: " + analysis_text
-    ).strip()
+    # Deterministic fallback: the vision analysis verbatim, citing [E1] so the
+    # reply, cited_ids, log, and downstream checks all agree. Grounded by
+    # construction (it IS the evidence). receipt_reason marks it as forced.
+    deterministic = ("Here's what I'm confident I saw [E1]: " + analysis_text).strip()
 
-    _t0 = _time.monotonic()
-    system = (
+    base_system = (
         f"{_voice_card(surface)}\n\n"
         f"{_PHOTO_VISION_INSTRUCTION}\n\n"
         f"=== WHAT MAEZ SAW IN THE PHOTO (cite [E1]) ===\n"
         f"{analysis_text}"
     )
-    messages = [
-        {"role": "system", "content": system},
-        {"role": "user", "content": caption},
-    ]
+
+    def _run(system_text):
+        try:
+            response = chat_fn(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_text},
+                    {"role": "user", "content": caption},
+                ],
+                think=False,
+                options={"temperature": 0.7, "num_predict": 1024},
+            )
+            return (
+                getattr(getattr(response, "message", None), "content", None) or ""
+            ).strip()
+        except Exception:
+            return ""
+
+    def _valid_photo_citation(text: str) -> bool:
+        # Valid only if it cites E1 and NO other label. The one-item photo working
+        # set contains exactly E1; any other [E#] is fake grounding.
+        return sorted({f"E{m.group(1)}" for m in _CITE_RE.finditer(text)}) == ["E1"]
+
+    _t0 = _time.monotonic()
     _t1 = _time.monotonic()
-    raw_reply = ""
-    try:
-        response = chat_fn(
-            model=model,
-            messages=messages,
-            think=False,
-            options={"temperature": 0.7, "num_predict": 1024},
-        )
-        raw_reply = (
-            getattr(getattr(response, "message", None), "content", None) or ""
-        ).strip()
-    except Exception:
-        raw_reply = ""
+    first_raw = _run(base_system)
+    if first_raw and _valid_photo_citation(first_raw):
+        reply, receipt_reason = first_raw, "cited_ok"
+    elif first_raw:
+        # Brain produced an ungrounded reply. One forced-citation retry.
+        retry_raw = _run(base_system + "\n\n" + _PHOTO_VISION_RETRY_INSTRUCTION)
+        if retry_raw and _valid_photo_citation(retry_raw):
+            reply, receipt_reason = retry_raw, "retry_recovered"
+        else:
+            reply, receipt_reason = deterministic, "deterministic_fallback"
+    else:
+        # Brain returned nothing on the first call — no wasted retry.
+        reply, receipt_reason = deterministic, "deterministic_fallback"
     _t2 = _time.monotonic()
 
-    reply = raw_reply or deterministic
     cited_ids = sorted({f"E{m.group(1)}" for m in _CITE_RE.finditer(reply)})
     return FocusedResult(
         reply=reply,
@@ -1079,6 +1097,7 @@ def synthesize_photo_turn(
         prompt_build_ms=int((_t1 - _t0) * 1000),
         chat_total_ms=int((_t2 - _t1) * 1000),
         reply_token_est=len(reply) // 4,
+        receipt_reason=receipt_reason,
     )
 
 
