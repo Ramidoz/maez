@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import time
 from typing import Any, Optional
@@ -135,6 +136,28 @@ def _clean_exchange(doc: str) -> str:
 
 logger = logging.getLogger(__name__)
 
+
+def _photo_focused_synth_enabled() -> bool:
+    """Direction (b) gate. Default ON; set MAEZ_PHOTO_FOCUSED_SYNTH=0 to fall
+    back to the legacy daemon.handle_message megaprompt path."""
+    val = os.environ.get("MAEZ_PHOTO_FOCUSED_SYNTH", "1").strip().lower()
+    return val not in ("0", "false", "no", "off")
+
+
+def _photo_analysis_evidence(event: MessageEvent) -> str:
+    """Bounded photo-vision evidence for focused synthesis. Prefers the clean
+    stash (event.photo_analysis_text); falls back to the per-image lines parsed
+    out of the channel_prompt injection."""
+    direct = (getattr(event, "photo_analysis_text", None) or "")
+    direct = direct.strip() if isinstance(direct, str) else str(direct).strip()
+    if direct:
+        return direct
+    cp = getattr(event, "channel_prompt", None)
+    text = (str(cp) if cp is not None else "").strip()
+    idx = text.find("Image 1:")
+    return text[idx:].strip() if idx != -1 else ""
+
+
 # Distinct surface label so logs make the routing path obvious during
 # parallel operation with the legacy `skills/telegram_voice.py` path.
 # When the old path is retired, this can be renamed to simply
@@ -170,6 +193,46 @@ class MaezMessageHandler:
 
     def __init__(self, daemon: Any):
         self.daemon = daemon
+
+    async def _synthesize_photo_focused(
+        self, *, text: str, event: MessageEvent, loop
+    ) -> Optional[str]:
+        """Direction (b): answer a photo turn from its bounded vision analysis
+        over a focused working set, never the full megaprompt. Returns the reply,
+        or None to fall back to daemon.handle_message (gate-off handled upstream;
+        here: no evidence / brain error / empty reply → None)."""
+        analysis_text = _photo_analysis_evidence(event)
+        if not analysis_text:
+            return None
+        try:
+            from core.routing import focused_cognition as _fc
+
+            with with_purpose(BrainPurpose.OWNER_REPLY):
+                result = await loop.run_in_executor(
+                    get_shared_executor(),
+                    copy_current_context_callable(
+                        lambda: _fc.synthesize_photo_turn(
+                            analysis_text=analysis_text,
+                            caption=text,
+                            surface=SURFACE_NAME,
+                        )
+                    ),
+                )
+        except Exception as e:
+            logger.warning("photo focused synth failed on %s: %s", SURFACE_NAME, e)
+            return None
+        reply = (getattr(result, "reply", "") or "")
+        if not reply.strip():
+            return None
+        # Proprioception (content-free): the focused photo path fired.
+        logger.info(
+            "[Telegram] Photo focused synthesis: working_set_chars=%s "
+            "cited=%s reply_chars=%d",
+            getattr(result, "working_set_chars", "?"),
+            len(getattr(result, "cited_ids", []) or []),
+            len(reply),
+        )
+        return reply
 
     async def __call__(self, event: MessageEvent) -> Optional[str]:
         text = (event.text or "").strip()
@@ -496,36 +559,51 @@ class MaezMessageHandler:
                 jarvis_tool_calls = []
                 jarvis_recall_items = ()
 
-            # Synthesis stage — daemon.handle_message does the final text
-            # reply with registry + residue + self-model blocks injected.
-            # 2026-04-23 memory-integrity contract (Commit 1): the audit
-            # is now owned by handle_message. The adapter passes the
-            # Jarvis transcript into handle_message so the audit sees
-            # the tool-loop context and correctly sets
-            # in_tool_continuation. Adapter no longer double-audits the
-            # returned reply.
-            try:
-                with with_purpose(BrainPurpose.OWNER_REPLY):
-                    reply = await loop.run_in_executor(
-                        get_shared_executor(),
-                        copy_current_context_callable(
-                            lambda: self.daemon.handle_message(
-                                text,
-                                SURFACE_NAME,
-                                transcript=jarvis_transcript or "",
-                                context_note=event.channel_prompt,
-                                chat_history=chat_history,
-                                chat_id=chat_id,
-                                tool_calls=jarvis_tool_calls or None,
-                                recall_items=jarvis_recall_items,
-                                send_intermediate=_send_progress_receipt,
-                            )
-                        ),
+            # Focused photo synthesis (direction b). When the turn carries a
+            # successful local photo analysis, answer over a BOUNDED working set
+            # (analysis + caption + voice) — NOT the full handle_message
+            # megaprompt, whose self-diagnostic "Vision: Maez cannot see" block
+            # overrode the present analysis (witnessed 2026-06-07). Gated; safe
+            # fallback to handle_message on gate-off / empty / error.
+            reply = None
+            if has_local_photo_context and _photo_focused_synth_enabled():
+                reply = await self._synthesize_photo_focused(
+                    text=text, event=event, loop=loop
+                )
+
+            if reply is None:
+                # Synthesis stage — daemon.handle_message does the final text
+                # reply with registry + residue + self-model blocks injected.
+                # 2026-04-23 memory-integrity contract (Commit 1): the audit
+                # is now owned by handle_message. The adapter passes the
+                # Jarvis transcript into handle_message so the audit sees
+                # the tool-loop context and correctly sets
+                # in_tool_continuation. Adapter no longer double-audits the
+                # returned reply.
+                try:
+                    with with_purpose(BrainPurpose.OWNER_REPLY):
+                        reply = await loop.run_in_executor(
+                            get_shared_executor(),
+                            copy_current_context_callable(
+                                lambda: self.daemon.handle_message(
+                                    text,
+                                    SURFACE_NAME,
+                                    transcript=jarvis_transcript or "",
+                                    context_note=event.channel_prompt,
+                                    chat_history=chat_history,
+                                    chat_id=chat_id,
+                                    tool_calls=jarvis_tool_calls or None,
+                                    recall_items=jarvis_recall_items,
+                                    send_intermediate=_send_progress_receipt,
+                                )
+                            ),
+                        )
+                except Exception as e:
+                    logger.warning(
+                        "daemon dispatch failed on %s: %s", SURFACE_NAME, e
                     )
-            except Exception as e:
-                logger.warning("daemon dispatch failed on %s: %s", SURFACE_NAME, e)
-                turn.update(output=f"(internal error: {e})")
-                return f"(internal error: {e})"
+                    turn.update(output=f"(internal error: {e})")
+                    return f"(internal error: {e})"
 
             if not isinstance(reply, str) or not reply.strip():
                 turn.update(output=jarvis_transcript or "(empty)")

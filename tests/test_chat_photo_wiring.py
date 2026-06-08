@@ -1,4 +1,5 @@
 import json
+import os
 import unittest
 from unittest import mock
 
@@ -188,8 +189,13 @@ class ChatPhotoWiringTests(unittest.IsolatedAsyncioTestCase):
                 captured["kwargs"] = kwargs
                 return "ok"
 
+        # MAEZ_PHOTO_FOCUSED_SYNTH=0 exercises the legacy fallback path (the
+        # photo analysis reaches the brain as a handle_message context_note).
+        # The default focused-synthesis path is covered by
+        # tests/test_photo_focused_routing.py.
         handler = MaezMessageHandler(FakeDaemon())
-        reply = await handler(event)
+        with mock.patch.dict(os.environ, {"MAEZ_PHOTO_FOCUSED_SYNTH": "0"}):
+            reply = await handler(event)
 
         self.assertEqual(reply, "ok")
         self.assertEqual(captured["text"], "Fine check this image")
@@ -234,8 +240,12 @@ class ChatPhotoWiringTests(unittest.IsolatedAsyncioTestCase):
                 captured["kwargs"] = kwargs
                 return "ok"
 
+        # Gate off the focused photo path so this asserts the legacy fallback
+        # (brain_loop planning pass skipped, context_note → handle_message). The
+        # default focused path is covered by tests/test_photo_focused_routing.py.
         handler = MaezMessageHandler(FakeDaemon())
-        with mock.patch("core.brain_loop.run_brain_loop") as run_brain_loop:
+        with mock.patch("core.brain_loop.run_brain_loop") as run_brain_loop, \
+            mock.patch.dict(os.environ, {"MAEZ_PHOTO_FOCUSED_SYNTH": "0"}):
             reply = await handler(event)
 
         self.assertEqual(reply, "ok")

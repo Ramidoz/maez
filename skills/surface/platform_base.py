@@ -773,7 +773,11 @@ class MessageEvent:
     # Per-channel ephemeral system prompt (e.g. Discord channel_prompts).
     # Applied at API call time and never persisted to transcript history.
     channel_prompt: Any = None
-    
+    # Clean per-image vision analysis for this turn (set by the Telegram photo
+    # path). Bounded evidence for focused photo synthesis — distinct from
+    # channel_prompt, which carries the framed injection for the legacy path.
+    photo_analysis_text: Any = None
+
     # Internal flag — set for synthetic events (e.g. background process
     # completion notifications) that must bypass user authorization checks.
     internal: bool = False

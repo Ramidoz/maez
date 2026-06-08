@@ -3015,6 +3015,10 @@ class TelegramAdapter(BasePlatformAdapter):
             analyses.append(f"+{overflow} more image{plural} not analyzed")
         if not analyses:
             return
+        # Stash the clean per-image analysis as bounded evidence for focused
+        # photo synthesis (direction b). The injection below stays for the
+        # legacy megaprompt path; this is the un-framed evidence.
+        event.photo_analysis_text = "\n".join(analyses)
         injection = (
             "Local Maez vision analysis of the attached owner-sent photo(s). "
             "This is Maez's own local perception result, not text authored by "
