@@ -1,7 +1,6 @@
 import unittest
 
 from core.routing.photo_contradiction import (
-    PhotoClaim,
     extract_photo_claims,
     normalize_claim_text,
 )
