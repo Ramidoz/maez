@@ -15,14 +15,19 @@ The fetch helper is the ONLY network component. The runner
     --repo-id <hf repo> --revision <PINNED sha/tag> --name <name>
 ```
 
-| name | candidate | likely repo_id (verify at obtain) | revision (PIN) | sha256 | smoke |
+| name (`--name`, must match `CandidateSpec.name`) | candidate | likely repo_id (verify at obtain) | revision (PIN) | sha256 | smoke |
 |---|---|---|---|---|---|
 | hhem | Vectara HHEM-2.1-Open | `vectara/hallucination_evaluation_model` | _TBD_ | _record_ | _record_ |
-| minicheck | Bespoke MiniCheck (small) | `bespokelabs/Bespoke-MiniCheck-RoBERTa-Large` (verify exact id/size) | _TBD_ | _record_ | _record_ |
+| minicheck-roberta | MiniCheck RoBERTa-Large | `lytang/MiniCheck-RoBERTa-Large` | _TBD_ | _record_ | _record_ |
+| minicheck-flan-t5 | MiniCheck Flan-T5-Large | `lytang/MiniCheck-Flan-T5-Large` | _TBD_ | _record_ | _record_ |
+| minicheck-deberta | MiniCheck DeBERTa-v3-Large | `lytang/MiniCheck-DeBERTa-v3-Large` | _TBD_ | _record_ | _record_ |
 | nli | DeBERTa-v3 NLI baseline | `MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli` | _TBD_ | _record_ | _record_ |
 | reranker | Qwen3-Reranker-0.6B (BASELINE only) | `Qwen/Qwen3-Reranker-0.6B` | _TBD_ | _record_ | _record_ |
-| thinkncheck | ThinknCheck 1B-Q4 Gemma3 (arXiv 2604.01652) | _verify a checkpoint is RELEASED_ | _TBD_ | _record_ | _record_ |
+| thinkncheck | ThinknCheck 1B-Q4 Gemma3 (arXiv 2604.01652) | `thinkncheck/thinkncheck-1b-gemma3-q4` (verify released/obtainable) | _TBD_ | _record_ | _record_ |
 
+- The `--name` value must be copied verbatim from the table. Adapters load from
+  `models/bakeoff/<CandidateSpec.name>/`; a mismatched name produces an honest
+  `unavailable`, not a fallback.
 - **ThinknCheck obtainability is verified HERE.** If no checkpoint is released
   (paper-only), record it `unavailable` — NOT a blocker; the other candidates run.
 - The `--revision` MUST be a specific commit/tag (the helper refuses an empty

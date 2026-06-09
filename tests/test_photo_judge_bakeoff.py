@@ -233,6 +233,24 @@ class CandidateRegistry(unittest.TestCase):
             adapters = build_candidates()
         self.assertEqual([a.name for a in adapters], [c.name for c in CANDIDATES])
 
+    def test_download_runbook_names_match_registry_specs(self):
+        import re
+        from scripts.photo_judge_bakeoff_adapters import CANDIDATES
+        runbook = (
+            ROOT / "docs" / "handoffs"
+            / "2026-06-08-photo-judge-bakeoff-download-runbook.md"
+        ).read_text(encoding="utf-8")
+        names = {
+            m.group(1)
+            for m in re.finditer(r"^\|\s*`?([a-z0-9-]+)`?\s*\|", runbook, re.M)
+            if m.group(1) not in {"name", "---"}
+        }
+        self.assertEqual(names, {c.name for c in CANDIDATES if c.repo_id})
+        self.assertNotIn("bespokelabs", runbook)
+        for spec in CANDIDATES:
+            if spec.repo_id:
+                self.assertIn(spec.repo_id, runbook)
+
 
 class Aggregator(unittest.TestCase):
     def _rows(self):
