@@ -360,14 +360,6 @@ class LocalVerifierContract(unittest.TestCase):
 
         self.assertAlmostEqual(
             nli_grounded_score_from_output([
-                {"label": "LABEL_0", "score": 0.91},
-                {"label": "LABEL_1", "score": 0.04},
-                {"label": "LABEL_2", "score": 0.05},
-            ]),
-            0.09,
-        )
-        self.assertAlmostEqual(
-            nli_grounded_score_from_output([
                 {"label": "contradiction", "score": 0.7},
                 {"label": "neutral", "score": 0.2},
                 {"label": "entailment", "score": 0.1},
@@ -375,12 +367,20 @@ class LocalVerifierContract(unittest.TestCase):
             0.3,
         )
 
-    def test_nli_score_helper_fails_closed_on_unknown_labels(self):
+    def test_nli_score_helper_fails_closed_on_unknown_or_index_labels(self):
         from core.routing.photo_contradiction import nli_grounded_score_from_output
 
         with self.assertRaises(ValueError):
             nli_grounded_score_from_output([
                 {"label": "mystery", "score": 0.9},
+            ])
+        # Raw LABEL_N indices are model-specific. For the pinned MoritzLaurer
+        # artifact contradiction is LABEL_2, not LABEL_0; do not guess.
+        with self.assertRaises(ValueError):
+            nli_grounded_score_from_output([
+                {"label": "LABEL_0", "score": 0.91},
+                {"label": "LABEL_1", "score": 0.04},
+                {"label": "LABEL_2", "score": 0.05},
             ])
 
 
@@ -441,7 +441,7 @@ def nli_grounded_score_from_output(output) -> float:
     rows = _flatten_pipeline_output(output)
     probs = {str(d["label"]).lower(): float(d["score"]) for d in rows}
     contradiction = None
-    for label in ("contradiction", "contradictory", "label_0"):
+    for label in ("contradiction", "contradictory"):
         if label in probs:
             contradiction = probs[label]
             break
@@ -1363,8 +1363,8 @@ egress is part of this branch.
 1. Claim extractor is deterministic, draft-bound, and conservative. No model
    extraction and no generated/paraphrased claims.
 2. Verifier is claim-level only. Whole-reply NLI must not be called.
-3. Live NLI and bakeoff NLI share the same score-mapping helper, including label
-   aliases such as `LABEL_0`; no forked live-vs-witness mapping.
+3. Live NLI and bakeoff NLI share the same score-mapping helper; raw `LABEL_N`
+   indices fail closed because their class mapping is model-specific.
 4. NLI is lazy and local-only. Importing the module must not import transformers;
    missing artifact means unavailable, never network.
 5. Revision laundering is blocked. `revised_clear` requires one actual
