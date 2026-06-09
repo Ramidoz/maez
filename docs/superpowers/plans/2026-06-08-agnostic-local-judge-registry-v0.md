@@ -15,6 +15,8 @@
 - Modify: `scripts/photo_judge_bakeoff_adapters.py`
   - Add `CandidateSpec`, `CANDIDATES`, `validate_local_chat_specs()`, and `build_candidates()`.
   - Parameterize HHEM/MiniCheck/NLI/Reranker adapters.
+  - Fail fast when a downloaded-model artifact directory is absent, so a no-download
+    runner smoke reports unavailable candidates without importing heavyweight model libraries.
   - Convert `ALL_ADAPTERS` into a compatibility alias for registry specs, not classes.
 - Modify: `scripts/photo_judge_bakeoff.py`
   - Use `build_candidates()` when no adapters are injected.
@@ -444,16 +446,22 @@ Expected: `OK`.
 
 - [ ] **Step 2: Run default runner smoke**
 
-Run:
+Run a runner/build/report smoke without sending claims to a live local chat judge:
 
 ```bash
 rm -rf /tmp/maez-photo-judge-registry-smoke
-.venv/bin/python -B scripts/photo_judge_bakeoff.py \
+tmp=$(mktemp)
+PYTHONPATH=/home/rohit/maez-wt-judge-registry \
+  /home/rohit/maez/.venv/bin/python -B -m scripts.photo_judge_bakeoff \
   --label registry-smoke \
+  --corpus "$tmp" \
   --out-dir /tmp/maez-photo-judge-registry-smoke
+rm -f "$tmp"
 ```
 
-Expected: exits 0. Some candidates may be unavailable if models are not downloaded or local judge is not running; the smoke must not crash or call external endpoints.
+Expected: exits 0 and reports unavailable candidates honestly. The real 14-case corpus
+run is the owner-greenlit witness because a local chatjudge candidate may perform real
+CPU judge calls.
 
 - [ ] **Step 3: Run full floor**
 
