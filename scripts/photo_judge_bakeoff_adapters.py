@@ -236,10 +236,13 @@ class ChatJudgeAdapter(CandidateAdapter):
     score_based = False   # yes/no
     model_id = "chatjudge (unconfigured)"  # set to the served alias at load
 
-    def __init__(self, threshold=None, base_url=None, expected_alias="maez-judge"):
+    def __init__(self, threshold=None, name=None, base_url=None,
+                 expected_alias="maez-judge"):
         # NO hardcoded port: a wrong endpoint could benchmark the vision server
         # under a judge label (e.g. :8082 serves maez-vision here). base_url must
         # be given explicitly, and the SERVED alias is verified at load.
+        if name:
+            self.name = name
         self.base_url = base_url
         self.expected_alias = expected_alias
         self.served_alias = None
@@ -322,7 +325,33 @@ def validate_local_chat_specs(specs=CANDIDATES):
             raise ValueError(f"chatjudge spec {spec.name!r} must use loopback http")
 
 
-ALL_ADAPTERS = [
-    HHEMAdapter, MiniCheckAdapter, ThinknCheckAdapter,
-    NLIAdapter, RerankerAdapter, ChatJudgeAdapter,
-]
+def build_candidates(specs=CANDIDATES):
+    validate_local_chat_specs(specs)
+    adapters = []
+    for spec in specs:
+        if spec.kind == "hhem":
+            adapters.append(HHEMAdapter(name=spec.name, repo_id=spec.repo_id))
+        elif spec.kind == "minicheck":
+            adapters.append(MiniCheckAdapter(
+                name=spec.name,
+                repo_id=spec.repo_id,
+                model_name=spec.params["model_name"],
+            ))
+        elif spec.kind == "thinkncheck":
+            adapters.append(ThinknCheckAdapter(name=spec.name, repo_id=spec.repo_id))
+        elif spec.kind == "nli":
+            adapters.append(NLIAdapter(name=spec.name, repo_id=spec.repo_id))
+        elif spec.kind == "reranker":
+            adapters.append(RerankerAdapter(name=spec.name, repo_id=spec.repo_id))
+        elif spec.kind == "chatjudge":
+            adapters.append(ChatJudgeAdapter(
+                name=spec.name,
+                base_url=spec.base_url,
+                expected_alias=spec.expected_alias or "maez-judge",
+            ))
+        else:
+            raise ValueError(f"unknown candidate kind {spec.kind!r}")
+    return adapters
+
+
+ALL_ADAPTERS = CANDIDATES

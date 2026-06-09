@@ -216,8 +216,8 @@ def main(argv=None, adapters=None):
 
     rows = load_corpus(args.corpus)
     if adapters is None:
-        from scripts.photo_judge_bakeoff_adapters import ALL_ADAPTERS
-        adapters = [cls() for cls in ALL_ADAPTERS]
+        from scripts.photo_judge_bakeoff_adapters import build_candidates
+        adapters = build_candidates()
     aggregates = [a for adapter in adapters for a in run_candidate(adapter, rows)]
     report = build_report(aggregates)
 

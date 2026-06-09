@@ -98,12 +98,9 @@ class AdapterBase(unittest.TestCase):
 
 
 class ConcreteAdapters(unittest.TestCase):
-    def test_all_adapters_registered(self):
-        from scripts.photo_judge_bakeoff_adapters import ALL_ADAPTERS
-        names = {a.name for a in ALL_ADAPTERS}
-        self.assertEqual(names, {
-            "hhem", "minicheck-roberta", "thinkncheck", "nli", "reranker",
-            "chatjudge"})
+    def test_all_adapters_compat_alias_points_to_registry_specs(self):
+        from scripts.photo_judge_bakeoff_adapters import ALL_ADAPTERS, CANDIDATES
+        self.assertIs(ALL_ADAPTERS, CANDIDATES)
 
     def test_score_based_vs_label_native_flags(self):
         from scripts.photo_judge_bakeoff_adapters import (
@@ -205,6 +202,24 @@ class CandidateRegistry(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             validate_local_chat_specs([bad])
+
+    def test_build_candidates_returns_one_adapter_per_spec(self):
+        from scripts.photo_judge_bakeoff_adapters import (
+            CANDIDATES, build_candidates)
+        with mock.patch("scripts.photo_judge_bakeoff_adapters.HHEMAdapter._load",
+                        return_value=object()), \
+             mock.patch("scripts.photo_judge_bakeoff_adapters.MiniCheckAdapter._load",
+                        return_value=object()), \
+             mock.patch("scripts.photo_judge_bakeoff_adapters.ThinknCheckAdapter._load",
+                        return_value=object()), \
+             mock.patch("scripts.photo_judge_bakeoff_adapters.NLIAdapter._load",
+                        return_value=object()), \
+             mock.patch("scripts.photo_judge_bakeoff_adapters.RerankerAdapter._load",
+                        return_value=object()), \
+             mock.patch("scripts.photo_judge_bakeoff_adapters.ChatJudgeAdapter._list_models",
+                        return_value=["maez-judge"]):
+            adapters = build_candidates()
+        self.assertEqual([a.name for a in adapters], [c.name for c in CANDIDATES])
 
 
 class Aggregator(unittest.TestCase):
@@ -391,6 +406,26 @@ class RunnerMain(unittest.TestCase):
         self.assertTrue(a0["runnable"])          # partial failure ≠ unavailable
         self.assertEqual(a0["error_count"], 1)   # err1 recorded as a per-case error
         self.assertEqual(a0["catch_rate"], 0.5)  # ok1 caught; err1 errored = missed
+
+    def test_default_runner_uses_registry_factory(self):
+        import scripts.photo_judge_bakeoff as r
+        from scripts.photo_judge_bakeoff_adapters import CandidateAdapter
+
+        class Fake(CandidateAdapter):
+            name = "registry-fake"
+            score_based = False
+            model_id = "fake/local"
+            def _load(self): return object()
+            def _raw_predict(self, premise, hypothesis): return "grounded"
+
+        import tempfile
+        outdir = tempfile.mkdtemp()
+        with mock.patch("scripts.photo_judge_bakeoff_adapters.build_candidates",
+                        return_value=[Fake(threshold=None)]) as factory:
+            rc = r.main(["--label", "registry", "--out-dir", outdir,
+                         "--corpus", str(CORPUS)])
+        self.assertEqual(rc, 0)
+        factory.assert_called_once()
 
 
 class FetchHelper(unittest.TestCase):
