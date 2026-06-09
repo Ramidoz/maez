@@ -17,13 +17,13 @@ The fetch helper is the ONLY network component. The runner
 
 | name (`--name`, must match `CandidateSpec.name`) | candidate | likely repo_id (verify at obtain) | revision (PIN) | sha256 | smoke |
 |---|---|---|---|---|---|
-| hhem | Vectara HHEM-2.1-Open | `vectara/hallucination_evaluation_model` | `8e4a2e6e96c708cc76c2344f7e4757df2515292c` | _record_ | _record_ |
-| minicheck-roberta | MiniCheck RoBERTa-Large | `lytang/MiniCheck-RoBERTa-Large` | `74c8919647e61ed0f71bc177d94f10930f090068` | _record_ | _record_ |
-| minicheck-flan-t5 | MiniCheck Flan-T5-Large | `lytang/MiniCheck-Flan-T5-Large` | `96eafd01cee2d16cf81aaa2fb226b14f422a37b3` | _record_ | _record_ |
-| minicheck-deberta | MiniCheck DeBERTa-v3-Large | `lytang/MiniCheck-DeBERTa-v3-Large` | `2f2d01a54fa022a7ffadb76260e1ea8bc88c82bb` | _record_ | _record_ |
-| nli | DeBERTa-v3 NLI baseline | `MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli` | `6f5cf0a2b59cabb106aca4c287eed12e357e90eb` | _record_ | _record_ |
-| reranker | Qwen3-Reranker-0.6B (BASELINE only) | `Qwen/Qwen3-Reranker-0.6B` | `e61197ed45024b0ed8a2d74b80b4d909f1255473` | _record_ | _record_ |
-| thinkncheck | ThinknCheck 1B-Q4 Gemma3 (arXiv 2604.01652) | `thinkncheck/thinkncheck-1b-gemma3-q4` (verify released/obtainable) | _TBD_ | _record_ | _record_ |
+| hhem | Vectara HHEM-2.1-Open | `vectara/hallucination_evaluation_model` | `8e4a2e6e96c708cc76c2344f7e4757df2515292c` | `d900412605dc3fa496037922e119d498520d530992dbb30261538da53866e55b` | fetch skipped; runner loaded with Transformers-5 shim |
+| minicheck-roberta | MiniCheck RoBERTa-Large | `lytang/MiniCheck-RoBERTa-Large` | `74c8919647e61ed0f71bc177d94f10930f090068` | `0576e5777bf1c79158f2c975c918721f57c1194678c0f8c7877c986a24e6b01f` | fetch skipped; runner loaded |
+| minicheck-flan-t5 | MiniCheck Flan-T5-Large | `lytang/MiniCheck-Flan-T5-Large` | `96eafd01cee2d16cf81aaa2fb226b14f422a37b3` | `9037cda4eb817b0e7d596439f147625b834e16500c435e3580af5d0dd2581e15` | fetch skipped; runner loaded |
+| minicheck-deberta | MiniCheck DeBERTa-v3-Large | `lytang/MiniCheck-DeBERTa-v3-Large` | `2f2d01a54fa022a7ffadb76260e1ea8bc88c82bb` | `e299a33ff200bb879dc7248cbab8a50f127c5d0fb08d1fffd86c3598aebaf62e` | fetch skipped; runner loaded |
+| nli | DeBERTa-v3 NLI baseline | `MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli` | `6f5cf0a2b59cabb106aca4c287eed12e357e90eb` | `c504f1da00c343a8989048f6f941cd804b64b8833a3773402ed8a6b586a20bbc` | fetch skipped; runner loaded |
+| reranker | Qwen3-Reranker-0.6B (BASELINE only) | `Qwen/Qwen3-Reranker-0.6B` | `e61197ed45024b0ed8a2d74b80b4d909f1255473` | `99a509a286c362a3fa87796660e0468c1f69e2768a1337511e2176ed0ea5d8d3` | fetch skipped; runner loaded |
+| thinkncheck | ThinknCheck 1B-Q4 Gemma3 (arXiv 2604.01652) | `thinkncheck/thinkncheck-1b-gemma3-q4` (verify released/obtainable) | unavailable | unavailable | HF repo was not obtainable (404/401); left unavailable |
 
 - The `--name` value must be copied verbatim from the table. Adapters load from
   `models/bakeoff/<CandidateSpec.name>/`; a mismatched name produces an honest
@@ -74,6 +74,19 @@ smoke_fn=<load+predict>)` programmatically.
 /home/rohit/maez/.venv/bin/python -B -m scripts.photo_judge_bakeoff \
     --label real-20260608
 # → logs/photo_judge_bakeoff/real-20260608.md + .json (gitignored)
+```
+
+The 2026-06-08 witness used an isolated runtime at `/tmp/maez-bakeoff-venv`
+because the project venv intentionally did not carry `torch` / `transformers` /
+`sentence-transformers`. It ran CPU-only:
+
+```
+CUDA_VISIBLE_DEVICES='' TOKENIZERS_PARALLELISM=false \
+PYTHONPATH=/home/rohit/maez-wt-judge-witness \
+/tmp/maez-bakeoff-venv/bin/python -B -m scripts.photo_judge_bakeoff \
+    --label real-2026-06-08-r2 \
+    --out-dir logs/photo_judge_bakeoff \
+    --corpus tests/data/judge_eval_photo_contradiction_v1.jsonl
 ```
 
 The report ranks the catch×latency frontier with per-threshold rows for score-based
