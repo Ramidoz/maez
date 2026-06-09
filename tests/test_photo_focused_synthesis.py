@@ -15,6 +15,7 @@ from unittest import mock
 from core.routing.focused_cognition import (
     FocusedResult,
     photo_freshness_search_query,
+    photo_freshness_web_search_enabled,
     synthesize_photo_turn,
 )
 
@@ -70,6 +71,39 @@ class SynthesizePhotoTurn(unittest.TestCase):
         )
 
         self.assertIsNone(query)
+
+    def test_photo_freshness_query_ignores_person_focused_news(self):
+        query = photo_freshness_search_query(
+            caption="latest news about Sam Altman at OpenAI",
+            analysis_text=(
+                "The image shows a person named Sam Altman on a conference stage "
+                "with an OpenAI logo behind him."
+            ),
+        )
+
+        self.assertIsNone(query)
+
+    def test_photo_freshness_query_does_not_treat_model_name_as_person(self):
+        query = photo_freshness_search_query(
+            caption="check the latest model",
+            analysis_text="The image shows Claude Mythos 5 and Fable 5 in a benchmark table.",
+        )
+
+        self.assertIsNotNone(query)
+        assert query is not None
+        self.assertIn("Claude Mythos 5", query)
+
+    def test_photo_freshness_web_search_is_default_off(self):
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertFalse(photo_freshness_web_search_enabled())
+
+    def test_photo_freshness_web_search_can_be_owner_enabled(self):
+        with mock.patch.dict(
+            "os.environ",
+            {"MAEZ_PHOTO_FRESHNESS_WEB_SEARCH": "1"},
+            clear=True,
+        ):
+            self.assertTrue(photo_freshness_web_search_enabled())
 
     def test_returns_focused_result_with_brain_reply(self):
         result = synthesize_photo_turn(

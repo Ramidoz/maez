@@ -18,13 +18,19 @@ answered from stale memory that those names did not exist.
 1. A photo proves what the image appears to show; it does not by itself prove the
    outside-world fact is true.
 2. Stale memory must not overrule current photo evidence.
-3. If the photo/caption asks about `latest`, `released`, `announced`, current
+3. The web leg is separately dormant by default:
+   `MAEZ_PHOTO_FRESHNESS_WEB_SEARCH=1` is required in addition to the existing
+   daemon web-search gate.
+4. If the photo/caption asks about `latest`, `released`, `announced`, current
    model names, benchmarks, prices, laws, medical/financial facts, or similar
    freshness-sensitive claims, run a fresh web check before the photo reply.
-4. If fresh evidence is found, pass it into bounded photo synthesis as `E2`.
-5. If the check returns no results, pass the no-results fact as `E2` and answer
+5. Person-focused photos/captions must not trigger autonomous web research about
+   a named person. The v0 detector is intentionally model/company scoped and
+   conservative.
+6. If fresh evidence is found, pass it into bounded photo synthesis as `E2`.
+7. If the check returns no results, pass the no-results fact as `E2` and answer
    honestly: "the image appears to show X, but I could not verify it."
-6. Keep Photo Contradiction Sense v0 intact: it still checks direct photo claims
+8. Keep Photo Contradiction Sense v0 intact: it still checks direct photo claims
    against `E1`. This slice adds freshness evidence; it does not turn the
    verifier into a censor.
 
@@ -37,10 +43,13 @@ witness failure first.
 ## Tests
 
 - A Fable/Mythos-style photo/caption derives a photo freshness query.
+- The photo freshness web-search leg is default-off and owner-enabled by
+  `MAEZ_PHOTO_FRESHNESS_WEB_SEARCH=1`.
+- A named-person freshness caption does not derive a query.
+- A model/product name is not mistaken for a person name.
 - Photo synthesis accepts citations to `E1` plus optional `E2`.
 - The prompt distinguishes photo evidence from fresh web evidence.
 - A successful photo analysis prevents empty-search fallback and passes fresh
   context into `synthesize_photo_turn`.
 - No raw photo pixels leave the box; this slice only searches text derived from
   the local vision analysis and caption.
-

@@ -5364,6 +5364,29 @@ class MaezDaemon:
                 transcript,
                 recall_stack_config=_recall_stack_config,
             )
+        ):
+            try:
+                from core.routing.focused_cognition import (
+                    photo_freshness_web_search_enabled,
+                )
+            except Exception as _photo_freshness_exc:
+                logger.debug(
+                    "photo freshness web search gate unavailable: %s",
+                    _photo_freshness_exc,
+                )
+                _photo_freshness_allowed = False
+            else:
+                _photo_freshness_allowed = photo_freshness_web_search_enabled()
+        else:
+            _photo_freshness_allowed = False
+        if (
+            photo_analysis
+            and _photo_freshness_allowed
+            and not authoritative_tool_reply
+            and _daemon_parallel_web_search_enabled(
+                transcript,
+                recall_stack_config=_recall_stack_config,
+            )
             and (not web_context or _empty_web_search)
         ):
             try:

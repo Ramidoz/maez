@@ -138,12 +138,16 @@ class PhotoSynthesisLivesInsideThePipeline(unittest.TestCase):
     def test_photo_freshness_context_reaches_photo_synthesis(self):
         body = _handle_message_body()
         self.assertIn("photo_freshness_search_query", body)
+        self.assertIn("photo_freshness_web_search_enabled", body)
         self.assertIn("Photo freshness search triggered", body)
         self.assertIn("fresh_context=", body)
+        i_gate = body.find("photo_freshness_web_search_enabled")
         i_query = body.find("photo_freshness_search_query")
         i_synth = body.find("synthesize_photo_turn")
+        self.assertGreater(i_gate, -1)
         self.assertGreater(i_query, -1)
         self.assertGreater(i_synth, -1)
+        self.assertLess(i_gate, i_query)
         self.assertLess(i_query, i_synth)
 
     def test_photo_vision_signal_marked_present_before_envelope_build(self):

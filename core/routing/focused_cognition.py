@@ -1004,6 +1004,12 @@ def _photo_contradiction_sense_requested() -> bool:
     return val in {"1", "true", "yes", "on"}
 
 
+def photo_freshness_web_search_enabled() -> bool:
+    """Owner-gated web leg for photo-triggered freshness checks. Default off."""
+    val = (os.environ.get("MAEZ_PHOTO_FRESHNESS_WEB_SEARCH", "") or "").strip().lower()
+    return val in {"1", "true", "yes", "on"}
+
+
 _PHOTO_FRESHNESS_RE = re.compile(
     r"\b("
     r"latest|current|today|now|new|released?|announced?|launch(?:ed)?|"
@@ -1022,6 +1028,10 @@ _PHOTO_MODEL_PHRASE_RE = re.compile(
     r"\b(?:Claude\s+)?(?:Mythos|Fable|Opus|Sonnet|Haiku)\s*\d+(?:\.\d+)?\b",
     re.IGNORECASE,
 )
+_PHOTO_PERSON_FOCUSED_RE = re.compile(
+    r"\b(?:latest\s+news\s+about|news\s+about|about|person\s+named|person\s+called)\s+"
+    r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})\b",
+)
 
 
 def _dedupe_preserve_case(parts: Iterable[str]) -> list[str]:
@@ -1039,12 +1049,26 @@ def _dedupe_preserve_case(parts: Iterable[str]) -> list[str]:
     return out
 
 
+def _photo_person_focused(haystack: str) -> bool:
+    for match in _PHOTO_PERSON_FOCUSED_RE.finditer(haystack):
+        phrase = match.group(1)
+        phrase_with_tail = haystack[match.start(1) : min(len(haystack), match.end(1) + 12)]
+        if _PHOTO_MODEL_PHRASE_RE.search(phrase_with_tail):
+            continue
+        if _PHOTO_KNOWN_ENTITY_RE.search(phrase):
+            continue
+        return True
+    return False
+
+
 def photo_freshness_search_query(*, caption: str, analysis_text: str) -> str | None:
     """Derive a compact web query when photo evidence implies a current-world claim."""
     caption = caption or ""
     analysis_text = analysis_text or ""
     haystack = f"{caption}\n{analysis_text}"
     if not _PHOTO_FRESHNESS_RE.search(haystack):
+        return None
+    if _photo_person_focused(haystack):
         return None
     if not (
         _PHOTO_KNOWN_ENTITY_RE.search(haystack)

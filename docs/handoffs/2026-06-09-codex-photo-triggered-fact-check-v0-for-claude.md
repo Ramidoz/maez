@@ -31,9 +31,13 @@ release truth needs a fresh check.
   when fresh context exists.
 - Wired `daemon.handle_message` to run a targeted photo freshness web search when
   a successful photo analysis plus caption/image text implies a current-world
-  claim and normal caption search did not already produce useful evidence.
+  claim, the dedicated photo freshness flag is enabled, and normal caption
+  search did not already produce useful evidence.
 - Passed the resulting `web_context` into photo focused synthesis as
   `fresh_context`.
+- Added `MAEZ_PHOTO_FRESHNESS_WEB_SEARCH` as a dedicated default-off owner gate.
+- Added a conservative named-person guard so person-focused photo/caption turns
+  do not autonomously research a named third party.
 
 ## Covenant/Behavior Anchors for Review
 
@@ -44,9 +48,14 @@ release truth needs a fresh check.
    not verified, not to dismiss it from stale memory.
 3. **No raw pixels egress.** The search query is derived only from the local
    vision text and caption. The raw image path is unchanged.
-4. **Existing photo honesty organs stay intact.** Lane 1 citations and Lane 2
+4. **Dedicated dormant gate.** `MAEZ_PHOTO_FRESHNESS_WEB_SEARCH=1` is required
+   before the new photo-derived web-search leg can run.
+5. **Third-party boundary.** Person-focused freshness captions, such as news
+   about a named individual, return no query. The v0 scope is model/company
+   freshness, not autonomous people research.
+6. **Existing photo honesty organs stay intact.** Lane 1 citations and Lane 2
    contradiction sense are not replaced; `E2` only adds freshness evidence.
-5. **No live activation.** This is ordinary code on a branch; no daemon restart,
+7. **No live activation.** This is ordinary code on a branch; no daemon restart,
    service change, flag flip, or model/env change was performed.
 
 ## Tests / Verification Run
@@ -67,7 +76,21 @@ GREEN verification after implementation:
   tests.test_photo_judge_bakeoff
 ```
 
-Result: `Ran 127 tests ... OK`.
+Result after the first implementation: `Ran 127 tests ... OK`.
+
+Claude review then required two cheap fixes before merge:
+
+- dedicated default-off flag for the photo freshness web leg;
+- third-party/person guard or equivalent scope assertion.
+
+Additional RED/GREEN coverage was added:
+
+- `photo_freshness_web_search_enabled()` is default-off and owner-enabled by
+  `MAEZ_PHOTO_FRESHNESS_WEB_SEARCH=1`;
+- `latest news about Sam Altman at OpenAI` derives no query;
+- `Claude Mythos 5` / `Fable 5` is not misclassified as a person name;
+- `daemon.handle_message` consults the dedicated gate before deriving the photo
+  freshness query.
 
 ```bash
 /home/rohit/maez/.venv/bin/python -m ruff check \
