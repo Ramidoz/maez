@@ -63,6 +63,9 @@ def extract_photo_claims(
     evidence_label: str = "E1",
     limit: int = 5,
 ) -> list[PhotoClaim]:
+    if limit <= 0:
+        return []
+
     claims: list[PhotoClaim] = []
     normalized_reply = normalize_claim_text(reply)
     for match in _SENTENCE_RE.finditer(reply or ""):

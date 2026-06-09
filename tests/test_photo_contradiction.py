@@ -37,7 +37,10 @@ class PhotoClaimExtraction(unittest.TestCase):
     def test_claims_are_draft_bound_no_generated_paraphrase(self):
         reply = "The image shows a Reddit screenshot [E1]."
         claims = extract_photo_claims(reply)
-        self.assertEqual(len(claims), 1)
+        self.assertEqual(
+            [c.text for c in claims],
+            ["The image shows a Reddit screenshot."],
+        )
         normalized_reply = normalize_claim_text(reply)
         self.assertIn(normalize_claim_text(claims[0].text), normalized_reply)
 
@@ -49,6 +52,7 @@ class PhotoClaimExtraction(unittest.TestCase):
             claims[0].text,
             "The image shows WWDC 2026, which is a developer conference.",
         )
+        self.assertNotIn("The image shows WWDC 2026.", [c.text for c in claims])
 
     def test_ambiguous_sentence_is_omitted_not_false_demoted(self):
         reply = "It seems important and probably relates to the current work [E1]."
@@ -61,13 +65,18 @@ class PhotoClaimExtraction(unittest.TestCase):
         )
         self.assertEqual(extract_photo_claims(reply), [])
 
-    def test_claim_cap_returns_first_five_and_reports_limit(self):
+    def test_claim_cap_truncates_to_first_five(self):
         reply = " ".join(
             f"The screenshot lists item {i} [E1]." for i in range(1, 8)
         )
         claims = extract_photo_claims(reply, limit=5)
         self.assertEqual(len(claims), 5)
         self.assertEqual(claims[-1].text, "The screenshot lists item 5.")
+
+    def test_nonpositive_claim_cap_returns_no_claims(self):
+        reply = "The screenshot lists item 1 [E1]."
+        self.assertEqual(extract_photo_claims(reply, limit=0), [])
+        self.assertEqual(extract_photo_claims(reply, limit=-1), [])
 
     def test_normalize_removes_citation_without_space_before_punctuation(self):
         self.assertEqual(
