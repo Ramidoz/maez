@@ -8,6 +8,7 @@ caption + voice + faithful instruction), never the full megaprompt.
 
 import unittest
 from types import SimpleNamespace
+from unittest import mock
 
 from core.routing.focused_cognition import FocusedResult, synthesize_photo_turn
 
@@ -170,6 +171,48 @@ def _scripted_chat(contents):
         return SimpleNamespace(message=SimpleNamespace(content=text))
 
     return chat_fn, box
+
+
+class PhotoContradictionSenseFields(unittest.TestCase):
+    def test_focused_result_has_contradiction_receipt_defaults(self):
+        r = FocusedResult(reply="x", cited_ids=["E1"], working_set_chars=1)
+
+        self.assertIsNone(r.contradiction_receipt)
+        self.assertEqual(r.contradiction_claim_count, 0)
+        self.assertEqual(r.contradiction_count, 0)
+        self.assertIsNone(r.contradiction_latency_ms)
+        self.assertIsNone(r.contradiction_model_id)
+        self.assertIsNone(r.contradiction_revision)
+        self.assertIsNone(r.contradiction_sha256)
+        self.assertFalse(r.contradiction_claim_limit_exceeded)
+
+    def test_flag_off_does_not_call_contradiction_checker(self):
+        chat, box = _scripted_chat(["The screenshot shows Reddit [E1]."])
+        for env in ({}, {"MAEZ_PHOTO_CONTRADICTION_SENSE": ""}):
+            with self.subTest(env=env):
+                box["i"] = 0
+                with mock.patch.dict("os.environ", env, clear=True), mock.patch(
+                    "core.routing.photo_contradiction.check_photo_contradictions",
+                    side_effect=AssertionError("must not run when flag off"),
+                ):
+                    r = synthesize_photo_turn(
+                        analysis_text=ANALYSIS,
+                        caption=CAPTION,
+                        surface="telegram_surface",
+                        chat_fn=chat,
+                        model="m",
+                    )
+
+                self.assertEqual(r.receipt_reason, "cited_ok")
+                self.assertIsNone(r.contradiction_receipt)
+                self.assertEqual(r.contradiction_claim_count, 0)
+                self.assertEqual(r.contradiction_count, 0)
+                self.assertIsNone(r.contradiction_latency_ms)
+                self.assertIsNone(r.contradiction_model_id)
+                self.assertIsNone(r.contradiction_revision)
+                self.assertIsNone(r.contradiction_sha256)
+                self.assertFalse(r.contradiction_claim_limit_exceeded)
+                self.assertEqual(box["i"], 1)
 
 
 class CitationRail(unittest.TestCase):

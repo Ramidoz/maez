@@ -297,6 +297,14 @@ class FocusedResult:
     chat_total_ms: int | None = None
     reply_token_est: int | None = None
     receipt_reason: str | None = None
+    contradiction_receipt: str | None = None
+    contradiction_claim_count: int = 0
+    contradiction_count: int = 0
+    contradiction_latency_ms: int | None = None
+    contradiction_model_id: str | None = None
+    contradiction_revision: str | None = None
+    contradiction_sha256: str | None = None
+    contradiction_claim_limit_exceeded: bool = False
 
 
 @dataclass(frozen=True)
@@ -1030,7 +1038,7 @@ def synthesize_photo_turn(
         durable_id=_content_hash(analysis_text),
     )
     working_set_chars = len(analysis_text) + len(caption)
-    working_set = WorkingSet(
+    _working_set = WorkingSet(
         items=[item],
         ordered_evidence_text=analysis_text,
         owner_question=caption,
@@ -1097,6 +1105,14 @@ def synthesize_photo_turn(
     _t2 = _time.monotonic()
 
     cited_ids = sorted({f"E{m.group(1)}" for m in _CITE_RE.finditer(reply)})
+    contradiction_receipt = None
+    contradiction_claim_count = 0
+    contradiction_count = 0
+    contradiction_latency_ms = None
+    contradiction_model_id = None
+    contradiction_revision = None
+    contradiction_sha256 = None
+    contradiction_claim_limit_exceeded = False
     return FocusedResult(
         reply=reply,
         cited_ids=cited_ids,
@@ -1105,6 +1121,14 @@ def synthesize_photo_turn(
         chat_total_ms=int((_t2 - _t1) * 1000),
         reply_token_est=len(reply) // 4,
         receipt_reason=receipt_reason,
+        contradiction_receipt=contradiction_receipt,
+        contradiction_claim_count=contradiction_claim_count,
+        contradiction_count=contradiction_count,
+        contradiction_latency_ms=contradiction_latency_ms,
+        contradiction_model_id=contradiction_model_id,
+        contradiction_revision=contradiction_revision,
+        contradiction_sha256=contradiction_sha256,
+        contradiction_claim_limit_exceeded=contradiction_claim_limit_exceeded,
     )
 
 
