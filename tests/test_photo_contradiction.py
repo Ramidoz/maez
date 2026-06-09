@@ -1,5 +1,6 @@
 import subprocess
 import sys
+import types
 import unittest
 from unittest import mock
 
@@ -104,6 +105,40 @@ class LocalVerifierContract(unittest.TestCase):
         for forbidden in ("requests", "huggingface_hub", "urllib.request"):
             self.assertNotIn(forbidden, src)
 
+    def test_loader_constructs_pipeline_with_local_only_top_level_kwargs(self):
+        import os
+        from pathlib import Path
+        from core.routing.photo_contradiction import _load_transformers_pipeline
+
+        artifact_dir = Path("/tmp/local-nli-artifact")
+        fake_callable = object()
+        calls = []
+
+        def fake_pipeline(task, **kwargs):
+            calls.append((task, kwargs))
+            self.assertEqual(task, "text-classification")
+            self.assertEqual(kwargs["model"], str(artifact_dir))
+            self.assertEqual(kwargs["tokenizer"], str(artifact_dir))
+            self.assertIsNone(kwargs["top_k"])
+            self.assertIs(kwargs["local_files_only"], True)
+            self.assertNotIn("model_kwargs", kwargs)
+            self.assertNotIn("tokenizer_kwargs", kwargs)
+            self.assertEqual(os.environ.get("TRANSFORMERS_OFFLINE"), "already-set")
+            return fake_callable
+
+        fake_transformers = types.SimpleNamespace(pipeline=fake_pipeline)
+        with mock.patch.dict(
+            sys.modules,
+            {"transformers": fake_transformers},
+        ), mock.patch.dict(
+            os.environ,
+            {"TRANSFORMERS_OFFLINE": "already-set"},
+        ):
+            loaded = _load_transformers_pipeline(artifact_dir)
+
+        self.assertIs(loaded, fake_callable)
+        self.assertEqual(len(calls), 1)
+
     def test_missing_nli_artifact_is_unavailable_without_model_import(self):
         from core.routing.photo_contradiction import LocalNLIContradictionVerifier
 
@@ -166,9 +201,10 @@ class LocalVerifierContract(unittest.TestCase):
                     {"label": "entailment", "score": 0.04},
                 ]]
 
+        fake_pipeline = FakePipeline()
         with mock.patch(
             "core.routing.photo_contradiction._load_transformers_pipeline",
-            return_value=FakePipeline(),
+            return_value=fake_pipeline,
         ), mock.patch(
             "core.routing.photo_contradiction._read_manifest",
             return_value={
@@ -185,6 +221,13 @@ class LocalVerifierContract(unittest.TestCase):
                 threshold=0.5,
             )
             verdict = verifier.predict("The image says 2026.", "The image says 2024.")
+        self.assertEqual(
+            fake_pipeline.pair,
+            {
+                "text": "The image says 2026.",
+                "text_pair": "The image says 2024.",
+            },
+        )
         self.assertEqual(verdict.label, "contradicts")
         self.assertLess(verdict.score, 0.5)
         self.assertEqual(verdict.model_id, "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli")

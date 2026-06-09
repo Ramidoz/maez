@@ -147,24 +147,15 @@ def _read_manifest(artifact_dir: Path) -> dict | None:
 
 
 def _load_transformers_pipeline(artifact_dir: Path):
-    previous = os.environ.get("TRANSFORMERS_OFFLINE")
-    os.environ["TRANSFORMERS_OFFLINE"] = "1"
-    try:
-        from transformers import pipeline
+    from transformers import pipeline
 
-        return pipeline(
-            "text-classification",
-            model=str(artifact_dir),
-            tokenizer=str(artifact_dir),
-            top_k=None,
-            model_kwargs={"local_files_only": True},
-            tokenizer_kwargs={"local_files_only": True},
-        )
-    finally:
-        if previous is None:
-            os.environ.pop("TRANSFORMERS_OFFLINE", None)
-        else:
-            os.environ["TRANSFORMERS_OFFLINE"] = previous
+    return pipeline(
+        "text-classification",
+        model=str(artifact_dir),
+        tokenizer=str(artifact_dir),
+        top_k=None,
+        local_files_only=True,
+    )
 
 
 class LocalNLIContradictionVerifier:
