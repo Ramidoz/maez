@@ -1294,11 +1294,8 @@ class ActionEngine:
         # Safety: never modify constraints or covenant sections
         if "HARD CONSTRAINTS" in note.upper() or "TRUST COVENANT" in note.upper():
             raise ForbiddenActionError("Cannot modify constraints or covenant sections")
-        ts = datetime.now().strftime("%Y-%m-%d %H:%M")
-        entry = f"\n[{ts}] {note}\n"
-        with open(SOUL_PATH, "a") as f:
-            f.write(entry)
-        return f"Soul note appended ({len(entry)} chars)"
+        from core.evolution import soul_loader
+        return soul_loader.append_soul_note(note)
 
     def edit_soul_section(
         self,

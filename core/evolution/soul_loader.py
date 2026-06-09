@@ -135,6 +135,27 @@ def append_to_local(text: str, *, separator: str = "\n\n") -> None:
         _cache_signature = None
 
 
+def append_soul_note(note: str) -> str:
+    """Append a self-authored soul note to the LOCAL layer (soul.local.md),
+    content-deduped so an identical note is not re-appended. Replaces the
+    legacy direct-append to the soul.md mirror (which the loader overwrites).
+    """
+    if not note or not note.strip():
+        return "empty soul note; skipped"
+    body = note.strip()
+    local_path = paths.soul_local_path()
+    try:
+        existing = local_path.read_text() if local_path.exists() else ""
+    except Exception:
+        existing = ""
+    if body in existing:
+        return f"soul note already present; skipped ({len(body)} chars)"
+    from datetime import datetime as _dt
+    ts = _dt.now().strftime("%Y-%m-%d %H:%M")
+    append_to_local(f"[{ts}] {body}")
+    return f"soul note appended to local ({len(body)} chars)"
+
+
 def reload() -> None:
     """Force the next current_soul() call to re-read from disk."""
     global _cache_text, _cache_signature
