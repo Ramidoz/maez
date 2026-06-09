@@ -1004,11 +1004,76 @@ def _photo_contradiction_sense_requested() -> bool:
     return val in {"1", "true", "yes", "on"}
 
 
+_PHOTO_FRESHNESS_RE = re.compile(
+    r"\b("
+    r"latest|current|today|now|new|released?|announced?|launch(?:ed)?|"
+    r"benchmark|pricing|price|model|version"
+    r")\b",
+    re.IGNORECASE,
+)
+_PHOTO_KNOWN_ENTITY_RE = re.compile(
+    r"\b("
+    r"Anthropic|Claude|Mythos|Fable|OpenAI|GPT|Gemini|Google|Meta|Llama|"
+    r"Qwen|Gemma|Mistral|Grok|xAI|Apple|Microsoft|Nvidia"
+    r")\b",
+    re.IGNORECASE,
+)
+_PHOTO_MODEL_PHRASE_RE = re.compile(
+    r"\b(?:Claude\s+)?(?:Mythos|Fable|Opus|Sonnet|Haiku)\s*\d+(?:\.\d+)?\b",
+    re.IGNORECASE,
+)
+
+
+def _dedupe_preserve_case(parts: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for part in parts:
+        cleaned = re.sub(r"\s+", " ", (part or "").strip(" \t\r\n\"'.,;:"))
+        if not cleaned:
+            continue
+        key = cleaned.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(cleaned)
+    return out
+
+
+def photo_freshness_search_query(*, caption: str, analysis_text: str) -> str | None:
+    """Derive a compact web query when photo evidence implies a current-world claim."""
+    caption = caption or ""
+    analysis_text = analysis_text or ""
+    haystack = f"{caption}\n{analysis_text}"
+    if not _PHOTO_FRESHNESS_RE.search(haystack):
+        return None
+    if not (
+        _PHOTO_KNOWN_ENTITY_RE.search(haystack)
+        or _PHOTO_MODEL_PHRASE_RE.search(haystack)
+    ):
+        return None
+
+    terms: list[str] = []
+    if re.search(r"\banthropic\b", haystack, re.IGNORECASE):
+        terms.append("Anthropic")
+    for phrase in re.findall(r'"([^"]{3,90})"', haystack):
+        if _PHOTO_KNOWN_ENTITY_RE.search(phrase) or _PHOTO_MODEL_PHRASE_RE.search(phrase):
+            terms.append(phrase)
+    for match in _PHOTO_MODEL_PHRASE_RE.finditer(haystack):
+        terms.append(match.group(0))
+    for word in ("latest", "released", "announced", "today"):
+        if re.search(rf"\b{word}\b", haystack, re.IGNORECASE):
+            terms.append(word)
+
+    compact = " ".join(_dedupe_preserve_case(terms))
+    return compact[:180] if compact else None
+
+
 def synthesize_photo_turn(
     *,
     analysis_text: str,
     caption: str,
     surface: str,
+    fresh_context: str | None = None,
     chat_fn=None,
     model=None,
 ) -> FocusedResult:
@@ -1037,16 +1102,29 @@ def synthesize_photo_turn(
 
     analysis_text = (analysis_text or "").strip()
     caption = caption or ""
+    fresh_context = (fresh_context or "").strip()
     item = EvidenceItem(
         local_label="E1",
         source_type="photo_vision",
         text=analysis_text,
         durable_id=_content_hash(analysis_text),
     )
-    working_set_chars = len(analysis_text) + len(caption)
+    items = [item]
+    if fresh_context:
+        items.append(
+            EvidenceItem(
+                local_label="E2",
+                source_type="web_context",
+                text=fresh_context,
+                durable_id=_content_hash(fresh_context),
+            )
+        )
+    working_set_chars = len(analysis_text) + len(caption) + len(fresh_context)
     _working_set = WorkingSet(
-        items=[item],
-        ordered_evidence_text=analysis_text,
+        items=items,
+        ordered_evidence_text=(
+            analysis_text if not fresh_context else analysis_text + "\n\n" + fresh_context
+        ),
         owner_question=caption,
         working_set_chars=working_set_chars,
         working_set_tokens_est=working_set_chars // 4,
@@ -1070,6 +1148,15 @@ def synthesize_photo_turn(
         f"=== WHAT MAEZ SAW IN THE PHOTO (cite [E1]) ===\n"
         f"{analysis_text}"
     )
+    if fresh_context:
+        base_system += (
+            "\n\n=== FRESH WORLD CHECK (cite [E2] for current-world verification) ===\n"
+            f"{fresh_context}\n\n"
+            "Use E1 for what the image appears to show. Use E2 only for whether "
+            "the current-world claim is externally verified. If E2 says no "
+            "results, do not dismiss E1 from stale memory; say the image appears "
+            "to show it but you could not verify it."
+        )
 
     def _run(system_text):
         try:
@@ -1089,9 +1176,11 @@ def synthesize_photo_turn(
             return ""
 
     def _valid_photo_citation(text: str) -> bool:
-        # Valid only if it cites E1 and NO other label. The one-item photo working
-        # set contains exactly E1; any other [E#] is fake grounding.
-        return sorted({f"E{m.group(1)}" for m in _CITE_RE.finditer(text)}) == ["E1"]
+        # Valid only if it cites the photo evidence and no labels outside the
+        # bounded photo/freshness working set.
+        allowed = {"E1", "E2"} if fresh_context else {"E1"}
+        labels = {f"E{m.group(1)}" for m in _CITE_RE.finditer(text)}
+        return "E1" in labels and labels <= allowed
 
     _t0 = _time.monotonic()
     _t1 = _time.monotonic()

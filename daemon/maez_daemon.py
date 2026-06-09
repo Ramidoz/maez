@@ -5303,6 +5303,7 @@ class MaezDaemon:
 
         _recall_stack_config = resolve_recall_stack()
         web_context = ""
+        _photo_freshness_query = None
         _legacy_routing_observation_id = None
         _empty_web_search = False
         _routing_obs_tool = None
@@ -5355,6 +5356,80 @@ class MaezDaemon:
                     "routing observation legacy web search skipped: %s",
                     _routing_obs_exc,
                 )
+
+        if (
+            photo_analysis
+            and not authoritative_tool_reply
+            and _daemon_parallel_web_search_enabled(
+                transcript,
+                recall_stack_config=_recall_stack_config,
+            )
+            and (not web_context or _empty_web_search)
+        ):
+            try:
+                from core.routing.focused_cognition import (
+                    photo_freshness_search_query,
+                )
+
+                _photo_freshness_query = photo_freshness_search_query(
+                    caption=text,
+                    analysis_text=photo_analysis,
+                )
+            except Exception as _photo_freshness_exc:
+                logger.debug(
+                    "photo freshness search query skipped: %s",
+                    _photo_freshness_exc,
+                )
+                _photo_freshness_query = None
+            if _photo_freshness_query:
+                logger.info(
+                    "Photo freshness search triggered for: %s",
+                    _photo_freshness_query[:80],
+                )
+                _routing_obs_started = time.monotonic()
+                _routing_obs_tool = "photo_freshness_web_search"
+                sr = web_search(_photo_freshness_query, max_results=3)
+                web_context = web_format(sr)
+                from core.routing.focused_cognition import (
+                    is_empty_search_result as _is_empty_search_result,
+                )
+
+                _empty_web_search = _is_empty_search_result(sr)
+                logger.info(
+                    "Photo freshness search: %d results injected (%s)",
+                    sr.get("result_count", 0),
+                    sr.get("source_type", "web"),
+                )
+                try:
+                    from core.routing.observation import (
+                        record_legacy_web_search_observation,
+                    )
+
+                    _routing_obs_count = int(sr.get("result_count", 0) or 0)
+                    _legacy_routing_observation_id = (
+                        record_legacy_web_search_observation(
+                            user_text=text,
+                            surface=source,
+                            chat_id=chat_id,
+                            chosen_tool=_routing_obs_tool,
+                            execution_status=(
+                                "success" if _routing_obs_count > 0 else "empty"
+                            ),
+                            evidence_block_count=1 if web_context else 0,
+                            outcome_quality=(
+                                "structured_evidence"
+                                if _routing_obs_count > 0
+                                else "empty_but_honest"
+                            ),
+                            latency_ms=(time.monotonic() - _routing_obs_started)
+                            * 1000,
+                        )
+                    )
+                except Exception as _routing_obs_exc:
+                    logger.debug(
+                        "routing observation photo freshness search skipped: %s",
+                        _routing_obs_exc,
+                    )
 
         is_voice = source == "voice"
         prompt = f"{system_state}\n\n"
@@ -5976,6 +6051,11 @@ class MaezDaemon:
                         analysis_text=photo_analysis,
                         caption=text,
                         surface=source,
+                        fresh_context=(
+                            web_context
+                            if _photo_freshness_query and web_context
+                            else None
+                        ),
                     )
                     _photo_reply = (_photo_result.reply or "").strip()
                 except Exception as _photo_exc:

@@ -135,6 +135,17 @@ class PhotoSynthesisLivesInsideThePipeline(unittest.TestCase):
         snippet = body[start:end]
         self.assertIn("not photo_analysis", snippet)
 
+    def test_photo_freshness_context_reaches_photo_synthesis(self):
+        body = _handle_message_body()
+        self.assertIn("photo_freshness_search_query", body)
+        self.assertIn("Photo freshness search triggered", body)
+        self.assertIn("fresh_context=", body)
+        i_query = body.find("photo_freshness_search_query")
+        i_synth = body.find("synthesize_photo_turn")
+        self.assertGreater(i_query, -1)
+        self.assertGreater(i_synth, -1)
+        self.assertLess(i_query, i_synth)
+
     def test_photo_vision_signal_marked_present_before_envelope_build(self):
         # The audit/grounding envelope is built from the signal lists; mark
         # owner-sent photo vision PRESENT before _build_envelope so the honesty

@@ -12,7 +12,11 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from unittest import mock
 
-from core.routing.focused_cognition import FocusedResult, synthesize_photo_turn
+from core.routing.focused_cognition import (
+    FocusedResult,
+    photo_freshness_search_query,
+    synthesize_photo_turn,
+)
 
 
 ANALYSIS = (
@@ -43,6 +47,30 @@ def _capture_chat(store):
 
 
 class SynthesizePhotoTurn(unittest.TestCase):
+    def test_photo_freshness_query_extracts_model_names_from_image(self):
+        query = photo_freshness_search_query(
+            caption="Check out anthropic's latest model",
+            analysis_text=(
+                'The image title reads "Claude Mythos 5 and Fable 5". '
+                "A benchmark table compares Claude Mythos 5 / Fable 5 against GPT 5.5."
+            ),
+        )
+
+        self.assertIsNotNone(query)
+        assert query is not None
+        self.assertIn("Anthropic", query)
+        self.assertIn("Claude Mythos 5", query)
+        self.assertIn("Fable 5", query)
+        self.assertIn("latest", query.lower())
+
+    def test_photo_freshness_query_ignores_plain_description(self):
+        query = photo_freshness_search_query(
+            caption="what is this?",
+            analysis_text="The image shows a red circle and a blue square.",
+        )
+
+        self.assertIsNone(query)
+
     def test_returns_focused_result_with_brain_reply(self):
         result = synthesize_photo_turn(
             analysis_text=ANALYSIS,
@@ -117,6 +145,40 @@ class SynthesizePhotoTurn(unittest.TestCase):
         self.assertTrue(
             "your own" in system or "you saw" in system or "looked" in system
         )
+
+    def test_fresh_web_context_is_e2_and_valid_citation(self):
+        store = {}
+
+        def fake_chat(*, model, messages, think, options):
+            store["messages"] = messages
+            return SimpleNamespace(
+                message=SimpleNamespace(
+                    content=(
+                        "The chart appears to show Claude Mythos 5 and Fable 5 [E1], "
+                        "and fresh web evidence says Anthropic announced them today [E2]."
+                    )
+                )
+            )
+
+        result = synthesize_photo_turn(
+            analysis_text='The chart title reads "Claude Mythos 5 and Fable 5".',
+            caption="Check out anthropic's latest model",
+            surface="telegram_surface",
+            fresh_context=(
+                "[WEB SEARCH: 'Anthropic Claude Mythos 5 Fable 5 latest'] "
+                "1 results — 2026-06-09\n"
+                "  1. Claude Fable 5 and Claude Mythos 5\n"
+                "     Anthropic announced Claude Fable 5 and Mythos 5 today."
+            ),
+            chat_fn=fake_chat,
+            model="m",
+        )
+
+        system = store["messages"][0]["content"]
+        self.assertEqual(result.receipt_reason, "cited_ok")
+        self.assertEqual(result.cited_ids, ["E1", "E2"])
+        self.assertIn("FRESH WORLD CHECK", system)
+        self.assertIn("cite [E2]", system)
 
     def test_deterministic_fallback_on_empty_reply(self):
         result = synthesize_photo_turn(
