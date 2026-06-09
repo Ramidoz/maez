@@ -33,3 +33,9 @@ Branch: `agnostic-local-judge-registry-v0`
 
 - Running the real 14-case corpus with a local chatjudge candidate is the owner-greenlit witness run, not the cheap smoke. If `maez-judge` is live, that run may perform real CPU judge calls.
 - The birth-readiness covenant-review backlog is tracked in the implementation plan, not treated as a blocker for this local-only eval refactor.
+
+## Claude Covenant HOLD Resolution
+
+- B1 resolved in `2c4fbf0`: loopback HTTP validation now lives at the socket-opening door too (`ChatJudgeAdapter._load`), sharing the same helper as registry validation. Test asserts an external `base_url` fails before `_list_models` is called.
+- B2 resolved in `ccc1bd5`: the download runbook table now uses `CandidateSpec.name` verbatim and public `lytang/*` MiniCheck repos. Test asserts runbook names and repo ids match `CANDIDATES`.
+- Advisory A1 remains for the owner-greenlit witness run: pin exact revisions once the real model downloads are chosen.
