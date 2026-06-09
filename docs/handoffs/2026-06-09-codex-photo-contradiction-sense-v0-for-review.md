@@ -1,7 +1,7 @@
 # Photo Contradiction Sense v0 - Review Handoff
 
 Branch: `photo-contradiction-sense-v0`
-Tip: `77fc94b043cc1242b56ddd2f882b6ad127b05fdf`
+Tip: `1e1494596571d1816bcfd978cfc01f06541eb145`
 Spec: `docs/superpowers/specs/2026-06-09-photo-contradiction-sense-v0-design.md`
 Plan: `docs/superpowers/plans/2026-06-09-photo-contradiction-sense-v0.md`
 
@@ -33,6 +33,19 @@ external egress is part of this branch.
    no raw photo pixels or claim text in daemon logs.
 9. No memory schema or ledger schema change.
 
+## Covenant-Gate Fixes Folded In
+
+The first covenant review passed the mechanism but required two cheap fixes
+before merge. Both are now in the branch:
+
+1. Two-sided verifier pressure. The sense note and revision wrapper now state
+   that the contradiction signal is a sense, not a verdict, and that if Maez
+   still believes what it saw on second look it should say so plainly and
+   explain why.
+2. Honest capped receipts. When the direct perceptual claim limit is exceeded
+   and checked claims are clean, the receipt is `partial_unchecked`, not
+   `clear`, so unchecked claims cannot be laundered as fully verified.
+
 ## Verification
 
 Focused protected suites:
@@ -45,7 +58,7 @@ $ /home/rohit/maez/.venv/bin/python -m unittest \
   tests.test_chat_photo_wiring \
   tests.test_photo_judge_bakeoff
 
-Ran 121 tests in 0.103s
+Ran 122 tests in 0.109s
 OK
 ```
 
