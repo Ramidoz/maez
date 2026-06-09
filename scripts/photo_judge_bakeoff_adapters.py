@@ -54,6 +54,16 @@ def read_bakeoff_manifest(cache_dir: str) -> dict | None:
         return None
 
 
+def is_loopback_http_url(url: str | None) -> bool:
+    parsed = urlparse(url or "")
+    return parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost"}
+
+
+def require_loopback_http_url(url: str | None, *, label: str) -> None:
+    if not is_loopback_http_url(url):
+        raise ValueError(f"{label} must use loopback http")
+
+
 class CandidateAdapter:
     name: str = "base"
     score_based: bool = True   # False → label-native (no threshold)
@@ -275,6 +285,7 @@ class ChatJudgeAdapter(CandidateAdapter):
             raise RuntimeError(
                 "ChatJudge requires an explicit base_url (a bakeoff judge "
                 "endpoint); refusing to guess a port")
+        require_loopback_http_url(self.base_url, label=f"ChatJudge {self.name!r}")
         served = self._list_models(self.base_url)
         if self.expected_alias not in served:
             raise RuntimeError(
@@ -333,9 +344,7 @@ def validate_local_chat_specs(specs=CANDIDATES):
     for spec in specs:
         if spec.kind != "chatjudge":
             continue
-        parsed = urlparse(spec.base_url or "")
-        if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"}:
-            raise ValueError(f"chatjudge spec {spec.name!r} must use loopback http")
+        require_loopback_http_url(spec.base_url, label=f"chatjudge spec {spec.name!r}")
 
 
 def build_candidates(specs=CANDIDATES):

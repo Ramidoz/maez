@@ -570,6 +570,16 @@ class ChatJudgeHonesty(unittest.TestCase):
         self.assertIn("maez-judge", a.unavailable_reason)   # expected named
         self.assertIn("maez-vision", a.unavailable_reason)  # actually-served named
 
+    def test_direct_external_base_url_is_refused_before_network(self):
+        from scripts.photo_judge_bakeoff_adapters import ChatJudgeAdapter
+        with mock.patch.object(ChatJudgeAdapter, "_list_models",
+                               side_effect=AssertionError("network attempted")) as list_models:
+            a = ChatJudgeAdapter(base_url="http://example.com:8081",
+                                 expected_alias="maez-judge")
+        self.assertTrue(a._load_failed)
+        self.assertIn("loopback", a.unavailable_reason)
+        list_models.assert_not_called()
+
     def test_available_when_alias_served_reports_actual(self):
         from scripts.photo_judge_bakeoff_adapters import ChatJudgeAdapter
         with mock.patch.object(ChatJudgeAdapter, "_list_models",
