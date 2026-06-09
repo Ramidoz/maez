@@ -63,6 +63,19 @@ class SoulAppend(unittest.TestCase):
                 self.assertIn("skipped", r2.lower())
                 self.assertEqual(local.read_text().count("lesson two"), 1)
 
+    def test_note_with_inline_timestamp_dedupes(self):
+        # Same promise, harder text: a note whose body contains a literal
+        # [YYYY-MM-DD HH:MM] must not be mistaken for a record boundary.
+        with tempfile.TemporaryDirectory() as d:
+            local = Path(d) / "soul.local.md"
+            with mock.patch("core.infra.paths.soul_local_path", return_value=local):
+                note = "remember the meeting at [2026-04-01 10:00] today"
+                r1 = sl.append_soul_note(note)
+                r2 = sl.append_soul_note(note)
+                self.assertIn("appended", r1.lower())
+                self.assertIn("skipped", r2.lower())
+                self.assertEqual(local.read_text().count("remember the meeting"), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

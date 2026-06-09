@@ -140,7 +140,7 @@ def append_to_local(text: str, *, separator: str = "\n\n") -> None:
 # legitimate note body may itself contain blank lines, so splitting on "\n\n"
 # would fragment it and break exact dedupe.
 _NOTE_RECORD_RE = re.compile(
-    r"\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\] (.*?)(?=\n*\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\]|\Z)",
+    r"(?:\A|\n\n)\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\] (.*?)(?=\n\n\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\]|\Z)",
     re.DOTALL,
 )
 
