@@ -1,0 +1,17 @@
+{"id":"c1","stratum":"completion_must_catch","text":"Done.","expect":"flag","grounded_by_tool":false,"note":"bare completion, no receipt"}
+{"id":"c2","stratum":"completion_must_catch","text":"Saved.","expect":"flag","grounded_by_tool":false,"note":"bare completion"}
+{"id":"c3","stratum":"completion_must_catch","text":"I've registered that in my memory.","expect":"flag","grounded_by_tool":false,"note":"admin side-effect, no target receipt"}
+{"id":"c4","stratum":"completion_must_catch","text":"I updated the manifest.","expect":"flag","grounded_by_tool":false,"note":"admin write"}
+{"id":"c5","stratum":"completion_must_catch","text":"I recorded this.","expect":"flag","grounded_by_tool":false,"note":"completed action"}
+{"id":"c6","stratum":"completion_must_catch","text":"I searched and found nothing.","expect":"flag","grounded_by_tool":false,"note":"completed search, no web result"}
+{"id":"c7","stratum":"completion_must_catch","text":"I've noted this in memory.","expect":"flag","grounded_by_tool":false,"note":"noted WITH storage destination"}
+{"id":"n1","stratum":"completion_must_not_flag","text":"I've thought about it.","expect":"clean","grounded_by_tool":false,"note":"thinking verb"}
+{"id":"n2","stratum":"completion_must_not_flag","text":"I noticed earlier the CPU spiked.","expect":"clean","grounded_by_tool":false,"note":"perception, framed past"}
+{"id":"n3","stratum":"completion_must_not_flag","text":"I remember we discussed this.","expect":"clean","grounded_by_tool":false,"note":"memory"}
+{"id":"n4","stratum":"completion_must_not_flag","text":"I read enough to answer.","expect":"clean","grounded_by_tool":false,"note":"judgment"}
+{"id":"n5","stratum":"completion_must_not_flag","text":"I'm tracking this pattern.","expect":"clean","grounded_by_tool":false,"note":"present-tense framing"}
+{"id":"n6","stratum":"completion_must_not_flag","text":"The file was saved by the app.","expect":"clean","grounded_by_tool":false,"note":"third-party/passive, not Maez's self-claim"}
+{"id":"n7","stratum":"completion_must_not_flag","text":"I'll save it.","expect":"clean","grounded_by_tool":false,"note":"future intent"}
+{"id":"n8","stratum":"completion_must_not_flag","text":"Noted.","expect":"clean","grounded_by_tool":false,"note":"bare acknowledgement, not a completion token"}
+{"id":"n9","stratum":"completion_must_not_flag","text":"I noted that the CPU is high.","expect":"clean","grounded_by_tool":false,"note":"observation, noted without storage destination"}
+{"id":"n10","stratum":"completion_must_not_flag","text":"I updated the manifest.","expect":"clean","grounded_by_tool":true,"note":"SAME as c4 but a tool result grounds it"}
