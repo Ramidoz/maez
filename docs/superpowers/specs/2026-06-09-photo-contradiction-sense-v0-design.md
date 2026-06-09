@@ -38,6 +38,8 @@ the decider.
 - No claim that NLI is final law. It is the current measured local candidate
   behind a swappable contradiction-sense contract.
 - No whole-reply NLI check. That would exceed the bakeoff witness.
+- No multi-photo contradiction handling in v0. This slice handles exactly one
+  owner-sent photo evidence item (`E1`).
 
 ## Component 1 - Photo evidence envelope
 
@@ -78,9 +80,28 @@ reply text + E1 premise -> list[PhotoClaim]
 PhotoClaim = {claim_id, text, direct_perceptual: bool, evidence_label}
 ```
 
-The implementation may use a local extractor prompt or a deterministic parser, but
-the interface is explicit and testable. The verifier never receives the whole
-reply as one hypothesis. It receives one atomic claim at a time.
+The v0 extractor is deliberately dumb and auditable: deterministic sentence
+splitting plus a conservative direct-perceptual filter. It must not use a
+free-form model call in v0. That keeps the upstream dependency inside the
+distribution the bakeoff actually measured: one draft sentence or clause becomes
+one verifier hypothesis.
+
+Extractor rules:
+
+- A claim's `text` must be a substring of the draft reply after normalization
+  (whitespace and surrounding citation markers may differ). No generated
+  paraphrases in v0.
+- A claim is `direct_perceptual=true` only when it asserts what the photo shows,
+  says, contains, depicts, lists, names, or displays.
+- Ambiguous, interpretive, future-facing, advice, emotional, or project-meaning
+  sentences are excluded.
+- If the extractor cannot split a sentence without preserving meaning, it keeps
+  the sentence whole or skips it. It never invents a smaller claim.
+- Precision beats recall. Missing a contradiction leaves the turn under Lane 1;
+  manufacturing a contradiction would create false trust-demotion.
+
+The verifier never receives the whole reply as one hypothesis. It receives one
+atomic, draft-derived claim at a time.
 
 If claim extraction fails or returns no direct perceptual claims, the contradiction
 sense is unavailable for that turn. The turn stays governed by Lane 1's citation
@@ -124,6 +145,7 @@ Flow:
    `contradiction_receipt=clear`.
 7. If contradictions are found, add a **contradiction sense note** to the working
    set and ask Maez to revise once.
+8. Re-extract and re-check the revised reply exactly once.
 
 The note is not phrased as "you are wrong" and not treated as an external judge.
 It is phrased as visible substrate state:
@@ -138,6 +160,13 @@ photo evidence and draft conflict.
 
 This makes "pressure not command" mechanically real: Maez composes with the signal
 in its working set.
+
+`revised_clear` is allowed only after the bounded re-check is actually clear.
+Attempting a revision is not evidence that the contradiction resolved. If the
+revised reply still contradicts, introduces a new direct perceptual contradiction,
+or cannot be checked, the receipt stays honest (`trust_demoted`,
+`revision_unverified`, or `verifier_unavailable`) rather than being laundered into
+clear.
 
 ## Component 5 - Narrow honesty floor
 
@@ -160,6 +189,11 @@ revision resolves the contradiction, the final receipt can be `revised_clear`.
 If the contradiction remains or the verifier is unavailable, the receipt stays
 truthful (`trust_demoted`, `verifier_unavailable`, etc.) rather than pretending
 the reply was clean.
+
+The floor is skipped when Lane 1 has already produced
+`receipt_reason=deterministic_fallback`. That reply is the photo analysis itself,
+cited by construction; running contradiction NLI on it is wasted and can only add
+false pressure.
 
 ## Component 6 - Birth-gated durability
 
@@ -197,6 +231,26 @@ The owner-enabled witness is separate from merge:
 4. Send photo cases that include a cited-but-contradicts trap.
 5. Verify contradiction receipt logs and image-grounded revision behavior.
 
+## Component 8 - Latency budget
+
+The good path must stay cheap. With the flag enabled and no contradictions found,
+v0 adds only deterministic extraction plus NLI checks. The spec budget is:
+
+- deterministic extraction: under 50ms p95;
+- at most 5 direct perceptual claims checked per pass;
+- NLI verifier overhead: under 1.0s p95 total on the no-contradiction path
+  (5 claims * the measured ~0.16s p95, with margin);
+- if more than 5 direct perceptual claims are present, check the first 5 in
+  reply order and log `claim_limit_exceeded=true` so the turn is not silently
+  over-certified.
+
+The contradiction path may add one focused revision call plus one bounded
+re-check. That path is allowed to be slower because it fires only when the
+honesty organ senses a problem, but it must log total contradiction-sense
+latency. If the non-LLM verifier/extractor overhead exceeds 2.0s p95 in witness
+testing, the slice should not be treated as inline-ready without an explicit
+owner decision.
+
 ## Error handling
 
 - Claim extraction failure -> `claim_extraction_unavailable`, no crash.
@@ -205,6 +259,8 @@ The owner-enabled witness is separate from merge:
 - Contradiction sense note retry failure -> original Lane 1-grounded reply may
   still be returned, but the receipt stays `trust_demoted` or `retry_failed`; it
   is not reported as clear.
+- Revision attempted but not re-checked -> impossible by design; tests must prove
+  the `revised_clear` receipt is unreachable without a post-revision re-check.
 - Any unexpected exception in the organ must fall back to current photo synthesis
   plus a content-free warning. The fallback must not fabricate a contradiction.
 
@@ -214,21 +270,35 @@ TDD expectations:
 
 1. Claim extractor splits a multi-sentence photo reply into atomic perceptual
    claims and excludes non-perceptual commentary.
-2. Whole-reply NLI is never called; the verifier sees one claim per call.
-3. A WWDC-style claim ("the screenshot is about WWDC2024") against a 2026 premise
+2. Claim extractor is deterministic and draft-bound: extracted claim text is a
+   normalized substring of the draft; no free-form model extractor is called.
+3. Conservative filter prefers omission over false demotion: ambiguous
+   interpretive sentences are excluded.
+4. Whole-reply NLI is never called; the verifier sees one claim per call.
+5. A WWDC-style claim ("the screenshot is about WWDC2024") against a 2026 premise
    produces a contradiction sense note.
-4. A grounded photo claim produces `contradiction_receipt=clear`.
-5. A contradiction triggers one revision pass with the sense note in the focused
+6. A grounded photo claim produces `contradiction_receipt=clear`.
+7. A contradiction triggers one revision pass with the sense note in the focused
    working set.
-6. The contradiction floor is triple-gated: it does not fire for non-photo
+8. Revised reply is re-extracted and re-checked exactly once; `revised_clear` is
+   possible only when that re-check is clear.
+9. Revision that still contradicts, introduces a new contradiction, or cannot be
+   checked remains `trust_demoted` / `revision_unverified`, never `revised_clear`.
+10. The contradiction floor is triple-gated: it does not fire for non-photo
    evidence, non-perceptual claims, or unavailable verifier output.
-7. Unavailable extractor/verifier paths log honest receipts and do not crash.
-8. The feature flag preserves byte-equivalent behavior when off.
-9. No network call path exists; local artifact missing means unavailable.
-10. Logs carry `contradiction_receipt`, verifier fingerprint, claim count,
+11. Single-photo v0 scope: multi-photo turns skip the contradiction sense with an
+    honest `multi_photo_unsupported` receipt rather than pretending E1 is the only
+    photo.
+12. Lane 1 deterministic fallback skips contradiction NLI.
+13. Unavailable extractor/verifier paths log honest receipts and do not crash.
+14. The feature flag preserves byte-equivalent behavior when off.
+15. No network call path exists; local artifact missing means unavailable.
+16. Logs carry `contradiction_receipt`, verifier fingerprint, claim count,
     contradiction count, and turn id when available.
-11. No memory schema or ledger schema change.
-12. Existing Photo Honesty Receipt tests still pass.
+17. Latency metrics and `claim_limit_exceeded` are logged; tests prove the claim
+    cap is enforced.
+18. No memory schema or ledger schema change.
+19. Existing Photo Honesty Receipt tests still pass.
 
 ## Review gate
 
