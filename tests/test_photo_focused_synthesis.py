@@ -6,6 +6,7 @@ analysis. The fix synthesizes photo turns over a BOUNDED working set (analysis +
 caption + voice + faithful instruction), never the full megaprompt.
 """
 
+import sys
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -186,22 +187,38 @@ class PhotoContradictionSenseFields(unittest.TestCase):
         self.assertIsNone(r.contradiction_sha256)
         self.assertFalse(r.contradiction_claim_limit_exceeded)
 
-    def test_flag_off_does_not_call_contradiction_checker(self):
+    def test_flag_off_does_not_import_or_call_contradiction_checker(self):
         chat, box = _scripted_chat(["The screenshot shows Reddit [E1]."])
+        module_name = "core.routing.photo_contradiction"
+        real_import = __import__
+
+        def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == module_name or (
+                name == "core.routing" and "photo_contradiction" in fromlist
+            ):
+                raise AssertionError("must not import contradiction organ when flag off")
+            return real_import(name, globals, locals, fromlist, level)
+
         for env in ({}, {"MAEZ_PHOTO_CONTRADICTION_SENSE": ""}):
             with self.subTest(env=env):
                 box["i"] = 0
-                with mock.patch.dict("os.environ", env, clear=True), mock.patch(
-                    "core.routing.photo_contradiction.check_photo_contradictions",
-                    side_effect=AssertionError("must not run when flag off"),
-                ):
-                    r = synthesize_photo_turn(
-                        analysis_text=ANALYSIS,
-                        caption=CAPTION,
-                        surface="telegram_surface",
-                        chat_fn=chat,
-                        model="m",
-                    )
+                previous_module = sys.modules.pop(module_name, None)
+                try:
+                    with mock.patch.dict("os.environ", env, clear=True), mock.patch(
+                        "builtins.__import__",
+                        side_effect=guarded_import,
+                    ):
+                        r = synthesize_photo_turn(
+                            analysis_text=ANALYSIS,
+                            caption=CAPTION,
+                            surface="telegram_surface",
+                            chat_fn=chat,
+                            model="m",
+                        )
+                    self.assertNotIn(module_name, sys.modules)
+                finally:
+                    if previous_module is not None:
+                        sys.modules[module_name] = previous_module
 
                 self.assertEqual(r.receipt_reason, "cited_ok")
                 self.assertIsNone(r.contradiction_receipt)
