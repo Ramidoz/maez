@@ -102,7 +102,8 @@ class ConcreteAdapters(unittest.TestCase):
         from scripts.photo_judge_bakeoff_adapters import ALL_ADAPTERS
         names = {a.name for a in ALL_ADAPTERS}
         self.assertEqual(names, {
-            "hhem", "minicheck", "thinkncheck", "nli", "reranker", "chatjudge"})
+            "hhem", "minicheck-roberta", "thinkncheck", "nli", "reranker",
+            "chatjudge"})
 
     def test_score_based_vs_label_native_flags(self):
         from scripts.photo_judge_bakeoff_adapters import (
@@ -133,6 +134,29 @@ class ConcreteAdapters(unittest.TestCase):
             v = a.predict("p", "h")
             self.assertEqual(v.label, "contradicts")
             self.assertIsNone(v.score)  # no threshold for label-native
+
+    def test_minicheck_adapter_honors_repo_and_model_name(self):
+        from scripts.photo_judge_bakeoff_adapters import MiniCheckAdapter
+        with mock.patch.object(MiniCheckAdapter, "_load", return_value=object()):
+            a = MiniCheckAdapter(
+                name="minicheck-flan-t5",
+                repo_id="lytang/MiniCheck-Flan-T5-Large",
+                model_name="flan-t5-large",
+            )
+        self.assertEqual(a.name, "minicheck-flan-t5")
+        self.assertEqual(a.model_id, "lytang/MiniCheck-Flan-T5-Large")
+        self.assertEqual(a.model_name, "flan-t5-large")
+
+    def test_repo_parameter_sets_model_id_on_score_adapters(self):
+        from scripts.photo_judge_bakeoff_adapters import HHEMAdapter, NLIAdapter
+        with mock.patch.object(HHEMAdapter, "_load", return_value=object()):
+            h = HHEMAdapter(name="hhem-alt", repo_id="vectara/custom")
+        with mock.patch.object(NLIAdapter, "_load", return_value=object()):
+            n = NLIAdapter(name="nli-alt", repo_id="owner/nli")
+        self.assertEqual(h.name, "hhem-alt")
+        self.assertEqual(h.model_id, "vectara/custom")
+        self.assertEqual(n.name, "nli-alt")
+        self.assertEqual(n.model_id, "owner/nli")
 
 
 class CandidateRegistry(unittest.TestCase):

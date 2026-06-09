@@ -118,10 +118,17 @@ class HHEMAdapter(CandidateAdapter):
     score_based = True
     model_id = "vectara/hallucination_evaluation_model"
 
+    def __init__(self, threshold=None, name=None, repo_id=None):
+        if name:
+            self.name = name
+        if repo_id:
+            self.model_id = repo_id
+        super().__init__(threshold=threshold)
+
     def _load(self):
         from transformers import AutoModelForSequenceClassification
         return AutoModelForSequenceClassification.from_pretrained(
-            os.path.join(_BAKEOFF_CACHE, "hhem"), trust_remote_code=True)
+            os.path.join(_BAKEOFF_CACHE, self.name), trust_remote_code=True)
 
     def _raw_predict(self, premise, hypothesis):
         # HHEM returns a 0..1 consistency score (higher = consistent = grounded)
@@ -133,10 +140,17 @@ class NLIAdapter(CandidateAdapter):
     score_based = True
     model_id = "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli"
 
+    def __init__(self, threshold=None, name=None, repo_id=None):
+        if name:
+            self.name = name
+        if repo_id:
+            self.model_id = repo_id
+        super().__init__(threshold=threshold)
+
     def _load(self):
         from transformers import pipeline
         return pipeline("text-classification",
-                        model=os.path.join(_BAKEOFF_CACHE, "nli"),
+                        model=os.path.join(_BAKEOFF_CACHE, self.name),
                         top_k=None)
 
     def _raw_predict(self, premise, hypothesis):
@@ -152,9 +166,16 @@ class RerankerAdapter(CandidateAdapter):
     score_based = True
     model_id = "Qwen/Qwen3-Reranker-0.6B"
 
+    def __init__(self, threshold=None, name=None, repo_id=None):
+        if name:
+            self.name = name
+        if repo_id:
+            self.model_id = repo_id
+        super().__init__(threshold=threshold)
+
     def _load(self):
         from sentence_transformers import CrossEncoder
-        return CrossEncoder(os.path.join(_BAKEOFF_CACHE, "reranker"))
+        return CrossEncoder(os.path.join(_BAKEOFF_CACHE, self.name))
 
     def _raw_predict(self, premise, hypothesis):
         # BASELINE-CAVEATED: relevance != entailment. Higher relevance treated
@@ -163,14 +184,24 @@ class RerankerAdapter(CandidateAdapter):
 
 
 class MiniCheckAdapter(CandidateAdapter):
-    name = "minicheck"
+    name = "minicheck-roberta"
     score_based = False   # label-native 0/1
-    model_id = "bespokelabs/Bespoke-MiniCheck-RoBERTa-Large"
+    model_id = "lytang/MiniCheck-RoBERTa-Large"
+    model_name = "roberta-large"
+
+    def __init__(self, threshold=None, name=None, repo_id=None, model_name=None):
+        if name:
+            self.name = name
+        if repo_id:
+            self.model_id = repo_id
+        if model_name:
+            self.model_name = model_name
+        super().__init__(threshold=threshold)
 
     def _load(self):
         from minicheck.minicheck import MiniCheck
-        return MiniCheck(model_name="roberta-large",
-                         cache_dir=os.path.join(_BAKEOFF_CACHE, "minicheck"))
+        return MiniCheck(model_name=self.model_name,
+                         cache_dir=os.path.join(_BAKEOFF_CACHE, self.name))
 
     def _raw_predict(self, premise, hypothesis):
         pred, _ = self._model.score(docs=[premise], claims=[hypothesis])[:2]
@@ -182,11 +213,18 @@ class ThinknCheckAdapter(CandidateAdapter):
     score_based = False   # reasoning verdict
     model_id = "thinkncheck/thinkncheck-1b-gemma3-q4"  # verify at obtain-time
 
+    def __init__(self, threshold=None, name=None, repo_id=None):
+        if name:
+            self.name = name
+        if repo_id:
+            self.model_id = repo_id
+        super().__init__(threshold=threshold)
+
     def _load(self):
         # 4-bit 1B Gemma3; served via llama.cpp OR transformers — pinned at
         # obtain-time. Returns a callable that yields a verdict string.
         from scripts.photo_judge_bakeoff_thinkncheck import load_thinkncheck
-        return load_thinkncheck(os.path.join(_BAKEOFF_CACHE, "thinkncheck"))
+        return load_thinkncheck(os.path.join(_BAKEOFF_CACHE, self.name))
 
     def _raw_predict(self, premise, hypothesis):
         verdict = self._model.verify(premise=premise, claim=hypothesis)
