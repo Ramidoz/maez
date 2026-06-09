@@ -44,6 +44,16 @@
 
 Codex mechanical-verify (round 1) confirmed the prune is clean (source-only edits; invariants pass; composed soul pruned; 45 + 226 + 11 tests OK; ruff clean) but found a **real blocker**: `append_soul_note` deduped with `body in existing` (substring) → a distinct shorter note contained inside an older one would be **silently false-skipped** — unacceptable for a soul writer. Fixed in `3532a93`: dedupe now matches **exact note-body** (timestamp-stripped, whole-unit via `_note_bodies`), and read/check/write are **atomic under `_lock`** (so concurrent identical notes can't double-append). Added `test_substring_distinct_note_still_appends` (Codex's exact repro: RED→GREEN), kept the exact-duplicate test. Regression: append + gardening + invariants green; ruff clean. **For Codex re-verify.**
 
+## Review round 2 — Codex blocker RESOLVED (`11acc0b`)
+
+Codex re-verify confirmed round-1 fixed (substring gone; atomic under `_lock`; 21+237 tests OK; ruff + `git diff --check` clean; source-only edit confirmed) but found another: `_note_bodies` split prior notes on blank lines (`split("\n\n")`), so a legitimate **multi-paragraph** note body fragments and exact dedupe fails → re-append. Fixed in `11acc0b`: records parsed by **timestamp boundary**. Added `test_multiparagraph_note_dedupes` (RED→GREEN).
+
+## Round 3 (Claude, proactive) — same-class variant closed (`d62225b`)
+
+While applying round-2 I traced one more variant of the same promise and closed it rather than let it re-surface: a note body containing a literal `[YYYY-MM-DD HH:MM]` would be mis-read as a record boundary → an identical such note re-appends. Anchored record starts to `\A`/`\n\n` (the append separator) and the end-boundary to `\n\n[ts]`, so inline timestamps in body text are not delimiters. Added `test_note_with_inline_timestamp_dedupes` (RED→GREEN). **Residual (irreducible for an append-text format):** a body containing a blank-line-then-timestamp is still ambiguous — acceptable for v0; only a structured store would fully fix it, out of scope.
+
+Append dedup now holds for: exact-duplicate, distinct-substring, multi-paragraph, inline-timestamp. **5 append tests + 42 regression + ruff green.**
+
 ## STOP
 
-Build complete, not merged. Live-on-merge → Codex re-verify (`3532a93`) → 6-agent covenant panel → **owner's merge breath**.
+Build complete, not merged. Live-on-merge → Codex re-verify (`d62225b`) → 6-agent covenant panel → **owner's merge breath**.
