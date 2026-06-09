@@ -1,0 +1,44 @@
+import unittest
+
+from core.safety.self_claim_audit import audit
+
+
+class CompletionRailInAudit(unittest.TestCase):
+    def test_short_completion_reaches_rail(self):
+        r = audit("Done.", surface="test")
+        self.assertTrue(r.rewritten)
+        self.assertEqual(r.text, "I don't have a completed action to report.")
+
+    def test_omit_false_span_keeps_rest(self):
+        r = audit("Got it. I've registered that in my memory.", surface="test")
+        self.assertTrue(r.rewritten)
+        self.assertEqual(r.text.strip(), "Got it.")
+
+    def test_grounded_skip_respected_for_tool_continuation(self):
+        r = audit("I updated the manifest.", surface="test", in_tool_continuation=True)
+        self.assertFalse(r.rewritten)
+        self.assertEqual(r.text, "I updated the manifest.")
+
+    def test_grounded_skip_respected_for_tool_results_envelope(self):
+        r = audit(
+            "I updated the manifest.",
+            surface="test",
+            evidence_envelope={
+                "tool_results": [
+                    {
+                        "name": "write",
+                        "status": "ok",
+                        "summary": "manifest updated",
+                    }
+                ]
+            },
+        )
+        self.assertFalse(r.rewritten)
+        self.assertEqual(r.text, "I updated the manifest.")
+
+    def test_clean_reflection_untouched(self):
+        r = audit(
+            "I've thought about it and I noticed the pattern earlier.",
+            surface="test",
+        )
+        self.assertFalse(r.rewritten)

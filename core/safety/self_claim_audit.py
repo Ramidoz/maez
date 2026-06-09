@@ -255,6 +255,13 @@ def check_completion_claims(text: str, *, grounded_by_tool: bool) -> list[Flag]:
     return flags
 
 
+def _evidence_envelope_has_tool_results(evidence_envelope: Optional[dict]) -> bool:
+    if not isinstance(evidence_envelope, dict):
+        return False
+    tool_results = evidence_envelope.get("tool_results")
+    return bool(tool_results)
+
+
 # ── sentence boundary helpers ──────────────────────────────────────────
 
 
@@ -719,6 +726,25 @@ def audit(
             rewritten=sentinel_cleanup is not None,
             mode="noop",
             skipped_reason="env_disabled",
+        )
+
+    rail_flags = check_completion_claims(
+        text,
+        grounded_by_tool=_evidence_envelope_has_tool_results(evidence_envelope),
+    )
+    if rail_flags:
+        rail_outcome = _rewrite_detailed(text, rail_flags)
+        _emit(surface=surface, flags=rail_flags, mode="completion_rail")
+        result_text = (
+            "I don't have a completed action to report."
+            if rail_outcome.voice_fallback_used
+            else rail_outcome.text
+        )
+        return AuditResult(
+            text=result_text,
+            rewritten=True,
+            mode="completion_rail",
+            flags=rail_flags,
         )
 
     # Cheap pre-filter: very short / purely-hedging replies can't
