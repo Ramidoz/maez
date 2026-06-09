@@ -123,6 +123,18 @@ class PhotoSynthesisLivesInsideThePipeline(unittest.TestCase):
         self.assertIn("photo_analysis", body)
         self.assertIn("photo_focused_synth_enabled", body)
 
+    def test_photo_analysis_blocks_honest_empty_preemption(self):
+        # A photo caption can look search-shaped ("latest model"). If web search
+        # returns empty, the honest-empty route must not preempt successful local
+        # photo evidence; the photo-focused branch should still get first claim.
+        body = _handle_message_body()
+        start = body.find("_honest_empty_candidate = (")
+        self.assertGreater(start, -1, "honest-empty candidate block not found")
+        end = body.find("_reply_decision = resolve_reply_mode", start)
+        self.assertGreater(end, start)
+        snippet = body[start:end]
+        self.assertIn("not photo_analysis", snippet)
+
     def test_photo_vision_signal_marked_present_before_envelope_build(self):
         # The audit/grounding envelope is built from the signal lists; mark
         # owner-sent photo vision PRESENT before _build_envelope so the honesty

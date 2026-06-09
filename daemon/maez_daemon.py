@@ -5712,6 +5712,7 @@ class MaezDaemon:
         )
         _honest_empty_candidate = (
             _empty_web_search
+            and not photo_analysis
             and not _evidence_state.evidence_present
             and not _dialogue_needs_or_uncertain
             and not _current_turn_echo_reply
