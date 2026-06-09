@@ -136,23 +136,21 @@ def append_to_local(text: str, *, separator: str = "\n\n") -> None:
         _cache_signature = None
 
 
-_NOTE_TS_RE = re.compile(r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\] (.*)$", re.DOTALL)
+# Note records are delimited by their timestamp prefix, NOT by blank lines: a
+# legitimate note body may itself contain blank lines, so splitting on "\n\n"
+# would fragment it and break exact dedupe.
+_NOTE_RECORD_RE = re.compile(
+    r"\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\] (.*?)(?=\n*\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\]|\Z)",
+    re.DOTALL,
+)
 
 
 def _note_bodies(existing: str) -> set:
-    """Exact bodies of previously-appended notes (timestamp prefix stripped),
-    compared as whole units. Substring matching would false-skip a distinct
-    shorter note contained inside an older one.
+    """Exact bodies of previously-appended notes, parsed by TIMESTAMP boundary
+    (each record runs from its '[ts] ' to the next '[ts]' or end), so a note
+    whose body contains blank lines is still compared as one whole unit.
     """
-    bodies = set()
-    for chunk in existing.split("\n\n"):
-        chunk = chunk.strip()
-        if not chunk:
-            continue
-        m = _NOTE_TS_RE.match(chunk)
-        if m:
-            bodies.add(m.group(1).strip())
-    return bodies
+    return {m.group(1).strip() for m in _NOTE_RECORD_RE.finditer(existing)}
 
 
 def append_soul_note(note: str, *, separator: str = "\n\n") -> str:

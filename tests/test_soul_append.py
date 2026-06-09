@@ -51,6 +51,18 @@ class SoulAppend(unittest.TestCase):
                     txt.count("] disk fixation lesson: stop repeating"), 2
                 )
 
+    def test_multiparagraph_note_dedupes(self):
+        # Codex round-2 catch: a note body with a blank line must still dedupe
+        # exactly (records delimited by timestamp boundary, not blank lines).
+        with tempfile.TemporaryDirectory() as d:
+            local = Path(d) / "soul.local.md"
+            with mock.patch("core.infra.paths.soul_local_path", return_value=local):
+                r1 = sl.append_soul_note("lesson one\n\nlesson two")
+                r2 = sl.append_soul_note("lesson one\n\nlesson two")
+                self.assertIn("appended", r1.lower())
+                self.assertIn("skipped", r2.lower())
+                self.assertEqual(local.read_text().count("lesson two"), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
