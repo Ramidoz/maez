@@ -54,6 +54,13 @@ class PhotoClaimExtraction(unittest.TestCase):
         reply = "It seems important and probably relates to the current work [E1]."
         self.assertEqual(extract_photo_claims(reply), [])
 
+    def test_bare_non_photo_verbs_are_omitted(self):
+        reply = (
+            "The presenter says WWDC 2026 is next week [E1]. "
+            "The article lists three possible launch dates [E1]."
+        )
+        self.assertEqual(extract_photo_claims(reply), [])
+
     def test_claim_cap_returns_first_five_and_reports_limit(self):
         reply = " ".join(
             f"The screenshot lists item {i} [E1]." for i in range(1, 8)

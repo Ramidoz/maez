@@ -17,7 +17,6 @@ _PHOTO_VERBS_RE = re.compile(
     r"\b("
     r"(?:image|photo|picture|screenshot|chart|table|text|title|page|screen)"
     r"\s+(?:shows|says|contains|depicts|lists|names|displays|reads|includes)"
-    r"|(?:shows|says|contains|depicts|lists|names|displays|reads|includes)"
     r")\b",
     re.IGNORECASE,
 )
