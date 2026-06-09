@@ -47,7 +47,7 @@ class SoulGardening(unittest.TestCase):
 
     def test_elderly_phrase_removed(self):
         soul = _fresh_soul()
-        self.assertNotIn("elderly care vision", soul)
+        self.assertNotIn("elderly care", soul)
         # Option A: purely subtractive — no grandmother-origin authored here.
         self.assertNotIn("grandmother", soul.lower())
 
