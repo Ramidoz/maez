@@ -190,6 +190,28 @@ class ConcreteAdapters(unittest.TestCase):
         self.assertEqual(a.model_id, "lytang/MiniCheck-Flan-T5-Large")
         self.assertEqual(a.model_name, "flan-t5-large")
 
+    def test_minicheck_adapter_uses_transformers_not_private_package(self):
+        src = (ROOT / "scripts" / "photo_judge_bakeoff_adapters.py").read_text()
+        self.assertNotIn("minicheck.minicheck", src)
+
+    def test_minicheck_label_mapping_from_transformers_output(self):
+        from scripts.photo_judge_bakeoff_adapters import MiniCheckAdapter
+        with mock.patch.object(MiniCheckAdapter, "requires_artifact", False), \
+             mock.patch.object(MiniCheckAdapter, "_load", return_value=object()):
+            a = MiniCheckAdapter()
+
+        a._model = lambda pair: [[
+            {"label": "LABEL_0", "score": 0.2},
+            {"label": "LABEL_1", "score": 0.8},
+        ]]
+        self.assertEqual(a._raw_predict("p", "h"), "grounded")
+
+        a._model = lambda pair: [
+            {"label": "unsupported", "score": 0.9},
+            {"label": "supported", "score": 0.1},
+        ]
+        self.assertEqual(a._raw_predict("p", "h"), "contradicts")
+
     def test_repo_parameter_sets_model_id_on_score_adapters(self):
         from scripts.photo_judge_bakeoff_adapters import HHEMAdapter, NLIAdapter
         with mock.patch.object(HHEMAdapter, "_load", return_value=object()):

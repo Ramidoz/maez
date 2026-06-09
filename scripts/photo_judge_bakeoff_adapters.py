@@ -235,13 +235,47 @@ class MiniCheckAdapter(CandidateAdapter):
         super().__init__(threshold=threshold)
 
     def _load(self):
-        from minicheck.minicheck import MiniCheck
-        return MiniCheck(model_name=self.model_name,
-                         cache_dir=os.path.join(_BAKEOFF_CACHE, self.name))
+        from transformers import pipeline
+        return pipeline("text-classification",
+                        model=os.path.join(_BAKEOFF_CACHE, self.name),
+                        top_k=None)
 
     def _raw_predict(self, premise, hypothesis):
-        pred, _ = self._model.score(docs=[premise], claims=[hypothesis])[:2]
-        return "grounded" if int(pred[0]) == 1 else "contradicts"
+        out = self._model({"text": premise, "text_pair": hypothesis})
+        if out and isinstance(out[0], list):
+            out = out[0]
+        scores = {
+            str(d.get("label", "")).lower(): float(d.get("score", 0.0))
+            for d in out
+        }
+        def _is_grounded_label(label: str) -> bool:
+            if ("unsupported" in label or "not_supported" in label
+                    or "not-supported" in label):
+                return False
+            return (label in {"1", "label_1", "entailment", "true", "supported",
+                              "supports"}
+                    or "support" in label
+                    or "entail" in label)
+
+        def _is_contradicts_label(label: str) -> bool:
+            return (label in {"0", "label_0", "contradiction", "false",
+                              "unsupported", "contradicts"}
+                    or "contradict" in label
+                    or "unsupport" in label
+                    or "not_supported" in label
+                    or "not-supported" in label)
+
+        grounded = max(
+            (score for label, score in scores.items()
+             if _is_grounded_label(label)),
+            default=0.0,
+        )
+        contradicts = max(
+            (score for label, score in scores.items()
+             if _is_contradicts_label(label)),
+            default=0.0,
+        )
+        return "grounded" if grounded >= contradicts else "contradicts"
 
 
 class ThinknCheckAdapter(CandidateAdapter):
