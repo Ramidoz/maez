@@ -13,10 +13,21 @@ from __future__ import annotations
 import json
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 ADAPTER_VERSION = "1"
 THRESHOLD_GRID = (0.3, 0.4, 0.5, 0.6, 0.7)
+
+
+@dataclass(frozen=True)
+class CandidateSpec:
+    name: str
+    kind: str
+    repo_id: str | None = None
+    base_url: str | None = None
+    expected_alias: str | None = None
+    params: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -238,6 +249,39 @@ class ChatJudgeAdapter(CandidateAdapter):
         with urllib.request.urlopen(req, timeout=30) as r:
             txt = _json.loads(r.read())["choices"][0]["message"]["content"]
         return "contradicts" if "contradict" in txt.lower() else "grounded"
+
+
+CANDIDATES = (
+    CandidateSpec(name="hhem", kind="hhem",
+                  repo_id="vectara/hallucination_evaluation_model"),
+    CandidateSpec(name="minicheck-roberta", kind="minicheck",
+                  repo_id="lytang/MiniCheck-RoBERTa-Large",
+                  params={"model_name": "roberta-large"}),
+    CandidateSpec(name="minicheck-flan-t5", kind="minicheck",
+                  repo_id="lytang/MiniCheck-Flan-T5-Large",
+                  params={"model_name": "flan-t5-large"}),
+    CandidateSpec(name="minicheck-deberta", kind="minicheck",
+                  repo_id="lytang/MiniCheck-DeBERTa-v3-Large",
+                  params={"model_name": "deberta-v3-large"}),
+    CandidateSpec(name="thinkncheck", kind="thinkncheck",
+                  repo_id="thinkncheck/thinkncheck-1b-gemma3-q4"),
+    CandidateSpec(name="nli", kind="nli",
+                  repo_id="MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli"),
+    CandidateSpec(name="reranker", kind="reranker",
+                  repo_id="Qwen/Qwen3-Reranker-0.6B"),
+    CandidateSpec(name="chatjudge-maez-judge", kind="chatjudge",
+                  base_url="http://127.0.0.1:8081",
+                  expected_alias="maez-judge"),
+)
+
+
+def validate_local_chat_specs(specs=CANDIDATES):
+    for spec in specs:
+        if spec.kind != "chatjudge":
+            continue
+        parsed = urlparse(spec.base_url or "")
+        if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"}:
+            raise ValueError(f"chatjudge spec {spec.name!r} must use loopback http")
 
 
 ALL_ADAPTERS = [

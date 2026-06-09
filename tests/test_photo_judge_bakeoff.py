@@ -135,6 +135,54 @@ class ConcreteAdapters(unittest.TestCase):
             self.assertIsNone(v.score)  # no threshold for label-native
 
 
+class CandidateRegistry(unittest.TestCase):
+    def test_registry_contains_expected_local_specs(self):
+        from scripts.photo_judge_bakeoff_adapters import CANDIDATES
+        names = {c.name for c in CANDIDATES}
+        self.assertEqual(names, {
+            "hhem",
+            "minicheck-roberta",
+            "minicheck-flan-t5",
+            "minicheck-deberta",
+            "thinkncheck",
+            "nli",
+            "reranker",
+            "chatjudge-maez-judge",
+        })
+
+    def test_minicheck_specs_use_public_lytang_repos(self):
+        from scripts.photo_judge_bakeoff_adapters import CANDIDATES
+        minis = [c for c in CANDIDATES if c.kind == "minicheck"]
+        self.assertEqual({m.repo_id for m in minis}, {
+            "lytang/MiniCheck-RoBERTa-Large",
+            "lytang/MiniCheck-Flan-T5-Large",
+            "lytang/MiniCheck-DeBERTa-v3-Large",
+        })
+        self.assertFalse(any("bespokelabs" in (m.repo_id or "") for m in minis))
+
+    def test_chatjudge_specs_are_loopback_only(self):
+        from scripts.photo_judge_bakeoff_adapters import (
+            CANDIDATES, validate_local_chat_specs)
+        validate_local_chat_specs(CANDIDATES)
+        chat_specs = [c for c in CANDIDATES if c.kind == "chatjudge"]
+        self.assertTrue(chat_specs)
+        self.assertTrue(all(c.base_url.startswith("http://127.0.0.1:")
+                            or c.base_url.startswith("http://localhost:")
+                            for c in chat_specs))
+
+    def test_external_chatjudge_spec_is_rejected(self):
+        from scripts.photo_judge_bakeoff_adapters import (
+            CandidateSpec, validate_local_chat_specs)
+        bad = CandidateSpec(
+            name="external",
+            kind="chatjudge",
+            base_url="https://api.example.com/v1",
+            expected_alias="judge",
+        )
+        with self.assertRaises(ValueError):
+            validate_local_chat_specs([bad])
+
+
 class Aggregator(unittest.TestCase):
     def _rows(self):
         return [
