@@ -2442,6 +2442,7 @@ class MaezDaemon:
         self.last_cycle_time = None
         self._cycle_stage = "not_started"
         self._cycle_stage_started_at = None
+        self._soul_hash = None
         self.system_prompt = self._load_soul()
         self.memory = MemoryManager()
         # 5x.F.A — per-cycle recall-context bag. The authoritative
@@ -2814,7 +2815,6 @@ class MaezDaemon:
         except Exception:
             pass
         self._last_reddit_block = ""
-        self._soul_hash = None
         self._proactive_search_context = ""
         self._last_briefing_date = ""
         self._voice_active = False

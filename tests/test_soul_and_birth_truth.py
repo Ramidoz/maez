@@ -69,6 +69,26 @@ class SoulLayeringReachesDaemon(unittest.TestCase):
                       "_watch_soul must route through soul_loader.current_soul "
                       "so layered edits hot-reload into the live daemon.")
 
+    def test_soul_hash_is_not_reset_after_startup_load(self):
+        """_load_soul arms _soul_hash; __init__ must not clear it afterward."""
+        src = (_REPO / "daemon" / "maez_daemon.py").read_text()
+        init_start = src.find("def __init__(self):")
+        self.assertNotEqual(init_start, -1)
+        import re as _re
+        m = _re.search(r"\n    def ", src[init_start + 20:])
+        init_body = src[init_start:(init_start + 20 + m.start()) if m else len(src)]
+
+        load_pos = init_body.find("self.system_prompt = self._load_soul()")
+        reset_pos = init_body.find("self._soul_hash = None")
+        self.assertNotEqual(load_pos, -1, "_load_soul must run during daemon init")
+        self.assertNotEqual(reset_pos, -1, "_soul_hash should have an init default")
+        self.assertLess(
+            reset_pos,
+            load_pos,
+            "_soul_hash default must be set before _load_soul() arms it; "
+            "resetting it afterward permanently disables hot-reload.",
+        )
+
     def test_soul_loader_combines_base_and_local(self):
         """current_soul() must return the concatenation of base + local.
 
