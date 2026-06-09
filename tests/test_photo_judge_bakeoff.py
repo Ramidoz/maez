@@ -167,6 +167,10 @@ class ConcreteAdapters(unittest.TestCase):
             a = HHEMAdapter(threshold=0.5)
             self.assertEqual(a.predict("p", "h").label, "contradicts")
 
+    def test_hhem_adapter_has_transformers5_tied_weights_shim(self):
+        src = (ROOT / "scripts" / "photo_judge_bakeoff_adapters.py").read_text()
+        self.assertIn("all_tied_weights_keys", src)
+
     def test_minicheck_label_native(self):
         from scripts.photo_judge_bakeoff_adapters import MiniCheckAdapter
         with mock.patch.object(MiniCheckAdapter, "requires_artifact", False), \

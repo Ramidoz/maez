@@ -160,6 +160,9 @@ class HHEMAdapter(CandidateAdapter):
 
     def _load(self):
         from transformers import AutoModelForSequenceClassification
+        from transformers.modeling_utils import PreTrainedModel
+        if not hasattr(PreTrainedModel, "all_tied_weights_keys"):
+            PreTrainedModel.all_tied_weights_keys = {}
         return AutoModelForSequenceClassification.from_pretrained(
             os.path.join(_BAKEOFF_CACHE, self.name), trust_remote_code=True)
 
