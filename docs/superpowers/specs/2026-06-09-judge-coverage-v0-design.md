@@ -28,13 +28,17 @@ A new **model-free** check in the audit path. It flags **only the lie-shape**: *
 
 **Must-NOT-flag, by construction:** thinking/perception/memory/judgment (`thought, noticed, remember, read, tracking, considered, realized` — not on the verb list); future/intent (`"I'll save it"`); a completed action **with** a matching tool result; third-party/passive; negations/refusals.
 
+**Precision refinements (folded from spec review):**
+- **`noted` requires an explicit storage destination** — it fires only on `"I've noted this in memory"` / `"I noted it in the log"` / `"I noted that in the manifest"`, never on bare `"Noted."` (a normal acknowledgement) and never on `"I noted that <observation>"` (an observation, not an admin write). `noted` is NOT a bare-completion token. The plan tunes each verb's pattern against the must-NOT-flag corpus — that corpus is the precision guarantee, so any verb that shades toward acknowledgement/idiom gets the same destination/target qualifier.
+- **Respect explicit grounded-skip paths.** The rail runs before the *length* prefilter, but it must NOT override a reply already marked grounded-by-construction — e.g. `in_tool_continuation=True` or a reply backed by real tool stdout this turn. It fixes short-line audit *skipping*; it must not punish replies that real tool output already grounds. (Implementation watch-item for the plan.)
+
 **Two properties that make this the right shape:**
 - **Runs unconditionally, before the length prefilter** — so `"Done."` (5 chars) is checked even though it skips the expensive judge. *That is the `_MIN_AUDIT_LENGTH=12` fix:* the deterministic rail covers short lines; the judge still skips them.
 - **Does not fail open** — deterministic, so it catches `"Done."` even when the judge is unavailable (the fail-open gap three panel lenses flagged).
 
 **Action: omit the false span, never invent a replacement.**
 - `"Got it. I've registered that in my memory."` → strip the false span → `"Got it."`
-- Edge — a reply that is *only* a bare completion (`"Done."`): do NOT send empty. Route to the existing honest-empty fallback, or a deterministic minimal correction: `"I don't have a completed action to report."` Never a richer invented answer.
+- Edge — a reply that is *only* a bare completion (`"Done."`): do NOT send empty. Replace with the single minimal completion-specific correction `"I don't have a completed action to report."` (more truthful than the generic honest-empty line). Never a richer invented answer, never a fork for the implementer.
 
 **Where:** a new function (e.g. `check_completion_claims`) in `core/safety/self_claim_audit.py` (or a small sibling), composed so it runs as a first deterministic pass before the prefilter/judge and its omissions hold regardless of judge availability.
 
