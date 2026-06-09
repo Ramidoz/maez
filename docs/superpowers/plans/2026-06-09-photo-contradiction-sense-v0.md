@@ -38,6 +38,8 @@
 - Good path overhead is deterministic extraction plus at most 5 NLI calls. If more direct perceptual claims are present, check only the first 5 and set `claim_limit_exceeded=True`.
 - `revised_clear` is impossible unless the revised reply is re-extracted and re-checked clear.
 - The local NLI artifact must lazy-load only after the feature flag is on and a check is requested. Importing `core.routing.photo_contradiction` must not import `transformers`.
+- Before editing `synthesize_photo_turn`, re-open the live function and adapt to its actual local helper names. At plan time those names are verified as `_run`, `base_system`, and `_valid_photo_citation`; the executor must not assume they stayed unchanged.
+- Current Lane 1 behavior is verified: if the first photo-focused brain call returns empty, it goes straight to `deterministic_fallback` without a citation retry.
 
 ---
 
@@ -122,7 +124,7 @@ class PhotoClaimExtraction(unittest.TestCase):
 Run:
 
 ```bash
-.venv/bin/python -m unittest tests.test_photo_contradiction
+/home/rohit/maez/.venv/bin/python -m unittest tests.test_photo_contradiction
 ```
 
 Expected: FAIL with `ModuleNotFoundError: No module named 'core.routing.photo_contradiction'`.
@@ -179,6 +181,7 @@ class PhotoClaim:
 def normalize_claim_text(text: str) -> str:
     text = _CITE_RE.sub("", text or "")
     text = _SPACE_RE.sub(" ", text).strip()
+    text = re.sub(r"\s+([.!?]+)", r"\1", text)
     return text
 
 
@@ -231,7 +234,7 @@ def extract_photo_claims(
 Run:
 
 ```bash
-.venv/bin/python -m unittest tests.test_photo_contradiction
+/home/rohit/maez/.venv/bin/python -m unittest tests.test_photo_contradiction
 ```
 
 Expected: PASS.
@@ -249,7 +252,9 @@ git commit -m "feat(photo): add deterministic contradiction claim extractor"
 
 **Files:**
 - Modify: `core/routing/photo_contradiction.py`
+- Modify: `scripts/photo_judge_bakeoff_adapters.py`
 - Test: `tests/test_photo_contradiction.py`
+- Test: `tests/test_photo_judge_bakeoff.py`
 
 - [ ] **Step 1: Add failing verifier tests**
 
@@ -349,6 +354,41 @@ class LocalVerifierContract(unittest.TestCase):
         self.assertEqual(verdict.revision, "abc")
         self.assertEqual(verdict.sha256, "deadbeef")
         self.assertGreaterEqual(verdict.latency_s, 0.0)
+
+    def test_nli_score_helper_handles_label_aliases(self):
+        from core.routing.photo_contradiction import nli_grounded_score_from_output
+
+        self.assertAlmostEqual(
+            nli_grounded_score_from_output([
+                {"label": "LABEL_0", "score": 0.91},
+                {"label": "LABEL_1", "score": 0.04},
+                {"label": "LABEL_2", "score": 0.05},
+            ]),
+            0.09,
+        )
+        self.assertAlmostEqual(
+            nli_grounded_score_from_output([
+                {"label": "contradiction", "score": 0.7},
+                {"label": "neutral", "score": 0.2},
+                {"label": "entailment", "score": 0.1},
+            ]),
+            0.3,
+        )
+
+    def test_nli_score_helper_fails_closed_on_unknown_labels(self):
+        from core.routing.photo_contradiction import nli_grounded_score_from_output
+
+        with self.assertRaises(ValueError):
+            nli_grounded_score_from_output([
+                {"label": "mystery", "score": 0.9},
+            ])
+
+
+class BakeoffNLIReusesCoreMapping(unittest.TestCase):
+    def test_bakeoff_nli_adapter_imports_core_score_helper(self):
+        from pathlib import Path
+        src = Path("scripts/photo_judge_bakeoff_adapters.py").read_text(encoding="utf-8")
+        self.assertIn("nli_grounded_score_from_output", src)
 ```
 
 - [ ] **Step 2: Run tests to verify RED**
@@ -356,10 +396,10 @@ class LocalVerifierContract(unittest.TestCase):
 Run:
 
 ```bash
-.venv/bin/python -m unittest tests.test_photo_contradiction
+/home/rohit/maez/.venv/bin/python -m unittest tests.test_photo_contradiction
 ```
 
-Expected: FAIL with missing `LocalNLIContradictionVerifier` / `ClaimVerdict`.
+Expected: FAIL with missing `LocalNLIContradictionVerifier`, `ClaimVerdict`, and `nli_grounded_score_from_output`.
 
 - [ ] **Step 3: Implement verifier types and lazy loader**
 
@@ -389,6 +429,25 @@ class ClaimVerdict:
 class ContradictionVerifier(Protocol):
     def predict(self, premise: str, hypothesis: str) -> ClaimVerdict:
         ...
+
+
+def _flatten_pipeline_output(output):
+    if output and isinstance(output[0], list):
+        return output[0]
+    return output
+
+
+def nli_grounded_score_from_output(output) -> float:
+    rows = _flatten_pipeline_output(output)
+    probs = {str(d["label"]).lower(): float(d["score"]) for d in rows}
+    contradiction = None
+    for label in ("contradiction", "contradictory", "label_0"):
+        if label in probs:
+            contradiction = probs[label]
+            break
+    if contradiction is None:
+        raise ValueError(f"NLI output lacks contradiction label: {sorted(probs)}")
+    return 1.0 - float(contradiction)
 
 
 def _read_manifest(artifact_dir: Path) -> dict | None:
@@ -481,11 +540,7 @@ class LocalNLIContradictionVerifier:
             return self._unavailable(unavailable, time.perf_counter() - t0)
         try:
             out = self._model({"text": premise, "text_pair": hypothesis})
-            if out and isinstance(out[0], list):
-                out = out[0]
-            probs = {str(d["label"]).lower(): float(d["score"]) for d in out}
-            contradiction = probs.get("contradiction", 0.0)
-            grounded_score = 1.0 - contradiction
+            grounded_score = nli_grounded_score_from_output(out)
             label = "grounded" if grounded_score >= self.threshold else "contradicts"
             return ClaimVerdict(
                 label=label,
@@ -502,12 +557,22 @@ class LocalNLIContradictionVerifier:
             )
 ```
 
+Modify `scripts/photo_judge_bakeoff_adapters.py:NLIAdapter._raw_predict` so the bakeoff reuses the same score helper:
+
+```python
+    def _raw_predict(self, premise, hypothesis):
+        from core.routing.photo_contradiction import nli_grounded_score_from_output
+
+        out = self._model({"text": premise, "text_pair": hypothesis})
+        return nli_grounded_score_from_output(out)
+```
+
 - [ ] **Step 4: Run tests to verify GREEN**
 
 Run:
 
 ```bash
-.venv/bin/python -m unittest tests.test_photo_contradiction
+/home/rohit/maez/.venv/bin/python -m unittest tests.test_photo_contradiction tests.test_photo_judge_bakeoff
 ```
 
 Expected: PASS.
@@ -515,7 +580,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/routing/photo_contradiction.py tests/test_photo_contradiction.py
+git add core/routing/photo_contradiction.py scripts/photo_judge_bakeoff_adapters.py tests/test_photo_contradiction.py tests/test_photo_judge_bakeoff.py
 git commit -m "feat(photo): add lazy local contradiction verifier"
 ```
 
@@ -633,7 +698,7 @@ class ContradictionReceiptAggregation(unittest.TestCase):
 Run:
 
 ```bash
-.venv/bin/python -m unittest tests.test_photo_contradiction
+/home/rohit/maez/.venv/bin/python -m unittest tests.test_photo_contradiction
 ```
 
 Expected: FAIL with missing `check_photo_contradictions`, `ContradictionReceipt`, and `photo_contradiction_sense_enabled`.
@@ -758,7 +823,7 @@ def check_photo_contradictions(
 Run:
 
 ```bash
-.venv/bin/python -m unittest tests.test_photo_contradiction
+/home/rohit/maez/.venv/bin/python -m unittest tests.test_photo_contradiction
 ```
 
 Expected: PASS.
@@ -816,7 +881,7 @@ Add `from unittest import mock` near the imports if not already present.
 Run:
 
 ```bash
-.venv/bin/python -m unittest tests.test_photo_focused_synthesis
+/home/rohit/maez/.venv/bin/python -m unittest tests.test_photo_focused_synthesis
 ```
 
 Expected: FAIL because `FocusedResult` lacks contradiction fields.
@@ -865,7 +930,7 @@ Return those fields in `FocusedResult`. Do not run the checker yet; this task on
 Run:
 
 ```bash
-.venv/bin/python -m unittest tests.test_photo_focused_synthesis
+/home/rohit/maez/.venv/bin/python -m unittest tests.test_photo_focused_synthesis
 ```
 
 Expected: PASS.
@@ -1052,7 +1117,7 @@ class PhotoContradictionSenseIntegration(unittest.TestCase):
 Run:
 
 ```bash
-.venv/bin/python -m unittest tests.test_photo_focused_synthesis
+/home/rohit/maez/.venv/bin/python -m unittest tests.test_photo_focused_synthesis
 ```
 
 Expected: FAIL because `synthesize_photo_turn` does not call the contradiction organ.
@@ -1075,12 +1140,15 @@ In `core/routing/focused_cognition.py`, add the contradiction pass after Lane 1 
                     verifier=verifier,
                 )
                 if contradiction.reason == "trust_demoted" and contradiction.sense_note:
-                    revision_raw = _run(
-                        base_system
-                        + "\n\n"
-                        + contradiction.sense_note
-                        + "\n\nRevise once. Keep every direct claim about the photo grounded in [E1]."
-                    )
+                    try:
+                        revision_raw = _run(
+                            base_system
+                            + "\n\n"
+                            + contradiction.sense_note
+                            + "\n\nRevise once. Keep every direct claim about the photo grounded in [E1]."
+                        )
+                    except Exception:
+                        revision_raw = ""
                     if revision_raw and _valid_photo_citation(revision_raw):
                         revision_check = _photo_contradiction.check_photo_contradictions(
                             premise=analysis_text,
@@ -1123,7 +1191,7 @@ Then include those values in the returned `FocusedResult`.
 Run:
 
 ```bash
-.venv/bin/python -m unittest tests.test_photo_focused_synthesis
+/home/rohit/maez/.venv/bin/python -m unittest tests.test_photo_focused_synthesis
 ```
 
 Expected: PASS.
@@ -1132,7 +1200,10 @@ Expected: PASS.
 
 ```bash
 git add core/routing/focused_cognition.py tests/test_photo_focused_synthesis.py
-git commit -m "feat(photo): fold contradiction sense into synthesis"
+git commit -m "feat(photo): fold contradiction sense into synthesis" \
+  -m "## Predicted effect
+
+With MAEZ_PHOTO_CONTRADICTION_SENSE unset, owner-sent photo replies remain byte-equivalent to the current Lane 1 path. With the flag enabled and a local NLI artifact available, direct photo-perceptual contradictions trigger one proprioceptive revision and a contradiction receipt; revised_clear is emitted only after a re-check."
 ```
 
 ---
@@ -1151,7 +1222,7 @@ Append to `PhotoSynthesisLivesInsideThePipeline` in `tests/test_photo_focused_ro
     def test_photo_log_carries_contradiction_receipt_fields(self):
         body = _handle_message_body()
         self.assertIn("contradiction_receipt=", body)
-        self.assertIn("contradiction_claims=", body)
+        self.assertIn("contradiction_claim_count=", body)
         self.assertIn("contradictions=", body)
         self.assertIn("contradiction_latency_ms=", body)
         self.assertIn("claim_limit_exceeded=", body)
@@ -1164,7 +1235,7 @@ Append to `PhotoSynthesisLivesInsideThePipeline` in `tests/test_photo_focused_ro
 Run:
 
 ```bash
-.venv/bin/python -m unittest tests.test_photo_focused_routing.PhotoSynthesisLivesInsideThePipeline.test_photo_log_carries_contradiction_receipt_fields
+/home/rohit/maez/.venv/bin/python -m unittest tests.test_photo_focused_routing.PhotoSynthesisLivesInsideThePipeline.test_photo_log_carries_contradiction_receipt_fields
 ```
 
 Expected: FAIL because the log line does not include the new fields.
@@ -1177,7 +1248,7 @@ Modify the `photo_focused_synthesis` logger in `daemon/maez_daemon.py`:
                     logger.info(
                         "photo_focused_synthesis surface=%s working_set_chars=%s "
                         "cited=%s reply_chars=%d receipt=%s turn_id=%s "
-                        "contradiction_receipt=%s contradiction_claims=%s "
+                        "contradiction_receipt=%s contradiction_claim_count=%s "
                         "contradictions=%s contradiction_latency_ms=%s "
                         "claim_limit_exceeded=%s",
                         source,
@@ -1201,7 +1272,7 @@ Do not log claim text, premise text, or raw photo pixels.
 Run:
 
 ```bash
-.venv/bin/python -m unittest tests.test_photo_focused_routing
+/home/rohit/maez/.venv/bin/python -m unittest tests.test_photo_focused_routing
 ```
 
 Expected: PASS.
@@ -1210,7 +1281,10 @@ Expected: PASS.
 
 ```bash
 git add daemon/maez_daemon.py tests/test_photo_focused_routing.py
-git commit -m "feat(photo): log contradiction sense receipts"
+git commit -m "feat(photo): log contradiction sense receipts" \
+  -m "## Predicted effect
+
+Photo-focused turns log contradiction_receipt, claim count, contradiction count, verifier latency, and claim-limit status without logging claim text or photo pixels. Non-photo turns and flag-off photo behavior are unchanged."
 ```
 
 ---
@@ -1226,7 +1300,7 @@ git commit -m "feat(photo): log contradiction sense receipts"
 Run:
 
 ```bash
-.venv/bin/python -m unittest \
+/home/rohit/maez/.venv/bin/python -m unittest \
   tests.test_photo_contradiction \
   tests.test_photo_focused_synthesis \
   tests.test_photo_focused_routing \
@@ -1241,7 +1315,7 @@ Expected: PASS.
 Run:
 
 ```bash
-.venv/bin/python - <<'PY'
+/home/rohit/maez/.venv/bin/python - <<'PY'
 import sys
 import core.routing.photo_contradiction as pc
 print("transformers_loaded", "transformers" in sys.modules)
@@ -1261,7 +1335,7 @@ flag_default False
 Run:
 
 ```bash
-.venv/bin/python -m unittest discover -s tests -p 'test_*.py'
+/home/rohit/maez/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'
 ```
 
 Expected: no branch-only failures. If ambient failures appear, run the same command on clean main or compare against the current documented baseline before claiming zero regressions.
@@ -1289,18 +1363,20 @@ egress is part of this branch.
 1. Claim extractor is deterministic, draft-bound, and conservative. No model
    extraction and no generated/paraphrased claims.
 2. Verifier is claim-level only. Whole-reply NLI must not be called.
-3. NLI is lazy and local-only. Importing the module must not import transformers;
+3. Live NLI and bakeoff NLI share the same score-mapping helper, including label
+   aliases such as `LABEL_0`; no forked live-vs-witness mapping.
+4. NLI is lazy and local-only. Importing the module must not import transformers;
    missing artifact means unavailable, never network.
-4. Revision laundering is blocked. `revised_clear` requires one actual
+5. Revision laundering is blocked. `revised_clear` requires one actual
    re-extract + re-check; no revision attempt can self-certify.
-5. The floor is narrow. It fires only for direct photo-perceptual claims against
+6. The floor is narrow. It fires only for direct photo-perceptual claims against
    the `E1` photo premise; multi-photo and deterministic fallback skip honestly.
-6. No hard substitution in v0. Maez's voice revises with a contradiction sense
+7. No hard substitution in v0. Maez's voice revises with a contradiction sense
    note; the branch does not replace a whole cited-but-contradicts reply with a
    deterministic fallback.
-7. Telemetry is content-free: receipt, counts, latency, fingerprint, turn id;
+8. Telemetry is content-free: receipt, counts, latency, fingerprint, turn id;
    no raw photo pixels or claim text in daemon logs.
-8. No memory schema or ledger schema change.
+9. No memory schema or ledger schema change.
 
 ## Verification
 
