@@ -12,7 +12,11 @@
 
 ## Implementation Notes (read first)
 
-- **Confirm 3 existing names** in `core/safety/self_claim_audit.py` before writing rail code (they exist; the rail reuses them): the `Flag` dataclass constructor (fields incl. `text`, `reason`), the module sentence splitter, and `_rewrite_detailed(text, flags) -> _RewriteOutcome`. Use them — do not reinvent omission.
+- **Verified live names (use exactly — these were the four spec-review crash fixes):**
+  - `Flag(kind, span, text, reason="")` — `kind` and `span` are **required**; NOT `Flag(text=, reason=)`. Rail emits `Flag(kind="completion_rail", span=(start,end), text=match, reason=...)`.
+  - There is **no `_split_sentences`.** The rail matches with `re.finditer` and emits real spans; `_rewrite_detailed(text, flags) -> _RewriteOutcome` expands each span to covering sentences (`_sentence_spans_covering`) and omits them.
+  - When `_rewrite_detailed` omits ALL sentences it returns the **generic** `_ARS_ALL_FLAGGED_FALLBACK` (`"I'm not sure about that right now."`) with `voice_fallback_used=True` / `mode="shortcircuit"` — the outcome text is **never empty**, so map `voice_fallback_used` to the completion-specific fallback (Task 3), do NOT test for empty text.
+  - The judge entry is `judge(*, text, signals_present, signals_absent, few_shots=None, ...)` (keyword-only), returning a `list[dict]` of ungrounded items — NOT `judge_text`, no `.has_ungrounded`.
 - **Venv:** `/home/rohit/maez/.venv/bin/python -B -m unittest`. Run from the worktree root.
 - **The rail composes by REUSE:** it produces `Flag`s; `_rewrite_detailed` omits flagged sentences. Only the all-omitted *fallback string* differs (completion-specific, see Task 3).
 - **Precision is the contract:** ZERO false-flags on `completion_must_not_flag` is a hard gate. The corpus IS the spec.
@@ -101,7 +105,7 @@ class CompletionRail(unittest.TestCase):
         self.assertEqual(check_completion_claims("I considered the manifest.", grounded_by_tool=False), [])
 ```
 - [ ] **Step 2: Run → RED** (`check_completion_claims` undefined).
-- [ ] **Step 3: Implement the rail** in `core/safety/self_claim_audit.py` (place near the other helpers; reuse the existing `Flag` + sentence splitter — confirm their names first):
+- [ ] **Step 3: Implement the rail** in `core/safety/self_claim_audit.py` (place near the other helpers). **Match over the full text with `finditer` and emit `Flag`s with real spans — do NOT split sentences yourself; `_rewrite_detailed` expands each span to its covering sentence(s) via `_sentence_spans_covering` and omits them.** The live `Flag` ctor is `Flag(kind, span, text, reason="")` — all four required except `reason`:
 ```python
 import re
 
@@ -118,8 +122,13 @@ _FIRST_PERSON_COMPLETION_RE = re.compile(
     r"\bI(?:'ve|\s+have|\s+just|)\s+(?:" + "|".join(_COMPLETION_VERBS) + r")\b",
     re.IGNORECASE,
 )
-# Bare standalone completion tokens Maez asserts (sentence is ONLY this).
-_BARE_COMPLETION_RE = re.compile(r"^(?:done|saved|recorded|updated)[.!]*$", re.IGNORECASE)
+# Bare standalone completion token Maez asserts, as a sentence (start-of-text or
+# after a sentence terminator). Tune against the corpus: must catch "Done." and
+# "OK. Done." but NOT "Noted." (not in this set) or "I'm done thinking".
+_BARE_COMPLETION_RE = re.compile(
+    r"(?:(?<=^)|(?<=[.!?]\s))(?:done|saved|recorded|updated)[.!]*(?=$|\s)",
+    re.IGNORECASE,
+)
 # 'noted' is ambiguous: only a completed-write when it names a storage destination.
 _NOTED_WRITE_RE = re.compile(
     r"\bI(?:'ve|\s+have|)\s+noted\b[^.!?]*\b(?:in|to)\s+(?:memory|the\s+\w+|my\s+\w+)\b",
@@ -132,24 +141,22 @@ def check_completion_claims(text: str, *, grounded_by_tool: bool) -> list:
     BOTH a curated action verb AND a first-person self-completion frame.
     Never flags thinking/perception/memory/judgment, future intent,
     third-party/passive, bare acknowledgements, or tool-grounded replies.
-    Returns a list of Flag (same type the judge produces) for _rewrite_detailed.
+    Returns list[Flag] (same type the judge produces) for _rewrite_detailed.
     """
     if grounded_by_tool or not text or not text.strip():
         return []
     flags = []
-    for sentence in _split_sentences(text):   # <-- use the module's existing splitter
-        s = sentence.strip()
-        if not s:
-            continue
-        if (
-            _BARE_COMPLETION_RE.match(s)
-            or _FIRST_PERSON_COMPLETION_RE.search(s)
-            or _NOTED_WRITE_RE.search(s)
-        ):
-            flags.append(Flag(text=s, reason="claims a completed action with no tool result this turn"))  # <-- match real Flag ctor
+    for rx in (_FIRST_PERSON_COMPLETION_RE, _NOTED_WRITE_RE, _BARE_COMPLETION_RE):
+        for m in rx.finditer(text):
+            flags.append(Flag(
+                kind="completion_rail",
+                span=(m.start(), m.end()),
+                text=m.group(0),
+                reason="claims a completed action with no tool result this turn",
+            ))
     return flags
 ```
-- [ ] **Step 4: Run → GREEN.** `/home/rohit/maez/.venv/bin/python -B -m unittest tests.test_completion_rail`. If any `completion_must_not_flag` row flags, tighten the regex (do NOT loosen must_catch) — the must-not-flag set is the precision contract.
+- [ ] **Step 4: Run → GREEN.** `/home/rohit/maez/.venv/bin/python -B -m unittest tests.test_completion_rail`. If any `completion_must_not_flag` row flags, tighten the regex (do NOT loosen must_catch) — the must-not-flag set is the precision contract. `_rewrite_detailed` de-dupes at the sentence level, so overlapping flags are safe.
 - [ ] **Step 5: Commit** (`feat(audit): deterministic completion-claim rail`, with `## Predicted effect`).
 
 ---
@@ -194,15 +201,19 @@ class CompletionRailInAudit(unittest.TestCase):
     rail_flags = check_completion_claims(text, grounded_by_tool=False)
     if rail_flags:
         rail_outcome = _rewrite_detailed(text, rail_flags)
-        if not rail_outcome.text.strip():
-            _emit(surface=surface, flags=rail_flags, mode="completion_rail")
-            return AuditResult(
-                text="I don't have a completed action to report.",
-                rewritten=True, mode="completion_rail", flags=rail_flags,
-            )
         _emit(surface=surface, flags=rail_flags, mode="completion_rail")
+        # _rewrite_detailed omits the covering sentences. If EVERY sentence was a
+        # false completion it returns the GENERIC ARS fallback
+        # (_ARS_ALL_FLAGGED_FALLBACK, mode="shortcircuit", voice_fallback_used=True);
+        # swap that for the completion-specific line. Do NOT test for empty text —
+        # the outcome text is never empty.
+        result_text = (
+            "I don't have a completed action to report."
+            if rail_outcome.voice_fallback_used
+            else rail_outcome.text
+        )
         return AuditResult(
-            text=rail_outcome.text, rewritten=True,
+            text=result_text, rewritten=True,
             mode="completion_rail", flags=rail_flags,
         )
 ```
@@ -238,13 +249,18 @@ class CompletionRailInAudit(unittest.TestCase):
 - [ ] **Step 2: Write the integration test** `tests/test_grounding_judge_recalled.py` (uses the LIVE judge — gated so it skips cleanly if the judge endpoint is down, but runs in the witness step):
 ```python
 import os, unittest
-from core.cognition.grounding_judge import judge_text  # confirm the real entry name
+from core.cognition.grounding_judge import judge   # keyword-only: judge(*, text, signals_present, signals_absent, ...)
 
 @unittest.skipUnless(os.environ.get("MAEZ_JUDGE_LIVE") == "1", "live judge integration")
 class RecalledAsPresent(unittest.TestCase):
     def test_recalled_value_as_present_is_flagged(self):
-        verdict = judge_text("The disk is at 92% right now.", signals_present=[], signals_absent=["system_stats"])
-        self.assertTrue(verdict.has_ungrounded)  # confirm real attr name
+        ungrounded = judge(
+            text="The disk is at 92% right now.",
+            signals_present=[],
+            signals_absent=["system_stats"],
+        )
+        # judge() returns list[dict] of ungrounded items ({"text","reason",...}).
+        self.assertTrue(any("92%" in (u.get("text", "")) for u in ungrounded))
 ```
 - [ ] **Step 3: Run the no-regression floor against the existing judge corpus** (this is the truth-critical guard — the few-shot must not flip existing cases):
 ```bash
