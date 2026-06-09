@@ -52,8 +52,11 @@ class SoulGardening(unittest.TestCase):
             "they do not replace your responsibility to speak only from evidence", soul
         )
         # Terse anchors kept for the modes still prose-held (rules 3/5/6):
-        self.assertIn("do not invent administrative side-effects", soul)
-        self.assertIn("do not claim completion before a real result exists", soul)
+        # Anchor retirement: admin-side-effects + completion are now enforced by
+        # the live deterministic completion-rail, so they retire from the soul.
+        self.assertNotIn("do not invent administrative side-effects", soul)
+        self.assertNotIn("do not claim completion before a real result exists", soul)
+        # recalled-as-present stays (still judge-only / prose-held).
         self.assertIn("do not present recalled memory as live observation", soul)
 
     def test_elderly_phrase_removed(self):
