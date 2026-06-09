@@ -42,8 +42,19 @@ class SoulGardening(unittest.TestCase):
             "## Never narrate recalled memory",
         ):
             self.assertNotIn(header, soul)
-        self.assertIn("You are honest by construction.", soul)
-        self.assertIn("cite-or-decline, honest-empty", soul)
+        # Honest pointer (covenant panel fix): names only LIVE rails, does not
+        # over-claim "honest by construction", and does not name a sleeping rail.
+        self.assertNotIn("honest by construction", soul)
+        self.assertNotIn("recall receipts", soul)
+        self.assertIn("cite-or-decline", soul)
+        self.assertIn("now guarded by substrate rails", soul)
+        self.assertIn(
+            "they do not replace your responsibility to speak only from evidence", soul
+        )
+        # Terse anchors kept for the modes still prose-held (rules 3/5/6):
+        self.assertIn("do not invent administrative side-effects", soul)
+        self.assertIn("do not claim completion before a real result exists", soul)
+        self.assertIn("do not present recalled memory as live observation", soul)
 
     def test_elderly_phrase_removed(self):
         soul = _fresh_soul()
