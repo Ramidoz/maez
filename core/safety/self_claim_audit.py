@@ -198,6 +198,63 @@ def _looks_obviously_clean(text: str) -> bool:
     return False
 
 
+# Curated completed-action verbs: admin / system / state-change / search.
+# Deliberately not thinking/perception/memory/judgment verbs; those preserve
+# ordinary Maez presence.
+_COMPLETION_VERBS = (
+    "registered",
+    "saved",
+    "recorded",
+    "updated",
+    "appended",
+    "added",
+    "stored",
+    "logged",
+    "committed",
+    "created",
+    "deleted",
+    "removed",
+    "installed",
+    "configured",
+    "searched",
+    "wrote",
+)
+_FIRST_PERSON_COMPLETION_RE = re.compile(
+    r"\bI(?:'ve|\s+have|\s+just|)\s+(?:"
+    + "|".join(_COMPLETION_VERBS)
+    + r")\b",
+    re.IGNORECASE,
+)
+_BARE_COMPLETION_RE = re.compile(
+    r"(?:(?<=^)|(?<=[.!?]\s))(?:done|saved|recorded|updated)[.!]*(?=$|\s)",
+    re.IGNORECASE,
+)
+_NOTED_WRITE_RE = re.compile(
+    r"\bI(?:'ve|\s+have|)\s+noted\b[^.!?]*\b(?:in|to)\s+"
+    r"(?:memory|the\s+\w+|my\s+\w+)\b",
+    re.IGNORECASE,
+)
+
+
+def check_completion_claims(text: str, *, grounded_by_tool: bool) -> list[Flag]:
+    """Flag completed self-action claims that lack a tool result this turn."""
+    if grounded_by_tool or not text or not text.strip():
+        return []
+
+    flags: list[Flag] = []
+    for rx in (_FIRST_PERSON_COMPLETION_RE, _NOTED_WRITE_RE, _BARE_COMPLETION_RE):
+        for match in rx.finditer(text):
+            flags.append(
+                Flag(
+                    kind="completion_rail",
+                    span=(match.start(), match.end()),
+                    text=match.group(0),
+                    reason="claims a completed action with no tool result this turn",
+                )
+            )
+    return flags
+
+
 # ── sentence boundary helpers ──────────────────────────────────────────
 
 
