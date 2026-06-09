@@ -36,6 +36,24 @@ class CompletionRailInAudit(unittest.TestCase):
         self.assertFalse(r.rewritten)
         self.assertEqual(r.text, "I updated the manifest.")
 
+    def test_unrelated_tool_result_does_not_ground_completion_claim(self):
+        r = audit(
+            "I updated the manifest.",
+            surface="test",
+            evidence_envelope={
+                "tool_results": [
+                    {
+                        "name": "weather",
+                        "status": "ok",
+                        "summary": "weather fetched",
+                    }
+                ]
+            },
+        )
+        self.assertTrue(r.rewritten)
+        self.assertEqual(r.mode, "completion_rail")
+        self.assertEqual(r.text, "I don't have a completed action to report.")
+
     def test_clean_reflection_untouched(self):
         r = audit(
             "I've thought about it and I noticed the pattern earlier.",

@@ -255,11 +255,77 @@ def check_completion_claims(text: str, *, grounded_by_tool: bool) -> list[Flag]:
     return flags
 
 
-def _evidence_envelope_has_tool_results(evidence_envelope: Optional[dict]) -> bool:
+_COMPLETION_GROUNDING_STOPWORDS = {
+    "i",
+    "ive",
+    "have",
+    "just",
+    "the",
+    "a",
+    "an",
+    "that",
+    "this",
+    "it",
+    "in",
+    "to",
+    "my",
+    "your",
+    "memory",
+    "ok",
+    "done",
+    "saved",
+    "recorded",
+    "updated",
+    "registered",
+    "appended",
+    "added",
+    "stored",
+    "logged",
+    "committed",
+    "created",
+    "deleted",
+    "removed",
+    "installed",
+    "configured",
+    "searched",
+    "wrote",
+    "noted",
+    "write",
+    "status",
+}
+
+
+def _completion_grounding_tokens(value: object) -> set[str]:
+    words = re.findall(r"[a-z0-9_]{3,}", str(value or "").lower().replace("'", ""))
+    return {w for w in words if w not in _COMPLETION_GROUNDING_STOPWORDS}
+
+
+def _tool_result_text(result: object) -> str:
+    if isinstance(result, dict):
+        parts = []
+        for key in ("name", "tool", "action", "summary", "result", "output", "message"):
+            if key in result:
+                parts.append(str(result.get(key) or ""))
+        return " ".join(parts)
+    return str(result or "")
+
+
+def _evidence_envelope_grounds_completion_claim(
+    text: str,
+    evidence_envelope: Optional[dict],
+) -> bool:
     if not isinstance(evidence_envelope, dict):
         return False
     tool_results = evidence_envelope.get("tool_results")
-    return bool(tool_results)
+    if not tool_results:
+        return False
+    claim_tokens = _completion_grounding_tokens(text)
+    if not claim_tokens:
+        return False
+    for result in tool_results:
+        if claim_tokens & _completion_grounding_tokens(_tool_result_text(result)):
+            return True
+    return False
 
 
 # ── sentence boundary helpers ──────────────────────────────────────────
@@ -730,7 +796,10 @@ def audit(
 
     rail_flags = check_completion_claims(
         text,
-        grounded_by_tool=_evidence_envelope_has_tool_results(evidence_envelope),
+        grounded_by_tool=_evidence_envelope_grounds_completion_claim(
+            text,
+            evidence_envelope,
+        ),
     )
     if rail_flags:
         rail_outcome = _rewrite_detailed(text, rail_flags)
