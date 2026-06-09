@@ -6,8 +6,9 @@ adapter does NOT bypass handle_message and does NOT import the low-level audit.
 """
 
 import json
-import os
+import ast
 import re
+import textwrap
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -145,6 +146,62 @@ class PhotoSynthesisLivesInsideThePipeline(unittest.TestCase):
         self.assertIn("turn_id=", body)
         self.assertIn("receipt_reason", body)       # reads it off the result
         self.assertIn("_user_msg_turn_id", body)    # the trace key
+
+    def test_photo_log_carries_contradiction_receipt_fields(self):
+        body = _handle_message_body()
+        start = body.find("photo_focused_synthesis")
+        self.assertGreater(start, -1, "photo_focused_synthesis log not found")
+        end = body.find("if not _focused_used", start)
+        snippet = body[start:end if end != -1 else len(body)]
+
+        for field in (
+            "contradiction_receipt=",
+            "contradiction_claim_count=",
+            "contradictions=",
+            "contradiction_latency_ms=",
+            "claim_limit_exceeded=",
+            "contradiction_model_id=",
+            "contradiction_revision=",
+            "contradiction_sha256=",
+        ):
+            self.assertIn(field, snippet)
+        for attr in (
+            "contradiction_receipt",
+            "contradiction_claim_count",
+            "contradiction_count",
+            "contradiction_latency_ms",
+            "contradiction_claim_limit_exceeded",
+            "contradiction_model_id",
+            "contradiction_revision",
+            "contradiction_sha256",
+        ):
+            self.assertIn(attr, snippet)
+        for forbidden in (
+            "photo_analysis",
+            "analysis_text",
+            "caption",
+            "sense_note",
+            "claim_details",
+            "claim.text",
+        ):
+            self.assertNotIn(forbidden, snippet)
+
+        tree = ast.parse(textwrap.dedent(body))
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "info"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+            and "photo_focused_synthesis" in node.args[0].value
+        ]
+        self.assertEqual(len(calls), 1)
+        log_call = calls[0]
+        fmt = log_call.args[0].value
+        self.assertEqual(fmt.count("%s") + fmt.count("%d"), len(log_call.args) - 1)
 
 
 class AdapterDoesNotImportLowLevelAudit(unittest.TestCase):

@@ -5986,13 +5986,29 @@ class MaezDaemon:
                     _reply_path = ReplyPath.FOCUSED
                     logger.info(
                         "photo_focused_synthesis surface=%s working_set_chars=%s "
-                        "cited=%s reply_chars=%d receipt=%s turn_id=%s",
+                        "cited=%s reply_chars=%d receipt=%s turn_id=%s "
+                        "contradiction_receipt=%s contradiction_claim_count=%s "
+                        "contradictions=%s contradiction_latency_ms=%s "
+                        "claim_limit_exceeded=%s contradiction_model_id=%s "
+                        "contradiction_revision=%s contradiction_sha256=%s",
                         source,
                         getattr(_photo_result, "working_set_chars", "?"),
                         len(getattr(_photo_result, "cited_ids", []) or []),
                         len(reply),
                         getattr(_photo_result, "receipt_reason", None),
                         _user_msg_turn_id,
+                        getattr(_photo_result, "contradiction_receipt", None),
+                        getattr(_photo_result, "contradiction_claim_count", 0),
+                        getattr(_photo_result, "contradiction_count", 0),
+                        getattr(_photo_result, "contradiction_latency_ms", None),
+                        getattr(
+                            _photo_result,
+                            "contradiction_claim_limit_exceeded",
+                            False,
+                        ),
+                        getattr(_photo_result, "contradiction_model_id", None),
+                        getattr(_photo_result, "contradiction_revision", None),
+                        getattr(_photo_result, "contradiction_sha256", None),
                     )
             if not _focused_used and _reply_decision.mode is ReplyMode.FOCUSED:
                 _focused_started = time.monotonic()
