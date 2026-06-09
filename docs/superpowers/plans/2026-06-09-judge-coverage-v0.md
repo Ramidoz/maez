@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:executing-plans (or subagent-driven-development). Steps use `- [ ]`. Behavior-changing on the truth-critical audit path — `## Predicted effect` on the code commits. **Do NOT include the soul-anchor retirement in any code commit** (it's a post-restart step, §Sequencing). Stop at the Codex handoff; no self-merge.
 
-**Goal:** Substrate-enforce the soul's rules 3+5 with a precision-first deterministic completion-rail (so two honesty anchors can retire) and rule 6 with a grounding-judge few-shot (its anchor stays).
+**Goal:** Substrate-enforce the soul's rules 3+5 with a precision-first deterministic completion-rail so two honesty anchors can retire after live witness. Rule 6 stays anchored in prose for v0.
 
-**Architecture:** A new model-free `check_completion_claims()` in `core/safety/self_claim_audit.py` returns `Flag`s for Maez's claims of a *completed self-action with no tool result this turn*; `audit()` runs it after the `in_tool_continuation` skip and before the `_looks_obviously_clean` prefilter, reusing the existing `_rewrite_detailed` sentence-omission. A rule-6 few-shot is added to `grounding_judge._BUILTIN_FEW_SHOTS`. The soul-anchor retirement is a separate, post-restart, hot-reloading step — not in this plan's commits.
+**Architecture:** A new model-free `check_completion_claims()` in `core/safety/self_claim_audit.py` returns `Flag`s for Maez's claims of a *completed self-action with no matching tool result this turn*; `audit()` runs it after the `in_tool_continuation` skip and before the `_looks_obviously_clean` prefilter, reusing the existing `_rewrite_detailed` sentence-omission. The originally planned rule-6 few-shot is split out after review because the live judge timed out and the few-shot carried an unmeasured over-flag risk. The soul-anchor retirement is a separate, post-restart, hot-reloading step — not in this plan's commits.
 
 **Tech Stack:** Python stdlib `re` + `unittest`; existing `Flag` dataclass + `_rewrite_detailed` + sentence splitter in `self_claim_audit.py`; `core.cognition.grounding_judge`.
 
@@ -226,48 +226,11 @@ class CompletionRailInAudit(unittest.TestCase):
 
 ---
 
-### Task 4: Rule-6 judge few-shot (recalled-as-present)
+### Task 4: Deferred rule-6 judge few-shot (recalled-as-present)
 
-**Files:** Modify `core/cognition/grounding_judge.py` (`_BUILTIN_FEW_SHOTS`, line 325) · Test `tests/test_grounding_judge_recalled.py`
+**Files:** none in v0.
 
-- [ ] **Step 1: Add the few-shot(s)** to `_BUILTIN_FEW_SHOTS` (same `{"text","reason"}` shape):
-```python
-    # Recalled memory narrated as present fact (rule 6). Content inside
-    # <RECALLED>/[CONTINUITY] envelopes describes how things WERE, not ARE.
-    {
-        "text": "still generating errors",
-        "reason": "narrates a recalled past observation as current state "
-        "with no current source this turn; recalled values must be "
-        "attributed to their tier/time, not restated as present fact",
-    },
-    {
-        "text": "the disk is at 92%",
-        "reason": "states a value from recalled memory as a present reading "
-        "without a current system-stats signal grounding it this turn",
-    },
-```
-- [ ] **Step 2: Write the integration test** `tests/test_grounding_judge_recalled.py` (uses the LIVE judge — gated so it skips cleanly if the judge endpoint is down, but runs in the witness step):
-```python
-import os, unittest
-from core.cognition.grounding_judge import judge   # keyword-only: judge(*, text, signals_present, signals_absent, ...)
-
-@unittest.skipUnless(os.environ.get("MAEZ_JUDGE_LIVE") == "1", "live judge integration")
-class RecalledAsPresent(unittest.TestCase):
-    def test_recalled_value_as_present_is_flagged(self):
-        ungrounded = judge(
-            text="The disk is at 92% right now.",
-            signals_present=[],
-            signals_absent=["system_stats"],
-        )
-        # judge() returns list[dict] of ungrounded items ({"text","reason",...}).
-        self.assertTrue(any("92%" in (u.get("text", "")) for u in ungrounded))
-```
-- [ ] **Step 3: Run the no-regression floor against the existing judge corpus** (this is the truth-critical guard — the few-shot must not flip existing cases):
-```bash
-MAEZ_JUDGE_LIVE=1 /home/rohit/maez/.venv/bin/python -B -m unittest tests.test_grounding_judge tests.test_grounding_judge_recalled
-```
-Expected: existing `test_grounding_judge` still passes (no regression); the recalled case is now caught. If the live judge is unavailable in this environment, mark this as the witness-step requirement and proceed (the few-shot text change is committed; the live run happens in §Integration witness).
-- [ ] **Step 4: Commit** (`feat(judge): few-shot for recalled-memory-as-present (rule 6)`, with `## Predicted effect`).
+Review result: the few-shot was source-tested but not live-witnessed; the live judge timed out at 20s. It also risked over-flagging legitimate, signal-backed current readings such as real disk percentages. Therefore rule 6 remains prose-held and the few-shot is deferred to a separate slice with two required live witnesses: catch recalled-as-present, and do not over-flag a current reading grounded by system stats.
 
 ---
 
@@ -277,7 +240,7 @@ Expected: existing `test_grounding_judge` still passes (no regression); the reca
 
 - [ ] **Step 1: Focused floor** — `tests.test_judge_coverage_corpus test_completion_rail test_completion_rail_audit test_self_claim_audit* test_grounding_judge` all green.
 - [ ] **Step 2: Full discover in the worktree**; compare failures to the main `d57371f` baseline (asset-confound only, no audit/judge regression).
-- [ ] **Step 3: Integration witness (record for the owner step)** — the rail is deterministic (corpus IS the witness); the rule-6 few-shot needs the LIVE judge (`MAEZ_JUDGE_LIVE=1`) to prove catch + no-regression; the end-to-end live proof is `audit("Got it. I've registered that in my memory.")` → `"Got it."` in the running daemon AFTER restart.
+- [ ] **Step 3: Integration witness (record for the owner step)** — the rail is deterministic (corpus IS the witness); the end-to-end live proof is `audit("Got it. I've registered that in my memory.")` → `"Got it."` in the running daemon AFTER restart. Rule 6 is intentionally not part of v0.
 - [ ] **Step 4: Handoff doc** — the 4 code commits, the corpus, the precision result (0 false-flags), the no-regression result, and the two review lanes: Codex mechanical-verify (rail logic, composition point, prefilter-fix, grounded-skip respected, no judge regression) + Claude covenant check (does the rail nag any legitimate voice? is omit-only honored? is the fallback truthful?).
 - [ ] **Step 5: Commit handoff. STOP.** Do NOT merge. Do NOT touch the soul.
 
@@ -285,7 +248,7 @@ Expected: existing `test_grounding_judge` still passes (no regression); the reca
 
 ## §Sequencing — the soul-anchor retirement is a SEPARATE post-restart step (NOT in this plan's commits)
 
-The rail + few-shot are **code** → inert until restart. The anchor retirement is a **soul edit** → hot-reloads on merge. They must NOT bundle. After this plan's code is reviewed and merged:
+The rail is **code** → inert until restart. The anchor retirement is a **soul edit** → hot-reloads on merge. They must NOT bundle. After this plan's code is reviewed and merged:
 
 1. Owner **restart** → rail active.
 2. **Witness the rail live** in the running daemon (`audit("Got it. I've registered that in my memory.")` → `"Got it."`; a bare `"Done."` → the completion fallback).
@@ -295,7 +258,7 @@ The rail + few-shot are **code** → inert until restart. The anchor retirement 
 
 ## Self-Review
 
-- **Spec coverage:** corpus (T1), rail both-conditions + precision (T2), prefilter-fix + omit + fallback + grounded-skip (T3), rule-6 few-shot + no-regression (T4), floor + witness + handoff (T5), sequencing/anchor-retirement (§). ✓
+- **Spec coverage:** corpus (T1), rail both-conditions + precision (T2), prefilter-fix + omit + fallback + grounded-skip (T3), rule-6 deferral (T4), floor + witness + handoff (T5), sequencing/anchor-retirement (§). ✓
 - **Placeholders:** none — concrete regexes, corpus rows, composition code. Three existing names (`Flag` ctor, sentence splitter, `judge_text`/verdict attr) flagged to confirm-from-file, not invented. ✓
 - **Consistency:** `check_completion_claims(text, *, grounded_by_tool)` used identically in T2/T3; `mode="completion_rail"` consistent; fallback string identical everywhere. ✓
 - **Covenant:** precision-first ZERO-false-flag gate; omit-only; rule-6 anchor stays; soul edit unbundled and post-restart. ✓
