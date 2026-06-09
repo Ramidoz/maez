@@ -63,6 +63,38 @@ class ContradictionVerifier(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class ReceiptClaimDetail:
+    claim_id: str
+    text: str
+    evidence_label: str
+    verdict_label: str
+    score: float | None = None
+    model_id: str | None = None
+    revision: str | None = None
+    sha256: str | None = None
+    verifier_reason: str | None = None
+    latency_s: float = 0.0
+
+
+@dataclass(frozen=True)
+class ContradictionReceipt:
+    state: str
+    reason: str
+    claim_count: int = 0
+    contradiction_count: int = 0
+    contradiction_claim_count: int = 0
+    claim_limit_exceeded: bool = False
+    contradicted_claim_ids: tuple[str, ...] = ()
+    sense_note: str | None = None
+    verifier_name: str | None = None
+    model_id: str | None = None
+    revision: str | None = None
+    sha256: str | None = None
+    latency_ms: int = 0
+    claim_details: tuple[ReceiptClaimDetail, ...] = ()
+
+
 def normalize_claim_text(text: str) -> str:
     text = _CITE_RE.sub("", text or "")
     text = _SPACE_RE.sub(" ", text).strip()
@@ -113,6 +145,173 @@ def extract_photo_claims(
         if len(claims) >= limit:
             break
     return claims
+
+
+def photo_contradiction_sense_enabled(env=os.environ) -> bool:
+    value = (env.get("MAEZ_PHOTO_CONTRADICTION_SENSE", "") or "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _looks_multi_photo(premise: str) -> bool:
+    markers = re.findall(
+        r"\b(?:image|photo|picture)\s+\d+\s*:",
+        premise or "",
+        re.IGNORECASE,
+    )
+    return len(markers) > 1
+
+
+def _count_potential_claims(reply: str) -> int:
+    return len(extract_photo_claims(reply, limit=10_000))
+
+
+def _clip_note_text(text: str, *, limit: int = 500) -> str:
+    clipped = normalize_claim_text(text)
+    if len(clipped) <= limit:
+        return clipped
+    return clipped[: limit - 3].rstrip() + "..."
+
+
+def _build_sense_note(
+    premise: str,
+    contradictions: list[tuple[PhotoClaim, ClaimVerdict]],
+) -> str:
+    lines = ["Contradiction sense fired:"]
+    for claim, _verdict in contradictions:
+        lines.append(f'- Claim {claim.claim_id}: "{claim.text}"')
+    lines.append(f"- Conflicts with E1: {_clip_note_text(premise)}")
+    lines.append(
+        "Revise the answer with this signal in view. Do not claim certainty "
+        "where the photo evidence and draft conflict."
+    )
+    return "\n".join(lines)
+
+
+def _detail_for(claim: PhotoClaim, verdict: ClaimVerdict) -> ReceiptClaimDetail:
+    return ReceiptClaimDetail(
+        claim_id=claim.claim_id,
+        text=claim.text,
+        evidence_label=claim.evidence_label,
+        verdict_label=verdict.label,
+        score=verdict.score,
+        model_id=verdict.model_id,
+        revision=verdict.revision,
+        sha256=verdict.sha256,
+        verifier_reason=verdict.reason,
+        latency_s=verdict.latency_s,
+    )
+
+
+def _verdict_metadata(
+    details: tuple[ReceiptClaimDetail, ...],
+) -> tuple[str | None, str | None, str | None]:
+    for detail in details:
+        if detail.model_id or detail.revision or detail.sha256:
+            return detail.model_id, detail.revision, detail.sha256
+    return None, None, None
+
+
+def check_photo_contradictions(
+    *,
+    premise: str,
+    reply: str,
+    verifier: ContradictionVerifier,
+    claim_limit: int = 5,
+    lane1_receipt_reason: str | None = None,
+) -> ContradictionReceipt:
+    t0 = time.perf_counter()
+    if lane1_receipt_reason == "deterministic_fallback":
+        return ContradictionReceipt(
+            state="grounded",
+            reason="deterministic_fallback",
+        )
+
+    if _looks_multi_photo(premise):
+        return ContradictionReceipt(
+            state="unavailable",
+            reason="multi_photo_unsupported",
+        )
+
+    total_possible = _count_potential_claims(reply)
+    claims = extract_photo_claims(reply, limit=claim_limit)
+    claim_limit_exceeded = total_possible > len(claims)
+    if not claims:
+        return ContradictionReceipt(
+            state="unavailable",
+            reason="claim_extraction_unavailable",
+            claim_limit_exceeded=claim_limit_exceeded,
+        )
+
+    contradictions: list[tuple[PhotoClaim, ClaimVerdict]] = []
+    details: list[ReceiptClaimDetail] = []
+    saw_unavailable = False
+    for claim in claims:
+        claim_t0 = time.perf_counter()
+        try:
+            verdict = verifier.predict(premise, claim.text)
+        except Exception as exc:
+            verdict = ClaimVerdict(
+                label="unavailable",
+                score=None,
+                latency_s=time.perf_counter() - claim_t0,
+                reason=f"predict: {type(exc).__name__}: {exc}",
+            )
+        if verdict.label == "contradicts":
+            contradictions.append((claim, verdict))
+        elif verdict.label != "grounded":
+            saw_unavailable = True
+        details.append(_detail_for(claim, verdict))
+
+    latency_ms = int((time.perf_counter() - t0) * 1000)
+    claim_details = tuple(details)
+    model_id, revision, sha256 = _verdict_metadata(claim_details)
+    verifier_name = type(verifier).__name__
+
+    if contradictions:
+        contradiction_count = len(contradictions)
+        return ContradictionReceipt(
+            state="trust_demoted",
+            reason="trust_demoted",
+            claim_count=len(claims),
+            contradiction_count=contradiction_count,
+            contradiction_claim_count=contradiction_count,
+            claim_limit_exceeded=claim_limit_exceeded,
+            contradicted_claim_ids=tuple(c.claim_id for c, _v in contradictions),
+            sense_note=_build_sense_note(premise, contradictions),
+            verifier_name=verifier_name,
+            model_id=model_id,
+            revision=revision,
+            sha256=sha256,
+            latency_ms=latency_ms,
+            claim_details=claim_details,
+        )
+
+    if saw_unavailable:
+        return ContradictionReceipt(
+            state="unavailable",
+            reason="verifier_unavailable",
+            claim_count=len(claims),
+            claim_limit_exceeded=claim_limit_exceeded,
+            verifier_name=verifier_name,
+            model_id=model_id,
+            revision=revision,
+            sha256=sha256,
+            latency_ms=latency_ms,
+            claim_details=claim_details,
+        )
+
+    return ContradictionReceipt(
+        state="grounded",
+        reason="clear",
+        claim_count=len(claims),
+        claim_limit_exceeded=claim_limit_exceeded,
+        verifier_name=verifier_name,
+        model_id=model_id,
+        revision=revision,
+        sha256=sha256,
+        latency_ms=latency_ms,
+        claim_details=claim_details,
+    )
 
 
 def _flatten_pipeline_output(output):

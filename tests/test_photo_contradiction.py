@@ -5,6 +5,7 @@ import unittest
 from unittest import mock
 
 from core.routing.photo_contradiction import (
+    ClaimVerdict,
     extract_photo_claims,
     normalize_claim_text,
 )
@@ -312,6 +313,189 @@ class LocalVerifierContract(unittest.TestCase):
             verdict = verifier.predict("premise", "hypothesis")
         self.assertEqual(verdict.label, "unavailable")
         self.assertIn("predict", verdict.reason)
+
+
+class FakeVerifier:
+    def __init__(self, labels):
+        self.labels = list(labels)
+        self.calls = []
+
+    def predict(self, premise, hypothesis):
+        self.calls.append((premise, hypothesis))
+        label = self.labels.pop(0)
+        return ClaimVerdict(
+            label=label,
+            score=0.1 if label == "contradicts" else 0.9,
+            latency_s=0.01,
+            model_id="fake-nli",
+            revision="rev",
+            sha256="sha",
+            reason="fake-unavailable" if label == "unavailable" else None,
+        )
+
+
+class RaisingVerifier:
+    def __init__(self):
+        self.calls = []
+
+    def predict(self, premise, hypothesis):
+        self.calls.append((premise, hypothesis))
+        raise RuntimeError("predict exploded")
+
+
+class ContradictionReceiptAggregation(unittest.TestCase):
+    PREMISE = "The screenshot title says WWDC 2026."
+
+    def test_clear_receipt_for_grounded_direct_claims(self):
+        from core.routing.photo_contradiction import check_photo_contradictions
+
+        verifier = FakeVerifier(["grounded"])
+        receipt = check_photo_contradictions(
+            premise=self.PREMISE,
+            reply="The screenshot title says WWDC 2026 [E1].",
+            verifier=verifier,
+        )
+
+        self.assertEqual(receipt.state, "grounded")
+        self.assertEqual(receipt.reason, "clear")
+        self.assertEqual(receipt.claim_count, 1)
+        self.assertEqual(receipt.contradiction_count, 0)
+        self.assertFalse(receipt.claim_limit_exceeded)
+        self.assertIsNone(receipt.sense_note)
+        self.assertEqual(
+            verifier.calls,
+            [(self.PREMISE, "The screenshot title says WWDC 2026.")],
+        )
+        self.assertEqual(receipt.claim_details[0].claim_id, "C1")
+        self.assertEqual(receipt.claim_details[0].verdict_label, "grounded")
+        self.assertEqual(receipt.claim_details[0].score, 0.9)
+
+    def test_trust_demoted_for_direct_photo_contradiction(self):
+        from core.routing.photo_contradiction import check_photo_contradictions
+
+        receipt = check_photo_contradictions(
+            premise=self.PREMISE,
+            reply="The screenshot title says WWDC 2024 [E1].",
+            verifier=FakeVerifier(["contradicts"]),
+        )
+
+        self.assertEqual(receipt.state, "trust_demoted")
+        self.assertEqual(receipt.reason, "trust_demoted")
+        self.assertEqual(receipt.claim_count, 1)
+        self.assertEqual(receipt.contradiction_count, 1)
+        self.assertEqual(receipt.contradicted_claim_ids, ("C1",))
+        self.assertIn("Contradiction sense fired", receipt.sense_note)
+        self.assertIn('Claim C1: "The screenshot title says WWDC 2024."', receipt.sense_note)
+        self.assertIn("Conflicts with E1: The screenshot title says WWDC 2026.", receipt.sense_note)
+        self.assertEqual(receipt.claim_details[0].verdict_label, "contradicts")
+
+    def test_non_perceptual_reply_is_claim_extraction_unavailable(self):
+        from core.routing.photo_contradiction import check_photo_contradictions
+
+        verifier = FakeVerifier(["contradicts"])
+        receipt = check_photo_contradictions(
+            premise=self.PREMISE,
+            reply="This matters for the roadmap [E1].",
+            verifier=verifier,
+        )
+
+        self.assertEqual(receipt.state, "unavailable")
+        self.assertEqual(receipt.reason, "claim_extraction_unavailable")
+        self.assertEqual(receipt.claim_count, 0)
+        self.assertEqual(receipt.contradiction_count, 0)
+        self.assertIsNone(receipt.sense_note)
+        self.assertEqual(verifier.calls, [])
+
+    def test_multi_photo_analysis_is_unsupported(self):
+        from core.routing.photo_contradiction import check_photo_contradictions
+
+        verifier = FakeVerifier(["grounded"])
+        receipt = check_photo_contradictions(
+            premise="Image 1: a chart. Image 2: a screenshot.",
+            reply="The screenshot shows a chart [E1].",
+            verifier=verifier,
+        )
+
+        self.assertEqual(receipt.state, "unavailable")
+        self.assertEqual(receipt.reason, "multi_photo_unsupported")
+        self.assertEqual(receipt.claim_count, 0)
+        self.assertEqual(verifier.calls, [])
+
+    def test_claim_limit_is_honestly_reported(self):
+        from core.routing.photo_contradiction import check_photo_contradictions
+
+        reply = " ".join(
+            f"The screenshot lists item {i} [E1]." for i in range(1, 8)
+        )
+        verifier = FakeVerifier(["grounded"] * 5)
+        receipt = check_photo_contradictions(
+            premise="The screenshot lists items 1 through 7.",
+            reply=reply,
+            verifier=verifier,
+            claim_limit=5,
+        )
+
+        self.assertEqual(receipt.state, "grounded")
+        self.assertEqual(receipt.reason, "clear")
+        self.assertEqual(receipt.claim_count, 5)
+        self.assertEqual(receipt.contradiction_count, 0)
+        self.assertTrue(receipt.claim_limit_exceeded)
+        self.assertEqual(len(verifier.calls), 5)
+        self.assertEqual(
+            [d.claim_id for d in receipt.claim_details],
+            ["C1", "C2", "C3", "C4", "C5"],
+        )
+
+    def test_feature_flag_default_off_and_explicit_truthy_enabled(self):
+        from core.routing.photo_contradiction import photo_contradiction_sense_enabled
+
+        self.assertFalse(photo_contradiction_sense_enabled(env={}))
+        for value in ("1", "true", "TRUE", "yes", "on"):
+            self.assertTrue(
+                photo_contradiction_sense_enabled(
+                    env={"MAEZ_PHOTO_CONTRADICTION_SENSE": value}
+                )
+            )
+        for value in ("", "0", "false", "no", "off", "please"):
+            self.assertFalse(
+                photo_contradiction_sense_enabled(
+                    env={"MAEZ_PHOTO_CONTRADICTION_SENSE": value}
+                )
+            )
+
+    def test_deterministic_fallback_skips_contradiction_check(self):
+        from core.routing.photo_contradiction import check_photo_contradictions
+
+        verifier = FakeVerifier(["contradicts"])
+        receipt = check_photo_contradictions(
+            premise=self.PREMISE,
+            reply="I'm confident I saw [E1]: The screenshot title says WWDC 2026.",
+            verifier=verifier,
+            lane1_receipt_reason="deterministic_fallback",
+        )
+
+        self.assertEqual(receipt.state, "grounded")
+        self.assertEqual(receipt.reason, "deterministic_fallback")
+        self.assertEqual(receipt.claim_count, 0)
+        self.assertEqual(receipt.contradiction_count, 0)
+        self.assertEqual(verifier.calls, [])
+
+    def test_verifier_exception_is_unavailable_not_crash(self):
+        from core.routing.photo_contradiction import check_photo_contradictions
+
+        verifier = RaisingVerifier()
+        receipt = check_photo_contradictions(
+            premise=self.PREMISE,
+            reply="The screenshot title says WWDC 2026 [E1].",
+            verifier=verifier,
+        )
+
+        self.assertEqual(receipt.state, "unavailable")
+        self.assertEqual(receipt.reason, "verifier_unavailable")
+        self.assertEqual(receipt.claim_count, 1)
+        self.assertEqual(receipt.contradiction_count, 0)
+        self.assertEqual(receipt.claim_details[0].verdict_label, "unavailable")
+        self.assertIn("predict exploded", receipt.claim_details[0].verifier_reason)
 
 
 if __name__ == "__main__":
