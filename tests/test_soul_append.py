@@ -36,6 +36,21 @@ class SoulAppend(unittest.TestCase):
                 self.assertIn("skipped", r.lower())
                 self.assertFalse(local.exists())
 
+    def test_substring_distinct_note_still_appends(self):
+        # Codex catch: dedupe must be EXACT note-body match, not substring.
+        # A shorter distinct note contained inside an older one must still append.
+        with tempfile.TemporaryDirectory() as d:
+            local = Path(d) / "soul.local.md"
+            with mock.patch("core.infra.paths.soul_local_path", return_value=local):
+                sl.append_soul_note("disk fixation lesson: stop repeating with detail")
+                r = sl.append_soul_note("disk fixation lesson: stop repeating")
+                self.assertIn("appended", r.lower())  # distinct, must NOT be skipped
+                txt = local.read_text()
+                self.assertIn("disk fixation lesson: stop repeating with detail", txt)
+                self.assertEqual(
+                    txt.count("] disk fixation lesson: stop repeating"), 2
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import re
 from typing import Optional
 
 from core import paths
@@ -135,24 +136,50 @@ def append_to_local(text: str, *, separator: str = "\n\n") -> None:
         _cache_signature = None
 
 
-def append_soul_note(note: str) -> str:
+_NOTE_TS_RE = re.compile(r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\] (.*)$", re.DOTALL)
+
+
+def _note_bodies(existing: str) -> set:
+    """Exact bodies of previously-appended notes (timestamp prefix stripped),
+    compared as whole units. Substring matching would false-skip a distinct
+    shorter note contained inside an older one.
+    """
+    bodies = set()
+    for chunk in existing.split("\n\n"):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        m = _NOTE_TS_RE.match(chunk)
+        if m:
+            bodies.add(m.group(1).strip())
+    return bodies
+
+
+def append_soul_note(note: str, *, separator: str = "\n\n") -> str:
     """Append a self-authored soul note to the LOCAL layer (soul.local.md),
-    content-deduped so an identical note is not re-appended. Replaces the
-    legacy direct-append to the soul.md mirror (which the loader overwrites).
+    deduped by EXACT note-body match (not substring) so a distinct shorter
+    note inside an older one is never silently skipped. Read, dedupe-check,
+    and write are atomic under _lock so concurrent identical notes cannot
+    double-append. Replaces the legacy direct-append to the soul.md mirror.
     """
     if not note or not note.strip():
         return "empty soul note; skipped"
     body = note.strip()
     local_path = paths.soul_local_path()
-    try:
-        existing = local_path.read_text() if local_path.exists() else ""
-    except Exception:
-        existing = ""
-    if body in existing:
-        return f"soul note already present; skipped ({len(body)} chars)"
     from datetime import datetime as _dt
-    ts = _dt.now().strftime("%Y-%m-%d %H:%M")
-    append_to_local(f"[{ts}] {body}")
+    entry = f"[{_dt.now().strftime('%Y-%m-%d %H:%M')}] {body}"
+    global _cache_text, _cache_signature
+    with _lock:
+        try:
+            existing = local_path.read_text() if local_path.exists() else ""
+        except Exception:
+            existing = ""
+        if body in _note_bodies(existing):
+            return f"soul note already present; skipped ({len(body)} chars)"
+        suffix = separator if existing and not existing.endswith(separator) else ""
+        local_path.write_text(existing + suffix + entry)
+        _cache_text = None
+        _cache_signature = None
     return f"soul note appended to local ({len(body)} chars)"
 
 
