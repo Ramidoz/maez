@@ -8,6 +8,7 @@ caption + voice + faithful instruction), never the full megaprompt.
 
 import sys
 import unittest
+from dataclasses import dataclass
 from types import SimpleNamespace
 from unittest import mock
 
@@ -174,6 +175,19 @@ def _scripted_chat(contents):
     return chat_fn, box
 
 
+@dataclass(frozen=True)
+class _FakeContradictionReceipt:
+    reason: str
+    sense_note: str | None = None
+    claim_count: int = 1
+    contradiction_count: int = 0
+    latency_ms: int | None = 12
+    model_id: str | None = "fake-nli"
+    revision: str | None = "fake-rev"
+    sha256: str | None = "fake-sha"
+    claim_limit_exceeded: bool = False
+
+
 class PhotoContradictionSenseFields(unittest.TestCase):
     def test_focused_result_has_contradiction_receipt_defaults(self):
         r = FocusedResult(reply="x", cited_ids=["E1"], working_set_chars=1)
@@ -230,6 +244,207 @@ class PhotoContradictionSenseFields(unittest.TestCase):
                 self.assertIsNone(r.contradiction_sha256)
                 self.assertFalse(r.contradiction_claim_limit_exceeded)
                 self.assertEqual(box["i"], 1)
+
+
+class PhotoContradictionSenseIntegration(unittest.TestCase):
+    def _flag_on(self):
+        return mock.patch.dict(
+            "os.environ",
+            {"MAEZ_PHOTO_CONTRADICTION_SENSE": "1"},
+            clear=True,
+        )
+
+    def _patch_contradiction(self, receipts):
+        fake_verifier = object()
+        return (
+            fake_verifier,
+            mock.patch(
+                "core.routing.photo_contradiction.LocalNLIContradictionVerifier",
+                return_value=fake_verifier,
+            ),
+            mock.patch(
+                "core.routing.photo_contradiction.check_photo_contradictions",
+                side_effect=receipts,
+            ),
+        )
+
+    def test_clear_receipt_does_not_revise(self):
+        clear = _FakeContradictionReceipt(
+            reason="clear",
+            claim_count=2,
+            contradiction_count=0,
+            claim_limit_exceeded=True,
+        )
+        chat, box = _scripted_chat(["The screenshot shows Reddit [E1]."])
+        _verifier, verifier_patch, check_patch = self._patch_contradiction([clear])
+
+        with self._flag_on(), verifier_patch, check_patch as check:
+            result = synthesize_photo_turn(
+                analysis_text=ANALYSIS,
+                caption=CAPTION,
+                surface="telegram_surface",
+                chat_fn=chat,
+                model="m",
+            )
+
+        self.assertEqual(result.receipt_reason, "cited_ok")
+        self.assertEqual(result.contradiction_receipt, "clear")
+        self.assertEqual(result.contradiction_claim_count, 2)
+        self.assertEqual(result.contradiction_count, 0)
+        self.assertTrue(result.contradiction_claim_limit_exceeded)
+        self.assertEqual(box["i"], 1)
+        self.assertEqual(check.call_count, 1)
+        self.assertEqual(check.call_args.kwargs["premise"], ANALYSIS)
+        self.assertEqual(check.call_args.kwargs["reply"], result.reply)
+
+    def test_contradiction_revises_and_must_recheck_before_revised_clear(self):
+        sense_note = (
+            "Photo contradiction sense: claim conflicts with E1; revise from E1."
+        )
+        first = _FakeContradictionReceipt(
+            reason="trust_demoted",
+            sense_note=sense_note,
+            contradiction_count=1,
+        )
+        second = _FakeContradictionReceipt(
+            reason="clear",
+            claim_count=1,
+            contradiction_count=0,
+        )
+        systems: list[str] = []
+        replies = iter(
+            [
+                "The screenshot shows a YouTube video [E1].",
+                "The screenshot shows a Reddit thread [E1].",
+            ]
+        )
+
+        def chat_fn(**kwargs):
+            systems.append(kwargs["messages"][0]["content"])
+            return SimpleNamespace(
+                message=SimpleNamespace(content=next(replies, ""))
+            )
+
+        _verifier, verifier_patch, check_patch = self._patch_contradiction(
+            [first, second]
+        )
+        with self._flag_on(), verifier_patch, check_patch as check:
+            result = synthesize_photo_turn(
+                analysis_text=ANALYSIS,
+                caption=CAPTION,
+                surface="telegram_surface",
+                chat_fn=chat_fn,
+                model="m",
+            )
+
+        self.assertEqual(result.reply, "The screenshot shows a Reddit thread [E1].")
+        self.assertEqual(result.contradiction_receipt, "revised_clear")
+        self.assertEqual(result.contradiction_count, 0)
+        self.assertEqual(len(systems), 2)
+        self.assertIn(sense_note, systems[1])
+        self.assertEqual(check.call_count, 2)
+        self.assertEqual(
+            check.call_args_list[0].kwargs["reply"],
+            "The screenshot shows a YouTube video [E1].",
+        )
+        self.assertEqual(
+            check.call_args_list[1].kwargs["reply"],
+            "The screenshot shows a Reddit thread [E1].",
+        )
+
+    def test_revision_still_contradicting_is_not_laundered_clear(self):
+        first = _FakeContradictionReceipt(
+            reason="trust_demoted",
+            sense_note="Photo contradiction sense: YouTube conflicts with Reddit.",
+            contradiction_count=1,
+        )
+        second = _FakeContradictionReceipt(
+            reason="trust_demoted",
+            sense_note="Photo contradiction sense: video still conflicts.",
+            contradiction_count=1,
+        )
+        chat, box = _scripted_chat(
+            [
+                "The screenshot shows a YouTube video [E1].",
+                "It is still definitely YouTube [E1].",
+            ]
+        )
+        _verifier, verifier_patch, check_patch = self._patch_contradiction(
+            [first, second]
+        )
+
+        with self._flag_on(), verifier_patch, check_patch as check:
+            result = synthesize_photo_turn(
+                analysis_text=ANALYSIS,
+                caption=CAPTION,
+                surface="telegram_surface",
+                chat_fn=chat,
+                model="m",
+            )
+
+        self.assertEqual(result.reply, "It is still definitely YouTube [E1].")
+        self.assertEqual(result.contradiction_receipt, "trust_demoted")
+        self.assertEqual(result.contradiction_count, 1)
+        self.assertEqual(box["i"], 2)
+        self.assertEqual(check.call_count, 2)
+
+    def test_deterministic_fallback_skips_contradiction_checker_when_flag_on(self):
+        chat, box = _scripted_chat([""])
+
+        with self._flag_on(), mock.patch(
+            "core.routing.photo_contradiction.LocalNLIContradictionVerifier"
+        ) as verifier, mock.patch(
+            "core.routing.photo_contradiction.check_photo_contradictions",
+            side_effect=AssertionError("deterministic fallback is grounded"),
+        ) as check:
+            result = synthesize_photo_turn(
+                analysis_text=ANALYSIS,
+                caption=CAPTION,
+                surface="telegram_surface",
+                chat_fn=chat,
+                model="m",
+            )
+
+        self.assertEqual(result.receipt_reason, "deterministic_fallback")
+        self.assertIsNone(result.contradiction_receipt)
+        self.assertEqual(box["i"], 1)
+        verifier.assert_not_called()
+        check.assert_not_called()
+
+    def test_revision_failure_keeps_original_reply_and_retry_failed_receipt(self):
+        first = _FakeContradictionReceipt(
+            reason="trust_demoted",
+            sense_note="Photo contradiction sense: YouTube conflicts with Reddit.",
+            contradiction_count=1,
+        )
+
+        def chat_fn(**_kwargs):
+            if not hasattr(chat_fn, "calls"):
+                chat_fn.calls = 0
+            chat_fn.calls += 1
+            if chat_fn.calls == 1:
+                return SimpleNamespace(
+                    message=SimpleNamespace(
+                        content="The screenshot shows a YouTube video [E1]."
+                    )
+                )
+            raise RuntimeError("revision model down")
+
+        _verifier, verifier_patch, check_patch = self._patch_contradiction([first])
+        with self._flag_on(), verifier_patch, check_patch as check:
+            result = synthesize_photo_turn(
+                analysis_text=ANALYSIS,
+                caption=CAPTION,
+                surface="telegram_surface",
+                chat_fn=chat_fn,
+                model="m",
+            )
+
+        self.assertEqual(result.reply, "The screenshot shows a YouTube video [E1].")
+        self.assertEqual(result.contradiction_receipt, "retry_failed")
+        self.assertEqual(result.contradiction_count, 1)
+        self.assertEqual(chat_fn.calls, 2)
+        self.assertEqual(check.call_count, 1)
 
 
 class CitationRail(unittest.TestCase):

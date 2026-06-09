@@ -998,6 +998,12 @@ def photo_focused_synth_enabled() -> bool:
     return val not in ("0", "false", "no", "off")
 
 
+def _photo_contradiction_sense_requested() -> bool:
+    """Local pre-import gate; the organ itself stays unimported while flag-off."""
+    val = (os.environ.get("MAEZ_PHOTO_CONTRADICTION_SENSE", "") or "").strip().lower()
+    return val in {"1", "true", "yes", "on"}
+
+
 def synthesize_photo_turn(
     *,
     analysis_text: str,
@@ -1104,7 +1110,6 @@ def synthesize_photo_turn(
         reply, receipt_reason = deterministic, "deterministic_fallback"
     _t2 = _time.monotonic()
 
-    cited_ids = sorted({f"E{m.group(1)}" for m in _CITE_RE.finditer(reply)})
     contradiction_receipt = None
     contradiction_claim_count = 0
     contradiction_count = 0
@@ -1113,6 +1118,58 @@ def synthesize_photo_turn(
     contradiction_revision = None
     contradiction_sha256 = None
     contradiction_claim_limit_exceeded = False
+    contradiction = None
+
+    if (
+        receipt_reason != "deterministic_fallback"
+        and _photo_contradiction_sense_requested()
+    ):
+        try:
+            from core.routing import photo_contradiction as _photo_contradiction
+
+            verifier = _photo_contradiction.LocalNLIContradictionVerifier()
+            contradiction = _photo_contradiction.check_photo_contradictions(
+                premise=analysis_text,
+                reply=reply,
+                verifier=verifier,
+            )
+            if contradiction.reason == "trust_demoted" and contradiction.sense_note:
+                revision_raw = _run(
+                    base_system
+                    + "\n\n"
+                    + contradiction.sense_note
+                    + "\n\nRevise once. Keep every direct claim about the photo "
+                    "grounded in [E1]."
+                )
+                if revision_raw and _valid_photo_citation(revision_raw):
+                    revision_check = _photo_contradiction.check_photo_contradictions(
+                        premise=analysis_text,
+                        reply=revision_raw,
+                        verifier=verifier,
+                    )
+                    reply = revision_raw
+                    contradiction = revision_check
+                    if revision_check.reason == "clear":
+                        contradiction = replace(revision_check, reason="revised_clear")
+                else:
+                    contradiction = replace(contradiction, reason="retry_failed")
+            _t2 = _time.monotonic()
+        except Exception as exc:
+            logger.warning(
+                "photo contradiction sense failed: %s", type(exc).__name__
+            )
+
+    if contradiction is not None:
+        contradiction_receipt = contradiction.reason
+        contradiction_claim_count = contradiction.claim_count
+        contradiction_count = contradiction.contradiction_count
+        contradiction_latency_ms = contradiction.latency_ms
+        contradiction_model_id = contradiction.model_id
+        contradiction_revision = contradiction.revision
+        contradiction_sha256 = contradiction.sha256
+        contradiction_claim_limit_exceeded = contradiction.claim_limit_exceeded
+
+    cited_ids = sorted({f"E{m.group(1)}" for m in _CITE_RE.finditer(reply)})
     return FocusedResult(
         reply=reply,
         cited_ids=cited_ids,
