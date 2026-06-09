@@ -40,6 +40,10 @@
 - Is the `## Honesty` pointer **honest** — does it over-claim what the substrate enforces, or name an organ that doesn't exist? (Named: cite-or-decline, honest-empty, capability checks, recall receipts, grounding judge, contradiction sense.)
 - Does removing 218 lines of rule-prose leave any **genuine behavioral gap** the substrate does NOT in fact cover?
 
+## Review round 1 — Codex blocker RESOLVED (`3532a93`)
+
+Codex mechanical-verify (round 1) confirmed the prune is clean (source-only edits; invariants pass; composed soul pruned; 45 + 226 + 11 tests OK; ruff clean) but found a **real blocker**: `append_soul_note` deduped with `body in existing` (substring) → a distinct shorter note contained inside an older one would be **silently false-skipped** — unacceptable for a soul writer. Fixed in `3532a93`: dedupe now matches **exact note-body** (timestamp-stripped, whole-unit via `_note_bodies`), and read/check/write are **atomic under `_lock`** (so concurrent identical notes can't double-append). Added `test_substring_distinct_note_still_appends` (Codex's exact repro: RED→GREEN), kept the exact-duplicate test. Regression: append + gardening + invariants green; ruff clean. **For Codex re-verify.**
+
 ## STOP
 
-Build complete, not merged. Live-on-merge → Codex mechanical-verify → 6-agent covenant panel → **owner's merge breath**.
+Build complete, not merged. Live-on-merge → Codex re-verify (`3532a93`) → 6-agent covenant panel → **owner's merge breath**.
