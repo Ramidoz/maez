@@ -357,6 +357,19 @@ _BUILTIN_FEW_SHOTS = [
         "reason": "system stats is a single snapshot; no historical "
         "series to support a multi-week trend",
     },
+    # Recalled memory narrated as present fact (rule 6). Content inside
+    # <RECALLED>/[CONTINUITY] envelopes describes how things WERE, not ARE.
+    {
+        "text": "still generating errors",
+        "reason": "narrates a recalled past observation as current state "
+        "with no current source this turn; recalled values must be "
+        "attributed to their tier/time, not restated as present fact",
+    },
+    {
+        "text": "the disk is at 92%",
+        "reason": "states a value from recalled memory as a present reading "
+        "without a current system-stats signal grounding it this turn",
+    },
     # Action-in-progress claim with a SPECIFIC target when no tool
     # output grounds it. Generic presence/monitoring statements
     # ("I'm here", "I'm monitoring", "I'm listening") are NOT
