@@ -54,6 +54,14 @@ While applying round-2 I traced one more variant of the same promise and closed 
 
 Append dedup now holds for: exact-duplicate, distinct-substring, multi-paragraph, inline-timestamp. **5 append tests + 42 regression + ruff green.**
 
+## Covenant panel — HOLD on one blocker, RESOLVED (`591606d`)
+
+The 6-agent covenant panel returned **HOLD**: 5/6 lenses pass (covenant intact, still reads as Maez, no new self, invariants genuinely pass), but the **Behavioral-Gap lens** found the prior `## Honesty` pointer over-evicted. Verified rule-by-rule against live code:
+- Rules **1/2/4** (fabricated search / command-result / invented-framework-name) ARE substrate-enforced (honest-empty path, grounding judge + few-shots) — safe to evict.
+- Rule **5** (premature "Done."/"Saved.") has **NO live enforcer** (no judge clause/few-shot; the `_MIN_AUDIT_LENGTH=12` prefilter skips short status lines) — so the pointer's "honest by construction" was itself a fabrication (BLOCKER). Rules **3** (bare admin wrap-up) and **6** (recalled-as-present) are thinly covered (concerns).
+
+**Fix — owner-chosen option (b), `591606d`:** the pointer now names only the LIVE rails (drops "recall receipts" — recall is default-off), states the rails do not replace Maez's own responsibility, and keeps terse one-line anchors for the three still-prose-held modes (3/5/6). The soul stops claiming an enforcement it lacks; the discipline for the unenforced modes is retained. Test updated to enforce the honest pointer (RED→GREEN); invariants pass; no-new-identity gate clean. **Deferred follow-up:** a separate "judge-coverage" slice lands clauses/few-shots for 3/5/6, after which those anchors retire.
+
 ## STOP
 
-Build complete, not merged. Live-on-merge → Codex re-verify (`d62225b`) → 6-agent covenant panel → **owner's merge breath**.
+Build complete, not merged. Live-on-merge → Codex re-verify (`591606d`: honest pointer + anchors) → **owner's merge breath**. (Full panel re-run optional — the fix is precisely the panel's prescription and introduces no new enforcement claim.)
