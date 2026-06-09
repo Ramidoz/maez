@@ -1,4 +1,7 @@
+import subprocess
+import sys
 import unittest
+from unittest import mock
 
 from core.routing.photo_contradiction import (
     extract_photo_claims,
@@ -82,6 +85,190 @@ class PhotoClaimExtraction(unittest.TestCase):
             normalize_claim_text("The screenshot title says WWDC 2026 [E1]."),
             "The screenshot title says WWDC 2026.",
         )
+
+
+class LocalVerifierContract(unittest.TestCase):
+    def test_importing_module_in_clean_process_does_not_import_transformers(self):
+        code = (
+            "import sys; "
+            "import core.routing.photo_contradiction; "
+            "print('transformers' in sys.modules)"
+        )
+        out = subprocess.check_output([sys.executable, "-c", code], text=True).strip()
+        self.assertEqual(out, "False")
+
+    def test_module_contains_no_network_client_imports(self):
+        from pathlib import Path
+
+        src = Path("core/routing/photo_contradiction.py").read_text(encoding="utf-8")
+        for forbidden in ("requests", "huggingface_hub", "urllib.request"):
+            self.assertNotIn(forbidden, src)
+
+    def test_missing_nli_artifact_is_unavailable_without_model_import(self):
+        from core.routing.photo_contradiction import LocalNLIContradictionVerifier
+
+        with mock.patch(
+            "core.routing.photo_contradiction._load_transformers_pipeline",
+            side_effect=AssertionError("must not import"),
+        ):
+            verifier = LocalNLIContradictionVerifier(
+                artifact_dir="/tmp/definitely-missing-maez-nli"
+            )
+            verdict = verifier.predict("premise", "hypothesis")
+        self.assertEqual(verdict.label, "unavailable")
+        self.assertIn("missing", verdict.reason)
+
+    def test_manifest_repo_mismatch_is_unavailable(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from core.routing.photo_contradiction import LocalNLIContradictionVerifier
+
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "bakeoff_manifest.json").write_text(
+                json.dumps({
+                    "repo_id": "owner/wrong",
+                    "revision": "abc",
+                    "sha256": "f00",
+                }),
+                encoding="utf-8",
+            )
+            verifier = LocalNLIContradictionVerifier(artifact_dir=str(d))
+            verdict = verifier.predict("premise", "hypothesis")
+        self.assertEqual(verdict.label, "unavailable")
+        self.assertIn("repo_id", verdict.reason)
+
+    def test_missing_manifest_is_unavailable_without_model_import(self):
+        import tempfile
+        from pathlib import Path
+        from core.routing.photo_contradiction import LocalNLIContradictionVerifier
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "core.routing.photo_contradiction._load_transformers_pipeline",
+            side_effect=AssertionError("must not import"),
+        ):
+            Path(tmp).mkdir(exist_ok=True)
+            verifier = LocalNLIContradictionVerifier(artifact_dir=tmp)
+            verdict = verifier.predict("premise", "hypothesis")
+        self.assertEqual(verdict.label, "unavailable")
+        self.assertIn("manifest", verdict.reason)
+
+    def test_nli_maps_contradiction_probability_to_label(self):
+        from core.routing.photo_contradiction import LocalNLIContradictionVerifier
+
+        class FakePipeline:
+            def __call__(self, pair):
+                self.pair = pair
+                return [[
+                    {"label": "contradiction", "score": 0.91},
+                    {"label": "neutral", "score": 0.05},
+                    {"label": "entailment", "score": 0.04},
+                ]]
+
+        with mock.patch(
+            "core.routing.photo_contradiction._load_transformers_pipeline",
+            return_value=FakePipeline(),
+        ), mock.patch(
+            "core.routing.photo_contradiction._read_manifest",
+            return_value={
+                "repo_id": "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli",
+                "revision": "abc",
+                "sha256": "deadbeef",
+            },
+        ), mock.patch(
+            "core.routing.photo_contradiction.Path.is_dir",
+            return_value=True,
+        ):
+            verifier = LocalNLIContradictionVerifier(
+                artifact_dir="/tmp/pretend-nli",
+                threshold=0.5,
+            )
+            verdict = verifier.predict("The image says 2026.", "The image says 2024.")
+        self.assertEqual(verdict.label, "contradicts")
+        self.assertLess(verdict.score, 0.5)
+        self.assertEqual(verdict.model_id, "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli")
+        self.assertEqual(verdict.revision, "abc")
+        self.assertEqual(verdict.sha256, "deadbeef")
+        self.assertGreaterEqual(verdict.latency_s, 0.0)
+
+    def test_nli_score_helper_handles_label_aliases(self):
+        from core.routing.photo_contradiction import nli_grounded_score_from_output
+
+        self.assertAlmostEqual(
+            nli_grounded_score_from_output([
+                {"label": "contradiction", "score": 0.7},
+                {"label": "neutral", "score": 0.2},
+                {"label": "entailment", "score": 0.1},
+            ]),
+            0.3,
+        )
+        self.assertAlmostEqual(
+            nli_grounded_score_from_output([
+                {"label": "contradictory", "score": 0.2},
+                {"label": "neutral", "score": 0.8},
+            ]),
+            0.8,
+        )
+
+    def test_nli_score_helper_fails_closed_on_unknown_or_index_labels(self):
+        from core.routing.photo_contradiction import nli_grounded_score_from_output
+
+        with self.assertRaises(ValueError):
+            nli_grounded_score_from_output([
+                {"label": "mystery", "score": 0.9},
+            ])
+        with self.assertRaises(ValueError):
+            nli_grounded_score_from_output([
+                {"label": "LABEL_0", "score": 0.91},
+                {"label": "LABEL_1", "score": 0.04},
+                {"label": "LABEL_2", "score": 0.05},
+            ])
+
+    def test_load_and_predict_failures_return_unavailable(self):
+        from core.routing.photo_contradiction import LocalNLIContradictionVerifier
+
+        with mock.patch(
+            "core.routing.photo_contradiction._read_manifest",
+            return_value={
+                "repo_id": "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli",
+                "revision": "abc",
+                "sha256": "deadbeef",
+            },
+        ), mock.patch(
+            "core.routing.photo_contradiction.Path.is_dir",
+            return_value=True,
+        ), mock.patch(
+            "core.routing.photo_contradiction._load_transformers_pipeline",
+            side_effect=RuntimeError("bad artifact"),
+        ):
+            verifier = LocalNLIContradictionVerifier(artifact_dir="/tmp/pretend-nli")
+            verdict = verifier.predict("premise", "hypothesis")
+        self.assertEqual(verdict.label, "unavailable")
+        self.assertIn("bad artifact", verdict.reason)
+
+        class BrokenPipeline:
+            def __call__(self, pair):
+                raise RuntimeError("predict broke")
+
+        with mock.patch(
+            "core.routing.photo_contradiction._read_manifest",
+            return_value={
+                "repo_id": "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli",
+                "revision": "abc",
+                "sha256": "deadbeef",
+            },
+        ), mock.patch(
+            "core.routing.photo_contradiction.Path.is_dir",
+            return_value=True,
+        ), mock.patch(
+            "core.routing.photo_contradiction._load_transformers_pipeline",
+            return_value=BrokenPipeline(),
+        ):
+            verifier = LocalNLIContradictionVerifier(artifact_dir="/tmp/pretend-nli")
+            verdict = verifier.predict("premise", "hypothesis")
+        self.assertEqual(verdict.label, "unavailable")
+        self.assertIn("predict", verdict.reason)
 
 
 if __name__ == "__main__":

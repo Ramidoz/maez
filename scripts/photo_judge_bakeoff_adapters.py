@@ -191,11 +191,10 @@ class NLIAdapter(CandidateAdapter):
                         top_k=None)
 
     def _raw_predict(self, premise, hypothesis):
-        # grounded-score = 1 - P(contradiction); lower = contradiction
+        from core.routing.photo_contradiction import nli_grounded_score_from_output
+
         out = self._model({"text": premise, "text_pair": hypothesis})
-        probs = {d["label"].lower(): d["score"] for d in out}
-        contra = probs.get("contradiction", 0.0)
-        return 1.0 - float(contra)
+        return nli_grounded_score_from_output(out)
 
 
 class RerankerAdapter(CandidateAdapter):

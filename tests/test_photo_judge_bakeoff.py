@@ -1,5 +1,3 @@
-import importlib
-import json
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -170,6 +168,12 @@ class ConcreteAdapters(unittest.TestCase):
     def test_hhem_adapter_has_transformers5_tied_weights_shim(self):
         src = (ROOT / "scripts" / "photo_judge_bakeoff_adapters.py").read_text()
         self.assertIn("all_tied_weights_keys", src)
+
+    def test_bakeoff_nli_adapter_imports_core_score_helper(self):
+        src = (ROOT / "scripts" / "photo_judge_bakeoff_adapters.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("nli_grounded_score_from_output", src)
 
     def test_minicheck_label_native(self):
         from scripts.photo_judge_bakeoff_adapters import MiniCheckAdapter
