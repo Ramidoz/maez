@@ -106,6 +106,40 @@ class AdapterBase(unittest.TestCase):
         self.assertIn("missing bakeoff artifact", a.unavailable_reason)
         self.assertEqual(a.predict("p", "h").label, "unavailable")
 
+    def test_incomplete_artifact_without_manifest_skips_model_load(self):
+        import tempfile
+        from pathlib import Path
+        from scripts.photo_judge_bakeoff_adapters import HHEMAdapter
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch("scripts.photo_judge_bakeoff_adapters._BAKEOFF_CACHE", tmp), \
+             mock.patch.object(HHEMAdapter, "_load",
+                               side_effect=AssertionError("should not import")):
+            Path(tmp, "hhem").mkdir()
+            a = HHEMAdapter(repo_id="vectara/hallucination_evaluation_model")
+        self.assertTrue(a._load_failed)
+        self.assertIn("incomplete bakeoff artifact", a.unavailable_reason)
+
+    def test_manifest_repo_mismatch_skips_model_load(self):
+        import json as _json
+        import tempfile
+        from pathlib import Path
+        from scripts.photo_judge_bakeoff_adapters import HHEMAdapter
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch("scripts.photo_judge_bakeoff_adapters._BAKEOFF_CACHE", tmp), \
+             mock.patch.object(HHEMAdapter, "_load",
+                               side_effect=AssertionError("should not import")):
+            d = Path(tmp, "hhem")
+            d.mkdir()
+            (d / "bakeoff_manifest.json").write_text(_json.dumps({
+                "name": "hhem",
+                "repo_id": "owner/wrong",
+                "revision": "abc",
+                "sha256": "f00",
+            }), encoding="utf-8")
+            a = HHEMAdapter(repo_id="vectara/hallucination_evaluation_model")
+        self.assertTrue(a._load_failed)
+        self.assertIn("manifest repo_id", a.unavailable_reason)
+
 
 class ConcreteAdapters(unittest.TestCase):
     def test_all_adapters_compat_alias_points_to_registry_specs(self):
@@ -192,6 +226,14 @@ class CandidateRegistry(unittest.TestCase):
             "lytang/MiniCheck-DeBERTa-v3-Large",
         })
         self.assertFalse(any("bespokelabs" in (m.repo_id or "") for m in minis))
+
+    def test_obtainable_repo_specs_are_revision_pinned(self):
+        from scripts.photo_judge_bakeoff_adapters import CANDIDATES
+        for spec in CANDIDATES:
+            if spec.repo_id and spec.name != "thinkncheck":
+                self.assertRegex(spec.revision or "", r"^[0-9a-f]{40}$", spec.name)
+        thinkncheck = [c for c in CANDIDATES if c.name == "thinkncheck"][0]
+        self.assertIsNone(thinkncheck.revision)
 
     def test_chatjudge_specs_are_loopback_only(self):
         from scripts.photo_judge_bakeoff_adapters import (

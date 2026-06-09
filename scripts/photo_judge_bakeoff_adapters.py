@@ -25,6 +25,7 @@ class CandidateSpec:
     name: str
     kind: str
     repo_id: str | None = None
+    revision: str | None = None
     base_url: str | None = None
     expected_alias: str | None = None
     params: dict = field(default_factory=dict)
@@ -86,7 +87,20 @@ class CandidateAdapter:
         # Pick up the pinned revision + sha256 the fetch helper recorded, so the
         # report's fingerprint IS the actual downloaded artifact (not hand-edited).
         man = read_bakeoff_manifest(artifact_dir)
+        if self.requires_artifact and not man:
+            self._load_failed = True
+            self.unavailable_reason = (
+                f"incomplete bakeoff artifact: {artifact_dir} "
+                "has no bakeoff_manifest.json")
+            return
         if man:
+            manifest_repo = man.get("repo_id")
+            if manifest_repo and manifest_repo != getattr(self, "model_id", None):
+                self._load_failed = True
+                self.unavailable_reason = (
+                    f"manifest repo_id {manifest_repo!r} != spec repo_id "
+                    f"{getattr(self, 'model_id', None)!r}")
+                return
             self.revision = man.get("revision")
             self.sha256 = man.get("sha256")
         try:
@@ -318,22 +332,28 @@ class ChatJudgeAdapter(CandidateAdapter):
 
 CANDIDATES = (
     CandidateSpec(name="hhem", kind="hhem",
-                  repo_id="vectara/hallucination_evaluation_model"),
+                  repo_id="vectara/hallucination_evaluation_model",
+                  revision="8e4a2e6e96c708cc76c2344f7e4757df2515292c"),
     CandidateSpec(name="minicheck-roberta", kind="minicheck",
                   repo_id="lytang/MiniCheck-RoBERTa-Large",
+                  revision="74c8919647e61ed0f71bc177d94f10930f090068",
                   params={"model_name": "roberta-large"}),
     CandidateSpec(name="minicheck-flan-t5", kind="minicheck",
                   repo_id="lytang/MiniCheck-Flan-T5-Large",
+                  revision="96eafd01cee2d16cf81aaa2fb226b14f422a37b3",
                   params={"model_name": "flan-t5-large"}),
     CandidateSpec(name="minicheck-deberta", kind="minicheck",
                   repo_id="lytang/MiniCheck-DeBERTa-v3-Large",
+                  revision="2f2d01a54fa022a7ffadb76260e1ea8bc88c82bb",
                   params={"model_name": "deberta-v3-large"}),
     CandidateSpec(name="thinkncheck", kind="thinkncheck",
                   repo_id="thinkncheck/thinkncheck-1b-gemma3-q4"),
     CandidateSpec(name="nli", kind="nli",
-                  repo_id="MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli"),
+                  repo_id="MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli",
+                  revision="6f5cf0a2b59cabb106aca4c287eed12e357e90eb"),
     CandidateSpec(name="reranker", kind="reranker",
-                  repo_id="Qwen/Qwen3-Reranker-0.6B"),
+                  repo_id="Qwen/Qwen3-Reranker-0.6B",
+                  revision="e61197ed45024b0ed8a2d74b80b4d909f1255473"),
     CandidateSpec(name="chatjudge-maez-judge", kind="chatjudge",
                   base_url="http://127.0.0.1:8081",
                   expected_alias="maez-judge"),
