@@ -57,6 +57,7 @@ def read_bakeoff_manifest(cache_dir: str) -> dict | None:
 class CandidateAdapter:
     name: str = "base"
     score_based: bool = True   # False → label-native (no threshold)
+    requires_artifact: bool = False
     revision: str | None = None   # pinned download revision (read from manifest)
     sha256: str | None = None     # artifact sha256 (read from manifest)
 
@@ -65,9 +66,16 @@ class CandidateAdapter:
         self.unavailable_reason: str | None = None
         self._model = None
         self._load_failed = False
+        artifact_dir = os.path.join(_BAKEOFF_CACHE, self.name)
+        if self.requires_artifact and not os.path.isdir(artifact_dir):
+            self._load_failed = True
+            self.unavailable_reason = (
+                f"missing bakeoff artifact: {artifact_dir} "
+                "(run photo_judge_bakeoff_fetch first)")
+            return
         # Pick up the pinned revision + sha256 the fetch helper recorded, so the
         # report's fingerprint IS the actual downloaded artifact (not hand-edited).
-        man = read_bakeoff_manifest(os.path.join(_BAKEOFF_CACHE, self.name))
+        man = read_bakeoff_manifest(artifact_dir)
         if man:
             self.revision = man.get("revision")
             self.sha256 = man.get("sha256")
@@ -116,6 +124,7 @@ _BAKEOFF_CACHE = os.path.join(
 class HHEMAdapter(CandidateAdapter):
     name = "hhem"
     score_based = True
+    requires_artifact = True
     model_id = "vectara/hallucination_evaluation_model"
 
     def __init__(self, threshold=None, name=None, repo_id=None):
@@ -138,6 +147,7 @@ class HHEMAdapter(CandidateAdapter):
 class NLIAdapter(CandidateAdapter):
     name = "nli"
     score_based = True
+    requires_artifact = True
     model_id = "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli"
 
     def __init__(self, threshold=None, name=None, repo_id=None):
@@ -164,6 +174,7 @@ class NLIAdapter(CandidateAdapter):
 class RerankerAdapter(CandidateAdapter):
     name = "reranker"
     score_based = True
+    requires_artifact = True
     model_id = "Qwen/Qwen3-Reranker-0.6B"
 
     def __init__(self, threshold=None, name=None, repo_id=None):
@@ -186,6 +197,7 @@ class RerankerAdapter(CandidateAdapter):
 class MiniCheckAdapter(CandidateAdapter):
     name = "minicheck-roberta"
     score_based = False   # label-native 0/1
+    requires_artifact = True
     model_id = "lytang/MiniCheck-RoBERTa-Large"
     model_name = "roberta-large"
 
@@ -211,6 +223,7 @@ class MiniCheckAdapter(CandidateAdapter):
 class ThinknCheckAdapter(CandidateAdapter):
     name = "thinkncheck"
     score_based = False   # reasoning verdict
+    requires_artifact = True
     model_id = "thinkncheck/thinkncheck-1b-gemma3-q4"  # verify at obtain-time
 
     def __init__(self, threshold=None, name=None, repo_id=None):

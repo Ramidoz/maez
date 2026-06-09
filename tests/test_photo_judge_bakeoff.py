@@ -96,6 +96,16 @@ class AdapterBase(unittest.TestCase):
         self.assertEqual(v.label, "unavailable")
         self.assertIn("no weights", a.unavailable_reason)
 
+    def test_missing_required_artifact_skips_model_load(self):
+        from scripts.photo_judge_bakeoff_adapters import HHEMAdapter
+        with mock.patch.object(HHEMAdapter, "_load",
+                               side_effect=AssertionError("should not import")):
+            a = HHEMAdapter(name="definitely-missing-artifact-for-test",
+                            repo_id="owner/missing")
+        self.assertTrue(a._load_failed)
+        self.assertIn("missing bakeoff artifact", a.unavailable_reason)
+        self.assertEqual(a.predict("p", "h").label, "unavailable")
+
 
 class ConcreteAdapters(unittest.TestCase):
     def test_all_adapters_compat_alias_points_to_registry_specs(self):
@@ -117,14 +127,16 @@ class ConcreteAdapters(unittest.TestCase):
         from scripts.photo_judge_bakeoff_adapters import HHEMAdapter
         # Patch _load at the CLASS level BEFORE instantiation so __init__'s
         # _load() never imports transformers or touches disk.
-        with mock.patch.object(HHEMAdapter, "_load", return_value=object()), \
+        with mock.patch.object(HHEMAdapter, "requires_artifact", False), \
+             mock.patch.object(HHEMAdapter, "_load", return_value=object()), \
              mock.patch.object(HHEMAdapter, "_raw_predict", return_value=0.05):
             a = HHEMAdapter(threshold=0.5)
             self.assertEqual(a.predict("p", "h").label, "contradicts")
 
     def test_minicheck_label_native(self):
         from scripts.photo_judge_bakeoff_adapters import MiniCheckAdapter
-        with mock.patch.object(MiniCheckAdapter, "_load", return_value=object()), \
+        with mock.patch.object(MiniCheckAdapter, "requires_artifact", False), \
+             mock.patch.object(MiniCheckAdapter, "_load", return_value=object()), \
              mock.patch.object(MiniCheckAdapter, "_raw_predict",
                                return_value="contradicts"):
             a = MiniCheckAdapter()
