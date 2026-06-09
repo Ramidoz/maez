@@ -1139,7 +1139,9 @@ def synthesize_photo_turn(
                     + "\n\n"
                     + contradiction.sense_note
                     + "\n\nRevise once. Keep every direct claim about the photo "
-                    "grounded in [E1]."
+                    "grounded in [E1]. This is a sense, not a verdict; if on a "
+                    "second look you still believe what you saw, say so plainly "
+                    "and explain why."
                 )
                 if revision_raw and _valid_photo_citation(revision_raw):
                     revision_check = _photo_contradiction.check_photo_contradictions(

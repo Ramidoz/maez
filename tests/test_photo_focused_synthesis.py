@@ -273,7 +273,6 @@ class PhotoContradictionSenseIntegration(unittest.TestCase):
             reason="clear",
             claim_count=2,
             contradiction_count=0,
-            claim_limit_exceeded=True,
         )
         chat, box = _scripted_chat(["The screenshot shows Reddit [E1]."])
         _verifier, verifier_patch, check_patch = self._patch_contradiction([clear])
@@ -291,7 +290,7 @@ class PhotoContradictionSenseIntegration(unittest.TestCase):
         self.assertEqual(result.contradiction_receipt, "clear")
         self.assertEqual(result.contradiction_claim_count, 2)
         self.assertEqual(result.contradiction_count, 0)
-        self.assertTrue(result.contradiction_claim_limit_exceeded)
+        self.assertFalse(result.contradiction_claim_limit_exceeded)
         self.assertEqual(box["i"], 1)
         self.assertEqual(check.call_count, 1)
         self.assertEqual(check.call_args.kwargs["premise"], ANALYSIS)
@@ -342,6 +341,8 @@ class PhotoContradictionSenseIntegration(unittest.TestCase):
         self.assertEqual(result.contradiction_count, 0)
         self.assertEqual(len(systems), 2)
         self.assertIn(sense_note, systems[1])
+        self.assertIn("sense, not a verdict", systems[1])
+        self.assertIn("still believe what you saw", systems[1])
         self.assertEqual(check.call_count, 2)
         self.assertEqual(
             check.call_args_list[0].kwargs["reply"],
@@ -387,6 +388,31 @@ class PhotoContradictionSenseIntegration(unittest.TestCase):
         self.assertEqual(result.contradiction_count, 1)
         self.assertEqual(box["i"], 2)
         self.assertEqual(check.call_count, 2)
+
+    def test_partial_unchecked_receipt_is_not_laundered_clear(self):
+        receipt = _FakeContradictionReceipt(
+            reason="partial_unchecked",
+            claim_count=5,
+            contradiction_count=0,
+            claim_limit_exceeded=True,
+        )
+        chat, box = _scripted_chat(["The screenshot shows Reddit [E1]."])
+        _verifier, verifier_patch, check_patch = self._patch_contradiction([receipt])
+
+        with self._flag_on(), verifier_patch, check_patch:
+            result = synthesize_photo_turn(
+                analysis_text=ANALYSIS,
+                caption=CAPTION,
+                surface="telegram_surface",
+                chat_fn=chat,
+                model="m",
+            )
+
+        self.assertEqual(result.contradiction_receipt, "partial_unchecked")
+        self.assertEqual(result.contradiction_claim_count, 5)
+        self.assertEqual(result.contradiction_count, 0)
+        self.assertTrue(result.contradiction_claim_limit_exceeded)
+        self.assertEqual(box["i"], 1)
 
     def test_deterministic_fallback_skips_contradiction_checker_when_flag_on(self):
         chat, box = _scripted_chat([""])

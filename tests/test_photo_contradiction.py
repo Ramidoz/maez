@@ -387,6 +387,8 @@ class ContradictionReceiptAggregation(unittest.TestCase):
         self.assertIn("Contradiction sense fired", receipt.sense_note)
         self.assertIn('Claim C1: "The screenshot title says WWDC 2024."', receipt.sense_note)
         self.assertIn("Conflicts with E1: The screenshot title says WWDC 2026.", receipt.sense_note)
+        self.assertIn("This is a sense, not a verdict", receipt.sense_note)
+        self.assertIn("say so plainly and explain why", receipt.sense_note)
         self.assertEqual(receipt.claim_details[0].verdict_label, "contradicts")
 
     def test_sense_note_clips_long_contradicted_claim_text(self):
@@ -441,7 +443,7 @@ class ContradictionReceiptAggregation(unittest.TestCase):
         self.assertEqual(receipt.claim_count, 0)
         self.assertEqual(verifier.calls, [])
 
-    def test_claim_limit_is_honestly_reported(self):
+    def test_claim_limit_is_partial_unchecked_not_clear(self):
         from core.routing.photo_contradiction import check_photo_contradictions
 
         reply = " ".join(
@@ -455,8 +457,8 @@ class ContradictionReceiptAggregation(unittest.TestCase):
             claim_limit=5,
         )
 
-        self.assertEqual(receipt.state, "grounded")
-        self.assertEqual(receipt.reason, "clear")
+        self.assertEqual(receipt.state, "partial_unchecked")
+        self.assertEqual(receipt.reason, "partial_unchecked")
         self.assertEqual(receipt.claim_count, 5)
         self.assertEqual(receipt.contradiction_count, 0)
         self.assertTrue(receipt.claim_limit_exceeded)

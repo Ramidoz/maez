@@ -181,8 +181,10 @@ def _build_sense_note(
         lines.append(f'- Claim {claim.claim_id}: "{_clip_note_text(claim.text)}"')
     lines.append(f"- Conflicts with E1: {_clip_note_text(premise)}")
     lines.append(
-        "Revise the answer with this signal in view. Do not claim certainty "
-        "where the photo evidence and draft conflict."
+        "Revise the answer with this signal in view. This is a sense, not a "
+        "verdict; if on a second look you still believe what you saw, say so "
+        "plainly and explain why. Do not claim certainty where the photo "
+        "evidence and draft conflict."
     )
     return "\n".join(lines)
 
@@ -292,6 +294,20 @@ def check_photo_contradictions(
             reason="verifier_unavailable",
             claim_count=len(claims),
             claim_limit_exceeded=claim_limit_exceeded,
+            verifier_name=verifier_name,
+            model_id=model_id,
+            revision=revision,
+            sha256=sha256,
+            latency_ms=latency_ms,
+            claim_details=claim_details,
+        )
+
+    if claim_limit_exceeded:
+        return ContradictionReceipt(
+            state="partial_unchecked",
+            reason="partial_unchecked",
+            claim_count=len(claims),
+            claim_limit_exceeded=True,
             verifier_name=verifier_name,
             model_id=model_id,
             revision=revision,
