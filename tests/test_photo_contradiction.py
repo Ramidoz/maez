@@ -389,6 +389,26 @@ class ContradictionReceiptAggregation(unittest.TestCase):
         self.assertIn("Conflicts with E1: The screenshot title says WWDC 2026.", receipt.sense_note)
         self.assertEqual(receipt.claim_details[0].verdict_label, "contradicts")
 
+    def test_sense_note_clips_long_contradicted_claim_text(self):
+        from core.routing.photo_contradiction import check_photo_contradictions
+
+        tokens = [f"token{i:03d}" for i in range(90)]
+        reply = f"The screenshot lists {' '.join(tokens)} [E1]."
+        receipt = check_photo_contradictions(
+            premise="The screenshot lists a much shorter visible item.",
+            reply=reply,
+            verifier=FakeVerifier(["contradicts"]),
+        )
+
+        claim_line = next(
+            line for line in receipt.sense_note.splitlines() if line.startswith("- Claim C1:")
+        )
+        self.assertLessEqual(len(claim_line), 520)
+        self.assertIn("The screenshot lists token000 token001", claim_line)
+        self.assertIn("...", claim_line)
+        self.assertNotIn("token089", claim_line)
+        self.assertIn("token089", receipt.claim_details[0].text)
+
     def test_non_perceptual_reply_is_claim_extraction_unavailable(self):
         from core.routing.photo_contradiction import check_photo_contradictions
 

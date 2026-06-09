@@ -178,7 +178,7 @@ def _build_sense_note(
 ) -> str:
     lines = ["Contradiction sense fired:"]
     for claim, _verdict in contradictions:
-        lines.append(f'- Claim {claim.claim_id}: "{claim.text}"')
+        lines.append(f'- Claim {claim.claim_id}: "{_clip_note_text(claim.text)}"')
     lines.append(f"- Conflicts with E1: {_clip_note_text(premise)}")
     lines.append(
         "Revise the answer with this signal in view. Do not claim certainty "
