@@ -2,7 +2,7 @@
 
 Branch: `valence-v0`
 Base: `b3b6faf`
-Tip: `9d4d3fc4e273675341cf2f776212dc9acac92b17`
+Tip: current `valence-v0` branch HEAD (`git rev-parse HEAD`)
 Spec: `docs/superpowers/specs/2026-06-09-valence-v0-design.md`
 Plan: `docs/superpowers/plans/2026-06-09-valence-v0.md`
 
@@ -136,6 +136,7 @@ core/evolution/valence/__init__.py
 core/evolution/valence/reading.py
 core/evolution/valence/setpoints.py
 core/evolution/valence/signals.py
+docs/handoffs/2026-06-09-valence-v0-for-review.md
 docs/superpowers/plans/2026-06-09-valence-v0.md
 docs/superpowers/specs/2026-06-09-valence-v0-design.md
 tests/test_valence_rail.py
