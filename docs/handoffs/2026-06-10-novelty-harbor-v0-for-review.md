@@ -57,6 +57,15 @@ git diff --check 5bb34af..HEAD
 <no output, exit 0>
 ```
 
+Anti-laundering mutation check:
+
+```text
+Baseline NoveltyHarborCoreTests: green.
+Temporarily changed _final_status(...) to return requested_status.
+Broken rail result: FAILED (failures=6), including 'harbored' != 'rejected_unsafe'.
+Restored _final_status(...): NoveltyHarborCoreTests green again.
+```
+
 Manual DB posture:
 
 ```text
