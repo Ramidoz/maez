@@ -38,20 +38,18 @@ class ValenceReading:
 
     def as_telemetry(self) -> str:
         label = f"{self.magnitude.name} {self.sign.name}"
+        prefix = "given the substrate signals I can see, "
+        if self.sign is Sign.NEUTRAL and self.magnitude is Magnitude.NONE:
+            return f"{prefix}this state appears {label}; no setpoint moved."
+
         reasons = "; ".join(
-            f"{contribution.setpoint}: {contribution.reason}"
+            contribution.reason
             for contribution in self.contributions
-            if contribution.reason
+            if contribution.sign is not Sign.NEUTRAL and contribution.reason
         )
         if reasons:
-            return (
-                "given the substrate signals I can see, "
-                f"{self.provenance} is {label}; reasons: {reasons}"
-            )
-        return (
-            "given the substrate signals I can see, "
-            f"{self.provenance} is {label}"
-        )
+            return f"{prefix}this state appears {label}, because: {reasons}."
+        return f"{prefix}this state appears {label}."
 
 
 def aggregate(contributions: Iterable[Contribution]) -> ValenceReading:
@@ -90,4 +88,3 @@ def aggregate(contributions: Iterable[Contribution]) -> ValenceReading:
         magnitude=magnitude,
         contributions=recorded,
     )
-
