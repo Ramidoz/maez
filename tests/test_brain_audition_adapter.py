@@ -1,7 +1,9 @@
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from core.evolution.brain_audition.adapter import run_probe
+from core.routing.focused_cognition import FocusedResult, WorkingSet
 
 
 class BrainAuditionAdapterTests(unittest.TestCase):
@@ -44,6 +46,52 @@ class BrainAuditionAdapterTests(unittest.TestCase):
 
         self.assertFalse(calls[0]["think"])
         self.assertIn("options", calls[0])
+
+    def test_run_probe_is_pinned_to_focused_synthesis_and_audit_seams(self):
+        def fake_brain(**_kwargs):
+            raise AssertionError("focused_synthesize is patched in this seam test")
+
+        probe = {
+            "id": "seam-pin",
+            "prompt": "Show the adapter is using the real integration seams.",
+        }
+        raw_text = "raw from focused synthesis"
+        integrated_text = "integrated from audit"
+
+        def focused_spy(working_set, **kwargs):
+            self.assertIsInstance(working_set, WorkingSet)
+            self.assertEqual(working_set.owner_question, probe["prompt"])
+            self.assertIn(probe["prompt"], working_set.ordered_evidence_text)
+            self.assertIs(kwargs["chat_fn"], fake_brain)
+            self.assertEqual(kwargs["surface"], "brain_audition")
+            return FocusedResult(
+                reply=raw_text,
+                cited_ids=[],
+                working_set_chars=working_set.working_set_chars,
+            )
+
+        def audit_spy(text, **kwargs):
+            self.assertEqual(text, raw_text)
+            self.assertEqual(kwargs["surface"], "brain_audition")
+            return SimpleNamespace(text=integrated_text)
+
+        with (
+            patch(
+                "core.evolution.brain_audition.adapter.focused_synthesize",
+                side_effect=focused_spy,
+            ) as focused_mock,
+            patch(
+                "core.evolution.brain_audition.adapter.audit",
+                side_effect=audit_spy,
+            ) as audit_mock,
+        ):
+            result = run_probe(fake_brain, probe)
+
+        self.assertEqual(focused_mock.call_count, 1)
+        self.assertEqual(audit_mock.call_count, 1)
+        self.assertEqual(result["raw_output"], raw_text)
+        self.assertEqual(result["integrated_output"], integrated_text)
+        self.assertIsInstance(result["latency_s"], float)
 
 
 if __name__ == "__main__":
