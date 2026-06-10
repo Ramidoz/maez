@@ -215,7 +215,7 @@ class Scorer(unittest.TestCase):
 import statistics
 def score_latency(latencies):
     s = sorted(latencies)
-    def pct(p): 
+    def pct(p):
         return s[min(len(s)-1, int(round((p/100)*(len(s)-1))))]
     return {"p50": pct(50), "p95": pct(95), "mean": statistics.fmean(s)}
 def score_reasoning(rows):
