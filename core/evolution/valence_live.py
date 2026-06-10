@@ -46,11 +46,12 @@ def _read_prior_open(log_path) -> int | None:
         last = next((line for line in reversed(lines) if line.strip()), None)
         if last is None:
             return None
-        value = json.loads(last).get("want_snapshot", {}).get("open")
+        record = json.loads(last)
+        value = record["want_snapshot"]["open"]
         if isinstance(value, bool) or not isinstance(value, int):
             return None
         return value
-    except Exception:
+    except (OSError, json.JSONDecodeError, ValueError, KeyError, TypeError):
         return None
 
 

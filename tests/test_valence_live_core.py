@@ -3,6 +3,7 @@ import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from core.evolution.valence.reading import Sign, ValenceReading
 from core.evolution.valence_live import read_and_log_valence
@@ -61,3 +62,38 @@ class ValenceLiveCore(unittest.TestCase):
                 log_path=log,
             )
             self.assertEqual(r2.sign, Sign.NEGATIVE)
+
+    def test_corrupt_prior_log_is_treated_as_no_prior(self):
+        with TemporaryDirectory() as d:
+            log = Path(d) / "v.jsonl"
+            log.write_text("{not-json\n", encoding="utf-8")
+
+            reading = read_and_log_valence(
+                audit_flags=[],
+                open_want_count=0,
+                continuity_state={},
+                now="t1",
+                log_path=log,
+            )
+
+            self.assertEqual(reading.sign, Sign.NEUTRAL)
+
+    def test_unexpected_prior_log_bug_bubbles_to_public_wrapper(self):
+        with TemporaryDirectory() as d:
+            log = Path(d) / "v.jsonl"
+            log.write_text('{"want_snapshot":{"open":1}}\n', encoding="utf-8")
+
+            with self.assertLogs("core.evolution.valence_live", level="WARNING"):
+                with patch(
+                    "core.evolution.valence_live.json.loads",
+                    side_effect=RuntimeError("boom"),
+                ):
+                    reading = read_and_log_valence(
+                        audit_flags=[],
+                        open_want_count=0,
+                        continuity_state={},
+                        now="t1",
+                        log_path=log,
+                    )
+
+            self.assertIsNone(reading)
