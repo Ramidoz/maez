@@ -2191,6 +2191,36 @@ def _cycle_apply_quiet_counter_result(
     )
 
 
+def _read_and_log_cycle_valence(
+    daemon: object,
+    *,
+    open_wants_count: int,
+    now: str,
+) -> None:
+    try:
+        from core.evolution import valence_live
+        from core.safety import audit_flag_buffer
+
+        reading = valence_live.read_and_log_valence(
+            audit_flags=audit_flag_buffer.peek(),
+            open_want_count=int(open_wants_count),
+            continuity_state={
+                "capsule_expected": bool(getattr(daemon, "_continuity_active", False)),
+                "capsule_present": bool(getattr(daemon, "_continuity_capsule", None)),
+            },
+            now=now,
+        )
+        if reading is not None:
+            audit_flag_buffer.clear()
+        else:
+            logger.debug("valence end-of-cycle read returned None; keeping audit buffer")
+    except Exception:
+        logger.warning(
+            "valence end-of-cycle read failed; keeping audit buffer",
+            exc_info=True,
+        )
+
+
 def _build_cycle_focused_prompt(
     *,
     legacy_prompt: str,
@@ -8960,6 +8990,12 @@ class MaezDaemon:
             # Check system thresholds for alerts (runs even if reasoning failed)
             self._mark_cycle_stage("threshold_alerts")
             self._check_and_alert(snap)
+
+            _read_and_log_cycle_valence(
+                self,
+                open_wants_count=_cycle_open_wants_count,
+                now=datetime.now(timezone.utc).isoformat(),
+            )
 
             # Follow-up delivery — every 5 cycles
             #

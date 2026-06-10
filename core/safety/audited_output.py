@@ -209,4 +209,11 @@ def audit_assistant_text(
     # AuditResult.text is the rewritten form when rewritten=True, else
     # the original text. Either way, returning result.text honors the
     # invariant — stored output == final audited output.
+    try:
+        from core.safety import audit_flag_buffer as _audit_flag_buffer
+
+        for _flag in getattr(result, "flags", ()) or ():
+            _audit_flag_buffer.push(getattr(_flag, "kind", "") or "")
+    except Exception:
+        pass
     return getattr(result, "text", text) or text
