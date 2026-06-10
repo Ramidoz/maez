@@ -58,7 +58,7 @@ def _buffer_audit_flags(flags) -> None:
         for _flag in flags or ():
             _audit_flag_buffer.push(getattr(_flag, "kind", "") or "")
     except Exception:
-        logger.debug(
+        logger.warning(
             "audit_assistant_text: audit flag side-record failed",
             exc_info=True,
         )

@@ -2201,6 +2201,18 @@ def _count_cycle_open_wants(daemon: object) -> int:
     return 0
 
 
+def _buffer_cycle_audit_flags(audit_result: object) -> None:
+    try:
+        from core.safety.audited_output import _buffer_audit_flags
+
+        _buffer_audit_flags(getattr(audit_result, "flags", ()) or ())
+    except Exception:
+        logger.warning(
+            "cycle-response audit flag side-record failed",
+            exc_info=True,
+        )
+
+
 def _read_and_log_cycle_valence(
     daemon: object,
     *,
@@ -8707,7 +8719,6 @@ class MaezDaemon:
                     _cycle_signals_present.append("system stats")
                     _audit_transcript = "\n".join(_audit_transcript_parts)
                     from core.self_claim_audit import audit as _sc_audit
-                    from core.safety.audited_output import _buffer_audit_flags
 
                     _audit_result = _sc_audit(
                         result,
@@ -8721,7 +8732,7 @@ class MaezDaemon:
                             None,
                         ),
                     )
-                    _buffer_audit_flags(_audit_result.flags)
+                    _buffer_cycle_audit_flags(_audit_result)
                     if _audit_result.rewritten:
                         logger.info(
                             "Cycle %d: audit rewrote fabrication (kinds=%s)",

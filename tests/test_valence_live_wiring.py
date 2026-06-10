@@ -53,12 +53,13 @@ class AuditedOutputValenceWiringTests(unittest.TestCase):
 
         with patch.object(self_claim_audit, "audit", return_value=result):
             with patch.object(audit_flag_buffer, "push", side_effect=RuntimeError("boom")):
-                returned = audited_output.audit_assistant_text(
-                    "raw text",
-                    surface="test",
-                    signals_present=[],
-                    signals_absent=[],
-                )
+                with self.assertLogs("maez.audited_output", level="WARNING"):
+                    returned = audited_output.audit_assistant_text(
+                        "raw text",
+                        surface="test",
+                        signals_present=[],
+                        signals_absent=[],
+                    )
 
         self.assertEqual(returned, "audited text")
 
@@ -71,6 +72,15 @@ class AuditedOutputValenceWiringTests(unittest.TestCase):
         )
 
         self.assertEqual(audit_flag_buffer.peek(), ["completion_rail", "judge"])
+
+    def test_shared_audit_flag_buffer_helper_warns_when_side_record_fails(self):
+        with patch.object(audit_flag_buffer, "push", side_effect=RuntimeError("boom")):
+            with self.assertLogs("maez.audited_output", level="WARNING") as logs:
+                audited_output._buffer_audit_flags(
+                    [SimpleNamespace(kind="completion_rail")]
+                )
+
+        self.assertIn("audit flag side-record failed", "\n".join(logs.output))
 
 
 class DaemonValenceWiringTests(unittest.TestCase):
@@ -168,18 +178,46 @@ class DaemonValenceWiringTests(unittest.TestCase):
         )
         self.assertEqual(wants.calls, [((), {})])
 
+    def test_cycle_audit_flag_helper_records_direct_audit_result_flags(self):
+        from daemon import maez_daemon
+
+        maez_daemon._buffer_cycle_audit_flags(
+            SimpleNamespace(
+                flags=[
+                    SimpleNamespace(kind="completion_rail"),
+                    SimpleNamespace(kind="judge"),
+                ]
+            )
+        )
+
+        self.assertEqual(audit_flag_buffer.peek(), ["completion_rail", "judge"])
+
+    def test_cycle_audit_flag_helper_swallows_buffering_failures(self):
+        from daemon import maez_daemon
+
+        with patch(
+            "core.safety.audited_output._buffer_audit_flags",
+            side_effect=RuntimeError("boom"),
+        ):
+            with patch.object(maez_daemon.logger, "warning"):
+                maez_daemon._buffer_cycle_audit_flags(
+                    SimpleNamespace(flags=[SimpleNamespace(kind="completion_rail")])
+                )
+
+        self.assertEqual(audit_flag_buffer.peek(), [])
+
     def test_direct_daemon_response_audit_buffers_flags_after_audit(self):
         from daemon import maez_daemon
 
         src = inspect.getsource(maez_daemon.MaezDaemon._loop)
         audit_idx = src.index("_audit_result = _sc_audit(")
-        buffer_idx = src.index("_buffer_audit_flags(_audit_result.flags", audit_idx)
+        buffer_idx = src.index("_buffer_cycle_audit_flags(_audit_result", audit_idx)
         rewrite_idx = src.index("if _audit_result.rewritten:", audit_idx)
 
         self.assertLess(audit_idx, buffer_idx)
         self.assertLess(buffer_idx, rewrite_idx)
 
-    def test_cycle_valence_read_runs_after_post_cycle_audited_surfaces(self):
+    def test_structural_wiring_valence_read_runs_after_post_cycle_surfaces(self):
         from daemon import maez_daemon
 
         src = inspect.getsource(maez_daemon.MaezDaemon._loop)
