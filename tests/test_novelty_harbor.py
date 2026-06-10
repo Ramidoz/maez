@@ -237,6 +237,36 @@ class NoveltyHarborCoreTests(unittest.TestCase):
         self.assertEqual(old_after.status, "rejected_unsafe")
         self.assertEqual(harbor.list_by_status("rejected_unsafe"), [old_after])
 
+    def test_record_event_refuses_superseding_already_superseded_record(self):
+        harbor = self.harbor()
+        old = harbor.record_event(
+            summary="Original surprise becomes stale after first replacement",
+            observed_by="codex",
+            source_ref="tests:test_novelty_harbor:old",
+            why_unexpected="This row will already have an authoritative replacement.",
+        )
+        replacement = harbor.record_event(
+            summary="First replacement becomes the authoritative successor",
+            observed_by="codex",
+            source_ref="tests:test_novelty_harbor:replacement",
+            why_unexpected="This row is the existing replacement.",
+            supersedes_event_id=old.event_id,
+        )
+        harbor.supersede(old.event_id, replacement_event_id=replacement.event_id)
+
+        with self.assertRaises(ValueError):
+            harbor.record_event(
+                summary="Second replacement must not point at stale original",
+                observed_by="codex",
+                source_ref="tests:test_novelty_harbor:second-replacement",
+                why_unexpected="A stale source should not gain a second successor.",
+                supersedes_event_id=old.event_id,
+            )
+
+        old_after = harbor.get(old.event_id)
+        self.assertEqual(old_after.status, "superseded")
+        self.assertEqual(old_after.superseded_by_event_id, replacement.event_id)
+
     def test_supersede_refuses_rejected_unsafe_terminal_record(self):
         harbor = self.harbor()
         old = harbor.record_event(
@@ -271,6 +301,59 @@ class NoveltyHarborCoreTests(unittest.TestCase):
 
         with self.assertRaises(KeyError):
             harbor.supersede(old.event_id, replacement_event_id=old.event_id + 1)
+
+    def test_supersede_is_idempotent_for_existing_replacement(self):
+        harbor = self.harbor()
+        old = harbor.record_event(
+            summary="Original surprise can be superseded idempotently",
+            observed_by="manual_test",
+            source_ref="tests:test_novelty_harbor:old",
+            why_unexpected="Retrying the same supersession should be harmless.",
+        )
+        replacement = harbor.record_event(
+            summary="Replacement already points at old",
+            observed_by="manual_test",
+            source_ref="tests:test_novelty_harbor:replacement",
+            why_unexpected="This is the same authoritative replacement.",
+            supersedes_event_id=old.event_id,
+        )
+        harbor.supersede(old.event_id, replacement_event_id=replacement.event_id)
+
+        harbor.supersede(old.event_id, replacement_event_id=replacement.event_id)
+
+        old_after = harbor.get(old.event_id)
+        self.assertEqual(old_after.status, "superseded")
+        self.assertEqual(old_after.superseded_by_event_id, replacement.event_id)
+
+    def test_supersede_rejects_different_replacement_for_already_superseded_record(self):
+        harbor = self.harbor()
+        old = harbor.record_event(
+            summary="Original surprise already has a successor",
+            observed_by="codex",
+            source_ref="tests:test_novelty_harbor:old",
+            why_unexpected="A second successor would create stale provenance.",
+        )
+        replacement = harbor.record_event(
+            summary="First replacement points at old",
+            observed_by="codex",
+            source_ref="tests:test_novelty_harbor:replacement",
+            why_unexpected="This row is the current successor.",
+            supersedes_event_id=old.event_id,
+        )
+        harbor.supersede(old.event_id, replacement_event_id=replacement.event_id)
+        different = harbor.record_event(
+            summary="Different replacement should not be accepted",
+            observed_by="codex",
+            source_ref="tests:test_novelty_harbor:different",
+            why_unexpected="This row lacks the old row's forward authority.",
+        )
+
+        with self.assertRaises(ValueError):
+            harbor.supersede(old.event_id, replacement_event_id=different.event_id)
+
+        old_after = harbor.get(old.event_id)
+        self.assertEqual(old_after.status, "superseded")
+        self.assertEqual(old_after.superseded_by_event_id, replacement.event_id)
 
     def test_supersede_requires_replacement_to_point_at_old_event(self):
         harbor = self.harbor()
