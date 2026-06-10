@@ -189,6 +189,67 @@ class NoveltyHarborCoreTests(unittest.TestCase):
         self.assertEqual(event.status, "promoted")
         self.assertEqual(event.promotion_decision_ref, "owner:decision:2026-06-10")
 
+    def test_supersession_preserves_old_row_and_marks_superseded(self):
+        harbor = self.harbor()
+        old = harbor.record_event(
+            summary="A manual surprise needs later correction",
+            observed_by="codex",
+            source_ref="tests:test_novelty_harbor:old",
+            why_unexpected="The first observation was incomplete.",
+        )
+        replacement = harbor.record_event(
+            summary="A corrected manual surprise replaces the old one",
+            observed_by="codex",
+            source_ref="tests:test_novelty_harbor:replacement",
+            why_unexpected="The corrected observation keeps the original row visible.",
+            supersedes_event_id=old.event_id,
+        )
+
+        harbor.supersede(old.event_id, replacement_event_id=replacement.event_id)
+
+        old_after = harbor.get(old.event_id)
+        replacement_after = harbor.get(replacement.event_id)
+        self.assertEqual(old_after.status, "superseded")
+        self.assertEqual(old_after.superseded_by_event_id, replacement.event_id)
+        self.assertEqual(replacement_after.supersedes_event_id, old.event_id)
+        self.assertEqual(harbor.list_by_status("superseded"), [old_after])
+
+    def test_supersede_refuses_rejected_unsafe_terminal_record(self):
+        harbor = self.harbor()
+        old = harbor.record_event(
+            summary="Unsafe observation must remain terminal",
+            observed_by="witness",
+            source_ref="tests:test_novelty_harbor:unsafe",
+            why_unexpected="A covenant break flag makes this a terminal rejection.",
+            covenant_break_flags=("gendered_maez",),
+        )
+        replacement = harbor.record_event(
+            summary="A later event cannot supersede terminal unsafe rejection",
+            observed_by="witness",
+            source_ref="tests:test_novelty_harbor:replacement",
+            why_unexpected="Terminal unsafe records should stay visible as unsafe.",
+            supersedes_event_id=old.event_id,
+        )
+
+        with self.assertRaises(ValueError):
+            harbor.supersede(old.event_id, replacement_event_id=replacement.event_id)
+
+        old_after = harbor.get(old.event_id)
+        self.assertEqual(old_after.status, "rejected_unsafe")
+        self.assertEqual(harbor.list_by_status("rejected_unsafe"), [old_after])
+
+    def test_supersede_requires_existing_replacement(self):
+        harbor = self.harbor()
+        old = harbor.record_event(
+            summary="A manual surprise needs a real replacement",
+            observed_by="manual_test",
+            source_ref="tests:test_novelty_harbor:old",
+            why_unexpected="Supersession should not point at a missing row.",
+        )
+
+        with self.assertRaises(KeyError):
+            harbor.supersede(old.event_id, replacement_event_id=old.event_id + 1)
+
     def test_metadata_rejects_nested_or_oversized_prose(self):
         harbor = self.harbor()
         base = dict(

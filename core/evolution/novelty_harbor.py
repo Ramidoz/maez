@@ -278,7 +278,42 @@ class NoveltyHarbor:
         return [_row_to_event(row) for row in rows]
 
     def supersede(self, event_id: int, *, replacement_event_id: int) -> None:
-        raise NotImplementedError("supersede is implemented in Task 3")
+        event_id = int(event_id)
+        replacement_event_id = int(replacement_event_id)
+
+        with closing(self._connect()) as conn:
+            with conn:
+                old = conn.execute(
+                    "SELECT * FROM novelty_harbor_events WHERE event_id = ?",
+                    (event_id,),
+                ).fetchone()
+                if old is None:
+                    raise KeyError(f"event_id does not exist: {event_id}")
+
+                replacement = conn.execute(
+                    "SELECT * FROM novelty_harbor_events WHERE event_id = ?",
+                    (replacement_event_id,),
+                ).fetchone()
+                if replacement is None:
+                    raise KeyError(
+                        f"replacement_event_id does not exist: {replacement_event_id}"
+                    )
+
+                if event_id == replacement_event_id:
+                    raise ValueError("event cannot supersede itself")
+
+                if old["status"] == STATUS_REJECTED_UNSAFE:
+                    raise ValueError("rejected_unsafe records cannot be superseded")
+
+                if old["status"] == STATUS_SUPERSEDED:
+                    return
+
+                conn.execute(
+                    "UPDATE novelty_harbor_events "
+                    "SET status = ?, superseded_by_event_id = ? "
+                    "WHERE event_id = ?",
+                    (STATUS_SUPERSEDED, replacement_event_id, event_id),
+                )
 
 
 def _row_to_event(row: sqlite3.Row) -> HarborEvent:
