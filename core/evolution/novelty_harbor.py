@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import sqlite3
 from contextlib import closing
@@ -403,3 +404,88 @@ def _row_to_event(row: sqlite3.Row) -> HarborEvent:
         ),
         metadata=json.loads(str(row["metadata_json"])),
     )
+
+
+def _json_object_arg(value: str) -> dict[str, Any]:
+    parsed = json.loads(value)
+    if not isinstance(parsed, dict):
+        raise argparse.ArgumentTypeError("must be a JSON object")
+    return parsed
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="python -m core.evolution.novelty_harbor",
+        description="Manual content-light recorder for Novelty Harbor events.",
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    record = subparsers.add_parser(
+        "record",
+        help="record a manually observed novelty harbor event",
+    )
+    record.add_argument("--db", default=DEFAULT_DB_PATH, help="SQLite DB path")
+    record.add_argument("--summary", required=True)
+    record.add_argument("--observed-by", required=True)
+    record.add_argument("--source-ref", required=True)
+    record.add_argument("--why-unexpected", required=True)
+    record.add_argument(
+        "--status",
+        default=STATUS_HARBORED,
+        choices=sorted(NEW_RECORD_REQUEST_STATUSES),
+        help="requested status for the new record",
+    )
+    record.add_argument(
+        "--covenant-break",
+        action="append",
+        default=[],
+        choices=sorted(COVENANT_BREAK_FLAGS),
+        help="covenant break flag; may be supplied more than once",
+    )
+    record.add_argument("--supersedes-event-id", type=int)
+    record.add_argument("--promotion-decision-ref")
+    record.add_argument(
+        "--valence-json",
+        type=_json_object_arg,
+        help="optional JSON object valence snapshot",
+    )
+    record.add_argument(
+        "--metadata-json",
+        type=_json_object_arg,
+        help="optional JSON object metadata",
+    )
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+
+    if args.command == "record":
+        event = NoveltyHarbor(args.db).record_event(
+            summary=args.summary,
+            observed_by=args.observed_by,
+            source_ref=args.source_ref,
+            why_unexpected=args.why_unexpected,
+            requested_status=args.status,
+            valence_snapshot=args.valence_json,
+            covenant_break_flags=tuple(args.covenant_break),
+            supersedes_event_id=args.supersedes_event_id,
+            promotion_decision_ref=args.promotion_decision_ref,
+            metadata=args.metadata_json,
+        )
+        flags = ",".join(event.covenant_break_flags) or "none"
+        print(
+            f"event_id={event.event_id} "
+            f"status={event.status} "
+            f"invariant_status={event.invariant_status} "
+            f"flags={flags}"
+        )
+        return 0
+
+    parser.error(f"unknown command: {args.command}")
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
