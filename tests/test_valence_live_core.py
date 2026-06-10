@@ -97,3 +97,23 @@ class ValenceLiveCore(unittest.TestCase):
                     )
 
             self.assertIsNone(reading)
+
+    def test_unexpected_prior_log_value_error_bubbles_to_public_wrapper(self):
+        with TemporaryDirectory() as d:
+            log = Path(d) / "v.jsonl"
+            log.write_text('{"want_snapshot":{"open":1}}\n', encoding="utf-8")
+
+            with self.assertLogs("core.evolution.valence_live", level="WARNING"):
+                with patch(
+                    "core.evolution.valence_live.json.loads",
+                    side_effect=ValueError("unexpected"),
+                ):
+                    reading = read_and_log_valence(
+                        audit_flags=[],
+                        open_want_count=0,
+                        continuity_state={},
+                        now="t1",
+                        log_path=log,
+                    )
+
+            self.assertIsNone(reading)

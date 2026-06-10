@@ -51,7 +51,7 @@ def _read_prior_open(log_path) -> int | None:
         if isinstance(value, bool) or not isinstance(value, int):
             return None
         return value
-    except (OSError, json.JSONDecodeError, ValueError, KeyError, TypeError):
+    except (OSError, json.JSONDecodeError, KeyError, TypeError):
         return None
 
 
