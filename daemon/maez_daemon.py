@@ -2243,6 +2243,26 @@ def _read_and_log_cycle_valence(
         )
 
 
+def _should_read_cycle_valence(gate_decision: object) -> bool:
+    return bool(getattr(gate_decision, "wake", False))
+
+
+def _maybe_read_cycle_valence(
+    daemon: object,
+    *,
+    gate_decision: object,
+    open_wants_count: int,
+    now: str,
+) -> None:
+    if not _should_read_cycle_valence(gate_decision):
+        return
+    _read_and_log_cycle_valence(
+        daemon,
+        open_wants_count=open_wants_count,
+        now=now,
+    )
+
+
 def _build_cycle_focused_prompt(
     *,
     legacy_prompt: str,

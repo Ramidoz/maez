@@ -159,6 +159,106 @@ class DaemonValenceWiringTests(unittest.TestCase):
 
         self.assertEqual(audit_flag_buffer.peek(), ["judge"])
 
+    def test_cycle_valence_reads_after_doorman_wake(self):
+        from daemon import maez_daemon
+
+        gate = SimpleNamespace(doorman_enabled=True, wake=True)
+        daemon = SimpleNamespace(_continuity_active=False, _continuity_capsule=None)
+
+        with patch.object(maez_daemon, "_read_and_log_cycle_valence") as read:
+            maez_daemon._maybe_read_cycle_valence(
+                daemon,
+                gate_decision=gate,
+                open_wants_count=2,
+                now="2026-06-10T00:00:00+00:00",
+            )
+
+        read.assert_called_once_with(
+            daemon,
+            open_wants_count=2,
+            now="2026-06-10T00:00:00+00:00",
+        )
+
+    def test_cycle_valence_skips_quiet_doorman_tick_without_clearing_buffer(self):
+        from daemon import maez_daemon
+
+        audit_flag_buffer.push("completion_rail")
+        gate = SimpleNamespace(doorman_enabled=True, wake=False)
+        daemon = SimpleNamespace(_continuity_active=False, _continuity_capsule=None)
+
+        with patch.object(maez_daemon, "_read_and_log_cycle_valence") as read:
+            maez_daemon._maybe_read_cycle_valence(
+                daemon,
+                gate_decision=gate,
+                open_wants_count=2,
+                now="2026-06-10T00:00:00+00:00",
+            )
+
+        read.assert_not_called()
+        self.assertEqual(audit_flag_buffer.peek(), ["completion_rail"])
+
+    def test_cycle_valence_uses_legacy_wake_field(self):
+        from daemon import maez_daemon
+
+        gate = SimpleNamespace(doorman_enabled=False, wake=True)
+        daemon = SimpleNamespace(_continuity_active=False, _continuity_capsule=None)
+
+        with patch.object(maez_daemon, "_read_and_log_cycle_valence") as read:
+            maez_daemon._maybe_read_cycle_valence(
+                daemon,
+                gate_decision=gate,
+                open_wants_count=4,
+                now="2026-06-10T00:00:00+00:00",
+            )
+
+        read.assert_called_once_with(
+            daemon,
+            open_wants_count=4,
+            now="2026-06-10T00:00:00+00:00",
+        )
+
+    def test_cycle_valence_skip_then_wake_drains_buffer_on_success(self):
+        from daemon import maez_daemon
+
+        audit_flag_buffer.push("completion_rail")
+        quiet_gate = SimpleNamespace(doorman_enabled=True, wake=False)
+        wake_gate = SimpleNamespace(doorman_enabled=True, wake=True)
+        daemon = SimpleNamespace(
+            _continuity_active=True,
+            _continuity_capsule={"current_mode": "orientation"},
+        )
+
+        with patch(
+            "core.evolution.valence_live.read_and_log_valence",
+            return_value=object(),
+        ) as read:
+            maez_daemon._maybe_read_cycle_valence(
+                daemon,
+                gate_decision=quiet_gate,
+                open_wants_count=1,
+                now="2026-06-10T00:00:00+00:00",
+            )
+            self.assertEqual(audit_flag_buffer.peek(), ["completion_rail"])
+            read.assert_not_called()
+
+            maez_daemon._maybe_read_cycle_valence(
+                daemon,
+                gate_decision=wake_gate,
+                open_wants_count=1,
+                now="2026-06-10T00:00:32+00:00",
+            )
+
+        read.assert_called_once_with(
+            audit_flags=["completion_rail"],
+            open_want_count=1,
+            continuity_state={
+                "capsule_expected": True,
+                "capsule_present": True,
+            },
+            now="2026-06-10T00:00:32+00:00",
+        )
+        self.assertEqual(audit_flag_buffer.peek(), [])
+
     def test_open_wants_count_matches_doorman_cap(self):
         from daemon import maez_daemon
 
