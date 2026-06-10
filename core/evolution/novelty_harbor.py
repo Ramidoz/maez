@@ -164,6 +164,18 @@ def _final_status(
     return requested_status
 
 
+def _is_supersedes_unique_integrity_error(exc: sqlite3.IntegrityError) -> bool:
+    message = str(exc)
+    return (
+        "idx_novelty_harbor_supersedes_unique_candidate" in message
+        or "novelty_harbor_events.supersedes_event_id" in message
+        or (
+            "UNIQUE constraint failed" in message
+            and "supersedes_event_id" in message
+        )
+    )
+
+
 class NoveltyHarbor:
     def __init__(self, db_path: Path | str | None = None):
         self.db_path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
@@ -276,6 +288,8 @@ class NoveltyHarbor:
                     )
                     event_id = int(cursor.lastrowid)
         except sqlite3.IntegrityError as exc:
+            if not _is_supersedes_unique_integrity_error(exc):
+                raise
             raise ValueError(
                 "superseded record already has a replacement candidate"
             ) from exc

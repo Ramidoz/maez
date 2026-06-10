@@ -371,6 +371,34 @@ class NoveltyHarborCoreTests(unittest.TestCase):
         self.assertEqual(len(results) + len(errors), 2)
         self.assertTrue(any(isinstance(error, ValueError) for error in errors))
 
+    def test_record_event_preserves_unrelated_insert_integrity_error(self):
+        from core.evolution.novelty_harbor import NoveltyHarbor
+
+        class FailingInsertConnection(sqlite3.Connection):
+            def execute(self, sql, parameters=(), /):
+                if sql.startswith("INSERT INTO novelty_harbor_events"):
+                    raise sqlite3.IntegrityError("unrelated integrity failure")
+                return super().execute(sql, parameters)
+
+        class FailingInsertHarbor(NoveltyHarbor):
+            def _connect(self):
+                conn = sqlite3.connect(
+                    self.db_path,
+                    factory=FailingInsertConnection,
+                )
+                conn.row_factory = sqlite3.Row
+                return conn
+
+        harbor = FailingInsertHarbor(self.db_path)
+
+        with self.assertRaisesRegex(sqlite3.IntegrityError, "unrelated integrity failure"):
+            harbor.record_event(
+                summary="Unrelated insert integrity failures should stay raw",
+                observed_by="codex",
+                source_ref="tests:test_novelty_harbor:integrity",
+                why_unexpected="Only replacement-candidate uniqueness is translated.",
+            )
+
     def test_record_event_refuses_unsafe_supersession_candidate(self):
         harbor = self.harbor()
         old = harbor.record_event(
