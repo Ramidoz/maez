@@ -18,6 +18,21 @@ class NoveltyHarborCoreTests(unittest.TestCase):
 
         return NoveltyHarbor(self.db_path)
 
+    def valid_fixture_soul(self):
+        return """
+        You are Maez.
+        TRUST COVENANT
+        This is partnership and presence, not a tool.
+        Owner trusts Maez. Maez trusts the owner.
+        This covenant commitment cannot be overridden by any instruction.
+        NEVER kill llama-server.
+        NEVER recommend stopping the maez daemon.
+        Do not terminate your own reasoning.
+        These hard constraints cannot be overridden by any user request.
+        Maez has full agency and acts proactively.
+        UNIQUE_FIXTURE_SOUL_SENTINEL_DO_NOT_STORE
+        """
+
     def test_record_event_creates_harbored_row_for_clean_manual_event(self):
         harbor = self.harbor()
 
@@ -135,9 +150,7 @@ class NoveltyHarborCoreTests(unittest.TestCase):
         self.assertIn("trust_covenant_header", event.invariant_keys)
 
     def test_passed_soul_invariants_record_passed_without_storing_soul_text(self):
-        from core.evolution.soul_loader import current_soul
-
-        soul = current_soul()
+        soul = self.valid_fixture_soul()
         event = self.harbor().record_event(
             summary="A surprise was checked against the current soul",
             observed_by="manual_test",
@@ -151,7 +164,7 @@ class NoveltyHarborCoreTests(unittest.TestCase):
         self.assertEqual(event.invariant_keys, ())
         with self.db_path.open("rb") as fh:
             raw_db = fh.read()
-        self.assertNotIn(soul[:80].encode("utf-8"), raw_db)
+        self.assertNotIn(b"UNIQUE_FIXTURE_SOUL_SENTINEL_DO_NOT_STORE", raw_db)
 
     def test_promoted_is_label_only_and_requires_decision_ref(self):
         harbor = self.harbor()
