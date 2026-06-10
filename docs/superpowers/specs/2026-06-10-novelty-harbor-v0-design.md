@@ -146,7 +146,9 @@ Indexes:
 
 ### Valence snapshot
 
-`valence_snapshot_json` is a small copied snapshot of the latest valence reading when available. It should carry only content-light fields:
+`valence_snapshot_json` is a small copied snapshot supplied by the caller or CLI. The core Harbor module does not import `valence_live` or read the valence log itself; keeping the module manual/offline is the boundary. A CLI may optionally read `logs/valence_telemetry.jsonl:last` and pass a content-light snapshot into the module.
+
+When supplied, the snapshot should carry only content-light fields:
 
 - `sign`
 - `magnitude`
@@ -217,11 +219,13 @@ Implementation detail: `record_event(...)` computes the final status. It does no
 - `promoted` requires `promotion_decision_ref`.
 - If invariant/covenant checks fail, final status is forced to `rejected_unsafe`, regardless of requested status.
 - `supersedes_event_id` must refer to an existing event.
+- `rejected_unsafe` is terminal. `supersede(...)` must refuse to supersede a `rejected_unsafe` event. A later row may record new understanding, but the original covenant/safety break remains permanently visible in `list_by_status("rejected_unsafe")`.
 - Supersession is append-preserving:
   - the new row can point to `supersedes_event_id`;
   - the old row gets `superseded_by_event_id`;
   - old row status becomes `superseded`;
   - old row content is not deleted.
+  - this transition is allowed only for non-`rejected_unsafe` rows.
 
 ## Privacy and third-party rails
 
@@ -234,6 +238,7 @@ So v0 includes conservative input validation:
 - reject `observed_by` outside the fixed set;
 - reject `source_ref` values that look like raw owner message payloads rather than pointers;
 - reject `covenant_break_flags` outside the fixed set.
+- validate `metadata` as content-light auxiliary data: JSON-object only, scalar values only (`str`, `int`, `float`, `bool`, `None`), max encoded size 2000 bytes, and string values capped at 300 chars. It is not a backdoor for long prose.
 
 Third-party rule: v0 must not preserve unconsented named third-party content as a novelty exhibit. The module cannot reliably detect every real person name, so the API contract is:
 
@@ -281,11 +286,12 @@ TDD tests should cover:
 3. `record_event` forces `rejected_unsafe` when covenant break flags are present.
 4. Caller-requested `promoted` is stored only as a label and requires `promotion_decision_ref`; no soul/memory/wants APIs are imported or called.
 5. Supersession preserves the old row and marks it `superseded`.
-6. Valence snapshot is copied when supplied and `{"available": false, "source": "none"}` when absent.
-7. Input validation rejects empty fields, unknown statuses, unknown observer values, unknown flags, and overlong prose.
-8. Boundary test: module imports no daemon, voice, telegram, llm client, soul writer, memory store writer, or wants writer.
-9. CLI smoke test records a clean event into a temp db and prints only content-light confirmation.
-10. CLI unsafe smoke test requests `harbored` with `--covenant-break gendered_maez` and prints `status=rejected_unsafe`.
+6. `supersede(...)` refuses to supersede a `rejected_unsafe` event.
+7. Valence snapshot is copied when supplied and `{"available": false, "source": "none"}` when absent.
+8. Input validation rejects empty fields, unknown statuses, unknown observer values, unknown flags, overlong prose, and non-content-light metadata.
+9. Boundary test: module imports no daemon, voice, telegram, llm client, soul writer, memory store writer, wants writer, or `valence_live`.
+10. CLI smoke test records a clean event into a temp db and prints only content-light confirmation.
+11. CLI unsafe smoke test requests `harbored` with `--covenant-break gendered_maez` and prints `status=rejected_unsafe`.
 
 ## Witness
 
