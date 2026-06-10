@@ -1,7 +1,10 @@
 import gc
+import sqlite3
 import tempfile
+import threading
 import unittest
 import warnings
+from contextlib import closing
 from pathlib import Path
 
 
@@ -297,6 +300,76 @@ class NoveltyHarborCoreTests(unittest.TestCase):
         self.assertEqual(old_after.status, "harbored")
         self.assertIsNone(old_after.superseded_by_event_id)
         self.assertEqual(replacement_after.supersedes_event_id, old.event_id)
+
+    def test_record_event_enforces_one_candidate_under_race(self):
+        from core.evolution.novelty_harbor import NoveltyHarbor
+
+        class CandidateRaceConnection(sqlite3.Connection):
+            barrier = None
+
+            def execute(self, sql, parameters=(), /):
+                cursor = super().execute(sql, parameters)
+                if (
+                    self.__class__.barrier is not None
+                    and "SELECT event_id FROM novelty_harbor_events" in sql
+                    and "WHERE supersedes_event_id = ?" in sql
+                ):
+                    self.__class__.barrier.wait(timeout=5)
+                return cursor
+
+        class RaceHarbor(NoveltyHarbor):
+            def _connect(self):
+                conn = sqlite3.connect(
+                    self.db_path,
+                    factory=CandidateRaceConnection,
+                    timeout=5,
+                )
+                conn.row_factory = sqlite3.Row
+                return conn
+
+        harbor = RaceHarbor(self.db_path)
+        old = harbor.record_event(
+            summary="Original surprise is raced by two replacement candidates",
+            observed_by="codex",
+            source_ref="tests:test_novelty_harbor:old",
+            why_unexpected="Only the database can close a concurrent candidate race.",
+        )
+        CandidateRaceConnection.barrier = threading.Barrier(2)
+        results = []
+        errors = []
+
+        def record_candidate(index):
+            try:
+                event = harbor.record_event(
+                    summary=f"Concurrent replacement candidate {index}",
+                    observed_by="codex",
+                    source_ref=f"tests:test_novelty_harbor:candidate:{index}",
+                    why_unexpected="This thread races the candidate uniqueness check.",
+                    supersedes_event_id=old.event_id,
+                )
+                results.append(event)
+            except Exception as exc:  # noqa: BLE001 - test records caller-visible errors
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=record_candidate, args=(index,))
+            for index in range(2)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+            self.assertFalse(thread.is_alive())
+
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            candidate_count = conn.execute(
+                "SELECT COUNT(*) FROM novelty_harbor_events WHERE supersedes_event_id = ?",
+                (old.event_id,),
+            ).fetchone()[0]
+
+        self.assertLessEqual(candidate_count, 1)
+        self.assertEqual(len(results) + len(errors), 2)
+        self.assertTrue(any(isinstance(error, ValueError) for error in errors))
 
     def test_record_event_refuses_unsafe_supersession_candidate(self):
         harbor = self.harbor()

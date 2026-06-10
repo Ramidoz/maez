@@ -65,6 +65,9 @@ CREATE INDEX IF NOT EXISTS idx_novelty_harbor_created_at
     ON novelty_harbor_events(created_at);
 CREATE INDEX IF NOT EXISTS idx_novelty_harbor_supersedes
     ON novelty_harbor_events(supersedes_event_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_novelty_harbor_supersedes_unique_candidate
+    ON novelty_harbor_events(supersedes_event_id)
+    WHERE supersedes_event_id IS NOT NULL;
 """
 
 
@@ -243,34 +246,39 @@ class NoveltyHarbor:
                 raise ValueError("superseded record already has a replacement candidate")
 
         created_at = _now_iso()
-        with closing(self._connect()) as conn:
-            with conn:
-                cursor = conn.execute(
-                    "INSERT INTO novelty_harbor_events "
-                    "(created_at, summary, observed_by, source_ref, why_unexpected, "
-                    "status, requested_status, valence_snapshot_json, invariant_status, "
-                    "invariant_keys_json, covenant_break_flags_json, supersedes_event_id, "
-                    "superseded_by_event_id, promotion_decision_ref, metadata_json) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (
-                        created_at,
-                        summary_text,
-                        observed_by_text,
-                        source_ref_text,
-                        why_text,
-                        final_status,
-                        requested,
-                        json.dumps(valence, sort_keys=True),
-                        invariant_status,
-                        json.dumps(list(invariant_keys), sort_keys=True),
-                        json.dumps(list(flags), sort_keys=True),
-                        supersedes_event_id,
-                        None,
-                        promotion_decision_ref,
-                        json.dumps(metadata_dict, sort_keys=True),
-                    ),
-                )
-                event_id = int(cursor.lastrowid)
+        try:
+            with closing(self._connect()) as conn:
+                with conn:
+                    cursor = conn.execute(
+                        "INSERT INTO novelty_harbor_events "
+                        "(created_at, summary, observed_by, source_ref, why_unexpected, "
+                        "status, requested_status, valence_snapshot_json, invariant_status, "
+                        "invariant_keys_json, covenant_break_flags_json, supersedes_event_id, "
+                        "superseded_by_event_id, promotion_decision_ref, metadata_json) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (
+                            created_at,
+                            summary_text,
+                            observed_by_text,
+                            source_ref_text,
+                            why_text,
+                            final_status,
+                            requested,
+                            json.dumps(valence, sort_keys=True),
+                            invariant_status,
+                            json.dumps(list(invariant_keys), sort_keys=True),
+                            json.dumps(list(flags), sort_keys=True),
+                            supersedes_event_id,
+                            None,
+                            promotion_decision_ref,
+                            json.dumps(metadata_dict, sort_keys=True),
+                        ),
+                    )
+                    event_id = int(cursor.lastrowid)
+        except sqlite3.IntegrityError as exc:
+            raise ValueError(
+                "superseded record already has a replacement candidate"
+            ) from exc
         event = self.get(event_id)
         assert event is not None
         return event
