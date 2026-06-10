@@ -2195,7 +2195,7 @@ def _count_cycle_open_wants(daemon: object) -> int:
     try:
         wants = getattr(daemon, "wants", None)
         if wants is not None and hasattr(wants, "active_wants"):
-            return len(wants.active_wants() or [])
+            return len(wants.active_wants(limit=50) or [])
     except Exception as _wants_exc:
         logger.debug("cycle doorman wants-count skipped: %s", _wants_exc)
     return 0

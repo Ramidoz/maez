@@ -159,7 +159,7 @@ class DaemonValenceWiringTests(unittest.TestCase):
 
         self.assertEqual(audit_flag_buffer.peek(), ["judge"])
 
-    def test_open_wants_count_uses_uncapped_active_wants(self):
+    def test_open_wants_count_matches_doorman_cap(self):
         from daemon import maez_daemon
 
         class Wants:
@@ -168,15 +168,17 @@ class DaemonValenceWiringTests(unittest.TestCase):
 
             def active_wants(self, *args, **kwargs):
                 self.calls.append((args, kwargs))
+                if kwargs == {"limit": 50}:
+                    return [object()] * 50
                 return [object()] * 75
 
         wants = Wants()
 
         self.assertEqual(
             maez_daemon._count_cycle_open_wants(SimpleNamespace(wants=wants)),
-            75,
+            50,
         )
-        self.assertEqual(wants.calls, [((), {})])
+        self.assertEqual(wants.calls, [((), {"limit": 50})])
 
     def test_cycle_audit_flag_helper_records_direct_audit_result_flags(self):
         from daemon import maez_daemon
