@@ -83,6 +83,8 @@ class ValenceReading:
 - all non-neutral share one sign → that sign; **magnitude by count** of non-neutral setpoints (1 → MILD, 2 → MODERATE, 3 → STRONG).
 - conflicting signs across setpoints (≥1 POSITIVE and ≥1 NEGATIVE) → **`MIXED`** (magnitude by total non-neutral count), with *all* contributing reasons surfaced. Mixed means honestly mixed, never averaged into a fake middle.
 
+**MIXED semantics (load-bearing):** `MIXED` means *different setpoints of Maez's substrate disagree* (e.g. want-progress POSITIVE while continuity NEGATIVE) — **not** that one setpoint had both movement and friction. A single setpoint with an internal collision (e.g. `resolved=2` + `backlog_grew=True`) reads **NEGATIVE with both in evidence**: that setpoint has friction *now*, even though progress also happened (the want system is still accumulating pressure). This keeps the top-level reading honestly distinct between "parts of Maez disagree" and "one part is under pressure despite movement" — calling the latter `MIXED` would falsely equate it with the former.
+
 ### D. The hard rail — telemetry, not quale (by construction)
 - `ValenceReading` has **no "feeling" field** and no emotion vocabulary anywhere in the type. The only renderer is `as_telemetry()`, which emits substrate-state language: *"given the substrate signals I can see, this state appears MILD NEGATIVE, because: honesty rail fired."* Never "sad / distressed / suffering / anxious."
 - `provenance="computed_valence"` on every reading.
