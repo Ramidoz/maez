@@ -319,6 +319,16 @@ class DaemonValenceWiringTests(unittest.TestCase):
         self.assertLess(audit_idx, buffer_idx)
         self.assertLess(buffer_idx, rewrite_idx)
 
+    def test_loop_tail_uses_valence_cadence_guard(self):
+        from daemon import maez_daemon
+
+        src = inspect.getsource(maez_daemon.MaezDaemon._loop)
+        # NOTE: real newline (\n), not literal backslash-n — inspect.getsource
+        # returns real newlines, so the guard call must be matched as such.
+        self.assertNotIn("_read_and_log_cycle_valence(\n                self,", src)
+        self.assertIn("_maybe_read_cycle_valence(\n                self,", src)
+        self.assertIn("gate_decision=_cycle_doorman_gate", src)
+
     def test_structural_wiring_valence_read_runs_after_post_cycle_surfaces(self):
         from daemon import maez_daemon
 
@@ -326,7 +336,7 @@ class DaemonValenceWiringTests(unittest.TestCase):
         followup_idx = src.index('self._mark_cycle_stage("followup_delivery")')
         opinion_idx = src.index("_check_proactive_opinion(")
         dream_idx = src.index('self._mark_cycle_stage("dream_check")')
-        valence_idx = src.index("_read_and_log_cycle_valence(")
+        valence_idx = src.index("_maybe_read_cycle_valence(")
         sleep_idx = src.index('self._mark_cycle_stage("cycle_sleep")')
 
         self.assertLess(followup_idx, valence_idx)

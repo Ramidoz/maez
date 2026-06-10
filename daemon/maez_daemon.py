@@ -9151,8 +9151,9 @@ class MaezDaemon:
             except Exception as e:
                 logger.debug("Dream cycle check failed: %s", e)
 
-            _read_and_log_cycle_valence(
+            _maybe_read_cycle_valence(
                 self,
+                gate_decision=_cycle_doorman_gate,
                 open_wants_count=_cycle_open_wants_count,
                 now=datetime.now(timezone.utc).isoformat(),
             )
