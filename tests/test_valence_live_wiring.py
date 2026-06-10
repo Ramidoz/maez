@@ -1,3 +1,4 @@
+import inspect
 import os
 import unittest
 from types import SimpleNamespace
@@ -60,6 +61,16 @@ class AuditedOutputValenceWiringTests(unittest.TestCase):
                 )
 
         self.assertEqual(returned, "audited text")
+
+    def test_shared_audit_flag_buffer_helper_records_direct_daemon_flags(self):
+        audited_output._buffer_audit_flags(
+            [
+                SimpleNamespace(kind="completion_rail"),
+                SimpleNamespace(kind="judge"),
+            ]
+        )
+
+        self.assertEqual(audit_flag_buffer.peek(), ["completion_rail", "judge"])
 
 
 class DaemonValenceWiringTests(unittest.TestCase):
@@ -137,6 +148,51 @@ class DaemonValenceWiringTests(unittest.TestCase):
                 )
 
         self.assertEqual(audit_flag_buffer.peek(), ["judge"])
+
+    def test_open_wants_count_uses_uncapped_active_wants(self):
+        from daemon import maez_daemon
+
+        class Wants:
+            def __init__(self):
+                self.calls = []
+
+            def active_wants(self, *args, **kwargs):
+                self.calls.append((args, kwargs))
+                return [object()] * 75
+
+        wants = Wants()
+
+        self.assertEqual(
+            maez_daemon._count_cycle_open_wants(SimpleNamespace(wants=wants)),
+            75,
+        )
+        self.assertEqual(wants.calls, [((), {})])
+
+    def test_direct_daemon_response_audit_buffers_flags_after_audit(self):
+        from daemon import maez_daemon
+
+        src = inspect.getsource(maez_daemon.MaezDaemon._loop)
+        audit_idx = src.index("_audit_result = _sc_audit(")
+        buffer_idx = src.index("_buffer_audit_flags(_audit_result.flags", audit_idx)
+        rewrite_idx = src.index("if _audit_result.rewritten:", audit_idx)
+
+        self.assertLess(audit_idx, buffer_idx)
+        self.assertLess(buffer_idx, rewrite_idx)
+
+    def test_cycle_valence_read_runs_after_post_cycle_audited_surfaces(self):
+        from daemon import maez_daemon
+
+        src = inspect.getsource(maez_daemon.MaezDaemon._loop)
+        followup_idx = src.index('self._mark_cycle_stage("followup_delivery")')
+        opinion_idx = src.index("_check_proactive_opinion(")
+        dream_idx = src.index('self._mark_cycle_stage("dream_check")')
+        valence_idx = src.index("_read_and_log_cycle_valence(")
+        sleep_idx = src.index('self._mark_cycle_stage("cycle_sleep")')
+
+        self.assertLess(followup_idx, valence_idx)
+        self.assertLess(opinion_idx, valence_idx)
+        self.assertLess(dream_idx, valence_idx)
+        self.assertLess(valence_idx, sleep_idx)
 
 
 if __name__ == "__main__":

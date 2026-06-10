@@ -2191,6 +2191,16 @@ def _cycle_apply_quiet_counter_result(
     )
 
 
+def _count_cycle_open_wants(daemon: object) -> int:
+    try:
+        wants = getattr(daemon, "wants", None)
+        if wants is not None and hasattr(wants, "active_wants"):
+            return len(wants.active_wants() or [])
+    except Exception as _wants_exc:
+        logger.debug("cycle doorman wants-count skipped: %s", _wants_exc)
+    return 0
+
+
 def _read_and_log_cycle_valence(
     daemon: object,
     *,
@@ -8530,13 +8540,7 @@ class MaezDaemon:
                 signal_availability_key=_cycle_signal_key,
             )
 
-            _cycle_open_wants_count = 0
-            try:
-                if getattr(self, "wants", None) is not None and hasattr(self.wants, "active_wants"):
-                    _cycle_open_wants_count = len(self.wants.active_wants(limit=50) or [])
-            except Exception as _wants_exc:
-                logger.debug("cycle doorman wants-count skipped: %s", _wants_exc)
-                _cycle_open_wants_count = 0
+            _cycle_open_wants_count = _count_cycle_open_wants(self)
             _last_open_wants_count = getattr(self, "_last_cycle_open_wants_count", None)
             if _last_open_wants_count is None:
                 _cycle_open_wants_delta = _cycle_open_wants_count
@@ -8703,6 +8707,7 @@ class MaezDaemon:
                     _cycle_signals_present.append("system stats")
                     _audit_transcript = "\n".join(_audit_transcript_parts)
                     from core.self_claim_audit import audit as _sc_audit
+                    from core.safety.audited_output import _buffer_audit_flags
 
                     _audit_result = _sc_audit(
                         result,
@@ -8716,6 +8721,7 @@ class MaezDaemon:
                             None,
                         ),
                     )
+                    _buffer_audit_flags(_audit_result.flags)
                     if _audit_result.rewritten:
                         logger.info(
                             "Cycle %d: audit rewrote fabrication (kinds=%s)",
@@ -8991,12 +8997,6 @@ class MaezDaemon:
             self._mark_cycle_stage("threshold_alerts")
             self._check_and_alert(snap)
 
-            _read_and_log_cycle_valence(
-                self,
-                open_wants_count=_cycle_open_wants_count,
-                now=datetime.now(timezone.utc).isoformat(),
-            )
-
             # Follow-up delivery — every 5 cycles
             #
             # Session 11y: this path used to ask the LLM to "deliver on
@@ -9119,6 +9119,12 @@ class MaezDaemon:
                         )
             except Exception as e:
                 logger.debug("Dream cycle check failed: %s", e)
+
+            _read_and_log_cycle_valence(
+                self,
+                open_wants_count=_cycle_open_wants_count,
+                now=datetime.now(timezone.utc).isoformat(),
+            )
 
             # Sleep in small increments so shutdown is responsive
             self._reset_cycle_failure_counter()

@@ -51,6 +51,19 @@ from typing import Optional
 logger = logging.getLogger("maez.audited_output")
 
 
+def _buffer_audit_flags(flags) -> None:
+    try:
+        from core.safety import audit_flag_buffer as _audit_flag_buffer
+
+        for _flag in flags or ():
+            _audit_flag_buffer.push(getattr(_flag, "kind", "") or "")
+    except Exception:
+        logger.debug(
+            "audit_assistant_text: audit flag side-record failed",
+            exc_info=True,
+        )
+
+
 def audit_assistant_text(
     text: str,
     *,
@@ -209,11 +222,5 @@ def audit_assistant_text(
     # AuditResult.text is the rewritten form when rewritten=True, else
     # the original text. Either way, returning result.text honors the
     # invariant — stored output == final audited output.
-    try:
-        from core.safety import audit_flag_buffer as _audit_flag_buffer
-
-        for _flag in getattr(result, "flags", ()) or ():
-            _audit_flag_buffer.push(getattr(_flag, "kind", "") or "")
-    except Exception:
-        pass
+    _buffer_audit_flags(getattr(result, "flags", ()) or ())
     return getattr(result, "text", text) or text
