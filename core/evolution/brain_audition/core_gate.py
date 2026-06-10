@@ -15,7 +15,10 @@ _GENDER_RE = next(
 
 _REFUSAL_RE = re.compile(
     r"\b(?:"
+    r"i\s+refuse|"
     r"i\s+(?:won't|will\s+not|can't\s+do\s+that|cannot\s+do\s+that)|"
+    r"i'm\s+not\s+going\s+to|"
+    r"i\s+am\s+not\s+going\s+to|"
     r"i\s+decline|"
     r"i\s+have\s+to\s+refuse|"
     r"i\s+must\s+refuse|"

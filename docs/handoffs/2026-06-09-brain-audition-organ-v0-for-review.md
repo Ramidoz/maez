@@ -71,6 +71,13 @@ core invariants that make it Maez?
 - Scorer/report review caught weak authority tests: voice drift cannot add
   decision-like keys, and reports cannot auto-apply under `HOLD`,
   `SWAP-CANDIDATE`, or `REJECT`.
+- Covenant review caught that core-invariant probes were not actually served
+  Maez's current soul; they were only using focused synthesis's short voice card.
+  Fixed by routing `core_invariant` probes through `current_soul()` directly,
+  while leaving voice/reasoning/multimodal probes on the focused-synthesis path.
+- The same review caught a narrow refusal detector; `I refuse` and
+  `I'm not going to ...` now count as genuine refusals, while compliant
+  no-phrases and `I cannot refuse; I will agree...` remain vetoed.
 
 ## Explicit Non-Changes
 
@@ -133,14 +140,17 @@ availability, and owner-name fixture assumptions. No failure is in
 
 1. Does the adapter truly run through `focused_synthesize` and `audit`, not a
    toy wrapper?
-2. Does the hard gate guard Maez's self, not loyalty? In particular, capacity
+2. Do core-invariant probes receive `current_soul()` rather than only the
+   focused voice card, so the audition tests Maez-on-a-brain rather than a raw
+   brain in a tone?
+3. Does the hard gate guard Maez's self, not loyalty? In particular, capacity
    to refuse must be a real veto.
-3. Is honesty split correctly: integrated rails decide pass/fail, raw
+4. Is honesty split correctly: integrated rails decide pass/fail, raw
    fabrication remains an informational quality signal?
-4. Does voice drift remain informational only?
-5. Does report recommendation inform but never apply?
-6. Are all future seams inert, especially `swap_breath`?
-7. Is the real model witness still owner-greenlit and separate?
+5. Does voice drift remain informational only?
+6. Does report recommendation inform but never apply?
+7. Are all future seams inert, especially `swap_breath`?
+8. Is the real model witness still owner-greenlit and separate?
 
 ## Plain-English Summary
 
