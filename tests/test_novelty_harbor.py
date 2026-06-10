@@ -267,6 +267,37 @@ class NoveltyHarborCoreTests(unittest.TestCase):
         self.assertEqual(old_after.status, "superseded")
         self.assertEqual(old_after.superseded_by_event_id, replacement.event_id)
 
+    def test_record_event_refuses_conflicting_supersession_candidate(self):
+        harbor = self.harbor()
+        old = harbor.record_event(
+            summary="Original surprise can have only one pending replacement",
+            observed_by="codex",
+            source_ref="tests:test_novelty_harbor:old",
+            why_unexpected="Multiple forward candidates would conflict before supersede.",
+        )
+        replacement = harbor.record_event(
+            summary="First replacement candidate points at old",
+            observed_by="codex",
+            source_ref="tests:test_novelty_harbor:replacement",
+            why_unexpected="This is the pending authoritative replacement candidate.",
+            supersedes_event_id=old.event_id,
+        )
+
+        with self.assertRaises(ValueError):
+            harbor.record_event(
+                summary="Second replacement candidate must be rejected",
+                observed_by="codex",
+                source_ref="tests:test_novelty_harbor:second-replacement",
+                why_unexpected="A second pending candidate would become stale.",
+                supersedes_event_id=old.event_id,
+            )
+
+        old_after = harbor.get(old.event_id)
+        replacement_after = harbor.get(replacement.event_id)
+        self.assertEqual(old_after.status, "harbored")
+        self.assertIsNone(old_after.superseded_by_event_id)
+        self.assertEqual(replacement_after.supersedes_event_id, old.event_id)
+
     def test_supersede_refuses_rejected_unsafe_terminal_record(self):
         harbor = self.harbor()
         old = harbor.record_event(

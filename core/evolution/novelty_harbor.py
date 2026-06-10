@@ -231,6 +231,14 @@ class NoveltyHarbor:
                 raise ValueError("rejected_unsafe records cannot be superseded")
             if superseded_event.status == STATUS_SUPERSEDED:
                 raise ValueError("superseded records cannot be superseded again")
+            with closing(self._connect()) as conn:
+                existing_replacement = conn.execute(
+                    "SELECT event_id FROM novelty_harbor_events "
+                    "WHERE supersedes_event_id = ? LIMIT 1",
+                    (int(supersedes_event_id),),
+                ).fetchone()
+            if existing_replacement is not None:
+                raise ValueError("superseded record already has a replacement candidate")
 
         created_at = _now_iso()
         with closing(self._connect()) as conn:
