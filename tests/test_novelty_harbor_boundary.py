@@ -16,6 +16,10 @@ FORBIDDEN_IMPORT_PARTS = {
     "llm_client",
     "focused_cognition",
     "valence_live",
+    "writer",
+    "ledger",
+    "body",
+    "body_capabilities",
     "soul_loader",
     "soul_editor",
     "memory_manager",
@@ -23,6 +27,10 @@ FORBIDDEN_IMPORT_PARTS = {
 }
 
 FORBIDDEN_ENTRYPOINT_STRINGS = ("MaezDaemon", "systemctl", "MAEZ_")
+
+
+def _forbidden_parts_for_import(name):
+    return sorted(set(name.split(".")) & FORBIDDEN_IMPORT_PARTS)
 
 
 def _import_names(tree):
@@ -45,12 +53,29 @@ class NoveltyHarborBoundaryTests(unittest.TestCase):
     def test_imports_do_not_touch_live_body_speech_or_writer_organs(self):
         offenders = []
         for name in _import_names(self.tree):
-            parts = set(name.split("."))
-            blocked = sorted(parts & FORBIDDEN_IMPORT_PARTS)
+            blocked = _forbidden_parts_for_import(name)
             if blocked:
                 offenders.append((name, blocked))
 
         self.assertEqual(offenders, [])
+
+    def test_forbidden_import_matcher_catches_writer_ledger_and_body_names(self):
+        self.assertEqual(
+            _forbidden_parts_for_import("core.ledger.writer"),
+            ["ledger", "writer"],
+        )
+        self.assertEqual(
+            _forbidden_parts_for_import("core.ledger.writer.try_write_turn"),
+            ["ledger", "writer"],
+        )
+        self.assertEqual(
+            _forbidden_parts_for_import("core.infra.body_capabilities"),
+            ["body_capabilities"],
+        )
+        self.assertEqual(
+            _forbidden_parts_for_import("core.evolution.soul_invariants"),
+            [],
+        )
 
     def test_module_keeps_soul_invariants_as_intentional_boundary_dependency(self):
         imported_names = set(_import_names(self.tree))
