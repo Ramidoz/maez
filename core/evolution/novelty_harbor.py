@@ -227,7 +227,7 @@ class NoveltyHarbor:
             raise KeyError(f"supersedes_event_id does not exist: {supersedes_event_id}")
 
         created_at = _now_iso()
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             with conn:
                 cursor = conn.execute(
                     "INSERT INTO novelty_harbor_events "
@@ -254,12 +254,13 @@ class NoveltyHarbor:
                         json.dumps(metadata_dict, sort_keys=True),
                     ),
                 )
-        event = self.get(int(cursor.lastrowid))
+                event_id = int(cursor.lastrowid)
+        event = self.get(event_id)
         assert event is not None
         return event
 
     def get(self, event_id: int) -> HarborEvent | None:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             row = conn.execute(
                 "SELECT * FROM novelty_harbor_events WHERE event_id = ?",
                 (int(event_id),),
@@ -269,7 +270,7 @@ class NoveltyHarbor:
     def list_by_status(self, status: str) -> list[HarborEvent]:
         if status not in STATUSES:
             raise ValueError(f"unknown status: {status}")
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             rows = conn.execute(
                 "SELECT * FROM novelty_harbor_events WHERE status = ? ORDER BY event_id ASC",
                 (status,),

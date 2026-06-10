@@ -1,5 +1,7 @@
+import gc
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 
 
@@ -74,3 +76,30 @@ class NoveltyHarborCoreTests(unittest.TestCase):
 
         source["sign"] = "mutated-after-call"
         self.assertEqual(event.valence_snapshot["sign"], "negative")
+
+    def test_store_operations_close_sqlite_connections(self):
+        harbor = self.harbor()
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", ResourceWarning)
+            for index in range(12):
+                event = harbor.record_event(
+                    summary=f"Clean manual surprise {index}",
+                    observed_by="manual_test",
+                    source_ref=f"tests:test_novelty_harbor:{index}",
+                    why_unexpected="This fixture exercises connection cleanup.",
+                )
+                self.assertIsNotNone(harbor.get(event.event_id))
+                self.assertGreaterEqual(len(harbor.list_by_status("harbored")), 1)
+            gc.collect()
+
+        resource_warnings = [
+            warning
+            for warning in caught
+            if issubclass(warning.category, ResourceWarning)
+            and (
+                "unclosed database" in str(warning.message)
+                or "Connection" in str(warning.message)
+            )
+        ]
+        self.assertEqual(resource_warnings, [])
