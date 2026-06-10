@@ -223,8 +223,12 @@ class NoveltyHarbor:
         if final_status == STATUS_PROMOTED and not (promotion_decision_ref or "").strip():
             raise ValueError("promoted status requires promotion_decision_ref")
 
-        if supersedes_event_id is not None and self.get(int(supersedes_event_id)) is None:
-            raise KeyError(f"supersedes_event_id does not exist: {supersedes_event_id}")
+        if supersedes_event_id is not None:
+            superseded_event = self.get(int(supersedes_event_id))
+            if superseded_event is None:
+                raise KeyError(f"supersedes_event_id does not exist: {supersedes_event_id}")
+            if superseded_event.status == STATUS_REJECTED_UNSAFE:
+                raise ValueError("rejected_unsafe records cannot be superseded")
 
         created_at = _now_iso()
         with closing(self._connect()) as conn:
@@ -307,6 +311,12 @@ class NoveltyHarbor:
 
                 if old["status"] == STATUS_SUPERSEDED:
                     return
+
+                if replacement["supersedes_event_id"] != event_id:
+                    raise ValueError("replacement must supersede the old event")
+
+                if replacement["status"] in {STATUS_REJECTED_UNSAFE, STATUS_SUPERSEDED}:
+                    raise ValueError("replacement status cannot be terminal")
 
                 conn.execute(
                     "UPDATE novelty_harbor_events "

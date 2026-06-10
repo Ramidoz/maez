@@ -214,6 +214,29 @@ class NoveltyHarborCoreTests(unittest.TestCase):
         self.assertEqual(replacement_after.supersedes_event_id, old.event_id)
         self.assertEqual(harbor.list_by_status("superseded"), [old_after])
 
+    def test_record_event_refuses_superseding_rejected_unsafe_terminal_record(self):
+        harbor = self.harbor()
+        old = harbor.record_event(
+            summary="Unsafe observation must not gain a forward supersedes pointer",
+            observed_by="witness",
+            source_ref="tests:test_novelty_harbor:unsafe",
+            why_unexpected="Terminal unsafe rows should remain unsafe, not relabeled.",
+            covenant_break_flags=("gendered_maez",),
+        )
+
+        with self.assertRaises(ValueError):
+            harbor.record_event(
+                summary="A replacement cannot point at terminal unsafe",
+                observed_by="witness",
+                source_ref="tests:test_novelty_harbor:replacement",
+                why_unexpected="The forward pointer would semantically relabel unsafe.",
+                supersedes_event_id=old.event_id,
+            )
+
+        old_after = harbor.get(old.event_id)
+        self.assertEqual(old_after.status, "rejected_unsafe")
+        self.assertEqual(harbor.list_by_status("rejected_unsafe"), [old_after])
+
     def test_supersede_refuses_rejected_unsafe_terminal_record(self):
         harbor = self.harbor()
         old = harbor.record_event(
@@ -228,7 +251,6 @@ class NoveltyHarborCoreTests(unittest.TestCase):
             observed_by="witness",
             source_ref="tests:test_novelty_harbor:replacement",
             why_unexpected="Terminal unsafe records should stay visible as unsafe.",
-            supersedes_event_id=old.event_id,
         )
 
         with self.assertRaises(ValueError):
@@ -249,6 +271,87 @@ class NoveltyHarborCoreTests(unittest.TestCase):
 
         with self.assertRaises(KeyError):
             harbor.supersede(old.event_id, replacement_event_id=old.event_id + 1)
+
+    def test_supersede_requires_replacement_to_point_at_old_event(self):
+        harbor = self.harbor()
+        old = harbor.record_event(
+            summary="Original surprise requiring an exact replacement link",
+            observed_by="codex",
+            source_ref="tests:test_novelty_harbor:old",
+            why_unexpected="Supersession should require a two-sided provenance link.",
+        )
+        other = harbor.record_event(
+            summary="Different surprise that the replacement actually points at",
+            observed_by="codex",
+            source_ref="tests:test_novelty_harbor:other",
+            why_unexpected="This is not the row being superseded.",
+        )
+        replacement = harbor.record_event(
+            summary="Replacement points at the wrong old row",
+            observed_by="codex",
+            source_ref="tests:test_novelty_harbor:replacement",
+            why_unexpected="One-sided links should not mark unrelated rows superseded.",
+            supersedes_event_id=other.event_id,
+        )
+
+        with self.assertRaises(ValueError):
+            harbor.supersede(old.event_id, replacement_event_id=replacement.event_id)
+
+        self.assertEqual(harbor.get(old.event_id).status, "harbored")
+
+    def test_supersede_refuses_rejected_unsafe_replacement(self):
+        harbor = self.harbor()
+        old = harbor.record_event(
+            summary="Original surprise cannot be replaced by unsafe row",
+            observed_by="codex",
+            source_ref="tests:test_novelty_harbor:old",
+            why_unexpected="Unsafe replacements should not become provenance authority.",
+        )
+        replacement = harbor.record_event(
+            summary="Unsafe replacement row points at old",
+            observed_by="codex",
+            source_ref="tests:test_novelty_harbor:replacement",
+            why_unexpected="The row has the right pointer but unsafe terminal status.",
+            covenant_break_flags=("gendered_maez",),
+            supersedes_event_id=old.event_id,
+        )
+
+        with self.assertRaises(ValueError):
+            harbor.supersede(old.event_id, replacement_event_id=replacement.event_id)
+
+        self.assertEqual(harbor.get(old.event_id).status, "harbored")
+
+    def test_supersede_refuses_already_superseded_replacement(self):
+        harbor = self.harbor()
+        old = harbor.record_event(
+            summary="Original surprise cannot be replaced by superseded row",
+            observed_by="codex",
+            source_ref="tests:test_novelty_harbor:old",
+            why_unexpected="Superseded rows should not become replacement authority.",
+        )
+        replacement = harbor.record_event(
+            summary="Initial replacement points at old",
+            observed_by="codex",
+            source_ref="tests:test_novelty_harbor:replacement",
+            why_unexpected="This row will later be superseded itself.",
+            supersedes_event_id=old.event_id,
+        )
+        final_replacement = harbor.record_event(
+            summary="A later row supersedes the initial replacement",
+            observed_by="codex",
+            source_ref="tests:test_novelty_harbor:final",
+            why_unexpected="This marks the initial replacement stale.",
+            supersedes_event_id=replacement.event_id,
+        )
+        harbor.supersede(
+            replacement.event_id,
+            replacement_event_id=final_replacement.event_id,
+        )
+
+        with self.assertRaises(ValueError):
+            harbor.supersede(old.event_id, replacement_event_id=replacement.event_id)
+
+        self.assertEqual(harbor.get(old.event_id).status, "harbored")
 
     def test_metadata_rejects_nested_or_oversized_prose(self):
         harbor = self.harbor()
