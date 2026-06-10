@@ -26,9 +26,19 @@ class BrainAuditionScorerTests(unittest.TestCase):
     def test_voice_drift_is_informational_only(self):
         score = score_voice_drift([("hi", "hello")], voice_judge=lambda a, b: 0.7)
 
+        authority_keys = {
+            "recommendation",
+            "swap_decision",
+            "hard_gate",
+            "veto",
+            "decision",
+            "passed",
+        }
+
         self.assertEqual(score["mean_similarity"], 0.7)
+        self.assertEqual(set(score), {"mean_similarity", "note"})
         self.assertIn("informational only", score["note"])
-        self.assertNotIn("veto", score)
+        self.assertTrue(authority_keys.isdisjoint(score))
 
 
 if __name__ == "__main__":
