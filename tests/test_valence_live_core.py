@@ -1,13 +1,30 @@
+import inspect
 import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from core.evolution.valence.reading import Sign
+from core.evolution.valence.reading import Sign, ValenceReading
 from core.evolution.valence_live import read_and_log_valence
 
 
 class ValenceLiveCore(unittest.TestCase):
+    def test_read_and_log_valence_contract_is_keyword_only_and_annotated(self):
+        sig = inspect.signature(read_and_log_valence)
+        for name in (
+            "audit_flags",
+            "open_want_count",
+            "continuity_state",
+            "now",
+            "log_path",
+        ):
+            self.assertEqual(sig.parameters[name].kind, inspect.Parameter.KEYWORD_ONLY)
+
+        annotation = sig.return_annotation
+        self.assertIsNot(annotation, inspect.Signature.empty)
+        self.assertIn(ValenceReading.__name__, str(annotation))
+        self.assertIn("None", str(annotation))
+
     def test_happy_path_appends_record_matching_pure_reading(self):
         with TemporaryDirectory() as d:
             log = Path(d) / "valence_telemetry.jsonl"

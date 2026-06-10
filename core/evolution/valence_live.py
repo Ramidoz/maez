@@ -126,12 +126,13 @@ def _append_and_prune(log_path, record, retention) -> None:
 
 
 def read_and_log_valence(
+    *,
     audit_flags,
     open_want_count,
     continuity_state,
     now,
     log_path=None,
-):
+) -> ValenceReading | None:
     """Compute and append a valence reading without raising into heartbeat."""
 
     try:
