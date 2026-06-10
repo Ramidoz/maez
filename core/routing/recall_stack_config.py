@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Mapping
 
+# Launch condition: enabling recall-triad requires the rule-6
+# recalled-as-present structural rail in the same slice or immediately before.
 BUNDLE_FLAG = "MAEZ_RECALL_TRIAD_ENABLED"
 RAW_RECALL_FLAG_NAMES = (
     "MAEZ_DISPATCHER_ENABLED",
