@@ -97,6 +97,7 @@ class DaemonValenceWiringTests(unittest.TestCase):
         daemon = SimpleNamespace(
             _continuity_active=True,
             _continuity_capsule={"current_mode": "orientation"},
+            wants=None,
         )
         sentinel = object()
 
@@ -118,6 +119,7 @@ class DaemonValenceWiringTests(unittest.TestCase):
                 "capsule_present": True,
             },
             now="2026-06-10T00:00:00+00:00",
+            resolved=0,
         )
         self.assertEqual(audit_flag_buffer.peek(), [])
 
@@ -226,6 +228,7 @@ class DaemonValenceWiringTests(unittest.TestCase):
         daemon = SimpleNamespace(
             _continuity_active=True,
             _continuity_capsule={"current_mode": "orientation"},
+            wants=None,
         )
 
         with patch(
@@ -256,8 +259,129 @@ class DaemonValenceWiringTests(unittest.TestCase):
                 "capsule_present": True,
             },
             now="2026-06-10T00:00:32+00:00",
+            resolved=0,
         )
         self.assertEqual(audit_flag_buffer.peek(), [])
+
+    def test_cycle_valence_threads_resolved_from_satisfied_delta(self):
+        from daemon import maez_daemon
+
+        class Wants:
+            def __init__(self):
+                self.calls = []
+
+            def count_events_since(self, cursor, event_type):
+                self.calls.append((cursor, event_type))
+                return 2
+
+        wants = Wants()
+        daemon = SimpleNamespace(
+            _continuity_active=False,
+            _continuity_capsule=None,
+            wants=wants,
+        )
+
+        with patch(
+            "core.evolution.valence_live.last_pulse_epoch",
+            return_value=1781049600.0,
+        ) as cursor:
+            with patch(
+                "core.evolution.valence_live.read_and_log_valence",
+                return_value=object(),
+            ) as read:
+                maez_daemon._read_and_log_cycle_valence(
+                    daemon,
+                    open_wants_count=1,
+                    now="2026-06-10T00:00:00+00:00",
+                )
+
+        cursor.assert_called_once_with()
+        self.assertEqual(wants.calls, [(1781049600.0, "satisfied")])
+        self.assertEqual(read.call_args.kwargs["resolved"], 2)
+
+    def test_cycle_valence_resolved_zero_when_no_cursor(self):
+        from daemon import maez_daemon
+
+        class Wants:
+            def count_events_since(self, cursor, event_type):
+                raise AssertionError("count should not run without a cursor")
+
+        daemon = SimpleNamespace(
+            _continuity_active=False,
+            _continuity_capsule=None,
+            wants=Wants(),
+        )
+
+        with patch("core.evolution.valence_live.last_pulse_epoch", return_value=None):
+            with patch(
+                "core.evolution.valence_live.read_and_log_valence",
+                return_value=object(),
+            ) as read:
+                maez_daemon._read_and_log_cycle_valence(
+                    daemon,
+                    open_wants_count=1,
+                    now="2026-06-10T00:00:00+00:00",
+                )
+
+        self.assertEqual(read.call_args.kwargs["resolved"], 0)
+
+    def test_cycle_valence_no_wants_does_not_read_cursor(self):
+        from daemon import maez_daemon
+
+        daemon = SimpleNamespace(
+            _continuity_active=False,
+            _continuity_capsule=None,
+            wants=None,
+        )
+
+        with patch(
+            "core.evolution.valence_live.last_pulse_epoch",
+            side_effect=AssertionError("cursor should not be read without wants"),
+        ):
+            with patch(
+                "core.evolution.valence_live.read_and_log_valence",
+                return_value=object(),
+            ) as read:
+                maez_daemon._read_and_log_cycle_valence(
+                    daemon,
+                    open_wants_count=1,
+                    now="2026-06-10T00:00:00+00:00",
+                )
+
+        self.assertEqual(read.call_args.kwargs["resolved"], 0)
+
+    def test_cycle_valence_resolved_zero_when_wants_read_raises(self):
+        from daemon import maez_daemon
+
+        class Wants:
+            def count_events_since(self, cursor, event_type):
+                raise RuntimeError("boom")
+
+        audit_flag_buffer.push("completion_rail")
+        daemon = SimpleNamespace(
+            _continuity_active=False,
+            _continuity_capsule=None,
+            wants=Wants(),
+        )
+
+        with patch(
+            "core.evolution.valence_live.last_pulse_epoch",
+            return_value=1781049600.0,
+        ):
+            with patch(
+                "core.evolution.valence_live.read_and_log_valence",
+                return_value=object(),
+            ) as read:
+                with patch.object(maez_daemon.logger, "warning") as warning:
+                    maez_daemon._read_and_log_cycle_valence(
+                        daemon,
+                        open_wants_count=1,
+                        now="2026-06-10T00:00:00+00:00",
+                    )
+
+        self.assertEqual(read.call_args.kwargs["resolved"], 0)
+        self.assertEqual(audit_flag_buffer.peek(), [])
+        self.assertTrue(warning.called)
 
     def test_open_wants_count_matches_doorman_cap(self):
         from daemon import maez_daemon

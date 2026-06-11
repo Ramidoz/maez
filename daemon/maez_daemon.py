@@ -2223,6 +2223,20 @@ def _read_and_log_cycle_valence(
         from core.evolution import valence_live
         from core.safety import audit_flag_buffer
 
+        resolved = 0
+        try:
+            wants_obj = getattr(daemon, "wants", None)
+            if wants_obj is not None:
+                cursor = valence_live.last_pulse_epoch()
+                if cursor is not None:
+                    resolved = int(wants_obj.count_events_since(cursor, "satisfied"))
+        except Exception:
+            logger.warning(
+                "valence satisfied-delta read failed; resolved=0",
+                exc_info=True,
+            )
+            resolved = 0
+
         reading = valence_live.read_and_log_valence(
             audit_flags=audit_flag_buffer.peek(),
             open_want_count=int(open_wants_count),
@@ -2231,6 +2245,7 @@ def _read_and_log_cycle_valence(
                 "capsule_present": bool(getattr(daemon, "_continuity_capsule", None)),
             },
             now=now,
+            resolved=resolved,
         )
         if reading is not None:
             audit_flag_buffer.clear()
