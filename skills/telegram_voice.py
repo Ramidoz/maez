@@ -32,7 +32,7 @@ if str(_MAEZ_HOME_PATH) not in sys.path:
 from core.infra.secrets import sanitize_env
 from core.health.shared_executor import get_shared_executor
 from core.perception import snapshot as perception_snapshot, format_snapshot
-from core.conversation_controller import ConversationController
+from core.conversation_controller import ConversationController, _search_commitment_enabled
 from core.body.camera_presence_voice import answer_camera_presence_question
 from core.safety.clinical_boundary import PrivateThoughtsCrisisSignalWriter, guard_owner_text
 from core.egress.provenance import ProvenanceSpan, ProvenancedText
@@ -2693,16 +2693,120 @@ class TelegramVoice:
             chat_id=str(self.authorized_user),
         )
 
+    def _search_commitment_backend(self):
+        from core.search.searxng_client import SearxngBackend
+
+        return SearxngBackend()
+
+    def _format_search_commitment_results(self, query: str, results: list[dict]) -> str:
+        import re as _re
+
+        label = (query or "the search I offered").strip()
+        lines = [f'Here\'s what I found for "{label}":', ""]
+        for i, r in enumerate((results or [])[:5], 1):
+            title = _re.sub(r"\s+", " ", (r.get("title") or "").strip())[:90]
+            url = _re.sub(r"\s+", "", (r.get("url") or "").strip())[:120]
+            snip = _re.sub(
+                r"\s+",
+                " ",
+                (r.get("content") or r.get("snippet") or "").strip(),
+            )[:220]
+            lines.append(f"{i}. {title}")
+            if snip:
+                lines.append(f"   {snip}")
+            if url:
+                lines.append(f"   {url}")
+            lines.append("")
+        reply = "\n".join(lines).rstrip()
+        if len(reply) > 3500:
+            reply = reply[:3500] + "\n\n(truncated)"
+        return reply
+
+    async def _try_search_commitment_offer_intent(self, update, text: str) -> bool:
+        if not _search_commitment_enabled():
+            return False
+        if not needs_web_search(text):
+            return False
+
+        channel, chat_id = "telegram_text", str(self.authorized_user)
+        query = self._derive_search_query(text)
+        backend = self._search_commitment_backend()
+        health = backend.health()
+        if self._controller.store_search_offer(
+            channel,
+            chat_id,
+            query,
+            health=health,
+        ):
+            status = _audit_telegram_reply(
+                f"I can search for this through my local web sense: {query}. Want me to?",
+                surface="telegram_search_commitment_offer",
+            )
+            await _reply_text(update, status)
+            return True
+        if health in {"degraded", "down"}:
+            status = _audit_telegram_reply(
+                "My web search is degraded right now, so I shouldn't promise a search. "
+                "I can answer from what I already know, or we can try again later.",
+                surface="telegram_search_commitment_degraded",
+            )
+            await _reply_text(update, status)
+            return True
+        return False
+
     async def _try_offer_binding_intent(self, update, text: str) -> bool:
         """Bind bare approvals to a fresh pending_offer. Returns True if
         the offer was fired (caller short-circuits further handling).
 
-        Decision logic lives in ConversationController.consume_offer_approval.
+        Decision logic lives in ConversationController. When the typed search
+        commitment flag is enabled, the typed resolver gets first chance;
+        otherwise this falls through to the legacy offer consumer.
         This method owns the Telegram-specific IO: rendering the fire
         message, running web_search, formatting the result card."""
         import time as _time
 
         channel, chat_id = "telegram_text", str(self.authorized_user)
+        if _search_commitment_enabled():
+            try:
+                backend = self._search_commitment_backend()
+                receipt = self._controller.get_search_offer(channel, chat_id)
+                query = getattr(receipt, "offered_query", "") if receipt is not None else ""
+                if receipt is not None:
+                    from core.search.search_commitment import is_clear_yes
+
+                    if (
+                        is_clear_yes(text)
+                        and not self._controller.has_awaiting_card(channel, chat_id)
+                        and backend.health() != "healthy"
+                    ):
+                        await _reply_text(
+                            update,
+                            "My web search is unavailable right now, so I can't follow "
+                            "through on that search honestly. I'm not going to make up an answer.",
+                        )
+                        return True
+                results = self._controller.resolve_search_affirmation(
+                    channel,
+                    chat_id,
+                    text,
+                    backend,
+                    now_ts=_time.time(),
+                    turns_since=1,
+                )
+                if results is not None:
+                    await _reply_text(
+                        update,
+                        self._format_search_commitment_results(query, results),
+                    )
+                    return True
+            except Exception as e:
+                logger.error("search commitment resolution failed: %s", e)
+                await _reply_text(
+                    update,
+                    "I tried to run the search I offered, but the search body failed. "
+                    "I'm not going to make up an answer.",
+                )
+                return True
 
         # Grab set_at BEFORE consuming so we can log age on fire
         pre = self._controller.get_offer(channel, chat_id)
@@ -3038,6 +3142,13 @@ class TelegramVoice:
                 return
         except Exception as e:
             logger.debug("web search interceptor failed: %s", e)
+
+        try:
+            if await self._try_search_commitment_offer_intent(update, user_text):
+                self._generating = False
+                return
+        except Exception as e:
+            logger.debug("search commitment offer interceptor failed: %s", e)
 
         try:
             await self._process_message(

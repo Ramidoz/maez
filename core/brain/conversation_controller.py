@@ -325,6 +325,7 @@ class ConversationController:
         # don't self-deadlock.
         self._offers_lock = threading.RLock()
         self._offers: dict[tuple[str, str], dict] = {}
+        self._search_receipts: dict[tuple[str, str], Any] = {}
         self._last_probes: dict[tuple[str, str], dict] = {}
         self._last_user_text: dict[tuple[str, str], str] = {}
 
@@ -747,6 +748,98 @@ class ConversationController:
                 channel, chat_id, reason,
             )
         return offer
+
+    def get_search_offer(self, channel: str, chat_id: str):
+        """Return the typed search commitment receipt for tests/diagnostics.
+
+        The commitment slot is separate from the legacy untyped `_offers` slot
+        so enabling the new organ cannot accidentally read old regex-captured
+        promises.
+        """
+        with self._offers_lock:
+            return self._search_receipts.get((channel, chat_id))
+
+    def store_search_offer(
+        self,
+        channel: str,
+        chat_id: str,
+        query: str,
+        *,
+        health: str,
+        now_ts: float | None = None,
+        ttl_seconds: float = 300.0,
+        ttl_turns: int = 3,
+    ) -> bool:
+        """Store a typed sovereign-local search offer when the flag is on.
+
+        Capability truth is checked before the offer exists. Degraded/down
+        search stores nothing, so there is no executable promise to later bind.
+        """
+        if not _search_commitment_enabled():
+            return False
+        query = (query or "").strip()
+        if not query or health != "healthy":
+            return False
+        from core.search.search_commitment import OfferReceipt
+
+        receipt = OfferReceipt(
+            action_type="web_search",
+            stakes="low_read",
+            offered_query=query,
+            created_ts=time.time() if now_ts is None else now_ts,
+            ttl_seconds=ttl_seconds,
+            ttl_turns=ttl_turns,
+            requires_confirmation=True,
+            confirmation_mode="clear_yes_ok",
+            executor="searxng",
+            egress_class="sovereign_local_search",
+        )
+        with self._offers_lock:
+            self._search_receipts[(channel, chat_id)] = receipt
+        return True
+
+    def resolve_search_affirmation(
+        self,
+        channel: str,
+        chat_id: str,
+        text: str,
+        backend,
+        *,
+        now_ts: float | None = None,
+        turns_since: int = 1,
+    ) -> list[dict] | None:
+        """Resolve a bare affirmation against the typed search receipt.
+
+        Returns search results only when the trap-proof conjunction passes.
+        Otherwise returns None and never touches the backend search method.
+        """
+        if not _search_commitment_enabled():
+            return None
+        from core.search.search_commitment import resolve_affirmation
+
+        key = (channel, chat_id)
+        with self._offers_lock:
+            receipt = self._search_receipts.get(key)
+        if receipt is None:
+            return None
+        health = backend.health()
+        decision = resolve_affirmation(
+            receipt,
+            text,
+            health=health,
+            has_awaiting_card=self.has_awaiting_card(channel, chat_id),
+            now_ts=time.time() if now_ts is None else now_ts,
+            turns_since=turns_since,
+        )
+        if not decision.execute:
+            if decision.reason == "stale_offer":
+                with self._offers_lock:
+                    self._search_receipts.pop(key, None)
+            return None
+        results = backend.search(decision.query)
+        with self._offers_lock:
+            self._search_receipts.pop(key, None)
+        return results
 
     def maybe_store_offer(
         self,
