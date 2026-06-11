@@ -5,6 +5,7 @@ Models load lazily so unit tests can mock the raw inference without downloading.
 """
 from __future__ import annotations
 
+import os
 import time
 
 import httpx
@@ -12,10 +13,12 @@ import httpx
 from adapter_prompt import (ENTAILMENT_SYSTEM_PROMPT, build_entailment_user_prompt,
                             parse_support_verdict)
 
-# Option A: HHEM ships UNAVAILABLE until the owner-gated pin is supplied post-gate.
-# Nothing downloads and no trust_remote_code runs during the build.
+# Option A: HHEM stays UNAVAILABLE unless an owner-approved pin is supplied via the
+# HHEM_REVISION env var (post-gate). Inert by construction: no env var -> no download,
+# no trust_remote_code. Owner-approved pin (2026-06-11, remote-code reviewed by owner
+# + Claude — a benign T5 wrapper, no network/fs/exec): 8e4a2e6e96c708cc76c2344f7e4757df2515292c
 HHEM_REPO = "vectara/hallucination_evaluation_model"
-HHEM_REVISION = None  # set post-gate to a full 40-char commit sha (owner-approved download)
+HHEM_REVISION = os.environ.get("HHEM_REVISION") or None
 MINICHECK_REPO = "lytang/MiniCheck-DeBERTa-v3-Large"
 
 
