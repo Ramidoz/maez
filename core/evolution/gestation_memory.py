@@ -287,6 +287,61 @@ class GestationMemory:
             ).fetchall()
         return [_row_to_claim(row) for row in rows]
 
+    def render(self) -> str:
+        claims = self.list_active()
+        facts = [claim for claim in claims if claim.claim_kind == "fact"]
+        interpretations = [
+            claim for claim in claims if claim.claim_kind == "interpretation"
+        ]
+
+        def source_string(claim: GestationClaim) -> str:
+            parts: list[str] = []
+            for source in claim.sources:
+                kind = source.get("kind")
+                if kind == "doc":
+                    parts.append(
+                        f"doc:{source.get('ref')}@{str(source.get('commit', ''))[:8]}"
+                    )
+                elif kind == "commit":
+                    parts.append(f"commit:{str(source.get('ref', ''))[:8]}")
+                elif kind == "ledger_row":
+                    parts.append(f"ledger:event_id={source.get('ref')}")
+                else:
+                    parts.append("note")
+            return ", ".join(parts)
+
+        def line(claim: GestationClaim) -> str:
+            scar_tag = " [SCAR]" if claim.scar else ""
+            return (
+                f"  - {claim.claim_text}{scar_tag} "
+                f"[{claim.confidence}] (sources: {source_string(claim)})"
+            )
+
+        changed = [
+            claim
+            for claim in facts
+            if claim.type in ("milestone", "decision")
+        ]
+        wrong = [
+            claim
+            for claim in claims
+            if claim.scar or claim.type in ("correction", "no_go")
+        ]
+
+        lines: list[str] = ["# Gestation record (sourced; deterministic render)", ""]
+        lines.append("## What happened")
+        lines.extend(line(claim) for claim in facts if not claim.scar)
+        lines.append("")
+        lines.append("## What changed")
+        lines.extend(line(claim) for claim in changed)
+        lines.append("")
+        lines.append("## What went wrong / what was corrected")
+        lines.extend(line(claim) for claim in wrong)
+        lines.append("")
+        lines.append("## Interpretations (meanings drawn from the evidence - not raw fact)")
+        lines.extend(line(claim) for claim in interpretations)
+        return "\n".join(lines) + "\n"
+
 
 def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()

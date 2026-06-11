@@ -197,3 +197,50 @@ class SupersedeTests(unittest.TestCase):
         self.gm.supersede(old.claim_id, new.claim_id)
         self.assertIsNotNone(self.gm.get(old.claim_id))
         self.assertIsNotNone(self.gm.get(new.claim_id))
+
+
+class RenderTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = TemporaryDirectory()
+        self.gm = GestationMemory(Path(self._tmp.name) / "g.db")
+        self.src, self.excerpt = _doc_source()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _claim(self, text, kind, typ, conf, scar=False):
+        return self.gm.record_claim(
+            claim_text=text,
+            claim_kind=kind,
+            type=typ,
+            confidence=conf,
+            sources=[self.src],
+            source_excerpts={0: self.excerpt},
+            observed_by="claude",
+            scar=scar,
+        )
+
+    def test_facts_and_interpretations_in_separate_sections(self):
+        self._claim("A fact happened.", "fact", "milestone", "documented")
+        self._claim("A meaning we drew.", "interpretation", "milestone", "inferred")
+        self._claim(
+            "It went wrong then was fixed.",
+            "fact",
+            "no_go",
+            "documented",
+            scar=True,
+        )
+        out = self.gm.render()
+        self.assertIn("What happened", out)
+        self.assertIn("What went wrong", out)
+        self.assertIn("Interpretations", out)
+        self.assertLess(out.index("A fact happened."), out.index("Interpretations"))
+        self.assertLess(out.index("Interpretations"), out.index("A meaning we drew."))
+        self.assertLess(
+            out.index("What went wrong"), out.index("It went wrong then was fixed.")
+        )
+
+    def test_every_rendered_claim_carries_a_source(self):
+        self._claim("A fact happened.", "fact", "milestone", "documented")
+        out = self.gm.render()
+        self.assertIn("2026-06-10-gestation-memory-v0-design.md", out)
