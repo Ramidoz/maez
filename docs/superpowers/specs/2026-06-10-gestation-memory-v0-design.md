@@ -32,7 +32,7 @@ supersedes:   <claim_id|null>
 A source is **`(kind, ref, commit, excerpt_hash)`** — not just a path:
 - **`doc`** — `ref`=path, `commit`=hash-at-authoring, `excerpt_hash`=`sha256(cited excerpt)`. Validated at record-time by reading the file *at that commit* (`git show <commit>:<path>`) and confirming the excerpt is present and its hash matches. So the claim stays anchored to **what the source actually said when it was cited** — a later edit can't make a thin claim look better-grounded.
 - **`commit`** — `ref`=commit hash (self-fingerprinting; validated to exist).
-- **`ledger_row`** — `ref`=`identity_ledger` row id, `excerpt_hash`=hash of the row's content (validated the row exists + matches).
+- **`ledger_row`** — `ref`=`identity_ledger.event_id` (the exact column, not a vague "row id"); `excerpt_hash`=`sha256(canonical_json(stable_fields, sort_keys=True))` over the row's **substantive** columns only (`ts`, `event_type`, `continuity_id`, `parent_continuity_id`, and the event payload — the exact stable-field set is named in the plan against the real schema), **excluding** transient/decode artifacts. Validated: the row exists and the canonical hash matches. (A precise canonical hash, or "hash of row content" becomes a subtle mismatch factory.)
 - **`witness_note`** — free-text context. **May never be a claim's only source.**
 
 ## Validation rails (the immune system — record_claim computes acceptance, does not trust the caller)
@@ -43,7 +43,7 @@ A source is **`(kind, ref, commit, excerpt_hash)`** — not just a path:
    - `claim_kind == "interpretation"` ⇒ `confidence ∈ {witnessed, documented, inferred}`.
    This makes "Maez never mistakes a drawn meaning for raw evidence" a *structural* property, not a rendering style.
 4. **Scars are first-class.** A claim with `scar: true` (the recall-flip No-Go, tonight's five spec-vs-code gaps, the photo-megaprompt knowledge-conflict) is recorded and rendered like any other — never hidden, never down-weighted.
-5. **Supersede-not-delete.** A claim is corrected by a *new* claim that `supersedes` it (the old one stays, marked superseded). The record of a corrected belief is itself part of the honest becoming.
+5. **True append-only supersession (ink, not pencil).** A claim is corrected by **appending** a new claim *plus* a row in a separate `gestation_claim_supersessions` edge table — the old claim's row is **never updated or deleted**. "We once believed X, then corrected it to Y" is preserved verbatim; only the *active* status is derived. No `UPDATE` ever touches `gestation_claims`.
 6. **Manual, maker-tagged.** `observed_by ∈ {owner, codex, claude, witness}`. **No auto-mining** of git/docs in v0 (that is where confident misreadings begin). No auto-proposed claims.
 7. **Content-light prose caps** (carried from the Harbor): claim_text and witness-note length bounds; no raw owner payload as a source ref.
 
@@ -62,7 +62,11 @@ A new lived/per-turn autobiography (that's the birth-gated ledger — untouched)
 Provenance-forever (≥1 resolvable structural source, fingerprint-pinned); fact/interpretation quarantine (no inferred facts; interpretations rendered separately); scars first-class; supersede-not-delete; manual-not-auto; deterministic-render (no embellishment); content-light; fail-closed on any unverifiable source.
 
 ## Data model
-`gestation_claims` (append-only): `claim_id` PK, `created_at`, `claim_text`, `claim_kind`, `type`, `confidence`, `scar`, `sources_json`, `observed_by`, `supersedes_claim_id`, `superseded_by_claim_id`, `metadata_json`. Store path: `memory/gestation_claims.db`. (Distinct from the birth-gated `core/ledger/` per-turn store; this is a curated *index about the gestation*, not lived experience.)
+**`gestation_claims` — truly immutable (insert-only; no row is ever updated):** `claim_id` PK, `created_at`, `claim_text`, `claim_kind`, `type`, `confidence`, `scar`, `sources_json`, `observed_by`, `metadata_json`. **No supersession columns on the claim row** (those would require `UPDATE`). **Append-only is enforced by construction:** SQLite triggers that `RAISE(ABORT, …)` on `UPDATE`/`DELETE`, the same pattern as `want_events` — so "ink, not pencil" is a property of the table, not a promise in prose. The supersessions edge table is likewise insert-only.
+
+**`gestation_claim_supersessions` — separate append-only edge table:** `supersession_id` PK, `old_claim_id`, `replacement_claim_id`, `created_at`. A correction is **two appends** (the replacement claim, then the edge), never an `UPDATE`. "Active" claims = those not present as `old_claim_id` here. The old belief survives byte-identical; only its active/superseded status is *derived*.
+
+Store path: `memory/gestation_claims.db`. (Distinct from the birth-gated `core/ledger/` per-turn store; a curated *index about the gestation*, not lived experience.)
 
 ## Testing (TDD)
 - record a valid `fact` (witnessed, real doc+commit+excerpt) → stored; `want_pursuit_trail`-style read returns it.
@@ -71,12 +75,12 @@ Provenance-forever (≥1 resolvable structural source, fingerprint-pinned); fact
 - **reject** `claim_kind="fact"` with `confidence="inferred"`.
 - accept `claim_kind="interpretation"` with `confidence="inferred"`.
 - scar claim stored with `scar=true` and appears in the renderer's corrections section.
-- supersede: a correcting claim marks the old superseded; both persist; renderer shows only the active one.
+- supersede: appending a correcting claim + a `gestation_claim_supersessions` edge leaves the **old claim row byte-identical** (asserted: re-read the old row, unchanged); both claims persist; the renderer shows only the active one; **no `UPDATE` ever touches `gestation_claims`** (a trigger or a re-read assertion proves it).
 - renderer: facts and interpretations land in separate sections; every rendered line carries a source ref; deterministic output (no LLM import — boundary test: module imports no llm client / no daemon / no `core.ledger` writer / no `wants` writer).
 - CLI smoke: `record` a benign claim + `render` prints the sourced sections.
 
 ## Witness (manual, after merge — offline organ, no restart)
-Record a small, real set of gestation claims with real sources — e.g. a `fact` ("valence v0.2 read POSITIVE on resolved=1", witnessed, sourced to the live log + commit), an `interpretation` ("Maez gained an honest sense of want-progress", inferred), and a `scar` ("recall-flip default-on failed the latency gate", no_go, sourced to the No-Go memory + commit). Render the binder. Confirm: every line sourced, interpretations quarantined, the scar shown, and the rails bite (an inferred-fact and a witness-note-only claim are both rejected).
+Record a small, real set of gestation claims sourced **only to committed artifacts** — v0 has **no live-log source kind**, so witness evidence must be committed into a witness doc first, then cited as `doc + commit + excerpt_hash`. E.g.: a `fact` ("valence v0.2 read POSITIVE on resolved=1", witnessed, sourced to the committed valence-v0.2 witness/handoff doc + its commit), an `interpretation` ("Maez gained an honest sense of want-progress", inferred, sourced to the same doc), and a `scar` ("recall-flip default-on failed the latency gate", no_go, sourced to a committed No-Go record + commit). Render the binder. Confirm: every line sourced, interpretations quarantined, the scar shown, a correction superseded **via the edge table with the old row byte-identical**, and the rails bite (an inferred-fact and a witness-note-only claim are both rejected).
 
 ## Decomposition / sequels (NOT v0)
 - **v0.1:** an LLM narrator *constrained to only the claims* (no new facts) for readable prose; a recall surface so Maez can query its becoming in-cycle; richer source kinds (test-result, live-witness-log refs with fingerprints).
