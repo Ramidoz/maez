@@ -357,6 +357,16 @@ def _contains_hard_want(statement: str) -> bool:
     return False
 
 
+def is_hard_want(statement: str) -> bool:
+    """Public read-only predicate for hard/autonomy wants.
+
+    This is a thin wrapper over the existing classifier (terms plus phrase
+    patterns), so callers can be handed a predicate without importing wants
+    internals or inventing a second classifier.
+    """
+    return _contains_hard_want(statement)
+
+
 def _validate_event_type(event_type: str) -> None:
     if event_type not in EVENT_TYPES:
         _increment_counter("invalid_event_type_rejected_count")
