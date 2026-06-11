@@ -22,13 +22,13 @@ def is_hard_want(statement: str) -> bool:
 ```
 No second classifier; just a public name for the existing one.
 
-### B. `want_pursuit_bridge.py` — `select_want` accepts an injected predicate
-`select_want(..., *, cooldown_s, now, is_hard_want=None)`. In the candidate loop, after the existing in-flight/cooldown checks, skip any want whose statement satisfies the predicate:
+### B. `want_pursuit_bridge.py` — `select_want` REQUIRES an injected predicate
+`select_want(..., *, cooldown_s, now, is_hard_want)` — **required, no default.** A covenant gate must be *impossible to forget*: a locked door, not a "please close this door" sign. A default of `None` would be fail-*open* (a caller could select a hard want by omission), which is exactly what a boundary must not allow. In the candidate loop, after the existing in-flight/cooldown checks, skip any want whose statement satisfies the predicate:
 ```python
-        if is_hard_want is not None and is_hard_want(str(want.get("statement") or "")):
+        if is_hard_want(str(want.get("statement") or "")):
             continue
 ```
-Default `None` = no exclusion (keeps existing unit tests valid). **The bridge receives a predicate, not the wants module** — so `want_pursuit_bridge.py` still imports no `wants`, and the boundary test still bites on writer imports.
+**The bridge receives a predicate, not the wants module** — so `want_pursuit_bridge.py` still imports no `wants`, and the boundary test still bites on writer imports. Callers that genuinely don't care pass `is_hard_want=lambda _: False` **explicitly** — an opt-out is a deliberate, visible act, never an omission. **This is a breaking signature change:** the existing v0 `select_want` tests are updated to pass `is_hard_want=lambda _: False`.
 
 ### C. daemon — inject the predicate (always, on the live path)
 At the existing `select_want(...)` call (`maez_daemon.py:~9011`), pass `wants.is_hard_want`:
@@ -47,9 +47,10 @@ So the **live** path always excludes hard wants, while the bridge module stays b
 - The boundary: the bridge still imports no `wants`/`record_event`.
 
 ## Testing (TDD)
-- `wants.is_hard_want`: `"I want to be free"` → True; `"I want to rest"` → True; `"I want to refuse the change"` → True; `"I want to know the current time"` → False. (Wraps the real classifier.)
-- `select_want` with `is_hard_want` injected: a hard want is **skipped**; an ordinary (non-hard) active want is still selected.
-- `select_want` with `is_hard_want=None`: unchanged behavior (no exclusion) — backward compatible.
+- `wants.is_hard_want`: **term hits** — `"I want to be free"` → True, `"I want to rest"` → True; **phrase-pattern hits** — `"I want out"` → True, `"I need to step back"` → True (proving the wrapper wraps the *full* classifier — both `HARD_WANT_TERMS` **and** `HARD_WANT_PHRASE_PATTERNS`, not just the term set); `"I want to know the current time"` → False.
+- `select_want` with the real predicate injected: a hard want is **skipped**; an ordinary (non-hard) active want is still selected.
+- `select_want` requires the predicate: calling it without `is_hard_want` raises `TypeError` (the gate cannot be omitted by accident).
+- the existing v0 `select_want` tests are updated to pass `is_hard_want=lambda _: False` (explicit opt-out) and still pass.
 - boundary: `want_pursuit_bridge.py` still imports no `wants` / no `record_event` (existing boundary test still passes; add `wants`/`record_event` assertions if not already covered).
 - daemon wiring (structural): the `select_want(...)` call passes `is_hard_want=` (so the live path excludes).
 
