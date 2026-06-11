@@ -160,6 +160,32 @@ class RecordClaimTests(unittest.TestCase):
                 observed_by="claude",
             )
 
+    def test_metadata_cannot_smuggle_nested_prose(self):
+        with self.assertRaises(ValueError):
+            self.gm.record_claim(
+                claim_text="x",
+                claim_kind="fact",
+                type="milestone",
+                confidence="documented",
+                sources=[self.src],
+                source_excerpts={0: self.excerpt},
+                observed_by="claude",
+                metadata={"nested": {"long": "not content-light"}},
+            )
+
+    def test_metadata_string_size_capped(self):
+        with self.assertRaises(ValueError):
+            self.gm.record_claim(
+                claim_text="x",
+                claim_kind="fact",
+                type="milestone",
+                confidence="documented",
+                sources=[self.src],
+                source_excerpts={0: self.excerpt},
+                observed_by="claude",
+                metadata={"note": "x" * 301},
+            )
+
 
 class SupersedeTests(unittest.TestCase):
     def setUp(self):

@@ -67,6 +67,8 @@ folded them in:
 - Boundary tests reject shim surfaces such as `core.identity_ledger`,
   `core.ledger`, `core.wants`, and writer symbols such as `IdentityLedger`,
   `LedgerWriter`, `Wants`, and `record_event`.
+- `metadata_json` is scalar-only and size-capped so it cannot become a backdoor
+  for long prose while the claim and witness fields are content-light.
 
 ## Verification
 
@@ -77,7 +79,7 @@ Focused suite:
   tests.test_gestation_memory tests.test_gestation_memory_sources \
   tests.test_gestation_memory_boundary -v
 
-Ran 30 tests in 0.100s
+Ran 32 tests in 0.106s
 OK
 ```
 

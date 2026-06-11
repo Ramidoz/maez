@@ -25,6 +25,8 @@ STRUCTURAL_SOURCE_KINDS = frozenset({"doc", "commit", "ledger_row"})
 MAX_CLAIM_CHARS = 500
 MAX_WITNESS_NOTE_CHARS = 500
 MAX_EXCERPT_CHARS = 2000
+MAX_METADATA_JSON_BYTES = 2000
+MAX_METADATA_STRING_CHARS = 300
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS gestation_claims (
@@ -210,7 +212,7 @@ class GestationMemory:
         if resolved_structural < 1:
             raise ValueError("at least one resolvable structural source is required")
 
-        meta = json.loads(json.dumps(dict(metadata or {}), sort_keys=True))
+        meta = _validate_metadata(metadata)
         now = datetime.now(UTC).timestamp()
         with closing(self._connect()) as conn:
             with conn:
@@ -346,6 +348,27 @@ class GestationMemory:
 
 def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _validate_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
+    if metadata is None:
+        return {}
+    if not isinstance(metadata, Mapping):
+        raise ValueError("metadata must be a JSON object")
+    out: dict[str, Any] = {}
+    for key, value in metadata.items():
+        key_text = str(key).strip()
+        if not key_text:
+            raise ValueError("metadata keys must be non-empty")
+        if not isinstance(value, (str, int, float, bool, type(None))):
+            raise ValueError("metadata values must be scalar")
+        if isinstance(value, str) and len(value) > MAX_METADATA_STRING_CHARS:
+            raise ValueError("metadata string value too long")
+        out[key_text] = value
+    encoded = json.dumps(out, sort_keys=True)
+    if len(encoded.encode("utf-8")) > MAX_METADATA_JSON_BYTES:
+        raise ValueError("metadata JSON too large")
+    return out
 
 
 def is_structural(source: Mapping[str, Any]) -> bool:
