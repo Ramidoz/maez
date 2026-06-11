@@ -119,3 +119,96 @@ class SelectWantTests(unittest.TestCase):
             now=10000.0,
         )
         self.assertIsNone(got)
+
+
+class _RecordingCards:
+    def __init__(self):
+        self.created = []
+
+    def create_card(self, *, action, params, reason=None, plain_english=None, **kw):
+        self.created.append(
+            {
+                "action": action,
+                "params": params,
+                "reason": reason,
+                "plain_english": plain_english,
+            }
+        )
+
+        class _R:
+            request_id = "card-1"
+
+        return _R()
+
+    def list_open_by_action(self, action):
+        return []
+
+
+class SeedAndProposeTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = TemporaryDirectory()
+        self.w = wonderings.Wonderings(Path(self._tmp.name) / "w.db")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_seed_work_order_adds_want_sourced_wondering(self):
+        wid = wpb.seed_work_order(self.w, {"want_id": "abc", "statement": "stay honest"})
+        row = self.w.get(wid)
+        self.assertEqual(row["source"], "want:abc")
+        self.assertIn("stay honest", row["question"])
+
+    def test_resolved_want_wondering_creates_advisory_card(self):
+        wid = self.w.add("q", source="want:abc")
+        cards = _RecordingCards()
+        rid = wpb.maybe_propose_terminal(
+            {"wondering_id": wid, "action": "resolved", "text": "found the cause"},
+            self.w,
+            cards,
+        )
+        self.assertEqual(rid, "card-1")
+        self.assertEqual(len(cards.created), 1)
+        c = cards.created[0]
+        self.assertEqual(c["action"], "want_terminal_proposal")
+        self.assertEqual(c["params"]["want_id"], "abc")
+        self.assertEqual(c["params"]["proposed"], "satisfied")
+        self.assertEqual(c["params"]["conclusion"], "found the cause")
+        self.assertEqual(c["params"]["wondering_id"], wid)
+
+    def test_abandoned_want_wondering_proposes_nothing(self):
+        wid = self.w.add("q", source="want:abc")
+        cards = _RecordingCards()
+        rid = wpb.maybe_propose_terminal(
+            {"wondering_id": wid, "action": "abandoned", "text": "dead end"},
+            self.w,
+            cards,
+        )
+        self.assertIsNone(rid)
+        self.assertEqual(cards.created, [])
+
+    def test_resolved_non_want_wondering_proposes_nothing(self):
+        wid = self.w.add("q", source="manual")
+        cards = _RecordingCards()
+        rid = wpb.maybe_propose_terminal(
+            {"wondering_id": wid, "action": "resolved", "text": "x"},
+            self.w,
+            cards,
+        )
+        self.assertIsNone(rid)
+        self.assertEqual(cards.created, [])
+
+    def test_non_resolved_actions_propose_nothing(self):
+        wid = self.w.add("q", source="want:abc")
+        cards = _RecordingCards()
+        for action in ("advanced", "card_queued", "no_probe", "safety_refused"):
+            self.assertIsNone(
+                wpb.maybe_propose_terminal(
+                    {"wondering_id": wid, "action": action},
+                    self.w,
+                    cards,
+                )
+            )
+        self.assertEqual(cards.created, [])
+
+    def test_none_result_is_safe(self):
+        self.assertIsNone(wpb.maybe_propose_terminal(None, self.w, _RecordingCards()))
