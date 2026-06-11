@@ -31,6 +31,7 @@ if str(_MAEZ_HOME_PATH) not in sys.path:
     sys.path.insert(0, str(_MAEZ_HOME_PATH))
 from core.infra.secrets import sanitize_env
 from core.health.shared_executor import get_shared_executor
+from core.search.search_commitment import is_search_offer_worthy
 from core.perception import snapshot as perception_snapshot, format_snapshot
 from core.conversation_controller import ConversationController, _search_commitment_enabled
 from core.body.camera_presence_voice import answer_camera_presence_question
@@ -2725,7 +2726,7 @@ class TelegramVoice:
     async def _try_search_commitment_offer_intent(self, update, text: str) -> bool:
         if not _search_commitment_enabled():
             return False
-        if not needs_web_search(text):
+        if not is_search_offer_worthy(text):
             return False
 
         channel, chat_id = "telegram_text", str(self.authorized_user)

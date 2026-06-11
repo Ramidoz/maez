@@ -19,9 +19,46 @@ _CLEAR_YES = re.compile(
     re.IGNORECASE,
 )
 
+_ORDINARY_CHAT = re.compile(
+    r"\b(how are you|how's it going|how is it going|how are things|tell me about yourself)\b",
+    re.IGNORECASE,
+)
+_EXPLICIT_SEARCH = re.compile(
+    r"\b(search(?: the web)?(?: for)?|web search|look up|google)\b",
+    re.IGNORECASE,
+)
+_LIVE_SEARCH_PATTERNS = (
+    re.compile(r"\b(?:latest|current|recent)\b.+", re.IGNORECASE),
+    re.compile(r"\b(?:news|headlines|breaking)\b(?:\s+(?:about|on|for))?\s+.+", re.IGNORECASE),
+    re.compile(r"\bweather\s+(?:in|for|near)\s+.+", re.IGNORECASE),
+    re.compile(r"\bwho won\b.+", re.IGNORECASE),
+    re.compile(r"\b(?:score|scores)\s+(?:of|for|in)?\s*.+", re.IGNORECASE),
+    re.compile(r"\b(?:stock price|share price|price of|price for)\b.+", re.IGNORECASE),
+    re.compile(r"\b(?:exchange rate|currency|convert)\b.+", re.IGNORECASE),
+    re.compile(r"\bwhat(?:'s| is)? happening (?:with|in|about)\b.+", re.IGNORECASE),
+)
+
 
 def is_clear_yes(text: str) -> bool:
     return bool(_CLEAR_YES.match((text or "").strip()))
+
+
+def is_search_offer_worthy(text: str) -> bool:
+    """Return True only for turns worth voicing a typed search offer.
+
+    This is intentionally narrower than ``skills.web_search.needs_web_search``:
+    that legacy detector can stay broad for internal routing, while a spoken
+    offer needs clearer search intent so ordinary conversation does not become
+    "Want me to search?" noise.
+    """
+    normalized = re.sub(r"\s+", " ", (text or "").strip())
+    if not normalized:
+        return False
+    if _ORDINARY_CHAT.search(normalized):
+        return False
+    if _EXPLICIT_SEARCH.search(normalized):
+        return True
+    return any(pattern.search(normalized) for pattern in _LIVE_SEARCH_PATTERNS)
 
 
 @dataclass

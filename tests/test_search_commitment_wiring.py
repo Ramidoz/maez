@@ -5,6 +5,7 @@ import unittest
 from unittest import mock
 
 from core.brain.conversation_controller import ConversationController
+from core.search.search_commitment import is_search_offer_worthy
 from core.search.searxng_client import FakeSearchBackend
 from skills.telegram_voice import TelegramVoice
 
@@ -124,6 +125,19 @@ class SearchCommitmentWiringTests(unittest.TestCase):
         self.assertEqual(backend.searched, [])
 
 
+class SearchCommitmentOfferTriggerTests(unittest.TestCase):
+    def test_offer_trigger_ignores_ordinary_conversation_with_today(self):
+        self.assertFalse(is_search_offer_worthy("how are you today?"))
+        self.assertFalse(is_search_offer_worthy("I feel scattered today."))
+        self.assertFalse(is_search_offer_worthy("tell me about yourself"))
+
+    def test_offer_trigger_accepts_explicit_and_live_search_requests(self):
+        self.assertTrue(is_search_offer_worthy("search the web for llama.cpp release notes"))
+        self.assertTrue(is_search_offer_worthy("look up the current Rust stable version"))
+        self.assertTrue(is_search_offer_worthy("what's the latest llama.cpp release?"))
+        self.assertTrue(is_search_offer_worthy("weather in Austin today"))
+
+
 class TelegramSearchCommitmentSeamTests(unittest.TestCase):
     def test_typed_resolver_runs_before_legacy_offer_consumer(self):
         src = inspect.getsource(TelegramVoice._try_offer_binding_intent)
@@ -171,6 +185,46 @@ class TelegramSearchCommitmentSeamTests(unittest.TestCase):
             self.assertTrue(handled)
             sent_text = reply.await_args.args[1]
             self.assertIn("unavailable", sent_text.lower())
+
+        asyncio.run(run())
+
+    def test_offer_creation_does_not_fire_for_ordinary_today_chat(self):
+        async def run():
+            os.environ["MAEZ_SEARCH_COMMITMENT_ENABLED"] = "1"
+            tv = TelegramVoice.__new__(TelegramVoice)
+            tv.authorized_user = 123
+            tv._controller = _make_controller()
+            tv._derive_search_query = lambda text: text
+            tv._search_commitment_backend = lambda: FakeSearchBackend(health="healthy")
+
+            with mock.patch("skills.telegram_voice._reply_text", new_callable=mock.AsyncMock) as reply:
+                handled = await tv._try_search_commitment_offer_intent(object(), "how are you today?")
+
+            self.assertFalse(handled)
+            reply.assert_not_awaited()
+            self.assertIsNone(tv._controller.get_search_offer("telegram_text", "123"))
+
+        asyncio.run(run())
+
+    def test_offer_creation_still_fires_for_live_search_question(self):
+        async def run():
+            os.environ["MAEZ_SEARCH_COMMITMENT_ENABLED"] = "1"
+            tv = TelegramVoice.__new__(TelegramVoice)
+            tv.authorized_user = 123
+            tv._controller = _make_controller()
+            tv._derive_search_query = lambda text: text
+            tv._search_commitment_backend = lambda: FakeSearchBackend(health="healthy")
+
+            with mock.patch("skills.telegram_voice._reply_text", new_callable=mock.AsyncMock) as reply:
+                handled = await tv._try_search_commitment_offer_intent(
+                    object(),
+                    "what's the latest llama.cpp release?",
+                )
+
+            self.assertTrue(handled)
+            self.assertIsNotNone(tv._controller.get_search_offer("telegram_text", "123"))
+            sent_text = reply.await_args.args[1]
+            self.assertIn("Want me to?", sent_text)
 
         asyncio.run(run())
 

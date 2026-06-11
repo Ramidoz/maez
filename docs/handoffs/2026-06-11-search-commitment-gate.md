@@ -16,6 +16,11 @@
 - `core/search/search_commitment.py`
   - `OfferReceipt`.
   - `is_clear_yes()`.
+  - `is_search_offer_worthy()` for spoken commitment offers. This is
+    intentionally narrower than the legacy `needs_web_search(...)` detector:
+    ordinary conversation like "how are you today?" does not create a search
+    offer, while explicit search requests and genuinely live/current queries
+    still can.
   - `resolve_affirmation()` with the trap-proof conjunction:
     `clear_yes ∧ fresh ∧ low_read ∧ sovereign_local_search ∧ healthy ∧ no awaiting card`.
 
@@ -50,8 +55,25 @@ Task 0 retired the load-bearing seam risk:
 Implementation judgment call for review:
 
 - The plan handoff named the old post-reply site (`maybe_store_offer` / `maybe_store_probe_bridge_offer`) as the offer-creation attach point. Codex did **not** reuse that as the new offer writer because it would keep the free-voice / regex-capture shape the spec was trying to retire.
-- Instead, v0 creates the typed search offer before the general reply path when the flag is on, the user turn is `needs_web_search(...)`, and the SearXNG backend reports `healthy`.
+- Instead, v0 creates the typed search offer before the general reply path when
+  the flag is on, the user turn passes the narrower
+  `is_search_offer_worthy(...)` commitment-offer trigger, and the SearXNG
+  backend reports `healthy`.
 - Explicit search commands still go through the existing `_try_web_search_intent` first, so v0 does not globally replace the existing direct-search command path.
+
+Cross-lane review found one quality issue after the initial safety PASS:
+
+- The first build reused broad `needs_web_search(...)` for typed offers. That
+  detector intentionally matches words such as "today" and "current", so with
+  the flag on, ordinary turns like "how are you today?" would have produced a
+  spoken search offer. This was not unsafe, but it would make the live witness
+  noisy and undignified.
+- The follow-up fix added `is_search_offer_worthy(...)` and switched only the
+  typed commitment-offer path to that predicate. The legacy broad detector and
+  `skills/web_search.py:search()` remain untouched.
+- Regression tests now pin both sides: "how are you today?" does not store or
+  voice a typed offer, while "what's the latest llama.cpp release?" still does
+  when SearXNG is healthy.
 
 ## Review focus
 
@@ -64,6 +86,9 @@ Claude / owner review should read these exact seams:
 5. **Telegram attach point:** typed resolver before legacy consumer; typed offer interceptor before `_process_message`; explicit direct search still precedes typed offer creation.
 6. **Health-loss honesty:** if search goes unavailable between offer and confirmation, Maez says so and does not fabricate.
 7. **No global search swap:** `skills/web_search.py:search()` is untouched.
+8. **Offer trigger quality:** ordinary conversational turns containing broad
+   live-data words like "today" do not create typed search offers; genuine
+   explicit/live search questions still do.
 
 ## Verification already run
 
@@ -76,6 +101,18 @@ Claude / owner review should read these exact seams:
 ```
 
 Result: **32 tests OK**.
+
+Follow-up after cross-lane over-offer review:
+
+```bash
+.venv/bin/python -B -m unittest \
+  tests.test_search_commitment \
+  tests.test_searxng_client \
+  tests.test_search_commitment_wiring \
+  tests.test_conversation_offer_supersession -v
+```
+
+Result: **36 tests OK**.
 
 ```bash
 .venv/bin/ruff check \
