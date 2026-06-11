@@ -350,6 +350,16 @@ class Wonderings:
             ).fetchall()
             return [dict(r) for r in rows]
 
+    def list_by_source(self, source: str) -> list[dict]:
+        """All wonderings with an exact source, oldest first."""
+        with self._lock, self._conn() as c:
+            rows = c.execute(
+                "SELECT * FROM wonderings WHERE source = ? "
+                "ORDER BY COALESCE(last_advanced, created_at) ASC",
+                (source,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
     def list_all(self, limit: int = 50) -> list[dict]:
         """All wonderings, any status, newest first. For the /wonderings
         slash command and debugging."""
