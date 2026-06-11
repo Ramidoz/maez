@@ -1,0 +1,16 @@
+# Owner installs to ~/.config/systemd/user/maez-searxng.service and starts it
+# as the witness breath. The merge does not install or start this service.
+# SearXNG is cloned and built by the owner; the contained audition proved
+# Python 3.14 can install its requirements and editable package on this box.
+[Unit]
+Description=Maez sovereign search body (SearXNG, local-only)
+After=default.target
+
+[Service]
+Type=simple
+Environment=SEARXNG_SETTINGS_PATH=%h/.config/maez/searxng-settings.yml
+ExecStart=%h/searxng/.venv/bin/python -m searx.webapp
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
