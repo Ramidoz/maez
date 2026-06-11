@@ -36,6 +36,8 @@ from core.routing.brain_gateway import (
     copy_current_context_callable,
     with_purpose,
 )
+from core.conversation_controller import _search_commitment_enabled
+from core.search.search_commitment import is_clear_yes, is_search_offer_worthy
 from core.safety.clinical_boundary import PrivateThoughtsCrisisSignalWriter, guard_owner_text
 from skills.surface.platform_base import MessageEvent, MessageType
 from skills.surface.platform_config import PlatformConfig
@@ -171,6 +173,83 @@ class MaezMessageHandler:
 
     def __init__(self, daemon: Any):
         self.daemon = daemon
+
+    def _search_commitment_controller(self):
+        legacy_tg = getattr(self.daemon, "telegram", None)
+        return getattr(legacy_tg, "_controller", None)
+
+    def _search_commitment_backend(self):
+        from core.search.searxng_client import SearxngBackend
+
+        return SearxngBackend()
+
+    def _format_search_commitment_results(self, query: str, results: list[dict]) -> str:
+        label = (query or "the search I offered").strip()
+        lines = [f'Here\'s what I found for "{label}":', ""]
+        for i, row in enumerate((results or [])[:5], 1):
+            title = re.sub(r"\s+", " ", (row.get("title") or "").strip())[:90]
+            url = re.sub(r"\s+", "", (row.get("url") or "").strip())[:120]
+            content = re.sub(
+                r"\s+",
+                " ",
+                (row.get("content") or row.get("snippet") or "").strip(),
+            )[:220]
+            lines.append(f"{i}. {title}")
+            if content:
+                lines.append(f"   {content}")
+            if url:
+                lines.append(f"   {url}")
+            lines.append("")
+        reply = "\n".join(lines).rstrip()
+        if len(reply) > 3500:
+            reply = reply[:3500] + "\n\n(truncated)"
+        return reply
+
+    async def _try_search_commitment_intent(
+        self,
+        *,
+        text: str,
+        chat_id: str,
+    ) -> Optional[str]:
+        if not _search_commitment_enabled():
+            return None
+        ctrl = self._search_commitment_controller()
+        if ctrl is None:
+            return None
+
+        channel = "telegram_text"
+        backend = self._search_commitment_backend()
+        receipt = ctrl.get_search_offer(channel, chat_id)
+        query = getattr(receipt, "offered_query", "") if receipt is not None else ""
+        if receipt is not None and is_clear_yes(text) and backend.health() != "healthy":
+            return (
+                "My web search is unavailable right now, so I can't follow through "
+                "on that search honestly. I'm not going to make up an answer."
+            )
+
+        results = ctrl.resolve_search_affirmation(
+            channel,
+            chat_id,
+            text,
+            backend,
+            turns_since=1,
+        )
+        if results is not None:
+            return self._format_search_commitment_results(query, results)
+
+        if not is_search_offer_worthy(text):
+            return None
+
+        health = backend.health()
+        query = (text or "").strip()
+        if ctrl.store_search_offer(channel, chat_id, query, health=health):
+            return f"I can search for this through my local web sense: {query}. Want me to?"
+        if health in {"degraded", "down"}:
+            return (
+                "My web search is degraded right now, so I shouldn't promise a search. "
+                "I can answer from what I already know, or we can try again later."
+            )
+        return None
 
     async def __call__(self, event: MessageEvent) -> Optional[str]:
         text = (event.text or "").strip()
@@ -309,6 +388,13 @@ class MaezMessageHandler:
                             except Exception:
                                 return dialog_reply
                         return None
+
+        search_commitment_reply = await self._try_search_commitment_intent(
+            text=text,
+            chat_id=chat_id,
+        )
+        if search_commitment_reply:
+            return search_commitment_reply
 
         # Self-mod dialog bridge — brain_loop needs a callable that
         # surfaces the Lane-3 dialog opening as a Telegram message

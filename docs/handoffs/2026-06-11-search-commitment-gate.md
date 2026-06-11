@@ -38,19 +38,35 @@
   - offer creation is a substrate-side Telegram interceptor before `_process_message`, after the existing explicit web-search command interceptor. This preserves direct explicit search commands while fixing the “Maez offered, owner said yes, nothing happened” wound.
   - legacy post-reply regex offer capture remains present but is disabled by the controller when the flag is on.
 
+- `skills/surface/maez_adapter.py`
+  - Surface V2 is the live inbound Telegram path. It now calls the same typed
+    search-commitment controller after card-reply handling and before the brain
+    loop / `daemon.handle_message(...)`.
+  - A search-worthy turn returns the typed offer before daemon synthesis.
+  - A clear affirmation against a fresh typed receipt returns SearXNG results
+    before daemon synthesis.
+  - An open approval card is still handled first, so card replies keep
+    precedence over search commitment.
+
 - `scripts/maez-searxng.template.service`
   - inert user-service template only. Merge does not install or start it.
 
 ## Seam record
 
-Task 0 retired the load-bearing seam risk:
+Task 0 initially missed the runtime inbound seam:
 
 - `core/brain/conversation_controller.py:handle_user_message()` is still extraction-in-progress and has no live caller.
-- live Telegram controller seam is `skills/telegram_voice.py`:
-  - controller instantiated around `TelegramVoice.__init__`.
-  - per-message handler is `_handle_message`.
-  - typed affirmation resolution is reached through `_try_offer_binding_intent`.
-  - typed offer creation is reached through `_try_search_commitment_offer_intent`, before the general reply path.
+- `skills/telegram_voice.py` has a registered legacy handler and still owns
+  outbound/shared plumbing, but daemon startup notes that inbound Telegram
+  polling has been owned by `skills/surface/` since 2026-04-20.
+- The live inbound Telegram controller seam is
+  `skills/surface/maez_adapter.py:MaezMessageHandler.__call__`, which calls
+  `daemon.handle_message(..., source="telegram_surface", ...)`.
+- The witness no-go proved this at runtime: the daemon logs showed
+  `telegram_surface message:` / `chat_turn handled`, not the legacy
+  `Telegram message from the owner` path.
+- The corrected tests pin the actual firing handler rather than merely checking
+  that a legacy handler is registered.
 
 Implementation judgment call for review:
 
@@ -75,6 +91,19 @@ Cross-lane review found one quality issue after the initial safety PASS:
   voice a typed offer, while "what's the latest llama.cpp release?" still does
   when SearXNG is healthy.
 
+Live witness no-go after the first wiring found one integration bug:
+
+- The typed commitment organ was wired into `skills/telegram_voice.py`, but the
+  actually running inbound path is Surface V2.
+- The core was proven sound in-process (`store -> get -> resolve("yeah sure")
+  -> SearXNG rows`), but the owner message never reached those interceptors.
+- The follow-up fix ports the same typed offer/affirmation wrapper into
+  `MaezMessageHandler.__call__` while leaving the core resolver, backend, and
+  controller methods untouched.
+- New Surface V2 tests prove the real inbound handler now creates offers,
+  resolves "yeah sure" to results, preserves card precedence, reports
+  health-loss honestly, and creates no executable offer when search is degraded.
+
 ## Review focus
 
 Claude / owner review should read these exact seams:
@@ -83,7 +112,10 @@ Claude / owner review should read these exact seams:
 2. **Trap-proof conjunction:** high-stakes, keyed-egress, stale, unhealthy, and awaiting-card cases do not execute.
 3. **Egress rail:** the backend searches only the stored `offered_query`.
 4. **Legacy supersession:** all three old untyped offer methods are inert under the flag.
-5. **Telegram attach point:** typed resolver before legacy consumer; typed offer interceptor before `_process_message`; explicit direct search still precedes typed offer creation.
+5. **Surface V2 attach point:** typed commitment handling runs in
+   `MaezMessageHandler.__call__` after card handling and before
+   `daemon.handle_message(...)`; legacy TelegramVoice wiring is not the witness
+   surface.
 6. **Health-loss honesty:** if search goes unavailable between offer and confirmation, Maez says so and does not fabricate.
 7. **No global search swap:** `skills/web_search.py:search()` is untouched.
 8. **Offer trigger quality:** ordinary conversational turns containing broad
@@ -114,11 +146,26 @@ Follow-up after cross-lane over-offer review:
 
 Result: **36 tests OK**.
 
+Follow-up after live Surface V2 no-go:
+
+```bash
+.venv/bin/python -B -m unittest \
+  tests.test_surface_adapter \
+  tests.test_search_commitment \
+  tests.test_searxng_client \
+  tests.test_search_commitment_wiring \
+  tests.test_conversation_offer_supersession -v
+```
+
+Result: **53 tests OK**.
+
 ```bash
 .venv/bin/ruff check \
   core/search/ \
   core/brain/conversation_controller.py \
+  skills/surface/maez_adapter.py \
   skills/telegram_voice.py \
+  tests/test_surface_adapter.py \
   tests/test_search_commitment_wiring.py \
   tests/test_conversation_offer_supersession.py
 ```

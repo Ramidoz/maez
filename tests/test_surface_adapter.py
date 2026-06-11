@@ -11,6 +11,8 @@ so a future bootstrap call produces a working bot.
 from __future__ import annotations
 
 import asyncio
+import os
+import time
 import unittest
 from pathlib import Path
 from typing import Optional
@@ -18,6 +20,8 @@ from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 
+from core.brain.conversation_controller import ConversationController
+from core.search.searxng_client import FakeSearchBackend
 from skills.surface import (
     MessageEvent, Platform, PlatformConfig, SessionSource, build_session_key,
     MaezMessageHandler, build_telegram_adapter, SURFACE_NAME,
@@ -83,7 +87,48 @@ class _FakeDaemon:
         return reply
 
 
+class _EmptyCards:
+    def get_open_for_channel(self, *args, **kwargs):
+        return []
+
+
+class _Pipe:
+    def __init__(self, *, open_cards=None, dialog_reply="card handled"):
+        self.card_store = self
+        self._open_cards = [] if open_cards is None else open_cards
+        self._dialog_reply = dialog_reply
+        self.replies = []
+
+    def get_open_for_channel(self, *args, **kwargs):
+        return list(self._open_cards)
+
+    def handle_reply(self, **kwargs):
+        self.replies.append(kwargs)
+
+        class _Result:
+            dialog_reply_text = self._dialog_reply
+
+        return _Result()
+
+
+class _TelegramWithController:
+    def __init__(self, controller=None, pipe=None):
+        self._controller = controller or ConversationController(
+            memory=None,
+            pipeline=None,
+            daemon=None,
+        )
+        self._pipe = pipe or _Pipe()
+
+    def _get_pipeline(self):
+        return self._pipe
+
+
 class HandlerRouting(unittest.TestCase):
+    def setUp(self):
+        os.environ.pop("MAEZ_SEARCH_COMMITMENT_ENABLED", None)
+        self.addCleanup(lambda: os.environ.pop("MAEZ_SEARCH_COMMITMENT_ENABLED", None))
+
     def test_handler_routes_text_through_daemon(self):
         daemon = _FakeDaemon(reply="I heard you")
         handler = MaezMessageHandler(daemon)
@@ -204,6 +249,150 @@ class HandlerRouting(unittest.TestCase):
 
         self.assertEqual(result, "I heard you")
         self.assertEqual(run.call_args.kwargs["surface"], SURFACE_NAME)
+
+    def test_surface_v2_search_commitment_offers_before_daemon_synthesis(self):
+        os.environ["MAEZ_SEARCH_COMMITMENT_ENABLED"] = "1"
+        daemon = _FakeDaemon(reply="general reply")
+        daemon.telegram = _TelegramWithController()
+        handler = MaezMessageHandler(daemon)
+        handler._search_commitment_backend = lambda: FakeSearchBackend(health="healthy")
+        event = MessageEvent(
+            text="what's the latest llama.cpp release?",
+            source=SessionSource(
+                platform=Platform.TELEGRAM,
+                chat_id="c",
+                user_id="rohit",
+                user_name="Rohit",
+            ),
+        )
+
+        result = asyncio.run(handler(event))
+
+        self.assertIn("Want me to?", result)
+        self.assertIsNotNone(
+            daemon.telegram._controller.get_search_offer("telegram_text", "c")
+        )
+        self.assertIsNone(daemon.last_text)
+
+    def test_surface_v2_search_commitment_resolves_yes_to_results(self):
+        os.environ["MAEZ_SEARCH_COMMITMENT_ENABLED"] = "1"
+        backend = FakeSearchBackend(
+            health="healthy",
+            results=[{"title": "Release", "url": "https://example.test", "content": "notes"}],
+        )
+        ctrl = ConversationController(memory=None, pipeline=None, daemon=None)
+        self.assertTrue(
+            ctrl.store_search_offer(
+                "telegram_text",
+                "c",
+                "llama.cpp release",
+                health="healthy",
+                now_ts=time.time(),
+            )
+        )
+        daemon = _FakeDaemon(reply="general reply")
+        daemon.telegram = _TelegramWithController(controller=ctrl)
+        handler = MaezMessageHandler(daemon)
+        handler._search_commitment_backend = lambda: backend
+        event = MessageEvent(
+            text="yeah sure",
+            source=SessionSource(
+                platform=Platform.TELEGRAM,
+                chat_id="c",
+                user_id="rohit",
+                user_name="Rohit",
+            ),
+        )
+
+        result = asyncio.run(handler(event))
+
+        self.assertIn("Here's what I found", result)
+        self.assertIn("Release", result)
+        self.assertEqual(backend.searched, ["llama.cpp release"])
+        self.assertIsNone(daemon.last_text)
+
+    def test_surface_v2_open_card_precedes_search_commitment_yes(self):
+        os.environ["MAEZ_SEARCH_COMMITMENT_ENABLED"] = "1"
+        backend = FakeSearchBackend(health="healthy")
+        ctrl = ConversationController(memory=None, pipeline=None, daemon=None)
+        ctrl.store_search_offer(
+            "telegram_text",
+            "c",
+            "llama.cpp release",
+            health="healthy",
+            now_ts=time.time(),
+        )
+        pipe = _Pipe(open_cards=[{"id": "card-1"}], dialog_reply="card handled")
+        daemon = _FakeDaemon(reply="general reply")
+        daemon.telegram = _TelegramWithController(controller=ctrl, pipe=pipe)
+        handler = MaezMessageHandler(daemon)
+        handler._search_commitment_backend = lambda: backend
+        event = MessageEvent(
+            text="yeah sure",
+            source=SessionSource(
+                platform=Platform.TELEGRAM,
+                chat_id="c",
+                user_id="rohit",
+                user_name="Rohit",
+            ),
+        )
+
+        result = asyncio.run(handler(event))
+
+        self.assertEqual(result, "card handled")
+        self.assertEqual(backend.searched, [])
+        self.assertIsNotNone(ctrl.get_search_offer("telegram_text", "c"))
+
+    def test_surface_v2_health_loss_after_offer_is_honest_unavailable(self):
+        os.environ["MAEZ_SEARCH_COMMITMENT_ENABLED"] = "1"
+        ctrl = ConversationController(memory=None, pipeline=None, daemon=None)
+        ctrl.store_search_offer(
+            "telegram_text",
+            "c",
+            "llama.cpp release",
+            health="healthy",
+            now_ts=time.time(),
+        )
+        daemon = _FakeDaemon(reply="general reply")
+        daemon.telegram = _TelegramWithController(controller=ctrl)
+        handler = MaezMessageHandler(daemon)
+        handler._search_commitment_backend = lambda: FakeSearchBackend(health="down")
+        event = MessageEvent(
+            text="yeah sure",
+            source=SessionSource(
+                platform=Platform.TELEGRAM,
+                chat_id="c",
+                user_id="rohit",
+                user_name="Rohit",
+            ),
+        )
+
+        result = asyncio.run(handler(event))
+
+        self.assertIn("unavailable", result.lower())
+        self.assertIsNone(daemon.last_text)
+
+    def test_surface_v2_degraded_search_creates_no_executable_offer(self):
+        os.environ["MAEZ_SEARCH_COMMITMENT_ENABLED"] = "1"
+        daemon = _FakeDaemon(reply="general reply")
+        daemon.telegram = _TelegramWithController()
+        handler = MaezMessageHandler(daemon)
+        handler._search_commitment_backend = lambda: FakeSearchBackend(health="degraded")
+        event = MessageEvent(
+            text="what's the latest llama.cpp release?",
+            source=SessionSource(
+                platform=Platform.TELEGRAM,
+                chat_id="c",
+                user_id="rohit",
+                user_name="Rohit",
+            ),
+        )
+
+        result = asyncio.run(handler(event))
+
+        self.assertIn("degraded", result.lower())
+        self.assertIsNone(daemon.telegram._controller.get_search_offer("telegram_text", "c"))
+        self.assertIsNone(daemon.last_text)
 
 
 class BuildTelegramAdapter(unittest.TestCase):
