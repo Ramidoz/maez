@@ -2,8 +2,11 @@ from dataclasses import dataclass, field
 import json
 import os
 import tempfile
+import importlib
+import sys
 import time
 import unittest
+from unittest import mock
 
 from core.cognition import grounding_shadow as gs
 from core.cognition.support_verifier import FakeSupportVerifier, SUPPORTED, UNSUPPORTED
@@ -189,6 +192,111 @@ class GroundingShadowQueueTests(unittest.TestCase):
         self.assertTrue(
             any(r.get("shadow_id") == "done" and r["status"] == "ok" for r in recs)
         )
+
+
+class HookTests(unittest.TestCase):
+    def setUp(self):
+        gs.reset_shadow_singleton()
+        self.addCleanup(gs.reset_shadow_singleton)
+        for key in ("MAEZ_GROUNDING_SHADOW_ENABLED", "MAEZ_GROUNDING_SHADOW_DEBUG"):
+            os.environ.pop(key, None)
+
+    def _temp_path(self):
+        fd, path = tempfile.mkstemp(suffix=".jsonl")
+        os.close(fd)
+        self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
+        return path
+
+    def test_disabled_by_default(self):
+        out = gs.shadow_observe(
+            _FakeAudit(),
+            CLAIMABLE,
+            surface="telegram",
+            boot_id="b",
+            shadow_id="s",
+            ts=1,
+        )
+        self.assertEqual(out, "disabled")
+
+    def test_enabled_enqueues(self):
+        os.environ["MAEZ_GROUNDING_SHADOW_ENABLED"] = "1"
+        shadow = gs.GroundingShadow(FakeSupportVerifier(), self._temp_path(), maxsize=4)
+        gs.set_shadow_singleton(shadow)
+        out = gs.shadow_observe(
+            _FakeAudit(),
+            CLAIMABLE,
+            surface="telegram",
+            boot_id="b",
+            shadow_id="s",
+            ts=1,
+        )
+        self.assertEqual(out, "enqueued")
+
+    def test_observe_never_raises_and_returns_promptly(self):
+        os.environ["MAEZ_GROUNDING_SHADOW_ENABLED"] = "1"
+        shadow = gs.GroundingShadow(
+            FakeSupportVerifier(sleep_s=5.0),
+            self._temp_path(),
+            maxsize=4,
+        )
+        gs.set_shadow_singleton(shadow)
+        t0 = time.monotonic()
+        out = gs.shadow_observe(
+            _FakeAudit(),
+            CLAIMABLE,
+            surface="telegram",
+            boot_id="b",
+            shadow_id="s",
+            ts=1,
+        )
+        self.assertLess(time.monotonic() - t0, 0.5)
+        self.assertEqual(out, "enqueued")
+
+    def test_daemon_module_does_not_import_transformers(self):
+        for module in [
+            key for key in sys.modules if key.startswith(("transformers", "torch"))
+        ]:
+            del sys.modules[module]
+        importlib.reload(gs)
+        self.assertNotIn("transformers", sys.modules)
+        self.assertNotIn("torch", sys.modules)
+
+    def test_call_site_keeps_reply_unchanged(self):
+        from core.safety import audited_output
+        from core.safety.self_claim_audit import AuditResult
+
+        fixed = AuditResult(
+            text="The corrected reply.",
+            rewritten=True,
+            mode="sentence",
+            flags=[],
+        )
+        env = {"claimable": CLAIMABLE}
+        with mock.patch("core.safety.self_claim_audit.audit", return_value=fixed):
+            out_off = audited_output.audit_assistant_text(
+                "raw",
+                surface="telegram",
+                evidence_envelope=env,
+                signals_present=[],
+                signals_absent=[],
+            )
+            os.environ["MAEZ_GROUNDING_SHADOW_ENABLED"] = "1"
+            gs.set_shadow_singleton(
+                gs.GroundingShadow(
+                    FakeSupportVerifier(raises=RuntimeError("boom")),
+                    self._temp_path(),
+                    maxsize=4,
+                )
+            )
+            out_on = audited_output.audit_assistant_text(
+                "raw",
+                surface="telegram",
+                evidence_envelope=env,
+                signals_present=[],
+                signals_absent=[],
+            )
+        self.assertEqual(out_off, out_on)
+        self.assertEqual(out_on, "The corrected reply.")
 
 
 if __name__ == "__main__":

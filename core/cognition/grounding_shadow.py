@@ -7,6 +7,7 @@ content-light divergence telemetry. This module gates nothing.
 from __future__ import annotations
 
 import json
+import os
 import queue
 import re
 import hashlib
@@ -14,6 +15,7 @@ import threading
 import time
 
 from core.cognition.support_verifier import (
+    HttpSupportVerifier,
     SUPPORTED,
     UNAVAILABLE,
     UNSUPPORTED,
@@ -289,3 +291,70 @@ class GroundingShadow:
                 f.write(json.dumps(rec) + "\n")
         except Exception:
             pass
+
+
+_SHADOW_SINGLETON = None
+
+
+def _default_telemetry_path() -> str:
+    base = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+    directory = os.path.join(base, "maez")
+    os.makedirs(directory, exist_ok=True)
+    return os.path.join(directory, "grounding_shadow.jsonl")
+
+
+def _get_shadow():
+    global _SHADOW_SINGLETON
+    if not os.environ.get("MAEZ_GROUNDING_SHADOW_ENABLED"):
+        return None
+    if _SHADOW_SINGLETON is None:
+        _SHADOW_SINGLETON = GroundingShadow(
+            HttpSupportVerifier(),
+            _default_telemetry_path(),
+            debug=bool(os.environ.get("MAEZ_GROUNDING_SHADOW_DEBUG")),
+        )
+        _SHADOW_SINGLETON.start()
+    return _SHADOW_SINGLETON
+
+
+def set_shadow_singleton(shadow):
+    global _SHADOW_SINGLETON
+    _SHADOW_SINGLETON = shadow
+
+
+def reset_shadow_singleton():
+    global _SHADOW_SINGLETON
+    if _SHADOW_SINGLETON is not None:
+        try:
+            _SHADOW_SINGLETON.stop()
+        except Exception:
+            pass
+    _SHADOW_SINGLETON = None
+
+
+def shadow_observe(
+    audit_result,
+    claimable_items,
+    *,
+    surface,
+    boot_id,
+    shadow_id,
+    ts,
+) -> str:
+    """Non-blocking observation hook. Never raises into the caller."""
+    try:
+        shadow = _get_shadow()
+        if shadow is None:
+            return "disabled"
+        job = {
+            "final_text": getattr(audit_result, "text", "") or "",
+            "claimable_items": claimable_items,
+            "audit_summary": audit_summary_from_result(audit_result),
+            "surface": surface,
+            "boot_id": boot_id,
+            "shadow_id": shadow_id,
+            "ts": ts,
+        }
+        return shadow.enqueue(job)
+    except Exception:
+        return "disabled"
