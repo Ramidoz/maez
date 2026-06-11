@@ -343,21 +343,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 All three expose the same interface: `.support(evidence, claim) -> (label, latency_s)` where `label ∈ {SUPPORTED, UNSUPPORTED, EMPTY, ERROR(...), UNPARSED(...)}`. HHEM also stores its last raw score for the sweep. **Models load lazily on first `.support()`** (so tests can mock without loading).
 
-> **API-confirmation smoke (do this BEFORE writing the adapters, it is owner-gated):** the HHEM download runs `trust_remote_code`. Get owner approval, then confirm the exact call on ONE pair:
-> ```bash
-> # OWNER-GATED: downloads ~440MB + runs HHEM repo code on load. Pinned revision.
-> /home/rohit/maez/.venv/bin/python -B -c "
-> from transformers import AutoModelForSequenceClassification
-> m = AutoModelForSequenceClassification.from_pretrained(
->     'vectara/hallucination_evaluation_model', trust_remote_code=True, revision='<PINNED_SHA>')
-> print('HHEM score:', m.predict([('The sky is blue.', 'The sky is blue.')]))  # expect ~high
-> "
-> # MiniCheck-DeBERTa (no remote code):
-> /home/rohit/maez/.venv/bin/python -B -c "
-> from minicheck.minicheck import MiniCheck    # if pkg present; else AutoModelForSequenceClassification
-> ..."  # confirm the (doc, claim)->label call shape, record it
-> ```
-> Record the confirmed call shapes; if they differ from the snippets below, adjust the adapter to match (do NOT force the snippet).
+> **Option A — HHEM is unavailable by construction until the gate clears.** `HHEM_REVISION` ships **unset (`None`)**; `HhemVerifier` raises `HhemRevisionUnconfigured` on load → `.support()` returns `ERROR(HhemRevisionUnconfigured)` rather than download anything. **No model downloads, and no `trust_remote_code` executes, anywhere in this build** — every verifier test mocks the raw inference, and MiniCheck also loads lazily (nothing downloads until the scorecard run). Resolving the HHEM pin, the owner-approved download, and the **API-confirmation smoke** (HHEM `.predict` shape + MiniCheck `(doc,claim)` shape — confirm and adjust the adapters if the real call differs from the snippets below) all happen **post-gate in Task 7**. This preserves the safety boundary: build everything offline, stop before any remote-code/download.
 
 - [ ] **Step 1: Write the failing test (mocked models — no real load)**
 
@@ -384,6 +370,14 @@ class VerifierTests(unittest.TestCase):
         with mock.patch.object(v, "_score_raw", return_value=0.2):
             self.assertEqual(v.support("E", "C")[0], "UNSUPPORTED")
         self.assertEqual(v.last_score, 0.2)
+
+    def test_hhem_unconfigured_revision_errors_without_download(self):
+        # Option A: with HHEM_REVISION unset (the default), HHEM refuses to load —
+        # it returns a clear ERROR and never touches the network / remote code.
+        self.assertIsNone(V.HHEM_REVISION)         # ships unset
+        v = V.HhemVerifier(threshold=0.5)          # NOT mocked
+        label, _ = v.support("E", "C")
+        self.assertEqual(label, "ERROR(HhemRevisionUnconfigured)")
 
     def test_4b_adapter_parses_endpoint(self):
         v = V.FourBAdapterVerifier(url="http://x", model="m")
@@ -414,10 +408,15 @@ import httpx
 from adapter_prompt import (ENTAILMENT_SYSTEM_PROMPT, build_entailment_user_prompt,
                             parse_support_verdict)
 
-# Pin HHEM to a specific commit — never load trust_remote_code off a moving main.
+# Option A: HHEM ships UNAVAILABLE until the owner-gated pin is supplied post-gate.
+# Nothing downloads and no trust_remote_code runs during the build.
 HHEM_REPO = "vectara/hallucination_evaluation_model"
-HHEM_REVISION = "<PINNED_SHA>"  # resolved + owner-approved in the smoke step
+HHEM_REVISION = None  # set post-gate to a full 40-char commit sha (owner-approved download)
 MINICHECK_REPO = "lytang/MiniCheck-DeBERTa-v3-Large"
+
+
+class HhemRevisionUnconfigured(RuntimeError):
+    """Raised when HhemVerifier is used before the owner-gated pin is set."""
 
 
 class HhemVerifier:
@@ -427,6 +426,10 @@ class HhemVerifier:
         self._model = None
 
     def _load(self):
+        if not HHEM_REVISION:
+            raise HhemRevisionUnconfigured(
+                "HHEM_REVISION unset — set the owner-approved pinned commit post-gate "
+                "(no trust_remote_code download happens until then)")
         from transformers import AutoModelForSequenceClassification
         self._model = AutoModelForSequenceClassification.from_pretrained(
             HHEM_REPO, trust_remote_code=True, revision=HHEM_REVISION)
@@ -828,8 +831,11 @@ Create `docs/handoffs/2026-06-11-grounding-audition-gate.md` documenting:
 - **The three hard gates that must clear before the scorecard run:**
   1. **Corpus label review** — Codex/owner reads each case's `(evidence, claim, expected, rationale)` and confirms the grounding label, case-by-case.
   2. **4B-adapter prompt review** — `adapter_prompt.py:ENTAILMENT_SYSTEM_PROMPT` reviewed (it's the yardstick).
-  3. **HHEM download owner-approval** — `trust_remote_code` runs repo code; resolve + pin `HHEM_REVISION`, owner approves the ~440MB download + remote-code execution.
-- The post-gate run command: `/home/rohit/maez/.venv/bin/python -B scripts/grounding_bench/bench_grounding.py` (judge endpoint up on 8081 for the 4B-adapter row).
+  3. **HHEM download owner-approval + pin** — `HhemVerifier` ships inert (`ERROR(HhemRevisionUnconfigured)`) until `HHEM_REVISION` is set; nothing downloaded so far. Owner approves the ~440MB download + `trust_remote_code` execution.
+- **Post-gate sequence (only after all three clear):**
+  1. Resolve the current commit sha of `vectara/hallucination_evaluation_model` and set `HHEM_REVISION` in `verifiers.py` to it (full 40-char sha).
+  2. **API-confirmation smoke** — load HHEM (now permitted) + MiniCheck on ONE pair each; confirm the `.predict` / `(doc,claim)` call shapes match the adapters; **adjust the adapters if the real call differs — do not force the snippet.**
+  3. **Run the scorecard:** `/home/rohit/maez/.venv/bin/python -B scripts/grounding_bench/bench_grounding.py` (judge endpoint up on 8081 for the 4B-adapter row). Optionally add the production-`grounding_judge` diagnostic row.
 
 - [ ] **Step 3: Commit + STOP**
 ```bash
@@ -849,9 +855,9 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 - 4B = entailment *adapter* (reviewed prompt), NOT grounding_judge's overclaim contract; test forbids the overclaim phrasing: Task 3. ✓
 - Abstain precondition calls no model (mock asserts not-called): Task 5. ✓
 - HHEM threshold sweep {0.3,0.5,0.7}; MiniCheck binary; per-mode false-negative headline: Tasks 4/6. ✓
-- HHEM `trust_remote_code` revision-pinned + owner-gated download: Task 4 smoke + Task 7 gate. ✓
+- HHEM `trust_remote_code` unavailable-by-construction (`HHEM_REVISION=None` → `ERROR(HhemRevisionUnconfigured)`); pin + owner-approved download + smoke are all post-gate (Option A — resolves the Task-4-smoke vs Task-7-gate contradiction): Task 4 guard + Task 7 post-gate sequence. ✓
 - Scope: no live-daemon change; no-citation excluded; citation/overclaim rails untouched: throughout. ✓
 - STOP at the gate before the meaningful run (label + prompt + download review): Task 7. ✓
 - Optional production-`grounding_judge` diagnostic row: deferred to the post-gate run (notable: not blocking v0; can be added as a `--only` candidate later).
 
-Placeholder scan: `HHEM_REVISION = "<PINNED_SHA>"` and the MiniCheck call-shape are intentionally resolved in the owner-gated API-confirmation smoke (Task 4), not guessed — flagged, not a silent TODO. No other placeholders. Signatures consistent: `.support(evidence, claim) -> (label, latency)` across all three verifiers; `judge_case`, `false_negatives_by_mode`, `render_markdown` consistent across Tasks 5–6.
+Placeholder scan: **no placeholder SHA is committed** — `HHEM_REVISION = None` ships HHEM unavailable-by-construction; the real pin is set post-gate (Task 7) and the MiniCheck call-shape is confirmed in the post-gate smoke. No `<PLACEHOLDER>` strings in committed code. No other placeholders. Signatures consistent: `.support(evidence, claim) -> (label, latency)` across all three verifiers; `judge_case`, `false_negatives_by_mode`, `render_markdown` consistent across Tasks 5–6.
