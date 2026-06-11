@@ -63,6 +63,13 @@ class SchemaTests(unittest.TestCase):
                 )
             with self.assertRaises(sqlite3.IntegrityError):
                 c.execute("DELETE FROM gestation_claims WHERE claim_id=1")
+            with self.assertRaises(sqlite3.IntegrityError):
+                c.execute(
+                    "INSERT OR REPLACE INTO gestation_claims "
+                    "(claim_id, created_at, claim_text, claim_kind, type, "
+                    "confidence, scar, sources_json, observed_by, metadata_json) "
+                    "VALUES (1,1.0,'z','fact','milestone','witnessed',0,'[]','owner','{}')"
+                )
 
     def test_supersessions_update_is_aborted(self):
         with sqlite3.connect(self.db) as c:
@@ -74,6 +81,12 @@ class SchemaTests(unittest.TestCase):
                 c.execute(
                     "UPDATE gestation_claim_supersessions "
                     "SET old_claim_id=9 WHERE supersession_id=1"
+                )
+            with self.assertRaises(sqlite3.IntegrityError):
+                c.execute(
+                    "INSERT OR REPLACE INTO gestation_claim_supersessions "
+                    "(supersession_id, old_claim_id, replacement_claim_id, created_at) "
+                    "VALUES (1,9,2,1.0)"
                 )
 
 

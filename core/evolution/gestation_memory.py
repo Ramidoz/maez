@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import hashlib
+import os
+import re
 import sqlite3
 import subprocess
 from contextlib import closing
@@ -52,6 +54,13 @@ CREATE TRIGGER IF NOT EXISTS gestation_claims_no_delete
 BEGIN
     SELECT RAISE(ABORT, 'gestation_claims is append-only: DELETE forbidden');
 END;
+CREATE TRIGGER IF NOT EXISTS gestation_claims_no_replace
+    BEFORE INSERT ON gestation_claims
+    WHEN NEW.claim_id IS NOT NULL
+         AND EXISTS (SELECT 1 FROM gestation_claims WHERE claim_id = NEW.claim_id)
+BEGIN
+    SELECT RAISE(ABORT, 'gestation_claims is append-only: INSERT OR REPLACE forbidden');
+END;
 CREATE TRIGGER IF NOT EXISTS gestation_supersessions_no_update
     BEFORE UPDATE ON gestation_claim_supersessions
 BEGIN
@@ -61,6 +70,16 @@ CREATE TRIGGER IF NOT EXISTS gestation_supersessions_no_delete
     BEFORE DELETE ON gestation_claim_supersessions
 BEGIN
     SELECT RAISE(ABORT, 'supersessions is append-only: DELETE forbidden');
+END;
+CREATE TRIGGER IF NOT EXISTS gestation_supersessions_no_replace
+    BEFORE INSERT ON gestation_claim_supersessions
+    WHEN NEW.supersession_id IS NOT NULL
+         AND EXISTS (
+             SELECT 1 FROM gestation_claim_supersessions
+             WHERE supersession_id = NEW.supersession_id
+         )
+BEGIN
+    SELECT RAISE(ABORT, 'supersessions is append-only: INSERT OR REPLACE forbidden');
 END;
 CREATE INDEX IF NOT EXISTS idx_gestation_supersedes
     ON gestation_claim_supersessions(old_claim_id);
@@ -75,7 +94,22 @@ _LEDGER_STABLE_COLUMNS = (
     "severity",
     "reason",
 )
-DEFAULT_LEDGER_DB = Path(__file__).resolve().parents[2] / "memory" / "identity_ledger.db"
+_FULL_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _default_identity_ledger_path() -> Path:
+    override = os.environ.get("MAEZ_IDENTITY_LEDGER_PATH")
+    if override:
+        return Path(override)
+    try:
+        from core.paths import memory_dir as _memory_dir
+
+        return _memory_dir() / "identity_ledger.db"
+    except Exception:
+        return Path(__file__).resolve().parents[2] / "memory" / "identity_ledger.db"
+
+
+DEFAULT_LEDGER_DB = _default_identity_ledger_path()
 
 
 @dataclass(frozen=True)
@@ -93,8 +127,18 @@ class GestationClaim:
 
 
 class GestationMemory:
-    def __init__(self, db_path: Path | str | None = None):
+    def __init__(
+        self,
+        db_path: Path | str | None = None,
+        *,
+        identity_ledger_db_path: Path | str | None = None,
+    ):
         self.db_path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
+        self.identity_ledger_db_path = (
+            Path(identity_ledger_db_path)
+            if identity_ledger_db_path is not None
+            else DEFAULT_LEDGER_DB
+        )
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with closing(sqlite3.connect(self.db_path)) as conn:
             conn.executescript(_SCHEMA)
@@ -152,7 +196,12 @@ class GestationMemory:
                     raise ValueError("witness_note ref invalid")
                 clean_sources.append({"kind": "witness_note", "ref": note})
                 continue
-            ok, reason = validate_source(src, repo_root=repo_root, excerpt=excerpts.get(i))
+            ok, reason = validate_source(
+                src,
+                repo_root=repo_root,
+                excerpt=excerpts.get(i),
+                ledger_db=self.identity_ledger_db_path,
+            )
             if not ok:
                 raise ValueError(f"source[{i}] ({kind}) did not resolve: {reason}")
             resolved_structural += 1
@@ -204,10 +253,30 @@ def is_structural(source: Mapping[str, Any]) -> bool:
     return str(source.get("kind", "")) in STRUCTURAL_SOURCE_KINDS
 
 
+def _require_full_commit(value: Any) -> str:
+    text = str(value or "")
+    if not _FULL_COMMIT_RE.fullmatch(text):
+        raise ValueError("source must use a full commit hash, not a mutable ref")
+    return text
+
+
 def canonical_ledger_row_hash(row: Mapping[str, Any]) -> str:
-    obj = {column: row.get(column) for column in _LEDGER_STABLE_COLUMNS}
-    obj["evidence"] = json.loads(row.get("evidence_json") or "{}")
-    obj["fingerprint"] = json.loads(row.get("fingerprint_json") or "{}")
+    missing = [
+        column
+        for column in (*_LEDGER_STABLE_COLUMNS, "evidence_json", "fingerprint_json")
+        if column not in row
+    ]
+    if missing:
+        raise ValueError(f"identity_ledger row missing columns: {missing}")
+    evidence = json.loads(row.get("evidence_json") or "{}")
+    fingerprint = json.loads(row.get("fingerprint_json") or "{}")
+    if not isinstance(evidence, dict):
+        raise ValueError("identity_ledger evidence_json must decode to an object")
+    if not isinstance(fingerprint, dict):
+        raise ValueError("identity_ledger fingerprint_json must decode to an object")
+    obj = {column: row[column] for column in _LEDGER_STABLE_COLUMNS}
+    obj["evidence"] = evidence
+    obj["fingerprint"] = fingerprint
     return _sha256(json.dumps(obj, sort_keys=True, separators=(",", ":")))
 
 
@@ -254,13 +323,22 @@ def validate_source(
         if kind == "witness_note":
             return True, "context-only (not structural)"
         if kind == "commit":
-            ref = str(source.get("ref", ""))
+            try:
+                ref = _require_full_commit(source.get("ref", ""))
+            except ValueError as exc:
+                return False, str(exc)
             cp = _git(repo_root, "cat-file", "-e", f"{ref}^{{commit}}")
             if cp.returncode == 0:
                 return True, "commit resolves"
             return False, "commit not found"
         if kind == "doc":
-            commit = str(source.get("commit", ""))
+            try:
+                commit = _require_full_commit(source.get("commit", ""))
+            except ValueError as exc:
+                return False, str(exc)
+            commit_cp = _git(repo_root, "cat-file", "-e", f"{commit}^{{commit}}")
+            if commit_cp.returncode != 0:
+                return False, "commit not found"
             ref = str(source.get("ref", ""))
             cp = _git(repo_root, "show", f"{commit}:{ref}")
             if cp.returncode != 0:
