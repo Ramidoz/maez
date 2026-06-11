@@ -64,7 +64,10 @@ def last_pulse_epoch(log_path=None) -> float | None:
         if last is None:
             return None
         record = json.loads(last)
-        return datetime.fromisoformat(record["ts"]).timestamp()
+        dt = datetime.fromisoformat(record["ts"])
+        if dt.tzinfo is None or dt.utcoffset() is None:
+            return None
+        return dt.timestamp()
     except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
         return None
 

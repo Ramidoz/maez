@@ -22,6 +22,16 @@ class ValenceLiveV02(unittest.TestCase):
             expected = datetime(2026, 6, 10, tzinfo=timezone.utc).timestamp()
             self.assertAlmostEqual(epoch, expected)
 
+    def test_last_pulse_epoch_returns_none_when_timestamp_is_naive(self):
+        with TemporaryDirectory() as d:
+            log = Path(d) / "v.jsonl"
+            log.write_text(
+                json.dumps({"ts": "2026-06-10T00:00:00"}) + "\n",
+                encoding="utf-8",
+            )
+
+            self.assertIsNone(valence_live.last_pulse_epoch(log))
+
     def test_last_pulse_epoch_returns_none_when_no_log(self):
         with TemporaryDirectory() as d:
             log = Path(d) / "missing.jsonl"
