@@ -10,6 +10,8 @@ import abc
 import time
 from typing import Optional
 
+import httpx
+
 SUPPORTED = "SUPPORTED"
 UNSUPPORTED = "UNSUPPORTED"
 UNAVAILABLE = "UNAVAILABLE"
@@ -52,3 +54,35 @@ class FakeSupportVerifier(SupportVerifier):
             time.sleep(self._sleep_s)
         label, score = self._scripted.get(claim, self._default)
         return label, score, time.monotonic() - t0
+
+
+class HttpSupportVerifier(SupportVerifier):
+    """POST to the out-of-process MiniCheck service.
+
+    Transport failures, timeouts, 5xx responses, and malformed JSON all become
+    ``UNAVAILABLE``. The grounding shadow must never raise into its caller.
+    """
+
+    def __init__(
+        self,
+        url: str = "http://127.0.0.1:8083",
+        default_timeout_s: float = 0.25,
+    ):
+        self._endpoint = url.rstrip("/") + "/support"
+        self._default_timeout_s = default_timeout_s
+
+    def support(self, evidence, claim, timeout_s=None):
+        t0 = time.monotonic()
+        timeout = self._default_timeout_s if timeout_s is None else timeout_s
+        try:
+            response = httpx.post(
+                self._endpoint,
+                json={"evidence": evidence, "claim": claim},
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            data = response.json()
+            label = SUPPORTED if data.get("verdict") == SUPPORTED else UNSUPPORTED
+            return label, data.get("score"), time.monotonic() - t0
+        except Exception:
+            return UNAVAILABLE, None, time.monotonic() - t0
