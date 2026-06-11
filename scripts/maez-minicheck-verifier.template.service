@@ -1,0 +1,15 @@
+# Owner installs to ~/.config/systemd/user/minicheck-verifier.service and starts it
+# as the witness breath. The merge does not install or start this unit.
+[Unit]
+Description=Maez MiniCheck claimable-entailment verifier (out-of-process)
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=/home/rohit/maez/.venv/bin/python -B /home/rohit/maez/scripts/minicheck_verifier_service.py
+Restart=on-failure
+# CPU only; the daemon never loads this model.
+Environment=CUDA_VISIBLE_DEVICES=
+
+[Install]
+WantedBy=default.target
