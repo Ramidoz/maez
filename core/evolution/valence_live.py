@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+from datetime import datetime
 from pathlib import Path
 
 from core.evolution.valence.reading import Sign, ValenceReading
@@ -55,11 +56,24 @@ def _read_prior_open(log_path) -> int | None:
         return None
 
 
-def _want_signals(open_count, prior_open) -> WantSignals:
+def last_pulse_epoch(log_path=None) -> float | None:
+    path = Path(log_path) if log_path is not None else _default_log_path()
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+        last = next((line for line in reversed(lines) if line.strip()), None)
+        if last is None:
+            return None
+        record = json.loads(last)
+        return datetime.fromisoformat(record["ts"]).timestamp()
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+        return None
+
+
+def _want_signals(open_count, prior_open, resolved=0) -> WantSignals:
     return WantSignals(
         backlog=open_count,
         backlog_grew=prior_open is not None and open_count > prior_open,
-        resolved=0,
+        resolved=resolved,
         blocked=0,
         stale=0,
     )
@@ -108,6 +122,11 @@ def _record(reading: ValenceReading, now, wants: WantSignals) -> dict:
             "stale": wants.stale,
             "backlog_grew": wants.backlog_grew,
         },
+        "want_coverage": {
+            "resolved": "satisfied_events_delta",
+            "blocked": "not_live_derived",
+            "stale": "not_live_derived",
+        },
         "telemetry": reading.as_telemetry(),
         "provenance": reading.provenance,
     }
@@ -132,6 +151,7 @@ def read_and_log_valence(
     open_want_count,
     continuity_state,
     now,
+    resolved=0,
     log_path=None,
 ) -> ValenceReading | None:
     """Compute and append a valence reading without raising into heartbeat."""
@@ -140,7 +160,7 @@ def read_and_log_valence(
         path = Path(log_path) if log_path is not None else _default_log_path()
         audit = _audit_signals(audit_flags)
         prior_open = _read_prior_open(path)
-        wants = _want_signals(open_want_count, prior_open)
+        wants = _want_signals(open_want_count, prior_open, resolved=resolved)
         cont = _continuity_signals(continuity_state)
         reading = read_valence(audit, wants, cont)
         record = _record(reading, now, wants)
