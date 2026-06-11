@@ -2,6 +2,7 @@ import sqlite3
 import hashlib
 import subprocess
 import unittest
+from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -39,7 +40,7 @@ class SchemaTests(unittest.TestCase):
         self._tmp.cleanup()
 
     def test_tables_exist(self):
-        with sqlite3.connect(self.db) as c:
+        with closing(sqlite3.connect(self.db)) as c:
             names = {
                 r[0]
                 for r in c.execute(
@@ -50,7 +51,7 @@ class SchemaTests(unittest.TestCase):
         self.assertIn("gestation_claim_supersessions", names)
 
     def test_gestation_claims_update_is_aborted(self):
-        with sqlite3.connect(self.db) as c:
+        with closing(sqlite3.connect(self.db)) as c:
             c.execute(
                 "INSERT INTO gestation_claims "
                 "(created_at, claim_text, claim_kind, type, confidence, scar, "
@@ -72,7 +73,7 @@ class SchemaTests(unittest.TestCase):
                 )
 
     def test_supersessions_update_is_aborted(self):
-        with sqlite3.connect(self.db) as c:
+        with closing(sqlite3.connect(self.db)) as c:
             c.execute(
                 "INSERT INTO gestation_claim_supersessions "
                 "(old_claim_id, replacement_claim_id, created_at) VALUES (1,2,1.0)"

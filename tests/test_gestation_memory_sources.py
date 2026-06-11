@@ -3,6 +3,7 @@ import json
 import sqlite3
 import subprocess
 import unittest
+from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -155,7 +156,7 @@ class LedgerRowSourceTests(unittest.TestCase):
     def setUp(self):
         self._tmp = TemporaryDirectory()
         self.db = Path(self._tmp.name) / "identity_ledger.db"
-        with sqlite3.connect(self.db) as conn:
+        with closing(sqlite3.connect(self.db)) as conn:
             conn.execute(
                 "CREATE TABLE identity_ledger ("
                 "event_id INTEGER PRIMARY KEY AUTOINCREMENT, "
@@ -171,6 +172,7 @@ class LedgerRowSourceTests(unittest.TestCase):
                 "VALUES (7, 1.5, 'gestation_boot', 'c1', NULL, 'same', 'seed', "
                 "'{\"b\":2,\"a\":1}', '{\"z\":9}')"
             )
+            conn.commit()
 
     def tearDown(self):
         self._tmp.cleanup()
