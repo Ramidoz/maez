@@ -33,6 +33,46 @@
 
 ---
 
+### Task 0: Prove the live recent-turn source before coding
+
+**Files:**
+- Read: `skills/surface/maez_adapter.py`
+- Read: `daemon/maez_daemon.py`
+- Read: `memory/memory_manager.py`
+
+- [ ] **Step 1: Verify Surface V2 already uses the recent-turn source**
+
+Run:
+
+```bash
+cd /home/rohit/maez
+rg -n "get_telegram_exchanges\\(" skills/surface/maez_adapter.py memory/memory_manager.py daemon/maez_daemon.py
+rg -n "self\\.memory = MemoryManager\\(" daemon/maez_daemon.py
+```
+
+Expected output includes all three facts:
+
+```text
+skills/surface/maez_adapter.py:496:                    lambda: _mem.get_telegram_exchanges(
+memory/memory_manager.py:2912:    def get_telegram_exchanges(self, limit: int | None = 400) -> list[dict]:
+daemon/maez_daemon.py:2540:        self.memory = MemoryManager()
+```
+
+If any line is absent, STOP and update the plan before implementation. This is the integration-witness lesson: the context provider must use the same real memory object Surface V2 already uses, not a fake-only method.
+
+- [ ] **Step 2: Read the existing Surface V2 context cleaner**
+
+Run:
+
+```bash
+sed -n '470,520p' skills/surface/maez_adapter.py
+sed -n '2912,2965p' memory/memory_manager.py
+```
+
+Expected: `maez_adapter.py` fetches `_mem.get_telegram_exchanges(limit=_CHAT_HISTORY_TURNS)` in an executor and then cleans each row through `_clean_exchange(...)`; `MemoryManager.get_telegram_exchanges(...)` returns stored exchange dicts. The intake shadow context provider must follow this source shape: `daemon.memory.get_telegram_exchanges(limit=6)` in the background worker, with failures becoming an empty context.
+
+---
+
 ### Task 1: `IntakeRead` schema + parser + fake backend
 
 **Files:**
@@ -415,7 +455,7 @@ import urllib.request
 
 from core.model_config import JUDGE_BASE_URL, JUDGE_CHAT_KWARGS, JUDGE_MODEL
 
-_MAX_TOKENS = 256
+_MAX_TOKENS = 160
 
 
 def _context_for_prompt(context: dict) -> str:
@@ -444,7 +484,7 @@ def build_prompt(message: str, context: dict) -> str:
     )
 
 
-def _call_judge(prompt: str, *, timeout_s: float = 0.5) -> str:
+def _call_judge(prompt: str, *, timeout_s: float = 8.0) -> str:
     payload = {
         "model": JUDGE_MODEL,
         "messages": [
@@ -623,6 +663,8 @@ class TelemetryTests(unittest.TestCase):
 
         self.assertEqual(verdicts["is_clear_yes"], "false")
         self.assertIn(verdicts["hard_want"], {"true", "false"})
+        self.assertIn(verdicts["continuity"], {"true", "false", "unavailable"})
+        self.assertIn("continuity_kind", verdicts)
         self.assertFalse(ctrl.mutated)
         self.assertIs(ctrl.get_search_offer("telegram_text", "c"), offer)
 
@@ -647,6 +689,37 @@ class TelemetryTests(unittest.TestCase):
         self.assertEqual(snap["egress_class"], "sovereign_local_search")
         self.assertIn("offered_query_hash", snap)
         self.assertNotIn("private query text", json.dumps(snap))
+
+    def test_build_telemetry_sanitizes_raw_pending_offer_dict(self):
+        read = IntakeRead(
+            turn_kind="ordinary",
+            stance="n_a",
+            boundary_signal="none",
+            needs="none",
+            referent_kind="none",
+            confidence=0.8,
+        )
+
+        rec = shadow.build_telemetry(
+            message="hello",
+            context_turns=[],
+            pending_offer={
+                "action_type": "web_search",
+                "stakes": "low_read",
+                "executor": "searxng",
+                "egress_class": "sovereign_local_search",
+                "offered_query": "private raw query",
+            },
+            faculty_read=read,
+            gate_verdicts={},
+            status="ok",
+            latency_s=0.0,
+            debug=False,
+        )
+
+        blob = json.dumps(rec)
+        self.assertIn("offered_query_hash", blob)
+        self.assertNotIn("private raw query", blob)
 ```
 
 - [ ] **Step 2: Run tests to verify failure**
@@ -674,7 +747,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import time
 from typing import Any
 
@@ -697,6 +769,15 @@ def _bucket_latency(latency_s: float) -> float:
 def offer_snapshot(offer) -> dict[str, Any] | None:
     if offer is None:
         return None
+    if isinstance(offer, dict):
+        query = offer.get("offered_query") or offer.get("query") or ""
+        return {
+            "action_type": offer.get("action_type"),
+            "stakes": offer.get("stakes"),
+            "egress_class": offer.get("egress_class"),
+            "executor": offer.get("executor"),
+            "offered_query_hash": _hash(str(query)),
+        }
     query = getattr(offer, "offered_query", "") or ""
     return {
         "action_type": getattr(offer, "action_type", None),
@@ -716,14 +797,23 @@ def _hard_want_verdict(text: str) -> str:
         return "unavailable"
 
 
-_CONTINUITY_HINT = re.compile(r"\b(that|this|it|those|earlier|before|what we were|what we talked)\b", re.I)
-
-
 def _continuity_verdict(text: str) -> str:
     try:
-        # Do not import private regex internals; this is a side-effect-free
-        # comparison snapshot, not a second implementation of continuity.
-        return _bool(bool(_CONTINUITY_HINT.search(text or "")))
+        from core.routing.focused_cognition import dialogue_continuity_state
+
+        state = dialogue_continuity_state(text or "")
+        return _bool(bool(getattr(state, "needs_dialogue", False)))
+    except Exception:
+        return "unavailable"
+
+
+def _continuity_kind(text: str) -> str:
+    try:
+        from core.routing.focused_cognition import dialogue_continuity_state
+
+        state = dialogue_continuity_state(text or "")
+        kind = getattr(getattr(state, "kind", None), "value", None)
+        return str(kind or "none")
     except Exception:
         return "unavailable"
 
@@ -748,6 +838,7 @@ def gate_verdicts(text: str, *, controller, channel: str, chat_id: str) -> dict[
         "is_clear_yes": _bool(is_clear_yes(text or "")),
         "hard_want": _hard_want_verdict(text or ""),
         "continuity": _continuity_verdict(text or ""),
+        "continuity_kind": _continuity_kind(text or ""),
         "recall_intent": _recall_verdict(text or ""),
         "search_worthy": _bool(is_search_offer_worthy(text or "")),
         "awaiting_card": "unavailable",
@@ -794,7 +885,7 @@ def build_telemetry(
         "context_hash": _hash(context_blob),
         "turn_len": len(message or ""),
         "context_turn_count": len(context_turns or []),
-        "pending_offer": pending_offer,
+        "pending_offer": offer_snapshot(pending_offer),
         "faculty_read": faculty_read.to_telemetry(debug=debug),
         "gate_verdicts": dict(gate_verdicts or {}),
         "agreements": _agreement(faculty_read, gate_verdicts or {}),
@@ -975,7 +1066,7 @@ class IntakeShadow:
         telemetry_path,
         *,
         maxsize: int = 64,
-        timeout_s: float = 0.5,
+        timeout_s: float = 8.0,
         debug: bool = False,
         rotate_bytes: int = 2_000_000,
         rotate_keep: int = 3,
@@ -1068,8 +1159,10 @@ class IntakeShadow:
             for idx in range(self._rotate_keep, 0, -1):
                 src = self._path.with_name(self._path.name + f".{idx}")
                 dst = self._path.with_name(self._path.name + f".{idx + 1}")
-                if dst.exists() and idx == self._rotate_keep:
-                    dst.unlink()
+                if idx == self._rotate_keep:
+                    if src.exists():
+                        src.unlink()
+                    continue
                 if src.exists():
                     src.rename(dst)
             self._path.rename(self._path.with_name(self._path.name + ".1"))
@@ -1241,7 +1334,10 @@ def _context_provider(memory):
     def _load() -> list[str]:
         if memory is None:
             return []
-        rows = memory.get_telegram_exchanges(limit=6)
+        try:
+            rows = memory.get_telegram_exchanges(limit=6)
+        except Exception:
+            return []
         out = []
         for row in rows or []:
             if isinstance(row, dict):
