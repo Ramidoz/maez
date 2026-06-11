@@ -6,8 +6,9 @@ import sqlite3
 import subprocess
 from contextlib import closing
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / "memory" / "gestation_claims.db"
 
@@ -103,6 +104,97 @@ class GestationMemory:
         conn.row_factory = sqlite3.Row
         return conn
 
+    def _repo_root(self) -> Path:
+        return Path(__file__).resolve().parents[2]
+
+    def record_claim(
+        self,
+        *,
+        claim_text: str,
+        claim_kind: str,
+        type: str,
+        confidence: str,
+        sources: Sequence[Mapping[str, Any]],
+        observed_by: str,
+        source_excerpts: Mapping[int, str] | None = None,
+        scar: bool = False,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> GestationClaim:
+        text = str(claim_text or "").strip()
+        if not text:
+            raise ValueError("claim_text is required")
+        if len(text) > MAX_CLAIM_CHARS:
+            raise ValueError("claim_text too long")
+        if claim_kind not in CLAIM_KINDS:
+            raise ValueError(f"unknown claim_kind {claim_kind!r}")
+        if type not in TYPES:
+            raise ValueError(f"unknown type {type!r}")
+        if confidence not in CONFIDENCES:
+            raise ValueError(f"unknown confidence {confidence!r}")
+        if observed_by not in OBSERVED_BY:
+            raise ValueError(f"unknown observed_by {observed_by!r}")
+        if claim_kind == "fact" and confidence == "inferred":
+            raise ValueError(
+                "a fact may not be inferred (inferred is for interpretations)"
+            )
+
+        excerpts = source_excerpts or {}
+        repo_root = self._repo_root()
+        resolved_structural = 0
+        clean_sources: list[dict[str, Any]] = []
+        for i, src in enumerate(sources):
+            kind = str(src.get("kind", ""))
+            if kind not in SOURCE_KINDS:
+                raise ValueError(f"unknown source kind {kind!r}")
+            if kind == "witness_note":
+                note = str(src.get("ref", "")).strip()
+                if not note or len(note) > MAX_WITNESS_NOTE_CHARS:
+                    raise ValueError("witness_note ref invalid")
+                clean_sources.append({"kind": "witness_note", "ref": note})
+                continue
+            ok, reason = validate_source(src, repo_root=repo_root, excerpt=excerpts.get(i))
+            if not ok:
+                raise ValueError(f"source[{i}] ({kind}) did not resolve: {reason}")
+            resolved_structural += 1
+            clean_sources.append(dict(src))
+        if resolved_structural < 1:
+            raise ValueError("at least one resolvable structural source is required")
+
+        meta = json.loads(json.dumps(dict(metadata or {}), sort_keys=True))
+        now = datetime.now(UTC).timestamp()
+        with closing(self._connect()) as conn:
+            with conn:
+                cur = conn.execute(
+                    "INSERT INTO gestation_claims "
+                    "(created_at, claim_text, claim_kind, type, confidence, scar, "
+                    "sources_json, observed_by, metadata_json) "
+                    "VALUES (?,?,?,?,?,?,?,?,?)",
+                    (
+                        now,
+                        text,
+                        claim_kind,
+                        type,
+                        confidence,
+                        int(bool(scar)),
+                        json.dumps(clean_sources, sort_keys=True),
+                        observed_by,
+                        json.dumps(meta, sort_keys=True),
+                    ),
+                )
+                claim_id = int(cur.lastrowid)
+        got = self.get(claim_id)
+        if got is None:
+            raise RuntimeError("inserted gestation claim could not be read back")
+        return got
+
+    def get(self, claim_id: int) -> GestationClaim | None:
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT * FROM gestation_claims WHERE claim_id = ?",
+                (int(claim_id),),
+            ).fetchone()
+        return None if row is None else _row_to_claim(row)
+
 
 def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -130,6 +222,21 @@ def _git(repo_root: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 def _read_only_sqlite_uri(path: Path) -> str:
     return f"file:{path.resolve()}?mode=ro"
+
+
+def _row_to_claim(row: sqlite3.Row) -> GestationClaim:
+    return GestationClaim(
+        claim_id=int(row["claim_id"]),
+        created_at=float(row["created_at"]),
+        claim_text=str(row["claim_text"]),
+        claim_kind=str(row["claim_kind"]),
+        type=str(row["type"]),
+        confidence=str(row["confidence"]),
+        scar=bool(row["scar"]),
+        sources=tuple(json.loads(row["sources_json"])),
+        observed_by=str(row["observed_by"]),
+        metadata=json.loads(row["metadata_json"]),
+    )
 
 
 def validate_source(

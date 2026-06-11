@@ -1,9 +1,32 @@
 import sqlite3
+import hashlib
+import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from core.evolution.gestation_memory import GestationMemory
+
+REPO = Path(__file__).resolve().parents[1]
+
+
+def _doc_source():
+    path = "docs/superpowers/specs/2026-06-10-gestation-memory-v0-design.md"
+    commit = subprocess.run(
+        ["git", "-C", str(REPO), "rev-parse", "HEAD"],
+        capture_output=True,
+        check=True,
+        text=True,
+    ).stdout.strip()
+    content = subprocess.run(
+        ["git", "-C", str(REPO), "show", f"{commit}:{path}"],
+        capture_output=True,
+        check=True,
+        text=True,
+    ).stdout
+    excerpt = next(line for line in content.splitlines() if "baby book" in line)
+    h = hashlib.sha256(excerpt.encode("utf-8")).hexdigest()
+    return {"kind": "doc", "ref": path, "commit": commit, "excerpt_hash": h}, excerpt
 
 
 class SchemaTests(unittest.TestCase):
@@ -52,3 +75,73 @@ class SchemaTests(unittest.TestCase):
                     "UPDATE gestation_claim_supersessions "
                     "SET old_claim_id=9 WHERE supersession_id=1"
                 )
+
+
+class RecordClaimTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = TemporaryDirectory()
+        self.gm = GestationMemory(Path(self._tmp.name) / "g.db")
+        self.src, self.excerpt = _doc_source()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_valid_fact_stored(self):
+        claim = self.gm.record_claim(
+            claim_text="The spec calls this a baby book made from receipts.",
+            claim_kind="fact",
+            type="milestone",
+            confidence="documented",
+            sources=[self.src],
+            source_excerpts={0: self.excerpt},
+            observed_by="claude",
+        )
+        self.assertEqual(self.gm.get(claim.claim_id).claim_text, claim.claim_text)
+
+    def test_witness_note_only_rejected(self):
+        with self.assertRaises(ValueError):
+            self.gm.record_claim(
+                claim_text="x",
+                claim_kind="fact",
+                type="milestone",
+                confidence="witnessed",
+                sources=[{"kind": "witness_note", "ref": "I saw it"}],
+                observed_by="claude",
+            )
+
+    def test_inferred_fact_rejected(self):
+        with self.assertRaises(ValueError):
+            self.gm.record_claim(
+                claim_text="x",
+                claim_kind="fact",
+                type="milestone",
+                confidence="inferred",
+                sources=[self.src],
+                source_excerpts={0: self.excerpt},
+                observed_by="claude",
+            )
+
+    def test_inferred_interpretation_accepted(self):
+        claim = self.gm.record_claim(
+            claim_text="Maez learned to try without declaring victory.",
+            claim_kind="interpretation",
+            type="milestone",
+            confidence="inferred",
+            sources=[self.src],
+            source_excerpts={0: self.excerpt},
+            observed_by="claude",
+        )
+        self.assertEqual(claim.confidence, "inferred")
+
+    def test_doc_excerpt_mismatch_rejected(self):
+        bad = dict(self.src, excerpt_hash="deadbeef")
+        with self.assertRaises(ValueError):
+            self.gm.record_claim(
+                claim_text="x",
+                claim_kind="fact",
+                type="milestone",
+                confidence="documented",
+                sources=[bad],
+                source_excerpts={0: self.excerpt},
+                observed_by="claude",
+            )
