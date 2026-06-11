@@ -6,8 +6,11 @@ content-light divergence telemetry. This module gates nothing.
 """
 from __future__ import annotations
 
+import json
+import queue
 import re
 import hashlib
+import threading
 import time
 
 from core.cognition.support_verifier import (
@@ -187,3 +190,102 @@ def build_telemetry(
         "status": compute_result["status"],
         "sentences": sentences,
     }
+
+
+class GroundingShadow:
+    """Bounded queue + background worker for grounding shadow telemetry."""
+
+    def __init__(
+        self,
+        verifier,
+        telemetry_path,
+        *,
+        maxsize: int = 64,
+        per_sentence_timeout_s: float = 0.25,
+        per_job_budget_s: float = 1.5,
+        debug: bool = False,
+    ):
+        self._verifier = verifier
+        self._telemetry_path = telemetry_path
+        self._q: queue.Queue = queue.Queue(maxsize=maxsize)
+        self._per_sentence_timeout_s = per_sentence_timeout_s
+        self._per_job_budget_s = per_job_budget_s
+        self._debug = debug
+        self._worker = None
+        self._stop = threading.Event()
+
+    def enqueue(self, job: dict) -> str:
+        try:
+            self._q.put_nowait(job)
+            return "enqueued"
+        except queue.Full:
+            self._emit(
+                {
+                    "shadow_id": job.get("shadow_id"),
+                    "ts": job.get("ts"),
+                    "surface": job.get("surface"),
+                    "boot_id": job.get("boot_id"),
+                    "status": "shadow_enqueue_failed",
+                }
+            )
+            return "shadow_enqueue_failed"
+        except Exception:
+            return "shadow_enqueue_failed"
+
+    def start(self):
+        if self._worker is None:
+            self._worker = threading.Thread(
+                target=self._run,
+                name="grounding-shadow",
+                daemon=True,
+            )
+            self._worker.start()
+
+    def stop(self):
+        self._stop.set()
+        try:
+            self._q.put_nowait(None)
+        except Exception:
+            pass
+        if self._worker is not None:
+            self._worker.join(timeout=1.0)
+
+    def _run(self):
+        while not self._stop.is_set():
+            try:
+                job = self._q.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if job is None:
+                break
+            try:
+                self._process(job)
+            except Exception:
+                pass
+
+    def _process(self, job):
+        compute = compute_shadow(
+            job["final_text"],
+            job["claimable_items"],
+            self._verifier,
+            per_sentence_timeout_s=self._per_sentence_timeout_s,
+            per_job_budget_s=self._per_job_budget_s,
+        )
+        rec = build_telemetry(
+            job.get("shadow_id"),
+            job.get("ts"),
+            job.get("surface"),
+            job.get("boot_id"),
+            job.get("audit_summary", {}),
+            job.get("claimable_items"),
+            compute,
+            debug=self._debug,
+        )
+        self._emit(rec)
+
+    def _emit(self, rec):
+        try:
+            with open(self._telemetry_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec) + "\n")
+        except Exception:
+            pass
