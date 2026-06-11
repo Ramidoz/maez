@@ -67,8 +67,13 @@ def select_want(
     *,
     cooldown_s: float,
     now: float,
+    is_hard_want,
 ) -> dict | None:
-    """Least-recently-pursued eligible active want, or None."""
+    """Least-recently-pursued eligible active want, or None.
+
+    is_hard_want is required: hard/autonomy wants are not work orders. Callers
+    that deliberately want no exclusion must pass ``lambda _: False``.
+    """
     if _has_open_want_wondering(wonderings_store):
         return None
 
@@ -77,6 +82,8 @@ def select_want(
     for want in wants_store.active_wants():
         want_id = str(want.get("want_id") or "")
         if not want_id or want_id in blocked:
+            continue
+        if is_hard_want(str(want.get("statement") or "")):
             continue
         last = _last_pursuit_ts(wonderings_store, want_id)
         if last and (now - last) < cooldown_s:

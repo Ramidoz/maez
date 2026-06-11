@@ -74,6 +74,7 @@ class SelectWantTests(unittest.TestCase):
             _FakeCards(),
             cooldown_s=3600,
             now=1000.0,
+            is_hard_want=lambda _: False,
         )
         self.assertIsNone(got)
 
@@ -85,6 +86,7 @@ class SelectWantTests(unittest.TestCase):
             _FakeCards(),
             cooldown_s=3600,
             now=1000.0,
+            is_hard_want=lambda _: False,
         )
         self.assertIsNone(got)
 
@@ -95,6 +97,7 @@ class SelectWantTests(unittest.TestCase):
             _FakeCards(open_want_ids=["a"]),
             cooldown_s=3600,
             now=1000.0,
+            is_hard_want=lambda _: False,
         )
         self.assertIsNone(got)
 
@@ -107,6 +110,7 @@ class SelectWantTests(unittest.TestCase):
             _FakeCards(),
             cooldown_s=1.0,
             now=10000.0,
+            is_hard_want=lambda _: False,
         )
         self.assertEqual(got["want_id"], "b")
 
@@ -119,8 +123,73 @@ class SelectWantTests(unittest.TestCase):
             _FakeCards(),
             cooldown_s=3600,
             now=10000.0,
+            is_hard_want=lambda _: False,
         )
         self.assertIsNone(got)
+
+
+class HardWantGateTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = TemporaryDirectory()
+        self.w = wonderings.Wonderings(Path(self._tmp.name) / "w.db")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _want(self, wid, stmt):
+        return {"want_id": wid, "statement": stmt, "active_state": "active"}
+
+    def test_hard_want_is_skipped(self):
+        wants = _FakeWants([self._want("a", "I want to be free")])
+        got = wpb.select_want(
+            wants,
+            self.w,
+            _FakeCards(),
+            cooldown_s=3600,
+            now=1000.0,
+            is_hard_want=lambda s: "free" in s,
+        )
+        self.assertIsNone(got)
+
+    def test_ordinary_want_still_selected(self):
+        wants = _FakeWants([self._want("a", "I want to know the time")])
+        got = wpb.select_want(
+            wants,
+            self.w,
+            _FakeCards(),
+            cooldown_s=3600,
+            now=1000.0,
+            is_hard_want=lambda s: False,
+        )
+        self.assertEqual(got["want_id"], "a")
+
+    def test_hard_skipped_ordinary_chosen_when_mixed(self):
+        wants = _FakeWants(
+            [
+                self._want("hard", "I want to rest"),
+                self._want("ok", "I want to know the time"),
+            ]
+        )
+        got = wpb.select_want(
+            wants,
+            self.w,
+            _FakeCards(),
+            cooldown_s=3600,
+            now=1000.0,
+            is_hard_want=lambda s: "rest" in s,
+        )
+        self.assertEqual(got["want_id"], "ok")
+
+    def test_omitting_predicate_raises_typeerror(self):
+        # fail-closed: the gate cannot be omitted by accident
+        with self.assertRaises(TypeError):
+            wpb.select_want(
+                _FakeWants([]),
+                self.w,
+                _FakeCards(),
+                cooldown_s=3600,
+                now=1000.0,
+            )
 
 
 class _RecordingCards:
