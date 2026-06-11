@@ -798,6 +798,18 @@ class Wants:
             row = conn.execute("SELECT COUNT(*) FROM want_events").fetchone()
         return int(row[0]) if row else 0
 
+    def count_events_since(self, since_ts: float, event_type: str) -> int:
+        if event_type not in EVENT_TYPES:
+            raise ValueError(f"unknown want event_type: {event_type!r}")
+
+        db_uri = self.db_path.resolve().as_uri() + "?mode=ro"
+        with closing(sqlite3.connect(db_uri, uri=True)) as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM want_events WHERE ts > ? AND event_type = ?",
+                (float(since_ts), event_type),
+            ).fetchone()
+        return int(row[0])
+
     @staticmethod
     def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
         data = dict(row)
