@@ -244,3 +244,12 @@ class RenderTests(unittest.TestCase):
         self._claim("A fact happened.", "fact", "milestone", "documented")
         out = self.gm.render()
         self.assertIn("2026-06-10-gestation-memory-v0-design.md", out)
+
+
+class CliTests(unittest.TestCase):
+    def test_render_subcommand_runs_on_empty_db(self):
+        from core.evolution import gestation_memory
+
+        with TemporaryDirectory() as td:
+            rc = gestation_memory.main(["render", "--db", str(Path(td) / "g.db")])
+            self.assertEqual(rc, 0)

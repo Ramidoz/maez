@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import hashlib
 import os
@@ -468,3 +469,67 @@ def validate_source(
     except Exception as exc:
         return False, f"source validation error: {exc}"
     return False, "unhandled source kind"
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="python -m core.evolution.gestation_memory")
+    subcommands = parser.add_subparsers(dest="command", required=True)
+
+    record = subcommands.add_parser("record")
+    record.add_argument("--db", default=str(DEFAULT_DB_PATH))
+    record.add_argument("--claim", required=True)
+    record.add_argument("--kind", required=True, choices=sorted(CLAIM_KINDS))
+    record.add_argument("--type", required=True, choices=sorted(TYPES))
+    record.add_argument("--confidence", required=True, choices=sorted(CONFIDENCES))
+    record.add_argument("--observed-by", required=True, choices=sorted(OBSERVED_BY))
+    record.add_argument("--scar", action="store_true")
+    record.add_argument("--source-commit", action="append", default=[])
+    record.add_argument("--source-doc", action="append", default=[])
+
+    render = subcommands.add_parser("render")
+    render.add_argument("--db", default=str(DEFAULT_DB_PATH))
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = _build_parser().parse_args(argv)
+    if args.command == "render":
+        print(GestationMemory(args.db).render())
+        return 0
+    if args.command == "record":
+        sources: list[dict[str, Any]] = []
+        excerpts: dict[int, str] = {}
+        for commit_hash in args.source_commit:
+            sources.append({"kind": "commit", "ref": commit_hash})
+        for source_doc in args.source_doc:
+            path, commit_hash, excerpt = source_doc.split("::", 2)
+            index = len(sources)
+            sources.append(
+                {
+                    "kind": "doc",
+                    "ref": path,
+                    "commit": commit_hash,
+                    "excerpt_hash": _sha256(excerpt),
+                }
+            )
+            excerpts[index] = excerpt
+        claim = GestationMemory(args.db).record_claim(
+            claim_text=args.claim,
+            claim_kind=args.kind,
+            type=args.type,
+            confidence=args.confidence,
+            sources=sources,
+            source_excerpts=excerpts,
+            observed_by=args.observed_by,
+            scar=args.scar,
+        )
+        print(
+            f"claim_id={claim.claim_id} "
+            f"kind={claim.claim_kind} confidence={claim.confidence}"
+        )
+        return 0
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
