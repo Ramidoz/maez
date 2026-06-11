@@ -50,6 +50,12 @@ class CorpusSchemaTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_corpus([self._row(rationale="   ")])
 
+    def test_real_longmemeval_requires_source_ref(self):
+        with self.assertRaises(ValueError):
+            validate_corpus([self._row(source="real-longmemeval")])   # no receipt
+        validate_corpus([self._row(source="real-longmemeval",
+                                   source_ref="longmemeval_judge30_2026-04-30:question_id=x")])
+
 
 class AdapterPromptTests(unittest.TestCase):
     def test_user_prompt_has_evidence_and_claim(self):

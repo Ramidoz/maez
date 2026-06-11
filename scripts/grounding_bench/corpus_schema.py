@@ -41,6 +41,10 @@ def validate_corpus(items: list[dict]) -> None:
             raise ValueError(f"row {rid}: ABSTAIN_EXPECTED only valid with claimable_absent")
         if not str(row["rationale"]).strip():
             raise ValueError(f"row {rid}: empty rationale (label must be reasoned)")
+        # A truth-bearing corpus must carry receipts for its 'real' rows: a
+        # real-longmemeval row needs a source_ref pointing back to the file.
+        if row["source"] == "real-longmemeval" and not str(row.get("source_ref", "")).strip():
+            raise ValueError(f"row {rid}: real-longmemeval rows require a source_ref (receipt)")
         if rid in seen_ids:
             raise ValueError(f"duplicate id {rid!r}")
         seen_ids.add(rid)
