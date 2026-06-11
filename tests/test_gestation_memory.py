@@ -258,7 +258,10 @@ class RenderTests(unittest.TestCase):
             scar=True,
         )
         out = self.gm.render()
-        self.assertIn("What happened", out)
+        # v0.1: a milestone fact lands in "What changed" (precedence partition);
+        # "What happened" is omitted when empty. Intent here is fact/interpretation
+        # separation, which still holds.
+        self.assertIn("What changed", out)
         self.assertIn("What went wrong", out)
         self.assertIn("Interpretations", out)
         self.assertLess(out.index("A fact happened."), out.index("Interpretations"))

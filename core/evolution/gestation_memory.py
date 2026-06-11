@@ -290,13 +290,27 @@ class GestationMemory:
             ).fetchall()
         return [_row_to_claim(row) for row in rows]
 
-    def render(self) -> str:
-        claims = self.list_active()
-        facts = [claim for claim in claims if claim.claim_kind == "fact"]
-        interpretations = [
-            claim for claim in claims if claim.claim_kind == "interpretation"
-        ]
+    def corrections_history(self) -> list[tuple[GestationClaim, GestationClaim]]:
+        """Read-only: (superseded_claim, replacement_claim) pairs, oldest first.
 
+        Makes the preserved 'we once believed X, then corrected it to Y' visible
+        without rewriting the old row. Superseded claims are excluded from
+        list_active (and thus the main render sections) but shown here.
+        """
+        with closing(self._connect()) as conn:
+            rows = conn.execute(
+                "SELECT old_claim_id, replacement_claim_id "
+                "FROM gestation_claim_supersessions ORDER BY supersession_id ASC"
+            ).fetchall()
+        pairs: list[tuple[GestationClaim, GestationClaim]] = []
+        for row in rows:
+            old = self.get(int(row["old_claim_id"]))
+            new = self.get(int(row["replacement_claim_id"]))
+            if old is not None and new is not None:
+                pairs.append((old, new))
+        return pairs
+
+    def render(self) -> str:
         def source_string(claim: GestationClaim) -> str:
             parts: list[str] = []
             for source in claim.sources:
@@ -317,33 +331,50 @@ class GestationMemory:
             scar_tag = " [SCAR]" if claim.scar else ""
             return (
                 f"  - {claim.claim_text}{scar_tag} "
-                f"[{claim.confidence}] (sources: {source_string(claim)})"
+                f"[{claim.type}/{claim.confidence}] (sources: {source_string(claim)})"
             )
 
-        changed = [
-            claim
-            for claim in facts
-            if claim.type in ("milestone", "decision")
-        ]
-        wrong = [
-            claim
-            for claim in claims
-            if claim.scar or claim.type in ("correction", "no_go")
-        ]
+        def section_for(claim: GestationClaim) -> str:
+            # precedence partition: each active claim lands in exactly one section
+            if claim.claim_kind == "interpretation":
+                return "interpretations"
+            if claim.scar or claim.type in ("scar", "correction", "no_go"):
+                return "wrong"
+            if claim.type in ("milestone", "decision"):
+                return "changed"
+            return "happened"
+
+        buckets: dict[str, list[GestationClaim]] = {
+            "happened": [], "changed": [], "wrong": [], "interpretations": [],
+        }
+        for claim in self.list_active():
+            buckets[section_for(claim)].append(claim)
 
         lines: list[str] = ["# Gestation record (sourced; deterministic render)", ""]
-        lines.append("## What happened")
-        lines.extend(line(claim) for claim in facts if not claim.scar)
-        lines.append("")
-        lines.append("## What changed")
-        lines.extend(line(claim) for claim in changed)
-        lines.append("")
-        lines.append("## What went wrong / what was corrected")
-        lines.extend(line(claim) for claim in wrong)
-        lines.append("")
-        lines.append("## Interpretations (meanings drawn from the evidence - not raw fact)")
-        lines.extend(line(claim) for claim in interpretations)
-        return "\n".join(lines) + "\n"
+        for key, header in (
+            ("happened", "## What happened"),
+            ("changed", "## What changed"),
+            ("wrong", "## What went wrong / what was corrected"),
+            (
+                "interpretations",
+                "## Interpretations (meanings drawn from the evidence - not raw fact)",
+            ),
+        ):
+            if buckets[key]:  # omit empty sections
+                lines.append(header)
+                lines.extend(line(claim) for claim in buckets[key])
+                lines.append("")
+
+        corrections = self.corrections_history()
+        if corrections:
+            lines.append(
+                "## Corrections history (preserved - once believed, then corrected)"
+            )
+            for old, new in corrections:
+                lines.append(f"  - once: {old.claim_text}  ->  now: {new.claim_text}")
+            lines.append("")
+
+        return "\n".join(lines).rstrip() + "\n"
 
 
 def _sha256(text: str) -> str:
