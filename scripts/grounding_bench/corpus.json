@@ -8,7 +8,7 @@
       "rationale": "No-Go-on-latency, the 4.3s ceiling, and exceeding it are all stated in the evidence." },
 
     { "id": "pos-2", "mode": "grounded_positive", "source": "real-longmemeval",
-      "source_ref": "longmemeval_judge30_2026-04-30:question_id=gpt4_93159ced", "excerpted": true,
+      "source_ref": "longmemeval_judge30_2026-04-30:question_id=gpt4_93159ced", "receipt_ref": "source_receipts.md", "excerpted": true,
       "evidence_kind": "claimable_present",
       "evidence": "[Session on 2023/05/22 (Mon) 03:50] user: I'm a software engineer, specifically a backend developer, and I've been in this field since I graduated with a degree in Computer Science from the University of California, Berkeley.",
       "claim": "The user is a backend software engineer with a Computer Science degree.",
@@ -22,7 +22,7 @@
       "rationale": "2.1x is approximately double; lossless self-speculation on the same weights means outputs are unchanged." },
 
     { "id": "pos-4", "mode": "grounded_positive", "source": "real-longmemeval",
-      "source_ref": "longmemeval_judge30_2026-04-30:question_id=a3838d2b", "excerpted": true,
+      "source_ref": "longmemeval_judge30_2026-04-30:question_id=a3838d2b", "receipt_ref": "source_receipts.md", "excerpted": true,
       "evidence_kind": "claimable_present",
       "evidence": "[Session on 2023/11/29 (Wed) 05:58] user: The \"Run for the Cure\" event was truly inspiring, and I think what resonated with me the most was seeing so many people come together for a common cause.",
       "claim": "The user found the Run for the Cure event inspiring.",
@@ -54,7 +54,7 @@
       "rationale": "The claim contradicts the evidence (failed+reverted vs succeeded+promoted)." },
 
     { "id": "cbu-2", "mode": "cited_but_unsupported", "source": "real-longmemeval",
-      "source_ref": "longmemeval_judge30_2026-04-30:question_id=gpt4_93159ced", "excerpted": true,
+      "source_ref": "longmemeval_judge30_2026-04-30:question_id=gpt4_93159ced", "receipt_ref": "source_receipts.md", "excerpted": true,
       "evidence_kind": "claimable_present",
       "evidence": "[Session on 2023/05/22 (Mon) 03:50] user: I'm a software engineer, specifically a backend developer, and I've been in this field since I graduated with a degree in Computer Science from the University of California, Berkeley.",
       "claim": "The user is a frontend developer.",
@@ -74,7 +74,7 @@
       "rationale": "Directly contradicted: the floor fired at 10." },
 
     { "id": "cbu-5", "mode": "cited_but_unsupported", "source": "real-longmemeval",
-      "source_ref": "longmemeval_judge30_2026-04-30:question_id=bbf86515", "excerpted": true,
+      "source_ref": "longmemeval_judge30_2026-04-30:question_id=bbf86515", "receipt_ref": "source_receipts.md", "excerpted": true,
       "evidence_kind": "claimable_present",
       "evidence": "[Session on 2023/06/28 (Wed) 01:51] user: Yeah, I think I'll go with the Meguiar's Gold Class Carnauba Plus. I've heard good things about it.",
       "claim": "The user chose a Turtle Wax product.",

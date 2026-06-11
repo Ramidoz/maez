@@ -50,11 +50,15 @@ class CorpusSchemaTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_corpus([self._row(rationale="   ")])
 
-    def test_real_longmemeval_requires_source_ref(self):
+    def test_real_longmemeval_requires_receipts(self):
         with self.assertRaises(ValueError):
-            validate_corpus([self._row(source="real-longmemeval")])   # no receipt
-        validate_corpus([self._row(source="real-longmemeval",
-                                   source_ref="longmemeval_judge30_2026-04-30:question_id=x")])
+            validate_corpus([self._row(source="real-longmemeval")])   # no source_ref
+        with self.assertRaises(ValueError):                           # source_ref but no receipt_ref
+            validate_corpus([self._row(source="real-longmemeval",
+                                       source_ref="longmemeval_judge30:question_id=x")])
+        validate_corpus([self._row(source="real-longmemeval",         # both -> passes
+                                   source_ref="longmemeval_judge30:question_id=x",
+                                   receipt_ref="source_receipts.md")])
 
 
 class AdapterPromptTests(unittest.TestCase):
@@ -149,6 +153,21 @@ class ReportTests(unittest.TestCase):
         self.assertIn("stale_over_current", md)
         self.assertIn("2/4", md)          # the dangerous miss, shown as a fraction
         self.assertIn("hhem@0.5", md)
+
+
+class ReceiptTests(unittest.TestCase):
+    def test_real_rows_evidence_in_committed_receipt(self):
+        # The branch must be self-sufficient: every real-longmemeval row's evidence
+        # is an exact substring of the COMMITTED receipt artifact (not a gitignored file).
+        import json
+        gb = REPO / "scripts" / "grounding_bench"
+        receipt = (gb / "source_receipts.md").read_text()
+        items = json.loads((gb / "corpus.json").read_text())["items"]
+        real = [r for r in items if r["source"] == "real-longmemeval"]
+        self.assertTrue(real, "expected at least one real-longmemeval row")
+        for r in real:
+            self.assertIn(r["evidence"], receipt,
+                          f"{r['id']}: evidence not found verbatim in committed source_receipts.md")
 
 
 if __name__ == "__main__":
