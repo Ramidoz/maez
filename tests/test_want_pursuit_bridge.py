@@ -1,3 +1,5 @@
+import inspect
+import os
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -212,3 +214,30 @@ class SeedAndProposeTests(unittest.TestCase):
 
     def test_none_result_is_safe(self):
         self.assertIsNone(wpb.maybe_propose_terminal(None, self.w, _RecordingCards()))
+
+
+class DaemonFlagAndWiringTests(unittest.TestCase):
+    def test_flag_default_off(self):
+        from daemon import maez_daemon
+
+        old = os.environ.pop("MAEZ_WANT_PURSUIT_ENABLED", None)
+        try:
+            self.assertFalse(maez_daemon._want_pursuit_enabled())
+            os.environ["MAEZ_WANT_PURSUIT_ENABLED"] = "1"
+            self.assertTrue(maez_daemon._want_pursuit_enabled())
+        finally:
+            os.environ.pop("MAEZ_WANT_PURSUIT_ENABLED", None)
+            if old is not None:
+                os.environ["MAEZ_WANT_PURSUIT_ENABLED"] = old
+
+    def test_loop_wires_bridge_after_advance_one_and_behind_flag(self):
+        from daemon import maez_daemon
+
+        src = inspect.getsource(maez_daemon.MaezDaemon._loop)
+        advance_idx = src.index("advance_one(self")
+        flag_idx = src.index("_want_pursuit_enabled(", advance_idx)
+        backward_idx = src.index("maybe_propose_terminal", advance_idx)
+        seed_idx = src.index("seed_work_order", advance_idx)
+        self.assertLess(advance_idx, flag_idx)
+        self.assertLess(flag_idx, backward_idx)
+        self.assertLess(backward_idx, seed_idx)

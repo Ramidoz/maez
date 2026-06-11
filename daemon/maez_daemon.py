@@ -239,6 +239,7 @@ from core.infra.http_security import (
 )
 
 LOOP_INTERVAL = 30  # seconds
+WANT_PURSUIT_COOLDOWN_S = 6 * 3600
 HEALTH_PORT = 11435
 WS_PORT = 11436
 S7_INTERNAL_CHANNEL_HEADER = "X-Maez-S7-Internal-Channel"
@@ -1678,6 +1679,11 @@ class _CycleDoormanGateDecision:
 
 def _cycle_doorman_enabled() -> bool:
     return (os.environ.get("MAEZ_CYCLE_DOORMAN_ENABLED", "") or "").strip() == "1"
+
+
+def _want_pursuit_enabled(environ: object | None = None) -> bool:
+    env = os.environ if environ is None else environ
+    return (env.get("MAEZ_WANT_PURSUIT_ENABLED", "") or "").strip() == "1"
 
 
 def _env_flag(name: str, *, environ: object | None = None) -> bool:
@@ -3253,6 +3259,16 @@ class MaezDaemon:
         """Content-free S5 state joined to the live identity-ledger fingerprint."""
 
         return voice_continuity_health(getattr(self, "_identity_ledger", None))
+
+    def _want_pursuit_card_store(self):
+        """Return the pending-card store used by the action pipeline, if available."""
+        try:
+            telegram = getattr(self, "telegram", None)
+            pipe = telegram._get_pipeline() if telegram else None
+            return getattr(pipe, "card_store", None) if pipe else None
+        except Exception as exc:
+            logger.debug("want-pursuit card store unavailable: %s", exc)
+            return None
 
     def _operator_health(self) -> dict:
         """Closed S7 operator-health projection; counts and modes only."""
@@ -8981,6 +8997,31 @@ class MaezDaemon:
                     w_result = advance_one(self, deadline=cycle_deadline)
                     if w_result:
                         logger.info("Wondering advance: %s", w_result)
+                    if _want_pursuit_enabled():
+                        try:
+                            from core.evolution import want_pursuit_bridge as _wpb
+                            from core.evolution.wonderings import get_store as _w_get_store
+
+                            _w_store = _w_get_store()
+                            _cards = self._want_pursuit_card_store()
+                            if _cards is not None:
+                                _wpb.maybe_propose_terminal(w_result, _w_store, _cards)
+                                _wants = getattr(self, "wants", None)
+                                if _wants is not None:
+                                    _picked = _wpb.select_want(
+                                        _wants,
+                                        _w_store,
+                                        _cards,
+                                        cooldown_s=WANT_PURSUIT_COOLDOWN_S,
+                                        now=time.time(),
+                                    )
+                                    if _picked is not None:
+                                        _wpb.seed_work_order(_w_store, _picked)
+                        except Exception:
+                            logger.warning(
+                                "want-pursuit bridge step failed; skipping",
+                                exc_info=True,
+                            )
             except BrainPreempted:
                 logger.info(
                     "Cycle %d: wondering preempted by foreground; yielding cycle",
