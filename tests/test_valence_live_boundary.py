@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 
-ALLOWED_STDLIB = frozenset(("json", "logging", "os", "pathlib"))
+ALLOWED_STDLIB = frozenset(("datetime", "json", "logging", "os", "pathlib"))
 PURE_VALENCE_PREFIX = "core.evolution.valence."
 
 FORBIDDEN = (
