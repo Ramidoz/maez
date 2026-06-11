@@ -1,0 +1,3 @@
+timestamp,label,n,false_pos,abstain_ok,abstain_wrong,errors,matches,p50,p95
+1781196882,minicheck-deberta,26,2,3,0,0,23,0.12,0.159
+1781196882,4b-entailment-adapter,26,0,3,0,0,25,1.905,3.153
