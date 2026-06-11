@@ -9001,6 +9001,7 @@ class MaezDaemon:
                         try:
                             from core.evolution import want_pursuit_bridge as _wpb
                             from core.evolution.wonderings import get_store as _w_get_store
+                            from core.evolution.wants import is_hard_want as _is_hard_want
 
                             _w_store = _w_get_store()
                             _cards = self._want_pursuit_card_store()
@@ -9014,6 +9015,7 @@ class MaezDaemon:
                                         _cards,
                                         cooldown_s=WANT_PURSUIT_COOLDOWN_S,
                                         now=time.time(),
+                                        is_hard_want=_is_hard_want,
                                     )
                                     if _picked is not None:
                                         _wpb.seed_work_order(_w_store, _picked)

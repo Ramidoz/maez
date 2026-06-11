@@ -310,3 +310,10 @@ class DaemonFlagAndWiringTests(unittest.TestCase):
         self.assertLess(advance_idx, flag_idx)
         self.assertLess(flag_idx, backward_idx)
         self.assertLess(backward_idx, seed_idx)
+
+    def test_loop_injects_is_hard_want_into_select_want(self):
+        from daemon import maez_daemon
+
+        src = inspect.getsource(maez_daemon.MaezDaemon._loop)
+        sel = src.index("select_want(")
+        self.assertIn("is_hard_want=", src[sel : sel + 400])
