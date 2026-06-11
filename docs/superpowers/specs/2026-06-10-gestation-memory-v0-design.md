@@ -25,14 +25,15 @@ confidence:   witnessed       # witnessed | documented | inferred
 scar:         false           # first-class; never hidden
 sources:      [ {kind, ref, commit, excerpt_hash}, ... ]   # >=1 must be structural + resolve
 observed_by:  claude          # owner | codex | claude | witness  (manual, maker-tagged)
-supersedes:   <claim_id|null>
+# supersession is NOT a field on the claim row — it lives only in the
+# gestation_claim_supersessions edge table (true append-only; see Data model).
 ```
 
 ## The source (a receipt that can't drift)
 A source is **`(kind, ref, commit, excerpt_hash)`** — not just a path:
 - **`doc`** — `ref`=path, `commit`=hash-at-authoring, `excerpt_hash`=`sha256(cited excerpt)`. Validated at record-time by reading the file *at that commit* (`git show <commit>:<path>`) and confirming the excerpt is present and its hash matches. So the claim stays anchored to **what the source actually said when it was cited** — a later edit can't make a thin claim look better-grounded.
 - **`commit`** — `ref`=commit hash (self-fingerprinting; validated to exist).
-- **`ledger_row`** — `ref`=`identity_ledger.event_id` (the exact column, not a vague "row id"); `excerpt_hash`=`sha256(canonical_json(stable_fields, sort_keys=True))` over the row's **substantive** columns only (`ts`, `event_type`, `continuity_id`, `parent_continuity_id`, and the event payload — the exact stable-field set is named in the plan against the real schema), **excluding** transient/decode artifacts. Validated: the row exists and the canonical hash matches. (A precise canonical hash, or "hash of row content" becomes a subtle mismatch factory.)
+- **`ledger_row`** — `ref`=`identity_ledger.event_id` (the exact column). `excerpt_hash` is the **canonical row hash, fully defined here (the spec is the contract; the plan does not get to decide the evidence hash):** the stable fields are the full real column set — **`event_id, ts, event_type, continuity_id, parent_continuity_id, severity, reason, evidence_json, fingerprint_json`** (verified against the live schema; the table has no transient/decode artifacts). **Parse the two JSON-string columns (`evidence_json`, `fingerprint_json`) into objects**, assemble `{event_id, ts, event_type, continuity_id, parent_continuity_id, severity, reason, evidence, fingerprint}`, and compute `sha256(json.dumps(obj, sort_keys=True, separators=(",", ":")))`. Parsing-then-canonicalizing (rather than hashing the raw stored strings) means whitespace or key-order differences in the stored JSON can't break the hash. Validated at record-time: the row exists and this canonical hash matches.
 - **`witness_note`** — free-text context. **May never be a claim's only source.**
 
 ## Validation rails (the immune system — record_claim computes acceptance, does not trust the caller)
