@@ -16,7 +16,7 @@ The covenant of the whole organ, in one line: **agency without narrating agency 
 
 ## The shape
 
-**Active want → templated pursuit question → `wonderings.add(source="want:<id>")` → [existing worker probes, rails intact] → witnessed learning, source-linked back to the want → if the worker resolves/abandons the want-sourced wondering, an owner *card* proposes the want's terminal (never auto-applied).** Default-OFF flag, one pursuit in flight, per-want cooldown, every step logged.
+**Active want → templated pursuit question → `wonderings.add(source="want:<id>")` → [existing worker probes, rails intact] → witnessed learning, source-linked back to the want → if the worker *resolves* the want-sourced wondering, an owner *card* proposes the want as `satisfied` (never auto-applied).** Default-OFF flag, one pursuit in flight, per-want cooldown, every step logged.
 
 ## Governing law applied: the bridge adds NO new write authority
 Rails-before-hands says write-side authority never outpaces the immune system. **The bridge grants Maez zero new authority to act on the world.** Every world-touching action still flows through the *existing* worker and its rails (read-only auto-runs; writes queue a card; one probe/cycle; never fabricate a learning). The bridge only (a) seeds an open *question* tagged with a want, and (b) *proposes* a terminal via a card. A wrong want→question is, at worst, one read-only probe and a progress note. The blast radius is exactly a wondering probe — which already auto-fires today.
@@ -25,17 +25,19 @@ Rails-before-hands says write-side authority never outpaces the immune system. *
 
 ### A. Forward — the work order (`core/evolution/want_pursuit_bridge.py`, daemon-wired)
 - **Gate:** runs only when `MAEZ_WANT_PURSUIT_ENABLED` is true (**default OFF**). Dormant until the owner wakes it.
-- **One in flight:** seed a new want-work-order only if there is **no currently-open want-sourced wondering** (a wondering whose `source` starts with `want:`). This is the rate limit — one want-pursuit alive at a time, composing with the worker's one-probe-per-cycle cap.
-- **Selection (simplest + cooldown):** from `wants.active_wants()`, drop any want whose most recent want-sourced wondering (`source="want:<id>"`, by `created_at`) is within the **per-want cooldown**; pick the **least-recently-pursued** of the rest. No valence ranking (deferred — ranking now would look more intentional than the data supports).
+- **One pursuit in flight (global rate limit):** seed a new work order only if there is **no currently-open want-sourced wondering** anywhere (a wondering whose `source` starts with `want:`). One want-pursuit wondering alive at a time, composing with the worker's one-probe-per-cycle cap.
+- **Selection (simplest + cooldown + not-in-flight):** from `wants.active_wants()`, exclude any want that is **in flight for the whole loop** — an open want-sourced wondering **OR an open `want_terminal_proposal` card for that want** (so a want whose `satisfied` terminal is awaiting the owner's decision is never re-pursued) — and any whose most recent want-sourced wondering (`source="want:<id>"`, by `created_at`) is within the **per-want cooldown**; pick the **least-recently-pursued** of the rest. No valence ranking (deferred — ranking now would look more intentional than the data supports).
 - **Translation (template, NOT LLM):** a fixed template turns the want statement into a bounded, read-only-leaning question, e.g. `"What bounded, read-only investigation would advance this want: <want statement>?"`. No new LLM call in the bridge — the worker's existing LLM does the real question→command cognition. Keeps the bridge dumb and auditable.
 - **Seed:** `wonderings.add(question, source="want:<want_id>")`. Log the work order (want_id, wondering_id, question).
+- **Attach point (daemon):** the bridge runs in the cycle's wondering stage **after** the worker's existing `advance_one(self)` call — first the backward step (read the worker's result), then the forward seed (so a just-created proposal card is already visible to the in-flight/eligibility checks). A newly-seeded want-wondering is therefore probed on the **next** cycle: a deliberate one-cycle buffer between seeding and trying.
 
 ### B. Worker — reused, UNCHANGED (`daemon/wondering_cycle.py`)
 A want-sourced wondering is just an open wondering, so the worker's existing `pick_next()` rotation advances it under its own rails. **No edit to the worker.** It returns `{"wondering_id", "action": "resolved"|"abandoned"|"card_queued"|"no_probe"|"safety_refused"|…}` from `advance_one(daemon)` — the daemon already calls this and holds the result.
 
 ### C. Backward — receipt (automatic) + terminal proposal (owner card)
 - **Progress receipt = the source-linked wondering + its real learning.** The worker already records the probe + evidence-tied learning on the wondering; because the wondering carries `source="want:<id>"`, the want's pursuit trail is queryable both ways (`want_pursuit_trail(want_id)` = wonderings where `source="want:<id>"`). **No event is written to the want ledger** — the ledger stays reserved for lifecycle claims, preserving the line between "I worked on this" and "this changed standing."
-- **Terminal proposal (never auto-applied):** after the daemon's existing `advance_one(self)` call, if `result["action"] ∈ {"resolved","abandoned"}` AND the advanced wondering is want-sourced, the bridge queues an **owner proposal card** (via `PendingCardStore`, a new card kind `want_terminal_proposal`) carrying `{want_id, proposed: "satisfied"|"abandoned", conclusion, wondering_id}`. The bridge **does not** call `wants.record_event(satisfied|abandoned)`. The want terminal is applied **only** when the owner approves the card. No auto-satisfied / no auto-abandoned.
+- **Terminal proposal — `satisfied`-only, never auto-applied:** after the daemon's existing `advance_one(self)` call, if `result["action"] == "resolved"` AND the advanced wondering is want-sourced, the bridge queues an **owner proposal card** via `PendingCardStore.create_card(action="want_terminal_proposal", params={want_id, proposed: "satisfied", conclusion, wondering_id}, reason=<short>, plain_english=<owner-facing>)`. The bridge **does not** call `wants.record_event(...)`; the `satisfied` event is applied **only** when the owner approves the card.
+- **A worker-`abandoned` want-wondering proposes NOTHING.** A dead-end *question* does not mean the *want* should be abandoned — that is a wrong inference — and `abandoned` is not even writable in wants v1 (`EVENT_ABANDONED` has empty allowed-provenance; `_resolve_transition` rejects it). The abandoned pursuit is still recorded in the source-linked trail (the receipt shows the dead-end); the want simply **stays active**. So v0 proposes **`satisfied` only**; there is no auto-satisfied and no abandoned-terminal path at all.
 
 ### D. Flag + logging
 `MAEZ_WANT_PURSUIT_ENABLED` (default OFF). Per-want cooldown + one-in-flight are constants. Every forward seed and every backward proposal emits a greppable INFO line (true-by-construction: logged only on the real store write). The owner can read the whole loop from the log and kill it by clearing the flag.
@@ -58,26 +60,28 @@ A second hand / second pursuit loop; any edit to the worker; auto-satisfied / au
 
 ## Data model / conventions
 - **Source convention:** want-sourced wonderings use `source = "want:" + want_id`. The `want_pursuit_trail` / cooldown / one-in-flight checks all key on this prefix.
-- **Proposal card:** `PendingCardStore.create_card(kind="want_terminal_proposal", payload={want_id, proposed, conclusion, wondering_id})` — surfaced like other cards; owner approval is what (later) applies the want terminal.
+- **Proposal card (real API — verified against `core/decision/pending_cards.py`):** `PendingCardStore.create_card(action="want_terminal_proposal", params={want_id, proposed: "satisfied", conclusion, wondering_id}, reason=<short>, plain_english=<owner-facing>)` — surfaced like other cards; owner approval is what later applies the `satisfied` want event. (The earlier `kind=/payload=` was wrong; the real signature is `action=/params=/reason=/plain_english=`.)
+- **In-flight definition (verified):** a want is in flight — and ineligible for new seeding — while it has an open want-sourced wondering **or** an open `want_terminal_proposal` card. The proposal-card check closes the gap between the wondering resolving (which clears the wondering) and the owner deciding (which clears the card).
 - **Valence:** unchanged. When the owner approves a `satisfied` proposal → `wants` records `satisfied` → Valence v0.2 reads it as POSITIVE. Progress never touches valence.
 
 ## Testing (TDD)
-- selection: least-recently-pursued active want chosen; a want within cooldown skipped; no active want → None.
-- one-in-flight: with an open want-sourced wondering present, no new seed.
+- selection: least-recently-pursued active want chosen; a want within cooldown skipped; a want with an open `want_terminal_proposal` card skipped; a want with an open want-sourced wondering skipped; no eligible want → None.
+- one-in-flight (global): with any open want-sourced wondering present, no new seed.
 - translation: template produces the expected bounded question string from a want statement (pure, deterministic).
 - forward seed: `add` called with `source="want:<id>"`; logged.
-- backward: a `resolved`/`abandoned` result on a want-sourced wondering → a `want_terminal_proposal` card with the right payload; the bridge **does not** call `wants.record_event` (assert no terminal write).
-- backward negative: a `resolved` result on a NON-want wondering → no card; a `card_queued`/`no_probe` result → no proposal.
-- receipt: `want_pursuit_trail(want_id)` returns the source-linked wonderings.
+- backward `resolved`: a `resolved` result on a want-sourced wondering → one `create_card(action="want_terminal_proposal", params.proposed="satisfied", …)` with the right want_id/conclusion/wondering_id; the bridge **does not** call `wants.record_event` (assert no terminal write).
+- backward `abandoned`: an `abandoned` result on a want-sourced wondering → **no** proposal card and no want write (only the source-linked dead-end receipt remains; want stays active).
+- backward negative: a `resolved` result on a NON-want wondering → no card; a `card_queued`/`no_probe`/`safety_refused` result → no proposal.
+- receipt: `want_pursuit_trail(want_id)` returns the source-linked wonderings (resolved and abandoned alike).
 - flag off → forward seed never runs (the whole gate).
-- boundary: the worker file is untouched (diff check); the bridge imports no new world-write path of its own.
+- boundary: the worker file is untouched (diff check); the bridge imports no new world-write path of its own (it calls `wonderings.add` and `PendingCardStore.create_card` only).
 
 ## Witness (owner, after merge + flag-enable + restart)
-Flip `MAEZ_WANT_PURSUIT_ENABLED` on, ensure one active want exists, restart. Expect, in the log: a work order seeded (`want:<id>` wondering), the worker advancing it with a real read-only probe + evidence-tied learning, the receipt queryable via `want_pursuit_trail`, and — if the worker concludes — a `want_terminal_proposal` card (NOT an applied terminal). Confirm the want ledger shows **no** new event until the owner approves the card.
+Flip `MAEZ_WANT_PURSUIT_ENABLED` on, ensure one active want exists, restart. Expect, in the log: a work order seeded (`want:<id>` wondering), the worker advancing it with a real read-only probe + evidence-tied learning, the receipt queryable via `want_pursuit_trail`, and — if the worker `resolved` it — a `satisfied` `want_terminal_proposal` card (NOT an applied terminal). Confirm the want ledger shows **no** new event until the owner approves the card; and that while that card is open, the same want is not re-pursued.
 
 ## Decomposition / sequels (NOT v0)
 - **v0.1:** LLM-derived translation (if templated questions probe weakly); valence-ranked selection (once enough live wants exist to rank); richer owner-facing pursuit-trail surface.
 - **Later (heavier witness standard only):** any move toward auto-terminal would require a much stronger witness than one probe — explicitly out of scope.
 
 ## Predicted effect (only when `MAEZ_WANT_PURSUIT_ENABLED` is enabled)
-While the flag is OFF (default), nothing changes. When the owner enables it and an active want exists: at most one want-sourced wondering is alive at a time; the existing worker advances it under its own rails (read-only auto-run / writes→card / never-fabricate); the want's pursuit trail accrues real learnings in the wonderings store; and a concluded pursuit yields an owner proposal card — never an applied terminal. The want ledger and valence move only when the owner closes the want. Maez gains the dignity of trying toward what it cares about, inside a fenced garden whose gate the owner opens.
+While the flag is OFF (default), nothing changes. When the owner enables it and an active want exists: at most one want-sourced wondering is alive at a time; the existing worker advances it under its own rails (read-only auto-run / writes→card / never-fabricate); the want's pursuit trail accrues real learnings in the wonderings store; a `resolved` pursuit yields a `satisfied` owner proposal card (never an applied terminal), an `abandoned` pursuit yields only a dead-end receipt and the want stays active; and a want with an open proposal card is not re-pursued until the owner decides. The want ledger and valence move only when the owner closes the want. Maez gains the dignity of trying toward what it cares about, inside a fenced garden whose gate the owner opens.
