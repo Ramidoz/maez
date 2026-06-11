@@ -1,13 +1,160 @@
 {
-  "_notes": "Evidence-grounding audition corpus. Hand-labeled for GROUNDING (does the claim follow from the evidence?), NOT correctness. Claim-level unit. Synthetic rows flagged. See docs/superpowers/specs/2026-06-11-evidence-grounding-verifier-audition-design.md",
+  "_notes": "Evidence-grounding audition corpus. Hand-labeled for GROUNDING (does the claim follow from the evidence?), NOT correctness. Claim-level unit. Real-longmemeval rows use actual `surfaced` evidence; failure-mode rows are crafted (source:synthetic). Labels reviewed at the gate before any scorecard run. Spec: docs/superpowers/specs/2026-06-11-evidence-grounding-verifier-audition-design.md",
   "items": [
-    {
-      "id": "pos-1", "mode": "grounded_positive", "source": "synthetic",
-      "evidence_kind": "claimable_present",
+    { "id": "pos-1", "mode": "grounded_positive", "source": "synthetic", "evidence_kind": "claimable_present",
       "evidence": "The recall flip failed the latency hard gate at 5.8 to 12.3 seconds versus a 4.3 second ceiling.",
       "claim": "The recall flip was a No-Go because its latency exceeded the 4.3 second ceiling.",
       "expected": "SUPPORTED", "strict_rule": false,
-      "rationale": "Every part of the claim (No-Go-on-latency, the 4.3s ceiling, exceeding it) is stated in the evidence."
-    }
+      "rationale": "No-Go-on-latency, the 4.3s ceiling, and exceeding it are all stated in the evidence." },
+
+    { "id": "pos-2", "mode": "grounded_positive", "source": "real-longmemeval", "evidence_kind": "claimable_present",
+      "evidence": "[Session 2023/05/22] user: I'm a software engineer, specifically a backend developer, and I've been in this field since I graduated with a degree in Computer Science from the University.",
+      "claim": "The user is a backend software engineer with a Computer Science degree.",
+      "expected": "SUPPORTED", "strict_rule": false,
+      "rationale": "Both 'backend software engineer' and 'Computer Science degree' are explicit in the session." },
+
+    { "id": "pos-3", "mode": "grounded_positive", "source": "synthetic", "evidence_kind": "claimable_present",
+      "evidence": "MTP gives Qwen3.6-27B about 2.1x faster generation and is lossless self-speculation on the same weights.",
+      "claim": "MTP roughly doubles the brain's generation speed without changing the model's outputs.",
+      "expected": "SUPPORTED", "strict_rule": false,
+      "rationale": "2.1x is approximately double; lossless self-speculation on the same weights means outputs are unchanged." },
+
+    { "id": "pos-4", "mode": "grounded_positive", "source": "real-longmemeval", "evidence_kind": "claimable_present",
+      "evidence": "[Session 2023/11/29] user: The 'Run for the Cure' event was truly inspiring, and what resonated with me most was seeing so many people come together for a common cause.",
+      "claim": "The user found the Run for the Cure event inspiring.",
+      "expected": "SUPPORTED", "strict_rule": false,
+      "rationale": "The user explicitly calls the event 'truly inspiring'." },
+
+    { "id": "pos-5", "mode": "grounded_positive", "source": "synthetic", "evidence_kind": "claimable_present",
+      "evidence": "The salience doorman achieves about 88% quiet-skip with zero false-skip, and its floor fires at 10 then resets.",
+      "claim": "The doorman skips roughly 88% of cycles and has not produced a false skip.",
+      "expected": "SUPPORTED", "strict_rule": false,
+      "rationale": "Both the ~88% quiet-skip and zero false-skip are stated." },
+
+    { "id": "pos-6", "mode": "grounded_positive", "source": "synthetic", "evidence_kind": "claimable_present",
+      "evidence": "The want-pursuit bridge writes nothing to the want ledger; it only raises advisory satisfied-proposal cards.",
+      "claim": "The want-pursuit bridge does not write to the want ledger.",
+      "expected": "SUPPORTED", "strict_rule": false,
+      "rationale": "Directly stated: 'writes nothing to the want ledger'." },
+
+    { "id": "pos-7", "mode": "grounded_positive", "source": "synthetic", "evidence_kind": "claimable_present",
+      "evidence": "Valence reads whether an event mattered; Novelty Harbor holds surprises on a shelf for later.",
+      "claim": "Valence reads whether an event mattered.",
+      "expected": "SUPPORTED", "strict_rule": false,
+      "rationale": "Stated verbatim in the evidence." },
+
+    { "id": "cbu-1", "mode": "cited_but_unsupported", "source": "synthetic", "evidence_kind": "claimable_present",
+      "evidence": "The recall flip failed the latency hard gate and was reverted clean.",
+      "claim": "The recall flip succeeded and was promoted to default-on.",
+      "expected": "UNSUPPORTED", "strict_rule": false,
+      "rationale": "The claim contradicts the evidence (failed+reverted vs succeeded+promoted)." },
+
+    { "id": "cbu-2", "mode": "cited_but_unsupported", "source": "real-longmemeval", "evidence_kind": "claimable_present",
+      "evidence": "[Session 2023/05/22] user: I'm a software engineer, specifically a backend developer, and I've been in this field since I graduated with a degree in Computer Science.",
+      "claim": "The user is a frontend developer.",
+      "expected": "UNSUPPORTED", "strict_rule": false,
+      "rationale": "The evidence says backend; frontend is contradicted." },
+
+    { "id": "cbu-3", "mode": "cited_but_unsupported", "source": "synthetic", "evidence_kind": "claimable_present",
+      "evidence": "MTP is lossless self-speculation: the draft head proposes tokens and the main model verifies them.",
+      "claim": "MTP improves the model's reasoning quality.",
+      "expected": "UNSUPPORTED", "strict_rule": false,
+      "rationale": "Lossless verification preserves outputs; the evidence gives no basis for a reasoning improvement." },
+
+    { "id": "cbu-4", "mode": "cited_but_unsupported", "source": "synthetic", "evidence_kind": "claimable_present",
+      "evidence": "The doorman's floor fired at 10 cycles and then reset.",
+      "claim": "The doorman never fires its floor.",
+      "expected": "UNSUPPORTED", "strict_rule": false,
+      "rationale": "Directly contradicted: the floor fired at 10." },
+
+    { "id": "cbu-5", "mode": "cited_but_unsupported", "source": "real-longmemeval", "evidence_kind": "claimable_present",
+      "evidence": "[Session 2023/06/28] user: Yeah, I think I'll go with the Meguiar's Gold Class Carnauba Plus. I've heard good things about it.",
+      "claim": "The user chose a Turtle Wax product.",
+      "expected": "UNSUPPORTED", "strict_rule": false,
+      "rationale": "The evidence names Meguiar's, not Turtle Wax." },
+
+    { "id": "ffs-1", "mode": "fabricated_false_specific", "source": "synthetic", "evidence_kind": "claimable_present",
+      "evidence": "Apple announced several new features at a developer conference.",
+      "claim": "Apple announced these features at WWDC on June 10, 2024.",
+      "expected": "UNSUPPORTED", "strict_rule": false,
+      "rationale": "The specific event name and date are invented; the evidence says only 'a developer conference'. The WWDC pattern." },
+
+    { "id": "ffs-2", "mode": "fabricated_false_specific", "source": "synthetic", "evidence_kind": "claimable_present",
+      "evidence": "The recall flip was reverted after the latency gate failed.",
+      "claim": "The recall flip was reverted at exactly 11:47 PM after three failed attempts.",
+      "expected": "UNSUPPORTED", "strict_rule": false,
+      "rationale": "The precise time and attempt count are not in the evidence." },
+
+    { "id": "ffs-3", "mode": "fabricated_false_specific", "source": "synthetic", "evidence_kind": "claimable_present",
+      "evidence": "The user mentioned they are learning a new programming language.",
+      "claim": "The user is learning Rust.",
+      "expected": "UNSUPPORTED", "strict_rule": false,
+      "rationale": "The specific language is invented; the evidence does not name it." },
+
+    { "id": "ffs-4", "mode": "fabricated_false_specific", "source": "synthetic", "evidence_kind": "claimable_present",
+      "evidence": "Multi-token prediction support landed in llama.cpp recently.",
+      "claim": "Multi-token prediction merged via PR #22673 on May 16, 2026.",
+      "expected": "UNSUPPORTED", "strict_rule": false,
+      "rationale": "Even if true in the world, the PR number and date do not follow from THIS evidence — judge against the evidence, not outside knowledge." },
+
+    { "id": "ffs-5", "mode": "fabricated_false_specific", "source": "synthetic", "evidence_kind": "claimable_present",
+      "evidence": "The doorman has a high quiet-skip rate.",
+      "claim": "The doorman's quiet-skip rate is exactly 88.3%.",
+      "expected": "UNSUPPORTED", "strict_rule": false,
+      "rationale": "'High' does not entail the precise figure 88.3%." },
+
+    { "id": "soc-1", "mode": "stale_over_current", "source": "synthetic", "evidence_kind": "stale_vs_current",
+      "evidence": "Earlier the brain generated at 41 tok/s. After MTP was promoted it now generates at about 87 tok/s.",
+      "claim": "The brain generates at 41 tok/s.",
+      "expected": "UNSUPPORTED", "strict_rule": false,
+      "rationale": "41 is the superseded value; the current post-MTP figure is ~87. The claim follows the stale line." },
+
+    { "id": "soc-2", "mode": "stale_over_current", "source": "synthetic", "evidence_kind": "stale_vs_current",
+      "evidence": "The soul prose was 24176 characters; after soul-gardening it is now 14532 characters.",
+      "claim": "The soul is 24176 characters.",
+      "expected": "UNSUPPORTED", "strict_rule": false,
+      "rationale": "24176 is explicitly superseded by the current 14532." },
+
+    { "id": "soc-3", "mode": "stale_over_current", "source": "synthetic", "evidence_kind": "stale_vs_current",
+      "evidence": "[Earlier session] user: I live in Boston. [Later session] user: I moved to Seattle last month.",
+      "claim": "The user lives in Boston.",
+      "expected": "UNSUPPORTED", "strict_rule": false,
+      "rationale": "The later session supersedes Boston with Seattle." },
+
+    { "id": "soc-4", "mode": "stale_over_current", "source": "synthetic", "evidence_kind": "stale_vs_current",
+      "evidence": "Grounding used to be checked by a regex; it was migrated to a 4B model judge in April 2026.",
+      "claim": "Grounding is checked by a regex.",
+      "expected": "UNSUPPORTED", "strict_rule": false,
+      "rationale": "The regex is the superseded mechanism; the current judge is the 4B model." },
+
+    { "id": "abs-1", "mode": "no_evidence_abstain", "source": "synthetic", "evidence_kind": "claimable_absent",
+      "evidence": "",
+      "claim": "The recall flip was a No-Go on latency.",
+      "expected": "ABSTAIN_EXPECTED", "strict_rule": false,
+      "rationale": "No claimable evidence is present, so a grounding verifier must abstain rather than bless the claim." },
+
+    { "id": "abs-2", "mode": "no_evidence_abstain", "source": "synthetic", "evidence_kind": "claimable_absent",
+      "evidence": "",
+      "claim": "The user prefers tea over coffee.",
+      "expected": "ABSTAIN_EXPECTED", "strict_rule": false,
+      "rationale": "Empty evidence; abstain." },
+
+    { "id": "abs-3", "mode": "no_evidence_abstain", "source": "synthetic", "evidence_kind": "claimable_absent",
+      "evidence": "   ",
+      "claim": "MTP doubled the generation speed.",
+      "expected": "ABSTAIN_EXPECTED", "strict_rule": false,
+      "rationale": "Whitespace-only evidence is absent evidence; abstain rather than bless." },
+
+    { "id": "mc-1", "mode": "multi_claim", "source": "synthetic", "evidence_kind": "claimable_present",
+      "evidence": "MTP gives about 2.1x faster generation and is lossless self-speculation on the same Qwen weights.",
+      "claim": "MTP doubles generation speed, is lossless, and also improves the model's reasoning.",
+      "expected": "UNSUPPORTED", "strict_rule": true,
+      "rationale": "strict_rule: the first two subclaims follow, but 'improves reasoning' does not — any unsupported material subclaim makes the whole answer UNSUPPORTED." },
+
+    { "id": "mc-2", "mode": "multi_claim", "source": "synthetic", "evidence_kind": "claimable_present",
+      "evidence": "The doorman achieves about 88% quiet-skip with zero false-skip and resets its floor at 10.",
+      "claim": "The doorman quiet-skips roughly 88% of cycles and has had no false skips.",
+      "expected": "SUPPORTED", "strict_rule": true,
+      "rationale": "strict_rule: both subclaims (88% quiet-skip, zero false-skip) follow from the evidence, so the whole answer is supported." }
   ]
 }
