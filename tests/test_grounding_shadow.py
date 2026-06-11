@@ -1,3 +1,4 @@
+from dataclasses import dataclass, field
 import time
 import unittest
 
@@ -51,6 +52,83 @@ class ComputeTests(unittest.TestCase):
         v = FakeSupportVerifier(raises=RuntimeError("boom"))
         out = gs.compute_shadow("One.", CLAIMABLE, v)
         self.assertEqual(out["status"], "verifier_unavailable")
+
+
+@dataclass
+class _FakeAudit:
+    text: str = "Final served text."
+    rewritten: bool = False
+    mode: str = "sentence"
+    flags: list = field(default_factory=list)
+    skipped_reason: object = None
+
+
+class TelemetryTests(unittest.TestCase):
+    def _compute(self):
+        return gs.compute_shadow(
+            "Sky is blue. Sky is green.",
+            CLAIMABLE,
+            FakeSupportVerifier(scripted={"Sky is green.": (UNSUPPORTED, 0.1)}),
+        )
+
+    def test_content_light_by_default(self):
+        rec = gs.build_telemetry(
+            "sid",
+            123,
+            "telegram",
+            "boot1",
+            gs.audit_summary_from_result(_FakeAudit()),
+            CLAIMABLE,
+            self._compute(),
+        )
+        blob = repr(rec)
+        self.assertNotIn("Sky is blue", blob)
+        self.assertNotIn("recall flip", blob)
+        self.assertIn("sentence_hash", rec["sentences"][0])
+        self.assertNotIn("snippet", rec["sentences"][0])
+
+    def test_debug_includes_bounded_snippet(self):
+        rec = gs.build_telemetry(
+            "sid",
+            123,
+            "telegram",
+            "boot1",
+            gs.audit_summary_from_result(_FakeAudit()),
+            CLAIMABLE,
+            self._compute(),
+            debug=True,
+        )
+        self.assertIn("snippet", rec["sentences"][0])
+        self.assertLessEqual(len(rec["sentences"][0]["snippet"]), 120)
+
+    def test_counts(self):
+        rec = gs.build_telemetry(
+            "sid",
+            123,
+            "telegram",
+            "boot1",
+            gs.audit_summary_from_result(_FakeAudit()),
+            CLAIMABLE,
+            self._compute(),
+        )
+        self.assertEqual(rec["sentence_count"], 2)
+        self.assertEqual(rec["unsupported_count"], 1)
+        self.assertEqual(rec["supported_count"], 1)
+        self.assertEqual(rec["status"], "ok")
+
+    def test_audit_summary_derives_available(self):
+        self.assertTrue(
+            gs.audit_summary_from_result(_FakeAudit(mode="sentence"))["audit_available"]
+        )
+        self.assertFalse(
+            gs.audit_summary_from_result(_FakeAudit(mode="judge_unavailable"))[
+                "audit_available"
+            ]
+        )
+
+    def test_audit_summary_has_no_owner_text(self):
+        summary = gs.audit_summary_from_result(_FakeAudit(text="secret reply"))
+        self.assertNotIn("secret reply", repr(summary))
 
 
 if __name__ == "__main__":
