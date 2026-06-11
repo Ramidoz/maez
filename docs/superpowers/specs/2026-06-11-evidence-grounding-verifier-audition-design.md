@@ -3,14 +3,14 @@
 **Date:** 2026-06-11
 **Status:** spec for owner review
 **Lane:** Claude builds (offline harness + corpus); **corpus labels get an independent review (Codex or owner) — a hard gate before the meaningful report runs.**
-**Parents:** the live `grounding_judge.py` (LLM support sub-check via the 4B endpoint); `envelope_schema.py` (the `claimable` / `forbidden` / `self_history` slots — the two rails are already in the data model); `feedback_verifier_swappable_receipt_invariant` (audition faster verifiers behind the same contract); `feedback_judge_agnostic_report_decides` (the report picks the winner); `scripts/judge_bench/` (the harness template + the overclaim test_set, which stays the LLM judge's).
+**Parents:** the live `grounding_judge.py` (LLM **overclaim** auditor — consumes `signals_present`/`signals_absent`/`self_history`/`tool_results`, **NOT `claimable`**; verified in code 2026-06-11, `grounding_judge.py:642` + the prompt at `:462`); `envelope_builder.py:132` (renders `claimable` into the brain's *generation* context — but nothing audits it for entailment); `envelope_schema.py` (the slots — both rails exist in the data model, but only the overclaim rail is judged today); `feedback_verifier_swappable_receipt_invariant` (audition faster verifiers behind the same contract); `feedback_judge_agnostic_report_decides` (the report picks the winner); `scripts/judge_bench/` (the harness template + the overclaim test_set, which stays the LLM judge's).
 
 ## Why
 Maez's honesty receipt — *an answer is trusted only if grounded* — runs through two distinct rails, and `envelope_schema.py` already encodes both:
 - **Overclaim / self-claim** (`forbidden` / `self_history`): "did Maez claim a capability/action/utterance it couldn't substantiate?" — a *reasoning* task. Stays with the LLM judge + deterministic rails (the existing 21-case `judge_bench` set; the 4B won it at 90.5%).
-- **Evidence-grounding** (`claimable`): "does this claim follow from the available evidence?" — an *entailment* task. Today the 4B LLM does this support sub-check inside `grounding_judge.py`.
+- **Evidence-grounding** (`claimable`): "does this claim follow from the available evidence?" — an *entailment* task. **This check is currently ABSENT** (audition finding, verified in code): `claimable` evidence is rendered into the brain's *generation* context (`envelope_builder.py`) but **no judge audits it for entailment** — `grounding_judge.py` audits only the overclaim rail. So this audition finds the verifier to *fill a gap*, not to replace an incumbent.
 
-This audition asks one concrete question: **can a small specialized verifier (HHEM / MiniCheck, CPU, ~0 GPU VRAM) replace or assist the 4B's *support sub-check*** — measured not on average performance but on an obstacle course of Maez's *dangerous* grounding failures. If yes, it's a triple win: better catch on the failure modes, lower latency, and the 4B's ~1.1GB GPU freed.
+This audition asks one concrete question: **can a small specialized verifier (HHEM / MiniCheck, CPU, ~0 GPU VRAM) perform the claimable-entailment support check** — `(evidence, claim) → SUPPORTED/UNSUPPORTED` — measured not on average performance but on an obstacle course of Maez's *dangerous* grounding failures, against a purpose-built **4B-entailment-adapter** LLM yardstick (there is no existing incumbent for this check). A winning verifier becomes a *new* layer above the deterministic citation floor (wired in by a follow-on slice). If it wins, it's a triple win: better catch on the failure modes, lower latency, and ~0 GPU VRAM vs the 4B's ~1.1GB.
 
 ## Scope boundary (load-bearing)
 The candidate verifiers answer **entailment only**: `(evidence, claim) → does the claim follow from the evidence?`. They are **not** the grounding judge. Everything else stays exactly where it is and is **out of scope for this corpus**:
@@ -56,9 +56,9 @@ The candidate verifiers answer **entailment only**: `(evidence, claim) → does 
 `scripts/grounding_bench/bench_grounding.py`, mirroring `scripts/judge_bench/bench.py`.
 - **Abstain precondition:** `if evidence_kind == "claimable_absent": return ABSTAIN` — **no model is called.** Scored correct iff `expected == ABSTAIN_EXPECTED`. This is "no document → abstain" made mechanical.
 - **Candidates (all on the identical corpus):**
-  - **HHEM-2.1-Open** (`vectara/hallucination_evaluation_model`, ~110M, `trust_remote_code`) → consistency score 0–1.
+  - **HHEM-2.1-Open** (`vectara/hallucination_evaluation_model`, ~110M, `trust_remote_code`) → consistency score 0–1. **`trust_remote_code` executes repo code on load → the model download + first load is owner-gated (egress + remote-code execution), pinned to a specific commit revision in the plan.**
   - **MiniCheck-DeBERTa-v3-Large** (`lytang/MiniCheck-DeBERTa-v3-Large`, ~440M, `AutoModelForSequenceClassification`) → binary supported. *(Flan-T5-Large deferred — added only if MiniCheck earns more effort on the first pass.)*
-  - **4B incumbent** — the current judge endpoint, via the `grounding_judge.py` contract, as the baseline.
+  - **4B entailment adapter** — the 4B judge endpoint driven by a **purpose-built `(evidence, claim) → SUPPORTED/UNSUPPORTED` entailment prompt** (NOT `grounding_judge.py`'s overclaim contract — that judges a different task). This is the LLM yardstick the specialists are measured against. *(Optional separate diagnostic row: run production `grounding_judge.py` on these cases to confirm it does NOT perform entailment — informative, clearly marked as not the baseline.)*
 - **Output → label:** MiniCheck binary → SUPPORTED/UNSUPPORTED directly. HHEM score evaluated across a **threshold sweep `{0.3, 0.5, 0.7}`** — no single threshold is treated as canonical yet.
 - **Latency** measured per call. VRAM: 0 for the CPU verifiers, ~1.1GB for the 4B (recorded, not measured per-call).
 - Models load once (cached); CPU inference via the installed `torch 2.12.0+cpu` + `transformers 5.10.2`.
@@ -68,7 +68,7 @@ The candidate verifiers answer **entailment only**: `(evidence, claim) → does 
 - **Headline — per-mode false-negative rate:** of the UNSUPPORTED cases in each dangerous mode (cited-but-unsupported, fabricated/false-specific, stale-over-current), how many did the candidate wrongly bless as SUPPORTED? *This is the number that decides the audition.*
 - Side columns: false-positive rate (SUPPORTED → UNSUPPORTED, the annoying-not-dangerous error), abstain-correctness, latency p50/p95, VRAM.
 - HHEM shown at each sweep threshold; **provisional headline threshold = the one minimizing false-negatives**, with FP printed beside it.
-- Candidate rows vs the **4B incumbent** row — "can a specialist replace/assist the 4B support sub-check?"
+- Candidate rows vs the **4B-entailment-adapter** baseline — "can a small specialist match/beat an LLM at the claimable-entailment check?" (plus the optional production-`grounding_judge` diagnostic row, marked *not* an entailment baseline).
 
 ## What v0 does NOT touch
 - The live `grounding_judge.py`, the daemon, any service/flag. (A *follow-on* slice would wire a winning verifier in — out of scope here.)
