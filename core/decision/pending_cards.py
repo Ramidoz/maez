@@ -564,6 +564,23 @@ class PendingCardStore:
             ).fetchall()
         return [_row_to_record(r) for r in rows]
 
+    def list_open_by_action(self, action: str) -> list[CardRecord]:
+        """Awaiting cards with the given action."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM pending_cards
+                WHERE action = ? AND status IN (?, ?)
+                ORDER BY created_at ASC
+                """,
+                (
+                    action,
+                    CardStatus.OPEN.value,
+                    CardStatus.DEFERRED.value,
+                ),
+            ).fetchall()
+        return [_row_to_record(r) for r in rows]
+
     def get_open_for_channel(self, channel: str, chat_id: Optional[str] = None) -> list[CardRecord]:
         with self._conn() as conn:
             if chat_id is None:
