@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json as _json
 import logging
+import os
 import threading
 import time
 import re as _re
@@ -42,6 +43,10 @@ except Exception:
     _DEFAULT_MODEL = "primary-model"
 
 logger = logging.getLogger("maez")
+
+
+def _search_commitment_enabled() -> bool:
+    return bool(os.environ.get("MAEZ_SEARCH_COMMITMENT_ENABLED"))
 
 
 # ============================================================ #
@@ -761,6 +766,8 @@ class ConversationController:
         controller stays surface-agnostic (each surface knows how to
         compose machine-specific context).
         """
+        if _search_commitment_enabled():
+            return False
         import time as _time
         try:
             if not self.reply_contains_offer(reply):
@@ -806,6 +813,8 @@ class ConversationController:
         Converts 'probe → fake narration → Yes does nothing' into
         'probe → real pending offer → Yes runs search'. Returns True
         if an offer was auto-stored."""
+        if _search_commitment_enabled():
+            return False
         import time as _time
         try:
             if not (had_action and reply):
@@ -858,6 +867,8 @@ class ConversationController:
           - ("none", None): no live offer (never existed / TTL expired).
           - ("not_web_search", None): offer exists but kind != web_search
             — caller falls through (narrow safety rail)."""
+        if _search_commitment_enabled():
+            return "none", None
         offer = self.get_offer(channel, chat_id)  # TTL-aware
         if offer is None:
             return "none", None
