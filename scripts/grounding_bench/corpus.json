@@ -1,0 +1,13 @@
+{
+  "_notes": "Evidence-grounding audition corpus. Hand-labeled for GROUNDING (does the claim follow from the evidence?), NOT correctness. Claim-level unit. Synthetic rows flagged. See docs/superpowers/specs/2026-06-11-evidence-grounding-verifier-audition-design.md",
+  "items": [
+    {
+      "id": "pos-1", "mode": "grounded_positive", "source": "synthetic",
+      "evidence_kind": "claimable_present",
+      "evidence": "The recall flip failed the latency hard gate at 5.8 to 12.3 seconds versus a 4.3 second ceiling.",
+      "claim": "The recall flip was a No-Go because its latency exceeded the 4.3 second ceiling.",
+      "expected": "SUPPORTED", "strict_rule": false,
+      "rationale": "Every part of the claim (No-Go-on-latency, the 4.3s ceiling, exceeding it) is stated in the evidence."
+    }
+  ]
+}
