@@ -158,3 +158,42 @@ class RecordClaimTests(unittest.TestCase):
                 source_excerpts={0: self.excerpt},
                 observed_by="claude",
             )
+
+
+class SupersedeTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = TemporaryDirectory()
+        self.gm = GestationMemory(Path(self._tmp.name) / "g.db")
+        self.src, self.excerpt = _doc_source()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _claim(self, text):
+        return self.gm.record_claim(
+            claim_text=text,
+            claim_kind="fact",
+            type="milestone",
+            confidence="documented",
+            sources=[self.src],
+            source_excerpts={0: self.excerpt},
+            observed_by="claude",
+        )
+
+    def test_supersede_appends_edge_and_leaves_old_row_byte_identical(self):
+        old = self._claim("We believed the bridge wrote the ledger.")
+        before = self.gm.get(old.claim_id)
+        new = self._claim("Corrected: the bridge writes no ledger.")
+        self.gm.supersede(old.claim_id, new.claim_id)
+        after = self.gm.get(old.claim_id)
+        self.assertEqual(before, after)
+        active_ids = {claim.claim_id for claim in self.gm.list_active()}
+        self.assertNotIn(old.claim_id, active_ids)
+        self.assertIn(new.claim_id, active_ids)
+
+    def test_both_claims_persist_after_supersede(self):
+        old = self._claim("old")
+        new = self._claim("new")
+        self.gm.supersede(old.claim_id, new.claim_id)
+        self.assertIsNotNone(self.gm.get(old.claim_id))
+        self.assertIsNotNone(self.gm.get(new.claim_id))

@@ -244,6 +244,49 @@ class GestationMemory:
             ).fetchone()
         return None if row is None else _row_to_claim(row)
 
+    def supersede(self, old_claim_id: int, replacement_claim_id: int) -> None:
+        old_id = int(old_claim_id)
+        replacement_id = int(replacement_claim_id)
+        if old_id == replacement_id:
+            raise ValueError("a claim cannot supersede itself")
+        if self.get(old_id) is None or self.get(replacement_id) is None:
+            raise KeyError("both claims must exist to supersede")
+        now = datetime.now(UTC).timestamp()
+        with closing(self._connect()) as conn:
+            with conn:
+                conn.execute(
+                    "INSERT INTO gestation_claim_supersessions "
+                    "(old_claim_id, replacement_claim_id, created_at) VALUES (?,?,?)",
+                    (old_id, replacement_id, now),
+                )
+
+    def _superseded_ids(self, conn: sqlite3.Connection) -> set[int]:
+        return {
+            int(row[0])
+            for row in conn.execute(
+                "SELECT old_claim_id FROM gestation_claim_supersessions"
+            )
+        }
+
+    def list_active(self) -> list[GestationClaim]:
+        with closing(self._connect()) as conn:
+            superseded = self._superseded_ids(conn)
+            rows = conn.execute(
+                "SELECT * FROM gestation_claims ORDER BY claim_id ASC"
+            ).fetchall()
+        return [
+            _row_to_claim(row)
+            for row in rows
+            if int(row["claim_id"]) not in superseded
+        ]
+
+    def list_all(self) -> list[GestationClaim]:
+        with closing(self._connect()) as conn:
+            rows = conn.execute(
+                "SELECT * FROM gestation_claims ORDER BY claim_id ASC"
+            ).fetchall()
+        return [_row_to_claim(row) for row in rows]
+
 
 def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
