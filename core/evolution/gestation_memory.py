@@ -370,9 +370,15 @@ class GestationMemory:
             lines.append(
                 "## Corrections history (preserved - once believed, then corrected)"
             )
+            # Both sides go through line() so the superseded belief — which is
+            # shown ONLY here — keeps its [type/confidence] and sources. No line
+            # in the binder may be prose without a receipt.
             for old, new in corrections:
-                lines.append(f"  - once: {old.claim_text}  ->  now: {new.claim_text}")
-            lines.append("")
+                lines.append("  once believed:")
+                lines.append(f"  {line(old)}")
+                lines.append("  corrected to:")
+                lines.append(f"  {line(new)}")
+                lines.append("")
 
         return "\n".join(lines).rstrip() + "\n"
 

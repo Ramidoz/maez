@@ -79,6 +79,12 @@ class RenderV01Tests(unittest.TestCase):
         self.assertIn("Corrected to Y.", out)
         # the superseded claim appears only in the tail (after the header)
         self.assertGreater(out.index("We believed X."), out.index("## Corrections history"))
+        # and the tail line keeps its receipt: [type/confidence] + sources.
+        # (the superseded belief is shown ONLY here, so it must stay sourced)
+        tail = out[out.index("## Corrections history"):]
+        self.assertIn("[milestone/documented]", tail)
+        self.assertIn("sources:", tail)
+        self.assertIn("@", tail)  # the doc commit fingerprint is present
 
     def test_no_corrections_history_when_none(self):
         self._claim("A milestone happened.")
