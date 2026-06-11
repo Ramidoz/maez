@@ -11,9 +11,9 @@
 - `adapter_prompt.py` — the **reviewed 4B-entailment-adapter prompt** (the LLM yardstick; explicitly an entailment check, not the overclaim contract).
 - `verifiers.py` — `HhemVerifier` (**unavailable by construction** — `HHEM_REVISION=None` → `ERROR(HhemRevisionUnconfigured)`, no download), `MinicheckVerifier` (lazy load), `FourBAdapterVerifier` (the 4B yardstick via the judge endpoint).
 - `bench_grounding.py` — the harness: **abstain precondition** (no model called on `claimable_absent`), HHEM threshold sweep, **per-mode false-negative headline** report (CSV + MD).
-- `tests/test_grounding_bench.py` — **18 tests, all green, all mocked** (no model loads). Key tests: abstain-precondition-calls-no-model; HHEM-unconfigured-errors-without-download; per-mode false-negative tally; the entailment-not-overclaim prompt assertion.
+- `tests/test_grounding_bench.py` — **20 tests, all green, all mocked** (no model loads). Key tests: abstain-precondition-calls-no-model; HHEM-unconfigured-errors-without-download; per-mode false-negative tally; the entailment-not-overclaim prompt assertion.
 
-**Floor:** `18 tests OK`, `ruff` clean. Mocked smoke confirmed a "blesses-everything" verifier is flagged 5/5, 5/5, 4/4 false-negatives across the dangerous modes (the obstacle course bites), and the 3 no-evidence cases abstained without a model call.
+**Floor:** `20 tests OK`, `ruff` clean. Mocked smoke confirmed a "blesses-everything" verifier is flagged 5/5, 5/5, 4/4 false-negatives across the dangerous modes (the obstacle course bites), and the 3 no-evidence cases abstained without a model call.
 
 ## The three HARD GATES — clear all before the scorecard run
 1. **Corpus label review** — read each case's `(evidence, claim, expected, rationale)` and confirm the *grounding* label, case-by-case. The flagged judgment calls: `ffs-4` (a *true-in-the-world* claim labeled UNSUPPORTED because the given evidence lacks the specific — tests world-knowledge leakage), `cbu-3`/`mc-1` ("improves reasoning" doesn't follow from "lossless"), `pos-3` (2.1× → "roughly doubles"), the `strict_rule` pair `mc-1`/`mc-2`.
