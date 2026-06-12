@@ -38,6 +38,7 @@ from core.routing.brain_gateway import (
     with_purpose,
 )
 from core.conversation_controller import _search_commitment_enabled
+from core.cognition.parity_flag import surface_parity_enabled
 from core.search.sense_flag import sense_enabled
 from core.search.search_commitment import is_clear_yes, is_search_offer_worthy
 from core.safety.clinical_boundary import PrivateThoughtsCrisisSignalWriter, guard_owner_text
@@ -315,18 +316,50 @@ class MaezMessageHandler:
         get_pipeline = getattr(legacy_tg, "_get_pipeline", None) if legacy_tg is not None else None
 
         chat_id = ""
+        user_id = "rohit"
         try:
             src = event.source
             if src and src.chat_id:
                 chat_id = str(src.chat_id)
+            if src and src.user_id:
+                user_id = str(src.user_id)
         except Exception:
             pass
         reply_to_msg_id = getattr(event, "reply_to_message_id", None)
+        pipe = None
+        if get_pipeline is not None:
+            try:
+                pipe = get_pipeline()
+            except Exception:
+                pipe = None
         has_local_photo_context = bool(
             event.message_type == MessageType.PHOTO
             and event.channel_prompt
             and "Local Maez vision analysis" in str(event.channel_prompt)
         )
+
+        # Surface Parity Restoration v0: D20 capability-gap detection.
+        # Placement law: after auth, before every early-return interceptor.
+        # The helper creates cards through pending_card_store; this path
+        # never sends card messages manually.
+        if surface_parity_enabled():
+            try:
+                from core.infra.capability_gap_detector import maybe_fire_capability_proposal
+
+                def _fire_gap_detector() -> None:
+                    try:
+                        maybe_fire_capability_proposal(
+                            text,
+                            pending_card_store=getattr(pipe, "card_store", None) if pipe else None,
+                            chat_id=chat_id,
+                            user_id=user_id,
+                        )
+                    except Exception:
+                        logger.debug("d20 gap detection skipped", exc_info=True)
+
+                loop.run_in_executor(get_shared_executor(), _fire_gap_detector)
+            except Exception:
+                logger.debug("d20 gap detection enqueue failed", exc_info=True)
 
         if os.environ.get("MAEZ_INTAKE_FACULTY_SHADOW"):
             try:
@@ -347,75 +380,70 @@ class MaezMessageHandler:
         # the pipeline's reply handler. The renderer inside the
         # pipeline sends the resolution notice directly, so we return
         # any mid-dialog continuation text (or None if fully handled).
-        if get_pipeline is not None:
+        if pipe is not None:
             try:
-                pipe = get_pipeline()
+                open_cards = pipe.card_store.get_open_for_channel(
+                    "telegram_text",
+                    chat_id=chat_id,
+                )
             except Exception:
-                pipe = None
-            if pipe is not None:
+                open_cards = []
+            if open_cards:
                 try:
-                    open_cards = pipe.card_store.get_open_for_channel(
-                        "telegram_text",
-                        chat_id=chat_id,
+                    result = await loop.run_in_executor(
+                        get_shared_executor(),
+                        lambda: pipe.handle_reply(
+                            text=text,
+                            user_id="rohit",
+                            chat_id=chat_id,
+                            reply_to_message_id=reply_to_msg_id,
+                            channel="telegram_text",
+                        ),
                     )
-                except Exception:
-                    open_cards = []
-                if open_cards:
-                    try:
-                        result = await loop.run_in_executor(
-                            get_shared_executor(),
-                            lambda: pipe.handle_reply(
-                                text=text,
-                                user_id="rohit",
-                                chat_id=chat_id,
-                                reply_to_message_id=reply_to_msg_id,
-                                channel="telegram_text",
-                            ),
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            "pipe.handle_reply failed on %s: %s",
-                            SURFACE_NAME,
-                            e,
-                        )
-                        result = None
-                    if result is not None:
-                        # Pipeline handled it — resolution was sent by
-                        # its CardRenderer. Return any mid-dialog
-                        # continuation text so the adapter sends it
-                        # as the reply to this message.
-                        dialog_reply = getattr(
-                            result,
-                            "dialog_reply_text",
-                            None,
-                        )
-                        if dialog_reply:
-                            # Strip tool-call JSON leaks (e.g. the
-                            # {"action": "log", ...} block observed
-                            # in a 2026-04-20 dialog reply).
-                            try:
-                                from core.brain_loop import (
-                                    strip_tool_call_leaks,
-                                )
+                except Exception as e:
+                    logger.warning(
+                        "pipe.handle_reply failed on %s: %s",
+                        SURFACE_NAME,
+                        e,
+                    )
+                    result = None
+                if result is not None:
+                    # Pipeline handled it — resolution was sent by
+                    # its CardRenderer. Return any mid-dialog
+                    # continuation text so the adapter sends it
+                    # as the reply to this message.
+                    dialog_reply = getattr(
+                        result,
+                        "dialog_reply_text",
+                        None,
+                    )
+                    if dialog_reply:
+                        # Strip tool-call JSON leaks (e.g. the
+                        # {"action": "log", ...} block observed
+                        # in a 2026-04-20 dialog reply).
+                        try:
+                            from core.brain_loop import (
+                                strip_tool_call_leaks,
+                            )
 
-                                dialog_reply = strip_tool_call_leaks(
-                                    dialog_reply,
-                                )
-                            except Exception:
-                                pass
-                            try:
-                                from core.self_claim_audit import (
-                                    audit as _sc_audit,
-                                )
+                            dialog_reply = strip_tool_call_leaks(
+                                dialog_reply,
+                            )
+                        except Exception:
+                            pass
+                        try:
+                            from core.self_claim_audit import (
+                                audit as _sc_audit,
+                            )
 
-                                r = _sc_audit(
-                                    dialog_reply,
-                                    surface=f"{SURFACE_NAME}_dialog",
-                                )
-                                return r.text if r.rewritten else dialog_reply
-                            except Exception:
-                                return dialog_reply
-                        return None
+                            r = _sc_audit(
+                                dialog_reply,
+                                surface=f"{SURFACE_NAME}_dialog",
+                            )
+                            return r.text if r.rewritten else dialog_reply
+                        except Exception:
+                            return dialog_reply
+                    return None
 
         search_commitment_reply = await self._try_search_commitment_intent(
             text=text,
