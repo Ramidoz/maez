@@ -1,9 +1,13 @@
 # Copyright © 2026 Rohit Ananthan
 # Licensed under the GNU Affero General Public License v3.0 or later.
 # See LICENSE for full text.
-"""
-Maez Telegram Voice — Bidirectional Telegram integration.
-Sends proactive observations and receives commands from the owner.
+"""OUTBOUND-ONLY since 2026-04-20 (Surface V2 migration).
+
+The inbound methods in this module (_handle_message, _process_message, the
+_try_*_intent interceptors) DO NOT FIRE on live owner messages. Inbound
+Telegram routes through skills/surface/maez_adapter.py. Wire new inbound
+features into maez_adapter, not here. See
+docs/SURFACE_PARITY_MAP_2026-06-12.md and docs/MAEZ_BUILD_LEDGER.md.
 """
 
 import asyncio
@@ -55,6 +59,7 @@ from skills.web_search import (
 )
 
 logger = logging.getLogger("maez")
+_INBOUND_WARNED = False
 
 
 DISPATCHER_TRANSCRIPT_MARKERS = (
@@ -2943,6 +2948,15 @@ class TelegramVoice:
 
     async def _handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle incoming messages from Telegram."""
+
+        global _INBOUND_WARNED
+        if not _INBOUND_WARNED:
+            _INBOUND_WARNED = True
+            logger.warning(
+                "telegram_voice._handle_message invoked — this surface is "
+                "outbound-only since 2026-04-20; live inbound is maez_adapter. "
+                "Is this a test or the Surface V2 kill-switch path?"
+            )
 
         if not update.message or not update.effective_user:
             return
