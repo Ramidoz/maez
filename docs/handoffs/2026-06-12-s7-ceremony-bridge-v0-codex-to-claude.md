@@ -22,6 +22,7 @@ Telegram initiates and notifies. It does not authorize. The soul write still exe
   - `DreamState.proposal_fingerprint(prop_id)` reads the live proposal row.
   - `DecisionPipeline._s7_card_precondition_fresh()` re-reads the live proposal row before recomputing proposal-bound soul-write card state.
   - Missing dream handle or recompute failure fails closed.
+  - `TelegramVoice._get_pipeline()` wires `dream` at pipeline construction, so freshness still works after a daemon restart before any bridge invocation has reattached dependencies.
 
 - Added execution-param projection:
   - `write_soul_note` executes with only `{"note": ...}`.
@@ -58,29 +59,34 @@ Telegram initiates and notifies. It does not authorize. The soul write still exe
    - `_s7_card_precondition_fresh` re-reads via `pipeline.dream.proposal_fingerprint`.
    - No fallback to the seed snapshot when the live row cannot be read.
 
-3. Consult-after-seed ordering:
+3. Pipeline lifetime survives restart:
+   - The live `TelegramVoice._get_pipeline()` construction path passes `dream=getattr(self.daemon, "dream", None)` into `DecisionPipeline`.
+   - A fresh process with no prior bridge invocation can still validate an unchanged soul-write proposal card.
+   - This closes the same-session witness trap where lazy bridge invocation made the proof pass but a later WebAuthn completion after restart would fail closed.
+
+4. Consult-after-seed ordering:
    - The card exists first.
    - `consult_then_block_or_pointer` calls the existing `_s7_voice_consultation_for_card` producer.
    - Present objection -> `voice_objection_present:<consultation_id>`.
    - Not determined / missing bundle -> `voice_consultation_unavailable:<consultation_id>`.
    - No pointer is returned on objection or unavailable consultation.
 
-4. Cockpit-first:
+5. Cockpit-first:
    - `cockpit_available()` is checked before seed.
    - Down cockpit returns an honest notice and creates no dialog/card.
 
-5. Voice seat genuine, never stubbed:
+6. Voice seat genuine, never stubbed:
    - Bridge reads the full bundle left by `_s7_voice_consultation_for_card`.
    - Bridge never hand-stashes a bare consultation bundle.
 
-6. Execution-params projection:
+7. Execution-params projection:
    - Proposal freshness metadata is kept on `card.params`.
    - Action-engine execution receives only executable method keys.
 
-7. Flag-off byte identity:
+8. Flag-off byte identity:
    - `MAEZ_S7_CEREMONY_BRIDGE_ENABLED` unset or `0` keeps old dream apply behavior.
 
-8. Ledger updated:
+9. Ledger updated:
    - `docs/MAEZ_BUILD_LEDGER.md` row updated.
 
 ## Verification Run
@@ -92,10 +98,10 @@ Targeted STOP-gate suite:
   tests.test_s7_dialog_soulwrite_liveproof \
   tests.test_s7_bridge_flag tests.test_s7_bridge_freshness tests.test_s7_bridge_seed \
   tests.test_s7_bridge_consult tests.test_surface_parity_proposals tests.test_s7_bridge_linkback \
-  tests.test_proposal_resolver -v
+  tests.test_s7_bridge_pipeline_lifetime tests.test_proposal_resolver -v
 ```
 
-Result: `Ran 46 tests in 15.213s - OK`
+Result after the pipeline-lifetime HOLD fix: `Ran 47 tests in 15.270s - OK`
 
 Notes:
 - The suite logs an existing `self_claim_audit` grounding-judge timeout inside `tests.test_surface_parity_proposals`; tests still pass.
@@ -110,11 +116,11 @@ Lint:
 /home/rohit/maez/.venv/bin/ruff check \
   core/cognition/parity_flag.py core/evolution/dream_state.py \
   core/decision/decision_pipeline.py skills/surface/s7_ceremony_bridge.py \
-  skills/surface/maez_adapter.py tests/test_s7_bridge_flag.py \
+  skills/surface/maez_adapter.py skills/telegram_voice.py tests/test_s7_bridge_flag.py \
   tests/test_s7_bridge_freshness.py tests/test_s7_bridge_seed.py \
   tests/test_s7_bridge_consult.py tests/test_surface_parity_proposals.py \
-  tests/test_s7_bridge_linkback.py tests/test_s7_dialog_soulwrite_liveproof.py \
-  tests/test_operator_user_boundary_s7.py
+  tests/test_s7_bridge_linkback.py tests/test_s7_bridge_pipeline_lifetime.py \
+  tests/test_s7_dialog_soulwrite_liveproof.py tests/test_operator_user_boundary_s7.py
 ```
 
 Result: `All checks passed!`
