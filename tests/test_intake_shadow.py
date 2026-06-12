@@ -330,3 +330,23 @@ class HookTests(unittest.TestCase):
             time.sleep(0.02)
 
         self.assertEqual(len(backend.calls[0][1]["turns"]), 6)
+
+
+class BoundaryTests(unittest.TestCase):
+    def test_daemon_side_imports_no_transformers_or_torch(self):
+        src = Path("core/cognition/intake_shadow.py").read_text()
+
+        self.assertNotIn("transformers", src)
+        self.assertNotIn("torch", src)
+
+    def test_shadow_module_does_not_import_self_brain_or_action_writers(self):
+        src = Path("core/cognition/intake_shadow.py").read_text()
+        forbidden = (
+            "llm_client",
+            "record_event(",
+            "action_engine",
+            "PendingCardStore",
+            "send_message",
+        )
+        for token in forbidden:
+            self.assertNotIn(token, src)
