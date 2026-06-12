@@ -31,8 +31,9 @@
 | `skills/surface/maez_adapter.py` (modify) | Interceptor → health gatekeeper; progress callback into `handle_message`. |
 | `skills/telegram_voice.py` (modify) | Legacy offer/result-card branches gated (ghost-path closure). |
 | `core/intake_bus/world_observation_lane.py` (create) | The metabolism lane: bounded observation → `admit()`. |
-| `core/brain/brain_loop.py` (modify) | Observation hook after merge; fanout progress emits; post-audit `[E#]` strip + marked-draft retention. |
-| `skills/surface/telegram_adapter.py` (modify) | `/receipts` command. |
+| `core/brain/brain_loop.py` (modify) | Observation hook after merge; fanout progress emits; turn-evidence stash. |
+| `daemon/maez_daemon.py` (modify) | Post-audit `[E#]` render + marked-draft retention (the audit→store→send invariant owner); `send_intermediate` threading. |
+| `skills/surface/telegram_adapter.py` (modify) | `/receipts` command (two-line shim over `receipts_reply`). |
 | `config/soul.md` (modify) | §Internet Access rewritten (staged; witness is an owner breath). |
 | `tests/test_web_search_sense.py` (create) | Body + refusal + flag-off identity. |
 | `tests/test_world_observation_lane.py` (create) | Metabolism condition legs, idempotency, provenance purity. |
@@ -102,11 +103,11 @@ Expected: `_validate(fact)`'s actual rules (what it refuses), the full
 egress_origin_class, promotion_posture, fetch_batch_id, metadata`), the
 store-adapter protocol used by `admit()` (`oldest_pending()`,
 `mark_admitted(source_ref, body_memory_id=...)`), and whether
-`egress_origin_class` is free-form or validated (the GitHub limb uses
-`"owner_account_context"`). Record the value to use for web observations:
-if free-form, use `"sovereign_local_search"`; if validated, use the closest
-existing external class and note it. This value is `WORLD_OBSERVATION_EGRESS`
-in Task 3.
+`egress_origin_class` is validated: it IS — `admit.py:26` checks
+`core.egress.gate.KNOWN_ORIGINS`. Confirm `"tool_result_public"` is a member
+(NON_PRIVATE set, `gate.py:33-38`) — that is `WORLD_OBSERVATION_EGRESS` in
+Task 3. (`"sovereign_local_search"` is a RECEIPT egress class, not a
+memory-origin class — admit() would refuse it.)
 
 - [ ] **Step 0d: Create the branch**
 
@@ -469,17 +470,53 @@ style for constructing the `TelegramVoice` object or its method under test):
 
 ```python
     def test_sense_on_legacy_offer_branch_inert_for_healthy(self):
+        # Ghost-path closure: the legacy surface must not voice offers or
+        # result-cards for healthy search-worthy turns when the sense flag
+        # is on. Uses this module's established construction pattern
+        # (TelegramVoice.__new__ + injected controller, see
+        # TelegramSearchCommitmentSeamTests ~:170).
+        import asyncio
+        from unittest import mock
+
+        from core.search.searxng_client import FakeSearchBackend
+        from skills.telegram_voice import TelegramVoice
+
+        os.environ["MAEZ_SEARCH_COMMITMENT_ENABLED"] = "1"
         os.environ["MAEZ_SEARCH_AS_SENSE_ENABLED"] = "1"
         self.addCleanup(lambda: os.environ.pop("MAEZ_SEARCH_AS_SENSE_ENABLED", None))
-        # The legacy surface must not voice offers or result-cards for
-        # healthy search-worthy turns when the sense flag is on (ghost-path
-        # closure). Reuse this module's existing offer-intent test setup and
-        # assert the intent helper returns False (not handled).
+        self.addCleanup(lambda: os.environ.pop("MAEZ_SEARCH_COMMITMENT_ENABLED", None))
+
+        tv = TelegramVoice.__new__(TelegramVoice)
+        tv._controller = _make_controller()
+        tv.authorized_user = "123"
+
+        replies: list[str] = []
+
+        async def _fake_reply(update, text):
+            replies.append(text)
+
+        with mock.patch.object(
+            TelegramVoice, "_search_commitment_backend",
+            return_value=FakeSearchBackend(health="healthy"),
+        ), mock.patch(
+            "skills.telegram_voice._reply_text", new=_fake_reply,
+        ):
+            handled = asyncio.run(
+                tv._try_search_commitment_offer_intent(
+                    mock.MagicMock(), "what's the latest llama.cpp release?"
+                )
+            )
+
+        self.assertFalse(handled)          # not intercepted — no offer voiced
+        self.assertEqual(replies, [])      # zero messages from the legacy path
+        self.assertIsNone(
+            tv._controller.get_search_offer("telegram_text", "123")
+        )                                   # and no receipt stored
 ```
 
-Complete the body by copying this module's existing
-`_try_search_commitment_offer_intent` test setup verbatim and asserting
-`False`/no-reply under the sense flag with a healthy fake backend.
+(If `_reply_text` lives under a different name in `skills.telegram_voice`,
+patch the real symbol — check the module's reply helper with one grep; do not
+weaken the three assertions.)
 
 - [ ] **Step 6: Gate the legacy branch**
 
@@ -574,8 +611,9 @@ class _Turn:
         self.fresh_attempt_outcome = outcome
 
 
-def _fresh_blocks():
-    return [{"title": "Releases - llama.cpp", "url": "https://github.com/x/releases", "snippet": "b9601 released"}]
+def _evidence():
+    # FreshBlock.text shape: format_for_context output (titles/URLs/snippets as text)
+    return ["[WEB SEARCH] Releases - llama.cpp — https://github.com/x/releases — b9601 released today"]
 
 
 class WriteConditionTests(unittest.TestCase):
@@ -587,7 +625,7 @@ class WriteConditionTests(unittest.TestCase):
         mem = _FakeMemory()
         out = lane.maybe_write_world_observation(
             mem, rendered_turn=_Turn(), query="latest llama.cpp release",
-            result_rows=_fresh_blocks(), diagnostic_id="fan-123",
+            evidence_texts=_evidence(), diagnostic_id="fan-123",
         )
         self.assertEqual(out, "admitted")
         self.assertEqual(len(mem.stored), 1)
@@ -600,7 +638,7 @@ class WriteConditionTests(unittest.TestCase):
         mem = _FakeMemory()
         out = lane.maybe_write_world_observation(
             mem, rendered_turn=_Turn(sources=("LIVE_REDDIT",)), query="q",
-            result_rows=_fresh_blocks(), diagnostic_id="fan-1",
+            evidence_texts=_evidence(), diagnostic_id="fan-1",
         )
         self.assertEqual(out, "skipped")
         self.assertEqual(mem.stored, [])
@@ -609,7 +647,7 @@ class WriteConditionTests(unittest.TestCase):
         mem = _FakeMemory()
         out = lane.maybe_write_world_observation(
             mem, rendered_turn=_Turn(summaries=("LIVE_REDDIT",)), query="q",
-            result_rows=_fresh_blocks(), diagnostic_id="fan-1",
+            evidence_texts=_evidence(), diagnostic_id="fan-1",
         )
         self.assertEqual(out, "skipped")
 
@@ -617,7 +655,7 @@ class WriteConditionTests(unittest.TestCase):
         mem = _FakeMemory()
         out = lane.maybe_write_world_observation(
             mem, rendered_turn=_Turn(outcome="ALL_FAILED"), query="q",
-            result_rows=_fresh_blocks(), diagnostic_id="fan-1",
+            evidence_texts=_evidence(), diagnostic_id="fan-1",
         )
         self.assertEqual(out, "skipped")
 
@@ -626,7 +664,7 @@ class WriteConditionTests(unittest.TestCase):
         mem = _FakeMemory()
         out = lane.maybe_write_world_observation(
             mem, rendered_turn=_Turn(), query="q",
-            result_rows=_fresh_blocks(), diagnostic_id="fan-1",
+            evidence_texts=_evidence(), diagnostic_id="fan-1",
         )
         self.assertEqual(out, "disabled")
         self.assertEqual(mem.stored, [])
@@ -635,7 +673,7 @@ class WriteConditionTests(unittest.TestCase):
         mem = _FakeMemory(existing="already-there")
         out = lane.maybe_write_world_observation(
             mem, rendered_turn=_Turn(), query="q",
-            result_rows=_fresh_blocks(), diagnostic_id="fan-123",
+            evidence_texts=_evidence(), diagnostic_id="fan-123",
         )
         self.assertEqual(out, "already_admitted")
         self.assertEqual(mem.stored, [])
@@ -644,7 +682,7 @@ class WriteConditionTests(unittest.TestCase):
         mem = _FakeMemory()
         lane.maybe_write_world_observation(
             mem, rendered_turn=_Turn(), query="latest llama.cpp release",
-            result_rows=_fresh_blocks(), diagnostic_id="fan-9",
+            evidence_texts=_evidence(), diagnostic_id="fan-9",
         )
         content = mem.stored[0]["content"]
         self.assertIn("web evidence entered the synthesis context", content)
@@ -656,9 +694,28 @@ class WriteConditionTests(unittest.TestCase):
                 raise RuntimeError("db locked")
         out = lane.maybe_write_world_observation(
             _Boom(), rendered_turn=_Turn(), query="q",
-            result_rows=_fresh_blocks(), diagnostic_id="fan-1",
+            evidence_texts=_evidence(), diagnostic_id="fan-1",
         )
         self.assertEqual(out, "error_dropped")
+
+    def test_real_bus_validation_accepts_the_origin_class(self):
+        # Run the REAL admit() validation, not just the fake: a wrong
+        # egress_origin_class (e.g. a receipt class) must be refused by the
+        # bus, and the lane's chosen class must pass it.
+        from core.egress.gate import KNOWN_ORIGINS
+
+        self.assertIn(lane.WORLD_OBSERVATION_EGRESS, KNOWN_ORIGINS)
+        self.assertNotIn("sovereign_local_search", KNOWN_ORIGINS)
+        mem = _FakeMemory()
+        out = lane.maybe_write_world_observation(
+            mem, rendered_turn=_Turn(), query="real validation",
+            evidence_texts=_evidence(), diagnostic_id="fan-real",
+        )
+        self.assertEqual(out, "admitted")  # through the REAL _validate path
+
+    def test_source_url_extraction_from_evidence_text(self):
+        urls = lane.extract_source_urls(_evidence())
+        self.assertEqual(urls, ["https://github.com/x/releases"])
 
 
 if __name__ == "__main__":
@@ -696,8 +753,12 @@ from memory.memory_manager import ProvenanceSource
 
 logger = logging.getLogger("maez")
 
-# Task 0c records whether egress_origin_class is validated; default per plan.
-WORLD_OBSERVATION_EGRESS = "sovereign_local_search"
+# admit() validates egress_origin_class against core.egress.gate.KNOWN_ORIGINS
+# (admit.py:26). "tool_result_public" is a real NON_PRIVATE member (gate.py:33-38)
+# and is the correct class for public web search results. Do NOT use
+# "sovereign_local_search" — that is a receipt egress class, not a memory-origin
+# class, and admit() would refuse every observation.
+WORLD_OBSERVATION_EGRESS = "tool_result_public"
 _MAX_ROWS = 3
 _MAX_SNIPPET = 200
 
@@ -732,15 +793,34 @@ def _outcome_ok(outcome) -> bool:
     return str(getattr(outcome, "value", outcome)) in {"ALL_SUCCEEDED", "PARTIAL"}
 
 
-def build_observation_content(query: str, result_rows: list[dict]) -> str:
+_URL_RE = re.compile(r"https?://[^\s\)\]]+")
+
+
+def extract_source_urls(evidence_texts: list[str], cap: int = 5) -> list[str]:
+    """URLs from the FreshBlock texts (format_for_context embeds them).
+    Used for /receipts sources — structural rows do not survive the fanout
+    (ExternalBranchResult carries FreshBlock.text, not raw result rows)."""
+    seen: list[str] = []
+    for text in evidence_texts or []:
+        for url in _URL_RE.findall(text or ""):
+            if url not in seen:
+                seen.append(url)
+            if len(seen) >= cap:
+                return seen
+    return seen
+
+
+def build_observation_content(query: str, evidence_texts: list[str]) -> str:
+    """The digest is built from FreshBlock.text — LITERALLY the evidence that
+    entered the synthesis context (stronger provenance than raw rows, which
+    the wing never surfaces). Bounded, no second LLM call."""
     lines = [
         f"Web observation — web evidence entered the synthesis context for: {query[:200]}",
     ]
-    for row in (result_rows or [])[:_MAX_ROWS]:
-        title = (row.get("title") or "").strip()[:120]
-        url = (row.get("url") or "").strip()[:160]
-        snippet = (row.get("snippet") or row.get("content") or "").strip()[:_MAX_SNIPPET]
-        lines.append(f"- {title} | {url}" + (f" | {snippet}" if snippet else ""))
+    for text in (evidence_texts or [])[:_MAX_ROWS]:
+        excerpt = " ".join((text or "").split())[:600]
+        if excerpt:
+            lines.append(f"- {excerpt}")
     lines.append(f"observed_at: {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}")
     return "\n".join(lines)
 
@@ -750,7 +830,7 @@ def maybe_write_world_observation(
     *,
     rendered_turn,
     query: str,
-    result_rows: list[dict],
+    evidence_texts: list[str],
     diagnostic_id: str,
 ) -> str:
     """Returns disabled|skipped|admitted|already_admitted|staged|refused|error_dropped."""
@@ -769,7 +849,7 @@ def maybe_write_world_observation(
         fact = IntakeFact(
             source_kind="world_observation",
             source_ref=f"web_search:{diagnostic_id}:{qhash}",
-            content=build_observation_content(query, result_rows),
+            content=build_observation_content(query, evidence_texts),
             provenance_source=ProvenanceSource.EXTERNAL_WEB,
             egress_origin_class=WORLD_OBSERVATION_EGRESS,
             promotion_posture=PromotionPosture.ADMIT_TO_BODY,
@@ -805,33 +885,43 @@ insert (matching the surrounding indentation):
 ```python
     # Search-as-a-Sense v0.1 metabolism (spec 2026-06-12 §4): one bounded
     # world observation when web evidence actually entered this turn.
+    # ExternalBranchResult carries blocks: tuple[FreshBlock] (NOT raw rows);
+    # FreshBlock.text is the evidence that actually entered context.
     # Flag-gated inside the lane; failure logs and drops, never blocks.
     try:
         from core.intake_bus.world_observation_lane import maybe_write_world_observation
 
-        _web_rows = []
+        _web_texts = []
         for _br in getattr(external_result, "branch_results", []) or []:
             if str(getattr(getattr(_br, "source", None), "value", "")) == "WEB_SEARCH":
-                _web_rows = list(getattr(_br, "result_rows", None) or [])[:3]
+                _web_texts = [getattr(b, "text", "") or "" for b in (getattr(_br, "blocks", ()) or ())][:3]
                 break
         maybe_write_world_observation(
             memory,
             rendered_turn=rendered_turn,
             query=user_text,
-            result_rows=_web_rows,
+            evidence_texts=_web_texts,
             diagnostic_id=str(getattr(external_result, "fanout_generation_id", "")),
         )
+        # Stash for the daemon-side render step (Task 5): web-evidence flag +
+        # sources for /receipts, keyed by thread (the turn is synchronous
+        # handle_message -> here -> back). Nested import: the render module
+        # arrives in Task 5 — until then this inner block no-ops without
+        # killing the observation write above.
+        try:
+            from core.routing.attribution_render import extract_source_urls_for_turn
+
+            extract_source_urls_for_turn(rendered_turn, _web_texts)
+        except Exception:
+            pass
     except Exception:
         logger.debug("world_observation hook skipped", exc_info=True)
 ```
 
-**Verify first** (one grep, adjust names to reality — Task 0 discipline):
-`grep -n "branch_results\|fanout_generation_id\|class ExternalBranchResult" core/dispatcher/external_sources.py | head` —
-confirm the branch-result field that carries the adapter's rows (it may be a
-`FreshBlock` list or a payload attribute; use the real field, keep the cap
-at 3). Confirm `memory` and `user_text` are in scope at the insertion point
-(both appear in the surrounding function — `merge_fanout_results(...,
-utterance=user_text, ...)`).
+Confirm `memory` and `user_text` are in scope at the insertion point (both
+appear in the surrounding function — `merge_fanout_results(..., utterance=
+user_text, ...)`); `external_result.branch_results` and `FreshBlock.text`
+verified at `core/dispatcher/external_sources.py:63-101`.
 
 - [ ] **Step 6: GREEN on the focused set**
 
@@ -928,19 +1018,51 @@ Thread `send_intermediate` into that function as a keyword parameter
 `core.search.sense_flag`), so flag-off turns carry `None` and behavior is
 byte-identical.
 
-- [ ] **Step 4: Surface-side: bubble-edit sender**
+- [ ] **Step 4: Surface-side: the progress bubble (SEPARATE from the final answer)**
+
+**Scope decision (v0.1):** the bubble shows true stages and is finally edited
+to a one-line closure; the final answer arrives via the NORMAL reply path,
+unchanged. Editing the bubble into the final answer (suppressing the normal
+send) touches live Telegram send semantics and is **deferred to v0.2**,
+named in the handoff. This keeps the live reply path byte-identical in shape.
 
 In `skills/surface/maez_adapter.py`, where the handler calls
-`daemon.handle_message` via `run_in_executor` (~:599), the call already
-passes its kwargs; add `send_intermediate=` a thread-safe sender built like
-the existing `_send_intermediate` (:422 — same `run_coroutine_threadsafe`
-pattern), but targeting ONE progress bubble: first call sends the message
-and remembers its id; later calls edit it; the final reply is sent by the
-existing path and the bubble is edited to the final reply text instead of
-sending a second message when a bubble exists (reuse
-`platform_base.py:1182`'s intermediate-edit-with-final-flag mechanism — 0b
-recorded the exact API; follow the `_send_progress_receipt` precedent at
-:626). Gate construction on `sense_enabled()` so flag-off passes `None`.
+`daemon.handle_message` via `run_in_executor` (~:599), build the sender
+(following the `_send_intermediate` thread-safety pattern at :422):
+
+```python
+        progress_sender = None
+        if sense_enabled():
+            _bubble: dict = {"msg_id": None}
+
+            def _send_progress(stage_text: str) -> None:
+                async def _do():
+                    try:
+                        if _bubble["msg_id"] is None:
+                            sent = await self.adapter.send_message(chat_id, stage_text)
+                            _bubble["msg_id"] = getattr(sent, "message_id", None) or sent
+                        else:
+                            await self.adapter.edit_message(chat_id, _bubble["msg_id"], stage_text)
+                    except Exception:
+                        logger.debug("progress bubble failed", exc_info=True)
+
+                try:
+                    asyncio.run_coroutine_threadsafe(_do(), loop)
+                except Exception:
+                    pass
+
+            progress_sender = _send_progress
+```
+
+and pass `send_intermediate=progress_sender` into the `daemon.handle_message`
+call. **Adapt the two adapter calls to the REAL send/edit API recorded in
+Task 0b** (`platform_base.py:1182` names the intermediate-edit mechanism;
+`_send_intermediate` at :422 shows the working send + loop reference — copy
+its exact send call and loop variable; if no edit API exists on the adapter,
+fall back to sending each stage as one compact message and note it in the
+handoff). After the final reply is delivered by the normal path, the bubble
+is left at its last true stage — no suppression, no fake completion text.
+Gate everything on `sense_enabled()` so flag-off passes `None`.
 
 - [ ] **Step 5: Surface test — pass-through + flag-off None**
 
@@ -1126,42 +1248,94 @@ def last_receipt(chat_id: str):
     return _RECEIPTS.get(str(chat_id))
 ```
 
-- [ ] **Step 4: GREEN, then wire into the turn**
+- [ ] **Step 4: Add the thread-keyed turn-evidence stash to the render module**
 
-Run: `.venv/bin/python -B -m unittest tests.test_attribution_render -v` → PASS.
-
-In `core/brain/brain_loop.py`, find where the dispatcher-turn function
-returns/finalizes the reply string AFTER all audits (grep
-`strip_tool_call_leaks\|return reply\|final` near the function end — the
-audits are upstream of the return by the handle_message contract). At that
-point insert:
+The render decision happens in `daemon.handle_message` (the OWNER of the
+audit→store→send invariant — `_trace_pre_audit_text` :6572, audit verdict
+:6819-6837, `chat_turn handled` :6888), but the web-evidence facts live in
+`brain_loop`'s dispatcher turn. The turn is synchronous
+(`handle_message → dispatcher turn → back`, same thread), so the brain-side
+hook stashes and the daemon-side render pops. Append to
+`core/routing/attribution_render.py`:
 
 ```python
-    # v0.1 post-audit render: audits above consumed the MARKED draft;
-    # the owner-facing string drops the [E#] markers (spec §6 ordering law).
-    try:
-        from core.routing.attribution_render import render_natural, retain_receipt
+import threading
 
-        _web_present = False
-        try:
-            _web_present = any(
-                str(getattr(getattr(s, "source", None), "value", getattr(s, "source", ""))) == "WEB_SEARCH"
-                for s in (getattr(rendered_turn, "source_summaries", None) or [])
-            )
-        except Exception:
-            pass
-        _sources = [r.get("url", "") for r in (_web_rows or []) if r.get("url")] if "_web_rows" in dir() else []
-        retain_receipt(str(chat_id or ""), marked=reply, sources=_sources)
-        reply = render_natural(reply, web_evidence_present=_web_present)
+_TURN_EVIDENCE: dict[int, dict] = {}
+
+
+def extract_source_urls_for_turn(rendered_turn, evidence_texts) -> None:
+    """Called by the brain_loop metabolism hook (Task 3). Stashes this
+    turn's web-evidence flag + source URLs for the daemon-side render,
+    keyed by thread ident (the turn is synchronous on one thread)."""
+    try:
+        from core.intake_bus.world_observation_lane import extract_source_urls
+
+        web_present = any(
+            str(getattr(getattr(s, "source", None), "value", getattr(s, "source", ""))) == "WEB_SEARCH"
+            for s in (getattr(rendered_turn, "source_summaries", None) or [])
+        )
+        _TURN_EVIDENCE[threading.get_ident()] = {
+            "web_present": web_present,
+            "sources": extract_source_urls(evidence_texts or []),
+        }
     except Exception:
         pass
+
+
+def pop_turn_evidence() -> dict:
+    """Called once by daemon.handle_message at render time. Always pops."""
+    return _TURN_EVIDENCE.pop(threading.get_ident(), {"web_present": False, "sources": []})
 ```
 
-(Use the actual local variable names at that point — `reply`/`out` and
-`chat_id` — match the function's reality, not this snippet's guesses; the
-`_web_rows` reuse comes from Task 3's hook if both live in the same scope,
-else recompute from `external_result` the same way. Keep retain-before-render
-ordering so `/receipts` always holds the marked draft.)
+Add to `tests/test_attribution_render.py`:
+
+```python
+    def test_stash_pop_roundtrip_and_default(self):
+        class _S:
+            source = type("X", (), {"value": "WEB_SEARCH"})()
+        class _T:
+            source_summaries = [_S()]
+        ar.extract_source_urls_for_turn(_T(), ["see https://a.example/x now"])
+        got = ar.pop_turn_evidence()
+        self.assertTrue(got["web_present"])
+        self.assertEqual(got["sources"], ["https://a.example/x"])
+        # second pop = clean default (always-pop semantics)
+        self.assertEqual(ar.pop_turn_evidence(), {"web_present": False, "sources": []})
+```
+
+- [ ] **Step 4b: Wire the render into `daemon.handle_message` (the invariant owner)**
+
+In `daemon/maez_daemon.py`, AFTER the model-reply audit completes (after the
+`build_model_reply_audit_verdict` block, :6819-6837 region) and BEFORE the
+final store/trace/`chat_turn handled` logging (:6888) — i.e. at the point
+where `reply` holds the final AUDITED text — insert:
+
+```python
+        # Search-as-a-Sense v0.1 (spec §6): the audits above consumed the
+        # MARKED draft. The owner-facing string — stored, sent, and traced
+        # below — is the natural-rendered one; /receipts keeps the marked
+        # audited draft. retain-before-render is the ordering law.
+        try:
+            from core.routing.attribution_render import (
+                pop_turn_evidence,
+                render_natural,
+                retain_receipt,
+            )
+
+            _turn_ev = pop_turn_evidence()
+            retain_receipt(str(chat_id or ""), marked=reply, sources=_turn_ev["sources"])
+            reply = render_natural(reply, web_evidence_present=_turn_ev["web_present"])
+        except Exception:
+            pass
+```
+
+**Invariant (state it in the handoff):** stored text, sent text, and the
+final trace hash are all the natural-rendered string; the marked audited
+draft survives only in the `/receipts` retention. `chat_id` is a
+`handle_message` kwarg (verified in its signature); `reply` is the audited
+local at that point (`_trace_pre_audit_text`/audit-verdict code above it
+names it — match the real local name).
 
 - [ ] **Step 5: `/receipts` command**
 
@@ -1175,19 +1349,44 @@ In `skills/surface/telegram_adapter.py`, at the top of `_handle_command`
         except Exception:
             command_text = ""
         if command_text.startswith("/receipts"):
-            from core.routing.attribution_render import last_receipt
+            from core.routing.attribution_render import receipts_reply
 
             chat_id = str(update.effective_chat.id) if update.effective_chat else ""
-            receipt = last_receipt(chat_id)
-            if receipt is None:
-                await update.message.reply_text("No receipts retained for the last reply.")
-                return
-            lines = [receipt["marked"], ""]
-            if receipt["sources"]:
-                lines.append("Sources:")
-                lines.extend(f"- {u}" for u in receipt["sources"][:5])
-            await update.message.reply_text("\n".join(lines)[:3900])
+            await update.message.reply_text(receipts_reply(chat_id))
             return
+```
+
+The reply-building logic lives in the render module so it is unit-tested
+(the command seam stays a two-line shim). Append to
+`core/routing/attribution_render.py`:
+
+```python
+def receipts_reply(chat_id: str) -> str:
+    """The full /receipts reply text. Honest empty answer when nothing
+    is retained."""
+    receipt = last_receipt(chat_id)
+    if receipt is None:
+        return "No receipts retained for the last reply."
+    lines = [receipt["marked"], ""]
+    if receipt["sources"]:
+        lines.append("Sources:")
+        lines.extend(f"- {u}" for u in receipt["sources"][:5])
+    return "\n".join(lines)[:3900]
+```
+
+And to `tests/test_attribution_render.py`:
+
+```python
+    def test_receipts_reply_full_and_empty(self):
+        ar.retain_receipt("c9", marked="claim [E1]", sources=["https://a", "https://b"])
+        out = ar.receipts_reply("c9")
+        self.assertIn("claim [E1]", out)
+        self.assertIn("Sources:", out)
+        self.assertIn("- https://a", out)
+        self.assertEqual(
+            ar.receipts_reply("nobody"),
+            "No receipts retained for the last reply.",
+        )
 ```
 
 (Match `_handle_command`'s real parameter names — read the function head
