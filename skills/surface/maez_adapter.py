@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import re
 import time
 from typing import Any, Optional
@@ -39,6 +38,7 @@ from core.routing.brain_gateway import (
 )
 from core.conversation_controller import _search_commitment_enabled
 from core.cognition.parity_flag import surface_parity_enabled
+from core.infra.env_flags import strict_env_flag
 from core.search.sense_flag import sense_enabled
 from core.search.search_commitment import is_clear_yes, is_search_offer_worthy
 from core.safety.clinical_boundary import PrivateThoughtsCrisisSignalWriter, guard_owner_text
@@ -646,7 +646,7 @@ class MaezMessageHandler:
             except Exception:
                 logger.debug("d20 gap detection enqueue failed", exc_info=True)
 
-        if os.environ.get("MAEZ_INTAKE_FACULTY_SHADOW"):
+        if strict_env_flag("MAEZ_INTAKE_FACULTY_SHADOW"):
             try:
                 from core.cognition.intake_shadow import observe_owner_turn
 

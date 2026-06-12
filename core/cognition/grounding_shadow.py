@@ -14,6 +14,7 @@ import hashlib
 import threading
 import time
 
+from core.infra.env_flags import strict_env_flag
 from core.cognition.support_verifier import (
     HttpSupportVerifier,
     SUPPORTED,
@@ -305,13 +306,13 @@ def _default_telemetry_path() -> str:
 
 def _get_shadow():
     global _SHADOW_SINGLETON
-    if not os.environ.get("MAEZ_GROUNDING_SHADOW_ENABLED"):
+    if not strict_env_flag("MAEZ_GROUNDING_SHADOW_ENABLED"):
         return None
     if _SHADOW_SINGLETON is None:
         _SHADOW_SINGLETON = GroundingShadow(
             HttpSupportVerifier(),
             _default_telemetry_path(),
-            debug=bool(os.environ.get("MAEZ_GROUNDING_SHADOW_DEBUG")),
+            debug=strict_env_flag("MAEZ_GROUNDING_SHADOW_DEBUG"),
         )
         _SHADOW_SINGLETON.start()
     return _SHADOW_SINGLETON
