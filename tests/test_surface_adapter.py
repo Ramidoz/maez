@@ -394,6 +394,68 @@ class HandlerRouting(unittest.TestCase):
         self.assertIsNone(daemon.telegram._controller.get_search_offer("telegram_text", "c"))
         self.assertIsNone(daemon.last_text)
 
+    def test_intake_shadow_flag_off_is_inert_on_surface_v2(self):
+        os.environ.pop("MAEZ_INTAKE_FACULTY_SHADOW", None)
+        daemon = _FakeDaemon(reply="normal reply")
+        daemon.telegram = _TelegramWithController()
+        daemon.memory = object()
+        handler = MaezMessageHandler(daemon)
+        event = MessageEvent(
+            text="proceed",
+            source=SessionSource(platform=Platform.TELEGRAM, chat_id="c", user_id="rohit"),
+        )
+
+        with patch("core.cognition.intake_shadow.observe_owner_turn") as observe:
+            result = asyncio.run(handler(event))
+
+        self.assertEqual(result, "normal reply")
+        observe.assert_not_called()
+
+    def test_intake_shadow_flag_on_enqueues_before_card_return(self):
+        os.environ["MAEZ_INTAKE_FACULTY_SHADOW"] = "1"
+        self.addCleanup(lambda: os.environ.pop("MAEZ_INTAKE_FACULTY_SHADOW", None))
+        pipe = _Pipe(open_cards=[{"id": "card-1"}], dialog_reply="card handled")
+        daemon = _FakeDaemon(reply="normal reply")
+        daemon.telegram = _TelegramWithController(pipe=pipe)
+        daemon.memory = object()
+        handler = MaezMessageHandler(daemon)
+        event = MessageEvent(
+            text="yeah sure",
+            source=SessionSource(platform=Platform.TELEGRAM, chat_id="c", user_id="rohit"),
+        )
+
+        with patch("core.cognition.intake_shadow.observe_owner_turn", return_value="enqueued") as observe:
+            result = asyncio.run(handler(event))
+
+        self.assertEqual(result, "card handled")
+        observe.assert_called_once()
+        self.assertEqual(observe.call_args.kwargs["surface"], SURFACE_NAME)
+        self.assertEqual(observe.call_args.kwargs["chat_id"], "c")
+
+    def test_intake_shadow_enqueue_failure_does_not_change_reply(self):
+        os.environ["MAEZ_INTAKE_FACULTY_SHADOW"] = "1"
+        self.addCleanup(lambda: os.environ.pop("MAEZ_INTAKE_FACULTY_SHADOW", None))
+        daemon = _FakeDaemon(reply="same reply")
+        daemon.telegram = _TelegramWithController()
+        daemon.memory = object()
+        handler = MaezMessageHandler(daemon)
+        event = MessageEvent(
+            text="tell me about yourself",
+            source=SessionSource(platform=Platform.TELEGRAM, chat_id="c", user_id="rohit"),
+        )
+
+        with patch("core.cognition.intake_shadow.observe_owner_turn", side_effect=RuntimeError("boom")):
+            result = asyncio.run(handler(event))
+
+        self.assertEqual(result, "same reply")
+        self.assertEqual(daemon.last_text, "tell me about yourself")
+
+    def test_intake_shadow_source_mentions_firing_surface(self):
+        src = (_REPO / "skills" / "surface" / "maez_adapter.py").read_text()
+
+        self.assertIn("SURFACE_NAME = \"telegram_surface\"", src)
+        self.assertIn("observe_owner_turn", src)
+
 
 class BuildTelegramAdapter(unittest.TestCase):
     def test_builder_returns_adapter_with_handler_set(self):

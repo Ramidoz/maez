@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import time
 from typing import Any, Optional
@@ -313,6 +314,20 @@ class MaezMessageHandler:
             and event.channel_prompt
             and "Local Maez vision analysis" in str(event.channel_prompt)
         )
+
+        if os.environ.get("MAEZ_INTAKE_FACULTY_SHADOW"):
+            try:
+                from core.cognition.intake_shadow import observe_owner_turn
+
+                observe_owner_turn(
+                    text,
+                    surface=SURFACE_NAME,
+                    chat_id=chat_id,
+                    controller=self._search_commitment_controller(),
+                    memory=getattr(self.daemon, "memory", None),
+                )
+            except Exception:
+                logger.debug("intake faculty shadow enqueue failed", exc_info=True)
 
         # Card-reply intent check — if there's an open approval card
         # and this message looks like a yes/no/defer, route through
