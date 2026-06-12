@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import Any
 
 from core import llm_client as _llm_client
+from core.search.sense_flag import sense_enabled
 
 
 @dataclass
@@ -75,6 +76,24 @@ class BrainLoopResult:
     transcript: str = ""
     tool_calls: list[dict] = field(default_factory=list)
     recall_items: tuple[Any, ...] = ()
+
+
+def _emit_search_progress(send_intermediate, external_sources, *, stage: str, count):
+    """Emit true substrate progress for real WEB_SEARCH fanout stages."""
+    if send_intermediate is None:
+        return
+    if not any(
+        str(getattr(source, "value", source)) == "WEB_SEARCH"
+        for source in (external_sources or ())
+    ):
+        return
+    try:
+        if stage == "start":
+            send_intermediate("searching the web...")
+        elif stage == "results" and count is not None:
+            send_intermediate(f"reading {count} results...")
+    except Exception:
+        logging.getLogger("maez").debug("search progress emit failed", exc_info=True)
 
 
 @dataclass(frozen=True)
@@ -634,6 +653,7 @@ def _run_dispatcher_pipeline(
     chat_id: str,
     chat_history=None,
     recall_stack_config=None,
+    send_intermediate=None,
 ) -> _DispatcherPathResult:
     from core.dispatcher.inventory import InventorySummary
     from core.dispatcher.external_sources import ExternalBranchStatus, ExternalFanout
@@ -739,6 +759,12 @@ def _run_dispatcher_pipeline(
         global_deadline_s=1.0,
     )
     external_fanout = ExternalFanout()
+    _emit_search_progress(
+        send_intermediate,
+        spec.external_sources,
+        stage="start",
+        count=None,
+    )
     with ThreadPoolExecutor(max_workers=2) as executor:
         layer1_future = executor.submit(
             layer1.run,
@@ -1763,6 +1789,7 @@ def run_brain_loop(
             chat_id=chat_id,
             chat_history=chat_history,
             recall_stack_config=_recall_stack_config,
+            send_intermediate=(send_intermediate if sense_enabled() else None),
         )
         if dispatcher_result.transcript:
             if return_structured:

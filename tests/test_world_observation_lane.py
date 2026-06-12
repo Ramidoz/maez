@@ -149,5 +149,30 @@ class WriteTests(unittest.TestCase):
         self.assertEqual(urls, ["https://github.com/x/releases"])
 
 
+class ProgressEmitTests(unittest.TestCase):
+    def test_emits_only_when_web_search_selected(self):
+        from core.brain.brain_loop import _emit_search_progress
+
+        calls = []
+        _emit_search_progress(calls.append, ["WEB_SEARCH"], stage="start", count=None)
+        _emit_search_progress(calls.append, ["WEB_SEARCH"], stage="results", count=5)
+        _emit_search_progress(calls.append, ["LIVE_REDDIT"], stage="start", count=None)
+        _emit_search_progress(None, ["WEB_SEARCH"], stage="start", count=None)
+        self.assertEqual(calls, ["searching the web...", "reading 5 results..."])
+
+    def test_pipeline_passthrough_gated_on_flag(self):
+        import inspect
+
+        from core.brain import brain_loop
+
+        src = inspect.getsource(brain_loop.run_brain_loop)
+        self.assertIn(
+            "send_intermediate=(send_intermediate if sense_enabled() else None)",
+            src,
+        )
+        sig = inspect.signature(brain_loop._run_dispatcher_pipeline)
+        self.assertIn("send_intermediate", sig.parameters)
+
+
 if __name__ == "__main__":
     unittest.main()
