@@ -14,6 +14,7 @@ import threading
 import time
 from typing import Any
 
+from core.infra.env_flags import strict_env_flag
 from core.cognition.intake_faculty import HttpIntakeBackend, IntakeRead
 from core.search.search_commitment import is_clear_yes, is_search_offer_worthy
 
@@ -318,11 +319,11 @@ def _default_path() -> Path:
 
 
 def _enabled() -> bool:
-    return bool(os.environ.get("MAEZ_INTAKE_FACULTY_SHADOW"))
+    return strict_env_flag("MAEZ_INTAKE_FACULTY_SHADOW")
 
 
 def _debug_enabled() -> bool:
-    return bool(os.environ.get("MAEZ_INTAKE_FACULTY_DEBUG"))
+    return strict_env_flag("MAEZ_INTAKE_FACULTY_DEBUG")
 
 
 def _get_shadow():

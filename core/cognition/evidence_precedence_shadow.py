@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 
 from core.cognition.capability_card import evidence_precedence_enabled
+from core.infra.env_flags import strict_env_flag
 
 logger = logging.getLogger("maez")
 
@@ -34,7 +35,7 @@ def _default_ledger() -> Path:
 
 
 def _debug() -> bool:
-    return bool(os.environ.get("MAEZ_EVIDENCE_PRECEDENCE_DEBUG"))
+    return strict_env_flag("MAEZ_EVIDENCE_PRECEDENCE_DEBUG")
 
 
 def _rotate(path: Path) -> None:

@@ -35,6 +35,8 @@ import re as _re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from core.infra.env_flags import strict_env_flag
+
 # 2026-04-23 Commit 6: default model for synthesis now tracks the
 # current primary brain. Callers can still override via model=.
 try:
@@ -46,7 +48,7 @@ logger = logging.getLogger("maez")
 
 
 def _search_commitment_enabled() -> bool:
-    return bool(os.environ.get("MAEZ_SEARCH_COMMITMENT_ENABLED"))
+    return strict_env_flag("MAEZ_SEARCH_COMMITMENT_ENABLED")
 
 
 # ============================================================ #
