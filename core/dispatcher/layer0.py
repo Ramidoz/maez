@@ -27,6 +27,7 @@ from core.dispatcher.spec import (
     SourceLabel,
     SubstrateSource,
 )
+from core.search.sense_flag import sense_enabled
 from memory.embedder import MiniLMEncoder, get_encoder
 
 
@@ -228,7 +229,7 @@ class Layer0Dispatcher:
         explicit_fetch = bool(_EXPLICIT_FETCH_RE.search(utterance))
         explicit_memory = bool(_EXPLICIT_MEMORY_RE.search(utterance))
         content_anchored = bool(_CONTENT_ANCHOR_RE.search(utterance))
-        current_world_question = _is_current_world_question(utterance)
+        current_world_question = sense_enabled() and _is_current_world_question(utterance)
         source_anchor_candidates = _source_anchor_candidates(utterance)
         live_reddit_anchor = _has_subreddit_anchor(utterance)
         scores = self.score_classes(utterance)

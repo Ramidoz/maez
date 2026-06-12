@@ -3,6 +3,7 @@ import numpy as np
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 def _write_manifest(path: Path) -> None:
@@ -220,11 +221,12 @@ class DispatcherLayer0Tests(unittest.TestCase):
                 generated_at=1.0,
             )
 
-            spec = Layer0Dispatcher(index=index, encoder=encoder).emit_spec(
-                "What's the latest with Anthropic?",
-                surface="telegram",
-                inventory=inventory,
-            )
+            with mock.patch.dict("os.environ", {"MAEZ_SEARCH_AS_SENSE_ENABLED": "1"}):
+                spec = Layer0Dispatcher(index=index, encoder=encoder).emit_spec(
+                    "What's the latest with Anthropic?",
+                    surface="telegram",
+                    inventory=inventory,
+                )
 
         self.assertEqual(spec.external_sources, [ExternalSource.WEB_SEARCH])
         self.assertIn(SubstrateSource.TELEGRAM_SEMANTIC, spec.substrate_sources)
@@ -232,6 +234,54 @@ class DispatcherLayer0Tests(unittest.TestCase):
         self.assertEqual(
             spec.provenance_framing,
             ProvenanceFraming.HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES,
+        )
+
+    def test_current_world_question_flag_off_preserves_prior_substrate_only_shape(self):
+        from core.dispatcher.inventory import InventorySummary
+        from core.dispatcher.layer0 import Layer0Dispatcher, load_archetype_index
+        from core.dispatcher.spec import (
+            CompositionHint,
+            ExternalSource,
+            InventoryWitness,
+            ProvenanceFraming,
+            SourceAvailability,
+            SubstrateSource,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "archetypes.md"
+            _write_manifest(manifest)
+            encoder = _FakeEncoder()
+            index = load_archetype_index(
+                manifest_path=manifest,
+                cache_path=Path(tmp) / "cache.json",
+                encoder=encoder,
+            )
+            inventory = InventorySummary(
+                inventory_witness=InventoryWitness.PRESENT,
+                source_availability={
+                    SubstrateSource.TELEGRAM_SEMANTIC: SourceAvailability.EXECUTABLE_PRESENT,
+                    SubstrateSource.ENTITY_INDEX: SourceAvailability.EXECUTABLE_PRESENT,
+                    SubstrateSource.LIVED_EPISODES: SourceAvailability.EXECUTABLE_PRESENT,
+                    ExternalSource.WEB_SEARCH: SourceAvailability.EXECUTABLE_PRESENT,
+                },
+                availability_limitations=[],
+                generated_at=1.0,
+            )
+
+            with mock.patch.dict("os.environ", {}, clear=True):
+                spec = Layer0Dispatcher(index=index, encoder=encoder).emit_spec(
+                    "What's the latest llama.cpp release?",
+                    surface="telegram",
+                    inventory=inventory,
+                )
+
+        self.assertEqual(spec.external_sources, [])
+        self.assertIn(SubstrateSource.TELEGRAM_SEMANTIC, spec.substrate_sources)
+        self.assertEqual(spec.composition_hint, CompositionHint.SUBSTRATE_ONLY)
+        self.assertEqual(
+            spec.provenance_framing,
+            ProvenanceFraming.SUBSTRATE_ONLY_NO_FRESH_VALIDATION,
         )
 
     def test_current_world_question_does_not_treat_greeting_today_as_search(self):
