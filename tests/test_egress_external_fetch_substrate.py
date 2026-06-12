@@ -8,15 +8,19 @@ from unittest import mock
 
 
 class _FakeResponse:
-    def __init__(self, body: bytes, status: int = 200):
+    def __init__(self, body: bytes, status: int = 200, headers: dict[str, str] | None = None):
         self._body = body
         self.status = status
+        self._headers = dict(headers or {})
 
     def read(self, *_args):
         return self._body
 
     def getcode(self):
         return self.status
+
+    def getheader(self, name: str, default=None):
+        return self._headers.get(name, default)
 
     def __enter__(self):
         return self
@@ -230,6 +234,33 @@ class ExternalFetchPreflightTests(unittest.TestCase):
 
 
 class ExternalFetchRuntimeTests(unittest.TestCase):
+    def test_result_carries_content_type_default_empty(self):
+        from core.egress.external_fetch import ExternalFetchResult
+
+        result = ExternalFetchResult(ok=False)
+
+        self.assertEqual(result.content_type, "")
+
+    def test_success_path_populates_content_type_from_header(self):
+        from core.egress.external_fetch import fetch_text
+
+        def opener(_request, **_kwargs):
+            return _FakeResponse(
+                b"<html><body>ok</body></html>",
+                headers={"Content-Type": "text/html; charset=utf-8"},
+            )
+
+        result = fetch_text(
+            fetch_type="fetch_url",
+            url="https://example.com/page",
+            caller="test.content-type",
+            opener=opener,
+            resolver=lambda _host: ["93.184.216.34"],
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.content_type, "text/html; charset=utf-8")
+
     def test_successful_fetch_sets_fixed_user_agent_and_logs_non_reconstructive_row(self):
         from core.egress.external_fetch import fetch_text
 

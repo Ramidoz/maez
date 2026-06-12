@@ -179,6 +179,7 @@ class ExternalFetchResult:
     preflight_status: str = "not_run"
     preflight_refusal_kind: str | None = None
     response_bytes: int = 0
+    content_type: str = ""
 
     def to_provenanced_text(self, *, source_ref: str | None = None) -> ProvenancedText:
         ref = source_ref or f"external_fetch:{self.fetch_type}:{self.request_id}"
@@ -253,6 +254,7 @@ def _result(
     status_code: int | None = None,
     preflight_status: str = "allowed",
     preflight_refusal_kind: str | None = None,
+    content_type: str = "",
 ) -> ExternalFetchResult:
     return ExternalFetchResult(
         ok=ok,
@@ -267,6 +269,7 @@ def _result(
         preflight_status=preflight_status,
         preflight_refusal_kind=preflight_refusal_kind,
         response_bytes=len(text.encode("utf-8", errors="replace")),
+        content_type=content_type,
     )
 
 
@@ -557,6 +560,7 @@ def fetch_text(
         status_code=status_code,
         request_id=request_id,
         preflight_status="allowed",
+        content_type=str(_response_header(response, "Content-Type") or ""),
     )
     _write_diagnostic(result=result, caller=caller, url=current_url, query=preflight.query, host=preflight.host)
     return result
