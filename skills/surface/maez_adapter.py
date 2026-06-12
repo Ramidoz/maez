@@ -38,6 +38,7 @@ from core.routing.brain_gateway import (
     with_purpose,
 )
 from core.conversation_controller import _search_commitment_enabled
+from core.search.sense_flag import sense_enabled
 from core.search.search_commitment import is_clear_yes, is_search_offer_worthy
 from core.safety.clinical_boundary import PrivateThoughtsCrisisSignalWriter, guard_owner_text
 from skills.surface.platform_base import MessageEvent, MessageType
@@ -220,6 +221,18 @@ class MaezMessageHandler:
 
         channel = "telegram_text"
         backend = self._search_commitment_backend()
+        if sense_enabled():
+            if not is_search_offer_worthy(text):
+                return None
+            health = backend.health()
+            if health == "healthy":
+                return None
+            return (
+                "My web sense is degraded right now, so I can't check the live web "
+                "for this. I can answer from what I already hold if you ask again, "
+                "or we can retry the web later."
+            )
+
         receipt = ctrl.get_search_offer(channel, chat_id)
         query = getattr(receipt, "offered_query", "") if receipt is not None else ""
         if receipt is not None and is_clear_yes(text) and backend.health() != "healthy":

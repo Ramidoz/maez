@@ -228,6 +228,32 @@ class TelegramSearchCommitmentSeamTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_sense_on_legacy_offer_branch_inert_for_healthy(self):
+        async def run():
+            os.environ["MAEZ_SEARCH_COMMITMENT_ENABLED"] = "1"
+            os.environ["MAEZ_SEARCH_AS_SENSE_ENABLED"] = "1"
+            self.addCleanup(lambda: os.environ.pop("MAEZ_SEARCH_AS_SENSE_ENABLED", None))
+            self.addCleanup(lambda: os.environ.pop("MAEZ_SEARCH_COMMITMENT_ENABLED", None))
+
+            tv = TelegramVoice.__new__(TelegramVoice)
+            tv._controller = _make_controller()
+            tv.authorized_user = "123"
+            tv._derive_search_query = lambda text: text
+            tv._search_commitment_backend = lambda: FakeSearchBackend(health="healthy")
+
+            with mock.patch("skills.telegram_voice._reply_text", new_callable=mock.AsyncMock) as reply:
+                handled = await tv._try_search_commitment_offer_intent(
+                    object(), "what's the latest llama.cpp release?"
+                )
+
+            self.assertFalse(handled)
+            reply.assert_not_awaited()
+            self.assertIsNone(
+                tv._controller.get_search_offer("telegram_text", "123")
+            )
+
+        asyncio.run(run())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -31,6 +31,7 @@ if str(_MAEZ_HOME_PATH) not in sys.path:
     sys.path.insert(0, str(_MAEZ_HOME_PATH))
 from core.infra.secrets import sanitize_env
 from core.health.shared_executor import get_shared_executor
+from core.search.sense_flag import sense_enabled
 from core.search.search_commitment import is_search_offer_worthy
 from core.perception import snapshot as perception_snapshot, format_snapshot
 from core.conversation_controller import ConversationController, _search_commitment_enabled
@@ -2726,6 +2727,8 @@ class TelegramVoice:
     async def _try_search_commitment_offer_intent(self, update, text: str) -> bool:
         if not _search_commitment_enabled():
             return False
+        if sense_enabled():
+            return False
         if not is_search_offer_worthy(text):
             return False
 
@@ -2767,7 +2770,7 @@ class TelegramVoice:
         import time as _time
 
         channel, chat_id = "telegram_text", str(self.authorized_user)
-        if _search_commitment_enabled():
+        if _search_commitment_enabled() and not sense_enabled():
             try:
                 backend = self._search_commitment_backend()
                 receipt = self._controller.get_search_offer(channel, chat_id)

@@ -394,6 +394,66 @@ class HandlerRouting(unittest.TestCase):
         self.assertIsNone(daemon.telegram._controller.get_search_offer("telegram_text", "c"))
         self.assertIsNone(daemon.last_text)
 
+    def test_sense_on_healthy_searchworthy_falls_through_to_synthesis(self):
+        os.environ["MAEZ_SEARCH_COMMITMENT_ENABLED"] = "1"
+        os.environ["MAEZ_SEARCH_AS_SENSE_ENABLED"] = "1"
+        self.addCleanup(lambda: os.environ.pop("MAEZ_SEARCH_AS_SENSE_ENABLED", None))
+        daemon = _FakeDaemon(reply="synthesized answer in voice")
+        daemon.telegram = _TelegramWithController()
+        handler = MaezMessageHandler(daemon)
+        event = MessageEvent(
+            text="what's the latest llama.cpp release?",
+            source=SessionSource(platform=Platform.TELEGRAM, chat_id="c", user_id="rohit"),
+        )
+        with patch.object(
+            MaezMessageHandler,
+            "_search_commitment_backend",
+            return_value=FakeSearchBackend(health="healthy"),
+        ):
+            result = asyncio.run(handler(event))
+        self.assertEqual(result, "synthesized answer in voice")
+        self.assertEqual(daemon.last_text, "what's the latest llama.cpp release?")
+
+    def test_sense_on_degraded_searchworthy_returns_fixed_notice_no_receipt(self):
+        os.environ["MAEZ_SEARCH_COMMITMENT_ENABLED"] = "1"
+        os.environ["MAEZ_SEARCH_AS_SENSE_ENABLED"] = "1"
+        self.addCleanup(lambda: os.environ.pop("MAEZ_SEARCH_AS_SENSE_ENABLED", None))
+        daemon = _FakeDaemon(reply="should not be reached")
+        daemon.telegram = _TelegramWithController()
+        handler = MaezMessageHandler(daemon)
+        event = MessageEvent(
+            text="what's the latest llama.cpp release?",
+            source=SessionSource(platform=Platform.TELEGRAM, chat_id="c", user_id="rohit"),
+        )
+        with patch.object(
+            MaezMessageHandler,
+            "_search_commitment_backend",
+            return_value=FakeSearchBackend(health="degraded"),
+        ):
+            result = asyncio.run(handler(event))
+        self.assertIn("web sense is degraded", result)
+        ctrl = daemon.telegram._controller
+        self.assertIsNone(ctrl.get_search_offer("telegram_text", "c"))
+        self.assertIsNone(daemon.last_text)
+
+    def test_sense_off_offer_behavior_unchanged(self):
+        os.environ["MAEZ_SEARCH_COMMITMENT_ENABLED"] = "1"
+        os.environ.pop("MAEZ_SEARCH_AS_SENSE_ENABLED", None)
+        daemon = _FakeDaemon(reply="unused")
+        daemon.telegram = _TelegramWithController()
+        handler = MaezMessageHandler(daemon)
+        event = MessageEvent(
+            text="what's the latest llama.cpp release?",
+            source=SessionSource(platform=Platform.TELEGRAM, chat_id="c", user_id="rohit"),
+        )
+        with patch.object(
+            MaezMessageHandler,
+            "_search_commitment_backend",
+            return_value=FakeSearchBackend(health="healthy"),
+        ):
+            result = asyncio.run(handler(event))
+        self.assertIn("local web sense", result)
+
     def test_intake_shadow_flag_off_is_inert_on_surface_v2(self):
         os.environ.pop("MAEZ_INTAKE_FACULTY_SHADOW", None)
         daemon = _FakeDaemon(reply="normal reply")
