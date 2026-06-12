@@ -449,7 +449,13 @@ class S7WorkClassAndEnvelopeTests(unittest.TestCase):
         from core.governance import operator_user_boundary as s7
         from core.infra import paths
 
-        expected = ("file:" + str(paths.soul_combined_path()),)
+        # Canonicalize the same way derive_affected_refs does: the ref is
+        # normalized to a stable home-relative form (e.g. file:config/soul.md),
+        # so the test must not compare against the raw absolute path — that is
+        # the worktree-vs-main path-resolution confound that made this brittle.
+        expected = s7._canonical_affected_refs(
+            ("file:" + str(paths.soul_combined_path()),)
+        )
 
         note_refs = s7.derive_affected_refs(
             action="write_soul_note",
