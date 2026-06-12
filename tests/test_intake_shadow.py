@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+import tempfile
+import time
 import unittest
 
-from core.cognition.intake_faculty import IntakeRead
+from core.cognition.intake_faculty import FakeIntakeBackend, IntakeRead
 from core.cognition import intake_shadow as shadow
 from core.search.search_commitment import OfferReceipt
 
@@ -167,3 +170,101 @@ class TelemetryTests(unittest.TestCase):
         blob = json.dumps(rec)
         self.assertIn("offered_query_hash", blob)
         self.assertNotIn("private raw query", blob)
+
+
+class _Memory:
+    def __init__(self, turns=None, raises=None):
+        self.turns = turns if turns is not None else [
+            {"content": "Rohit: prior\nMaez: reply"},
+            {"content": "Rohit: second\nMaez: reply"},
+        ]
+        self.raises = raises
+
+    def get_telegram_exchanges(self, limit=6):
+        if self.raises:
+            raise self.raises
+        return self.turns[:limit]
+
+
+class IntakeShadowQueueTests(unittest.TestCase):
+    def _path(self):
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        return Path(td.name) / "intake_shadow.jsonl"
+
+    def test_full_queue_returns_enqueue_failed_without_raising(self):
+        path = self._path()
+        sh = shadow.IntakeShadow(FakeIntakeBackend(), path, maxsize=1)
+
+        self.assertEqual(sh.enqueue({"message": "one"}), "enqueued")
+        self.assertEqual(sh.enqueue({"message": "two"}), "enqueue_failed")
+
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        self.assertEqual(rows[-1]["status"], "enqueue_failed")
+
+    def test_worker_writes_content_light_record(self):
+        path = self._path()
+        backend = FakeIntakeBackend(default=IntakeRead(
+            turn_kind="commitment_response",
+            stance="yes",
+            boundary_signal="none",
+            needs="search",
+            referent_kind="pending_offer",
+            confidence=0.9,
+            rationale="private rationale",
+        ))
+        sh = shadow.IntakeShadow(backend, path, maxsize=4, debug=False)
+        sh.start()
+        self.addCleanup(sh.stop)
+
+        self.assertEqual(sh.enqueue({
+            "message": "Proceed with private topic",
+            "surface": "telegram_surface",
+            "chat_id": "c",
+            "context_provider": lambda: ["Rohit: private prior"],
+            "pending_offer": None,
+            "gate_verdicts": {"is_clear_yes": "false"},
+        }), "enqueued")
+
+        deadline = time.time() + 2.0
+        while time.time() < deadline and not path.exists():
+            time.sleep(0.02)
+
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        blob = json.dumps(rows[-1])
+        self.assertEqual(rows[-1]["status"], "ok")
+        self.assertNotIn("Proceed", blob)
+        self.assertNotIn("private prior", blob)
+        self.assertNotIn("private rationale", blob)
+
+    def test_busy_backend_drops_sample_as_judge_busy(self):
+        path = self._path()
+        sh = shadow.IntakeShadow(FakeIntakeBackend(busy=True), path, maxsize=4)
+        sh.start()
+        self.addCleanup(sh.stop)
+
+        sh.enqueue({
+            "message": "anything",
+            "surface": "telegram_surface",
+            "chat_id": "c",
+            "context_provider": lambda: [],
+            "pending_offer": None,
+            "gate_verdicts": {},
+        })
+
+        deadline = time.time() + 2.0
+        while time.time() < deadline and not path.exists():
+            time.sleep(0.02)
+
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        self.assertEqual(rows[-1]["status"], "judge_busy")
+
+    def test_rotation_keeps_file_bounded(self):
+        path = self._path()
+        sh = shadow.IntakeShadow(FakeIntakeBackend(), path, maxsize=4, rotate_bytes=120, rotate_keep=2)
+
+        for idx in range(8):
+            sh._emit({"status": "ok", "idx": idx, "payload": "x" * 100})
+
+        files = sorted(path.parent.glob("intake_shadow.jsonl*"))
+        self.assertLessEqual(len(files), 3)  # active + 2 rotated

@@ -7,6 +7,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
+import queue
+import threading
 import time
 from typing import Any
 
@@ -165,3 +168,128 @@ def build_telemetry(
         rec["turn_excerpt"] = (message or "")[:160]
         rec["context_summary"] = context_blob[:360]
     return rec
+
+
+class IntakeShadow:
+    """Bounded queue + one-in-flight background worker.
+
+    The live path only calls enqueue(). Model work happens in _run().
+    """
+
+    def __init__(
+        self,
+        backend,
+        telemetry_path,
+        *,
+        maxsize: int = 64,
+        timeout_s: float = 8.0,
+        debug: bool = False,
+        rotate_bytes: int = 2_000_000,
+        rotate_keep: int = 3,
+    ):
+        self._backend = backend
+        self._path = Path(telemetry_path)
+        self._q: queue.Queue = queue.Queue(maxsize=maxsize)
+        self._timeout_s = timeout_s
+        self._debug = debug
+        self._rotate_bytes = max(1024, int(rotate_bytes))
+        self._rotate_keep = max(1, int(rotate_keep))
+        self._worker = None
+        self._stop = threading.Event()
+        self._in_flight = threading.Lock()
+
+    def enqueue(self, job: dict) -> str:
+        try:
+            self._q.put_nowait(dict(job or {}))
+            return "enqueued"
+        except queue.Full:
+            self._emit({"ts": int(time.time()), "status": "enqueue_failed"})
+            return "enqueue_failed"
+        except Exception:
+            return "enqueue_failed"
+
+    def start(self):
+        if self._worker is None:
+            self._worker = threading.Thread(target=self._run, name="intake-shadow", daemon=True)
+            self._worker.start()
+
+    def stop(self):
+        self._stop.set()
+        try:
+            self._q.put_nowait(None)
+        except Exception:
+            pass
+        if self._worker is not None:
+            self._worker.join(timeout=1.0)
+
+    def _run(self):
+        while not self._stop.is_set():
+            try:
+                job = self._q.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if job is None:
+                break
+            if not self._in_flight.acquire(blocking=False):
+                self._emit({"ts": int(time.time()), "status": "judge_busy"})
+                continue
+            try:
+                self._process(job)
+            except Exception:
+                self._emit({"ts": int(time.time()), "status": "backend_error"})
+            finally:
+                try:
+                    self._in_flight.release()
+                except Exception:
+                    pass
+
+    def _process(self, job: dict):
+        provider = job.get("context_provider")
+        try:
+            context_turns = list(provider()) if callable(provider) else []
+        except Exception:
+            context_turns = []
+        context = {
+            "turns": context_turns,
+            "pending_offer": job.get("pending_offer"),
+            "surface": job.get("surface"),
+        }
+        read, latency_s = self._backend.read(job.get("message", ""), context, self._timeout_s)
+        status = read.status if read.status != "ok" else "ok"
+        rec = build_telemetry(
+            message=job.get("message", ""),
+            context_turns=context_turns,
+            pending_offer=job.get("pending_offer"),
+            faculty_read=read,
+            gate_verdicts=job.get("gate_verdicts") or {},
+            status=status,
+            latency_s=latency_s,
+            debug=self._debug,
+        )
+        self._emit(rec)
+
+    def _rotate_if_needed(self):
+        try:
+            if not self._path.exists() or self._path.stat().st_size < self._rotate_bytes:
+                return
+            for idx in range(self._rotate_keep, 0, -1):
+                src = self._path.with_name(self._path.name + f".{idx}")
+                dst = self._path.with_name(self._path.name + f".{idx + 1}")
+                if idx == self._rotate_keep:
+                    if src.exists():
+                        src.unlink()
+                    continue
+                if src.exists():
+                    src.rename(dst)
+            self._path.rename(self._path.with_name(self._path.name + ".1"))
+        except Exception:
+            pass
+
+    def _emit(self, rec: dict):
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            self._rotate_if_needed()
+            with self._path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, sort_keys=True) + "\n")
+        except Exception:
+            pass
