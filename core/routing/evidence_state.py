@@ -110,6 +110,22 @@ def build_evidence_precedence_directive(state: EvidenceState) -> str:
         "You may NOT claim the relevant source is blocked, missing, unavailable, "
         "or not-wired this turn - the evidence above contradicts that."
     )
+    try:
+        from core.cognition.capability_card import evidence_precedence_enabled
+
+        if evidence_precedence_enabled():
+            lines.append(
+                "Recalled memories may CONTEXTUALIZE the fresh evidence above; they "
+                "may not CONTRADICT it. Your memory of past failures with similar "
+                "pages or searches is not evidence about THIS evidence."
+            )
+            lines.append(
+                "Before you claim the evidence lacks or truncates something, re-read "
+                "the evidence text itself - the detail you remember missing before "
+                "may be present now."
+            )
+    except Exception:
+        pass
     return "\n".join(lines)
 
 
