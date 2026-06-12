@@ -172,6 +172,43 @@ class TelemetryTests(unittest.TestCase):
         self.assertIn("offered_query_hash", blob)
         self.assertNotIn("private raw query", blob)
 
+    def test_offer_snapshot_is_idempotent_for_composed_live_path(self):
+        read = IntakeRead(
+            turn_kind="commitment_response",
+            stance="yes",
+            boundary_signal="none",
+            needs="search",
+            referent_kind="pending_offer",
+            confidence=0.8,
+        )
+        first_snapshot = shadow.offer_snapshot({
+            "action_type": "web_search",
+            "stakes": "low_read",
+            "executor": "searxng",
+            "egress_class": "sovereign_local_search",
+            "offered_query": "llama.cpp release",
+        })
+
+        rec = shadow.build_telemetry(
+            message="yeah sure",
+            context_turns=[],
+            pending_offer=first_snapshot,
+            faculty_read=read,
+            gate_verdicts={},
+            status="ok",
+            latency_s=0.0,
+            debug=False,
+        )
+
+        self.assertEqual(
+            rec["pending_offer"]["offered_query_hash"],
+            first_snapshot["offered_query_hash"],
+        )
+        self.assertNotEqual(
+            rec["pending_offer"]["offered_query_hash"],
+            shadow._hash(""),
+        )
+
 
 class _Memory:
     def __init__(self, turns=None, raises=None):

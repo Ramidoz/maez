@@ -34,6 +34,14 @@ def offer_snapshot(offer) -> dict[str, Any] | None:
     if offer is None:
         return None
     if isinstance(offer, dict):
+        if "offered_query_hash" in offer:
+            return {
+                "action_type": offer.get("action_type"),
+                "stakes": offer.get("stakes"),
+                "egress_class": offer.get("egress_class"),
+                "executor": offer.get("executor"),
+                "offered_query_hash": offer.get("offered_query_hash"),
+            }
         query = offer.get("offered_query") or offer.get("query") or ""
         return {
             "action_type": offer.get("action_type"),

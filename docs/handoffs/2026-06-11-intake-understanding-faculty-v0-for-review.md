@@ -19,12 +19,24 @@ Built and stopped at review gate. No merge, no restart, no flag flip, no live wi
 5. Correct live seam: Surface V2 (`telegram_surface`), not legacy TelegramVoice.
 6. One self / instruments: no calls to the 27B self brain, no actions, no wants writes.
 
+## Task 0 live-source evidence
+
+The context provider was verified against the real Surface V2 memory source before implementation:
+
+```text
+skills/surface/maez_adapter.py:496:                    lambda: _mem.get_telegram_exchanges(
+memory/memory_manager.py:2912:    def get_telegram_exchanges(self, limit: int | None = 400) -> list[dict]:
+daemon/maez_daemon.py:2540:        self.memory = MemoryManager()
+```
+
+The shadow context provider follows that shape: it calls `daemon.memory.get_telegram_exchanges(limit=6)` only inside the background worker and degrades context to `[]` if the read fails.
+
 ## Verification run by builder
 
 ```text
 /home/rohit/maez/.venv/bin/python -B -m unittest tests.test_intake_faculty tests.test_intake_shadow tests.test_surface_adapter tests.test_search_commitment -v
 
-Ran 57 tests in 15.191s
+Ran 58 tests in 15.239s
 
 OK
 ```
