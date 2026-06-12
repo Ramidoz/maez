@@ -100,6 +100,16 @@ just gains the per-source text.) Never a search-ish message for a page read.
    content for page reads = URL + title + bounded excerpt; `source_ref=
    "page_read:<diagnostic_id>:<url_hash>"`; same chat_id-keyed stash, same
    daemon drain, same idempotency. `/receipts` sources include the read URL.
+
+   **LOAD-BEARING (Codex review catch — the silently-stores-nothing class):**
+   the shared lane's write gate currently checks `sense_enabled()` only. It
+   becomes `search_sense_enabled() OR page_read_enabled()` — each source's
+   Layer0 NERVE stays behind its own flag, but the shared STOMACH accepts a
+   write from any enabled sense. Without this, `MAEZ_PAGE_READ_ENABLED=1`
+   with search-sense off would read and answer while
+   `write_world_observation` returned `"disabled"` and stored nothing —
+   green tests, empty stomach. REQUIRED TEST: a page-read observation writes
+   with ONLY `MAEZ_PAGE_READ_ENABLED=1` set (search-sense flag absent).
 4. **Voice:** unchanged — evidence flows into synthesis, `[E#]` rendered to
    natural attribution post-audit; the attribution suffix already generalizes
    ("I looked at the live web for this").
@@ -141,8 +151,11 @@ just gains the per-source text.) Never a search-ish message for a page read.
 3. `/receipts` → the page URL as source.
 4. Memory: one `page_read:*` observation with the three audit booleans;
    repeat the paste → no duplicate.
-5. A model-invented-URL probe (ask Maez to check a page WITHOUT naming a
-   URL) → no fetch, honest reply (the rail holding).
+5. No-URL probe (ask Maez to "check that page" WITHOUT naming a URL) →
+   Layer0 selects no FETCH_URL, no fetch, honest reply. (The
+   `MODEL_INVENTED_URL` rail itself is pinned by unit/integration tests —
+   no live path sets `conversation_state["model_suggested_url"]` in v0, so
+   it is a rail test, not a live witness step.)
 6. A non-text URL (e.g. a direct PDF link) → honest "couldn't read that."
 
 ## Deferred (named)
