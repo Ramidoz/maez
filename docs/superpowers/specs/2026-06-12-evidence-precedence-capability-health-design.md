@@ -188,9 +188,17 @@ byte-identical: no card, directive unchanged, no detector, no ledger.
 - Directive: extension present only when the base directive fires AND flag
   on; flag-off → directive byte-identical (string equality on a fixed
   EvidenceState).
-- Detector: each absence verb; fresh-index citation required (`[E5]` recalled
-  index ⇒ no flag); multi-sentence replies; no `[E#]` ⇒ no flag; ledger row
-  content-light (no raw text without DEBUG); rotation.
+- Detector: each absence verb; multi-sentence replies; no `[E#]` ⇒ no flag;
+  ledger row content-light (no raw text without DEBUG); rotation. Every
+  ledger row records `fresh_index_mode` (`"proof"` | `"fallback_all_cited"`).
+  The index-discrimination tests BRANCH on the Task-0 outcome:
+  - **Proof path** (fresh indices travel): `[E5]` recalled index ⇒ NO flag;
+    `[E1]` fresh index ⇒ flag.
+  - **Fallback path** (`fallback_all_cited`): any cited index on a
+    `web_present` turn ⇒ flag BY DESIGN; the test asserts the row carries
+    `fresh_index_mode="fallback_all_cited"` so the over-flag bias is visible
+    in every row the witness reads. (The recalled-index-no-flag test is
+    proof-path ONLY — do not write it against the fallback.)
 - Placement: a structural test asserting the detector consumes the marked
   draft variable BEFORE `render_natural` in the drain (source-order test,
   the established pattern).
