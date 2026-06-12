@@ -445,6 +445,38 @@ class S7WorkClassAndEnvelopeTests(unittest.TestCase):
                 self.assertIn(derived, s7.GUARDED_WORK_CLASSES)
                 self.assertNotIn(derived, s7.VOICE_SEAT_WORK_CLASSES)
 
+    def test_025b_soul_write_actions_share_canonical_soul_ref_for_aggregation(self):
+        from core.governance import operator_user_boundary as s7
+        from core.infra import paths
+
+        expected = ("file:" + str(paths.soul_combined_path()),)
+
+        note_refs = s7.derive_affected_refs(
+            action="write_soul_note",
+            params={"note": "a new soul note"},
+        )
+        edit_refs = s7.derive_affected_refs(
+            action="edit_soul_section",
+            params={
+                "target_name": "Values",
+                "new_body": "new body",
+                "rationale": "test",
+            },
+        )
+
+        self.assertEqual(note_refs, expected)
+        self.assertEqual(edit_refs, expected)
+        self.assertEqual(
+            s7.derive_aggregation_group(
+                affected_refs=note_refs,
+                derived_work_class="self_modification",
+            ),
+            s7.derive_aggregation_group(
+                affected_refs=edit_refs,
+                derived_work_class="self_modification",
+            ),
+        )
+
     def test_026_claimed_and_derived_class_disagreement_resolves_to_stricter(self):
         from core.governance import operator_user_boundary as s7
 

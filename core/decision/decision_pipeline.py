@@ -313,6 +313,18 @@ def _fingerprint_for_action(action: str, params: dict) -> dict:
             except Exception:
                 fields["target"] = {"path": str(path), "err": True}
 
+    elif action in ("write_soul_note", "edit_soul_section"):
+        proposal_fingerprint = params.get("_proposal_fingerprint")
+        if proposal_fingerprint is not None:
+            fields["proposal_fingerprint"] = proposal_fingerprint
+        if action == "edit_soul_section":
+            fields["target_section"] = str(
+                params.get("target_name")
+                or params.get("target")
+                or params.get("section")
+                or ""
+            )
+
     # Coarse disk-free bucket (in 10% steps) so minor fluctuations don't invalidate
     try:
         import shutil
@@ -349,6 +361,7 @@ class DecisionPipeline:
     audit_log: AuditLog
     renderer: Any = None                 # CardRenderer protocol; optional for tests
     get_cards_for: Optional[Callable[[str, str], list[CardRecord]]] = None
+    dream: Any = None
 
     # Which actions are eligible for Lane 0 immediate-run (read-only).
     # The classifier is authoritative — this is just a safety check.
@@ -1489,6 +1502,7 @@ class DecisionPipeline:
                         DialogStage.EXECUTED.value,
                         execution_output=result.execution_output,
                     )
+                    self._mark_s7_bridge_proposal_applied(card)
                 elif result.execution_success is False:
                     dialog_store.set_stage(
                         turn.dialog.dialog_id,
@@ -1574,6 +1588,14 @@ class DecisionPipeline:
             summary = card.proposed_action_summary or card.plain_english
             if summary is not None:
                 execute_params.setdefault("plain_english", summary)
+        elif card.action == "write_soul_note":
+            return {"note": execute_params.get("note", "")}
+        elif card.action == "edit_soul_section":
+            return {
+                "target_name": execute_params.get("target_name", ""),
+                "new_body": execute_params.get("new_body", ""),
+                "rationale": execute_params.get("rationale", ""),
+            }
         return execute_params
 
     def _action_requires_s7_authorization(self, action: str, params: dict | None) -> bool:
@@ -1588,8 +1610,52 @@ class DecisionPipeline:
     def _s7_card_precondition_fresh(self, card: CardRecord) -> bool:
         if card.state_hash == "empty":
             return True
-        current = _drop_volatile(_fingerprint_for_action(card.action, card.params))
+        params = dict(card.params or {})
+        if card.action in ("write_soul_note", "edit_soul_section") and params.get(
+            "_proposal_id"
+        ) is not None:
+            dream = getattr(self, "dream", None)
+            if dream is None or not hasattr(dream, "proposal_fingerprint"):
+                return False
+            try:
+                params["_proposal_fingerprint"] = dream.proposal_fingerprint(
+                    int(params["_proposal_id"])
+                )
+            except Exception:
+                return False
+        current = _drop_volatile(_fingerprint_for_action(card.action, params))
         return compute_state_hash(current) == card.state_hash
+
+    def _mark_s7_bridge_proposal_applied(self, card: CardRecord) -> None:
+        """Link a successful S7 soul write back to its originating proposal."""
+
+        if card.action not in ("write_soul_note", "edit_soul_section"):
+            return
+        params = dict(card.params or {})
+        prop_id = params.get("_proposal_id")
+        if prop_id is None:
+            return
+        dream = getattr(self, "dream", None)
+        if dream is None or not hasattr(dream, "mark_applied"):
+            return
+        try:
+            ok, msg = dream.mark_applied(
+                int(prop_id),
+                source="s7_ceremony_bridge",
+            )
+            if not ok:
+                logger.warning(
+                    "S7 bridge could not mark proposal %s applied after card %s: %s",
+                    prop_id,
+                    getattr(card, "request_id", "?"),
+                    msg,
+                )
+        except Exception:
+            logger.warning(
+                "S7 bridge proposal link-back failed for card %s",
+                getattr(card, "request_id", "?"),
+                exc_info=True,
+            )
 
     def _card_requires_s7_authorization(self, card: CardRecord) -> bool:
         return self._action_requires_s7_authorization(card.action, card.params)

@@ -43,6 +43,7 @@ class SurfaceProposalTests(unittest.TestCase):
     def setUp(self):
         os.environ["MAEZ_SURFACE_PARITY_ENABLED"] = "1"
         self.addCleanup(lambda: os.environ.pop("MAEZ_SURFACE_PARITY_ENABLED", None))
+        self.addCleanup(lambda: os.environ.pop("MAEZ_S7_CEREMONY_BRIDGE_ENABLED", None))
 
     def _event(self, text: str) -> MessageEvent:
         return MessageEvent(
@@ -137,3 +138,67 @@ class SurfaceProposalTests(unittest.TestCase):
 
         self.assertEqual(daemon.dream.applied, [24])
         self.assertIn("#24: dream applied", result)
+
+    def test_s7_bridge_flag_off_keeps_dream_apply_byte_path(self):
+        os.environ["MAEZ_S7_CEREMONY_BRIDGE_ENABLED"] = "0"
+        daemon = _FakeDaemon(reply="general reply")
+        daemon.dream = _DreamStore()
+        handler = self._handler(daemon)
+        handler._surface_parity_pending_evolution_candidates = lambda: []
+
+        result = asyncio.run(handler(self._event("approve #24")))
+
+        self.assertEqual(daemon.dream.applied, [24])
+        self.assertIn("#24: dream applied", result)
+
+    def test_s7_bridge_cockpit_down_does_not_seed_or_apply(self):
+        os.environ["MAEZ_S7_CEREMONY_BRIDGE_ENABLED"] = "1"
+        daemon = _FakeDaemon(reply="general reply")
+        daemon.dream = _DreamStore()
+        handler = self._handler(daemon)
+        handler._surface_parity_pending_evolution_candidates = lambda: []
+
+        with patch(
+            "skills.surface.s7_ceremony_bridge.cockpit_available",
+            return_value=False,
+        ), patch(
+            "skills.surface.s7_ceremony_bridge.seed_soul_proposal_dialog"
+        ) as seed:
+            result = asyncio.run(handler(self._event("approve #24")))
+
+        self.assertEqual(daemon.dream.applied, [])
+        seed.assert_not_called()
+        self.assertIn("authorization surface isn't running", result)
+
+    def test_s7_bridge_cockpit_up_seeds_consults_and_returns_pointer(self):
+        os.environ["MAEZ_S7_CEREMONY_BRIDGE_ENABLED"] = "1"
+        daemon = _FakeDaemon(reply="general reply")
+        daemon.dream = _DreamStore()
+        handler = self._handler(daemon)
+        handler._surface_parity_pending_evolution_candidates = lambda: []
+        seed_result = type("Seed", (), {"card_request_id": "card-24", "action": "write_soul_note"})()
+        consult_result = type(
+            "Consult",
+            (),
+            {"ceremony_pointer": "http://127.0.0.1:11437/cockpit/s7-webauthn-proof#card-24", "blocked": False},
+        )()
+
+        with patch(
+            "skills.surface.s7_ceremony_bridge.cockpit_available",
+            return_value=True,
+        ), patch(
+            "skills.surface.s7_ceremony_bridge.seed_soul_proposal_dialog",
+            return_value=seed_result,
+        ) as seed, patch(
+            "skills.surface.s7_ceremony_bridge.consult_then_block_or_pointer",
+            return_value=consult_result,
+        ) as consult:
+            result = asyncio.run(handler(self._event("approve #24")))
+
+        self.assertEqual(daemon.dream.applied, [])
+        seed.assert_called_once()
+        self.assertEqual(seed.call_args.kwargs["prop_id"], 24)
+        consult.assert_called_once()
+        self.assertEqual(consult.call_args.kwargs["card_request_id"], "card-24")
+        self.assertIn("complete the S7 ceremony", result)
+        self.assertIn("card-24", result)
