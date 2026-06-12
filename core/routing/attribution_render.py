@@ -63,7 +63,9 @@ def receipts_reply(chat_id: str) -> str:
     return "\n".join(lines)[:3900]
 
 
-def stash_turn_evidence(chat_id, *, rendered_turn, evidence_texts, observation) -> None:
+def stash_turn_evidence(
+    chat_id, *, rendered_turn, evidence_texts, observation, extra_source_urls=None
+) -> None:
     try:
         from core.intake_bus.world_observation_lane import extract_source_urls
 
@@ -72,9 +74,17 @@ def stash_turn_evidence(chat_id, *, rendered_turn, evidence_texts, observation) 
             in {"WEB_SEARCH", "FETCH_URL"}
             for summary in (getattr(rendered_turn, "source_summaries", None) or [])
         )
+        # G2: a page-read's own URL is often absent from the page BODY text, so
+        # extract_source_urls (which scans evidence text) misses it and /receipts
+        # shows no Sources. Union the explicitly-read URL(s) in, deduped + capped.
+        sources = extract_source_urls(evidence_texts or [])
+        for url in extra_source_urls or []:
+            if url and url not in sources:
+                sources.append(url)
+        sources = sources[:5]
         _TURN_EVIDENCE[str(chat_id or "")] = {
             "web_present": web_present,
-            "sources": extract_source_urls(evidence_texts or []),
+            "sources": sources,
             "observation": observation,
         }
         while len(_TURN_EVIDENCE) > 8:

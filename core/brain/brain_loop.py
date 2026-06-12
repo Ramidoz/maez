@@ -925,11 +925,17 @@ def _run_dispatcher_pipeline(
                         or getattr(external_result, "fanout_generation_id", "")
                     ),
                 }
+            _read_url = (
+                _observation.get("url")
+                if isinstance(_observation, dict) and _observation.get("kind") == "page_read"
+                else None
+            )
             stash_turn_evidence(
                 chat_id,
                 rendered_turn=rendered_turn,
                 evidence_texts=_web_texts or _page_texts,
                 observation=_observation,
+                extra_source_urls=[_read_url] if _read_url else None,
             )
     except Exception:
         logger.debug("world_observation stash skipped", exc_info=True)
