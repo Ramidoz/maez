@@ -83,3 +83,39 @@ solder a nerve to it silently.
 
 Queue language correction: the fix is ATTACHMENT (first live wiring), not
 re-attachment.
+
+## E. (~00:47-01:10) Page-Read v0 witness: limb GREEN, synthesis defeated by recalled narrative
+The reading limb passed every mechanical step live: nerve (Layer0 URL arm),
+true "reading the page..." notice, egress-witnessed fetch (200, text/html),
+digestion, evidence into synthesis, ONE page_read observation admitted
+(ref page_read:03643db1...:332f0603..., lane log 00:47:05), no-URL turn
+correctly inert WITH good continuity, no fabricated version.
+
+THE FAILURE IS SYNTHESIS, PROVEN BY PROBE: replaying Maez's exact fetch
+path (external_fetch + extract_readable) puts the release tag at pos 447
+of the extracted text — INSIDE the 2000-char block cap. Maez's evidence
+plainly contained "b9603 12 Jun". The reply said "the version tag is
+truncated in the data I have [E1]" — CONTRADICTED by E1 — and "We've hit
+this wall before [E5]" — E5 being the recalled memory of the search-era
+truncation failures. NEW NAMED FAILURE CLASS: **recalled failure-narrative
+defeats fresh evidence** (knowledge-conflict reborn inside focused
+cognition; memory actively narrating against the page). Likely compounded
+by tag-format unfamiliarity (b9603 != vX.Y.Z) giving the narrative room.
+(Claude's first hypothesis — chrome+caps — FALSIFIED by the same probe;
+the extraction pipeline is innocent.)
+
+SECOND FINDING: the grounding shadow saw the reply and logged
+status=no_claimable — its claimability gate does not treat
+ABSENCE-CLAIMS-ABOUT-EVIDENCE ("the data doesn't contain X") as checkable,
+yet false-absence is the canon's named core concern. Shadow v0.1 item:
+an absence-claim claimable category (claim about evidence content ->
+entailment-check against the evidence). The only rail that caught the
+contradiction tonight was the owner.
+
+THIRD (small): /receipts for page reads shows no Sources list — the stash
+derives sources from evidence-text URLs; for page reads the read URL
+itself must be added. Fold into the fix list.
+
+Queue: capability-health/evidence-precedence arc now carries THREE wounds
+(Reddit-wall self-claim, temporal hedge, narrative-over-page) + the shadow
+claimability gap + the receipts-URL fix + felt-time first-attachment.
