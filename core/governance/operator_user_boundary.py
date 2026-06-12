@@ -825,6 +825,10 @@ def _canonical_affected_refs(refs: tuple[str, ...]) -> tuple[str, ...]:
 def derive_affected_refs(*, action: str, params: dict[str, Any] | None = None) -> tuple[str, ...]:
     """Derive target refs from signed action material; caller refs are not authority."""
     params = dict(params or {})
+    if action in {"write_soul_note", "edit_soul_section"}:
+        from core.infra import paths as _paths
+
+        return _canonical_affected_refs(("file:" + str(_paths.soul_combined_path()),))
     for key in ("path", "file", "target"):
         if params.get(key):
             return _canonical_affected_refs(("file:" + str(params[key]),))

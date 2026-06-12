@@ -4,6 +4,10 @@ Date: 2026-06-12T17:44:56-05:00
 Branch: `s7-ceremony-bridge-v0`
 Base: `main@115142c`
 
+> Superseded by `2026-06-12-s7-ceremony-bridge-0a-go.md` after Task 0.5
+> taught S7 that `write_soul_note` and `edit_soul_section` share the
+> canonical soul ref from `core.infra.paths.soul_combined_path()`.
+
 ## Verdict
 
 NO-GO. The existing self-mod-dialog live soul-write path cannot yet be proven
@@ -77,10 +81,10 @@ Do not proceed to Task 1+ yet. The bridge must not wrap a ceremony around this
 path until the action-envelope geometry for `write_soul_note` and
 `edit_soul_section` is repaired and the 0a proof reaches the real execution leg.
 
-The smallest likely repair is to make S7's affected-ref derivation recognize
-the two explicit soul-write actions as touching `file:config/soul.md` (or the
-canonical soul ref used elsewhere), without requiring extra executable params
-that would leak into `_do_write_soul_note(...)` / `_do_edit_soul_section(...)`.
+The repair is to make S7's affected-ref derivation recognize the two explicit
+soul-write actions as touching the canonical `core.infra.paths.soul_combined_path()`
+ref, without requiring extra executable params that would leak into
+`_do_write_soul_note(...)` / `_do_edit_soul_section(...)`.
 
 After that, rerun the same proof. Only if both tests execute against the
 sandbox soul and leave the real soul hashes unchanged should 0a become GO.

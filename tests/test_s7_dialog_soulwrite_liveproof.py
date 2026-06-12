@@ -449,7 +449,7 @@ class DialogSoulWriteLiveProof(unittest.TestCase):
         after = self.sandbox_soul.read_text(encoding="utf-8")
         self.assertNotEqual(after, before)
         self.assertIn("New value body from 0a live proof.", after)
-        self.assertIn("applied", result.execution_output.lower())
+        self.assertIn("replaced", result.execution_output.lower())
 
 
 if __name__ == "__main__":
