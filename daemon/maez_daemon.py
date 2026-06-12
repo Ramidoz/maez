@@ -5760,24 +5760,37 @@ class MaezDaemon:
         # Step 5v: declared at function scope so the response log
         # below can reference its size without re-pulling.
         _ambient_block = ""
+        _capability_block = ""
+        try:
+            # Evidence-precedence v0: build the capability card outside the
+            # ambient-brief gate and outside the ambient-empty check. It returns
+            # "" when the organ flag is off.
+            from core.cognition.capability_card import capability_prompt_block
+
+            _capability_block = capability_prompt_block()
+        except Exception as _cap_exc:
+            logger.debug("capability card injection failed: %s", _cap_exc)
         if os.environ.get("MAEZ_AMBIENT_BRIEF", "1") != "0":
             try:
                 from core.memory.ambient_format import ambient_prompt_block
 
                 _ambient_block = ambient_prompt_block()
-                if _ambient_block:
-                    messages.append(
-                        {
-                            "role": "system",
-                            "content": _ambient_block,
-                        }
-                    )
-                    system_part_capture.append(("ambient_block", _ambient_block))
             except Exception as _amb_exc:
                 logger.debug(
                     "ambient brief injection failed: %s",
                     _amb_exc,
                 )
+        _combined_context_block = "\n\n".join(
+            p for p in (_ambient_block, _capability_block) if p
+        )
+        if _combined_context_block:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": _combined_context_block,
+                }
+            )
+            system_part_capture.append(("ambient_block", _combined_context_block))
 
         # Trace: capture the evidence ids the lived brief surfaced.
         # An empty brief yields an empty list — silence is honest.
