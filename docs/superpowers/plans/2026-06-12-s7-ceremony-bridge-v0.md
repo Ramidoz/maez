@@ -56,19 +56,20 @@ class DialogSoulWriteLiveProof(unittest.TestCase):
         self.sandbox_soul.write_text("# sandbox soul\n\n## Existing\nbody\n", encoding="utf-8")
         # ADJUST per 0a-1 enumeration: patch EVERY enumerated soul-path resolver
         # to self.sandbox_soul BEFORE building the pipeline/action engine.
-        # Assert the real soul is never opened (see tearDown content-hash guard).
-        self._real_soul = Path(os.path.expanduser("~/maez/soul.md"))
-        self._real_soul_hash = (
-            hashlib.sha256(self._real_soul.read_bytes()).hexdigest()
-            if self._real_soul.exists() else None
-        )
+        # Real-soul guard uses the REAL path API (F1) — NOT ~/maez/soul.md, which
+        # is not guaranteed. Hash every real soul path; assert all untouched.
+        from core.infra import paths
+        self._guarded = {}
+        for p in (paths.soul_combined_path(), paths.soul_base_path(), paths.soul_local_path()):
+            # plus every path discovered in 0a-1 that the action engine may resolve
+            if Path(p).exists():
+                self._guarded[str(p)] = hashlib.sha256(Path(p).read_bytes()).hexdigest()
 
     def tearDown(self):
-        if self._real_soul_hash is not None:
+        for path, before in self._guarded.items():
             self.assertEqual(
-                hashlib.sha256(self._real_soul.read_bytes()).hexdigest(),
-                self._real_soul_hash,
-                "REAL soul.md was modified by a 'hermetic' test — path leak",
+                hashlib.sha256(Path(path).read_bytes()).hexdigest(), before,
+                f"REAL soul file {path} was modified by a 'hermetic' test — path leak",
             )
 
     def test_write_soul_note_executes_end_to_end(self):
@@ -92,6 +93,8 @@ class DialogSoulWriteLiveProof(unittest.TestCase):
 Run: `/home/rohit/maez/.venv/bin/python -B -m unittest tests.test_s7_dialog_soulwrite_liveproof -v`
 - **GO:** both soul writes execute against the sandbox, real soul untouched → proceed to Task 1, and keep this as a standing regression.
 - **NO-GO (dormant/unwired leg):** STOP. Write the exact failing leg into the handoff and escalate to the owner. Do not build the Telegram ceremony around a dead path.
+
+**The `skipTest` lines above MUST be removed and the two tests fully implemented before 0a counts as GO.** A skipped proof is a false witness — a green run with skips is a NO-GO by default, not a pass.
 
 - [ ] **Step 0b: Record the freshness hook.** Confirm `_s7_card_precondition_fresh` (decision_pipeline.py:1588) recomputes `_drop_volatile(_fingerprint_for_action(card.action, card.params))` and compares to `card.state_hash`, and that ratify-time already calls it (decision_pipeline.py:1395, blocks "stale S7 self-mod precondition"). This is the F2 recompute site — Task 2 feeds the proposal fingerprint into `_fingerprint_for_action` so this gate catches proposal drift automatically.
 
@@ -305,15 +308,58 @@ Augment `_s7_card_precondition_fresh` so soul-write cards re-read the live propo
         if card.state_hash == "empty":
             return True
         params = dict(card.params or {})
-        if card.action in ("write_soul_note", "edit_soul_section"):
-            prop_id = params.get("_proposal_id")
+        if card.action in ("write_soul_note", "edit_soul_section") and params.get("_proposal_id") is not None:
+            # FAIL CLOSED (F2): a soul-write card bound to a proposal MUST be able
+            # to recompute that proposal's LIVE fingerprint. If we cannot, we do
+            # NOT fall back to the seed snapshot — we refuse, because an
+            # unverifiable proposal must not ride a valid S7 artifact.
+            prop_id = params["_proposal_id"]
             dream = getattr(self, "dream", None)  # ADJUST to the real dream handle
-            if prop_id is not None and dream is not None and hasattr(dream, "proposal_fingerprint"):
+            if dream is None or not hasattr(dream, "proposal_fingerprint"):
+                return False
+            try:
                 params["_proposal_fingerprint"] = dream.proposal_fingerprint(int(prop_id))
+            except Exception:
+                return False
         current = _drop_volatile(_fingerprint_for_action(card.action, params))
         return compute_state_hash(current) == card.state_hash
 ```
-(Verify the pipe's dream handle name: `grep -nE "self\.dream|dream_state|self\._dream" core/decision/decision_pipeline.py | head`; adjust-rule: use the real attribute; if the pipe has no dream handle, thread one in via the constructor — name it in the handoff.)
+(Verify the pipe's dream handle name: `grep -nE "self\.dream|dream_state|self\._dream" core/decision/decision_pipeline.py | head`; adjust-rule: use the real attribute; if the pipe has no dream handle, thread one in via the constructor — name it in the handoff. The fail-closed `return False` is non-negotiable: no live recompute ⇒ refuse.)
+
+- [ ] **Step 7b: Project executable params at execute time (F3 — the leak fix).**
+
+`_execution_params_for_card` (decision_pipeline.py:1568) today returns `dict(card.params or {})` verbatim, and `_strip_s7_execution_metadata` strips only `s7_*` — so the `_proposal_id` / `_proposal_fingerprint` freshness keys would reach `action_engine._execute_action` → `_do_write_soul_note(**params)` / `edit_soul_section(**params)` and raise `TypeError` (those take only `note` / `target_name,new_body,rationale`). Add a soul-write projection branch so execution gets EXACTLY the executable keys:
+
+```python
+    def _execution_params_for_card(card: CardRecord) -> dict:
+        execute_params = dict(card.params or {})
+        if card.action == "capability.acquire":
+            ...  # (unchanged)
+        elif card.action == "write_soul_note":
+            return {"note": execute_params.get("note", "")}
+        elif card.action == "edit_soul_section":
+            return {
+                "target_name": execute_params.get("target_name", ""),
+                "new_body": execute_params.get("new_body", ""),
+                "rationale": execute_params.get("rationale", ""),
+            }
+        return execute_params
+```
+Freshness reads `card.params` (with `_proposal_*`); execution reads this projection (without). The two never cross.
+
+Failing test first:
+```python
+def test_soul_write_execution_params_drop_proposal_meta_and_use_real_keys(self):
+    from core.decision.decision_pipeline import DecisionPipeline  # or the staticmethod
+    card = _fake_card(action="write_soul_note", params={"note": "n", "_proposal_id": 7, "_proposal_fingerprint": {"x": 1}})
+    ep = DecisionPipeline._execution_params_for_card(card)
+    self.assertEqual(set(ep), {"note"})            # no _proposal_* keys reach the engine
+    card2 = _fake_card(action="edit_soul_section", params={"target_name": "V", "new_body": "b", "rationale": "r", "_proposal_id": 9})
+    ep2 = DecisionPipeline._execution_params_for_card(card2)
+    self.assertEqual(set(ep2), {"target_name", "new_body", "rationale"})
+    self.assertNotIn("target", ep2)                # F3: target_name, not target
+```
+(Verify `_execution_params_for_card` is a staticmethod vs instance method and call it accordingly; verify nothing else relies on soul-write cards passing extra params through.)
 
 - [ ] **Step 8: Write the F2 staleness integration test**
 
@@ -381,7 +427,9 @@ class SeedDialogTest(unittest.TestCase):
         seed_soul_proposal_dialog(prop_id=9, deps=deps)
         card = deps.card_store.last_created
         self.assertEqual(card.action, "edit_soul_section")
-        self.assertEqual(card.params["target"], "Values")
+        self.assertEqual(card.params["target_name"], "Values")   # F3: target_name, not target
+        self.assertIn("new_body", card.params)
+        self.assertIn("rationale", card.params)
 ```
 
 - [ ] **Step 2: Run → fail.** Module missing.
@@ -408,11 +456,15 @@ class SeedResult:
 
 
 def _proposal_to_card_action(proposal: dict) -> tuple[str, dict]:
+    """Return (action, EXECUTABLE params) matching the action-engine signatures
+    EXACTLY (F3): _do_write_soul_note(note); edit_soul_section(target_name,
+    new_body, rationale). NOTE the key is `target_name`, NOT `target`."""
     kind = proposal.get("kind") or "dream"
     if kind == "edit":
         return "edit_soul_section", {
-            "target": proposal.get("target") or proposal.get("section") or "",
+            "target_name": proposal.get("target_name") or proposal.get("target") or proposal.get("section") or "",
             "new_body": proposal.get("new_body") or "",
+            "rationale": proposal.get("rationale") or "",
         }
     return "write_soul_note", {"note": proposal.get("insight") or proposal.get("note") or ""}
 
@@ -428,20 +480,28 @@ def seed_soul_proposal_dialog(*, prop_id: int, deps: Any) -> Optional[SeedResult
         return None  # caller surfaces "that proposal has moved on"
 
     action, params = _proposal_to_card_action(proposal)
+    # Freshness metadata lives ALONGSIDE the executable params, prefixed `_proposal`
+    # so the execution projection (Task 2 Step 5b) strips it before the action engine.
     params["_proposal_id"] = int(prop_id)
     params["_proposal_fingerprint"] = deps.dream.proposal_fingerprint(prop_id)
 
+    # F4: create_card has NO `audit_decision` kwarg. It takes `classification`
+    # (and/or `audit_verdict`). Use a classification that yields lane-3 so the
+    # card satisfies _is_pending_dialog_card (lane=="3" OR audit_decision=="ESCALATE").
     card = deps.card_store.create_card(
         action=action,
         params=params,
-        audit_decision="ESCALATE",   # lane-3 narrow-route acceptance
-        # ADJUST remaining create_card kwargs to the real signature (Task 0e)
+        classification={"intent_category": "SELF_MODIFICATION", "lane": "3"},
+        # ADJUST remaining create_card kwargs to the real signature (Task 0e: the
+        # verified sig is create_card(self, ..., audit_verdict=None, classification=None, ...)).
     )
+    # Assert the card actually came out lane-3 / ESCALATE (the narrow-route key):
+    assert card.audit_decision == "ESCALATE" or str(getattr(card, "lane", "")) == "3"
     deps.open_dialog_for_card(card)   # self_mod_dialog.open_dialog_for_card
     deps.remember_open_dialog(prop_id, card.request_id, action)
     return SeedResult(card_request_id=card.request_id, action=action)
 ```
-(Adjust `deps.dream.get_proposal`, `create_card` kwargs, and `open_dialog_for_card` to the real signatures recorded in Task 0d/0e. The `deps` object is constructed in Task 5 from the live pipe/dream/card_store; tests inject fakes.)
+(Adjust `deps.dream.get_proposal`, the remaining `create_card` kwargs, and `open_dialog_for_card` to the real signatures recorded in Task 0d/0e. If `classification={...lane:"3"}` does not make `_is_pending_dialog_card` true, construct the real audit-verdict object that yields ESCALATE — verify with `grep -nE "audit_decision|lane" core/decision/pending_cards.py | head` and pin the working form in the handoff. The `deps` object is constructed in Task 5 from the live pipe/dream/card_store; tests inject fakes.)
 
 - [ ] **Step 4: Run → pass.** Commit.
 
@@ -489,13 +549,21 @@ class ConsultAfterSeedTest(unittest.TestCase):
         self.assertIsNone(out.ceremony_pointer)
         self.assertEqual(deps.block_reason("r2"), "voice_consultation_unavailable:s7.1.card.voice.r2")
 
-    def test_no_objection_stashes_consultation_and_returns_pointer(self):
+    def test_no_objection_with_full_bundle_returns_pointer(self):
         from skills.surface.s7_ceremony_bridge import consult_then_block_or_pointer
-        deps = _fake_bridge_deps(consultation_objection="absent", consultation_id="s7.1.card.voice.r3")
+        # the producer self-wrote the full bundle (consultation+raw+semantic+hash)
+        deps = _fake_bridge_deps(consultation_objection="absent", consultation_id="s7.1.card.voice.r3", full_bundle=True)
         out = consult_then_block_or_pointer(card_request_id="r3", deps=deps)
         self.assertIsNotNone(out.ceremony_pointer)
-        self.assertTrue(deps.consultation_stashed("r3"))      # _s7_pending_voice_source_bundles[r3]
         self.assertFalse(deps.dialog_blocked("r3"))
+        self.assertFalse(deps.bridge_wrote_bundle)            # bridge must NOT write the bundle itself
+
+    def test_no_objection_but_missing_bundle_fails_closed(self):
+        from skills.surface.s7_ceremony_bridge import consult_then_block_or_pointer
+        deps = _fake_bridge_deps(consultation_objection="absent", consultation_id="r3b", full_bundle=False)
+        out = consult_then_block_or_pointer(card_request_id="r3b", deps=deps)
+        self.assertIsNone(out.ceremony_pointer)               # no pointer without the full bundle
+        self.assertTrue(deps.dialog_blocked("r3b"))
 
     def test_voice_producer_is_invoked_not_a_constant(self):
         from skills.surface.s7_ceremony_bridge import consult_then_block_or_pointer
@@ -518,7 +586,11 @@ class ConsultResult:
 def consult_then_block_or_pointer(*, card_request_id: str, deps: Any) -> ConsultResult:
     card = deps.card_store.get(card_request_id)
     envelope = deps.s7_request_envelope_for_card(card)
-    consultation = deps.run_voice_consultation(card, envelope)   # _s7_voice_consultation_for_card (genuine)
+    # F5: the existing producer _s7_voice_consultation_for_card writes the FULL
+    # pending bundle itself (consultation + raw_response_text + semantic_reader_attempt
+    # + source_ref_hash) to _s7_pending_voice_source_bundles[envelope.request_id].
+    # Call it; NEVER hand-stash a bare consultation (that would clobber the bundle).
+    consultation = deps.run_voice_consultation(card, envelope)   # == pipe._s7_voice_consultation_for_card
     objection = getattr(consultation, "objection_state", "not_determined")
     cid = getattr(consultation, "consultation_id", card_request_id)
 
@@ -529,9 +601,14 @@ def consult_then_block_or_pointer(*, card_request_id: str, deps: Any) -> Consult
         deps.set_blocked_for_card(card_request_id, reason=f"voice_consultation_unavailable:{cid}")
         return ConsultResult(ceremony_pointer=None, blocked=True)
 
-    deps.stash_consultation(card_request_id, consultation)   # _s7_pending_voice_source_bundles[request_id]
+    # FAIL CLOSED: the producer must have left the full bundle for the ceremony
+    # route to consume. If it is missing/partial, do not surface a pointer.
+    if not deps.full_voice_bundle_present(envelope.request_id):
+        deps.set_blocked_for_card(card_request_id, reason=f"voice_consultation_unavailable:{cid}")
+        return ConsultResult(ceremony_pointer=None, blocked=True)
     return ConsultResult(ceremony_pointer=deps.ceremony_pointer_for(card_request_id), blocked=False)
 ```
+(`deps.full_voice_bundle_present(request_id)` checks that `pipe._s7_pending_voice_source_bundles[request_id]` exists and has the `consultation`/`raw_response_text`/`semantic_reader_attempt`/`source_ref_hash` keys the producer writes — verified at decision_pipeline.py:~1150. Do NOT write that dict from the bridge; only read it.)
 
 - [ ] **Step 4: Run → pass.** Commit.
 
