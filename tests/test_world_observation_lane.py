@@ -250,6 +250,16 @@ class ProgressEmitTests(unittest.TestCase):
         _emit_search_progress(None, ["WEB_SEARCH"], stage="start", count=None)
         self.assertEqual(calls, ["searching the web...", "reading 5 results..."])
 
+    def test_page_read_wording_is_source_specific(self):
+        from core.brain.brain_loop import _emit_search_progress
+
+        calls = []
+        _emit_search_progress(calls.append, ["FETCH_URL"], stage="start", count=None)
+        _emit_search_progress(calls.append, ["WEB_SEARCH"], stage="start", count=None)
+        _emit_search_progress(calls.append, ["LIVE_REDDIT"], stage="start", count=None)
+
+        self.assertEqual(calls, ["reading the page...", "searching the web..."])
+
     def test_pipeline_passthrough_gated_on_flag(self):
         import inspect
 

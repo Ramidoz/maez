@@ -79,18 +79,20 @@ class BrainLoopResult:
 
 
 def _emit_search_progress(send_intermediate, external_sources, *, stage: str, count):
-    """Emit true substrate progress for real WEB_SEARCH fanout stages."""
+    """Emit true substrate progress for real fresh-evidence fanout stages."""
     if send_intermediate is None:
         return
-    if not any(
-        str(getattr(source, "value", source)) == "WEB_SEARCH"
-        for source in (external_sources or ())
-    ):
+    source_values = {
+        str(getattr(source, "value", source)) for source in (external_sources or ())
+    }
+    if not source_values.intersection({"WEB_SEARCH", "FETCH_URL"}):
         return
     try:
-        if stage == "start":
+        if stage == "start" and "FETCH_URL" in source_values:
+            send_intermediate("reading the page...")
+        elif stage == "start":
             send_intermediate("searching the web...")
-        elif stage == "results" and count is not None:
+        elif "WEB_SEARCH" in source_values and stage == "results" and count is not None:
             send_intermediate(f"reading {count} results...")
     except Exception:
         logging.getLogger("maez").debug("search progress emit failed", exc_info=True)
