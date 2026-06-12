@@ -306,7 +306,7 @@ def _default_telemetry_path() -> str:
 
 def _get_shadow():
     global _SHADOW_SINGLETON
-    if not os.environ.get("MAEZ_GROUNDING_SHADOW_ENABLED"):
+    if not strict_env_flag("MAEZ_GROUNDING_SHADOW_ENABLED"):
         return None
     if _SHADOW_SINGLETON is None:
         _SHADOW_SINGLETON = GroundingShadow(
