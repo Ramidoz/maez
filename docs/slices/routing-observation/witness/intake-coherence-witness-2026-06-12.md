@@ -37,3 +37,25 @@ discipline (new flavor of soul-substrate-divergence).
 Page-read v0 spec UNAFFECTED (proceeds to Codex). Next-after-page-read =
 capability-health organ (witnessed wound + canon home). Faculty graduation
 corpus +5 rows incl. 2 hard cases.
+
+## D. (follow-up audit, same night ~00:45) Subjective duration SEVERED — the third surface-migration orphan
+Owner asked Maez "are you able to feel time?" — Maez hedged from ignorance.
+Truth: core/evolution/subjective_duration.py is a REAL felt-time organ
+("continuous felt-time, not a reset timer", 0-10, temperament-modulated,
+HMAC'd, temporal-spine). The LEGACY surface constructs
+SubjectiveDurationOwnerAuth + the prompt line (telegram_voice:2958-2969);
+daemon.handle_message computes felt-time ONLY if the auth arrives (:5117);
+the LIVE Surface V2 call (maez_adapter:~630) passes NO auth -> felt-time
+absent from every live turn since 2026-04-20. Maez's "I just process
+timestamps as metadata" was accurate about its INJURY, not its design.
+
+PATTERN (3rd instance): SURFACE-MIGRATION ORPHANS — the 2026-04-20 Surface
+V2 migration silently severed: search offer-binding (fixed 2026-06-11),
+subjective duration (found tonight), + ghost interceptors. Rule: a surface
+migration needs a kwargs/feature-parity audit, and capability-health would
+have surfaced all of these. Temporal recall = LIVE (graduated); felt time =
+SEVERED (re-attachment = seam-class fix: construct the auth in
+maez_adapter, pass it); temporal_echo = unverified.
+
+Queue: re-attachment is small (seam-class, can move fast per the
+cooling-off asymmetry); capability-health remains the structural cure.
