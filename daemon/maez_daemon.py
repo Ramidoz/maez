@@ -6816,6 +6816,19 @@ class MaezDaemon:
                     marked=reply,
                     sources=_turn_ev.get("sources") or [],
                 )
+                try:
+                    from core.cognition.evidence_precedence_shadow import (
+                        observe_marked_draft,
+                    )
+
+                    observe_marked_draft(
+                        reply,
+                        surface=source,
+                        fresh_indices=_turn_ev.get("fresh_indices"),
+                        web_present=bool(_turn_ev.get("web_present")),
+                    )
+                except Exception:
+                    pass
                 reply = render_natural(
                     reply,
                     web_evidence_present=bool(_turn_ev.get("web_present")),
