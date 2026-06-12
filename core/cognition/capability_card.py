@@ -27,6 +27,20 @@ def evidence_precedence_enabled() -> bool:
     )
 
 
+def voice_boundary_enabled() -> bool:
+    """Strict parser: only ``1/true/yes/on`` enable. ``"0"`` is OFF.
+
+    Deliberately rejects the house-wide ``bool(os.environ.get(...))`` footgun
+    (``"0"`` would read truthy). Mirrors ``evidence_precedence_enabled``.
+    """
+    return (
+        (os.environ.get("MAEZ_VOICE_BOUNDARY_ENABLED", "") or "")
+        .strip()
+        .lower()
+        in {"1", "true", "yes", "on"}
+    )
+
+
 def reset_card_cache() -> None:
     _CARD_CACHE["text"] = None
     _CARD_CACHE["ts"] = 0.0
