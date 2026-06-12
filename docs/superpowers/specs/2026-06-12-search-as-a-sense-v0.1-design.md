@@ -35,7 +35,7 @@ owner turn (search-worthy, healthy)
              ├▶ skills/web_search.search() → SearxngBackend   [NEW: healed body]
              ├▶ merge_fanout_results → rendered_turn → focused-cognition synthesis  [existing]
              ├▶ grounding audit on the MARKED draft     [existing rail, unmoved]
-             ├▶ render: [E·] → natural attribution      [NEW: post-audit strip]
+             ├▶ render: [E#] markers (_CITE_RE) → natural attribution  [NEW: post-audit strip]
              └▶ IF web evidence entered the rendered turn:
                    world-observation digest → intake bus → external_web/untrusted  [NEW: metabolism]
 ```
@@ -98,7 +98,7 @@ with its own wording and confirmation rule (v0.2+ if wanted). The OfferReceipt
 
 **Write condition (structural, honest — not semantic):** one observation is
 written iff the rendered dispatcher turn actually admitted web evidence:
-- `rendered_turn` spec's `external_sources` contains `WEB_SEARCH`, AND
+- `rendered_turn.effective_spec.external_sources` (`core/dispatcher/merge.py:54`) contains `WEB_SEARCH`, AND
 - `source_summaries` includes `WEB_SEARCH` as fresh evidence/context, AND
 - `fresh_attempt_outcome` ∈ {`ALL_SUCCEEDED`, `PARTIAL`}.
 
