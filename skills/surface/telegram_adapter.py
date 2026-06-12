@@ -2759,7 +2759,85 @@ class TelegramAdapter(BasePlatformAdapter):
         event = self._build_message_event(update.message, MessageType.COMMAND, update_id=update.update_id)
         if await self._try_handle_dream_command_event(event):
             return
+        if await self._try_command_proposal_surface(event):
+            return
         await self.handle_message(event)
+
+    async def _send_command_reply(self, event: MessageEvent, text: str) -> None:
+        chat_id = getattr(getattr(event, "source", None), "chat_id", "") or ""
+        if not chat_id:
+            return
+        payload = ProvenancedText.maez_authored_owner_third_party_transport(
+            text,
+            source_ref="telegram:command_reply",
+        )
+        await self.send(str(chat_id), payload)
+
+    async def _try_command_proposal_surface(self, event: MessageEvent) -> bool:
+        """Handle /proposals and /show before slash commands fall into the LLM."""
+        try:
+            from core.cognition.capability_card import voice_boundary_enabled
+
+            if not voice_boundary_enabled():
+                return False
+        except Exception:
+            return False
+
+        text = (getattr(event, "text", "") or "").strip()
+        head = text.split(maxsplit=1)[0].split("@", 1)[0].lower() if text else ""
+        if head not in ("/proposals", "/show"):
+            return False
+
+        handler = getattr(self, "_message_handler", None)
+        if handler is None or not hasattr(handler, "_try_surface_parity_proposal_intent"):
+            return False
+
+        chat_id = str(getattr(getattr(event, "source", None), "chat_id", "") or "")
+        if head == "/proposals":
+            try:
+                evo = handler._surface_parity_pending_evolution_candidates()
+                dream = handler._surface_parity_pending_dream_rows()
+            except Exception:
+                logger.debug("C1 /proposals fetch failed", exc_info=True)
+                await self._send_command_reply(
+                    event,
+                    "I couldn't read the pending proposal list right now.",
+                )
+                return True
+            if not evo and not dream:
+                await self._send_command_reply(
+                    event,
+                    "You have no pending proposals right now.",
+                )
+                return True
+            await self._send_command_reply(
+                event,
+                handler._surface_parity_disambiguation(pending=evo, dream_rows=dream),
+            )
+            return True
+
+        from core.dispatcher.proposal_commands import parse_show_id
+
+        proposal_id = parse_show_id(text)
+        if proposal_id is None:
+            await self._send_command_reply(event, "Usage: /show <id>")
+            return True
+        try:
+            reply = await handler._try_surface_parity_proposal_intent(
+                text=f"show #{proposal_id}",
+                chat_id=chat_id,
+            )
+        except Exception:
+            logger.debug("C1 /show failed", exc_info=True)
+            await self._send_command_reply(
+                event,
+                f"I couldn't show proposal #{proposal_id} right now.",
+            )
+            return True
+        if reply is None:
+            return False
+        await self._send_command_reply(event, reply)
+        return True
 
     async def _try_handle_dream_command_event(self, event: MessageEvent) -> bool:
         """Handle dream-state slash commands deterministically on surface v2.
