@@ -17,6 +17,12 @@ class SeedResult:
     action: str
 
 
+@dataclass(frozen=True)
+class ConsultResult:
+    ceremony_pointer: str | None
+    blocked: bool
+
+
 def _proposal_to_card_action(proposal: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     proposal_type = str(
         proposal.get("proposal_type") or proposal.get("kind") or "append"
@@ -95,3 +101,57 @@ def seed_soul_proposal_dialog(*, prop_id: int, deps: Any) -> SeedResult | None:
     if callable(remember):
         remember(prop_id, card.request_id, action)
     return SeedResult(card_request_id=card.request_id, action=action)
+
+
+def _objection_state(consultation: Any) -> str:
+    return str(
+        getattr(
+            consultation,
+            "maez_objection_state",
+            getattr(consultation, "objection_state", "not_determined"),
+        )
+        or "not_determined"
+    )
+
+
+def consult_then_block_or_pointer(*, card_request_id: str, deps: Any) -> ConsultResult:
+    """Run Maez's existing S7 voice seat and return a ceremony pointer or block.
+
+    The consultation producer owns the evidence bundle. This helper never writes
+    that bundle; it only verifies the reviewed producer left a complete one
+    before showing the owner a WebAuthn ceremony pointer.
+    """
+
+    card = deps.get_card(card_request_id)
+    envelope = deps.s7_request_envelope_for_card(card)
+    consultation = deps.run_voice_consultation(card, envelope)
+    objection = _objection_state(consultation)
+    consultation_id = str(
+        getattr(consultation, "consultation_id", "") or card_request_id
+    )
+
+    if objection == "present":
+        deps.set_blocked_for_card(
+            card_request_id,
+            reason=f"voice_objection_present:{consultation_id}",
+        )
+        return ConsultResult(ceremony_pointer=None, blocked=True)
+
+    if objection != "absent":
+        deps.set_blocked_for_card(
+            card_request_id,
+            reason=f"voice_consultation_unavailable:{consultation_id}",
+        )
+        return ConsultResult(ceremony_pointer=None, blocked=True)
+
+    if not deps.full_voice_bundle_present(envelope.request_id):
+        deps.set_blocked_for_card(
+            card_request_id,
+            reason=f"voice_consultation_unavailable:{consultation_id}",
+        )
+        return ConsultResult(ceremony_pointer=None, blocked=True)
+
+    return ConsultResult(
+        ceremony_pointer=deps.ceremony_pointer_for(card_request_id),
+        blocked=False,
+    )
