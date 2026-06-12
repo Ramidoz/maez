@@ -1502,6 +1502,7 @@ class DecisionPipeline:
                         DialogStage.EXECUTED.value,
                         execution_output=result.execution_output,
                     )
+                    self._mark_s7_bridge_proposal_applied(card)
                 elif result.execution_success is False:
                     dialog_store.set_stage(
                         turn.dialog.dialog_id,
@@ -1624,6 +1625,37 @@ class DecisionPipeline:
                 return False
         current = _drop_volatile(_fingerprint_for_action(card.action, params))
         return compute_state_hash(current) == card.state_hash
+
+    def _mark_s7_bridge_proposal_applied(self, card: CardRecord) -> None:
+        """Link a successful S7 soul write back to its originating proposal."""
+
+        if card.action not in ("write_soul_note", "edit_soul_section"):
+            return
+        params = dict(card.params or {})
+        prop_id = params.get("_proposal_id")
+        if prop_id is None:
+            return
+        dream = getattr(self, "dream", None)
+        if dream is None or not hasattr(dream, "mark_applied"):
+            return
+        try:
+            ok, msg = dream.mark_applied(
+                int(prop_id),
+                source="s7_ceremony_bridge",
+            )
+            if not ok:
+                logger.warning(
+                    "S7 bridge could not mark proposal %s applied after card %s: %s",
+                    prop_id,
+                    getattr(card, "request_id", "?"),
+                    msg,
+                )
+        except Exception:
+            logger.warning(
+                "S7 bridge proposal link-back failed for card %s",
+                getattr(card, "request_id", "?"),
+                exc_info=True,
+            )
 
     def _card_requires_s7_authorization(self, card: CardRecord) -> bool:
         return self._action_requires_s7_authorization(card.action, card.params)

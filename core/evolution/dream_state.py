@@ -1252,3 +1252,26 @@ class DreamState:
             c.commit()
         logger.info("dream: proposal #%d rejected (%s)", prop_id, reason)
         return True, f"dream #{prop_id} rejected"
+
+    def mark_applied(self, prop_id: int, *, source: str = "manual") -> tuple[bool, str]:
+        """Mark a proposal as applied after an external guarded write succeeds.
+
+        S7 ceremony bridge executes the soul write through the self-mod-dialog
+        action path rather than through ``apply_proposal``/``apply_section``.
+        This link-back records that the originating proposal is no longer
+        pending, but only after the guarded action has already succeeded.
+        """
+
+        prop = self.get_proposal(prop_id)
+        if prop is None:
+            return False, f"dream #{prop_id} not found"
+        if prop["status"] != "pending":
+            return False, f"dream #{prop_id} already {prop['status']}"
+        with self._lock, self._conn() as c:
+            c.execute(
+                "UPDATE dream_proposals SET status = 'applied', applied_at = ? WHERE id = ?",
+                (time.time(), prop_id),
+            )
+            c.commit()
+        logger.info("dream: proposal #%d marked applied via %s", prop_id, source)
+        return True, f"dream #{prop_id} marked applied"

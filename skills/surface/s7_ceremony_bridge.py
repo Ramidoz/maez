@@ -32,6 +32,12 @@ class LiveBridgeDeps:
     user_id: str = "rohit"
     channel: str = "telegram_text"
 
+    def __post_init__(self) -> None:
+        try:
+            self.pipeline.dream = self.dream
+        except Exception:
+            pass
+
     @property
     def card_store(self) -> Any:
         return self.pipeline.card_store
