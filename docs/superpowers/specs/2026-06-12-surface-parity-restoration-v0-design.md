@@ -49,7 +49,11 @@ SUPERSEDED_BY_DESIGN · PLANNED_SPEC · PLANNED_PLAN · HAZARD · DEFERRED`
 
 Each row: **organ/slice · status · live seam (file:fn) · dead seam if any ·
 flag/env · witness artifact (path) · owner breath needed · duplicate-risk
-note · next action.**
+note · next action · last_verified_commit · last_verified_at ·
+updated_by/source** (the provenance columns — Codex should-fix #5 — are
+what keep the ledger from becoming a stale state doc with nicer buckets:
+a row whose last_verified_commit is ancient is VISIBLY stale, not silently
+trusted).
 
 Initial population: every entry in the Surface Parity Map's three sections
 plus the standing hazards plus the active PLANNED items (this arc, the
@@ -82,6 +86,16 @@ the engines. Bounded phrases only (the legacy matchers: yes/approve/reject
 "yes" mid-chat still reaches the brain). Replies through the adapter's
 send path with audit (match the existing intercept reply pattern).
 
+**Anti-drift requirement (Codex should-fix #4):** PREFERRED — extract a
+transport-neutral proposal-intent resolver (phrase matching + target
+resolution + last-shown binding) into a shared module that BOTH
+telegram_voice and maez_adapter call, so there is one parser forever.
+ACCEPTABLE FALLBACK (if extraction is too entangled for this arc) —
+structural parity tests proving the Surface V2 matcher equals legacy on:
+approve/reject/show phrasing, #N target resolution, last-shown binding,
+multi-proposal disambiguation, and dream proposals. The choice and its
+justification go in the handoff.
+
 **R2 — Felt-time first attachment (O2).** In maez_adapter, construct
 `SubjectiveDurationOwnerAuth` exactly as telegram_voice:2958-2966 does
 (same fields, owner-auth from the authorized chat identity) and pass
@@ -90,21 +104,34 @@ send path with audit (match the existing intercept reply pattern).
 the felt-time prompt line and owner-contact recording activate with the
 parameter's arrival.
 
-**R2b — The capability card stops being static (cross-organ honesty).** The
-card's `felt time: built, not yet attached` STATIC entry dies in this arc,
-replaced by a live probe: `felt time:` reads the parity flag AND the
-subjective-duration substrate's recordable state (probe shape: parity flag
-off ⇒ "built, not attached (parity off)"; flag on ⇒ "attached" +
-optionally the substrate's last-contact recency if cheaply readable;
-probe failure ⇒ "unknown (probe error)" per card law). Without R2b the
-honesty card lies the moment the organ wakes.
+**R2b — The capability card stops being static (cross-organ honesty,
+OFF-MEANS-OFF — Codex must-fix #1).** The static entry becomes a probe with
+flag-conditional output that preserves byte-identity when the arc flag is
+off:
+- parity flag OFF ⇒ the probe returns the EXACT old string
+  `built, not yet attached` (string-equality test pins it — the card is
+  byte-identical to pre-arc output);
+- parity flag ON ⇒ `attached` (+ the substrate's last-contact recency if
+  cheaply readable);
+- probe failure ⇒ `unknown (probe error)` per card law.
+Off means off is sacred: no prompt byte changes anywhere while
+`MAEZ_SURFACE_PARITY_ENABLED` is unset. Without R2b the honesty card lies
+the moment the organ wakes.
 
-**R3 — D20 gap detection on Surface V2 (O3).** Fire
-`maybe_fire_capability_proposal` from the live handler with the same
-fire-and-forget posture as the legacy call sites (never blocks or raises
-into the reply path), adapted to the adapter's async context (the
-`_send_intermediate`/threadsafe pattern for any card it raises). Same
-dedup behavior the function already owns.
+**R3 — D20 gap detection on Surface V2 (O3).**
+- **Placement is load-bearing (Codex must-fix #2):** the call sits AFTER
+  the S4/owner-auth guards but BEFORE every interceptor (cards, proposals,
+  search-commitment) — legacy D20 observed every authorized turn because
+  it fired before the early returns; a post-card hook would recreate the
+  orphan class for card-handled turns. A source-order test pins it.
+- **No invented sending (Codex must-fix #3, contract verified at
+  capability_gap_detector.py:191):** the helper runs detect → orchestrate
+  → CARD via its `pending_card_store` parameter and never raises. Call it
+  fire-and-forget with the live `pipe.card_store` when available
+  (`pending_card_store=` from the adapter's existing pipe access); the
+  EXISTING pending-card renderer/path owns all visibility. The implementer
+  must NOT render or send anything for it — no `_send_intermediate`, no
+  manual card messages. Its own cooldown dedup stands.
 
 **R4 — The loudness guard (prevents O4).** `telegram_voice`'s inbound-intent
 methods get: (a) a module-docstring banner — "OUTBOUND-ONLY since
@@ -128,11 +155,10 @@ process via a module flag, so tests don't spam). No behavior change.
    so the witness is the call-site log evidence on real turns plus one
    crafted capability-gap turn; absence of a fired proposal on the crafted
    turn is reported honestly, not forced.
-4. Flag-off spot-check: byte-identical (no interceptors, no auth param, no
-   D20 call, static card entry text unchanged... NOTE: R2b's probe replaces
-   the static entry UNDER THE CARD'S OWN FLAG — with parity off the probe
-   reports "built, not attached (parity off)", which is still TRUE; exact
-   wording asserted in tests).
+4. Flag-off spot-check: byte-identical EVERYWHERE — no interceptors, no
+   auth param, no D20 call, and the card's felt-time entry renders the
+   EXACT pre-arc string `built, not yet attached` (string-equality test).
+   Off means off, including prompt bytes.
 
 ## Error honesty
 
