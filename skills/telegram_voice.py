@@ -978,6 +978,7 @@ class TelegramVoice:
             card_store=card_store,
             audit_log=audit_log,
             renderer=renderer,
+            dream=getattr(self.daemon, "dream", None),
         )
         self._card_store = card_store
         self._audit_log = audit_log
