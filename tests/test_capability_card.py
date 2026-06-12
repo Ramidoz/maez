@@ -8,7 +8,7 @@ from core.cognition import capability_card as cc
 
 class _Env(unittest.TestCase):
     def setUp(self):
-        for k in ("MAEZ_EVIDENCE_PRECEDENCE_ENABLED",):
+        for k in ("MAEZ_EVIDENCE_PRECEDENCE_ENABLED", "MAEZ_SURFACE_PARITY_ENABLED"):
             os.environ.pop(k, None)
             self.addCleanup(lambda k=k: os.environ.pop(k, None))
         cc.reset_card_cache()
@@ -97,6 +97,39 @@ class CardTests(_Env):
             cc.reset_card_cache()
             cc.capability_prompt_block()
         self.assertEqual(_Counting.instances, 1)
+
+
+class FeltTimeProbeTests(_Env):
+    def test_flag_off_returns_exact_legacy_string(self):
+        os.environ["MAEZ_EVIDENCE_PRECEDENCE_ENABLED"] = "1"
+        os.environ.pop("MAEZ_SURFACE_PARITY_ENABLED", None)
+
+        card = cc.capability_prompt_block()
+
+        self.assertIn("felt time: built, not yet attached", card)
+
+    def test_flag_on_reports_attached(self):
+        os.environ["MAEZ_EVIDENCE_PRECEDENCE_ENABLED"] = "1"
+        os.environ["MAEZ_SURFACE_PARITY_ENABLED"] = "1"
+
+        card = cc.capability_prompt_block()
+
+        self.assertIn("felt time: attached", card)
+        self.assertNotIn("not yet attached", card)
+
+    def test_flag_zero_is_not_attached(self):
+        os.environ["MAEZ_EVIDENCE_PRECEDENCE_ENABLED"] = "1"
+        os.environ["MAEZ_SURFACE_PARITY_ENABLED"] = "0"
+
+        card = cc.capability_prompt_block()
+
+        self.assertIn("felt time: built, not yet attached", card)
+
+    def test_no_unconditional_static_entry_remains(self):
+        import inspect
+
+        src = inspect.getsource(cc)
+        self.assertNotIn('("felt time", lambda: "built, not yet attached")', src)
 
 
 if __name__ == "__main__":

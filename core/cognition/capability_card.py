@@ -52,6 +52,15 @@ def _flag_probe(
     return _probe
 
 
+def _felt_time_probe() -> str:
+    try:
+        from core.cognition.parity_flag import surface_parity_enabled
+
+        return "attached" if surface_parity_enabled() else "built, not yet attached"
+    except Exception:
+        return "unknown (probe error)"
+
+
 def _default_registry() -> Sequence[tuple[str, Callable[[], str]]]:
     return (
         ("web sense", _web_sense_probe),
@@ -61,7 +70,7 @@ def _default_registry() -> Sequence[tuple[str, Callable[[], str]]]:
             "search commitment",
             _flag_probe("MAEZ_SEARCH_COMMITMENT_ENABLED", "gatekeeper mode", "off"),
         ),
-        ("felt time", lambda: "built, not yet attached"),
+        ("felt time", _felt_time_probe),
     )
 
 

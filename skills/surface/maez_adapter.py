@@ -647,6 +647,20 @@ class MaezMessageHandler:
             # flows through that same pipeline instead of bypassing it.
             # 2026-04-23 memory-integrity contract (Commit 1): the audit is
             # owned by handle_message; the adapter does NOT double-audit.
+            subjective_duration_owner_auth = None
+            if surface_parity_enabled():
+                try:
+                    from core.evolution.subjective_duration import SubjectiveDurationOwnerAuth
+
+                    subjective_duration_owner_auth = SubjectiveDurationOwnerAuth(
+                        surface="telegram_owner",
+                        proof="telegram_authorized_user",
+                    )
+                except Exception:
+                    logger.debug(
+                        "subjective duration auth construction failed",
+                        exc_info=True,
+                    )
             try:
                 with with_purpose(BrainPurpose.OWNER_REPLY):
                     reply = await loop.run_in_executor(
@@ -664,6 +678,7 @@ class MaezMessageHandler:
                                 chat_id=chat_id,
                                 tool_calls=jarvis_tool_calls or None,
                                 recall_items=jarvis_recall_items,
+                                subjective_duration_owner_auth=subjective_duration_owner_auth,
                                 send_intermediate=_send_progress_receipt,
                             )
                         ),
