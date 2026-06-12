@@ -28,11 +28,11 @@
 |---|---|
 | `core/search/sense_flag.py` (create) | The one flag helper `sense_enabled()`. |
 | `skills/web_search.py` (modify) | Healed body: SearXNG under the flag; pre-egress subject-boundary refusal at the body. |
-| `skills/surface/maez_adapter.py` (modify) | Interceptor → health gatekeeper; progress callback into `handle_message`. |
+| `skills/surface/maez_adapter.py` (modify) | Interceptor → health gatekeeper (Task 2 ONLY — no progress change; the adapter already feeds `run_brain_loop`). |
 | `skills/telegram_voice.py` (modify) | Legacy offer/result-card branches gated (ghost-path closure). |
 | `core/intake_bus/world_observation_lane.py` (create) | The metabolism lane: bounded observation → `admit()`. |
 | `core/brain/brain_loop.py` (modify) | Observation hook after merge; fanout progress emits; turn-evidence stash. |
-| `daemon/maez_daemon.py` (modify) | Post-audit `[E#]` render + marked-draft retention (the audit→store→send invariant owner); `send_intermediate` threading. |
+| `daemon/maez_daemon.py` (modify) | Drains the chat_id-keyed turn stash: metabolism write (memory owner) + marked-draft retention + post-audit `[E#]` render (the audit→store→send invariant owner). |
 | `skills/surface/telegram_adapter.py` (modify) | `/receipts` command (two-line shim over `receipts_reply`). |
 | `config/soul.md` (modify) | §Internet Access rewritten (staged; witness is an owner breath). |
 | `tests/test_web_search_sense.py` (create) | Body + refusal + flag-off identity. |
@@ -77,17 +77,27 @@ grep -n "send_intermediate" skills/surface/maez_adapter.py | head -6
 awk 'NR<8500 && /def .*\(/ {line=NR": "$0} /merge_fanout_results\(/ {print "fanout call at "NR" inside -> "line; exit}' core/brain/brain_loop.py
 grep -n "run_external_fanout\|ExternalFanout(" core/brain/brain_loop.py | head -4
 ```
-Expected: `daemon.handle_message(... send_intermediate=None ...)` exists
-(verified at signature, `daemon/maez_daemon.py:5045` region) and the adapter
-already passes a sender at `maez_adapter.py:582/626` — the surface→daemon hop
-EXISTS. The awk prints the enclosing function of the `merge_fanout_results`
-call (~:836) — that function and the fanout invocation above it are where
-`progress_cb` must be threaded from `handle_message`. Write down: (i) the
-enclosing function name, (ii) every intermediate function between
-`handle_message` and it (follow the call chain with grep), (iii) the exact
-fanout call line. **STOP if** `handle_message` never forwards toward that
-function (i.e., the dispatcher turn is driven from somewhere else) — report
-the real chain first.
+**PROVEN CHAIN (Task 0b executed 2026-06-12 — this supersedes earlier
+guesses):** the external wing is NOT reached through `daemon.handle_message`.
+Surface V2 makes TWO separate executor calls:
+1. `maez_adapter.py:572-575` → `run_brain_loop(..., chat_id=...,
+   send_intermediate=_send_intermediate, ...)` (`brain_loop.py:1687` — the
+   kwarg ALREADY exists and the adapter ALREADY passes a working sender)
+   → `_run_dispatcher_pipeline(...)` at `brain_loop.py:1759` (def :629 —
+   has `chat_id`, has NO `memory`, NO `send_intermediate` yet) → fanout +
+   `merge_fanout_results` (:836, inside the pipeline).
+2. `maez_adapter.py:611` → `daemon.handle_message(...,
+   transcript=jarvis_transcript, chat_id=..., ...)` — final synthesis,
+   audit, store, send. `self.memory` lives HERE.
+
+Consequences the tasks below are built on: (i) progress threads
+`run_brain_loop → _run_dispatcher_pipeline` (one new kwarg + pass-through
+at :1759), NOT through the daemon; (ii) the two executor calls give NO
+same-thread guarantee — cross-call state is keyed by **`chat_id`** (both
+sides have it), never thread ident; (iii) the pipeline cannot write memory —
+the metabolism write happens in `handle_message`, fed by a chat_id-keyed
+stash. Confirm each line number above against the worktree; **STOP if** any
+hop differs.
 
 - [ ] **Step 0c: Record the intake-bus validation vocabulary**
 
@@ -616,72 +626,64 @@ def _evidence():
     return ["[WEB SEARCH] Releases - llama.cpp — https://github.com/x/releases — b9601 released today"]
 
 
-class WriteConditionTests(unittest.TestCase):
+class ConditionTests(unittest.TestCase):
+    """The three structural legs — pure, no memory involved."""
+
+    def test_all_legs_hold(self):
+        self.assertTrue(lane.evaluate_write_condition(_Turn()))
+
+    def test_leg_no_web_search_in_spec(self):
+        self.assertFalse(lane.evaluate_write_condition(_Turn(sources=("LIVE_REDDIT",))))
+
+    def test_leg_no_summary(self):
+        self.assertFalse(lane.evaluate_write_condition(_Turn(summaries=("LIVE_REDDIT",))))
+
+    def test_leg_failed_outcome(self):
+        self.assertFalse(lane.evaluate_write_condition(_Turn(outcome="ALL_FAILED")))
+
+    def test_malformed_turn_is_false_not_raise(self):
+        self.assertFalse(lane.evaluate_write_condition(object()))
+
+
+class WriteTests(unittest.TestCase):
     def setUp(self):
         os.environ["MAEZ_SEARCH_AS_SENSE_ENABLED"] = "1"
         self.addCleanup(lambda: os.environ.pop("MAEZ_SEARCH_AS_SENSE_ENABLED", None))
 
-    def test_writes_one_observation_when_all_legs_hold(self):
+    def test_writes_one_observation(self):
         mem = _FakeMemory()
-        out = lane.maybe_write_world_observation(
-            mem, rendered_turn=_Turn(), query="latest llama.cpp release",
+        out = lane.write_world_observation(
+            mem, query="latest llama.cpp release",
             evidence_texts=_evidence(), diagnostic_id="fan-123",
         )
         self.assertEqual(out, "admitted")
         self.assertEqual(len(mem.stored), 1)
         rec = mem.stored[0]
-        self.assertEqual(rec["provenance_source"], "external_web")
+        self.assertEqual(str(getattr(rec["provenance_source"], "value", rec["provenance_source"])), "external_web")
         self.assertIn("latest llama.cpp release", rec["content"])
         self.assertIn("github.com", rec["content"])
-
-    def test_leg_no_web_search_in_spec_means_no_write(self):
-        mem = _FakeMemory()
-        out = lane.maybe_write_world_observation(
-            mem, rendered_turn=_Turn(sources=("LIVE_REDDIT",)), query="q",
-            evidence_texts=_evidence(), diagnostic_id="fan-1",
-        )
-        self.assertEqual(out, "skipped")
-        self.assertEqual(mem.stored, [])
-
-    def test_leg_no_summary_means_no_write(self):
-        mem = _FakeMemory()
-        out = lane.maybe_write_world_observation(
-            mem, rendered_turn=_Turn(summaries=("LIVE_REDDIT",)), query="q",
-            evidence_texts=_evidence(), diagnostic_id="fan-1",
-        )
-        self.assertEqual(out, "skipped")
-
-    def test_leg_failed_outcome_means_no_write(self):
-        mem = _FakeMemory()
-        out = lane.maybe_write_world_observation(
-            mem, rendered_turn=_Turn(outcome="ALL_FAILED"), query="q",
-            evidence_texts=_evidence(), diagnostic_id="fan-1",
-        )
-        self.assertEqual(out, "skipped")
 
     def test_flag_off_never_writes(self):
         os.environ.pop("MAEZ_SEARCH_AS_SENSE_ENABLED", None)
         mem = _FakeMemory()
-        out = lane.maybe_write_world_observation(
-            mem, rendered_turn=_Turn(), query="q",
-            evidence_texts=_evidence(), diagnostic_id="fan-1",
+        out = lane.write_world_observation(
+            mem, query="q", evidence_texts=_evidence(), diagnostic_id="fan-1",
         )
         self.assertEqual(out, "disabled")
         self.assertEqual(mem.stored, [])
 
     def test_idempotent_on_diagnostic_id(self):
         mem = _FakeMemory(existing="already-there")
-        out = lane.maybe_write_world_observation(
-            mem, rendered_turn=_Turn(), query="q",
-            evidence_texts=_evidence(), diagnostic_id="fan-123",
+        out = lane.write_world_observation(
+            mem, query="q", evidence_texts=_evidence(), diagnostic_id="fan-123",
         )
         self.assertEqual(out, "already_admitted")
         self.assertEqual(mem.stored, [])
 
     def test_provenance_purity_no_owner_text_beyond_query(self):
         mem = _FakeMemory()
-        lane.maybe_write_world_observation(
-            mem, rendered_turn=_Turn(), query="latest llama.cpp release",
+        lane.write_world_observation(
+            mem, query="latest llama.cpp release",
             evidence_texts=_evidence(), diagnostic_id="fan-9",
         )
         content = mem.stored[0]["content"]
@@ -692,9 +694,8 @@ class WriteConditionTests(unittest.TestCase):
         class _Boom(_FakeMemory):
             def store(self, **kwargs):
                 raise RuntimeError("db locked")
-        out = lane.maybe_write_world_observation(
-            _Boom(), rendered_turn=_Turn(), query="q",
-            evidence_texts=_evidence(), diagnostic_id="fan-1",
+        out = lane.write_world_observation(
+            _Boom(), query="q", evidence_texts=_evidence(), diagnostic_id="fan-1",
         )
         self.assertEqual(out, "error_dropped")
 
@@ -707,8 +708,8 @@ class WriteConditionTests(unittest.TestCase):
         self.assertIn(lane.WORLD_OBSERVATION_EGRESS, KNOWN_ORIGINS)
         self.assertNotIn("sovereign_local_search", KNOWN_ORIGINS)
         mem = _FakeMemory()
-        out = lane.maybe_write_world_observation(
-            mem, rendered_turn=_Turn(), query="real validation",
+        out = lane.write_world_observation(
+            mem, query="real validation",
             evidence_texts=_evidence(), diagnostic_id="fan-real",
         )
         self.assertEqual(out, "admitted")  # through the REAL _validate path
@@ -826,26 +827,34 @@ def build_observation_content(query: str, evidence_texts: list[str]) -> str:
     return "\n".join(lines)
 
 
-def maybe_write_world_observation(
+def evaluate_write_condition(rendered_turn) -> bool:
+    """The three structural legs (spec §4), pure — runs INSIDE the dispatcher
+    pipeline where rendered_turn lives. The WRITE runs in handle_message,
+    where memory lives (the pipeline has no memory in scope — Task 0b)."""
+    try:
+        spec = getattr(rendered_turn, "effective_spec", None)
+        return (
+            _has_web_search(getattr(spec, "external_sources", None))
+            and _summaries_include_web(getattr(rendered_turn, "source_summaries", None))
+            and _outcome_ok(getattr(rendered_turn, "fresh_attempt_outcome", None))
+        )
+    except Exception:
+        return False
+
+
+def write_world_observation(
     memory,
     *,
-    rendered_turn,
     query: str,
     evidence_texts: list[str],
     diagnostic_id: str,
 ) -> str:
-    """Returns disabled|skipped|admitted|already_admitted|staged|refused|error_dropped."""
+    """Returns disabled|admitted|already_admitted|staged|refused|error_dropped.
+    Called by daemon.handle_message with the daemon's memory, AFTER the
+    pipeline evaluated the condition and stashed the payload."""
     if not sense_enabled():
         return "disabled"
     try:
-        spec = getattr(rendered_turn, "effective_spec", None)
-        if not _has_web_search(getattr(spec, "external_sources", None)):
-            return "skipped"
-        if not _summaries_include_web(getattr(rendered_turn, "source_summaries", None)):
-            return "skipped"
-        if not _outcome_ok(getattr(rendered_turn, "fresh_attempt_outcome", None)):
-            return "skipped"
-
         qhash = hashlib.sha256((query or "").encode("utf-8")).hexdigest()[:12]
         fact = IntakeFact(
             source_kind="world_observation",
@@ -864,6 +873,13 @@ def maybe_write_world_observation(
         logger.warning("world_observation lane dropped: %s", e)
         return "error_dropped"
 ```
+
+(Adjust the lane tests to the split API: condition tests call
+`evaluate_write_condition(_Turn(...))` and assert True/False per leg; write
+tests call `write_world_observation(mem, query=..., evidence_texts=...,
+diagnostic_id=...)` directly — same assertions, no rendered_turn parameter.
+The flag-off test asserts `write_world_observation` returns "disabled" with
+zero stores.)
 
 (If Task 0c found `_validate` enforces a different `egress_origin_class`
 vocabulary or extra `IntakeFact` invariants, set `WORLD_OBSERVATION_EGRESS`
@@ -884,45 +900,47 @@ merge_fanout_results(...)` call (~:836) and its `turn_seal_state` lines,
 insert (matching the surrounding indentation):
 
 ```python
-    # Search-as-a-Sense v0.1 metabolism (spec 2026-06-12 §4): one bounded
-    # world observation when web evidence actually entered this turn.
+    # Search-as-a-Sense v0.1 metabolism (spec §4) — PIPELINE SIDE.
+    # _run_dispatcher_pipeline has NO memory in scope (Task 0b), so this
+    # hook only evaluates the structural condition and STASHES the payload
+    # keyed by chat_id; daemon.handle_message (the memory owner) drains it.
     # ExternalBranchResult carries blocks: tuple[FreshBlock] (NOT raw rows);
     # FreshBlock.text is the evidence that actually entered context.
-    # Flag-gated inside the lane; failure logs and drops, never blocks.
     try:
-        from core.intake_bus.world_observation_lane import maybe_write_world_observation
+        from core.intake_bus.world_observation_lane import evaluate_write_condition
+        from core.routing.attribution_render import stash_turn_evidence
 
         _web_texts = []
         for _br in getattr(external_result, "branch_results", []) or []:
             if str(getattr(getattr(_br, "source", None), "value", "")) == "WEB_SEARCH":
                 _web_texts = [getattr(b, "text", "") or "" for b in (getattr(_br, "blocks", ()) or ())][:3]
                 break
-        maybe_write_world_observation(
-            memory,
+        stash_turn_evidence(
+            chat_id,
             rendered_turn=rendered_turn,
-            query=user_text,
             evidence_texts=_web_texts,
-            diagnostic_id=str(getattr(external_result, "fanout_generation_id", "")),
+            observation=(
+                {
+                    "query": user_text,
+                    "evidence_texts": _web_texts,
+                    "diagnostic_id": str(getattr(external_result, "fanout_generation_id", "")),
+                }
+                if evaluate_write_condition(rendered_turn)
+                else None
+            ),
         )
-        # Stash for the daemon-side render step (Task 5): web-evidence flag +
-        # sources for /receipts, keyed by thread (the turn is synchronous
-        # handle_message -> here -> back). Nested import: the render module
-        # arrives in Task 5 — until then this inner block no-ops without
-        # killing the observation write above.
-        try:
-            from core.routing.attribution_render import extract_source_urls_for_turn
-
-            extract_source_urls_for_turn(rendered_turn, _web_texts)
-        except Exception:
-            pass
     except Exception:
-        logger.debug("world_observation hook skipped", exc_info=True)
+        logger.debug("world_observation stash skipped", exc_info=True)
 ```
 
-Confirm `memory` and `user_text` are in scope at the insertion point (both
-appear in the surrounding function — `merge_fanout_results(..., utterance=
-user_text, ...)`); `external_result.branch_results` and `FreshBlock.text`
-verified at `core/dispatcher/external_sources.py:63-101`.
+NOTE the ordering consequence: `stash_turn_evidence` lives in
+`core/routing/attribution_render.py` (Task 5's module). Build order for the
+hook: land the lane module + tests in this task, but insert THIS pipeline
+hook as the FIRST step of Task 5 (after the render module exists). The plan
+keeps it printed here because this is where it logically belongs.
+`chat_id` and `user_text` are pipeline parameters (def :629);
+`external_result.branch_results` / `FreshBlock.text` verified at
+`core/dispatcher/external_sources.py:63-101`.
 
 - [ ] **Step 6: GREEN on the focused set**
 
@@ -951,13 +969,15 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ### Task 4: The wait signal (true progress, new daemon→fanout wiring)
 
 **Files:**
-- Modify: `core/brain/brain_loop.py` (the fanout call site found in 0b)
-- Modify: `daemon/maez_daemon.py` (thread the existing `send_intermediate` into the dispatcher turn call)
-- Modify: `skills/surface/maez_adapter.py` (pass a bubble-editing sender)
-- Test: `tests/test_surface_adapter.py`
+- Modify: `core/brain/brain_loop.py` ONLY (`_run_dispatcher_pipeline` gains
+  `send_intermediate=None`; `run_brain_loop`'s call at :1759 passes it
+  through flag-gated; the emit fires before the fanout)
+- Test: `tests/test_world_observation_lane.py`
 
-Per Task 0b: `handle_message` ALREADY accepts `send_intermediate` — the new
-wiring is `handle_message` → dispatcher-turn function → around the fanout.
+Per Task 0b (PROVEN): the chain is `adapter:575 → run_brain_loop
+(send_intermediate already exists) → _run_dispatcher_pipeline → fanout`.
+NOT through `daemon.handle_message`. The surface and the daemon are NOT
+modified in this task.
 
 - [ ] **Step 1: Write the failing brain-side test**
 
@@ -1004,121 +1024,65 @@ def _emit_search_progress(send_intermediate, external_sources, *, stage: str, co
         logging.getLogger("maez").debug("search progress emit failed", exc_info=True)
 ```
 
-Then, at the external-fanout call site inside the dispatcher-turn function
-(the function 0b identified around :830): immediately BEFORE the fanout
-runs, add `_emit_search_progress(send_intermediate,
-spec.external_sources, stage="start", count=None)`; immediately AFTER
-`external_result` is assigned, add `_emit_search_progress(send_intermediate,
-spec.external_sources, stage="results",
-count=len(getattr(external_result, "branch_results", []) or []))`.
-Thread `send_intermediate` into that function as a keyword parameter
-(default `None`) and pass it through from `daemon.handle_message`'s existing
-`send_intermediate` kwarg at the call site 0b mapped (every hop: add
-`send_intermediate=send_intermediate`). Flag-gate the threading at the
-`handle_message` hop: pass it only `if sense_enabled()` (import from
-`core.search.sense_flag`), so flag-off turns carry `None` and behavior is
-byte-identical.
+Then wire the PROVEN chain (Task 0b — NOT through the daemon):
+1. `_run_dispatcher_pipeline` (def :629) gains a keyword parameter
+   `send_intermediate=None`.
+2. `run_brain_loop`'s call at :1759 passes it through:
+   `send_intermediate=(send_intermediate if sense_enabled() else None)`
+   (import `sense_enabled` from `core.search.sense_flag`) — `run_brain_loop`
+   already HAS the kwarg and the adapter already passes a working sender
+   (`maez_adapter.py:575`), so the surface needs NO change.
+3. Inside the pipeline, immediately BEFORE the external fanout runs:
+   `_emit_search_progress(send_intermediate, spec.external_sources,
+   stage="start", count=None)`. The "results" stage call is NOT wired in
+   v0.1 (it would send a second full message through the existing sender —
+   the edit API needed for in-place stage upgrades doesn't exist at
+   `adapter.send`; deferred to v0.2, named in the handoff). The helper keeps
+   both stages so v0.2 only adds the call.
 
-- [ ] **Step 4: Surface-side: the progress bubble (SEPARATE from the final answer)**
+- [ ] **Step 4: Surface side: NO CHANGE (the proven chain ends here)**
 
-**Scope decision (v0.1):** the bubble shows true stages and is finally edited
-to a one-line closure; the final answer arrives via the NORMAL reply path,
-unchanged. Editing the bubble into the final answer (suppressing the normal
-send) touches live Telegram send semantics and is **deferred to v0.2**,
-named in the handoff. This keeps the live reply path byte-identical in shape.
+**Scope decision (v0.1):** one true progress notice ("searching the web…")
+as a SEPARATE message; the final answer arrives via the NORMAL reply path,
+unchanged. Editing a bubble into the final answer is **deferred to v0.2**,
+named in the handoff.
 
-In `skills/surface/maez_adapter.py`, where the handler calls
-`daemon.handle_message` via `run_in_executor` (~:599), build the sender
-(following the `_send_intermediate` thread-safety pattern at :422):
+Per Task 0b the adapter ALREADY passes a working `send_intermediate` into
+`run_brain_loop` (`maez_adapter.py:575`, the `_send_intermediate` sender at
+:422 — `adapter.send` + `ProvenancedText` + `run_coroutine_threadsafe`).
+The notice rides that existing sender; the flag-gating happens at the
+`run_brain_loop → _run_dispatcher_pipeline` pass-through (Step 3), so
+flag-off turns hand the pipeline `None`. **Do not modify the adapter in
+this task.** Verify only: the sender at :575 is constructed unconditionally
+for owner turns (read the surrounding block; if it is conditional on some
+other flow, note the condition in the handoff — do not change it).
 
-```python
-        # Follows the proven _send_intermediate pattern (:422 in this file):
-        # adapter from daemon._surface_v2_adapter, sends scheduled onto
-        # daemon._surface_v2_loop, payload wrapped in ProvenancedText.
-        progress_sender = None
-        if sense_enabled():
-            _p_adapter = getattr(self.daemon, "_surface_v2_adapter", None)
-            _p_loop = getattr(self.daemon, "_surface_v2_loop", None)
-            _p_sent = {"count": 0}
-
-            def _send_progress(stage_text: str) -> None:
-                if not _p_adapter or not _p_loop or not chat_id:
-                    return
-                if _p_sent["count"] >= 1:
-                    # v0.1: ONE true stage notice ("searching the web…").
-                    # The "reading N results…" upgrade requires a message-edit
-                    # API on the adapter — Task 0b records whether one exists
-                    # (platform_base.py:1182 names intermediate edits). If it
-                    # does, edit the first message here; if not, skip stage 2
-                    # and say so in the handoff. Never send a second bubble.
-                    return
-                _p_sent["count"] += 1
-                try:
-                    from core.egress.provenance import ProvenancedText
-
-                    payload = ProvenancedText.maez_authored_owner_third_party_transport(
-                        stage_text,
-                        source_ref=f"{SURFACE_NAME}:search_sense_progress",
-                    )
-                    asyncio.run_coroutine_threadsafe(
-                        _p_adapter.send(chat_id, payload), _p_loop
-                    )
-                except Exception:
-                    logger.debug("progress notice failed", exc_info=True)
-
-            progress_sender = _send_progress
-```
-
-and pass `send_intermediate=progress_sender` into the `daemon.handle_message`
-call. The final answer is delivered by the NORMAL path, unchanged — the
-notice is a separate, true, one-shot message; no suppression, no fake
-completion text. Gate everything on `sense_enabled()` so flag-off passes
-`None`.
-
-- [ ] **Step 5: Surface test — pass-through + flag-off None**
-
-Append to `tests/test_surface_adapter.py` `HandlerRouting`:
+Add the pass-through test to `tests/test_world_observation_lane.py`
+(brain-side, no surface objects needed):
 
 ```python
-    def test_sense_on_threads_send_intermediate_into_daemon(self):
-        os.environ["MAEZ_SEARCH_AS_SENSE_ENABLED"] = "1"
-        self.addCleanup(lambda: os.environ.pop("MAEZ_SEARCH_AS_SENSE_ENABLED", None))
-        daemon = _FakeDaemon(reply="ok")
-        daemon.telegram = _TelegramWithController()
-        handler = MaezMessageHandler(daemon)
-        event = MessageEvent(
-            text="hello there",
-            source=SessionSource(platform=Platform.TELEGRAM, chat_id="c", user_id="rohit"),
-        )
-        asyncio.run(handler(event))
-        self.assertTrue(callable(daemon.last_kwargs.get("send_intermediate")))
+    def test_pipeline_passthrough_gated_on_flag(self):
+        # run_brain_loop must hand the pipeline None when the flag is off.
+        import inspect
 
-    def test_sense_off_send_intermediate_is_none(self):
-        os.environ.pop("MAEZ_SEARCH_AS_SENSE_ENABLED", None)
-        daemon = _FakeDaemon(reply="ok")
-        daemon.telegram = _TelegramWithController()
-        handler = MaezMessageHandler(daemon)
-        event = MessageEvent(
-            text="hello there",
-            source=SessionSource(platform=Platform.TELEGRAM, chat_id="c", user_id="rohit"),
-        )
-        asyncio.run(handler(event))
-        self.assertIsNone(daemon.last_kwargs.get("send_intermediate"))
+        from core.brain import brain_loop
+
+        src = inspect.getsource(brain_loop.run_brain_loop)
+        self.assertIn("send_intermediate=(send_intermediate if sense_enabled() else None)", src)
+        sig = inspect.signature(brain_loop._run_dispatcher_pipeline)
+        self.assertIn("send_intermediate", sig.parameters)
 ```
 
-(`_FakeDaemon` must record kwargs — if it doesn't already, extend it with
-`self.last_kwargs = kwargs` in its `handle_message`; check first.)
+- [ ] **Step 5: GREEN**
 
-- [ ] **Step 6: GREEN**
-
-Run: `.venv/bin/python -B -m unittest tests.test_surface_adapter tests.test_world_observation_lane -v 2>&1 | tail -4`
+Run: `.venv/bin/python -B -m unittest tests.test_world_observation_lane -v 2>&1 | tail -4`
 Expected: PASS.
 
-- [ ] **Step 7: Commit (behavior-affecting)**
+- [ ] **Step 6: Commit (behavior-affecting)**
 
 ```bash
-git add core/brain/brain_loop.py daemon/maez_daemon.py skills/surface/maez_adapter.py tests/test_surface_adapter.py tests/test_world_observation_lane.py
-git commit -m "feat(search-sense): true progress bubble keyed to real fanout stages
+git add core/brain/brain_loop.py tests/test_world_observation_lane.py
+git commit -m "feat(search-sense): true progress notice keyed to real fanout start
 
 ## Predicted effect
 With the sense flag on, Telegram turns where the dispatcher actually
@@ -1272,15 +1236,16 @@ hook stashes and the daemon-side render pops. Append to
 `core/routing/attribution_render.py`:
 
 ```python
-import threading
+_TURN_EVIDENCE: dict[str, dict] = {}
+_EMPTY_TURN = {"web_present": False, "sources": [], "observation": None}
 
-_TURN_EVIDENCE: dict[int, dict] = {}
 
-
-def extract_source_urls_for_turn(rendered_turn, evidence_texts) -> None:
-    """Called by the brain_loop metabolism hook (Task 3). Stashes this
-    turn's web-evidence flag + source URLs for the daemon-side render,
-    keyed by thread ident (the turn is synchronous on one thread)."""
+def stash_turn_evidence(chat_id, *, rendered_turn, evidence_texts, observation) -> None:
+    """Called by the pipeline hook (printed in Task 3, inserted in Task 5).
+    Keyed by chat_id: run_brain_loop and handle_message run on SEPARATE
+    executor threads (Task 0b — no thread-ident keying), but both carry
+    chat_id. observation is the metabolism payload dict, or None when the
+    structural condition failed."""
     try:
         from core.intake_bus.world_observation_lane import extract_source_urls
 
@@ -1288,17 +1253,20 @@ def extract_source_urls_for_turn(rendered_turn, evidence_texts) -> None:
             str(getattr(getattr(s, "source", None), "value", getattr(s, "source", ""))) == "WEB_SEARCH"
             for s in (getattr(rendered_turn, "source_summaries", None) or [])
         )
-        _TURN_EVIDENCE[threading.get_ident()] = {
+        _TURN_EVIDENCE[str(chat_id or "")] = {
             "web_present": web_present,
             "sources": extract_source_urls(evidence_texts or []),
+            "observation": observation,
         }
+        while len(_TURN_EVIDENCE) > 8:  # single-owner; bound regardless
+            _TURN_EVIDENCE.pop(next(iter(_TURN_EVIDENCE)))
     except Exception:
         pass
 
 
-def pop_turn_evidence() -> dict:
+def pop_turn_evidence(chat_id) -> dict:
     """Called once by daemon.handle_message at render time. Always pops."""
-    return _TURN_EVIDENCE.pop(threading.get_ident(), {"web_present": False, "sources": []})
+    return _TURN_EVIDENCE.pop(str(chat_id or ""), dict(_EMPTY_TURN))
 ```
 
 Add to `tests/test_attribution_render.py`:
@@ -1309,12 +1277,17 @@ Add to `tests/test_attribution_render.py`:
             source = type("X", (), {"value": "WEB_SEARCH"})()
         class _T:
             source_summaries = [_S()]
-        ar.extract_source_urls_for_turn(_T(), ["see https://a.example/x now"])
-        got = ar.pop_turn_evidence()
+        obs = {"query": "q", "evidence_texts": ["t"], "diagnostic_id": "fan-1"}
+        ar.stash_turn_evidence("chat7", rendered_turn=_T(),
+                               evidence_texts=["see https://a.example/x now"],
+                               observation=obs)
+        got = ar.pop_turn_evidence("chat7")
         self.assertTrue(got["web_present"])
         self.assertEqual(got["sources"], ["https://a.example/x"])
-        # second pop = clean default (always-pop semantics)
-        self.assertEqual(ar.pop_turn_evidence(), {"web_present": False, "sources": []})
+        self.assertEqual(got["observation"], obs)
+        # second pop = clean default (always-pop semantics); unknown chat too
+        self.assertIsNone(ar.pop_turn_evidence("chat7")["observation"])
+        self.assertFalse(ar.pop_turn_evidence("never")["web_present"])
 ```
 
 - [ ] **Step 4b: Wire the render into `daemon.handle_message` (the invariant owner)**
@@ -1325,10 +1298,13 @@ final store/trace/`chat_turn handled` logging (:6888) — i.e. at the point
 where `reply` holds the final AUDITED text — insert:
 
 ```python
-        # Search-as-a-Sense v0.1 (spec §6): the audits above consumed the
-        # MARKED draft. The owner-facing string — stored, sent, and traced
-        # below — is the natural-rendered one; /receipts keeps the marked
-        # audited draft. retain-before-render is the ordering law.
+        # Search-as-a-Sense v0.1 (spec §4+§6): drain the pipeline's
+        # chat_id-keyed turn stash HERE — the memory owner and the
+        # audit→store→send invariant owner. Order is law:
+        #   1. metabolism write (self.memory is in scope here, not in the
+        #      pipeline — Task 0b)
+        #   2. retain the MARKED audited draft for /receipts
+        #   3. render natural (the stored/sent/traced string)
         try:
             from core.routing.attribution_render import (
                 pop_turn_evidence,
@@ -1336,7 +1312,11 @@ where `reply` holds the final AUDITED text — insert:
                 retain_receipt,
             )
 
-            _turn_ev = pop_turn_evidence()
+            _turn_ev = pop_turn_evidence(chat_id)
+            if _turn_ev.get("observation"):
+                from core.intake_bus.world_observation_lane import write_world_observation
+
+                write_world_observation(self.memory, **_turn_ev["observation"])
             retain_receipt(str(chat_id or ""), marked=reply, sources=_turn_ev["sources"])
             reply = render_natural(reply, web_evidence_present=_turn_ev["web_present"])
         except Exception:
@@ -1526,7 +1506,8 @@ service changes. Branch: search-as-a-sense-v0.1.
   result-card on any healthy search-worthy path, either surface.
 - core/intake_bus/world_observation_lane.py + brain_loop hook: ONE bounded
   external_web/untrusted observation per evidence-admitted search.
-- brain_loop + daemon + adapter: true progress bubble on real fanout stages.
+- brain_loop: pipeline-threaded progress (one true notice on real fanout
+  start; surface and daemon untouched for progress).
 - attribution_render + telegram_adapter: post-audit [E#] strip + /receipts.
 - config/soul.md: web section staged (witness = owner breath).
 
