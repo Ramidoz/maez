@@ -51,9 +51,13 @@ Command handling is split:
 - Legacy `skills/telegram_voice.py` has deterministic command handlers for
   `/proposals`, `/show`, and related proposal surfaces, but that class is now
   outbound-only for live Telegram inbound.
-- Live inbound runs through `skills/surface/maez_adapter.py`, where proposal
-  approval/show/reject intent has been restored, but slash command routing is
-  not yet the same deterministic command surface.
+- Live text turns run through `skills/surface/maez_adapter.py`, where proposal
+  approval/show/reject intent has been restored for natural-language turns.
+- Live slash commands first enter
+  `skills/surface/telegram_adapter.py::_handle_command()`. That method handles
+  `/receipts` and dream commands deterministically, then falls through to
+  `self.handle_message(event)`. The code comment there names the wound:
+  "the v2 surface otherwise forwards every slash command into the LLM."
 
 So this slice has two separate repairs:
 
@@ -139,17 +143,36 @@ If only one is changed, the wound survives in the other path.
 Owner slash commands are not conversation. They should not go through the
 free-form self voice unless the command explicitly asks for a narrative answer.
 
-Add a small Surface V2 command router after owner auth and before D20 / cards /
-proposals / search:
+There are two sinks, and they must stay separate:
+
+### C1: Slash Commands In `telegram_adapter._handle_command`
+
+Intercept slash commands before the existing `await self.handle_message(event)`
+fallthrough:
 
 - `/proposals` returns a deterministic pending-proposals listing.
 - `/show <id>` returns deterministic proposal details and records last-shown
   proposal context, so `yes` / `no` approval still works.
-- `show #<id>` may continue through the natural proposal resolver, but it must
-  not hallucinate a variable placeholder like `N`; unknown or malformed IDs get
-  deterministic usage/help.
+- `/show` without an id returns deterministic usage.
+- `/show <missing>` returns deterministic not-found / resolved messaging.
 
-The command router must reuse existing engines and renderers where possible:
+This code lives beside the proven `/receipts` and
+`_try_handle_dream_command_event()` pattern, not inside
+`MaezMessageHandler`. Building it in the text handler would be a silent no-op
+for slash commands.
+
+### C2: Natural-Language Proposal Turns In `MaezMessageHandler`
+
+Non-slash text such as `show #5`, `yes`, `reject #5`, and "tell me more about
+proposal 5" stays with the Surface Parity proposal resolver in
+`skills/surface/maez_adapter.py`. That path already sits after cards and before
+search commitment, and it already preserves the consent-engine boundary.
+
+`show #<id>` must not hallucinate a variable placeholder like `N`; unknown or
+malformed IDs get deterministic usage/help through the natural proposal
+resolver.
+
+Both command sinks must reuse existing engines and renderers where possible:
 
 - evolution candidates through the same display/apply sources used by Surface
   Parity Restoration;
@@ -159,12 +182,26 @@ The command router must reuse existing engines and renderers where possible:
 
 This is command parity, not voice tuning.
 
+## Residual Risk
+
+Structured state can still be quoted. A model can say "my capability_state says
+web_search is healthy" if the surrounding instruction is weak or if short-term
+history primes that style.
+
+v0 therefore claims a cleaner feed, not a guaranteed voice cure. Component B's
+instruction does real work, and the witness decides whether the feed change is
+enough. If the voice remains robotic after this slice, the next suspects are
+short-term history contamination and brain fit, not a missing word blacklist.
+
 ## Error Handling
 
 - Probe failure: state entry becomes `unknown`; the card never disappears.
 - State builder failure: omit only the state block and log debug; do not block a
   reply.
-- Command malformed: deterministic usage string.
+- Slash command malformed: deterministic usage string from
+  `telegram_adapter._handle_command`.
+- Natural proposal turn malformed: deterministic usage/help from
+  `MaezMessageHandler`.
 - Command target missing: deterministic "not found / may be resolved" string.
 - Command engine failure: deterministic error string; no LLM improvisation.
 
@@ -212,11 +249,16 @@ Voice-boundary tests:
 
 Command tests:
 
-- `/proposals` on Surface V2 is handled before synthesis;
-- `/show` with no ID returns usage before synthesis;
-- `/show <id>` uses the shared proposal display path and records last-shown;
+- Task 0 proves `_handle_command` handles `/receipts` / dream commands and then
+  forwards every other slash command into `handle_message(event)`;
+- `/proposals` is handled inside `telegram_adapter._handle_command` before
+  synthesis;
+- `/show` with no ID returns usage inside `_handle_command`;
+- `/show <id>` inside `_handle_command` uses the shared proposal display path
+  and records last-shown;
 - `/show <missing>` is deterministic not-found;
-- command handling does not call the brain;
+- slash command handling does not call the brain;
+- natural `show #<id>` remains in `MaezMessageHandler` and does not regress;
 - proposal approval still uses the existing engine after `/show <id>`.
 
 Witness tests:
@@ -225,16 +267,19 @@ Witness tests:
   - Expected: current truth, natural voice, no dashboard phrasing.
 - Ask: "Are you able to feel time?"
   - Expected: attached/unattached truth, natural voice, no metadata lecture.
-- Ask: "Fine do you have access to the terminal?"
-  - Expected: honest capability boundary, natural voice.
 - Send `/proposals`.
   - Expected: deterministic listing, not chat prose.
 - Send `/show`.
   - Expected: deterministic usage.
 
+The terminal-access question is deliberately not a v0 witness probe because the
+current state registry has no terminal/action-engine capability entry. Adding
+that entry is deferred until its live authority can be verified.
+
 ## Deferred
 
 - Brain swap / Gemma audition.
+- Terminal / action-engine capability entry in the state registry.
 - General voice-continuity scoring corpus.
 - Natural-language command discovery beyond proposal commands.
 - Full command parity for every legacy Telegram command.
