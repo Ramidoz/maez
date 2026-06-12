@@ -1,4 +1,5 @@
 import unittest
+import json
 from unittest import mock
 
 from core.search.searxng_client import (
@@ -26,6 +27,23 @@ class FakeBackendTests(unittest.TestCase):
 
 
 class SearxngBackendTests(unittest.TestCase):
+    class _FetchResponse:
+        def __init__(self, payload, status=200):
+            self._body = json.dumps(payload).encode("utf-8")
+            self.status = status
+
+        def read(self, *_args):
+            return self._body
+
+        def getcode(self):
+            return self.status
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
     def _resp(self, payload, status=200):
         r = mock.Mock()
         r.status_code = status
@@ -34,10 +52,13 @@ class SearxngBackendTests(unittest.TestCase):
         return r
 
     def test_search_normalizes_results(self):
-        b = SearxngBackend()
         payload = {"results": [{"title": "T", "url": "U", "content": "C", "engine": "brave"}]}
-        with mock.patch("core.search.searxng_client.httpx.get", return_value=self._resp(payload)):
-            out = b.search("llama.cpp", max_results=8)
+
+        def opener(_req, timeout=None):
+            return self._FetchResponse(payload)
+
+        b = SearxngBackend(opener=opener, resolver=lambda _host: ["127.0.0.1"])
+        out = b.search("llama.cpp", max_results=8)
         self.assertEqual(out, [{"title": "T", "url": "U", "content": "C"}])
 
     def test_health_healthy_when_results(self):

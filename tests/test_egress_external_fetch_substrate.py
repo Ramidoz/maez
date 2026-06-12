@@ -103,6 +103,38 @@ class ExternalFetchPreflightTests(unittest.TestCase):
                 self.assertEqual(result.preflight_refusal_kind, refusal_kind)
                 self.assertIn(refusal_kind, result.reason_codes)
 
+    def test_loopback_allowance_is_port_scoped_for_local_search_body(self):
+        from core.egress.external_fetch import fetch_text
+
+        opened = []
+
+        def opener(req, timeout):
+            opened.append((req.full_url, timeout))
+            return _FakeResponse(b'{"results":[{"title":"T"}]}', status=200)
+
+        result = fetch_text(
+            fetch_type="web_search",
+            url="http://127.0.0.1:8888/search?q=llama&format=json",
+            caller="skills.web_search.search.searxng",
+            opener=opener,
+            resolver=lambda _host: ["127.0.0.1"],
+            allow_loopback_ports=(8888,),
+        )
+        self.assertTrue(result.ok)
+        self.assertEqual(result.preflight_status, "allowed")
+        self.assertEqual(opened[0][0], "http://127.0.0.1:8888/search?q=llama&format=json")
+
+        blocked = fetch_text(
+            fetch_type="web_search",
+            url="http://127.0.0.1:9999/search?q=llama&format=json",
+            caller="skills.web_search.search.searxng",
+            opener=opener,
+            resolver=lambda _host: ["127.0.0.1"],
+            allow_loopback_ports=(8888,),
+        )
+        self.assertFalse(blocked.ok)
+        self.assertEqual(blocked.preflight_refusal_kind, "preflight_refused_loopback")
+
     def test_dns_multi_answer_and_rebinding_refuse_before_network(self):
         from core.egress.external_fetch import fetch_text
 

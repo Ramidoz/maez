@@ -278,11 +278,16 @@ def _normalize_ip(value: str) -> tuple[ipaddress.IPv4Address | ipaddress.IPv6Add
     return ip, False
 
 
-def _classify_ip(value: str) -> str | None:
+def _classify_ip(value: str, *, allow_loopback: bool = False) -> str | None:
     try:
         ip, was_mapped = _normalize_ip(value)
     except ValueError:
         return "preflight_refused_dns_resolution"
+    if allow_loopback and (
+        ip.is_loopback
+        or (was_mapped and ip.is_loopback)
+    ):
+        return None
     if was_mapped and (
         ip.is_loopback
         or ip.is_private
@@ -311,6 +316,8 @@ def _default_resolver(host: str) -> list[str]:
 def _resolve_and_validate(
     host: str,
     resolver: Callable[[str], Iterable[str]] | None,
+    *,
+    allow_loopback: bool = False,
 ) -> str | None:
     try:
         ipaddress.ip_address(host)
@@ -323,7 +330,7 @@ def _resolve_and_validate(
     if not answers:
         return "preflight_refused_dns_resolution"
     for answer in answers:
-        refusal = _classify_ip(str(answer))
+        refusal = _classify_ip(str(answer), allow_loopback=allow_loopback)
         if refusal:
             if direct_literal or refusal == "preflight_refused_ipv4_mapped_ipv6":
                 return refusal
@@ -335,6 +342,7 @@ def _preflight_url(
     url: str,
     *,
     resolver: Callable[[str], Iterable[str]] | None,
+    allow_loopback_ports: Iterable[int] = (),
 ) -> _PreflightResult:
     if not url or not str(url).strip():
         return _PreflightResult(False, str(url or ""), status="refused", refusal_kind="preflight_refused_empty_url")
@@ -345,9 +353,14 @@ def _preflight_url(
         return _PreflightResult(False, str(url), status="refused", refusal_kind="preflight_refused_credentials")
     if not parsed.hostname:
         return _PreflightResult(False, str(url), status="refused", refusal_kind="preflight_refused_empty_url")
+    allowed_loopback_ports = {int(p) for p in (allow_loopback_ports or ())}
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    allow_loopback = port in allowed_loopback_ports
     if parsed.hostname.lower().rstrip(".") == "localhost":
+        if allow_loopback:
+            return _PreflightResult(True, str(url), host=parsed.hostname, query=parsed.query)
         return _PreflightResult(False, str(url), host=parsed.hostname, query=parsed.query, status="refused", refusal_kind="preflight_refused_loopback")
-    refusal = _resolve_and_validate(parsed.hostname, resolver)
+    refusal = _resolve_and_validate(parsed.hostname, resolver, allow_loopback=allow_loopback)
     if refusal:
         return _PreflightResult(False, str(url), host=parsed.hostname, query=parsed.query, status="refused", refusal_kind=refusal)
     return _PreflightResult(True, str(url), host=parsed.hostname, query=parsed.query)
@@ -414,6 +427,7 @@ def fetch_text(
     opener: Callable[..., object] | None = None,
     resolver: Callable[[str], Iterable[str]] | None = None,
     registry: FetchRegistry | None = None,
+    allow_loopback_ports: Iterable[int] = (),
 ) -> ExternalFetchResult:
     registry = registry or build_fetch_registry()
     entry = registry.require_fetch_type(fetch_type)
@@ -444,7 +458,11 @@ def fetch_text(
         return result
 
     current_url = str(url)
-    preflight = _preflight_url(current_url, resolver=resolver)
+    preflight = _preflight_url(
+        current_url,
+        resolver=resolver,
+        allow_loopback_ports=allow_loopback_ports,
+    )
     if not preflight.ok:
         result = _result(
             entry=entry,
@@ -461,7 +479,13 @@ def fetch_text(
     redirects = 0
     while True:
         # Revalidate immediately before open. This is the v1 DNS-rebinding guard.
-        reconnect_refusal = _resolve_and_validate(preflight.host, resolver)
+        _parsed_current = urllib.parse.urlsplit(current_url)
+        _current_port = _parsed_current.port or (443 if _parsed_current.scheme == "https" else 80)
+        reconnect_refusal = _resolve_and_validate(
+            preflight.host,
+            resolver,
+            allow_loopback=_current_port in {int(p) for p in (allow_loopback_ports or ())},
+        )
         if reconnect_refusal:
             result = _result(
                 entry=entry,
@@ -495,7 +519,11 @@ def fetch_text(
                     return result
                 location = _response_header(response, "Location")
                 next_url = urllib.parse.urljoin(current_url, location or "")
-                redirected = _preflight_url(next_url, resolver=resolver)
+                redirected = _preflight_url(
+                    next_url,
+                    resolver=resolver,
+                    allow_loopback_ports=allow_loopback_ports,
+                )
                 if not redirected.ok:
                     result = _result(
                         entry=entry,

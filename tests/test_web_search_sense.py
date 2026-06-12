@@ -1,11 +1,34 @@
 from __future__ import annotations
 
+import json
 import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
+from core.dispatcher.external_sources import _latest_diagnostic_id_after
+from core.egress import external_fetch
 from core.policies.third_party_subject_gate import SubjectKind
-from core.search.searxng_client import FakeSearchBackend
+from core.search.searxng_client import FakeSearchBackend, SearxngBackend
+
+
+class _FakeResponse:
+    def __init__(self, payload, status=200):
+        self._body = json.dumps(payload).encode("utf-8")
+        self.status = status
+
+    def read(self, *_args):
+        return self._body
+
+    def getcode(self):
+        return self.status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
 
 
 class _Env(unittest.TestCase):
@@ -57,6 +80,41 @@ class SenseFlagTests(_Env):
             out["results"][0], {"title": "T", "url": "U", "snippet": "C"}
         )
         self.assertEqual(fake.searched, ["llama.cpp release"])
+
+    def test_searxng_sense_path_records_dispatcher_visible_egress_diagnostic(self):
+        os.environ["MAEZ_SEARCH_AS_SENSE_ENABLED"] = "1"
+        import skills.web_search as ws
+
+        with tempfile.TemporaryDirectory() as td:
+            log_path = Path(td) / "external_fetch.jsonl"
+            os.environ["MAEZ_EXTERNAL_FETCH_LOG"] = str(log_path)
+            self.addCleanup(lambda: os.environ.pop("MAEZ_EXTERNAL_FETCH_LOG", None))
+            start_offset = log_path.stat().st_size if log_path.exists() else 0
+
+            def opener(_req, timeout=None):
+                return _FakeResponse(
+                    {
+                        "results": [
+                            {"title": "T", "url": "https://example.com/t", "content": "C"}
+                        ]
+                    }
+                )
+
+            backend = SearxngBackend(
+                base_url="http://127.0.0.1:8888",
+                opener=opener,
+                resolver=lambda _host: ["127.0.0.1"],
+            )
+            with mock.patch.object(ws, "_sense_backend", return_value=backend):
+                out = ws.search("llama.cpp release", max_results=3)
+
+            self.assertTrue(out["success"])
+            diagnostic_id = _latest_diagnostic_id_after(
+                log_path=external_fetch._diagnostic_path(),
+                start_offset=start_offset,
+                caller_prefix="skills.web_search.",
+            )
+            self.assertTrue(diagnostic_id)
 
     def test_flag_on_empty_results_is_honest_failure(self):
         os.environ["MAEZ_SEARCH_AS_SENSE_ENABLED"] = "1"
