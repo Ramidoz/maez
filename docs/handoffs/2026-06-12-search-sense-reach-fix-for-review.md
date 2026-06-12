@@ -2,7 +2,7 @@
 
 **Branch:** `search-sense-reach-fix`  
 **Base:** `7c5fc2e docs(search-sense): witness NO-GO root causes + fix prescriptions`  
-**Tip:** `1f96c32 fix(search-sense): derive web query from conversation context`  
+**Tip:** `42a9b7c fix(search-sense): gate current-world reach behind sense flag`  
 **Status:** STOP at review gate. No merge, no restart, no flag changes.
 
 ## What this fixes
@@ -23,6 +23,7 @@ This branch addresses the three live NO-GO causes from
 - `171bb50 fix(search-sense): witness SearXNG egress through external_fetch`
 - `ab7e26e fix(search-sense): route current-world questions to web`
 - `1f96c32 fix(search-sense): derive web query from conversation context`
+- `42a9b7c fix(search-sense): gate current-world reach behind sense flag`
 
 Each behavior-affecting commit includes a `## Predicted effect` section.
 
@@ -65,6 +66,8 @@ Changed:
 
 - `core/dispatcher/layer0.py`
   - Adds `_is_current_world_question()`.
+  - Gates the new current-world arm behind `sense_enabled()`, preserving
+    flag-off behavior.
   - Requires question shape plus freshness marker.
   - Explicitly excludes conversational "how are you today?" style greetings.
   - Emits hybrid `WEB_SEARCH` + substrate with
@@ -73,6 +76,7 @@ Changed:
 Tests:
 
 - `tests.test_dispatcher_layer0.DispatcherLayer0Tests.test_current_world_question_selects_web_search_hybrid`
+- `tests.test_dispatcher_layer0.DispatcherLayer0Tests.test_current_world_question_flag_off_preserves_prior_substrate_only_shape`
 - `tests.test_dispatcher_layer0.DispatcherLayer0Tests.test_current_world_question_does_not_treat_greeting_today_as_search`
 
 RED/GREEN evidence:
@@ -81,10 +85,15 @@ RED/GREEN evidence:
   `external_sources=[]`.
 - After implementation: same turn emits `[WEB_SEARCH]`, `CompositionHint.PARALLEL`,
   and hybrid fresh-validates framing.
+- Before the gate fix: with `MAEZ_SEARCH_AS_SENSE_ENABLED` unset, `"What's the
+  latest llama.cpp release?"` still emitted `[WEB_SEARCH]`.
+- After the gate fix: with the flag unset, the same turn emits no external
+  sources and preserves the prior substrate-only shape.
 
 Review anchor:
 
 - Confirm this does not secretly reuse the broad legacy `needs_web_search()` gate.
+- Confirm current-world reach is inert when `MAEZ_SEARCH_AS_SENSE_ENABLED` is unset.
 - Confirm the "today" trap stays covered.
 
 ## Defect 3 — query derivation
@@ -131,7 +140,7 @@ Command:
   tests.test_egress_external_fetch_substrate -v
 ```
 
-Result: `Ran 90 tests ... OK`.
+Result: `Ran 91 tests ... OK`.
 
 Command:
 
