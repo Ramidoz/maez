@@ -52,8 +52,11 @@ stays deterministic in v0.1 — the intake faculty is shadow-only and NOT
 graduated; it keeps reading beside this gate and the ledger decides later.
 
 **Pre-egress third-party refusal (rail, named here so it lands as a test):**
-the named-person check runs at query construction in the search path, BEFORE
-any SearXNG egress — refusal at creation, never sanitization after.
+the named-person check lives **at or below `skills/web_search.py:search()`
+itself** — NOT only in dispatcher preflight — so every caller (the wing,
+`/search`, legacy paths) inherits it identically once the body is healed
+globally. Refusal at query construction, BEFORE any SearXNG egress; never
+sanitization after.
 
 ### 2. Bypass retirement — both surfaces (amendment #4)
 
@@ -79,8 +82,11 @@ v0 behavior byte-identical.
 ### 3. Degraded search = honest notice ONLY (amendment #1)
 
 v0.1 does **not** offer to execute a degraded search. When the turn is
-search-worthy and `health() != healthy`, Maez says plainly that its web sense
-is degraded/down and answers from what it has. No executable receipt exists
+search-worthy and `health() != healthy`, the interceptor returns a **fixed
+honest notice only** (web sense degraded/down; can answer from existing
+knowledge if re-asked, or try again later) — it does NOT synthesize. A richer
+"answer from memory with no fresh evidence" degraded path is a later
+dispatcher feature, named-deferred. No executable receipt exists
 for non-healthy search — this preserves the typed-receipt law
 (`store_search_offer` refuses non-healthy; `resolve_affirmation` blocks on
 health) instead of smuggling degraded execution through the healthy receipt.
@@ -109,7 +115,8 @@ provenance** (mislabel lived material as web-derived). The structural digest is
 the provenance-clean v0.1. **Deferred, named:** a Maez-authored 2–3-sentence
 digest written OFF the reply path (reflection-time, bounded call) in v0.2.
 
-**Admission:** through the intake bus (`core/intake/admit.py`) — the bus owns
+**Admission:** through the intake bus (`core/intake_bus/admit.py`, contract in
+`core/intake_bus/contract.py` — NOT `core/intake/`, which does not exist) — the bus owns
 tier/taint/posture/idempotency; the lane owns acquisition + envelope.
 **Idempotency key:** fanout diagnostic id (+ query hash) so repeated identical
 searches don't multiply records. Decay/salience: bus defaults; no special
@@ -122,15 +129,25 @@ bubble appears when the dispatcher has actually selected `WEB_SEARCH` and
 external fanout has started; advances on real branch results ("reading N
 results…"); is absent when the wing doesn't search. Final edit replaces the
 bubble with the real answer. Carried over the existing intermediate-edit
-machinery; a progress callback is threaded from the fanout seam to the surface
-(precedent: `send_intermediate` plumbing at `maez_adapter.py:582/626`).
+machinery — but the callback path is **NEW WIRING, not existing machinery**:
+`send_intermediate` exists at the surface (`maez_adapter.py:582/626`), while
+external fanout currently emits no progress stages at all. The plan's Task 0
+must PROVE the callback can be threaded Surface V2 → daemon → dispatcher
+fanout before any implementation (static-trace-is-not-integration-witness).
 True-by-construction; no performed deliberation, ever.
 
 ### 6. Voice + receipts
 
-Post-audit render strips `[E·]` markers into natural attribution ("from the
-GitHub releases page just now…"). Ordering is law: **grounding audit runs on
-the marked draft; the strip happens after.** The rail does not move; it stops
+**The exact object being transformed (pinned):** the final assistant draft
+produced by focused-cognition synthesis, whose citation markers match
+`core/routing/focused_cognition._CITE_RE` (`r"\[E(\d+)\]"`, :88). That string
+— after the audit rails have consumed the marked version, before surface send
+— is rendered to natural attribution ("from the GitHub releases page just
+now…") using the evidence-item metadata the markers index. The dispatcher's
+transcript-context markers (`[fresh evidence]`, `[memory evidence]`,
+`[no fresh evidence available...]` — brain_loop.py:1495) are a DIFFERENT
+object and are not touched. Ordering is law: **grounding audit runs on the
+marked draft; the strip happens after.** The rail does not move; it stops
 performing at the owner. The marked draft + source list of the last reply are
 retained per-chat (bounded, in-memory) and returned by **`/receipts`**.
 (Study `MAEZ_RECALL_CITATION_RENDER_V2` — a render layer exists; extend, don't
@@ -195,6 +212,8 @@ restart.
 
 Faculty graduation into the trigger seat (the gate stays deterministic until
 the shadow ledger earns it); `degraded_local_search_attempt` receipt; the
+richer degraded dispatcher path (synthesize from memory with an explicit
+no-fresh-evidence frame — v0.1 returns the fixed notice only); the
 Maez-authored reflection-time digest; extractor limbs; source-affordance
 ledger; multi-source fanout beyond WEB_SEARCH; you.com tier-3; browser body.
 
