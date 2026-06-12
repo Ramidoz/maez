@@ -10,3 +10,8 @@ import os
 
 def sense_enabled() -> bool:
     return bool(os.environ.get("MAEZ_SEARCH_AS_SENSE_ENABLED"))
+
+
+def page_read_enabled() -> bool:
+    """Page-Read Sense v0 (spec 2026-06-12). Own flag, own witness, own revert."""
+    return bool(os.environ.get("MAEZ_PAGE_READ_ENABLED"))
