@@ -7,13 +7,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import queue
 import threading
 import time
 from typing import Any
 
-from core.cognition.intake_faculty import IntakeRead
+from core.cognition.intake_faculty import HttpIntakeBackend, IntakeRead
 from core.search.search_commitment import is_clear_yes, is_search_offer_worthy
 
 
@@ -293,3 +294,108 @@ class IntakeShadow:
                 f.write(json.dumps(rec, sort_keys=True) + "\n")
         except Exception:
             pass
+
+
+_SHADOW_SINGLETON = None
+
+
+def _default_path() -> Path:
+    base = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+    return Path(base) / "maez" / "intake_shadow.jsonl"
+
+
+def _enabled() -> bool:
+    return bool(os.environ.get("MAEZ_INTAKE_FACULTY_SHADOW"))
+
+
+def _debug_enabled() -> bool:
+    return bool(os.environ.get("MAEZ_INTAKE_FACULTY_DEBUG"))
+
+
+def _get_shadow():
+    global _SHADOW_SINGLETON
+    if not _enabled():
+        return None
+    if _SHADOW_SINGLETON is None:
+        _SHADOW_SINGLETON = IntakeShadow(
+            HttpIntakeBackend(),
+            _default_path(),
+            debug=_debug_enabled(),
+        )
+        _SHADOW_SINGLETON.start()
+    return _SHADOW_SINGLETON
+
+
+def set_shadow_singleton(shadow):
+    global _SHADOW_SINGLETON
+    _SHADOW_SINGLETON = shadow
+
+
+def reset_shadow_singleton():
+    global _SHADOW_SINGLETON
+    if _SHADOW_SINGLETON is not None:
+        try:
+            _SHADOW_SINGLETON.stop()
+        except Exception:
+            pass
+    _SHADOW_SINGLETON = None
+
+
+def _context_provider(memory):
+    def _load() -> list[str]:
+        if memory is None:
+            return []
+        try:
+            rows = memory.get_telegram_exchanges(limit=6)
+        except Exception:
+            return []
+        out = []
+        for row in rows or []:
+            if isinstance(row, dict):
+                content = row.get("content") or ""
+            else:
+                content = str(row or "")
+            if content:
+                out.append(str(content)[:1200])
+        return out[:6]
+
+    return _load
+
+
+def observe_owner_turn(
+    message: str,
+    *,
+    surface: str,
+    chat_id: str,
+    controller,
+    memory,
+    channel: str = "telegram_text",
+) -> str:
+    """Default-off, non-blocking owner-turn observation hook.
+
+    Returns disabled/enqueued/enqueue_failed. Never raises into the surface.
+    """
+    try:
+        shadow = _get_shadow()
+        if shadow is None:
+            return "disabled"
+        try:
+            offer = controller.get_search_offer(channel, chat_id) if controller is not None else None
+        except Exception:
+            offer = None
+        job = {
+            "message": message or "",
+            "surface": surface,
+            "chat_id": chat_id,
+            "context_provider": _context_provider(memory),
+            "pending_offer": offer_snapshot(offer),
+            "gate_verdicts": gate_verdicts(
+                message or "",
+                controller=controller,
+                channel=channel,
+                chat_id=chat_id,
+            ),
+        }
+        return shadow.enqueue(job)
+    except Exception:
+        return "enqueue_failed"

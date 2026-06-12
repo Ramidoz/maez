@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import tempfile
 import time
@@ -268,3 +269,64 @@ class IntakeShadowQueueTests(unittest.TestCase):
 
         files = sorted(path.parent.glob("intake_shadow.jsonl*"))
         self.assertLessEqual(len(files), 3)  # active + 2 rotated
+
+
+class HookTests(unittest.TestCase):
+    def setUp(self):
+        os.environ.pop("MAEZ_INTAKE_FACULTY_SHADOW", None)
+        os.environ.pop("MAEZ_INTAKE_FACULTY_DEBUG", None)
+        shadow.reset_shadow_singleton()
+        self.addCleanup(shadow.reset_shadow_singleton)
+        self.addCleanup(lambda: os.environ.pop("MAEZ_INTAKE_FACULTY_SHADOW", None))
+        self.addCleanup(lambda: os.environ.pop("MAEZ_INTAKE_FACULTY_DEBUG", None))
+
+    def test_flag_off_returns_disabled_and_builds_nothing(self):
+        result = shadow.observe_owner_turn(
+            "proceed",
+            surface="telegram_surface",
+            chat_id="c",
+            controller=_Controller(),
+            memory=_Memory(),
+        )
+
+        self.assertEqual(result, "disabled")
+
+    def test_flag_on_enqueues_without_fetching_context_on_live_path(self):
+        os.environ["MAEZ_INTAKE_FACULTY_SHADOW"] = "1"
+        path = Path(tempfile.mkdtemp()) / "intake_shadow.jsonl"
+        sh = shadow.IntakeShadow(FakeIntakeBackend(), path, maxsize=4)
+        shadow.set_shadow_singleton(sh)
+        memory = _Memory(raises=AssertionError("context fetch should happen in worker, not enqueue"))
+
+        result = shadow.observe_owner_turn(
+            "proceed",
+            surface="telegram_surface",
+            chat_id="c",
+            controller=_Controller(),
+            memory=memory,
+        )
+
+        self.assertEqual(result, "enqueued")
+
+    def test_context_provider_fetches_six_turns_when_worker_runs(self):
+        os.environ["MAEZ_INTAKE_FACULTY_SHADOW"] = "1"
+        path = Path(tempfile.mkdtemp()) / "intake_shadow.jsonl"
+        backend = FakeIntakeBackend()
+        sh = shadow.IntakeShadow(backend, path, maxsize=4)
+        sh.start()
+        self.addCleanup(sh.stop)
+        shadow.set_shadow_singleton(sh)
+
+        shadow.observe_owner_turn(
+            "proceed",
+            surface="telegram_surface",
+            chat_id="c",
+            controller=_Controller(),
+            memory=_Memory(turns=[{"content": f"turn-{i}"} for i in range(8)]),
+        )
+
+        deadline = time.time() + 2.0
+        while time.time() < deadline and not backend.calls:
+            time.sleep(0.02)
+
+        self.assertEqual(len(backend.calls[0][1]["turns"]), 6)
