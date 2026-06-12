@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import unittest
+from types import SimpleNamespace
 from tempfile import TemporaryDirectory
 from unittest import mock
 
@@ -256,6 +257,42 @@ class AssembleWorkingSetTests(unittest.TestCase):
 
         self.assertIsNotNone(ws)
         self.assertEqual(ws.items[0].source_type, "temporal_recall_status")
+
+    def test_focused_prompt_treats_live_body_card_as_capability_authority(self):
+        from core.routing.focused_cognition import WorkingSet, focused_synthesize
+
+        captured = {}
+
+        def _chat(**kwargs):
+            captured["system"] = kwargs["messages"][0]["content"]
+            return SimpleNamespace(message=SimpleNamespace(content="ok [E1]"))
+
+        ws = WorkingSet(
+            items=[],
+            ordered_evidence_text="[E1] stale memory says search is not attached.",
+            owner_question="What is the state of your web search tools?",
+            working_set_chars=52,
+            working_set_tokens_est=13,
+            citation_render_version="v2",
+        )
+
+        with (
+            mock.patch.dict("os.environ", {"MAEZ_EVIDENCE_PRECEDENCE_ENABLED": "1"}),
+            mock.patch(
+                "core.cognition.capability_card.capability_prompt_block",
+                return_value=(
+                    "YOUR LIVE BODY (live/cached substrate probe):\n"
+                    " - web sense: healthy\n"
+                    " - page read: enabled"
+                ),
+            ),
+        ):
+            focused_synthesize(ws, surface="telegram_surface", chat_fn=_chat, model="m")
+
+        system = captured["system"]
+        self.assertIn("YOUR LIVE BODY", system)
+        self.assertIn("answer from YOUR LIVE BODY", system)
+        self.assertIn("body or capabilities", system)
 
 
 class DialogueContinuityStateTests(unittest.TestCase):

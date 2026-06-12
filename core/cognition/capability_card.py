@@ -19,7 +19,12 @@ _BACKEND = None
 
 
 def evidence_precedence_enabled() -> bool:
-    return bool(os.environ.get("MAEZ_EVIDENCE_PRECEDENCE_ENABLED"))
+    return (
+        (os.environ.get("MAEZ_EVIDENCE_PRECEDENCE_ENABLED", "") or "")
+        .strip()
+        .lower()
+        in {"1", "true", "yes", "on"}
+    )
 
 
 def reset_card_cache() -> None:

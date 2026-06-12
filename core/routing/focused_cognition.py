@@ -192,6 +192,10 @@ def _focused_evidence_precedence_instruction() -> str:
     if not _evidence_precedence_enabled():
         return ""
     return (
+        "For questions about Maez's current body or capabilities, answer from "
+        "YOUR LIVE BODY when that block is present. It is current substrate "
+        "state, not recalled memory, and it outranks stale evidence about "
+        "former tools or unattached organs.\n"
         "Recalled memories may CONTEXTUALIZE the fresh evidence above; they "
         "may not CONTRADICT it. Your memory of past failures with similar "
         "pages or searches is not evidence about THIS evidence.\n"

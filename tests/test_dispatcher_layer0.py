@@ -236,6 +236,106 @@ class DispatcherLayer0Tests(unittest.TestCase):
             ProvenanceFraming.HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES,
         )
 
+    def test_self_capability_status_question_does_not_egress_to_web(self):
+        from core.dispatcher.inventory import InventorySummary
+        from core.dispatcher.layer0 import Layer0Dispatcher, load_archetype_index
+        from core.dispatcher.spec import (
+            CompositionHint,
+            ExternalSource,
+            InventoryWitness,
+            ProvenanceFraming,
+            SourceAvailability,
+            SubstrateSource,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "archetypes.md"
+            _write_manifest(manifest)
+            encoder = _FakeEncoder()
+            index = load_archetype_index(
+                manifest_path=manifest,
+                cache_path=Path(tmp) / "cache.json",
+                encoder=encoder,
+            )
+            inventory = InventorySummary(
+                inventory_witness=InventoryWitness.PRESENT,
+                source_availability={
+                    SubstrateSource.TELEGRAM_SEMANTIC: SourceAvailability.EXECUTABLE_PRESENT,
+                    SubstrateSource.ENTITY_INDEX: SourceAvailability.EXECUTABLE_PRESENT,
+                    SubstrateSource.LIVED_EPISODES: SourceAvailability.EXECUTABLE_PRESENT,
+                    ExternalSource.WEB_SEARCH: SourceAvailability.EXECUTABLE_PRESENT,
+                },
+                availability_limitations=[],
+                generated_at=1.0,
+            )
+
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "MAEZ_EVIDENCE_PRECEDENCE_ENABLED": "1",
+                    "MAEZ_SEARCH_AS_SENSE_ENABLED": "1",
+                },
+            ):
+                spec = Layer0Dispatcher(index=index, encoder=encoder).emit_spec(
+                    "What's the state of your web search tools?",
+                    surface="telegram",
+                    inventory=inventory,
+                )
+
+        self.assertEqual(spec.external_sources, [])
+        self.assertNotIn(ExternalSource.WEB_SEARCH, spec.external_sources)
+        self.assertEqual(spec.composition_hint, CompositionHint.SUBSTRATE_ONLY)
+        self.assertEqual(
+            spec.provenance_framing,
+            ProvenanceFraming.SUBSTRATE_ONLY_NO_FRESH_VALIDATION,
+        )
+
+    def test_self_capability_status_question_flag_off_preserves_prior_search_shape(self):
+        from core.cognition.capability_card import evidence_precedence_enabled
+        from core.dispatcher.inventory import InventorySummary
+        from core.dispatcher.layer0 import Layer0Dispatcher, load_archetype_index
+        from core.dispatcher.spec import (
+            ExternalSource,
+            InventoryWitness,
+            SourceAvailability,
+            SubstrateSource,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "archetypes.md"
+            _write_manifest(manifest)
+            encoder = _FakeEncoder()
+            index = load_archetype_index(
+                manifest_path=manifest,
+                cache_path=Path(tmp) / "cache.json",
+                encoder=encoder,
+            )
+            inventory = InventorySummary(
+                inventory_witness=InventoryWitness.PRESENT,
+                source_availability={
+                    SubstrateSource.TELEGRAM_SEMANTIC: SourceAvailability.EXECUTABLE_PRESENT,
+                    ExternalSource.WEB_SEARCH: SourceAvailability.EXECUTABLE_PRESENT,
+                },
+                availability_limitations=[],
+                generated_at=1.0,
+            )
+
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "MAEZ_SEARCH_AS_SENSE_ENABLED": "1",
+                    "MAEZ_EVIDENCE_PRECEDENCE_ENABLED": "0",
+                },
+            ):
+                self.assertFalse(evidence_precedence_enabled())
+                spec = Layer0Dispatcher(index=index, encoder=encoder).emit_spec(
+                    "What's the state of your web search tools?",
+                    surface="telegram",
+                    inventory=inventory,
+                )
+
+        self.assertEqual(spec.external_sources, [ExternalSource.WEB_SEARCH])
+
     def test_current_world_question_flag_off_preserves_prior_substrate_only_shape(self):
         from core.dispatcher.inventory import InventorySummary
         from core.dispatcher.layer0 import Layer0Dispatcher, load_archetype_index
@@ -284,7 +384,7 @@ class DispatcherLayer0Tests(unittest.TestCase):
             ProvenanceFraming.SUBSTRATE_ONLY_NO_FRESH_VALIDATION,
         )
 
-    def test_owner_url_selects_fetch_url_hybrid_under_flag(self):
+    def test_owner_url_selects_fetch_url_fresh_only_under_flag(self):
         from core.dispatcher.inventory import InventorySummary
         from core.dispatcher.layer0 import Layer0Dispatcher, load_archetype_index
         from core.dispatcher.spec import (
@@ -326,12 +426,9 @@ class DispatcherLayer0Tests(unittest.TestCase):
                 )
 
         self.assertEqual(spec.external_sources, [ExternalSource.FETCH_URL])
-        self.assertIn(SubstrateSource.TELEGRAM_SEMANTIC, spec.substrate_sources)
-        self.assertEqual(spec.composition_hint, CompositionHint.PARALLEL)
-        self.assertEqual(
-            spec.provenance_framing,
-            ProvenanceFraming.HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES,
-        )
+        self.assertEqual(spec.substrate_sources, [])
+        self.assertEqual(spec.composition_hint, CompositionHint.FRESH_ONLY)
+        self.assertEqual(spec.provenance_framing, ProvenanceFraming.FRESH_ONLY)
 
     def test_owner_url_flag_off_prior_composition(self):
         from core.dispatcher.inventory import InventorySummary

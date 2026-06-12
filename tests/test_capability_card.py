@@ -24,6 +24,11 @@ class FlagTests(_Env):
         os.environ["MAEZ_EVIDENCE_PRECEDENCE_ENABLED"] = "1"
         self.assertTrue(cc.evidence_precedence_enabled())
 
+    def test_flag_zero_is_off(self):
+        os.environ["MAEZ_EVIDENCE_PRECEDENCE_ENABLED"] = "0"
+        self.assertFalse(cc.evidence_precedence_enabled())
+        self.assertEqual(cc.capability_prompt_block(), "")
+
 
 class CardTests(_Env):
     def setUp(self):

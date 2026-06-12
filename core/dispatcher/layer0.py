@@ -15,6 +15,7 @@ import math
 import re
 from pathlib import Path
 
+from core.cognition.capability_card import evidence_precedence_enabled
 from core.dispatcher.inventory import InventorySummary
 from core.dispatcher.spec import (
     AvailabilityLimitation,
@@ -104,6 +105,13 @@ _CURRENT_WORLD_MARKER_RE = re.compile(
 )
 _CONVERSATIONAL_TODAY_RE = re.compile(
     r"\b(how are you|how're you|how you doing|how are things|how is your day|how's your day)\b.*\btoday\b",
+    re.IGNORECASE,
+)
+_SELF_CAPABILITY_RE = re.compile(
+    r"\b(?:you|your|maez|yourself)\b.*\b(?:web search|search tools?|page read|page reading|"
+    r"web sense|search sense|tools?|capabilit(?:y|ies))\b"
+    r"|\b(?:web search|search tools?|page read|page reading|web sense|search sense|tools?|"
+    r"capabilit(?:y|ies))\b.*\b(?:you|your|maez|yourself)\b",
     re.IGNORECASE,
 )
 # Generic Reddit talk selects the owned Reddit substrate.
@@ -231,6 +239,9 @@ class Layer0Dispatcher:
         explicit_memory = bool(_EXPLICIT_MEMORY_RE.search(utterance))
         content_anchored = bool(_CONTENT_ANCHOR_RE.search(utterance))
         owner_url_present = page_read_enabled() and bool(extract_first_url(utterance))
+        self_capability_question = (
+            evidence_precedence_enabled() and _is_self_capability_question(utterance)
+        )
         current_world_question = sense_enabled() and _is_current_world_question(utterance)
         source_anchor_candidates = _source_anchor_candidates(utterance)
         live_reddit_anchor = _has_subreddit_anchor(utterance)
@@ -242,17 +253,10 @@ class Layer0Dispatcher:
             _append_once(limitations, AvailabilityLimitation.SCORING_LOW_CONFIDENCE)
 
         if owner_url_present and not explicit_memory:
-            substrate_sources = _available_substrates(
-                inventory,
-                _substrate_candidates(source_anchor_candidates),
-            )
+            substrate_sources = []
             external_sources = [ExternalSource.FETCH_URL]
-            if substrate_sources:
-                hint = CompositionHint.PARALLEL
-                framing = ProvenanceFraming.HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES
-            else:
-                hint = CompositionHint.FRESH_ONLY
-                framing = ProvenanceFraming.FRESH_ONLY
+            hint = CompositionHint.FRESH_ONLY
+            framing = ProvenanceFraming.FRESH_ONLY
         elif live_reddit_anchor and not explicit_memory:
             substrate_sources = _available_substrates(
                 inventory,
@@ -265,6 +269,14 @@ class Layer0Dispatcher:
             else:
                 hint = CompositionHint.FRESH_ONLY
                 framing = ProvenanceFraming.FRESH_ONLY
+        elif self_capability_question and not explicit_memory:
+            substrate_sources = _available_substrates(
+                inventory,
+                _substrate_candidates(source_anchor_candidates),
+            )
+            external_sources = []
+            hint = CompositionHint.SUBSTRATE_ONLY
+            framing = ProvenanceFraming.SUBSTRATE_ONLY_NO_FRESH_VALIDATION
         elif explicit_fetch and not explicit_memory:
             substrate_sources: list[SubstrateSource] = []
             external_sources = [ExternalSource.WEB_SEARCH]
@@ -489,6 +501,12 @@ def _is_current_world_question(utterance: str) -> bool:
     if not _CURRENT_WORLD_MARKER_RE.search(utterance):
         return False
     return not _CONVERSATIONAL_TODAY_RE.search(utterance)
+
+
+def _is_self_capability_question(utterance: str) -> bool:
+    if not _QUESTION_SHAPE_RE.search(utterance):
+        return False
+    return bool(_SELF_CAPABILITY_RE.search(utterance or ""))
 
 
 def _substrate_candidates(source_anchor_candidates: Sequence[SubstrateSource]) -> list[SubstrateSource]:
