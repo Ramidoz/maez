@@ -16,14 +16,104 @@ import time
 import urllib.parse
 
 from core.egress import external_fetch
+from core.policies.exceptions import SubjectBoundaryRefused
+from core.policies.third_party_subject_gate import (
+    SubjectKind,
+    enforce_subject_boundary,
+)
+from core.search.sense_flag import sense_enabled
 
 logger = logging.getLogger("maez")
 
 _cache = {}
 _cache_ttl = 300  # 5 minutes
+_SENSE_BACKEND = None
 
 
-def search(query: str, max_results: int = 5) -> dict:
+def _sense_backend():
+    """Lazy singleton so the flag-off path never imports/builds SearXNG."""
+    global _SENSE_BACKEND
+    if _SENSE_BACKEND is None:
+        from core.search.searxng_client import SearxngBackend
+
+        _SENSE_BACKEND = SearxngBackend()
+    return _SENSE_BACKEND
+
+
+class _SubjectQuery:
+    """Adapter to the SubjectBoundaryQuery protocol for body-level checks."""
+
+    def __init__(self, subject_kind, subject_ref=None):
+        self.bond_id = "owner"
+        self.subject_kind = subject_kind
+        self.subject_ref = subject_ref
+
+
+def search(
+    query: str,
+    max_results: int = 5,
+    *,
+    subject_kind=SubjectKind.PUBLIC_TOPIC,
+) -> dict:
+    """Search the web.
+
+    SearXNG sense under ``MAEZ_SEARCH_AS_SENSE_ENABLED``; the legacy
+    DuckDuckGo path is byte-identical when the flag is off. The subject
+    boundary lives here, at the body, so every caller inherits it.
+    """
+    if not sense_enabled():
+        return _ddg_search(query, max_results)
+
+    try:
+        enforce_subject_boundary(
+            _SubjectQuery(subject_kind, subject_ref=(query or "")[:80])
+        )
+    except SubjectBoundaryRefused:
+        logger.info("web search refused pre-egress: subject_boundary")
+        return {
+            "query": query,
+            "success": False,
+            "results": [],
+            "source": "searxng",
+            "refused": "subject_boundary",
+        }
+
+    cache_key = query.lower().strip()
+    if cache_key in _cache:
+        age = time.time() - _cache[cache_key]["timestamp"]
+        if age < _cache_ttl:
+            logger.debug("Web search cache hit: %s", query)
+            return _cache[cache_key]["result"]
+
+    logger.info("Web search (searxng sense): %s", query[:100])
+    try:
+        rows = _sense_backend().search(query, max_results=max_results)
+    except Exception as e:
+        logger.warning("searxng sense failed: %s", e)
+        return {"query": query, "success": False, "results": [], "source": "searxng"}
+
+    results = [
+        {
+            "title": r.get("title") or "",
+            "url": r.get("url") or "",
+            "snippet": r.get("content") or "",
+        }
+        for r in rows
+    ]
+    result = {
+        "query": query,
+        "success": bool(results),
+        "results": results,
+        "result_count": len(results),
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "source": "searxng",
+    }
+    if result["success"]:
+        _cache[cache_key] = {"result": result, "timestamp": time.time()}
+    return result
+
+
+def _ddg_search(query: str, max_results: int = 5) -> dict:
     """Search the web using DuckDuckGo. Returns dict with results.
 
     Session 11x: made exception-handling resilient. Previously, if the
