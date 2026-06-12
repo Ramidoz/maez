@@ -37,7 +37,10 @@ from core.routing.brain_gateway import (
     with_purpose,
 )
 from core.conversation_controller import _search_commitment_enabled
-from core.cognition.parity_flag import surface_parity_enabled
+from core.cognition.parity_flag import (
+    s7_ceremony_bridge_enabled,
+    surface_parity_enabled,
+)
 from core.infra.env_flags import strict_env_flag
 from core.search.sense_flag import sense_enabled
 from core.search.search_commitment import is_clear_yes, is_search_offer_worthy
@@ -263,7 +266,14 @@ class MaezMessageHandler:
         lines.append('Reply with the number, for example "yes to #22" or "reject #23".')
         return self._audit_surface_reply("\n".join(lines), surface=f"{SURFACE_NAME}_proposal_disambig")
 
-    async def _try_surface_parity_proposal_intent(self, *, text: str, chat_id: str) -> Optional[str]:
+    async def _try_surface_parity_proposal_intent(
+        self,
+        *,
+        text: str,
+        chat_id: str,
+        pipe: Any = None,
+        user_id: str = "rohit",
+    ) -> Optional[str]:
         if not surface_parity_enabled():
             return None
 
@@ -334,6 +344,8 @@ class MaezMessageHandler:
                 target_id=target_id,
                 chat_id=chat_id,
                 loop=loop,
+                pipe=pipe,
+                user_id=user_id,
             )
         return await self._surface_parity_handle_evolution_proposal(
             action=action,
@@ -349,6 +361,8 @@ class MaezMessageHandler:
         target_id: int,
         chat_id: str,
         loop: asyncio.AbstractEventLoop,
+        pipe: Any = None,
+        user_id: str = "rohit",
     ) -> Optional[str]:
         dream = getattr(self.daemon, "dream", None)
         if dream is None:
@@ -365,6 +379,54 @@ class MaezMessageHandler:
             return f"Proposal #{target_id} is already {status} - nothing to apply/reject."
         try:
             if action == "approve":
+                if s7_ceremony_bridge_enabled():
+                    def _bridge() -> str:
+                        from skills.surface import s7_ceremony_bridge as bridge
+
+                        if not bridge.cockpit_available():
+                            return (
+                                "The S7 authorization surface isn't running, so I can't "
+                                "open the ceremony for this soul-affecting proposal yet. "
+                                "Start the cockpit and ask again."
+                            )
+                        if pipe is None:
+                            return (
+                                "I can't open the S7 ceremony because the live decision "
+                                "pipeline isn't available on this surface."
+                            )
+                        deps = bridge.LiveBridgeDeps(
+                            dream=dream,
+                            pipeline=pipe,
+                            chat_id=chat_id,
+                            user_id=user_id,
+                        )
+                        seed = bridge.seed_soul_proposal_dialog(
+                            prop_id=target_id,
+                            deps=deps,
+                        )
+                        if seed is None:
+                            return (
+                                f"Proposal #{target_id} has moved on or is no longer pending, "
+                                "so I didn't open an S7 ceremony for it."
+                            )
+                        consult = bridge.consult_then_block_or_pointer(
+                            card_request_id=seed.card_request_id,
+                            deps=deps,
+                        )
+                        if consult.blocked or not consult.ceremony_pointer:
+                            return (
+                                f"Proposal #{target_id} opened an S7 request, but Maez's "
+                                "own consultation did not clear it. I blocked the dialog "
+                                "instead of asking for your hardware-key proof."
+                            )
+                        return (
+                            f"Proposal #{target_id} needs the S7 ceremony before it can "
+                            f"touch my soul. Please complete the S7 ceremony here: "
+                            f"{consult.ceremony_pointer}"
+                        )
+
+                    return await loop.run_in_executor(get_shared_executor(), _bridge)
+
                 if (prop.get("proposal_type") or "append") == "section_replace":
                     ok, msg = await loop.run_in_executor(
                         get_shared_executor(),
@@ -733,6 +795,8 @@ class MaezMessageHandler:
         proposal_reply = await self._try_surface_parity_proposal_intent(
             text=text,
             chat_id=chat_id,
+            pipe=pipe,
+            user_id=user_id,
         )
         if proposal_reply:
             return proposal_reply

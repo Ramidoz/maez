@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+import urllib.request
 
 
 @dataclass(frozen=True)
@@ -21,6 +22,115 @@ class SeedResult:
 class ConsultResult:
     ceremony_pointer: str | None
     blocked: bool
+
+
+@dataclass
+class LiveBridgeDeps:
+    dream: Any
+    pipeline: Any
+    chat_id: str
+    user_id: str = "rohit"
+    channel: str = "telegram_text"
+
+    @property
+    def card_store(self) -> Any:
+        return self.pipeline.card_store
+
+    def open_dialog_for_proposal(self, prop_id: int) -> Any | None:
+        try:
+            cards = self.card_store.get_open_for_channel(
+                self.channel,
+                chat_id=self.chat_id,
+            )
+        except Exception:
+            cards = []
+        for card in cards:
+            params = dict(getattr(card, "params", {}) or {})
+            if int(params.get("_proposal_id") or -1) == int(prop_id):
+                return SeedResult(
+                    card_request_id=card.request_id,
+                    action=card.action,
+                )
+        return None
+
+    def s7_request_envelope_for_card(self, card: Any) -> Any:
+        return self.pipeline._s7_request_envelope_for_card(card)
+
+    def s7_request_envelope_hash_for_card(self, card: Any) -> str:
+        from core.governance import operator_user_boundary as s7
+
+        return s7.work_request_envelope_hash(
+            self.s7_request_envelope_for_card(card)
+        )
+
+    def open_dialog_for_card(self, card: Any) -> None:
+        from skills.self_mod_dialog import open_dialog_for_card
+
+        open_dialog_for_card(
+            store=self.pipeline._get_dialog_store(),
+            card_action=card.action,
+            card_params=card.params,
+            card_request_id=card.request_id,
+            audit_reasoning=getattr(card, "audit_reasoning", "") or "",
+            concerns=list(getattr(card, "audit_concerns", []) or []),
+            require_s7_linkage=True,
+            s7_request_envelope_hash=self.s7_request_envelope_hash_for_card(card),
+        )
+
+    def remember_open_dialog(self, prop_id: int, card_request_id: str, action: str) -> None:
+        return None
+
+    def get_card(self, card_request_id: str) -> Any:
+        card = self.card_store.get(card_request_id)
+        if card is None:
+            raise ValueError(f"S7 bridge card {card_request_id} not found")
+        return card
+
+    def run_voice_consultation(self, card: Any, envelope: Any) -> Any:
+        return self.pipeline._s7_voice_consultation_for_card(card, envelope)
+
+    def full_voice_bundle_present(self, request_id: str) -> bool:
+        pending = getattr(self.pipeline, "_s7_pending_voice_source_bundles", None)
+        if not isinstance(pending, dict):
+            return False
+        entry = pending.get(request_id)
+        if not isinstance(entry, dict):
+            return False
+        return all(
+            key in entry
+            for key in (
+                "consultation",
+                "raw_response_text",
+                "semantic_reader_attempt",
+                "source_ref_hash",
+            )
+        )
+
+    def set_blocked_for_card(self, card_request_id: str, *, reason: str) -> None:
+        store = self.pipeline._get_dialog_store()
+        dialog = store.get_for_card(card_request_id)
+        if dialog is not None:
+            store.set_blocked(dialog.dialog_id, reason=reason)
+        try:
+            self.card_store.block(card_request_id, reason)
+        except Exception:
+            pass
+
+    def ceremony_pointer_for(self, card_request_id: str) -> str:
+        return (
+            "http://127.0.0.1:11437/cockpit/s7-webauthn-proof"
+            f"#{card_request_id}"
+        )
+
+
+def cockpit_available(url: str = "http://127.0.0.1:11437/", timeout_s: float = 0.5) -> bool:
+    """Return true when the local cockpit surface is reachable."""
+
+    try:
+        with urllib.request.urlopen(url, timeout=timeout_s) as response:
+            return int(getattr(response, "status", 200) or 200) < 500
+    except Exception:
+        return False
 
 
 def _proposal_to_card_action(proposal: dict[str, Any]) -> tuple[str, dict[str, Any]]:
