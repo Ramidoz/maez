@@ -6769,6 +6769,39 @@ class MaezDaemon:
             else:
                 _pursuit_decision = None
 
+        # Search-as-a-Sense v0.1: drain the dispatcher turn evidence here,
+        # where memory and the final audit->store->send invariant are owned.
+        # Order is intentional: write the bounded observation, retain the
+        # marked audited draft for /receipts, then natural-render the stored
+        # and sent reply.
+        try:
+            from core.search.sense_flag import sense_enabled
+            from core.routing.attribution_render import (
+                pop_turn_evidence,
+                render_natural,
+                retain_receipt,
+            )
+
+            if sense_enabled():
+                _turn_ev = pop_turn_evidence(chat_id)
+                if _turn_ev.get("observation"):
+                    from core.intake_bus.world_observation_lane import (
+                        write_world_observation,
+                    )
+
+                    write_world_observation(self.memory, **_turn_ev["observation"])
+                retain_receipt(
+                    str(chat_id or ""),
+                    marked=reply,
+                    sources=_turn_ev.get("sources") or [],
+                )
+                reply = render_natural(
+                    reply,
+                    web_evidence_present=bool(_turn_ev.get("web_present")),
+                )
+        except Exception:
+            pass
+
         # Slice 2 Session 3: record the surface decision in the
         # wonderings store + emit a lived episode (ADR 0019
         # alignment — proactive surfaces are high-signal moments

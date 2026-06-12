@@ -867,6 +867,41 @@ def _run_dispatcher_pipeline(
         surface=surface,
         timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     )
+    # Search-as-a-Sense v0.1 metabolism — pipeline side only. Memory is
+    # owned by daemon.handle_message, so this stashes the evidence payload by
+    # chat_id for the daemon to drain after audit.
+    try:
+        from core.intake_bus.world_observation_lane import evaluate_write_condition
+        from core.routing.attribution_render import stash_turn_evidence
+
+        if sense_enabled():
+            _web_texts = []
+            for _branch in getattr(external_result, "branch_results", []) or []:
+                if str(getattr(getattr(_branch, "source", None), "value", "")) == "WEB_SEARCH":
+                    _web_texts = [
+                        getattr(_block, "text", "") or ""
+                        for _block in (getattr(_branch, "blocks", ()) or ())
+                    ][:3]
+                    break
+            stash_turn_evidence(
+                chat_id,
+                rendered_turn=rendered_turn,
+                evidence_texts=_web_texts,
+                observation=(
+                    {
+                        "query": user_text,
+                        "evidence_texts": _web_texts,
+                        "diagnostic_id": str(
+                            getattr(external_result, "fanout_generation_id", "")
+                        ),
+                    }
+                    if evaluate_write_condition(rendered_turn)
+                    else None
+                ),
+            )
+    except Exception:
+        logger.debug("world_observation stash skipped", exc_info=True)
+
     turn_seal_state = "clean"
     if rendered_turn.refusal_reason is not None:
         turn_seal_state = "refused"

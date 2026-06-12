@@ -2745,6 +2745,16 @@ class TelegramAdapter(BasePlatformAdapter):
             return
         if not self._should_process_message(update.message, is_command=True):
             return
+        try:
+            command_text = (update.message.text or "").strip().lower()
+        except Exception:
+            command_text = ""
+        if command_text.startswith("/receipts"):
+            from core.routing.attribution_render import receipts_reply
+
+            chat_id = str(update.effective_chat.id) if update.effective_chat else ""
+            await update.message.reply_text(receipts_reply(chat_id))
+            return
 
         event = self._build_message_event(update.message, MessageType.COMMAND, update_id=update.update_id)
         if await self._try_handle_dream_command_event(event):
