@@ -191,7 +191,12 @@ class IntakeShadow:
         telemetry_path,
         *,
         maxsize: int = 64,
-        timeout_s: float = 8.0,
+        # 2026-06-11 hearing fix: the judge finishes the pre-closed-think
+        # read in ~8-10s (CPU-offloaded prefill), so 8.0s timed out at the
+        # finish line. 20s is safe: the worker is async/off-reply-path, and
+        # the bounded queue + one-in-flight still protect the audit judge —
+        # a slow read costs shadow throughput, never reply latency.
+        timeout_s: float = 20.0,
         debug: bool = False,
         rotate_bytes: int = 2_000_000,
         rotate_keep: int = 3,

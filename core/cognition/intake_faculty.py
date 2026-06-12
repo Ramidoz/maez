@@ -11,9 +11,16 @@ import time
 from typing import Any
 import urllib.request
 
-from core.model_config import JUDGE_BASE_URL, JUDGE_CHAT_KWARGS, JUDGE_MODEL
+from core.model_config import JUDGE_BASE_URL
 
-_MAX_TOKENS = 160
+# 2026-06-11 hearing fix: the dedicated judge (llama-b9124) ignores
+# chat_template_kwargs, so Qwen3.5 burns the whole budget in
+# reasoning_content and returns content="". Witnessed live: 160 tok →
+# empty @10.7s; 512 tok → still thinking @30.7s. The working recipe is a
+# raw /completion call with the think block PRE-CLOSED (probe: valid JSON
+# @8.05s). 224 tokens gives the ~90-token read headroom against rationale
+# truncation (the 160-token probe cut mid-string).
+_MAX_TOKENS = 224
 
 TURN_KINDS = frozenset({
     "commitment_response",
@@ -157,11 +164,37 @@ class FakeIntakeBackend:
         return self._scripted.get(message, self._default), time.monotonic() - started
 
 
+def _json_candidates(text: str):
+    """Yield progressively repaired JSON candidates from model output.
+
+    Survives prose wrapping (text around the object) and trailing
+    truncation (n_predict cutting mid-string in the rationale — witnessed
+    on the 160-token probe). Repairs only ever CLOSE the object; they
+    cannot invent fields, and a failed repair falls through to the honest
+    parse_error read.
+    """
+    s = text or ""
+    start = s.find("{")
+    if start < 0:
+        return
+    end = s.rfind("}")
+    if end > start:
+        yield s[start : end + 1]
+    tail = s[start:].rstrip()
+    for suffix in ('"}', "}", '"}}'):
+        yield tail + suffix
+
+
 def parse_json_read(text: str) -> IntakeRead:
-    try:
-        return IntakeRead.from_model(json.loads(text or ""))
-    except Exception:
-        return IntakeRead.ambiguous(status="parse_error")
+    for candidate in _json_candidates(text):
+        try:
+            data = json.loads(candidate)
+        except Exception:
+            continue
+        read = IntakeRead.from_model(data)
+        if read.status == "ok":
+            return read
+    return IntakeRead.ambiguous(status="parse_error")
 
 
 def _context_for_prompt(context: dict) -> str:
@@ -184,33 +217,48 @@ def build_prompt(message: str, context: dict) -> str:
         "a refusal category: a no to an offer is commitment_response with stance=no; Maez's "
         "capacity to refuse is a separate sacred axis. Allowed stance: yes, no, ambiguous, n_a. "
         "Allowed boundary_signal: none, soft, hard. Allowed needs: search, recall, none. "
-        "Allowed referent_kind: pending_offer, earlier_topic, none.\n\n"
+        "Allowed referent_kind: pending_offer, earlier_topic, none. "
+        "Keep rationale under 15 words.\n\n"
         f"OWNER_MESSAGE:\n{message or ''}\n\n"
         f"CONTEXT_JSON:\n{_context_for_prompt(context or {})}\n"
     )
 
 
+_SYSTEM_LINE = "You are a strict JSON classifier. Output only valid JSON."
+
+
+def render_chatml(system: str, user: str) -> str:
+    """ChatML with the assistant think block PRE-CLOSED.
+
+    Qwen-template quirk adapter: the dedicated judge server build ignores
+    chat_template_kwargs/enable_thinking, so we render the template by hand
+    and hand the model an already-closed <think> block — it cannot spend the
+    budget thinking. Model-specific by design; quirks live in this adapter,
+    the IntakeRead contract stays model-agnostic.
+    """
+    return (
+        f"<|im_start|>system\n{system}<|im_end|>\n"
+        f"<|im_start|>user\n{user}<|im_end|>\n"
+        f"<|im_start|>assistant\n<think>\n\n</think>\n\n"
+    )
+
+
 def _call_judge(prompt: str, *, timeout_s: float = 8.0) -> str:
     payload = {
-        "model": JUDGE_MODEL,
-        "messages": [
-            {"role": "system", "content": "You are a strict JSON classifier. Output only valid JSON."},
-            {"role": "user", "content": prompt},
-        ],
+        "prompt": render_chatml(_SYSTEM_LINE, prompt),
+        "n_predict": _MAX_TOKENS,
         "temperature": 0.0,
-        "max_tokens": _MAX_TOKENS,
+        "stop": ["<|im_end|>"],
     }
-    if JUDGE_CHAT_KWARGS:
-        payload["chat_template_kwargs"] = dict(JUDGE_CHAT_KWARGS)
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
-        f"{JUDGE_BASE_URL.rstrip('/')}/v1/chat/completions",
+        f"{JUDGE_BASE_URL.rstrip('/')}/completion",
         data=body,
         headers={"Content-Type": "application/json"},
     )
     with urllib.request.urlopen(req, timeout=timeout_s) as resp:
         data = json.loads(resp.read())
-    return data["choices"][0]["message"]["content"] or ""
+    return data.get("content") or ""
 
 
 class HttpIntakeBackend:

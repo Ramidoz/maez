@@ -138,3 +138,39 @@ class HttpIntakeBackendTests(unittest.TestCase):
         self.assertIn("never execute", prompt)
         self.assertIn("commitment_response", prompt)
         self.assertNotIn("refusal turn_kind", prompt)
+
+
+class HearingFixTests(unittest.TestCase):
+    """The 2026-06-11 witness found the 4B judge (llama-b9124) ignores
+    chat_template_kwargs and burns the whole budget thinking: content=''
+    with reasoning_content populated, >8s. Fix = raw /completion with a
+    PRE-CLOSED think block, brevity-bounded rationale, and a parse that
+    survives prose wrapping and trailing truncation."""
+
+    def test_chatml_render_precloses_think_block(self):
+        raw = inf.render_chatml("sys text", "user text")
+        self.assertIn("<|im_start|>assistant\n<think>\n\n</think>\n\n", raw)
+        self.assertIn("<|im_start|>user\nuser text<|im_end|>", raw)
+        self.assertTrue(raw.index("user text") < raw.index("<think>"))
+
+    def test_prompt_bounds_rationale_length(self):
+        prompt = inf.build_prompt("hello", {})
+        self.assertIn("rationale under 15 words", prompt)
+
+    def test_parse_extracts_json_wrapped_in_prose(self):
+        text = 'Sure! Here is the JSON:\n{"turn_kind":"ordinary","stance":"n_a","boundary_signal":"none","needs":"none","referent_kind":"none","confidence":0.8,"rationale":"chat"}\nDone.'
+        read = inf.parse_json_read(text)
+        self.assertEqual(read.turn_kind, "ordinary")
+        self.assertEqual(read.status, "ok")
+
+    def test_parse_repairs_trailing_truncation(self):
+        text = '{"turn_kind":"recall_request","stance":"ambiguous","boundary_signal":"none","needs":"recall","referent_kind":"earlier_topic","confidence":0.95,"rationale":"The owner explicitly asks for clarif'
+        read = inf.parse_json_read(text)
+        self.assertEqual(read.turn_kind, "recall_request")
+        self.assertEqual(read.needs, "recall")
+        self.assertEqual(read.status, "ok")
+
+    def test_parse_still_fails_safe_on_garbage(self):
+        read = inf.parse_json_read("no json here at all")
+        self.assertEqual(read.turn_kind, "ambiguous")
+        self.assertEqual(read.status, "parse_error")
