@@ -176,6 +176,8 @@ class MaezMessageHandler:
 
     def __init__(self, daemon: Any):
         self.daemon = daemon
+        self._last_shown_proposal: dict[str, dict[str, Any]] = {}
+        self._last_shown_freshness_s = 600.0
 
     def _search_commitment_controller(self):
         legacy_tg = getattr(self.daemon, "telegram", None)
@@ -207,6 +209,289 @@ class MaezMessageHandler:
         if len(reply) > 3500:
             reply = reply[:3500] + "\n\n(truncated)"
         return reply
+
+    def _audit_surface_reply(self, text: str, *, surface: str) -> str:
+        try:
+            from core.self_claim_audit import audit as _sc_audit
+
+            result = _sc_audit(text, surface=surface)
+            return result.text if result.rewritten else text
+        except Exception:
+            return text
+
+    def _surface_parity_pending_evolution_candidates(self) -> list[dict]:
+        try:
+            from skills.evolution_engine import _rail_conn
+
+            with _rail_conn() as conn:
+                rows = conn.execute(
+                    "SELECT id, target_file, weakness_description, created_at "
+                    "FROM candidates WHERE state='validated' "
+                    "ORDER BY id DESC LIMIT 10"
+                ).fetchall()
+            return [
+                {
+                    "id": row[0],
+                    "target_file": row[1],
+                    "weakness": row[2],
+                    "created_at": row[3],
+                }
+                for row in rows
+            ]
+        except Exception:
+            logger.debug("surface parity pending evolution query failed", exc_info=True)
+            return []
+
+    def _surface_parity_pending_dream_rows(self) -> list[tuple]:
+        dream = getattr(self.daemon, "dream", None)
+        if dream is None:
+            return []
+        try:
+            return list(dream.list_pending())
+        except Exception:
+            logger.debug("surface parity pending dream query failed", exc_info=True)
+            return []
+
+    def _surface_parity_disambiguation(self, *, pending: list[dict], dream_rows: list[tuple]) -> str:
+        lines = [f"I have {len(pending) + len(dream_rows)} proposals pending - which one?", ""]
+        for row in pending[:5]:
+            lines.append(f"  #{row['id']}: {(row.get('weakness') or '')[:80]}")
+        for row in dream_rows[:5]:
+            pid, _created, insight = row
+            lines.append(f"  #{pid}: {(insight or '')[:80]}")
+        lines.append("")
+        lines.append('Reply with the number, for example "yes to #22" or "reject #23".')
+        return self._audit_surface_reply("\n".join(lines), surface=f"{SURFACE_NAME}_proposal_disambig")
+
+    async def _try_surface_parity_proposal_intent(self, *, text: str, chat_id: str) -> Optional[str]:
+        if not surface_parity_enabled():
+            return None
+
+        from core.dispatcher.proposal_resolver import (
+            detect_proposal_intent,
+            resolve_proposal_target,
+        )
+
+        action, explicit_id = detect_proposal_intent(text)
+        if not action:
+            return None
+
+        pending = self._surface_parity_pending_evolution_candidates()
+        dream_rows = self._surface_parity_pending_dream_rows()
+        evolution_ids = {int(row["id"]) for row in pending}
+        dream_ids = {int(row[0]) for row in dream_rows}
+        if not pending and not dream_rows and explicit_id is None:
+            return None
+
+        last_shown = self._last_shown_proposal.get(chat_id)
+        source = None
+        target_id: int | None = None
+
+        if explicit_id is not None:
+            if explicit_id in evolution_ids:
+                source = "evolution"
+                target_id = explicit_id
+            elif explicit_id in dream_ids:
+                source = "dream"
+                target_id = explicit_id
+            else:
+                return f"I don't find proposal #{explicit_id}. It may have expired or already been resolved."
+        else:
+            target_id = resolve_proposal_target(
+                action=action,
+                explicit_id=None,
+                pending_ids=evolution_ids,
+                last_shown=last_shown,
+                source="evolution",
+                text=text,
+                freshness_s=self._last_shown_freshness_s,
+            )
+            if target_id is not None:
+                source = "evolution"
+            else:
+                target_id = resolve_proposal_target(
+                    action=action,
+                    explicit_id=None,
+                    pending_ids=dream_ids,
+                    last_shown=last_shown,
+                    source="dream",
+                    text=text,
+                    freshness_s=self._last_shown_freshness_s,
+                )
+                if target_id is not None:
+                    source = "dream"
+
+        if target_id is None or source is None:
+            lowered = (text or "").lower()
+            if ("proposal" in lowered or "dream" in lowered) and (len(pending) + len(dream_rows)) > 1:
+                return self._surface_parity_disambiguation(pending=pending, dream_rows=dream_rows)
+            return None
+
+        loop = asyncio.get_event_loop()
+        if source == "dream":
+            return await self._surface_parity_handle_dream_proposal(
+                action=action,
+                target_id=target_id,
+                chat_id=chat_id,
+                loop=loop,
+            )
+        return await self._surface_parity_handle_evolution_proposal(
+            action=action,
+            target_id=target_id,
+            chat_id=chat_id,
+            loop=loop,
+        )
+
+    async def _surface_parity_handle_dream_proposal(
+        self,
+        *,
+        action: str,
+        target_id: int,
+        chat_id: str,
+        loop: asyncio.AbstractEventLoop,
+    ) -> Optional[str]:
+        dream = getattr(self.daemon, "dream", None)
+        if dream is None:
+            return None
+        try:
+            prop = dream.get_proposal(target_id)
+        except Exception:
+            logger.debug("surface parity dream get_proposal failed", exc_info=True)
+            return None
+        if not prop:
+            return f"I don't find proposal #{target_id}. It may have expired or already been resolved."
+        status = prop.get("status") or "unknown"
+        if status != "pending":
+            return f"Proposal #{target_id} is already {status} - nothing to apply/reject."
+        try:
+            if action == "approve":
+                if (prop.get("proposal_type") or "append") == "section_replace":
+                    ok, msg = await loop.run_in_executor(
+                        get_shared_executor(),
+                        lambda: dream.apply_section_edit_proposal(target_id),
+                    )
+                else:
+                    ok, msg = await loop.run_in_executor(
+                        get_shared_executor(),
+                        lambda: dream.apply_proposal(target_id),
+                    )
+            elif action == "reject":
+                ok, msg = await loop.run_in_executor(
+                    get_shared_executor(),
+                    lambda: dream.reject_proposal(target_id),
+                )
+            elif action == "show":
+                insight = str(prop.get("insight") or prop.get("summary") or "")[:500]
+                self._last_shown_proposal[chat_id] = {
+                    "id": int(target_id),
+                    "source": "dream",
+                    "shown_at": time.time(),
+                }
+                return self._audit_surface_reply(
+                    f"Proposal #{target_id}\n\n{insight}\n\nReply \"yes\" to apply or \"no\" to reject.",
+                    surface=f"{SURFACE_NAME}_dream_proposal_show",
+                )
+            else:
+                return None
+        except Exception as exc:
+            logger.exception("surface parity dream proposal dispatch failed")
+            return f"Couldn't process #{target_id}: {exc}"
+
+        prefix = "OK" if ok else "Couldn't"
+        return f"{prefix} #{target_id}: {msg}"
+
+    async def _surface_parity_handle_evolution_proposal(
+        self,
+        *,
+        action: str,
+        target_id: int,
+        chat_id: str,
+        loop: asyncio.AbstractEventLoop,
+    ) -> Optional[str]:
+        try:
+            if action == "approve":
+                from skills.evolution_engine import apply_candidate
+
+                result = await loop.run_in_executor(
+                    get_shared_executor(),
+                    lambda: apply_candidate(target_id),
+                )
+                if "error" in result:
+                    return (
+                        f"Something went wrong applying #{target_id}: {result['error']}\n"
+                        f"{'Rolled back. ' if result.get('rolled_back') else ''}"
+                        "Let me know if you want me to try a different proposal."
+                    )
+                return (
+                    f"Done. Proposal #{target_id} is live now. I'll watch the next "
+                    "20-30 cycles for any regression and roll back automatically if my score drops."
+                )
+            if action == "reject":
+                from skills.evolution_engine import _log_evolution, _set_candidate_state, V1_ALLOWED_TARGET
+
+                await loop.run_in_executor(
+                    get_shared_executor(),
+                    lambda: (
+                        _set_candidate_state(
+                            target_id,
+                            "rejected",
+                            rejection_reason="manual rejection via Surface V2 natural-language chat",
+                        ),
+                        _log_evolution(
+                            {
+                                "action": "MANUAL_REJECTION",
+                                "target": V1_ALLOWED_TARGET,
+                                "result": f"candidate {target_id}",
+                                "detail": "surface_v2_natural_language",
+                            }
+                        ),
+                    ),
+                )
+                return (
+                    f"Got it - proposal #{target_id} is rejected. I'll leave that one alone "
+                    "and keep an eye out for other things I could try."
+                )
+            if action == "show":
+                from skills.evolution_engine import load_candidate_for_display
+
+                disp = await loop.run_in_executor(
+                    get_shared_executor(),
+                    lambda: load_candidate_for_display(target_id),
+                )
+                if not disp:
+                    return f"I can't find proposal #{target_id}."
+                intent = disp.get("intent") or {}
+                usefulness = disp.get("usefulness") or {}
+                self._last_shown_proposal[chat_id] = {
+                    "id": int(target_id),
+                    "source": "evolution",
+                    "shown_at": time.time(),
+                }
+                lines = [
+                    f"Proposal #{target_id}",
+                    "",
+                    f"What I want to do: {intent.get('human_rationale', '(no plain-English description)')}",
+                    "",
+                    "Technical details:",
+                    f"  File: {disp.get('target_file', '?')}",
+                    f"  Target: {intent.get('target_name', '?')}",
+                    f"  Before: {intent.get('current_value')!r}",
+                    f"  After:  {intent.get('proposed_value')!r}",
+                    f"  Technical rationale: {intent.get('rationale', '')[:200]}",
+                    "",
+                    f"My confidence: {usefulness.get('overall', 'unknown')}",
+                    f"  ({usefulness.get('reasoning', '')[:200]})",
+                    "",
+                    f'Reply "yes" to apply, "no" to reject (or explicit "yes to #{target_id}" / "reject #{target_id}").',
+                ]
+                return self._audit_surface_reply(
+                    "\n".join(lines),
+                    surface=f"{SURFACE_NAME}_proposal_show",
+                )
+        except Exception as exc:
+            logger.error("Surface V2 proposal action failed: %s", exc)
+            return f"Something went wrong while handling that: {exc}"
+        return None
 
     async def _try_search_commitment_intent(
         self,
@@ -444,6 +729,13 @@ class MaezMessageHandler:
                         except Exception:
                             return dialog_reply
                     return None
+
+        proposal_reply = await self._try_surface_parity_proposal_intent(
+            text=text,
+            chat_id=chat_id,
+        )
+        if proposal_reply:
+            return proposal_reply
 
         search_commitment_reply = await self._try_search_commitment_intent(
             text=text,

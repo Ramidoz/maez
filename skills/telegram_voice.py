@@ -2158,33 +2158,9 @@ class TelegramVoice:
         """Match approve/reject/show intent. Returns (action, candidate_id|None).
         action is one of: 'approve', 'reject', 'show', or None.
         candidate_id is the explicit id from the message if present, else None."""
-        import re as _re
+        from core.dispatcher.proposal_resolver import detect_proposal_intent
 
-        stripped = (text or "").strip().lower()
-        if not stripped or len(stripped) > 80:
-            return None, None
-
-        for pat in self._NL_APPROVE_PATTERNS:
-            m = _re.match(pat, stripped)
-            if m:
-                groups = [g for g in m.groups() if g and g.isdigit()]
-                cid = int(groups[0]) if groups else None
-                return "approve", cid
-
-        for pat in self._NL_REJECT_PATTERNS:
-            m = _re.match(pat, stripped)
-            if m:
-                groups = [g for g in m.groups() if g and g.isdigit()]
-                cid = int(groups[0]) if groups else None
-                return "reject", cid
-
-        m = _re.match(self._NL_SHOW_PATTERN, stripped)
-        if m:
-            groups = [g for g in m.groups() if g and g.isdigit()]
-            cid = int(groups[0]) if groups else None
-            return "show", cid
-
-        return None, None
+        return detect_proposal_intent(text)
 
     async def _try_dream_proposal_intent(self, update, text: str) -> bool:
         """2026-04-18: sibling of _try_proposal_intent for DREAM + section-edit
