@@ -744,6 +744,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import time
 
 from core.intake_bus.admit import admit
@@ -1031,38 +1032,48 @@ In `skills/surface/maez_adapter.py`, where the handler calls
 (following the `_send_intermediate` thread-safety pattern at :422):
 
 ```python
+        # Follows the proven _send_intermediate pattern (:422 in this file):
+        # adapter from daemon._surface_v2_adapter, sends scheduled onto
+        # daemon._surface_v2_loop, payload wrapped in ProvenancedText.
         progress_sender = None
         if sense_enabled():
-            _bubble: dict = {"msg_id": None}
+            _p_adapter = getattr(self.daemon, "_surface_v2_adapter", None)
+            _p_loop = getattr(self.daemon, "_surface_v2_loop", None)
+            _p_sent = {"count": 0}
 
             def _send_progress(stage_text: str) -> None:
-                async def _do():
-                    try:
-                        if _bubble["msg_id"] is None:
-                            sent = await self.adapter.send_message(chat_id, stage_text)
-                            _bubble["msg_id"] = getattr(sent, "message_id", None) or sent
-                        else:
-                            await self.adapter.edit_message(chat_id, _bubble["msg_id"], stage_text)
-                    except Exception:
-                        logger.debug("progress bubble failed", exc_info=True)
-
+                if not _p_adapter or not _p_loop or not chat_id:
+                    return
+                if _p_sent["count"] >= 1:
+                    # v0.1: ONE true stage notice ("searching the web…").
+                    # The "reading N results…" upgrade requires a message-edit
+                    # API on the adapter — Task 0b records whether one exists
+                    # (platform_base.py:1182 names intermediate edits). If it
+                    # does, edit the first message here; if not, skip stage 2
+                    # and say so in the handoff. Never send a second bubble.
+                    return
+                _p_sent["count"] += 1
                 try:
-                    asyncio.run_coroutine_threadsafe(_do(), loop)
+                    from core.egress.provenance import ProvenancedText
+
+                    payload = ProvenancedText.maez_authored_owner_third_party_transport(
+                        stage_text,
+                        source_ref=f"{SURFACE_NAME}:search_sense_progress",
+                    )
+                    asyncio.run_coroutine_threadsafe(
+                        _p_adapter.send(chat_id, payload), _p_loop
+                    )
                 except Exception:
-                    pass
+                    logger.debug("progress notice failed", exc_info=True)
 
             progress_sender = _send_progress
 ```
 
 and pass `send_intermediate=progress_sender` into the `daemon.handle_message`
-call. **Adapt the two adapter calls to the REAL send/edit API recorded in
-Task 0b** (`platform_base.py:1182` names the intermediate-edit mechanism;
-`_send_intermediate` at :422 shows the working send + loop reference — copy
-its exact send call and loop variable; if no edit API exists on the adapter,
-fall back to sending each stage as one compact message and note it in the
-handoff). After the final reply is delivered by the normal path, the bubble
-is left at its last true stage — no suppression, no fake completion text.
-Gate everything on `sense_enabled()` so flag-off passes `None`.
+call. The final answer is delivered by the NORMAL path, unchanged — the
+notice is a separate, true, one-shot message; no suppression, no fake
+completion text. Gate everything on `sense_enabled()` so flag-off passes
+`None`.
 
 - [ ] **Step 5: Surface test — pass-through + flag-off None**
 
@@ -1111,10 +1122,11 @@ git commit -m "feat(search-sense): true progress bubble keyed to real fanout sta
 
 ## Predicted effect
 With the sense flag on, Telegram turns where the dispatcher actually
-selects WEB_SEARCH show one bubble ('searching the web…' -> 'reading N
-results…') that is edited into the final answer; turns without web fanout
-show nothing. Flag off: send_intermediate stays None end-to-end,
-byte-identical behavior.
+selects WEB_SEARCH show one true progress notice ('searching the web…')
+as a SEPARATE message, and the final answer arrives via the normal reply
+path unchanged; turns without web fanout show no notice. (One-bubble
+edit-into-answer is deferred to v0.2.) Flag off: send_intermediate stays
+None end-to-end, byte-identical behavior.
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
@@ -1125,8 +1137,9 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 **Files:**
 - Create: `core/routing/attribution_render.py`
-- Modify: `core/brain/brain_loop.py` (apply render at the end of the turn, AFTER the audit, where the final reply string is produced)
-- Modify: `skills/surface/telegram_adapter.py` (`_handle_command`, :914 region)
+- Modify: `daemon/maez_daemon.py` (`handle_message` — the audit→store→send invariant owner; render goes AFTER the audit verdict, BEFORE store/trace/send, per Step 4b)
+- Modify: `core/brain/brain_loop.py` (ONLY the turn-evidence stash call inside the Task 3 hook — no render here)
+- Modify: `skills/surface/telegram_adapter.py` (`_handle_command`, :914 region — two-line `/receipts` shim)
 - Create: `tests/test_attribution_render.py`
 
 - [ ] **Step 1: Write the failing render tests**
@@ -1536,8 +1549,10 @@ service changes. Branch: search-as-a-sense-v0.1.
 ## Owner witness after review + merge (spec's 6-step plan)
 1. Set MAEZ_SEARCH_AS_SENSE_ENABLED=1 in ~/.config/maez/model.env (with a
    witness comment + revert line) and restart maez.service.
-2. Ask a current-world question: expect true "searching the web…" bubble ->
-   an answer in Maez's voice, natural attribution, NO result-card, NO offer.
+2. Ask a current-world question: expect ONE true "searching the web…"
+   notice as a separate message, then the answer in Maez's voice via the
+   normal reply path — natural attribution, NO result-card, NO offer.
+   (Bubble-edits-into-answer is v0.2; do not judge v0.1 against it.)
 3. /receipts: expect the marked draft + sources.
 4. Memory check: exactly one external_web/untrusted observation for the
    search; repeat the same question — no duplicate record.
