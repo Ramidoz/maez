@@ -779,5 +779,86 @@ class DispatcherExternalSourceFanoutTests(unittest.TestCase):
                 self.assertNotIn(pattern, source)
 
 
+class FetchUrlAdapterTests(unittest.TestCase):
+    def _fetched(self, *, text, content_type, ok=True):
+        from core.egress.external_fetch import ExternalFetchResult
+
+        return ExternalFetchResult(
+            ok=ok,
+            text=text,
+            fetch_type="fetch_url",
+            decision="allow",
+            request_id="diag-page-1",
+            content_type=content_type,
+        )
+
+    def _request(self, utterance):
+        from core.dispatcher.external_sources import ExternalAdapterRequest
+        from core.dispatcher.spec import ExternalSource
+
+        return ExternalAdapterRequest(
+            source=ExternalSource.FETCH_URL,
+            utterance=utterance,
+            conversation_state={},
+            retrieval_timestamp="2026-06-12T00:00:00Z",
+        )
+
+    def test_html_is_extracted_not_raw(self):
+        from core.dispatcher import external_sources as es
+
+        html = (
+            "<html><head><title>T</title><script>x</script></head>"
+            "<body><p>real body text</p></body></html>"
+        )
+        with mock.patch.object(
+            es.external_fetch,
+            "fetch_text",
+            return_value=self._fetched(text=html, content_type="text/html; charset=utf-8"),
+        ):
+            payload = es._fetch_url_adapter(
+                es.ExternalSource.FETCH_URL,
+                self._request("check https://a.example/page"),
+            )
+
+        self.assertIn("real body text", payload.text)
+        self.assertIn("T", payload.text.splitlines()[0])
+        self.assertNotIn("<script>", payload.text)
+        self.assertNotIn("<html>", payload.text)
+        self.assertEqual(payload.egress_diagnostic_id, "diag-page-1")
+
+    def test_non_text_content_type_refused_empty(self):
+        from core.dispatcher import external_sources as es
+
+        with mock.patch.object(
+            es.external_fetch,
+            "fetch_text",
+            return_value=self._fetched(text="%PDF-1.7 ...", content_type="application/pdf"),
+        ):
+            with self.assertRaises(es._MappedExternalFailure) as ctx:
+                es._fetch_url_adapter(
+                    es.ExternalSource.FETCH_URL,
+                    self._request("check https://a.example/file.pdf"),
+                )
+
+        self.assertEqual(ctx.exception.status, es.ExternalBranchStatus.EMPTY)
+
+    def test_empty_extraction_refused_empty(self):
+        from core.dispatcher import external_sources as es
+
+        with mock.patch.object(
+            es.external_fetch,
+            "fetch_text",
+            return_value=self._fetched(
+                text="<html><script>only noise</script></html>",
+                content_type="text/html",
+            ),
+        ):
+            with self.assertRaises(es._MappedExternalFailure):
+                es._fetch_url_adapter(
+                    es.ExternalSource.FETCH_URL,
+                    self._request("check https://a.example/empty"),
+                )
+
+
 if __name__ == "__main__":
     unittest.main()

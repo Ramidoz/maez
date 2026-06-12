@@ -679,6 +679,8 @@ def _fetch_url_adapter(
     _source: ExternalSource,
     request: ExternalAdapterRequest,
 ) -> ExternalAdapterPayload:
+    from core.search.page_extract import extract_readable
+
     url = _extract_urls(request.utterance)[0]
     fetched = external_fetch.fetch_text(
         fetch_type="fetch_url",
@@ -686,6 +688,29 @@ def _fetch_url_adapter(
         caller="core.dispatcher.external_sources.fetch_url",
         timeout_s=5.0,
     )
+    if getattr(fetched, "ok", False):
+        base_type = (getattr(fetched, "content_type", "") or "").split(";", 1)[0].strip().lower()
+        if base_type not in {"text/html", "text/plain", ""}:
+            raise _MappedExternalFailure(
+                status=ExternalBranchStatus.EMPTY,
+                empty_reason=ExternalEmptyReason.NO_RESULTS,
+                limitation=AvailabilityLimitation.FRESH_ATTEMPT_FAILED,
+            )
+        title, text = extract_readable(
+            str(getattr(fetched, "text", "")),
+            content_type=base_type or "text/html",
+        )
+        if not text.strip():
+            raise _MappedExternalFailure(
+                status=ExternalBranchStatus.EMPTY,
+                empty_reason=ExternalEmptyReason.NO_RESULTS,
+                limitation=AvailabilityLimitation.FRESH_ATTEMPT_FAILED,
+            )
+        return ExternalAdapterPayload(
+            text=(title + "\n" + text) if title else text,
+            egress_diagnostic_id=str(getattr(fetched, "request_id", "")),
+            retrieval_timestamp=request.retrieval_timestamp,
+        )
     return _payload_from_fetch_result(
         fetched,
         retrieval_timestamp=request.retrieval_timestamp,
