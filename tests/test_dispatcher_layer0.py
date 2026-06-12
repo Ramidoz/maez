@@ -284,6 +284,137 @@ class DispatcherLayer0Tests(unittest.TestCase):
             ProvenanceFraming.SUBSTRATE_ONLY_NO_FRESH_VALIDATION,
         )
 
+    def test_owner_url_selects_fetch_url_hybrid_under_flag(self):
+        from core.dispatcher.inventory import InventorySummary
+        from core.dispatcher.layer0 import Layer0Dispatcher, load_archetype_index
+        from core.dispatcher.spec import (
+            CompositionHint,
+            ExternalSource,
+            InventoryWitness,
+            ProvenanceFraming,
+            SourceAvailability,
+            SubstrateSource,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "archetypes.md"
+            _write_manifest(manifest)
+            encoder = _FakeEncoder()
+            index = load_archetype_index(
+                manifest_path=manifest,
+                cache_path=Path(tmp) / "cache.json",
+                encoder=encoder,
+            )
+            inventory = InventorySummary(
+                inventory_witness=InventoryWitness.PRESENT,
+                source_availability={
+                    SubstrateSource.TELEGRAM_SEMANTIC: SourceAvailability.EXECUTABLE_PRESENT,
+                    SubstrateSource.ENTITY_INDEX: SourceAvailability.EXECUTABLE_PRESENT,
+                    SubstrateSource.LIVED_EPISODES: SourceAvailability.EXECUTABLE_PRESENT,
+                    ExternalSource.WEB_SEARCH: SourceAvailability.EXECUTABLE_PRESENT,
+                    ExternalSource.FETCH_URL: SourceAvailability.EXECUTABLE_PRESENT,
+                },
+                availability_limitations=[],
+                generated_at=1.0,
+            )
+
+            with mock.patch.dict("os.environ", {"MAEZ_PAGE_READ_ENABLED": "1"}):
+                spec = Layer0Dispatcher(index=index, encoder=encoder).emit_spec(
+                    "check https://github.com/ggml-org/llama.cpp/releases - what's the latest release?",
+                    surface="telegram_surface",
+                    inventory=inventory,
+                )
+
+        self.assertEqual(spec.external_sources, [ExternalSource.FETCH_URL])
+        self.assertIn(SubstrateSource.TELEGRAM_SEMANTIC, spec.substrate_sources)
+        self.assertEqual(spec.composition_hint, CompositionHint.PARALLEL)
+        self.assertEqual(
+            spec.provenance_framing,
+            ProvenanceFraming.HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES,
+        )
+
+    def test_owner_url_flag_off_prior_composition(self):
+        from core.dispatcher.inventory import InventorySummary
+        from core.dispatcher.layer0 import Layer0Dispatcher, load_archetype_index
+        from core.dispatcher.spec import (
+            ExternalSource,
+            InventoryWitness,
+            SourceAvailability,
+            SubstrateSource,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "archetypes.md"
+            _write_manifest(manifest)
+            encoder = _FakeEncoder()
+            index = load_archetype_index(
+                manifest_path=manifest,
+                cache_path=Path(tmp) / "cache.json",
+                encoder=encoder,
+            )
+            inventory = InventorySummary(
+                inventory_witness=InventoryWitness.PRESENT,
+                source_availability={
+                    SubstrateSource.TELEGRAM_SEMANTIC: SourceAvailability.EXECUTABLE_PRESENT,
+                    SubstrateSource.ENTITY_INDEX: SourceAvailability.EXECUTABLE_PRESENT,
+                    SubstrateSource.LIVED_EPISODES: SourceAvailability.EXECUTABLE_PRESENT,
+                    ExternalSource.WEB_SEARCH: SourceAvailability.EXECUTABLE_PRESENT,
+                    ExternalSource.FETCH_URL: SourceAvailability.EXECUTABLE_PRESENT,
+                },
+                availability_limitations=[],
+                generated_at=1.0,
+            )
+
+            with mock.patch.dict("os.environ", {}, clear=True):
+                spec = Layer0Dispatcher(index=index, encoder=encoder).emit_spec(
+                    "check https://github.com/x/releases please",
+                    surface="telegram_surface",
+                    inventory=inventory,
+                )
+
+        self.assertNotIn(ExternalSource.FETCH_URL, spec.external_sources)
+
+    def test_no_url_arm_inert_even_with_flag(self):
+        from core.dispatcher.inventory import InventorySummary
+        from core.dispatcher.layer0 import Layer0Dispatcher, load_archetype_index
+        from core.dispatcher.spec import (
+            ExternalSource,
+            InventoryWitness,
+            SourceAvailability,
+            SubstrateSource,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "archetypes.md"
+            _write_manifest(manifest)
+            encoder = _FakeEncoder()
+            index = load_archetype_index(
+                manifest_path=manifest,
+                cache_path=Path(tmp) / "cache.json",
+                encoder=encoder,
+            )
+            inventory = InventorySummary(
+                inventory_witness=InventoryWitness.PRESENT,
+                source_availability={
+                    SubstrateSource.TELEGRAM_SEMANTIC: SourceAvailability.EXECUTABLE_PRESENT,
+                    SubstrateSource.ENTITY_INDEX: SourceAvailability.EXECUTABLE_PRESENT,
+                    SubstrateSource.LIVED_EPISODES: SourceAvailability.EXECUTABLE_PRESENT,
+                    ExternalSource.WEB_SEARCH: SourceAvailability.EXECUTABLE_PRESENT,
+                    ExternalSource.FETCH_URL: SourceAvailability.EXECUTABLE_PRESENT,
+                },
+                availability_limitations=[],
+                generated_at=1.0,
+            )
+
+            with mock.patch.dict("os.environ", {"MAEZ_PAGE_READ_ENABLED": "1"}):
+                spec = Layer0Dispatcher(index=index, encoder=encoder).emit_spec(
+                    "check that page we talked about",
+                    surface="telegram_surface",
+                    inventory=inventory,
+                )
+
+        self.assertNotIn(ExternalSource.FETCH_URL, spec.external_sources)
+
     def test_current_world_question_does_not_treat_greeting_today_as_search(self):
         from core.dispatcher.inventory import InventorySummary
         from core.dispatcher.layer0 import Layer0Dispatcher, load_archetype_index

@@ -27,7 +27,8 @@ from core.dispatcher.spec import (
     SourceLabel,
     SubstrateSource,
 )
-from core.search.sense_flag import sense_enabled
+from core.search.page_extract import extract_first_url
+from core.search.sense_flag import page_read_enabled, sense_enabled
 from memory.embedder import MiniLMEncoder, get_encoder
 
 
@@ -229,6 +230,7 @@ class Layer0Dispatcher:
         explicit_fetch = bool(_EXPLICIT_FETCH_RE.search(utterance))
         explicit_memory = bool(_EXPLICIT_MEMORY_RE.search(utterance))
         content_anchored = bool(_CONTENT_ANCHOR_RE.search(utterance))
+        owner_url_present = page_read_enabled() and bool(extract_first_url(utterance))
         current_world_question = sense_enabled() and _is_current_world_question(utterance)
         source_anchor_candidates = _source_anchor_candidates(utterance)
         live_reddit_anchor = _has_subreddit_anchor(utterance)
@@ -239,7 +241,19 @@ class Layer0Dispatcher:
         if not accepted and scores and scores[0].score >= self.thresholds.no_match_below:
             _append_once(limitations, AvailabilityLimitation.SCORING_LOW_CONFIDENCE)
 
-        if live_reddit_anchor and not explicit_memory:
+        if owner_url_present and not explicit_memory:
+            substrate_sources = _available_substrates(
+                inventory,
+                _substrate_candidates(source_anchor_candidates),
+            )
+            external_sources = [ExternalSource.FETCH_URL]
+            if substrate_sources:
+                hint = CompositionHint.PARALLEL
+                framing = ProvenanceFraming.HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES
+            else:
+                hint = CompositionHint.FRESH_ONLY
+                framing = ProvenanceFraming.FRESH_ONLY
+        elif live_reddit_anchor and not explicit_memory:
             substrate_sources = _available_substrates(
                 inventory,
                 _substrate_candidates(source_anchor_candidates),
