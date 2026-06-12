@@ -37,11 +37,16 @@ evidence-interpretations, from beating current witnessed substrate.
 A small registry of **probes, not prose**: each entry `(name, probe_fn)`
 reading live state.
 
-**v0 probe set:**
-- `web sense` → `SearxngBackend.health()` (its 30s health cache) → `healthy/degraded/down`
-- `page read` → `page_read_enabled()` → `on/off`
+**v0 probe set (flags pinned exactly — Codex should-fix):**
+- `web sense` → `SearxngBackend.health()` (its 30s health cache) →
+  `healthy/degraded/down`. **Egress posture, explicit because this rides
+  every turn:** the health probe sends the fixed string `"healthcheck"` to
+  the LOCAL SearXNG instance only, cached, never owner text — acceptable
+  and named.
+- `page read` → `page_read_enabled()` (`MAEZ_PAGE_READ_ENABLED`) → `on/off`
 - `recall` → `MAEZ_RECALL_TRIAD_ENABLED` → `on/off`
-- `search commitment` → flag → `gatekeeper mode/off`
+- `search commitment` → `MAEZ_SEARCH_COMMITMENT_ENABLED` (+ sense flag
+  composition) → `gatekeeper mode/off`
 - `felt time` → the ONE static honest entry: `built, not yet attached`
   (scheduled to die when the attachment seam-fix lands; until then it is the
   truth Maez could not tell the owner in W2)
@@ -68,10 +73,25 @@ YOUR LIVE BODY (live/cached substrate probe):
  the memory describes your past, not your present.
 ```
 
-Integration: the card builder is called from where `ambient_prompt_block()`
-is consumed (`daemon/maez_daemon.py:5767` region), appended to the ambient
-block content, flag-gated. Gate-free w.r.t. topic — it rides EVERY turn (no
-topic detection ⇒ no new keyword gate ⇒ no faculty dependency).
+**Integration (Codex must-fix #1 — verified: `daemon/maez_daemon.py:5762-5775`
+only appends the system message `if _ambient_block:` is non-empty, and the
+whole block is inside `MAEZ_AMBIENT_BRIEF != "0"`):** the card must not be
+hostage to either condition. The seam becomes a COMBINED block:
+
+```python
+capability = capability_prompt_block()   # own builder, own flag, own cache;
+                                         # built OUTSIDE the MAEZ_AMBIENT_BRIEF gate
+ambient = ambient_prompt_block() if ambient_brief_enabled else ""
+combined = "\n\n".join(p for p in (ambient, capability) if p)
+if combined:
+    append the system message (same role/capture as today)
+```
+
+REQUIRED TEST: ambient empty + organ flag on ⇒ the capability card still
+appears as the system message; organ flag off ⇒ the message content is
+byte-identical to today's `ambient_prompt_block()` output (including the
+empty case appending nothing). Gate-free w.r.t. topic — the card rides EVERY
+turn (no topic detection ⇒ no new keyword gate ⇒ no faculty dependency).
 
 ## Component B — the directive extension (W3, instruction half)
 
@@ -107,9 +127,24 @@ citations are gone).
 **Detection:** absence-shaped claim citing a fresh-evidence marker —
 a sentence matching (case-insensitive) `truncated|missing|cut off|not (in|
 present in|part of)|doesn't contain|lacks|absent from` AND containing
-`[En]` where `n` ∈ the turn's fresh-evidence indices (known from the
-evidence state / stash — the fresh index set travels with the turn evidence
-the same chat_id-keyed way the sources do).
+`[En]` where `n` is treated as fresh.
+
+**Fresh-index reality (Codex must-fix #2 — verified: `stash_turn_evidence`
+stores only `web_present`/`sources`/`observation`; NO marker indices travel
+today):** which `[E#]` indices are fresh is NOT currently backed by live
+data. Therefore:
+- **Task-0 proof obligation for the plan:** locate the authoritative source
+  of fresh `[E#]` index assignment (where focused-cognition numbers the
+  evidence items and which of them came from the fresh wing) and determine
+  the cheapest honest way to carry the fresh-index set into the stash
+  (extend `stash_turn_evidence` with `fresh_indices: tuple[int, ...]`).
+- **Conservative v0 fallback (acceptable because shadow-only):** if the
+  authoritative source is not cleanly reachable, the detector treats ALL
+  `[E#]` citations in the marked draft as fresh ON web/page-evidence turns
+  (`web_present` true in the stash). This over-flags absence-claims citing
+  recalled indices — cost: ledger noise, named here so the witness reads the
+  rows with that bias in mind. The fallback choice (proof vs fallback) is
+  recorded in the handoff, not silently made.
 
 **Action in v0: NONE.** One content-light ledger row per flag to
 `~/.local/state/maez/evidence_precedence_shadow.jsonl` (the established
