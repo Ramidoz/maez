@@ -746,7 +746,12 @@ def _run_dispatcher_pipeline(
 
     fanout_generation_id = uuid.uuid4().hex
     fanout_started = time.monotonic()
-    conversation_state = {"bond_id": bond_id, "surface": surface, "chat_id": chat_id}
+    conversation_state = {
+        "bond_id": bond_id,
+        "surface": surface,
+        "chat_id": chat_id,
+        "chat_history": chat_history,
+    }
     layer1 = Layer1Fanout(
         adapters=_dispatcher_recall_adapters(
             user_text,

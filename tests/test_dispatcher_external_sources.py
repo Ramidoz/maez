@@ -578,6 +578,64 @@ class DispatcherExternalSourceFanoutTests(unittest.TestCase):
             )
             self.assertFalse(result.fresh_blocks[0].egress_diagnostic_id.startswith("web_search:"))
 
+    def test_default_web_search_meta_instruction_uses_recent_owner_question(self):
+        from core.dispatcher.external_sources import ExternalFanout
+        from core.dispatcher.spec import ExternalBranchStatus, ExternalSource
+
+        with tempfile.TemporaryDirectory() as td:
+            log_path = Path(td) / "external_fetch.jsonl"
+            seen = {}
+
+            def witnessed_search(query, max_results=3):
+                seen["query"] = query
+                self.assertEqual(max_results, 3)
+                log_path.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": "external-fetch-diagnostic-v1",
+                            "request_id": "diag-web-derived",
+                            "caller": "skills.web_search.search.searxng",
+                        }
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                return {
+                    "success": True,
+                    "results": [{"title": "Result", "snippet": "Fresh", "url": "https://example.com"}],
+                    "result_count": 1,
+                    "query": query,
+                }
+
+            with (
+                mock.patch.dict(
+                    "os.environ",
+                    {"MAEZ_EXTERNAL_FETCH_LOG": str(log_path)},
+                ),
+                mock.patch("skills.web_search.search", side_effect=witnessed_search),
+                mock.patch(
+                    "skills.web_search.format_for_context",
+                    return_value="[WEB SEARCH] Fresh result",
+                ),
+            ):
+                result = ExternalFanout().run(
+                    _spec(ExternalSource.WEB_SEARCH),
+                    utterance="Search the internet if you don't have the latest information",
+                    conversation_state={
+                        "chat_history": [
+                            {
+                                "content": "rohit: What's the latest with Anthropic?\n"
+                                "maez: I don't have current web information yet.",
+                                "metadata": {"timestamp": "2026-06-12T16:34:00Z"},
+                            }
+                        ]
+                    },
+                    fanout_generation_id="seal-web-derived",
+                )
+
+            self.assertEqual(result.branch_results[0].status, ExternalBranchStatus.SUCCESS)
+            self.assertEqual(seen["query"], "What's the latest with Anthropic?")
+
     def test_every_fresh_block_has_matching_egress_diagnostic(self):
         from core.dispatcher.external_sources import (
             ExternalAdapterPayload,

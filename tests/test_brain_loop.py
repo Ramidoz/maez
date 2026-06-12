@@ -315,6 +315,7 @@ class DispatcherWiring(unittest.TestCase):
 
             def run(self, spec, *, utterance, conversation_state, fanout_generation_id):
                 seen["external_generation_id"] = fanout_generation_id
+                seen["external_conversation_state"] = conversation_state
                 return ExternalFanoutResult(
                     fanout_generation_id=fanout_generation_id,
                     sealed_at=1.0,
@@ -343,6 +344,13 @@ class DispatcherWiring(unittest.TestCase):
                 recall_items=(recall_item,),
             )
 
+        chat_history = [
+            {
+                "content": "rohit: What's the latest with Anthropic?\n"
+                "maez: I don't have current web information yet.",
+                "metadata": {"timestamp": "2026-06-12T16:34:00Z"},
+            }
+        ]
         with (
             patch.object(brain_loop, "_dispatcher_index", return_value=object()),
             patch.object(brain_loop, "_dispatcher_repair_fsm", return_value=FakeFSM()),
@@ -357,6 +365,7 @@ class DispatcherWiring(unittest.TestCase):
                 surface="telegram",
                 bond_id="rohit",
                 chat_id="budget-test",
+                chat_history=chat_history,
             )
 
         self.assertEqual(result.transcript, "MERGED")
@@ -368,6 +377,7 @@ class DispatcherWiring(unittest.TestCase):
         self.assertEqual(seen["merge_generation_ids"], ("shared-seal", "shared-seal"))
         self.assertIs(seen["recorded_spec"], spec)
         self.assertEqual(result.recall_items, (recall_item,))
+        self.assertEqual(seen["external_conversation_state"]["chat_history"], chat_history)
 
     def test_dispatcher_enabled_never_falls_through_to_jarvis_for_external_sources(self):
         from core import brain_loop

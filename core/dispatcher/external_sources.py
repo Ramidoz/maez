@@ -57,6 +57,21 @@ SOURCE_PRIORITY = (
     ExternalSource.ARXIV_OR_PAPERCLIP,
     ExternalSource.FRONTIER_CONSULT,
 )
+_EXPLICIT_WEB_SEARCH_RE = re.compile(
+    r"^\s*(?:search(?: the internet| the web| web)?(?: for)?|google|look up|fetch|"
+    r"check the internet(?: for)?|go check(?: for)?)\b[\s:,-]*(?P<object>.*)$",
+    re.IGNORECASE,
+)
+_META_SEARCH_INSTRUCTION_RE = re.compile(
+    r"\b(?:if you (?:do not|don't) have|if (?:you )?(?:need|want)|latest information|"
+    r"current information|up[- ]to[- ]date|internet if|web if)\b",
+    re.IGNORECASE,
+)
+_OWNER_LINE_RE = re.compile(r"^\s*(?:rohit|owner|user)\s*:\s*(?P<text>.+?)\s*$", re.IGNORECASE)
+_QUESTION_START_RE = re.compile(
+    r"^\s*(?:what|who|when|where|why|how|is|are|do|does|did|can|could|should|has|have)\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -484,7 +499,8 @@ def _web_search_adapter(
 
     log_path = external_fetch._diagnostic_path()
     start_offset = log_path.stat().st_size if log_path.exists() else 0
-    result = web_search.search(request.utterance, max_results=3)
+    query = _derive_web_search_query(request.utterance, request.conversation_state)
+    result = web_search.search(query, max_results=3)
     if not result.get("success") or not result.get("results"):
         raise _MappedExternalFailure(
             status=ExternalBranchStatus.EMPTY,
@@ -514,6 +530,69 @@ def _web_search_adapter(
         egress_diagnostic_id=diagnostic_id,
         retrieval_timestamp=request.retrieval_timestamp,
     )
+
+
+def _derive_web_search_query(utterance: str, conversation_state: Mapping[str, Any]) -> str:
+    text = (utterance or "").strip()
+    match = _EXPLICIT_WEB_SEARCH_RE.match(text)
+    if not match:
+        return text
+    requested_object = _clean_query_text(match.group("object"))
+    if requested_object and not _META_SEARCH_INSTRUCTION_RE.search(requested_object):
+        return requested_object
+    history_query = _latest_substantive_owner_question(conversation_state.get("chat_history"))
+    return history_query or text
+
+
+def _latest_substantive_owner_question(chat_history: Any) -> str:
+    if not chat_history:
+        return ""
+    try:
+        entries = list(chat_history)
+    except TypeError:
+        entries = [chat_history]
+    for entry in reversed(entries):
+        for candidate in reversed(_owner_texts_from_history_entry(entry)):
+            query = _clean_query_text(candidate)
+            if query and _looks_like_substantive_question(query):
+                return query
+    return ""
+
+
+def _owner_texts_from_history_entry(entry: Any) -> list[str]:
+    if isinstance(entry, Mapping):
+        for key in ("user_text", "owner_text", "text", "content"):
+            value = entry.get(key)
+            if isinstance(value, str) and value.strip():
+                if key in {"user_text", "owner_text", "text"}:
+                    return [value]
+                return _owner_lines(value)
+        return []
+    if isinstance(entry, str):
+        return _owner_lines(entry)
+    content = getattr(entry, "content", None)
+    if isinstance(content, str):
+        return _owner_lines(content)
+    return []
+
+
+def _owner_lines(content: str) -> list[str]:
+    lines: list[str] = []
+    for raw_line in content.splitlines():
+        match = _OWNER_LINE_RE.match(raw_line)
+        if match:
+            lines.append(match.group("text"))
+    return lines
+
+
+def _looks_like_substantive_question(text: str) -> bool:
+    if _META_SEARCH_INSTRUCTION_RE.search(text):
+        return False
+    return "?" in text or bool(_QUESTION_START_RE.search(text))
+
+
+def _clean_query_text(text: str) -> str:
+    return (text or "").strip().strip(" \t\r\n\"'`.,;:!-")
 
 
 def _latest_diagnostic_id_after(
