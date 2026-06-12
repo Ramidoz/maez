@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import unittest
 from tempfile import TemporaryDirectory
+from unittest import mock
 
 from core.routing.focused_cognition import assemble_working_set
 
@@ -949,6 +951,55 @@ class FocusedSynthesizeTests(unittest.TestCase):
             self.assertNotIn(banned, system)
         self.assertLess(len(system), 2000)
         self.assertIn("E1", result.cited_ids)
+
+    def test_evidence_precedence_reaches_focused_prompt_when_flag_on(self):
+        from core.routing.focused_cognition import focused_synthesize
+
+        captured = {}
+
+        def fake_chat(*, model, messages, think, options):
+            del model, think, options
+            captured["system"] = messages[0]["content"]
+
+            class _Response:
+                class message:
+                    content = "The page says b9603 [E1]."
+
+            return _Response()
+
+        os.environ["MAEZ_EVIDENCE_PRECEDENCE_ENABLED"] = "1"
+        self.addCleanup(lambda: os.environ.pop("MAEZ_EVIDENCE_PRECEDENCE_ENABLED", None))
+        with mock.patch(
+            "core.cognition.capability_card.capability_prompt_block",
+            return_value="YOUR LIVE BODY (live/cached substrate probe):\n web sense: searxng healthy",
+        ):
+            focused_synthesize(self._ws(), surface="telegram_surface", chat_fn=fake_chat)
+
+        self.assertIn("YOUR LIVE BODY (live/cached substrate probe)", captured["system"])
+        self.assertIn("Recalled memories may CONTEXTUALIZE", captured["system"])
+        self.assertIn("re-read the evidence text itself", captured["system"])
+
+    def test_evidence_precedence_flag_off_keeps_focused_prompt_unchanged(self):
+        from core.routing.focused_cognition import focused_synthesize
+
+        captured = {}
+
+        def fake_chat(*, model, messages, think, options):
+            del model, think, options
+            captured["system"] = messages[0]["content"]
+
+            class _Response:
+                class message:
+                    content = "Notable: [E1] LiquidAI's tiny MoE."
+
+            return _Response()
+
+        os.environ.pop("MAEZ_EVIDENCE_PRECEDENCE_ENABLED", None)
+        focused_synthesize(self._ws(), surface="telegram_surface", chat_fn=fake_chat)
+
+        self.assertNotIn("YOUR LIVE BODY", captured["system"])
+        self.assertNotIn("CONTEXTUALIZE", captured["system"])
+        self.assertNotIn("former tools", captured["system"])
 
 
 class GroundednessTests(unittest.TestCase):

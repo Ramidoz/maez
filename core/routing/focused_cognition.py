@@ -174,9 +174,42 @@ def _citation_render_version() -> str:
 
 def _citation_instruction(render_version: str | None = None) -> str:
     version = render_version or _citation_render_version()
-    if version == "v2":
-        return _FAITHFUL_INSTRUCTION_V2
-    return _FAITHFUL_INSTRUCTION
+    base = _FAITHFUL_INSTRUCTION_V2 if version == "v2" else _FAITHFUL_INSTRUCTION
+    extension = _focused_evidence_precedence_instruction()
+    return f"{base}\n{extension}" if extension else base
+
+
+def _evidence_precedence_enabled() -> bool:
+    try:
+        from core.cognition.capability_card import evidence_precedence_enabled
+
+        return evidence_precedence_enabled()
+    except Exception:
+        return False
+
+
+def _focused_evidence_precedence_instruction() -> str:
+    if not _evidence_precedence_enabled():
+        return ""
+    return (
+        "Recalled memories may CONTEXTUALIZE the fresh evidence above; they "
+        "may not CONTRADICT it. Your memory of past failures with similar "
+        "pages or searches is not evidence about THIS evidence.\n"
+        "Before you claim the evidence lacks or truncates something, re-read "
+        "the evidence text itself - the detail you remember missing before "
+        "may be present now."
+    )
+
+
+def _focused_capability_card() -> str:
+    if not _evidence_precedence_enabled():
+        return ""
+    try:
+        from core.cognition.capability_card import capability_prompt_block
+
+        return capability_prompt_block()
+    except Exception:
+        return ""
 
 
 def is_empty_search_result(sr: dict) -> bool:
@@ -840,7 +873,9 @@ def assemble_working_set(
 
 def _voice_card(surface: str) -> str:
     # Voice surfaces are excluded by the daemon gate in v1.
-    return _VOICE_CARD_TEXT
+    del surface
+    card = _focused_capability_card()
+    return f"{_VOICE_CARD_TEXT}\n\n{card}" if card else _VOICE_CARD_TEXT
 
 
 def focused_synthesize(
