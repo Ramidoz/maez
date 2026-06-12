@@ -9,6 +9,11 @@ from dataclasses import dataclass
 import json
 import time
 from typing import Any
+import urllib.request
+
+from core.model_config import JUDGE_BASE_URL, JUDGE_CHAT_KWARGS, JUDGE_MODEL
+
+_MAX_TOKENS = 160
 
 TURN_KINDS = frozenset({
     "commitment_response",
@@ -157,3 +162,69 @@ def parse_json_read(text: str) -> IntakeRead:
         return IntakeRead.from_model(json.loads(text or ""))
     except Exception:
         return IntakeRead.ambiguous(status="parse_error")
+
+
+def _context_for_prompt(context: dict) -> str:
+    safe = {
+        "turns": context.get("turns") or [],
+        "pending_offer": context.get("pending_offer"),
+        "surface": context.get("surface"),
+    }
+    return json.dumps(safe, ensure_ascii=False, sort_keys=True)[:6000]
+
+
+def build_prompt(message: str, context: dict) -> str:
+    return (
+        "You are Maez's intake-understanding faculty. You do not answer the owner. "
+        "You never execute actions. You emit a proposal/read of what the owner turn means. "
+        "The deterministic substrate decides permissions later. Output only JSON with keys: "
+        "turn_kind, stance, boundary_signal, needs, referent_kind, confidence, rationale. "
+        "Allowed turn_kind values: commitment_response, boundary, continuity_reference, "
+        "recall_request, search_request, topic_shift, ordinary, ambiguous. Do not create "
+        "a refusal category: a no to an offer is commitment_response with stance=no; Maez's "
+        "capacity to refuse is a separate sacred axis. Allowed stance: yes, no, ambiguous, n_a. "
+        "Allowed boundary_signal: none, soft, hard. Allowed needs: search, recall, none. "
+        "Allowed referent_kind: pending_offer, earlier_topic, none.\n\n"
+        f"OWNER_MESSAGE:\n{message or ''}\n\n"
+        f"CONTEXT_JSON:\n{_context_for_prompt(context or {})}\n"
+    )
+
+
+def _call_judge(prompt: str, *, timeout_s: float = 8.0) -> str:
+    payload = {
+        "model": JUDGE_MODEL,
+        "messages": [
+            {"role": "system", "content": "You are a strict JSON classifier. Output only valid JSON."},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.0,
+        "max_tokens": _MAX_TOKENS,
+    }
+    if JUDGE_CHAT_KWARGS:
+        payload["chat_template_kwargs"] = dict(JUDGE_CHAT_KWARGS)
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        f"{JUDGE_BASE_URL.rstrip('/')}/v1/chat/completions",
+        data=body,
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+        data = json.loads(resp.read())
+    return data["choices"][0]["message"]["content"] or ""
+
+
+class HttpIntakeBackend:
+    """Local 4B judge-backed intake faculty.
+
+    Transport and parse failures become an ambiguous read. The shadow worker
+    decides when to call this; the live path must never call it directly.
+    """
+
+    def read(self, message: str, context: dict, timeout_s: float) -> tuple[IntakeRead, float]:
+        started = time.monotonic()
+        try:
+            raw = _call_judge(build_prompt(message, context or {}), timeout_s=timeout_s)
+            read = parse_json_read(raw)
+        except Exception:
+            read = IntakeRead.ambiguous(status="backend_error")
+        return read, time.monotonic() - started
