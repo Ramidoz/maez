@@ -119,3 +119,21 @@ itself must be added. Fold into the fix list.
 Queue: capability-health/evidence-precedence arc now carries THREE wounds
 (Reddit-wall self-claim, temporal hedge, narrative-over-page) + the shadow
 claimability gap + the receipts-URL fix + felt-time first-attachment.
+
+## F. (~09:00) THE FOURTH ASKING — PASS. All three wounds closed.
+Chain: v0 (wrong prompt layer) -> focused-seam (truth present, demoted) ->
+authority fix @ebcab5b (self-capability arm + live-body authority + URL
+fresh-only + one strict flag parser). Witness:
+- W1: SUBSTRATE_ONLY composition (no self-googling); answered from the card;
+  the Reddit-wall memory appeared as "historical failures... a stark
+  improvement over" — CONTEXTUALIZE-not-CONTRADICT, the law in the voice.
+- W2: "built, not yet attached" [LIVE] — the W2 truth spoken. (Owner note:
+  still over-explanatory; quality watch, not a defect.)
+- W3: "The latest release is b9610, tagged Latest, June 12" — read off the
+  page. Shadow ledger: 2 rows total, BOTH from the failures (00:47, 08:29),
+  ZERO from the pass — the instrument recorded its own wound class ending.
+Each asking moved the failure one layer deeper: wrong surface (commitment),
+wrong nerve (progress), wrong prompt layer (card/directive), wrong authority
+(evidence-only instruction) — four layers, four fixes, all witnessed.
+Discovered en route + queued: the house-wide 0-truthy flag footgun (every
+model.env "set 0" revert comment is wrong; proven by execution).
