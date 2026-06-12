@@ -17,7 +17,7 @@
 | File | Responsibility | Change |
 |---|---|---|
 | `core/cognition/capability_card.py` | Self-knowledge feed. Adds strict flag `voice_boundary_enabled()`; `capability_prompt_block()` branches prose vs envelope+instruction. | Modify |
-| `core/dispatcher/proposal_commands.py` | **New.** Pure deterministic formatters for `/proposals` listing and `/show <id>` detail (testable without a Telegram `Update`). | Create |
+| `core/dispatcher/proposal_commands.py` | **New.** Just `parse_show_id` — a pure, testable id parser. C1 reuses the existing Surface-Parity renderers for listing/detail (no new renderer = no display drift). | Create |
 | `skills/surface/telegram_adapter.py` | Component C1: intercept `/proposals` / `/show` in `_handle_command` before the `handle_message(event)` fallthrough (`:2762`). | Modify |
 | `skills/surface/maez_adapter.py` | Component C2: **no functional change** — only a regression guard test that natural `show #N`/`yes`/`reject #N` stays here and still binds. | Test-only |
 | `core/routing/focused_cognition.py` / `daemon/maez_daemon.py` | Capability-card consumers. **No code change** — they already call `capability_prompt_block()`; coverage tests prove both receive A+B. | Test-only (guard) |
@@ -73,7 +73,7 @@ Expected: MaezMessageHandler (maez_adapter) exposes `_surface_parity_pending_evo
 cd /home/rohit/maez
 git checkout -b capability-state-voice-boundary-v0
 git rev-parse --abbrev-ref HEAD   # expect: capability-state-voice-boundary-v0
-git log --oneline -1              # expect main tip 24c7373 as parent
+git log --oneline -1              # expect main tip e9a66d7 (the plan commit) as parent
 ```
 
 ---
@@ -253,9 +253,21 @@ class VoiceBoundaryEnvelopeTest(unittest.TestCase):
         self.assertEqual(payload["authority"], "current_self_capability_state")
         self.assertIn("outranks stale memory", payload["precedence"])
         names = {e["name"]: e for e in payload["entries"]}
-        self.assertEqual(names["web sense"]["status"], "searxng healthy")
+        # status is CANONICALIZED — no dashboard jargon reaches Maez's grounding
+        self.assertEqual(names["web sense"]["status"], "healthy")     # not "searxng healthy"
+        self.assertEqual(names["search commitment"]["status"], "on")  # not "gatekeeper mode"
+        self.assertEqual(names["felt time"]["status"], "attached")
         self.assertEqual(names["web sense"]["source"], "probe")
         self.assertEqual(names["page read"]["source"], "flag")
+
+    def test_flag_on_envelope_carries_no_dashboard_jargon(self):
+        # The whole point: 'gatekeeper mode' / 'searxng' must NOT survive into the
+        # envelope. This pins #1 as a green-test guarantee, not a witness surprise.
+        os.environ["MAEZ_VOICE_BOUNDARY_ENABLED"] = "1"
+        reset_card_cache()
+        out = capability_prompt_block(registry=_fake_registry())
+        self.assertNotIn("gatekeeper mode", out)
+        self.assertNotIn("searxng", out)
 
     def test_flag_on_includes_voice_boundary_instruction(self):
         os.environ["MAEZ_VOICE_BOUNDARY_ENABLED"] = "1"
@@ -311,6 +323,38 @@ _VOICE_BOUNDARY_INSTRUCTION = (
     "voice. Memories may explain what used to be true; they do not override "
     "this state."
 )
+
+
+def _canonical_status(name: str, raw: str) -> str:
+    """Map raw probe output to a neutral status enum for the envelope ONLY.
+
+    This is a RENDERED-FORM change (spec-allowed), not a probe change: the old
+    prose path keeps the raw probe output byte-identical. The point is that the
+    envelope must NOT carry dashboard jargon ('gatekeeper mode', 'searxng ...')
+    into Maez's grounding — that is the exact wound this slice closes. Unknown
+    shapes pass through stripped, never invented.
+    """
+    low = (raw or "").strip().lower()
+    if "unknown" in low or "error" in low:
+        return "unknown"
+    if name == "web sense":
+        if "healthy" in low or "ok" in low:
+            return "healthy"
+        if "degraded" in low or "down" in low or "unhealthy" in low:
+            return "degraded"
+        return "unknown"
+    if name == "search commitment":
+        return "off" if low in ("off", "", "false", "no") else "on"
+    if name == "felt time":
+        if "attached" in low and "not" not in low:
+            return "attached"
+        return "unattached"
+    # page read / recall and any other flag-style probe
+    if low in ("on", "true", "yes", "1"):
+        return "on"
+    if low in ("off", "false", "no", "", "0"):
+        return "off"
+    return low  # already-neutral value, passed through verbatim
 ```
 
 Add a builder function (after `_default_registry`, ~:74):
@@ -328,7 +372,9 @@ def _build_capability_envelope(
     for name, probe in registry:
         source = _ENTRY_SOURCE.get(name, "probe")
         try:
-            entries.append({"name": name, "status": probe(), "source": source})
+            entries.append(
+                {"name": name, "status": _canonical_status(name, probe()), "source": source}
+            )
         except Exception:
             entries.append(
                 {"name": name, "status": "unknown", "source": source, "error": "probe_error"}
@@ -495,139 +541,74 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ## Task 4: Component C1 — deterministic `/proposals` and `/show` in `_handle_command`
 
 **Files:**
-- Create: `core/dispatcher/proposal_commands.py` (pure formatters)
+- Create: `core/dispatcher/proposal_commands.py` (just `parse_show_id` — a pure, testable id parser)
 - Modify: `skills/surface/telegram_adapter.py::_handle_command` (before the `:2762` fallthrough)
 - Test: `tests/test_voice_boundary_commands.py` (create)
 
-C1 reuses the live `MaezMessageHandler` instance (`self._message_handler`) for pending data and for the shared last-shown store. Slash handling must **not** call the brain. `/show <id>` records last-shown with the exact shape/source C2 reads (`{"id":int,"source":"evolution"|"dream","shown_at":float}`).
+**Design (revised per cross-lane review — REUSE over reinvention):** C1 does NOT render proposal detail itself. It delegates to the live `MaezMessageHandler` instance's EXISTING Surface-Parity methods, which already render + audit + set last-shown with the correct chat-id keying:
+- `/proposals` → `handler._surface_parity_disambiguation(pending=evo, dream_rows=dream)` (existing listing renderer).
+- `/show <id>` → `handler._try_surface_parity_proposal_intent(text=f"show #{id}", chat_id=str(event.source.chat_id))` — the SAME method C2 natural-language uses. It renders the detail AND writes `_last_shown_proposal[chat_id]` with `source` set internally, so a following natural `yes` binds **by construction** (no separate write to desync, no display drift). This is why we feed a canonical synthetic `"show #<id>"` string.
 
-- [ ] **Step 1: Write the failing tests for the pure formatters**
+This also means C1 inherits the `surface_parity_enabled()` gate inside that method — correct, because the entire proposal-approval capability is parity-gated; if parity is off there are no approvable proposals and `/show` falls through to the normal path. In the live config both flags are on.
+
+**Verified facts (Task 0 + review):** `MessageEvent.source: SessionSource` (`platform_base.py:745`); C2 keys last-shown by `str(event.source.chat_id)` (`maez_adapter.py:603-608`) — C1 MUST key identically. `telegram_adapter.py` uses module-level `logger = logging.getLogger(__name__)` (`:44`), NOT `self.logger`. `_try_surface_parity_proposal_intent` is gated on `surface_parity_enabled()` and returns `None` when off/unparseable, a deterministic not-found string when the id is absent (`maez_adapter.py:267,~298`).
+
+- [ ] **Step 1: Write the failing test for `parse_show_id`**
 
 Create `tests/test_voice_boundary_commands.py`:
 ```python
 import unittest
 
-from core.dispatcher.proposal_commands import (
-    render_proposals_listing,
-    render_proposal_detail,
-    parse_show_id,
-)
+from core.dispatcher.proposal_commands import parse_show_id
 
 
-class ProposalCommandFormatterTest(unittest.TestCase):
-    EVO = [{"id": 22, "weakness": "cannot summarize long pages", "target_file": "x.py"}]
-    DREAM = [(7, "2026-06-10", "I keep losing the thread after a tool call")]
-
-    def test_listing_lists_both_kinds_deterministically(self):
-        out = render_proposals_listing(self.EVO, self.DREAM)
-        self.assertIn("#22", out)
-        self.assertIn("#7", out)
-        self.assertIn("cannot summarize", out)
-        # deterministic: same input -> same output
-        self.assertEqual(out, render_proposals_listing(self.EVO, self.DREAM))
-
-    def test_listing_empty_is_honest(self):
-        out = render_proposals_listing([], [])
-        self.assertIn("no pending proposals", out.lower())
-
-    def test_detail_evolution(self):
-        out, source = render_proposal_detail(22, self.EVO, self.DREAM)
-        self.assertEqual(source, "evolution")
-        self.assertIn("#22", out)
-        self.assertIn("cannot summarize", out)
-
-    def test_detail_dream(self):
-        out, source = render_proposal_detail(7, self.EVO, self.DREAM)
-        self.assertEqual(source, "dream")
-        self.assertIn("#7", out)
-        self.assertIn("losing the thread", out)
-
-    def test_detail_missing(self):
-        out, source = render_proposal_detail(99, self.EVO, self.DREAM)
-        self.assertIsNone(source)
-        self.assertIn("99", out)
-        self.assertIn("don't", out.lower())
-
-    def test_parse_show_id(self):
+class ParseShowIdTest(unittest.TestCase):
+    def test_parses_plain_and_hash_and_botsuffix(self):
         self.assertEqual(parse_show_id("/show 22"), 22)
         self.assertEqual(parse_show_id("/show #22"), 22)
         self.assertEqual(parse_show_id("/show@maezbot 22"), 22)
+        self.assertEqual(parse_show_id("/show@maezbot #22"), 22)
+
+    def test_no_id_or_garbage_is_none(self):
         self.assertIsNone(parse_show_id("/show"))
         self.assertIsNone(parse_show_id("/show xyz"))
+        self.assertIsNone(parse_show_id(""))
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [ ] **Step 2: Run to verify it fails**
 
 Run: `/home/rohit/maez/.venv/bin/python -B -m unittest tests.test_voice_boundary_commands -v`
 Expected: FAIL — module `core.dispatcher.proposal_commands` does not exist.
 
-- [ ] **Step 3: Implement the pure formatters**
+- [ ] **Step 3: Implement `parse_show_id`**
 
 Create `core/dispatcher/proposal_commands.py`:
 ```python
-"""Deterministic renderers for the /proposals and /show slash commands.
+"""Slash-command helpers for the /proposals and /show command surface.
 
-Pure functions over the Surface-Parity pending-data shapes so they are testable
-without a Telegram Update and never call the brain. The adapter (C1) supplies
-the data via the live MaezMessageHandler instance.
+Kept tiny and pure: the adapter (C1) reuses the existing Surface-Parity
+renderers for everything else, so the only logic worth isolating here is
+parsing a proposal id out of a /show command (testable without a Telegram
+Update). No brain call, no proposal-engine logic.
 """
 from __future__ import annotations
 
 import re
 from typing import Optional
 
-# evolution candidates: list[dict] with keys id, weakness, target_file
-# dream rows: list[tuple] (pid, created, insight)
-
 
 def parse_show_id(text: str) -> Optional[int]:
     """Extract the integer id from '/show 22', '/show #22', '/show@bot 22'."""
     m = re.search(r"/show(?:@\S+)?\s+#?(\d+)\b", (text or "").strip())
     return int(m.group(1)) if m else None
-
-
-def render_proposals_listing(evolution: list[dict], dream: list[tuple]) -> str:
-    if not evolution and not dream:
-        return "You have no pending proposals right now."
-    lines = [f"{len(evolution) + len(dream)} pending proposal(s):", ""]
-    for row in evolution[:10]:
-        lines.append(f"  #{row['id']}: {(row.get('weakness') or '')[:80]}")
-    for pid, _created, insight in dream[:10]:
-        lines.append(f"  #{pid}: {(insight or '')[:80]}")
-    lines.append("")
-    lines.append('Use /show <id> for detail, then reply "yes to #<id>" or "reject #<id>".')
-    return "\n".join(lines)
-
-
-def render_proposal_detail(
-    proposal_id: int, evolution: list[dict], dream: list[tuple]
-) -> tuple[str, Optional[str]]:
-    """Return (text, source) where source is 'evolution'|'dream'|None(not found)."""
-    for row in evolution:
-        if int(row["id"]) == proposal_id:
-            body = row.get("weakness") or ""
-            target = row.get("target_file") or ""
-            text = f"Proposal #{proposal_id} (growth):\n{body}"
-            if target:
-                text += f"\n(target: {target})"
-            text += '\n\nReply "yes" to approve or "reject #%d".' % proposal_id
-            return text, "evolution"
-    for pid, _created, insight in dream:
-        if int(pid) == proposal_id:
-            text = (
-                f"Proposal #{proposal_id} (dream):\n{(insight or '')[:500]}"
-                f'\n\nReply "yes" to approve or "reject #{proposal_id}".'
-            )
-            return text, "dream"
-    return (f"I don't see a pending proposal #{proposal_id}. It may already be resolved.", None)
 ```
 
-- [ ] **Step 4: Run to verify the formatters pass**
+- [ ] **Step 4: Run to verify it passes**
 
 Run: `/home/rohit/maez/.venv/bin/python -B -m unittest tests.test_voice_boundary_commands -v`
 Expected: PASS.
 
-- [ ] **Step 5: Write the failing test for the `_handle_command` interception (no brain call)**
+- [ ] **Step 5: Write the failing test for the `_handle_command` interception (reuse + no brain)**
 
 Append to `tests/test_voice_boundary_commands.py`:
 ```python
@@ -637,14 +618,25 @@ import types
 
 
 class FakeMaezHandler:
+    """Stands in for the live MaezMessageHandler instance C1 reaches via
+    self._message_handler. Records the reuse calls C1 must make."""
     def __init__(self, evo, dream):
         self._evo = evo
         self._dream = dream
         self._last_shown_proposal = {}
+        self.show_calls = []
     def _surface_parity_pending_evolution_candidates(self):
         return self._evo
     def _surface_parity_pending_dream_rows(self):
         return self._dream
+    def _surface_parity_disambiguation(self, *, pending, dream_rows):
+        return f"LISTING evo={len(pending)} dream={len(dream_rows)}"
+    async def _try_surface_parity_proposal_intent(self, *, text, chat_id):
+        # mimic the real method: on a show, render + set last-shown, return text
+        self.show_calls.append((text, chat_id))
+        import time
+        self._last_shown_proposal[chat_id] = {"id": 22, "source": "evolution", "shown_at": time.time()}
+        return f"DETAIL for {text}"
 
 
 class HandleCommandInterceptTest(unittest.TestCase):
@@ -674,23 +666,31 @@ class HandleCommandInterceptTest(unittest.TestCase):
         return a, sent
 
     def _event(self, text):
-        return types.SimpleNamespace(
-            text=text, chat_id="c1", user_id="u1", message_id=1, raw=None,
-        )
+        # MessageEvent.source.chat_id is the real keying path
+        src = types.SimpleNamespace(chat_id="c1")
+        return types.SimpleNamespace(text=text, source=src, message_id=1, raw=None)
 
-    def test_proposals_handled_without_brain(self):
+    def test_proposals_reuses_disambiguation_no_brain(self):
         a, sent = self._adapter([{"id": 22, "weakness": "w", "target_file": "x"}], [])
         handled = asyncio.run(a._try_command_proposal_surface(self._event("/proposals")))
         self.assertTrue(handled)
-        self.assertIn("#22", sent[0])
+        self.assertIn("LISTING evo=1 dream=0", sent[0])
 
-    def test_show_records_last_shown_for_followup_yes(self):
+    def test_proposals_empty_is_honest(self):
+        a, sent = self._adapter([], [])
+        handled = asyncio.run(a._try_command_proposal_surface(self._event("/proposals")))
+        self.assertTrue(handled)
+        self.assertIn("no pending proposals", sent[0].lower())
+
+    def test_show_delegates_with_correct_chatid_and_binds(self):
         a, sent = self._adapter([{"id": 22, "weakness": "w", "target_file": "x"}], [])
         handled = asyncio.run(a._try_command_proposal_surface(self._event("/show 22")))
         self.assertTrue(handled)
-        binding = a._message_handler._last_shown_proposal["c1"]
-        self.assertEqual(binding["id"], 22)
-        self.assertEqual(binding["source"], "evolution")  # matches C2's read
+        # delegated to the existing handler with a canonical synthetic text + real chat id
+        self.assertEqual(a._message_handler.show_calls, [("show #22", "c1")])
+        # last-shown written under the SAME key C2 reads (str(event.source.chat_id))
+        self.assertEqual(a._message_handler._last_shown_proposal["c1"]["id"], 22)
+        self.assertIn("DETAIL", sent[0])
 
     def test_show_no_id_usage(self):
         a, sent = self._adapter([], [])
@@ -702,22 +702,25 @@ class HandleCommandInterceptTest(unittest.TestCase):
         a, sent = self._adapter([], [])
         handled = asyncio.run(a._try_command_proposal_surface(self._event("/weather")))
         self.assertFalse(handled)  # falls through to handle_message in real _handle_command
+
+    def test_flag_off_not_handled(self):
+        os.environ.pop("MAEZ_VOICE_BOUNDARY_ENABLED", None)
+        a, sent = self._adapter([{"id": 22, "weakness": "w", "target_file": "x"}], [])
+        handled = asyncio.run(a._try_command_proposal_surface(self._event("/proposals")))
+        self.assertFalse(handled)
 ```
 
-**Note for the implementer:** `_event` and the `event` shape must match the real `MessageEvent` used by `_handle_command`. Verify the field names before relying on this fake:
+**Verify the fakes match reality before relying on them:**
 ```bash
-grep -nE "class MessageEvent|chat_id|user_id|message_id|\.text" skills/surface/platform_base.py | head
-sed -n '2742,2762p' skills/surface/telegram_adapter.py
+grep -nE "class MessageEvent|class SessionSource|chat_id" skills/surface/platform_base.py | head
+sed -n '603,610p' skills/surface/maez_adapter.py   # the canonical chat_id derivation to copy
+sed -n '2742,2763p' skills/surface/telegram_adapter.py  # how _handle_command builds event + replies
 ```
-**Adjust-rule:** make `_event` produce the same attributes `_handle_command` reads off the event; if `_handle_command` builds the event from `update`/`context` rather than receiving one, factor the proposal-surface logic into `_try_command_proposal_surface(self, event)` taking the already-built event (built at the top of `_handle_command`), and call it from `_handle_command` after the event is constructed.
+**Adjust-rule:** if `_handle_command` builds its `event` from `(update, context)` rather than receiving one, keep `_try_command_proposal_surface(self, event)` taking the already-built event and call it after the event is constructed (before `:2762`). Make `_send_command_reply` mirror whatever `/receipts` uses at `:2752-2759` (do not invent a new send); if `/receipts` already exposes a reusable reply helper, call that and update the test's monkeypatch target.
 
 - [ ] **Step 6: Implement C1 in `telegram_adapter.py`**
 
-First confirm how `_handle_command` builds its `event` and how `/receipts` replies (to mirror the send path):
-```bash
-sed -n '2742,2763p' skills/surface/telegram_adapter.py
-```
-Add a small reply helper if one is not already used by `/receipts` (mirror whatever `/receipts` calls — likely a `_reply_text`/`_send_*`). Then add the interceptor method and call it before the fallthrough. Insert into `_handle_command` immediately before `await self.handle_message(event)` (:2762):
+Insert into `_handle_command` immediately before `await self.handle_message(event)` (`:2762`):
 ```python
         if await self._try_command_proposal_surface(event):
             return
@@ -729,65 +732,71 @@ Add the method (near `_try_handle_dream_command_event`):
     async def _try_command_proposal_surface(self, event) -> bool:
         """C1: deterministic /proposals and /show. Never calls the brain.
 
-        Reuses the live MaezMessageHandler's Surface-Parity pending-data
-        accessors and its shared last-shown store, so a following natural
-        'yes' still binds via the C2 resolver. Returns True if it handled the
-        command; False lets _handle_command fall through to the brain.
+        Delegates to the live MaezMessageHandler's existing Surface-Parity
+        renderers so detail/listing and the last-shown binding stay identical
+        to the natural-language (C2) path. Returns True if handled; False lets
+        _handle_command fall through to the brain.
         """
         from core.cognition.capability_card import voice_boundary_enabled
         if not voice_boundary_enabled():
             return False
         text = (getattr(event, "text", "") or "").strip()
-        is_proposals = text.split()[0].split("@")[0] == "/proposals" if text else False
-        is_show = text.split()[0].split("@")[0] == "/show" if text else False
-        if not (is_proposals or is_show):
+        if not text:
+            return False
+        head = text.split()[0].split("@")[0]
+        if head not in ("/proposals", "/show"):
             return False
 
         handler = getattr(self, "_message_handler", None)
-        if handler is None or not hasattr(handler, "_surface_parity_pending_evolution_candidates"):
+        if handler is None or not hasattr(handler, "_try_surface_parity_proposal_intent"):
             return False  # no live handler -> let the normal path run
 
-        from core.dispatcher.proposal_commands import (
-            render_proposals_listing,
-            render_proposal_detail,
-            parse_show_id,
-        )
+        # SAME keying as C2's __call__ (maez_adapter.py:603-608)
+        chat_id = ""
+        src = getattr(event, "source", None)
+        if src is not None and getattr(src, "chat_id", None):
+            chat_id = str(src.chat_id)
 
-        try:
-            evolution = handler._surface_parity_pending_evolution_candidates()
-            dream = handler._surface_parity_pending_dream_rows()
-        except Exception:
-            self.logger.debug("C1 pending-proposal fetch failed", exc_info=True)
-            return False
-
-        if is_proposals:
-            await self._send_command_reply(event, render_proposals_listing(evolution, dream))
+        if head == "/proposals":
+            try:
+                evo = handler._surface_parity_pending_evolution_candidates()
+                dream = handler._surface_parity_pending_dream_rows()
+            except Exception:
+                logger.debug("C1 /proposals fetch failed", exc_info=True)
+                return False
+            if not evo and not dream:
+                await self._send_command_reply(event, "You have no pending proposals right now.")
+                return True
+            await self._send_command_reply(
+                event, handler._surface_parity_disambiguation(pending=evo, dream_rows=dream)
+            )
             return True
 
         # /show
-        import time as _time
+        from core.dispatcher.proposal_commands import parse_show_id
         proposal_id = parse_show_id(text)
         if proposal_id is None:
             await self._send_command_reply(event, "Usage: /show <id>  (e.g. /show 22)")
             return True
-        detail, source = render_proposal_detail(proposal_id, evolution, dream)
-        if source is not None:
-            chat_id = str(getattr(event, "chat_id", "") or "")
-            handler._last_shown_proposal[chat_id] = {
-                "id": int(proposal_id),
-                "source": source,
-                "shown_at": _time.time(),
-            }
-        await self._send_command_reply(event, detail)
+        try:
+            reply = await handler._try_surface_parity_proposal_intent(
+                text=f"show #{proposal_id}", chat_id=chat_id
+            )
+        except Exception:
+            logger.debug("C1 /show delegation failed", exc_info=True)
+            return False
+        if reply is None:
+            return False  # parity disabled / nothing resolvable -> normal path
+        await self._send_command_reply(event, reply)
         return True
 ```
 
-Implement `_send_command_reply` to mirror the existing `/receipts` reply path (use the SAME call `/receipts` uses — read it at :2752-2759 and copy the mechanism; do not invent a new send). If `/receipts` already exposes a reusable reply helper, call that and skip adding a new one (then update the test's monkeypatch target accordingly).
+Implement `_send_command_reply` to MIRROR the existing `/receipts` reply path (read `:2752-2759` and copy the mechanism; do not invent a new send). If `/receipts` already calls a reusable helper, reuse it and skip adding a new method (then point the test's monkeypatch at that name). Note: `logger` is the module logger at `:44`, NOT `self.logger`.
 
 - [ ] **Step 7: Run the full command test file**
 
 Run: `/home/rohit/maez/.venv/bin/python -B -m unittest tests.test_voice_boundary_commands -v`
-Expected: PASS (formatters + interception, including the brain-not-called assertion and the last-shown binding).
+Expected: PASS — including the brain-not-called assertion, the exact-delegation assertion (`("show #22", "c1")`), and the last-shown binding under the real key.
 
 - [ ] **Step 8: Commit**
 
@@ -797,12 +806,14 @@ git commit -m "feat(voice-boundary): deterministic /proposals and /show on Surfa
 
 ## Predicted effect
 With the flag on, /proposals and /show <id> are answered deterministically in
-telegram_adapter._handle_command BEFORE the handle_message fallthrough, instead
-of being improvised by the brain. /show <id> records last-shown into the live
-MaezMessageHandler's shared store using the same {id,source,shown_at} shape the
-C2 resolver reads, so a following natural 'yes' still binds. Reuses the
-Surface-Parity pending-data accessors (no duplicate proposal engine) and never
-calls the brain. Flag off or no live handler: unchanged fallthrough.
+telegram_adapter._handle_command BEFORE the handle_message fallthrough, by
+DELEGATING to the existing Surface-Parity renderers on the live
+MaezMessageHandler. /show feeds a canonical 'show #<id>' to
+_try_surface_parity_proposal_intent, which renders detail and writes
+_last_shown_proposal under str(event.source.chat_id) -- the same key C2 reads --
+so a following natural 'yes' binds by construction. No duplicate engine, no
+display drift, never calls the brain. Flag off / no live handler / parity off:
+unchanged fallthrough.
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
@@ -904,7 +915,7 @@ Expected: all PASS. (Do NOT full-discover in `/home/rohit/maez` — S7 live-tree
 
 - [ ] **Step 2: Update the Build Ledger**
 
-Add/refresh rows in `docs/MAEZ_BUILD_LEDGER.md` (match the existing 12-column table shape; `updated_by` = `claude`, `last_verified_commit` = the branch tip from Step 4):
+Add/refresh rows in `docs/MAEZ_BUILD_LEDGER.md` (match the existing 12-column table shape; `updated_by` = `codex` — Codex is the builder executing this task; `last_verified_commit` = the branch tip from Step 4):
 - `Voice boundary v0 (capability-state envelope + voice instruction)` · `BUILT_ASLEEP` (witness-pending) · live seam `core/cognition/capability_card.py::capability_prompt_block (both consumers)` · dead seam `n/a` · flag `MAEZ_VOICE_BOUNDARY_ENABLED` · witness `pending — :11435 A/B + Telegram C` · owner breath `merge+flag+restart+witness` · dup-risk `single render fn = no two-path drift; JSON still quotable (residual)` · next action `A/B via 11435, C via Telegram`.
 - `Capability card render form` row: note the prose→envelope render-form change is voice-flag-gated; flag-off byte-identical.
 - `Command surface on Surface V2 (/proposals, /show)` · `BUILT_ASLEEP` · live seam `telegram_adapter._handle_command::_try_command_proposal_surface` · flag `MAEZ_VOICE_BOUNDARY_ENABLED` · dup-risk `reuses MaezMessageHandler accessors + shared last-shown; no new engine`.
@@ -960,6 +971,8 @@ git rev-parse --short HEAD   # record as the ledger last_verified_commit
 
 **Placeholder scan:** no TBD/TODO; every code step shows complete code; adjust-rules name exact verification commands rather than "handle edge cases." ✓
 
-**Type consistency:** `voice_boundary_enabled()`, `capability_prompt_block(registry=None) -> str`, `_build_capability_envelope(registry) -> str`, `render_proposals_listing(evolution, dream) -> str`, `render_proposal_detail(id, evolution, dream) -> (str, Optional[str])`, `parse_show_id(text) -> Optional[int]`, `_try_command_proposal_surface(self, event) -> bool`, last-shown shape `{"id":int,"source":str,"shown_at":float}` — consistent across tasks. ✓
+**Type consistency:** `voice_boundary_enabled()`, `capability_prompt_block(registry=None) -> str`, `_build_capability_envelope(registry) -> str`, `_canonical_status(name, raw) -> str`, `parse_show_id(text) -> Optional[int]`, `_try_command_proposal_surface(self, event) -> bool`, reuse of `handler._surface_parity_disambiguation(pending=, dream_rows=)` and `handler._try_surface_parity_proposal_intent(text=, chat_id=)`, last-shown shape `{"id":int,"source":str,"shown_at":float}` keyed by `str(event.source.chat_id)` — consistent across tasks. ✓
 
-**Known fragilities flagged for the implementer (with adjust-rules, not guesses):** the real `MessageEvent` field names (Task 4 Step 5), the `/receipts` reply mechanism to mirror for `_send_command_reply` (Task 4 Step 6), and any line-number drift since @24c7373 (Task 0). Each carries a verification command + adjust-rule.
+**Known fragilities flagged for the implementer (with adjust-rules, not guesses):** the `/receipts` reply mechanism to mirror for `_send_command_reply` (Task 4 Step 6 — the one piece still copied rather than reused), and any line-number drift since the proofs (Task 0). The `MessageEvent.source.chat_id` keying and the module-`logger` fact are now pinned from code, not guessed. Each remaining item carries a verification command + adjust-rule.
+
+**Cross-lane review patches (Codex HOLD, all six accepted + verified against code):** (1) envelope now canonicalizes status via `_canonical_status` so `gatekeeper mode`/`searxng` never reach Maez's grounding, with a no-jargon green-test guard; (2) C1 keys last-shown by `str(event.source.chat_id)` — verified C2 does the same at maez_adapter:603-608; (3) module `logger`, not `self.logger` — verified at telegram_adapter:44; (4) ledger `updated_by=codex`; (5) branch parent `e9a66d7`; (6) C1 reuses `_surface_parity_disambiguation` + `_try_surface_parity_proposal_intent` instead of a new renderer — which *also* makes #2 structural (the existing handler owns the keyed write). #6's reuse inherits the `surface_parity_enabled()` gate, which is correct (proposal approval is parity-gated end to end).
