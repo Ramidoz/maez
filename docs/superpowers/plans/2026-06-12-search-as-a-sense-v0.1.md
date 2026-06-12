@@ -1409,7 +1409,7 @@ nothing else.)
 - [ ] **Step 6: Commit (behavior-affecting)**
 
 ```bash
-git add core/routing/attribution_render.py core/brain/brain_loop.py skills/surface/telegram_adapter.py tests/test_attribution_render.py
+git add core/routing/attribution_render.py daemon/maez_daemon.py core/brain/brain_loop.py skills/surface/telegram_adapter.py tests/test_attribution_render.py
 git commit -m "feat(search-sense): post-audit natural render + /receipts
 
 ## Predicted effect
