@@ -59,3 +59,27 @@ maez_adapter, pass it); temporal_echo = unverified.
 
 Queue: re-attachment is small (seam-class, can move fast per the
 cooling-off asymmetry); capability-health remains the structural cure.
+
+## D-CORRECTION (git archaeology, ~01:00): NOT severed — BORN ORPHANED
+Section D's "severed since 2026-04-20" is FALSIFIED. fb2f781 (2026-05-24)
+created subjective_duration.py AND its telegram_voice wiring AND the
+handle_message param in one commit — FIVE WEEKS AFTER the Surface V2
+migration. The organ was built against the already-dead inbound surface on
+day one; its felt-time line has never reached a live conversation. Same
+wrong-surface mistake as search-commitment v0 (2026-06-11), which was
+caught same-day only because the live-witness/Task-0 discipline existed by
+then; felt-time predates that lesson by 2.5 weeks (its witness must have
+been unit-level — the live path never walked). Cycle-side writes via the
+curiosity meaningful-event seam (ba4a545) may exist independently —
+unverified, do not claim either way.
+
+PATTERN SHARPENED: the trap is not "the migration severed organs" — it is
+that the legacy surface KEEPS LOOKING ALIVE. telegram_voice's continued
+existence (outbound-only) makes it an attractive, plausible, dead wiring
+target. Candidate guard for the capability-health arc: make the
+outbound-only status structurally loud (docstring + a runtime warning or
+assertion on its inbound-intent methods), so the next builder cannot
+solder a nerve to it silently.
+
+Queue language correction: the fix is ATTACHMENT (first live wiring), not
+re-attachment.
