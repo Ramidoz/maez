@@ -43,6 +43,8 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+import hashlib
+import json
 import logging
 import re
 import sqlite3
@@ -900,6 +902,33 @@ class DreamState:
             "target_section": row[7],
             "proposed_new_body": row[8],
             "unified_diff": row[9],
+        }
+
+    def proposal_fingerprint(self, prop_id: int) -> dict[str, Any]:
+        """Return the live proposal freshness fingerprint for S7 bridge cards.
+
+        The S7 ceremony bridge binds a soul-write card to the proposal row that
+        caused it. The bridge stores this fingerprint at seed time; the
+        ratify-time freshness gate re-reads it from the live row. A status move,
+        edit, or missing proposal therefore changes the card precondition.
+        """
+
+        proposal = self.get_proposal(prop_id)
+        if proposal is None:
+            return {"proposal_id": int(prop_id), "status": "absent"}
+        content = {
+            "insight": proposal.get("insight") or "",
+            "target_section": proposal.get("target_section") or "",
+            "proposed_new_body": proposal.get("proposed_new_body") or "",
+            "unified_diff": proposal.get("unified_diff") or "",
+        }
+        content_blob = json.dumps(content, sort_keys=True, separators=(",", ":"))
+        return {
+            "proposal_id": int(prop_id),
+            "proposal_type": str(proposal.get("proposal_type") or "append"),
+            "status": str(proposal.get("status") or ""),
+            "created_at": str(proposal.get("created_at") or ""),
+            "content_hash": hashlib.sha256(content_blob.encode("utf-8")).hexdigest(),
         }
 
     def s7_apply_action_params(self, prop_id: int) -> dict[str, Any]:
