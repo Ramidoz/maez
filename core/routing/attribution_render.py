@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from collections import OrderedDict
 
-from core.search.sense_flag import sense_enabled
+from core.search.sense_flag import page_read_enabled, sense_enabled
 
 _CITE_RE = re.compile(r"\s*\[E(\d+)\]")
 _WEB_SUFFIX = "\n\n-- I looked at the live web for this (ask /receipts for sources)."
@@ -22,7 +22,7 @@ _EMPTY_TURN = {"web_present": False, "sources": [], "observation": None}
 
 
 def render_natural(marked_draft, *, web_evidence_present: bool):
-    if not sense_enabled():
+    if not (sense_enabled() or page_read_enabled()):
         return marked_draft
     try:
         if not isinstance(marked_draft, str) or not marked_draft:
@@ -69,7 +69,7 @@ def stash_turn_evidence(chat_id, *, rendered_turn, evidence_texts, observation) 
 
         web_present = any(
             str(getattr(getattr(summary, "source", None), "value", getattr(summary, "source", "")))
-            == "WEB_SEARCH"
+            in {"WEB_SEARCH", "FETCH_URL"}
             for summary in (getattr(rendered_turn, "source_summaries", None) or [])
         )
         _TURN_EVIDENCE[str(chat_id or "")] = {

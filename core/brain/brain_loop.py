@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Any
 
 from core import llm_client as _llm_client
-from core.search.sense_flag import sense_enabled
+from core.search.sense_flag import page_read_enabled, sense_enabled
 
 
 @dataclass
@@ -879,30 +879,55 @@ def _run_dispatcher_pipeline(
         from core.intake_bus.world_observation_lane import evaluate_write_condition
         from core.routing.attribution_render import stash_turn_evidence
 
-        if sense_enabled():
+        if sense_enabled() or page_read_enabled():
             _web_texts = []
+            _page_blocks = []
             for _branch in getattr(external_result, "branch_results", []) or []:
-                if str(getattr(getattr(_branch, "source", None), "value", "")) == "WEB_SEARCH":
+                _source_value = str(getattr(getattr(_branch, "source", None), "value", ""))
+                if _source_value == "WEB_SEARCH":
                     _web_texts = [
                         getattr(_block, "text", "") or ""
                         for _block in (getattr(_branch, "blocks", ()) or ())
                     ][:3]
-                    break
+                elif _source_value == "FETCH_URL":
+                    _page_blocks = list(getattr(_branch, "blocks", ()) or ())[:1]
+            _page_texts = [
+                getattr(_block, "text", "") or "" for _block in (_page_blocks or [])
+            ]
+            _observation = None
+            if sense_enabled() and evaluate_write_condition(rendered_turn):
+                _observation = {
+                    "query": user_text,
+                    "evidence_texts": _web_texts,
+                    "diagnostic_id": str(
+                        getattr(external_result, "fanout_generation_id", "")
+                    ),
+                }
+            elif (
+                page_read_enabled()
+                and _page_blocks
+                and evaluate_write_condition(rendered_turn, source_value="FETCH_URL")
+            ):
+                from core.search.page_extract import extract_first_url
+
+                _page_text = _page_texts[0]
+                _title, _sep, _rest = _page_text.partition("\n")
+                _excerpt = (_rest if _sep else _page_text).strip()[:600]
+                _observation = {
+                    "kind": "page_read",
+                    "url": extract_first_url(user_text) or "",
+                    "title": _title.strip()[:200],
+                    "excerpt": _excerpt,
+                    "diagnostic_id": str(
+                        getattr(_page_blocks[0], "egress_diagnostic_id", "")
+                        or getattr(external_result, "fanout_generation_id", "")
+                    ),
+                }
             stash_turn_evidence(
                 chat_id,
                 rendered_turn=rendered_turn,
-                evidence_texts=_web_texts,
-                observation=(
-                    {
-                        "query": user_text,
-                        "evidence_texts": _web_texts,
-                        "diagnostic_id": str(
-                            getattr(external_result, "fanout_generation_id", "")
-                        ),
-                    }
-                    if evaluate_write_condition(rendered_turn)
-                    else None
-                ),
+                evidence_texts=_web_texts or _page_texts,
+                observation=_observation,
             )
     except Exception:
         logger.debug("world_observation stash skipped", exc_info=True)
@@ -1829,7 +1854,9 @@ def run_brain_loop(
             chat_id=chat_id,
             chat_history=chat_history,
             recall_stack_config=_recall_stack_config,
-            send_intermediate=(send_intermediate if sense_enabled() else None),
+            send_intermediate=(
+                send_intermediate if sense_enabled() or page_read_enabled() else None
+            ),
         )
         if dispatcher_result.transcript:
             if return_structured:

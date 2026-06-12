@@ -30,6 +30,16 @@ class RenderTests(unittest.TestCase):
         marked = "kept [E1]."
         self.assertEqual(ar.render_natural(marked, web_evidence_present=True), marked)
 
+    def test_page_read_flag_also_enables_natural_rendering(self):
+        os.environ.pop("MAEZ_SEARCH_AS_SENSE_ENABLED", None)
+        os.environ["MAEZ_PAGE_READ_ENABLED"] = "1"
+        self.addCleanup(lambda: os.environ.pop("MAEZ_PAGE_READ_ENABLED", None))
+
+        out = ar.render_natural("The release is b9601 [E1].", web_evidence_present=True)
+
+        self.assertNotIn("[E1]", out)
+        self.assertIn("looked at the live web", out)
+
     def test_render_failure_falls_back_to_marked_draft(self):
         self.assertEqual(ar.render_natural(None, web_evidence_present=True), None)
 
@@ -61,6 +71,25 @@ class RenderTests(unittest.TestCase):
         self.assertIsNone(ar.pop_turn_evidence("chat7")["observation"])
         self.assertFalse(ar.pop_turn_evidence("never")["web_present"])
 
+    def test_fetch_url_summary_marks_web_present_for_page_read(self):
+        class _S:
+            source = type("X", (), {"value": "FETCH_URL"})()
+
+        class _T:
+            source_summaries = [_S()]
+
+        ar.stash_turn_evidence(
+            "page-chat",
+            rendered_turn=_T(),
+            evidence_texts=["Title\nsee https://a.example/page now"],
+            observation={"kind": "page_read"},
+        )
+
+        got = ar.pop_turn_evidence("page-chat")
+        self.assertTrue(got["web_present"])
+        self.assertEqual(got["sources"], ["https://a.example/page"])
+
+
     def test_receipts_reply_full_and_empty(self):
         ar.retain_receipt("c9", marked="claim [E1]", sources=["https://a", "https://b"])
         out = ar.receipts_reply("c9")
@@ -76,7 +105,7 @@ class RenderTests(unittest.TestCase):
         from core.brain import brain_loop
 
         brain_src = inspect.getsource(brain_loop._run_dispatcher_pipeline)
-        self.assertIn("if sense_enabled():", brain_src)
+        self.assertIn("if sense_enabled() or page_read_enabled():", brain_src)
 
         daemon_src = (
             Path(__file__).resolve().parents[1]
@@ -84,7 +113,7 @@ class RenderTests(unittest.TestCase):
             / "maez_daemon.py"
         ).read_text(encoding="utf-8")
         window = daemon_src[daemon_src.index("Search-as-a-Sense v0.1: drain"):]
-        self.assertIn("if sense_enabled():", window[:1200])
+        self.assertIn("if sense_enabled() or page_read_enabled():", window[:1200])
 
 
 if __name__ == "__main__":

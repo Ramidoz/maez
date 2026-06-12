@@ -6775,21 +6775,29 @@ class MaezDaemon:
         # marked audited draft for /receipts, then natural-render the stored
         # and sent reply.
         try:
-            from core.search.sense_flag import sense_enabled
+            from core.search.sense_flag import page_read_enabled, sense_enabled
             from core.routing.attribution_render import (
                 pop_turn_evidence,
                 render_natural,
                 retain_receipt,
             )
 
-            if sense_enabled():
+            if sense_enabled() or page_read_enabled():
                 _turn_ev = pop_turn_evidence(chat_id)
                 if _turn_ev.get("observation"):
-                    from core.intake_bus.world_observation_lane import (
-                        write_world_observation,
-                    )
+                    _observation = dict(_turn_ev["observation"])
+                    if _observation.pop("kind", None) == "page_read":
+                        from core.intake_bus.world_observation_lane import (
+                            write_page_observation,
+                        )
 
-                    write_world_observation(self.memory, **_turn_ev["observation"])
+                        write_page_observation(self.memory, **_observation)
+                    else:
+                        from core.intake_bus.world_observation_lane import (
+                            write_world_observation,
+                        )
+
+                        write_world_observation(self.memory, **_observation)
                 retain_receipt(
                     str(chat_id or ""),
                     marked=reply,

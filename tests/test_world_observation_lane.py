@@ -15,6 +15,7 @@ class _FakeMemory:
         return self._existing
 
     def store(self, **kwargs):
+        kwargs.setdefault("source_ref", kwargs.get("metadata", {}).get("source_ref"))
         self.stored.append(kwargs)
         return "body-1"
 
@@ -149,6 +150,95 @@ class WriteTests(unittest.TestCase):
         self.assertEqual(urls, ["https://github.com/x/releases"])
 
 
+class PageObservationTests(unittest.TestCase):
+    def setUp(self):
+        for key in ("MAEZ_SEARCH_AS_SENSE_ENABLED", "MAEZ_PAGE_READ_ENABLED"):
+            os.environ.pop(key, None)
+            self.addCleanup(lambda key=key: os.environ.pop(key, None))
+
+    def test_page_observation_writes_with_only_page_flag(self):
+        os.environ["MAEZ_PAGE_READ_ENABLED"] = "1"
+        mem = _FakeMemory()
+        out = lane.write_page_observation(
+            mem,
+            url="https://github.com/x/releases",
+            title="Releases",
+            excerpt="b9601 released June 11",
+            diagnostic_id="diag-p1",
+        )
+
+        self.assertEqual(out, "admitted")
+        rec = mem.stored[0]
+        self.assertIn("https://github.com/x/releases", rec["content"])
+        self.assertIn("Releases", rec["content"])
+
+    def test_page_observation_disabled_when_neither_flag(self):
+        mem = _FakeMemory()
+        out = lane.write_page_observation(
+            mem,
+            url="https://a",
+            title="t",
+            excerpt="x",
+            diagnostic_id="d1",
+        )
+
+        self.assertEqual(out, "disabled")
+        self.assertEqual(mem.stored, [])
+
+    def test_web_search_write_still_works_with_only_search_flag(self):
+        os.environ["MAEZ_SEARCH_AS_SENSE_ENABLED"] = "1"
+        mem = _FakeMemory()
+        out = lane.write_world_observation(
+            mem,
+            query="q",
+            evidence_texts=_evidence(),
+            diagnostic_id="d2",
+        )
+
+        self.assertEqual(out, "admitted")
+
+    def test_page_source_ref_and_reclass_metadata(self):
+        os.environ["MAEZ_PAGE_READ_ENABLED"] = "1"
+        mem = _FakeMemory()
+        lane.write_page_observation(
+            mem,
+            url="https://a.example/p",
+            title="T",
+            excerpt="x",
+            diagnostic_id="diag-9",
+        )
+
+        rec = mem.stored[0]
+        self.assertTrue(rec["source_ref"].startswith("page_read:diag-9:"))
+        metadata = rec["metadata"]
+        self.assertEqual(metadata["owner_supplied_url"], "true")
+        self.assertEqual(metadata["preflight_allowed"], "true")
+        self.assertEqual(metadata["text_content_type"], "true")
+
+    def test_page_observation_idempotent(self):
+        os.environ["MAEZ_PAGE_READ_ENABLED"] = "1"
+        mem = _FakeMemory(existing="row-1")
+        out = lane.write_page_observation(
+            mem,
+            url="https://a",
+            title="t",
+            excerpt="x",
+            diagnostic_id="diag-9",
+        )
+
+        self.assertEqual(out, "already_admitted")
+
+    def test_condition_source_aware(self):
+        self.assertTrue(
+            lane.evaluate_write_condition(
+                _Turn(sources=("FETCH_URL",), summaries=("FETCH_URL",)),
+                source_value="FETCH_URL",
+            )
+        )
+        self.assertFalse(lane.evaluate_write_condition(_Turn(), source_value="FETCH_URL"))
+        self.assertTrue(lane.evaluate_write_condition(_Turn()))
+
+
 class ProgressEmitTests(unittest.TestCase):
     def test_emits_only_when_web_search_selected(self):
         from core.brain.brain_loop import _emit_search_progress
@@ -167,7 +257,7 @@ class ProgressEmitTests(unittest.TestCase):
 
         src = inspect.getsource(brain_loop.run_brain_loop)
         self.assertIn(
-            "send_intermediate=(send_intermediate if sense_enabled() else None)",
+            "send_intermediate if sense_enabled() or page_read_enabled() else None",
             src,
         )
         sig = inspect.signature(brain_loop._run_dispatcher_pipeline)
