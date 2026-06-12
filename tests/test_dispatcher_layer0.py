@@ -187,6 +187,92 @@ class DispatcherLayer0Tests(unittest.TestCase):
             SourceAvailability.EXECUTABLE_UNKNOWN,
         )
 
+    def test_current_world_question_selects_web_search_hybrid(self):
+        from core.dispatcher.inventory import InventorySummary
+        from core.dispatcher.layer0 import Layer0Dispatcher, load_archetype_index
+        from core.dispatcher.spec import (
+            CompositionHint,
+            ExternalSource,
+            InventoryWitness,
+            ProvenanceFraming,
+            SourceAvailability,
+            SubstrateSource,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "archetypes.md"
+            _write_manifest(manifest)
+            encoder = _FakeEncoder()
+            index = load_archetype_index(
+                manifest_path=manifest,
+                cache_path=Path(tmp) / "cache.json",
+                encoder=encoder,
+            )
+            inventory = InventorySummary(
+                inventory_witness=InventoryWitness.PRESENT,
+                source_availability={
+                    SubstrateSource.TELEGRAM_SEMANTIC: SourceAvailability.EXECUTABLE_PRESENT,
+                    SubstrateSource.ENTITY_INDEX: SourceAvailability.EXECUTABLE_PRESENT,
+                    SubstrateSource.LIVED_EPISODES: SourceAvailability.EXECUTABLE_PRESENT,
+                    ExternalSource.WEB_SEARCH: SourceAvailability.EXECUTABLE_PRESENT,
+                },
+                availability_limitations=[],
+                generated_at=1.0,
+            )
+
+            spec = Layer0Dispatcher(index=index, encoder=encoder).emit_spec(
+                "What's the latest with Anthropic?",
+                surface="telegram",
+                inventory=inventory,
+            )
+
+        self.assertEqual(spec.external_sources, [ExternalSource.WEB_SEARCH])
+        self.assertIn(SubstrateSource.TELEGRAM_SEMANTIC, spec.substrate_sources)
+        self.assertEqual(spec.composition_hint, CompositionHint.PARALLEL)
+        self.assertEqual(
+            spec.provenance_framing,
+            ProvenanceFraming.HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES,
+        )
+
+    def test_current_world_question_does_not_treat_greeting_today_as_search(self):
+        from core.dispatcher.inventory import InventorySummary
+        from core.dispatcher.layer0 import Layer0Dispatcher, load_archetype_index
+        from core.dispatcher.spec import (
+            ExternalSource,
+            InventoryWitness,
+            SourceAvailability,
+            SubstrateSource,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "archetypes.md"
+            _write_manifest(manifest)
+            encoder = _FakeEncoder()
+            index = load_archetype_index(
+                manifest_path=manifest,
+                cache_path=Path(tmp) / "cache.json",
+                encoder=encoder,
+            )
+            inventory = InventorySummary(
+                inventory_witness=InventoryWitness.PRESENT,
+                source_availability={
+                    SubstrateSource.TELEGRAM_SEMANTIC: SourceAvailability.EXECUTABLE_PRESENT,
+                    SubstrateSource.ENTITY_INDEX: SourceAvailability.EXECUTABLE_PRESENT,
+                    SubstrateSource.LIVED_EPISODES: SourceAvailability.EXECUTABLE_PRESENT,
+                    ExternalSource.WEB_SEARCH: SourceAvailability.EXECUTABLE_PRESENT,
+                },
+                availability_limitations=[],
+                generated_at=1.0,
+            )
+
+            spec = Layer0Dispatcher(index=index, encoder=encoder).emit_spec(
+                "How are you today?",
+                surface="telegram",
+                inventory=inventory,
+            )
+
+        self.assertNotIn(ExternalSource.WEB_SEARCH, spec.external_sources)
+
     def test_mid_band_no_match_is_deterministic_and_marks_low_confidence(self):
         from core.dispatcher.inventory import InventorySummary
         from core.dispatcher.layer0 import (

@@ -91,6 +91,19 @@ _CONTENT_ANCHOR_RE = re.compile(
     r"\b(qwen|reddit|online|local ?llama|telegram|github|calendar|project|status)\b",
     re.IGNORECASE,
 )
+_QUESTION_SHAPE_RE = re.compile(
+    r"^\s*(what|who|when|where|why|how|is|are|do|does|did|can|could|should|has|have|tell me|any)\b|[?]",
+    re.IGNORECASE,
+)
+_CURRENT_WORLD_MARKER_RE = re.compile(
+    r"\b(latest|nowadays|current|recent|news|release|price|today)\b"
+    r"|what(?:'s| is) (?:new|happening)",
+    re.IGNORECASE,
+)
+_CONVERSATIONAL_TODAY_RE = re.compile(
+    r"\b(how are you|how're you|how you doing|how are things|how is your day|how's your day)\b.*\btoday\b",
+    re.IGNORECASE,
+)
 # Generic Reddit talk selects the owned Reddit substrate.
 _REDDIT_ANCHOR_RE = re.compile(r"\b(reddit|local ?llama|r/[A-Za-z0-9_]+)\b", re.IGNORECASE)
 # A syntactically valid subreddit anchor additionally selects LIVE_REDDIT.
@@ -215,6 +228,7 @@ class Layer0Dispatcher:
         explicit_fetch = bool(_EXPLICIT_FETCH_RE.search(utterance))
         explicit_memory = bool(_EXPLICIT_MEMORY_RE.search(utterance))
         content_anchored = bool(_CONTENT_ANCHOR_RE.search(utterance))
+        current_world_question = _is_current_world_question(utterance)
         source_anchor_candidates = _source_anchor_candidates(utterance)
         live_reddit_anchor = _has_subreddit_anchor(utterance)
         scores = self.score_classes(utterance)
@@ -241,6 +255,18 @@ class Layer0Dispatcher:
             external_sources = [ExternalSource.WEB_SEARCH]
             hint = CompositionHint.FRESH_ONLY
             framing = ProvenanceFraming.FRESH_ONLY
+        elif current_world_question and not explicit_memory:
+            substrate_sources = _available_substrates(
+                inventory,
+                _substrate_candidates(source_anchor_candidates),
+            )
+            external_sources = [ExternalSource.WEB_SEARCH]
+            if substrate_sources:
+                hint = CompositionHint.PARALLEL
+                framing = ProvenanceFraming.HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES
+            else:
+                hint = CompositionHint.FRESH_ONLY
+                framing = ProvenanceFraming.FRESH_ONLY
         elif explicit_memory and not explicit_fetch:
             substrate_sources = _available_substrates(
                 inventory,
@@ -440,6 +466,14 @@ def _source_anchor_candidates(utterance: str) -> list[SubstrateSource]:
 
 def _has_subreddit_anchor(utterance: str) -> bool:
     return bool(_SUBREDDIT_ANCHOR_RE.search(utterance))
+
+
+def _is_current_world_question(utterance: str) -> bool:
+    if not _QUESTION_SHAPE_RE.search(utterance):
+        return False
+    if not _CURRENT_WORLD_MARKER_RE.search(utterance):
+        return False
+    return not _CONVERSATIONAL_TODAY_RE.search(utterance)
 
 
 def _substrate_candidates(source_anchor_candidates: Sequence[SubstrateSource]) -> list[SubstrateSource]:
