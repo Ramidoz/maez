@@ -28,3 +28,19 @@ fresh process pid 310285 (restart 14:07:50 CDT), `MAEZ_VOICE_BOUNDARY_ENABLED=1`
 - Component C (/proposals, /show, /show <id> → natural yes) is Telegram-ONLY (the :11435
   bench bypasses the adapter interceptor layer — see the cockpit/HTTP HAZARD row).
   Owner-driven Telegram witness pending.
+
+## Component C — Telegram witness (2026-06-12) — PASS
+
+Owner-run on Telegram (live Surface V2):
+- `/proposals` → deterministic listing ("I have 28 proposals pending - which one?", #17-#21), reused `_surface_parity_disambiguation`. Not brain prose. PASS.
+- `/show` → "Usage: /show <id>". PASS.
+- `/show 17` → deterministic detail (delegated to `_try_surface_parity_proposal_intent(text="show #17")`, which wrote last-shown). PASS.
+- `Yes` (bare natural-language) → "Couldn't #17: S7 execution authorization required before /apply_dream soul write".
+
+**The binding is PROVEN end to end:** the `/show 17` slash command (C1, telegram_adapter) wrote `_last_shown_proposal[chat_id]`; the bare `Yes` (C2, maez_adapter, a DIFFERENT handler) read the SAME key and resolved to #17 — it did NOT fall into general chat. This is the cross-handler chat-id binding (Codex review finding #2, `str(event.source.chat_id)`) holding live. The piece the unit tests faked is now witnessed real.
+
+**S7 covenant rail held:** #17 is a dream proposal; applying it = soul write = S7-gated; the casual "Yes" was correctly refused. Consent channel held the thread AND the soul rail held the gate.
+
+**Not witnessed (no defect):** a clean evolution-proposal approve→execute→acknowledge path — pending proposals were all dream-class. Owner decision, not a witness gap.
+
+**Reinforces follow-on:** dream/soul proposal approval currently has ONLY the S7 block, no authorization path → the S7 ceremony bridge follow-on is the way to make dream approval possible (not bypass the rail).
