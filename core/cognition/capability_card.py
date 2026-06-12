@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+import json
 from collections.abc import Callable, Sequence
 
 logger = logging.getLogger("maez")
@@ -16,6 +17,19 @@ logger = logging.getLogger("maez")
 _CARD_TTL_S = 30.0
 _CARD_CACHE: dict[str, object] = {"text": None, "ts": 0.0}
 _BACKEND = None
+_ENTRY_SOURCE = {
+    "web sense": "probe",
+    "page read": "flag",
+    "recall": "flag",
+    "search commitment": "flag",
+    "felt time": "probe",
+}
+_VOICE_BOUNDARY_INSTRUCTION = (
+    "Use CAPABILITY_STATE as private grounding for current self-capability "
+    "questions. Do not quote field names or dashboard phrasing. Render the "
+    "truth in your own voice. Memories may contextualize, but they do not "
+    "override this state for what your body can do now."
+)
 
 
 def evidence_precedence_enabled() -> bool:
@@ -88,6 +102,78 @@ def _default_registry() -> Sequence[tuple[str, Callable[[], str]]]:
     )
 
 
+def _canonical_status(name: str, raw: str) -> str:
+    """Map raw probe output to neutral envelope values only.
+
+    This is a rendered-form change, not a probe change: the flag-off prose path
+    keeps raw probe output byte-identical. The envelope must not feed dashboard
+    jargon such as "gatekeeper mode" or "searxng healthy" into the voice.
+    """
+    low = (raw or "").strip().lower()
+    if "unknown" in low or "error" in low:
+        return "unknown"
+    if name == "web sense":
+        if "healthy" in low or "ok" in low:
+            return "healthy"
+        if "degraded" in low or "down" in low or "unhealthy" in low:
+            return "degraded"
+        return "unknown"
+    if name == "search commitment":
+        return "off" if low in ("off", "", "false", "no") else "on"
+    if name == "felt time":
+        if "attached" in low and "not" not in low:
+            return "attached"
+        return "unattached"
+    if low in ("on", "true", "yes", "1"):
+        return "on"
+    if low in ("off", "false", "no", "", "0"):
+        return "off"
+    return low
+
+
+def _build_capability_envelope(
+    registry: Sequence[tuple[str, Callable[[], str]]],
+) -> str:
+    """Build the structured voice-boundary envelope.
+
+    Status is a neutral rendered form of raw probe output. Failed probes remain
+    explicit as unknown entries; a missing line would be a quieter lie.
+    """
+    entries: list[dict[str, str]] = []
+    for name, probe in registry:
+        source = _ENTRY_SOURCE.get(name, "probe")
+        try:
+            entries.append(
+                {
+                    "name": name,
+                    "status": _canonical_status(name, probe()),
+                    "source": source,
+                }
+            )
+        except Exception:
+            entries.append(
+                {
+                    "name": name,
+                    "status": "unknown",
+                    "source": source,
+                    "error": "probe_error",
+                }
+            )
+    payload = {
+        "kind": "capability_state",
+        "freshness": "live_or_cached_30s",
+        "authority": "current_self_capability_state",
+        "precedence": "for current body/capability questions, this outranks stale memory",
+        "entries": entries,
+    }
+    return (
+        "CAPABILITY_STATE (current self-capability; private grounding):\n"
+        + json.dumps(payload, indent=2)
+        + "\n"
+        + _VOICE_BOUNDARY_INSTRUCTION
+    )
+
+
 def capability_prompt_block(
     registry: Sequence[tuple[str, Callable[[], str]]] | None = None,
 ) -> str:
@@ -100,8 +186,15 @@ def capability_prompt_block(
         return str(_CARD_CACHE["text"])
 
     try:
+        reg = registry if registry is not None else _default_registry()
+        if voice_boundary_enabled():
+            text = _build_capability_envelope(reg)
+            _CARD_CACHE["text"] = text
+            _CARD_CACHE["ts"] = now
+            return text
+
         entries: list[str] = []
-        for name, probe in registry if registry is not None else _default_registry():
+        for name, probe in reg:
             try:
                 entries.append(f"{name}: {probe()}")
             except Exception:
