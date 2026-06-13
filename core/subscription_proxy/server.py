@@ -643,6 +643,20 @@ def _reserved_denied_enforced() -> bool:
     return (os.environ.get("MAEZ_EGRESS_RESERVED_DENIED_SHADOW", "") or "").strip() != "1"
 
 
+def _origin_downgrade_enforced() -> bool:
+    """origin_downgrade blocks (a segment asserts a more-permissive origin
+    class than its real one) are enforced at the cloud chokepoint by DEFAULT.
+    MAEZ_EGRESS_ORIGIN_DOWNGRADE_SHADOW in {1,true,yes,on} is the rollback
+    kill-switch that reverts them to the legacy shadow behavior.
+
+    Strict parser ({1,true,yes,on}) INVERTED as a kill-switch — mirrors
+    core/infra/env_flags.strict_env_flag so "0"/""/garbage all ENFORCE.
+    Read dynamically so the flag can be toggled without a code change."""
+    return (
+        os.environ.get("MAEZ_EGRESS_ORIGIN_DOWNGRADE_SHADOW", "") or ""
+    ).strip().lower() not in {"1", "true", "yes", "on"}
+
+
 # "1" = shadow (forward original). Default-enforce after the owner-authorized
 # survey cleared; MAEZ_EGRESS_REDACT_SHADOW=1 is the rollback kill-switch.
 _REDACT_SHADOW_DEFAULT = "0"
@@ -753,6 +767,11 @@ async def chat_completions(request: Request):
             and _reserved_denied_enforced()
         ):
             _enforced_reason = "reserved_denied_raw"
+        elif (
+            "origin_downgrade" in egress_decision.reason_codes
+            and _origin_downgrade_enforced()
+        ):
+            _enforced_reason = "origin_downgrade"
     if _enforced_reason is not None:
         _record(
             adapter=adapter.name, caller=caller, model=model_in,
