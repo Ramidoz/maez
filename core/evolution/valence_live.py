@@ -12,6 +12,25 @@ from core.evolution.valence.signals import AuditSignals, ContinuitySignals, Want
 
 _LOG = logging.getLogger(__name__)
 
+# The one truthy set for the whole house (mirrors core/infra/env_flags.TRUTHY).
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+def valence_live_enabled() -> bool:
+    """Whether the live valence organ may compute + log this cycle.
+
+    DEFAULT-ON: an absent/empty ``MAEZ_VALENCE_LIVE_ENABLED`` returns True so
+    the live behaviour is preserved byte-for-byte (covenant: do not silently
+    amputate a live organ). An explicit ``1/true/yes/on`` keeps it ON; any
+    other value — ``0``/``false``/``no``/``off`` or junk — DISABLES it via the
+    strict parser, closing the ``bool(os.environ.get(...))`` footgun where
+    ``"0"`` would read as ON.
+    """
+    raw = (os.environ.get("MAEZ_VALENCE_LIVE_ENABLED", "") or "").strip().lower()
+    if raw == "":
+        return True
+    return raw in _TRUTHY
+
 
 def _default_log_path() -> Path:
     return Path(__file__).resolve().parents[2] / "logs" / "valence_telemetry.jsonl"
@@ -158,6 +177,11 @@ def read_and_log_valence(
     log_path=None,
 ) -> ValenceReading | None:
     """Compute and append a valence reading without raising into heartbeat."""
+
+    if not valence_live_enabled():
+        # Organ disabled: return None so the daemon keeps (does not clear) its
+        # audit_flag_buffer — disabling never silently drops honesty-audit flags.
+        return None
 
     try:
         path = Path(log_path) if log_path is not None else _default_log_path()
