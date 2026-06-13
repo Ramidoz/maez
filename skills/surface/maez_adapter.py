@@ -628,17 +628,30 @@ class MaezMessageHandler:
         """
         loop = asyncio.get_event_loop()
 
-        # chat_id is re-resolved here ONLY to capture it inside the transport
-        # closures, exactly as the inline body resolves it before defining
-        # _send_intermediate / _send_progress_receipt. run_inbound_turn resolves
-        # its own chat_id identically from the same event for everything else.
+        # Surface-decoupling: the adapter now OWNS event-shape resolution so the
+        # core stays surface-agnostic. chat_id + resolved_user_id are resolved
+        # here exactly as the inline body resolved them (chat_id="" / user_id=
+        # "rohit" fallbacks). chat_id is also captured inside the transport
+        # closures below, identically to the inline body.
         chat_id = ""
+        resolved_user_id = "rohit"
         try:
             src = event.source
             if src and src.chat_id:
                 chat_id = str(src.chat_id)
+            if src and src.user_id:
+                resolved_user_id = str(src.user_id)
         except Exception:
             pass
+
+        # has_local_photo_context computation moves OUT of the core (so the core
+        # no longer imports MessageType) and INTO the adapter; the core consumes
+        # the resulting bool as ``is_photo_turn``.
+        is_photo_turn = bool(
+            event.message_type == MessageType.PHOTO
+            and event.channel_prompt
+            and "Local Maez vision analysis" in str(event.channel_prompt)
+        )
 
         adapter = getattr(self.daemon, "_surface_v2_adapter", None)
         adapter_loop = getattr(self.daemon, "_surface_v2_loop", None)
@@ -730,15 +743,29 @@ class MaezMessageHandler:
             _mem = getattr(self.daemon, "memory", None)
             return _mem.get_telegram_exchanges(limit=limit)
 
+        action_engine = getattr(self.daemon, "actions", None)
+        legacy_tg = getattr(self.daemon, "telegram", None)
+        get_pipeline = (
+            getattr(legacy_tg, "_get_pipeline", None) if legacy_tg is not None else None
+        )
+
         return dict(
-            event=event,
             daemon=self.daemon,
+            text=event.text or "",
+            chat_id=chat_id,
+            resolved_user_id=resolved_user_id,
+            reply_to_message_id=getattr(event, "reply_to_message_id", None),
+            context_note=event.channel_prompt,
+            photo_analysis=getattr(event, "photo_analysis_text", None),
+            is_photo_turn=is_photo_turn,
             owner_surface_label=SURFACE_NAME,
             user_id="rohit",
             channel="telegram_text",
             owner_auth_factory=_owner_auth_factory,
             observe_turn_label="telegram_turn",
             chat_history_turns=_CHAT_HISTORY_TURNS,
+            action_engine=action_engine,
+            get_pipeline=get_pipeline,
             chat_history_provider=_chat_history_provider,
             try_proposal_intent=self._try_surface_parity_proposal_intent,
             try_search_commitment_intent=self._try_search_commitment_intent,

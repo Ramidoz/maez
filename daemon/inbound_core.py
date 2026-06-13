@@ -68,8 +68,16 @@ def inbound_core_v2_enabled() -> bool:
 
 async def run_inbound_turn(
     *,
-    event: Any,
     daemon: Any,
+    # Surface-decoupled turn payload (the adapter resolves these from its event
+    # in ``_build_inbound_descriptor`` so the core never touches a surface event):
+    text: str,
+    chat_id: str,
+    resolved_user_id: str,
+    reply_to_message_id: "str | None",
+    context_note: Any,
+    photo_analysis: "str | None",
+    is_photo_turn: bool,
     # Surface-coupled literals (Telegram adapter injects its own values):
     owner_surface_label: str,
     user_id: str,
@@ -77,6 +85,10 @@ async def run_inbound_turn(
     owner_auth_factory: Callable[[], Any],
     observe_turn_label: str = "telegram_turn",
     chat_history_turns: int,
+    # Injected pipeline / action handles (adapter resolves daemon-level handles;
+    # a future cockpit caller passes its own without going through daemon.telegram):
+    action_engine: Any,
+    get_pipeline: "Callable[[], Any] | None",
     # Injected dependencies (adapter methods / module helpers become callables):
     chat_history_provider: Callable[[int], Any],
     try_proposal_intent: Callable[..., Awaitable[Optional[str]]],
@@ -95,11 +107,7 @@ async def run_inbound_turn(
     here (so a flag-on caller gets the same early-return) but the adapter also
     keeps it in ``__call__`` for the flag-off byte-identical path.
     """
-    # Imported lazily to avoid a module-load circular import:
-    # skills.surface.__init__ imports maez_adapter, which imports this module.
-    from skills.surface.platform_base import MessageType
-
-    text = (event.text or "").strip()
+    text = (text or "").strip()
     if not text:
         return None
 
@@ -139,42 +147,26 @@ async def run_inbound_turn(
 
     loop = asyncio.get_event_loop()
 
-    # Resolve shared references — pipeline + action engine live on
-    # the legacy TelegramVoice instance (it constructs them lazily
-    # in `_get_pipeline`). In v2 mode legacy still holds these for
-    # shared card rendering during the parallel-run period.
-    action_engine = getattr(daemon, "actions", None)
-    legacy_tg = getattr(daemon, "telegram", None)
-    get_pipeline = getattr(legacy_tg, "_get_pipeline", None) if legacy_tg is not None else None
+    # Pipeline + action engine are INJECTED. The Telegram adapter resolves them
+    # from the legacy TelegramVoice instance (it constructs the pipeline lazily
+    # in `_get_pipeline`); a future cockpit caller passes daemon-level handles
+    # directly. ``action_engine`` and ``get_pipeline`` arrive as params.
 
-    # ``user_id`` (the injected param) is the adapter's hardcoded literal
-    # ("rohit"). The original __call__ uses that literal verbatim at three
-    # sites (handle_reply, observe_turn metadata, run_brain_loop) while using a
-    # SEPARATELY-RESOLVED value (param overwritten by ``src.user_id``) at the
-    # D20 detector and proposal-intent sites. We preserve that exact split:
-    # ``_resolved_user_id`` is the resolved variable; ``user_id`` stays literal.
-    chat_id = ""
-    _resolved_user_id = user_id
-    try:
-        src = event.source
-        if src and src.chat_id:
-            chat_id = str(src.chat_id)
-        if src and src.user_id:
-            _resolved_user_id = str(src.user_id)
-    except Exception:
-        pass
-    reply_to_msg_id = getattr(event, "reply_to_message_id", None)
+    # ``user_id`` (the injected literal param, "rohit") is used verbatim at the
+    # handle_reply / observe_turn-metadata / run_brain_loop sites, while the
+    # SEPARATELY-RESOLVED ``resolved_user_id`` (the adapter resolved it from
+    # ``event.source.user_id`` with a "rohit" fallback) is used at the D20
+    # detector and proposal-intent sites. The adapter owns that resolution; the
+    # core preserves the literal-vs-resolved split exactly.
+    _resolved_user_id = resolved_user_id
+    reply_to_msg_id = reply_to_message_id
     pipe = None
     if get_pipeline is not None:
         try:
             pipe = get_pipeline()
         except Exception:
             pipe = None
-    has_local_photo_context = bool(
-        event.message_type == MessageType.PHOTO
-        and event.channel_prompt
-        and "Local Maez vision analysis" in str(event.channel_prompt)
-    )
+    has_local_photo_context = bool(is_photo_turn)
 
     # Surface Parity Restoration v0: D20 capability-gap detection.
     # Placement law: after auth, before every early-return interceptor.
@@ -413,10 +405,8 @@ async def run_inbound_turn(
                             text,
                             owner_surface_label,
                             transcript=jarvis_transcript or "",
-                            context_note=event.channel_prompt,
-                            photo_analysis=getattr(
-                                event, "photo_analysis_text", None
-                            ),
+                            context_note=context_note,
+                            photo_analysis=photo_analysis,
                             chat_history=chat_history,
                             chat_id=chat_id,
                             tool_calls=jarvis_tool_calls or None,
