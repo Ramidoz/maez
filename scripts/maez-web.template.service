@@ -1,0 +1,41 @@
+[Unit]
+Description=Maez Local Web Surface (S7 cockpit / WebAuthn proof)
+Documentation=file://__MAEZ_HOME__/docs/ARCHITECTURE.md
+# The web surface is the owner's local browser door into Maez: the chat UI and
+# the S7 WebAuthn proof cockpit at http://localhost:11437/cockpit/s7-webauthn-proof.
+# It is a thin Flask app bound to loopback 127.0.0.1:11437 only. It talks to the
+# daemon over loopback, so order it After the daemon — if the daemon isn't up the
+# surface still serves, it just shows the daemon as unreachable until it is.
+After=maez.service
+Wants=maez.service
+OnFailure=maez-crashloop-alert@%N.service
+
+[Service]
+Type=simple
+User=__MAEZ_USER__
+Group=__MAEZ_USER__
+WorkingDirectory=__MAEZ_HOME__
+Environment=PYTHONUNBUFFERED=1
+Environment=MAEZ_HOME=__MAEZ_HOME__
+
+# Loopback-only web surface. web_interface.py binds app.run(host="127.0.0.1",
+# port=11437); this unit just launches it. The owner's browser must reach it at
+# http://localhost:11437 (the WebAuthn ceremony binds origin http://localhost:11437,
+# and the browser exact-matches Origin, so localhost — not 127.0.0.1 — is the door).
+ExecStart=__MAEZ_HOME__/.venv/bin/python3 __MAEZ_HOME__/skills/web_interface.py
+Restart=on-failure
+RestartSec=10
+
+# Hardening — the web surface needs the repo readable and the memory/logs/config
+# writable (sessions, audit tail). Everything else is read-only or off-limits.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=__MAEZ_HOME__/memory __MAEZ_HOME__/logs __MAEZ_HOME__/config
+
+StandardOutput=append:__MAEZ_HOME__/logs/maez-web.log
+StandardError=append:__MAEZ_HOME__/logs/maez-web.log
+
+[Install]
+WantedBy=multi-user.target

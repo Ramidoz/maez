@@ -124,7 +124,7 @@ class LiveBridgeDeps:
 
     def ceremony_pointer_for(self, card_request_id: str) -> str:
         return (
-            "http://127.0.0.1:11437/cockpit/s7-webauthn-proof"
+            "http://localhost:11437/cockpit/s7-webauthn-proof"
             f"#{card_request_id}"
         )
 
