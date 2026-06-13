@@ -42,6 +42,7 @@ from core.cognition.parity_flag import (
     surface_parity_enabled,
 )
 from core.infra.env_flags import strict_env_flag
+from daemon.inbound_core import inbound_core_v2_enabled, run_inbound_turn
 from core.search.sense_flag import sense_enabled
 from core.search.search_commitment import is_clear_yes, is_search_offer_worthy
 from core.safety.clinical_boundary import PrivateThoughtsCrisisSignalWriter, guard_owner_text
@@ -613,10 +614,154 @@ class MaezMessageHandler:
             )
         return None
 
+    def _build_inbound_descriptor(self, event: MessageEvent) -> dict:
+        """Assemble the keyword descriptor for daemon.inbound_core.run_inbound_turn.
+
+        Every surface-coupled literal the inline body hardcodes is injected
+        here. The transport closures (_send_intermediate / _send_progress_receipt)
+        are built capturing the SAME state the inline body captures
+        (self._surface_v2_adapter / self._surface_v2_loop / this handler's loop
+        / chat_id) so the flag-on path is byte-identical to flag-off.
+
+        Only built when MAEZ_INBOUND_CORE_V2 is ON, so this never runs on the
+        default (flag-off) path.
+        """
+        loop = asyncio.get_event_loop()
+
+        # chat_id is re-resolved here ONLY to capture it inside the transport
+        # closures, exactly as the inline body resolves it before defining
+        # _send_intermediate / _send_progress_receipt. run_inbound_turn resolves
+        # its own chat_id identically from the same event for everything else.
+        chat_id = ""
+        try:
+            src = event.source
+            if src and src.chat_id:
+                chat_id = str(src.chat_id)
+        except Exception:
+            pass
+
+        adapter = getattr(self.daemon, "_surface_v2_adapter", None)
+        adapter_loop = getattr(self.daemon, "_surface_v2_loop", None)
+
+        def _send_intermediate(msg_text: str) -> None:
+            if not adapter or not adapter_loop or not chat_id:
+                return
+            try:
+                from core.egress.provenance import ProvenancedText
+
+                payload = ProvenancedText.maez_authored_owner_third_party_transport(
+                    msg_text,
+                    source_ref=f"{SURFACE_NAME}:self_mod_dialog_intermediate",
+                )
+                coro = adapter.send(chat_id, payload)
+                fut = asyncio.run_coroutine_threadsafe(coro, adapter_loop)
+                fut.result(timeout=20)
+            except Exception as e:
+                logger.warning(
+                    "send_intermediate failed on %s: %s",
+                    SURFACE_NAME,
+                    e,
+                )
+
+        def _send_progress_receipt(
+            msg_text: str,
+            *,
+            on_complete=None,
+            should_send=None,
+        ) -> None:
+            def _complete(result: str) -> None:
+                if on_complete is None:
+                    return
+                try:
+                    on_complete(result, time.monotonic())
+                except Exception:
+                    logger.debug("recall progress receipt completion callback failed")
+
+            if not adapter or not loop or not chat_id:
+                _complete("failed")
+                return
+
+            async def _send() -> None:
+                try:
+                    if should_send is not None and not should_send():
+                        _complete("failed")
+                        return
+                    from core.egress.provenance import ProvenancedText
+                    from core.routing.recall_receipt import RECEIPT_SEND_TIMEOUT_MS
+
+                    payload = ProvenancedText.maez_authored_owner_third_party_transport(
+                        msg_text,
+                        source_ref=f"{SURFACE_NAME}:recall_progress_receipt",
+                    )
+                    result = await asyncio.wait_for(
+                        adapter.send(chat_id, payload),
+                        timeout=RECEIPT_SEND_TIMEOUT_MS / 1000.0,
+                    )
+                    _complete("ok" if getattr(result, "success", False) else "failed")
+                except asyncio.TimeoutError:
+                    _complete("timeout")
+                except Exception as e:
+                    logger.debug(
+                        "recall progress receipt send failed on %s: %s",
+                        SURFACE_NAME,
+                        type(e).__name__,
+                    )
+                    _complete("failed")
+
+            try:
+                asyncio.run_coroutine_threadsafe(_send(), loop)
+            except Exception as e:
+                logger.debug(
+                    "recall progress receipt scheduling failed on %s: %s",
+                    SURFACE_NAME,
+                    type(e).__name__,
+                )
+                _complete("failed")
+
+        def _owner_auth_factory():
+            from core.evolution.subjective_duration import SubjectiveDurationOwnerAuth
+
+            return SubjectiveDurationOwnerAuth(
+                surface="telegram_owner",
+                proof="telegram_authorized_user",
+            )
+
+        def _chat_history_provider(limit: int):
+            _mem = getattr(self.daemon, "memory", None)
+            return _mem.get_telegram_exchanges(limit=limit)
+
+        return dict(
+            event=event,
+            daemon=self.daemon,
+            owner_surface_label=SURFACE_NAME,
+            user_id="rohit",
+            channel="telegram_text",
+            owner_auth_factory=_owner_auth_factory,
+            observe_turn_label="telegram_turn",
+            chat_history_turns=_CHAT_HISTORY_TURNS,
+            chat_history_provider=_chat_history_provider,
+            try_proposal_intent=self._try_surface_parity_proposal_intent,
+            try_search_commitment_intent=self._try_search_commitment_intent,
+            search_commitment_controller=self._search_commitment_controller,
+            audit_surface_reply=self._audit_surface_reply,
+            clean_exchange=_clean_exchange,
+            send_intermediate=_send_intermediate,
+            send_progress_receipt=_send_progress_receipt,
+        )
+
     async def __call__(self, event: MessageEvent) -> Optional[str]:
         text = (event.text or "").strip()
         if not text:
             return None
+
+        # SLICE 0 strangler seam — flag-gated delegation to the
+        # surface-agnostic inbound core. DEFAULT OFF. When ON, the entire
+        # inbound pipeline below is run from daemon.inbound_core.run_inbound_turn
+        # with every surface-coupled literal injected via the descriptor. When
+        # OFF (default), the EXISTING inline body below runs UNTOUCHED — this is
+        # the byte-identical path proven by tests/test_inbound_core_equivalence.
+        if inbound_core_v2_enabled():
+            return await run_inbound_turn(**self._build_inbound_descriptor(event))
 
         _s4_result = guard_owner_text(
             text,
