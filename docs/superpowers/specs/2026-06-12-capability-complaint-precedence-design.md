@@ -27,24 +27,41 @@ This wound is **not** "Maez lacks a proposal reflex." It is "Maez externalizes a
 1. **Explicit requests still win when they are truly requests.** "search for Anthropic news," "check this URL" keep flowing through the existing search / page-read arms.
 2. **Self-complaints win when Maez is the subject.** "you seem unable to find recent news," "why can't you read pages," "you keep failing to search" route `SUBSTRATE_ONLY`, no web.
 
-**How guardrail 1 is satisfied structurally (not by mixed-case detection):** the new complaint arm is inserted into the Layer0 `elif` chain **after** the explicit-request arms (`owner_url_present` :~252, `explicit_fetch` :~280). Because `elif` short-circuits, any real request matches and routes first; the complaint arm is only reached when no explicit request was present. So a pure complaint → `SUBSTRATE_ONLY`; "search for X" (even if phrased with frustration) → the search arm. No need to parse mixed "complaint + request" utterances.
+**How guardrail 1 is satisfied — by EXCLUSION, not by ordering (Codex HOLD, verified).** The first-draft claim "place the arm after `explicit_fetch` and let `elif` short-circuit protect it" is **wrong** and would preserve the wound. `_EXPLICIT_FETCH_RE` (layer0.py:85) is `\b(search|google|look up|fetch|check the internet|go check)\b` — it matches the bare word `search`/`fetch` **anywhere**, so every witness-class complaint ("you seem unable to **search** the web," "you keep failing to **search**," "why can't you **fetch** pages") sets `explicit_fetch=True` and would route to `WEB_SEARCH` before ever reaching a later complaint arm. `live_reddit_anchor` has the same flaw ("you keep failing at r/LocalLLaMA" → `LIVE_REDDIT`).
+
+The fix: compute `self_capability_complaint` **before** routing, and **exclude self-complaints from the broad external arms**:
+- `live_reddit_anchor and not explicit_memory and not self_capability_complaint`
+- `explicit_fetch and not explicit_memory and not self_capability_complaint`
+
+Then add the complaint arm **before** `current_world_question`. Owner-URL reads still win first (`owner_url_present` is a genuine read request and is NOT excluded — a complaint carrying a literal URL is rare and a URL read is the right outcome). Guardrails hold:
+- "search for Anthropic news" → no Maez-subject complaint → `self_capability_complaint=False` → `explicit_fetch` fires → `WEB_SEARCH`. ✓
+- "you seem unable to search the web" → `self_capability_complaint=True` → `explicit_fetch` excluded → complaint arm → `SUBSTRATE_ONLY`. ✓
+- "you keep failing at r/LocalLLaMA" → `self_capability_complaint=True` → `live_reddit` excluded → complaint arm → `SUBSTRATE_ONLY`, not `LIVE_REDDIT`. ✓
 
 ## Components (one detector + one routing arm; ride existing rails)
 
 **Component 1 — `_is_self_capability_complaint(utterance)`** (new, beside `_is_self_capability_question` in `layer0.py`). **Verb-anchored**, not noun-anchored: fires on a Maez-as-subject reference (`you`/`your`/`maez`/`yourself`) **+ an inability/failure predicate** — e.g. `unable`, `can'?t`/`cannot`, `couldn'?t`, `fail(s|ing|ed)?`, `broken`, `not work(ing)?`/`doesn'?t work`/`isn'?t working`, `useless`, `keep(s)? (failing|messing|getting … wrong)`, `seem(s)? unable`, `never (work|search|read)s?`. The predicate is what distinguishes a complaint from a neutral mention. (Implementer: assemble a focused regex from these stems; bias toward precision — a miss falls through to today's behavior, a false-positive wrongly suppresses a legitimate request, so favor not-firing when unsure. The two guardrail examples sets are the test corpus.)
 
-**Component 2 — the routing arm** in `emit_spec`'s `if/elif` chain. Add:
+**Component 2 — routing changes** in `emit_spec`'s `if/elif` chain (layer0.py:~236-290). Three edits:
+
+1. **Compute the flag** beside the existing `self_capability_question` (layer0.py:~242):
+```text
+self_capability_complaint = evidence_precedence_enabled() and _is_self_capability_complaint(utterance)
+```
+2. **Exclude self-complaints from the two broad external arms** (so a complaint that merely contains "search"/"fetch"/"r/X" is not externalized):
+```text
+elif live_reddit_anchor and not explicit_memory and not self_capability_complaint:   # (was: …and not explicit_memory)
+elif explicit_fetch and not explicit_memory and not self_capability_complaint:        # (was: …and not explicit_memory)
+```
+3. **Add the complaint arm before the `current_world_question` arm:**
 ```text
 elif self_capability_complaint and not explicit_memory:
     external_sources = []
     hint = CompositionHint.SUBSTRATE_ONLY
     framing = ProvenanceFraming.SUBSTRATE_ONLY_NO_FRESH_VALIDATION
 ```
-positioned **after** the `explicit_fetch` arm and **before** the `current_world_question` arm. `self_capability_complaint` is computed exactly like the existing question flag:
-```text
-self_capability_complaint = evidence_precedence_enabled() and _is_self_capability_complaint(utterance)
-```
-Gated on the existing `evidence_precedence_enabled()` flag — it rides the live capability-health rail (the capability card already injects on these turns). **No new flag.** Flag-off ⇒ byte-identical (the complaint arm never evaluates true).
+
+`owner_url_present` (the literal-URL arm) keeps winning first and is **not** excluded. The existing `self_capability_question` arm is unchanged. Gated on the existing `evidence_precedence_enabled()` flag (rides the live capability-health rail; the capability card already injects on these turns). **No new flag.** Flag-off ⇒ `self_capability_complaint` is always `False`, so both the exclusions and the new arm are inert ⇒ byte-identical.
 
 ## Non-Goals
 
@@ -59,12 +76,13 @@ Gated on the existing `evidence_precedence_enabled()` flag — it rides the live
 
 - Detector raises / regex error ⇒ treat as no-match (fall through to today's behavior); never block routing.
 - `evidence_precedence_enabled()` off ⇒ arm inert, byte-identical.
-- Ambiguity (complaint-ish but also a request) ⇒ resolved by precedence: explicit arms already won earlier in the chain, so the complaint arm only fires on a pure complaint.
+- Ambiguity (complaint-ish but also contains an external trigger word) ⇒ resolved by **exclusion**: a Maez-subject complaint suppresses the `explicit_fetch` and `live_reddit` arms, so the complaint reaches its own arm. A genuine request with no Maez-subject complaint is unaffected (`self_capability_complaint=False`).
 
 ## Testing (TDD, fakes only; runner `/home/rohit/maez/.venv/bin/python -B -m unittest`, no full-discover)
 
 - **Complaint corpus → `SUBSTRATE_ONLY`, no `WEB_SEARCH`:** "you seem unable to find recent news," "why can't you read pages," "you keep failing to search," "you're broken at searching," "Maez can't even read that page." Assert `external_sources == []` and hint `SUBSTRATE_ONLY`.
-- **Guardrail 1 — explicit requests still route out:** "search for Anthropic news" → `WEB_SEARCH`; "check https://example.com/x" → `FETCH_URL`. Unchanged by this slice.
+- **Collision cases (the load-bearing ones — these CONTAIN external trigger words and must still route `SUBSTRATE_ONLY`):** "you seem unable to **search** the web" (contains `search` → would set `explicit_fetch`), "why can't you **fetch** pages" (contains `fetch`), "you keep failing at **r/LocalLLaMA**" (sets `live_reddit_anchor`). Assert NONE of these externalize — `external_sources == []`, not `WEB_SEARCH`/`LIVE_REDDIT`. This is the difference between fixing the wound and a green-tests-around-a-broken-witness regression.
+- **Guardrail 1 — explicit requests still route out:** "search for Anthropic news" → `WEB_SEARCH` (no Maez-subject complaint, so not excluded); "check https://example.com/x" → `FETCH_URL` (owner-URL wins first). Unchanged by this slice.
 - **Question arm unregressed:** "what's the state of your web search tools?" still routes `SUBSTRATE_ONLY` (existing behavior, not via the new arm — assert it still works).
 - **Flag-off byte-identity:** with `evidence_precedence_enabled()` false, a complaint routes exactly as today (no `SUBSTRATE_ONLY` suppression) — the arm is inert.
 - **Precision bias:** a neutral mention that is not a complaint ("you can read pages now, nice") does not falsely route `SUBSTRATE_ONLY` away from whatever it would normally do.
