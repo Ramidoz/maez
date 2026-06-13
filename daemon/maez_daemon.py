@@ -10462,6 +10462,19 @@ class MaezDaemon:
             srv = make_server("127.0.0.1", HEALTH_PORT, app)
             srv.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self._health_server = srv
+            # The backend probe (_check_ollama) already passed in start() and
+            # the health socket is now bound — only now is "active" honest. Tell
+            # systemd (Type=notify) we are really serving. No-op outside systemd
+            # (NOTIFY_SOCKET unset) or when MAEZ_SYSTEMD_NOTIFY is off; never
+            # raises, so a missing/closed notify socket can't fault a daemon that
+            # is otherwise up.
+            try:
+                from core.infra.systemd_notify import sd_notify
+
+                if not sd_notify("READY=1"):
+                    logger.debug("sd_notify READY=1 skipped (no NOTIFY_SOCKET or flag off).")
+            except Exception as e:  # pragma: no cover - defensive, must not block serving
+                logger.debug("sd_notify READY=1 failed, proceeding: %s", e)
             srv.serve_forever()
             logger.info("Health endpoint stopped.")
         except KeyboardInterrupt:
