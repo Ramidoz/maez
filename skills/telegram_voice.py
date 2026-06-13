@@ -1771,9 +1771,10 @@ class TelegramVoice:
 
             # Latest probe results from audit_log (Lane 0 inline + card-executed)
             try:
+                from core.infra import paths as _paths
                 db_path = (
                     getattr(getattr(self, "_audit_log", None), "db_path", None)
-                    or "memory/audit_log.db"
+                    or str(_paths.audit_log_db())
                 )
                 since = now - 600  # last 10 min
                 conn = _sqlite.connect(str(db_path))
@@ -1833,8 +1834,10 @@ class TelegramVoice:
 
     def _propose_next_step_from_probe(self, user_text: str) -> dict | None:
         """Thin delegation to ConversationController.propose_next_step_from_probe."""
+        from core.infra import paths as _paths
         audit_db_path = str(
-            getattr(getattr(self, "_audit_log", None), "db_path", None) or "memory/audit_log.db"
+            getattr(getattr(self, "_audit_log", None), "db_path", None)
+            or _paths.audit_log_db()
         )
         return self._controller.propose_next_step_from_probe(
             user_text,

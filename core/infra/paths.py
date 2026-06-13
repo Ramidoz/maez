@@ -118,6 +118,21 @@ def memory_db_dir() -> Path:
     return memory_dir() / "db"
 
 
+def audit_log_db() -> Path:
+    """Canonical sqlite path for the action audit log.
+
+    Mirrors ``core.cognition.audit_log._default_audit_log_path`` so every
+    producer that needs the audit DB (the AuditLog class, the conversation
+    controller's probe proposer, the telegram voice probe lookup) resolves
+    to the *same* absolute file regardless of the process CWD. Honors the
+    ``MAEZ_AUDIT_LOG_PATH`` override first for parity with that module.
+    """
+    override = os.environ.get("MAEZ_AUDIT_LOG_PATH")
+    if override:
+        return Path(override)
+    return memory_dir() / "audit_log.db"
+
+
 def logs_dir() -> Path:
     return data_dir() / "logs"
 
