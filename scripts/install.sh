@@ -235,12 +235,12 @@ else
         systemctl --user daemon-reload
         echo
         echo "  To start the daemon now:"
-        echo "    systemctl --user enable --now maez.service maez-subscription-proxy.service"
+        echo "    systemctl --user enable --now maez.service maez-web.service maez-subscription-proxy.service"
     elif [ "$SYSTEMD_CHOICE" = "2" ]; then
         sudo systemctl daemon-reload
         echo
         echo "  To start the daemon now:"
-        echo "    sudo systemctl enable --now maez.service maez-subscription-proxy.service"
+        echo "    sudo systemctl enable --now maez.service maez-web.service maez-subscription-proxy.service"
     else
         echo
         echo "  Rendered units are in: $RENDER_DIR"
