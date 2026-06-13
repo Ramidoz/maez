@@ -172,7 +172,15 @@ async def run_inbound_turn(
     # Placement law: after auth, before every early-return interceptor.
     # The helper creates cards through pending_card_store; this path
     # never sends card messages manually.
-    if surface_parity_enabled():
+    #
+    # None-safety (SLICE 2): when ``pipe`` is None (e.g. the cockpit caller
+    # passes get_pipeline=None for the minimal S4 + synthesis scope), the D20
+    # block is SKIPPED entirely. With pending_card_store=None,
+    # maybe_fire_capability_proposal would construct a default PendingCardStore
+    # and could create a durable card — outside SLICE 2's "no cards/proposals"
+    # scope — so we gate on a real pipe. For the Telegram path ``pipe`` is
+    # always non-None, so this is byte-identical to the prior behavior.
+    if pipe is not None and surface_parity_enabled():
         try:
             from core.infra.capability_gap_detector import maybe_fire_capability_proposal
 
