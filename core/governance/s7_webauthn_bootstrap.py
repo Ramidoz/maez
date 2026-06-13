@@ -28,7 +28,14 @@ from typing import Any
 import uuid
 
 
-DEFAULT_STORE_ROOT = Path("memory/s7_1_webauthn")
+from core.infra import paths as _paths
+
+# Path resolution only. Anchors the default store root under paths.home()
+# instead of the process CWD (shadow-store prevention). This does NOT change
+# S7 arming, any gate, the human-gate invariant, or when/whether the store
+# directory is created — the store is still only materialized inside
+# S7WebAuthnBootstrapStore on a deliberate ceremony, exactly as before.
+DEFAULT_STORE_ROOT = _paths.memory_dir() / "s7_1_webauthn"
 MAX_BOOTSTRAP_TTL_MINUTES = 10
 MIN_BOOTSTRAP_TOKEN_BYTES = 16
 

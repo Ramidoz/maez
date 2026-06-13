@@ -1995,6 +1995,10 @@ class MomentAssemblyBoundaryTests(unittest.TestCase):
             "scripts/moment_assembly_probe.py",
             "scripts/x6_gestation_load.py",
             "tests/test_moment_assembly_diagnostic.py",
+            # Store-root manifest reads DEFAULT_LOG_PATH (a config constant,
+            # not a diagnostic record symbol) to assert path-rooting. It
+            # never builds or writes a diagnostic record.
+            "tests/test_store_root_manifest.py",
         }
         hits = _find_moment_assembly_symbol_hits(
             _production_python_paths(),
