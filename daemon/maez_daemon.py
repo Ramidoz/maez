@@ -2381,6 +2381,98 @@ def _pair_history_for_chat_threading(raw_history) -> list[dict]:
     return out
 
 
+# Cockpit chat_history depth — mirror the Telegram default
+# (skills.surface.maez_adapter._CHAT_HISTORY_TURNS = 3) so cockpit synthesis
+# sees the same window of prior exchanges.
+_COCKPIT_CHAT_HISTORY_TURNS = 3
+# Stable per-session cockpit chat id is a LATER slice; SLICE 2 uses one fixed,
+# non-empty id so the unified-core early-return interceptors have a chat scope.
+_COCKPIT_CHAT_ID = "cockpit_owner"
+
+
+def cockpit_core_enabled() -> bool:
+    """Return True iff ``MAEZ_COCKPIT_CORE`` is 1/true/yes/on. DEFAULT OFF.
+
+    Strict on/off parser (``core.infra.env_flags.strict_env_flag``): ``"0"``,
+    ``false``, ``no``, ``off``, empty, unset, or any other value → False. When
+    OFF the cockpit ``/message`` route behaves EXACTLY as before (source="UI" ->
+    handle_message). When ON the route delegates to
+    ``daemon.inbound_core.run_inbound_turn`` so cockpit gets the unified path —
+    and specifically so the S4 clinical boundary fires on the cockpit owner
+    surface.
+    """
+    from core.infra.env_flags import strict_env_flag
+
+    return strict_env_flag("MAEZ_COCKPIT_CORE")
+
+
+def _build_cockpit_inbound_descriptor(daemon, *, text: str, chat_history) -> dict:
+    """Assemble the keyword descriptor for run_inbound_turn from a cockpit turn.
+
+    SLICE 2 covenant decisions (fixed — do not expand here):
+
+    * S4 fires: ``owner_surface_label="cockpit"`` (now in the
+      ``_is_direct_owner_surface`` allowlist).
+    * M1-EXCLUDED: cockpit is NOT in ``M1_ALLOWED_PROMOTION_SOURCES`` (the
+      unauthenticated localhost surface must not write durable M1 selfhood).
+    * Felt-time OFF: ``owner_auth_factory=lambda: None`` (subjective_duration
+      organ is silently off — honest for an unauthenticated surface).
+    * MINIMAL scope: ``get_pipeline=None`` and ``action_engine=None`` so the
+      card-reply / proposal / search / brain-loop / D20 blocks all self-skip.
+      No cards, no proposal/search interceptors, no tools — those are later
+      slices. The interceptor hooks are no-ops.
+    """
+    from skills.surface.maez_adapter import _clean_exchange
+
+    async def _try_proposal_intent(*args, **kwargs):
+        return None
+
+    async def _try_search_commitment_intent(*args, **kwargs):
+        return None
+
+    def _search_commitment_controller():
+        return None
+
+    def _audit_surface_reply(text: str, *, surface: str) -> str:
+        # Cockpit SLICE 2 has no card-dialog path, so this is never reached
+        # inside run_inbound_turn (it only fires within the ``pipe is not None``
+        # card-dialog block). Passthrough keeps the contract honest.
+        return text
+
+    def _chat_history_provider(limit: int):
+        # Reuse the cockpit request's paired history (already cleaned into the
+        # handle_message shape). The core's clean_exchange pass is a no-op on
+        # this already-clean content; fall open to [] when absent.
+        return list(chat_history or [])
+
+    return dict(
+        daemon=daemon,
+        text=text or "",
+        chat_id=_COCKPIT_CHAT_ID,
+        resolved_user_id="rohit",
+        reply_to_message_id=None,
+        context_note=None,
+        photo_analysis=None,
+        is_photo_turn=False,
+        owner_surface_label="cockpit",
+        user_id="rohit",
+        channel="web_chat_owner",
+        owner_auth_factory=lambda: None,
+        observe_turn_label="cockpit_turn",
+        chat_history_turns=_COCKPIT_CHAT_HISTORY_TURNS,
+        action_engine=None,
+        get_pipeline=None,
+        chat_history_provider=_chat_history_provider,
+        try_proposal_intent=_try_proposal_intent,
+        try_search_commitment_intent=_try_search_commitment_intent,
+        search_commitment_controller=_search_commitment_controller,
+        audit_surface_reply=_audit_surface_reply,
+        clean_exchange=_clean_exchange,
+        send_intermediate=None,
+        send_progress_receipt=None,
+    )
+
+
 def _chat_history_message_count(messages: list[dict]) -> int:
     """Count substantive prior chat messages already threaded into messages[]."""
     count = 0
@@ -10261,6 +10353,30 @@ class MaezDaemon:
             # expects. 2026-04-27 incident fix.
             raw_history = data.get("history") or []
             chat_history = _pair_history_for_chat_threading(raw_history) if raw_history else None
+            # SLICE 2 strangler seam — flag-gated delegation to the
+            # surface-agnostic inbound core. DEFAULT OFF. When ON, the cockpit
+            # routes through run_inbound_turn so the S4 clinical boundary fires
+            # on the cockpit owner surface (which source="UI" silently bypassed)
+            # and synthesis runs the unified path. Minimal scope: NO M1
+            # promotion (cockpit not in M1_ALLOWED_PROMOTION_SOURCES), felt-time
+            # OFF, NO cards/proposals/search/tools (get_pipeline=action_engine=
+            # None). When OFF (default), the existing source="UI" path runs
+            # UNTOUCHED.
+            if cockpit_core_enabled():
+                from daemon.inbound_core import run_inbound_turn
+
+                # The Flask route is sync; run_inbound_turn is async. asyncio.run
+                # creates and manages a fresh event loop for this turn (no daemon
+                # loop is running on the Flask request thread); inside the
+                # coroutine, run_inbound_turn's own asyncio.get_event_loop()
+                # returns that running loop for its run_in_executor offloads.
+                descriptor = _build_cockpit_inbound_descriptor(
+                    self,
+                    text=text,
+                    chat_history=chat_history,
+                )
+                reply = asyncio.run(run_inbound_turn(**descriptor))
+                return jsonify({"reply": reply})
             reply = self.handle_message(
                 text,
                 source="UI",
