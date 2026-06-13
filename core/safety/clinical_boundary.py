@@ -567,6 +567,7 @@ def _is_direct_owner_surface(surface: str) -> bool:
         "telegram",
         "telegram_v2",
         "telegram_legacy",
+        "telegram_surface",  # live Surface-V2 inbound label (maez_adapter.SURFACE_NAME)
         "web_chat",
         "daemon",
         "direct",

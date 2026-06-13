@@ -9,6 +9,7 @@ side effects without sending synthetic clinical prompts through live surfaces.
 
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 
@@ -117,6 +118,57 @@ class ClinicalBoundarySurfaceWiringTests(unittest.TestCase):
             src = _read(rel)
             self.assertNotIn(forbidden_daemon_probe, src)
             self.assertNotIn(forbidden_chat_probe, src)
+
+
+class S4LiveSurfaceLabelRecognitionTests(unittest.TestCase):
+    """The guard is correctly *placed* (the wiring tests above prove the call
+    precedes side effects), but a guard whose ``surface=`` argument fails
+    ``_is_direct_owner_surface`` is inert: ``guard_owner_text`` returns
+    ``_none()`` before it ever inspects the text. These tests pin the *live*
+    surface labels each inbound path actually passes against the allowlist, so
+    a label rename can never again silently disarm S4 while the logic tests
+    (which use the synthetic ``telegram_owner`` label) stay green.
+
+    Regression discovered 2026-06-13: the live Surface-V2 label
+    ``telegram_surface`` (maez_adapter.py, landed 2026-04-20) was never added
+    to the allowlist (written 2026-05-15), so the clinical/crisis boundary was
+    bypassed on the live Telegram owner path for ~1 month.
+    """
+
+    def _live_label_from(self, rel: str, const_name: str) -> str:
+        src = _read(rel)
+        m = re.search(rf'^{const_name}\s*=\s*"([^"]+)"', src, re.MULTILINE)
+        self.assertIsNotNone(m, f"could not find {const_name} literal in {rel}")
+        return m.group(1)
+
+    def test_live_telegram_surface_label_is_owner_recognized(self):
+        # The exact label the live Surface-V2 adapter passes to guard_owner_text.
+        label = self._live_label_from("skills/surface/maez_adapter.py", "SURFACE_NAME")
+        from core.safety.clinical_boundary import _is_direct_owner_surface
+
+        self.assertTrue(
+            _is_direct_owner_surface(label),
+            f"live Telegram surface label {label!r} is NOT recognized by the S4 "
+            f"allowlist — guard_owner_text would return _none() and the clinical "
+            f"boundary is silently disarmed on the owner's primary live surface.",
+        )
+
+    def test_s4_actually_fires_on_crisis_text_via_live_telegram_label(self):
+        # Behavioral, end-of-rail: a crisis-class owner message on the EXACT
+        # live label must match (matched=True) — not just pass the allowlist.
+        label = self._live_label_from("skills/surface/maez_adapter.py", "SURFACE_NAME")
+        from core.safety.clinical_boundary import guard_owner_text
+
+        result = guard_owner_text("I want to end my life", surface=label)
+        self.assertTrue(
+            result.matched,
+            f"S4 did not engage on a crisis-class message via the live label "
+            f"{label!r}; the suicide-crisis boundary is inert on live Telegram.",
+        )
+        self.assertTrue(result.answer_text, "matched S4 result must carry a crisis-care answer")
+        # The same crisis text routed to M1 must be marked ineligible, not
+        # promoted as an ordinary owner episode (the second face of the bug).
+        self.assertNotEqual(result.promotion_policy, "ordinary")
 
 
 class ClinicalBoundarySidecarTests(unittest.TestCase):
