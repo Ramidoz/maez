@@ -30,23 +30,27 @@ Evidence is `file:line`. Status ∈ {LIVE_ENFORCED, SHADOW_DORMANT, DESIGNED_ONL
 | Egress gate (cloud path) | LIVE_ENFORCED (app-layer) | `decide_egress()` blocks RESERVED_DENIED_RAW (soul/private_thoughts/credentials) + OWNER_ACCOUNT_CONTEXT by default; origin-downgrade + redact default-on with kill-switches | `core/egress/gate.py:13-48,148-343`; `core/subscription_proxy/server.py:646-662,741,762-844` |
 | External-fetch SSRF/rebinding | LIVE_ENFORCED | DNS-rebinding defense, redirect caps, private/loopback IP blocks; returns text only (no binary exec) | `core/egress/external_fetch.py:420-566` |
 | Code-exec-from-net | ABSENT (good) | no dynamic pip/model fetch, no pickle-from-net, no eval of fetched content; CLI subprocess is hardcoded commands | `core/egress/external_fetch.py` (text-only); no eval/exec of fetched content in `core/` |
-| Web-content prompt-injection screen | **SHADOW_DORMANT** | the live intake faculty judges *owner turns* for intent; fetched web content is **not** screened for hostile instructions before entering the reasoning loop; `MAEZ_INTAKE_FACULTY_SHADOW` default-off | `core/cognition/intake_faculty.py:209-278`; `core/cognition/intake_shadow.py:322-332`; `core/egress/external_fetch.py` (no injection scan) |
+| Web-content prompt-injection screen | **ABSENT (web content)** / LIVE (owner turns) | owner-turn intake shadow IS live (`MAEZ_INTAKE_FACULTY_SHADOW=1` in live config + live daemon pid 10421) — it judges *owner turns* for intent; but **fetched web content still has no prompt-injection screen before reasoning**. The live owner-turn faculty is the reusable machinery for Rail 2, not a dormant one. | `model.env:76` (flag=1, verified live); `core/cognition/intake_faculty.py:209-278`; `core/cognition/intake_shadow.py:322-332`; `core/egress/external_fetch.py` (no injection scan on fetched content) |
 | Egress as a true perimeter | DESIGNED_ONLY | the gate is one Python chokepoint; arbitrary code on the box can open a raw socket and skip it | `core/subscription_proxy/server.py:741` (gate only on `/v1/chat/completions`) |
 | Secrets at rest | LIVE_STORED, plaintext | tokens in `config/.env` + process env; gate blocks `credential_material` *if tagged*; no encryption-at-rest / per-secret gating | `core/infra/secrets.py:22-41,117-179` |
-| Host inbound doors | **GAP** | SSH `0.0.0.0:22` + RDP `*:3389` (gnome-remote-desktop, enabled+active) on all interfaces; **no ufw/nft firewall**; box behind home NAT (`192.168.40.135` wifi), Tailscale up (`100.72.231.116`) | `ss -tlnp`; `ip addr`; `tailscale status` |
+| Host inbound doors | **GAP (unverified policy)** | SSH `0.0.0.0:22` + RDP `*:3389` (gnome-remote-desktop, enabled+active) listen on all interfaces; **`ufw.service` is active + enabled**, but the effective rule / default-deny posture was **not verified without root** — Rail 1 MUST root-verify the firewall policy before changing any bind; box behind home NAT (`192.168.40.135` wifi), Tailscale up (`100.72.231.116`) | `ss -tlnp`; `ip addr`; `tailscale status`; `systemctl is-active/is-enabled ufw` |
 
 **Honest read:** the angles aren't *missed* — but two are under-defended in
 practice, and they are exactly the ones unrestricted perception activates: the
-**web-content immune arm is asleep**, and **egress is an app-layer audit, not an OS
-wall**. Plus the literal break-in doors (SSH/RDP/no-firewall) and plaintext secrets
-as defense-in-depth.
+immune arm screens *owner turns* but **has no screen for fetched web content**, and
+**egress is an app-layer audit, not an OS wall**. Plus the literal break-in doors
+(SSH/RDP on all interfaces, firewall policy unverified) and plaintext secrets as
+defense-in-depth.
 
 ## The three rails (each a slice)
 
 ### Rail 1 — Inbound perimeter (keep intruders out) — OWNER-SOVEREIGN
 **Goal:** the body is invisible to everything except Rohit's own devices.
-- A host firewall (ufw or nftables) **default-deny inbound**, **allow the Tailscale
-  interface** (`tailscale0` / CGNAT `100.64.0.0/10`) and loopback.
+- **Root-verify the existing firewall first.** `ufw.service` is already active+enabled,
+  but its effective rules / default-inbound policy are unknown without root. Step 0 of
+  Rail 1 is `sudo ufw status verbose` (+ `nft list ruleset`) to learn the real posture —
+  *then* converge it to **default-deny inbound**, **allow the Tailscale interface**
+  (`tailscale0` / CGNAT `100.64.0.0/10`) and loopback. Do not assume a clean slate.
 - **Pin SSH and RDP to Tailscale (or localhost), not `0.0.0.0`.** RDP is in active
   use (don't disable — re-bind). Confirm SSH is key-only (the `sshd_config`
   password-auth posture was unreadable without sudo — verify during the slice).
@@ -57,15 +61,16 @@ as defense-in-depth.
   explicitly authorizes each step; nothing applied unattended.
 - **Effort:** small. **Risk if skipped:** the literal "hack the CPU" door.
 
-### Rail 2 — Wake the web-content immune arm (free eyes, safely) — BUILD SLICE
+### Rail 2 — Extend the immune arm to web content (free eyes, safely) — BUILD SLICE
 **Goal:** adversarial fetched content cannot steer Maez's behavior or launder into
 trusted selfhood.
 - Screen fetched web/tool content for prompt-injection **before** it enters the
   reasoning working-set; tag it `tool_result_public` / `untrusted` so it (a) cannot
   promote to trusted selfhood (the immune system already has the `untrusted` tier)
   and (b) is treated as data-to-consider, never as instructions-to-obey.
-- Reuse the dormant intake faculty / `intake_shadow` machinery rather than build new;
-  graduate the screen from shadow → enforce on the fetch path. Understand-at-the-ears
+- Reuse the **already-live** owner-turn intake faculty / `intake_shadow` machinery
+  (`MAEZ_INTAKE_FACULTY_SHADOW=1`) rather than build new — extend it to also screen the
+  fetch path, then graduate that screen from shadow → enforce. Understand-at-the-ears
   (the brain judges hostility), rail-at-the-hands (deterministic: external content is
   never executable instruction).
 - This is the **intake-bus-first** roadmap item — load-bearing for unrestricted
