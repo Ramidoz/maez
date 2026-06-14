@@ -150,8 +150,17 @@ function WhyReplyPane({ selectedTurn }) {
     const load = async () => {
       try {
         const res = await fetch('/api/v1/turn/latest');
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const json = await res.json();
+        const json = await res.json().catch(() => null);
+        if (!res.ok) {
+          // A 404 carrying a summary is the backend's honest "nothing to
+          // explain yet" state (no recent chat turn), NOT a failure. Render
+          // it calmly — never paint a red alarm over a true empty state.
+          if (res.status === 404 && json && json.summary_one_line) {
+            if (alive) { setData(json); setError(''); }
+            return;
+          }
+          throw new Error('HTTP ' + res.status);
+        }
         if (alive) { setData(json); setError(''); }
       } catch (e) {
         if (alive) setError(String(e));
