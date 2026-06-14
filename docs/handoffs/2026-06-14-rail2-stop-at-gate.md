@@ -235,12 +235,10 @@ because Layer B never blocks.
 
 ---
 
-## 4. Known cosmetic follow-up
+## 4. Cosmetic follow-up — RESOLVED
 
-**`ResourceWarning: unclosed file` in `tests/test_rail2_fetch_screen.py`**
+**`ResourceWarning: unclosed file` in `tests/test_rail2_fetch_screen.py` — fixed @5959f2e.**
 
-Two test helper patterns read the JSONL log with bare `open(log)` (lines 40 and 79)
-rather than a `with open(log) as fh:` context manager. Python's garbage collector
-closes them, so there is no functional defect and no data loss. The warning is
-harmless. Cleanup is welcome at any time but is not a blocker for the Codex review
-or the flag flip.
+The two bare `open(log)` reads now use `with open(log) as fh:` context managers. Verified
+clean: the suite runs 7/7 green under `-W error::ResourceWarning` (warnings promoted to
+errors). No outstanding cosmetic items.
