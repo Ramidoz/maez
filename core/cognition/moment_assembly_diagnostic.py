@@ -33,7 +33,13 @@ import numpy as np
 
 MOMENT_ASSEMBLY_DIAGNOSTIC_SCHEMA = 2
 AUDIT_BOUNDARY = "not_audit_evidence"
-DEFAULT_LOG_PATH = Path("logs/moment_assembly_diagnostic.jsonl")
+from core.infra import paths as _paths
+
+# Path resolution only — anchor under paths.logs_dir() (which honors
+# $MAEZ_HOME / $MAEZ_DATA) instead of the process CWD, so the diagnostic
+# stream lands in one canonical place regardless of where the daemon was
+# launched. Pure path math at import; no file is created here.
+DEFAULT_LOG_PATH = _paths.logs_dir() / "moment_assembly_diagnostic.jsonl"
 THESIS_DOC_PATH = "docs/governance/ARCHITECTURAL_THESIS.md"
 ARCHITECTURAL_THESIS_ADR_ID = "ARCHITECTURAL_THESIS"
 BYPASS_NOTE_MAX_CHARS = 500

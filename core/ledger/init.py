@@ -14,9 +14,16 @@ from __future__ import annotations
 import sqlite3
 import sys
 
+from core.infra import paths as _paths
 from core.ledger import migrate
 
-_DEFAULT_PATH = "memory/ledger.db"
+# Path resolution only. This is the DEFAULT target when the owner runs
+# `python -m core.ledger.init` without an explicit path. Resolving through
+# the canonical resolver anchors it under paths.home() instead of the
+# process CWD (shadow-DB prevention). This module is birth-gated: it does
+# NOT auto-create or migrate anything at import — that still happens only
+# inside main(), only when the owner deliberately runs it.
+_DEFAULT_PATH = str(_paths.memory_dir() / "ledger.db")
 
 
 def _head_prefix(db_path: str) -> str:

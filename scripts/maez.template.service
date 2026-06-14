@@ -16,7 +16,22 @@ OnFailure=maez-crashloop-alert@%N.service
 # probes before llama-server has finished loading the model" race.
 
 [Service]
-Type=simple
+# Type=notify: the daemon stays `activating` until it sends READY=1 (via
+# core/infra/systemd_notify.sd_notify) AFTER the LLM backend probe passes AND
+# the health socket binds — so `systemctl is-active maez` only reports `active`
+# once Maez is genuinely serving, not merely forked. NotifyAccess=main limits
+# the trusted READY=1 to the main daemon process. TimeoutStartSec=45 gives the
+# in-code backend probe its ~14s retry window plus model-load slack before
+# systemd calls the start a failure.
+#
+# llama-server / ollama / searxng / the judge are owner-installed OPTIONAL
+# bodies. They are deliberately kept OUT of the hard dependency chain
+# (Requires=): After= only orders startup when they exist (see [Unit] above),
+# and the in-code probe waits for whichever backend comes up at localhost. A
+# missing optional body must never make `maez.service` fail to start.
+Type=notify
+NotifyAccess=main
+TimeoutStartSec=45
 User=__MAEZ_USER__
 Group=__MAEZ_USER__
 WorkingDirectory=__MAEZ_HOME__

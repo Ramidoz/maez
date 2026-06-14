@@ -1066,7 +1066,7 @@ class ConversationController:
         *,
         channel: str,
         chat_id: str,
-        audit_db_path: str = "memory/audit_log.db",
+        audit_db_path: str | None = None,
         user_id: str | None = None,
         model: str = _DEFAULT_MODEL,
     ) -> Optional[dict]:
@@ -1086,6 +1086,14 @@ class ConversationController:
         """
         import sqlite3 as _sqlite
         import time as _time
+
+        # Resolve the audit DB lazily through the canonical resolver so the
+        # path is anchored under paths.home() rather than the process CWD
+        # (a bare-relative default would open a shadow DB when the daemon is
+        # launched from a different directory).
+        if audit_db_path is None:
+            from core.infra import paths as _paths
+            audit_db_path = str(_paths.audit_log_db())
 
         # Resolve default user_id from identity rather than hardcoding
         # "rohit". On a fresh install the owner's configured user_id
