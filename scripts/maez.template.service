@@ -27,8 +27,14 @@ OnFailure=maez-crashloop-alert@%N.service
 # llama-server / ollama / searxng / the judge are owner-installed OPTIONAL
 # bodies. They are deliberately kept OUT of the hard dependency chain
 # (Requires=): After= only orders startup when they exist (see [Unit] above),
-# and the in-code probe waits for whichever backend comes up at localhost. A
-# missing optional body must never make `maez.service` fail to start.
+# and the in-code probe waits for whichever backend comes up at localhost.
+# HONEST ABORT: a *reasoning backend* is NOT optional — start() calls
+# _check_ollama() and sys.exit(1)s if no backend answers within the probe's
+# ~14s retry window. Under Type=notify that exit surfaces as a failed
+# activation (correct, intended honesty: Maez refuses to claim "active" with no
+# brain). Searxng / the judge ARE optional and never block start. This is why
+# TimeoutStartSec MUST exceed the _check_ollama retry budget — otherwise systemd
+# would fail the start before the backend probe has finished retrying.
 Type=notify
 NotifyAccess=main
 TimeoutStartSec=45

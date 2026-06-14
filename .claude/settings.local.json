@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(systemctl status:*)",
+      "Bash(sudo systemctl:*)",
+      "Bash(systemctl is-active:*)",
+      "Bash(journalctl -u maez.service --since \"3 minutes ago\" --no-pager)",
+      "Bash(journalctl -u maez.service --since \"10 minutes ago\" --no-pager)",
+      "Bash(.venv/bin/python -m unittest tests.test_grounding_judge tests.test_fabrication_memory)"
+    ]
+  }
+}
