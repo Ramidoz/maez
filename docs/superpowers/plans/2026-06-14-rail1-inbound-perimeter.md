@@ -211,14 +211,19 @@ before continuing.
 
 - [ ] **Step 2: Stage the auto-rollback for sshd**
 
-This restores the original sshd config in 5 minutes if you don't cancel it:
+This restores SSH in 5 minutes if you don't cancel it. **Critical:** the rollback must
+*remove the Task 2 drop-in* (`10-rail1-keyonly.conf`) — that is where the change lives.
+Restoring only the main `sshd_config` would leave the bad drop-in active. Absolute
+paths so lockout recovery never depends on PATH:
 ```bash
-sudo cp /etc/ssh/sshd_config /etc/ssh/sshd_config.rail1.bak
+sudo /usr/bin/cp /etc/ssh/sshd_config /etc/ssh/sshd_config.rail1.bak
 sudo systemd-run --on-active=300 --timer-property=AccuracySec=1s \
-  /bin/sh -c 'cp /etc/ssh/sshd_config.rail1.bak /etc/ssh/sshd_config && systemctl restart ssh'
+  /usr/bin/sh -c '/usr/bin/rm -f /etc/ssh/sshd_config.d/10-rail1-keyonly.conf; /usr/bin/cp /etc/ssh/sshd_config.rail1.bak /etc/ssh/sshd_config; /usr/bin/systemctl restart ssh'
 ```
 Expected: prints `Running timer as unit: run-rXXXX.timer`. **Record** that name as
-`<ROLLBACK_TIMER>`.
+`<ROLLBACK_TIMER>`. (The rollback removes the drop-in *and* restores the main file *and*
+restarts ssh — any one of the three being missed is a lockout risk, so all three are in
+the timer.)
 
 - [ ] **Step 3: Disable password auth (drop-in, not main file edit)**
 
@@ -275,19 +280,20 @@ via Tailscale — the street-facing doors are shut without touching the services
 
 - [ ] **Step 1: Stage the auto-rollback FIRST (self-heal a lockout)**
 
+Absolute path so recovery never depends on PATH:
 ```bash
-sudo systemd-run --on-active=300 --timer-property=AccuracySec=1s ufw --force disable
+sudo systemd-run --on-active=300 --timer-property=AccuracySec=1s /usr/sbin/ufw --force disable
 ```
 Expected: `Running timer as unit: run-rXXXX.timer`. **Record** as `<ROLLBACK_TIMER>`.
 This disables ufw entirely in 5 min (reverting to the pre-Task-3 reachability) unless
-you cancel it in Step 5.
+you cancel it in Step 6.
 
 - [ ] **Step 2: Add the allow rules BEFORE enabling default-deny**
 
 Order matters — add the permits first so enabling deny never strands you:
 ```bash
-sudo ufw allow in on lo
-sudo ufw allow in on tailscale0
+sudo /usr/sbin/ufw allow in on lo
+sudo /usr/sbin/ufw allow in on tailscale0
 ```
 Expected: `Rule added` (or `Rule added (v6)`) for each. These permit all loopback and
 all tailnet traffic regardless of the default policy.
@@ -295,8 +301,8 @@ all tailnet traffic regardless of the default policy.
 - [ ] **Step 3: Set default-deny inbound, keep outbound free (perception stays free)**
 
 ```bash
-sudo ufw default deny incoming
-sudo ufw default allow outgoing
+sudo /usr/sbin/ufw default deny incoming
+sudo /usr/sbin/ufw default allow outgoing
 ```
 Expected: `Default incoming policy changed to 'deny'` and outgoing `'allow'`. Outbound
 stays unrestricted — Maez's eyes are untouched (covenant rail).
@@ -305,15 +311,43 @@ stays unrestricted — Maez's eyes are untouched (covenant rail).
 
 If Task 0 Step 1 showed `Status: inactive`:
 ```bash
-sudo ufw --force enable
+sudo /usr/sbin/ufw --force enable
 ```
 If it showed `Status: active`:
 ```bash
-sudo ufw reload
+sudo /usr/sbin/ufw reload
 ```
 Expected: `Firewall is active and enabled on system startup` or `Firewall reloaded`.
 
-- [ ] **Step 5: VERIFY before cancelling rollback — three checks**
+- [ ] **Step 5: Reconcile pre-existing broad ALLOW rules (critical — default-deny does NOT override an explicit allow)**
+
+`default deny incoming` only blocks traffic that **no rule allows**. If Task 0 — or this
+box's history — left a broad inbound rule like `22/tcp ALLOW IN Anywhere` or
+`3389 ALLOW IN Anywhere`, that explicit allow KEEPS SSH/RDP open to the LAN *despite*
+default-deny. You must find and remove any broad SSH/RDP/Anywhere inbound allow that is
+NOT scoped to `tailscale0`/`lo`.
+
+List the numbered rules:
+```bash
+sudo /usr/sbin/ufw status numbered
+```
+Expected: a numbered list. **Inspect every `ALLOW IN` line.** For each inbound allow on
+port 22, 3389, or `Anywhere` that is NOT `on tailscale0` / `on lo`, delete it by number
+(delete the **highest number first** — numbers renumber as you delete):
+```bash
+sudo /usr/sbin/ufw delete <N>
+```
+Then confirm nothing non-tailnet still allows inbound:
+```bash
+sudo /usr/sbin/ufw status numbered | grep -iE 'ALLOW IN' | grep -ivE 'tailscale0| lo '
+```
+Expected: **empty output** — the only `ALLOW IN` rules left are on `tailscale0` and `lo`.
+
+> **STOP for review if the rule set is non-trivial** (NAT/route rules, many app
+> profiles, anything you're unsure deletes safely). Paste `ufw status numbered` and we
+> reconcile together before you continue — do not guess which rule to delete.
+
+- [ ] **Step 6: VERIFY before cancelling rollback — three checks**
 
 a) **Admin path survived (most important):** from your second device's NEW shell:
 ```bash
@@ -336,27 +370,26 @@ nc -vz -w 3 192.168.40.135 22 ; nc -vz -w 3 192.168.40.135 3389
 ```
 Expected: both **time out / connection refused** (the LAN can no longer reach SSH/RDP).
 Over Tailscale (`100.72.231.116:22`) it still connects. If you can't easily test from a
-non-tailnet device, at minimum confirm (a) and (b) and accept LAN-block on the rule
-logic.
+non-tailnet device, at minimum confirm (a) and (b) and that Step 5 left no broad allow.
 
-- [ ] **Step 6: Cancel the rollback — ONLY if all of Step 5 passed**
+- [ ] **Step 7: Cancel the rollback — ONLY if all of Step 6 passed**
 
 ```bash
 sudo systemctl stop <ROLLBACK_TIMER>
 sudo systemctl list-timers | grep run-r || echo "no rail1 rollback timers pending"
 ```
-Expected: no pending rail1 timer. **If ANY check in Step 5 failed, do NOT cancel** —
+Expected: no pending rail1 timer. **If ANY check in Step 6 failed, do NOT cancel** —
 let the 5-minute timer disable ufw and restore access, then re-diagnose from Task 3
 Step 1.
 
-- [ ] **Step 7: Record the new firewall state**
+- [ ] **Step 8: Record the new firewall state**
 
 ```bash
-sudo ufw status verbose
+sudo /usr/sbin/ufw status verbose
 ```
 Expected: `Status: active`, `Default: deny (incoming), allow (outgoing)`, with
-`Anywhere on lo` and `Anywhere on tailscale0` ALLOW rules. **Record** this as the
-after-state.
+`Anywhere on lo` and `Anywhere on tailscale0` ALLOW rules and **no** broad
+`22 ALLOW Anywhere` / `3389 ALLOW Anywhere`. **Record** this as the after-state.
 
 ---
 
@@ -376,7 +409,7 @@ separate, independently-rolled-back changes.
 
 ```bash
 sudo systemd-run --on-active=300 --timer-property=AccuracySec=1s \
-  /bin/sh -c 'rm -f /etc/ssh/sshd_config.d/20-rail1-bind.conf && systemctl restart ssh'
+  /usr/bin/sh -c '/usr/bin/rm -f /etc/ssh/sshd_config.d/20-rail1-bind.conf; /usr/bin/systemctl restart ssh'
 ```
 Expected: `Running timer as unit: run-rXXXX.timer` → record as `<ROLLBACK_TIMER>`.
 
@@ -477,8 +510,9 @@ Expected: `Status: active`, default deny incoming, `ufw enabled` (survives reboo
 
 - [ ] **Step 4: Update the build ledger Rail 1 row**
 
-Edit `docs/MAEZ_BUILD_LEDGER.md`: move the Rail 1 / "Host inbound doors" item to
-`LIVE_WITNESSED`, record the witness (the Step 1 diff + Step 2 organ-green), the
+Edit `docs/MAEZ_BUILD_LEDGER.md`: **add or update** the Rail 1 / "Host inbound doors"
+row (it does not exist yet — confirmed 2026-06-14, so this likely ADDS a new row) at
+`LIVE_WITNESSED`, recording the witness (the Step 1 diff + Step 2 organ-green), the
 `last_verified_commit`, and `updated_by`. This is a docs-only commit:
 ```bash
 git add docs/MAEZ_BUILD_LEDGER.md
@@ -496,13 +530,14 @@ is silently dropped. Plaintext-secrets-at-rest remains Rail 3's job, not Rail 1'
 ## Rollback quick-reference (if anything goes wrong at any point)
 
 - **You lost your SSH shell:** wait ≤5 minutes — the staged `systemd-run` timer
-  auto-reverts the last change (ufw disable / sshd restore). Then reconnect over
-  Tailscale and re-diagnose.
-- **Manually revert the firewall now:** `sudo ufw disable` (reopens everything).
-- **List pending rollback timers:** `sudo systemctl list-timers | grep run-r`.
-- **Cancel a rollback you no longer need:** `sudo systemctl stop <ROLLBACK_TIMER>`.
-- **Revert an sshd drop-in:** `sudo rm /etc/ssh/sshd_config.d/10-rail1-keyonly.conf
-  /etc/ssh/sshd_config.d/20-rail1-bind.conf && sudo systemctl restart ssh`.
+  auto-reverts the last change (ufw disable / sshd drop-in removed + restore). Then
+  reconnect over Tailscale and re-diagnose.
+- **Manually revert the firewall now:** `sudo /usr/sbin/ufw disable` (reopens everything).
+- **List pending rollback timers:** `sudo /usr/bin/systemctl list-timers | grep run-r`.
+- **Cancel a rollback you no longer need:** `sudo /usr/bin/systemctl stop <ROLLBACK_TIMER>`.
+- **Revert the sshd drop-ins (removes them, the actual changes):** `sudo /usr/bin/rm -f
+  /etc/ssh/sshd_config.d/10-rail1-keyonly.conf /etc/ssh/sshd_config.d/20-rail1-bind.conf
+  && sudo /usr/bin/systemctl restart ssh`.
 - **At the physical console you can always recover** regardless of network state.
 
 ---
