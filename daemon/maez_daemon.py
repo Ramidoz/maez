@@ -2219,6 +2219,127 @@ def _buffer_cycle_audit_flags(audit_result: object) -> None:
         )
 
 
+def _valence_reading_to_telemetry(reading) -> dict | None:
+    """Convert a ValenceReading into the honest dict the cockpit retains.
+
+    Keeps ONLY real fields (sign, magnitude, the reading's own telemetry
+    sentence, and the active contribution reasons). Never invents a mood.
+    Returns None for a None reading so the caller can leave prior value/None.
+    """
+    if reading is None:
+        return None
+    try:
+        sign = getattr(getattr(reading, "sign", None), "value", None)
+        magnitude = getattr(getattr(reading, "magnitude", None), "value", None)
+        reasons = []
+        for contribution in getattr(reading, "contributions", ()) or ():
+            csign = getattr(contribution, "sign", None)
+            creason = getattr(contribution, "reason", "")
+            if csign is not None and getattr(csign, "name", "") != "NEUTRAL" and creason:
+                reasons.append(creason)
+        return {
+            "sign": sign,
+            "magnitude": magnitude,
+            "telemetry": reading.as_telemetry(),
+            "reasons": reasons,
+            "provenance": getattr(reading, "provenance", "computed_valence"),
+        }
+    except Exception:
+        return None
+
+
+# Organ-gating MAEZ_* flags surfaced to the cockpit. Tokens/secrets/paths are
+# deliberately excluded — only the switches that turn cognition organs on/off.
+_COCKPIT_FLAG_NAMES = (
+    "MAEZ_COCKPIT_REAL_STATE",
+    "MAEZ_COCKPIT_CORE",
+    "MAEZ_LIVED_RECALL",
+    "MAEZ_CYCLE_DOORMAN_ENABLED",
+    "MAEZ_CYCLE_FOCUSED_ENABLED",
+    "MAEZ_RECALL_RECEIPT_ENABLED",
+    "MAEZ_RECALL_SHADOW_ENABLED",
+    "MAEZ_RECALL_STATUS_INTERCEPT_ENABLED",
+    "MAEZ_REFLECTION_SYNTHESIS_ENABLED",
+    "MAEZ_WANT_PURSUIT_ENABLED",
+    "MAEZ_WONDERING_PURSUIT",
+    "MAEZ_WORKING_SELF",
+    "MAEZ_SCREEN_PERCEPTION",
+    "MAEZ_LEDGER_WRITES",
+    "MAEZ_EVIDENCE_ENVELOPE_DISABLED",
+)
+
+
+def _cockpit_flags_snapshot() -> dict:
+    """Read the live organ-gating flags straight off os.environ (raw values)."""
+    return {name: os.environ.get(name) for name in _COCKPIT_FLAG_NAMES}
+
+
+def _build_cockpit_state(daemon) -> dict:
+    """Assemble the fast cockpit real-state JSON true-by-construction.
+
+    Reads straight off the daemon's retained in-memory attrs. Does NOT call
+    perception_snapshot()/nvidia-smi (that is why /health is slow). Every field
+    is guarded so a missing attr yields null, never a crash. Deliberately
+    OMITS mood and uncertainty — they have no organ; performing them would be
+    fabrication the covenant forbids.
+    """
+
+    def _safe(fn, default=None):
+        try:
+            return fn()
+        except Exception:
+            return default
+
+    reasoning_loop = _safe(
+        lambda: daemon._cycle_heartbeat_health(), default=None
+    )
+    status = _safe(
+        lambda: daemon._health_status_from_reasoning_loop(reasoning_loop or {}),
+        default=None,
+    )
+
+    cog = getattr(daemon, "_last_cog_metadata", None)
+    cognition = None
+    if isinstance(cog, dict) and cog:
+        cognition = {
+            "score_0_100": cog.get("cog_score"),
+            "primary": cog.get("cog_primary"),
+            "labels": cog.get("cog_labels"),
+            "topic": cog.get("cog_topic"),
+            "retried": cog.get("cog_retried"),
+        }
+
+    recall = None
+    receipt = getattr(daemon, "_last_recall_receipt", None)
+    if receipt is not None:
+        recall = {
+            "receipt": getattr(receipt, "receipt", None),
+            "at_ts": getattr(receipt, "at_ts", None),
+            "boot_id": getattr(receipt, "boot_id", None),
+        }
+
+    return {
+        "status": status,
+        "running": bool(getattr(daemon, "running", False)),
+        "boot_time": getattr(daemon, "boot_time", None),
+        "cycle_count": getattr(daemon, "cycle_count", None),
+        "last_cycle": getattr(daemon, "last_cycle_time", None),
+        "reasoning_loop": reasoning_loop,
+        "cognition": cognition,
+        "last_thought": getattr(daemon, "_last_cycle_text", None) or None,
+        "valence": getattr(daemon, "_last_valence_reading", None),
+        "recall": recall,
+        "watchdog": _safe(lambda: daemon._watchdog_health(), default=None),
+        "temporal_spine": _safe(lambda: temporal_spine_health(), default=None),
+        "clinical_boundary": _safe(lambda: clinical_boundary_health(), default=None),
+        "voice_continuity": _safe(
+            lambda: daemon._voice_continuity_health(), default=None
+        ),
+        "flags": _cockpit_flags_snapshot(),
+        "sampled_at": time.time(),
+    }
+
+
 def _read_and_log_cycle_valence(
     daemon: object,
     *,
@@ -2255,6 +2376,12 @@ def _read_and_log_cycle_valence(
         )
         if reading is not None:
             audit_flag_buffer.clear()
+            # Retain the honest reading on the daemon for the cockpit. On a
+            # None reading we leave the prior value untouched (last good read).
+            try:
+                daemon._last_valence_reading = _valence_reading_to_telemetry(reading)
+            except Exception:
+                logger.debug("failed to retain valence reading for cockpit", exc_info=True)
         else:
             logger.debug("valence end-of-cycle read returned None; keeping audit buffer")
     except Exception:
@@ -2379,6 +2506,98 @@ def _pair_history_for_chat_threading(raw_history) -> list[dict]:
         else:
             i += 1
     return out
+
+
+# Cockpit chat_history depth — mirror the Telegram default
+# (skills.surface.maez_adapter._CHAT_HISTORY_TURNS = 3) so cockpit synthesis
+# sees the same window of prior exchanges.
+_COCKPIT_CHAT_HISTORY_TURNS = 3
+# Stable per-session cockpit chat id is a LATER slice; SLICE 2 uses one fixed,
+# non-empty id so the unified-core early-return interceptors have a chat scope.
+_COCKPIT_CHAT_ID = "cockpit_owner"
+
+
+def cockpit_core_enabled() -> bool:
+    """Return True iff ``MAEZ_COCKPIT_CORE`` is 1/true/yes/on. DEFAULT OFF.
+
+    Strict on/off parser (``core.infra.env_flags.strict_env_flag``): ``"0"``,
+    ``false``, ``no``, ``off``, empty, unset, or any other value → False. When
+    OFF the cockpit ``/message`` route behaves EXACTLY as before (source="UI" ->
+    handle_message). When ON the route delegates to
+    ``daemon.inbound_core.run_inbound_turn`` so cockpit gets the unified path —
+    and specifically so the S4 clinical boundary fires on the cockpit owner
+    surface.
+    """
+    from core.infra.env_flags import strict_env_flag
+
+    return strict_env_flag("MAEZ_COCKPIT_CORE")
+
+
+def _build_cockpit_inbound_descriptor(daemon, *, text: str, chat_history) -> dict:
+    """Assemble the keyword descriptor for run_inbound_turn from a cockpit turn.
+
+    SLICE 2 covenant decisions (fixed — do not expand here):
+
+    * S4 fires: ``owner_surface_label="cockpit"`` (now in the
+      ``_is_direct_owner_surface`` allowlist).
+    * M1-EXCLUDED: cockpit is NOT in ``M1_ALLOWED_PROMOTION_SOURCES`` (the
+      unauthenticated localhost surface must not write durable M1 selfhood).
+    * Felt-time OFF: ``owner_auth_factory=lambda: None`` (subjective_duration
+      organ is silently off — honest for an unauthenticated surface).
+    * MINIMAL scope: ``get_pipeline=None`` and ``action_engine=None`` so the
+      card-reply / proposal / search / brain-loop / D20 blocks all self-skip.
+      No cards, no proposal/search interceptors, no tools — those are later
+      slices. The interceptor hooks are no-ops.
+    """
+    from skills.surface.maez_adapter import _clean_exchange
+
+    async def _try_proposal_intent(*args, **kwargs):
+        return None
+
+    async def _try_search_commitment_intent(*args, **kwargs):
+        return None
+
+    def _search_commitment_controller():
+        return None
+
+    def _audit_surface_reply(text: str, *, surface: str) -> str:
+        # Cockpit SLICE 2 has no card-dialog path, so this is never reached
+        # inside run_inbound_turn (it only fires within the ``pipe is not None``
+        # card-dialog block). Passthrough keeps the contract honest.
+        return text
+
+    def _chat_history_provider(limit: int):
+        # Reuse the cockpit request's paired history (already cleaned into the
+        # handle_message shape). The core's clean_exchange pass is a no-op on
+        # this already-clean content; fall open to [] when absent.
+        return list(chat_history or [])
+
+    return dict(
+        daemon=daemon,
+        text=text or "",
+        chat_id=_COCKPIT_CHAT_ID,
+        resolved_user_id="rohit",
+        reply_to_message_id=None,
+        context_note=None,
+        photo_analysis=None,
+        is_photo_turn=False,
+        owner_surface_label="cockpit",
+        user_id="rohit",
+        channel="web_chat_owner",
+        owner_auth_factory=lambda: None,
+        observe_turn_label="cockpit_turn",
+        chat_history_turns=_COCKPIT_CHAT_HISTORY_TURNS,
+        action_engine=None,
+        get_pipeline=None,
+        chat_history_provider=_chat_history_provider,
+        try_proposal_intent=_try_proposal_intent,
+        try_search_commitment_intent=_try_search_commitment_intent,
+        search_commitment_controller=_search_commitment_controller,
+        audit_surface_reply=_audit_surface_reply,
+        clean_exchange=_clean_exchange,
+        send_intermediate=None,
+        send_progress_receipt=None,
+    )
 
 
 def _chat_history_message_count(messages: list[dict]) -> int:
@@ -2533,6 +2752,11 @@ class MaezDaemon:
         self._last_recall_receipt = None
         self.cycle_count = 0
         self.last_cycle_time = None
+        # Cockpit real-state retain attrs (true-by-construction): the daemon's
+        # actual last utterance and last computed valence reading, held in
+        # memory so the face can read REAL state instead of scraping logs.
+        self._last_cycle_text = ""
+        self._last_valence_reading = None
         self._cycle_stage = "not_started"
         self._cycle_stage_started_at = None
         self._soul_hash = None
@@ -8876,6 +9100,9 @@ class MaezDaemon:
                     raise
 
                 logger.info("Cycle %d response:\n%s", self.cycle_count, result)
+                # Retain the daemon's actual last utterance in memory (bound
+                # length) so the cockpit reads a real thought, not a log scrape.
+                self._last_cycle_text = (result or "")[:2000]
                 # Store response with full perception snapshot. Screen context
                 # is v1a ephemeral-only: it may shape the in-cycle prompt, but
                 # it is not appended to durable memory or metadata here.
@@ -9880,6 +10107,15 @@ class MaezDaemon:
                 }
             )
 
+        @app.route("/internal/cockpit/state")
+        def cockpit_state():
+            # FAST real-state read for the cockpit face: true-by-construction
+            # off the daemon's retained in-memory attrs. No perception_snapshot
+            # / nvidia-smi here (that is what keeps /health ~1.7s). Never
+            # fabricates mood/uncertainty — they have no organ, so they are
+            # omitted entirely.
+            return jsonify(_build_cockpit_state(self))
+
         @app.route("/operator/health")
         def operator_health():
             payload = dict(self._operator_health())
@@ -10261,6 +10497,30 @@ class MaezDaemon:
             # expects. 2026-04-27 incident fix.
             raw_history = data.get("history") or []
             chat_history = _pair_history_for_chat_threading(raw_history) if raw_history else None
+            # SLICE 2 strangler seam — flag-gated delegation to the
+            # surface-agnostic inbound core. DEFAULT OFF. When ON, the cockpit
+            # routes through run_inbound_turn so the S4 clinical boundary fires
+            # on the cockpit owner surface (which source="UI" silently bypassed)
+            # and synthesis runs the unified path. Minimal scope: NO M1
+            # promotion (cockpit not in M1_ALLOWED_PROMOTION_SOURCES), felt-time
+            # OFF, NO cards/proposals/search/tools (get_pipeline=action_engine=
+            # None). When OFF (default), the existing source="UI" path runs
+            # UNTOUCHED.
+            if cockpit_core_enabled():
+                from daemon.inbound_core import run_inbound_turn
+
+                # The Flask route is sync; run_inbound_turn is async. asyncio.run
+                # creates and manages a fresh event loop for this turn (no daemon
+                # loop is running on the Flask request thread); inside the
+                # coroutine, run_inbound_turn's own asyncio.get_event_loop()
+                # returns that running loop for its run_in_executor offloads.
+                descriptor = _build_cockpit_inbound_descriptor(
+                    self,
+                    text=text,
+                    chat_history=chat_history,
+                )
+                reply = asyncio.run(run_inbound_turn(**descriptor))
+                return jsonify({"reply": reply})
             reply = self.handle_message(
                 text,
                 source="UI",

@@ -482,8 +482,6 @@ function ChatPane({ tall, showSidebar = true, selectedTurn, onSelectTurn }) {
           <div style={{ fontFamily: A.sans, fontSize: 11, color: A.textDim, marginTop: 1, display: 'flex', gap: 6, alignItems: 'center' }}>
             <span style={{ color: sessionColor, fontWeight: 600 }}>Maez</span>
             <span>·</span>
-            <span style={{ fontStyle: 'italic' }}>{sim.state.daemon.mood}</span>
-            <span>·</span>
             <span>{session?.history.length || 0} messages</span>
           </div>
         </div>
@@ -1092,7 +1090,7 @@ function DaemonPane({ compact }) {
   const d = sim.state.daemon;
   const pct = ((30 - d.nextTickIn) / 30) * 100;
   return (
-    <Card title="Daemon" subtitle={`Cycle #${d.cycle.toLocaleString()} · ${d.mood}`}
+    <Card title="Daemon" subtitle={`Cycle #${d.cycle.toLocaleString()}`}
       icon="◎" iconColor={A.indigo}
       right={<Chip color={A.indigo}>{d.nextTickIn}s</Chip>}>
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -1109,7 +1107,7 @@ function DaemonPane({ compact }) {
           <div style={{ display: 'grid', gap: 10, borderTop: `0.5px solid ${A.stroke}`, paddingTop: 10 }}>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
               <Meter label="Cognition" value={d.score} color={d.score > 0.75 ? A.green : A.orange} />
-              <Meter label="Uncertainty" value={d.uncertainty} color={A.cyan} />
+              {/* Uncertainty meter removed: no organ computes it (covenant — no fabricated inner life). */}
             </div>
             <div style={{ fontFamily: A.sans, fontSize: 11.5, color: A.textDim, lineHeight: 1.45, background: A.surfaceLo, border: `0.5px solid ${A.stroke}`, borderRadius: 10, padding: 10 }}>
               <span style={{ color: A.textSoft, fontWeight: 700 }}>{cognitionLabel(d.score)}.</span> {cognitionExplanation(d.score)}

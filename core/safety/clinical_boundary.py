@@ -568,6 +568,7 @@ def _is_direct_owner_surface(surface: str) -> bool:
         "telegram_v2",
         "telegram_legacy",
         "telegram_surface",  # live Surface-V2 inbound label (maez_adapter.SURFACE_NAME)
+        "cockpit",  # cockpit /message owner surface (SLICE 2 — S4 fires on cockpit owner path)
         "web_chat",
         "daemon",
         "direct",
