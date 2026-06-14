@@ -135,3 +135,4 @@ docs/eval/runs/*.json
 
 # Brain benchmark raw answer/evidence dumps are quarantined local artifacts.
 logs/brain_bench_debug/
+.claude/
