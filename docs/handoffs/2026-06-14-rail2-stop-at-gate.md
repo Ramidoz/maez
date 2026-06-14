@@ -185,6 +185,17 @@ Confirm the Task 3 tests (`test_nonsuccess_branch_is_dropped_from_fresh_blocks`,
 `test_no_accepted_block_has_empty_text`, `test_all_failed_surfaces_honest_no_fresh_summary`)
 pass without any production code change on this branch.
 
+### 2f. A/B set asymmetry — by design, not a mismatch
+
+**Claim (recorded so it isn't mis-flagged):** Layer B screens the **full**
+`accepted_fresh_blocks` set (every SUCCESS block, per-block), while Layer A wraps only
+the fresh-role summaries that actually render — i.e. sources in `spec.external_sources`,
+joined per-source. These are deliberately different granularities and different sets.
+The asymmetry is in the **safe direction**: the immune/observability layer (B) never
+screens *less* than the containment layer (A) wraps; B may additionally screen content
+that A does not surface this turn. This is intentional — do not flag it as an A/B
+mismatch.
+
 ---
 
 ## 3. Owner breath sequence
