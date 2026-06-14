@@ -11,6 +11,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 import hashlib
 import json
+import threading
 from typing import Any
 
 from core.dispatcher.external_sources import (
@@ -44,6 +45,8 @@ from core.dispatcher.spec import (
     SubstrateSource,
     _LEGAL_HINT_FRAMING,
 )
+from core.cognition.fetch_screen_flags import fetch_injection_shadow_enabled
+from core.cognition import fetch_screen as _fetch_screen
 
 
 @dataclass(frozen=True)
@@ -71,6 +74,46 @@ def _role_order(role: SourceRole) -> tuple[int, str]:
         return (len(_SUBSTRATE_ROLE_ORDER), role.value)
 
 
+# ---------------------------------------------------------------------------
+# Layer B shadow screener — off-path, never blocks the reply
+# ---------------------------------------------------------------------------
+
+_FETCH_SCREEN_WORKER = None
+_FETCH_SCREEN_LOCK = threading.Lock()
+
+
+def _fetch_screen_log_path():
+    """Return the log path for fetch_screen verdicts.
+
+    Uses core.infra.paths.logs_dir() — the same base as grounding_shadow,
+    moment_assembly_diagnostic, and other telemetry writers — overridable via
+    $MAEZ_DATA.  We do NOT use XDG_STATE_HOME (that's intake_shadow's choice,
+    kept distinct to avoid cross-contamination of log dirs).
+    """
+    from core.infra import paths as _paths
+    return _paths.logs_dir() / "fetch_screen.jsonl"
+
+
+def _maybe_shadow_screen(accepted_fresh_blocks):
+    if not fetch_injection_shadow_enabled():
+        return
+    global _FETCH_SCREEN_WORKER
+    try:
+        if _FETCH_SCREEN_WORKER is None:
+            with _FETCH_SCREEN_LOCK:
+                if _FETCH_SCREEN_WORKER is None:
+                    _FETCH_SCREEN_WORKER = _fetch_screen.FetchScreenWorker(_fetch_screen_log_path())
+                    _FETCH_SCREEN_WORKER.start()
+        for block in accepted_fresh_blocks:
+            _FETCH_SCREEN_WORKER.enqueue({
+                "source": getattr(block.source, "value", str(block.source)),
+                "content_hash": _fetch_screen.content_hash(block.text),
+                "text": block.text,
+            })
+    except Exception:
+        pass  # shadow must NEVER affect the reply
+
+
 def merge_fanout_results(
     spec: CompositionSpec,
     layer1_result: Layer1FanoutResult,
@@ -82,6 +125,7 @@ def merge_fanout_results(
     ask_shape: AskShape = AskShape.CONVERSATIONAL,
 ) -> RenderedTurn:
     accepted_fresh_blocks = _accepted_fresh_blocks(external_result)
+    _maybe_shadow_screen(accepted_fresh_blocks)
     substrate_has_rows = bool(layer1_result.recall_blocks)
     fresh_outcome = _fresh_attempt_outcome(spec, accepted_fresh_blocks)
     transform = _transform_for(
