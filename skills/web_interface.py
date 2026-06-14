@@ -48,6 +48,7 @@ from core.infra.http_security import (
     apply_local_cors_headers,
     reject_untrusted_browser_write,
 )
+from core.infra.env_flags import strict_env_flag
 from core.safety.clinical_boundary import (
     PrivateThoughtsCrisisSignalWriter,
     guard_owner_text,
@@ -118,6 +119,9 @@ MODEL_STATE_PATH = "/home/rohit/maez/config/model_state.json"
 THUNDER_STATE_PATH = "/home/rohit/maez/config/thunder_state.json"
 TRAINING_RUNS_DIR = "/home/rohit/maez/training/runs"
 DAEMON_HEALTH_URL = "http://127.0.0.1:11435/health"
+# Fast real-state read for the cockpit face (true-by-construction off the
+# daemon's retained in-memory attrs). Used only when MAEZ_COCKPIT_REAL_STATE on.
+DAEMON_COCKPIT_STATE_URL = "http://127.0.0.1:11435/internal/cockpit/state"
 # 2026-04-23 Commit 6: removed stale 'llama-server-vision' from the
 # journal surface — no such service runs. Re-add when a multimodal
 # endpoint is re-provisioned.
@@ -1112,7 +1116,12 @@ def bg_page():
 # wiring lands in follow-up work.
 # ══════════════════════════════════════════════════════════════════════
 
-COCKPIT_DIR = "/home/rohit/maez/web/cockpit"
+# Repo-relative (skills/ is one level under the repo root → parents[1]), with an
+# env override. Avoids hardcoding the live tree so a worktree serves ITS OWN
+# cockpit JSX (hermetic-path fix).
+COCKPIT_DIR = os.environ.get("MAEZ_COCKPIT_DIR") or str(
+    Path(__file__).resolve().parents[1] / "web" / "cockpit"
+)
 
 
 @app.route("/cockpit")
@@ -1492,8 +1501,37 @@ def _tail_log_lines(path: str, n: int = 200) -> list:
         return []
 
 
+def _daemon_cockpit_state_proxy(timeout=1.5):
+    """Proxy the daemon's fast real-state endpoint verbatim.
+
+    Mirrors `_daemon_health()`: short timeout, returns the daemon JSON as-is.
+    On unreachable returns an honest {"status": "unreachable"} — NEVER falls
+    back to scraped/seed data (the covenant forbids fabricated inner life).
+    """
+    try:
+        with urllib.request.urlopen(DAEMON_COCKPIT_STATE_URL, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except Exception as e:
+        logger.debug("daemon cockpit-state unreachable: %s", e)
+        return {"status": "unreachable"}
+
+
 @app.route("/api/v1/daemon/state")
 def api_daemon_state():
+    """Daemon state for the cockpit face.
+
+    MAEZ_COCKPIT_REAL_STATE (strict) gates the rollout:
+      - OFF (default): the legacy best-effort log-scrape + SQLite reconstruction
+        below (byte-identical to before this slice).
+      - ON: proxy the daemon's fast /internal/cockpit/state verbatim — real
+        in-memory substrate state, true-by-construction, no fabricated mood.
+    """
+    if strict_env_flag("MAEZ_COCKPIT_REAL_STATE"):
+        return jsonify(_daemon_cockpit_state_proxy())
+    return _api_daemon_state_log_scrape()
+
+
+def _api_daemon_state_log_scrape():
     """Snapshot of daemon state, reconstructed from log tail + SQLite
     queries. Best-effort — fields default when a source is unreachable."""
     import re as _re
