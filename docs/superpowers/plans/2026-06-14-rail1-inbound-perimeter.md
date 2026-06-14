@@ -401,9 +401,25 @@ separate, independently-rolled-back changes.
 
 > Only attempt this after Task 3 is confirmed stable. If you prefer to stop at the
 > firewall (Task 3 alone already closes the doors), Task 4 is optional — mark it
-> deferred and skip to Task 5.
+> deferred and skip to Task 5. **Recommended for the first Rail 1 run: DEFER all of
+> Task 4** — the firewall posture is complete on its own.
 
-### 4a: SSH ListenAddress → Tailscale only
+### 4a: SSH ListenAddress → Tailscale only — DEFERRED BY DEFAULT (boot-order caution)
+
+> **⚠️ Do NOT do 4a on the first run unless you deliberately want it and will test a
+> reboot.** Binding sshd to `100.72.231.116` introduces **boot-order fragility**: if
+> `ssh.service` starts before `tailscaled` has assigned the Tailscale address, sshd
+> **fails to bind and SSH is down entirely** until you fix it at the console. The Task 3
+> firewall already closes the street-facing door without this risk. If you do want 4a
+> later, first add explicit service ordering so sshd waits for Tailscale, e.g. a drop-in
+> `/etc/systemd/system/ssh.service.d/10-after-tailscale.conf`:
+> ```
+> [Unit]
+> After=tailscaled.service network-online.target
+> Wants=network-online.target
+> ```
+> then `sudo systemctl daemon-reload`, apply the steps below, and **test a full reboot**
+> to confirm SSH comes back. Until you've done that reboot test, leave 4a deferred.
 
 - [ ] **Step 1: Stage rollback**
 
@@ -544,10 +560,13 @@ is silently dropped. Plaintext-secrets-at-rest remains Rail 3's job, not Rail 1'
 
 ## Done-when
 
-- `sudo ufw status verbose` → active, default deny incoming, allow on `lo` +
-  `tailscale0`.
+**Recommended first-run path: Task 0 → 1 → (2 if password auth on) → 3 → 5.** Task 4 is
+deferred by default (4a has a boot-order caution; 4b is firewall-contained already).
+
+- `sudo /usr/sbin/ufw status verbose` → active, default deny incoming, allow on `lo` +
+  `tailscale0`, and no broad `22`/`3389` Anywhere allow remaining (Task 3 Step 5).
 - SSH/RDP reachable over Tailscale (`100.72.231.116`), refused from non-tailnet LAN.
 - Maez organs still loopback-bound and services active (no regression).
 - (If Task 2 ran) `passwordauthentication no`.
-- Ledger Rail 1 row = `LIVE_WITNESSED` with the before/after witness.
+- Ledger Rail 1 row added/updated to `LIVE_WITNESSED` with the before/after witness.
 - The paused **memory-parity** decision may now resume (every door is a provably-you door).
