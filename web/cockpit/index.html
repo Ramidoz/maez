@@ -34,6 +34,8 @@
   @keyframes mz-wobble { 0%,100%{ border-radius:54% 46% 52% 48% / 60% 58% 42% 40% } 33%{ border-radius:48% 52% 46% 54% / 56% 62% 38% 44% } 66%{ border-radius:52% 48% 54% 46% / 62% 56% 44% 38% } }
   @keyframes mz-ember { 0%,100%{ opacity:.82; transform:translate(-50%,-50%) scale(1) } 50%{ opacity:1; transform:translate(-50%,-50%) scale(1.08) } }
   @keyframes mz-rise { 0%,100%{ transform:translate(-50%,-50%) translateY(2px) scale(1); opacity:.74 } 50%{ transform:translate(-50%,-50%) translateY(-3px) scale(1.06); opacity:1 } }
+  /* orbital rings: gently morph so they read as flowing threads, not rigid hoops */
+  @keyframes mz-ring-flow { 0%,100%{ border-radius:49% 51% 52% 48% / 51% 49% 51% 49% } 25%{ border-radius:52% 48% 49% 51% / 48% 52% 49% 51% } 50%{ border-radius:48% 52% 51% 49% / 52% 48% 51% 49% } 75%{ border-radius:51% 49% 48% 52% / 49% 51% 52% 48% } }
   .mz-slime { position:relative; width:114px; height:100px; border-radius:54% 46% 52% 48% / 60% 58% 42% 40%; overflow:hidden;
     background:radial-gradient(58% 52% at 44% 32%, rgba(176,214,242,.92), rgba(96,156,214,.84) 52%, rgba(44,96,164,.82) 100%);
     box-shadow:inset 0 -12px 22px rgba(20,44,82,.5), 0 10px 28px rgba(70,140,210,.16);
@@ -425,10 +427,10 @@ function MaezCoreVisual({ d }) {
           position: 'absolute',
           width: 262 + i * 44,
           height: 262 + i * 44,
-          borderRadius: '50%',
-          border: `1px solid ${[A.orange, A.cyan, A.purple][i]}42`,
-          transform: `rotate(${i * 26}deg)`,
-          animation: `maez-orbit ${18 + i * 8}s linear infinite`,
+          borderRadius: '49% 51% 52% 48% / 51% 49% 51% 49%',
+          border: `1px solid ${[A.orange, A.cyan, A.purple][i]}38`,
+          animation: `maez-orbit ${22 + i * 9}s linear infinite, mz-ring-flow ${9 + i * 3}s ease-in-out infinite`,
+          animationDirection: i % 2 ? 'reverse, normal' : 'normal, normal',
         }}>
           <span style={{
             position: 'absolute',
