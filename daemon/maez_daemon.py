@@ -2219,6 +2219,127 @@ def _buffer_cycle_audit_flags(audit_result: object) -> None:
         )
 
 
+def _valence_reading_to_telemetry(reading) -> dict | None:
+    """Convert a ValenceReading into the honest dict the cockpit retains.
+
+    Keeps ONLY real fields (sign, magnitude, the reading's own telemetry
+    sentence, and the active contribution reasons). Never invents a mood.
+    Returns None for a None reading so the caller can leave prior value/None.
+    """
+    if reading is None:
+        return None
+    try:
+        sign = getattr(getattr(reading, "sign", None), "value", None)
+        magnitude = getattr(getattr(reading, "magnitude", None), "value", None)
+        reasons = []
+        for contribution in getattr(reading, "contributions", ()) or ():
+            csign = getattr(contribution, "sign", None)
+            creason = getattr(contribution, "reason", "")
+            if csign is not None and getattr(csign, "name", "") != "NEUTRAL" and creason:
+                reasons.append(creason)
+        return {
+            "sign": sign,
+            "magnitude": magnitude,
+            "telemetry": reading.as_telemetry(),
+            "reasons": reasons,
+            "provenance": getattr(reading, "provenance", "computed_valence"),
+        }
+    except Exception:
+        return None
+
+
+# Organ-gating MAEZ_* flags surfaced to the cockpit. Tokens/secrets/paths are
+# deliberately excluded — only the switches that turn cognition organs on/off.
+_COCKPIT_FLAG_NAMES = (
+    "MAEZ_COCKPIT_REAL_STATE",
+    "MAEZ_COCKPIT_CORE",
+    "MAEZ_LIVED_RECALL",
+    "MAEZ_CYCLE_DOORMAN_ENABLED",
+    "MAEZ_CYCLE_FOCUSED_ENABLED",
+    "MAEZ_RECALL_RECEIPT_ENABLED",
+    "MAEZ_RECALL_SHADOW_ENABLED",
+    "MAEZ_RECALL_STATUS_INTERCEPT_ENABLED",
+    "MAEZ_REFLECTION_SYNTHESIS_ENABLED",
+    "MAEZ_WANT_PURSUIT_ENABLED",
+    "MAEZ_WONDERING_PURSUIT",
+    "MAEZ_WORKING_SELF",
+    "MAEZ_SCREEN_PERCEPTION",
+    "MAEZ_LEDGER_WRITES",
+    "MAEZ_EVIDENCE_ENVELOPE_DISABLED",
+)
+
+
+def _cockpit_flags_snapshot() -> dict:
+    """Read the live organ-gating flags straight off os.environ (raw values)."""
+    return {name: os.environ.get(name) for name in _COCKPIT_FLAG_NAMES}
+
+
+def _build_cockpit_state(daemon) -> dict:
+    """Assemble the fast cockpit real-state JSON true-by-construction.
+
+    Reads straight off the daemon's retained in-memory attrs. Does NOT call
+    perception_snapshot()/nvidia-smi (that is why /health is slow). Every field
+    is guarded so a missing attr yields null, never a crash. Deliberately
+    OMITS mood and uncertainty — they have no organ; performing them would be
+    fabrication the covenant forbids.
+    """
+
+    def _safe(fn, default=None):
+        try:
+            return fn()
+        except Exception:
+            return default
+
+    reasoning_loop = _safe(
+        lambda: daemon._cycle_heartbeat_health(), default=None
+    )
+    status = _safe(
+        lambda: daemon._health_status_from_reasoning_loop(reasoning_loop or {}),
+        default=None,
+    )
+
+    cog = getattr(daemon, "_last_cog_metadata", None)
+    cognition = None
+    if isinstance(cog, dict) and cog:
+        cognition = {
+            "score_0_100": cog.get("cog_score"),
+            "primary": cog.get("cog_primary"),
+            "labels": cog.get("cog_labels"),
+            "topic": cog.get("cog_topic"),
+            "retried": cog.get("cog_retried"),
+        }
+
+    recall = None
+    receipt = getattr(daemon, "_last_recall_receipt", None)
+    if receipt is not None:
+        recall = {
+            "receipt": getattr(receipt, "receipt", None),
+            "at_ts": getattr(receipt, "at_ts", None),
+            "boot_id": getattr(receipt, "boot_id", None),
+        }
+
+    return {
+        "status": status,
+        "running": bool(getattr(daemon, "running", False)),
+        "boot_time": getattr(daemon, "boot_time", None),
+        "cycle_count": getattr(daemon, "cycle_count", None),
+        "last_cycle": getattr(daemon, "last_cycle_time", None),
+        "reasoning_loop": reasoning_loop,
+        "cognition": cognition,
+        "last_thought": getattr(daemon, "_last_cycle_text", None) or None,
+        "valence": getattr(daemon, "_last_valence_reading", None),
+        "recall": recall,
+        "watchdog": _safe(lambda: daemon._watchdog_health(), default=None),
+        "temporal_spine": _safe(lambda: temporal_spine_health(), default=None),
+        "clinical_boundary": _safe(lambda: clinical_boundary_health(), default=None),
+        "voice_continuity": _safe(
+            lambda: daemon._voice_continuity_health(), default=None
+        ),
+        "flags": _cockpit_flags_snapshot(),
+        "sampled_at": time.time(),
+    }
+
+
 def _read_and_log_cycle_valence(
     daemon: object,
     *,
@@ -2255,6 +2376,12 @@ def _read_and_log_cycle_valence(
         )
         if reading is not None:
             audit_flag_buffer.clear()
+            # Retain the honest reading on the daemon for the cockpit. On a
+            # None reading we leave the prior value untouched (last good read).
+            try:
+                daemon._last_valence_reading = _valence_reading_to_telemetry(reading)
+            except Exception:
+                logger.debug("failed to retain valence reading for cockpit", exc_info=True)
         else:
             logger.debug("valence end-of-cycle read returned None; keeping audit buffer")
     except Exception:
@@ -2625,6 +2752,11 @@ class MaezDaemon:
         self._last_recall_receipt = None
         self.cycle_count = 0
         self.last_cycle_time = None
+        # Cockpit real-state retain attrs (true-by-construction): the daemon's
+        # actual last utterance and last computed valence reading, held in
+        # memory so the face can read REAL state instead of scraping logs.
+        self._last_cycle_text = ""
+        self._last_valence_reading = None
         self._cycle_stage = "not_started"
         self._cycle_stage_started_at = None
         self._soul_hash = None
@@ -8968,6 +9100,9 @@ class MaezDaemon:
                     raise
 
                 logger.info("Cycle %d response:\n%s", self.cycle_count, result)
+                # Retain the daemon's actual last utterance in memory (bound
+                # length) so the cockpit reads a real thought, not a log scrape.
+                self._last_cycle_text = (result or "")[:2000]
                 # Store response with full perception snapshot. Screen context
                 # is v1a ephemeral-only: it may shape the in-cycle prompt, but
                 # it is not appended to durable memory or metadata here.
@@ -9971,6 +10106,15 @@ class MaezDaemon:
                     ),
                 }
             )
+
+        @app.route("/internal/cockpit/state")
+        def cockpit_state():
+            # FAST real-state read for the cockpit face: true-by-construction
+            # off the daemon's retained in-memory attrs. No perception_snapshot
+            # / nvidia-smi here (that is what keeps /health ~1.7s). Never
+            # fabricates mood/uncertainty — they have no organ, so they are
+            # omitted entirely.
+            return jsonify(_build_cockpit_state(self))
 
         @app.route("/operator/health")
         def operator_health():

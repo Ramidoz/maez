@@ -44,10 +44,11 @@ function InnerLifeHero() {
   const d = sim.state.daemon;
   return (
     <ICard style={{ gridColumn: '1 / span 2', gridRow: '1' }}>
-      <div style={{ padding: '22px 28px', display: 'grid', gridTemplateColumns: '1fr 280px', gap: 28, alignItems: 'center' }}>
+      <div style={{ padding: '22px 28px' }}>
         <div>
+          {/* Covenant: no fabricated mood — only real cycle + thought. */}
           <div style={{ fontFamily: I.sans, fontSize: 10, color: I.inkDim, letterSpacing: 1.2, textTransform: 'uppercase', marginBottom: 10 }}>
-            maez · cycle {d.cycle.toLocaleString()} · feeling {d.mood}
+            maez · cycle {d.cycle.toLocaleString()}
           </div>
           <div style={{ fontFamily: I.serif, fontSize: 26, color: I.ink, lineHeight: 1.25, letterSpacing: -0.4 }}>
             "{d.currentThought}"
@@ -55,36 +56,10 @@ function InnerLifeHero() {
           <div style={{ fontFamily: I.sans, fontSize: 12, color: I.inkSoft, marginTop: 14, display: 'flex', gap: 22 }}>
             <span>next tick in <span style={{ color: I.amber, fontVariantNumeric: 'tabular-nums' }}>{d.nextTickIn}s</span></span>
             <span>cognition <span style={{ color: d.score > 0.75 ? I.sage : I.amber, fontVariantNumeric: 'tabular-nums' }}>{d.score.toFixed(2)}</span></span>
-            <span>uncertainty <span style={{ color: I.inkSoft, fontVariantNumeric: 'tabular-nums' }}>{d.uncertainty.toFixed(2)}</span></span>
           </div>
-        </div>
-        <div>
-          <MoodDial mood={d.mood} score={d.score} uncertainty={d.uncertainty} />
         </div>
       </div>
     </ICard>
-  );
-}
-
-function MoodDial({ mood, score, uncertainty }) {
-  // a circular instrument — attention (score) as arc, uncertainty as ring width
-  const r = 64;
-  const C = 2 * Math.PI * r;
-  return (
-    <svg width="220" height="140" viewBox="-110 -70 220 140">
-      <circle cx="0" cy="0" r={r} fill="none" stroke={I.rule} strokeWidth="1" />
-      <circle cx="0" cy="0" r={r} fill="none" stroke={I.sage} strokeWidth="6"
-        strokeDasharray={`${C * score} ${C}`} transform="rotate(-90)" strokeLinecap="butt" />
-      <circle cx="0" cy="0" r={r - 12} fill="none" stroke={I.amber} strokeWidth="1.5"
-        strokeDasharray={`${C * uncertainty * 0.75} 4 2 4`} opacity="0.6" />
-      {[0, 90, 180, 270].map((a) => (
-        <line key={a} x1={Math.cos(a * Math.PI/180) * (r + 4)} y1={Math.sin(a * Math.PI/180) * (r + 4)}
-          x2={Math.cos(a * Math.PI/180) * (r + 9)} y2={Math.sin(a * Math.PI/180) * (r + 9)} stroke={I.inkDim} strokeWidth="1" />
-      ))}
-      <text x="0" y="-2" textAnchor="middle" style={{ fontFamily: I.serif, fontSize: 20, fill: I.ink }}>{score.toFixed(2)}</text>
-      <text x="0" y="14" textAnchor="middle" style={{ fontFamily: I.sans, fontSize: 9, fill: I.inkDim, letterSpacing: 1 }}>ATTENTION</text>
-      <text x="0" y="56" textAnchor="middle" style={{ fontFamily: I.serif, fontStyle: 'italic', fontSize: 13, fill: I.inkSoft }}>{mood}</text>
-    </svg>
   );
 }
 

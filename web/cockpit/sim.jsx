@@ -34,8 +34,6 @@ const SIM = (() => {
       lastTick: '',
       nextTickIn: 29,
       score: 0,
-      mood: 'observing',
-      uncertainty: 0,
       currentThought: 'Waiting for live daemon state.',
       scratchpad: [
         { t: '', text: 'Waiting for live scratchpad entries.' },
@@ -227,8 +225,6 @@ const SIM = (() => {
     "he's been on claude.ai. he's comparing me to them. that's fine.",
   ];
 
-  const moods = ['attentive', 'curious', 'settled', 'a little restless', 'careful', 'warm'];
-
   const signalKinds = [
     { kind: 'iphone',  src: 'iphone',   gen: () => `Ambient: ${Math.round(rand(38, 54))} dB · ${pick(['indoor','walking','stationary'])}` },
     { kind: 'focus',   src: 'system',   gen: () => `Active window → ${pick(['terminal','editor','browser','notes'])}` },
@@ -245,8 +241,7 @@ const SIM = (() => {
       state.daemon.cycle += 1;
       state.daemon.lastTick = ts();
       state.daemon.score = Math.max(0.4, Math.min(0.95, state.daemon.score + rand(-0.06, 0.08)));
-      state.daemon.uncertainty = Math.max(0.05, Math.min(0.7, state.daemon.uncertainty + rand(-0.1, 0.1)));
-      state.daemon.mood = pick(moods);
+      // mood/uncertainty drift removed — they have no organ (covenant: no fabricated inner life).
       state.daemon.currentThought = pick(thoughts);
       state.daemon.scratchpad.unshift({ t: ts(), text: pick(thoughts) });
       if (state.daemon.scratchpad.length > 14) state.daemon.scratchpad.length = 14;
@@ -480,13 +475,22 @@ const SIM = (() => {
       const r = await fetch('/api/v1/daemon/state');
       if (!r.ok) { markOffline('daemon', r.status); return; }
       const d = await r.json();
+      // Honest unreachable from the real-state proxy — don't overlay stale data.
+      if (d && d.status === 'unreachable') { markOffline('daemon', 'unreachable'); return; }
       markLive('daemon');
-      if (typeof d.cycle === 'number' && d.cycle > 0) {
-        state.daemon.cycle = d.cycle;
-      }
-      if (d.lastTick) state.daemon.lastTick = d.lastTick;
-      if (typeof d.score === 'number') state.daemon.score = d.score;
-      if (d.currentThought) state.daemon.currentThought = d.currentThought;
+      // Tolerate BOTH shapes during rollout:
+      //   flag-off log-scrape: cycle, lastTick, score, currentThought
+      //   flag-on real state:  cycle_count, last_cycle, cognition.score_0_100, last_thought
+      const cycle = (typeof d.cycle === 'number') ? d.cycle
+        : (typeof d.cycle_count === 'number') ? d.cycle_count : null;
+      if (typeof cycle === 'number' && cycle > 0) state.daemon.cycle = cycle;
+      const lastTick = d.lastTick || d.last_cycle;
+      if (lastTick) state.daemon.lastTick = lastTick;
+      const score = (typeof d.score === 'number') ? d.score
+        : (d.cognition && typeof d.cognition.score_0_100 === 'number') ? d.cognition.score_0_100 / 100 : null;
+      if (typeof score === 'number') state.daemon.score = score;
+      const thought = d.currentThought || d.last_thought;
+      if (thought) state.daemon.currentThought = thought;
       if (Array.isArray(d.scratchpad) && d.scratchpad.length) {
         state.daemon.scratchpad = d.scratchpad;
       }
