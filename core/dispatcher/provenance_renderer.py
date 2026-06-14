@@ -13,6 +13,8 @@ import hashlib
 import json
 from typing import Any
 
+from core.cognition.fetch_screen_flags import fetch_containment_enabled
+from core.dispatcher import fresh_containment as _fc
 from core.dispatcher.spec import (
     CompositionHint,
     CompositionSpec,
@@ -157,25 +159,38 @@ def _template_id(framing: ProvenanceFraming, ask_shape: AskShape) -> str:
 
 
 def _render_prompt_block(
-    spec: CompositionSpec,
+    spec,
     *,
     ask_shape: AskShape,
     source_summaries: list[SourceSummary],
 ) -> tuple[str, list[str]]:
     rendered_roles: list[str] = []
+    _contain = fetch_containment_enabled()
+    _nonce = _fc.new_nonce() if _contain else ""
+    _fresh_roles = {SourceRole.FRESH_EVIDENCE, SourceRole.FRESH_CONTEXT}
+
+    def _text_for(summary):
+        if _contain and summary.role in _fresh_roles:
+            return _fc.contain_fresh_text(summary.text, nonce=_nonce)
+        return summary.text
+
     if ask_shape == AskShape.REPORT:
         sections = []
+        if _contain and any(s.role in _fresh_roles for s in source_summaries):
+            sections.append(_fc.standing_instruction())
         for summary in source_summaries:
             title = _section_title(summary.role)
             rendered_roles.append(summary.role.value)
-            sections.append(f"## {title}\n{summary.text}")
+            sections.append(f"## {title}\n{_text_for(summary)}")
         return "\n\n".join(sections), rendered_roles
 
     parts = []
+    if _contain and any(s.role in _fresh_roles for s in source_summaries):
+        parts.append(_fc.standing_instruction())
     for summary in source_summaries:
         marker = _inline_marker(summary.role)
         rendered_roles.append(summary.role.value)
-        parts.append(f"{marker} {summary.text}")
+        parts.append(f"{marker} {_text_for(summary)}")
 
     if (
         spec.composition_hint == CompositionHint.SUBSTRATE_ONLY
