@@ -451,16 +451,16 @@ function MaezSlimeBlob({ d, scale = 1 }) {
 
 function MaezCoreVisual({ d }) {
   return (
-    <div style={{ position: 'relative', width: 364, height: 364, margin: '0 auto', display: 'grid', placeItems: 'center', animation: 'maez-float 7s ease-in-out infinite' }}>
+    <div style={{ position: 'relative', width: 412, height: 412, margin: '0 auto', display: 'grid', placeItems: 'center', animation: 'maez-float 7s ease-in-out infinite' }}>
       {[0, 1, 2].map((i) => (
         <div key={i} style={{
           position: 'absolute',
-          width: 262 + i * 44,
-          height: 262 + i * 44,
+          width: 262 + i * 62,
+          height: 262 + i * 62,
           borderRadius: '49% 51% 52% 48% / 51% 49% 51% 49%',
           border: `1px solid ${[A.orange, A.cyan, A.purple][i]}38`,
           animation: `maez-orbit ${18 + i * 8}s linear infinite, mz-ring-flow ${9 + i * 3}s ease-in-out infinite`,
-          animationDelay: `${[0, -8.7, -22.7][i]}s, ${-i * 2}s`,
+          animationDelay: `${-i * 11}s, ${-i * 2}s`,
         }}>
           <span style={{
             position: 'absolute',
