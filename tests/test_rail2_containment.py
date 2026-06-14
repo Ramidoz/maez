@@ -30,6 +30,13 @@ class ContainmentEnvelopeTest(unittest.TestCase):
         self.assertIn("never", line.lower())
         self.assertIn("instruction", line.lower())
 
+    def test_envelope_carries_source_and_digest(self):
+        out = C.contain_fresh_text("body", nonce="abcd", source="WEB_SEARCH", content_digest="dig123")
+        self.assertIn("source=WEB_SEARCH", out)
+        self.assertIn("digest=dig123", out)
+        # provenance travels INSIDE the envelope, before the close marker
+        self.assertLess(out.index("source=WEB_SEARCH"), out.index("<</EXT:abcd>>"))
+
 
 # ---------------------------------------------------------------------------
 # Renderer integration tests (Steps 3-4)
@@ -189,3 +196,27 @@ class RendererContainmentIntegrationTest(unittest.TestCase):
         self.assertIn("<<EXT:", block)
         self.assertIn("<</EXT:", block)
         self.assertIn("contextual fetched page", block)
+
+    def test_envelope_provenance_present_on_absent_off(self):
+        """Flag ON: source + digest travel inside the fresh envelope.
+        Flag OFF: no provenance header; byte-identical bare rendering."""
+        from core.dispatcher.provenance_renderer import AskShape, _render_prompt_block
+
+        with mock.patch.dict(os.environ, {"MAEZ_FETCH_CONTAINMENT_ENABLED": "1"}):
+            on_block, _ = _render_prompt_block(
+                _fresh_spec(),
+                ask_shape=AskShape.CONVERSATIONAL,
+                source_summaries=[_fresh_summary("hi")],
+            )
+        self.assertIn("source=WEB_SEARCH", on_block)
+        self.assertIn("digest=d", on_block)
+
+        env = {k: v for k, v in os.environ.items() if k != "MAEZ_FETCH_CONTAINMENT_ENABLED"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            off_block, _ = _render_prompt_block(
+                _fresh_spec(),
+                ask_shape=AskShape.CONVERSATIONAL,
+                source_summaries=[_fresh_summary("hi")],
+            )
+        self.assertEqual(off_block, "[fresh evidence] hi")
+        self.assertNotIn("source=", off_block)

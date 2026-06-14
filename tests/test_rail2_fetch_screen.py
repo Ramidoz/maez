@@ -86,3 +86,19 @@ class FetchScreenWorkerDrainTest(unittest.TestCase):
             self.assertEqual(rows[0]["verdict"], "benign")
             self.assertEqual(rows[0]["source"], "WEB_SEARCH")
             self.assertNotIn("text", rows[0])
+
+
+class FetchScreenEnqueueNoIOTest(unittest.TestCase):
+    def test_full_queue_enqueue_does_no_io(self):
+        """The reply-path enqueue must do NO file I/O even when the queue is full —
+        on overload the shadow drops silently (in-memory counter only)."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            log = os.path.join(d, "screen.jsonl")
+            w = S.FetchScreenWorker(log, maxsize=1)
+            # worker NOT started, so the queue never drains
+            self.assertEqual(w.enqueue({"text": "a"}), "enqueued")        # fills maxsize=1
+            self.assertEqual(w.enqueue({"text": "b"}), "enqueue_failed")  # queue.Full path
+            self.assertEqual(w._dropped, 1)
+            # the full-queue path wrote NOTHING to disk (no mkdir/open/write on the caller)
+            self.assertFalse(os.path.exists(log))

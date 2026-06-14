@@ -171,7 +171,12 @@ def _render_prompt_block(
 
     def _text_for(summary):
         if _contain and summary.role in _fresh_roles:
-            return _fc.contain_fresh_text(summary.text, nonce=_nonce)
+            return _fc.contain_fresh_text(
+                summary.text,
+                nonce=_nonce,
+                source=getattr(summary.source, "value", str(summary.source)),
+                content_digest=summary.content_digest,
+            )
         return summary.text
 
     if ask_shape == AskShape.REPORT:

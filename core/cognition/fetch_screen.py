@@ -100,13 +100,17 @@ class FetchScreenWorker:
         self._worker = None
         self._stop = threading.Event()
         self._in_flight = threading.Lock()
+        self._dropped = 0  # in-memory drop counter — NEVER written from the caller path
 
     def enqueue(self, job: dict) -> str:
+        # The caller is the reply path. This MUST do no blocking work and no I/O:
+        # put_nowait + an in-memory counter only. On overload we drop silently; the
+        # shadow must be most powerless exactly when the queue is full.
         try:
             self._q.put_nowait(dict(job or {}))
             return "enqueued"
         except queue.Full:
-            self._emit({"ts": int(time.time()), "status": "enqueue_failed"})
+            self._dropped += 1  # no _emit() / no file I/O on the reply path
             return "enqueue_failed"
         except Exception:
             return "enqueue_failed"

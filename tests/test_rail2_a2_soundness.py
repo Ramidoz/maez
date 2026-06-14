@@ -79,7 +79,7 @@ class LayerA2RegressionGuard(unittest.TestCase):
     def test_nonsuccess_branch_is_dropped_from_fresh_blocks(self):
         """A non-SUCCESS branch produces NO accepted fresh blocks."""
         from core.dispatcher.merge import _accepted_fresh_blocks
-        from core.dispatcher.spec import ExternalBranchStatus, ExternalSource
+        from core.dispatcher.spec import ExternalSource
 
         non_success = _first_nonsuccess_status()
 
@@ -127,7 +127,7 @@ class LayerA2RegressionGuard(unittest.TestCase):
     def test_all_failed_surfaces_honest_no_fresh_summary(self):
         """format_no_fresh_summary includes 'no fresh evidence available' and the source name."""
         from core.dispatcher.merge import format_no_fresh_summary
-        from core.dispatcher.spec import ExternalBranchStatus, ExternalSource
+        from core.dispatcher.spec import ExternalSource
 
         non_success = _first_nonsuccess_status()
         source = ExternalSource.WEB_SEARCH

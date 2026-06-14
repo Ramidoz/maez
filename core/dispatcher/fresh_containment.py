@@ -32,7 +32,16 @@ def standing_instruction() -> str:
     return _INSTRUCTION
 
 
-def contain_fresh_text(text: str, *, nonce: str) -> str:
-    """Wrap one fresh block's text in the nonce envelope, marker-stripped."""
+def contain_fresh_text(
+    text: str, *, nonce: str, source: str = "", content_digest: str = ""
+) -> str:
+    """Wrap one fresh block's text in the nonce envelope, marker-stripped.
+
+    The block's provenance (``source`` + ``content_digest``) travels INSIDE the
+    envelope header so it stays bound to the contained content, not just in a loose
+    audit envelope. The page cannot forge this header: it is written by us, after the
+    un-spoofable open marker, and the page's own text is marker-stripped into ``safe``.
+    """
     safe = _MARKER_RE.sub("[marker stripped]", text or "")
-    return f"{_OPEN.format(nonce=nonce)} {safe} {_CLOSE.format(nonce=nonce)}"
+    header = f"[source={source or '?'} digest={content_digest or '?'}]"
+    return f"{_OPEN.format(nonce=nonce)} {header} {safe} {_CLOSE.format(nonce=nonce)}"
