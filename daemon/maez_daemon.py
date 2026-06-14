@@ -5394,6 +5394,7 @@ class MaezDaemon:
             needs_web_search,
             search_rss,
             is_news_query,
+            is_generic_news_query,
         )
 
         # Trace harness Slice 1 — start a trace at handle_message entry
@@ -5654,8 +5655,12 @@ class MaezDaemon:
         ):
             logger.info("Web search triggered for: %s", text[:80])
             _routing_obs_started = time.monotonic()
-            _routing_obs_tool = "search_rss" if is_news_query(text) else "web_search"
-            if _routing_obs_tool == "search_rss":
+            # Only a GENERIC 'give me the news' request uses the category-feed RSS
+            # reader; a news query naming a subject ('news about Elon') goes to the
+            # real keyword search, because search_rss never searches for the subject.
+            _use_rss = is_news_query(text) and is_generic_news_query(text)
+            _routing_obs_tool = "search_rss" if _use_rss else "web_search"
+            if _use_rss:
                 sr = search_rss(text, max_results=5)
             else:
                 sr = web_search(text, max_results=3)
@@ -7400,6 +7405,7 @@ class MaezDaemon:
             needs_web_search,
             search_rss,
             is_news_query,
+            is_generic_news_query,
         )
 
         logger.info("Voice stream: %s", text[:100])
@@ -7452,7 +7458,9 @@ class MaezDaemon:
             memory_block = self.memory.format_for_prompt(recalled)
             web_context = ""
             if needs_web_search(text):
-                if is_news_query(text):
+                # Generic news -> category-feed RSS; subject-specific news -> real
+                # keyword search (search_rss ignores the subject, returns top headlines).
+                if is_news_query(text) and is_generic_news_query(text):
                     sr = search_rss(text, max_results=3)
                 else:
                     sr = web_search(text, max_results=3)

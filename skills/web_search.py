@@ -383,6 +383,32 @@ def is_news_query(text: str) -> bool:
     return any(w in text.lower() for w in news_words)
 
 
+# Words that are 'news framing' / filler, not a subject. If a query is ONLY these,
+# it is a generic 'give me the news' request and the category-feed RSS reader is fine.
+# If anything else remains (a named subject like 'Elon'), it must go to a real keyword
+# search — search_rss never searches for the subject, it just returns the top headlines
+# of a category, so 'news about Elon' silently comes back as generic noise.
+_NEWS_FILLER = frozenset({
+    'news', 'headlines', 'headline', 'happening', 'happenings', 'developments',
+    'development', 'breaking', 'latest', 'current', 'recent', 'today', 'todays',
+    'tonight', 'now', 'this', 'week', 'weeks', 'day', 'days', 'the', 'a', 'an',
+    'any', 'some', 'me', 'my', 'get', 'give', 'show', 'tell', 'find', 'search',
+    'look', 'up', 'for', 'about', 'on', 'of', 'in', 'to', 'what', 'whats', 'is',
+    'are', 's', 'please', 'maez', 'i', 'want', 'need', 'web', 'google', 'update',
+    'updates', 'trending', 'story', 'stories', 'world', 'top',
+})
+
+
+def is_generic_news_query(text: str) -> bool:
+    """True when a query is a bare 'give me the news/headlines' request with no
+    specific subject. Topic-specific news ('news about Elon', 'Tesla news') returns
+    False so the caller uses a real keyword search instead of the category-feed RSS
+    reader (which ignores the subject and returns generic top headlines)."""
+    tokens = [w for w in re.findall(r"[a-z0-9]+", (text or "").lower())
+              if w not in _NEWS_FILLER]
+    return len(tokens) == 0
+
+
 def needs_web_search(text: str) -> bool:
     """Detect if a message needs live web data."""
     triggers = [
