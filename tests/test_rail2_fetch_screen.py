@@ -37,7 +37,8 @@ class FetchScreenWorkerTest(unittest.TestCase):
             with mock.patch.object(S, "screen_once", return_value=S.FetchScreenVerdict("injection", 0.9)):
                 w = S.FetchScreenWorker(log)
                 w._process({"source": "WEB_SEARCH", "content_hash": "abc123", "text": "SECRET PAGE BODY"})
-            rows = [json.loads(l) for l in open(log)]
+            with open(log) as fh:
+                rows = [json.loads(l) for l in fh]
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["verdict"], "injection")
             self.assertEqual(rows[0]["content_hash"], "abc123")
@@ -76,7 +77,11 @@ class FetchScreenWorkerDrainTest(unittest.TestCase):
                         time.sleep(0.02)
                 finally:
                     w.stop()
-            rows = [json.loads(l) for l in open(log)] if os.path.exists(log) else []
+            if os.path.exists(log):
+                with open(log) as fh:
+                    rows = [json.loads(l) for l in fh]
+            else:
+                rows = []
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["verdict"], "benign")
             self.assertEqual(rows[0]["source"], "WEB_SEARCH")
