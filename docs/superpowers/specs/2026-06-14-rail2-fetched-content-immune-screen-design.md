@@ -31,11 +31,14 @@ fetched text stops being allowed to speak as part of its nervous system.
 - **Chokepoint (owner-verified):** fresh blocks are collected in `_accepted_fresh_blocks()`
   at `core/dispatcher/merge.py:357`, then rendered into source summaries. Containment
   belongs at the render/merge seam so every fresh block gets identical treatment.
-- **Reusable judge (Layer B):** `HttpIntakeBackend.read(message, context, timeout_s)
-  -> (IntakeRead, float)` (`core/cognition/intake_faculty.py:271`) calls a LOCAL,
-  always-on judge at `JUDGE_BASE_URL=http://127.0.0.1:8081` (a loopback llama-server;
-  `/health` 200). Runs off-reply-path via `IntakeShadow.enqueue` (20s budget,
-  non-blocking). Flag pattern: `MAEZ_INTAKE_FACULTY_SHADOW` (strict `{1,true,yes,on}`).
+- **Judge transport reusable; schema is not (Layer B):** the shared, reusable parts are
+  the transport `_call_judge`/`render_chatml` (`intake_faculty.py:246/230`) to a LOCAL,
+  always-on judge at `JUDGE_BASE_URL=http://127.0.0.1:8081` (loopback llama-server,
+  `/health` 200), and the off-path queue *pattern* of `IntakeShadow` (20s budget,
+  non-blocking). The owner-turn `HttpIntakeBackend.read → IntakeRead`
+  (`intake_faculty.py:271`) and `IntakeShadow._process`/`_agreement` are bound to the
+  owner-turn schema and are NOT reused (see Layer B). Flag pattern:
+  `MAEZ_INTAKE_FACULTY_SHADOW` (strict `{1,true,yes,on}`).
 
 ## Layer A — Structural containment (gate-first, ship now)
 
@@ -71,11 +74,17 @@ construction**, which is exactly why this is safe to gate-first.
 **One responsibility:** observe — classify each fresh block for injection/hostility and
 log a verdict, WITHOUT affecting the reply. Earns authority before it ever blocks.
 
-- **Reuse, don't rebuild:** the existing `HttpIntakeBackend` + `IntakeShadow.enqueue`
-  off-path machinery, with a NEW prompt that asks the judge to classify *fetched content*
-  for embedded-instruction / injection / role-spoof attempts (not owner-turn intent). New
-  result shape (small, e.g. `verdict ∈ {benign, suspicious, injection}`, `confidence`,
-  `status`).
+- **Reuse the transport, build a parallel screener (verified 2026-06-14):** share the
+  low-level judge transport — `_call_judge` + `render_chatml` (`intake_faculty.py:246/230`)
+  and the `JUDGE_BASE_URL` config — and the *off-path queue pattern* of `IntakeShadow`. Do
+  NOT extend `HttpIntakeBackend.read` / `IntakeShadow._process` in place: they are hardwired
+  to the owner-turn `IntakeRead` schema (`parse_json_read → IntakeRead` with
+  turn_kind/stance/…, plus owner-turn `_agreement()`), which a fetched-content verdict does
+  not fit. So Layer B is a small **parallel screener** that reuses the transport but has its
+  OWN: prompt builder (classify fetched content for embedded-instruction / injection /
+  role-spoof, not owner-turn intent), result dataclass + parser (small, e.g.
+  `verdict ∈ {benign, suspicious, injection}`, `confidence`, `status`), and its own
+  off-path worker/queue instance. This keeps the owner-turn faculty untouched.
 - **Content-light logging only:** per fresh block, log `{source, content_hash, verdict,
   confidence, latency_ms, status}` — **never the raw page text** (honest + privacy:
   hash, not content).
