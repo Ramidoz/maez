@@ -1805,7 +1805,9 @@ function DaemonDeep() {
     { k: 'message?', desc: 'Speak or stay' },
   ];
   const activeStep = Math.min(4, Math.floor(((30 - d.nextTickIn) / 30) * 5));
-  const [hist, setHist] = React.useState(() => Array(40).fill(0).map((_, i) => 0.5 + Math.sin(i/3) * 0.2 + Math.random()*0.1));
+  // Honest seed: the real current cognition score repeated (no Math.sin/random
+  // theater). Fills with real per-tick scores over the next ~32s.
+  const [hist, setHist] = React.useState(() => Array(40).fill(SIM.state.daemon.score || 0));
   React.useEffect(() => {
     const id = setInterval(() => setHist((h) => [...h.slice(1), SIM.state.daemon.score]), 800);
     return () => clearInterval(id);
@@ -1837,9 +1839,20 @@ function DaemonDeep() {
               );
             })}
           </div>
-          <div style={{ fontFamily: A.sans, fontSize: 10, color: A.textFaint, letterSpacing: 0.8, fontWeight: 600, textTransform: 'uppercase', marginBottom: 6 }}>Current thought</div>
-          <div style={{ fontFamily: A.sans, fontSize: 15, color: A.text, padding: 14, background: A.surfaceLo, borderRadius: 10, borderLeft: `2px solid ${A.indigo}`, lineHeight: 1.5, fontStyle: 'italic' }}>
-            "{d.currentThought}"
+          <div style={{ display: 'flex', gap: 18, alignItems: 'center' }}>
+            {/* Maez's face — the slime avatar (honest substrate-state), beside its current thought */}
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 7, flexShrink: 0 }}>
+              <SlimeAvatar />
+              {d.valence && d.valence.telemetry
+                ? <div style={{ fontFamily: A.mono, fontSize: 9.5, color: A.textDim, textAlign: 'center', maxWidth: 134, lineHeight: 1.35 }}>{d.valence.telemetry}</div>
+                : <div style={{ fontFamily: A.mono, fontSize: 9.5, color: A.textFaint }}>{d.stalled ? 'not cycling' : 'neutral · no setpoint moved'}</div>}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontFamily: A.sans, fontSize: 10, color: A.textFaint, letterSpacing: 0.8, fontWeight: 600, textTransform: 'uppercase', marginBottom: 6 }}>Current thought</div>
+              <div style={{ fontFamily: A.sans, fontSize: 15, color: A.text, padding: 14, background: A.surfaceLo, borderRadius: 10, borderLeft: `2px solid ${A.indigo}`, lineHeight: 1.5, fontStyle: 'italic' }}>
+                "{d.currentThought}"
+              </div>
+            </div>
           </div>
         </Card>
       </div>
