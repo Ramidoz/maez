@@ -76,12 +76,19 @@ def sd_notify(
     """
     env = os.environ if environ is None else environ
 
-    if not systemd_notify_enabled(env):
-        return False
-
     raw = env.get("NOTIFY_SOCKET", "")
     if not raw:
+        # No socket -> nothing is waiting on us. Honor the flag's no-op intent:
+        # when there is no socket (non-systemd / sandbox) the flag's only job is
+        # to keep this a no-op, which it already is. Always returns False here.
         return False
+
+    # A present NOTIFY_SOCKET means systemd is ACTUALLY waiting on READY=1 under
+    # Type=notify. FORCE-ON: send the datagram regardless of MAEZ_SYSTEMD_NOTIFY.
+    # If the flag could suppress the signal here the daemon would serve fine but
+    # systemd would kill it at TimeoutStartSec -> crash loop. The flag still
+    # meaningfully disables the (otherwise no-op) emit when there is no socket /
+    # we are not running under systemd — handled by the early return above.
 
     payload = state.encode("utf-8") if isinstance(state, str) else state
     addr = _resolve_socket_path(raw)

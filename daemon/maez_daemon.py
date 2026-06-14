@@ -2540,8 +2540,16 @@ def _build_cockpit_inbound_descriptor(daemon, *, text: str, chat_history) -> dic
 
     * S4 fires: ``owner_surface_label="cockpit"`` (now in the
       ``_is_direct_owner_surface`` allowlist).
-    * M1-EXCLUDED: cockpit is NOT in ``M1_ALLOWED_PROMOTION_SOURCES`` (the
-      unauthenticated localhost surface must not write durable M1 selfhood).
+    * M1-EXCLUDED: cockpit is NOT in ``M1_ALLOWED_PROMOTION_SOURCES`` — no M1
+      PROMOTION from this surface. Raw conversation is still stored as ordinary
+      lived memory, same as the legacy UI path; whether cockpit should write
+      lived memory at all is an open owner covenant decision.
+    * No shared-window mutation: ``mark_s4_promotion_policy=False`` so an S4
+      match on cockpit returns the crisis-care reply WITHOUT marking the shared
+      (Telegram-fed) global M1 promotion window s4_ineligible — an
+      unauthenticated localhost surface must not mutate durable selfhood.
+    * D20 pipe-gated: ``gate_d20_on_pipe=True`` so with ``get_pipeline=None`` the
+      capability-gap detector self-skips (no orphaned card to a default store).
     * Felt-time OFF: ``owner_auth_factory=lambda: None`` (subjective_duration
       organ is silently off — honest for an unauthenticated surface).
     * MINIMAL scope: ``get_pipeline=None`` and ``action_engine=None`` so the
@@ -2589,6 +2597,8 @@ def _build_cockpit_inbound_descriptor(daemon, *, text: str, chat_history) -> dic
         chat_history_turns=_COCKPIT_CHAT_HISTORY_TURNS,
         action_engine=None,
         get_pipeline=None,
+        mark_s4_promotion_policy=False,
+        gate_d20_on_pipe=True,
         chat_history_provider=_chat_history_provider,
         try_proposal_intent=_try_proposal_intent,
         try_search_commitment_intent=_try_search_commitment_intent,
@@ -10501,11 +10511,13 @@ class MaezDaemon:
             # surface-agnostic inbound core. DEFAULT OFF. When ON, the cockpit
             # routes through run_inbound_turn so the S4 clinical boundary fires
             # on the cockpit owner surface (which source="UI" silently bypassed)
-            # and synthesis runs the unified path. Minimal scope: NO M1
-            # promotion (cockpit not in M1_ALLOWED_PROMOTION_SOURCES), felt-time
-            # OFF, NO cards/proposals/search/tools (get_pipeline=action_engine=
-            # None). When OFF (default), the existing source="UI" path runs
-            # UNTOUCHED.
+            # and synthesis runs the unified path. Minimal scope: no M1
+            # PROMOTION (cockpit is excluded from M1_ALLOWED_PROMOTION_SOURCES);
+            # raw conversation is still stored as ordinary lived memory, same as
+            # the legacy UI path — whether cockpit should write lived memory at
+            # all is an open owner covenant decision. Felt-time OFF, NO
+            # cards/proposals/search/tools (get_pipeline=action_engine=None).
+            # When OFF (default), the existing source="UI" path runs UNTOUCHED.
             if cockpit_core_enabled():
                 from daemon.inbound_core import run_inbound_turn
 
@@ -10519,7 +10531,15 @@ class MaezDaemon:
                     text=text,
                     chat_history=chat_history,
                 )
-                reply = asyncio.run(run_inbound_turn(**descriptor))
+                # Degrade honestly: an S4/early exception from run_inbound_turn
+                # (before its own internal try/except wraps synthesis) returns a
+                # JSON error rather than a raw 500 traceback — mirrors the
+                # internal-error handling inside run_inbound_turn.
+                try:
+                    reply = asyncio.run(run_inbound_turn(**descriptor))
+                except Exception:
+                    logger.warning("cockpit inbound core turn failed", exc_info=True)
+                    return jsonify({"reply": "(internal error)"})
                 return jsonify({"reply": reply})
             reply = self.handle_message(
                 text,

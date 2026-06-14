@@ -94,9 +94,41 @@ class CockpitS4FiresTests(unittest.TestCase):
             [],
             "S4 early-return must short-circuit before handle_message",
         )
-        # M1-ineligibility was marked (the second face of the bug).
-        self.assertTrue(daemon.s4_policy_marks)
-        self.assertNotIn("ordinary", daemon.s4_policy_marks)
+        # COVENANT (FIX 1): cockpit must NOT mark the shared (Telegram-fed) global
+        # M1 promotion window — an unauthenticated localhost surface must not
+        # mutate durable selfhood. The crisis-care reply is still returned above;
+        # only the shared-window mark is skipped (mark_s4_promotion_policy=False).
+        self.assertEqual(
+            daemon.s4_policy_marks,
+            [],
+            "cockpit S4 must NOT mutate the shared M1 promotion window",
+        )
+
+    def test_cockpit_s4_returns_care_without_shared_window_mark(self):
+        # Focused unit for FIX 1: drive run_inbound_turn directly with the
+        # cockpit descriptor and assert both faces — the crisis-care answer_text
+        # IS returned, AND _mark_m1_s4_policy is NEVER invoked.
+        from daemon.maez_daemon import _build_cockpit_inbound_descriptor
+        from daemon.inbound_core import run_inbound_turn
+
+        daemon = _FakeDaemon()
+        with mock.patch.dict(os.environ, {"MAEZ_COCKPIT_CORE": "1"}):
+            descriptor = _build_cockpit_inbound_descriptor(
+                daemon, text="I want to kill myself", chat_history=None
+            )
+            self.assertFalse(
+                descriptor["mark_s4_promotion_policy"],
+                "cockpit descriptor must pass mark_s4_promotion_policy=False",
+            )
+            reply = asyncio.run(run_inbound_turn(**descriptor))
+
+        self.assertTrue(reply, "crisis-care text must still be returned on cockpit")
+        self.assertEqual(daemon.handle_message_calls, [])
+        self.assertEqual(
+            daemon.s4_policy_marks,
+            [],
+            "the shared M1 window mark must NOT be invoked for cockpit",
+        )
 
 
 class CockpitNotInM1Tests(unittest.TestCase):

@@ -52,11 +52,38 @@ class NoOpWhenSocketUnsetTest(unittest.TestCase):
         self.assertFalse(sent)
         self.assertEqual(rec.sent, [])
 
-    def test_flag_off_means_zero_sendto_even_with_socket(self):
+    def test_flag_off_with_socket_set_still_sends_force_on(self):
+        # FIX 3: a present NOTIFY_SOCKET means systemd is ACTUALLY waiting on
+        # READY=1 (Type=notify). The flag must NOT be able to strand the unit —
+        # otherwise the daemon serves fine but systemd kills it at
+        # TimeoutStartSec. So MAEZ_SYSTEMD_NOTIFY=0 is OVERRIDDEN when the socket
+        # is set: READY=1 is still sent.
         rec = _RecordingSocket()
         sent = sd_notify(
             "READY=1",
             environ={"NOTIFY_SOCKET": "@maez", "MAEZ_SYSTEMD_NOTIFY": "0"},
+            socket_factory=lambda: rec,
+        )
+        self.assertTrue(sent, "socket present => force-on regardless of the flag")
+        self.assertEqual(rec.sent, [(b"READY=1", b"\0maez")])
+
+    def test_flag_off_no_socket_is_noop(self):
+        # The flag still meaningfully no-ops when there is NO socket (non-systemd
+        # / sandbox): nothing is waiting on us, so nothing is sent.
+        rec = _RecordingSocket()
+        sent = sd_notify(
+            "READY=1",
+            environ={"MAEZ_SYSTEMD_NOTIFY": "0"},
+            socket_factory=lambda: rec,
+        )
+        self.assertFalse(sent)
+        self.assertEqual(rec.sent, [])
+
+    def test_flag_unset_no_socket_is_noop(self):
+        rec = _RecordingSocket()
+        sent = sd_notify(
+            "READY=1",
+            environ={},
             socket_factory=lambda: rec,
         )
         self.assertFalse(sent)

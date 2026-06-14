@@ -85,6 +85,18 @@ async def run_inbound_turn(
     owner_auth_factory: Callable[[], Any],
     observe_turn_label: str = "telegram_turn",
     chat_history_turns: int,
+    # SLICE 2 covenant levers (DEFAULT preserves Telegram byte-identity):
+    #   mark_s4_promotion_policy: when an S4 match fires, whether to mark the
+    #     SHARED global M1 promotion window s4_ineligible. Telegram IS an M1
+    #     source so it marks (True). Cockpit is M1-excluded and must NOT mutate
+    #     the shared (Telegram-fed) window from an unauthenticated surface, so it
+    #     passes False — the crisis-care answer_text is STILL returned either way.
+    #   gate_d20_on_pipe: when False (default = Telegram inline body), the D20
+    #     capability-gap block fires whenever surface_parity is on, even if pipe
+    #     is None (byte-identical to the inline Telegram body). Cockpit passes
+    #     True to SKIP D20 when pipe is None (no orphaned card to a default store).
+    mark_s4_promotion_policy: bool = True,
+    gate_d20_on_pipe: bool = False,
     # Injected pipeline / action handles (adapter resolves daemon-level handles;
     # a future cockpit caller passes its own without going through daemon.telegram):
     action_engine: Any,
@@ -119,9 +131,15 @@ async def run_inbound_turn(
         ),
     )
     if _s4_result.matched:
-        mark = getattr(daemon, "_mark_m1_s4_policy", None)
-        if callable(mark):
-            mark(_s4_result.promotion_policy)
+        # The crisis-care answer is returned regardless of surface — an owner in
+        # crisis on cockpit still gets the care reply. Only the SHARED-window
+        # promotion mark is conditional: cockpit (mark_s4_promotion_policy=False)
+        # must not mutate the Telegram-fed global M1 window from an
+        # unauthenticated localhost surface (a durable-selfhood mutation).
+        if mark_s4_promotion_policy:
+            mark = getattr(daemon, "_mark_m1_s4_policy", None)
+            if callable(mark):
+                mark(_s4_result.promotion_policy)
         return _s4_result.answer_text
 
     # Pre-processing — same signals the daemon's own
@@ -173,14 +191,15 @@ async def run_inbound_turn(
     # The helper creates cards through pending_card_store; this path
     # never sends card messages manually.
     #
-    # None-safety (SLICE 2): when ``pipe`` is None (e.g. the cockpit caller
-    # passes get_pipeline=None for the minimal S4 + synthesis scope), the D20
-    # block is SKIPPED entirely. With pending_card_store=None,
+    # None-safety (SLICE 2): the pipe-gate is OPT-IN via ``gate_d20_on_pipe``.
+    # DEFAULT False reproduces the inline Telegram body EXACTLY — D20 fires
+    # whenever surface_parity is on, even if pipe is None (the inline body never
+    # gated on pipe). The cockpit caller passes gate_d20_on_pipe=True so that
+    # when ``pipe`` is None (get_pipeline=None for the minimal S4 + synthesis
+    # scope) the D20 block is SKIPPED — with pending_card_store=None,
     # maybe_fire_capability_proposal would construct a default PendingCardStore
-    # and could create a durable card — outside SLICE 2's "no cards/proposals"
-    # scope — so we gate on a real pipe. For the Telegram path ``pipe`` is
-    # always non-None, so this is byte-identical to the prior behavior.
-    if pipe is not None and surface_parity_enabled():
+    # and could create an orphaned durable card, outside SLICE 2's scope.
+    if surface_parity_enabled() and (pipe is not None or not gate_d20_on_pipe):
         try:
             from core.infra.capability_gap_detector import maybe_fire_capability_proposal
 

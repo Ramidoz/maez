@@ -389,6 +389,42 @@ class InboundCoreEquivalenceTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(trace, [])
 
+    # ---- (h) no-pipe equivalence: D20 must fire un-gated on Telegram ----
+    def test_h_no_pipe_equivalence(self):
+        # When _get_pipeline raises (pipe is None) the Telegram body still fires
+        # the D20 capability-gap detector (the inline body gates ONLY on
+        # surface_parity, never on pipe). FIX 2 makes the core byte-identical:
+        # gate_d20_on_pipe defaults False, so flag-on == flag-off even with no
+        # pipe. The trace records the D20 enqueue via get_shared_executor; the
+        # inline-executor harness runs _fire_gap_detector, which imports the real
+        # capability_gap_detector. With pending_card_store=None it self-skips, so
+        # no card is created — but the enqueue path itself must match.
+        result, trace = self._assert_equivalent(
+            event=FakeEvent(text="hello maez"),
+            with_pipe=False,
+        )
+        self.assertEqual(result, "final reply")
+        kinds = [t[0] for t in trace]
+        # No pipe -> no card_store probe, no handle_reply, but synthesis still runs.
+        self.assertNotIn("card_store.get_open_for_channel", kinds)
+        self.assertNotIn("pipe.handle_reply", kinds)
+        self.assertIn("handle_message", kinds)
+
+    # ---- (i) no-memory equivalence: chat_history kwarg identical ----
+    def test_i_no_memory(self):
+        # When daemon.memory is None the chat_history fetch is skipped and
+        # handle_message receives chat_history=None. Flag-on must match flag-off.
+        result, trace = self._assert_equivalent(
+            event=FakeEvent(text="hello maez"),
+            with_memory=False,
+        )
+        self.assertEqual(result, "final reply")
+        kinds = [t[0] for t in trace]
+        self.assertNotIn("get_telegram_exchanges", kinds)
+        # handle_message tuple index 6 is the chat_history snapshot (None here).
+        hm = [t for t in trace if t[0] == "handle_message"][0]
+        self.assertIsNone(hm[6], "chat_history kwarg must be None across flag states")
+
     # ---- extra: resolved user_id (src.user_id set) still byte-identical ----
     def test_g_resolved_user_id_split_preserved(self):
         # When src.user_id is set, D20 + proposal use the resolved id while
