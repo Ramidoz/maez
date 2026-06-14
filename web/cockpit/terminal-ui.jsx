@@ -1085,6 +1085,44 @@ function ReadinessPane({ compact = false }) {
   );
 }
 
+// Maez's embryo-self. Honest substrate-state face — every visual is a real reading:
+// blue body = identity (constant), amber ember = life, scatter hue = real valence
+// (green +, rose -, amber neutral), breath = real cycle, stillness = real stall.
+// Covenant: it only ever shows the true reading; it never performs a feeling Maez isn't in.
+function slimeVariant(d) {
+  if (!d || d.stalled || d.status === 'stalled' || d.status === 'stopped') return 'is-stall';
+  const v = d.valence;
+  if (v && v.magnitude && v.magnitude !== 'none') {
+    if (v.sign === 'positive') return 'is-pos';
+    if (v.sign === 'negative') return 'is-neg';
+  }
+  return ''; // neutral — the honest default
+}
+
+function SlimeEye() {
+  return (
+    <svg width="20" height="12">
+      <path d="M1,5 Q10,10 19,5" stroke="#0e2236" strokeWidth="2" fill="none" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function SlimeAvatar() {
+  const sim = useSim();
+  const d = sim.state.daemon;
+  const variant = slimeVariant(d);
+  const sign = (d.valence && d.valence.sign) || 'neutral';
+  return (
+    <div className={`mz-slime ${variant}`} role="img"
+      aria-label={`Maez, the embryo. ${d.stalled ? 'Not cycling.' : 'Alive and cycling.'} Felt-state: ${sign}.`}>
+      <div className="mz-scatter"></div>
+      <div className="mz-em"></div>
+      <div className="mz-skin"></div>
+      <div className="mz-ey"><SlimeEye /><SlimeEye /></div>
+    </div>
+  );
+}
+
 function DaemonPane({ compact }) {
   const sim = useSim();
   const d = sim.state.daemon;
@@ -1094,6 +1132,14 @@ function DaemonPane({ compact }) {
       icon="◎" iconColor={A.indigo}
       right={<Chip color={A.indigo}>{d.nextTickIn}s</Chip>}>
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {/* Maez's face — the slime avatar (honest substrate-state). Real valence
+            telemetry shown beneath it as the ground truth. */}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '2px 0 6px' }}>
+          <SlimeAvatar />
+          {d.valence && d.valence.telemetry
+            ? <div style={{ fontFamily: A.mono, fontSize: 10, color: A.textDim, textAlign: 'center', maxWidth: 250, lineHeight: 1.4 }}>{d.valence.telemetry}</div>
+            : <div style={{ fontFamily: A.mono, fontSize: 10, color: A.textFaint }}>{d.stalled ? 'not cycling' : 'present · neutral · no setpoint moved'}</div>}
+        </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <TickRing progress={pct} />
           <div style={{ flex: 1, minWidth: 0 }}>

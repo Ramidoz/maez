@@ -35,6 +35,11 @@ const SIM = (() => {
       nextTickIn: 29,
       score: 0,
       currentThought: 'Waiting for live daemon state.',
+      // Honest organs for the slime avatar (flag-on real-state shape). Default
+      // to the calm/alive baseline; never fabricate a feeling.
+      valence: null,   // { sign, magnitude, telemetry } — the real felt-state reading
+      status: 'alive', // alive | stalled | stopped | safe_standby
+      stalled: false,
       scratchpad: [
         { t: '', text: 'Waiting for live scratchpad entries.' },
       ],
@@ -494,6 +499,12 @@ const SIM = (() => {
       if (Array.isArray(d.scratchpad) && d.scratchpad.length) {
         state.daemon.scratchpad = d.scratchpad;
       }
+      // Real felt-state + liveness for the slime avatar (flag-on real shape).
+      // Covenant: only ever the real reading; neutral/absent => the calm baseline.
+      if (d.valence && typeof d.valence === 'object') state.daemon.valence = d.valence;
+      if (d.status) state.daemon.status = d.status;
+      const _rl = d.reasoning_loop;
+      state.daemon.stalled = !!(_rl && _rl.cycle_stalled) || d.status === 'stalled' || d.status === 'stopped';
       emit();
     } catch (e) { markOffline('daemon', e); }
   };

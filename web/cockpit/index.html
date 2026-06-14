@@ -27,6 +27,30 @@
       transition-duration: 0.001ms !important;
     }
   }
+  /* Maez slime avatar — the embryo-self. Honest substrate-state face: blue body =
+     identity (constant), amber ember = life, scatter hue = real valence (green +,
+     rose -), breath = real cycle, stillness = real stall. */
+  @keyframes mz-breathe { 0%,100%{ transform:scale(1) translateY(0) } 50%{ transform:scale(1.04) translateY(-2px) } }
+  @keyframes mz-wobble { 0%,100%{ border-radius:54% 46% 52% 48% / 60% 58% 42% 40% } 33%{ border-radius:48% 52% 46% 54% / 56% 62% 38% 44% } 66%{ border-radius:52% 48% 54% 46% / 62% 56% 44% 38% } }
+  @keyframes mz-ember { 0%,100%{ opacity:.82; transform:translate(-50%,-50%) scale(1) } 50%{ opacity:1; transform:translate(-50%,-50%) scale(1.08) } }
+  @keyframes mz-rise { 0%,100%{ transform:translate(-50%,-50%) translateY(2px) scale(1); opacity:.74 } 50%{ transform:translate(-50%,-50%) translateY(-3px) scale(1.06); opacity:1 } }
+  .mz-slime { position:relative; width:114px; height:100px; border-radius:54% 46% 52% 48% / 60% 58% 42% 40%; overflow:hidden;
+    background:radial-gradient(58% 52% at 44% 32%, rgba(176,214,242,.92), rgba(96,156,214,.84) 52%, rgba(44,96,164,.82) 100%);
+    box-shadow:inset 0 -12px 22px rgba(20,44,82,.5), 0 10px 28px rgba(70,140,210,.16);
+    animation:mz-wobble 5s ease-in-out infinite, mz-breathe 4.4s ease-in-out infinite; }
+  .mz-slime .mz-skin { position:absolute; inset:0; border-radius:inherit; z-index:6; pointer-events:none; box-shadow:inset 0 11px 18px rgba(255,255,255,.26); }
+  .mz-slime .mz-skin::before { content:""; position:absolute; top:13px; left:26px; width:26px; height:14px; border-radius:50%; background:rgba(255,255,255,.5); filter:blur(2px); }
+  .mz-slime .mz-em { position:absolute; top:74%; left:50%; transform:translate(-50%,-50%); width:40px; height:34px; z-index:3; filter:blur(5px); mix-blend-mode:screen;
+    background:radial-gradient(ellipse, rgba(255,206,128,.95), rgba(243,176,86,.62) 32%, rgba(223,146,58,.24) 56%, transparent 78%); animation:mz-ember 4.4s ease-in-out infinite; }
+  .mz-slime .mz-scatter { position:absolute; left:50%; top:78%; transform:translate(-50%,-50%); width:150px; height:150px; z-index:2; filter:blur(13px); mix-blend-mode:screen;
+    background:radial-gradient(ellipse at 50% 62%, rgba(245,182,96,.34), rgba(232,160,72,.12) 42%, transparent 70%); animation:mz-rise 7s ease-in-out infinite; }
+  .mz-slime .mz-ey { position:absolute; top:37px; left:0; right:0; display:flex; justify-content:center; gap:25px; z-index:7; }
+  .mz-slime .mz-ey svg { overflow:visible; }
+  .mz-slime.is-pos .mz-scatter { background:radial-gradient(ellipse at 50% 62%, rgba(108,224,160,.60), rgba(98,210,148,.26) 42%, transparent 73%); }
+  .mz-slime.is-neg .mz-scatter { background:radial-gradient(ellipse at 50% 62%, rgba(232,120,146,.56), rgba(218,108,132,.24) 42%, transparent 73%); animation-duration:8.5s; }
+  .mz-slime.is-stall { animation:none; filter:saturate(.32); }
+  .mz-slime.is-stall .mz-em { animation:none; opacity:.42; background:radial-gradient(ellipse, rgba(150,156,150,.5), transparent 70%); }
+  .mz-slime.is-stall .mz-scatter { animation:none; opacity:.25; background:radial-gradient(ellipse at 50% 62%, rgba(150,156,150,.3), transparent 70%); }
 </style>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&family=Geist:wght@300;400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
