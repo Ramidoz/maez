@@ -101,13 +101,16 @@ no-fresh path**, not fresh blocks.
     `external_result.availability_limitations` into `_effective_spec` (`merge.py:119`),
     surfacing as a limitation **beside** the succeeded fresh blocks (the owner's option
     **(b)**). A2 v0 adopts this.
-- **A2 v0's only NET-NEW work** is the one gap the existing paths miss: a **SUCCESS branch
-  whose extracted text is empty / degenerate** (ok=True but no usable content) currently
-  could render as an empty `[fresh evidence]` envelope. A2 treats an empty/degenerate
-  success as a **read-failure for that source** (surfaced like a failed branch via the
-  availability-limitation / no-fresh path), never an empty envelope. (Oversize is already
-  handled upstream: `external_fetch` truncates at **512 KB**, `external_fetch.py:428` — a
-  truncated-but-present body is sound content, not a failure.)
+- **A2 v0 net-new collapses to a regression guard (Task 0 @d1d51cf, CONFIRMED):** the
+  empty/degenerate-success case is **already handled upstream** — an `ok=True` read with
+  empty/whitespace text is converted to a non-SUCCESS `EMPTY` branch before the merge seam by
+  two guards (`external_sources.py:752-757` strips whitespace → `EMPTY`; `:446-454` raw-empty →
+  `EMPTY`), then dropped by `_accepted_fresh_blocks` (`merge.py:362`). So an empty `[fresh
+  evidence]` envelope **cannot render today**. A2 therefore adds **no new filter**; its v0
+  scope is a **regression test** that locks this invariant (non-SUCCESS dropped; no accepted
+  block has empty text; all-failed surfaces the honest no-fresh summary) so a future payload
+  producer cannot silently reopen the hole. (Oversize is also already handled: `external_fetch`
+  truncates at **512 KB**, `external_fetch.py:428` — a truncated-but-present body is sound.)
 - **The judge is explicitly NOT this gate:** "detector unavailable" (Layer B judge down)
   **does NOT block** — B is shadow and fail-open. A2 acts only on deterministic
   fetch/branch outcomes. Do not let an uncalibrated judge muzzle perception on day one.

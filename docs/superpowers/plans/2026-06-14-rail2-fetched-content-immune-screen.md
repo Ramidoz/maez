@@ -382,107 +382,136 @@ git commit -m "$(printf 'feat(rail2): Layer A — un-spoofable containment envel
 
 ---
 
-## Task 3: Layer A2 — empty/degenerate SUCCESS becomes an honest read-failure
+## Task 3: Layer A2 — regression guard (empty-success is ALREADY filtered; prove it stays filtered)
+
+**REVISED per Task 0 (CONFIRMED @d1d51cf):** an empty/whitespace successful read can NOT reach
+the render seam — two upstream guards already convert it to a non-SUCCESS `EMPTY` branch, which
+`_accepted_fresh_blocks` drops at `merge.py:362`:
+- **Guard A** `external_sources.py:752-757` — on `ok=True`, `if not text.strip():` raises
+  `_MappedExternalFailure(EMPTY)` (whitespace-only included).
+- **Guard B** `external_sources.py:446-454` — `if not payload.text:` returns a non-SUCCESS `EMPTY`
+  result (raw-empty).
+
+So A2 has **no net-new filter to add** (the spec's "net-new" collapses — see the spec A2 patch).
+Task 3 is a **regression guard only**: a test that pins this invariant so a future payload
+producer can't silently reopen the hole. **No `merge.py` edit. No flag dependency** (this is an
+existing always-on invariant, independent of `MAEZ_FETCH_CONTAINMENT_ENABLED`).
 
 **Files:**
-- Modify: `core/dispatcher/merge.py` (the boundary Task 0 located — candidate `_accepted_fresh_blocks:357`)
 - Create: `tests/test_rail2_a2_soundness.py`
+- Modify: NONE (regression test only)
 
-**Predicted effect:** with `MAEZ_FETCH_CONTAINMENT_ENABLED=1`, a SUCCESS branch whose extracted text is empty/whitespace no longer renders as an empty `[fresh evidence]` envelope — it surfaces via the existing availability-limitation / no-fresh path. Flag-off: empty blocks pass through exactly as today.
+**Predicted effect:** none (test-only; documents and locks an existing invariant).
 
-> **Task-0 keyed:** implement at the boundary Task 0 Step 3 recorded. The code below assumes
-> empty-text SUCCESS blocks currently reach `_accepted_fresh_blocks`. If Task 0 found they are
-> already filtered upstream, REPLACE Steps 3-4 with a single guard test asserting "no empty fresh
-> block reaches render" and skip the merge edit (record that A2 net-new is already satisfied).
-
-- [ ] **Step 1: Write the failing test (existing behavior guarded + net-new)**
+- [ ] **Step 1: Write the regression-guard test (pin BOTH guards + the honest-failure surfacing)**
 
 ```python
 # tests/test_rail2_a2_soundness.py
-import os
+"""Layer A2 regression guard. Task 0 (@d1d51cf) proved empty/whitespace reads are
+already converted to non-SUCCESS EMPTY upstream (external_sources.py:752-757 strip-guard
+and :446-454 raw-guard) and dropped by _accepted_fresh_blocks (merge.py:362). This test
+locks that invariant so a future payload producer cannot reopen an empty [fresh evidence]
+envelope. No production code changes for A2.
+"""
 import unittest
-from unittest import mock
 from core.dispatcher import merge as M
-# Build real ExternalFanoutResult / ExternalBranchResult / FreshBlock via their constructors
-# (capture signatures in Task 0; no mocks for dataclasses).
+from core.dispatcher import external_sources as E
+from core.dispatcher.external_sources import ExternalBranchStatus, FreshBlock
 
-class A2SoundnessTest(unittest.TestCase):
-    def test_all_failed_emits_no_fresh_summary(self):
-        # existing behavior, guarded: an all-failed fanout yields the honest no-fresh string
-        result = _fanout(branches=[_failed_branch("FETCH_URL")])
+
+def _fresh_block(source_value: str, text: str) -> FreshBlock:
+    return FreshBlock(
+        source=E.ExternalSource(source_value),
+        text=text,
+        retrieval_timestamp="2026-06-14T00:00:00Z",
+        freshness=list(E.FreshnessClass)[0],
+        prompt_cost=0,
+        egress_diagnostic_id="diag-test",
+    )
+
+
+def _branch(source_value: str, *, status, blocks=()):
+    # Build a minimal real ExternalBranchResult; capture exact kwargs from Task 0 signature.
+    return E.ExternalBranchResult(
+        branch_id="b1",
+        fanout_generation_id="g1",
+        source=E.ExternalSource(source_value),
+        status=status,
+        blocks=tuple(blocks),
+    )
+
+
+def _fanout(branches):
+    return E.ExternalFanoutResult(
+        fanout_generation_id="g1",
+        sealed_at=10_000.0,
+        branch_results=tuple(branches),
+        fresh_blocks=(),
+        availability_limitations=(),
+    )
+
+
+class A2RegressionGuardTest(unittest.TestCase):
+    def test_nonsuccess_branch_is_dropped_from_fresh_blocks(self):
+        # An EMPTY/non-SUCCESS branch never becomes an accepted fresh block.
+        empty_branch = _branch("WEB_SEARCH", status=_first_nonsuccess_status())
+        blocks = M._accepted_fresh_blocks(_fanout([empty_branch]))
+        self.assertEqual(blocks, ())
+
+    def test_no_accepted_block_has_empty_text(self):
+        # Invariant: any block that DOES survive _accepted_fresh_blocks has non-empty text.
+        good = _branch("WEB_SEARCH", status=ExternalBranchStatus.SUCCESS,
+                       blocks=[_fresh_block("WEB_SEARCH", "real content")])
+        blocks = M._accepted_fresh_blocks(_fanout([good]))
+        for b in blocks:
+            self.assertTrue((b.text or "").strip(), "an empty-text block reached the render seam — A2 invariant broken")
+
+    def test_all_failed_surfaces_honest_no_fresh_summary(self):
+        result = _fanout([_branch("FETCH_URL", status=_first_nonsuccess_status())])
         summary = M.format_no_fresh_summary(result)
         self.assertIn("no fresh evidence available", summary)
         self.assertIn("FETCH_URL", summary)
 
-    def test_empty_success_not_accepted_when_flag_on(self):
-        # net-new: ok=True SUCCESS branch with empty text must NOT become an accepted fresh block
-        result = _fanout(branches=[_success_branch("WEB_SEARCH", text="   ")])
-        with mock.patch.dict(os.environ, {"MAEZ_FETCH_CONTAINMENT_ENABLED": "1"}):
-            blocks = M._accepted_fresh_blocks(result)
-        self.assertEqual(blocks, ())
 
-    def test_empty_success_passthrough_when_flag_off(self):
-        # flag-off byte-identical: empty block passes through exactly as today
-        result = _fanout(branches=[_success_branch("WEB_SEARCH", text="   ")])
-        with mock.patch.dict(os.environ, {}, clear=True):
-            blocks_off = M._accepted_fresh_blocks(result)
-        # whatever today does (likely keeps the empty block) is preserved
-        self.assertEqual(len(blocks_off), 1)
+def _first_nonsuccess_status():
+    for s in ExternalBranchStatus:
+        if s is not ExternalBranchStatus.SUCCESS:
+            return s
+    raise AssertionError("no non-SUCCESS status exists")
+
+
+if __name__ == "__main__":
+    unittest.main()
 ```
 
-> Build `_fanout`, `_failed_branch`, `_success_branch` from the real
-> `external_sources.ExternalFanoutResult` / `ExternalBranchResult` / `FreshBlock`
-> constructors captured in Task 0. A failed branch has `status != SUCCESS`; a success branch
-> has `status == ExternalBranchStatus.SUCCESS` and one `FreshBlock`.
+> **Implementer note:** the constructor kwargs above are from Task 0's captured signatures
+> (`FreshBlock(source, text, retrieval_timestamp, freshness, prompt_cost, egress_diagnostic_id)`;
+> `ExternalBranchResult(branch_id, fanout_generation_id, source, status, blocks=(), …)`;
+> `ExternalFanoutResult(fanout_generation_id, sealed_at, branch_results, fresh_blocks, availability_limitations)`).
+> If a required positional differs at head, fix the constructor call to match the real dataclass —
+> do NOT mock the dataclasses and do NOT weaken the three assertions. `ExternalSource` /
+> `FreshnessClass` are enums in `external_sources`; use a real member.
 
-- [ ] **Step 2: Run — verify fail**
-
-Run: `/home/rohit/maez/.venv/bin/python -B -m unittest tests.test_rail2_a2_soundness -v`
-Expected: `test_empty_success_not_accepted_when_flag_on` FAILS (today the empty block is accepted).
-
-- [ ] **Step 3: Implement the net-new filter in `_accepted_fresh_blocks`**
-
-Modify `core/dispatcher/merge.py:357-392`. Add at top of the module:
-`from core.cognition.fetch_screen_flags import fetch_containment_enabled`. Then inside the SUCCESS loop, when the flag is on, skip blocks whose text is empty/whitespace (they fall through to the existing availability/no-fresh surfacing):
-
-```python
-def _accepted_fresh_blocks(external_result):
-    contain = fetch_containment_enabled()
-    blocks = []
-    for branch in external_result.branch_results:
-        if branch.status is not ExternalBranchStatus.SUCCESS:
-            continue
-        if branch.completed_at is not None and branch.completed_at > external_result.sealed_at:
-            continue
-        for block in branch.blocks:
-            # Layer A2: an empty/degenerate successful read is a read-failure,
-            # not an empty [fresh evidence] envelope. Flag-off: keep as today.
-            if contain and not (block.text or "").strip():
-                continue
-            blocks.append(block)
-    return tuple(blocks)
-```
-
-(Confirm the existing loop body against Task 0's captured source — preserve the `completed_at`/`sealed_at` guard exactly as it is today; only add the empty-text skip under the flag.)
-
-- [ ] **Step 4: Run — verify pass**
+- [ ] **Step 2: Run — verify it PASSES immediately (it documents an existing invariant)**
 
 Run: `/home/rohit/maez/.venv/bin/python -B -m unittest tests.test_rail2_a2_soundness -v`
-Expected: PASS (3 tests).
+Expected: PASS (3 tests). If `test_no_accepted_block_has_empty_text` or the drop test FAILS, the
+invariant Task 0 proved is NOT actually held at head — STOP and escalate to the controller (the
+A2 assumption would be refuted).
 
-- [ ] **Step 5: Regression — the merge module's own suite**
+- [ ] **Step 3: Regression — the merge module's own suite (unchanged by this task)**
 
 ```bash
 ls tests | grep -iE "merge|dispatcher|fanout"
 /home/rohit/maez/.venv/bin/python -B -m unittest tests.<merge_test_module> -v
 ```
-Expected: PASS (flag-off path unchanged).
+Expected: PASS (no production change in this task).
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add core/dispatcher/merge.py tests/test_rail2_a2_soundness.py
-git commit -m "$(printf 'feat(rail2): Layer A2 — empty/degenerate success becomes honest read-failure\n\nUnder MAEZ_FETCH_CONTAINMENT_ENABLED, a SUCCESS branch with empty/whitespace\ntext is no longer accepted as a fresh block (would render empty); it falls\nthrough to the existing availability-limitation / no-fresh surfacing. All-failed\nand partial-failure paths are the existing machinery, now test-guarded.\n\n## Predicted effect\nAn empty page read surfaces as an honest read-failure instead of an empty\n[fresh evidence] block. Flag-off: byte-identical (empty block passes through).\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>')"
+git add tests/test_rail2_a2_soundness.py
+git commit -m "$(printf 'test(rail2): Layer A2 regression guard — empty-success stays filtered\n\nTask 0 (@d1d51cf) proved empty/whitespace reads are converted to non-SUCCESS\nEMPTY upstream (external_sources.py:752-757 + :446-454) and dropped at\nmerge.py:362, so no empty [fresh evidence] envelope can render. This test\nlocks the invariant (non-SUCCESS dropped; no accepted block has empty text;\nall-failed surfaces the honest no-fresh summary). No production change.\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>')"
 ```
 
 ---
