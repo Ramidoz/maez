@@ -78,6 +78,12 @@ if nothing is loaded. **Record** whether anything *other* than ufw-managed chain
 present (e.g. docker, libvirt, a hand-rolled ruleset) — those can override ufw and must
 be reconciled before trusting the perimeter.
 
+> **Pre-checked (read-only, 2026-06-14):** docker/containerd/libvirtd are all inactive
+> (docker CLI not even installed) and there are no `docker0`/`virbr`/`veth` bridges. So
+> this `nft` cross-check is **expected to show only ufw-managed chains** — no competing
+> container/VM ruleset exists to fight the firewall. Still run it with root to confirm;
+> if a non-ufw chain HAS appeared since, reconcile it before Task 3.
+
 - [ ] **Step 3: Capture the SSH auth posture**
 
 Run:
