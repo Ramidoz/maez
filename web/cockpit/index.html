@@ -36,6 +36,7 @@
   @keyframes mz-rise { 0%,100%{ transform:translate(-50%,-50%) translateY(2px) scale(1); opacity:.74 } 50%{ transform:translate(-50%,-50%) translateY(-3px) scale(1.06); opacity:1 } }
   /* orbital rings: gently morph so they read as flowing threads, not rigid hoops */
   @keyframes mz-ring-flow { 0%,100%{ border-radius:46% 54% 55% 45% / 54% 46% 54% 46% } 25%{ border-radius:55% 45% 46% 54% / 45% 55% 47% 53% } 50%{ border-radius:45% 55% 53% 47% / 55% 45% 52% 48% } 75%{ border-radius:53% 47% 45% 55% / 47% 53% 55% 45% } }
+  @keyframes mz-twinkle { 0%,100%{ opacity:.18; transform:scale(.8) } 50%{ opacity:.9; transform:scale(1.18) } }
   .mz-slime { position:relative; width:114px; height:100px; border-radius:54% 46% 52% 48% / 60% 58% 42% 40%; overflow:hidden;
     background:radial-gradient(58% 52% at 44% 32%, rgba(176,214,242,.92), rgba(96,156,214,.84) 52%, rgba(44,96,164,.82) 100%);
     box-shadow:inset 0 -12px 22px rgba(20,44,82,.5), 0 10px 28px rgba(70,140,210,.16);
@@ -398,6 +399,35 @@ function DashboardModeSwitch({ mode, onMode }) {
 // Maez's face — the slime, rendered from the global mz-slime CSS. Honest substrate
 // state: blue body = identity, amber ember = life, scatter hue = real valence
 // (green +, rose -, amber neutral), breath = real cycle, stillness = real stall.
+// Decorative star field for the galaxy hero — ambiance only (NOT data). Deterministic
+// positions so it doesn't re-randomize on every render.
+const STARS = Array.from({ length: 60 }, (_, i) => {
+  const a = Math.sin(i * 12.9898) * 43758.5453;
+  const b = Math.sin(i * 78.233 + 1.7) * 12543.331;
+  return {
+    top: Math.abs(a - Math.floor(a)) * 100,
+    left: Math.abs(b - Math.floor(b)) * 100,
+    s: 0.6 + Math.abs(Math.sin(i * 3.7)) * 1.7,
+    d: (i % 9) * 0.5,
+    o: 0.18 + Math.abs(Math.sin(i * 2.1)) * 0.5,
+  };
+});
+function Starfield() {
+  return (
+    <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none', zIndex: 0 }} aria-hidden="true">
+      {STARS.map((st, i) => (
+        <span key={i} style={{
+          position: 'absolute', top: `${st.top}%`, left: `${st.left}%`,
+          width: st.s, height: st.s, borderRadius: '50%',
+          background: i % 5 === 0 ? '#a9c4ff' : '#e2e8ff', opacity: st.o,
+          boxShadow: `0 0 ${st.s * 2.6}px #9fb4ff`,
+          animation: `mz-twinkle ${3.5 + st.d}s ease-in-out ${st.d}s infinite`,
+        }} />
+      ))}
+    </div>
+  );
+}
+
 function MaezSlimeBlob({ d, scale = 1 }) {
   let variant = '';
   if (!d || d.stalled || d.status === 'stalled' || d.status === 'stopped') variant = 'is-stall';
@@ -430,17 +460,17 @@ function MaezCoreVisual({ d }) {
           borderRadius: '49% 51% 52% 48% / 51% 49% 51% 49%',
           border: `1px solid ${[A.orange, A.cyan, A.purple][i]}38`,
           animation: `maez-orbit ${18 + i * 8}s linear infinite, mz-ring-flow ${9 + i * 3}s ease-in-out infinite`,
-          animationDelay: `${-i * 11}s, ${-i * 2}s`,
+          animationDelay: `${[0, -8.7, -22.7][i]}s, ${-i * 2}s`,
         }}>
           <span style={{
             position: 'absolute',
             top: 18 + i * 9,
             left: '50%',
-            width: 8,
-            height: 8,
+            width: 9,
+            height: 9,
             borderRadius: '50%',
-            background: [A.orange, A.cyan, A.purple][i],
-            boxShadow: `0 0 18px ${[A.orange, A.cyan, A.purple][i]}`,
+            background: `radial-gradient(circle at 38% 34%, #fff, ${[A.orange, A.cyan, A.purple][i]} 62%)`,
+            boxShadow: `0 0 8px rgba(255,255,255,0.55), 0 0 16px ${[A.orange, A.cyan, A.purple][i]}, 0 0 36px ${[A.orange, A.cyan, A.purple][i]}88`,
           }} />
         </div>
       ))}
@@ -693,12 +723,13 @@ function LivingDashboard({ onMode, openSurface }) {
           tooltip="Senses — what Maez can see right now: services, hardware, presence. Open Ambient for the full live readout."
           onClick={() => openSurface('signals')} />
       </div>
-      <Glass pad={24} style={{ minHeight: 390, position: 'relative', display: 'grid', placeItems: 'center', background: 'radial-gradient(circle at 50% 45%, rgba(217,154,66,0.16), rgba(136,212,231,0.05) 42%, rgba(0,0,0,0.08) 76%)' }}>
-        <div style={{ position: 'absolute', top: 16, left: 20, display: 'flex', alignItems: 'baseline', gap: 8 }}>
+      <Glass pad={24} style={{ minHeight: 390, position: 'relative', overflow: 'hidden', display: 'grid', placeItems: 'center', background: 'radial-gradient(circle at 50% 42%, rgba(140,160,255,0.10), rgba(217,154,66,0.11) 40%, rgba(6,8,22,0.24) 80%)' }}>
+        <Starfield />
+        <div style={{ position: 'absolute', top: 16, left: 20, zIndex: 2, display: 'flex', alignItems: 'baseline', gap: 8 }}>
           <span style={{ fontFamily: A.sans, fontSize: 11, color: A.textFaint, fontWeight: 850, letterSpacing: 1.1, textTransform: 'uppercase' }}>Maez</span>
           <span style={{ fontFamily: A.mono, fontSize: 13, color: d.score > 0.75 ? A.green : A.orange, fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}>{d.score ? d.score.toFixed(2) : 'live'}</span>
         </div>
-        <div style={{ textAlign: 'center', width: '100%' }}>
+        <div style={{ position: 'relative', zIndex: 1, textAlign: 'center', width: '100%' }}>
           <MaezCoreVisual d={d} />
           <div style={{ marginTop: 8, fontFamily: A.sans, fontSize: 23, fontWeight: 800, letterSpacing: -0.7, color: A.text }}>
             {d.score >= 0.5 ? 'Thinking clearly enough.' : 'Thinking carefully.'}
