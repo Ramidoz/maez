@@ -81,7 +81,13 @@ nested markers to produce a dangling open.
 **Mechanism (in `core/dispatcher/fresh_containment.py`):**
 
 1. The standing instruction is prepended once per turn (adjacent to all blocks).
-2. For each block, `contain_fresh_text(text, nonce=nonce)` is called:
+   The envelope also carries the block's **provenance inside the header** —
+   `[source=… digest=…]` from `SourceSummary.source`/`content_digest` (added in the
+   HOLD-fix @147bf56) — so provenance travels with the contained content. The header
+   is written by us, after the un-spoofable open marker, on marker-stripped page text;
+   a page cannot forge it.
+2. For each block, `contain_fresh_text(text, nonce=nonce, source=…, content_digest=…)`
+   is called:
    - `_MARKER_RE = re.compile(r"<</?EXT:[^>]*>>")` strips ALL occurrences of the
      marker pattern from the page text before wrapping — a forged close marker like
      `<</EXT:xxxx>>` becomes `[marker stripped]`. This is the **primary defense**
@@ -148,6 +154,10 @@ judge, or a slow judge cannot block or delay the reply.
 **Where to look in `core/cognition/fetch_screen.py` and its call site in merge:**
 
 - `FetchScreenWorker.enqueue()` uses `put_nowait` — drops on full queue, never waits.
+  On `queue.Full` it does **NO I/O** — only an in-memory `self._dropped += 1` counter
+  (HOLD-fix @147bf56: the prior `_emit()` call did mkdir/open/write on the reply path,
+  violating "a full queue cannot delay the reply"). `test_full_queue_enqueue_does_no_io`
+  asserts zero disk I/O on the full-queue path.
 - `FetchScreenWorker._run()` is a `daemon=True` thread — killed at process exit
   with no join blocking main.
 - All `Exception` are swallowed in `_run()` and `_process()`.
@@ -240,5 +250,9 @@ because Layer B never blocks.
 **`ResourceWarning: unclosed file` in `tests/test_rail2_fetch_screen.py` — fixed @5959f2e.**
 
 The two bare `open(log)` reads now use `with open(log) as fh:` context managers. Verified
-clean: the suite runs 7/7 green under `-W error::ResourceWarning` (warnings promoted to
-errors). No outstanding cosmetic items.
+clean: the suite runs green under `-W error::ResourceWarning` (warnings promoted to
+errors).
+
+**Ruff:** clean across all Rail 2 files (fixed two `F401` unused imports in the A2 test,
+HOLD-fix @147bf56). `ruff check <the 9 Rail 2 modules>` → "All checks passed!". Full Rail 2
++ seam suites: 43/43 green. No outstanding hygiene items.
