@@ -242,7 +242,7 @@ class Layer0Dispatcher:
         self_capability_question = (
             evidence_precedence_enabled() and _is_self_capability_question(utterance)
         )
-        current_world_question = sense_enabled() and _is_current_world_question(utterance)
+        current_world_request = sense_enabled() and _is_current_world_request(utterance)
         source_anchor_candidates = _source_anchor_candidates(utterance)
         live_reddit_anchor = _has_subreddit_anchor(utterance)
         scores = self.score_classes(utterance)
@@ -282,7 +282,7 @@ class Layer0Dispatcher:
             external_sources = [ExternalSource.WEB_SEARCH]
             hint = CompositionHint.FRESH_ONLY
             framing = ProvenanceFraming.FRESH_ONLY
-        elif current_world_question and not explicit_memory:
+        elif current_world_request and not explicit_memory:
             substrate_sources = _available_substrates(
                 inventory,
                 _substrate_candidates(source_anchor_candidates),
@@ -495,9 +495,18 @@ def _has_subreddit_anchor(utterance: str) -> bool:
     return bool(_SUBREDDIT_ANCHOR_RE.search(utterance))
 
 
-def _is_current_world_question(utterance: str) -> bool:
-    if not _QUESTION_SHAPE_RE.search(utterance):
-        return False
+def _is_current_world_request(utterance: str) -> bool:
+    """True when the utterance asks for current-world information.
+
+    This used to require question shape (``_QUESTION_SHAPE_RE``), so bare current-world
+    fragments like "news about Anthropic" or "latest Elon news" fell through to
+    SUBSTRATE_ONLY and the brain answered (and confabulated current specifics) from
+    memory instead of fetching. We now accept any utterance carrying a current-world
+    marker (news/latest/recent/today/…) — question-shaped or a bare fragment — and
+    exclude only the conversational "how are you … today" greeting. Explicit-memory
+    forms ("what do you remember …") are still blocked downstream at the ``emit_spec``
+    branch via its ``and not explicit_memory`` guard, so they stay substrate-only.
+    """
     if not _CURRENT_WORLD_MARKER_RE.search(utterance):
         return False
     return not _CONVERSATIONAL_TODAY_RE.search(utterance)

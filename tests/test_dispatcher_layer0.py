@@ -848,5 +848,119 @@ class DispatcherLayer0Tests(unittest.TestCase):
         self.assertEqual(spec.external_sources, [ExternalSource.WEB_SEARCH])
 
 
+class CurrentWorldRequestTest(unittest.TestCase):
+    """Bare current-world fragments must trigger fresh search.
+
+    The predicate used to require question shape, so 'news about Anthropic' and
+    'latest Elon news' fell through to SUBSTRATE_ONLY and the brain answered (and
+    confabulated current specifics) from memory. Now any utterance carrying a
+    current-world marker counts — question-shaped or a bare fragment — while the
+    conversational 'how are you today' greeting stays excluded and explicit-memory
+    forms are still blocked at the emit_spec branch.
+    """
+
+    def _emit(self, utterance):
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+
+        from core.dispatcher.inventory import InventorySummary
+        from core.dispatcher.layer0 import Layer0Dispatcher, load_archetype_index
+        from core.dispatcher.spec import (
+            ExternalSource,
+            InventoryWitness,
+            SourceAvailability,
+            SubstrateSource,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "archetypes.md"
+            _write_manifest(manifest)
+            encoder = _FakeEncoder()
+            index = load_archetype_index(
+                manifest_path=manifest,
+                cache_path=Path(tmp) / "cache.json",
+                encoder=encoder,
+            )
+            inventory = InventorySummary(
+                inventory_witness=InventoryWitness.PRESENT,
+                source_availability={
+                    SubstrateSource.TELEGRAM_SEMANTIC: SourceAvailability.EXECUTABLE_PRESENT,
+                    SubstrateSource.ENTITY_INDEX: SourceAvailability.EXECUTABLE_PRESENT,
+                    SubstrateSource.LIVED_EPISODES: SourceAvailability.EXECUTABLE_PRESENT,
+                    ExternalSource.WEB_SEARCH: SourceAvailability.EXECUTABLE_PRESENT,
+                },
+                availability_limitations=[],
+                generated_at=1.0,
+            )
+            with mock.patch.dict("os.environ", {"MAEZ_SEARCH_AS_SENSE_ENABLED": "1"}):
+                return Layer0Dispatcher(index=index, encoder=encoder).emit_spec(
+                    utterance, surface="telegram", inventory=inventory
+                )
+
+    # --- predicate-level (fast, direct) ---
+
+    def test_predicate_bare_subject_news_fragment_is_current_world(self):
+        from core.dispatcher.layer0 import _is_current_world_request
+
+        self.assertTrue(_is_current_world_request("news about Anthropic"))
+
+    def test_predicate_bare_latest_person_news_fragment_is_current_world(self):
+        from core.dispatcher.layer0 import _is_current_world_request
+
+        self.assertTrue(_is_current_world_request("latest Elon news"))
+
+    def test_predicate_question_form_still_current_world(self):
+        from core.dispatcher.layer0 import _is_current_world_request
+
+        self.assertTrue(_is_current_world_request("what's today's news?"))
+
+    def test_predicate_conversational_today_excluded(self):
+        from core.dispatcher.layer0 import _is_current_world_request
+
+        self.assertFalse(_is_current_world_request("how are you today?"))
+
+    def test_predicate_requires_a_current_world_marker(self):
+        from core.dispatcher.layer0 import _is_current_world_request
+
+        # No news/latest/today/etc. marker -> not a current-world request.
+        self.assertFalse(_is_current_world_request("tell me about your day"))
+
+    # --- emit_spec-level (the spec the dispatcher actually emits) ---
+
+    def test_bare_subject_news_selects_web_search(self):
+        from core.dispatcher.spec import ExternalSource
+
+        spec = self._emit("news about Anthropic")
+        self.assertIn(ExternalSource.WEB_SEARCH, spec.external_sources)
+
+    def test_bare_latest_person_news_selects_web_search(self):
+        from core.dispatcher.spec import ExternalSource
+
+        spec = self._emit("latest Elon news")
+        self.assertIn(ExternalSource.WEB_SEARCH, spec.external_sources)
+
+    def test_generic_news_question_still_selects_web_search(self):
+        from core.dispatcher.spec import ExternalSource
+
+        spec = self._emit("what's today's news?")
+        self.assertIn(ExternalSource.WEB_SEARCH, spec.external_sources)
+
+    def test_greeting_today_still_no_web_search(self):
+        from core.dispatcher.spec import ExternalSource
+
+        spec = self._emit("How are you today?")
+        self.assertNotIn(ExternalSource.WEB_SEARCH, spec.external_sources)
+
+    def test_explicit_memory_news_stays_substrate_only(self):
+        from core.dispatcher.spec import CompositionHint, ExternalSource
+
+        # 'what do you remember' is explicit memory; even with a current-world marker
+        # the emit_spec branch (and not explicit_memory) keeps it substrate-only.
+        spec = self._emit("what do you remember about the latest news?")
+        self.assertNotIn(ExternalSource.WEB_SEARCH, spec.external_sources)
+        self.assertEqual(spec.composition_hint, CompositionHint.SUBSTRATE_ONLY)
+
+
 if __name__ == "__main__":
     unittest.main()
