@@ -373,7 +373,21 @@ EOF
 - Modify: `daemon/maez_daemon.py:7226-7234` (the store seam)
 - Test: `tests/test_self_web_claim_hygiene.py`
 
-**Uses the Task-0a signal** for `web_grounded` (default `bool((web_context or "").strip())` unless Task 0a found otherwise).
+**Uses the Task-0a-confirmed signal** for `web_grounded`. Task 0 REFUTED the naive
+`bool((web_context or "").strip())` — `web_context` is empty on the dispatcher
+(Search-as-a-Sense) path (set only on legacy/photo paths at `daemon/maez_daemon.py:5683,5773`),
+which is the path the live wound used, so that signal would make the feature a no-op where it
+matters. The confirmed signal is the **fresh** subset of `_evidence_state.marker_labels`
+(`_evidence_state = turn_evidence_state(...)` built unconditionally at `daemon/maez_daemon.py:6090`,
+in scope at 7230, unioning both the dispatcher `[fresh evidence]` transcript marker and the legacy
+`web search results`):
+```python
+web_grounded = bool({"fresh evidence", "web search results"} & set(_evidence_state.marker_labels))
+```
+`_POSITIVE_MARKERS` also yields `memory evidence`/`memory context` labels (substrate recall), so do
+NOT use `_evidence_state.evidence_present` (too broad) — only the two fresh labels count.
+`decide_turn_storage` takes the computed `web_grounded: bool` (stays pure/testable); the daemon
+computes it from `_evidence_state` at the call site.
 
 - [ ] **Step 1: Write the failing test (store_telegram accepts turn_link_id)**
 
@@ -416,7 +430,11 @@ And merge it into `meta` (where the `meta = {...}` dict is built, ~line 1129-114
 In `daemon/maez_daemon.py`, replace the single store (lines 7230-7234) with the flag-gated split. Add the import near the top of the file if absent: `from core.infra.env_flags import strict_env_flag`. Then:
 ```python
         _self_claim_hygiene = strict_env_flag("MAEZ_SELF_CLAIM_HYGIENE_ENABLED")
-        _web_grounded = bool((web_context or "").strip())  # Task-0a signal
+        # Task-0a confirmed signal: fresh subset of the evidence-state marker labels,
+        # which unions the dispatcher [fresh evidence] transcript marker AND legacy web.
+        _web_grounded = bool(
+            {"fresh evidence", "web search results"} & set(_evidence_state.marker_labels)
+        )
         if _self_claim_hygiene and _web_grounded:
             _turn_link_id = uuid.uuid4().hex
             _m1_raw_memory_id = self.memory.store_telegram(
@@ -448,13 +466,13 @@ In `daemon/maez_daemon.py`, replace the single store (lines 7230-7234) with the 
 
 - [ ] **Step 4: Write + run the store-split behavior tests**
 
-Append tests that drive the daemon store decision. Prefer testing a small extracted helper to avoid standing up the whole daemon: extract the decision into a module-level pure function `decide_turn_storage(*, source, text, reply, web_context, hygiene_enabled) -> list[StoreSpec]` (a `StoreSpec` = namedtuple of `content, provenance_source, trust_tier, turn_link_id, is_owner_record`) and have `handle_message` call it, then store per spec. Test the helper:
+Append tests that drive the daemon store decision. Prefer testing a small extracted helper to avoid standing up the whole daemon: extract the decision into a module-level pure function `decide_turn_storage(*, source, text, reply, web_grounded, hygiene_enabled) -> list[StoreSpec]` (a `StoreSpec` = namedtuple of `content, provenance_source, trust_tier, turn_link_id, is_owner_record`) and have `handle_message` call it (passing `web_grounded` computed from `_evidence_state.marker_labels`), then store per spec. Test the helper:
 ```python
 class StoreSplitDecisionTest(unittest.TestCase):
     def test_web_grounded_on_splits_into_two_linked_records(self):
         from daemon.maez_daemon import decide_turn_storage
         specs = decide_turn_storage(source="telegram", text="news about X",
-                                    reply="X did Y", web_context="[fresh] ...",
+                                    reply="X did Y", web_grounded=True,
                                     hygiene_enabled=True)
         self.assertEqual(len(specs), 2)
         owner = [s for s in specs if s.is_owner_record][0]
@@ -470,7 +488,7 @@ class StoreSplitDecisionTest(unittest.TestCase):
     def test_non_web_grounded_keeps_single_combined_record(self):
         from daemon.maez_daemon import decide_turn_storage
         specs = decide_turn_storage(source="telegram", text="hi", reply="hello",
-                                    web_context="", hygiene_enabled=True)
+                                    web_grounded=False, hygiene_enabled=True)
         self.assertEqual(len(specs), 1)
         self.assertEqual(specs[0].provenance_source, "user_utterance")
         self.assertEqual(specs[0].trust_tier, "lived")
@@ -479,7 +497,7 @@ class StoreSplitDecisionTest(unittest.TestCase):
     def test_flag_off_keeps_single_combined_record_even_web_grounded(self):
         from daemon.maez_daemon import decide_turn_storage
         specs = decide_turn_storage(source="telegram", text="news about X",
-                                    reply="X did Y", web_context="[fresh] ...",
+                                    reply="X did Y", web_grounded=True,
                                     hygiene_enabled=False)
         self.assertEqual(len(specs), 1)
         self.assertEqual(specs[0].trust_tier, "lived")
@@ -767,7 +785,7 @@ class FlagOffByteIdenticalTest(unittest.TestCase):
     def test_store_decision_flag_off_is_single_combined(self):
         from daemon.maez_daemon import decide_turn_storage
         specs = decide_turn_storage(source="telegram", text="news about X",
-                                    reply="X did Y", web_context="fresh stuff",
+                                    reply="X did Y", web_grounded=True,
                                     hygiene_enabled=False)
         self.assertEqual(len(specs), 1)
         self.assertIn("Maez:", specs[0].content)
