@@ -1251,6 +1251,15 @@ def synthesize_photo_turn(
         f"{analysis_text}"
     )
     if fresh_context:
+        from core.routing import web_containment as _wc  # local import: keep off the photo-path import (no cycle; defensive)
+        if _wc.containment_enabled() and fresh_context:
+            import hashlib
+            _nonce = _wc.new_nonce()
+            _digest = hashlib.sha256(fresh_context.encode("utf-8")).hexdigest()[:16]
+            _wrapped = _wc.wrap_web_text(fresh_context, nonce=_nonce, source="web", digest=_digest)
+            fresh_context = _wc.standing_instruction() + "\n\n" + _wrapped
+            _wc.emit_receipt(_wc.containment_receipt(
+                _wrapped, nonce=_nonce, path="photo", expected_segments=1, digest=_digest))
         base_system += (
             "\n\n=== FRESH WORLD CHECK (cite [E2] for current-world verification) ===\n"
             f"{fresh_context}\n\n"
