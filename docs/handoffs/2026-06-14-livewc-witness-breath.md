@@ -46,10 +46,14 @@ systemctl --user restart maez.service && systemctl --user is-active maez.service
    - Telegram: same.
    (Optionally also exercise a voice turn and a photo-with-freshness turn for those paths.)
 
-2. **Grep the receipt (the rotating file, not the journal):**
+2. **Grep the receipt (the rotating file, not the journal) — with a staleness guard:**
 ```bash
+date
 grep -h 'web_containment_applied' /home/rohit/maez/logs/maez.log* | tail -20
 ```
+**Confirm the receipt timestamps are AFTER the restart + fetches** (each `maez.log` line is
+prefixed `YYYY-MM-DD HH:MM:SS`). A row from before this restart is a stale leftover and does
+NOT count — the wrap must have fired on *this* live turn.
 
 3. **Expected shape — for EACH row, the load-bearing invariant
    `open_markers == close_markers == rendered_web_segments` and `balanced=True`:**
