@@ -84,6 +84,7 @@ class ProvenanceSource(str, Enum):
     TOOL_OBSERVATION = "tool_observation"
     EXTERNAL_WEB = "external_web"
     CLAUDE_TIER_RESPONSE = "claude_tier_response"
+    SELF_WEB_CLAIM = "self_web_claim"
     SYSTEM = "system"
 
 
@@ -105,6 +106,7 @@ _DEFAULT_TIER_BY_SOURCE: dict[ProvenanceSource, TrustTier] = {
     ProvenanceSource.TOOL_OBSERVATION: TrustTier.OBSERVED,
     ProvenanceSource.EXTERNAL_WEB: TrustTier.UNTRUSTED,
     ProvenanceSource.CLAUDE_TIER_RESPONSE: TrustTier.UNTRUSTED,
+    ProvenanceSource.SELF_WEB_CLAIM: TrustTier.UNTRUSTED,
     ProvenanceSource.SYSTEM: TrustTier.COVENANT,
 }
 
