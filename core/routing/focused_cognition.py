@@ -271,7 +271,14 @@ def _origin_trust_segment(origin_trust: str | None) -> str:
 
 
 def _self_web_claim_segment(origin_provenance: str | None) -> str:
-    """Hard-label a kept self-web-claim so it is never asserted as established fact."""
+    """Hard-label a kept self-web-claim so it is never asserted as established fact.
+
+    Flag-gated: with MAEZ_SELF_CLAIM_HYGIENE_ENABLED off the label is never
+    rendered, even for a stale self_web_claim record minted while the flag was on,
+    so flag-off output stays byte-identical to pre-feature output.
+    """
+    if not _self_claim_hygiene_enabled():
+        return ""
     if origin_provenance == "self_web_claim":
         return f" · {_SELF_WEB_CLAIM_LABEL}"
     return ""

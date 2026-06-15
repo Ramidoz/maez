@@ -182,6 +182,20 @@ class RecallExclusionTest(unittest.TestCase):
             web_context="Anthropic released a new model today.", enabled=False)
         self.assertIn("old Anthropic claim", [it.text for it in ws.items])
 
+    def test_no_self_web_claim_label_when_flag_off(self):
+        ws = self._assemble(
+            recall_items=self._items(("memory_context", "old claim", "self_web_claim")),
+            web_context="", enabled=False)
+        # item is kept (flag off), but NO hygiene label may leak into the prompt
+        self.assertNotIn("self-web-claim", ws.ordered_evidence_text)
+        self.assertIn("old claim", ws.ordered_evidence_text)
+
+    def test_self_web_claim_label_present_when_flag_on_no_fresh(self):
+        ws = self._assemble(
+            recall_items=self._items(("memory_context", "old claim", "self_web_claim")),
+            web_context="", enabled=True)
+        self.assertIn("self-web-claim", ws.ordered_evidence_text)
+
 
 if __name__ == "__main__":
     unittest.main()
