@@ -85,6 +85,7 @@ class DispatcherLayer1Tests(unittest.TestCase):
                     "source_type": "memory_context",
                     "temporal_provenance": None,
                     "trust_tier": None,
+                    "provenance_source": None,
                 }
             ],
         )

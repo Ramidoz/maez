@@ -154,6 +154,7 @@ def recall_partitions_to_items(partition: dict, *, role_source_type: str):
                 durable_id=str(row.get("id") or "") or None,
                 temporal_provenance=temporal_provenance,
                 trust_tier=meta.get("trust_tier"),
+                provenance_source=meta.get("provenance_source"),
             )
         )
     return tuple(items)

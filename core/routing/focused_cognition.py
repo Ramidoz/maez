@@ -240,6 +240,7 @@ class EvidenceItem:
     durable_id: str
     temporal_provenance: dict | None = None
     origin_trust: str | None = None
+    origin_provenance: str | None = None
 
 
 def _authority_label(source_type: str) -> str:
@@ -677,12 +678,12 @@ def _memory_items_with_provenance(body: str) -> list[tuple[str, dict | None]]:
 
 
 def _ranked_items_for_state(
-    raw_items: list[tuple[str, str, str | None, dict | None, str | None]],
+    raw_items: list[tuple[str, str, str | None, dict | None, str | None, str | None]],
     dialogue_state: DialogueContinuityState,
     date_cue: bool = False,
-) -> list[tuple[str, str, str | None, dict | None, str | None]]:
-    def rank(item: tuple[str, str, str | None, dict | None, str | None]) -> int:
-        source_type, _text, _durable_id, temporal_provenance, _origin_trust = item
+) -> list[tuple[str, str, str | None, dict | None, str | None, str | None]]:
+    def rank(item: tuple[str, str, str | None, dict | None, str | None, str | None]) -> int:
+        source_type, _text, _durable_id, temporal_provenance, _origin_trust, _origin_prov = item
         if date_cue:
             if (
                 source_type in ("memory_context", "memory_evidence")
@@ -805,7 +806,7 @@ def assemble_working_set(
     ):
         return None
 
-    raw_items: list[tuple[str, str, str | None, dict | None, str | None]] = []
+    raw_items: list[tuple[str, str, str | None, dict | None, str | None, str | None]] = []
     if not dialogue_authoritative:
         if structured_recall_items is not None:
             for item in structured_recall_items:
@@ -818,6 +819,7 @@ def assemble_working_set(
                 durable_id = getattr(item, "durable_id", None)
                 temporal_provenance = getattr(item, "temporal_provenance", None)
                 origin_trust = getattr(item, "trust_tier", None)
+                origin_provenance = getattr(item, "provenance_source", None)
                 raw_items.append(
                     (
                         source_type,
@@ -825,6 +827,7 @@ def assemble_working_set(
                         durable_id,
                         temporal_provenance,
                         origin_trust,
+                        origin_provenance,
                     )
                 )
             for marker, body in _split_blocks(transcript or ""):
@@ -832,35 +835,36 @@ def assemble_working_set(
                 if source_type in ("memory_context", "memory_evidence"):
                     continue
                 for item_text in _atomic_items(body):
-                    raw_items.append((source_type, item_text, None, None, None))
+                    raw_items.append((source_type, item_text, None, None, None, None))
         else:
             for marker, body in _split_blocks(transcript or ""):
                 source_type = _SOURCE_TYPE[marker]
                 if source_type in ("memory_context", "memory_evidence"):
                     for item_text, provenance in _memory_items_with_provenance(body):
-                        raw_items.append((source_type, item_text, None, provenance, None))
+                        raw_items.append((source_type, item_text, None, provenance, None, None))
                 else:
                     for item_text in _atomic_items(body):
-                        raw_items.append((source_type, item_text, None, None, None))
+                        raw_items.append((source_type, item_text, None, None, None, None))
 
         web_context = web_context or ""
         if web_context.strip() and _WEB_NO_RESULTS not in web_context:
             for item_text in _atomic_items(web_context):
-                raw_items.append(("web_context", item_text, None, None, None))
+                raw_items.append(("web_context", item_text, None, None, None, None))
 
     for anchor in anchors:
-        raw_items.append((anchor.source_type, anchor.text, anchor.durable_id, None, None))
+        raw_items.append((anchor.source_type, anchor.text, anchor.durable_id, None, None, None))
 
     if date_cue:
         has_confirmed = any(
             provenance and provenance.get("confirmed")
-            for _source_type, _text, _durable_id, provenance, _origin_trust in raw_items
+            for _source_type, _text, _durable_id, provenance, _origin_trust, _origin_prov in raw_items
         )
         if not has_confirmed:
             raw_items.append(
                 (
                     "temporal_recall_status",
                     "No dated memory matched the explicit date cue in the question.",
+                    None,
                     None,
                     None,
                     None,
@@ -879,6 +883,7 @@ def assemble_working_set(
             durable_id=durable_id or _content_hash(text),
             temporal_provenance=temporal_provenance,
             origin_trust=origin_trust,
+            origin_provenance=origin_provenance,
         )
         for index, (
             source_type,
@@ -886,6 +891,7 @@ def assemble_working_set(
             durable_id,
             temporal_provenance,
             origin_trust,
+            origin_provenance,
         ) in enumerate(raw_items)
     ]
     render_version = _citation_render_version()

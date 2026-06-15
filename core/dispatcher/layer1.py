@@ -67,6 +67,7 @@ class RecallItem:
     durable_id: str | None = None
     temporal_provenance: dict | None = None
     trust_tier: str | None = None
+    provenance_source: str | None = None
 
 
 @dataclass(frozen=True)
@@ -102,6 +103,7 @@ class RecallBlock:
                     "source_type": item.source_type,
                     "temporal_provenance": item.temporal_provenance,
                     "trust_tier": item.trust_tier,
+                    "provenance_source": item.provenance_source,
                 }
                 for item in self.items
             ]
