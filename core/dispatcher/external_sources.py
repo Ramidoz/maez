@@ -500,7 +500,16 @@ def _web_search_adapter(
     log_path = external_fetch._diagnostic_path()
     start_offset = log_path.stat().st_size if log_path.exists() else 0
     query = _derive_web_search_query(request.utterance, request.conversation_state)
-    result = web_search.search(query, max_results=3)
+    # Search parity with the legacy/cockpit path (#2 fix): a GENERIC 'give me the
+    # news' request goes to the category-feed headline reader; a SUBJECT news query
+    # ('news about Anthropic') stays on real keyword search, because search_rss never
+    # searches for the subject. Classify the DERIVED query, not the raw utterance, so
+    # explicit wrappers ('search the internet for today's news') reduce to 'today's
+    # news' and still route to RSS (the raw form's 'internet' token would misroute).
+    if web_search.is_news_query(query) and web_search.is_generic_news_query(query):
+        result = web_search.search_rss(query, max_results=3)
+    else:
+        result = web_search.search(query, max_results=3)
     if not result.get("success") or not result.get("results"):
         raise _MappedExternalFailure(
             status=ExternalBranchStatus.EMPTY,

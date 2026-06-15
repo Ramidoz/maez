@@ -860,5 +860,121 @@ class FetchUrlAdapterTests(unittest.TestCase):
                 )
 
 
+class WebSearchAdapterNewsRoutingTest(unittest.TestCase):
+    """Search-parity: the dispatcher web-search adapter must route GENERIC news
+    ('what's today's news?') to the category-feed headline reader (search_rss),
+    while SUBJECT news ('news about Anthropic') stays on real keyword search.
+
+    The legacy/cockpit path got this in the #2 fix; the dispatcher path (Telegram)
+    did not, so a generic-news Telegram turn returned portal 'doorways' instead of
+    headlines. Classification is on the DERIVED query (post _derive_web_search_query),
+    so explicit wrappers like 'search the internet for today's news' reduce to
+    'today's news' and still hit RSS — classifying on the raw utterance misroutes
+    because 'internet' survives the news-filter.
+    """
+
+    def _run(self, utterance, *, conversation_state=None):
+        """Run the WEB_SEARCH fanout with both backends mocked; return
+        (which_backend_called, branch_result)."""
+        from core.dispatcher.external_sources import ExternalFanout
+        from core.dispatcher.spec import ExternalSource
+
+        called = {"backend": None, "query": None}
+
+        with tempfile.TemporaryDirectory() as td:
+            log_path = Path(td) / "external_fetch.jsonl"
+
+            def _make_backend(name, caller):
+                def _backend(query, max_results=3):
+                    called["backend"] = name
+                    called["query"] = query
+                    self.assertEqual(max_results, 3)
+                    log_path.write_text(
+                        json.dumps(
+                            {
+                                "schema_version": "external-fetch-diagnostic-v1",
+                                "request_id": f"diag-{name}",
+                                "caller": caller,
+                            }
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
+                    return {
+                        "success": True,
+                        "results": [
+                            {"title": "R", "snippet": "Fresh", "url": "https://example.com"}
+                        ],
+                        "result_count": 1,
+                        "query": query,
+                    }
+
+                return _backend
+
+            with (
+                mock.patch.dict(
+                    "os.environ", {"MAEZ_EXTERNAL_FETCH_LOG": str(log_path)}
+                ),
+                mock.patch(
+                    "skills.web_search.search",
+                    side_effect=_make_backend("search", "skills.web_search.search.searxng"),
+                ),
+                mock.patch(
+                    "skills.web_search.search_rss",
+                    side_effect=_make_backend(
+                        "search_rss", "skills.web_search.search_rss.feed"
+                    ),
+                ),
+                mock.patch(
+                    "skills.web_search.format_for_context",
+                    return_value="[WEB SEARCH] Fresh result",
+                ),
+            ):
+                result = ExternalFanout().run(
+                    _spec(ExternalSource.WEB_SEARCH),
+                    utterance=utterance,
+                    conversation_state=conversation_state or {},
+                    fanout_generation_id="seal-news-routing",
+                )
+            return called, result
+
+    def test_generic_news_query_routes_to_search_rss(self):
+        from core.dispatcher.spec import ExternalBranchStatus
+
+        called, result = self._run("what's today's news?")
+        self.assertEqual(called["backend"], "search_rss")
+        self.assertEqual(result.branch_results[0].status, ExternalBranchStatus.SUCCESS)
+
+    def test_subject_news_query_routes_to_keyword_search(self):
+        from core.dispatcher.spec import ExternalBranchStatus
+
+        called, result = self._run("news about Anthropic")
+        self.assertEqual(called["backend"], "search")
+        self.assertEqual(result.branch_results[0].status, ExternalBranchStatus.SUCCESS)
+
+    def test_subject_news_named_person_routes_to_keyword_search(self):
+        called, _ = self._run("latest Elon news")
+        self.assertEqual(called["backend"], "search")
+
+    def test_explicit_form_generic_news_reduces_to_rss(self):
+        # 'search the internet for today's news' -> derived 'today's news' -> RSS.
+        # Classifying on the RAW utterance would misroute (the token 'internet'
+        # survives the news-filler set, so raw is_generic_news_query is False).
+        called, _ = self._run("search the internet for today's news")
+        self.assertEqual(called["backend"], "search_rss")
+        self.assertEqual(called["query"], "today's news")
+
+    def test_rss_path_egress_diagnostic_accepts_rss_caller(self):
+        # The RSS backend logs caller 'skills.web_search.search_rss.feed'; the
+        # adapter's caller_prefix='skills.web_search.' must still match it so the
+        # fresh block carries a real egress diagnostic id.
+        from core.dispatcher.spec import ExternalBranchStatus
+
+        called, result = self._run("what's today's news?")
+        self.assertEqual(called["backend"], "search_rss")
+        self.assertEqual(result.branch_results[0].status, ExternalBranchStatus.SUCCESS)
+        self.assertEqual(result.fresh_blocks[0].egress_diagnostic_id, "diag-search_rss")
+
+
 if __name__ == "__main__":
     unittest.main()
