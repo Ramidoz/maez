@@ -6118,6 +6118,7 @@ class MaezDaemon:
         # dispatcher transcript, never transcript_context; the latter includes
         # instruction examples that contain the marker strings.
         from core.routing.evidence_state import (
+            WEB_GROUNDED_LABELS,
             build_evidence_precedence_directive,
             build_turn_final_context,
             turn_evidence_state,
@@ -7273,8 +7274,7 @@ class MaezDaemon:
         # path, so bool(web_context.strip()) would be wrong here).
         _self_claim_hygiene = strict_env_flag("MAEZ_SELF_CLAIM_HYGIENE_ENABLED")
         _web_grounded = bool(
-            {"fresh evidence", "web search results"}
-            & set(_evidence_state.marker_labels)
+            WEB_GROUNDED_LABELS & set(_evidence_state.marker_labels)
         )
         _specs = decide_turn_storage(
             source=source,

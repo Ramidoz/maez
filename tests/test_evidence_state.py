@@ -5,6 +5,7 @@ import unittest
 
 from core.routing.evidence_state import (
     EvidenceState,
+    WEB_GROUNDED_LABELS,
     build_evidence_precedence_directive,
     build_turn_final_context,
     turn_evidence_state,
@@ -40,6 +41,20 @@ class TurnEvidenceStateTests(unittest.TestCase):
             web_context="[WEB SEARCH: 'x'] No results found.",
         )
         self.assertFalse(empty.evidence_present)
+
+    def test_web_grounded_labels_are_emitted_by_evidence_state(self):
+        dispatcher = turn_evidence_state(
+            transcript="[fresh evidence] WEB_SEARCH rows",
+            web_context="",
+        )
+        legacy = turn_evidence_state(
+            transcript="",
+            web_context="[WEB SEARCH: 'x'] 1 results - 2026\n  1. Title",
+        )
+        emitted = set(dispatcher.marker_labels) | set(legacy.marker_labels)
+
+        self.assertEqual(WEB_GROUNDED_LABELS, {"fresh evidence", "web search results"})
+        self.assertLessEqual(WEB_GROUNDED_LABELS, emitted)
 
     def test_excludes_background(self):
         state = turn_evidence_state(

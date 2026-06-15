@@ -27,6 +27,8 @@ _SOURCE_HINTS: dict[str, str] = {
     "web search results": "web search results",
 }
 
+WEB_GROUNDED_LABELS = frozenset({"fresh evidence", "web search results"})
+
 @dataclass(frozen=True)
 class EvidenceState:
     evidence_present: bool
