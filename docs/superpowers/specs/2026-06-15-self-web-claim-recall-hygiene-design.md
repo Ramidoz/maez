@@ -1,7 +1,7 @@
 # Self-Web-Claim Recall Hygiene (design) — content-honesty Thread C
 
 **Date:** 2026-06-15. Co-designed with Rohit.
-**Status:** design approved (4 cruxes resolved + 2 spec constraints). Awaiting spec review before plan.
+**Status:** design approved (4 cruxes + 2 spec constraints + M1 owner-id-only must-fix + forward-only witness caveat). Cleared for the implementation plan.
 **Arc:** content-honesty (Thread C of three). Thread A (real support checker) and Thread B
 (fresh-vs-memory conflict resolution) are **separate, later** arcs — out of scope here.
 
@@ -103,6 +103,32 @@ records and the reply text re-enters as `lived` anyway.
 available, thread it from the dispatcher/focused result; if that is invasive, STOP and revisit
 the seam rather than forcing it.
 
+## Section 1b — M1 lived-episode promotion: owner-id-only (must-fix M1)
+
+Immediately after the store, the daemon calls `m1_promoter.consider_audited_exchange(...)`
+with `raw_memory_id` (`daemon/maez_daemon.py:7235-7246`); the promoter records that id into the
+promoted lived episode's `source_memory_ids` (`core/memory/m1_lived_episode_promotion.py:744-754`).
+If the `SELF_WEB_CLAIM` reply id reached that list, the fabricated reply's raw record would
+gain **lived-episode lineage** and could relaunder into trusted recall, bypassing the
+Section-2 filter entirely ([[feedback_producer_causality_no_caller_score_laundering]]).
+
+**Verified:** the promoted episode stores only a **structural summary**
+(`build_structural_summary`, `:300-320` — "Bonded Telegram exchange. N audited owner/Maez
+pairs … Participants …"), never the reply text or its web-claims. So `source_memory_ids` is the
+**sole** laundering vector, and pinning the id closes it completely.
+
+**Invariant (spec):** on the split web-grounded path, `consider_audited_exchange` —
+- **may** receive only the **owner utterance record id** as `raw_memory_id`;
+- **must never** receive the `SELF_WEB_CLAIM` reply id;
+- **must never** receive **both** ids.
+
+`consider_audited_exchange` still receives `maez_reply` text for its audit/marker decision, but
+that text does not enter episode content (verified above) — so no further treatment is needed.
+
+**Test:** web-grounded split + M1 promotion path → the promoted episode's `source_memory_ids`
+(and the pending window's `source_memory_ids`) contain the **owner record id only**, never the
+reply id, never both.
+
 ## Section 2 — Recall side: exclude self-claims when fresh present
 
 At the memory_context assembly in `core/routing/focused_cognition.py:810-829`, after the
@@ -133,6 +159,16 @@ text — hashes/counts only):
 
 Flag off → neither receipt appears (byte-identical behavior).
 
+**Witness/backfill caveat (forward-only).** This v0 changes *new* turns only; it does **not**
+heal the already-stored `lived` Anthropic false record sitting in ChromaDB. Therefore:
+- A live witness **must** use a **new post-flag web-grounded turn** (store split + recall
+  exclusion observed on that turn), **or** must first remove/retag the old record via a
+  separate owner-approved backfill.
+- Do **not** claim "the Anthropic wound is healed" from this slice alone — until the old
+  record is aged out by consolidation or evicted by a backfill, it can still re-surface.
+  The slice's claim is "self-web-claims from now on are tagged and excluded," proven by the
+  receipts on a fresh turn.
+
 ## Section 4 — Flag, testing, rail
 
 **Flag:** `MAEZ_SELF_CLAIM_HYGIENE_ENABLED` (`strict_env_flag`, `{1,true,yes,on}`).
@@ -142,6 +178,9 @@ Off = byte-identical (single combined store, no recall filter, no receipts).
 - *Store:* web-grounded turn → two linked records (owner `lived` + reply `self_web_claim`/
   `untrusted`); non-web-grounded → one combined `lived` record; flag off → always combined;
   **no duplicate** — the combined record is absent whenever the split fires.
+- *M1 promotion (must-fix M1):* web-grounded split + promotion path → promoted episode and
+  pending-window `source_memory_ids` contain the **owner record id only**, never the
+  `SELF_WEB_CLAIM` reply id, never both.
 - *Provenance travel (constraint 2):* `provenance_source` survives `metadata → RecallItem →
   EvidenceItem` (assert the new fields carry it).
 - *Recall:* `fresh_present` + `self_web_claim` → excluded; no-fresh + `self_web_claim` →
@@ -158,8 +197,8 @@ asserted.
 ## Scope (explicit)
 
 - **IN:** new `SELF_WEB_CLAIM` provenance; split-when-web-grounded store (two linked records);
-  `provenance_source` threading (Task-0); the fresh-present exclusion filter + no-fresh
-  keep/label; two receipts; the flag; tests.
+  the M1 owner-id-only promotion invariant; `provenance_source` threading (Task-0); the
+  fresh-present exclusion filter + no-fresh keep/label; two receipts; the flag; tests.
 - **OUT (separate arcs — different wound, different proof):**
   - **Thread A** — a real support checker (verify cited evidence *supports* the claim, beyond
     `check_groundedness`'s label-exists test at `focused_cognition.py:1401`).
