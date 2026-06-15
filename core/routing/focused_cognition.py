@@ -285,19 +285,25 @@ def _render_evidence_lines_contained(
     render_version: str | None = None,
     nonce: str = "",
     contain_enabled: bool = False,
-) -> tuple[list[str], int]:
+) -> tuple[list[str], int, list[str]]:
     """Render evidence lines; when contain_enabled, wrap source_type=='web_context'
     items' text in the un-spoofable envelope and count rendered web segments. The text
     handed in is already truncated by _budget_items_for_prompt, so markers added here
-    are outside the truncation budget."""
+    are outside the truncation budget.
+
+    Returns (lines, web_segments, web_digests) where web_digests is one entry per
+    rendered web wrap (so a v1 repeat of a web top item yields two identical entries).
+    """
     from core.routing import web_containment as _wc  # local import: keep web_containment off focused_cognition's import path (no cycle; defensive)
     version = render_version or _citation_render_version()
     web_segments = 0
+    web_digests: list[str] = []
 
     def _txt(item: EvidenceItem) -> str:
         nonlocal web_segments
         if contain_enabled and item.source_type == "web_context":
             web_segments += 1
+            web_digests.append(item.durable_id)
             return _wc.wrap_web_text(item.text, nonce=nonce, source="web_context", digest=item.durable_id)
         return item.text
 
@@ -312,7 +318,7 @@ def _render_evidence_lines_contained(
             )
             for item in items
         ]
-        return lines, web_segments
+        return lines, web_segments, web_digests
 
     lines = [
         f"[{item.local_label}] ({_authority_label(item.source_type)}"
@@ -322,7 +328,7 @@ def _render_evidence_lines_contained(
     if items:
         top = items[0]
         lines.append(f"(most important, repeated) [{top.local_label}] {_txt(top)}")
-    return lines, web_segments
+    return lines, web_segments, web_digests
 
 
 def _render_evidence_lines(
@@ -331,7 +337,7 @@ def _render_evidence_lines(
     render_version: str | None = None,
 ) -> list[str]:
     """Back-compat: measurement/legacy render (no containment, byte-identical)."""
-    lines, _ = _render_evidence_lines_contained(
+    lines, _, _ = _render_evidence_lines_contained(
         items, render_version=render_version, nonce="", contain_enabled=False)
     return lines
 
@@ -893,15 +899,16 @@ def assemble_working_set(
     from core.routing import web_containment as _wc  # local import: keep web_containment off focused_cognition's import path (no cycle; defensive)
     _contain = _wc.containment_enabled()
     _nonce = _wc.new_nonce() if _contain else ""
-    _lines, _web_segments = _render_evidence_lines_contained(
+    _lines, _web_segments, _web_digests = _render_evidence_lines_contained(
         items, render_version=render_version, nonce=_nonce, contain_enabled=_contain)
     ordered = "\n".join(_lines)
     if _contain and _web_segments:
         ordered = _wc.standing_instruction() + "\n\n" + ordered
+        _web_digest = ",".join(dict.fromkeys(_web_digests))[:80]
         _wc.emit_receipt(_wc.containment_receipt(
             ordered, nonce=_nonce, path="focused",
             expected_segments=_web_segments,
-            digest=(items[0].durable_id if items else "")))
+            digest=_web_digest))
 
     total_chars = len(ordered) + len(owner_question or "")
     return WorkingSet(
