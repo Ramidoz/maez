@@ -212,6 +212,14 @@ def decide_turn_storage(*, source, text, reply, web_grounded, hygiene_enabled):
     ]
 
 
+def m1_raw_memory_id_for_promotion(*, owner_id, reply_id=None):
+    """M1 lived-episode promotion lineage may cite ONLY the owner record, never the
+    self_web_claim reply — so a web-grounded reply cannot relaunder into a lived
+    episode's source_memory_ids. reply_id is accepted only to make the exclusion
+    explicit and unit-testable; it is deliberately never returned."""
+    return owner_id
+
+
 CALENDAR_MODE = resolve_calendar_mode(os.environ)
 GITHUB_MODE = resolve_github_mode(os.environ)
 CALENDAR_STORE_DB_PATH = Path(
@@ -7276,6 +7284,7 @@ class MaezDaemon:
             hygiene_enabled=_self_claim_hygiene,
         )
         _m1_raw_memory_id = None
+        _reply_memory_id = None
         for _spec in _specs:
             _stored_id = self.memory.store_telegram(
                 _spec.content,
@@ -7285,6 +7294,13 @@ class MaezDaemon:
             )
             if _spec.is_owner_record:
                 _m1_raw_memory_id = _stored_id
+            else:
+                _reply_memory_id = _stored_id
+        # Defense-in-depth: funnel the owner id through the owner-id-only guard so the
+        # self_web_claim reply id can NEVER enter a lived episode's source_memory_ids.
+        _m1_raw_memory_id = m1_raw_memory_id_for_promotion(
+            owner_id=_m1_raw_memory_id, reply_id=_reply_memory_id,
+        )
         if len(_specs) == 2:
             logger.info(
                 "self_claim_stored web_grounded=True provenance=self_web_claim "

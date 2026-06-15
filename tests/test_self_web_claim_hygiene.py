@@ -123,5 +123,20 @@ class StoreSplitDecisionTest(unittest.TestCase):
         self.assertEqual(specs[0].trust_tier, "lived")
 
 
+class M1OwnerIdOnlyTest(unittest.TestCase):
+    def test_promotion_receives_owner_id_only_on_split(self):
+        from daemon.maez_daemon import m1_raw_memory_id_for_promotion
+        chosen = m1_raw_memory_id_for_promotion(owner_id="owner-1", reply_id="reply-1")
+        self.assertEqual(chosen, "owner-1")
+        self.assertNotEqual(chosen, "reply-1")
+
+    def test_promotion_id_is_owner_when_unsplit(self):
+        from daemon.maez_daemon import m1_raw_memory_id_for_promotion
+        self.assertEqual(
+            m1_raw_memory_id_for_promotion(owner_id="combined-1", reply_id=None),
+            "combined-1",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
