@@ -43,12 +43,18 @@ class M1DaemonWiringTests(unittest.TestCase):
         body = _method_body(_read("daemon/maez_daemon.py"), "handle_message")
 
         audit_idx = body.find("reply = audit_assistant_text(")
-        store_idx = body.find("_m1_raw_memory_id = self.memory.store_telegram(")
+        # Self-web-claim hygiene split the single store into a spec-driven loop;
+        # M1 still binds to the OWNER record id returned by store_telegram.
+        store_idx = body.find("self.memory.store_telegram(")
+        owner_bind_idx = body.find("_m1_raw_memory_id = _stored_id")
         m1_idx = body.find("self.m1_promoter.consider_audited_exchange(")
         trace_idx = body.find("_trace.stored_text_hash")
 
         self.assertGreater(audit_idx, 0)
         self.assertGreater(store_idx, audit_idx)
+        self.assertGreater(owner_bind_idx, store_idx)
+        self.assertIn("if _spec.is_owner_record:",
+                      body[store_idx:owner_bind_idx])
         self.assertGreater(m1_idx, store_idx)
         self.assertGreater(trace_idx, m1_idx)
         self.assertIn("raw_memory_id=_m1_raw_memory_id", body[m1_idx:m1_idx + 600])

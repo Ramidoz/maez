@@ -44,5 +44,84 @@ class ProvenanceTravelsRecallChainTest(unittest.TestCase):
         self.assertEqual(ev.origin_provenance, "self_web_claim")
 
 
+class _FakeCollection:
+    def __init__(self):
+        self.add_calls = []
+
+    def add(self, *, ids, documents, metadatas):
+        self.add_calls.append({
+            "ids": ids,
+            "documents": documents,
+            "metadatas": metadatas,
+        })
+
+
+def _mm_with_fakes():
+    from memory.memory_manager import MemoryManager
+
+    mm = MemoryManager.__new__(MemoryManager)
+    mm.raw = _FakeCollection()
+    mm.core = _FakeCollection()
+    return mm
+
+
+class StoreTelegramTurnLinkIdTest(unittest.TestCase):
+    def test_store_telegram_persists_turn_link_id(self):
+        mm = _mm_with_fakes()
+        mid = mm.store_telegram(
+            "the owner: hi\nMaez: here",
+            provenance_source="user_utterance",
+            trust_tier="lived",
+            turn_link_id="turn-xyz",
+        )
+
+        self.assertTrue(mid)
+        meta = mm.raw.add_calls[-1]["metadatas"][0]
+        self.assertEqual(meta["turn_link_id"], "turn-xyz")
+
+    def test_store_telegram_omits_turn_link_id_when_not_given(self):
+        mm = _mm_with_fakes()
+        mm.store_telegram(
+            "the owner: hi\nMaez: here",
+            provenance_source="user_utterance",
+            trust_tier="lived",
+        )
+        meta = mm.raw.add_calls[-1]["metadatas"][0]
+        self.assertNotIn("turn_link_id", meta)
+
+
+class StoreSplitDecisionTest(unittest.TestCase):
+    def test_web_grounded_on_splits_into_two_linked_records(self):
+        from daemon.maez_daemon import decide_turn_storage
+        specs = decide_turn_storage(source="telegram", text="news about X",
+                                    reply="X did Y", web_grounded=True, hygiene_enabled=True)
+        self.assertEqual(len(specs), 2)
+        owner = [s for s in specs if s.is_owner_record][0]
+        reply = [s for s in specs if not s.is_owner_record][0]
+        self.assertEqual(owner.provenance_source, "user_utterance")
+        self.assertEqual(owner.trust_tier, "lived")
+        self.assertEqual(reply.provenance_source, "self_web_claim")
+        self.assertEqual(reply.trust_tier, "untrusted")
+        self.assertEqual(owner.turn_link_id, reply.turn_link_id)
+        self.assertNotIn("Maez:", owner.content)
+        self.assertNotIn("the owner", reply.content)
+
+    def test_non_web_grounded_keeps_single_combined_record(self):
+        from daemon.maez_daemon import decide_turn_storage
+        specs = decide_turn_storage(source="telegram", text="hi", reply="hello",
+                                    web_grounded=False, hygiene_enabled=True)
+        self.assertEqual(len(specs), 1)
+        self.assertEqual(specs[0].provenance_source, "user_utterance")
+        self.assertEqual(specs[0].trust_tier, "lived")
+        self.assertIn("Maez:", specs[0].content)
+
+    def test_flag_off_keeps_single_combined_record_even_web_grounded(self):
+        from daemon.maez_daemon import decide_turn_storage
+        specs = decide_turn_storage(source="telegram", text="news about X",
+                                    reply="X did Y", web_grounded=True, hygiene_enabled=False)
+        self.assertEqual(len(specs), 1)
+        self.assertEqual(specs[0].trust_tier, "lived")
+
+
 if __name__ == "__main__":
     unittest.main()

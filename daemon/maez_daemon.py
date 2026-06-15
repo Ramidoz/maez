@@ -7,6 +7,7 @@ Maez Daemon — Always-on system-level AI agent.
 Runs a continuous reasoning loop and exposes a health check endpoint.
 """
 
+import collections
 import hashlib
 import hmac
 import json
@@ -66,6 +67,7 @@ try:
 except Exception:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from memory.memory_manager import MemoryManager
+from core.infra.env_flags import strict_env_flag
 
 # 5x.F.A — cycle-scoped recall-context bag helpers. Hoisted to
 # module-top because (a) the import is cheap and Chroma-free per
@@ -184,6 +186,32 @@ PID_FILE = BASE_DIR / "daemon" / "maez.pid"
 SHUTDOWN_FILE = BASE_DIR / "daemon" / "last_shutdown"
 LEDGER_DB_PATH = Path(os.environ.get("MAEZ_LEDGER_DB_PATH") or (MEMORY_DIR / "ledger.db"))
 M1_ALLOWED_PROMOTION_SOURCES = frozenset({"telegram_surface", "telegram_text"})
+
+StoreSpec = collections.namedtuple(
+    "StoreSpec",
+    ["content", "provenance_source", "trust_tier", "turn_link_id", "is_owner_record"],
+)
+
+
+def decide_turn_storage(*, source, text, reply, web_grounded, hygiene_enabled):
+    """Decide how to persist a finished Telegram turn.
+
+    Web-grounded turns (flag on) split into two linked records so Maez's reply is
+    stored untrusted under self_web_claim WITHOUT the owner's words inheriting that
+    downgrade — and WITHOUT writing the old combined record (no duplicate). All other
+    cases keep the single combined lived record."""
+    if hygiene_enabled and web_grounded:
+        import uuid as _uuid
+        link = _uuid.uuid4().hex
+        return [
+            StoreSpec(f"the owner ({source}): {text}", "user_utterance", "lived", link, True),
+            StoreSpec(f"Maez: {reply}", "self_web_claim", "untrusted", link, False),
+        ]
+    return [
+        StoreSpec(f"the owner ({source}): {text}\nMaez: {reply}", "user_utterance", "lived", None, True),
+    ]
+
+
 CALENDAR_MODE = resolve_calendar_mode(os.environ)
 GITHUB_MODE = resolve_github_mode(os.environ)
 CALENDAR_STORE_DB_PATH = Path(
@@ -7224,14 +7252,45 @@ class MaezDaemon:
             logger.debug("chat_turn log line failed: %s", _log_exc)
 
         # 5x.B Pass 1: stored as user_utterance/lived because the
-        # exchange is bond transcript. NOTE: the string carries both
-        # owner text and Maez reply — 5x.D should treat consolidations
+        # exchange is bond transcript. NOTE: the combined string carries
+        # both owner text and Maez reply — 5x.D should treat consolidations
         # of this row as mixed-origin, not pure owner-verbatim.
-        _m1_raw_memory_id = self.memory.store_telegram(
-            f"the owner ({source}): {text}\nMaez: {reply}",
-            provenance_source="user_utterance",
-            trust_tier="lived",
+        #
+        # Self-web-claim hygiene (behind MAEZ_SELF_CLAIM_HYGIENE_ENABLED):
+        # on web-grounded turns, split the store into two LINKED records so
+        # Maez's reply lands untrusted under self_web_claim WITHOUT the owner's
+        # words inheriting that downgrade, and WITHOUT writing the combined row
+        # (no duplicate). The web-grounded signal is the fresh subset of the
+        # evidence-state marker labels (web_context is empty on the dispatcher
+        # path, so bool(web_context.strip()) would be wrong here).
+        _self_claim_hygiene = strict_env_flag("MAEZ_SELF_CLAIM_HYGIENE_ENABLED")
+        _web_grounded = bool(
+            {"fresh evidence", "web search results"}
+            & set(_evidence_state.marker_labels)
         )
+        _specs = decide_turn_storage(
+            source=source,
+            text=text,
+            reply=reply,
+            web_grounded=_web_grounded,
+            hygiene_enabled=_self_claim_hygiene,
+        )
+        _m1_raw_memory_id = None
+        for _spec in _specs:
+            _stored_id = self.memory.store_telegram(
+                _spec.content,
+                provenance_source=_spec.provenance_source,
+                trust_tier=_spec.trust_tier,
+                turn_link_id=_spec.turn_link_id,
+            )
+            if _spec.is_owner_record:
+                _m1_raw_memory_id = _stored_id
+        if len(_specs) == 2:
+            logger.info(
+                "self_claim_stored web_grounded=True provenance=self_web_claim "
+                "trust_tier=untrusted reply_chars=%d turn_link_id=%s",
+                len(reply or ""), _specs[1].turn_link_id,
+            )
         try:
             if (
                 source in M1_ALLOWED_PROMOTION_SOURCES

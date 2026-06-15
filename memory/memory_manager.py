@@ -1115,7 +1115,7 @@ class MemoryManager:
 
     def store_telegram(self, content: str, *,
                        provenance_source=None, trust_tier=None,
-                       egress_origin_class=None) -> str:
+                       egress_origin_class=None, turn_link_id=None) -> str:
         """Store a Telegram exchange in the raw archive.
 
         ``provenance_source`` / ``trust_tier`` are the Step 5x.A
@@ -1137,6 +1137,8 @@ class MemoryManager:
         }
         meta.update(provenance_extra)
         meta.update(egress_origin_extra)
+        if turn_link_id:
+            meta["turn_link_id"] = str(turn_link_id)
         self._assert_embedding_writes_allowed()
         self.raw.add(
             ids=[memory_id],
