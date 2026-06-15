@@ -197,5 +197,31 @@ class RecallExclusionTest(unittest.TestCase):
         self.assertIn("self-web-claim", ws.ordered_evidence_text)
 
 
+class FlagOffByteIdenticalTest(unittest.TestCase):
+    def test_store_decision_flag_off_is_single_combined(self):
+        from daemon.maez_daemon import decide_turn_storage
+        specs = decide_turn_storage(source="telegram", text="news about X",
+                                    reply="X did Y", web_grounded=True,
+                                    hygiene_enabled=False)
+        self.assertEqual(len(specs), 1)
+        self.assertIn("Maez:", specs[0].content)
+        self.assertEqual(specs[0].trust_tier, "lived")
+
+    def test_recall_flag_off_emits_no_hygiene_receipt(self):
+        from core.dispatcher.layer1 import RecallItem
+        from core.routing.focused_cognition import assemble_working_set
+        recall = (RecallItem(text="old claim", source_type="memory_context",
+                             durable_id="d", trust_tier="untrusted",
+                             provenance_source="self_web_claim"),)
+        with mock.patch.dict("os.environ", {"MAEZ_SELF_CLAIM_HYGIENE_ENABLED": "0"}):
+            with self.assertLogs(level="INFO") as cm:
+                import logging
+                logging.getLogger("maez.focused").info("probe")  # ensure >=1 record so assertLogs doesn't error
+                assemble_working_set(transcript="", web_context="fresh stuff",
+                                     owner_question="news about Anthropic",
+                                     recall_items=recall)
+        self.assertFalse(any("recall_hygiene" in m for m in cm.output))
+
+
 if __name__ == "__main__":
     unittest.main()
