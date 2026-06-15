@@ -1691,6 +1691,22 @@ def _env_flag(name: str, *, environ: object | None = None) -> bool:
     return (env.get(name, "") or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _wrap_daemon_web_context(web_context: str, *, path: str) -> str:
+    """Wrap a daemon web_context block in the un-spoofable containment envelope
+    (legacy/voice prompt throats). Flag-off or empty -> returns web_context unchanged
+    (byte-identical). Emits a content-light path-tagged receipt."""
+    from core.routing import web_containment as _wc
+    if not (_wc.containment_enabled() and web_context):
+        return web_context
+    import hashlib
+    nonce = _wc.new_nonce()
+    digest = hashlib.sha256(web_context.encode("utf-8")).hexdigest()[:16]
+    wrapped = _wc.wrap_web_text(web_context, nonce=nonce, source="web", digest=digest)
+    _wc.emit_receipt(_wc.containment_receipt(wrapped, nonce=nonce, path=path,
+                                             expected_segments=1, digest=digest))
+    return _wc.standing_instruction() + "\n\n" + wrapped
+
+
 def _safe_episode_body_counts(episode_store: object | None) -> dict[str, object]:
     if episode_store is None:
         return {
@@ -5815,8 +5831,9 @@ class MaezDaemon:
         if _envelope_block:
             prompt += _envelope_block + "\n\n"
         if web_context and not _empty_web_search:
+            _wc_block = _wrap_daemon_web_context(web_context, path="legacy")
             prompt += (
-                f"{web_context}\n\n"
+                f"{_wc_block}\n\n"
                 f"INSTRUCTION: Real search results above. Do NOT list headlines. "
                 f"Synthesize into 3-5 sentences. Tell the owner what matters and why. "
                 f"Give your opinion. Connect to his context if relevant.\n\n"
@@ -7469,7 +7486,8 @@ class MaezDaemon:
             if memory_block:
                 prompt += memory_block + "\n\n"
             if web_context:
-                prompt += f"{web_context}\n\n"
+                _wc_block = _wrap_daemon_web_context(web_context, path="voice")
+                prompt += f"{_wc_block}\n\n"
             prompt += (
                 f'the owner just spoke to you out loud:\n"{text}"\n\n'
                 f"Respond in 1-2 short sentences. Your response will be spoken aloud.\n"
