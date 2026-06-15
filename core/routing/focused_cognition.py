@@ -85,6 +85,15 @@ _ORIGIN_TRUST_LABEL: dict[str, str] = {
     "observed": "observed/tool",
     "untrusted": "untrusted",
 }
+_FRESH_SOURCE_TYPES: tuple[str, ...] = ("fresh_evidence", "web_context")
+_SELF_WEB_CLAIM_LABEL = "self-web-claim (unverified prior)"
+
+
+def _self_claim_hygiene_enabled() -> bool:
+    from core.infra.env_flags import strict_env_flag
+    return strict_env_flag("MAEZ_SELF_CLAIM_HYGIENE_ENABLED")
+
+
 _CITE_RE = re.compile(r"\[E(\d+)\]")
 _RECALLED_RE = re.compile(r"<RECALLED\b([^>]*)>(.*?)</RECALLED>", re.DOTALL)
 _DATE_MATCH_ATTR = re.compile(r'date_match="([a-z_]+)"')
@@ -261,6 +270,13 @@ def _origin_trust_segment(origin_trust: str | None) -> str:
     return f" · origin trust: {label}"
 
 
+def _self_web_claim_segment(origin_provenance: str | None) -> str:
+    """Hard-label a kept self-web-claim so it is never asserted as established fact."""
+    if origin_provenance == "self_web_claim":
+        return f" · {_SELF_WEB_CLAIM_LABEL}"
+    return ""
+
+
 def _temporal_date_label(temporal_provenance: dict | None) -> str:
     if not temporal_provenance:
         return "(none)"
@@ -314,7 +330,8 @@ def _render_evidence_lines_contained(
                 f"[{item.local_label}] · date: {_temporal_date_label(item.temporal_provenance)} "
                 f"· provenance: {_temporal_provenance_label(item.temporal_provenance)} "
                 f"· source: {item.source_type} · authority: {_authority_label(item.source_type)}"
-                f"{_origin_trust_segment(item.origin_trust)}\n"
+                f"{_origin_trust_segment(item.origin_trust)}"
+                f"{_self_web_claim_segment(item.origin_provenance)}\n"
                 f"{_txt(item)}"
             )
             for item in items
@@ -323,7 +340,8 @@ def _render_evidence_lines_contained(
 
     lines = [
         f"[{item.local_label}] ({_authority_label(item.source_type)}"
-        f"{_origin_trust_segment(item.origin_trust)}) {_txt(item)}"
+        f"{_origin_trust_segment(item.origin_trust)}"
+        f"{_self_web_claim_segment(item.origin_provenance)}) {_txt(item)}"
         for item in items
     ]
     if items:
@@ -870,6 +888,20 @@ def assemble_working_set(
                     None,
                 )
             )
+
+    if _self_claim_hygiene_enabled():
+        fresh_present = any(t[0] in _FRESH_SOURCE_TYPES for t in raw_items)
+        if fresh_present:
+            kept = [t for t in raw_items if t[5] != "self_web_claim"]
+            excluded = len(raw_items) - len(kept)
+            raw_items = kept
+        else:
+            excluded = 0
+        logger.info(
+            "recall_hygiene fresh_present=%s excluded_self_claims=%d kept_memory_items=%d",
+            fresh_present, excluded,
+            sum(1 for t in raw_items if t[0] in ("memory_context", "memory_evidence")),
+        )
 
     if not raw_items:
         return None

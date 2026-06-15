@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 
 
 class SelfWebClaimProvenanceTest(unittest.TestCase):
@@ -136,6 +137,50 @@ class M1OwnerIdOnlyTest(unittest.TestCase):
             m1_raw_memory_id_for_promotion(owner_id="combined-1", reply_id=None),
             "combined-1",
         )
+
+
+class RecallExclusionTest(unittest.TestCase):
+    def _items(self, *triples):
+        # triples: (source_type, text, origin_provenance)
+        from core.dispatcher.layer1 import RecallItem
+        return tuple(RecallItem(text=t, source_type=st, durable_id=t,
+                                trust_tier=("untrusted" if op else None),
+                                provenance_source=op) for st, t, op in triples)
+
+    def _assemble(self, *, recall_items, web_context, enabled):
+        from core.routing.focused_cognition import assemble_working_set
+        env = {"MAEZ_SELF_CLAIM_HYGIENE_ENABLED": "1" if enabled else "0"}
+        with mock.patch.dict("os.environ", env):
+            return assemble_working_set(
+                transcript="", web_context=web_context,
+                owner_question="news about Anthropic", recall_items=recall_items)
+
+    def test_self_web_claim_excluded_when_fresh_present(self):
+        ws = self._assemble(
+            recall_items=self._items(("memory_context", "old Anthropic claim", "self_web_claim")),
+            web_context="Anthropic released a new model today.", enabled=True)
+        self.assertIsNotNone(ws)
+        self.assertNotIn("old Anthropic claim", [it.text for it in ws.items])
+
+    def test_self_web_claim_kept_and_labeled_when_no_fresh(self):
+        ws = self._assemble(
+            recall_items=self._items(("memory_context", "old Anthropic claim", "self_web_claim")),
+            web_context="", enabled=True)
+        kept = [it for it in ws.items if it.text == "old Anthropic claim"]
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(kept[0].origin_provenance, "self_web_claim")
+
+    def test_external_web_untrusted_not_excluded_when_fresh(self):
+        ws = self._assemble(
+            recall_items=self._items(("memory_context", "prior web observation", "external_web")),
+            web_context="Something fresh happened today.", enabled=True)
+        self.assertIn("prior web observation", [it.text for it in ws.items])
+
+    def test_flag_off_keeps_self_web_claim_even_with_fresh(self):
+        ws = self._assemble(
+            recall_items=self._items(("memory_context", "old Anthropic claim", "self_web_claim")),
+            web_context="Anthropic released a new model today.", enabled=False)
+        self.assertIn("old Anthropic claim", [it.text for it in ws.items])
 
 
 if __name__ == "__main__":
