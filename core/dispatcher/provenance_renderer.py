@@ -168,9 +168,11 @@ def _render_prompt_block(
     _contain = fetch_containment_enabled()
     _nonce = _fc.new_nonce() if _contain else ""
     _fresh_roles = {SourceRole.FRESH_EVIDENCE, SourceRole.FRESH_CONTEXT}
+    _fresh_digests: list[str] = []
 
     def _text_for(summary):
         if _contain and summary.role in _fresh_roles:
+            _fresh_digests.append(summary.content_digest)
             return _fc.contain_fresh_text(
                 summary.text,
                 nonce=_nonce,
@@ -178,6 +180,15 @@ def _render_prompt_block(
                 content_digest=summary.content_digest,
             )
         return summary.text
+
+    def _emit_dispatcher_receipt(block: str) -> None:
+        if not (_contain and _fresh_digests):
+            return
+        from core.routing import web_containment as _wc  # local import: keep off provenance_renderer's import path (no cycle)
+        _digest = ",".join(dict.fromkeys(_fresh_digests))[:80]
+        _wc.emit_receipt(_wc.containment_receipt(
+            block, nonce=_nonce, path="dispatcher",
+            expected_segments=len(_fresh_digests), digest=_digest))
 
     if ask_shape == AskShape.REPORT:
         sections = []
@@ -187,7 +198,9 @@ def _render_prompt_block(
             title = _section_title(summary.role)
             rendered_roles.append(summary.role.value)
             sections.append(f"## {title}\n{_text_for(summary)}")
-        return "\n\n".join(sections), rendered_roles
+        _block = "\n\n".join(sections)
+        _emit_dispatcher_receipt(_block)
+        return _block, rendered_roles
 
     parts = []
     if _contain and any(s.role in _fresh_roles for s in source_summaries):
@@ -207,7 +220,9 @@ def _render_prompt_block(
             "the substrate is not being framed as unreliable."
         )
         rendered_roles.append("NO_FRESH_VALIDATION")
-    return "\n".join(parts), rendered_roles
+    _block = "\n".join(parts)
+    _emit_dispatcher_receipt(_block)
+    return _block, rendered_roles
 
 
 def _inline_marker(role: SourceRole) -> str:
