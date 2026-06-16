@@ -12,8 +12,8 @@ The old grounding rail only checked whether cited labels existed, not whether th
 actually supported the claim. Worse, the existing grounding shadow lived at the audit envelope seam,
 where `claimable` is empty on live paths, so it observed nothing. This slice re-homes the shadow to
 the focused-cognition seam: capture the real `{E# -> evidence text}` WorkingSet map, wait until the
-final audit returns, then check the served reply sentence-by-sentence against only the evidence it
-cited.
+final audit and post-audit temporal fragment guard have both run, then check the served reply
+sentence-by-sentence against only the evidence it cited.
 
 v0 is **shadow-only**. It measures; it does not yet protect or change a reply.
 
@@ -28,6 +28,7 @@ v0 is **shadow-only**. It measures; it does not yet protect or change a reply.
 | `4430b4d` | feat(grounding-shadow): observe focused support after audit |
 | `9580e60` | feat(grounding-shadow): add uncited diagnostic mode |
 | `e2e254d` | test(grounding-bench): add Anthropic fabrication cases |
+| `d24e5e1` | fix(grounding-shadow): observe final served reply |
 
 ## Task-0 proof
 
@@ -37,7 +38,8 @@ v0 is **shadow-only**. It measures; it does not yet protect or change a reply.
 - Focused seam is reachable in source:
   - `daemon/maez_daemon.py` runs `check_groundedness(_focused_result, _focused_working_set)`.
   - The same scope later calls `reply = audit_assistant_text(...)`.
-  - The post-audit `reply` and `_focused_working_set` are both available before storage/return.
+  - The post-audit, post-fragment-guard `reply` and `_focused_working_set` are both available
+    before storage/return.
 
 ## Verification
 
@@ -57,13 +59,23 @@ corpus-ok items=28
 All checks passed!
 ```
 
+Codex-review repair re-run:
+
+```text
+.venv/bin/python -B -m unittest tests.test_support_verifier tests.test_grounding_shadow \
+  tests.test_audited_output_envelope tests.test_output_command_guard
+Ran 67 tests in 5.497s
+OK
+```
+
 ## Review anchors for Codex / cross-lane
 
 1. **Cited-only law:** `cited_support` sends MiniCheck only the evidence labels actually cited by
    that sentence. `no_citation` is `ABSTAIN`; `unmatched_citation` is deterministic `UNSUPPORTED`;
    `empty_evidence` is `ABSTAIN`.
-2. **Post-audit text:** the shadow captures the evidence map at the focused seam but enqueues only
-   after `audit_assistant_text(...)` returns, so it judges the served reply, not the pre-audit draft.
+2. **Final served text:** the shadow captures the evidence map at the focused seam but enqueues only
+   after `audit_assistant_text(...)` returns **and** `_trf_apply_fragment_guard(...)` has run, so it
+   judges the final served reply, not the pre-audit draft or a merely post-audit intermediate.
 3. **Queue-full powerless:** `GroundingShadow.enqueue()` does no file I/O on full queue; it only
    increments `dropped_count` and returns `shadow_enqueue_failed`.
 4. **Old hook removed:** `core/safety/audited_output.py` no longer enqueues the empty-claimable
