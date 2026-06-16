@@ -156,9 +156,12 @@ live shadow — do **not** gate live shadow on a large corpus rebuild.
 - **House law:** the **queue-full path is memory-only / I/O-free** — a full-queue regression test
   (Rail 2 full-queue shape) asserts `enqueue()` performs **no `_emit`/telemetry write** when the
   queue is full (only an in-memory dropped-counter bump); `UNAVAILABLE` → reply unchanged.
-- **Cited-label mapping:** with labels threaded, a sentence citing `[E1]` maps to E1's text and the
-  verifier receives **only** E1's evidence (not E2's); a claimable item with no label degrades to
-  `no_citation` deterministically, never a silent all-evidence check.
+- **Cited-label mapping (phrase sharply):** with labels threaded, a sentence citing `[E1]` maps to
+  E1's text and the verifier receives **only** E1's evidence (not E2's). A sentence with **no `[E#]`**
+  → `no_citation` (ABSTAIN). A sentence that **cites `[E1]` but it cannot be resolved** to evidence
+  text → `unmatched_citation` (deterministic `UNSUPPORTED`) — **never** `no_citation`, **never** a
+  silent all-evidence check. (`no_citation` = the sentence cited nothing; `unmatched_citation` = it
+  cited something unresolvable.)
 - **Flag off → byte-identical:** shadow disabled → no enqueue, no telemetry, reply untouched.
 - **Corpus:** the new Anthropic-class items classify as expected under MiniCheck in `grounding_bench`.
 
