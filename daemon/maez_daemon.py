@@ -6269,6 +6269,7 @@ class MaezDaemon:
         _focused_working_set = None
         _focused_result = None
         _focused_verdict = None
+        _focused_support_evidence_map = {}
         _reply_path = reply_path_from_mode(_reply_decision.mode.value.lower())
         _focused_used = False
         _focused_answer_used = False
@@ -6591,6 +6592,16 @@ class MaezDaemon:
                             _focused_result,
                             _focused_working_set,
                         )
+                        try:
+                            from core.cognition.grounding_shadow import (
+                                evidence_map_from_working_set as _focused_support_map,
+                            )
+
+                            _focused_support_evidence_map = _focused_support_map(
+                                _focused_working_set
+                            )
+                        except Exception:
+                            _focused_support_evidence_map = {}
                         from core.routing.recall_outcome import (
                             citation_support as _citation_support,
                         )
@@ -6892,6 +6903,25 @@ class MaezDaemon:
                     else None
                 ),
             )
+            try:
+                if _focused_used and _focused_support_evidence_map:
+                    from core.cognition.grounding_shadow import (
+                        observe_focused_support as _observe_focused_support,
+                    )
+
+                    _observe_focused_support(
+                        reply,
+                        _focused_support_evidence_map,
+                        surface=source,
+                        boot_id=os.environ.get("MAEZ_BOOT_ID"),
+                        shadow_id=uuid.uuid4().hex,
+                        ts=int(time.time()),
+                    )
+            except Exception as _grounding_shadow_exc:
+                logger.debug(
+                    "focused grounding shadow enqueue skipped: %s",
+                    _grounding_shadow_exc,
+                )
             try:
                 _trace.audit = AuditInfo(
                     ran=True,

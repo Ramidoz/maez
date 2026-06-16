@@ -242,6 +242,51 @@ class ClaimLevelReceiptTest(unittest.TestCase):
         self.assertNotIn("snippet", s0)
 
 
+class ObserveFocusedSupportTest(unittest.TestCase):
+    def setUp(self):
+        gs.reset_shadow_singleton()
+        self.addCleanup(gs.reset_shadow_singleton)
+        os.environ.pop("MAEZ_GROUNDING_SHADOW_ENABLED", None)
+
+    def test_enqueues_post_audit_reply_and_map(self):
+        captured = {}
+
+        class _Spy(gs.GroundingShadow):
+            def enqueue(self, job):
+                captured.update(job)
+                return "enqueued"
+
+        gs.set_shadow_singleton(_Spy(FakeSupportVerifier(), "/tmp/x.jsonl"))
+
+        with mock.patch.dict(
+            os.environ,
+            {"MAEZ_GROUNDING_SHADOW_ENABLED": "1"},
+            clear=False,
+        ):
+            out = gs.observe_focused_support(
+                "Served reply [E1].",
+                {"E1": "evidence"},
+                surface="telegram_surface",
+                boot_id="b",
+                shadow_id="s",
+                ts=0,
+            )
+
+        self.assertEqual(out, "enqueued")
+        self.assertEqual(captured["final_text"], "Served reply [E1].")
+        self.assertEqual(captured["evidence_map"], {"E1": "evidence"})
+        self.assertTrue(captured["post_audit"])
+
+    def test_evidence_map_from_working_set_uses_local_labels(self):
+        item = mock.Mock(local_label="E1", text="fresh evidence")
+        working_set = mock.Mock(items=[item, mock.Mock(local_label=None, text="skip")])
+
+        self.assertEqual(
+            gs.evidence_map_from_working_set(working_set),
+            {"E1": "fresh evidence"},
+        )
+
+
 class GroundingShadowQueueTests(unittest.TestCase):
     def _shadow(self, **kwargs):
         fd, path = tempfile.mkstemp(suffix=".jsonl")

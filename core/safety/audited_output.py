@@ -46,9 +46,6 @@ memory pattern that handles this.
 from __future__ import annotations
 
 import logging
-import os
-import time
-import uuid
 from typing import Optional
 
 logger = logging.getLogger("maez.audited_output")
@@ -63,30 +60,6 @@ def _buffer_audit_flags(flags) -> None:
     except Exception:
         logger.warning(
             "audit_assistant_text: audit flag side-record failed",
-            exc_info=True,
-        )
-
-
-def _observe_grounding_shadow(result, evidence_envelope, *, surface: str) -> None:
-    """Best-effort post-audit grounding shadow enqueue.
-
-    Lazy import keeps the normal path light, and every failure stays local: the
-    shadow may observe a served reply, but it may never affect that reply.
-    """
-    try:
-        from core.cognition.grounding_shadow import shadow_observe
-
-        shadow_observe(
-            result,
-            (evidence_envelope or {}).get("claimable"),
-            surface=surface,
-            boot_id=os.environ.get("MAEZ_BOOT_ID"),
-            shadow_id=uuid.uuid4().hex,
-            ts=int(time.time()),
-        )
-    except Exception:
-        logger.warning(
-            "audit_assistant_text: grounding shadow enqueue failed",
             exc_info=True,
         )
 
@@ -250,5 +223,7 @@ def audit_assistant_text(
     # the original text. Either way, returning result.text honors the
     # invariant — stored output == final audited output.
     _buffer_audit_flags(getattr(result, "flags", ()) or ())
-    _observe_grounding_shadow(result, evidence_envelope, surface=surface)
+    # Grounding-shadow entailment now runs at the focused-cognition seam where
+    # the cited [E#] working-set labels exist; this audit helper only sees the
+    # older evidence envelope, whose claimable set is empty on live paths.
     return getattr(result, "text", text) or text

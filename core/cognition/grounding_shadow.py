@@ -198,6 +198,21 @@ def classify_sentence(sentence, evidence_map, verifier, timeout_s) -> dict:
     }
 
 
+def evidence_map_from_working_set(working_set) -> dict[str, str]:
+    """Extract the focused WorkingSet's cited-evidence label map."""
+    out: dict[str, str] = {}
+    try:
+        items = getattr(working_set, "items", ()) or ()
+        for item in items:
+            label = getattr(item, "local_label", None)
+            text = getattr(item, "text", None)
+            if label and text:
+                out[str(label)] = str(text)
+    except Exception:
+        return {}
+    return out
+
+
 def build_telemetry(
     shadow_id,
     ts,
@@ -400,6 +415,35 @@ def shadow_observe(
             "boot_id": boot_id,
             "shadow_id": shadow_id,
             "ts": ts,
+        }
+        return shadow.enqueue(job)
+    except Exception:
+        return "disabled"
+
+
+def observe_focused_support(
+    reply,
+    evidence_map,
+    *,
+    surface,
+    boot_id,
+    shadow_id,
+    ts,
+) -> str:
+    """Non-blocking observation hook for the post-audit focused reply."""
+    try:
+        shadow = _get_shadow()
+        if shadow is None:
+            return "disabled"
+        job = {
+            "final_text": reply or "",
+            "evidence_map": dict(evidence_map or {}),
+            "audit_summary": {},
+            "surface": surface,
+            "boot_id": boot_id,
+            "shadow_id": shadow_id,
+            "ts": ts,
+            "post_audit": True,
         }
         return shadow.enqueue(job)
     except Exception:
