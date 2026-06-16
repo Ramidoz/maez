@@ -204,17 +204,20 @@ def build_telemetry(
     surface,
     boot_id,
     audit_summary,
-    claimable_items,
     compute_result,
     *,
+    post_audit: bool = False,
     debug: bool = False,
 ) -> dict:
     sentences = []
     for result in compute_result.get("sentences", []):
         sentence = result.get("sentence") or ""
         rec = {
-            "sentence_hash": _hash(sentence),
-            "verdict": result.get("verdict"),
+            "claim_hash": _hash(sentence),
+            "cited_evidence_ids": list(result.get("cited_evidence_ids") or []),
+            "support_verdict": result.get("verdict"),
+            "mode": result.get("mode"),
+            "verifier": result.get("verifier"),
             "score": result.get("score"),
             "latency_ms": round((result.get("latency_s") or 0.0) * 1000, 1),
         }
@@ -222,25 +225,19 @@ def build_telemetry(
             rec["snippet"] = sentence[:120]
         sentences.append(rec)
 
-    verdicts = [r.get("verdict") for r in compute_result.get("sentences", [])]
+    verdicts = [r.get("support_verdict") for r in sentences]
     return {
         "shadow_id": shadow_id,
         "ts": ts,
         "surface": surface,
         "boot_id": boot_id,
+        "post_audit": bool(post_audit),
         "audit_available": audit_summary.get("audit_available"),
         "flag_count": audit_summary.get("flag_count"),
         "flag_kinds": audit_summary.get("flag_kinds"),
         "rewritten": audit_summary.get("rewritten"),
         "mode": audit_summary.get("mode"),
         "skipped_reason": audit_summary.get("skipped_reason"),
-        "claimable_count": len(claimable_items or []),
-        "claimable_chars": _claimable_chars(claimable_items),
-        "provenance_refs": [
-            _hash(str(c.get("provenance") or ""))
-            for c in (claimable_items or ())
-            if isinstance(c, dict)
-        ],
         "sentence_count": len(verdicts),
         "unsupported_count": sum(1 for verdict in verdicts if verdict == UNSUPPORTED),
         "supported_count": sum(1 for verdict in verdicts if verdict == SUPPORTED),
@@ -328,8 +325,8 @@ class GroundingShadow:
             job.get("surface"),
             job.get("boot_id"),
             job.get("audit_summary", {}),
-            job.get("claimable_items"),
             compute,
+            post_audit=bool(job.get("post_audit")),
             debug=self._debug,
         )
         self._emit(rec)

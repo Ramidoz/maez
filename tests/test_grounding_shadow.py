@@ -154,13 +154,12 @@ class TelemetryTests(unittest.TestCase):
             "telegram",
             "boot1",
             gs.audit_summary_from_result(_FakeAudit()),
-            CLAIMABLE,
             self._compute(),
         )
         blob = repr(rec)
         self.assertNotIn("Sky is blue", blob)
         self.assertNotIn("recall flip", blob)
-        self.assertIn("sentence_hash", rec["sentences"][0])
+        self.assertIn("claim_hash", rec["sentences"][0])
         self.assertNotIn("snippet", rec["sentences"][0])
 
     def test_debug_includes_bounded_snippet(self):
@@ -170,7 +169,6 @@ class TelemetryTests(unittest.TestCase):
             "telegram",
             "boot1",
             gs.audit_summary_from_result(_FakeAudit()),
-            CLAIMABLE,
             self._compute(),
             debug=True,
         )
@@ -184,7 +182,6 @@ class TelemetryTests(unittest.TestCase):
             "telegram",
             "boot1",
             gs.audit_summary_from_result(_FakeAudit()),
-            CLAIMABLE,
             self._compute(),
         )
         self.assertEqual(rec["sentence_count"], 2)
@@ -205,6 +202,44 @@ class TelemetryTests(unittest.TestCase):
     def test_audit_summary_has_no_owner_text(self):
         summary = gs.audit_summary_from_result(_FakeAudit(text="secret reply"))
         self.assertNotIn("secret reply", repr(summary))
+
+
+class ClaimLevelReceiptTest(unittest.TestCase):
+    def test_receipt_has_required_claim_fields_and_post_audit(self):
+        compute = gs.compute_shadow(
+            "Anthropic launched Mythos 5 [E1].",
+            {"E1": "Anthropic released Opus 4.5."},
+            FakeSupportVerifier(default=(UNSUPPORTED, 0.1)),
+            per_job_budget_s=5.0,
+        )
+
+        rec = gs.build_telemetry(
+            "sid",
+            0,
+            "telegram_surface",
+            "boot",
+            {"mode": "noop"},
+            compute,
+            post_audit=True,
+            debug=False,
+        )
+
+        self.assertTrue(rec["post_audit"])
+        s0 = rec["sentences"][0]
+        for required_field in (
+            "claim_hash",
+            "cited_evidence_ids",
+            "support_verdict",
+            "mode",
+            "verifier",
+            "score",
+            "latency_ms",
+        ):
+            self.assertIn(required_field, s0)
+        self.assertEqual(s0["mode"], "cited_support")
+        self.assertEqual(s0["cited_evidence_ids"], ["E1"])
+        self.assertEqual(s0["support_verdict"], UNSUPPORTED)
+        self.assertNotIn("snippet", s0)
 
 
 class GroundingShadowQueueTests(unittest.TestCase):
