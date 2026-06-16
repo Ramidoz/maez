@@ -23,6 +23,7 @@ from core.cognition.support_verifier import (
 )
 
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+_CITE_RE = re.compile(r"\[E(\d+)\]")
 
 
 def split_sentences(text: str) -> list[str]:
@@ -51,17 +52,17 @@ def claimable_evidence(claimable_items) -> str:
 
 def compute_shadow(
     final_text,
-    claimable_items,
+    evidence_map,
     verifier,
     *,
     per_sentence_timeout_s: float = 0.25,
     per_job_budget_s: float = 1.5,
 ) -> dict:
     """Run sentence-level support checks under a per-job budget."""
-    evidence = claimable_evidence(claimable_items)
-    if not evidence.strip():
+    evidence_map = dict(evidence_map or {})
+    if not evidence_map:
         return {
-            "status": "no_claimable",
+            "status": "no_evidence",
             "sentences": [],
             "shadowed_count": 0,
             "remaining_count": 0,
@@ -88,24 +89,15 @@ def compute_shadow(
                 "shadowed_count": shadowed,
                 "remaining_count": len(sentences) - idx,
             }
-        try:
-            label, score, latency_s = verifier.support(
-                evidence,
-                sentence,
-                per_sentence_timeout_s,
-            )
-        except Exception:
-            label, score, latency_s = UNAVAILABLE, None, 0.0
-        if label == UNAVAILABLE:
-            status = "verifier_unavailable"
-        results.append(
-            {
-                "sentence": sentence,
-                "verdict": label,
-                "score": score,
-                "latency_s": latency_s,
-            }
+        rec = classify_sentence(
+            sentence,
+            evidence_map,
+            verifier,
+            per_sentence_timeout_s,
         )
+        if rec["verdict"] == UNAVAILABLE:
+            status = "verifier_unavailable"
+        results.append(rec)
         shadowed += 1
 
     return {
@@ -141,6 +133,69 @@ def _claimable_chars(claimable_items) -> int:
             continue
         total += len(str(item.get("evidence") or item.get("text") or ""))
     return total
+
+
+def _cited_labels(sentence: str) -> list[str]:
+    return [f"E{match.group(1)}" for match in _CITE_RE.finditer(sentence or "")]
+
+
+def _verifier_name(verifier) -> str:
+    return getattr(verifier, "name", None) or verifier.__class__.__name__
+
+
+def classify_sentence(sentence, evidence_map, verifier, timeout_s) -> dict:
+    labels = _cited_labels(sentence)
+    base = {"sentence": sentence, "cited_evidence_ids": labels}
+    if not labels:
+        return {
+            **base,
+            "mode": "no_citation",
+            "verdict": "ABSTAIN",
+            "verifier": "deterministic",
+            "score": None,
+            "latency_s": 0.0,
+        }
+    if any(label not in evidence_map for label in labels):
+        return {
+            **base,
+            "mode": "unmatched_citation",
+            "verdict": UNSUPPORTED,
+            "verifier": "deterministic",
+            "score": None,
+            "latency_s": 0.0,
+        }
+    texts = [(evidence_map[label] or "").strip() for label in labels]
+    combined = "\n".join(text for text in texts if text)
+    if not combined:
+        return {
+            **base,
+            "mode": "empty_evidence",
+            "verdict": "ABSTAIN",
+            "verifier": "deterministic",
+            "score": None,
+            "latency_s": 0.0,
+        }
+    try:
+        label, score, latency = verifier.support(combined, sentence, timeout_s)
+    except Exception:
+        label, score, latency = UNAVAILABLE, None, 0.0
+    if label == UNAVAILABLE:
+        return {
+            **base,
+            "mode": "verifier_unavailable",
+            "verdict": UNAVAILABLE,
+            "verifier": _verifier_name(verifier),
+            "score": score,
+            "latency_s": latency,
+        }
+    return {
+        **base,
+        "mode": "cited_support",
+        "verdict": label,
+        "verifier": _verifier_name(verifier),
+        "score": score,
+        "latency_s": latency,
+    }
 
 
 def build_telemetry(
@@ -262,7 +317,7 @@ class GroundingShadow:
     def _process(self, job):
         compute = compute_shadow(
             job["final_text"],
-            job["claimable_items"],
+            job.get("evidence_map") or {},
             self._verifier,
             per_sentence_timeout_s=self._per_sentence_timeout_s,
             per_job_budget_s=self._per_job_budget_s,

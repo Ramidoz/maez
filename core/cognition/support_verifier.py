@@ -32,6 +32,8 @@ class SupportVerifier(abc.ABC):
 class FakeSupportVerifier(SupportVerifier):
     """Tests only. Scripted verdicts; never loads a real model."""
 
+    name = "fake"
+
     def __init__(
         self,
         scripted=None,
@@ -44,10 +46,12 @@ class FakeSupportVerifier(SupportVerifier):
         self._raises = raises
         self._sleep_s = sleep_s
         self.calls: list[tuple[str, str]] = []
+        self.last_evidence: str | None = None
 
     def support(self, evidence, claim, timeout_s):
         t0 = time.monotonic()
         self.calls.append((evidence, claim))
+        self.last_evidence = evidence
         if self._raises is not None:
             raise self._raises
         if self._sleep_s:

@@ -19,6 +19,7 @@ CLAIMABLE = [
         "evidence": "The recall flip was a No-Go on latency.",
     }
 ]
+EVIDENCE_MAP = {"E1": "The recall flip was a No-Go on latency."}
 
 
 class SplitTests(unittest.TestCase):
@@ -30,34 +31,103 @@ class SplitTests(unittest.TestCase):
 
 
 class ComputeTests(unittest.TestCase):
-    def test_no_claimable_calls_no_verifier(self):
+    def test_no_evidence_calls_no_verifier(self):
         v = FakeSupportVerifier()
-        out = gs.compute_shadow("A sentence.", [], v)
-        self.assertEqual(out["status"], "no_claimable")
+        out = gs.compute_shadow("A sentence.", {}, v)
+        self.assertEqual(out["status"], "no_evidence")
         self.assertEqual(v.calls, [])
 
     def test_no_sentences(self):
-        out = gs.compute_shadow("   ", CLAIMABLE, FakeSupportVerifier())
+        out = gs.compute_shadow("   ", EVIDENCE_MAP, FakeSupportVerifier())
         self.assertEqual(out["status"], "no_sentences")
 
     def test_ok_runs_per_sentence(self):
         v = FakeSupportVerifier(default=(SUPPORTED, 0.9))
-        out = gs.compute_shadow("One. Two.", CLAIMABLE, v)
+        out = gs.compute_shadow("One [E1]. Two [E1].", EVIDENCE_MAP, v)
         self.assertEqual(out["status"], "ok")
         self.assertEqual(len(out["sentences"]), 2)
         self.assertEqual(out["sentences"][0]["verdict"], SUPPORTED)
 
     def test_budget_exceeded_stops_and_counts(self):
         v = FakeSupportVerifier(sleep_s=0.2)
-        out = gs.compute_shadow("One. Two. Three.", CLAIMABLE, v, per_job_budget_s=0.25)
+        out = gs.compute_shadow(
+            "One [E1]. Two [E1]. Three [E1].",
+            EVIDENCE_MAP,
+            v,
+            per_job_budget_s=0.25,
+        )
         self.assertEqual(out["status"], "budget_exceeded")
         self.assertGreaterEqual(out["remaining_count"], 1)
         self.assertLess(out["shadowed_count"], 3)
 
     def test_verifier_error_marks_unavailable(self):
         v = FakeSupportVerifier(raises=RuntimeError("boom"))
-        out = gs.compute_shadow("One.", CLAIMABLE, v)
+        out = gs.compute_shadow("One [E1].", EVIDENCE_MAP, v)
         self.assertEqual(out["status"], "verifier_unavailable")
+
+
+class CitedOnlyMappingTest(unittest.TestCase):
+    def _compute(self, reply, evidence_map, verifier):
+        return gs.compute_shadow(
+            reply,
+            evidence_map,
+            verifier,
+            per_sentence_timeout_s=0.25,
+            per_job_budget_s=5.0,
+        )
+
+    def test_no_citation_abstains_never_supported(self):
+        v = FakeSupportVerifier(default=(SUPPORTED, 0.99))
+
+        out = self._compute(
+            "Anthropic launched Mythos 5.",
+            {"E1": "Anthropic released Opus."},
+            v,
+        )
+
+        self.assertTrue(out["sentences"], out)
+        s = out["sentences"][0]
+        self.assertEqual(s["mode"], "no_citation")
+        self.assertEqual(s["verdict"], "ABSTAIN")
+        self.assertEqual(v.calls, [])
+
+    def test_cited_support_routes_only_cited_evidence(self):
+        v = FakeSupportVerifier(default=(UNSUPPORTED, 0.1))
+
+        out = self._compute(
+            "Anthropic launched Mythos 5 [E1].",
+            {"E1": "Anthropic released Opus 4.5.", "E2": "Unrelated."},
+            v,
+        )
+
+        self.assertTrue(out["sentences"], out)
+        s = out["sentences"][0]
+        self.assertEqual(s["mode"], "cited_support")
+        self.assertEqual(s["verdict"], UNSUPPORTED)
+        self.assertEqual(s["cited_evidence_ids"], ["E1"])
+        self.assertEqual(v.last_evidence, "Anthropic released Opus 4.5.")
+
+    def test_unmatched_citation_is_deterministic_unsupported(self):
+        v = FakeSupportVerifier(default=(SUPPORTED, 0.99))
+
+        out = self._compute("Claim [E9].", {"E1": "x"}, v)
+
+        self.assertTrue(out["sentences"], out)
+        s = out["sentences"][0]
+        self.assertEqual(s["mode"], "unmatched_citation")
+        self.assertEqual(s["verdict"], UNSUPPORTED)
+        self.assertEqual(v.calls, [])
+
+    def test_empty_evidence_abstains(self):
+        v = FakeSupportVerifier(default=(SUPPORTED, 0.99))
+
+        out = self._compute("Claim [E1].", {"E1": "   "}, v)
+
+        self.assertTrue(out["sentences"], out)
+        s = out["sentences"][0]
+        self.assertEqual(s["mode"], "empty_evidence")
+        self.assertEqual(s["verdict"], "ABSTAIN")
+        self.assertEqual(v.calls, [])
 
 
 @dataclass
@@ -72,9 +142,9 @@ class _FakeAudit:
 class TelemetryTests(unittest.TestCase):
     def _compute(self):
         return gs.compute_shadow(
-            "Sky is blue. Sky is green.",
-            CLAIMABLE,
-            FakeSupportVerifier(scripted={"Sky is green.": (UNSUPPORTED, 0.1)}),
+            "Sky is blue [E1]. Sky is green [E1].",
+            EVIDENCE_MAP,
+            FakeSupportVerifier(scripted={"Sky is green [E1].": (UNSUPPORTED, 0.1)}),
         )
 
     def test_content_light_by_default(self):
@@ -146,7 +216,8 @@ class GroundingShadowQueueTests(unittest.TestCase):
 
     def _job(self, sid="s1"):
         return {
-            "final_text": "One. Two.",
+            "final_text": "One [E1]. Two [E1].",
+            "evidence_map": EVIDENCE_MAP,
             "claimable_items": CLAIMABLE,
             "audit_summary": {"mode": "sentence", "audit_available": True},
             "surface": "telegram",
