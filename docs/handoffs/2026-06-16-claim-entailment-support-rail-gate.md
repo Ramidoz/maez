@@ -1,10 +1,26 @@
 # Claim-Level Entailment Support Rail — STOP-at-Gate Handoff (content-honesty Thread A)
 
-**Branch:** `claim-entailment-support-rail` (local-only/unpushed; not merged).
-**Status:** built + self-reviewed + verified. **Asleep** (`MAEZ_GROUNDING_SHADOW_ENABLED`
-default-off; no service install, no flag flip, no restart).
+**Main:** merged local-only; live timeout headroom fix at `67bde6f`.
+**Status:** LIVE_WITNESSED 2026-06-16. `MAEZ_GROUNDING_SHADOW_ENABLED=1`;
+MiniCheck verifier service active on `127.0.0.1:8083`.
 **Spec:** `docs/superpowers/specs/2026-06-16-claim-entailment-support-rail-design.md`.
 **Plan:** `docs/superpowers/plans/2026-06-16-claim-entailment-support-rail.md`.
+
+## Post-Witness Update
+
+Owner breath taken 2026-06-16: MiniCheck service started, Maez restarted, and a
+live cockpit web turn produced a post-audit grounding shadow row at 13:41:08
+CDT. The row judged the final served reply, not the focused draft:
+
+- `post_audit=true`, `surface=cockpit`, `sentence_count=4`
+- `unsupported_count=2`
+- two served cited sentences: `mode=cited_support`,
+  `support_verdict=UNSUPPORTED`, `verifier=HttpSupportVerifier`
+- one longer cited sentence: `mode=verifier_unavailable`,
+  latency `1007ms`, recorded honestly rather than hidden
+
+This witnesses the v0 measuring instrument. It is still shadow-only: the rail
+does not omit, caveat, or rewrite replies until a later gate-graduation slice.
 
 ## What this fixes
 
