@@ -1,8 +1,8 @@
 # Claim-Level Entailment Support Rail (design) — content-honesty Thread A
 
 **Date:** 2026-06-16. Co-designed with Rohit.
-**Status:** design approved (cruxes resolved + uncited-fallback must-fix folded + 5 spec
-requirements). Awaiting spec review before plan.
+**Status:** cruxes resolved; awaiting spec review before plan (uncited-fallback must-fix +
+spec-review HOLD corrections folded).
 **Arc:** content-honesty Thread A. Threads B (fresh-vs-memory conflict) and C (self-web-claim
 recall hygiene — LIVE) are separate. **NOT** this slice: repairing the `grounding_judge.py`
 overclaim/self-history rail (broken: heavy carve-out prompt + thinking-overflow + strict JSON
@@ -33,9 +33,11 @@ whole-reply judge: *for each important claim, prove the cited evidence actually 
   equals the 4B LLM on dangerous false-negatives (0/5 cited-but-unsupported, 0/5
   fabricated-false-specific, 1/4 stale) at **~16× the speed (0.12s vs 1.9s p50) and 0 GPU VRAM**;
   its only cost is 2 false-positives — erring toward over-rejection, the **safe** direction.
-- **Deployment gap:** the live shadow instantiates `HttpSupportVerifier()` → `:8083`, but **there
-  is no `:8083` listener and no MiniCheck service**. Enabling the shadow today → every call
-  `UNAVAILABLE`. The bench's `MinicheckVerifier` only loads the model in the audition harness.
+- **Deployment gap (service written, not installed):** the MiniCheck service **artifact already
+  exists** — `scripts/minicheck_verifier_service.py`, `scripts/maez-minicheck-verifier.template.service`,
+  `tests/test_minicheck_verifier_service.py` — but there is **no installed/running `:8083` unit**.
+  The live shadow instantiates `HttpSupportVerifier()` → `:8083`, so enabling the shadow today →
+  every call `UNAVAILABLE`. v0 **installs/starts/witnesses the existing artifact**, not a new build.
 
 **So v0 is "complete + wake the instrument," not "build from scratch":** make the receipt
 claim-level and honest, stand up the MiniCheck `/support` service, and watch it judge Maez's real
@@ -79,13 +81,20 @@ Plus the existing per-job header (shadow_id, ts, surface, boot_id, counts, statu
 "supported-vs-uncited-vs-unmatched" legible and prevents an uncited diagnostic from reading as
 grounded.
 
-## MiniCheck `/support` service (the infra piece — owner-breath)
+## MiniCheck `/support` service (install the EXISTING artifact — owner-breath)
 
-Stand up a **MiniCheck `/support` microservice on `:8083`** (a small server wrapping
-`lytang/MiniCheck-DeBERTa-v3-Large`, POST `{evidence, claim}` → `{label: SUPPORTED|UNSUPPORTED,
-score}`), as a user systemd unit (sibling to `llama-judge.service`). This matches the already-wired
-`HttpSupportVerifier` and keeps the model off the daemon process (isolated, swappable). Owner
-breath to create/enable the unit.
+The service is **already written** — `scripts/minicheck_verifier_service.py` (wraps
+`lytang/MiniCheck-DeBERTa-v3-Large`, POST `{evidence, claim}` → **`{"verdict": SUPPORTED|UNSUPPORTED,
+"score": …}`**), `scripts/maez-minicheck-verifier.template.service`, and
+`tests/test_minicheck_verifier_service.py`. v0 **installs/starts the existing unit on `:8083` and
+witnesses it answering**, sibling to `llama-judge.service` (model off the daemon process, isolated,
+swappable, matching the wired `HttpSupportVerifier`). **Patch the service only if Task 0 finds it
+insufficient** — do NOT duplicate it. Owner breath to install/enable the unit.
+
+**Response contract (load-bearing):** `HttpSupportVerifier` reads `data.get("verdict")`
+(`core/cognition/support_verifier.py:85`); the service returns `{"verdict": …, "score": …}`
+(`scripts/minicheck_verifier_service.py:51`). The field is **`verdict`**, not `label` — any
+client/test must use `verdict`.
 
 ## Posture: receipt-complete SHADOW (v0)
 
@@ -98,16 +107,32 @@ turns. **Gate** (omit/caveat unsupported claims, honoring two-sided pressure —
 
 ## House law for the shadow (spec requirements)
 
-- **Bounded + non-blocking:** queue bounded, enqueue is **I/O-free** (the enqueue path does no
-  network/disk), verifier timeouts short, and **`UNAVAILABLE` never changes the reply**
-  ([[feedback_canary_neutral_baseline_for_multi_surface_ceremonies]] discipline; mirrors the
-  intake-bus enqueue-I/O-free law).
-- **MiniCheck service health is Task 0:** prove `:8083/support` exists and answers, **or** the
-  shadow emits content-light `verifier_unavailable` rows and never blocks. Either outcome is a
-  valid Task-0 result; the build must handle both.
-- **No service, no fake witness:** if MiniCheck is absent, v0 can still test the deterministic
-  floor and the receipt shape, but **cannot claim verifier witness**. The ledger/handoff must say
-  so honestly.
+- **Bounded + non-blocking (FIX an existing defect):** queue bounded, verifier timeouts short, and
+  **`UNAVAILABLE` never changes the reply**. **Existing defect to fix in v0:**
+  `GroundingShadow.enqueue()` currently calls `self._emit(...)` (a telemetry **write**) inside its
+  `except queue.Full` branch (`core/cognition/grounding_shadow.py:224-225`) — an I/O write on the
+  enqueue path under overload, violating the house law (mirrors the intake-bus enqueue-I/O-free
+  law). v0 must make the queue-full path **memory-only / I/O-free** (e.g. bump an in-memory dropped
+  counter, flushed by the worker thread, not written inline), with a **full-queue regression test**
+  in the shape of Rail 2's full-queue test.
+
+## Task-0 proofs (HARD GATE — docs/proof only, committed first)
+
+1. **MiniCheck service health:** prove `:8083/support` (the existing artifact) installs, starts, and
+   answers `{"verdict", "score"}` — **or** that the shadow emits content-light `verifier_unavailable`
+   rows and never blocks. Either outcome is a valid Task-0 result; the build must handle both.
+   **No service → no fake witness:** if MiniCheck is absent, v0 can still test the deterministic floor
+   and receipt shape, but **cannot claim verifier witness** — the ledger/handoff must say so honestly.
+2. **Cited-label mapping reachability (load-bearing):** the live hook receives
+   `(evidence_envelope or {}).get("claimable")` (`core/safety/audited_output.py:81`), **not** the
+   focused `WorkingSet`. Today claimable items carry `text`/`fact` only
+   (`core/cognition/envelope_builder.py:135`) with **no `[E#]` label**. The honest-mapping law
+   (check a sentence against *only* its cited evidence) is **impossible without the label**. Task 0
+   must prove whether claimable items can carry their `[E#]`/`local_label` identity (+ text); if not,
+   the plan **threads the labels** from the `WorkingSet` `EvidenceItem.local_label`
+   (`focused_cognition.py:246`) into the claimable envelope **before** the rail is implemented. If
+   threading is infeasible without invasive change, **STOP** and revisit — do not fall back to
+   "check against all claimable" (that is the wound the must-fix forbids).
 
 ## Corpus extension (before or alongside shadow — don't block on a rebuild)
 
@@ -128,8 +153,12 @@ live shadow — do **not** gate live shadow on a large corpus rebuild.
   the verifier received E1's evidence, not E2's).
 - **Receipt completeness:** every record carries the required fields + a valid `mode`; content-light
   by default (hash, no snippet unless debug).
-- **House law:** enqueue is I/O-free (no network in the enqueue path); `UNAVAILABLE` →
-  reply unchanged; queue bounded (drop/skip when full, recorded).
+- **House law:** the **queue-full path is memory-only / I/O-free** — a full-queue regression test
+  (Rail 2 full-queue shape) asserts `enqueue()` performs **no `_emit`/telemetry write** when the
+  queue is full (only an in-memory dropped-counter bump); `UNAVAILABLE` → reply unchanged.
+- **Cited-label mapping:** with labels threaded, a sentence citing `[E1]` maps to E1's text and the
+  verifier receives **only** E1's evidence (not E2's); a claimable item with no label degrades to
+  `no_citation` deterministically, never a silent all-evidence check.
 - **Flag off → byte-identical:** shadow disabled → no enqueue, no telemetry, reply untouched.
 - **Corpus:** the new Anthropic-class items classify as expected under MiniCheck in `grounding_bench`.
 
