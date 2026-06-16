@@ -277,6 +277,28 @@ class ObserveFocusedSupportTest(unittest.TestCase):
         self.assertEqual(captured["evidence_map"], {"E1": "evidence"})
         self.assertTrue(captured["post_audit"])
 
+    def test_observe_focused_support_disabled_by_default(self):
+        captured = {}
+
+        class _Spy(gs.GroundingShadow):
+            def enqueue(self, job):
+                captured.update(job)
+                return "enqueued"
+
+        gs.set_shadow_singleton(_Spy(FakeSupportVerifier(), "/tmp/x.jsonl"))
+
+        out = gs.observe_focused_support(
+            "Served reply [E1].",
+            {"E1": "evidence"},
+            surface="telegram_surface",
+            boot_id="b",
+            shadow_id="s",
+            ts=0,
+        )
+
+        self.assertEqual(out, "disabled")
+        self.assertEqual(captured, {})
+
     def test_evidence_map_from_working_set_uses_local_labels(self):
         item = mock.Mock(local_label="E1", text="fresh evidence")
         working_set = mock.Mock(items=[item, mock.Mock(local_label=None, text="skip")])
@@ -285,6 +307,31 @@ class ObserveFocusedSupportTest(unittest.TestCase):
             gs.evidence_map_from_working_set(working_set),
             {"E1": "fresh evidence"},
         )
+
+    def test_uncited_diagnostic_is_separate_and_never_grounded(self):
+        verifier = FakeSupportVerifier(default=(SUPPORTED, 0.88))
+        with mock.patch.dict(
+            os.environ,
+            {"MAEZ_GROUNDING_SHADOW_DIAGNOSTIC": "1"},
+            clear=False,
+        ):
+            out = gs.compute_shadow(
+                "Anthropic made a current claim.",
+                {"E1": "Anthropic released Claude Opus 4.5."},
+                verifier,
+            )
+
+        self.assertEqual(out["sentences"][0]["mode"], "no_citation")
+        self.assertEqual(out["sentences"][0]["verdict"], "ABSTAIN")
+        diagnostic = out["sentences"][1]
+        self.assertEqual(diagnostic["mode"], "uncited_all_evidence_diagnostic")
+        self.assertEqual(diagnostic["verdict"], SUPPORTED)
+        self.assertFalse(diagnostic["counts_as_grounded"])
+        self.assertEqual(diagnostic["cited_evidence_ids"], [])
+
+        rec = gs.build_telemetry("sid", 0, "telegram", "boot", {}, out)
+        self.assertEqual(rec["supported_count"], 0)
+        self.assertFalse(rec["sentences"][1]["counts_as_grounded"])
 
 
 class GroundingShadowQueueTests(unittest.TestCase):

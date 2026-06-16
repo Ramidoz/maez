@@ -98,6 +98,18 @@ def compute_shadow(
         if rec["verdict"] == UNAVAILABLE:
             status = "verifier_unavailable"
         results.append(rec)
+        if rec.get("mode") == "no_citation" and strict_env_flag(
+            "MAEZ_GROUNDING_SHADOW_DIAGNOSTIC"
+        ):
+            diagnostic = _uncited_all_evidence_diagnostic(
+                sentence,
+                evidence_map,
+                verifier,
+                per_sentence_timeout_s,
+            )
+            if diagnostic["verdict"] == UNAVAILABLE:
+                status = "verifier_unavailable"
+            results.append(diagnostic)
         shadowed += 1
 
     return {
@@ -198,6 +210,37 @@ def classify_sentence(sentence, evidence_map, verifier, timeout_s) -> dict:
     }
 
 
+def _uncited_all_evidence_diagnostic(sentence, evidence_map, verifier, timeout_s) -> dict:
+    combined = "\n".join(
+        str(text).strip() for text in (evidence_map or {}).values() if str(text).strip()
+    )
+    base = {
+        "sentence": sentence,
+        "cited_evidence_ids": [],
+        "mode": "uncited_all_evidence_diagnostic",
+        "counts_as_grounded": False,
+    }
+    if not combined:
+        return {
+            **base,
+            "verdict": "ABSTAIN",
+            "verifier": "deterministic",
+            "score": None,
+            "latency_s": 0.0,
+        }
+    try:
+        label, score, latency = verifier.support(combined, sentence, timeout_s)
+    except Exception:
+        label, score, latency = UNAVAILABLE, None, 0.0
+    return {
+        **base,
+        "verdict": label,
+        "verifier": _verifier_name(verifier),
+        "score": score,
+        "latency_s": latency,
+    }
+
+
 def evidence_map_from_working_set(working_set) -> dict[str, str]:
     """Extract the focused WorkingSet's cited-evidence label map."""
     out: dict[str, str] = {}
@@ -235,12 +278,17 @@ def build_telemetry(
             "verifier": result.get("verifier"),
             "score": result.get("score"),
             "latency_ms": round((result.get("latency_s") or 0.0) * 1000, 1),
+            "counts_as_grounded": bool(result.get("counts_as_grounded", True)),
         }
         if debug:
             rec["snippet"] = sentence[:120]
         sentences.append(rec)
 
-    verdicts = [r.get("support_verdict") for r in sentences]
+    verdicts = [
+        r.get("support_verdict")
+        for r in sentences
+        if r.get("counts_as_grounded", True)
+    ]
     return {
         "shadow_id": shadow_id,
         "ts": ts,
