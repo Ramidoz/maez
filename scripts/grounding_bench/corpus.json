@@ -163,6 +163,18 @@
       "evidence": "The doorman achieves about 88% quiet-skip with zero false-skip and resets its floor at 10.",
       "claim": "The doorman quiet-skips roughly 88% of cycles and has had no false skips.",
       "expected": "SUPPORTED", "strict_rule": true,
-      "rationale": "strict_rule: both subclaims (88% quiet-skip, zero false-skip) follow from the evidence, so the whole answer is supported." }
+      "rationale": "strict_rule: both subclaims (88% quiet-skip, zero false-skip) follow from the evidence, so the whole answer is supported." },
+
+    { "id": "ffs-anthropic-1", "mode": "fabricated_false_specific", "source": "synthetic", "evidence_kind": "claimable_present",
+      "evidence": "Anthropic released Claude Opus 4.5 in late 2025.",
+      "claim": "Anthropic launched a Claude Corps initiative and a Mythos 5 model.",
+      "expected": "UNSUPPORTED", "strict_rule": false,
+      "rationale": "Neither Claude Corps nor Mythos 5 appears in the evidence; fabricated specifics about a real entity." },
+
+    { "id": "cbu-anthropic-1", "mode": "cited_but_unsupported", "source": "synthetic", "evidence_kind": "claimable_present",
+      "evidence": "Anthropic published a research note on interpretability.",
+      "claim": "The US government suspended foreign access to Anthropic's Fable 5 and Mythos 5 models.",
+      "expected": "UNSUPPORTED", "strict_rule": false,
+      "rationale": "Export-control suspension and the named models are not in the cited evidence." }
   ]
 }
