@@ -1,7 +1,8 @@
 # Claim-Level Entailment Support Rail (design) — content-honesty Thread A
 
 **Date:** 2026-06-16. Co-designed with Rohit.
-**Status:** cruxes resolved; awaiting spec review before plan (uncited-fallback must-fix +
+**Status:** cruxes resolved; awaiting spec re-review before plan (focused-path re-scope folded after
+the audit-path empty-`claimable` discovery; uncited-fallback must-fix +
 spec-review HOLD corrections folded).
 **Arc:** content-honesty Thread A. Threads B (fresh-vs-memory conflict) and C (self-web-claim
 recall hygiene — LIVE) are separate. **NOT** this slice: repairing the `grounding_judge.py`
@@ -38,16 +39,46 @@ whole-reply judge: *for each important claim, prove the cited evidence actually 
   `tests/test_minicheck_verifier_service.py` — but there is **no installed/running `:8083` unit**.
   The live shadow instantiates `HttpSupportVerifier()` → `:8083`, so enabling the shadow today →
   every call `UNAVAILABLE`. v0 **installs/starts/witnesses the existing artifact**, not a new build.
+- **WRONG-SEAM defect (the load-bearing discovery):** the shadow is wired to the **audit path**
+  (`core/safety/audited_output.py:253` → `shadow_observe(result, (evidence_envelope or {}).get("claimable"), …)`),
+  but **`evidence_envelope.claimable` is EMPTY on every live path** — **no `build_envelope(...)` call
+  anywhere passes `claimable=`** (`_normalize_claimable(claimable or [])` → `[]`; `ledger_db_path`
+  feeds `self_history`, not claimable). So the shadow, even enabled, returns `no_claimable` and
+  checks **nothing**. The `[E#]` cited evidence (fresh web block, recalled memory) lives in the
+  focused **`WorkingSet`** (`EvidenceItem.local_label` + text, `core/routing/focused_cognition.py:236-246`,
+  `:353`), a **separate object the audit-path hook never sees**. Cited-only entailment is impossible
+  from `evidence_envelope.claimable`.
 
-**So v0 is "complete + wake the instrument," not "build from scratch":** make the receipt
-claim-level and honest, install + start the existing MiniCheck `/support` service, and watch it
-judge Maez's real cited sentences in shadow.
+## The hook seam (re-scoped to the focused path)
+
+The entailment observation is **re-homed to the focused path**, where the reply and its cited
+evidence are both in hand — **NOT** the audit-path `claimable` envelope. Concrete seam: where
+`check_groundedness(_focused_result, _focused_working_set)` already runs
+(`daemon/maez_daemon.py:6590`), **both** objects are in scope:
+- `_focused_result` (`FocusedResult.reply` + `cited_ids`, `focused_cognition.py:389`), and
+- `_focused_working_set` (`WorkingSet.items: list[EvidenceItem]`, each with `local_label` + text).
+
+A new non-blocking observation (sibling to `check_groundedness`) enqueues `(reply, label→text map
+of the working-set evidence)` to the **reused `GroundingShadow` worker/queue/verifier/telemetry/flag**.
+The audit-path hook (which only ever sees empty `claimable`) is **superseded** — left dormant
+(emits `no_claimable`) or removed in v0; it is not the entailment seam. Per-sentence citations come
+from the same `_CITE_RE = \[E(\d+)\]` (`focused_cognition.py:97`) run per sentence.
+
+**So v0 is "re-home the hook + complete the receipt + wake the instrument," not "build from
+scratch":** move the observation to the focused seam, do honest cited-only mapping, install + start
+the existing MiniCheck `/support` service, and watch it judge Maez's real cited sentences in shadow.
 
 ## The honest-mapping law (crux — resolved, with the must-fix)
 
 A claim is checked against **only the evidence it cites** — never the whole pile. An uncited
 sentence must **never** be blessed by evidence it didn't cite (that smuggles the
 labels-prove-shape wound into the new rail, [[feedback_labels_prove_shape_not_support]]).
+
+**Mechanism (focused seam):** build a `{local_label → text}` map from `_focused_working_set.items`
+(`EvidenceItem.local_label`, text). Split `_focused_result.reply` into sentences; per sentence,
+`_CITE_RE` (`\[E(\d+)\]`) gives that sentence's cited labels; look each up in the map; MiniCheck
+runs on **only** those cited evidence texts. "in working set" / "resolvable" both mean "the cited
+`[E#]` is a key in that label→text map with non-empty text."
 
 Per reply sentence:
 
@@ -58,7 +89,7 @@ Per reply sentence:
 | cites `[E#]` but evidence text empty | `empty_evidence` | `ABSTAIN` (deterministic) | no |
 | no `[E#]` citation | `no_citation` | `ABSTAIN` (deterministic — **NO support blessing**) | no |
 | verifier down/timeout on a `cited_support` sentence | `verifier_unavailable` | `UNAVAILABLE` | attempted |
-| (optional, diagnostic) uncited sentence, all claimable evidence | `uncited_all_evidence_diagnostic` | records would-be label **but NEVER counts as grounded** | yes (diagnostic only) |
+| (optional, diagnostic) uncited sentence, all working-set evidence | `uncited_all_evidence_diagnostic` | records would-be label **but NEVER counts as grounded** | yes (diagnostic only) |
 
 `unmatched_citation` is exactly `check_groundedness`'s dropped signal, now **acted on** as
 `UNSUPPORTED`.
@@ -123,16 +154,18 @@ turns. **Gate** (omit/caveat unsupported claims, honoring two-sided pressure —
    rows and never blocks. Either outcome is a valid Task-0 result; the build must handle both.
    **No service → no fake witness:** if MiniCheck is absent, v0 can still test the deterministic floor
    and receipt shape, but **cannot claim verifier witness** — the ledger/handoff must say so honestly.
-2. **Cited-label mapping reachability (load-bearing):** the live hook receives
-   `(evidence_envelope or {}).get("claimable")` (`core/safety/audited_output.py:81`), **not** the
-   focused `WorkingSet`. Today claimable items carry `text`/`fact` only
-   (`core/cognition/envelope_builder.py:135`) with **no `[E#]` label**. The honest-mapping law
-   (check a sentence against *only* its cited evidence) is **impossible without the label**. Task 0
-   must prove whether claimable items can carry their `[E#]`/`local_label` identity (+ text); if not,
-   the plan **threads the labels** from the `WorkingSet` `EvidenceItem.local_label`
-   (`focused_cognition.py:246`) into the claimable envelope **before** the rail is implemented. If
-   threading is infeasible without invasive change, **STOP** and revisit — do not fall back to
-   "check against all claimable" (that is the wound the must-fix forbids).
+2. **Focused-seam reachability (load-bearing — re-scoped):** the entailment observation must reach
+   the **focused** seam where reply + cited evidence are both in hand — NOT the audit-path
+   `claimable` envelope (which is **always empty**, see WRONG-SEAM defect above). Confirmed at
+   design time: at `daemon/maez_daemon.py:6590` both `_focused_result` (reply + `cited_ids`) and
+   `_focused_working_set` (`WorkingSet.items`, each `EvidenceItem` with `local_label` + text) are in
+   scope; a `{local_label → text}` map is buildable and per-sentence `_CITE_RE` extraction works.
+   Task 0 must **prove this concretely at runtime** (instrument the seam: confirm a real web turn
+   has ≥1 `EvidenceItem` with a `local_label` the reply cites, and the label→text map is non-empty)
+   and confirm the new observation can enqueue **non-blocking** from there. If the focused seam
+   turns out NOT to carry the cited evidence at runtime (e.g. on the dispatcher surface the reply is
+   produced elsewhere), **STOP** and revisit — do **not** fall back to the empty `claimable` envelope
+   or to "check against all evidence" (that is the wound the must-fix forbids).
 
 ## Corpus extension (before or alongside shadow — don't block on a rebuild)
 
@@ -144,10 +177,10 @@ live shadow — do **not** gate live shadow on a large corpus rebuild.
 ## Testing (TDD, fakes)
 
 - **Mapping law (the must-fix):** a `no_citation` sentence → `ABSTAIN`/`no_citation`, **never**
-  `SUPPORTED`, even when all-claimable evidence would entail it; the `uncited_all_evidence_diagnostic`
+  `SUPPORTED`, even when the whole working set would entail it; the `uncited_all_evidence_diagnostic`
   record (if enabled) carries its would-be label but the sentence's support_verdict stays ABSTAIN.
 - **Deterministic floor:** `unmatched_citation` → `UNSUPPORTED` (no model call); `empty_evidence` →
-  `ABSTAIN`; no-claimable → ABSTAIN. Use `FakeSupportVerifier` to assert the model is NOT called on
+  `ABSTAIN`; no-evidence (empty working set) → ABSTAIN. Use `FakeSupportVerifier` to assert the model is NOT called on
   floor cases.
 - **cited_support routing:** a sentence citing `[E1]` is checked against **only** E1's text (assert
   the verifier received E1's evidence, not E2's).
@@ -156,8 +189,8 @@ live shadow — do **not** gate live shadow on a large corpus rebuild.
 - **House law:** the **queue-full path is memory-only / I/O-free** — a full-queue regression test
   (Rail 2 full-queue shape) asserts `enqueue()` performs **no `_emit`/telemetry write** when the
   queue is full (only an in-memory dropped-counter bump); `UNAVAILABLE` → reply unchanged.
-- **Cited-label mapping (phrase sharply):** with labels threaded, a sentence citing `[E1]` maps to
-  E1's text and the verifier receives **only** E1's evidence (not E2's). A sentence with **no `[E#]`**
+- **Cited-label mapping (phrase sharply):** with the working-set `{local_label→text}` map, a
+  sentence citing `[E1]` maps to E1's text and the verifier receives **only** E1's evidence (not E2's). A sentence with **no `[E#]`**
   → `no_citation` (ABSTAIN). A sentence that **cites `[E1]` but it cannot be resolved** to evidence
   text → `unmatched_citation` (deterministic `UNSUPPORTED`) — **never** `no_citation`, **never** a
   silent all-evidence check. (`no_citation` = the sentence cited nothing; `unmatched_citation` = it
@@ -167,10 +200,12 @@ live shadow — do **not** gate live shadow on a large corpus rebuild.
 
 ## Scope (explicit)
 
-- **IN:** claim-level receipt (the invariant + `mode` taxonomy); honest cited-only mapping +
-  deterministic floor + optional uncited diagnostic; MiniCheck `/support` service; receipt-complete
-  **shadow** wiring (claim→cited-evidence, verifier-name, latency); corpus extension; flag-gated
-  off=byte-identical; tests.
+- **IN:** **re-home the entailment observation to the focused seam** (where `_focused_result` +
+  `_focused_working_set` are in hand) + fix the queue-full I/O defect; claim-level receipt (the
+  invariant + `mode` taxonomy); honest cited-only mapping (working-set `label→text` + per-sentence
+  `_CITE_RE`) + deterministic floor + optional uncited diagnostic; install the MiniCheck `/support`
+  service; receipt-complete **shadow** wiring (claim→cited-evidence, verifier-name, latency); corpus
+  extension; flag-gated off=byte-identical; tests.
 - **OUT (separate slices):**
   - **Gate graduation** (omit/caveat unsupported claims) + the **verifier-UNAVAILABLE fail-posture**
     decision — the next slice after shadow is witnessed.
