@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 import json
 import os
+from pathlib import Path
 import tempfile
 import importlib
 import sys
@@ -509,6 +510,18 @@ class HookTests(unittest.TestCase):
             )
         self.assertEqual(out_off, out_on)
         self.assertEqual(out_on, "The corrected reply.")
+
+
+class DaemonFocusedSupportHookOrderTests(unittest.TestCase):
+    def test_focused_support_observes_after_fragment_guard(self):
+        src = Path("daemon/maez_daemon.py").read_text()
+        audit_idx = src.find("reply = audit_assistant_text(")
+        guard_idx = src.find("reply = self._trf_apply_fragment_guard(", audit_idx)
+        observe_idx = src.find("_observe_focused_support(", audit_idx)
+
+        self.assertGreater(audit_idx, 0)
+        self.assertGreater(guard_idx, audit_idx)
+        self.assertGreater(observe_idx, guard_idx)
 
 
 if __name__ == "__main__":

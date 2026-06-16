@@ -6887,6 +6887,7 @@ class MaezDaemon:
         # Trace: snapshot the pre-audit text so audit.changed_output
         # is a literal pre/post hash comparison, not a guess.
         _trace_pre_audit_text = reply
+        _grounding_shadow_post_audit_ready = False
         try:
             from core.safety.audited_output import audit_assistant_text
 
@@ -6903,25 +6904,7 @@ class MaezDaemon:
                     else None
                 ),
             )
-            try:
-                if _focused_used and _focused_support_evidence_map:
-                    from core.cognition.grounding_shadow import (
-                        observe_focused_support as _observe_focused_support,
-                    )
-
-                    _observe_focused_support(
-                        reply,
-                        _focused_support_evidence_map,
-                        surface=source,
-                        boot_id=os.environ.get("MAEZ_BOOT_ID"),
-                        shadow_id=uuid.uuid4().hex,
-                        ts=int(time.time()),
-                    )
-            except Exception as _grounding_shadow_exc:
-                logger.debug(
-                    "focused grounding shadow enqueue skipped: %s",
-                    _grounding_shadow_exc,
-                )
+            _grounding_shadow_post_audit_ready = True
             try:
                 _trace.audit = AuditInfo(
                     ran=True,
@@ -6943,6 +6926,29 @@ class MaezDaemon:
             temporal_anchor_result=_temporal_anchor_result,
             trace=_trace,
         )
+        try:
+            if (
+                _grounding_shadow_post_audit_ready
+                and _focused_used
+                and _focused_support_evidence_map
+            ):
+                from core.cognition.grounding_shadow import (
+                    observe_focused_support as _observe_focused_support,
+                )
+
+                _observe_focused_support(
+                    reply,
+                    _focused_support_evidence_map,
+                    surface=source,
+                    boot_id=os.environ.get("MAEZ_BOOT_ID"),
+                    shadow_id=uuid.uuid4().hex,
+                    ts=int(time.time()),
+                )
+        except Exception as _grounding_shadow_exc:
+            logger.debug(
+                "focused grounding shadow enqueue skipped: %s",
+                _grounding_shadow_exc,
+            )
         try:
             from core.routing.recall_outcome import RecallOutcome, classify_outcome
             from core.routing.recall_receipt import (
