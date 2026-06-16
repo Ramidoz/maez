@@ -1,9 +1,9 @@
 # Claim-Level Entailment Support Rail (design) — content-honesty Thread A
 
 **Date:** 2026-06-16. Co-designed with Rohit.
-**Status:** cruxes resolved; awaiting spec re-review before plan (focused-path re-scope folded after
-the audit-path empty-`claimable` discovery; uncited-fallback must-fix +
-spec-review HOLD corrections folded).
+**Status:** cruxes resolved; awaiting spec re-review before plan (focused-path re-scope + judge-the-
+post-audit-served-reply must-fix folded; audit-path empty-`claimable` discovery; uncited-fallback
+must-fix + earlier HOLD corrections folded).
 **Arc:** content-honesty Thread A. Threads B (fresh-vs-memory conflict) and C (self-web-claim
 recall hygiene — LIVE) are separate. **NOT** this slice: repairing the `grounding_judge.py`
 overclaim/self-history rail (broken: heavy carve-out prompt + thinking-overflow + strict JSON
@@ -51,22 +51,30 @@ whole-reply judge: *for each important claim, prove the cited evidence actually 
 
 ## The hook seam (re-scoped to the focused path)
 
-The entailment observation is **re-homed to the focused path**, where the reply and its cited
-evidence are both in hand — **NOT** the audit-path `claimable` envelope. Concrete seam: where
-`check_groundedness(_focused_result, _focused_working_set)` already runs
-(`daemon/maez_daemon.py:6590`), **both** objects are in scope:
-- `_focused_result` (`FocusedResult.reply` + `cited_ids`, `focused_cognition.py:389`), and
-- `_focused_working_set` (`WorkingSet.items: list[EvidenceItem]`, each with `local_label` + text).
+The entailment observation is **re-homed to the focused path** for its evidence, but **judges the
+final SERVED (post-audit) reply, not the pre-audit focused draft** — otherwise the receipt proves
+support for a draft the owner never saw. Two distinct moments in the same `handle_message` scope:
 
-A new non-blocking observation (sibling to `check_groundedness`) enqueues `(reply, label→text map
-of the working-set evidence)` to the **reused `GroundingShadow` worker/queue/verifier/telemetry/flag**.
-The audit-path hook (which only ever sees empty `claimable`) is **superseded** — left dormant
-(emits `no_claimable`) or removed in v0; it is not the entailment seam. Per-sentence citations come
-from the same `_CITE_RE = \[E(\d+)\]` (`focused_cognition.py:97`) run per sentence.
+1. **Capture (focused seam):** where `check_groundedness(_focused_result, _focused_working_set)`
+   runs (`daemon/maez_daemon.py:6590`), `_focused_working_set` (`WorkingSet.items: list[EvidenceItem]`,
+   each `local_label` + text) is in hand. Build/retain the `{local_label → text}` evidence map +
+   the `_focused_used` flag. **Do not enqueue here.**
+2. **Enqueue (after audit):** after `reply = audit_assistant_text(...)` returns
+   (`daemon/maez_daemon.py:~6882`), **if** `_focused_used` and the map is non-empty, enqueue the
+   **post-audit `reply`** (the final served/stored text — verified to retain `[E#]` markers; the
+   audit omits whole sentences but doesn't strip citations) **plus the captured evidence map** to the
+   **reused `GroundingShadow` worker/queue/verifier/telemetry/flag**. Per-sentence citations come from
+   `_CITE_RE = \[E(\d+)\]` (`focused_cognition.py:97`) run per **post-audit** sentence.
 
-**So v0 is "re-home the hook + complete the receipt + wake the instrument," not "build from
-scratch":** move the observation to the focused seam, do honest cited-only mapping, install + start
-the existing MiniCheck `/support` service, and watch it judge Maez's real cited sentences in shadow.
+This keeps both truths: **the evidence is the real focused `WorkingSet`; the judged text is the final
+text Maez actually served.** The receipt header records `post_audit: true`. The old audit-path hook
+(`shadow_observe(... evidence_envelope.claimable ...)`, always empty `claimable`) is **superseded** —
+removed or left dormant; it is not the entailment seam.
+
+**So v0 is "re-home the evidence capture + judge the final reply + complete the receipt + wake the
+instrument," not "build from scratch":** capture the map at the focused seam, enqueue the post-audit
+reply, do honest cited-only mapping, install + start the existing MiniCheck `/support` service, and
+watch it judge Maez's real served cited sentences in shadow.
 
 ## The honest-mapping law (crux — resolved, with the must-fix)
 
@@ -74,11 +82,13 @@ A claim is checked against **only the evidence it cites** — never the whole pi
 sentence must **never** be blessed by evidence it didn't cite (that smuggles the
 labels-prove-shape wound into the new rail, [[feedback_labels_prove_shape_not_support]]).
 
-**Mechanism (focused seam):** build a `{local_label → text}` map from `_focused_working_set.items`
-(`EvidenceItem.local_label`, text). Split `_focused_result.reply` into sentences; per sentence,
-`_CITE_RE` (`\[E(\d+)\]`) gives that sentence's cited labels; look each up in the map; MiniCheck
-runs on **only** those cited evidence texts. "in working set" / "resolvable" both mean "the cited
-`[E#]` is a key in that label→text map with non-empty text."
+**Mechanism (focused seam capture, post-audit judge):** build a `{local_label → text}` map from
+`_focused_working_set.items` (`EvidenceItem.local_label`, text) at the focused seam. Then split the
+**post-audit served `reply`** into sentences; per sentence, `_CITE_RE` (`\[E(\d+)\]`) gives that
+sentence's cited labels; look each up in the map; MiniCheck runs on **only** those cited evidence
+texts. "in working set" / "resolvable" both mean "the cited `[E#]` is a key in that label→text map
+with non-empty text." (Sentences the audit removed are simply not present in the served reply, so
+they are never judged — correct: only served claims are checked.)
 
 Per reply sentence:
 
@@ -107,7 +117,8 @@ One content-light record per checked sentence (verifiers swap behind it;
   score: float|null,
   latency_ms: int }
 ```
-Plus the existing per-job header (shadow_id, ts, surface, boot_id, counts, status). The
+Plus the existing per-job header (shadow_id, ts, surface, boot_id, counts, status) **and
+`post_audit: true`** (the judged text is the final served/audited reply, not the focused draft). The
 `mode` taxonomy above is **required** in the receipt — it is what makes
 "supported-vs-uncited-vs-unmatched" legible and prevents an uncited diagnostic from reading as
 grounded.
@@ -154,18 +165,18 @@ turns. **Gate** (omit/caveat unsupported claims, honoring two-sided pressure —
    rows and never blocks. Either outcome is a valid Task-0 result; the build must handle both.
    **No service → no fake witness:** if MiniCheck is absent, v0 can still test the deterministic floor
    and receipt shape, but **cannot claim verifier witness** — the ledger/handoff must say so honestly.
-2. **Focused-seam reachability (load-bearing — re-scoped):** the entailment observation must reach
-   the **focused** seam where reply + cited evidence are both in hand — NOT the audit-path
-   `claimable` envelope (which is **always empty**, see WRONG-SEAM defect above). Confirmed at
-   design time: at `daemon/maez_daemon.py:6590` both `_focused_result` (reply + `cited_ids`) and
-   `_focused_working_set` (`WorkingSet.items`, each `EvidenceItem` with `local_label` + text) are in
-   scope; a `{local_label → text}` map is buildable and per-sentence `_CITE_RE` extraction works.
-   Task 0 must **prove this concretely at runtime** (instrument the seam: confirm a real web turn
-   has ≥1 `EvidenceItem` with a `local_label` the reply cites, and the label→text map is non-empty)
-   and confirm the new observation can enqueue **non-blocking** from there. If the focused seam
-   turns out NOT to carry the cited evidence at runtime (e.g. on the dispatcher surface the reply is
-   produced elsewhere), **STOP** and revisit — do **not** fall back to the empty `claimable` envelope
-   or to "check against all evidence" (that is the wound the must-fix forbids).
+2. **Capture-then-post-audit reachability (load-bearing — re-scoped):** the entailment observation
+   captures evidence at the **focused** seam but judges the **final served (post-audit) reply** —
+   NOT the audit-path `claimable` envelope (always empty) and NOT the pre-audit focused draft. Task 0
+   must **prove BOTH are simultaneously reachable at runtime** on a real focused web turn:
+   (i) at the focused seam, the `{local_label → text}` map built from `_focused_working_set.items`
+   is **non-empty** and contains ≥1 label the reply cites; and
+   (ii) after `audit_assistant_text(...)` returns (`daemon/maez_daemon.py:~6882`), the **final
+   `reply` still exists in the same handler scope** (with `_focused_used` true), **retains `[E#]`
+   markers**, and can be enqueued **non-blocking** alongside the captured map.
+   If either is false at runtime (e.g. the dispatcher surface produces the reply elsewhere, or the
+   served reply strips `[E#]`), **STOP** and revisit — do **not** fall back to the empty `claimable`
+   envelope, the pre-audit draft, or "check against all evidence" (the wounds the must-fixes forbid).
 
 ## Corpus extension (before or alongside shadow — don't block on a rebuild)
 
@@ -195,13 +206,18 @@ live shadow — do **not** gate live shadow on a large corpus rebuild.
   text → `unmatched_citation` (deterministic `UNSUPPORTED`) — **never** `no_citation`, **never** a
   silent all-evidence check. (`no_citation` = the sentence cited nothing; `unmatched_citation` = it
   cited something unresolvable.)
+- **Post-audit served text:** the judged reply is the text **after** `audit_assistant_text` returns
+  (`post_audit: true` in the header); a sentence the audit removed is **absent** from the served
+  reply and is therefore **never judged**; a focused turn whose `_focused_used` is false enqueues
+  nothing. Assert the enqueued `final_text` equals the post-audit reply, not the focused draft.
 - **Flag off → byte-identical:** shadow disabled → no enqueue, no telemetry, reply untouched.
 - **Corpus:** the new Anthropic-class items classify as expected under MiniCheck in `grounding_bench`.
 
 ## Scope (explicit)
 
-- **IN:** **re-home the entailment observation to the focused seam** (where `_focused_result` +
-  `_focused_working_set` are in hand) + fix the queue-full I/O defect; claim-level receipt (the
+- **IN:** **capture the evidence map at the focused seam** (`_focused_working_set`) + **judge the
+  final post-audit served reply** (enqueue after `audit_assistant_text` returns) + fix the queue-full
+  I/O defect; claim-level receipt (the
   invariant + `mode` taxonomy); honest cited-only mapping (working-set `label→text` + per-sentence
   `_CITE_RE`) + deterministic floor + optional uncited diagnostic; install the MiniCheck `/support`
   service; receipt-complete **shadow** wiring (claim→cited-evidence, verifier-name, latency); corpus
