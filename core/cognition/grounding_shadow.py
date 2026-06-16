@@ -319,8 +319,8 @@ class GroundingShadow:
         telemetry_path,
         *,
         maxsize: int = 64,
-        per_sentence_timeout_s: float = 0.25,
-        per_job_budget_s: float = 1.5,
+        per_sentence_timeout_s: float = 1.0,
+        per_job_budget_s: float = 4.0,
         debug: bool = False,
     ):
         self._verifier = verifier

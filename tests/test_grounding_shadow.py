@@ -358,6 +358,12 @@ class GroundingShadowQueueTests(unittest.TestCase):
         shadow, _ = self._shadow(maxsize=4)
         self.assertEqual(shadow.enqueue(self._job()), "enqueued")
 
+    def test_default_timeout_has_minicheck_headroom(self):
+        shadow, _ = self._shadow()
+
+        self.assertGreaterEqual(shadow._per_sentence_timeout_s, 1.0)
+        self.assertGreaterEqual(shadow._per_job_budget_s, 4.0)
+
     def test_full_queue_returns_shadow_enqueue_failed(self):
         shadow, _path = self._shadow(maxsize=1)
         self.assertEqual(shadow.enqueue(self._job("s1")), "enqueued")
