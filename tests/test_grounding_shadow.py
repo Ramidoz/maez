@@ -160,12 +160,26 @@ class GroundingShadowQueueTests(unittest.TestCase):
         self.assertEqual(shadow.enqueue(self._job()), "enqueued")
 
     def test_full_queue_returns_shadow_enqueue_failed(self):
-        shadow, path = self._shadow(maxsize=1)
+        shadow, _path = self._shadow(maxsize=1)
         self.assertEqual(shadow.enqueue(self._job("s1")), "enqueued")
         self.assertEqual(shadow.enqueue(self._job("s2")), "shadow_enqueue_failed")
-        with open(path) as f:
-            recs = [json.loads(line) for line in f if line.strip()]
-        self.assertTrue(any(r["status"] == "shadow_enqueue_failed" for r in recs))
+        self.assertEqual(shadow.dropped_count, 1)
+
+    def test_queue_full_does_not_emit(self):
+        shadow = gs.GroundingShadow(
+            FakeSupportVerifier(),
+            "/nonexistent/should_never_be_written.jsonl",
+            maxsize=1,
+        )
+        emitted = []
+        shadow._emit = lambda rec: emitted.append(rec)
+        shadow._q.put_nowait({"a": 1})
+
+        result = shadow.enqueue({"shadow_id": "x", "ts": 0})
+
+        self.assertEqual(result, "shadow_enqueue_failed")
+        self.assertEqual(emitted, [])
+        self.assertEqual(shadow.dropped_count, 1)
 
     def test_enqueue_never_raises(self):
         shadow, _ = self._shadow(maxsize=1)

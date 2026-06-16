@@ -216,21 +216,14 @@ class GroundingShadow:
         self._debug = debug
         self._worker = None
         self._stop = threading.Event()
+        self.dropped_count = 0
 
     def enqueue(self, job: dict) -> str:
         try:
             self._q.put_nowait(job)
             return "enqueued"
         except queue.Full:
-            self._emit(
-                {
-                    "shadow_id": job.get("shadow_id"),
-                    "ts": job.get("ts"),
-                    "surface": job.get("surface"),
-                    "boot_id": job.get("boot_id"),
-                    "status": "shadow_enqueue_failed",
-                }
-            )
+            self.dropped_count += 1
             return "shadow_enqueue_failed"
         except Exception:
             return "shadow_enqueue_failed"
