@@ -40,8 +40,8 @@ whole-reply judge: *for each important claim, prove the cited evidence actually 
   every call `UNAVAILABLE`. v0 **installs/starts/witnesses the existing artifact**, not a new build.
 
 **So v0 is "complete + wake the instrument," not "build from scratch":** make the receipt
-claim-level and honest, stand up the MiniCheck `/support` service, and watch it judge Maez's real
-cited sentences in shadow.
+claim-level and honest, install + start the existing MiniCheck `/support` service, and watch it
+judge Maez's real cited sentences in shadow.
 
 ## The honest-mapping law (crux — resolved, with the must-fix)
 
