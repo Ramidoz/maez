@@ -254,3 +254,43 @@ class DaemonSupportGateSourceTests(unittest.TestCase):
         self.assertGreater(async_call_idx, guard_idx)
         self.assertLess(gate_call_idx, receipt_idx)
         self.assertLess(async_call_idx, receipt_idx)
+
+
+class RenderNaturalSurvivalTest(unittest.TestCase):
+    def test_caveat_survives_render_natural_and_markers_stripped(self):
+        from unittest import mock
+
+        from core.routing.attribution_render import render_natural
+
+        gated = (
+            "Anthropic launched Mythos 5 [E1]. "
+            "I couldn't confirm this from the source I cited."
+        )
+        with mock.patch("core.routing.attribution_render.sense_enabled", return_value=True):
+            out = render_natural(gated, web_evidence_present=False)
+
+        self.assertNotIn("[E1]", out)
+        self.assertIn("I couldn't confirm this from the source I cited.", out)
+
+    def test_receipts_retains_gated_marked_draft(self):
+        from core.routing.attribution_render import last_receipt, retain_receipt
+
+        gated = "Claim [E1]. I couldn't confirm this from the source I cited."
+
+        retain_receipt("support-gate-test-chat", marked=gated, sources=["https://example.test"])
+
+        self.assertEqual(last_receipt("support-gate-test-chat")["marked"], gated)
+
+
+class FlagOffByteIdenticalTest(unittest.TestCase):
+    def test_gate_off_no_support_gate_path(self):
+        from core.cognition.grounding_shadow import decide_support_path
+
+        self.assertEqual(
+            decide_support_path(gate_enabled=False, shadow_enabled=False),
+            "none",
+        )
+        self.assertEqual(
+            decide_support_path(gate_enabled=False, shadow_enabled=True),
+            "async_shadow",
+        )
