@@ -7271,10 +7271,10 @@ def analytics_collect():
 
 @app.route("/api/analytics-summary")
 def analytics_summary():
-    token = _request_token()
-    user = accounts.get_by_token(token) if token else None
-    if not user:
-        return jsonify({"error": "Invalid token"}), 401
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
+    token = (request.cookies.get(AUTH_COOKIE, "") or "").strip()
+    user = accounts.get_by_token(token) if token else {}
     return jsonify(
         {
             **_build_analytics_summary(_load_analytics_events()),
@@ -7288,10 +7288,10 @@ def analytics_summary():
 
 @app.route("/api/planner-board", methods=["GET", "POST"])
 def planner_board():
-    token = _request_token()
-    user = accounts.get_by_token(token) if token else None
-    if not user:
-        return jsonify({"error": "Invalid token"}), 401
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
+    token = (request.cookies.get(AUTH_COOKIE, "") or "").strip()
+    user = accounts.get_by_token(token) if token else {}
 
     if request.method == "GET":
         board = _load_planner_board()
@@ -9930,19 +9930,11 @@ def _debug_auth_ok():
     """Gate for /debug and /api/debug/*.
 
     Debug surfaces expose Maez's private body/memory state, so they use the
-    same resolved-record owner proof as cockpit private APIs. The compact
-    token lookup is identity only; it must not be trusted for owner-grade
-    authorization fields.
+    same cookie-only resolved-record owner proof as cockpit private APIs.
+    Query-token URLs remain useful for public/helper flows, but not for
+    owner-grade debug state.
     """
-    token = _request_token()
-    if not token:
-        return False
-    user = accounts.get_by_token(token) or {}
-    uid = (user.get("uuid") or "").strip()
-    if not uid:
-        return False
-    user_record = accounts.get_user_record(uid) or {}
-    return _is_private_owner_bridge(user_record)
+    return _owner_private_auth_ok()
 
 
 @app.route("/debug")

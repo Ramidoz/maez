@@ -107,6 +107,53 @@ class PromptSnippet(unittest.TestCase):
         s = prompt_snippet()
         self.assertIn("30-second", s)
 
+    def test_snippet_renders_runtime_body_status_not_legacy_active_buckets(self):
+        """Self-description should use the runtime body registry, not raw
+        systemd active/inactive buckets that flatten asleep/degraded organs."""
+        from core.infra import capability_registry as cr
+
+        runtime = {
+            "schema_version": "maez_runtime_services.v0",
+            "overall": "degraded",
+            "services": {
+                "primary_brain": {
+                    "status": "healthy",
+                    "configured": True,
+                    "required_by": ["always"],
+                    "degraded_reasons": [],
+                },
+                "support_verifier": {
+                    "status": "degraded",
+                    "configured": True,
+                    "required_by": ["MAEZ_SUPPORT_GATE_ENABLED"],
+                    "degraded_reasons": ["contract_unhealthy"],
+                },
+                "search_body": {
+                    "status": "asleep",
+                    "configured": False,
+                    "required_by": [],
+                    "degraded_reasons": [],
+                },
+            },
+        }
+
+        with (
+            mock.patch.object(cr, "_list_services", return_value={"maez": "active"}),
+            mock.patch.object(
+                cr,
+                "_runtime_services_for_prompt",
+                return_value=runtime,
+            ),
+        ):
+            s = prompt_snippet()
+
+        self.assertIn("Runtime services: overall degraded.", s)
+        self.assertIn("primary_brain=healthy", s)
+        self.assertIn("support_verifier=degraded (contract_unhealthy)", s)
+        self.assertIn("search_body=asleep", s)
+        self.assertNotIn("Services active:", s)
+        self.assertNotIn("Services inactive/stopped:", s)
+
 
 class GroundedVocab(unittest.TestCase):
     def test_vocab_is_frozenset(self):

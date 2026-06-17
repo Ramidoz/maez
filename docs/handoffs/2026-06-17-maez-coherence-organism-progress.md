@@ -108,6 +108,18 @@ or authorized differently depending on surface.
    - The current authority for branch state is this handoff plus the
      `BUILT_BRANCH_VERIFIED` row in `docs/MAEZ_BUILD_LEDGER.md`.
 
+12. Review-HOLD closure: private cockpit auth + prompt body truth
+   - Debug cockpit routes now reuse the same cookie-only
+     `_owner_private_auth_ok()` proof as other owner-private cockpit APIs.
+     A copied `?web_token=` URL no longer authorizes debug body/memory state.
+   - `/api/analytics-summary` and `/api/planner-board` now require owner-private
+     cookie auth rather than any valid query or cookie token; the route
+     inventory no longer treats them as public/helper APIs.
+   - The capability prompt no longer renders raw `Services active:` /
+     `Services inactive/stopped:` systemd buckets. It renders the shared
+     `runtime_services` body map instead, preserving `healthy`, `degraded`,
+     `asleep`, and `unknown` statuses for Maez's self-description.
+
 ## Latest Verification
 
 Command:
@@ -215,6 +227,31 @@ rg -n "Status: design, awaiting review|runtime body truth.*pending|all services 
 
 Result: no stale body-state/status hits in the authoritative spec, plan, or UI
 targets. This handoff deliberately names the old phrases in slice descriptions.
+
+Additional slice 12 verification:
+
+```bash
+/home/rohit/maez/.venv/bin/python -m unittest \
+  tests.test_web_debug_auth \
+  tests.test_cockpit_proxies_2026_05_05 \
+  tests.test_capability_registry \
+  tests.test_runtime_services \
+  tests.test_web_runtime_truth \
+  tests.test_maez_body_organ_view \
+  tests.test_cockpit_living_dashboard \
+  tests.test_web_owner_core \
+  tests.test_cockpit_inbound_core \
+  tests.test_inbound_core_equivalence
+/home/rohit/maez/.venv/bin/python -m ruff check \
+  skills/web_interface.py \
+  core/infra/capability_registry.py \
+  tests/test_web_debug_auth.py \
+  tests/test_cockpit_proxies_2026_05_05.py \
+  tests/test_capability_registry.py
+git diff --check
+```
+
+Result: `Ran 123 tests ... OK (skipped=2)`; ruff clean; diff check clean.
 
 Lint/checks:
 

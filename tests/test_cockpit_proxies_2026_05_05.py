@@ -851,10 +851,8 @@ class CockpitPrivateReadRoutesAuth(unittest.TestCase):
 
         public_or_helper_routes = {
             "/api/analytics",
-            "/api/analytics-summary",
             "/api/iphone/ingest",
             "/api/maez-state",
-            "/api/planner-board",
             "/api/progress-board",
             "/api/session-timeline",
             "/api/v1/gpu",

@@ -254,20 +254,44 @@ def describe() -> dict[str, Any]:
     return snapshot
 
 
+def _runtime_services_for_prompt() -> dict[str, Any]:
+    try:
+        from core.infra.runtime_services import runtime_services_snapshot_cached
+
+        return runtime_services_snapshot_cached(timeout_s=0.25)
+    except Exception as e:
+        return {
+            "schema_version": "maez_runtime_services.v0",
+            "overall": "unknown",
+            "services": {},
+            "_unavailable": f"runtime_services probe failed: {e}",
+        }
+
+
+def _runtime_services_prompt_line(snapshot: dict[str, Any]) -> str:
+    overall = str(snapshot.get("overall") or "unknown")
+    services = snapshot.get("services") or {}
+    parts: list[str] = []
+    for key in sorted(services):
+        item = services.get(key) or {}
+        status = str(item.get("status") or "unknown")
+        reasons = item.get("degraded_reasons") or []
+        suffix = f" ({', '.join(str(reason) for reason in reasons[:2])})" if reasons else ""
+        parts.append(f"{key}={status}{suffix}")
+    if not parts:
+        unavailable = snapshot.get("_unavailable")
+        detail = f"; {unavailable}" if unavailable else ""
+        return f"Runtime services: overall {overall}; no service details available{detail}."
+    return f"Runtime services: overall {overall}. " + "; ".join(parts) + "."
+
+
 def prompt_snippet() -> str:
     """Compact, prompt-suitable rendering of the registry. Kept short
     (<800 chars) so it doesn't bloat every turn's context. The closing
     instruction is the load-bearing part — tells the model what to do
     when a claim isn't grounded here."""
     d = describe()
-    services_active = sorted([
-        k for k, v in d["services"].items() if v == "active"
-        and not k.startswith("_")
-    ])
-    services_inactive = sorted([
-        k for k, v in d["services"].items() if v != "active"
-        and not k.startswith("_")
-    ])
+    runtime_services_line = _runtime_services_prompt_line(_runtime_services_for_prompt())
     modules = ", ".join(d["modules"])
     disabled = ", ".join(
         f"{k} ({v.split(';')[0]})" for k, v in d["disabled_features"].items()
@@ -334,8 +358,7 @@ def prompt_snippet() -> str:
     base = (
         "# CAPABILITIES (source of truth for self-description)\n"
         f"Modules on disk: {modules}.\n"
-        f"Services active: {', '.join(services_active) or '(none)'}.\n"
-        f"Services inactive/stopped: {', '.join(services_inactive) or '(none)'}.\n"
+        f"{runtime_services_line}\n"
         f"Disabled features: {disabled}.\n"
         "Schedules: 30-second reasoning cycle; daily consolidation at "
         "03:00 local; nightly journal at 23:00 local; curiosity check-in "
