@@ -497,6 +497,16 @@ class CockpitS7WebAuthnDeferredProxy(unittest.TestCase):
                     self.assertEqual(response.status_code, 401)
                     self.assertEqual(response.get_json()["error"], "owner_auth_required")
 
+    def test_status_route_requires_owner_private_session(self):
+        def fail_if_forwarded(*_args, **_kwargs):
+            raise AssertionError("unauthenticated S7 status reached daemon")
+
+        with patch("urllib.request.urlopen", side_effect=fail_if_forwarded):
+            response = self.client.get("/api/v1/s7/webauthn/status")
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.get_json()["error"], "owner_auth_required")
+
     def test_status_route_proxies_to_daemon_even_when_ceremony_flag_off(self):
         captured = {}
 
@@ -508,7 +518,8 @@ class CockpitS7WebAuthnDeferredProxy(unittest.TestCase):
                 status=200,
             )
 
-        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        self._set_owner_cookie()
+        with self._owner_session(), patch("urllib.request.urlopen", side_effect=fake_urlopen):
             response = self.client.get("/api/v1/s7/webauthn/status")
 
         body = json.loads(response.get_data())

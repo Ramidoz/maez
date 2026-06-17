@@ -1987,6 +1987,8 @@ def _s7_cockpit_status_proxy():
     import urllib.error as _urlerr
     import urllib.request as _urlreq
 
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     try:
         req = _urlreq.Request(
             f"{_DAEMON_BASE}/internal/s7/webauthn/status",
