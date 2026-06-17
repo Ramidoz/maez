@@ -120,6 +120,17 @@ or authorized differently depending on surface.
      `runtime_services` body map instead, preserving `healthy`, `degraded`,
      `asleep`, and `unknown` statuses for Maez's self-description.
 
+13. Full-branch review-HOLD closure: internal-channel readers
+   - The daemon's `/internal/cockpit/state` and `/internal/s7/webauthn/status`
+     routes were correctly locked behind the S7 internal-channel proof, but
+     two web-side GET proxies had not been given that proof.
+   - `/api/v1/daemon/state` now proxies the real cockpit-state request with
+     `X-Maez-S7-Internal-Channel` when `MAEZ_COCKPIT_REAL_STATE=1`.
+   - `/api/v1/s7/webauthn/status` now sends the same internal-channel header
+     as the S7 POST proxies.
+   - The real-state proxy tests now reflect the owner-private auth contract
+     and assert the bridge header on the real daemon request.
+
 ## Latest Verification
 
 Command:
@@ -261,6 +272,24 @@ Review:
   `tests.test_web_debug_auth`, `tests.test_capability_registry`, and
   `tests.test_cockpit_proxies_2026_05_05.CockpitPrivateReadRoutesAuth`.
   Result: `Ran 25 tests ... OK (skipped=2)`.
+- `Kuhn` reviewed the full branch `80a10d9..599ce3a` and returned `HOLD`:
+  two web-side GET proxies were missing the S7 internal-channel header after
+  the daemon routes were locked. The fix is slice 13.
+
+Additional slice 13 verification:
+
+```bash
+MAEZ_IPHONE_INGEST_TOKEN=test-token MAEZ_SECRETS_DISABLE_NEW_LOADER=1 \
+  /home/rohit/maez/.venv/bin/python -m unittest \
+    tests.test_cockpit_real_state_bridge \
+    tests.test_cockpit_proxies_2026_05_05 \
+    tests.test_s7_1_daemon_internal_channel \
+    tests.test_s7_1_status_projection \
+    tests.test_web_runtime_truth \
+    tests.test_web_owner_core
+```
+
+Result: `Ran 102 tests ... OK`.
 
 Lint/checks:
 

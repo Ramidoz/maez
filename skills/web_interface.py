@@ -1576,7 +1576,12 @@ def _daemon_cockpit_state_proxy(timeout=1.5):
     back to scraped/seed data (the covenant forbids fabricated inner life).
     """
     try:
-        with urllib.request.urlopen(DAEMON_COCKPIT_STATE_URL, timeout=timeout) as r:
+        req = urllib.request.Request(
+            DAEMON_COCKPIT_STATE_URL,
+            headers=_s7_internal_channel_headers(),
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8"))
     except Exception as e:
         logger.debug("daemon cockpit-state unreachable: %s", e)
@@ -1992,6 +1997,7 @@ def _s7_cockpit_status_proxy():
     try:
         req = _urlreq.Request(
             f"{_DAEMON_BASE}/internal/s7/webauthn/status",
+            headers=_s7_internal_channel_headers(),
             method="GET",
         )
         with _urlreq.urlopen(req, timeout=_COCKPIT_PROXY_TIMEOUT_S) as resp:

@@ -513,13 +513,22 @@ class CockpitS7WebAuthnDeferredProxy(unittest.TestCase):
         def fake_urlopen(req, timeout=None):
             captured["url"] = req.full_url
             captured["method"] = req.get_method()
+            captured["headers"] = dict(req.header_items())
             return _make_urlopen_response(
                 b'{"ok": true, "live_flag_enabled": false}',
                 status=200,
             )
 
         self._set_owner_cookie()
-        with self._owner_session(), patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        with (
+            self._owner_session(),
+            patch.dict(
+                os.environ,
+                {"S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret"},
+                clear=False,
+            ),
+            patch("urllib.request.urlopen", side_effect=fake_urlopen),
+        ):
             response = self.client.get("/api/v1/s7/webauthn/status")
 
         body = json.loads(response.get_data())
@@ -527,6 +536,10 @@ class CockpitS7WebAuthnDeferredProxy(unittest.TestCase):
         self.assertFalse(body["live_flag_enabled"])
         self.assertEqual(captured["url"], "http://127.0.0.1:11435/internal/s7/webauthn/status")
         self.assertEqual(captured["method"], "GET")
+        self.assertEqual(
+            captured["headers"].get("X-maez-s7-internal-channel"),
+            "test-channel-secret",
+        )
 
     def test_flag_on_register_begin_forwards_with_internal_channel_not_browser_origin(self):
         captured = {}

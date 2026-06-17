@@ -16,8 +16,15 @@ Runner:
 import json
 import os
 import unittest
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest import mock
+
+
+_WEB_INTERFACE_TEST_ENV = {
+    "MAEZ_IPHONE_INGEST_TOKEN": "test-token",
+    "MAEZ_SECRETS_DISABLE_NEW_LOADER": "1",
+}
 
 
 # ── fakes ────────────────────────────────────────────────────────────────
@@ -162,15 +169,36 @@ class TestRetainAttrInit(unittest.TestCase):
 
 class TestWebProxyFlag(unittest.TestCase):
     def _client(self):
-        import skills.web_interface as wi
+        with mock.patch.dict(os.environ, _WEB_INTERFACE_TEST_ENV, clear=False):
+            import skills.web_interface as wi
         wi.app.config["TESTING"] = True
         return wi, wi.app.test_client()
+
+    @contextmanager
+    def _owner_session(self, wi, client):
+        client.set_cookie("maez_token", "tok")
+        with (
+            mock.patch.object(
+                wi.accounts,
+                "get_by_token",
+                return_value={"uuid": "owner", "display_name": "Rohit"},
+            ),
+            mock.patch.object(
+                wi.accounts,
+                "get_user_record",
+                return_value={"private_owner_bridge": True},
+            ),
+        ):
+            yield
 
     def test_flag_off_uses_log_scrape_shape(self):
         wi, client = self._client()
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("MAEZ_COCKPIT_REAL_STATE", None)
-            with mock.patch.object(wi, "_tail_log_lines", return_value=[]):
+            with (
+                self._owner_session(wi, client),
+                mock.patch.object(wi, "_tail_log_lines", return_value=[]),
+            ):
                 resp = client.get("/api/v1/daemon/state")
         self.assertEqual(resp.status_code, 200)
         body = resp.get_json()
@@ -193,16 +221,43 @@ class TestWebProxyFlag(unittest.TestCase):
             def __exit__(self, *a):
                 return False
 
-        with mock.patch.dict(os.environ, {"MAEZ_COCKPIT_REAL_STATE": "1"}, clear=False):
-            with mock.patch("urllib.request.urlopen", return_value=_Resp(real_payload)):
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["headers"] = dict(req.header_items())
+            captured["url"] = req.full_url
+            captured["timeout"] = timeout
+            return _Resp(real_payload)
+
+        env = {
+            "MAEZ_COCKPIT_REAL_STATE": "1",
+            "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
+        }
+        with mock.patch.dict(os.environ, env, clear=False):
+            with self._owner_session(wi, client), mock.patch(
+                "urllib.request.urlopen",
+                side_effect=fake_urlopen,
+            ):
                 resp = client.get("/api/v1/daemon/state")
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.get_json(), real_payload)
+        self.assertEqual(captured["url"], wi.DAEMON_COCKPIT_STATE_URL)
+        self.assertEqual(
+            captured["headers"].get("X-maez-s7-internal-channel"),
+            "test-channel-secret",
+        )
 
     def test_flag_on_unreachable_is_honest(self):
         wi, client = self._client()
-        with mock.patch.dict(os.environ, {"MAEZ_COCKPIT_REAL_STATE": "1"}, clear=False):
-            with mock.patch("urllib.request.urlopen", side_effect=OSError("refused")):
+        env = {
+            "MAEZ_COCKPIT_REAL_STATE": "1",
+            "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
+        }
+        with mock.patch.dict(os.environ, env, clear=False):
+            with (
+                self._owner_session(wi, client),
+                mock.patch("urllib.request.urlopen", side_effect=OSError("refused")),
+            ):
                 resp = client.get("/api/v1/daemon/state")
         body = resp.get_json()
         self.assertEqual(body, {"status": "unreachable"})
@@ -227,7 +282,8 @@ class TestWebProxyFlag(unittest.TestCase):
 
 class TestCockpitDir(unittest.TestCase):
     def test_resolves_repo_relative(self):
-        import skills.web_interface as wi
+        with mock.patch.dict(os.environ, _WEB_INTERFACE_TEST_ENV, clear=False):
+            import skills.web_interface as wi
         self.assertTrue(
             wi.COCKPIT_DIR.endswith(os.path.join("web", "cockpit")),
             wi.COCKPIT_DIR,
@@ -241,13 +297,15 @@ class TestCockpitDir(unittest.TestCase):
 
     def test_env_override_respected(self):
         import importlib
-        with mock.patch.dict(os.environ, {"MAEZ_COCKPIT_DIR": "/tmp/custom/cockpit"}, clear=False):
+        env = {**_WEB_INTERFACE_TEST_ENV, "MAEZ_COCKPIT_DIR": "/tmp/custom/cockpit"}
+        with mock.patch.dict(os.environ, env, clear=False):
             import skills.web_interface as wi
             importlib.reload(wi)
             self.assertEqual(wi.COCKPIT_DIR, "/tmp/custom/cockpit")
         # restore default for other tests
-        import skills.web_interface as wi2
-        importlib.reload(wi2)
+        with mock.patch.dict(os.environ, _WEB_INTERFACE_TEST_ENV, clear=False):
+            import skills.web_interface as wi2
+            importlib.reload(wi2)
 
 
 if __name__ == "__main__":
