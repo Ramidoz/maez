@@ -86,22 +86,31 @@ def _list_modules() -> list[str]:
     return sorted(out)
 
 
-def _list_services() -> dict[str, str]:
-    """systemd unit states for maez* and llama* units. Returns
-    {unit_name: state} where state is 'active' | 'inactive' | 'failed'
-    | 'unknown'. If systemctl is unavailable, returns {'unavailable': reason}."""
-    try:
-        out = subprocess.check_output(
-            ["systemctl", "list-units", "--all", "--no-pager", "--no-legend",
-             "--type=service", "maez*", "llama*"],
-            timeout=2.0, stderr=subprocess.DEVNULL,
-        ).decode("utf-8", errors="replace")
-    except (subprocess.TimeoutExpired, FileNotFoundError,
-            subprocess.CalledProcessError):
-        return {"_unavailable": "systemctl not reachable"}
+def _systemctl_service_cmd(*, user: bool) -> list[str]:
+    cmd = ["systemctl"]
+    if user:
+        cmd.append("--user")
+    cmd.extend(
+        [
+            "list-units",
+            "--all",
+            "--no-pager",
+            "--no-legend",
+            "--type=service",
+            "maez*",
+            "llama*",
+            "ollama*",
+            "minicheck*",
+            "searxng*",
+        ]
+    )
+    return cmd
+
+
+def _parse_service_lines(raw: str) -> dict[str, str]:
     result: dict[str, str] = {}
-    for line in out.splitlines():
-        toks = line.strip().split(None, 3)
+    for line in raw.splitlines():
+        toks = line.strip().split(None, 4)
         if len(toks) < 4:
             continue
         unit = toks[0]
@@ -109,6 +118,44 @@ def _list_services() -> dict[str, str]:
             name = unit[:-len(".service")]
             state = toks[2]  # active | inactive | failed
             result[name] = state
+    return result
+
+
+def _merge_service_state(result: dict[str, str], name: str, state: str) -> None:
+    current = result.get(name)
+    if current == "active":
+        return
+    if state == "active" or current is None:
+        result[name] = state
+
+
+def _list_services() -> dict[str, str]:
+    """systemd unit states for maez* and llama* units. Returns
+    {unit_name: state} where state is 'active' | 'inactive' | 'failed'
+    | 'unknown'. If systemctl is unavailable, returns {'unavailable': reason}.
+
+    Maez runs as user services on Rohit's workstation. Query the user manager
+    first, then system scope as a fallback/supplement, and prefer an active
+    state over an inactive duplicate.
+    """
+    result: dict[str, str] = {}
+    failures: list[str] = []
+    for scope, user in (("user", True), ("system", False)):
+        try:
+            out = subprocess.check_output(
+                _systemctl_service_cmd(user=user),
+                timeout=2.0,
+                stderr=subprocess.DEVNULL,
+            ).decode("utf-8", errors="replace")
+        except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.CalledProcessError):
+            failures.append(scope)
+            continue
+        for name, state in _parse_service_lines(out).items():
+            _merge_service_state(result, name, state)
+    if not result:
+        if failures:
+            return {"_unavailable": f"systemctl not reachable ({', '.join(failures)})"}
+        return {}
     return result
 
 

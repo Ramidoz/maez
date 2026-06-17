@@ -9,6 +9,7 @@ truthful across refactors.
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 from core.capability_registry import (
     describe, prompt_snippet, grounded_vocab,
@@ -39,6 +40,36 @@ class DescribeShape(unittest.TestCase):
         vision capability."""
         d = describe()
         self.assertIn("llama-server-vision", d["disabled_features"])
+
+    def test_services_include_user_scope_units(self):
+        from core.infra import capability_registry as cr
+
+        def fake_check_output(cmd, **_kwargs):
+            if "--user" in cmd:
+                return (
+                    "maez.service loaded active running Maez daemon\n"
+                    "minicheck-verifier.service loaded active running MiniCheck verifier\n"
+                ).encode("utf-8")
+            return b""
+
+        with mock.patch.object(cr.subprocess, "check_output", side_effect=fake_check_output):
+            services = cr._list_services()
+
+        self.assertEqual(services["maez"], "active")
+        self.assertEqual(services["minicheck-verifier"], "active")
+
+    def test_user_scope_active_wins_over_system_scope_inactive(self):
+        from core.infra import capability_registry as cr
+
+        def fake_check_output(cmd, **_kwargs):
+            if "--user" in cmd:
+                return b"maez-web.service loaded active running Maez web\n"
+            return b"maez-web.service loaded inactive dead Maez web system\n"
+
+        with mock.patch.object(cr.subprocess, "check_output", side_effect=fake_check_output):
+            services = cr._list_services()
+
+        self.assertEqual(services["maez-web"], "active")
 
 
 class PromptSnippet(unittest.TestCase):

@@ -88,6 +88,8 @@ _SERVICES_TO_PROBE = (
     ("daemon_ws_11436", "127.0.0.1", 11436),  # daemon WebSocket
     ("web_11437", "127.0.0.1", 11437),    # web cockpit
     ("proxy_11438", "127.0.0.1", 11438),  # subscription proxy
+    ("minicheck_8083", "127.0.0.1", 8083),  # support verifier
+    ("searxng_8888", "127.0.0.1", 8888),  # local search backend
 )
 
 # Env vars relevant to desktop / X / Wayland / DBus reach.
