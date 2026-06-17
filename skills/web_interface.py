@@ -1686,6 +1686,8 @@ def _api_daemon_state_log_scrape():
 def api_cards_list():
     """Recent pending cards — all non-terminal + last 24h terminal
     so the cockpit can show context on what just got resolved."""
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     import sqlite3 as _sq
     import time as _time
 
@@ -5491,6 +5493,8 @@ def console_rail():
 @app.route("/api/v1/dreams")
 def api_dreams():
     """Merged view of evolution candidates + dream proposals."""
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     import sqlite3 as _sq
 
     dreams = []
@@ -5600,6 +5604,8 @@ def api_quality():
 
 @app.route("/api/v1/workshop/sessions", methods=["GET"])
 def api_workshop_list():
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     try:
         from core.workshop import rollup
 
@@ -5629,6 +5635,8 @@ def api_workshop_create():
 
 @app.route("/api/v1/workshop/session/<session_id>", methods=["GET"])
 def api_workshop_get(session_id: str):
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     try:
         from core.workshop import get_session, get_turns
 
@@ -5724,9 +5732,8 @@ def api_workshop_apply(session_id: str):
     Body: {"diff": "<unified diff text>", "reviewed": true}
     Returns: {applied, target, backup, stdout, stderr, error?}
 
-    Same privilege boundary as the rest of /api/v1/workshop — 127.0.0.1
-    only, no auth layer. Destructive: writes to disk. Reversible via
-    the returned backup path.
+    Same owner-private bridge boundary as the rest of /api/v1/workshop.
+    Destructive: writes to disk. Reversible via the returned backup path.
 
     **Covenant gate** (audit Tier-2, 2026-05-04): the request body
     must include `reviewed: true`. Without it, apply_diff refuses
@@ -5827,6 +5834,8 @@ def api_self_dev():
         recent_concerns — default 25   (max 200)
         window_hours    — default 168  (7 days)
     """
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     try:
         from core.self_dev_persistence import rollup
     except Exception as e:

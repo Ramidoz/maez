@@ -785,6 +785,30 @@ class CockpitPrivateReadRoutesAuth(unittest.TestCase):
                 self.assertEqual(response.status_code, 401)
                 self.assertEqual(response.get_json()["error"], "owner_auth_required")
 
+    def test_private_consent_and_workshop_reads_require_owner_session_before_work(self):
+        def fail_if_called(*_args, **_kwargs):
+            raise AssertionError("unauthenticated private read reached data layer")
+
+        with (
+            patch("sqlite3.connect", side_effect=fail_if_called),
+            patch("core.workshop.rollup", side_effect=fail_if_called),
+            patch("core.workshop.get_session", side_effect=fail_if_called),
+            patch("core.self_dev_persistence.rollup", side_effect=fail_if_called),
+        ):
+            paths = (
+                "/api/v1/cards",
+                "/api/v1/dreams",
+                "/api/v1/workshop/sessions",
+                "/api/v1/workshop/session/session-1",
+                "/api/v1/self_dev",
+            )
+
+            for path in paths:
+                with self.subTest(path=path):
+                    response = self.client.get(path)
+                    self.assertEqual(response.status_code, 401)
+                    self.assertEqual(response.get_json()["error"], "owner_auth_required")
+
 
 class _FakeFile:
     """Tiny stand-in for the .read() interface HTTPError exposes via fp.
