@@ -134,3 +134,45 @@ class DaemonWebOwnerDescriptorTests(unittest.TestCase):
         self.assertEqual(descriptor["observe_turn_label"], "web_owner_turn")
         self.assertIsNone(descriptor["get_pipeline"])
         self.assertIsNone(descriptor["action_engine"])
+
+    def test_web_owner_surface_disabled_does_not_fall_through_to_cockpit(self):
+        from daemon.maez_daemon import _select_message_inbound_descriptor
+
+        with mock.patch.dict(
+            os.environ,
+            {"MAEZ_COCKPIT_CORE": "1", "MAEZ_WEB_OWNER_CORE": "0"},
+        ):
+            descriptor, error = _select_message_inbound_descriptor(
+                mock.Mock(),
+                text="hello from maez.live",
+                chat_history=None,
+                surface_hint="web_owner",
+            )
+
+        self.assertIsNone(descriptor)
+        self.assertEqual(error, "web_owner_core_disabled")
+
+    def test_message_descriptor_selector_routes_each_enabled_surface(self):
+        from daemon.maez_daemon import _select_message_inbound_descriptor
+
+        with mock.patch.dict(
+            os.environ,
+            {"MAEZ_COCKPIT_CORE": "1", "MAEZ_WEB_OWNER_CORE": "1"},
+        ):
+            web_descriptor, web_error = _select_message_inbound_descriptor(
+                mock.Mock(),
+                text="hello from maez.live",
+                chat_history=None,
+                surface_hint="web_owner",
+            )
+            cockpit_descriptor, cockpit_error = _select_message_inbound_descriptor(
+                mock.Mock(),
+                text="hello from cockpit",
+                chat_history=None,
+                surface_hint="cockpit",
+            )
+
+        self.assertIsNone(web_error)
+        self.assertEqual(web_descriptor["owner_surface_label"], "web_owner")
+        self.assertIsNone(cockpit_error)
+        self.assertEqual(cockpit_descriptor["owner_surface_label"], "cockpit")

@@ -2690,6 +2690,43 @@ def _build_web_owner_inbound_descriptor(daemon, *, text: str, chat_history) -> d
     )
 
 
+def _select_message_inbound_descriptor(
+    daemon,
+    *,
+    text: str,
+    chat_history,
+    surface_hint: str,
+) -> tuple[dict | None, str | None]:
+    """Return the inbound-core descriptor for a ``/message`` surface.
+
+    ``surface=web_owner`` is a cross-process private owner bridge. If the web
+    process is configured for that bridge but the daemon is not, fail closed
+    instead of silently treating the turn as cockpit traffic under
+    ``MAEZ_COCKPIT_CORE``.
+    """
+    if surface_hint == "web_owner":
+        if not web_owner_core_enabled():
+            return None, "web_owner_core_disabled"
+        return (
+            _build_web_owner_inbound_descriptor(
+                daemon,
+                text=text,
+                chat_history=chat_history,
+            ),
+            None,
+        )
+    if cockpit_core_enabled():
+        return (
+            _build_cockpit_inbound_descriptor(
+                daemon,
+                text=text,
+                chat_history=chat_history,
+            ),
+            None,
+        )
+    return None, None
+
+
 def _chat_history_message_count(messages: list[dict]) -> int:
     """Count substantive prior chat messages already threaded into messages[]."""
     count = 0
@@ -10723,10 +10760,15 @@ class MaezDaemon:
             # cards/proposals/search/tools (get_pipeline=action_engine=None).
             # When OFF (default), the existing source="UI" path runs UNTOUCHED.
             surface_hint = str(data.get("surface") or "cockpit").strip()
-            web_owner_core_request = (
-                surface_hint == "web_owner" and web_owner_core_enabled()
+            descriptor, descriptor_error = _select_message_inbound_descriptor(
+                self,
+                text=text,
+                chat_history=chat_history,
+                surface_hint=surface_hint,
             )
-            if cockpit_core_enabled() or web_owner_core_request:
+            if descriptor_error == "web_owner_core_disabled":
+                return jsonify({"error": descriptor_error}), 409
+            if descriptor is not None:
                 from daemon.inbound_core import run_inbound_turn
 
                 # The Flask route is sync; run_inbound_turn is async. asyncio.run
@@ -10734,18 +10776,6 @@ class MaezDaemon:
                 # loop is running on the Flask request thread); inside the
                 # coroutine, run_inbound_turn's own asyncio.get_event_loop()
                 # returns that running loop for its run_in_executor offloads.
-                if web_owner_core_request:
-                    descriptor = _build_web_owner_inbound_descriptor(
-                        self,
-                        text=text,
-                        chat_history=chat_history,
-                    )
-                else:
-                    descriptor = _build_cockpit_inbound_descriptor(
-                        self,
-                        text=text,
-                        chat_history=chat_history,
-                    )
                 # Degrade honestly: an S4/early exception from run_inbound_turn
                 # (before its own internal try/except wraps synthesis) returns a
                 # JSON error rather than a raw 500 traceback — mirrors the
