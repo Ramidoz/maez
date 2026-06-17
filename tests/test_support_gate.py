@@ -87,3 +87,64 @@ class ApplySupportGateTest(unittest.TestCase):
 
         self.assertEqual(out.gated_marked_draft.strip(), "Just a thought.")
         self.assertEqual(v.calls, [])
+
+
+class GateRecordsTest(unittest.TestCase):
+    def _gate(self, draft, evidence_map, verifier):
+        from core.cognition.grounding_shadow import apply_support_gate
+
+        return apply_support_gate(
+            draft,
+            evidence_map,
+            verifier,
+            surface="cockpit",
+            shadow_id="sid",
+            ts=0,
+            boot_id="b",
+        )
+
+    def test_one_pass_no_duplicate_calls(self):
+        from core.cognition.support_verifier import (
+            FakeSupportVerifier,
+            SUPPORTED,
+            UNSUPPORTED,
+        )
+
+        v = FakeSupportVerifier(
+            scripted={
+                "A [E1].": (UNSUPPORTED, 0.1),
+                "B [E2].": (SUPPORTED, 0.9),
+            }
+        )
+
+        self._gate("A [E1]. B [E2].", {"E1": "x", "E2": "y"}, v)
+
+        self.assertEqual(len(v.calls), 2)
+
+    def test_support_row_marked_gate_applied_and_post_audit(self):
+        from core.cognition.support_verifier import FakeSupportVerifier, UNSUPPORTED
+
+        out = self._gate(
+            "A [E1].",
+            {"E1": "x"},
+            FakeSupportVerifier(default=(UNSUPPORTED, 0.1)),
+        )
+
+        self.assertTrue(out.support_row["gate_applied"])
+        self.assertTrue(out.support_row["post_audit"])
+        self.assertEqual(out.support_row["sentences"][0]["support_verdict"], "UNSUPPORTED")
+        self.assertEqual(out.support_row["sentences"][0]["cited_evidence_ids"], ["E1"])
+
+    def test_gate_receipt_counts_match_actions(self):
+        from core.cognition.support_verifier import FakeSupportVerifier, UNSUPPORTED
+
+        out = self._gate(
+            "A [E1]. B [E2].",
+            {"E1": "x"},
+            FakeSupportVerifier(default=(UNSUPPORTED, 0.1)),
+        )
+
+        receipt = out.gate_receipt
+        self.assertEqual(receipt["caveated_unsupported"], 1)
+        self.assertEqual(receipt["caveated_unmatched"], 1)
+        self.assertIn("latency_ms", receipt)

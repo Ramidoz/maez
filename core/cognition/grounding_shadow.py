@@ -310,10 +310,47 @@ def apply_support_gate(
         if caveat:
             parts.append(caveat)
     gated = " ".join(part for part in parts if part)
+    compute_result = {
+        "status": "budget_exceeded" if budget_hit else "ok",
+        "sentences": recs,
+        "shadowed_count": len(recs),
+        "remaining_count": 0,
+    }
+    support_row = build_telemetry(
+        shadow_id,
+        ts,
+        surface,
+        boot_id,
+        {"mode": "gate"},
+        compute_result,
+        post_audit=True,
+    )
+    support_row["gate_applied"] = True
+    gate_receipt = {
+        "event": "support_gate_applied",
+        "surface": surface,
+        "cited": sum(1 for rec in recs if rec.get("cited_evidence_ids")),
+        "caveated_unsupported": sum(
+            1
+            for rec in recs
+            if rec.get("mode") == "cited_support" and rec.get("verdict") == UNSUPPORTED
+        ),
+        "caveated_unmatched": sum(
+            1 for rec in recs if rec.get("mode") == "unmatched_citation"
+        ),
+        "caveated_unverified": sum(
+            1
+            for rec in recs
+            if rec.get("mode") in {"verifier_unavailable", "budget_exhausted"}
+        ),
+        "budget_exhausted": any(rec.get("mode") == "budget_exhausted" for rec in recs),
+        "verifier": _verifier_name(verifier),
+        "latency_ms": round(sum(rec.get("latency_s") or 0.0 for rec in recs) * 1000, 1),
+    }
     return GateOutcome(
         gated_marked_draft=gated,
-        gate_receipt={},
-        support_row={"sentences": recs},
+        gate_receipt=gate_receipt,
+        support_row=support_row,
     )
 
 
