@@ -2588,6 +2588,24 @@ class TelegramAdapter(BasePlatformAdapter):
                 logger.warning("[%s] Ignoring invalid Telegram thread id: %r", self.name, value)
         return ignored
 
+    def _telegram_allowed_users(self) -> set[str]:
+        raw = self.config.extra.get("allowed_users")
+        if raw is None:
+            raw = os.getenv("TELEGRAM_ALLOWED_USERS", "")
+        if isinstance(raw, list):
+            return {str(part).strip() for part in raw if str(part).strip()}
+        return {part.strip() for part in str(raw).split(",") if part.strip()}
+
+    def _message_user_authorized(self, message: Message) -> bool:
+        allowed = self._telegram_allowed_users()
+        if not allowed:
+            return True
+        if "*" in allowed:
+            return True
+        user = getattr(message, "from_user", None)
+        user_id = str(getattr(user, "id", "") or "")
+        return bool(user_id and user_id in allowed)
+
     def _compile_mention_patterns(self) -> List[re.Pattern]:
         """Compile optional regex wake-word patterns for group triggers."""
         patterns = self.config.extra.get("mention_patterns")
@@ -2702,6 +2720,8 @@ class TelegramAdapter(BasePlatformAdapter):
         - the bot is @mentioned
         - the text/caption matches a configured regex wake-word pattern
         """
+        if not self._message_user_authorized(message):
+            return False
         if not self._is_group_chat(message):
             return True
         thread_id = getattr(message, "message_thread_id", None)
