@@ -693,6 +693,64 @@ class CockpitS7WebAuthnDeferredProxy(unittest.TestCase):
         self.assertIn("b64urlToBuffer", text)
 
 
+class CockpitMutationRoutesAuth(unittest.TestCase):
+    """Older cockpit mutation routes must share the private-owner boundary."""
+
+    def setUp(self):
+        with patch.dict(
+            os.environ,
+            {
+                "MAEZ_IPHONE_INGEST_TOKEN": "test-token",
+                "MAEZ_SECRETS_DISABLE_NEW_LOADER": "1",
+            },
+            clear=False,
+        ):
+            from skills import web_interface as wi
+        self.client = wi.app.test_client()
+        self.wi = wi
+
+    def test_workshop_mutation_routes_require_owner_session_before_work(self):
+        def fail_if_called(*_args, **_kwargs):
+            raise AssertionError("unauthenticated workshop mutation reached work layer")
+
+        with (
+            patch("core.workshop.create_session", side_effect=fail_if_called),
+            patch("core.workshop.turn", side_effect=fail_if_called),
+            patch("core.workshop.update_session_model", side_effect=fail_if_called),
+            patch("core.workshop.apply_diff", side_effect=fail_if_called),
+            patch("core.workshop.delete_session", side_effect=fail_if_called),
+        ):
+            cases = (
+                ("post", "/api/v1/workshop/sessions", {"title": "x"}),
+                ("post", "/api/v1/workshop/session/s1/turn", {"message": "hi"}),
+                ("post", "/api/v1/workshop/session/s1/model", {"model": "sonnet"}),
+                (
+                    "post",
+                    "/api/v1/workshop/session/s1/apply",
+                    {"diff": "--- a/x\n+++ b/x\n", "reviewed": True},
+                ),
+                ("delete", "/api/v1/workshop/session/s1", None),
+            )
+            for method, path, payload in cases:
+                with self.subTest(path=path):
+                    response = getattr(self.client, method)(path, json=payload)
+                    self.assertEqual(response.status_code, 401)
+                    self.assertEqual(response.get_json()["error"], "owner_auth_required")
+
+    def test_self_dev_resolve_requires_owner_session_before_write(self):
+        def fail_if_called(*_args, **_kwargs):
+            raise AssertionError("unauthenticated self-dev resolve reached write layer")
+
+        with patch("core.self_dev_persistence.set_concern_status", side_effect=fail_if_called):
+            response = self.client.post(
+                "/api/v1/self_dev/concern/42/resolve",
+                json={"state": "resolved", "notes": "done"},
+            )
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.get_json()["error"], "owner_auth_required")
+
+
 class _FakeFile:
     """Tiny stand-in for the .read() interface HTTPError exposes via fp.
 

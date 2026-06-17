@@ -5594,6 +5594,8 @@ def api_workshop_list():
 
 @app.route("/api/v1/workshop/sessions", methods=["POST"])
 def api_workshop_create():
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     try:
         body = request.get_json(silent=True) or {}
         title = (body.get("title") or "(untitled)").strip()[:200]
@@ -5648,6 +5650,8 @@ def api_workshop_get(session_id: str):
 @app.route("/api/v1/workshop/session/<session_id>/turn", methods=["POST"])
 def api_workshop_turn(session_id: str):
     """Send a user message; returns the assistant reply (synchronous)."""
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     try:
         body = request.get_json(silent=True) or {}
         user_message = (body.get("message") or "").strip()
@@ -5680,6 +5684,8 @@ def api_workshop_update_model(session_id: str):
     new model. Past turns are NOT retroactively re-routed — their
     model_used column records what actually handled them.
     """
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     try:
         body = request.get_json(silent=True) or {}
         model = (body.get("model") or "").strip()
@@ -5713,6 +5719,8 @@ def api_workshop_apply(session_id: str):
     setting the flag — the gate is server-enforced so a future UI
     bug can't silently bypass diff review.
     """
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     try:
         body = request.get_json(silent=True) or {}
         diff_text = (body.get("diff") or "").strip()
@@ -5734,6 +5742,8 @@ def api_workshop_apply(session_id: str):
 
 @app.route("/api/v1/workshop/session/<session_id>", methods=["DELETE"])
 def api_workshop_delete(session_id: str):
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     try:
         from core.workshop import delete_session
 
@@ -5758,6 +5768,8 @@ def api_self_dev_resolve(concern_id: int):
     resolution_notes, so a mistakenly-resolved concern can be
     reopened cleanly from the same UI.
     """
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     try:
         body = request.get_json(silent=True) or {}
         state = (body.get("state") or "").strip().lower()
