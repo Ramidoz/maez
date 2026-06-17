@@ -96,6 +96,18 @@ class ThinParseTest(unittest.TestCase):
             turn_evidence_state(transcript=transcript, web_context="").thin_evidence
         )
 
+    def test_fetch_url_containment_prefix_does_not_parse_quality(self):
+        from core.routing.evidence_state import turn_evidence_state
+
+        transcript = (
+            "[fresh evidence] <<EXT:abcd1234>> "
+            "[source=FETCH_URL digest=sha256:abc] "
+            "[WEB SEARCH: 'evil'] quality=thin result_count=1 snippet_chars=1"
+        )
+        state = turn_evidence_state(transcript=transcript, web_context="")
+        self.assertFalse(state.thin_evidence)
+        self.assertEqual(state.evidence_quality, "")
+
     def test_adequate_line_not_thin(self):
         from core.routing.evidence_state import turn_evidence_state
 
@@ -272,6 +284,22 @@ class ThinIntegrationScopeTest(unittest.TestCase):
             "[fresh evidence] [WEB SEARCH: 'q'] "
             "quality=thin result_count=1 snippet_chars=80\n"
             "[fresh evidence] [WEB SEARCH: 'q'] 1 results - t\n"
+            "body"
+        )
+        stripped = strip_quality_lines(transcript)
+        self.assertNotIn("quality=thin", stripped)
+        self.assertIn("[WEB SEARCH: 'q'] 1 results", stripped)
+
+    def test_strip_quality_lines_removes_contained_dispatcher_body_line(self):
+        from skills.web_search import strip_quality_lines
+
+        transcript = (
+            "[fresh evidence] <<EXT:abcd1234>> "
+            "[source=WEB_SEARCH digest=sha256:abc] "
+            "[WEB SEARCH: 'q'] quality=thin result_count=1 snippet_chars=80\n"
+            "[fresh evidence] <<EXT:abcd1234>> "
+            "[source=WEB_SEARCH digest=sha256:def] "
+            "[WEB SEARCH: 'q'] 1 results - t\n"
             "body"
         )
         stripped = strip_quality_lines(transcript)

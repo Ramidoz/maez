@@ -44,7 +44,7 @@ _LEGACY_QUALITY_LINE_RE = re.compile(
 )
 _DISPATCHER_QUALITY_LINE_RE = re.compile(
     r"^\[fresh evidence\]\s*"
-    r"(?:<<EXT:[^>]+>>\s*\[source=[^\]]+\]\s*)?"
+    r"(?:<<EXT:[^>]+>>\s*\[source=WEB_SEARCH(?:\s+[^\]]*)?\]\s*)?"
     r"\[WEB SEARCH: [^\]]*\] "
     r"quality=(thin|adequate) result_count=(\d+) snippet_chars=(\d+)",
 )

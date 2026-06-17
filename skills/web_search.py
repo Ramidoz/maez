@@ -31,7 +31,9 @@ _SENSE_BACKEND = None
 _THIN_RESULT_COUNT = 3
 _THIN_SNIPPET_CHARS = 450
 _QUALITY_LINE_RE = re.compile(
-    r"^(?:\[fresh evidence\]\s*)?\[WEB SEARCH: [^\]]*\] "
+    r"^(?:\[fresh evidence\]\s*)?"
+    r"(?:<<EXT:[^>]+>>\s*\[source=[^\]]+\]\s*)?"
+    r"\[WEB SEARCH: [^\]]*\] "
     r"quality=(?:thin|adequate) result_count=\d+ snippet_chars=\d+\n?",
     re.MULTILINE,
 )
