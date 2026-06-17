@@ -65,6 +65,10 @@ def strip_quality_lines(text: str) -> str:
     return _QUALITY_LINE_RE.sub("", text or "")
 
 
+def _single_line(value: object) -> str:
+    return re.sub(r"[\r\n]+", " ", str(value or "")).strip()
+
+
 def _sense_backend():
     """Lazy singleton so the flag-off path never imports/builds SearXNG."""
     global _SENSE_BACKEND
@@ -279,17 +283,21 @@ def format_for_context(result: dict, *, include_quality: bool = False) -> str:
     if not result.get('success') or not result.get('results'):
         return f"[WEB SEARCH: '{result.get('query', '')}'] No results found."
 
+    emit_quality = include_quality and _thin_evidence_enabled()
     lines = [
         f"[WEB SEARCH: '{result['query']}'] "
         f"{result['result_count']} results — {result['timestamp']}"
     ]
     for i, r in enumerate(result['results'][:3], 1):
-        lines.append(f"  {i}. {r['title']}")
-        lines.append(f"     {r['snippet'][:200]}")
+        title = _single_line(r.get("title")) if emit_quality else r["title"]
+        snippet = _single_line(r.get("snippet")) if emit_quality else r["snippet"]
+        lines.append(f"  {i}. {title}")
+        lines.append(f"     {snippet[:200]}")
         if r.get('url'):
-            lines.append(f"     Source: {r['url']}")
+            url = _single_line(r.get("url")) if emit_quality else r["url"]
+            lines.append(f"     Source: {url}")
     rendered = '\n'.join(lines)
-    if include_quality and _thin_evidence_enabled():
+    if emit_quality:
         quality, result_count, snippet_chars = _compute_quality(result)
         quality_line = (
             f"[WEB SEARCH: '{result['query']}'] "

@@ -43,9 +43,10 @@ _LEGACY_QUALITY_LINE_RE = re.compile(
     r"quality=(thin|adequate) result_count=(\d+) snippet_chars=(\d+)$"
 )
 _DISPATCHER_QUALITY_LINE_RE = re.compile(
-    r"^\[fresh evidence\]\s*\[WEB SEARCH: [^\]]*\] "
+    r"^\[fresh evidence\]\s*"
+    r"(?:<<EXT:[^>]+>>\s*\[source=[^\]]+\]\s*)?"
+    r"\[WEB SEARCH: [^\]]*\] "
     r"quality=(thin|adequate) result_count=(\d+) snippet_chars=(\d+)",
-    re.MULTILINE,
 )
 
 
@@ -92,14 +93,19 @@ def _quality_info(
                 int(match.group(3)),
             )
 
-    for match in _DISPATCHER_QUALITY_LINE_RE.finditer(transcript or ""):
-        quality = match.group(1)
-        return (
-            quality == "thin",
-            quality,
-            int(match.group(2)),
-            int(match.group(3)),
-        )
+    for line in (transcript or "").splitlines():
+        if not line.startswith("[fresh evidence]"):
+            continue
+        match = _DISPATCHER_QUALITY_LINE_RE.match(line)
+        if match:
+            quality = match.group(1)
+            return (
+                quality == "thin",
+                quality,
+                int(match.group(2)),
+                int(match.group(3)),
+            )
+        break
     return False, "", None, None
 
 
