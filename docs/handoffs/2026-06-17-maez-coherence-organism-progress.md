@@ -253,6 +253,15 @@ git diff --check
 
 Result: `Ran 123 tests ... OK (skipped=2)`; ruff clean; diff check clean.
 
+Review:
+
+- `Chandrasekhar` independently reviewed `1635275..7d77fb0` and returned
+  `PASS`, with no blocking findings.
+- Reviewer reran:
+  `tests.test_web_debug_auth`, `tests.test_capability_registry`, and
+  `tests.test_cockpit_proxies_2026_05_05.CockpitPrivateReadRoutesAuth`.
+  Result: `Ran 25 tests ... OK (skipped=2)`.
+
 Lint/checks:
 
 ```bash
