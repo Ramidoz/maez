@@ -234,6 +234,31 @@ class CockpitRouteBranchTests(unittest.TestCase):
         # No brain-loop ran (get_pipeline None) -> empty transcript synthesized.
         self.assertEqual(call["kwargs"].get("transcript"), "")
 
+    def test_web_owner_routes_through_core_with_web_owner_surface(self):
+        # The owner web bridge must enter daemon.handle_message with its real
+        # surface label so post-audit rails remain shared with Telegram/focused
+        # paths instead of becoming a generic UI tunnel.
+        from daemon.maez_daemon import _build_web_owner_inbound_descriptor
+        from daemon.inbound_core import run_inbound_turn
+
+        daemon = _FakeDaemon(reply="hi from web owner core")
+        descriptor = _build_web_owner_inbound_descriptor(
+            daemon,
+            text="news about Anthropic",
+            chat_history=[{"role": "user", "content": "prior"}],
+        )
+        self.assertEqual(descriptor["owner_surface_label"], "web_owner")
+        self.assertEqual(descriptor["chat_id"], "web_owner")
+        self.assertEqual(descriptor["channel"], "web_owner_bridge")
+
+        reply = asyncio.run(run_inbound_turn(**descriptor))
+
+        self.assertEqual(reply, "hi from web owner core")
+        self.assertEqual(len(daemon.handle_message_calls), 1)
+        call = daemon.handle_message_calls[0]
+        self.assertEqual(call["source"], "web_owner")
+        self.assertEqual(call["kwargs"].get("chat_id"), "web_owner")
+
 
 if __name__ == "__main__":
     unittest.main()

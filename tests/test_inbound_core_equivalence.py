@@ -178,8 +178,13 @@ def _make_inline_run_in_executor(loop):
     # avoid threads we instead monkeypatch loop.run_in_executor.
     orig = loop.run_in_executor
 
-    async def _inline(executor, fn, *args):
-        return fn(*args)
+    def _inline(executor, fn, *args):
+        fut = loop.create_future()
+        try:
+            fut.set_result(fn(*args))
+        except Exception as exc:
+            fut.set_exception(exc)
+        return fut
 
     return _inline, orig
 
