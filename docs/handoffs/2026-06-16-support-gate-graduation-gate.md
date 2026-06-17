@@ -37,6 +37,21 @@ Thread A now has a synchronous protection path, still off by default:
 | `c6c867b` | sync wrapper logs receipt and writes support row |
 | `95b6b68` | daemon wiring at final marked-draft seam |
 | `9376962` | render_natural + /receipts survival tests |
+| `a805a5d` | STOP-at-gate handoff + ledger row |
+| `7e0785c` | harden witness logging, row-write status, detached citations |
+
+## Review Repairs
+
+Code-quality review raised three HOLDs; all are patched at `7e0785c`:
+
+- `support_gate_applied` now logs through `maez.grounding_shadow`, so the daemon
+  file handler can capture it in `logs/maez.log`.
+- `emit_support_row(...)` returns `row_written`; the gate logs
+  `row_written=true/false`, warns on row-write failure, and warns with
+  traceback on unexpected gate failure before fail-open.
+- Detached citation-only fragments like `Claim. [E1]` and `Claim.\n[E1]` fold
+  back onto the previous sentence, so MiniCheck judges the claim plus citation,
+  not the bracket alone.
 
 ## Verification
 
@@ -44,7 +59,7 @@ Fresh local verification:
 
 ```bash
 .venv/bin/python -B -m unittest tests.test_support_gate tests.test_grounding_shadow tests.test_support_verifier
-# Ran 58 tests in 0.455s — OK
+# Ran 62 tests in 0.443s — OK
 
 .venv/bin/python -B -c "import daemon.maez_daemon"
 
