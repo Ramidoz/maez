@@ -68,6 +68,7 @@ except Exception:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from memory.memory_manager import MemoryManager
 from core.infra.env_flags import strict_env_flag
+from core.infra.runtime_services import runtime_services_snapshot
 
 # 5x.F.A — cycle-scoped recall-context bag helpers. Hoisted to
 # module-top because (a) the import is cheap and Chroma-free per
@@ -3530,6 +3531,10 @@ class MaezDaemon:
                 "configured_model": MODEL,
                 "served_model_alias": served_model_alias(default=MODEL, timeout_s=0.25),
             },
+            "runtime_services": runtime_services_snapshot(
+                timeout_s=0.25,
+                probe_daemon_http_contract=False,
+            ),
             "body": {
                 "cpu_percent": system.get("cpu_percent"),
                 "ram_percent": system.get("ram_percent"),

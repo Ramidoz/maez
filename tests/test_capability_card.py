@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import unittest
+from unittest import mock
 
 from core.cognition import capability_card as cc
 
@@ -95,7 +96,67 @@ class FlagTests(_Env):
         self.assertIn("support gate: off", card)
         self.assertIn("grounding shadow: off", card)
 
-    def test_voice_boundary_sources_mark_support_honesty_organs_as_flags(self):
+    def test_support_honesty_organs_render_degraded_when_verifier_unavailable(self):
+        os.environ["MAEZ_EVIDENCE_PRECEDENCE_ENABLED"] = "1"
+        os.environ["MAEZ_SUPPORT_GATE_ENABLED"] = "1"
+        os.environ["MAEZ_GROUNDING_SHADOW_ENABLED"] = "1"
+        self.addCleanup(lambda: os.environ.pop("MAEZ_SUPPORT_GATE_ENABLED", None))
+        self.addCleanup(lambda: os.environ.pop("MAEZ_GROUNDING_SHADOW_ENABLED", None))
+
+        with mock.patch(
+            "core.cognition.capability_card.support_honesty_status",
+            return_value="degraded",
+        ):
+            card = cc.capability_prompt_block(
+                registry=(
+                    ("support gate", cc._support_gate_probe),
+                    ("grounding shadow", cc._grounding_shadow_probe),
+                )
+            )
+
+        self.assertIn("support gate: degraded", card)
+        self.assertIn("grounding shadow: degraded", card)
+
+    def test_support_honesty_organs_render_on_when_verifier_healthy(self):
+        os.environ["MAEZ_EVIDENCE_PRECEDENCE_ENABLED"] = "1"
+        os.environ["MAEZ_SUPPORT_GATE_ENABLED"] = "1"
+        os.environ["MAEZ_GROUNDING_SHADOW_ENABLED"] = "1"
+        self.addCleanup(lambda: os.environ.pop("MAEZ_SUPPORT_GATE_ENABLED", None))
+        self.addCleanup(lambda: os.environ.pop("MAEZ_GROUNDING_SHADOW_ENABLED", None))
+
+        with mock.patch(
+            "core.cognition.capability_card.support_honesty_status",
+            return_value="healthy",
+        ):
+            card = cc.capability_prompt_block(
+                registry=(
+                    ("support gate", cc._support_gate_probe),
+                    ("grounding shadow", cc._grounding_shadow_probe),
+                )
+            )
+
+        self.assertIn("support gate: on", card)
+        self.assertIn("grounding shadow: on", card)
+        self.assertNotIn("support gate: healthy", card)
+
+    def test_support_honesty_organs_stay_off_when_flags_off(self):
+        os.environ["MAEZ_EVIDENCE_PRECEDENCE_ENABLED"] = "1"
+
+        with mock.patch(
+            "core.cognition.capability_card.support_honesty_status",
+            return_value="degraded",
+        ):
+            card = cc.capability_prompt_block(
+                registry=(
+                    ("support gate", cc._support_gate_probe),
+                    ("grounding shadow", cc._grounding_shadow_probe),
+                )
+            )
+
+        self.assertIn("support gate: off", card)
+        self.assertIn("grounding shadow: off", card)
+
+    def test_voice_boundary_sources_mark_support_honesty_organs_as_runtime_probes(self):
         os.environ["MAEZ_EVIDENCE_PRECEDENCE_ENABLED"] = "1"
         os.environ["MAEZ_VOICE_BOUNDARY_ENABLED"] = "1"
         self.addCleanup(lambda: os.environ.pop("MAEZ_VOICE_BOUNDARY_ENABLED", None))
@@ -109,7 +170,7 @@ class FlagTests(_Env):
 
         self.assertIn('"name": "support gate"', card)
         self.assertIn('"name": "grounding shadow"', card)
-        self.assertIn('"source": "flag"', card)
+        self.assertIn('"source": "probe"', card)
         self.assertNotIn("minicheck", card.lower())
         self.assertNotIn("verifier healthy", card.lower())
 

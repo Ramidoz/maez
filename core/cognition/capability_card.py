@@ -12,6 +12,7 @@ import json
 from collections.abc import Callable, Sequence
 
 from core.infra.env_flags import strict_env_flag
+from core.infra.runtime_services import support_honesty_status
 
 logger = logging.getLogger("maez")
 
@@ -23,8 +24,8 @@ _ENTRY_SOURCE = {
     "page read": "flag",
     "recall": "flag",
     "search commitment": "flag",
-    "support gate": "flag",
-    "grounding shadow": "flag",
+    "support gate": "probe",
+    "grounding shadow": "probe",
     "felt time": "probe",
 }
 _VOICE_BOUNDARY_INSTRUCTION = (
@@ -73,6 +74,20 @@ def _flag_probe(
     return _probe
 
 
+def _support_gate_probe() -> str:
+    if not strict_env_flag("MAEZ_SUPPORT_GATE_ENABLED"):
+        return "off"
+    status = support_honesty_status()
+    return "on" if status == "healthy" else status
+
+
+def _grounding_shadow_probe() -> str:
+    if not strict_env_flag("MAEZ_GROUNDING_SHADOW_ENABLED"):
+        return "off"
+    status = support_honesty_status()
+    return "on" if status == "healthy" else status
+
+
 def _felt_time_probe() -> str:
     try:
         from core.cognition.parity_flag import surface_parity_enabled
@@ -91,8 +106,8 @@ def _default_registry() -> Sequence[tuple[str, Callable[[], str]]]:
             "search commitment",
             _flag_probe("MAEZ_SEARCH_COMMITMENT_ENABLED", "gatekeeper mode", "off"),
         ),
-        ("support gate", _flag_probe("MAEZ_SUPPORT_GATE_ENABLED")),
-        ("grounding shadow", _flag_probe("MAEZ_GROUNDING_SHADOW_ENABLED")),
+        ("support gate", _support_gate_probe),
+        ("grounding shadow", _grounding_shadow_probe),
         ("felt time", _felt_time_probe),
     )
 

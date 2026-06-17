@@ -51,7 +51,22 @@ def handle_support(payload: dict) -> dict:
     return {"verdict": verdict, "score": score}
 
 
+def handle_health() -> dict:
+    return {"status": "ok", "contract": "minicheck_support.v1"}
+
+
 class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path.rstrip("/") != "/health":
+            self.send_error(404)
+            return
+        data = json.dumps(handle_health()).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def do_POST(self):
         if self.path.rstrip("/") != "/support":
             self.send_error(404)
