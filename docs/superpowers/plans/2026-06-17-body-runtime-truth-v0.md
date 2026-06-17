@@ -2,6 +2,12 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**As-built branch status (2026-06-17):** implemented and branch-verified on
+`maez-coherence-organism`; ledger row is `BUILT_BRANCH_VERIFIED`. The plan below
+is the historical implementation recipe, not pending work. The current branch
+handoff is `docs/handoffs/2026-06-17-maez-coherence-organism-progress.md`.
+Live witness still requires the owner-gated merge/restart path.
+
 **Goal:** Add one content-free runtime service witness so Maez can distinguish configured organs from working organs.
 
 **Architecture:** `core.infra.runtime_services` owns read-only probes for service unit, port, and contract truth. `/health.body` exposes the snapshot, `capability_card` consumes the support-verifier status for support honesty organs, and `scripts.maez_runtime_services_probe` gives a terminal witness. No service is started, stopped, enabled, installed, or restarted.

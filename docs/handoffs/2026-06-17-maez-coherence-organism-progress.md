@@ -99,6 +99,15 @@ or authorized differently depending on surface.
      `llama_server_vision` for body/vision status; when runtime truth is
      missing it says `body unknown` / `runtime unknown`.
 
+11. Runtime-body map reconciliation
+   - `docs/superpowers/specs/2026-06-17-body-runtime-truth-v0-design.md` no
+     longer says the runtime body witness is merely awaiting review.
+   - `docs/superpowers/plans/2026-06-17-body-runtime-truth-v0.md` is now
+     explicitly marked as the historical implementation recipe, not pending
+     work.
+   - The current authority for branch state is this handoff plus the
+     `BUILT_BRANCH_VERIFIED` row in `docs/MAEZ_BUILD_LEDGER.md`.
+
 ## Latest Verification
 
 Command:
@@ -193,6 +202,20 @@ git diff --check
 
 Result: `Ran 88 tests ... OK`; ruff clean; diff check clean.
 
+Additional slice 11 verification:
+
+```bash
+rg -n "Status: design, awaiting review|runtime body truth.*pending|all services up|services active|llama_server_vision" \
+  docs/superpowers/specs/2026-06-17-body-runtime-truth-v0-design.md \
+  docs/superpowers/plans/2026-06-17-body-runtime-truth-v0.md \
+  ui/project-planner.html \
+  web/cockpit/index.html \
+  web/cockpit/sim.jsx
+```
+
+Result: no stale body-state/status hits in the authoritative spec, plan, or UI
+targets. This handoff deliberately names the old phrases in slice descriptions.
+
 Lint/checks:
 
 ```bash
@@ -217,10 +240,10 @@ Result: clean.
 
 These are not fixed by this handoff and should stay visible:
 
-1. Stale docs
-   - Some docs/plans still describe design or pending-review state for slices
-     that are now live/asleep elsewhere. The branch should reconcile the owner
-     facing body map before any switch-over claim.
+1. Final branch review and switch-over proof
+   - The branch has multiple verified seam closures, but it still needs a
+     cross-lane review pass and an explicit owner switch-over decision before
+     any live Maez restart or mainline claim.
 
 ## Plain-English Summary
 
@@ -228,8 +251,9 @@ This branch has not made Maez one body yet, but it has closed several doors
 where Maez's body could be read or controlled differently depending on which
 surface touched it. The current repair theme is simple: one owner proof, one
 runtime truth map, one internal bridge, one Telegram authorization boundary,
-one voice input spine, one fresh-evidence honesty spine, and one cockpit body
-display language.
+one voice input spine, one fresh-evidence honesty spine, one cockpit body
+display language, and one current map of those repairs.
 
-The next useful slice is stale-doc reconciliation: make the branch's written
-map match the now-built body before any switch-over claim.
+The next useful slice is the final review package: summarize the branch,
+run the agreed verification set, and ask the review lane to attack the remaining
+surface/reader divergence before any switch-over.

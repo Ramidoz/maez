@@ -2,7 +2,15 @@
 
 Date: 2026-06-17
 Branch: `maez-coherence-organism`
-Status: design, awaiting review
+Status: implemented on branch; `BUILT_BRANCH_VERIFIED` in
+`docs/MAEZ_BUILD_LEDGER.md`; live witness still owner-gated after merge/restart.
+
+As-built note (2026-06-17): the runtime-services registry, `/health.body`
+projection, capability-card support-honesty runtime probe, terminal witness,
+and owner-facing cockpit/journal runtime-body displays are all present on the
+`maez-coherence-organism` branch. This document remains the design record; the
+latest branch status lives in
+`docs/handoffs/2026-06-17-maez-coherence-organism-progress.md`.
 
 ## The wound
 
