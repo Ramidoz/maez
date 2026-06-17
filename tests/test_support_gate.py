@@ -180,3 +180,41 @@ class GateRecordsTest(unittest.TestCase):
             budget_s=-1.0,
         )
         self.assertEqual(exhausted.support_row["status"], "budget_exceeded")
+
+
+class ObserveFocusedSupportGateTest(unittest.TestCase):
+    def test_returns_gated_reply_logs_receipt_writes_row(self):
+        import json
+        import os
+        import tempfile
+        from unittest import mock
+
+        import core.cognition.grounding_shadow as gs
+        from core.cognition.support_verifier import FakeSupportVerifier, UNSUPPORTED
+
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "grounding_shadow.jsonl")
+            with (
+                mock.patch.object(gs, "_default_telemetry_path", return_value=path),
+                mock.patch.object(
+                    gs,
+                    "HttpSupportVerifier",
+                    lambda: FakeSupportVerifier(default=(UNSUPPORTED, 0.1)),
+                ),
+                self.assertLogs("core.cognition.grounding_shadow", level="INFO") as cm,
+            ):
+                gated = gs.observe_focused_support_gate(
+                    "Claim [E1].",
+                    {"E1": "x"},
+                    surface="cockpit",
+                    boot_id="b",
+                    shadow_id="s",
+                    ts=0,
+                )
+
+            self.assertIn("I couldn't confirm this from the source I cited.", gated)
+            self.assertTrue(any("support_gate_applied" in message for message in cm.output))
+            with open(path, encoding="utf-8") as f:
+                rows = [json.loads(line) for line in f]
+            self.assertTrue(rows)
+            self.assertTrue(rows[0]["gate_applied"])

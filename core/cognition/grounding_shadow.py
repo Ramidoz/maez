@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import logging
 import os
 import queue
 import re
@@ -23,6 +24,7 @@ from core.cognition.support_verifier import (
     UNSUPPORTED,
 )
 
+logger = logging.getLogger(__name__)
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 _CITE_RE = re.compile(r"\[E(\d+)\]")
 
@@ -372,6 +374,56 @@ def evidence_map_from_working_set(working_set) -> dict[str, str]:
     except Exception:
         return {}
     return out
+
+
+def emit_support_row(rec: dict, *, telemetry_path: str | None = None) -> None:
+    path = telemetry_path or _default_telemetry_path()
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec) + "\n")
+    except Exception:
+        pass
+
+
+def observe_focused_support_gate(
+    reply,
+    evidence_map,
+    *,
+    surface,
+    boot_id,
+    shadow_id,
+    ts,
+) -> str:
+    """SYNC support gate: caveat marked draft and write gate telemetry."""
+    try:
+        verifier = HttpSupportVerifier()
+        outcome = apply_support_gate(
+            reply,
+            evidence_map,
+            verifier,
+            surface=surface,
+            shadow_id=shadow_id,
+            ts=ts,
+            boot_id=boot_id,
+        )
+        receipt = outcome.gate_receipt
+        logger.info(
+            "support_gate_applied surface=%s cited=%s caveated_unsupported=%s "
+            "caveated_unmatched=%s caveated_unverified=%s budget_exhausted=%s "
+            "verifier=%s latency_ms=%s",
+            receipt.get("surface"),
+            receipt.get("cited"),
+            receipt.get("caveated_unsupported"),
+            receipt.get("caveated_unmatched"),
+            receipt.get("caveated_unverified"),
+            receipt.get("budget_exhausted"),
+            receipt.get("verifier"),
+            receipt.get("latency_ms"),
+        )
+        emit_support_row(outcome.support_row)
+        return outcome.gated_marked_draft
+    except Exception:
+        return reply
 
 
 def build_telemetry(
