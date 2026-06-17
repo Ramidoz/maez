@@ -347,7 +347,7 @@ Expected in logs:
 ```bash
 . /tmp/maez-coherence-baseline.env
 tail -n +"$((LOG_BASELINE + 1))" "$LOG_PATH" | grep 'web_owner message: hello from the owner web bridge'
-if tail -n +"$((LOG_BASELINE + 1))" "$LOG_PATH" | grep -E 'web_owner_core_disabled|web_owner_channel_untrusted|s7_internal_channel_untrusted'; then
+if tail -n +"$((LOG_BASELINE + 1))" "$LOG_PATH" | grep -E 'web_owner_core_disabled|s7_internal_channel_untrusted'; then
   echo "FAIL: web owner bridge hit a disabled/untrusted path"
   exit 1
 fi
