@@ -39,10 +39,14 @@ Thread A now has a synchronous protection path, still off by default:
 | `9376962` | render_natural + /receipts survival tests |
 | `a805a5d` | STOP-at-gate handoff + ledger row |
 | `7e0785c` | harden witness logging, row-write status, detached citations |
+| `72909ef` | record code-quality review repairs at the gate |
+| `99cdc74` | require MiniCheck active in the owner witness breath |
 
 ## Review Repairs
 
-Code-quality review raised three HOLDs; all are patched at `7e0785c`:
+Code-quality review raised three HOLDs; all behavior fixes are patched at
+`7e0785c`. The later commits are gate-bookkeeping only: they record the review
+repairs and make the owner witness require an active MiniCheck service.
 
 - `support_gate_applied` now logs through `maez.grounding_shadow`, so the daemon
   file handler can capture it in `logs/maez.log`.
