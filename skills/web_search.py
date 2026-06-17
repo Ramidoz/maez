@@ -30,6 +30,11 @@ _cache_ttl = 300  # 5 minutes
 _SENSE_BACKEND = None
 _THIN_RESULT_COUNT = 3
 _THIN_SNIPPET_CHARS = 450
+_QUALITY_LINE_RE = re.compile(
+    r"^(?:\[fresh evidence\]\s*)?\[WEB SEARCH: [^\]]*\] "
+    r"quality=(?:thin|adequate) result_count=\d+ snippet_chars=\d+\n?",
+    re.MULTILINE,
+)
 
 
 def _thin_evidence_enabled() -> bool:
@@ -53,6 +58,11 @@ def _compute_quality(result: dict) -> tuple[str, int, int]:
         else "adequate"
     )
     return quality, result_count, snippet_chars
+
+
+def strip_quality_lines(text: str) -> str:
+    """Remove Maez-authored thin-evidence diagnostic headers from raw fallbacks."""
+    return _QUALITY_LINE_RE.sub("", text or "")
 
 
 def _sense_backend():

@@ -1217,8 +1217,11 @@ class MaezMessageHandler:
                 return f"(internal error: {e})"
 
             if not isinstance(reply, str) or not reply.strip():
-                turn.update(output=jarvis_transcript or "(empty)")
-                return jarvis_transcript or None
+                from skills.web_search import strip_quality_lines
+
+                fallback = strip_quality_lines(jarvis_transcript or "")
+                turn.update(output=fallback or "(empty)")
+                return fallback or None
 
             # 2026-04-23 Commit 7b: strip_tool_call_leaks was moved INTO
             # daemon.handle_message (before audit, before store) so the

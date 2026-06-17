@@ -40,7 +40,7 @@ _THIN_EVIDENCE_DIRECTIVE = (
 
 _QUALITY_LINE_RE = re.compile(
     r"^(?:\[fresh evidence\]\s*)?\[WEB SEARCH: [^\]]*\] "
-    r"quality=(thin|adequate) result_count=\d+ snippet_chars=\d+",
+    r"quality=(thin|adequate) result_count=(\d+) snippet_chars=(\d+)",
     re.MULTILINE,
 )
 
@@ -52,6 +52,9 @@ class EvidenceState:
     source_hint: tuple[str, ...] = ()
     descriptions: tuple[str, ...] = ()
     thin_evidence: bool = False
+    evidence_quality: str = ""
+    evidence_result_count: int | None = None
+    evidence_snippet_chars: int | None = None
 
 
 def _label_for_marker(marker: str) -> str:
@@ -69,12 +72,20 @@ def _first_line_after(text: str, marker: str) -> str:
     return lines[0][:120]
 
 
-def _detect_thin_evidence(transcript: str, web_context: str) -> bool:
+def _quality_info(
+    transcript: str,
+    web_context: str,
+) -> tuple[bool, str, int | None, int | None]:
     for text in (transcript or "", web_context or ""):
         for match in _QUALITY_LINE_RE.finditer(text):
-            if match.group(1) == "thin":
-                return True
-    return False
+            quality = match.group(1)
+            return (
+                quality == "thin",
+                quality,
+                int(match.group(2)),
+                int(match.group(3)),
+            )
+    return False, "", None, None
 
 
 def turn_evidence_state(*, transcript: str, web_context: str) -> EvidenceState:
@@ -87,6 +98,10 @@ def turn_evidence_state(*, transcript: str, web_context: str) -> EvidenceState:
 
     transcript = transcript or ""
     web_context = web_context or ""
+    thin_evidence, quality, result_count, snippet_chars = _quality_info(
+        transcript,
+        web_context,
+    )
     labels: list[str] = []
     hints: list[str] = []
     descriptions: list[str] = []
@@ -110,7 +125,10 @@ def turn_evidence_state(*, transcript: str, web_context: str) -> EvidenceState:
         marker_labels=tuple(labels),
         source_hint=tuple(hints),
         descriptions=tuple(descriptions),
-        thin_evidence=_detect_thin_evidence(transcript, web_context),
+        thin_evidence=thin_evidence,
+        evidence_quality=quality,
+        evidence_result_count=result_count,
+        evidence_snippet_chars=snippet_chars,
     )
 
 

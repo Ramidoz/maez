@@ -5716,7 +5716,7 @@ class MaezDaemon:
                 sr = search_rss(text, max_results=5)
             else:
                 sr = web_search(text, max_results=3)
-            web_context = web_format(sr)
+            web_context = web_format(sr, include_quality=True)
             from core.routing.focused_cognition import (
                 is_empty_search_result as _is_empty_search_result,
             )
@@ -6128,6 +6128,29 @@ class MaezDaemon:
             transcript=transcript,
             web_context=web_context,
         )
+        if (
+            strict_env_flag("MAEZ_THIN_EVIDENCE_HONESTY_ENABLED")
+            and _evidence_state.evidence_quality
+        ):
+            try:
+                from skills.web_search import (
+                    _THIN_RESULT_COUNT,
+                    _THIN_SNIPPET_CHARS,
+                )
+
+                logger.info(
+                    "thin_evidence quality=%s result_count=%s snippet_chars=%s "
+                    "thresholds=(%s,%s) directive=%s surface=%s",
+                    _evidence_state.evidence_quality,
+                    _evidence_state.evidence_result_count,
+                    _evidence_state.evidence_snippet_chars,
+                    _THIN_RESULT_COUNT,
+                    _THIN_SNIPPET_CHARS,
+                    "thin" if _evidence_state.thin_evidence else "normal",
+                    source,
+                )
+            except Exception:
+                pass
         evidence_directive = ""
         if _evidence_state.evidence_present:
             evidence_directive = build_evidence_precedence_directive(_evidence_state)

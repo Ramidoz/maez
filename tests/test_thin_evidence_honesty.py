@@ -1,3 +1,4 @@
+from pathlib import Path
 import unittest
 from unittest import mock
 
@@ -158,6 +159,73 @@ class FocusedThinWiringTest(unittest.TestCase):
         )
         self.assertIsNotNone(working_set)
         self.assertTrue(working_set.thin_evidence)
+
+
+class ThinIntegrationScopeTest(unittest.TestCase):
+    ROOT = Path(__file__).resolve().parents[1]
+
+    def test_treated_search_throats_opt_in_to_quality_line(self):
+        dispatcher = (
+            self.ROOT / "core" / "dispatcher" / "external_sources.py"
+        ).read_text(encoding="utf-8")
+        daemon = (
+            self.ROOT / "daemon" / "maez_daemon.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("format_for_context(result, include_quality=True)", dispatcher)
+        self.assertIn("web_format(sr, include_quality=True)", daemon)
+
+    def test_untreated_consumers_stay_default_quality_off(self):
+        daemon = (
+            self.ROOT / "daemon" / "maez_daemon.py"
+        ).read_text(encoding="utf-8")
+        action_engine = (
+            self.ROOT / "core" / "actions" / "action_engine.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("web_context = web_format(sr)", daemon)
+        self.assertIn("news_text = web_fmt(news)", daemon)
+        self.assertIn("return format_for_context(result)", action_engine)
+
+    def test_strip_quality_lines_removes_dispatcher_body_line(self):
+        from skills.web_search import strip_quality_lines
+
+        transcript = (
+            "[fresh evidence] [WEB SEARCH: 'q'] "
+            "quality=thin result_count=1 snippet_chars=80\n"
+            "[fresh evidence] [WEB SEARCH: 'q'] 1 results - t\n"
+            "body"
+        )
+        stripped = strip_quality_lines(transcript)
+        self.assertNotIn("quality=thin", stripped)
+        self.assertIn("[WEB SEARCH: 'q'] 1 results", stripped)
+
+    def test_adapter_empty_reply_fallback_strips_quality_line(self):
+        adapter = (
+            self.ROOT / "skills" / "surface" / "maez_adapter.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("strip_quality_lines(jarvis_transcript", adapter)
+
+
+class ReceiptAndFlagOffTest(unittest.TestCase):
+    def test_thin_state_carries_receipt_counts(self):
+        from core.routing.evidence_state import turn_evidence_state
+
+        web_context = (
+            "[WEB SEARCH: 'q'] quality=thin result_count=1 snippet_chars=80\n"
+            "[WEB SEARCH: 'q'] 1 results - t"
+        )
+        state = turn_evidence_state(transcript="", web_context=web_context)
+        self.assertEqual(state.evidence_quality, "thin")
+        self.assertEqual(state.evidence_result_count, 1)
+        self.assertEqual(state.evidence_snippet_chars, 80)
+
+    def test_thin_directive_constant_has_no_refusal(self):
+        from core.routing.evidence_state import _THIN_EVIDENCE_DIRECTIVE
+
+        lowered = _THIN_EVIDENCE_DIRECTIVE.lower()
+        for banned in ("i cannot answer", "i won't answer", "refuse", "i can't help"):
+            self.assertNotIn(banned, lowered)
 
     def test_midline_page_text_does_not_spoof(self):
         from core.routing.evidence_state import turn_evidence_state

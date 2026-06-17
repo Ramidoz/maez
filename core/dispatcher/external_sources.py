@@ -516,7 +516,7 @@ def _web_search_adapter(
             empty_reason=ExternalEmptyReason.NO_RESULTS,
             limitation=AvailabilityLimitation.FRESH_ATTEMPT_FAILED,
         )
-    text = web_search.format_for_context(result)
+    text = web_search.format_for_context(result, include_quality=True)
     if not text.strip():
         raise _MappedExternalFailure(
             status=ExternalBranchStatus.EMPTY,
