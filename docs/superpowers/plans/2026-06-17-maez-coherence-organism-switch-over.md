@@ -200,22 +200,77 @@ If either service is inactive, stop and diagnose before restart.
 Run:
 
 ```bash
-systemctl --user show -p Environment maez.service | tr ' ' '\n' | grep '^S7_INTERNAL_CHANNEL_TOKEN='
-systemctl --user show -p Environment maez-web.service | tr ' ' '\n' | grep '^S7_INTERNAL_CHANNEL_TOKEN='
+grep -n '^S7_INTERNAL_CHANNEL_TOKEN=' /home/rohit/.config/maez/model.env | sed 's/=.*/=<redacted>/'
+systemctl --user cat maez-web.service | grep '^Environment=S7_INTERNAL_CHANNEL_TOKEN=' | sed 's/=.*/=<redacted>/'
 ```
 
-Expected: both commands print a nonempty `S7_INTERNAL_CHANNEL_TOKEN=` line. Do not paste the token into chat. If either is missing, stop; the cockpit internal readers will fail after switch-over.
+Expected: both commands print a nonempty token line. Do not paste the token into chat. The daemon token lives in `model.env` via `EnvironmentFile`; `systemctl show -p Environment maez.service` does **not** expand that file and is not a valid daemon-token readiness check. If either configured token is missing, stop; the cockpit internal readers will fail after switch-over.
 
-- [ ] **Step 3: Confirm no owner-local config edit is needed**
+- [ ] **Step 3: Confirm owner-local bridge flags are aligned**
 
 Run:
 
 ```bash
 grep -n '^MAEZ_COCKPIT_REAL_STATE=' /home/rohit/.config/maez/model.env || true
 grep -n '^MAEZ_WEB_OWNER_CORE=' /home/rohit/.config/maez/model.env || true
+systemctl --user cat maez-web.service | grep -E '^Environment=(MAEZ_COCKPIT_REAL_STATE|MAEZ_WEB_OWNER_CORE)=' || true
 ```
 
-Expected: this only reports existing operator choices. This branch does not require a new flag edit for code to load. Do not change `model.env` during this task.
+Expected for the **full organism witness**:
+
+```text
+S7_INTERNAL_CHANNEL_TOKEN is configured for maez.service and maez-web.service.
+MAEZ_WEB_OWNER_CORE=1 is configured for maez.service and maez-web.service.
+MAEZ_COCKPIT_REAL_STATE=1 is configured for maez.service and maez-web.service.
+```
+
+Code can be banked and restarted with these off, but Task 4's web-owner and authenticated cockpit bridge witnesses will be **UNWITNESSED** or fail closed. Do not continue to the full `LIVE_WITNESSED` switch-over until the owner-local bridge config is deliberately provisioned.
+
+- [ ] **Step 3a: Owner-local provisioning recipe if Step 2/3 fails**
+
+Use one secret value for both services. Do not paste the value into chat or commit it.
+
+One workable shape is:
+
+```bash
+# Owner breath: choose/generate a secret locally.
+TOKEN="$(python3 - <<'PY'
+import secrets
+print(secrets.token_urlsafe(48))
+PY
+)"
+
+# Daemon reads model.env.
+cp /home/rohit/.config/maez/model.env /home/rohit/.config/maez/model.env.pre-organism-$(date +%Y%m%d-%H%M%S)
+grep -v -E '^(S7_INTERNAL_CHANNEL_TOKEN|MAEZ_WEB_OWNER_CORE|MAEZ_COCKPIT_REAL_STATE)=' \
+  /home/rohit/.config/maez/model.env > /tmp/maez.model.env.organism
+cat >> /tmp/maez.model.env.organism <<EOF
+
+# Maez coherence organism witness — owner/internal web bridge.
+# Revert: set 0/remove these lines and restart maez.service + maez-web.service.
+S7_INTERNAL_CHANNEL_TOKEN=$TOKEN
+MAEZ_WEB_OWNER_CORE=1
+MAEZ_COCKPIT_REAL_STATE=1
+EOF
+mv /tmp/maez.model.env.organism /home/rohit/.config/maez/model.env
+chmod 600 /home/rohit/.config/maez/model.env
+
+# Web service does not read model.env today, so mirror only the needed bridge env
+# into an owner-local user drop-in.
+mkdir -p /home/rohit/.config/systemd/user/maez-web.service.d
+cat > /home/rohit/.config/systemd/user/maez-web.service.d/30-organism-bridge.conf <<EOF
+[Service]
+Environment=S7_INTERNAL_CHANNEL_TOKEN=$TOKEN
+Environment=MAEZ_WEB_OWNER_CORE=1
+Environment=MAEZ_COCKPIT_REAL_STATE=1
+EOF
+chmod 600 /home/rohit/.config/systemd/user/maez-web.service.d/30-organism-bridge.conf
+
+unset TOKEN
+systemctl --user daemon-reload
+```
+
+Then rerun Step 2 and Step 3. These are configuration-file checks; the running process environment will reflect the new values only after Task 3's PID-change restart.
 
 - [ ] **Step 4: Capture the pre-restart baseline**
 
@@ -262,6 +317,8 @@ NEW_WEB_PID=$(systemctl --user show -p MainPID --value maez-web.service)
 printf 'NEW_MAEZ_PID=%s\nNEW_WEB_PID=%s\n' "$NEW_MAEZ_PID" "$NEW_WEB_PID"
 test "$NEW_MAEZ_PID" != "$OLD_MAEZ_PID"
 test "$NEW_WEB_PID" != "$OLD_WEB_PID"
+tr '\0' '\n' < "/proc/$NEW_MAEZ_PID/environ" | grep -E '^(S7_INTERNAL_CHANNEL_TOKEN|MAEZ_WEB_OWNER_CORE|MAEZ_COCKPIT_REAL_STATE)=' | sed 's/S7_INTERNAL_CHANNEL_TOKEN=.*/S7_INTERNAL_CHANNEL_TOKEN=<redacted>/'
+tr '\0' '\n' < "/proc/$NEW_WEB_PID/environ" | grep -E '^(S7_INTERNAL_CHANNEL_TOKEN|MAEZ_WEB_OWNER_CORE|MAEZ_COCKPIT_REAL_STATE)=' | sed 's/S7_INTERNAL_CHANNEL_TOKEN=.*/S7_INTERNAL_CHANNEL_TOKEN=<redacted>/'
 ```
 
 Expected:
@@ -274,6 +331,7 @@ new numeric nonzero PID for maez-web.service
 ```
 
 The two `test` commands must pass. If a PID does not change, stop: the witness could be reading the old process.
+The process-environment checks must show all three bridge variables for both services, with the token redacted in output.
 
 - [ ] **Step 2: Tail logs for immediate startup errors**
 
