@@ -1593,6 +1593,8 @@ def api_daemon_state():
       - ON: proxy the daemon's fast /internal/cockpit/state verbatim — real
         in-memory substrate state, true-by-construction, no fabricated mood.
     """
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     if strict_env_flag("MAEZ_COCKPIT_REAL_STATE"):
         return jsonify(_daemon_cockpit_state_proxy())
     return _api_daemon_state_log_scrape()
@@ -2171,6 +2173,8 @@ def api_signals():
     import json as _json
     import os as _os
 
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     sigs = []
     perception_path = "/home/rohit/maez/memory/perception_cache.json"
     if _os.path.exists(perception_path):
@@ -2919,6 +2923,8 @@ def api_turn_latest():
     import sqlite3 as _sq
     import time as _time
 
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     lines = _tail_log_lines(_MAEZ_LOG_PATH, 4000)
 
     # Walk backward to find the most recent chat_turn handled (telegram).
@@ -3579,6 +3585,8 @@ def api_now():
     import sqlite3 as _sq
     import time as _time
 
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     out: dict = {}
     now_epoch = _time.time()
 
@@ -4872,6 +4880,8 @@ def api_rail_timeline():
     """
     from flask import jsonify
 
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     now_s = _time_rail.time()
     cache_age = now_s - _RAIL_CACHE["built_at"]
     if _RAIL_CACHE["value"] is None or cache_age >= _RAIL_CACHE_TTL_S:
@@ -5575,6 +5585,8 @@ def api_quality():
         consolidation_lookback — default 20
         fabrication_limit     — default 10
     """
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     try:
         from core.quality_telemetry import build_rollup
     except Exception as e:
@@ -5896,6 +5908,8 @@ def api_identity():
     """Owner / machine / covenant / reddit subs."""
     import os as _os
 
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     identity = {
         "owner": {
             "name": _default_owner_name(),
@@ -5949,6 +5963,8 @@ def api_router():
     """Router totals + recent decisions via Langfuse if creds present."""
     import os as _os
 
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     totals = {"local": 0, "claude": 0, "bytesIn": 0, "bytesOut": 0, "costUsd": 0.0}
     window = []
     if _os.environ.get("LANGFUSE_PUBLIC_KEY") and _os.environ.get("LANGFUSE_SECRET_KEY"):
@@ -5997,6 +6013,8 @@ def api_logs(name: str):
     """Tail of maez.log / cognition.log / evolution.log."""
     import re as _re
 
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     allowed = {
         "maez": "/home/rohit/maez/logs/maez.log",
         "cognition": "/home/rohit/maez/logs/cognition.log",

@@ -90,6 +90,7 @@ class WebRuntimeTruthTests(unittest.TestCase):
                     "memory_counts": {"raw": 1, "daily": 0, "core": 0},
                 },
             ),
+            mock.patch.object(self.wi, "_owner_private_auth_ok", return_value=True),
         ):
             response = self.client.get("/api/v1/now")
 

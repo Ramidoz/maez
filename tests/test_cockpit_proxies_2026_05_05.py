@@ -809,6 +809,25 @@ class CockpitPrivateReadRoutesAuth(unittest.TestCase):
                     self.assertEqual(response.status_code, 401)
                     self.assertEqual(response.get_json()["error"], "owner_auth_required")
 
+    def test_private_observability_routes_require_owner_session(self):
+        paths = (
+            "/api/v1/daemon/state",
+            "/api/v1/signals",
+            "/api/v1/turn/latest",
+            "/api/v1/now",
+            "/api/v1/rail/timeline",
+            "/api/v1/quality",
+            "/api/v1/identity",
+            "/api/v1/router",
+            "/api/v1/logs/maez",
+        )
+
+        for path in paths:
+            with self.subTest(path=path):
+                response = self.client.get(path)
+                self.assertEqual(response.status_code, 401)
+                self.assertEqual(response.get_json()["error"], "owner_auth_required")
+
 
 class _FakeFile:
     """Tiny stand-in for the .read() interface HTTPError exposes via fp.
