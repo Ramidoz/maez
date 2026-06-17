@@ -2276,6 +2276,8 @@ def api_signals():
 @app.route("/api/v1/soul")
 def api_soul():
     """Two-layer soul content."""
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     import os as _os
 
     base_path = "/home/rohit/maez/config/soul.base.md"
@@ -2294,6 +2296,8 @@ def api_soul():
 @app.route("/api/v1/memory")
 def api_memory():
     """ChromaDB tier counts + visible samples from each memory tier."""
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     import sqlite3 as _sq
     import os as _os
 
@@ -2610,6 +2614,8 @@ def api_lived_memory():
     something to show on first load. The dedicated /predictions
     endpoint accepts a custom query.
     """
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     episodes = _read_lived_episodes(_LIVED_EPISODE_DB_PATH)
     edges = _read_lived_edges(_LIVED_GRAPH_DB_PATH)
     echoes = _compute_echoes_for_cockpit()
@@ -2635,6 +2641,8 @@ def api_lived_memory():
 def api_lived_memory_episodes():
     """Just the episodes — for cockpit views that want the raw
     episode list without graph / echo / prediction overhead."""
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     episodes = _read_lived_episodes(_LIVED_EPISODE_DB_PATH)
     return jsonify(
         {
@@ -2653,6 +2661,8 @@ def api_lived_memory_graph():
     validity. ``at_time=2026-04-15T00:00:00+00:00`` returns the
     beliefs Maez was holding on that date; default returns
     currently-active beliefs. Malformed ``at_time`` → 400."""
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     at_time = request.args.get("at_time") or None
     if at_time:
         # Validate before hitting the store so we can return 400
@@ -2679,6 +2689,8 @@ def api_lived_memory_echoes():
     resemblance claims between recent and older important episodes.
     The panel surfaces these directly; the chat surface does NOT
     consume this endpoint in v1.4 (observation-only)."""
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     echoes = _compute_echoes_for_cockpit()
     return jsonify({"echoes": echoes, "count": len(echoes)})
 
@@ -2693,6 +2705,8 @@ def api_lived_memory_predictions():
     is gated on query shape and the panel omits the section in that
     case.
     """
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     query = request.args.get("q") or _DEFAULT_PREDICTIONS_QUERY
     predictions = _compute_predictions_for_cockpit(query)
     return jsonify(
@@ -2715,6 +2729,8 @@ def api_lived_memory_brief():
     ``lines`` field splits the brief on newlines for easier rendering
     in the panel; ``brief`` is the raw multi-line string.
     """
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     query = request.args.get("q") or _DEFAULT_BRIEF_QUERY
     try:
         from core.memory.episodes import EpisodeStore
@@ -6085,6 +6101,8 @@ def api_chat_sessions():
     message + Maez reply from either shape, stripping any prompt
     scaffolding so the cockpit shows conversational content only.
     """
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     import re as _re
 
     try:

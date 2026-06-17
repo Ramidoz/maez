@@ -751,6 +751,41 @@ class CockpitMutationRoutesAuth(unittest.TestCase):
         self.assertEqual(response.get_json()["error"], "owner_auth_required")
 
 
+class CockpitPrivateReadRoutesAuth(unittest.TestCase):
+    """Private owner-memory/soul read APIs must not be public local APIs."""
+
+    def setUp(self):
+        with patch.dict(
+            os.environ,
+            {
+                "MAEZ_IPHONE_INGEST_TOKEN": "test-token",
+                "MAEZ_SECRETS_DISABLE_NEW_LOADER": "1",
+            },
+            clear=False,
+        ):
+            from skills import web_interface as wi
+        self.client = wi.app.test_client()
+
+    def test_private_read_routes_require_owner_session(self):
+        paths = (
+            "/api/v1/soul",
+            "/api/v1/memory",
+            "/api/v1/lived-memory",
+            "/api/v1/lived-memory/episodes",
+            "/api/v1/lived-memory/graph",
+            "/api/v1/lived-memory/echoes",
+            "/api/v1/lived-memory/predictions",
+            "/api/v1/lived-memory/brief",
+            "/api/v1/chat/sessions",
+        )
+
+        for path in paths:
+            with self.subTest(path=path):
+                response = self.client.get(path)
+                self.assertEqual(response.status_code, 401)
+                self.assertEqual(response.get_json()["error"], "owner_auth_required")
+
+
 class _FakeFile:
     """Tiny stand-in for the .read() interface HTTPError exposes via fp.
 
