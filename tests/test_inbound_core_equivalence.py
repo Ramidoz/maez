@@ -31,6 +31,7 @@ from typing import Any, Optional
 from unittest import mock
 
 import skills.surface.maez_adapter as adapter_mod
+import core as core_pkg
 import daemon.inbound_core as core_mod
 from skills.surface.maez_adapter import MaezMessageHandler
 from skills.surface.platform_base import MessageType
@@ -302,6 +303,7 @@ class InboundCoreEquivalenceTests(unittest.TestCase):
                  mock.patch.object(core_mod, "surface_parity_enabled", lambda: surface_parity), \
                  mock.patch.object(adapter_mod, "get_shared_executor", lambda: None), \
                  mock.patch.object(core_mod, "get_shared_executor", lambda: None), \
+                 mock.patch.object(core_pkg, "brain_loop", fake_brain_mod, create=True), \
                  mock.patch.dict("sys.modules", {"core.brain_loop": fake_brain_mod, "core.observability": fake_obs_mod}):
                 result = loop.run_until_complete(handler(event))
 

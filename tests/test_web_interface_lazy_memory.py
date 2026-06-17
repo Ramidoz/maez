@@ -15,9 +15,17 @@ from __future__ import annotations
 import subprocess
 import sys
 import unittest
+import os
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parent.parent
+
+
+def _probe_env() -> dict[str, str]:
+    env = dict(os.environ)
+    env["MAEZ_SECRETS_DISABLE_NEW_LOADER"] = "1"
+    env.setdefault("MAEZ_IPHONE_INGEST_TOKEN", "test-token")
+    return env
 
 
 class WebInterfaceLazyMemoryTests(unittest.TestCase):
@@ -43,7 +51,7 @@ class WebInterfaceLazyMemoryTests(unittest.TestCase):
         ])
         r = subprocess.run(
             [sys.executable, "-c", probe],
-            capture_output=True, text=True, cwd=str(_REPO), timeout=180,
+            capture_output=True, text=True, cwd=str(_REPO), timeout=180, env=_probe_env()
         )
         self.assertIn(
             "LAZY_OK", r.stdout,
@@ -72,7 +80,7 @@ class WebInterfaceLazyMemoryTests(unittest.TestCase):
         ])
         r = subprocess.run(
             [sys.executable, "-c", probe],
-            capture_output=True, text=True, cwd=str(_REPO), timeout=180,
+            capture_output=True, text=True, cwd=str(_REPO), timeout=180, env=_probe_env()
         )
         self.assertIn(
             "LAZY_CONCURRENT_OK", r.stdout,
