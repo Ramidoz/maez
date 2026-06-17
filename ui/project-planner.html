@@ -2013,11 +2013,16 @@
         const dae = state.daemon || {};
         const m = state.model || {};
         const services = state.services || {};
-        const allUp = ['maez', 'maez_web', 'llama_server', 'llama_server_vision']
+        const runtimeServices = state.runtime_services || {};
+        const runtimeOverall = runtimeServices.overall || '';
+        const allUp = runtimeOverall
+          ? runtimeOverall === 'healthy'
+          : ['maez', 'maez_web', 'llama_server', 'llama_server_vision']
           .every((k) => services[k] === 'active');
         const cyc = (dae.cycle_count != null) ? Number(dae.cycle_count).toLocaleString() : null;
         const cog = (dae.cognition_score != null) ? dae.cognition_score : null;
         const adapter = m.merged_adapter ? 'merged adapter · live' : 'base only';
+        const bodyState = runtimeOverall ? (' · body ' + runtimeOverall) : (allUp ? ' · all services up' : ' · degraded');
         // Latest entry from timeline
         let entryLabel = '—';
         if (timeline && timeline.sessions && timeline.sessions[0]) {
@@ -2027,7 +2032,7 @@
         heroMeta.innerHTML =
           '<div><span class="k">Entry</span> <span class="v">' + escHtml(entryLabel) + '</span></div>' +
           '<div><span class="k">Brain</span> <span class="v">' + escHtml(m.base || 'gemma-4-26B-A4B') + '</span></div>' +
-          '<div><span class="k">State</span> <span class="v ember">' + escHtml(adapter) + (allUp ? ' · all services up' : ' · degraded') + '</span></div>' +
+          '<div><span class="k">State</span> <span class="v ember">' + escHtml(adapter) + escHtml(bodyState) + '</span></div>' +
           '<div><span class="k">' + (cyc ? 'Cycles' : 'Daemon') + '</span> <span class="v">' + (cyc ? cyc : (dae.status || 'unknown')) + (cog != null ? ' · cog ' + escHtml(cog) : '') + '</span></div>';
       }
     }
@@ -2038,6 +2043,8 @@
       if (logValues) {
         const m = state.model || {};
         const svc = state.services || {};
+        const runtimeServices = state.runtime_services || {};
+        const runtimeOverall = runtimeServices.overall || '';
         const t = state.thunder || {};
         const visionUp = svc.llama_server_vision === 'active';
         const vram = (m.vram_used_gb != null && m.vram_total_gb != null)
@@ -2050,7 +2057,7 @@
           '<span><span class="k">Brain</span> <span class="v">' + escHtml(m.base || '—') + ' · ' + escHtml(m.quant || '—') + (m.merged_adapter ? ' · merged' : '') + '</span></span>' +
           '<span><span class="k">Disk</span> <span class="v">' + (m.disk_gb != null ? m.disk_gb + ' GB' : '—') + '</span></span>' +
           '<span><span class="k">Vram</span> <span class="v">' + escHtml(vram) + '</span></span>' +
-          '<span><span class="k">Runtime</span> <span class="v">' + escHtml(m.runtime || '—') + '</span></span>' +
+          '<span><span class="k">Runtime</span> <span class="v">' + escHtml(runtimeOverall || m.runtime || '—') + '</span></span>' +
           '<span><span class="k">Vision</span> <span class="v">' + (visionUp ? 'active · ' + escHtml(m.vision_model || '') : 'down') + '</span></span>' +
           '<span><span class="k">Today</span> <span class="v">' + escHtml(cost) + '</span></span>';
       }

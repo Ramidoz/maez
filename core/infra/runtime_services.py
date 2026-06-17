@@ -223,6 +223,15 @@ def _generic_json_contract(
     }
 
 
+def _served_model_alias_contract(alias: str | None) -> dict[str, Any]:
+    value = (alias or "").strip()
+    return {
+        "kind": "served_model_alias",
+        "alias": value,
+        "ok": bool(value) and value.lower() != "unknown",
+    }
+
+
 def runtime_services_snapshot(
     timeout_s: float = 0.35,
     *,
@@ -267,10 +276,9 @@ def runtime_services_snapshot(
         required_by=["always"],
         unit_name="llama-server.service",
         port=("127.0.0.1", 8080),
-        contract={
-            "kind": "served_model_alias",
-            "ok": bool(model_alias(default="unknown", timeout_s=timeout_s)),
-        },
+        contract=_served_model_alias_contract(
+            model_alias(default="unknown", timeout_s=timeout_s)
+        ),
     )
     add_service(
         "maez_daemon",
@@ -298,6 +306,7 @@ def runtime_services_snapshot(
         required_by=_required_by(
             "MAEZ_COCKPIT_REAL_STATE",
             "MAEZ_COCKPIT_CORE",
+            "MAEZ_WEB_OWNER_CORE",
             "MAEZ_S7_CEREMONY_BRIDGE_ENABLED",
         ),
         unit_name="maez-web.service",

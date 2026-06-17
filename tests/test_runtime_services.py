@@ -183,6 +183,31 @@ class RuntimeServiceSnapshotTests(unittest.TestCase):
         self.assertEqual(snap["services"]["subscription_proxy"]["status"], "asleep")
         self.assertEqual(snap["overall"], "healthy")
 
+    def test_primary_brain_degraded_when_served_model_alias_is_unknown(self):
+        from core.infra import runtime_services as rs
+
+        fakes = self._healthy_fakes()
+        fakes["model_alias"] = lambda default=None, timeout_s=0.35: "unknown"
+
+        with mock.patch.dict("os.environ", {}, clear=True):
+            snap = rs.runtime_services_snapshot(**fakes)
+
+        service = snap["services"]["primary_brain"]
+        self.assertEqual(service["status"], "degraded")
+        self.assertFalse(service["contract"]["ok"])
+        self.assertIn("contract_unhealthy", service["degraded_reasons"])
+
+    def test_web_owner_core_requires_maez_web_service(self):
+        from core.infra import runtime_services as rs
+
+        with mock.patch.dict("os.environ", {"MAEZ_WEB_OWNER_CORE": "1"}, clear=True):
+            service = rs.runtime_services_snapshot(**self._healthy_fakes())[
+                "services"
+            ]["maez_web"]
+
+        self.assertTrue(service["configured"])
+        self.assertIn("MAEZ_WEB_OWNER_CORE", service["required_by"])
+
     def test_daemon_contract_can_skip_recursive_self_health_call(self):
         from core.infra import runtime_services as rs
 

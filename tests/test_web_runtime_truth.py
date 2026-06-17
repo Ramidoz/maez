@@ -123,6 +123,14 @@ class WebRuntimeTruthTests(unittest.TestCase):
         self.assertIn("services", payload)
         runtime_snapshot.assert_called_once()
 
+    def test_public_journal_reads_runtime_services_not_only_legacy_service_map(self):
+        from pathlib import Path
+
+        page = Path("ui/project-planner.html").read_text()
+
+        self.assertIn("state.runtime_services", page)
+        self.assertIn("runtimeOverall", page)
+
 
 if __name__ == "__main__":
     unittest.main()
