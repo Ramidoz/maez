@@ -1931,6 +1931,8 @@ def api_card_approve(request_id: str):
 def _s7_cockpit_ceremony_deferred(route: str):
     from core.governance.operator_user_boundary import s7_ceremony_deferred_response
 
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     return jsonify(s7_ceremony_deferred_response(surface="cockpit", route=route)), 503
 
 
@@ -1938,6 +1940,8 @@ def _s7_cockpit_proxy_to_daemon(route: str, internal_route: str):
     import urllib.error as _urlerr
     import urllib.request as _urlreq
 
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     token = os.environ.get("S7_INTERNAL_CHANNEL_TOKEN", "")
     if not token:
         return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 503
@@ -6007,6 +6011,8 @@ def api_dream_action(dream_id: int, action: str):
     import sqlite3 as _sq
     import time as _time
 
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     if action not in ("approve", "reject"):
         return jsonify({"ok": False, "error": "action must be approve or reject"}), 400
     is_dream = dream_id >= 10000

@@ -276,6 +276,12 @@ class CockpitCardApproveProxy(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.get_json()["error"], "owner_auth_required")
 
+    def test_dream_action_requires_owner_session(self):
+        response = self.client.post("/api/v1/dreams/10001/approve")
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.get_json()["error"], "owner_auth_required")
+
     def test_valid_non_owner_cookie_does_not_authorize_card_approve_or_deny(self):
         def fail_if_forwarded(*_args, **_kwargs):
             raise AssertionError("non-owner card approval reached daemon")
@@ -292,11 +298,14 @@ class CockpitCardApproveProxy(unittest.TestCase):
         ):
             approve = self.client.post("/api/v1/cards/abc-123/approve")
             deny = self.client.post("/api/v1/cards/abc-123/deny")
+            dream = self.client.post("/api/v1/dreams/10001/approve")
 
         self.assertEqual(approve.status_code, 401)
         self.assertEqual(approve.get_json()["error"], "owner_auth_required")
         self.assertEqual(deny.status_code, 401)
         self.assertEqual(deny.get_json()["error"], "owner_auth_required")
+        self.assertEqual(dream.status_code, 401)
+        self.assertEqual(dream.get_json()["error"], "owner_auth_required")
 
     def test_query_token_does_not_authorize_privileged_cockpit_route(self):
         def fail_if_forwarded(*_args, **_kwargs):
@@ -417,6 +426,26 @@ class CockpitS7WebAuthnDeferredProxy(unittest.TestCase):
         ):
             from skills import web_interface as wi
         self.client = wi.app.test_client()
+        self.wi = wi
+
+    @contextmanager
+    def _owner_session(self):
+        with (
+            patch.object(
+                self.wi.accounts,
+                "get_by_token",
+                return_value={"uuid": "owner", "display_name": "Rohit"},
+            ),
+            patch.object(
+                self.wi.accounts,
+                "get_user_record",
+                return_value={"private_owner_bridge": True},
+            ),
+        ):
+            yield
+
+    def _set_owner_cookie(self):
+        self.client.set_cookie("maez_token", "tok")
 
     def test_webauthn_proxy_routes_return_structured_deferred_without_daemon_call(self):
         def fail_if_forwarded(*_args, **_kwargs):
@@ -430,7 +459,8 @@ class CockpitS7WebAuthnDeferredProxy(unittest.TestCase):
             "/api/v1/s7/cards/req-1/webauthn/finish",
         )
 
-        with patch("urllib.request.urlopen", side_effect=fail_if_forwarded):
+        self._set_owner_cookie()
+        with self._owner_session(), patch("urllib.request.urlopen", side_effect=fail_if_forwarded):
             for path in paths:
                 with self.subTest(path=path):
                     response = self.client.post(path, json={"sample": "payload"})
@@ -441,6 +471,31 @@ class CockpitS7WebAuthnDeferredProxy(unittest.TestCase):
                     self.assertEqual(body["reason_code"], "s7_ceremony_deferred")
                     self.assertEqual(body["status"], "deferred")
                     self.assertEqual(body["surface"], "cockpit")
+
+    def test_s7_write_proxies_require_owner_private_session(self):
+        def fail_if_forwarded(*_args, **_kwargs):
+            raise AssertionError("unauthenticated S7 proxy reached daemon")
+
+        paths = (
+            "/api/v1/s7/webauthn/register/begin",
+            "/api/v1/s7/webauthn/register/finish",
+            "/api/v1/s7/webauthn/register/backup-card",
+            "/api/v1/s7/webauthn/proof/disable-card",
+            "/api/v1/s7/webauthn/proof/disable-credential",
+            "/api/v1/s7/cards/req-1/webauthn/begin",
+            "/api/v1/s7/cards/req-1/webauthn/finish",
+            "/api/v1/s7/cards/req-1/execute",
+        )
+
+        with (
+            patch.dict(os.environ, {"S7_LIVE_WEBAUTHN_CEREMONY": "1"}, clear=False),
+            patch("urllib.request.urlopen", side_effect=fail_if_forwarded),
+        ):
+            for path in paths:
+                with self.subTest(path=path):
+                    response = self.client.post(path, json={"sample": "payload"})
+                    self.assertEqual(response.status_code, 401)
+                    self.assertEqual(response.get_json()["error"], "owner_auth_required")
 
     def test_status_route_proxies_to_daemon_even_when_ceremony_flag_off(self):
         captured = {}
@@ -478,8 +533,9 @@ class CockpitS7WebAuthnDeferredProxy(unittest.TestCase):
             "S7_LIVE_WEBAUTHN_CEREMONY": "1",
             "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
         }
+        self._set_owner_cookie()
         with patch.dict(os.environ, env, clear=False):
-            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            with self._owner_session(), patch("urllib.request.urlopen", side_effect=fake_urlopen):
                 response = self.client.post(
                     "/api/v1/s7/webauthn/register/begin",
                     json={"bootstrap_token": "token"},
@@ -513,8 +569,9 @@ class CockpitS7WebAuthnDeferredProxy(unittest.TestCase):
             "S7_LIVE_WEBAUTHN_CEREMONY": "1",
             "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
         }
+        self._set_owner_cookie()
         with patch.dict(os.environ, env, clear=False):
-            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            with self._owner_session(), patch("urllib.request.urlopen", side_effect=fake_urlopen):
                 response = self.client.post(
                     "/api/v1/s7/webauthn/register/backup-card",
                     json={"session_binding": "session-backup-card"},
@@ -550,8 +607,9 @@ class CockpitS7WebAuthnDeferredProxy(unittest.TestCase):
             "S7_LIVE_WEBAUTHN_CEREMONY": "1",
             "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
         }
+        self._set_owner_cookie()
         with patch.dict(os.environ, env, clear=False):
-            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            with self._owner_session(), patch("urllib.request.urlopen", side_effect=fake_urlopen):
                 card_response = self.client.post(
                     "/api/v1/s7/webauthn/proof/disable-card",
                     json={"credential_ref": "cred-primary", "credential_kind": "primary"},
@@ -582,8 +640,9 @@ class CockpitS7WebAuthnDeferredProxy(unittest.TestCase):
         def fail_if_forwarded(*_args, **_kwargs):
             raise AssertionError("malicious browser origin reached daemon proxy")
 
+        self._set_owner_cookie()
         with patch.dict(os.environ, {"S7_LIVE_WEBAUTHN_CEREMONY": "1"}, clear=False):
-            with patch("urllib.request.urlopen", side_effect=fail_if_forwarded):
+            with self._owner_session(), patch("urllib.request.urlopen", side_effect=fail_if_forwarded):
                 response = self.client.post(
                     "/api/v1/s7/webauthn/register/begin",
                     json={"bootstrap_token": "token"},
