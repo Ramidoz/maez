@@ -412,14 +412,12 @@ class TelegramAdapter(BasePlatformAdapter):
             self._batch_sweep_loop()
         )
 
-    @staticmethod
-    def _is_callback_user_authorized(user_id: str) -> bool:
+    def _is_callback_user_authorized(self, user_id: str) -> bool:
         """Return whether a Telegram inline-button caller may perform gated actions."""
-        allowed_csv = os.getenv("TELEGRAM_ALLOWED_USERS", "").strip()
-        if not allowed_csv:
+        allowed_ids = self._telegram_allowed_users()
+        if not allowed_ids:
             return True
-        allowed_ids = {uid.strip() for uid in allowed_csv.split(",") if uid.strip()}
-        return "*" in allowed_ids or user_id in allowed_ids
+        return "*" in allowed_ids or str(user_id) in allowed_ids
 
     @classmethod
     def _metadata_thread_id(cls, metadata: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -1974,6 +1972,10 @@ class TelegramAdapter(BasePlatformAdapter):
 
         # --- Model picker callbacks ---
         if data.startswith(("mp:", "mm:", "mb", "mx", "mg:")):
+            caller_id = str(getattr(query.from_user, "id", ""))
+            if not self._is_callback_user_authorized(caller_id):
+                await self._egress_query_call(query, "answer", message_kind="callback_answer", source_ref="telegram_adapter:callback_answer", text="⛔ You are not authorized to use this picker.")
+                return
             chat_id = str(query.message.chat_id) if query.message else None
             if chat_id:
                 await self._handle_model_picker_callback(query, data, chat_id)
@@ -2769,14 +2771,14 @@ class TelegramAdapter(BasePlatformAdapter):
             command_text = (update.message.text or "").strip().lower()
         except Exception:
             command_text = ""
+        event = self._build_message_event(update.message, MessageType.COMMAND, update_id=update.update_id)
         if command_text.startswith("/receipts"):
             from core.routing.attribution_render import receipts_reply
 
-            chat_id = str(update.effective_chat.id) if update.effective_chat else ""
-            await update.message.reply_text(receipts_reply(chat_id))
+            chat_id = str(getattr(getattr(event, "source", None), "chat_id", "") or "")
+            await self._send_command_reply(event, receipts_reply(chat_id))
             return
 
-        event = self._build_message_event(update.message, MessageType.COMMAND, update_id=update.update_id)
         if await self._try_handle_dream_command_event(event):
             return
         if await self._try_command_proposal_surface(event):
