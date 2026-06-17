@@ -38,8 +38,12 @@ _THIN_EVIDENCE_DIRECTIVE = (
 )
 
 
-_QUALITY_LINE_RE = re.compile(
-    r"^(?:\[fresh evidence\]\s*)?\[WEB SEARCH: [^\]]*\] "
+_LEGACY_QUALITY_LINE_RE = re.compile(
+    r"^\[WEB SEARCH: [^\]]*\] "
+    r"quality=(thin|adequate) result_count=(\d+) snippet_chars=(\d+)$"
+)
+_DISPATCHER_QUALITY_LINE_RE = re.compile(
+    r"^\[fresh evidence\]\s*\[WEB SEARCH: [^\]]*\] "
     r"quality=(thin|adequate) result_count=(\d+) snippet_chars=(\d+)",
     re.MULTILINE,
 )
@@ -76,8 +80,10 @@ def _quality_info(
     transcript: str,
     web_context: str,
 ) -> tuple[bool, str, int | None, int | None]:
-    for text in (transcript or "", web_context or ""):
-        for match in _QUALITY_LINE_RE.finditer(text):
+    first_web_line = (web_context or "").strip().splitlines()[:1]
+    if first_web_line:
+        match = _LEGACY_QUALITY_LINE_RE.match(first_web_line[0])
+        if match:
             quality = match.group(1)
             return (
                 quality == "thin",
@@ -85,6 +91,15 @@ def _quality_info(
                 int(match.group(2)),
                 int(match.group(3)),
             )
+
+    for match in _DISPATCHER_QUALITY_LINE_RE.finditer(transcript or ""):
+        quality = match.group(1)
+        return (
+            quality == "thin",
+            quality,
+            int(match.group(2)),
+            int(match.group(3)),
+        )
     return False, "", None, None
 
 
