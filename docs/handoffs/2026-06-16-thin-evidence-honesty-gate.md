@@ -2,7 +2,7 @@
 
 Date: 2026-06-16
 Branch: `thin-evidence-honesty`
-Tip: this handoff commit; behavior tip `09968f5`
+Tip: this handoff commit; behavior tip `532d31d`
 Base: `main` at `749d9aa`
 State: BUILT_ASLEEP — no flag flip, no restart, no `model.env` edit.
 
@@ -51,6 +51,7 @@ Also added: the Surface V2 empty-reply fallback strips the body-authored quality
 - `78f0b30` — treated-throat opt-ins, receipt counts, fallback stripping.
 - `ffc2905` — review repair: block newline spoofing of the quality header.
 - `09968f5` — review repair: block forged dispatcher `[fresh evidence]` quality lines, support the containment prefix, and sanitize multiline result fields on opt-in render.
+- `532d31d` — review repair: restrict contained dispatcher quality parsing to `source=WEB_SEARCH` and strip contained quality headers from fallback output.
 - This handoff commit — updates the review gate to the dispatcher quality spoof repair.
 
 ## Verification
@@ -63,14 +64,14 @@ Ran from `/home/rohit/.config/superpowers/worktrees/maez/thin-evidence-honesty`:
   tests.test_evidence_state \
   tests.test_focused_cognition_citation_render \
   tests.test_focused_cognition
-# Ran 99 tests in 0.047s — OK
+# Ran 107 tests in 0.042s — OK
 
 /home/rohit/maez/.venv/bin/python -B -m unittest \
   tests.test_dispatcher_layer1 \
   tests.test_surface_adapter \
   tests.test_brain_loop_structured
 # Combined final run after review repair:
-# Ran 174 tests in 15.206s — OK
+# Ran 176 tests in 15.213s — OK
 
 /home/rohit/maez/.venv/bin/python -B -m unittest \
   tests.test_cycle_packet \
@@ -96,11 +97,12 @@ Please attack these seams:
 
 1. **Opt-in only:** no untreated / owner-facing consumer emits the `quality=` line by default.
 2. **Dispatcher fallback:** raw fallback through `skills/surface/maez_adapter.py` strips the quality header before owner display.
-3. **Anti-spoof:** `EvidenceState` parses legacy quality only from the first `web_context` line, and dispatcher quality only from the first `[fresh evidence]` line; the live Rail-2 containment prefix is supported at that line, but later forged `[fresh evidence] ... quality=thin` text is ignored. Opt-in `format_for_context(..., include_quality=True)` collapses multiline result fields so page snippets cannot create a second fake header line.
-4. **Both prompt layers:** daemon directive and focused `_focused_evidence_precedence_instruction` both switch to the shared thin wording and suppress the confidence-forcing clause.
-5. **Focused wire:** `assemble_working_set` -> `WorkingSet.thin_evidence` -> `_citation_instruction(..., thin_evidence=...)`.
-6. **Flag-off:** no quality line, no directive change, no receipt; result dict shape remains unmutated.
-7. **Covenant:** thin wording hedges but does not refuse.
+3. **Anti-spoof:** `EvidenceState` parses legacy quality only from the first `web_context` line, and dispatcher quality only from the first `[fresh evidence]` line. The live Rail-2 containment prefix is supported only when the contained source is `WEB_SEARCH`; `FETCH_URL` or other contained page content cannot spoof thin evidence. Later forged `[fresh evidence] ... quality=thin` text is ignored. Opt-in `format_for_context(..., include_quality=True)` collapses multiline result fields so page snippets cannot create a second fake header line.
+4. **Fallback stripping:** `strip_quality_lines(...)` removes bare and Rail-2-contained body-authored quality lines before any empty-reply fallback reaches the owner.
+5. **Both prompt layers:** daemon directive and focused `_focused_evidence_precedence_instruction` both switch to the shared thin wording and suppress the confidence-forcing clause.
+6. **Focused wire:** `assemble_working_set` -> `WorkingSet.thin_evidence` -> `_citation_instruction(..., thin_evidence=...)`.
+7. **Flag-off:** no quality line, no directive change, no receipt; result dict shape remains unmutated.
+8. **Covenant:** thin wording hedges but does not refuse.
 
 ## Owner Breath
 
