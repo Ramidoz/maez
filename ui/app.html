@@ -994,6 +994,7 @@ let displayName = localStorage.getItem('maez_name') || '';
 let conversationHistory = [];
 let allSessions = [];
 let userInfo = null;
+let sendInFlight = false;
 
 const PROMPTS_PUBLIC = [
   { tag: 'the beginning', body: 'Tell me what you are, in your own words.' },
@@ -1184,6 +1185,7 @@ async function sendMsg() {
   input.value = '';
   resizeInput();
   showView('chatView');
+  sendInFlight = true;
   appendMessage('user', text, true);
   conversationHistory.push({ role: 'user', content: text });
   showTyping();
@@ -1216,6 +1218,7 @@ async function sendMsg() {
     hideTyping();
     appendMessage('maez', 'The line dropped for a moment. Try that again.', true);
   } finally {
+    sendInFlight = false;
     sendBtn.disabled = false;
     input.focus();
   }
@@ -1355,7 +1358,8 @@ async function boot() {
 
     renderPrompts(Boolean(userInfo && userInfo.telegram_linked));
     renderSessions();
-    showView('emptyView');
+    if (!sendInFlight && conversationHistory.length === 0) showView('emptyView');
+    else showView('chatView');
     resizeInput();
   } catch (e) {
     if (testMode) {

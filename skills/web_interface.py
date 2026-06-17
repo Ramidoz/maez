@@ -211,41 +211,52 @@ def _render_identity_reply(*, display: str, linked_user: bool) -> str:
     return baseline + sensor_clause
 
 
-def _parse_owner_exchange(content: str, timestamp: str) -> list[dict]:
+_OWNER_ASKED_EXCHANGE_RE = re.compile(
+    r"^\s*the owner asked:\s*(?P<user>.*?)\s+Maez replied:\s*(?P<reply>.*?)\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+_OWNER_DAEMON_EXCHANGE_RE = re.compile(
+    r"^\s*(?:the owner\s*(?:\([^)]*\))?|rohit)\s*:\s*(?P<user>.*?)\s+Maez\s*:\s*(?P<reply>.*?)\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _chat_history_message(role: str, content: str, timestamp: str) -> dict | None:
+    text = (content or "").strip()
+    if not text:
+        return None
+    normalized_role = "user" if role == "user" else "assistant"
+    return {"role": normalized_role, "content": text, "timestamp": timestamp}
+
+
+def _normalize_chat_history_record(role: str, content: str, timestamp: str) -> list[dict]:
+    """Return display-ready chat turns for one stored history record.
+
+    Older web/daemon records sometimes persisted the owner and Maez reply as one
+    combined storage string. Split those at the server boundary so the browser
+    receives real turns instead of rendering storage scaffolding as owner text.
+    """
+
     text = (content or "").strip()
     if not text:
         return []
 
-    user_prefix = "the owner asked:"
-    reply_prefix = "\nMaez replied:"
-    if text.startswith(user_prefix) and reply_prefix in text:
-        user_text, reply_text = text[len(user_prefix) :].split(reply_prefix, 1)
-        messages = []
-        if user_text.strip():
-            messages.append(
-                {
-                    "role": "user",
-                    "content": user_text.strip(),
-                    "timestamp": timestamp,
-                }
-            )
-        if reply_text.strip():
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": reply_text.strip(),
-                    "timestamp": timestamp,
-                }
-            )
-        return messages
+    for pattern in (_OWNER_ASKED_EXCHANGE_RE, _OWNER_DAEMON_EXCHANGE_RE):
+        match = pattern.match(text)
+        if not match:
+            continue
+        messages = [
+            _chat_history_message("user", match.group("user"), timestamp),
+            _chat_history_message("assistant", match.group("reply"), timestamp),
+        ]
+        return [msg for msg in messages if msg is not None]
 
-    return [
-        {
-            "role": "assistant",
-            "content": text,
-            "timestamp": timestamp,
-        }
-    ]
+    message = _chat_history_message(role, text, timestamp)
+    return [message] if message else []
+
+
+def _parse_owner_exchange(content: str, timestamp: str) -> list[dict]:
+    return _normalize_chat_history_record("assistant", content, timestamp)
 
 
 def _load_private_owner_history() -> list[dict]:
@@ -6962,12 +6973,12 @@ def history():
                     where={"user_id": str(user_key)}, include=["documents", "metadatas"]
                 )
                 for doc, meta in zip(results["documents"], results["metadatas"], strict=False):
-                    all_msgs.append(
-                        {
-                            "role": meta.get("role", "?"),
-                            "content": doc,
-                            "timestamp": meta.get("timestamp", ""),
-                        }
+                    all_msgs.extend(
+                        _normalize_chat_history_record(
+                            meta.get("role", "?"),
+                            doc,
+                            meta.get("timestamp", ""),
+                        )
                     )
             except Exception:
                 pass
@@ -9132,6 +9143,7 @@ let displayName = localStorage.getItem('maez_name') || '';
 let conversationHistory = [];
 let allSessions = [];
 let userInfo = null;
+let sendInFlight = false;
 
 const PROMPTS_PUBLIC = [
   { tag: 'Identity', body: 'What are you?' },
@@ -9326,6 +9338,7 @@ async function sendMsg() {
   input.value = '';
   resizeInput();
   showView('chatView');
+  sendInFlight = true;
   appendMessage('user', text, true);
   conversationHistory.push({ role: 'user', content: text });
   showTyping();
@@ -9358,6 +9371,7 @@ async function sendMsg() {
     hideTyping();
     appendMessage('maez', 'The line dropped for a moment. Try that again.', true);
   } finally {
+    sendInFlight = false;
     sendBtn.disabled = false;
     input.focus();
   }
@@ -9410,7 +9424,8 @@ async function boot() {
 
     renderPrompts(Boolean(userInfo && userInfo.telegram_linked));
     renderSessions();
-    showView('emptyView');
+    if (!sendInFlight && conversationHistory.length === 0) showView('emptyView');
+    else showView('chatView');
     resizeInput();
   } catch (e) {
     doLogout();
