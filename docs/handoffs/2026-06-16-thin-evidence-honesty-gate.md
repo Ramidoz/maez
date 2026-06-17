@@ -2,7 +2,7 @@
 
 Date: 2026-06-16
 Branch: `thin-evidence-honesty`
-Tip: `ffc2905`
+Tip: this handoff commit; behavior tip `09968f5`
 Base: `main` at `749d9aa`
 State: BUILT_ASLEEP — no flag flip, no restart, no `model.env` edit.
 
@@ -14,7 +14,7 @@ Flow:
 
 1. Treated search throats opt into a body-authored quality header:
    `[WEB SEARCH: 'q'] quality=thin|adequate result_count=N snippet_chars=M`.
-2. `EvidenceState` parses only the line-start body header, with optional dispatcher `[fresh evidence]` prefix.
+2. `EvidenceState` parses only the body-owned quality header: legacy from the first `web_context` line, dispatcher from the first `[fresh evidence]` line, with the live containment prefix supported.
 3. Thin evidence switches the daemon evidence-precedence directive to limited-evidence honesty and suppresses the confidence-forcing unavailable-source clause.
 4. Focused cognition now carries `WorkingSet.thin_evidence` into `_citation_instruction(...)`, so the focused synthesis prompt hears the same thin directive.
 5. A greppable receipt logs `thin_evidence quality=... result_count=... snippet_chars=... thresholds=(3,450) directive=thin|normal surface=...`.
@@ -50,6 +50,8 @@ Also added: the Surface V2 empty-reply fallback strips the body-authored quality
 - `a7121a9` — focused `WorkingSet.thin_evidence` wiring.
 - `78f0b30` — treated-throat opt-ins, receipt counts, fallback stripping.
 - `ffc2905` — review repair: block newline spoofing of the quality header.
+- `09968f5` — review repair: block forged dispatcher `[fresh evidence]` quality lines, support the containment prefix, and sanitize multiline result fields on opt-in render.
+- This handoff commit — updates the review gate to the dispatcher quality spoof repair.
 
 ## Verification
 
@@ -68,7 +70,7 @@ Ran from `/home/rohit/.config/superpowers/worktrees/maez/thin-evidence-honesty`:
   tests.test_surface_adapter \
   tests.test_brain_loop_structured
 # Combined final run after review repair:
-# Ran 170 tests in 15.216s — OK
+# Ran 174 tests in 15.206s — OK
 
 /home/rohit/maez/.venv/bin/python -B -m unittest \
   tests.test_cycle_packet \
@@ -94,7 +96,7 @@ Please attack these seams:
 
 1. **Opt-in only:** no untreated / owner-facing consumer emits the `quality=` line by default.
 2. **Dispatcher fallback:** raw fallback through `skills/surface/maez_adapter.py` strips the quality header before owner display.
-3. **Anti-spoof:** `EvidenceState` parses legacy quality only from the first `web_context` line, and dispatcher quality only from `[fresh evidence]`-prefixed lines; page snippets with embedded newlines cannot spoof it.
+3. **Anti-spoof:** `EvidenceState` parses legacy quality only from the first `web_context` line, and dispatcher quality only from the first `[fresh evidence]` line; the live Rail-2 containment prefix is supported at that line, but later forged `[fresh evidence] ... quality=thin` text is ignored. Opt-in `format_for_context(..., include_quality=True)` collapses multiline result fields so page snippets cannot create a second fake header line.
 4. **Both prompt layers:** daemon directive and focused `_focused_evidence_precedence_instruction` both switch to the shared thin wording and suppress the confidence-forcing clause.
 5. **Focused wire:** `assemble_working_set` -> `WorkingSet.thin_evidence` -> `_citation_instruction(..., thin_evidence=...)`.
 6. **Flag-off:** no quality line, no directive change, no receipt; result dict shape remains unmutated.
