@@ -1744,6 +1744,27 @@ def _wrap_daemon_web_context(web_context: str, *, path: str) -> str:
     return _wc.standing_instruction() + "\n\n" + wrapped
 
 
+def _legacy_support_evidence_map(
+    web_context: str,
+    transcript_context: str,
+) -> dict[str, str]:
+    """Best-effort support evidence map for non-focused fresh-evidence turns.
+
+    Focused cognition has labelled EvidenceItems. Legacy synthesis only has the
+    rendered fresh block, so expose that block as E1 for the support rail. This
+    keeps the gate/shadow active on fallback paths without pretending legacy has
+    a richer citation graph than it does.
+    """
+    for candidate in (web_context, transcript_context):
+        text = (candidate or "").strip()
+        if not text:
+            continue
+        if "No results found." in text or "[no fresh evidence available:" in text:
+            continue
+        return {"E1": text}
+    return {}
+
+
 def _safe_episode_body_counts(episode_store: object | None) -> dict[str, object]:
     if episode_store is None:
         return {
@@ -7024,6 +7045,11 @@ class MaezDaemon:
             temporal_anchor_result=_temporal_anchor_result,
             trace=_trace,
         )
+        if not _focused_support_evidence_map:
+            _focused_support_evidence_map = _legacy_support_evidence_map(
+                web_context,
+                transcript_context,
+            )
         try:
             if (
                 _grounding_shadow_post_audit_ready

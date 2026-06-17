@@ -398,6 +398,36 @@ class DaemonSupportGateSourceTests(unittest.TestCase):
             "support gate must still run when focused evidence exists but synthesis falls back",
         )
 
+    def test_legacy_fresh_context_can_seed_support_evidence_map(self):
+        from daemon.maez_daemon import _legacy_support_evidence_map
+
+        web_context = "[WEB SEARCH: 'anthropic'] 1 results - headline\n  1. Anthropic news"
+        transcript_context = "[fresh evidence] WEB_SEARCH: Anthropic news"
+
+        self.assertEqual(_legacy_support_evidence_map(web_context, ""), {"E1": web_context})
+        self.assertEqual(
+            _legacy_support_evidence_map("", transcript_context),
+            {"E1": transcript_context},
+        )
+        self.assertEqual(_legacy_support_evidence_map("", ""), {})
+        self.assertEqual(
+            _legacy_support_evidence_map("[WEB SEARCH: 'x'] No results found.", ""),
+            {},
+        )
+
+    def test_daemon_backfills_support_map_from_web_context_before_gate_guard(self):
+        src = Path("daemon/maez_daemon.py").read_text()
+        guard_idx = src.find("reply = self._trf_apply_fragment_guard(")
+        backfill_idx = src.find("_legacy_support_evidence_map(", guard_idx)
+        condition_idx = src.find("if (\n                _grounding_shadow_post_audit_ready", guard_idx)
+
+        self.assertGreater(guard_idx, 0)
+        self.assertGreater(backfill_idx, guard_idx)
+        self.assertGreater(condition_idx, backfill_idx)
+        call_block = src[backfill_idx:condition_idx]
+        self.assertIn("web_context", call_block)
+        self.assertIn("transcript_context", call_block)
+
 
 class RenderNaturalSurvivalTest(unittest.TestCase):
     def test_caveat_survives_render_natural_and_markers_stripped(self):
