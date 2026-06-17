@@ -230,10 +230,32 @@ class PhotoSynthesisLivesInsideThePipeline(unittest.TestCase):
         fmt = log_call.args[0].value
         self.assertEqual(fmt.count("%s") + fmt.count("%d"), len(log_call.args) - 1)
 
+    def test_photo_branch_populates_support_gate_evidence_map(self):
+        body = _handle_message_body()
+        start = body.find("_photo_reply = (_photo_result.reply or \"\").strip()")
+        self.assertGreater(start, -1, "photo reply branch not found")
+        end = body.find("if not _focused_used", start)
+        self.assertGreater(end, start)
+        snippet = body[start:end]
+
+        self.assertIn("_focused_support_evidence_map", snippet)
+        self.assertIn('"E1": photo_analysis', snippet)
+        self.assertIn('_focused_support_evidence_map["E2"] = web_context', snippet)
+        self.assertLess(
+            snippet.find("_focused_support_evidence_map"),
+            snippet.find("photo_focused_synthesis"),
+            "support evidence map must be ready before the post-audit gate runs",
+        )
+
 
 class AdapterDoesNotImportLowLevelAudit(unittest.TestCase):
     def test_adapter_has_no_single_line_self_claim_audit_import(self):
         src = (_REPO / "skills" / "surface" / "maez_adapter.py").read_text()
+        self.assertNotIn("from core.self_claim_audit import audit", src)
+        self.assertNotIn("core.self_claim_audit import audit as", src)
+
+    def test_inbound_core_has_no_low_level_self_claim_audit_import(self):
+        src = (_REPO / "daemon" / "inbound_core.py").read_text()
         self.assertNotIn("from core.self_claim_audit import audit", src)
         self.assertNotIn("core.self_claim_audit import audit as", src)
 

@@ -6591,6 +6591,11 @@ class MaezDaemon:
                     reply = _photo_reply
                     _focused_used = True
                     _reply_path = ReplyPath.FOCUSED
+                    _focused_support_evidence_map = {
+                        "E1": photo_analysis,
+                    }
+                    if _photo_freshness_query and web_context:
+                        _focused_support_evidence_map["E2"] = web_context
                     logger.info(
                         "photo_focused_synthesis surface=%s working_set_chars=%s "
                         "cited=%s reply_chars=%d receipt=%s turn_id=%s "
