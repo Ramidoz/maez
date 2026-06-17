@@ -42,6 +42,9 @@ Thread A now has a synchronous protection path, still off by default:
 | `72909ef` | record code-quality review repairs at the gate |
 | `99cdc74` | require MiniCheck active in the owner witness breath |
 
+The behavior tip is `7e0785c`. Later commits in this branch are docs-only gate
+bookkeeping; a final docs-only sync commit may sit above this table.
+
 ## Review Repairs
 
 Code-quality review raised three HOLDs; all behavior fixes are patched at
