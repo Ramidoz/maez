@@ -291,6 +291,21 @@ MAEZ_IPHONE_INGEST_TOKEN=test-token MAEZ_SECRETS_DISABLE_NEW_LOADER=1 \
 
 Result: `Ran 102 tests ... OK`.
 
+Re-review:
+
+- `Kuhn` re-reviewed `599ce3a..7beeb5f` and returned `PASS`.
+- Reviewer ran `tests.test_cockpit_real_state_bridge` with
+  `MAEZ_IPHONE_INGEST_TOKEN` and `MAEZ_SECRETS_DISABLE_NEW_LOADER` explicitly
+  unset. Result: `Ran 12 tests ... OK`.
+- Reviewer reran the seam suite
+  (`tests.test_cockpit_real_state_bridge`,
+  `tests.test_cockpit_proxies_2026_05_05`,
+  `tests.test_s7_1_daemon_internal_channel`,
+  `tests.test_s7_1_status_projection`, `tests.test_web_runtime_truth`,
+  `tests.test_web_owner_core`). Result: `Ran 102 tests ... OK`.
+- Local broad seam suite after the fix:
+  `Ran 474 tests ... OK (skipped=2)`.
+
 Lint/checks:
 
 ```bash
