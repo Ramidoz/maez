@@ -6,6 +6,7 @@ content-light divergence telemetry. This module gates nothing.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import os
 import queue
@@ -239,6 +240,81 @@ def _uncited_all_evidence_diagnostic(sentence, evidence_map, verifier, timeout_s
         "score": score,
         "latency_s": latency,
     }
+
+
+@dataclass
+class GateOutcome:
+    gated_marked_draft: str
+    gate_receipt: dict
+    support_row: dict
+
+
+def _caveat_for(rec: dict) -> str | None:
+    mode = rec.get("mode")
+    verdict = rec.get("verdict")
+    if mode == "cited_support" and verdict == UNSUPPORTED:
+        return "I couldn't confirm this from the source I cited."
+    if mode == "unmatched_citation":
+        return "I cited a source I can't match here."
+    if mode in {"verifier_unavailable", "budget_exhausted"}:
+        return "I couldn't verify this before sending."
+    return None
+
+
+def apply_support_gate(
+    marked_draft,
+    evidence_map,
+    verifier,
+    *,
+    surface="unknown",
+    per_sentence_timeout_s: float = 1.0,
+    budget_s: float = 4.0,
+    shadow_id=None,
+    ts=None,
+    boot_id=None,
+) -> GateOutcome:
+    """Synchronously caveat unsupported cited claims in a marked draft."""
+    sentences = split_sentences(marked_draft)
+    started = time.monotonic()
+    parts: list[str] = []
+    recs: list[dict] = []
+    budget_hit = False
+    for sentence in sentences:
+        parts.append(sentence)
+        if budget_hit or (time.monotonic() - started) >= budget_s:
+            budget_hit = True
+            labels = _cited_labels(sentence)
+            if labels:
+                rec = {
+                    "sentence": sentence,
+                    "cited_evidence_ids": labels,
+                    "mode": "budget_exhausted",
+                    "verdict": UNAVAILABLE,
+                    "verifier": "deterministic",
+                    "score": None,
+                    "latency_s": 0.0,
+                }
+                recs.append(rec)
+                caveat = _caveat_for(rec)
+                if caveat:
+                    parts.append(caveat)
+            continue
+        rec = classify_sentence(
+            sentence,
+            evidence_map,
+            verifier,
+            per_sentence_timeout_s,
+        )
+        recs.append(rec)
+        caveat = _caveat_for(rec)
+        if caveat:
+            parts.append(caveat)
+    gated = " ".join(part for part in parts if part)
+    return GateOutcome(
+        gated_marked_draft=gated,
+        gate_receipt={},
+        support_row={"sentences": recs},
+    )
 
 
 def evidence_map_from_working_set(working_set) -> dict[str, str]:
