@@ -308,24 +308,40 @@ class ObserveFocusedSupportGateTest(unittest.TestCase):
         self.assertTrue(any("row_written=False" in message for message in cm.output))
 
     def test_gate_failure_logs_warning_and_returns_original(self):
+        import json
+        import os
+        import tempfile
         from unittest import mock
 
         import core.cognition.grounding_shadow as gs
 
-        with (
-            mock.patch.object(gs, "apply_support_gate", side_effect=RuntimeError("boom")),
-            self.assertLogs("maez.grounding_shadow", level="WARNING") as cm,
-        ):
-            gated = gs.observe_focused_support_gate(
-                "Claim [E1].",
-                {"E1": "x"},
-                surface="cockpit",
-                boot_id="b",
-                shadow_id="s",
-                ts=0,
-            )
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "grounding_shadow.jsonl")
+            with (
+                mock.patch.object(gs, "_default_telemetry_path", return_value=path),
+                mock.patch.object(
+                    gs,
+                    "apply_support_gate",
+                    side_effect=RuntimeError("boom"),
+                ),
+                self.assertLogs("maez.grounding_shadow", level="WARNING") as cm,
+            ):
+                gated = gs.observe_focused_support_gate(
+                    "Claim [E1].",
+                    {"E1": "x"},
+                    surface="cockpit",
+                    boot_id="b",
+                    shadow_id="s",
+                    ts=0,
+                )
 
-        self.assertEqual(gated, "Claim [E1].")
+            with open(path, encoding="utf-8") as f:
+                rows = [json.loads(line) for line in f]
+
+        self.assertEqual(gated, "Claim [E1]. I couldn't verify this before sending.")
+        self.assertTrue(rows)
+        self.assertEqual(rows[0]["status"], "gate_failed")
+        self.assertEqual(rows[0]["error_class"], "RuntimeError")
         self.assertTrue(any("support_gate_failed" in message for message in cm.output))
 
 

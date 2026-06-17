@@ -258,6 +258,9 @@ class GateOutcome:
     support_row: dict
 
 
+_GATE_FAILURE_CAVEAT = "I couldn't verify this before sending."
+
+
 def _caveat_for(rec: dict) -> str | None:
     mode = rec.get("mode")
     verdict = rec.get("verdict")
@@ -272,8 +275,17 @@ def _caveat_for(rec: dict) -> str | None:
         "budget_exhausted",
         "uncited_verifier_unavailable",
     }:
-        return "I couldn't verify this before sending."
+        return _GATE_FAILURE_CAVEAT
     return None
+
+
+def _append_gate_failure_caveat(reply: str) -> str:
+    reply = (reply or "").strip()
+    if not reply:
+        return _GATE_FAILURE_CAVEAT
+    if _GATE_FAILURE_CAVEAT in reply:
+        return reply
+    return f"{reply} {_GATE_FAILURE_CAVEAT}"
 
 
 def _classify_uncited_for_gate(sentence, evidence_map, verifier, timeout_s) -> dict:
@@ -513,9 +525,37 @@ def observe_focused_support_gate(
                 shadow_id,
             )
         return outcome.gated_marked_draft
-    except Exception:
-        logger.warning("support_gate_failed surface=%s", surface, exc_info=True)
-        return reply
+    except Exception as exc:
+        failure_row = {
+            "shadow_id": shadow_id,
+            "ts": ts,
+            "surface": surface,
+            "boot_id": boot_id,
+            "post_audit": True,
+            "audit_available": None,
+            "flag_count": None,
+            "flag_kinds": [],
+            "rewritten": None,
+            "mode": "gate",
+            "skipped_reason": None,
+            "sentence_count": 0,
+            "unsupported_count": 0,
+            "supported_count": 0,
+            "skipped_count": 0,
+            "status": "gate_failed",
+            "error_class": exc.__class__.__name__,
+            "gate_applied": True,
+            "sentences": [],
+        }
+        row_written = emit_support_row(failure_row)
+        logger.warning(
+            "support_gate_failed surface=%s error_class=%s row_written=%s",
+            surface,
+            exc.__class__.__name__,
+            row_written,
+            exc_info=True,
+        )
+        return _append_gate_failure_caveat(reply)
 
 
 def decide_support_path(*, gate_enabled: bool, shadow_enabled: bool) -> str:
