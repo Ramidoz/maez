@@ -7664,139 +7664,37 @@ class MaezDaemon:
                     logger.debug("Public context Chroma client close failed: %s", e)
 
     def handle_voice_stream(self, text: str) -> str:
-        """Stream LLM response sentence-by-sentence to TTS. Returns full reply."""
+        """Speak the shared daemon reply sentence-by-sentence to TTS.
+
+        Voice input is a surface, not a separate brain. Synthesis runs through
+        handle_message(source="voice") so audit, support-gate, evidence, memory,
+        and owner-boundary rails stay identical to the other owner surfaces.
+        """
         from skills.voice_output import feed_sentence
-        from skills.web_search import (
-            search as web_search,
-            format_for_context as web_format,
-            needs_web_search,
-            search_rss,
-            is_news_query,
-            is_generic_news_query,
-        )
 
         logger.info("Voice stream: %s", text[:100])
+        full_reply = self.handle_message(text, source="voice")
+        sentence_buf = full_reply
 
-        import datetime as _dt
+        # Preserve the old TTS sentence batching at the boundary while the
+        # brain call itself now travels through the shared owner-message spine.
+        while True:
+            m = re.search(r"([.!?])\s", sentence_buf)
+            if not m:
+                break
+            idx = m.end()
+            sentence = sentence_buf[:idx].strip()
+            sentence_buf = sentence_buf[idx:]
+            if sentence:
+                logger.info("[VOICE STREAM] Speaking: %s", sentence[:80])
+                feed_sentence(sentence)
 
-        simple_patterns = [
-            "what time",
-            "what day",
-            "what date",
-            "how are you",
-            "hello",
-            "hi maez",
-            "good morning",
-            "good night",
-            "good afternoon",
-            "good evening",
-            "thanks",
-            "thank you",
-            "who are you",
-            "what can you do",
-            "tell me a joke",
-            "are you there",
-            "can you hear",
-            "you there",
-            "status",
-            "what's up",
-            "whats up",
-            "sup",
-        ]
-        text_lower = text.lower().strip()
-        is_simple = any(p in text_lower for p in simple_patterns)
-
-        if is_simple:
-            now_dt = _dt.datetime.now()
-            time_str = now_dt.strftime("%I:%M %p").lstrip("0")
-            day_str = now_dt.strftime("%A, %B %d, %Y")
-            prompt = (
-                f"Current time: {time_str}, {day_str}\n\n"
-                f'the owner just spoke to you out loud:\n"{text}"\n\n'
-                f"Respond in 1 short sentence. Spoken aloud, be natural and warm.\n"
-                f"Remember: you are Maez, the owner's AI partner.\n"
+        if sentence_buf.strip():
+            logger.info(
+                "[VOICE STREAM] Speaking remainder: %s",
+                sentence_buf.strip()[:60],
             )
-            num_predict = 60
-            logger.info("[VOICE STREAM] Simple question — lightweight prompt")
-        else:
-            snap = perception_snapshot()
-            system_state = format_snapshot(snap)
-            recalled = self.memory.recall_for_telegram(text)
-            memory_block = self.memory.format_for_prompt(recalled)
-            web_context = ""
-            if needs_web_search(text):
-                # Generic news -> category-feed RSS; subject-specific news -> real
-                # keyword search (search_rss ignores the subject, returns top headlines).
-                if is_news_query(text) and is_generic_news_query(text):
-                    sr = search_rss(text, max_results=3)
-                else:
-                    sr = web_search(text, max_results=3)
-                web_context = web_format(sr)
-            prompt = f"{system_state}\n\n"
-            if memory_block:
-                prompt += memory_block + "\n\n"
-            if web_context:
-                _wc_block = _wrap_daemon_web_context(web_context, path="voice")
-                prompt += f"{_wc_block}\n\n"
-            prompt += (
-                f'the owner just spoke to you out loud:\n"{text}"\n\n'
-                f"Respond in 1-2 short sentences. Your response will be spoken aloud.\n"
-                f"Be warm, direct, and conversational. No bullet points or markdown.\n\n"
-                f"Remember: NEVER suggest touching ollama, its models, or any "
-                f"process that powers your reasoning."
-            )
-            num_predict = 200
-
-        full_reply = ""
-        try:
-            from core import llm_client as _llm_client
-            from core.routing.brain_gateway import with_purpose as _brain_purpose
-            from core.routing.cancellable_brain_call import BrainPreempted
-
-            with _brain_purpose("voice_reply"):
-                resp = _llm_client.chat(
-                    model=MODEL,
-                    messages=[
-                        {"role": "system", "content": self.system_prompt},
-                        {"role": "user", "content": prompt},
-                    ],
-                    think=False,
-                    options={"temperature": 0.7, "num_predict": num_predict},
-                )
-
-            full_reply = _extract_final((resp.message.content or "").strip())
-            sentence_buf = full_reply
-
-            # Preserve the old TTS sentence batching at the boundary while the
-            # brain call itself now travels through the foreground gateway lane.
-            while True:
-                m = re.search(r"([.!?])\s", sentence_buf)
-                if not m:
-                    break
-                idx = m.end()
-                sentence = sentence_buf[:idx].strip()
-                sentence_buf = sentence_buf[idx:]
-                if sentence:
-                    logger.info("[VOICE STREAM] Speaking: %s", sentence[:80])
-                    feed_sentence(sentence)
-
-            if sentence_buf.strip():
-                logger.info("[VOICE STREAM] Speaking remainder: %s", sentence_buf.strip()[:60])
-                feed_sentence(sentence_buf.strip())
-        except BrainPreempted:
-            raise
-        except Exception as e:
-            logger.error("Voice stream error: %s", e)
-            full_reply = full_reply or f"Error: {e}"
-
-        # Store in memory. 5x.B Pass 1: user_utterance/lived; mixed-
-        # origin transcript (see 5x.D).
-        self.memory.store_telegram(
-            f"the owner (voice): {text}\nMaez: {full_reply}",
-            provenance_source="user_utterance",
-            trust_tier="lived",
-        )
-        self._ws_broadcast({"type": "message_reply", "text": full_reply})
+            feed_sentence(sentence_buf.strip())
         return full_reply
 
     def _send_morning_briefing(self, snap: dict):

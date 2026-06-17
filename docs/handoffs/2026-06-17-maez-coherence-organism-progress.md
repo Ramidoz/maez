@@ -65,6 +65,16 @@ or authorized differently depending on surface.
    - Tightened the inbound-core test executor shim so fire-and-forget executor
      calls return completed futures instead of leaking coroutine warnings.
 
+8. Voice inbound-spine convergence
+   - `handle_voice_stream` no longer owns a private LLM/search/store path.
+   - Voice input now calls `handle_message(text, source="voice")` for synthesis,
+     then speaks the returned audited reply at the TTS edge.
+   - This makes voice inherit the same audit, support-gate/shadow,
+     evidence-precedence, thin-evidence, self-claim hygiene, storage, and
+     broadcast rails as the other owner surfaces.
+   - The old `voice_reply` private brain side door is pinned absent by a
+     structural routing test.
+
 ## Latest Verification
 
 Command:
@@ -113,6 +123,23 @@ Additional slice 7 verification:
 
 Result: `Ran 38 tests ... OK`.
 
+Additional slice 8 verification:
+
+```bash
+/home/rohit/maez/.venv/bin/python -m unittest discover -s tests -p 'test_voice_shared_spine.py'
+/home/rohit/maez/.venv/bin/python -m unittest \
+  tests.test_daemon_shutdown_lifecycle \
+  tests.test_rail2_containment \
+  tests.test_livewc_helper \
+  tests.test_thin_evidence_honesty \
+  tests.test_support_gate \
+  tests.test_grounding_shadow \
+  tests.test_self_web_claim_hygiene \
+  tests.test_brain_gateway_routing
+```
+
+Result: `Ran 1 test ... OK` and `Ran 135 tests ... OK`.
+
 Lint/checks:
 
 ```bash
@@ -137,10 +164,11 @@ Result: clean.
 
 These are not fixed by this handoff and should stay visible:
 
-1. Voice/legacy fresh-evidence parity
-   - Voice and some legacy prompt paths still need proof that containment,
-   evidence precedence, thin-evidence honesty, and support-gate behavior
-   all compose the same way.
+1. Legacy prompt path parity
+   - Voice now enters the shared message spine. Remaining legacy prompt paths
+     still need proof that containment, evidence precedence, thin-evidence
+     honesty, and support-gate behavior compose the same way when focused
+     cognition does not run.
 
 2. Cockpit UI body display audit
    - `ui/project-planner.html` now reads `runtime_services`, but other cockpit
@@ -157,8 +185,10 @@ These are not fixed by this handoff and should stay visible:
 This branch has not made Maez one body yet, but it has closed several doors
 where Maez's body could be read or controlled differently depending on which
 surface touched it. The current repair theme is simple: one owner proof, one
-runtime truth map, one internal bridge, one Telegram authorization boundary.
+runtime truth map, one internal bridge, one Telegram authorization boundary,
+and one voice input spine.
 
-The next useful slice is probably voice/freshness parity: trace a voice turn
-with fresh evidence through containment, evidence precedence, thin-evidence
-honesty, and the support gate, then repair any bypass.
+The next useful slice is probably legacy prompt parity: trace a non-focused
+fresh-evidence turn through containment, evidence precedence, thin-evidence
+honesty, and the support gate, then repair any bypass that still exists outside
+the shared focused path.
