@@ -217,6 +217,31 @@ grep -n '^MAEZ_WEB_OWNER_CORE=' /home/rohit/.config/maez/model.env || true
 
 Expected: this only reports existing operator choices. This branch does not require a new flag edit for code to load. Do not change `model.env` during this task.
 
+- [ ] **Step 4: Capture the pre-restart baseline**
+
+Run:
+
+```bash
+OLD_MAEZ_PID=$(systemctl --user show -p MainPID --value maez.service)
+OLD_WEB_PID=$(systemctl --user show -p MainPID --value maez-web.service)
+LOG_PATH=/home/rohit/maez/logs/maez.log
+LOG_BASELINE=0
+if [ -f "$LOG_PATH" ]; then
+  LOG_BASELINE=$(wc -l < "$LOG_PATH")
+fi
+RESTART_BASELINE_UTC=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+cat > /tmp/maez-coherence-baseline.env <<EOF
+OLD_MAEZ_PID=$OLD_MAEZ_PID
+OLD_WEB_PID=$OLD_WEB_PID
+LOG_PATH=$LOG_PATH
+LOG_BASELINE=$LOG_BASELINE
+RESTART_BASELINE_UTC=$RESTART_BASELINE_UTC
+EOF
+cat /tmp/maez-coherence-baseline.env
+```
+
+Expected: old PIDs are numeric and nonzero. Keep this file; Task 3 and Task 4 use it to prove witness rows are post-restart, not stale matches from rotated logs.
+
 ---
 
 ### Task 3: Owner Restart Breath
@@ -229,10 +254,14 @@ Expected: this only reports existing operator choices. This branch does not requ
 Run:
 
 ```bash
+. /tmp/maez-coherence-baseline.env
 systemctl --user restart maez.service maez-web.service
 systemctl --user is-active maez.service maez-web.service
-systemctl --user show -p MainPID --value maez.service
-systemctl --user show -p MainPID --value maez-web.service
+NEW_MAEZ_PID=$(systemctl --user show -p MainPID --value maez.service)
+NEW_WEB_PID=$(systemctl --user show -p MainPID --value maez-web.service)
+printf 'NEW_MAEZ_PID=%s\nNEW_WEB_PID=%s\n' "$NEW_MAEZ_PID" "$NEW_WEB_PID"
+test "$NEW_MAEZ_PID" != "$OLD_MAEZ_PID"
+test "$NEW_WEB_PID" != "$OLD_WEB_PID"
 ```
 
 Expected:
@@ -244,7 +273,7 @@ new numeric nonzero PID for maez.service
 new numeric nonzero PID for maez-web.service
 ```
 
-Record the new PIDs in the witness notes.
+The two `test` commands must pass. If a PID does not change, stop: the witness could be reading the old process.
 
 - [ ] **Step 2: Tail logs for immediate startup errors**
 
@@ -303,7 +332,7 @@ curl -s -o /tmp/maez-daemon-state-no-cookie.json -w '%{http_code}\n' 'http://127
 cat /tmp/maez-daemon-state-no-cookie.json
 ```
 
-Expected without owner cookie: `401` with `owner_auth_required`. Then use the authenticated cockpit browser session to open `/api/v1/daemon/state`. Expected: real daemon JSON, not `{"status":"unreachable"}` caused by missing internal-channel proof.
+Expected without owner cookie: `401` with `owner_auth_required`. Then use the authenticated cockpit browser session to open `/api/v1/daemon/state`. Expected: real daemon JSON from the daemon bridge, not `{"status":"unreachable"}` caused by missing internal-channel proof. The authenticated JSON should include live daemon-state fields such as `sampled_at`, `cycle_count`, `running`, or equivalent state payload fields. If you cannot use an authenticated browser/cookie, mark this positive bridge witness **UNWITNESSED** rather than inferring it from source code.
 
 - [ ] **Step 4: Web owner shared spine witness**
 
@@ -316,11 +345,15 @@ hello from the owner web bridge
 Expected in logs:
 
 ```bash
-grep -h 'Web chat from Rohit: hello from the owner web bridge' /home/rohit/maez/logs/maez.log* | tail -5
-grep -h 'source=web_owner\\|surface=web_owner' /home/rohit/maez/logs/maez.log* | tail -20
+. /tmp/maez-coherence-baseline.env
+tail -n +"$((LOG_BASELINE + 1))" "$LOG_PATH" | grep 'web_owner message: hello from the owner web bridge'
+if tail -n +"$((LOG_BASELINE + 1))" "$LOG_PATH" | grep -E 'web_owner_core_disabled|web_owner_channel_untrusted|s7_internal_channel_untrusted'; then
+  echo "FAIL: web owner bridge hit a disabled/untrusted path"
+  exit 1
+fi
 ```
 
-The response should be served through `daemon.handle_message` / inbound core, not a generic UI tunnel.
+The response should be served through `daemon.handle_message` / inbound core, not a generic UI tunnel. The load-bearing positive marker is the daemon's `web_owner message:` log line after the restart baseline; `Web chat from Rohit:` is only the web-process proxy surface and is not sufficient.
 
 - [ ] **Step 5: Voice shared spine witness**
 
@@ -330,7 +363,21 @@ Use the normal voice path for a short spoken utterance:
 hey, are you there?
 ```
 
-Expected: voice speaks the audited reply at the TTS edge. Logs should show the turn handled with `source=voice`. There should be no private `voice_reply` synthesis path.
+Expected: voice speaks the audited reply at the TTS edge. Logs should show the shared-spine `voice message:` marker. There should be no private `voice_reply` synthesis path.
+
+Verify the shared-spine marker:
+
+```bash
+. /tmp/maez-coherence-baseline.env
+tail -n +"$((LOG_BASELINE + 1))" "$LOG_PATH" | grep 'Voice stream: hey, are you there'
+tail -n +"$((LOG_BASELINE + 1))" "$LOG_PATH" | grep 'voice message: hey, are you there'
+if tail -n +"$((LOG_BASELINE + 1))" "$LOG_PATH" | grep -E 'voice_reply|call_purpose=voice_reply'; then
+  echo "FAIL: voice used a private voice_reply synthesis path"
+  exit 1
+fi
+```
+
+`Voice stream:` proves the audio edge received the utterance; `voice message:` proves `handle_message(source="voice")` handled it. The latter is the shared-spine witness.
 
 - [ ] **Step 6: Telegram /receipts egress witness**
 
@@ -341,6 +388,8 @@ In Telegram, run:
 ```
 
 Expected: reply goes through the normal command/provenance send path. It should not bypass producer provenance with direct `reply_text`.
+
+Live-observable expectation: Telegram visibly returns the deterministic `/receipts` response. The provenance path is branch-verified structurally by `_send_command_reply(...)` constructing `ProvenancedText.maez_authored_owner_third_party_transport(source_ref="telegram:command_reply")` and sending via `self.send(...)`; this call site does not currently emit a content-light live provenance marker. Do **not** mark an independent live producer-provenance witness from this step unless a future log/egress row exposes one.
 
 - [ ] **Step 7: Fresh-evidence rail witness**
 
@@ -390,9 +439,9 @@ Observed:
 - Cockpit query-token private routes rejected with 401.
 - Runtime body map visible through cockpit services endpoint/UI.
 - Internal cockpit state reader returned real daemon state when authenticated, not missing-proof unreachable.
-- Web owner surface entered the shared inbound spine.
-- Voice path spoke a reply produced by shared `handle_message(source="voice")`.
-- Telegram receipts used the provenance/command path.
+- Web owner surface entered the shared inbound spine (`web_owner message:` after the restart baseline, with no disabled/untrusted bridge error).
+- Voice path spoke a reply produced by shared `handle_message(source="voice")` (`Voice stream:` plus `voice message:` after the restart baseline, with no `voice_reply` synthesis row).
+- Telegram receipts returned the deterministic owner-visible reply; producer provenance remains branch-verified unless a live provenance marker is added.
 - Fresh-evidence turn composed thin evidence, support gate/shadow, and self-claim hygiene.
 
 Notes:

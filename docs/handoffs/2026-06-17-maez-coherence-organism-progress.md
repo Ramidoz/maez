@@ -12,7 +12,9 @@ This branch has moved from setup into repair work. The landed changes are
 mostly seam closures: places where the same Maez body could be read, controlled,
 or authorized differently depending on surface.
 
-Current branch head: `e4eadf5`.
+Current branch: `maez-coherence-organism`. Run `git rev-parse HEAD` for the
+current head before merging; this handoff has accumulated doc-only gate updates
+after the original reviewed code head.
 
 Switch-over plan:
 `docs/superpowers/plans/2026-06-17-maez-coherence-organism-switch-over.md`.
