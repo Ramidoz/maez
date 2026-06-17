@@ -101,6 +101,28 @@ class WebRuntimeTruthTests(unittest.TestCase):
         self.assertIn("primary brain is healthy", body["summary"])
         self.assertNotIn("talk to 2 live services", body["summary"])
 
+    def test_public_maez_state_carries_runtime_service_truth_without_replacing_legacy_shape(self):
+        with (
+            mock.patch(
+                "core.infra.runtime_services.runtime_services_snapshot_cached",
+                return_value=self._runtime_snapshot(),
+            ) as runtime_snapshot,
+            mock.patch.object(self.wi.memory, "memory_stats", return_value={"raw": 0, "daily": 0, "core": 0, "total": 0}),
+            mock.patch.object(self.wi.accounts, "count", return_value=1),
+            mock.patch.object(self.wi, "_daemon_health", return_value={"ok": True}),
+            mock.patch.object(self.wi, "_model_state", return_value={}),
+            mock.patch.object(self.wi, "_soul_state", return_value={}),
+            mock.patch.object(self.wi, "_thunder_state", return_value={}),
+        ):
+            response = self.client.get("/api/maez-state")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["runtime_services"]["schema_version"], "maez_runtime_services.v0")
+        self.assertEqual(payload["runtime_services"]["overall"], "degraded")
+        self.assertIn("services", payload)
+        runtime_snapshot.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
