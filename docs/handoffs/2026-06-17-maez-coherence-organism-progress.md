@@ -75,6 +75,17 @@ or authorized differently depending on surface.
    - The old `voice_reply` private brain side door is pinned absent by a
      structural routing test.
 
+9. Legacy fresh-evidence full-chain proof
+   - Added a behavioral regression for a non-focused legacy fresh-evidence turn.
+   - The test forces `MAEZ_RECALL_TRIAD_ENABLED=0`, turns on thin-evidence
+     honesty, evidence precedence, support gate, and self-claim hygiene, then
+     verifies all of them compose on one turn.
+   - It proves the legacy prompt receives the thin directive, the support gate
+     receives the rendered fresh block as `E1`, the final returned reply carries
+     the gate caveat, focused synthesis did not run, and the web-grounded reply
+     is stored as `self_web_claim` / `untrusted` while the owner utterance stays
+     `user_utterance` / `lived`.
+
 ## Latest Verification
 
 Command:
@@ -140,6 +151,15 @@ Additional slice 8 verification:
 
 Result: `Ran 1 test ... OK` and `Ran 135 tests ... OK`.
 
+Additional slice 9 verification:
+
+```bash
+/home/rohit/maez/.venv/bin/python -m unittest \
+  tests.test_memory_integrity_invariant.DaemonHandleMessageContract.test_legacy_fresh_turn_carries_thin_directive_and_support_gate
+```
+
+Result: `Ran 1 test ... OK`.
+
 Lint/checks:
 
 ```bash
@@ -164,18 +184,12 @@ Result: clean.
 
 These are not fixed by this handoff and should stay visible:
 
-1. Legacy prompt path parity
-   - Voice now enters the shared message spine. Remaining legacy prompt paths
-     still need proof that containment, evidence precedence, thin-evidence
-     honesty, and support-gate behavior compose the same way when focused
-     cognition does not run.
-
-2. Cockpit UI body display audit
+1. Cockpit UI body display audit
    - `ui/project-planner.html` now reads `runtime_services`, but other cockpit
      UI surfaces may still collapse `healthy/degraded/asleep/unknown` into old
      active/inactive language.
 
-3. Stale docs
+2. Stale docs
    - Some docs/plans still describe design or pending-review state for slices
      that are now live/asleep elsewhere. The branch should reconcile the owner
      facing body map before any switch-over claim.
@@ -186,9 +200,8 @@ This branch has not made Maez one body yet, but it has closed several doors
 where Maez's body could be read or controlled differently depending on which
 surface touched it. The current repair theme is simple: one owner proof, one
 runtime truth map, one internal bridge, one Telegram authorization boundary,
-and one voice input spine.
+one voice input spine, and one fresh-evidence honesty spine.
 
-The next useful slice is probably legacy prompt parity: trace a non-focused
-fresh-evidence turn through containment, evidence precedence, thin-evidence
-honesty, and the support gate, then repair any bypass that still exists outside
-the shared focused path.
+The next useful slice is probably the cockpit UI body display audit: scan the
+owner-facing web surfaces for stale active/inactive language and make them read
+the shared runtime truth map where they describe Maez's body.
