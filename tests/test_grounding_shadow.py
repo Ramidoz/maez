@@ -523,11 +523,18 @@ class DaemonFocusedSupportHookOrderTests(unittest.TestCase):
         src = Path("daemon/maez_daemon.py").read_text()
         audit_idx = src.find("reply = audit_assistant_text(")
         guard_idx = src.find("reply = self._trf_apply_fragment_guard(", audit_idx)
-        observe_idx = src.find("_observe_focused_support(", audit_idx)
+        gate_idx = src.find("observe_focused_support_gate(", guard_idx)
+        observe_idx = src.find("observe_focused_support(", guard_idx)
+        receipt_idx = src.find("retain_receipt(", guard_idx)
+        render_idx = src.find("reply = render_natural(", guard_idx)
 
         self.assertGreater(audit_idx, 0)
         self.assertGreater(guard_idx, audit_idx)
         self.assertGreater(observe_idx, guard_idx)
+        self.assertGreater(gate_idx, guard_idx)
+        self.assertLess(observe_idx, receipt_idx)
+        self.assertLess(gate_idx, receipt_idx)
+        self.assertLess(receipt_idx, render_idx)
 
 
 if __name__ == "__main__":

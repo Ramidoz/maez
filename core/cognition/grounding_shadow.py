@@ -426,6 +426,14 @@ def observe_focused_support_gate(
         return reply
 
 
+def decide_support_path(*, gate_enabled: bool, shadow_enabled: bool) -> str:
+    if gate_enabled:
+        return "sync_gate"
+    if shadow_enabled:
+        return "async_shadow"
+    return "none"
+
+
 def build_telemetry(
     shadow_id,
     ts,

@@ -6933,20 +6933,36 @@ class MaezDaemon:
                 and _focused_support_evidence_map
             ):
                 from core.cognition.grounding_shadow import (
-                    observe_focused_support as _observe_focused_support,
+                    decide_support_path,
+                    observe_focused_support,
+                    observe_focused_support_gate,
                 )
 
-                _observe_focused_support(
-                    reply,
-                    _focused_support_evidence_map,
-                    surface=source,
-                    boot_id=os.environ.get("MAEZ_BOOT_ID"),
-                    shadow_id=uuid.uuid4().hex,
-                    ts=int(time.time()),
+                _support_path = decide_support_path(
+                    gate_enabled=strict_env_flag("MAEZ_SUPPORT_GATE_ENABLED"),
+                    shadow_enabled=strict_env_flag("MAEZ_GROUNDING_SHADOW_ENABLED"),
                 )
+                if _support_path == "sync_gate":
+                    reply = observe_focused_support_gate(
+                        reply,
+                        _focused_support_evidence_map,
+                        surface=source,
+                        boot_id=os.environ.get("MAEZ_BOOT_ID"),
+                        shadow_id=uuid.uuid4().hex,
+                        ts=int(time.time()),
+                    )
+                elif _support_path == "async_shadow":
+                    observe_focused_support(
+                        reply,
+                        _focused_support_evidence_map,
+                        surface=source,
+                        boot_id=os.environ.get("MAEZ_BOOT_ID"),
+                        shadow_id=uuid.uuid4().hex,
+                        ts=int(time.time()),
+                    )
         except Exception as _grounding_shadow_exc:
             logger.debug(
-                "focused grounding shadow enqueue skipped: %s",
+                "focused grounding shadow/gate skipped: %s",
                 _grounding_shadow_exc,
             )
         try:

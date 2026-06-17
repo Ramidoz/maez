@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 
 class ApplySupportGateTest(unittest.TestCase):
@@ -218,3 +219,38 @@ class ObserveFocusedSupportGateTest(unittest.TestCase):
                 rows = [json.loads(line) for line in f]
             self.assertTrue(rows)
             self.assertTrue(rows[0]["gate_applied"])
+
+
+class FlagMatrixTest(unittest.TestCase):
+    def _decide(self, gate, shadow):
+        from core.cognition.grounding_shadow import decide_support_path
+
+        return decide_support_path(gate_enabled=gate, shadow_enabled=shadow)
+
+    def test_matrix(self):
+        self.assertEqual(self._decide(False, False), "none")
+        self.assertEqual(self._decide(False, True), "async_shadow")
+        self.assertEqual(self._decide(True, False), "sync_gate")
+        self.assertEqual(self._decide(True, True), "sync_gate")
+
+
+class DaemonSupportGateSourceTests(unittest.TestCase):
+    def test_daemon_reads_gate_flag_independently_at_marked_draft_seam(self):
+        src = Path("daemon/maez_daemon.py").read_text()
+        guard_idx = src.find("reply = self._trf_apply_fragment_guard(")
+        receipt_idx = src.find("retain_receipt(", guard_idx)
+        render_idx = src.find("reply = render_natural(", guard_idx)
+        gate_flag_idx = src.find('strict_env_flag("MAEZ_SUPPORT_GATE_ENABLED")', guard_idx)
+        shadow_flag_idx = src.find('strict_env_flag("MAEZ_GROUNDING_SHADOW_ENABLED")', guard_idx)
+        gate_call_idx = src.find("observe_focused_support_gate(", guard_idx)
+        async_call_idx = src.find("observe_focused_support(", guard_idx)
+
+        self.assertGreater(guard_idx, 0)
+        self.assertGreater(receipt_idx, guard_idx)
+        self.assertGreater(render_idx, receipt_idx)
+        self.assertGreater(gate_flag_idx, guard_idx)
+        self.assertGreater(shadow_flag_idx, guard_idx)
+        self.assertGreater(gate_call_idx, guard_idx)
+        self.assertGreater(async_call_idx, guard_idx)
+        self.assertLess(gate_call_idx, receipt_idx)
+        self.assertLess(async_call_idx, receipt_idx)
