@@ -2,7 +2,7 @@
 
 Date: 2026-06-16
 Branch: `thin-evidence-honesty`
-Tip: `78f0b30`
+Tip: `ffc2905`
 Base: `main` at `749d9aa`
 State: BUILT_ASLEEP — no flag flip, no restart, no `model.env` edit.
 
@@ -49,6 +49,7 @@ Also added: the Surface V2 empty-reply fallback strips the body-authored quality
 - `d8d8f06` — daemon directive hedges on thin evidence.
 - `a7121a9` — focused `WorkingSet.thin_evidence` wiring.
 - `78f0b30` — treated-throat opt-ins, receipt counts, fallback stripping.
+- `ffc2905` — review repair: block newline spoofing of the quality header.
 
 ## Verification
 
@@ -66,7 +67,15 @@ Ran from `/home/rohit/.config/superpowers/worktrees/maez/thin-evidence-honesty`:
   tests.test_dispatcher_layer1 \
   tests.test_surface_adapter \
   tests.test_brain_loop_structured
-# Ran 69 tests in 15.198s — OK
+# Combined final run after review repair:
+# Ran 170 tests in 15.216s — OK
+
+/home/rohit/maez/.venv/bin/python -B -m unittest \
+  tests.test_cycle_packet \
+  tests.test_brain_bench_inference \
+  tests.test_brain_bench_probe_runner \
+  tests.test_recall_flip_eval_probes
+# Ran 52 tests in 16.210s — OK
 
 /home/rohit/maez/.venv/bin/ruff check \
   skills/web_search.py \
@@ -85,7 +94,7 @@ Please attack these seams:
 
 1. **Opt-in only:** no untreated / owner-facing consumer emits the `quality=` line by default.
 2. **Dispatcher fallback:** raw fallback through `skills/surface/maez_adapter.py` strips the quality header before owner display.
-3. **Anti-spoof:** `EvidenceState` only parses line-start body-authored `[WEB SEARCH: ...] quality=...`, optionally prefixed by `[fresh evidence]`; page snippets cannot spoof it.
+3. **Anti-spoof:** `EvidenceState` parses legacy quality only from the first `web_context` line, and dispatcher quality only from `[fresh evidence]`-prefixed lines; page snippets with embedded newlines cannot spoof it.
 4. **Both prompt layers:** daemon directive and focused `_focused_evidence_precedence_instruction` both switch to the shared thin wording and suppress the confidence-forcing clause.
 5. **Focused wire:** `assemble_working_set` -> `WorkingSet.thin_evidence` -> `_citation_instruction(..., thin_evidence=...)`.
 6. **Flag-off:** no quality line, no directive change, no receipt; result dict shape remains unmutated.
