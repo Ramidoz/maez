@@ -9919,26 +9919,30 @@ else:
 # Read-only owner-scoped surface for debugging Maez internals: daemon
 # cycles, wondering state, approval cards, fabrication signal. All routes
 # below are GET-only and gate on the owner-scoped auth pattern used by
-# other private surfaces in this file: test_t dev bypass OR a valid token
-# whose user is flagged private_owner_bridge=True. API handlers reuse
+# other private surfaces in this file: a valid token whose resolved
+# full user record is flagged private_owner_bridge=True. API handlers reuse
 # existing helpers (_service_state_cached, _daemon_health) — no new
 # daemon imports. Slice A ships only the route skeleton + services pane;
 # wondering-core and cards/shells/fabrication panes come in slices B + C.
 
 
 def _debug_auth_ok():
-    """Gate for /debug and /api/debug/*. Test_t bypass matches existing
-    private-surface pattern; production requires a real owner-bridge token.
-    Returns True if the caller is authorized."""
-    if request.args.get("test_t", "").strip():
-        return True
+    """Gate for /debug and /api/debug/*.
+
+    Debug surfaces expose Maez's private body/memory state, so they use the
+    same resolved-record owner proof as cockpit private APIs. The compact
+    token lookup is identity only; it must not be trusted for owner-grade
+    authorization fields.
+    """
     token = _request_token()
     if not token:
         return False
-    user = accounts.get_by_token(token)
-    if not user:
+    user = accounts.get_by_token(token) or {}
+    uid = (user.get("uuid") or "").strip()
+    if not uid:
         return False
-    return _is_private_owner_bridge(user)
+    user_record = accounts.get_user_record(uid) or {}
+    return _is_private_owner_bridge(user_record)
 
 
 @app.route("/debug")
