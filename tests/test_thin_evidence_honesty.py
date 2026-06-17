@@ -93,6 +93,34 @@ class ThinParseTest(unittest.TestCase):
             turn_evidence_state(transcript="", web_context=web_context).thin_evidence
         )
 
+
+class DaemonDirectiveTest(unittest.TestCase):
+    def _state(self, thin):
+        from core.routing.evidence_state import EvidenceState
+
+        return EvidenceState(
+            evidence_present=True,
+            marker_labels=("web search results",),
+            descriptions=("web summary",),
+            thin_evidence=thin,
+        )
+
+    def test_thin_emits_hedge_and_suppresses_confidence_clause(self):
+        from core.routing.evidence_state import build_evidence_precedence_directive
+
+        out = build_evidence_precedence_directive(self._state(True))
+        self.assertIn("THIN", out)
+        self.assertIn("limited information", out)
+        self.assertNotIn("You may NOT claim the relevant source", out)
+        self.assertNotIn("refuse", out.lower())
+
+    def test_adequate_keeps_normal_directive(self):
+        from core.routing.evidence_state import build_evidence_precedence_directive
+
+        out = build_evidence_precedence_directive(self._state(False))
+        self.assertIn("You may NOT claim the relevant source", out)
+        self.assertNotIn("THIN", out)
+
     def test_midline_page_text_does_not_spoof(self):
         from core.routing.evidence_state import turn_evidence_state
 

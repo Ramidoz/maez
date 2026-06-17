@@ -30,6 +30,13 @@ _SOURCE_HINTS: dict[str, str] = {
 
 WEB_GROUNDED_LABELS = frozenset({"fresh evidence", "web search results"})
 
+_THIN_EVIDENCE_DIRECTIVE = (
+    "The fresh evidence this turn is THIN - few results, little detail. "
+    "Answer only what it actually supports, and say plainly that the search "
+    "returned limited information. Do not fabricate specifics the results do "
+    "not contain. You may offer to search differently."
+)
+
 
 _QUALITY_LINE_RE = re.compile(
     r"^(?:\[fresh evidence\]\s*)?\[WEB SEARCH: [^\]]*\] "
@@ -123,6 +130,10 @@ def build_evidence_precedence_directive(state: EvidenceState) -> str:
             lines.append(f"  - {label}: {description}")
         else:
             lines.append(f"  - {label}")
+    if state.thin_evidence:
+        lines.append(_THIN_EVIDENCE_DIRECTIVE)
+        return "\n".join(lines)
+
     lines.append(
         "Answer from this evidence. If a live/fresh fetch failed but substrate "
         "evidence exists, say that distinction plainly."
