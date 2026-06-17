@@ -310,8 +310,13 @@ def apply_support_gate(
         if caveat:
             parts.append(caveat)
     gated = " ".join(part for part in parts if part)
+    status = "ok"
+    if budget_hit:
+        status = "budget_exceeded"
+    elif any(rec.get("verdict") == UNAVAILABLE for rec in recs):
+        status = "verifier_unavailable"
     compute_result = {
-        "status": "budget_exceeded" if budget_hit else "ok",
+        "status": status,
         "sentences": recs,
         "shadowed_count": len(recs),
         "remaining_count": 0,

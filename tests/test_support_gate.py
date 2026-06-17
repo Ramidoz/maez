@@ -148,3 +148,35 @@ class GateRecordsTest(unittest.TestCase):
         self.assertEqual(receipt["caveated_unsupported"], 1)
         self.assertEqual(receipt["caveated_unmatched"], 1)
         self.assertIn("latency_ms", receipt)
+
+    def test_support_row_status_reports_verifier_unavailable(self):
+        from core.cognition.support_verifier import FakeSupportVerifier
+
+        out = self._gate(
+            "A [E1].",
+            {"E1": "x"},
+            FakeSupportVerifier(raises=RuntimeError("down")),
+        )
+
+        self.assertEqual(out.support_row["status"], "verifier_unavailable")
+
+    def test_support_row_status_reports_budget_exhausted(self):
+        from core.cognition.support_verifier import FakeSupportVerifier, SUPPORTED
+        from core.cognition.grounding_shadow import apply_support_gate
+
+        out = self._gate(
+            "A [E1].",
+            {"E1": "x"},
+            FakeSupportVerifier(default=(SUPPORTED, 0.9)),
+        )
+
+        self.assertEqual(out.support_row["status"], "ok")
+
+        exhausted = apply_support_gate(
+            "A [E1].",
+            {"E1": "x"},
+            FakeSupportVerifier(default=(SUPPORTED, 0.9)),
+            surface="cockpit",
+            budget_s=-1.0,
+        )
+        self.assertEqual(exhausted.support_row["status"], "budget_exceeded")
