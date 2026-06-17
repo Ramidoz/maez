@@ -121,6 +121,44 @@ class DaemonDirectiveTest(unittest.TestCase):
         self.assertIn("You may NOT claim the relevant source", out)
         self.assertNotIn("THIN", out)
 
+
+class FocusedThinWiringTest(unittest.TestCase):
+    def _instruction(self, thin):
+        from core.routing import focused_cognition as fc
+
+        with mock.patch.object(fc, "_evidence_precedence_enabled", return_value=True):
+            return fc._citation_instruction(None, thin_evidence=thin)
+
+    def test_thin_focused_instruction_hedges_and_suppresses(self):
+        out = self._instruction(True)
+        self.assertIn("THIN", out)
+        self.assertIn("limited information", out)
+        self.assertNotIn("Before you claim the evidence lacks", out)
+        self.assertNotIn("refuse", out.lower())
+
+    def test_adequate_focused_instruction_normal(self):
+        out = self._instruction(False)
+        self.assertNotIn("THIN", out)
+        self.assertIn("Before you claim the evidence lacks", out)
+
+    def test_working_set_carries_thin_from_state(self):
+        from core.routing.focused_cognition import assemble_working_set
+
+        web_context = (
+            "[WEB SEARCH: 'q'] quality=thin result_count=1 snippet_chars=50\n"
+            "[WEB SEARCH: 'q'] 1 results - t\n"
+            "  1. T\n"
+            "     snippet"
+        )
+        working_set = assemble_working_set(
+            transcript="[fresh evidence] result [E1]",
+            web_context=web_context,
+            owner_question="q",
+            recall_items=None,
+        )
+        self.assertIsNotNone(working_set)
+        self.assertTrue(working_set.thin_evidence)
+
     def test_midline_page_text_does_not_spoof(self):
         from core.routing.evidence_state import turn_evidence_state
 

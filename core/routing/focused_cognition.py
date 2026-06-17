@@ -181,10 +181,14 @@ def _citation_render_version() -> str:
     return "v2" if _citation_render_v2_enabled() else "v1"
 
 
-def _citation_instruction(render_version: str | None = None) -> str:
+def _citation_instruction(
+    render_version: str | None = None,
+    *,
+    thin_evidence: bool = False,
+) -> str:
     version = render_version or _citation_render_version()
     base = _FAITHFUL_INSTRUCTION_V2 if version == "v2" else _FAITHFUL_INSTRUCTION
-    extension = _focused_evidence_precedence_instruction()
+    extension = _focused_evidence_precedence_instruction(thin_evidence=thin_evidence)
     return f"{base}\n{extension}" if extension else base
 
 
@@ -197,9 +201,13 @@ def _evidence_precedence_enabled() -> bool:
         return False
 
 
-def _focused_evidence_precedence_instruction() -> str:
+def _focused_evidence_precedence_instruction(*, thin_evidence: bool = False) -> str:
     if not _evidence_precedence_enabled():
         return ""
+    if thin_evidence:
+        from core.routing.evidence_state import _THIN_EVIDENCE_DIRECTIVE
+
+        return _THIN_EVIDENCE_DIRECTIVE
     return (
         "For questions about Maez's current body or capabilities, answer from "
         "YOUR LIVE BODY when that block is present. It is current substrate "
@@ -383,6 +391,7 @@ class WorkingSet:
     working_set_chars: int
     working_set_tokens_est: int
     citation_render_version: str = "v1"
+    thin_evidence: bool = False
 
 
 @dataclass(frozen=True)
@@ -963,6 +972,7 @@ def assemble_working_set(
         working_set_chars=total_chars,
         working_set_tokens_est=total_chars // 4,
         citation_render_version=render_version,
+        thin_evidence=state.thin_evidence,
     )
 
 
@@ -997,7 +1007,10 @@ def focused_synthesize(
     _t0 = _time.monotonic()
     system = (
         f"{_voice_card(surface)}\n\n"
-        f"{_citation_instruction(working_set.citation_render_version)}\n\n"
+        f"{_citation_instruction(
+            working_set.citation_render_version,
+            thin_evidence=working_set.thin_evidence,
+        )}\n\n"
         f"{_TRUST_TIER_INSTRUCTION}\n\n"
         f"{_ORIGIN_TRUST_INSTRUCTION}\n\n"
         f"=== EVIDENCE (cite [E#]) ===\n"
