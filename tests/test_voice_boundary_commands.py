@@ -53,11 +53,14 @@ class HandleCommandInterceptTest(unittest.TestCase):
 
         source = inspect.getsource(TelegramAdapter._handle_command)
         proposal_idx = source.find("_try_command_proposal_surface")
+        unwired_idx = source.find("_try_handle_unwired_command_event")
         generic_idx = source.find("await self.handle_message(event)")
 
         self.assertGreaterEqual(proposal_idx, 0)
+        self.assertGreaterEqual(unwired_idx, 0)
         self.assertGreaterEqual(generic_idx, 0)
         self.assertLess(proposal_idx, generic_idx)
+        self.assertLess(unwired_idx, generic_idx)
 
     def setUp(self):
         self._saved_voice = os.environ.get("MAEZ_VOICE_BOUNDARY_ENABLED")
@@ -174,6 +177,37 @@ class HandleCommandInterceptTest(unittest.TestCase):
 
         handled = asyncio.run(
             adapter._try_command_proposal_surface(self._event("/proposals"))
+        )
+
+        self.assertFalse(handled)
+
+    def test_unwired_slash_command_is_deterministic_not_brain(self):
+        adapter, sent = self._adapter([], [])
+
+        handled = asyncio.run(
+            adapter._try_handle_unwired_command_event(self._event("/pending"))
+        )
+
+        self.assertTrue(handled)
+        self.assertIn("not wired", sent[0].lower())
+        self.assertIn("/pending", sent[0])
+
+    def test_unknown_slash_command_is_deterministic_not_brain(self):
+        adapter, sent = self._adapter([], [])
+
+        handled = asyncio.run(
+            adapter._try_handle_unwired_command_event(self._event("/flarble"))
+        )
+
+        self.assertTrue(handled)
+        self.assertIn("not wired", sent[0].lower())
+        self.assertIn("/flarble", sent[0])
+
+    def test_plain_text_is_not_captured_by_unwired_command_guard(self):
+        adapter, _sent = self._adapter([], [])
+
+        handled = asyncio.run(
+            adapter._try_handle_unwired_command_event(self._event("show #22"))
         )
 
         self.assertFalse(handled)

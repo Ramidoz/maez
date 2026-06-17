@@ -2761,6 +2761,8 @@ class TelegramAdapter(BasePlatformAdapter):
             return
         if await self._try_command_proposal_surface(event):
             return
+        if await self._try_handle_unwired_command_event(event):
+            return
         await self.handle_message(event)
 
     async def _send_command_reply(self, event: MessageEvent, text: str) -> None:
@@ -2837,6 +2839,26 @@ class TelegramAdapter(BasePlatformAdapter):
         if reply is None:
             return False
         await self._send_command_reply(event, reply)
+        return True
+
+    async def _try_handle_unwired_command_event(self, event: MessageEvent) -> bool:
+        """Fail closed for slash commands that have no deterministic v2 handler.
+
+        Surface V2 used to forward every remaining slash command into the LLM.
+        Commands are controls, not conversation; if a command has not been
+        ported to this surface, say so plainly instead of improvising.
+        """
+        text = (getattr(event, "text", "") or "").strip()
+        if not text.startswith("/"):
+            return False
+        head = text.split(maxsplit=1)[0].split("@", 1)[0]
+        if head == "/":
+            return False
+        await self._send_command_reply(
+            event,
+            f"{head} is not wired on this Telegram surface yet.",
+        )
+        logger.info("surface_command_unwired command=%s", head)
         return True
 
     async def _try_handle_dream_command_event(self, event: MessageEvent) -> bool:
