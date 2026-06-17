@@ -70,6 +70,46 @@ class _RecallBiasedRedditEncoder(_FakeEncoder):
 
 
 class DispatcherLayer0Tests(unittest.TestCase):
+    def _emit_spec_for(self, utterance: str, *, env: dict[str, str] | None = None):
+        from core.dispatcher.inventory import InventorySummary
+        from core.dispatcher.layer0 import Layer0Dispatcher, load_archetype_index
+        from core.dispatcher.spec import (
+            ExternalSource,
+            InventoryWitness,
+            SourceAvailability,
+            SubstrateSource,
+        )
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        manifest = Path(tmp.name) / "archetypes.md"
+        _write_manifest(manifest)
+        encoder = _FakeEncoder()
+        index = load_archetype_index(
+            manifest_path=manifest,
+            cache_path=Path(tmp.name) / "cache.json",
+            encoder=encoder,
+        )
+        inventory = InventorySummary(
+            inventory_witness=InventoryWitness.PRESENT,
+            source_availability={
+                SubstrateSource.TELEGRAM_SEMANTIC: SourceAvailability.EXECUTABLE_PRESENT,
+                SubstrateSource.ENTITY_INDEX: SourceAvailability.EXECUTABLE_PRESENT,
+                SubstrateSource.LIVED_EPISODES: SourceAvailability.EXECUTABLE_PRESENT,
+                ExternalSource.WEB_SEARCH: SourceAvailability.EXECUTABLE_PRESENT,
+                ExternalSource.LIVE_REDDIT: SourceAvailability.EXECUTABLE_PRESENT,
+                ExternalSource.FETCH_URL: SourceAvailability.EXECUTABLE_PRESENT,
+            },
+            availability_limitations=[],
+            generated_at=1.0,
+        )
+        with mock.patch.dict("os.environ", env or {}, clear=False):
+            return Layer0Dispatcher(index=index, encoder=encoder).emit_spec(
+                utterance,
+                surface="telegram",
+                inventory=inventory,
+            )
+
     def test_archetype_manifest_parser_stops_at_non_archetype_tables(self):
         from core.dispatcher.layer0 import _parse_manifest
 
@@ -335,6 +375,97 @@ class DispatcherLayer0Tests(unittest.TestCase):
                 )
 
         self.assertEqual(spec.external_sources, [ExternalSource.WEB_SEARCH])
+
+    def test_self_capability_complaint_about_search_does_not_egress(self):
+        from core.dispatcher.spec import (
+            CompositionHint,
+            ExternalSource,
+            ProvenanceFraming,
+        )
+
+        spec = self._emit_spec_for(
+            "you seem unable to search the web",
+            env={
+                "MAEZ_EVIDENCE_PRECEDENCE_ENABLED": "1",
+                "MAEZ_SEARCH_AS_SENSE_ENABLED": "1",
+            },
+        )
+
+        self.assertEqual(spec.external_sources, [])
+        self.assertNotIn(ExternalSource.WEB_SEARCH, spec.external_sources)
+        self.assertEqual(spec.composition_hint, CompositionHint.SUBSTRATE_ONLY)
+        self.assertEqual(
+            spec.provenance_framing,
+            ProvenanceFraming.SUBSTRATE_ONLY_NO_FRESH_VALIDATION,
+        )
+
+    def test_self_capability_complaint_about_fetch_does_not_egress(self):
+        from core.dispatcher.spec import ExternalSource
+
+        spec = self._emit_spec_for(
+            "why can't you fetch pages",
+            env={
+                "MAEZ_EVIDENCE_PRECEDENCE_ENABLED": "1",
+                "MAEZ_SEARCH_AS_SENSE_ENABLED": "1",
+            },
+        )
+
+        self.assertEqual(spec.external_sources, [])
+        self.assertNotIn(ExternalSource.WEB_SEARCH, spec.external_sources)
+
+    def test_self_capability_complaint_about_subreddit_does_not_egress(self):
+        from core.dispatcher.spec import ExternalSource
+
+        spec = self._emit_spec_for(
+            "you keep failing at r/LocalLLaMA",
+            env={
+                "MAEZ_EVIDENCE_PRECEDENCE_ENABLED": "1",
+                "MAEZ_SEARCH_AS_SENSE_ENABLED": "1",
+            },
+        )
+
+        self.assertEqual(spec.external_sources, [])
+        self.assertNotIn(ExternalSource.LIVE_REDDIT, spec.external_sources)
+
+    def test_self_capability_complaint_flag_off_preserves_prior_external_shape(self):
+        from core.dispatcher.spec import ExternalSource
+
+        spec = self._emit_spec_for(
+            "you seem unable to search the web",
+            env={
+                "MAEZ_EVIDENCE_PRECEDENCE_ENABLED": "0",
+                "MAEZ_SEARCH_AS_SENSE_ENABLED": "1",
+            },
+        )
+
+        self.assertEqual(spec.external_sources, [ExternalSource.WEB_SEARCH])
+
+    def test_explicit_search_still_wins_over_complaint_guard(self):
+        from core.dispatcher.spec import ExternalSource
+
+        spec = self._emit_spec_for(
+            "search for Anthropic news",
+            env={
+                "MAEZ_EVIDENCE_PRECEDENCE_ENABLED": "1",
+                "MAEZ_SEARCH_AS_SENSE_ENABLED": "1",
+            },
+        )
+
+        self.assertEqual(spec.external_sources, [ExternalSource.WEB_SEARCH])
+
+    def test_owner_url_still_wins_over_complaint_guard(self):
+        from core.dispatcher.spec import ExternalSource
+
+        spec = self._emit_spec_for(
+            "why can't you fetch https://example.com/release-notes",
+            env={
+                "MAEZ_EVIDENCE_PRECEDENCE_ENABLED": "1",
+                "MAEZ_PAGE_READ_ENABLED": "1",
+                "MAEZ_SEARCH_AS_SENSE_ENABLED": "1",
+            },
+        )
+
+        self.assertEqual(spec.external_sources, [ExternalSource.FETCH_URL])
 
     def test_current_world_question_flag_off_preserves_prior_substrate_only_shape(self):
         from core.dispatcher.inventory import InventorySummary
