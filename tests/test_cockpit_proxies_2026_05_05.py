@@ -776,6 +776,7 @@ class CockpitPrivateReadRoutesAuth(unittest.TestCase):
         ):
             from skills import web_interface as wi
         self.client = wi.app.test_client()
+        self.wi = wi
 
     def test_private_read_routes_require_owner_session(self):
         paths = (
@@ -838,6 +839,55 @@ class CockpitPrivateReadRoutesAuth(unittest.TestCase):
                 response = self.client.get(path)
                 self.assertEqual(response.status_code, 401)
                 self.assertEqual(response.get_json()["error"], "owner_auth_required")
+
+    def test_api_route_auth_inventory_has_only_deliberate_public_exceptions(self):
+        """Every /api route is either gated or explicitly listed here.
+
+        This is not a security proof for every route's semantics; it is a
+        drift alarm. A future cockpit API cannot accidentally join the public
+        local surface without making this allowlist decision visible.
+        """
+        import inspect
+
+        public_or_helper_routes = {
+            "/api/analytics",
+            "/api/analytics-summary",
+            "/api/iphone/ingest",
+            "/api/maez-state",
+            "/api/planner-board",
+            "/api/progress-board",
+            "/api/session-timeline",
+            "/api/v1/gpu",
+            "/api/v1/services",
+            # S7 routes delegate to shared helpers that enforce owner-private
+            # auth before ceremony/proxy work. They are listed because static
+            # source inspection of the route shim cannot see helper internals.
+            "/api/v1/s7/cards/<request_id>/execute",
+            "/api/v1/s7/cards/<request_id>/webauthn/begin",
+            "/api/v1/s7/cards/<request_id>/webauthn/finish",
+            "/api/v1/s7/webauthn/proof/disable-card",
+            "/api/v1/s7/webauthn/proof/disable-credential",
+            "/api/v1/s7/webauthn/register/backup-card",
+            "/api/v1/s7/webauthn/register/begin",
+            "/api/v1/s7/webauthn/register/finish",
+            "/api/v1/s7/webauthn/status",
+        }
+        ungated = []
+        for rule in self.wi.app.url_map.iter_rules():
+            if not rule.rule.startswith("/api"):
+                continue
+            fn = self.wi.app.view_functions[rule.endpoint]
+            source = inspect.getsource(fn)
+            has_auth_marker = (
+                "_owner_private_auth_ok" in source
+                or "_debug_auth_ok" in source
+                or "_request_token" in source
+                or fn.__name__ == "api_iphone_ingest"
+            )
+            if not has_auth_marker and rule.rule not in public_or_helper_routes:
+                ungated.append(rule.rule)
+
+        self.assertEqual(sorted(ungated), [])
 
 
 class _FakeFile:
