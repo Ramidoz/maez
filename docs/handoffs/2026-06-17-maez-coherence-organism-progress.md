@@ -47,6 +47,15 @@ or authorized differently depending on surface.
    - Positive status tests now use the bridge header rather than direct local
      daemon access.
 
+6. Legacy/fallback support-rail parity
+   - Non-focused replies with fresh evidence now backfill a best-effort support
+     evidence map from `web_context` or `transcript_context` before the
+     support-gate/shadow guard.
+   - Focused/photo evidence maps still win when present; fallback paths expose
+     the rendered fresh block as `E1` rather than bypassing the rail entirely.
+   - This closes the immediate "fresh evidence but empty focused support map"
+     bypass class.
+
 ## Latest Verification
 
 Command:
@@ -69,7 +78,20 @@ Command:
   tests.test_s7_1_status_projection
 ```
 
-Result: `Ran 223 tests ... OK`.
+Result before slice 6: `Ran 223 tests ... OK`.
+
+Additional slice 6 verification:
+
+```bash
+/home/rohit/maez/.venv/bin/python -m unittest \
+  tests.test_support_gate \
+  tests.test_grounding_shadow \
+  tests.test_focused_cognition \
+  tests.test_thin_evidence_honesty \
+  tests.test_self_web_claim_hygiene
+```
+
+Result: `Ran 164 tests ... OK`.
 
 Lint/checks:
 
@@ -95,29 +117,22 @@ Result: clean.
 
 These are not fixed by this handoff and should stay visible:
 
-1. Legacy synthesis support-gate gap
-   - Fresh-evidence legacy generation can still bypass the support gate because
-     support evidence maps are focused/photo-shaped today.
-   - Needed direction: build a support evidence map from the fresh evidence
-     transcript for legacy paths or route legacy through the same post-audit
-     support seam.
-
-2. Web owner `/chat` post-audit rail parity
+1. Web owner `/chat` post-audit rail parity
    - The owner web chat bridge reaches daemon core, but the audit/support/
      capability-card/evidence-precedence parity still needs an end-to-end
      proof against Telegram/focused paths.
 
-3. Voice/legacy fresh-evidence parity
+2. Voice/legacy fresh-evidence parity
    - Voice and some legacy prompt paths still need proof that containment,
      evidence precedence, thin-evidence honesty, and support-gate behavior
      all compose the same way.
 
-4. Cockpit UI body display audit
+3. Cockpit UI body display audit
    - `ui/project-planner.html` now reads `runtime_services`, but other cockpit
      UI surfaces may still collapse `healthy/degraded/asleep/unknown` into old
      active/inactive language.
 
-5. Stale docs
+4. Stale docs
    - Some docs/plans still describe design or pending-review state for slices
      that are now live/asleep elsewhere. The branch should reconcile the owner
      facing body map before any switch-over claim.
@@ -129,6 +144,7 @@ where Maez's body could be read or controlled differently depending on which
 surface touched it. The current repair theme is simple: one owner proof, one
 runtime truth map, one internal bridge, one Telegram authorization boundary.
 
-The next useful slice is probably the legacy/focused support-gate parity gap,
-because that is where Maez can still have real fresh evidence and yet serve an
-unsupported claim without the same protection the focused path gets.
+The next useful slice is probably a web-owner/voice parity proof: trace one
+owner web `/chat` turn and one voice/freshness turn through the same post-audit
+rails, then repair any surface that still bypasses the shared support/evidence
+spine.
