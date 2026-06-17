@@ -862,6 +862,48 @@ def _journal_services_state():
     return {svc.replace("-", "_"): _service_state_cached(svc) for svc in JOURNAL_SERVICES}
 
 
+def _runtime_services_state(timeout_s: float = 0.35) -> dict:
+    from core.infra.runtime_services import runtime_services_snapshot_cached
+
+    return runtime_services_snapshot_cached(timeout_s=timeout_s)
+
+
+def _runtime_service_label(name: str) -> str:
+    return name.replace("_", " ").replace("-", " ")
+
+
+def _runtime_services_summary(snapshot: dict) -> str:
+    services = snapshot.get("services") or {}
+    if not services:
+        return "Runtime service truth unavailable."
+
+    always = [
+        (name, service)
+        for name, service in services.items()
+        if "always" in (service.get("required_by") or [])
+    ]
+    required_degraded = [
+        (name, service)
+        for name, service in services.items()
+        if service.get("configured") and service.get("status") == "degraded"
+    ]
+
+    parts: list[str] = []
+    for name, service in always[:2]:
+        parts.append(f"{_runtime_service_label(name)} is {service.get('status', 'unknown')}")
+    for name, service in required_degraded[:3]:
+        reason = ", ".join(service.get("degraded_reasons") or [])
+        suffix = f" ({reason})" if reason else ""
+        phrase = f"{_runtime_service_label(name)} is degraded{suffix}"
+        if phrase not in parts:
+            parts.append(phrase)
+
+    if not parts:
+        overall = snapshot.get("overall", "unknown")
+        return f"Runtime services are {overall}."
+    return "Runtime: " + "; ".join(parts) + "."
+
+
 def _model_state():
     """Compose the model block from config/model_state.json + training/runs/current/summary.json."""
     data = {
@@ -2063,42 +2105,17 @@ def api_s7_guarded_card_execute(request_id: str):
 
 @app.route("/api/v1/services")
 def api_services():
-    """systemctl status for maez/llama/ollama units."""
-    import subprocess as _sp
-
-    out = {}
+    """Runtime service readiness from Maez's contract-aware body snapshot."""
     try:
-        r = _sp.run(
-            [
-                "systemctl",
-                "list-units",
-                "--type=service",
-                "--all",
-                "--no-pager",
-                "--no-legend",
-                "maez*",
-                "llama*",
-                "ollama*",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=3.0,
-            check=False,
-            env=sanitize_env(),
-        )
-        for line in (r.stdout or "").splitlines():
-            toks = line.strip().split(None, 4)
-            if len(toks) < 4 or not toks[0].endswith(".service"):
-                continue
-            name = toks[0][: -len(".service")]
-            out[name] = {
-                "status": toks[2],
-                "sub": toks[3] if len(toks) > 3 else "",
-                "desc": toks[4] if len(toks) > 4 else "",
-            }
+        snapshot = _runtime_services_state()
     except Exception as e:
         return jsonify({"error": str(e), "services": {}}), 500
-    return jsonify({"services": out})
+    return jsonify(
+        {
+            "runtime_services": snapshot,
+            "services": snapshot.get("services") or {},
+        }
+    )
 
 
 @app.route("/api/v1/gpu")
@@ -3605,6 +3622,13 @@ def api_now():
 
     # ── Body truth ──────────────────────────────────────────────
     body: dict = {}
+    runtime_snapshot: dict | None = None
+    try:
+        runtime_snapshot = _runtime_services_state()
+        body["runtime_services"] = runtime_snapshot
+    except Exception as e:
+        body["runtime_services_error"] = f"runtime service probe failed: {e}"
+
     try:
         from core.infra import body_capabilities as _bc
 
@@ -3675,9 +3699,9 @@ def api_now():
         cannot_phrases.append("see your screen (vision retired)")
     if "wmctrl" in body.get("tools_missing", []):
         cannot_phrases.append("use wmctrl (not installed)")
-    if body.get("services_alive_systemd"):
-        can_phrases.append(f"talk to {len(body['services_alive_systemd'])} live services")
     body_summary_parts = []
+    if runtime_snapshot:
+        body_summary_parts.append(_runtime_services_summary(runtime_snapshot))
     if can_phrases:
         body_summary_parts.append("Maez can " + ", ".join(can_phrases))
     if cannot_phrases:
@@ -3947,6 +3971,7 @@ def api_now():
             "memory/pending_cards.db",
             "core.infra.body_capabilities",
             "core.infra.capability_registry",
+            "core.infra.runtime_services",
         ],
     }
     return jsonify(out)

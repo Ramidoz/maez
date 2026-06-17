@@ -1,0 +1,105 @@
+from __future__ import annotations
+
+import os
+import unittest
+from unittest import mock
+
+
+class WebRuntimeTruthTests(unittest.TestCase):
+    def setUp(self):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "MAEZ_IPHONE_INGEST_TOKEN": "test-token",
+                "MAEZ_SECRETS_DISABLE_NEW_LOADER": "1",
+            },
+            clear=False,
+        ):
+            from skills import web_interface as wi
+
+        self.wi = wi
+        self.client = wi.app.test_client()
+
+    def _runtime_snapshot(self):
+        return {
+            "schema_version": "maez_runtime_services.v0",
+            "overall": "degraded",
+            "services": {
+                "primary_brain": {
+                    "status": "healthy",
+                    "configured": True,
+                    "required_by": ["always"],
+                    "degraded_reasons": [],
+                },
+                "support_verifier": {
+                    "status": "degraded",
+                    "configured": True,
+                    "required_by": ["MAEZ_SUPPORT_GATE_ENABLED"],
+                    "degraded_reasons": ["contract_unhealthy"],
+                },
+                "search_body": {
+                    "status": "asleep",
+                    "configured": False,
+                    "required_by": [],
+                    "degraded_reasons": [],
+                },
+            },
+        }
+
+    def test_services_api_returns_runtime_service_truth_not_systemctl_list(self):
+        with mock.patch(
+            "core.infra.runtime_services.runtime_services_snapshot_cached",
+            return_value=self._runtime_snapshot(),
+        ):
+            response = self.client.get("/api/v1/services")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["runtime_services"]["schema_version"], "maez_runtime_services.v0")
+        self.assertEqual(payload["runtime_services"]["overall"], "degraded")
+        self.assertEqual(payload["services"]["support_verifier"]["status"], "degraded")
+        self.assertEqual(
+            payload["services"]["support_verifier"]["degraded_reasons"],
+            ["contract_unhealthy"],
+        )
+        self.assertNotIn("sub", payload["services"]["support_verifier"])
+
+    def test_now_body_summary_leads_with_runtime_contract_status(self):
+        with (
+            mock.patch(
+                "core.infra.runtime_services.runtime_services_snapshot_cached",
+                return_value=self._runtime_snapshot(),
+            ),
+            mock.patch.object(self.wi, "_tail_log_lines", return_value=[]),
+            mock.patch(
+                "core.infra.body_capabilities.body_capabilities",
+                return_value={
+                    "binaries": {"rg": True, "wmctrl": False},
+                    "services": {"brain": True},
+                    "desktop_session_reachable": False,
+                    "sudo_passwordless": False,
+                },
+            ),
+            mock.patch(
+                "core.infra.capability_registry.describe",
+                return_value={
+                    "services": {
+                        "maez": "active",
+                        "llama-server": "active",
+                    },
+                    "memory_counts": {"raw": 1, "daily": 0, "core": 0},
+                },
+            ),
+        ):
+            response = self.client.get("/api/v1/now")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_json()["body"]
+        self.assertEqual(body["runtime_services"]["overall"], "degraded")
+        self.assertIn("support verifier is degraded", body["summary"])
+        self.assertIn("primary brain is healthy", body["summary"])
+        self.assertNotIn("talk to 2 live services", body["summary"])
+
+
+if __name__ == "__main__":
+    unittest.main()
