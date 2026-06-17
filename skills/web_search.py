@@ -28,6 +28,31 @@ logger = logging.getLogger("maez")
 _cache = {}
 _cache_ttl = 300  # 5 minutes
 _SENSE_BACKEND = None
+_THIN_RESULT_COUNT = 3
+_THIN_SNIPPET_CHARS = 450
+
+
+def _thin_evidence_enabled() -> bool:
+    try:
+        from core.infra.env_flags import strict_env_flag
+
+        return strict_env_flag("MAEZ_THIN_EVIDENCE_HONESTY_ENABLED")
+    except Exception:
+        return False
+
+
+def _compute_quality(result: dict) -> tuple[str, int, int]:
+    result_count = int(result.get("result_count", 0) or 0)
+    snippet_chars = sum(
+        len((r.get("snippet") or "")[:200])
+        for r in (result.get("results") or [])[:3]
+    )
+    quality = (
+        "thin"
+        if result_count < _THIN_RESULT_COUNT or snippet_chars < _THIN_SNIPPET_CHARS
+        else "adequate"
+    )
+    return quality, result_count, snippet_chars
 
 
 def _sense_backend():
@@ -239,7 +264,7 @@ def _html_search(query: str, max_results: int = 5) -> list:
         return []
 
 
-def format_for_context(result: dict) -> str:
+def format_for_context(result: dict, *, include_quality: bool = False) -> str:
     """Format search results for prompt injection."""
     if not result.get('success') or not result.get('results'):
         return f"[WEB SEARCH: '{result.get('query', '')}'] No results found."
@@ -253,7 +278,16 @@ def format_for_context(result: dict) -> str:
         lines.append(f"     {r['snippet'][:200]}")
         if r.get('url'):
             lines.append(f"     Source: {r['url']}")
-    return '\n'.join(lines)
+    rendered = '\n'.join(lines)
+    if include_quality and _thin_evidence_enabled():
+        quality, result_count, snippet_chars = _compute_quality(result)
+        quality_line = (
+            f"[WEB SEARCH: '{result['query']}'] "
+            f"quality={quality} result_count={result_count} "
+            f"snippet_chars={snippet_chars}"
+        )
+        return f"{quality_line}\n{rendered}"
+    return rendered
 
 
 NEWS_RSS_FEEDS = {
