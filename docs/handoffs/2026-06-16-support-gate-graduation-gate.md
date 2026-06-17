@@ -88,14 +88,21 @@ Fresh local verification:
 Only after cross-lane review passes:
 
 1. Merge `support-gate-graduation` to `main` locally.
-2. Add to `/home/rohit/.config/maez/model.env`:
+2. Ensure MiniCheck is active:
+
+   ```bash
+   systemctl --user start minicheck-verifier.service
+   systemctl --user is-active minicheck-verifier.service
+   ```
+
+3. Add to `/home/rohit/.config/maez/model.env`:
 
    ```bash
    MAEZ_SUPPORT_GATE_ENABLED=1
    ```
 
-3. Restart `maez.service`.
-4. Run a real focused web turn that produces an unsupported cited claim.
+4. Restart `maez.service`.
+5. Run a real focused web turn that produces an unsupported cited claim.
 
 Witness requirements:
 
