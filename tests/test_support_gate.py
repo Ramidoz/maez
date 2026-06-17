@@ -379,6 +379,25 @@ class DaemonSupportGateSourceTests(unittest.TestCase):
         self.assertLess(gate_call_idx, receipt_idx)
         self.assertLess(async_call_idx, receipt_idx)
 
+    def test_daemon_gate_depends_on_evidence_map_not_focused_success(self):
+        src = Path("daemon/maez_daemon.py").read_text()
+        guard_idx = src.find("reply = self._trf_apply_fragment_guard(")
+        condition_idx = src.find("if (\n                _grounding_shadow_post_audit_ready", guard_idx)
+        import_idx = src.find(
+            "from core.cognition.grounding_shadow import",
+            condition_idx,
+        )
+
+        self.assertGreater(guard_idx, 0)
+        self.assertGreater(condition_idx, guard_idx)
+        self.assertGreater(import_idx, condition_idx)
+        condition = src[condition_idx:import_idx]
+        self.assertNotIn(
+            "_focused_used",
+            condition,
+            "support gate must still run when focused evidence exists but synthesis falls back",
+        )
+
 
 class RenderNaturalSurvivalTest(unittest.TestCase):
     def test_caveat_survives_render_natural_and_markers_stripped(self):

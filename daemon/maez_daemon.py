@@ -7027,7 +7027,6 @@ class MaezDaemon:
         try:
             if (
                 _grounding_shadow_post_audit_ready
-                and _focused_used
                 and _focused_support_evidence_map
             ):
                 from core.cognition.grounding_shadow import (
