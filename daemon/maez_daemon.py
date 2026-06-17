@@ -2585,7 +2585,23 @@ def cockpit_core_enabled() -> bool:
     return strict_env_flag("MAEZ_COCKPIT_CORE")
 
 
-def _build_cockpit_inbound_descriptor(daemon, *, text: str, chat_history) -> dict:
+def web_owner_core_enabled() -> bool:
+    """Return True iff private maez.live owner chat may use inbound core."""
+    from core.infra.env_flags import strict_env_flag
+
+    return strict_env_flag("MAEZ_WEB_OWNER_CORE")
+
+
+def _build_cockpit_inbound_descriptor(
+    daemon,
+    *,
+    text: str,
+    chat_history,
+    owner_surface_label: str = "cockpit",
+    chat_id: str = _COCKPIT_CHAT_ID,
+    channel: str = "web_chat_owner",
+    observe_turn_label: str = "cockpit_turn",
+) -> dict:
     """Assemble the keyword descriptor for run_inbound_turn from a cockpit turn.
 
     SLICE 2 covenant decisions (fixed — do not expand here):
@@ -2635,17 +2651,17 @@ def _build_cockpit_inbound_descriptor(daemon, *, text: str, chat_history) -> dic
     return dict(
         daemon=daemon,
         text=text or "",
-        chat_id=_COCKPIT_CHAT_ID,
+        chat_id=chat_id,
         resolved_user_id="rohit",
         reply_to_message_id=None,
         context_note=None,
         photo_analysis=None,
         is_photo_turn=False,
-        owner_surface_label="cockpit",
+        owner_surface_label=owner_surface_label,
         user_id="rohit",
-        channel="web_chat_owner",
+        channel=channel,
         owner_auth_factory=lambda: None,
-        observe_turn_label="cockpit_turn",
+        observe_turn_label=observe_turn_label,
         chat_history_turns=_COCKPIT_CHAT_HISTORY_TURNS,
         action_engine=None,
         get_pipeline=None,
@@ -2659,6 +2675,18 @@ def _build_cockpit_inbound_descriptor(daemon, *, text: str, chat_history) -> dic
         clean_exchange=_clean_exchange,
         send_intermediate=None,
         send_progress_receipt=None,
+    )
+
+
+def _build_web_owner_inbound_descriptor(daemon, *, text: str, chat_history) -> dict:
+    return _build_cockpit_inbound_descriptor(
+        daemon,
+        text=text,
+        chat_history=chat_history,
+        owner_surface_label="web_owner",
+        chat_id="web_owner",
+        channel="web_owner_bridge",
+        observe_turn_label="web_owner_turn",
     )
 
 
@@ -10694,7 +10722,11 @@ class MaezDaemon:
             # all is an open owner covenant decision. Felt-time OFF, NO
             # cards/proposals/search/tools (get_pipeline=action_engine=None).
             # When OFF (default), the existing source="UI" path runs UNTOUCHED.
-            if cockpit_core_enabled():
+            surface_hint = str(data.get("surface") or "cockpit").strip()
+            web_owner_core_request = (
+                surface_hint == "web_owner" and web_owner_core_enabled()
+            )
+            if cockpit_core_enabled() or web_owner_core_request:
                 from daemon.inbound_core import run_inbound_turn
 
                 # The Flask route is sync; run_inbound_turn is async. asyncio.run
@@ -10702,11 +10734,18 @@ class MaezDaemon:
                 # loop is running on the Flask request thread); inside the
                 # coroutine, run_inbound_turn's own asyncio.get_event_loop()
                 # returns that running loop for its run_in_executor offloads.
-                descriptor = _build_cockpit_inbound_descriptor(
-                    self,
-                    text=text,
-                    chat_history=chat_history,
-                )
+                if web_owner_core_request:
+                    descriptor = _build_web_owner_inbound_descriptor(
+                        self,
+                        text=text,
+                        chat_history=chat_history,
+                    )
+                else:
+                    descriptor = _build_cockpit_inbound_descriptor(
+                        self,
+                        text=text,
+                        chat_history=chat_history,
+                    )
                 # Degrade honestly: an S4/early exception from run_inbound_turn
                 # (before its own internal try/except wraps synthesis) returns a
                 # JSON error rather than a raw 500 traceback — mirrors the

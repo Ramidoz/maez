@@ -1703,6 +1703,30 @@ _COCKPIT_PROXY_TIMEOUT_S = 60.0
 _COCKPIT_APPROVE_TIMEOUT_S = 30.0
 
 
+def web_owner_core_enabled() -> bool:
+    """Return True iff private maez.live owner chat should proxy to daemon body."""
+    return strict_env_flag("MAEZ_WEB_OWNER_CORE")
+
+
+def _proxy_web_owner_message_to_daemon(*, message: str, history: list | None) -> dict:
+    body = json.dumps(
+        {
+            "text": message,
+            "history": history if isinstance(history, list) else [],
+            "surface": "web_owner",
+        }
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        f"{_DAEMON_BASE}/message",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=_COCKPIT_PROXY_TIMEOUT_S) as resp:
+        payload = resp.read()
+    return json.loads(payload.decode("utf-8"))
+
+
 @app.route("/api/v1/cockpit/message", methods=["POST"])
 def api_cockpit_message():
     """Proxy the cockpit's chat send to the daemon's /message endpoint.
@@ -6282,6 +6306,30 @@ def chat():
             return jsonify({"reply": _s4_result.answer_text, "display_name": display})
     history = data.get("history", [])
     logger.info("Web chat from %s: %s", display, message[:80])
+    if owner_bridge and web_owner_core_enabled():
+        try:
+            owner_core = _proxy_web_owner_message_to_daemon(
+                message=message,
+                history=history,
+            )
+            reply = str(owner_core.get("reply") or "").strip()
+            if not reply:
+                return jsonify(
+                    {
+                        "error": "daemon_owner_core_empty_reply",
+                        "display_name": display,
+                    }
+                ), 502
+            return jsonify({"reply": reply, "display_name": display})
+        except Exception as e:
+            logger.warning("web owner core proxy failed: %s", e)
+            return jsonify(
+                {
+                    "error": "daemon_owner_core_unreachable",
+                    "detail": str(e)[:200],
+                    "display_name": display,
+                }
+            ), 502
     messages_list = []
     user_key = None
     _owner_ledger_db_path = None
