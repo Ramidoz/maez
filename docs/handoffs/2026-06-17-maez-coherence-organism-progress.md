@@ -56,6 +56,15 @@ or authorized differently depending on surface.
    - This closes the immediate "fresh evidence but empty focused support map"
      bypass class.
 
+7. Web owner inbound-spine proof
+   - Added a regression proving the owner web bridge enters
+     `daemon.handle_message` with `source="web_owner"` through
+     `run_inbound_turn`.
+   - This keeps the web owner surface on the shared post-audit rail surface
+     instead of silently becoming a generic `UI` tunnel.
+   - Tightened the inbound-core test executor shim so fire-and-forget executor
+     calls return completed futures instead of leaking coroutine warnings.
+
 ## Latest Verification
 
 Command:
@@ -93,6 +102,17 @@ Additional slice 6 verification:
 
 Result: `Ran 164 tests ... OK`.
 
+Additional slice 7 verification:
+
+```bash
+/home/rohit/maez/.venv/bin/python -m unittest \
+  tests.test_cockpit_inbound_core \
+  tests.test_web_owner_core \
+  tests.test_inbound_core_equivalence
+```
+
+Result: `Ran 38 tests ... OK`.
+
 Lint/checks:
 
 ```bash
@@ -117,22 +137,17 @@ Result: clean.
 
 These are not fixed by this handoff and should stay visible:
 
-1. Web owner `/chat` post-audit rail parity
-   - The owner web chat bridge reaches daemon core, but the audit/support/
-     capability-card/evidence-precedence parity still needs an end-to-end
-     proof against Telegram/focused paths.
-
-2. Voice/legacy fresh-evidence parity
+1. Voice/legacy fresh-evidence parity
    - Voice and some legacy prompt paths still need proof that containment,
-     evidence precedence, thin-evidence honesty, and support-gate behavior
-     all compose the same way.
+   evidence precedence, thin-evidence honesty, and support-gate behavior
+   all compose the same way.
 
-3. Cockpit UI body display audit
+2. Cockpit UI body display audit
    - `ui/project-planner.html` now reads `runtime_services`, but other cockpit
      UI surfaces may still collapse `healthy/degraded/asleep/unknown` into old
      active/inactive language.
 
-4. Stale docs
+3. Stale docs
    - Some docs/plans still describe design or pending-review state for slices
      that are now live/asleep elsewhere. The branch should reconcile the owner
      facing body map before any switch-over claim.
@@ -144,7 +159,6 @@ where Maez's body could be read or controlled differently depending on which
 surface touched it. The current repair theme is simple: one owner proof, one
 runtime truth map, one internal bridge, one Telegram authorization boundary.
 
-The next useful slice is probably a web-owner/voice parity proof: trace one
-owner web `/chat` turn and one voice/freshness turn through the same post-audit
-rails, then repair any surface that still bypasses the shared support/evidence
-spine.
+The next useful slice is probably voice/freshness parity: trace a voice turn
+with fresh evidence through containment, evidence precedence, thin-evidence
+honesty, and the support gate, then repair any bypass.
