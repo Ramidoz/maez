@@ -62,7 +62,7 @@ class CockpitMessageProxy(unittest.TestCase):
 
         def fake_urlopen(req, timeout=None):
             captured["url"] = req.full_url
-            captured["data"] = req.data
+            captured["data"] = json.loads(req.data.decode("utf-8"))
             captured["method"] = req.get_method()
             captured["timeout"] = timeout
             return _make_urlopen_response(daemon_reply, status=200)
@@ -80,9 +80,27 @@ class CockpitMessageProxy(unittest.TestCase):
         self.assertEqual(r.get_data(), daemon_reply)
         self.assertEqual(captured["url"], "http://127.0.0.1:11435/message")
         self.assertEqual(captured["method"], "POST")
-        self.assertEqual(captured["data"], sent_body)
+        self.assertEqual(captured["data"], {"text": "hi maez", "surface": "cockpit"})
         self.assertIsNotNone(captured["timeout"])
         self.assertGreaterEqual(captured["timeout"], 60.0)
+
+    def test_forces_cockpit_surface_even_if_browser_claims_web_owner(self):
+        daemon_reply = json.dumps({"reply": "hi rohit"}).encode()
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["data"] = json.loads(req.data.decode("utf-8"))
+            return _make_urlopen_response(daemon_reply, status=200)
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            r = self.client.post(
+                "/api/v1/cockpit/message",
+                json={"text": "hi maez", "surface": "web_owner"},
+            )
+
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(captured["data"]["text"], "hi maez")
+        self.assertEqual(captured["data"]["surface"], "cockpit")
 
     def test_passes_through_daemon_4xx_response(self):
         """If daemon answers 400, the cockpit caller sees 400 + body."""

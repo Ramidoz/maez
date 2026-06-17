@@ -453,6 +453,32 @@ class DispatcherLayer0Tests(unittest.TestCase):
 
         self.assertEqual(spec.external_sources, [ExternalSource.WEB_SEARCH])
 
+    def test_explicit_search_about_broken_owner_object_still_egresses(self):
+        from core.dispatcher.spec import ExternalSource
+
+        spec = self._emit_spec_for(
+            "can you search for why my script is broken",
+            env={
+                "MAEZ_EVIDENCE_PRECEDENCE_ENABLED": "1",
+                "MAEZ_SEARCH_AS_SENSE_ENABLED": "1",
+            },
+        )
+
+        self.assertEqual(spec.external_sources, [ExternalSource.WEB_SEARCH])
+
+    def test_explicit_fetch_about_not_working_owner_object_still_egresses(self):
+        from core.dispatcher.spec import ExternalSource
+
+        spec = self._emit_spec_for(
+            "can you fetch pages about why my app is not working",
+            env={
+                "MAEZ_EVIDENCE_PRECEDENCE_ENABLED": "1",
+                "MAEZ_SEARCH_AS_SENSE_ENABLED": "1",
+            },
+        )
+
+        self.assertEqual(spec.external_sources, [ExternalSource.WEB_SEARCH])
+
     def test_owner_url_still_wins_over_complaint_guard(self):
         from core.dispatcher.spec import ExternalSource
 

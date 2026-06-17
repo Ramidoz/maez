@@ -10760,6 +10760,8 @@ class MaezDaemon:
             # cards/proposals/search/tools (get_pipeline=action_engine=None).
             # When OFF (default), the existing source="UI" path runs UNTOUCHED.
             surface_hint = str(data.get("surface") or "cockpit").strip()
+            if surface_hint == "web_owner" and not _s7_internal_channel_trusted(request):
+                return jsonify({"error": "web_owner_channel_untrusted"}), 403
             descriptor, descriptor_error = _select_message_inbound_descriptor(
                 self,
                 text=text,

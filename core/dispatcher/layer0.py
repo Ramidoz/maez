@@ -115,11 +115,17 @@ _SELF_CAPABILITY_RE = re.compile(
     re.IGNORECASE,
 )
 _SELF_REF_RE = re.compile(r"\b(?:you|your|maez|yourself)\b", re.IGNORECASE)
-_SELF_CAPABILITY_COMPLAINT_RE = re.compile(
-    r"\b(?:unable|can't|cannot|can not|won't|fail(?:ed|ing|s)?|broken|useless)\b"
-    r"|does(?:n't| not) work|don't work|not working"
-    r"|\bkeep(?:s)?\b.{0,60}\b(?:wrong|fail(?:ed|ing|s)?)\b"
-    r"|\bseem(?:s|ed)?\b.{0,40}\bunable\b",
+_SELF_DIRECT_COMPLAINT_RE = re.compile(
+    r"\b(?:you|maez|yourself)\b.{0,35}\b(?:unable|can't|cannot|can not|won't|fail(?:ed|ing|s)?|useless)\b"
+    r"|\b(?:can't|cannot|can not|won't)\s+(?:you|maez)\b"
+    r"|\b(?:you|maez)\b.{0,15}\bnot working\b"
+    r"|\b(?:you|maez)\b.{0,20}\bkeep(?:s)?\b.{0,60}\b(?:wrong|fail(?:ed|ing|s)?)\b"
+    r"|\b(?:you|maez)\b.{0,20}\bseem(?:s|ed)?\b.{0,40}\bunable\b",
+    re.IGNORECASE,
+)
+_SELF_CAPABILITY_OBJECT_COMPLAINT_RE = re.compile(
+    r"\byour\s+(?:web search|search tools?|search|tools?|page read(?:ing)?|web sense|search sense|capabilit(?:y|ies))\b"
+    r".{0,45}\b(?:broken|useless|fail(?:ed|ing|s)?|does(?:n't| not) work|don't work|not working|unable)\b",
     re.IGNORECASE,
 )
 # Generic Reddit talk selects the owned Reddit substrate.
@@ -535,7 +541,12 @@ def _is_self_capability_question(utterance: str) -> bool:
 
 def _is_self_capability_complaint(utterance: str) -> bool:
     text = utterance or ""
-    return bool(_SELF_REF_RE.search(text) and _SELF_CAPABILITY_COMPLAINT_RE.search(text))
+    if not _SELF_REF_RE.search(text):
+        return False
+    return bool(
+        _SELF_DIRECT_COMPLAINT_RE.search(text)
+        or _SELF_CAPABILITY_OBJECT_COMPLAINT_RE.search(text)
+    )
 
 
 def _substrate_candidates(source_anchor_candidates: Sequence[SubstrateSource]) -> list[SubstrateSource]:

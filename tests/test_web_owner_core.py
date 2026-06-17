@@ -18,6 +18,25 @@ def _make_urlopen_response(body: bytes, status: int = 200):
     return cm
 
 
+class _StopServer(RuntimeError):
+    pass
+
+
+class _FakeSocket:
+    def setsockopt(self, *_args):
+        return None
+
+
+class _FakeServer:
+    socket = _FakeSocket()
+
+    def serve_forever(self):
+        raise _StopServer()
+
+    def server_close(self):
+        return None
+
+
 class WebOwnerCoreProxyTests(unittest.TestCase):
     def _web_interface(self):
         sys.modules.pop("skills.web_interface", None)
@@ -46,7 +65,10 @@ class WebOwnerCoreProxyTests(unittest.TestCase):
             captured["timeout"] = timeout
             return _make_urlopen_response(json.dumps({"reply": "from daemon"}).encode())
 
-        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        with (
+            mock.patch.dict(os.environ, {"S7_INTERNAL_CHANNEL_TOKEN": "bridge-secret"}),
+            mock.patch("urllib.request.urlopen", side_effect=fake_urlopen),
+        ):
             reply = wi._proxy_web_owner_message_to_daemon(
                 message="hello from maez.live",
                 history=[{"role": "user", "content": "prior"}],
@@ -59,6 +81,40 @@ class WebOwnerCoreProxyTests(unittest.TestCase):
         self.assertEqual(captured["data"]["surface"], "web_owner")
         self.assertEqual(captured["data"]["history"], [{"role": "user", "content": "prior"}])
         self.assertGreaterEqual(captured["timeout"], 60.0)
+
+    def test_proxy_requires_internal_channel_and_sends_header(self):
+        wi = self._web_interface()
+
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["headers"] = dict(req.header_items())
+            return _make_urlopen_response(json.dumps({"reply": "from daemon"}).encode())
+
+        with (
+            mock.patch.dict(os.environ, {"S7_INTERNAL_CHANNEL_TOKEN": "bridge-secret"}),
+            mock.patch("urllib.request.urlopen", side_effect=fake_urlopen),
+        ):
+            wi._proxy_web_owner_message_to_daemon(
+                message="hello from maez.live",
+                history=[],
+            )
+
+        self.assertEqual(
+            captured["headers"].get("X-maez-s7-internal-channel"),
+            "bridge-secret",
+        )
+
+    def test_proxy_fails_closed_without_internal_channel_token(self):
+        wi = self._web_interface()
+
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("S7_INTERNAL_CHANNEL_TOKEN", None)
+            with self.assertRaises(RuntimeError):
+                wi._proxy_web_owner_message_to_daemon(
+                    message="hello from maez.live",
+                    history=[],
+                )
 
     def test_web_owner_core_flag_is_strict(self):
         wi = self._web_interface()
@@ -115,6 +171,43 @@ class WebOwnerCoreProxyTests(unittest.TestCase):
             message="hello from the owner web bridge",
             history=[{"role": "user", "content": "prior"}],
         )
+
+    def test_owner_chat_daemon_refusal_fails_closed_without_public_fallback(self):
+        wi = self._web_interface()
+        client = wi.app.test_client()
+
+        with (
+            mock.patch.dict("os.environ", {"MAEZ_WEB_OWNER_CORE": "1"}),
+            mock.patch.object(
+                wi.accounts,
+                "get_by_token",
+                return_value={"uuid": "owner", "display_name": "Rohit"},
+            ),
+            mock.patch.object(
+                wi.accounts,
+                "get_user_record",
+                return_value={"private_owner_bridge": True},
+            ),
+            mock.patch(
+                "core.evolution.subjective_duration.SubjectiveDuration.record_salience_event"
+            ),
+            mock.patch.object(
+                wi,
+                "_proxy_web_owner_message_to_daemon",
+                side_effect=RuntimeError("web_owner_core_disabled"),
+            ),
+        ):
+            response = client.post(
+                "/chat",
+                json={
+                    "web_token": "tok",
+                    "message": "hello from the owner web bridge",
+                    "history": [],
+                },
+            )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.get_json()["error"], "daemon_owner_core_unreachable")
 
 
 class DaemonWebOwnerDescriptorTests(unittest.TestCase):
@@ -176,3 +269,63 @@ class DaemonWebOwnerDescriptorTests(unittest.TestCase):
         self.assertEqual(web_descriptor["owner_surface_label"], "web_owner")
         self.assertIsNone(cockpit_error)
         self.assertEqual(cockpit_descriptor["owner_surface_label"], "cockpit")
+
+
+class DaemonWebOwnerMessageRouteTests(unittest.TestCase):
+    def _client(self):
+        from daemon.maez_daemon import MaezDaemon
+
+        daemon = MaezDaemon.__new__(MaezDaemon)
+        daemon._health_server = None
+        captured = {}
+
+        def fake_make_server(_host, _port, app):
+            captured["app"] = app
+            return _FakeServer()
+
+        with mock.patch("werkzeug.serving.make_server", side_effect=fake_make_server):
+            with self.assertRaises(_StopServer):
+                daemon._run_health_server()
+        return captured["app"].test_client()
+
+    def test_web_owner_message_requires_internal_channel(self):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "MAEZ_WEB_OWNER_CORE": "1",
+                "S7_INTERNAL_CHANNEL_TOKEN": "bridge-secret",
+            },
+            clear=False,
+        ):
+            response = self._client().post(
+                "/message",
+                json={"text": "hello", "surface": "web_owner"},
+            )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.get_json()["error"], "web_owner_channel_untrusted")
+
+    def test_web_owner_message_accepts_valid_internal_channel(self):
+        async def fake_run_inbound_turn(**kwargs):
+            self.assertEqual(kwargs["owner_surface_label"], "web_owner")
+            return "owner bridge reply"
+
+        with (
+            mock.patch.dict(
+                os.environ,
+                {
+                    "MAEZ_WEB_OWNER_CORE": "1",
+                    "S7_INTERNAL_CHANNEL_TOKEN": "bridge-secret",
+                },
+                clear=False,
+            ),
+            mock.patch("daemon.inbound_core.run_inbound_turn", fake_run_inbound_turn),
+        ):
+            response = self._client().post(
+                "/message",
+                json={"text": "hello", "surface": "web_owner"},
+                headers={"X-Maez-S7-Internal-Channel": "bridge-secret"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["reply"], "owner bridge reply")

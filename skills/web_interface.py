@@ -1701,6 +1701,8 @@ def api_card_deny(request_id: str):
 _DAEMON_BASE = "http://127.0.0.1:11435"
 _COCKPIT_PROXY_TIMEOUT_S = 60.0
 _COCKPIT_APPROVE_TIMEOUT_S = 30.0
+_S7_INTERNAL_CHANNEL_HEADER = "X-Maez-S7-Internal-Channel"
+_S7_INTERNAL_CHANNEL_TOKEN_ENV = "S7_INTERNAL_CHANNEL_TOKEN"
 
 
 def web_owner_core_enabled() -> bool:
@@ -1709,6 +1711,9 @@ def web_owner_core_enabled() -> bool:
 
 
 def _proxy_web_owner_message_to_daemon(*, message: str, history: list | None) -> dict:
+    token = os.environ.get(_S7_INTERNAL_CHANNEL_TOKEN_ENV, "").strip()
+    if not token:
+        raise RuntimeError("s7_internal_channel_untrusted")
     body = json.dumps(
         {
             "text": message,
@@ -1719,7 +1724,10 @@ def _proxy_web_owner_message_to_daemon(*, message: str, history: list | None) ->
     req = urllib.request.Request(
         f"{_DAEMON_BASE}/message",
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            _S7_INTERNAL_CHANNEL_HEADER: token,
+        },
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=_COCKPIT_PROXY_TIMEOUT_S) as resp:
@@ -1740,8 +1748,13 @@ def api_cockpit_message():
     import urllib.request as _urlreq
     import urllib.error as _urlerr
 
-    body = request.get_data() or b"{}"
-    headers = {"Content-Type": request.headers.get("Content-Type", "application/json")}
+    raw = request.get_json(silent=True)
+    data = dict(raw) if isinstance(raw, dict) else {}
+    # ``surface`` is authority-bearing in daemon /message. The generic cockpit
+    # proxy must never let browser JSON select the private web-owner bridge.
+    data["surface"] = "cockpit"
+    body = json.dumps(data).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
     try:
         req = _urlreq.Request(
             f"{_DAEMON_BASE}/message",
