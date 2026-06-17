@@ -77,11 +77,15 @@ class S71StatusProjectionTests(unittest.TestCase):
             )
             env = {
                 "S7_LIVE_WEBAUTHN_CEREMONY": "1",
+                "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
                 "S7_WEBAUTHN_STORE_ROOT": str(root),
             }
 
             with patch.dict(os.environ, env, clear=False):
-                response = _daemon_client().get("/internal/s7/webauthn/status")
+                response = _daemon_client().get(
+                    "/internal/s7/webauthn/status",
+                    headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+                )
 
             body = response.get_json()
             self.assertEqual(response.status_code, 200)

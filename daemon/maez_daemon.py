@@ -10369,6 +10369,8 @@ class MaezDaemon:
 
         @app.route("/internal/cockpit/state")
         def cockpit_state():
+            if not _s7_internal_channel_trusted(request):
+                return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
             # FAST real-state read for the cockpit face: true-by-construction
             # off the daemon's retained in-memory attrs. No perception_snapshot
             # / nvidia-smi here (that is what keeps /health ~1.7s). Never
@@ -10384,6 +10386,8 @@ class MaezDaemon:
 
         @app.route("/internal/s7/webauthn/status", methods=["GET"])
         def s7_webauthn_status():
+            if not _s7_internal_channel_trusted(request):
+                return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
             service = S7LocalWebAuthnCeremonyService(
                 verifier=S7ProductionWebAuthnVerifier(),
                 store_factory=lambda: S7WebAuthnBootstrapStore(_s7_webauthn_store_root()),

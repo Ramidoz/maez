@@ -779,6 +779,48 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.get_json()["error"], "s7_internal_channel_untrusted")
 
+    def test_internal_cockpit_state_requires_internal_channel(self):
+        with patch.dict(
+            os.environ,
+            {"S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret"},
+            clear=False,
+        ):
+            response = self._client().get("/internal/cockpit/state")
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.get_json()["error"], "s7_internal_channel_untrusted")
+
+    def test_internal_webauthn_status_requires_internal_channel(self):
+        with patch.dict(
+            os.environ,
+            {"S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret"},
+            clear=False,
+        ):
+            response = self._client().get("/internal/s7/webauthn/status")
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.get_json()["error"], "s7_internal_channel_untrusted")
+
+    def test_internal_cockpit_state_accepts_valid_internal_channel(self):
+        with (
+            patch.dict(
+                os.environ,
+                {"S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret"},
+                clear=False,
+            ),
+            patch(
+                "daemon.maez_daemon._build_cockpit_state",
+                return_value={"ok": True, "surface": "cockpit"},
+            ),
+        ):
+            response = self._client().get(
+                "/internal/cockpit/state",
+                headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["surface"], "cockpit")
+
     def test_031_daemon_register_begin_accepts_valid_internal_channel_then_requires_bootstrap(self):
         with tempfile.TemporaryDirectory() as tmp:
             env = {
