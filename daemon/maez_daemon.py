@@ -10764,9 +10764,12 @@ class MaezDaemon:
             # all is an open owner covenant decision. Felt-time OFF, NO
             # cards/proposals/search/tools (get_pipeline=action_engine=None).
             # When OFF (default), the existing source="UI" path runs UNTOUCHED.
-            surface_hint = str(data.get("surface") or "cockpit").strip()
+            raw_surface_hint = str(data.get("surface") or "cockpit").strip()
+            surface_hint = "web_owner" if raw_surface_hint == "web_owner" else "cockpit"
             if surface_hint == "web_owner" and not _s7_internal_channel_trusted(request):
                 return jsonify({"error": "web_owner_channel_untrusted"}), 403
+            if surface_hint == "cockpit" and not _s7_internal_channel_trusted(request):
+                return jsonify({"error": "cockpit_channel_untrusted"}), 403
             descriptor, descriptor_error = _select_message_inbound_descriptor(
                 self,
                 text=text,
@@ -10824,6 +10827,8 @@ class MaezDaemon:
             returns an empty transcript with a 200 so the caller's
             fallback path (non-tool LLM synthesis) still works.
             """
+            if not _s7_internal_channel_trusted(request):
+                return jsonify({"error": "s7_internal_channel_untrusted"}), 403
             data = request.get_json(silent=True) or {}
             text = (data.get("text") or "").strip()
             if not text:
@@ -10893,6 +10898,8 @@ class MaezDaemon:
             execution path."""
             if request.method == "OPTIONS":
                 return ("", 204)
+            if not _s7_internal_channel_trusted(request):
+                return jsonify({"error": "s7_internal_channel_untrusted"}), 403
             _record_owner_interaction(self)
             try:
                 telegram = getattr(self, "telegram", None)

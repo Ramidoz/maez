@@ -209,6 +209,38 @@ class WebOwnerCoreProxyTests(unittest.TestCase):
         self.assertEqual(response.status_code, 502)
         self.assertEqual(response.get_json()["error"], "daemon_owner_core_unreachable")
 
+    def test_private_owner_chat_fails_closed_when_core_flag_off(self):
+        wi = self._web_interface()
+        client = wi.app.test_client()
+
+        with (
+            mock.patch.dict("os.environ", {"MAEZ_WEB_OWNER_CORE": "0"}),
+            mock.patch.object(
+                wi.accounts,
+                "get_by_token",
+                return_value={"uuid": "owner", "display_name": "Rohit"},
+            ),
+            mock.patch.object(
+                wi.accounts,
+                "get_user_record",
+                return_value={"private_owner_bridge": True},
+            ),
+            mock.patch(
+                "core.evolution.subjective_duration.SubjectiveDuration.record_salience_event"
+            ),
+        ):
+            response = client.post(
+                "/chat",
+                json={
+                    "web_token": "tok",
+                    "message": "hello from the owner web bridge",
+                    "history": [],
+                },
+            )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()["error"], "web_owner_core_disabled")
+
 
 class DaemonWebOwnerDescriptorTests(unittest.TestCase):
     def test_web_owner_descriptor_uses_owner_surface_not_cockpit(self):
@@ -304,6 +336,65 @@ class DaemonWebOwnerMessageRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.get_json()["error"], "web_owner_channel_untrusted")
+
+    def test_cockpit_message_requires_internal_channel(self):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "MAEZ_COCKPIT_CORE": "1",
+                "S7_INTERNAL_CHANNEL_TOKEN": "bridge-secret",
+            },
+            clear=False,
+        ):
+            response = self._client().post(
+                "/message",
+                json={"text": "hello", "surface": "cockpit"},
+            )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.get_json()["error"], "cockpit_channel_untrusted")
+
+    def test_unknown_message_surface_is_treated_as_cockpit_for_trust(self):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "MAEZ_COCKPIT_CORE": "1",
+                "S7_INTERNAL_CHANNEL_TOKEN": "bridge-secret",
+            },
+            clear=False,
+        ):
+            response = self._client().post(
+                "/message",
+                json={"text": "hello", "surface": "not_cockpit"},
+            )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.get_json()["error"], "cockpit_channel_untrusted")
+
+    def test_internal_brain_loop_requires_internal_channel(self):
+        with mock.patch.dict(
+            os.environ,
+            {"S7_INTERNAL_CHANNEL_TOKEN": "bridge-secret"},
+            clear=False,
+        ):
+            response = self._client().post(
+                "/internal/brain_loop",
+                json={"text": "run a tool"},
+            )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.get_json()["error"], "s7_internal_channel_untrusted")
+
+    def test_internal_card_approval_requires_internal_channel(self):
+        with mock.patch.dict(
+            os.environ,
+            {"S7_INTERNAL_CHANNEL_TOKEN": "bridge-secret"},
+            clear=False,
+        ):
+            response = self._client().post("/internal/approve_card/req-1")
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.get_json()["error"], "s7_internal_channel_untrusted")
 
     def test_web_owner_message_accepts_valid_internal_channel(self):
         async def fake_run_inbound_turn(**kwargs):

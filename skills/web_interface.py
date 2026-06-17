@@ -766,6 +766,31 @@ def _request_token():
     return (request.args.get("web_token", "") or request.cookies.get(AUTH_COOKIE, "")).strip()
 
 
+def _owner_private_auth_ok() -> bool:
+    """Return true for an authenticated owner-private browser session.
+
+    Privileged cockpit routes intentionally use the session cookie only. Query
+    parameters remain for older public chat/history flows, but owner-like
+    cockpit actions should not be authorizable by copying a token into a URL.
+    """
+    token = (request.cookies.get(AUTH_COOKIE, "") or "").strip()
+    if not token:
+        return False
+    try:
+        user = accounts.get_by_token(token)
+        if not user:
+            return False
+        user_record = accounts.get_user_record(user.get("uuid", "")) or {}
+        return _is_private_owner_bridge(user_record)
+    except Exception as exc:
+        logger.debug("owner private auth check failed: %s", exc)
+        return False
+
+
+def _owner_private_auth_required_response():
+    return jsonify({"ok": False, "error": "owner_auth_required"}), 401
+
+
 def _attach_auth_cookie(response, token):
     if token:
         response.set_cookie(
@@ -1666,6 +1691,8 @@ def api_card_deny(request_id: str):
     """Deny a card from the cockpit. Safe — no execution side effect,
     just marks it resolved so the UI (and the daemon's state) both
     see it as closed."""
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     try:
         from core.pending_cards import PendingCardStore
 
@@ -1703,6 +1730,13 @@ _COCKPIT_PROXY_TIMEOUT_S = 60.0
 _COCKPIT_APPROVE_TIMEOUT_S = 30.0
 _S7_INTERNAL_CHANNEL_HEADER = "X-Maez-S7-Internal-Channel"
 _S7_INTERNAL_CHANNEL_TOKEN_ENV = "S7_INTERNAL_CHANNEL_TOKEN"
+
+
+def _s7_internal_channel_headers() -> dict[str, str]:
+    token = os.environ.get(_S7_INTERNAL_CHANNEL_TOKEN_ENV, "").strip()
+    if not token:
+        raise RuntimeError("s7_internal_channel_untrusted")
+    return {_S7_INTERNAL_CHANNEL_HEADER: token}
 
 
 def web_owner_core_enabled() -> bool:
@@ -1748,13 +1782,20 @@ def api_cockpit_message():
     import urllib.request as _urlreq
     import urllib.error as _urlerr
 
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
+    try:
+        internal_headers = _s7_internal_channel_headers()
+    except RuntimeError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 503
+
     raw = request.get_json(silent=True)
     data = dict(raw) if isinstance(raw, dict) else {}
     # ``surface`` is authority-bearing in daemon /message. The generic cockpit
     # proxy must never let browser JSON select the private web-owner bridge.
     data["surface"] = "cockpit"
     body = json.dumps(data).encode("utf-8")
-    headers = {"Content-Type": "application/json"}
+    headers = {"Content-Type": "application/json", **internal_headers}
     try:
         req = _urlreq.Request(
             f"{_DAEMON_BASE}/message",
@@ -1773,6 +1814,10 @@ def api_cockpit_message():
             payload = e.read()
         except Exception:
             payload = str(e).encode("utf-8")
+        try:
+            e.close()
+        except Exception:
+            pass
         return (payload, e.code, {"Content-Type": "application/json"})
     except Exception as e:
         return jsonify(
@@ -1794,8 +1839,15 @@ def api_card_approve(request_id: str):
     import urllib.request as _urlreq
     import urllib.error as _urlerr
 
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
+    try:
+        internal_headers = _s7_internal_channel_headers()
+    except RuntimeError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 503
+
     body = request.get_data() or b""
-    headers = {}
+    headers = dict(internal_headers)
     ct = request.headers.get("Content-Type")
     if ct:
         headers["Content-Type"] = ct
@@ -1819,6 +1871,10 @@ def api_card_approve(request_id: str):
             payload = e.read()
         except Exception:
             payload = str(e).encode("utf-8")
+        try:
+            e.close()
+        except Exception:
+            pass
         return (payload, e.code, {"Content-Type": "application/json"})
     except Exception as e:
         return jsonify(
@@ -6319,7 +6375,14 @@ def chat():
             return jsonify({"reply": _s4_result.answer_text, "display_name": display})
     history = data.get("history", [])
     logger.info("Web chat from %s: %s", display, message[:80])
-    if owner_bridge and web_owner_core_enabled():
+    if owner_bridge and not web_owner_core_enabled():
+        return jsonify(
+            {
+                "error": "web_owner_core_disabled",
+                "display_name": display,
+            }
+        ), 409
+    if owner_bridge:
         try:
             owner_core = _proxy_web_owner_message_to_daemon(
                 message=message,

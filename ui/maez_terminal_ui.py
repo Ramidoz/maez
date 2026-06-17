@@ -2,6 +2,7 @@
 """Maez Terminal UI — Persistent cyberpunk terminal face. Shadow-buffered rendering."""
 
 import json
+import os
 import random
 import subprocess
 import sys
@@ -615,8 +616,16 @@ class MaezTerminalUI:
         time.sleep(0.8)
         self.set_emotion("thinking")
         try:
+            headers = {}
+            token = os.environ.get("S7_INTERNAL_CHANNEL_TOKEN", "").strip()
+            if token:
+                headers["X-Maez-S7-Internal-Channel"] = token
             with httpx.Client(timeout=60) as c:
-                r = c.post(MESSAGE_URL, json={"text": text})
+                r = c.post(
+                    MESSAGE_URL,
+                    json={"text": text, "surface": "cockpit"},
+                    headers=headers,
+                )
                 d = r.json()
             reply = d.get("reply", "(no response)")
         except Exception as e:
