@@ -73,6 +73,46 @@ class FlagTests(_Env):
         src = inspect.getsource(cc._flag_probe)
         self.assertNotIn("os.environ.get(env_name)", src)
 
+    def test_default_registry_names_support_honesty_organs(self):
+        names = [name for name, _probe in cc._default_registry()]
+
+        self.assertIn("support gate", names)
+        self.assertIn("grounding shadow", names)
+
+    def test_support_honesty_organs_use_strict_flag_semantics(self):
+        os.environ["MAEZ_EVIDENCE_PRECEDENCE_ENABLED"] = "1"
+        for name in ("MAEZ_SUPPORT_GATE_ENABLED", "MAEZ_GROUNDING_SHADOW_ENABLED"):
+            self.addCleanup(lambda name=name: os.environ.pop(name, None))
+            os.environ[name] = "0"
+
+        card = cc.capability_prompt_block(
+            registry=(
+                ("support gate", cc._flag_probe("MAEZ_SUPPORT_GATE_ENABLED")),
+                ("grounding shadow", cc._flag_probe("MAEZ_GROUNDING_SHADOW_ENABLED")),
+            )
+        )
+
+        self.assertIn("support gate: off", card)
+        self.assertIn("grounding shadow: off", card)
+
+    def test_voice_boundary_sources_mark_support_honesty_organs_as_flags(self):
+        os.environ["MAEZ_EVIDENCE_PRECEDENCE_ENABLED"] = "1"
+        os.environ["MAEZ_VOICE_BOUNDARY_ENABLED"] = "1"
+        self.addCleanup(lambda: os.environ.pop("MAEZ_VOICE_BOUNDARY_ENABLED", None))
+
+        card = cc.capability_prompt_block(
+            registry=(
+                ("support gate", lambda: "on"),
+                ("grounding shadow", lambda: "off"),
+            )
+        )
+
+        self.assertIn('"name": "support gate"', card)
+        self.assertIn('"name": "grounding shadow"', card)
+        self.assertIn('"source": "flag"', card)
+        self.assertNotIn("minicheck", card.lower())
+        self.assertNotIn("verifier healthy", card.lower())
+
 
 class CardTests(_Env):
     def setUp(self):

@@ -23,6 +23,8 @@ _ENTRY_SOURCE = {
     "page read": "flag",
     "recall": "flag",
     "search commitment": "flag",
+    "support gate": "flag",
+    "grounding shadow": "flag",
     "felt time": "probe",
 }
 _VOICE_BOUNDARY_INSTRUCTION = (
@@ -89,6 +91,8 @@ def _default_registry() -> Sequence[tuple[str, Callable[[], str]]]:
             "search commitment",
             _flag_probe("MAEZ_SEARCH_COMMITMENT_ENABLED", "gatekeeper mode", "off"),
         ),
+        ("support gate", _flag_probe("MAEZ_SUPPORT_GATE_ENABLED")),
+        ("grounding shadow", _flag_probe("MAEZ_GROUNDING_SHADOW_ENABLED")),
         ("felt time", _felt_time_probe),
     )
 
