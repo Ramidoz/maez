@@ -7,10 +7,11 @@ unknown.
 from __future__ import annotations
 
 import logging
-import os
 import time
 import json
 from collections.abc import Callable, Sequence
+
+from core.infra.env_flags import strict_env_flag
 
 logger = logging.getLogger("maez")
 
@@ -33,12 +34,7 @@ _VOICE_BOUNDARY_INSTRUCTION = (
 
 
 def evidence_precedence_enabled() -> bool:
-    return (
-        (os.environ.get("MAEZ_EVIDENCE_PRECEDENCE_ENABLED", "") or "")
-        .strip()
-        .lower()
-        in {"1", "true", "yes", "on"}
-    )
+    return strict_env_flag("MAEZ_EVIDENCE_PRECEDENCE_ENABLED")
 
 
 def voice_boundary_enabled() -> bool:
@@ -47,12 +43,7 @@ def voice_boundary_enabled() -> bool:
     Deliberately rejects the house-wide ``bool(os.environ.get(...))`` footgun
     (``"0"`` would read truthy). Mirrors ``evidence_precedence_enabled``.
     """
-    return (
-        (os.environ.get("MAEZ_VOICE_BOUNDARY_ENABLED", "") or "")
-        .strip()
-        .lower()
-        in {"1", "true", "yes", "on"}
-    )
+    return strict_env_flag("MAEZ_VOICE_BOUNDARY_ENABLED")
 
 
 def reset_card_cache() -> None:
@@ -75,7 +66,7 @@ def _flag_probe(
     off_text: str = "off",
 ) -> Callable[[], str]:
     def _probe() -> str:
-        return on_text if os.environ.get(env_name) else off_text
+        return on_text if strict_env_flag(env_name) else off_text
 
     return _probe
 
