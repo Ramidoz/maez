@@ -12,6 +12,14 @@ This branch has moved from setup into repair work. The landed changes are
 mostly seam closures: places where the same Maez body could be read, controlled,
 or authorized differently depending on surface.
 
+Current branch head: `e4eadf5`.
+
+Switch-over plan:
+`docs/superpowers/plans/2026-06-17-maez-coherence-organism-switch-over.md`.
+
+Status: branch-built, branch-reviewed, switch-over-plan-written. Live Maez has
+not been restarted or switched over from this branch.
+
 ## Landed Slices
 
 1. Web owner/private cockpit API gates
@@ -330,10 +338,13 @@ Result: clean.
 
 These are not fixed by this handoff and should stay visible:
 
-1. Final branch review and switch-over proof
-   - The branch has multiple verified seam closures, but it still needs a
-     cross-lane review pass and an explicit owner switch-over decision before
-     any live Maez restart or mainline claim.
+1. Mechanical merge / switch-over proof
+   - The branch has multiple verified seam closures and has passed cross-lane
+     review after the bridge-proof HOLD fix.
+   - It still needs an explicit owner decision before local merge, restart, or
+     live witness.
+   - The exact merge/restart/witness sequence is written in
+     `docs/superpowers/plans/2026-06-17-maez-coherence-organism-switch-over.md`.
 
 ## Plain-English Summary
 
@@ -344,6 +355,6 @@ runtime truth map, one internal bridge, one Telegram authorization boundary,
 one voice input spine, one fresh-evidence honesty spine, one cockpit body
 display language, and one current map of those repairs.
 
-The next useful slice is the final review package: summarize the branch,
-run the agreed verification set, and ask the review lane to attack the remaining
-surface/reader divergence before any switch-over.
+The next useful action is owner-gated: execute the switch-over plan's mechanical
+merge section, or keep the branch parked. No live restart happens until Rohit
+explicitly chooses that breath.
