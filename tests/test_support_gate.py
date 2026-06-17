@@ -89,6 +89,30 @@ class ApplySupportGateTest(unittest.TestCase):
         self.assertEqual(out.gated_marked_draft.strip(), "Just a thought.")
         self.assertEqual(v.calls, [])
 
+    def test_detached_citation_folds_onto_previous_sentence(self):
+        from core.cognition.support_verifier import FakeSupportVerifier, UNSUPPORTED
+
+        v = FakeSupportVerifier(default=(UNSUPPORTED, 0.1))
+
+        out = self._gate("Anthropic launched Mythos 5. [E1]", {"E1": "Anthropic released Opus."}, v)
+
+        self.assertIn("Anthropic launched Mythos 5. [E1]", out.gated_marked_draft)
+        self.assertIn(
+            "I couldn't confirm this from the source I cited.",
+            out.gated_marked_draft,
+        )
+        self.assertEqual(v.calls[0][1], "Anthropic launched Mythos 5. [E1]")
+
+    def test_detached_citation_newline_folds_onto_previous_sentence(self):
+        from core.cognition.support_verifier import FakeSupportVerifier, UNSUPPORTED
+
+        v = FakeSupportVerifier(default=(UNSUPPORTED, 0.1))
+
+        out = self._gate("Anthropic launched Mythos 5.\n[E1]", {"E1": "Anthropic released Opus."}, v)
+
+        self.assertIn("Anthropic launched Mythos 5. [E1]", out.gated_marked_draft)
+        self.assertEqual(v.calls[0][1], "Anthropic launched Mythos 5. [E1]")
+
 
 class GateRecordsTest(unittest.TestCase):
     def _gate(self, draft, evidence_map, verifier):
@@ -202,7 +226,7 @@ class ObserveFocusedSupportGateTest(unittest.TestCase):
                     "HttpSupportVerifier",
                     lambda: FakeSupportVerifier(default=(UNSUPPORTED, 0.1)),
                 ),
-                self.assertLogs("core.cognition.grounding_shadow", level="INFO") as cm,
+                self.assertLogs("maez.grounding_shadow", level="INFO") as cm,
             ):
                 gated = gs.observe_focused_support_gate(
                     "Claim [E1].",
@@ -215,10 +239,59 @@ class ObserveFocusedSupportGateTest(unittest.TestCase):
 
             self.assertIn("I couldn't confirm this from the source I cited.", gated)
             self.assertTrue(any("support_gate_applied" in message for message in cm.output))
+            self.assertTrue(any("row_written=True" in message for message in cm.output))
             with open(path, encoding="utf-8") as f:
                 rows = [json.loads(line) for line in f]
             self.assertTrue(rows)
             self.assertTrue(rows[0]["gate_applied"])
+
+    def test_row_write_failure_is_logged(self):
+        from unittest import mock
+
+        import core.cognition.grounding_shadow as gs
+        from core.cognition.support_verifier import FakeSupportVerifier, UNSUPPORTED
+
+        with (
+            mock.patch.object(
+                gs,
+                "HttpSupportVerifier",
+                lambda: FakeSupportVerifier(default=(UNSUPPORTED, 0.1)),
+            ),
+            mock.patch.object(gs, "emit_support_row", return_value=False),
+            self.assertLogs("maez.grounding_shadow", level="INFO") as cm,
+        ):
+            gated = gs.observe_focused_support_gate(
+                "Claim [E1].",
+                {"E1": "x"},
+                surface="cockpit",
+                boot_id="b",
+                shadow_id="s",
+                ts=0,
+            )
+
+        self.assertIn("I couldn't confirm this from the source I cited.", gated)
+        self.assertTrue(any("row_written=False" in message for message in cm.output))
+
+    def test_gate_failure_logs_warning_and_returns_original(self):
+        from unittest import mock
+
+        import core.cognition.grounding_shadow as gs
+
+        with (
+            mock.patch.object(gs, "apply_support_gate", side_effect=RuntimeError("boom")),
+            self.assertLogs("maez.grounding_shadow", level="WARNING") as cm,
+        ):
+            gated = gs.observe_focused_support_gate(
+                "Claim [E1].",
+                {"E1": "x"},
+                surface="cockpit",
+                boot_id="b",
+                shadow_id="s",
+                ts=0,
+            )
+
+        self.assertEqual(gated, "Claim [E1].")
+        self.assertTrue(any("support_gate_failed" in message for message in cm.output))
 
 
 class FlagMatrixTest(unittest.TestCase):

@@ -24,16 +24,23 @@ from core.cognition.support_verifier import (
     UNSUPPORTED,
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("maez.grounding_shadow")
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 _CITE_RE = re.compile(r"\[E(\d+)\]")
+_CITATION_ONLY_RE = re.compile(r"^(?:\s*\[E\d+\]\s*)+[.!?]?$")
 
 
 def split_sentences(text: str) -> list[str]:
     text = (text or "").strip()
     if not text:
         return []
-    return [part.strip() for part in _SENTENCE_SPLIT.split(text) if part.strip()]
+    out: list[str] = []
+    for part in (part.strip() for part in _SENTENCE_SPLIT.split(text) if part.strip()):
+        if out and _CITATION_ONLY_RE.fullmatch(part):
+            out[-1] = f"{out[-1]} {part}".strip()
+            continue
+        out.append(part)
+    return out
 
 
 def claimable_evidence(claimable_items) -> str:
@@ -376,13 +383,14 @@ def evidence_map_from_working_set(working_set) -> dict[str, str]:
     return out
 
 
-def emit_support_row(rec: dict, *, telemetry_path: str | None = None) -> None:
+def emit_support_row(rec: dict, *, telemetry_path: str | None = None) -> bool:
     path = telemetry_path or _default_telemetry_path()
     try:
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec) + "\n")
+        return True
     except Exception:
-        pass
+        return False
 
 
 def observe_focused_support_gate(
@@ -407,10 +415,11 @@ def observe_focused_support_gate(
             boot_id=boot_id,
         )
         receipt = outcome.gate_receipt
+        row_written = emit_support_row(outcome.support_row)
         logger.info(
             "support_gate_applied surface=%s cited=%s caveated_unsupported=%s "
             "caveated_unmatched=%s caveated_unverified=%s budget_exhausted=%s "
-            "verifier=%s latency_ms=%s",
+            "verifier=%s latency_ms=%s row_written=%s",
             receipt.get("surface"),
             receipt.get("cited"),
             receipt.get("caveated_unsupported"),
@@ -419,10 +428,17 @@ def observe_focused_support_gate(
             receipt.get("budget_exhausted"),
             receipt.get("verifier"),
             receipt.get("latency_ms"),
+            row_written,
         )
-        emit_support_row(outcome.support_row)
+        if not row_written:
+            logger.warning(
+                "support_gate_row_write_failed surface=%s shadow_id=%s",
+                surface,
+                shadow_id,
+            )
         return outcome.gated_marked_draft
     except Exception:
+        logger.warning("support_gate_failed surface=%s", surface, exc_info=True)
         return reply
 
 
