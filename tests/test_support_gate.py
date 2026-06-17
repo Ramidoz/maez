@@ -87,7 +87,24 @@ class ApplySupportGateTest(unittest.TestCase):
         out = self._gate("Just a thought.", {"E1": "x"}, v)
 
         self.assertEqual(out.gated_marked_draft.strip(), "Just a thought.")
-        self.assertEqual(v.calls, [])
+
+    def test_uncited_unsupported_sentence_gets_evidence_caveat(self):
+        from core.cognition.support_verifier import FakeSupportVerifier, UNSUPPORTED
+
+        v = FakeSupportVerifier(default=(UNSUPPORTED, 0.1))
+
+        out = self._gate(
+            "Anthropic launched Mythos 5.",
+            {"E1": "Anthropic released Claude Opus 4.5."},
+            v,
+        )
+
+        self.assertIn("Anthropic launched Mythos 5.", out.gated_marked_draft)
+        self.assertIn(
+            "I couldn't confirm this from the evidence I had.",
+            out.gated_marked_draft,
+        )
+        self.assertEqual(v.calls[0][1], "Anthropic launched Mythos 5.")
 
     def test_detached_citation_folds_onto_previous_sentence(self):
         from core.cognition.support_verifier import FakeSupportVerifier, UNSUPPORTED
@@ -173,6 +190,24 @@ class GateRecordsTest(unittest.TestCase):
         self.assertEqual(receipt["caveated_unsupported"], 1)
         self.assertEqual(receipt["caveated_unmatched"], 1)
         self.assertIn("latency_ms", receipt)
+
+    def test_uncited_gate_verdict_does_not_count_as_grounded_support(self):
+        from core.cognition.support_verifier import FakeSupportVerifier, SUPPORTED
+
+        out = self._gate(
+            "Anthropic released Claude Opus 4.5.",
+            {"E1": "Anthropic released Claude Opus 4.5."},
+            FakeSupportVerifier(default=(SUPPORTED, 0.9)),
+        )
+
+        self.assertEqual(out.gate_receipt["cited"], 0)
+        self.assertEqual(out.gate_receipt["uncited_checked"], 1)
+        self.assertEqual(out.support_row["supported_count"], 0)
+        self.assertFalse(out.support_row["sentences"][0]["counts_as_grounded"])
+        self.assertEqual(
+            out.support_row["sentences"][0]["mode"],
+            "uncited_all_evidence_gate",
+        )
 
     def test_support_row_status_reports_verifier_unavailable(self):
         from core.cognition.support_verifier import FakeSupportVerifier
