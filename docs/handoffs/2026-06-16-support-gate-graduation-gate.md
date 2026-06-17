@@ -1,8 +1,9 @@
 # Support Gate Graduation — STOP-at-Gate Handoff
 
 **Branch:** `support-gate-graduation` (local-only, unpushed).
-**Status:** built + locally verified; **BUILT_ASLEEP**. No model.env edit, no restart, no
-live flag flip.
+**Status:** built + locally verified; **LIVE_WITNESSED** as of 2026-06-16
+21:17 CDT. The owner breath was taken after this gate: MiniCheck active,
+`MAEZ_SUPPORT_GATE_ENABLED=1`, daemon restarted, live witness recorded.
 
 **Spec:** `docs/superpowers/specs/2026-06-16-support-gate-graduation-design.md`.
 **Plan:** `docs/superpowers/plans/2026-06-16-support-gate-graduation.md`.
@@ -92,7 +93,7 @@ Fresh local verification:
 
 ## Owner Breath
 
-Only after cross-lane review passes:
+Completed after cross-lane review passed:
 
 1. Merge `support-gate-graduation` to `main` locally.
 2. Ensure MiniCheck is active:
@@ -119,6 +120,20 @@ Witness requirements:
   `support_gate_applied ... caveated_unsupported>=1`
 - `~/.local/state/maez/grounding_shadow.jsonl` has a post-restart row with
   `gate_applied: true`, `post_audit: true`, and the same unsupported verdict.
+
+## Live Witness
+
+2026-06-16 21:17 CDT, cockpit `/message`, prompt: "What is the latest news
+about Anthropic?"
+
+- Served reply preserved Maez's sentences and appended the inline caveat
+  `I couldn't confirm this from the source I cited.` four times.
+- `logs/maez.log` recorded:
+  `support_gate_applied surface=cockpit cited=4 caveated_unsupported=4 ... row_written=True`.
+- `~/.local/state/maez/grounding_shadow.jsonl` recorded one aggregate gate row
+  with `gate_applied=true`, `post_audit=true`, `unsupported_count=4`, and four
+  `mode=cited_support` / `support_verdict=UNSUPPORTED` sentence records from
+  `HttpSupportVerifier`.
 
 ## Predicted Effect
 
