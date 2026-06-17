@@ -10,6 +10,7 @@ context with instruction examples appended.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 from core.routing.search_context import WEB_NO_RESULTS as _WEB_NO_RESULTS
 
@@ -29,12 +30,21 @@ _SOURCE_HINTS: dict[str, str] = {
 
 WEB_GROUNDED_LABELS = frozenset({"fresh evidence", "web search results"})
 
+
+_QUALITY_LINE_RE = re.compile(
+    r"^(?:\[fresh evidence\]\s*)?\[WEB SEARCH: [^\]]*\] "
+    r"quality=(thin|adequate) result_count=\d+ snippet_chars=\d+",
+    re.MULTILINE,
+)
+
+
 @dataclass(frozen=True)
 class EvidenceState:
     evidence_present: bool
     marker_labels: tuple[str, ...] = ()
     source_hint: tuple[str, ...] = ()
     descriptions: tuple[str, ...] = ()
+    thin_evidence: bool = False
 
 
 def _label_for_marker(marker: str) -> str:
@@ -50,6 +60,14 @@ def _first_line_after(text: str, marker: str) -> str:
     if not lines:
         return ""
     return lines[0][:120]
+
+
+def _detect_thin_evidence(transcript: str, web_context: str) -> bool:
+    for text in (transcript or "", web_context or ""):
+        for match in _QUALITY_LINE_RE.finditer(text):
+            if match.group(1) == "thin":
+                return True
+    return False
 
 
 def turn_evidence_state(*, transcript: str, web_context: str) -> EvidenceState:
@@ -85,6 +103,7 @@ def turn_evidence_state(*, transcript: str, web_context: str) -> EvidenceState:
         marker_labels=tuple(labels),
         source_hint=tuple(hints),
         descriptions=tuple(descriptions),
+        thin_evidence=_detect_thin_evidence(transcript, web_context),
     )
 
 

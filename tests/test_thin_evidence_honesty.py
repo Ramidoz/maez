@@ -56,3 +56,51 @@ class ThinSignalRenderTest(unittest.TestCase):
         self.assertNotIn("quality=", out)
         self.assertNotIn("result_quality", result)
         self.assertTrue(out.startswith("[WEB SEARCH: 'q'] 1 results"))
+
+
+class ThinParseTest(unittest.TestCase):
+    def test_anchored_quality_thin_line_sets_thin(self):
+        from core.routing.evidence_state import turn_evidence_state
+
+        web_context = (
+            "[WEB SEARCH: 'q'] quality=thin result_count=1 snippet_chars=80\n"
+            "[WEB SEARCH: 'q'] 1 results - t\n"
+            "  1. T\n"
+            "     s"
+        )
+        self.assertTrue(
+            turn_evidence_state(transcript="", web_context=web_context).thin_evidence
+        )
+
+    def test_dispatcher_fresh_evidence_prefix_parses(self):
+        from core.routing.evidence_state import turn_evidence_state
+
+        transcript = (
+            "[fresh evidence] [WEB SEARCH: 'q'] "
+            "quality=thin result_count=2 snippet_chars=120"
+        )
+        self.assertTrue(
+            turn_evidence_state(transcript=transcript, web_context="").thin_evidence
+        )
+
+    def test_adequate_line_not_thin(self):
+        from core.routing.evidence_state import turn_evidence_state
+
+        web_context = (
+            "[WEB SEARCH: 'q'] quality=adequate result_count=3 snippet_chars=600"
+        )
+        self.assertFalse(
+            turn_evidence_state(transcript="", web_context=web_context).thin_evidence
+        )
+
+    def test_midline_page_text_does_not_spoof(self):
+        from core.routing.evidence_state import turn_evidence_state
+
+        web_context = (
+            "[WEB SEARCH: 'q'] 1 results - t\n"
+            "  1. Blog\n"
+            "     our data quality=thin per the report"
+        )
+        self.assertFalse(
+            turn_evidence_state(transcript="", web_context=web_context).thin_evidence
+        )
