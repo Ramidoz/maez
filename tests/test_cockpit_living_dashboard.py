@@ -8,6 +8,7 @@ import unittest
 
 COCKPIT_INDEX = Path(__file__).resolve().parents[1] / "web" / "cockpit" / "index.html"
 COCKPIT_UI = Path(__file__).resolve().parents[1] / "web" / "cockpit" / "terminal-ui.jsx"
+COCKPIT_SIM = Path(__file__).resolve().parents[1] / "web" / "cockpit" / "sim.jsx"
 
 
 class CockpitLivingDashboardTests(unittest.TestCase):
@@ -15,6 +16,7 @@ class CockpitLivingDashboardTests(unittest.TestCase):
     def setUpClass(cls):
         cls.html = COCKPIT_INDEX.read_text(encoding="utf-8")
         cls.ui = COCKPIT_UI.read_text(encoding="utf-8")
+        cls.sim = COCKPIT_SIM.read_text(encoding="utf-8")
 
     def test_living_and_technical_modes_are_available(self):
         self.assertIn("function LivingDashboard", self.html)
@@ -52,6 +54,14 @@ class CockpitLivingDashboardTests(unittest.TestCase):
         self.assertIn("function cognitionLabel", self.ui)
         self.assertIn("function cognitionExplanation", self.ui)
         self.assertIn("It is not IQ or consciousness", self.ui)
+
+    def test_living_dashboard_uses_runtime_services_not_active_inactive_flattening(self):
+        self.assertIn("runtimeServices", self.sim)
+        self.assertIn("state.runtimeServices", self.sim)
+        self.assertIn("runtimeServiceEntries", self.html)
+        self.assertIn("runtimeServiceStatus", self.html)
+        self.assertNotIn("info.status === 'active' ? 'active' : 'inactive'", self.sim)
+        self.assertNotIn("services active", self.html)
 
 
 if __name__ == "__main__":

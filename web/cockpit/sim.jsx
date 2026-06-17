@@ -24,6 +24,11 @@ const SIM = (() => {
       'maez-web':            { port: 11437, status: 'unknown', vram: 0, ms: null },
       'llama-server':        { port: 8080,  status: 'unknown', vram: 0, ms: null },
     },
+    runtimeServices: {
+      schema_version: 'maez_runtime_services.v0',
+      overall: 'unknown',
+      services: {},
+    },
     gpu: { vramUsed: 0, vramTotal: 24, temp: 0, power: 0, util: 0 },
     cpu: { util: 14, temp: 48, load: [0.92, 1.12, 0.88] },
     signals: [
@@ -538,17 +543,24 @@ const SIM = (() => {
       const d = await r.json();
       if (!d.services) return;
       markLive('services');
-      // Overlay real status onto whatever's in state.health that matches
+      if (d.runtime_services && typeof d.runtime_services === 'object') {
+        state.runtimeServices = d.runtime_services;
+      }
+      // Overlay contract-aware runtime status onto whatever's in state.health
+      // that matches. Do not collapse healthy/degraded/asleep/unknown back into
+      // old systemd active/inactive; the living dashboard reads this as Maez's
+      // body truth.
       const rename = {
         'maez': 'maez (daemon)',
       };
       const newHealth = { ...state.health };
       for (const [name, info] of Object.entries(d.services)) {
         const key = rename[name] || name;
+        const status = info && info.status ? info.status : 'unknown';
         if (newHealth[key]) {
-          newHealth[key].status = info.status === 'active' ? 'active' : 'inactive';
+          newHealth[key].status = status;
         } else {
-          newHealth[key] = { port: null, status: info.status === 'active' ? 'active' : 'inactive', vram: 0, ms: null };
+          newHealth[key] = { port: null, status, vram: 0, ms: null };
         }
       }
       state.health = newHealth;

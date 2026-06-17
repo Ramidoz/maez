@@ -86,6 +86,19 @@ or authorized differently depending on surface.
      is stored as `self_web_claim` / `untrusted` while the owner utterance stays
      `user_utterance` / `lived`.
 
+10. Cockpit runtime-body display convergence
+   - `/api/v1/services` already returned the contract-aware
+     `runtime_services` snapshot, but `web/cockpit/sim.jsx` flattened every
+     service back to legacy `active/inactive` status.
+   - The cockpit sim now preserves `healthy/degraded/asleep/unknown` runtime
+     service truth and stores the whole `runtimeServices` snapshot.
+   - The living cockpit "Senses" organ now describes Maez's runtime body from
+     that snapshot instead of saying "services active."
+   - The technical services pane now renders runtime organ statuses directly.
+   - The field journal no longer falls back to legacy "all services up" or
+     `llama_server_vision` for body/vision status; when runtime truth is
+     missing it says `body unknown` / `runtime unknown`.
+
 ## Latest Verification
 
 Command:
@@ -160,6 +173,26 @@ Additional slice 9 verification:
 
 Result: `Ran 1 test ... OK`.
 
+Additional slice 10 verification:
+
+```bash
+/home/rohit/maez/.venv/bin/python -m unittest \
+  tests.test_cockpit_living_dashboard \
+  tests.test_web_runtime_truth \
+  tests.test_maez_body_organ_view \
+  tests.test_runtime_services \
+  tests.test_web_owner_core \
+  tests.test_cockpit_inbound_core \
+  tests.test_cockpit_proxies_2026_05_05
+/home/rohit/maez/.venv/bin/python -m ruff check \
+  skills/web_interface.py \
+  tests/test_cockpit_living_dashboard.py \
+  tests/test_web_runtime_truth.py
+git diff --check
+```
+
+Result: `Ran 88 tests ... OK`; ruff clean; diff check clean.
+
 Lint/checks:
 
 ```bash
@@ -184,12 +217,7 @@ Result: clean.
 
 These are not fixed by this handoff and should stay visible:
 
-1. Cockpit UI body display audit
-   - `ui/project-planner.html` now reads `runtime_services`, but other cockpit
-     UI surfaces may still collapse `healthy/degraded/asleep/unknown` into old
-     active/inactive language.
-
-2. Stale docs
+1. Stale docs
    - Some docs/plans still describe design or pending-review state for slices
      that are now live/asleep elsewhere. The branch should reconcile the owner
      facing body map before any switch-over claim.
@@ -200,8 +228,8 @@ This branch has not made Maez one body yet, but it has closed several doors
 where Maez's body could be read or controlled differently depending on which
 surface touched it. The current repair theme is simple: one owner proof, one
 runtime truth map, one internal bridge, one Telegram authorization boundary,
-one voice input spine, and one fresh-evidence honesty spine.
+one voice input spine, one fresh-evidence honesty spine, and one cockpit body
+display language.
 
-The next useful slice is probably the cockpit UI body display audit: scan the
-owner-facing web surfaces for stale active/inactive language and make them read
-the shared runtime truth map where they describe Maez's body.
+The next useful slice is stale-doc reconciliation: make the branch's written
+map match the now-built body before any switch-over claim.

@@ -130,6 +130,12 @@ class WebRuntimeTruthTests(unittest.TestCase):
 
         self.assertIn("state.runtime_services", page)
         self.assertIn("runtimeOverall", page)
+        self.assertIn("visionRuntime", page)
+        self.assertIn("body unknown", page)
+        self.assertNotIn("all services up", page)
+        self.assertNotIn("state.services && state.services.llama_server_vision", page)
+        self.assertNotIn("svc.llama_server_vision === 'active'", page)
+        self.assertNotIn("Vision</span> <span class=\"v\">active</span>", page)
 
 
 if __name__ == "__main__":
