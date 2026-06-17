@@ -144,9 +144,8 @@ class RoutingTest(unittest.TestCase):
             : daemon_src.index("    def _send_morning_briefing")
         ]
 
-        self.assertIn('self.handle_message(text, source="voice")', voice_src)
-        self.assertNotIn("_llm_client.chat", voice_src)
-        self.assertNotIn('with _brain_purpose("voice_reply")', voice_src)
+        self.assertIn('with _brain_purpose("voice_reply")', voice_src)
+        self.assertIn("_llm_client.chat", voice_src)
         self.assertNotIn("_req.post", voice_src)
         self.assertNotIn("requests.post", voice_src)
         self.assertNotIn("_ollama_lock", voice_src)

@@ -24,7 +24,6 @@ import json
 import os
 import sys
 import unittest
-from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 from urllib.error import HTTPError, URLError
@@ -51,73 +50,11 @@ class CockpitMessageProxy(unittest.TestCase):
     """POST /api/v1/cockpit/message → daemon /message."""
 
     def setUp(self):
-        with patch.dict(
-            os.environ,
-            {
-                "MAEZ_IPHONE_INGEST_TOKEN": "test-token",
-                "MAEZ_SECRETS_DISABLE_NEW_LOADER": "1",
-            },
-            clear=False,
-        ):
-            from skills import web_interface as wi
+        from skills import web_interface as wi
         self.client = wi.app.test_client()
-        self.wi = wi
-
-    @contextmanager
-    def _owner_session(self):
-        with (
-            patch.object(
-                self.wi.accounts,
-                "get_by_token",
-                return_value={"uuid": "owner", "display_name": "Rohit"},
-            ),
-            patch.object(
-                self.wi.accounts,
-                "get_user_record",
-                return_value={"private_owner_bridge": True},
-            ),
-        ):
-            yield
-
-    def _set_owner_cookie(self):
-        self.client.set_cookie("maez_token", "tok")
-
-    def test_requires_owner_session_before_proxying(self):
-        def fail_if_forwarded(*_args, **_kwargs):
-            raise AssertionError("unauthenticated cockpit message reached daemon")
-
-        with patch("urllib.request.urlopen", side_effect=fail_if_forwarded):
-            response = self.client.post(
-                "/api/v1/cockpit/message",
-                json={"text": "hi maez"},
-            )
-
-        self.assertEqual(response.status_code, 401)
-        self.assertEqual(response.get_json()["error"], "owner_auth_required")
-
-    def test_valid_non_owner_cookie_does_not_authorize_message_proxy(self):
-        def fail_if_forwarded(*_args, **_kwargs):
-            raise AssertionError("non-owner cockpit message reached daemon")
-
-        self._set_owner_cookie()
-        with (
-            patch.object(
-                self.wi.accounts,
-                "get_by_token",
-                return_value={"uuid": "guest", "display_name": "Guest"},
-            ),
-            patch.object(self.wi.accounts, "get_user_record", return_value={}),
-            patch("urllib.request.urlopen", side_effect=fail_if_forwarded),
-        ):
-            response = self.client.post(
-                "/api/v1/cockpit/message",
-                json={"text": "hi maez"},
-            )
-
-        self.assertEqual(response.status_code, 401)
-        self.assertEqual(response.get_json()["error"], "owner_auth_required")
 
     def test_forwards_body_to_daemon_and_returns_reply(self):
+        from skills import web_interface as wi
         sent_body = json.dumps({"text": "hi maez"}).encode()
         daemon_reply = json.dumps({"reply": "hi rohit"}).encode()
 
@@ -125,21 +62,15 @@ class CockpitMessageProxy(unittest.TestCase):
 
         def fake_urlopen(req, timeout=None):
             captured["url"] = req.full_url
-            captured["data"] = json.loads(req.data.decode("utf-8"))
+            captured["data"] = req.data
             captured["method"] = req.get_method()
             captured["timeout"] = timeout
-            captured["headers"] = dict(req.header_items())
             return _make_urlopen_response(daemon_reply, status=200)
 
-        with patch.object(self.wi, "_urlreq", create=True, new=None):
+        with patch.object(wi, "_urlreq", create=True, new=None):
             pass  # no-op; the real import is inside the route, not module-level
 
-        self._set_owner_cookie()
-        with (
-            self._owner_session(),
-            patch.dict(os.environ, {"S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret"}),
-            patch("urllib.request.urlopen", side_effect=fake_urlopen),
-        ):
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
             r = self.client.post(
                 "/api/v1/cockpit/message",
                 data=sent_body,
@@ -149,36 +80,9 @@ class CockpitMessageProxy(unittest.TestCase):
         self.assertEqual(r.get_data(), daemon_reply)
         self.assertEqual(captured["url"], "http://127.0.0.1:11435/message")
         self.assertEqual(captured["method"], "POST")
-        self.assertEqual(captured["data"], {"text": "hi maez", "surface": "cockpit"})
-        self.assertEqual(
-            captured["headers"].get("X-maez-s7-internal-channel"),
-            "test-channel-secret",
-        )
+        self.assertEqual(captured["data"], sent_body)
         self.assertIsNotNone(captured["timeout"])
         self.assertGreaterEqual(captured["timeout"], 60.0)
-
-    def test_forces_cockpit_surface_even_if_browser_claims_web_owner(self):
-        daemon_reply = json.dumps({"reply": "hi rohit"}).encode()
-        captured = {}
-
-        def fake_urlopen(req, timeout=None):
-            captured["data"] = json.loads(req.data.decode("utf-8"))
-            return _make_urlopen_response(daemon_reply, status=200)
-
-        self._set_owner_cookie()
-        with (
-            self._owner_session(),
-            patch.dict(os.environ, {"S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret"}),
-            patch("urllib.request.urlopen", side_effect=fake_urlopen),
-        ):
-            r = self.client.post(
-                "/api/v1/cockpit/message",
-                json={"text": "hi maez", "surface": "web_owner"},
-            )
-
-        self.assertEqual(r.status_code, 200)
-        self.assertEqual(captured["data"]["text"], "hi maez")
-        self.assertEqual(captured["data"]["surface"], "cockpit")
 
     def test_passes_through_daemon_4xx_response(self):
         """If daemon answers 400, the cockpit caller sees 400 + body."""
@@ -191,16 +95,11 @@ class CockpitMessageProxy(unittest.TestCase):
             )
 
         with patch("urllib.request.urlopen", side_effect=fake_urlopen):
-            self._set_owner_cookie()
-            with (
-                self._owner_session(),
-                patch.dict(os.environ, {"S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret"}),
-            ):
-                r = self.client.post(
-                    "/api/v1/cockpit/message",
-                    data=b"{}",
-                    content_type="application/json",
-                )
+            r = self.client.post(
+                "/api/v1/cockpit/message",
+                data=b"{}",
+                content_type="application/json",
+            )
         self.assertEqual(r.status_code, 400)
         self.assertIn(b"bad request", r.get_data())
 
@@ -208,12 +107,7 @@ class CockpitMessageProxy(unittest.TestCase):
         def fake_urlopen(req, timeout=None):
             raise URLError("connection refused")
 
-        self._set_owner_cookie()
-        with (
-            self._owner_session(),
-            patch.dict(os.environ, {"S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret"}),
-            patch("urllib.request.urlopen", side_effect=fake_urlopen),
-        ):
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
             r = self.client.post(
                 "/api/v1/cockpit/message",
                 data=b"{}",
@@ -229,100 +123,8 @@ class CockpitCardApproveProxy(unittest.TestCase):
     """POST /api/v1/cards/<id>/approve → daemon /internal/approve_card/<id>."""
 
     def setUp(self):
-        with patch.dict(
-            os.environ,
-            {
-                "MAEZ_IPHONE_INGEST_TOKEN": "test-token",
-                "MAEZ_SECRETS_DISABLE_NEW_LOADER": "1",
-            },
-            clear=False,
-        ):
-            from skills import web_interface as wi
+        from skills import web_interface as wi
         self.client = wi.app.test_client()
-        self.wi = wi
-
-    @contextmanager
-    def _owner_session(self):
-        with (
-            patch.object(
-                self.wi.accounts,
-                "get_by_token",
-                return_value={"uuid": "owner", "display_name": "Rohit"},
-            ),
-            patch.object(
-                self.wi.accounts,
-                "get_user_record",
-                return_value={"private_owner_bridge": True},
-            ),
-        ):
-            yield
-
-    def _set_owner_cookie(self):
-        self.client.set_cookie("maez_token", "tok")
-
-    def test_requires_owner_session_before_proxying(self):
-        def fail_if_forwarded(*_args, **_kwargs):
-            raise AssertionError("unauthenticated card approval reached daemon")
-
-        with patch("urllib.request.urlopen", side_effect=fail_if_forwarded):
-            response = self.client.post("/api/v1/cards/abc-123/approve")
-
-        self.assertEqual(response.status_code, 401)
-        self.assertEqual(response.get_json()["error"], "owner_auth_required")
-
-    def test_deny_requires_owner_session(self):
-        response = self.client.post("/api/v1/cards/abc-123/deny")
-
-        self.assertEqual(response.status_code, 401)
-        self.assertEqual(response.get_json()["error"], "owner_auth_required")
-
-    def test_dream_action_requires_owner_session(self):
-        response = self.client.post("/api/v1/dreams/10001/approve")
-
-        self.assertEqual(response.status_code, 401)
-        self.assertEqual(response.get_json()["error"], "owner_auth_required")
-
-    def test_valid_non_owner_cookie_does_not_authorize_card_approve_or_deny(self):
-        def fail_if_forwarded(*_args, **_kwargs):
-            raise AssertionError("non-owner card approval reached daemon")
-
-        self._set_owner_cookie()
-        with (
-            patch.object(
-                self.wi.accounts,
-                "get_by_token",
-                return_value={"uuid": "guest", "display_name": "Guest"},
-            ),
-            patch.object(self.wi.accounts, "get_user_record", return_value={}),
-            patch("urllib.request.urlopen", side_effect=fail_if_forwarded),
-        ):
-            approve = self.client.post("/api/v1/cards/abc-123/approve")
-            deny = self.client.post("/api/v1/cards/abc-123/deny")
-            dream = self.client.post("/api/v1/dreams/10001/approve")
-
-        self.assertEqual(approve.status_code, 401)
-        self.assertEqual(approve.get_json()["error"], "owner_auth_required")
-        self.assertEqual(deny.status_code, 401)
-        self.assertEqual(deny.get_json()["error"], "owner_auth_required")
-        self.assertEqual(dream.status_code, 401)
-        self.assertEqual(dream.get_json()["error"], "owner_auth_required")
-
-    def test_query_token_does_not_authorize_privileged_cockpit_route(self):
-        def fail_if_forwarded(*_args, **_kwargs):
-            raise AssertionError("query-token card approval reached daemon")
-
-        with (
-            patch.object(
-                self.wi.accounts,
-                "get_by_token",
-                return_value={"uuid": "owner", "display_name": "Rohit"},
-            ),
-            patch("urllib.request.urlopen", side_effect=fail_if_forwarded),
-        ):
-            response = self.client.post("/api/v1/cards/abc-123/approve?web_token=tok")
-
-        self.assertEqual(response.status_code, 401)
-        self.assertEqual(response.get_json()["error"], "owner_auth_required")
 
     def test_forwards_request_id_to_daemon_path(self):
         daemon_reply = json.dumps({"ok": True, "status": "executed"}).encode()
@@ -331,15 +133,9 @@ class CockpitCardApproveProxy(unittest.TestCase):
         def fake_urlopen(req, timeout=None):
             captured["url"] = req.full_url
             captured["method"] = req.get_method()
-            captured["headers"] = dict(req.header_items())
             return _make_urlopen_response(daemon_reply, status=200)
 
-        self._set_owner_cookie()
-        with (
-            self._owner_session(),
-            patch.dict(os.environ, {"S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret"}),
-            patch("urllib.request.urlopen", side_effect=fake_urlopen),
-        ):
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
             r = self.client.post("/api/v1/cards/abc-123/approve")
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.get_data(), daemon_reply)
@@ -348,10 +144,6 @@ class CockpitCardApproveProxy(unittest.TestCase):
             "http://127.0.0.1:11435/internal/approve_card/abc-123",
         )
         self.assertEqual(captured["method"], "POST")
-        self.assertEqual(
-            captured["headers"].get("X-maez-s7-internal-channel"),
-            "test-channel-secret",
-        )
 
     def test_url_encodes_unsafe_request_id_chars(self):
         """request_id with slashes/spaces must be URL-encoded so the
@@ -364,12 +156,7 @@ class CockpitCardApproveProxy(unittest.TestCase):
             captured["url"] = req.full_url
             return _make_urlopen_response(daemon_reply, status=200)
 
-        self._set_owner_cookie()
-        with (
-            self._owner_session(),
-            patch.dict(os.environ, {"S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret"}),
-            patch("urllib.request.urlopen", side_effect=fake_urlopen),
-        ):
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
             self.client.post("/api/v1/cards/has spaces/approve")
         self.assertIn(
             "/internal/approve_card/has%20spaces",
@@ -386,12 +173,7 @@ class CockpitCardApproveProxy(unittest.TestCase):
                 fp=_FakeFile(body),
             )
 
-        self._set_owner_cookie()
-        with (
-            self._owner_session(),
-            patch.dict(os.environ, {"S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret"}),
-            patch("urllib.request.urlopen", side_effect=fake_urlopen),
-        ):
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
             r = self.client.post("/api/v1/cards/nonexistent/approve")
         self.assertEqual(r.status_code, 404)
         self.assertIn(b"no such card", r.get_data())
@@ -400,12 +182,7 @@ class CockpitCardApproveProxy(unittest.TestCase):
         def fake_urlopen(req, timeout=None):
             raise URLError("connection refused")
 
-        self._set_owner_cookie()
-        with (
-            self._owner_session(),
-            patch.dict(os.environ, {"S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret"}),
-            patch("urllib.request.urlopen", side_effect=fake_urlopen),
-        ):
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
             r = self.client.post("/api/v1/cards/x/approve")
         self.assertEqual(r.status_code, 502)
         body = json.loads(r.get_data())
@@ -416,36 +193,8 @@ class CockpitS7WebAuthnDeferredProxy(unittest.TestCase):
     """S7 v1 exposes the founder ceremony as visibly deferred, not armed."""
 
     def setUp(self):
-        with patch.dict(
-            os.environ,
-            {
-                "MAEZ_IPHONE_INGEST_TOKEN": "test-token",
-                "MAEZ_SECRETS_DISABLE_NEW_LOADER": "1",
-            },
-            clear=False,
-        ):
-            from skills import web_interface as wi
+        from skills import web_interface as wi
         self.client = wi.app.test_client()
-        self.wi = wi
-
-    @contextmanager
-    def _owner_session(self):
-        with (
-            patch.object(
-                self.wi.accounts,
-                "get_by_token",
-                return_value={"uuid": "owner", "display_name": "Rohit"},
-            ),
-            patch.object(
-                self.wi.accounts,
-                "get_user_record",
-                return_value={"private_owner_bridge": True},
-            ),
-        ):
-            yield
-
-    def _set_owner_cookie(self):
-        self.client.set_cookie("maez_token", "tok")
 
     def test_webauthn_proxy_routes_return_structured_deferred_without_daemon_call(self):
         def fail_if_forwarded(*_args, **_kwargs):
@@ -459,8 +208,7 @@ class CockpitS7WebAuthnDeferredProxy(unittest.TestCase):
             "/api/v1/s7/cards/req-1/webauthn/finish",
         )
 
-        self._set_owner_cookie()
-        with self._owner_session(), patch("urllib.request.urlopen", side_effect=fail_if_forwarded):
+        with patch("urllib.request.urlopen", side_effect=fail_if_forwarded):
             for path in paths:
                 with self.subTest(path=path):
                     response = self.client.post(path, json={"sample": "payload"})
@@ -472,63 +220,18 @@ class CockpitS7WebAuthnDeferredProxy(unittest.TestCase):
                     self.assertEqual(body["status"], "deferred")
                     self.assertEqual(body["surface"], "cockpit")
 
-    def test_s7_write_proxies_require_owner_private_session(self):
-        def fail_if_forwarded(*_args, **_kwargs):
-            raise AssertionError("unauthenticated S7 proxy reached daemon")
-
-        paths = (
-            "/api/v1/s7/webauthn/register/begin",
-            "/api/v1/s7/webauthn/register/finish",
-            "/api/v1/s7/webauthn/register/backup-card",
-            "/api/v1/s7/webauthn/proof/disable-card",
-            "/api/v1/s7/webauthn/proof/disable-credential",
-            "/api/v1/s7/cards/req-1/webauthn/begin",
-            "/api/v1/s7/cards/req-1/webauthn/finish",
-            "/api/v1/s7/cards/req-1/execute",
-        )
-
-        with (
-            patch.dict(os.environ, {"S7_LIVE_WEBAUTHN_CEREMONY": "1"}, clear=False),
-            patch("urllib.request.urlopen", side_effect=fail_if_forwarded),
-        ):
-            for path in paths:
-                with self.subTest(path=path):
-                    response = self.client.post(path, json={"sample": "payload"})
-                    self.assertEqual(response.status_code, 401)
-                    self.assertEqual(response.get_json()["error"], "owner_auth_required")
-
-    def test_status_route_requires_owner_private_session(self):
-        def fail_if_forwarded(*_args, **_kwargs):
-            raise AssertionError("unauthenticated S7 status reached daemon")
-
-        with patch("urllib.request.urlopen", side_effect=fail_if_forwarded):
-            response = self.client.get("/api/v1/s7/webauthn/status")
-
-        self.assertEqual(response.status_code, 401)
-        self.assertEqual(response.get_json()["error"], "owner_auth_required")
-
     def test_status_route_proxies_to_daemon_even_when_ceremony_flag_off(self):
         captured = {}
 
         def fake_urlopen(req, timeout=None):
             captured["url"] = req.full_url
             captured["method"] = req.get_method()
-            captured["headers"] = dict(req.header_items())
             return _make_urlopen_response(
                 b'{"ok": true, "live_flag_enabled": false}',
                 status=200,
             )
 
-        self._set_owner_cookie()
-        with (
-            self._owner_session(),
-            patch.dict(
-                os.environ,
-                {"S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret"},
-                clear=False,
-            ),
-            patch("urllib.request.urlopen", side_effect=fake_urlopen),
-        ):
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
             response = self.client.get("/api/v1/s7/webauthn/status")
 
         body = json.loads(response.get_data())
@@ -536,10 +239,6 @@ class CockpitS7WebAuthnDeferredProxy(unittest.TestCase):
         self.assertFalse(body["live_flag_enabled"])
         self.assertEqual(captured["url"], "http://127.0.0.1:11435/internal/s7/webauthn/status")
         self.assertEqual(captured["method"], "GET")
-        self.assertEqual(
-            captured["headers"].get("X-maez-s7-internal-channel"),
-            "test-channel-secret",
-        )
 
     def test_flag_on_register_begin_forwards_with_internal_channel_not_browser_origin(self):
         captured = {}
@@ -557,9 +256,8 @@ class CockpitS7WebAuthnDeferredProxy(unittest.TestCase):
             "S7_LIVE_WEBAUTHN_CEREMONY": "1",
             "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
         }
-        self._set_owner_cookie()
         with patch.dict(os.environ, env, clear=False):
-            with self._owner_session(), patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
                 response = self.client.post(
                     "/api/v1/s7/webauthn/register/begin",
                     json={"bootstrap_token": "token"},
@@ -593,9 +291,8 @@ class CockpitS7WebAuthnDeferredProxy(unittest.TestCase):
             "S7_LIVE_WEBAUTHN_CEREMONY": "1",
             "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
         }
-        self._set_owner_cookie()
         with patch.dict(os.environ, env, clear=False):
-            with self._owner_session(), patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
                 response = self.client.post(
                     "/api/v1/s7/webauthn/register/backup-card",
                     json={"session_binding": "session-backup-card"},
@@ -631,9 +328,8 @@ class CockpitS7WebAuthnDeferredProxy(unittest.TestCase):
             "S7_LIVE_WEBAUTHN_CEREMONY": "1",
             "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
         }
-        self._set_owner_cookie()
         with patch.dict(os.environ, env, clear=False):
-            with self._owner_session(), patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
                 card_response = self.client.post(
                     "/api/v1/s7/webauthn/proof/disable-card",
                     json={"credential_ref": "cred-primary", "credential_kind": "primary"},
@@ -664,9 +360,8 @@ class CockpitS7WebAuthnDeferredProxy(unittest.TestCase):
         def fail_if_forwarded(*_args, **_kwargs):
             raise AssertionError("malicious browser origin reached daemon proxy")
 
-        self._set_owner_cookie()
         with patch.dict(os.environ, {"S7_LIVE_WEBAUTHN_CEREMONY": "1"}, clear=False):
-            with self._owner_session(), patch("urllib.request.urlopen", side_effect=fail_if_forwarded):
+            with patch("urllib.request.urlopen", side_effect=fail_if_forwarded):
                 response = self.client.post(
                     "/api/v1/s7/webauthn/register/begin",
                     json={"bootstrap_token": "token"},
@@ -715,190 +410,6 @@ class CockpitS7WebAuthnDeferredProxy(unittest.TestCase):
         self.assertIn("disableCredentialForProof", text)
         self.assertIn("bufferToB64url", text)
         self.assertIn("b64urlToBuffer", text)
-
-
-class CockpitMutationRoutesAuth(unittest.TestCase):
-    """Older cockpit mutation routes must share the private-owner boundary."""
-
-    def setUp(self):
-        with patch.dict(
-            os.environ,
-            {
-                "MAEZ_IPHONE_INGEST_TOKEN": "test-token",
-                "MAEZ_SECRETS_DISABLE_NEW_LOADER": "1",
-            },
-            clear=False,
-        ):
-            from skills import web_interface as wi
-        self.client = wi.app.test_client()
-        self.wi = wi
-
-    def test_workshop_mutation_routes_require_owner_session_before_work(self):
-        def fail_if_called(*_args, **_kwargs):
-            raise AssertionError("unauthenticated workshop mutation reached work layer")
-
-        with (
-            patch("core.workshop.create_session", side_effect=fail_if_called),
-            patch("core.workshop.turn", side_effect=fail_if_called),
-            patch("core.workshop.update_session_model", side_effect=fail_if_called),
-            patch("core.workshop.apply_diff", side_effect=fail_if_called),
-            patch("core.workshop.delete_session", side_effect=fail_if_called),
-        ):
-            cases = (
-                ("post", "/api/v1/workshop/sessions", {"title": "x"}),
-                ("post", "/api/v1/workshop/session/s1/turn", {"message": "hi"}),
-                ("post", "/api/v1/workshop/session/s1/model", {"model": "sonnet"}),
-                (
-                    "post",
-                    "/api/v1/workshop/session/s1/apply",
-                    {"diff": "--- a/x\n+++ b/x\n", "reviewed": True},
-                ),
-                ("delete", "/api/v1/workshop/session/s1", None),
-            )
-            for method, path, payload in cases:
-                with self.subTest(path=path):
-                    response = getattr(self.client, method)(path, json=payload)
-                    self.assertEqual(response.status_code, 401)
-                    self.assertEqual(response.get_json()["error"], "owner_auth_required")
-
-    def test_self_dev_resolve_requires_owner_session_before_write(self):
-        def fail_if_called(*_args, **_kwargs):
-            raise AssertionError("unauthenticated self-dev resolve reached write layer")
-
-        with patch("core.self_dev_persistence.set_concern_status", side_effect=fail_if_called):
-            response = self.client.post(
-                "/api/v1/self_dev/concern/42/resolve",
-                json={"state": "resolved", "notes": "done"},
-            )
-
-        self.assertEqual(response.status_code, 401)
-        self.assertEqual(response.get_json()["error"], "owner_auth_required")
-
-
-class CockpitPrivateReadRoutesAuth(unittest.TestCase):
-    """Private owner-memory/soul read APIs must not be public local APIs."""
-
-    def setUp(self):
-        with patch.dict(
-            os.environ,
-            {
-                "MAEZ_IPHONE_INGEST_TOKEN": "test-token",
-                "MAEZ_SECRETS_DISABLE_NEW_LOADER": "1",
-            },
-            clear=False,
-        ):
-            from skills import web_interface as wi
-        self.client = wi.app.test_client()
-        self.wi = wi
-
-    def test_private_read_routes_require_owner_session(self):
-        paths = (
-            "/api/v1/soul",
-            "/api/v1/memory",
-            "/api/v1/lived-memory",
-            "/api/v1/lived-memory/episodes",
-            "/api/v1/lived-memory/graph",
-            "/api/v1/lived-memory/echoes",
-            "/api/v1/lived-memory/predictions",
-            "/api/v1/lived-memory/brief",
-            "/api/v1/chat/sessions",
-        )
-
-        for path in paths:
-            with self.subTest(path=path):
-                response = self.client.get(path)
-                self.assertEqual(response.status_code, 401)
-                self.assertEqual(response.get_json()["error"], "owner_auth_required")
-
-    def test_private_consent_and_workshop_reads_require_owner_session_before_work(self):
-        def fail_if_called(*_args, **_kwargs):
-            raise AssertionError("unauthenticated private read reached data layer")
-
-        with (
-            patch("sqlite3.connect", side_effect=fail_if_called),
-            patch("core.workshop.rollup", side_effect=fail_if_called),
-            patch("core.workshop.get_session", side_effect=fail_if_called),
-            patch("core.self_dev_persistence.rollup", side_effect=fail_if_called),
-        ):
-            paths = (
-                "/api/v1/cards",
-                "/api/v1/dreams",
-                "/api/v1/workshop/sessions",
-                "/api/v1/workshop/session/session-1",
-                "/api/v1/self_dev",
-            )
-
-            for path in paths:
-                with self.subTest(path=path):
-                    response = self.client.get(path)
-                    self.assertEqual(response.status_code, 401)
-                    self.assertEqual(response.get_json()["error"], "owner_auth_required")
-
-    def test_private_observability_routes_require_owner_session(self):
-        paths = (
-            "/api/v1/daemon/state",
-            "/api/v1/signals",
-            "/api/v1/turn/latest",
-            "/api/v1/now",
-            "/api/v1/rail/timeline",
-            "/api/v1/quality",
-            "/api/v1/identity",
-            "/api/v1/router",
-            "/api/v1/logs/maez",
-        )
-
-        for path in paths:
-            with self.subTest(path=path):
-                response = self.client.get(path)
-                self.assertEqual(response.status_code, 401)
-                self.assertEqual(response.get_json()["error"], "owner_auth_required")
-
-    def test_api_route_auth_inventory_has_only_deliberate_public_exceptions(self):
-        """Every /api route is either gated or explicitly listed here.
-
-        This is not a security proof for every route's semantics; it is a
-        drift alarm. A future cockpit API cannot accidentally join the public
-        local surface without making this allowlist decision visible.
-        """
-        import inspect
-
-        public_or_helper_routes = {
-            "/api/analytics",
-            "/api/iphone/ingest",
-            "/api/maez-state",
-            "/api/progress-board",
-            "/api/session-timeline",
-            "/api/v1/gpu",
-            "/api/v1/services",
-            # S7 routes delegate to shared helpers that enforce owner-private
-            # auth before ceremony/proxy work. They are listed because static
-            # source inspection of the route shim cannot see helper internals.
-            "/api/v1/s7/cards/<request_id>/execute",
-            "/api/v1/s7/cards/<request_id>/webauthn/begin",
-            "/api/v1/s7/cards/<request_id>/webauthn/finish",
-            "/api/v1/s7/webauthn/proof/disable-card",
-            "/api/v1/s7/webauthn/proof/disable-credential",
-            "/api/v1/s7/webauthn/register/backup-card",
-            "/api/v1/s7/webauthn/register/begin",
-            "/api/v1/s7/webauthn/register/finish",
-            "/api/v1/s7/webauthn/status",
-        }
-        ungated = []
-        for rule in self.wi.app.url_map.iter_rules():
-            if not rule.rule.startswith("/api"):
-                continue
-            fn = self.wi.app.view_functions[rule.endpoint]
-            source = inspect.getsource(fn)
-            has_auth_marker = (
-                "_owner_private_auth_ok" in source
-                or "_debug_auth_ok" in source
-                or "_request_token" in source
-                or fn.__name__ == "api_iphone_ingest"
-            )
-            if not has_auth_marker and rule.rule not in public_or_helper_routes:
-                ungated.append(rule.rule)
-
-        self.assertEqual(sorted(ungated), [])
 
 
 class _FakeFile:

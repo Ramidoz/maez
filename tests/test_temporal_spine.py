@@ -20,17 +20,6 @@ LOS_ANGELES = ZoneInfo("America/Los_Angeles")
 UTC = ZoneInfo("UTC")
 
 
-def _web_interface_for_tests():
-    with (
-        patch.dict(os.environ, {"MAEZ_IPHONE_INGEST_TOKEN": "test-token"}, clear=False),
-        patch("core.infra.secrets.load_ordinary_config_for_process"),
-        patch("core.infra.secrets.load_secrets_for_process"),
-    ):
-        import skills.web_interface as web_interface
-
-    return web_interface
-
-
 class TemporalSpineHelperTests(unittest.TestCase):
     def setUp(self):
         from core.time import temporal_spine
@@ -452,7 +441,7 @@ class TemporalSpineHealthAndSidecarTests(unittest.TestCase):
         )
 
     def test_public_maez_state_strips_temporal_spine(self):
-        web_interface = _web_interface_for_tests()
+        import skills.web_interface as web_interface
 
         with patch.object(
             web_interface,
@@ -468,9 +457,7 @@ class TemporalSpineHealthAndSidecarTests(unittest.TestCase):
         self.assertNotIn("temporal_spine", response.get_json()["daemon"])
 
     def test_debug_services_strips_temporal_spine(self):
-        web_interface = _web_interface_for_tests()
-        client = web_interface.app.test_client()
-        client.set_cookie("maez_token", "tok")
+        import skills.web_interface as web_interface
 
         with (
             patch.object(
@@ -482,18 +469,8 @@ class TemporalSpineHealthAndSidecarTests(unittest.TestCase):
                 },
             ),
             patch.object(web_interface, "_service_state_cached", return_value={"active": "active"}),
-            patch.object(
-                web_interface.accounts,
-                "get_by_token",
-                return_value={"uuid": "owner", "display_name": "Rohit"},
-            ),
-            patch.object(
-                web_interface.accounts,
-                "get_user_record",
-                return_value={"private_owner_bridge": True},
-            ),
         ):
-            response = client.get("/api/debug/services")
+            response = web_interface.app.test_client().get("/api/debug/services?test_t=1")
 
         self.assertEqual(response.status_code, 200)
         self.assertNotIn("temporal_spine", response.get_json()["daemon"])

@@ -216,9 +216,10 @@ class MaezMessageHandler:
 
     def _audit_surface_reply(self, text: str, *, surface: str) -> str:
         try:
-            from core.safety.audited_output import audit_assistant_text
+            from core.self_claim_audit import audit as _sc_audit
 
-            return audit_assistant_text(text, surface=surface)
+            result = _sc_audit(text, surface=surface)
+            return result.text if result.rewritten else text
         except Exception:
             return text
 
@@ -949,10 +950,18 @@ class MaezMessageHandler:
                             )
                         except Exception:
                             pass
-                        return self._audit_surface_reply(
-                            dialog_reply,
-                            surface=f"{SURFACE_NAME}_dialog",
-                        )
+                        try:
+                            from core.self_claim_audit import (
+                                audit as _sc_audit,
+                            )
+
+                            r = _sc_audit(
+                                dialog_reply,
+                                surface=f"{SURFACE_NAME}_dialog",
+                            )
+                            return r.text if r.rewritten else dialog_reply
+                        except Exception:
+                            return dialog_reply
                     return None
 
         proposal_reply = await self._try_surface_parity_proposal_intent(

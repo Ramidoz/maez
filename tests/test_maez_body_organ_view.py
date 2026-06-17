@@ -113,7 +113,6 @@ class BodyHealthProjectionTests(unittest.TestCase):
                 "desktop",
                 "memory",
                 "brain",
-                "runtime_services",
                 "body",
                 "heartbeat",
                 "attention",
@@ -190,50 +189,6 @@ class BodyHealthProjectionTests(unittest.TestCase):
         self.assertEqual(body["memory"]["episode_counts_error_class"], "RuntimeError")
         self.assertEqual(body["memory"]["episodes_active"], 0)
         self.assertEqual(body["brain"]["served_model_alias"], "llamacpp:unknown")
-
-    def test_body_health_includes_runtime_services(self):
-        import daemon.maez_daemon as md
-
-        daemon = SimpleNamespace(
-            cycle_count=1,
-            lived_episodes=None,
-            dream=None,
-            _github_health=lambda: {
-                "mode": "disabled",
-                "source_kind": "github.repo_count",
-                "state": "disabled",
-                "staged_records": 0,
-                "error_class": "",
-            },
-        )
-        runtime = {
-            "schema_version": "maez_runtime_services.v0",
-            "overall": "healthy",
-            "services": {"support_verifier": {"status": "asleep"}},
-        }
-        with mock.patch(
-            "daemon.maez_daemon.runtime_services_snapshot",
-            return_value=runtime,
-        ) as runtime_snapshot, mock.patch(
-            "daemon.maez_daemon.served_model_alias",
-            return_value="qwen36-27b",
-        ):
-            body = md.MaezDaemon._body_health(
-                daemon,
-                camera_presence={},
-                desktop_presence={},
-                memory_stats={},
-                reasoning_loop={},
-                system={},
-            )
-
-        self.assertEqual(body["runtime_services"], runtime)
-        runtime_snapshot.assert_called_once_with(
-            timeout_s=0.25,
-            probe_daemon_http_contract=False,
-        )
-        encoded = json.dumps(body, sort_keys=True)
-        self.assertNotIn("Maez runtime probe", encoded)
 
 
 class BodyHealthWiringTests(unittest.TestCase):

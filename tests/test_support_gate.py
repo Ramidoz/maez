@@ -87,24 +87,7 @@ class ApplySupportGateTest(unittest.TestCase):
         out = self._gate("Just a thought.", {"E1": "x"}, v)
 
         self.assertEqual(out.gated_marked_draft.strip(), "Just a thought.")
-
-    def test_uncited_unsupported_sentence_gets_evidence_caveat(self):
-        from core.cognition.support_verifier import FakeSupportVerifier, UNSUPPORTED
-
-        v = FakeSupportVerifier(default=(UNSUPPORTED, 0.1))
-
-        out = self._gate(
-            "Anthropic launched Mythos 5.",
-            {"E1": "Anthropic released Claude Opus 4.5."},
-            v,
-        )
-
-        self.assertIn("Anthropic launched Mythos 5.", out.gated_marked_draft)
-        self.assertIn(
-            "I couldn't confirm this from the evidence I had.",
-            out.gated_marked_draft,
-        )
-        self.assertEqual(v.calls[0][1], "Anthropic launched Mythos 5.")
+        self.assertEqual(v.calls, [])
 
     def test_detached_citation_folds_onto_previous_sentence(self):
         from core.cognition.support_verifier import FakeSupportVerifier, UNSUPPORTED
@@ -190,24 +173,6 @@ class GateRecordsTest(unittest.TestCase):
         self.assertEqual(receipt["caveated_unsupported"], 1)
         self.assertEqual(receipt["caveated_unmatched"], 1)
         self.assertIn("latency_ms", receipt)
-
-    def test_uncited_gate_verdict_does_not_count_as_grounded_support(self):
-        from core.cognition.support_verifier import FakeSupportVerifier, SUPPORTED
-
-        out = self._gate(
-            "Anthropic released Claude Opus 4.5.",
-            {"E1": "Anthropic released Claude Opus 4.5."},
-            FakeSupportVerifier(default=(SUPPORTED, 0.9)),
-        )
-
-        self.assertEqual(out.gate_receipt["cited"], 0)
-        self.assertEqual(out.gate_receipt["uncited_checked"], 1)
-        self.assertEqual(out.support_row["supported_count"], 0)
-        self.assertFalse(out.support_row["sentences"][0]["counts_as_grounded"])
-        self.assertEqual(
-            out.support_row["sentences"][0]["mode"],
-            "uncited_all_evidence_gate",
-        )
 
     def test_support_row_status_reports_verifier_unavailable(self):
         from core.cognition.support_verifier import FakeSupportVerifier
@@ -308,40 +273,24 @@ class ObserveFocusedSupportGateTest(unittest.TestCase):
         self.assertTrue(any("row_written=False" in message for message in cm.output))
 
     def test_gate_failure_logs_warning_and_returns_original(self):
-        import json
-        import os
-        import tempfile
         from unittest import mock
 
         import core.cognition.grounding_shadow as gs
 
-        with tempfile.TemporaryDirectory() as td:
-            path = os.path.join(td, "grounding_shadow.jsonl")
-            with (
-                mock.patch.object(gs, "_default_telemetry_path", return_value=path),
-                mock.patch.object(
-                    gs,
-                    "apply_support_gate",
-                    side_effect=RuntimeError("boom"),
-                ),
-                self.assertLogs("maez.grounding_shadow", level="WARNING") as cm,
-            ):
-                gated = gs.observe_focused_support_gate(
-                    "Claim [E1].",
-                    {"E1": "x"},
-                    surface="cockpit",
-                    boot_id="b",
-                    shadow_id="s",
-                    ts=0,
-                )
+        with (
+            mock.patch.object(gs, "apply_support_gate", side_effect=RuntimeError("boom")),
+            self.assertLogs("maez.grounding_shadow", level="WARNING") as cm,
+        ):
+            gated = gs.observe_focused_support_gate(
+                "Claim [E1].",
+                {"E1": "x"},
+                surface="cockpit",
+                boot_id="b",
+                shadow_id="s",
+                ts=0,
+            )
 
-            with open(path, encoding="utf-8") as f:
-                rows = [json.loads(line) for line in f]
-
-        self.assertEqual(gated, "Claim [E1]. I couldn't verify this before sending.")
-        self.assertTrue(rows)
-        self.assertEqual(rows[0]["status"], "gate_failed")
-        self.assertEqual(rows[0]["error_class"], "RuntimeError")
+        self.assertEqual(gated, "Claim [E1].")
         self.assertTrue(any("support_gate_failed" in message for message in cm.output))
 
 
@@ -378,55 +327,6 @@ class DaemonSupportGateSourceTests(unittest.TestCase):
         self.assertGreater(async_call_idx, guard_idx)
         self.assertLess(gate_call_idx, receipt_idx)
         self.assertLess(async_call_idx, receipt_idx)
-
-    def test_daemon_gate_depends_on_evidence_map_not_focused_success(self):
-        src = Path("daemon/maez_daemon.py").read_text()
-        guard_idx = src.find("reply = self._trf_apply_fragment_guard(")
-        condition_idx = src.find("if (\n                _grounding_shadow_post_audit_ready", guard_idx)
-        import_idx = src.find(
-            "from core.cognition.grounding_shadow import",
-            condition_idx,
-        )
-
-        self.assertGreater(guard_idx, 0)
-        self.assertGreater(condition_idx, guard_idx)
-        self.assertGreater(import_idx, condition_idx)
-        condition = src[condition_idx:import_idx]
-        self.assertNotIn(
-            "_focused_used",
-            condition,
-            "support gate must still run when focused evidence exists but synthesis falls back",
-        )
-
-    def test_legacy_fresh_context_can_seed_support_evidence_map(self):
-        from daemon.maez_daemon import _legacy_support_evidence_map
-
-        web_context = "[WEB SEARCH: 'anthropic'] 1 results - headline\n  1. Anthropic news"
-        transcript_context = "[fresh evidence] WEB_SEARCH: Anthropic news"
-
-        self.assertEqual(_legacy_support_evidence_map(web_context, ""), {"E1": web_context})
-        self.assertEqual(
-            _legacy_support_evidence_map("", transcript_context),
-            {"E1": transcript_context},
-        )
-        self.assertEqual(_legacy_support_evidence_map("", ""), {})
-        self.assertEqual(
-            _legacy_support_evidence_map("[WEB SEARCH: 'x'] No results found.", ""),
-            {},
-        )
-
-    def test_daemon_backfills_support_map_from_web_context_before_gate_guard(self):
-        src = Path("daemon/maez_daemon.py").read_text()
-        guard_idx = src.find("reply = self._trf_apply_fragment_guard(")
-        backfill_idx = src.find("_legacy_support_evidence_map(", guard_idx)
-        condition_idx = src.find("if (\n                _grounding_shadow_post_audit_ready", guard_idx)
-
-        self.assertGreater(guard_idx, 0)
-        self.assertGreater(backfill_idx, guard_idx)
-        self.assertGreater(condition_idx, backfill_idx)
-        call_block = src[backfill_idx:condition_idx]
-        self.assertIn("web_context", call_block)
-        self.assertIn("transcript_context", call_block)
 
 
 class RenderNaturalSurvivalTest(unittest.TestCase):

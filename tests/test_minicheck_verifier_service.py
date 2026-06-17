@@ -28,18 +28,6 @@ class ServiceShapeTests(unittest.TestCase):
         body = mod.handle_support({})
         self.assertIn("error", body)
 
-    def test_handle_health_is_content_free_and_does_not_load_model(self):
-        mod = self._load()
-        with mock.patch.object(mod, "_load", side_effect=AssertionError("model load")):
-            body = mod.handle_health()
-        self.assertEqual(
-            body,
-            {
-                "status": "ok",
-                "contract": "minicheck_support.v1",
-            },
-        )
-
     def test_module_loads_without_touching_model(self):
         self._load()
 

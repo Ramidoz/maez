@@ -9,7 +9,6 @@ truthful across refactors.
 from __future__ import annotations
 
 import unittest
-from unittest import mock
 
 from core.capability_registry import (
     describe, prompt_snippet, grounded_vocab,
@@ -40,36 +39,6 @@ class DescribeShape(unittest.TestCase):
         vision capability."""
         d = describe()
         self.assertIn("llama-server-vision", d["disabled_features"])
-
-    def test_services_include_user_scope_units(self):
-        from core.infra import capability_registry as cr
-
-        def fake_check_output(cmd, **_kwargs):
-            if "--user" in cmd:
-                return (
-                    "maez.service loaded active running Maez daemon\n"
-                    "minicheck-verifier.service loaded active running MiniCheck verifier\n"
-                ).encode("utf-8")
-            return b""
-
-        with mock.patch.object(cr.subprocess, "check_output", side_effect=fake_check_output):
-            services = cr._list_services()
-
-        self.assertEqual(services["maez"], "active")
-        self.assertEqual(services["minicheck-verifier"], "active")
-
-    def test_user_scope_active_wins_over_system_scope_inactive(self):
-        from core.infra import capability_registry as cr
-
-        def fake_check_output(cmd, **_kwargs):
-            if "--user" in cmd:
-                return b"maez-web.service loaded active running Maez web\n"
-            return b"maez-web.service loaded inactive dead Maez web system\n"
-
-        with mock.patch.object(cr.subprocess, "check_output", side_effect=fake_check_output):
-            services = cr._list_services()
-
-        self.assertEqual(services["maez-web"], "active")
 
 
 class PromptSnippet(unittest.TestCase):
@@ -106,53 +75,6 @@ class PromptSnippet(unittest.TestCase):
         away from (as '3AM cycles', 'nightly' etc.). Lock it in."""
         s = prompt_snippet()
         self.assertIn("30-second", s)
-
-    def test_snippet_renders_runtime_body_status_not_legacy_active_buckets(self):
-        """Self-description should use the runtime body registry, not raw
-        systemd active/inactive buckets that flatten asleep/degraded organs."""
-        from core.infra import capability_registry as cr
-
-        runtime = {
-            "schema_version": "maez_runtime_services.v0",
-            "overall": "degraded",
-            "services": {
-                "primary_brain": {
-                    "status": "healthy",
-                    "configured": True,
-                    "required_by": ["always"],
-                    "degraded_reasons": [],
-                },
-                "support_verifier": {
-                    "status": "degraded",
-                    "configured": True,
-                    "required_by": ["MAEZ_SUPPORT_GATE_ENABLED"],
-                    "degraded_reasons": ["contract_unhealthy"],
-                },
-                "search_body": {
-                    "status": "asleep",
-                    "configured": False,
-                    "required_by": [],
-                    "degraded_reasons": [],
-                },
-            },
-        }
-
-        with (
-            mock.patch.object(cr, "_list_services", return_value={"maez": "active"}),
-            mock.patch.object(
-                cr,
-                "_runtime_services_for_prompt",
-                return_value=runtime,
-            ),
-        ):
-            s = prompt_snippet()
-
-        self.assertIn("Runtime services: overall degraded.", s)
-        self.assertIn("primary_brain=healthy", s)
-        self.assertIn("support_verifier=degraded (contract_unhealthy)", s)
-        self.assertIn("search_body=asleep", s)
-        self.assertNotIn("Services active:", s)
-        self.assertNotIn("Services inactive/stopped:", s)
 
 
 class GroundedVocab(unittest.TestCase):

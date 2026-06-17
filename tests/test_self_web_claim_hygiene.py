@@ -214,16 +214,13 @@ class FlagOffByteIdenticalTest(unittest.TestCase):
                              durable_id="d", trust_tier="untrusted",
                              provenance_source="self_web_claim"),)
         with mock.patch.dict("os.environ", {"MAEZ_SELF_CLAIM_HYGIENE_ENABLED": "0"}):
-            with mock.patch("core.routing.focused_cognition.logger.info") as info:
+            with self.assertLogs(level="INFO") as cm:
+                import logging
+                logging.getLogger("maez.focused").info("probe")  # ensure >=1 record so assertLogs doesn't error
                 assemble_working_set(transcript="", web_context="fresh stuff",
                                      owner_question="news about Anthropic",
                                      recall_items=recall)
-        self.assertFalse(
-            any(
-                args and "recall_hygiene" in str(args[0])
-                for args, _kwargs in info.call_args_list
-            )
-        )
+        self.assertFalse(any("recall_hygiene" in m for m in cm.output))
 
 
 if __name__ == "__main__":

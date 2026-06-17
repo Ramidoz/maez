@@ -68,7 +68,6 @@ except Exception:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from memory.memory_manager import MemoryManager
 from core.infra.env_flags import strict_env_flag
-from core.infra.runtime_services import runtime_services_snapshot
 
 # 5x.F.A — cycle-scoped recall-context bag helpers. Hoisted to
 # module-top because (a) the import is cheap and Chroma-free per
@@ -1744,27 +1743,6 @@ def _wrap_daemon_web_context(web_context: str, *, path: str) -> str:
     return _wc.standing_instruction() + "\n\n" + wrapped
 
 
-def _legacy_support_evidence_map(
-    web_context: str,
-    transcript_context: str,
-) -> dict[str, str]:
-    """Best-effort support evidence map for non-focused fresh-evidence turns.
-
-    Focused cognition has labelled EvidenceItems. Legacy synthesis only has the
-    rendered fresh block, so expose that block as E1 for the support rail. This
-    keeps the gate/shadow active on fallback paths without pretending legacy has
-    a richer citation graph than it does.
-    """
-    for candidate in (web_context, transcript_context):
-        text = (candidate or "").strip()
-        if not text:
-            continue
-        if "No results found." in text or "[no fresh evidence available:" in text:
-            continue
-        return {"E1": text}
-    return {}
-
-
 def _safe_episode_body_counts(episode_store: object | None) -> dict[str, object]:
     if episode_store is None:
         return {
@@ -2607,23 +2585,7 @@ def cockpit_core_enabled() -> bool:
     return strict_env_flag("MAEZ_COCKPIT_CORE")
 
 
-def web_owner_core_enabled() -> bool:
-    """Return True iff private maez.live owner chat may use inbound core."""
-    from core.infra.env_flags import strict_env_flag
-
-    return strict_env_flag("MAEZ_WEB_OWNER_CORE")
-
-
-def _build_cockpit_inbound_descriptor(
-    daemon,
-    *,
-    text: str,
-    chat_history,
-    owner_surface_label: str = "cockpit",
-    chat_id: str = _COCKPIT_CHAT_ID,
-    channel: str = "web_chat_owner",
-    observe_turn_label: str = "cockpit_turn",
-) -> dict:
+def _build_cockpit_inbound_descriptor(daemon, *, text: str, chat_history) -> dict:
     """Assemble the keyword descriptor for run_inbound_turn from a cockpit turn.
 
     SLICE 2 covenant decisions (fixed — do not expand here):
@@ -2673,17 +2635,17 @@ def _build_cockpit_inbound_descriptor(
     return dict(
         daemon=daemon,
         text=text or "",
-        chat_id=chat_id,
+        chat_id=_COCKPIT_CHAT_ID,
         resolved_user_id="rohit",
         reply_to_message_id=None,
         context_note=None,
         photo_analysis=None,
         is_photo_turn=False,
-        owner_surface_label=owner_surface_label,
+        owner_surface_label="cockpit",
         user_id="rohit",
-        channel=channel,
+        channel="web_chat_owner",
         owner_auth_factory=lambda: None,
-        observe_turn_label=observe_turn_label,
+        observe_turn_label="cockpit_turn",
         chat_history_turns=_COCKPIT_CHAT_HISTORY_TURNS,
         action_engine=None,
         get_pipeline=None,
@@ -2698,55 +2660,6 @@ def _build_cockpit_inbound_descriptor(
         send_intermediate=None,
         send_progress_receipt=None,
     )
-
-
-def _build_web_owner_inbound_descriptor(daemon, *, text: str, chat_history) -> dict:
-    return _build_cockpit_inbound_descriptor(
-        daemon,
-        text=text,
-        chat_history=chat_history,
-        owner_surface_label="web_owner",
-        chat_id="web_owner",
-        channel="web_owner_bridge",
-        observe_turn_label="web_owner_turn",
-    )
-
-
-def _select_message_inbound_descriptor(
-    daemon,
-    *,
-    text: str,
-    chat_history,
-    surface_hint: str,
-) -> tuple[dict | None, str | None]:
-    """Return the inbound-core descriptor for a ``/message`` surface.
-
-    ``surface=web_owner`` is a cross-process private owner bridge. If the web
-    process is configured for that bridge but the daemon is not, fail closed
-    instead of silently treating the turn as cockpit traffic under
-    ``MAEZ_COCKPIT_CORE``.
-    """
-    if surface_hint == "web_owner":
-        if not web_owner_core_enabled():
-            return None, "web_owner_core_disabled"
-        return (
-            _build_web_owner_inbound_descriptor(
-                daemon,
-                text=text,
-                chat_history=chat_history,
-            ),
-            None,
-        )
-    if cockpit_core_enabled():
-        return (
-            _build_cockpit_inbound_descriptor(
-                daemon,
-                text=text,
-                chat_history=chat_history,
-            ),
-            None,
-        )
-    return None, None
 
 
 def _chat_history_message_count(messages: list[dict]) -> int:
@@ -3552,10 +3465,6 @@ class MaezDaemon:
                 "configured_model": MODEL,
                 "served_model_alias": served_model_alias(default=MODEL, timeout_s=0.25),
             },
-            "runtime_services": runtime_services_snapshot(
-                timeout_s=0.25,
-                probe_daemon_http_contract=False,
-            ),
             "body": {
                 "cpu_percent": system.get("cpu_percent"),
                 "ram_percent": system.get("ram_percent"),
@@ -6612,11 +6521,6 @@ class MaezDaemon:
                     reply = _photo_reply
                     _focused_used = True
                     _reply_path = ReplyPath.FOCUSED
-                    _focused_support_evidence_map = {
-                        "E1": photo_analysis,
-                    }
-                    if _photo_freshness_query and web_context:
-                        _focused_support_evidence_map["E2"] = web_context
                     logger.info(
                         "photo_focused_synthesis surface=%s working_set_chars=%s "
                         "cited=%s reply_chars=%d receipt=%s turn_id=%s "
@@ -7045,14 +6949,10 @@ class MaezDaemon:
             temporal_anchor_result=_temporal_anchor_result,
             trace=_trace,
         )
-        if not _focused_support_evidence_map:
-            _focused_support_evidence_map = _legacy_support_evidence_map(
-                web_context,
-                transcript_context,
-            )
         try:
             if (
                 _grounding_shadow_post_audit_ready
+                and _focused_used
                 and _focused_support_evidence_map
             ):
                 from core.cognition.grounding_shadow import (
@@ -7664,37 +7564,139 @@ class MaezDaemon:
                     logger.debug("Public context Chroma client close failed: %s", e)
 
     def handle_voice_stream(self, text: str) -> str:
-        """Speak the shared daemon reply sentence-by-sentence to TTS.
-
-        Voice input is a surface, not a separate brain. Synthesis runs through
-        handle_message(source="voice") so audit, support-gate, evidence, memory,
-        and owner-boundary rails stay identical to the other owner surfaces.
-        """
+        """Stream LLM response sentence-by-sentence to TTS. Returns full reply."""
         from skills.voice_output import feed_sentence
+        from skills.web_search import (
+            search as web_search,
+            format_for_context as web_format,
+            needs_web_search,
+            search_rss,
+            is_news_query,
+            is_generic_news_query,
+        )
 
         logger.info("Voice stream: %s", text[:100])
-        full_reply = self.handle_message(text, source="voice")
-        sentence_buf = full_reply
 
-        # Preserve the old TTS sentence batching at the boundary while the
-        # brain call itself now travels through the shared owner-message spine.
-        while True:
-            m = re.search(r"([.!?])\s", sentence_buf)
-            if not m:
-                break
-            idx = m.end()
-            sentence = sentence_buf[:idx].strip()
-            sentence_buf = sentence_buf[idx:]
-            if sentence:
-                logger.info("[VOICE STREAM] Speaking: %s", sentence[:80])
-                feed_sentence(sentence)
+        import datetime as _dt
 
-        if sentence_buf.strip():
-            logger.info(
-                "[VOICE STREAM] Speaking remainder: %s",
-                sentence_buf.strip()[:60],
+        simple_patterns = [
+            "what time",
+            "what day",
+            "what date",
+            "how are you",
+            "hello",
+            "hi maez",
+            "good morning",
+            "good night",
+            "good afternoon",
+            "good evening",
+            "thanks",
+            "thank you",
+            "who are you",
+            "what can you do",
+            "tell me a joke",
+            "are you there",
+            "can you hear",
+            "you there",
+            "status",
+            "what's up",
+            "whats up",
+            "sup",
+        ]
+        text_lower = text.lower().strip()
+        is_simple = any(p in text_lower for p in simple_patterns)
+
+        if is_simple:
+            now_dt = _dt.datetime.now()
+            time_str = now_dt.strftime("%I:%M %p").lstrip("0")
+            day_str = now_dt.strftime("%A, %B %d, %Y")
+            prompt = (
+                f"Current time: {time_str}, {day_str}\n\n"
+                f'the owner just spoke to you out loud:\n"{text}"\n\n'
+                f"Respond in 1 short sentence. Spoken aloud, be natural and warm.\n"
+                f"Remember: you are Maez, the owner's AI partner.\n"
             )
-            feed_sentence(sentence_buf.strip())
+            num_predict = 60
+            logger.info("[VOICE STREAM] Simple question — lightweight prompt")
+        else:
+            snap = perception_snapshot()
+            system_state = format_snapshot(snap)
+            recalled = self.memory.recall_for_telegram(text)
+            memory_block = self.memory.format_for_prompt(recalled)
+            web_context = ""
+            if needs_web_search(text):
+                # Generic news -> category-feed RSS; subject-specific news -> real
+                # keyword search (search_rss ignores the subject, returns top headlines).
+                if is_news_query(text) and is_generic_news_query(text):
+                    sr = search_rss(text, max_results=3)
+                else:
+                    sr = web_search(text, max_results=3)
+                web_context = web_format(sr)
+            prompt = f"{system_state}\n\n"
+            if memory_block:
+                prompt += memory_block + "\n\n"
+            if web_context:
+                _wc_block = _wrap_daemon_web_context(web_context, path="voice")
+                prompt += f"{_wc_block}\n\n"
+            prompt += (
+                f'the owner just spoke to you out loud:\n"{text}"\n\n'
+                f"Respond in 1-2 short sentences. Your response will be spoken aloud.\n"
+                f"Be warm, direct, and conversational. No bullet points or markdown.\n\n"
+                f"Remember: NEVER suggest touching ollama, its models, or any "
+                f"process that powers your reasoning."
+            )
+            num_predict = 200
+
+        full_reply = ""
+        try:
+            from core import llm_client as _llm_client
+            from core.routing.brain_gateway import with_purpose as _brain_purpose
+            from core.routing.cancellable_brain_call import BrainPreempted
+
+            with _brain_purpose("voice_reply"):
+                resp = _llm_client.chat(
+                    model=MODEL,
+                    messages=[
+                        {"role": "system", "content": self.system_prompt},
+                        {"role": "user", "content": prompt},
+                    ],
+                    think=False,
+                    options={"temperature": 0.7, "num_predict": num_predict},
+                )
+
+            full_reply = _extract_final((resp.message.content or "").strip())
+            sentence_buf = full_reply
+
+            # Preserve the old TTS sentence batching at the boundary while the
+            # brain call itself now travels through the foreground gateway lane.
+            while True:
+                m = re.search(r"([.!?])\s", sentence_buf)
+                if not m:
+                    break
+                idx = m.end()
+                sentence = sentence_buf[:idx].strip()
+                sentence_buf = sentence_buf[idx:]
+                if sentence:
+                    logger.info("[VOICE STREAM] Speaking: %s", sentence[:80])
+                    feed_sentence(sentence)
+
+            if sentence_buf.strip():
+                logger.info("[VOICE STREAM] Speaking remainder: %s", sentence_buf.strip()[:60])
+                feed_sentence(sentence_buf.strip())
+        except BrainPreempted:
+            raise
+        except Exception as e:
+            logger.error("Voice stream error: %s", e)
+            full_reply = full_reply or f"Error: {e}"
+
+        # Store in memory. 5x.B Pass 1: user_utterance/lived; mixed-
+        # origin transcript (see 5x.D).
+        self.memory.store_telegram(
+            f"the owner (voice): {text}\nMaez: {full_reply}",
+            provenance_source="user_utterance",
+            trust_tier="lived",
+        )
+        self._ws_broadcast({"type": "message_reply", "text": full_reply})
         return full_reply
 
     def _send_morning_briefing(self, snap: dict):
@@ -10293,8 +10295,6 @@ class MaezDaemon:
 
         @app.route("/internal/cockpit/state")
         def cockpit_state():
-            if not _s7_internal_channel_trusted(request):
-                return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
             # FAST real-state read for the cockpit face: true-by-construction
             # off the daemon's retained in-memory attrs. No perception_snapshot
             # / nvidia-smi here (that is what keeps /health ~1.7s). Never
@@ -10310,8 +10310,6 @@ class MaezDaemon:
 
         @app.route("/internal/s7/webauthn/status", methods=["GET"])
         def s7_webauthn_status():
-            if not _s7_internal_channel_trusted(request):
-                return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
             service = S7LocalWebAuthnCeremonyService(
                 verifier=S7ProductionWebAuthnVerifier(),
                 store_factory=lambda: S7WebAuthnBootstrapStore(_s7_webauthn_store_root()),
@@ -10696,21 +10694,7 @@ class MaezDaemon:
             # all is an open owner covenant decision. Felt-time OFF, NO
             # cards/proposals/search/tools (get_pipeline=action_engine=None).
             # When OFF (default), the existing source="UI" path runs UNTOUCHED.
-            raw_surface_hint = str(data.get("surface") or "cockpit").strip()
-            surface_hint = "web_owner" if raw_surface_hint == "web_owner" else "cockpit"
-            if surface_hint == "web_owner" and not _s7_internal_channel_trusted(request):
-                return jsonify({"error": "web_owner_channel_untrusted"}), 403
-            if surface_hint == "cockpit" and not _s7_internal_channel_trusted(request):
-                return jsonify({"error": "cockpit_channel_untrusted"}), 403
-            descriptor, descriptor_error = _select_message_inbound_descriptor(
-                self,
-                text=text,
-                chat_history=chat_history,
-                surface_hint=surface_hint,
-            )
-            if descriptor_error == "web_owner_core_disabled":
-                return jsonify({"error": descriptor_error}), 409
-            if descriptor is not None:
+            if cockpit_core_enabled():
                 from daemon.inbound_core import run_inbound_turn
 
                 # The Flask route is sync; run_inbound_turn is async. asyncio.run
@@ -10718,6 +10702,11 @@ class MaezDaemon:
                 # loop is running on the Flask request thread); inside the
                 # coroutine, run_inbound_turn's own asyncio.get_event_loop()
                 # returns that running loop for its run_in_executor offloads.
+                descriptor = _build_cockpit_inbound_descriptor(
+                    self,
+                    text=text,
+                    chat_history=chat_history,
+                )
                 # Degrade honestly: an S4/early exception from run_inbound_turn
                 # (before its own internal try/except wraps synthesis) returns a
                 # JSON error rather than a raw 500 traceback — mirrors the
@@ -10759,8 +10748,6 @@ class MaezDaemon:
             returns an empty transcript with a 200 so the caller's
             fallback path (non-tool LLM synthesis) still works.
             """
-            if not _s7_internal_channel_trusted(request):
-                return jsonify({"error": "s7_internal_channel_untrusted"}), 403
             data = request.get_json(silent=True) or {}
             text = (data.get("text") or "").strip()
             if not text:
@@ -10830,8 +10817,6 @@ class MaezDaemon:
             execution path."""
             if request.method == "OPTIONS":
                 return ("", 204)
-            if not _s7_internal_channel_trusted(request):
-                return jsonify({"error": "s7_internal_channel_untrusted"}), 403
             _record_owner_interaction(self)
             try:
                 telegram = getattr(self, "telegram", None)

@@ -39,7 +39,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
 _REPO = Path(__file__).resolve().parent.parent
 if str(_REPO) not in sys.path:
@@ -114,15 +113,8 @@ class _ClientFixture(unittest.TestCase):
 
         wi.app.config["TESTING"] = True
         self.client = wi.app.test_client()
-        self._auth_patch = mock.patch.object(
-            wi,
-            "_owner_private_auth_ok",
-            return_value=True,
-        )
-        self._auth_patch.start()
 
     def tearDown(self):
-        self._auth_patch.stop()
         if self._orig_ep is not None:
             self._wi._LIVED_EPISODE_DB_PATH = self._orig_ep
         if self._orig_g is not None:

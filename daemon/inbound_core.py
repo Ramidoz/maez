@@ -288,10 +288,18 @@ async def run_inbound_turn(
                         )
                     except Exception:
                         pass
-                    return audit_surface_reply(
-                        dialog_reply,
-                        surface=f"{owner_surface_label}_dialog",
-                    )
+                    try:
+                        from core.self_claim_audit import (
+                            audit as _sc_audit,
+                        )
+
+                        r = _sc_audit(
+                            dialog_reply,
+                            surface=f"{owner_surface_label}_dialog",
+                        )
+                        return r.text if r.rewritten else dialog_reply
+                    except Exception:
+                        return dialog_reply
                 return None
 
     proposal_reply = await try_proposal_intent(

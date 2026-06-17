@@ -766,31 +766,6 @@ def _request_token():
     return (request.args.get("web_token", "") or request.cookies.get(AUTH_COOKIE, "")).strip()
 
 
-def _owner_private_auth_ok() -> bool:
-    """Return true for an authenticated owner-private browser session.
-
-    Privileged cockpit routes intentionally use the session cookie only. Query
-    parameters remain for older public chat/history flows, but owner-like
-    cockpit actions should not be authorizable by copying a token into a URL.
-    """
-    token = (request.cookies.get(AUTH_COOKIE, "") or "").strip()
-    if not token:
-        return False
-    try:
-        user = accounts.get_by_token(token)
-        if not user:
-            return False
-        user_record = accounts.get_user_record(user.get("uuid", "")) or {}
-        return _is_private_owner_bridge(user_record)
-    except Exception as exc:
-        logger.debug("owner private auth check failed: %s", exc)
-        return False
-
-
-def _owner_private_auth_required_response():
-    return jsonify({"ok": False, "error": "owner_auth_required"}), 401
-
-
 def _attach_auth_cookie(response, token):
     if token:
         response.set_cookie(
@@ -860,48 +835,6 @@ def _service_state_cached(service_name, ttl=_SERVICE_STATE_TTL):
 
 def _journal_services_state():
     return {svc.replace("-", "_"): _service_state_cached(svc) for svc in JOURNAL_SERVICES}
-
-
-def _runtime_services_state(timeout_s: float = 0.35) -> dict:
-    from core.infra.runtime_services import runtime_services_snapshot_cached
-
-    return runtime_services_snapshot_cached(timeout_s=timeout_s)
-
-
-def _runtime_service_label(name: str) -> str:
-    return name.replace("_", " ").replace("-", " ")
-
-
-def _runtime_services_summary(snapshot: dict) -> str:
-    services = snapshot.get("services") or {}
-    if not services:
-        return "Runtime service truth unavailable."
-
-    always = [
-        (name, service)
-        for name, service in services.items()
-        if "always" in (service.get("required_by") or [])
-    ]
-    required_degraded = [
-        (name, service)
-        for name, service in services.items()
-        if service.get("configured") and service.get("status") == "degraded"
-    ]
-
-    parts: list[str] = []
-    for name, service in always[:2]:
-        parts.append(f"{_runtime_service_label(name)} is {service.get('status', 'unknown')}")
-    for name, service in required_degraded[:3]:
-        reason = ", ".join(service.get("degraded_reasons") or [])
-        suffix = f" ({reason})" if reason else ""
-        phrase = f"{_runtime_service_label(name)} is degraded{suffix}"
-        if phrase not in parts:
-            parts.append(phrase)
-
-    if not parts:
-        overall = snapshot.get("overall", "unknown")
-        return f"Runtime services are {overall}."
-    return "Runtime: " + "; ".join(parts) + "."
 
 
 def _model_state():
@@ -1576,12 +1509,7 @@ def _daemon_cockpit_state_proxy(timeout=1.5):
     back to scraped/seed data (the covenant forbids fabricated inner life).
     """
     try:
-        req = urllib.request.Request(
-            DAEMON_COCKPIT_STATE_URL,
-            headers=_s7_internal_channel_headers(),
-            method="GET",
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with urllib.request.urlopen(DAEMON_COCKPIT_STATE_URL, timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8"))
     except Exception as e:
         logger.debug("daemon cockpit-state unreachable: %s", e)
@@ -1598,8 +1526,6 @@ def api_daemon_state():
       - ON: proxy the daemon's fast /internal/cockpit/state verbatim — real
         in-memory substrate state, true-by-construction, no fabricated mood.
     """
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     if strict_env_flag("MAEZ_COCKPIT_REAL_STATE"):
         return jsonify(_daemon_cockpit_state_proxy())
     return _api_daemon_state_log_scrape()
@@ -1693,8 +1619,6 @@ def _api_daemon_state_log_scrape():
 def api_cards_list():
     """Recent pending cards — all non-terminal + last 24h terminal
     so the cockpit can show context on what just got resolved."""
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     import sqlite3 as _sq
     import time as _time
 
@@ -1742,8 +1666,6 @@ def api_card_deny(request_id: str):
     """Deny a card from the cockpit. Safe — no execution side effect,
     just marks it resolved so the UI (and the daemon's state) both
     see it as closed."""
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     try:
         from core.pending_cards import PendingCardStore
 
@@ -1779,45 +1701,6 @@ def api_card_deny(request_id: str):
 _DAEMON_BASE = "http://127.0.0.1:11435"
 _COCKPIT_PROXY_TIMEOUT_S = 60.0
 _COCKPIT_APPROVE_TIMEOUT_S = 30.0
-_S7_INTERNAL_CHANNEL_HEADER = "X-Maez-S7-Internal-Channel"
-_S7_INTERNAL_CHANNEL_TOKEN_ENV = "S7_INTERNAL_CHANNEL_TOKEN"
-
-
-def _s7_internal_channel_headers() -> dict[str, str]:
-    token = os.environ.get(_S7_INTERNAL_CHANNEL_TOKEN_ENV, "").strip()
-    if not token:
-        raise RuntimeError("s7_internal_channel_untrusted")
-    return {_S7_INTERNAL_CHANNEL_HEADER: token}
-
-
-def web_owner_core_enabled() -> bool:
-    """Return True iff private maez.live owner chat should proxy to daemon body."""
-    return strict_env_flag("MAEZ_WEB_OWNER_CORE")
-
-
-def _proxy_web_owner_message_to_daemon(*, message: str, history: list | None) -> dict:
-    token = os.environ.get(_S7_INTERNAL_CHANNEL_TOKEN_ENV, "").strip()
-    if not token:
-        raise RuntimeError("s7_internal_channel_untrusted")
-    body = json.dumps(
-        {
-            "text": message,
-            "history": history if isinstance(history, list) else [],
-            "surface": "web_owner",
-        }
-    ).encode("utf-8")
-    req = urllib.request.Request(
-        f"{_DAEMON_BASE}/message",
-        data=body,
-        headers={
-            "Content-Type": "application/json",
-            _S7_INTERNAL_CHANNEL_HEADER: token,
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=_COCKPIT_PROXY_TIMEOUT_S) as resp:
-        payload = resp.read()
-    return json.loads(payload.decode("utf-8"))
 
 
 @app.route("/api/v1/cockpit/message", methods=["POST"])
@@ -1833,20 +1716,8 @@ def api_cockpit_message():
     import urllib.request as _urlreq
     import urllib.error as _urlerr
 
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
-    try:
-        internal_headers = _s7_internal_channel_headers()
-    except RuntimeError as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 503
-
-    raw = request.get_json(silent=True)
-    data = dict(raw) if isinstance(raw, dict) else {}
-    # ``surface`` is authority-bearing in daemon /message. The generic cockpit
-    # proxy must never let browser JSON select the private web-owner bridge.
-    data["surface"] = "cockpit"
-    body = json.dumps(data).encode("utf-8")
-    headers = {"Content-Type": "application/json", **internal_headers}
+    body = request.get_data() or b"{}"
+    headers = {"Content-Type": request.headers.get("Content-Type", "application/json")}
     try:
         req = _urlreq.Request(
             f"{_DAEMON_BASE}/message",
@@ -1865,10 +1736,6 @@ def api_cockpit_message():
             payload = e.read()
         except Exception:
             payload = str(e).encode("utf-8")
-        try:
-            e.close()
-        except Exception:
-            pass
         return (payload, e.code, {"Content-Type": "application/json"})
     except Exception as e:
         return jsonify(
@@ -1890,15 +1757,8 @@ def api_card_approve(request_id: str):
     import urllib.request as _urlreq
     import urllib.error as _urlerr
 
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
-    try:
-        internal_headers = _s7_internal_channel_headers()
-    except RuntimeError as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 503
-
     body = request.get_data() or b""
-    headers = dict(internal_headers)
+    headers = {}
     ct = request.headers.get("Content-Type")
     if ct:
         headers["Content-Type"] = ct
@@ -1922,10 +1782,6 @@ def api_card_approve(request_id: str):
             payload = e.read()
         except Exception:
             payload = str(e).encode("utf-8")
-        try:
-            e.close()
-        except Exception:
-            pass
         return (payload, e.code, {"Content-Type": "application/json"})
     except Exception as e:
         return jsonify(
@@ -1940,8 +1796,6 @@ def api_card_approve(request_id: str):
 def _s7_cockpit_ceremony_deferred(route: str):
     from core.governance.operator_user_boundary import s7_ceremony_deferred_response
 
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     return jsonify(s7_ceremony_deferred_response(surface="cockpit", route=route)), 503
 
 
@@ -1949,8 +1803,6 @@ def _s7_cockpit_proxy_to_daemon(route: str, internal_route: str):
     import urllib.error as _urlerr
     import urllib.request as _urlreq
 
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     token = os.environ.get("S7_INTERNAL_CHANNEL_TOKEN", "")
     if not token:
         return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 503
@@ -1992,12 +1844,9 @@ def _s7_cockpit_status_proxy():
     import urllib.error as _urlerr
     import urllib.request as _urlreq
 
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     try:
         req = _urlreq.Request(
             f"{_DAEMON_BASE}/internal/s7/webauthn/status",
-            headers=_s7_internal_channel_headers(),
             method="GET",
         )
         with _urlreq.urlopen(req, timeout=_COCKPIT_PROXY_TIMEOUT_S) as resp:
@@ -2121,17 +1970,42 @@ def api_s7_guarded_card_execute(request_id: str):
 
 @app.route("/api/v1/services")
 def api_services():
-    """Runtime service readiness from Maez's contract-aware body snapshot."""
+    """systemctl status for maez/llama/ollama units."""
+    import subprocess as _sp
+
+    out = {}
     try:
-        snapshot = _runtime_services_state()
+        r = _sp.run(
+            [
+                "systemctl",
+                "list-units",
+                "--type=service",
+                "--all",
+                "--no-pager",
+                "--no-legend",
+                "maez*",
+                "llama*",
+                "ollama*",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=3.0,
+            check=False,
+            env=sanitize_env(),
+        )
+        for line in (r.stdout or "").splitlines():
+            toks = line.strip().split(None, 4)
+            if len(toks) < 4 or not toks[0].endswith(".service"):
+                continue
+            name = toks[0][: -len(".service")]
+            out[name] = {
+                "status": toks[2],
+                "sub": toks[3] if len(toks) > 3 else "",
+                "desc": toks[4] if len(toks) > 4 else "",
+            }
     except Exception as e:
         return jsonify({"error": str(e), "services": {}}), 500
-    return jsonify(
-        {
-            "runtime_services": snapshot,
-            "services": snapshot.get("services") or {},
-        }
-    )
+    return jsonify({"services": out})
 
 
 @app.route("/api/v1/gpu")
@@ -2181,8 +2055,6 @@ def api_signals():
     import json as _json
     import os as _os
 
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     sigs = []
     perception_path = "/home/rohit/maez/memory/perception_cache.json"
     if _os.path.exists(perception_path):
@@ -2290,8 +2162,6 @@ def api_signals():
 @app.route("/api/v1/soul")
 def api_soul():
     """Two-layer soul content."""
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     import os as _os
 
     base_path = "/home/rohit/maez/config/soul.base.md"
@@ -2310,8 +2180,6 @@ def api_soul():
 @app.route("/api/v1/memory")
 def api_memory():
     """ChromaDB tier counts + visible samples from each memory tier."""
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     import sqlite3 as _sq
     import os as _os
 
@@ -2628,8 +2496,6 @@ def api_lived_memory():
     something to show on first load. The dedicated /predictions
     endpoint accepts a custom query.
     """
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     episodes = _read_lived_episodes(_LIVED_EPISODE_DB_PATH)
     edges = _read_lived_edges(_LIVED_GRAPH_DB_PATH)
     echoes = _compute_echoes_for_cockpit()
@@ -2655,8 +2521,6 @@ def api_lived_memory():
 def api_lived_memory_episodes():
     """Just the episodes — for cockpit views that want the raw
     episode list without graph / echo / prediction overhead."""
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     episodes = _read_lived_episodes(_LIVED_EPISODE_DB_PATH)
     return jsonify(
         {
@@ -2675,8 +2539,6 @@ def api_lived_memory_graph():
     validity. ``at_time=2026-04-15T00:00:00+00:00`` returns the
     beliefs Maez was holding on that date; default returns
     currently-active beliefs. Malformed ``at_time`` → 400."""
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     at_time = request.args.get("at_time") or None
     if at_time:
         # Validate before hitting the store so we can return 400
@@ -2703,8 +2565,6 @@ def api_lived_memory_echoes():
     resemblance claims between recent and older important episodes.
     The panel surfaces these directly; the chat surface does NOT
     consume this endpoint in v1.4 (observation-only)."""
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     echoes = _compute_echoes_for_cockpit()
     return jsonify({"echoes": echoes, "count": len(echoes)})
 
@@ -2719,8 +2579,6 @@ def api_lived_memory_predictions():
     is gated on query shape and the panel omits the section in that
     case.
     """
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     query = request.args.get("q") or _DEFAULT_PREDICTIONS_QUERY
     predictions = _compute_predictions_for_cockpit(query)
     return jsonify(
@@ -2743,8 +2601,6 @@ def api_lived_memory_brief():
     ``lines`` field splits the brief on newlines for easier rendering
     in the panel; ``brief`` is the raw multi-line string.
     """
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     query = request.args.get("q") or _DEFAULT_BRIEF_QUERY
     try:
         from core.memory.episodes import EpisodeStore
@@ -2931,8 +2787,6 @@ def api_turn_latest():
     import sqlite3 as _sq
     import time as _time
 
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     lines = _tail_log_lines(_MAEZ_LOG_PATH, 4000)
 
     # Walk backward to find the most recent chat_turn handled (telegram).
@@ -3593,8 +3447,6 @@ def api_now():
     import sqlite3 as _sq
     import time as _time
 
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     out: dict = {}
     now_epoch = _time.time()
 
@@ -3660,13 +3512,6 @@ def api_now():
 
     # ── Body truth ──────────────────────────────────────────────
     body: dict = {}
-    runtime_snapshot: dict | None = None
-    try:
-        runtime_snapshot = _runtime_services_state()
-        body["runtime_services"] = runtime_snapshot
-    except Exception as e:
-        body["runtime_services_error"] = f"runtime service probe failed: {e}"
-
     try:
         from core.infra import body_capabilities as _bc
 
@@ -3737,9 +3582,9 @@ def api_now():
         cannot_phrases.append("see your screen (vision retired)")
     if "wmctrl" in body.get("tools_missing", []):
         cannot_phrases.append("use wmctrl (not installed)")
+    if body.get("services_alive_systemd"):
+        can_phrases.append(f"talk to {len(body['services_alive_systemd'])} live services")
     body_summary_parts = []
-    if runtime_snapshot:
-        body_summary_parts.append(_runtime_services_summary(runtime_snapshot))
     if can_phrases:
         body_summary_parts.append("Maez can " + ", ".join(can_phrases))
     if cannot_phrases:
@@ -4009,7 +3854,6 @@ def api_now():
             "memory/pending_cards.db",
             "core.infra.body_capabilities",
             "core.infra.capability_registry",
-            "core.infra.runtime_services",
         ],
     }
     return jsonify(out)
@@ -4888,8 +4732,6 @@ def api_rail_timeline():
     """
     from flask import jsonify
 
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     now_s = _time_rail.time()
     cache_age = now_s - _RAIL_CACHE["built_at"]
     if _RAIL_CACHE["value"] is None or cache_age >= _RAIL_CACHE_TTL_S:
@@ -5511,8 +5353,6 @@ def console_rail():
 @app.route("/api/v1/dreams")
 def api_dreams():
     """Merged view of evolution candidates + dream proposals."""
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     import sqlite3 as _sq
 
     dreams = []
@@ -5593,8 +5433,6 @@ def api_quality():
         consolidation_lookback — default 20
         fabrication_limit     — default 10
     """
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     try:
         from core.quality_telemetry import build_rollup
     except Exception as e:
@@ -5624,8 +5462,6 @@ def api_quality():
 
 @app.route("/api/v1/workshop/sessions", methods=["GET"])
 def api_workshop_list():
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     try:
         from core.workshop import rollup
 
@@ -5636,8 +5472,6 @@ def api_workshop_list():
 
 @app.route("/api/v1/workshop/sessions", methods=["POST"])
 def api_workshop_create():
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     try:
         body = request.get_json(silent=True) or {}
         title = (body.get("title") or "(untitled)").strip()[:200]
@@ -5655,8 +5489,6 @@ def api_workshop_create():
 
 @app.route("/api/v1/workshop/session/<session_id>", methods=["GET"])
 def api_workshop_get(session_id: str):
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     try:
         from core.workshop import get_session, get_turns
 
@@ -5694,8 +5526,6 @@ def api_workshop_get(session_id: str):
 @app.route("/api/v1/workshop/session/<session_id>/turn", methods=["POST"])
 def api_workshop_turn(session_id: str):
     """Send a user message; returns the assistant reply (synchronous)."""
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     try:
         body = request.get_json(silent=True) or {}
         user_message = (body.get("message") or "").strip()
@@ -5728,8 +5558,6 @@ def api_workshop_update_model(session_id: str):
     new model. Past turns are NOT retroactively re-routed — their
     model_used column records what actually handled them.
     """
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     try:
         body = request.get_json(silent=True) or {}
         model = (body.get("model") or "").strip()
@@ -5752,8 +5580,9 @@ def api_workshop_apply(session_id: str):
     Body: {"diff": "<unified diff text>", "reviewed": true}
     Returns: {applied, target, backup, stdout, stderr, error?}
 
-    Same owner-private bridge boundary as the rest of /api/v1/workshop.
-    Destructive: writes to disk. Reversible via the returned backup path.
+    Same privilege boundary as the rest of /api/v1/workshop — 127.0.0.1
+    only, no auth layer. Destructive: writes to disk. Reversible via
+    the returned backup path.
 
     **Covenant gate** (audit Tier-2, 2026-05-04): the request body
     must include `reviewed: true`. Without it, apply_diff refuses
@@ -5762,8 +5591,6 @@ def api_workshop_apply(session_id: str):
     setting the flag — the gate is server-enforced so a future UI
     bug can't silently bypass diff review.
     """
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     try:
         body = request.get_json(silent=True) or {}
         diff_text = (body.get("diff") or "").strip()
@@ -5785,8 +5612,6 @@ def api_workshop_apply(session_id: str):
 
 @app.route("/api/v1/workshop/session/<session_id>", methods=["DELETE"])
 def api_workshop_delete(session_id: str):
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     try:
         from core.workshop import delete_session
 
@@ -5811,8 +5636,6 @@ def api_self_dev_resolve(concern_id: int):
     resolution_notes, so a mistakenly-resolved concern can be
     reopened cleanly from the same UI.
     """
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     try:
         body = request.get_json(silent=True) or {}
         state = (body.get("state") or "").strip().lower()
@@ -5854,8 +5677,6 @@ def api_self_dev():
         recent_concerns — default 25   (max 200)
         window_hours    — default 168  (7 days)
     """
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     try:
         from core.self_dev_persistence import rollup
     except Exception as e:
@@ -5916,8 +5737,6 @@ def api_identity():
     """Owner / machine / covenant / reddit subs."""
     import os as _os
 
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     identity = {
         "owner": {
             "name": _default_owner_name(),
@@ -5971,8 +5790,6 @@ def api_router():
     """Router totals + recent decisions via Langfuse if creds present."""
     import os as _os
 
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     totals = {"local": 0, "claude": 0, "bytesIn": 0, "bytesOut": 0, "costUsd": 0.0}
     window = []
     if _os.environ.get("LANGFUSE_PUBLIC_KEY") and _os.environ.get("LANGFUSE_SECRET_KEY"):
@@ -6021,8 +5838,6 @@ def api_logs(name: str):
     """Tail of maez.log / cognition.log / evolution.log."""
     import re as _re
 
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     allowed = {
         "maez": "/home/rohit/maez/logs/maez.log",
         "cognition": "/home/rohit/maez/logs/cognition.log",
@@ -6074,8 +5889,6 @@ def api_dream_action(dream_id: int, action: str):
     import sqlite3 as _sq
     import time as _time
 
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     if action not in ("approve", "reject"):
         return jsonify({"ok": False, "error": "action must be approve or reject"}), 400
     is_dream = dream_id >= 10000
@@ -6136,8 +5949,6 @@ def api_chat_sessions():
     message + Maez reply from either shape, stripping any prompt
     scaffolding so the cockpit shows conversational content only.
     """
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
     import re as _re
 
     try:
@@ -6471,37 +6282,6 @@ def chat():
             return jsonify({"reply": _s4_result.answer_text, "display_name": display})
     history = data.get("history", [])
     logger.info("Web chat from %s: %s", display, message[:80])
-    if owner_bridge and not web_owner_core_enabled():
-        return jsonify(
-            {
-                "error": "web_owner_core_disabled",
-                "display_name": display,
-            }
-        ), 409
-    if owner_bridge:
-        try:
-            owner_core = _proxy_web_owner_message_to_daemon(
-                message=message,
-                history=history,
-            )
-            reply = str(owner_core.get("reply") or "").strip()
-            if not reply:
-                return jsonify(
-                    {
-                        "error": "daemon_owner_core_empty_reply",
-                        "display_name": display,
-                    }
-                ), 502
-            return jsonify({"reply": reply, "display_name": display})
-        except Exception as e:
-            logger.warning("web owner core proxy failed: %s", e)
-            return jsonify(
-                {
-                    "error": "daemon_owner_core_unreachable",
-                    "detail": str(e)[:200],
-                    "display_name": display,
-                }
-            ), 502
     messages_list = []
     user_key = None
     _owner_ledger_db_path = None
@@ -7277,10 +7057,10 @@ def analytics_collect():
 
 @app.route("/api/analytics-summary")
 def analytics_summary():
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
-    token = (request.cookies.get(AUTH_COOKIE, "") or "").strip()
-    user = accounts.get_by_token(token) if token else {}
+    token = _request_token()
+    user = accounts.get_by_token(token) if token else None
+    if not user:
+        return jsonify({"error": "Invalid token"}), 401
     return jsonify(
         {
             **_build_analytics_summary(_load_analytics_events()),
@@ -7294,10 +7074,10 @@ def analytics_summary():
 
 @app.route("/api/planner-board", methods=["GET", "POST"])
 def planner_board():
-    if not _owner_private_auth_ok():
-        return _owner_private_auth_required_response()
-    token = (request.cookies.get(AUTH_COOKIE, "") or "").strip()
-    user = accounts.get_by_token(token) if token else {}
+    token = _request_token()
+    user = accounts.get_by_token(token) if token else None
+    if not user:
+        return jsonify({"error": "Invalid token"}), 401
 
     if request.method == "GET":
         board = _load_planner_board()
@@ -7377,15 +7157,6 @@ def api_maez_state():
     daemon_health.pop("clinical_boundary", None)
     daemon_health.pop("voice_continuity", None)
     daemon_health.pop("successor_governance", None)
-    try:
-        runtime_services = _runtime_services_state(timeout_s=0.35)
-    except Exception as e:
-        runtime_services = {
-            "schema_version": "maez_runtime_services.v0",
-            "overall": "unknown",
-            "services": {},
-            "error": str(e)[:160],
-        }
     return jsonify(
         {
             "daemon": daemon_health,
@@ -7397,7 +7168,6 @@ def api_maez_state():
             },
             "model": _model_state(),
             "services": _journal_services_state(),
-            "runtime_services": runtime_services,
             "soul": _soul_state(),
             "thunder": _thunder_state(),
             "users_registered": accounts.count(),
@@ -9925,22 +9695,26 @@ else:
 # Read-only owner-scoped surface for debugging Maez internals: daemon
 # cycles, wondering state, approval cards, fabrication signal. All routes
 # below are GET-only and gate on the owner-scoped auth pattern used by
-# other private surfaces in this file: a valid token whose resolved
-# full user record is flagged private_owner_bridge=True. API handlers reuse
+# other private surfaces in this file: test_t dev bypass OR a valid token
+# whose user is flagged private_owner_bridge=True. API handlers reuse
 # existing helpers (_service_state_cached, _daemon_health) — no new
 # daemon imports. Slice A ships only the route skeleton + services pane;
 # wondering-core and cards/shells/fabrication panes come in slices B + C.
 
 
 def _debug_auth_ok():
-    """Gate for /debug and /api/debug/*.
-
-    Debug surfaces expose Maez's private body/memory state, so they use the
-    same cookie-only resolved-record owner proof as cockpit private APIs.
-    Query-token URLs remain useful for public/helper flows, but not for
-    owner-grade debug state.
-    """
-    return _owner_private_auth_ok()
+    """Gate for /debug and /api/debug/*. Test_t bypass matches existing
+    private-surface pattern; production requires a real owner-bridge token.
+    Returns True if the caller is authorized."""
+    if request.args.get("test_t", "").strip():
+        return True
+    token = _request_token()
+    if not token:
+        return False
+    user = accounts.get_by_token(token)
+    if not user:
+        return False
+    return _is_private_owner_bridge(user)
 
 
 @app.route("/debug")

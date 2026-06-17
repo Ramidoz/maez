@@ -110,13 +110,7 @@ class R2_BodyCapabilitiesShape(unittest.TestCase):
         result = bc.body_capabilities()
         services = result["services"]
         self.assertIsInstance(services, dict)
-        for key in (
-            "brain_8080",
-            "daemon_11435",
-            "proxy_11438",
-            "minicheck_8083",
-            "searxng_8888",
-        ):
+        for key in ("brain_8080", "daemon_11435", "proxy_11438"):
             self.assertIn(
                 key, services,
                 f"services must include {key!r}",

@@ -692,13 +692,7 @@ function LivingDashboard({ onMode, openSurface }) {
   const d = sim.state.daemon;
   const mem = sim.state.memory.stats;
   const g = sim.state.gpu;
-  const runtimeServiceEntries = Object.values(sim.state.runtimeServices?.services || {});
-  const runtimeServiceStatus = sim.state.runtimeServices?.overall || 'unknown';
-  const configuredRuntimeServices = runtimeServiceEntries.filter((s) => s.configured !== false);
-  const healthyRuntimeServices = configuredRuntimeServices.filter((s) => s.status === 'healthy').length;
-  const runtimeMetric = configuredRuntimeServices.length
-    ? `${healthyRuntimeServices}/${configuredRuntimeServices.length} organs healthy`
-    : `body ${runtimeServiceStatus}`;
+  const serviceActive = Object.values(sim.state.health).filter((s) => s.status === 'active').length;
   const redactions = (sim.state.logs.cognition || []).concat(sim.state.logs.maez || []).filter((l) =>
     String(l.msg || '').toLowerCase().includes('redacting stale fields')
   ).length;
@@ -731,8 +725,8 @@ function LivingDashboard({ onMode, openSurface }) {
           tooltip="Heart — the steady 30-second pulse that keeps Maez awake. Open the Daemon view for cycle internals."
           onClick={() => openSurface('daemon')} />
         <OrganCard icon={OrganGlyph.senses} title="Senses" color={A.cyan}
-          metric={runtimeMetric}
-          plain={`Maez's runtime body is ${runtimeServiceStatus}.`}
+          metric={`${serviceActive} services active`}
+          plain="Maez is reading the room through safe live signals."
           detail={`GPU ${g.util || 0}% · VRAM ${g.vramUsed?.toFixed?.(1) || 0}/${g.vramTotal || '?'} GB`}
           action="Ambient"
           tooltip="Senses — what Maez can see right now: services, hardware, presence. Open Ambient for the full live readout."

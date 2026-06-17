@@ -1275,7 +1275,7 @@
         <span><span class="k">Disk</span> <span class="v">16 GB</span></span>
         <span><span class="k">Vram</span> <span class="v">22.8 / 24 GB</span></span>
         <span><span class="k">Ctx</span> <span class="v">32 768</span></span>
-        <span><span class="k">Vision</span> <span class="v">runtime unknown</span></span>
+        <span><span class="k">Vision</span> <span class="v">active</span></span>
         <span><span class="k">Today</span> <span class="v">$0.00 out-of-pocket</span></span>
       </div>
     </div>
@@ -2012,12 +2012,12 @@
       if (heroMeta) {
         const dae = state.daemon || {};
         const m = state.model || {};
-        const runtimeServices = state.runtime_services || {};
-        const runtimeOverall = runtimeServices.overall || '';
+        const services = state.services || {};
+        const allUp = ['maez', 'maez_web', 'llama_server', 'llama_server_vision']
+          .every((k) => services[k] === 'active');
         const cyc = (dae.cycle_count != null) ? Number(dae.cycle_count).toLocaleString() : null;
         const cog = (dae.cognition_score != null) ? dae.cognition_score : null;
         const adapter = m.merged_adapter ? 'merged adapter · live' : 'base only';
-        const bodyState = runtimeOverall ? (' · body ' + runtimeOverall) : ' · body unknown';
         // Latest entry from timeline
         let entryLabel = '—';
         if (timeline && timeline.sessions && timeline.sessions[0]) {
@@ -2027,7 +2027,7 @@
         heroMeta.innerHTML =
           '<div><span class="k">Entry</span> <span class="v">' + escHtml(entryLabel) + '</span></div>' +
           '<div><span class="k">Brain</span> <span class="v">' + escHtml(m.base || 'gemma-4-26B-A4B') + '</span></div>' +
-          '<div><span class="k">State</span> <span class="v ember">' + escHtml(adapter) + escHtml(bodyState) + '</span></div>' +
+          '<div><span class="k">State</span> <span class="v ember">' + escHtml(adapter) + (allUp ? ' · all services up' : ' · degraded') + '</span></div>' +
           '<div><span class="k">' + (cyc ? 'Cycles' : 'Daemon') + '</span> <span class="v">' + (cyc ? cyc : (dae.status || 'unknown')) + (cog != null ? ' · cog ' + escHtml(cog) : '') + '</span></div>';
       }
     }
@@ -2037,10 +2037,9 @@
       const logValues = document.getElementById('logValues');
       if (logValues) {
         const m = state.model || {};
-        const runtimeServices = state.runtime_services || {};
-        const runtimeOverall = runtimeServices.overall || '';
-        const visionRuntime = ((runtimeServices.services || {}).vision_body || {}).status || 'unknown';
+        const svc = state.services || {};
         const t = state.thunder || {};
+        const visionUp = svc.llama_server_vision === 'active';
         const vram = (m.vram_used_gb != null && m.vram_total_gb != null)
           ? (m.vram_used_gb + ' / ' + m.vram_total_gb + ' GB')
           : '—';
@@ -2051,8 +2050,8 @@
           '<span><span class="k">Brain</span> <span class="v">' + escHtml(m.base || '—') + ' · ' + escHtml(m.quant || '—') + (m.merged_adapter ? ' · merged' : '') + '</span></span>' +
           '<span><span class="k">Disk</span> <span class="v">' + (m.disk_gb != null ? m.disk_gb + ' GB' : '—') + '</span></span>' +
           '<span><span class="k">Vram</span> <span class="v">' + escHtml(vram) + '</span></span>' +
-          '<span><span class="k">Runtime</span> <span class="v">' + escHtml(runtimeOverall || m.runtime || '—') + '</span></span>' +
-          '<span><span class="k">Vision</span> <span class="v">' + escHtml(visionRuntime) + (m.vision_model ? ' · ' + escHtml(m.vision_model) : '') + '</span></span>' +
+          '<span><span class="k">Runtime</span> <span class="v">' + escHtml(m.runtime || '—') + '</span></span>' +
+          '<span><span class="k">Vision</span> <span class="v">' + (visionUp ? 'active · ' + escHtml(m.vision_model || '') : 'down') + '</span></span>' +
           '<span><span class="k">Today</span> <span class="v">' + escHtml(cost) + '</span></span>';
       }
     }
@@ -2067,8 +2066,6 @@
         const m = state.model || {};
         const t = state.thunder || {};
         const dae = state.daemon || {};
-        const runtimeServices = state.runtime_services || {};
-        const visionRuntime = ((runtimeServices.services || {}).vision_body || {}).status || 'unknown';
         const sessionCount = (timeline && Array.isArray(timeline.sessions)) ? timeline.sessions.length : 0;
 
         const metric = (val, unit, label, delta, ember) =>
@@ -2090,7 +2087,7 @@
           metric(m.adapter_pairs || '—', 'pairs', 'Latest training corpus', m.adapter_loss_final != null ? 'loss · ' + m.adapter_loss_final : ''),
           metric(soul.lines || 0, 'lines', 'soul.md', soul.last_updated ? 'updated ' + soul.last_updated : ''),
           metric(m.merged_adapter ? '1' : '0', 'merged', 'Adapter releases', m.adapter_trained ? 'as of ' + m.adapter_trained : '', true),
-          metric(m.vision_model || '—', '', 'Vision', visionRuntime),
+          metric(m.vision_model || '—', '', 'Vision', state.services && state.services.llama_server_vision === 'active' ? 'active' : 'down'),
           metric(t.credits_remaining_usd != null ? '$' + Number(t.credits_remaining_usd).toFixed(2) : '—', 'left', 'Thunder credits', t.last_run_date ? 'last run ' + t.last_run_date : '', true),
         ].join('');
 

@@ -258,74 +258,16 @@ class GateOutcome:
     support_row: dict
 
 
-_GATE_FAILURE_CAVEAT = "I couldn't verify this before sending."
-
-
 def _caveat_for(rec: dict) -> str | None:
     mode = rec.get("mode")
     verdict = rec.get("verdict")
     if mode == "cited_support" and verdict == UNSUPPORTED:
         return "I couldn't confirm this from the source I cited."
-    if mode == "uncited_all_evidence_gate" and verdict == UNSUPPORTED:
-        return "I couldn't confirm this from the evidence I had."
     if mode == "unmatched_citation":
         return "I cited a source I can't match here."
-    if mode in {
-        "verifier_unavailable",
-        "budget_exhausted",
-        "uncited_verifier_unavailable",
-    }:
-        return _GATE_FAILURE_CAVEAT
+    if mode in {"verifier_unavailable", "budget_exhausted"}:
+        return "I couldn't verify this before sending."
     return None
-
-
-def _append_gate_failure_caveat(reply: str) -> str:
-    reply = (reply or "").strip()
-    if not reply:
-        return _GATE_FAILURE_CAVEAT
-    if _GATE_FAILURE_CAVEAT in reply:
-        return reply
-    return f"{reply} {_GATE_FAILURE_CAVEAT}"
-
-
-def _classify_uncited_for_gate(sentence, evidence_map, verifier, timeout_s) -> dict:
-    combined = "\n".join(
-        str(text).strip() for text in (evidence_map or {}).values() if str(text).strip()
-    )
-    base = {
-        "sentence": sentence,
-        "cited_evidence_ids": [],
-        "mode": "uncited_all_evidence_gate",
-        "counts_as_grounded": False,
-    }
-    if not combined:
-        return {
-            **base,
-            "verdict": "ABSTAIN",
-            "verifier": "deterministic",
-            "score": None,
-            "latency_s": 0.0,
-        }
-    try:
-        label, score, latency = verifier.support(combined, sentence, timeout_s)
-    except Exception:
-        label, score, latency = UNAVAILABLE, None, 0.0
-    if label == UNAVAILABLE:
-        return {
-            **base,
-            "mode": "uncited_verifier_unavailable",
-            "verdict": UNAVAILABLE,
-            "verifier": _verifier_name(verifier),
-            "score": score,
-            "latency_s": latency,
-        }
-    return {
-        **base,
-        "verdict": label,
-        "verifier": _verifier_name(verifier),
-        "score": score,
-        "latency_s": latency,
-    }
 
 
 def apply_support_gate(
@@ -365,30 +307,13 @@ def apply_support_gate(
                 caveat = _caveat_for(rec)
                 if caveat:
                     parts.append(caveat)
-            elif evidence_map:
-                rec = {
-                    "sentence": sentence,
-                    "cited_evidence_ids": [],
-                    "mode": "uncited_verifier_unavailable",
-                    "verdict": UNAVAILABLE,
-                    "verifier": "deterministic",
-                    "score": None,
-                    "latency_s": 0.0,
-                    "counts_as_grounded": False,
-                }
-                recs.append(rec)
-                caveat = _caveat_for(rec)
-                if caveat:
-                    parts.append(caveat)
             continue
-        rec = classify_sentence(sentence, evidence_map, verifier, per_sentence_timeout_s)
-        if rec.get("mode") == "no_citation" and evidence_map:
-            rec = _classify_uncited_for_gate(
-                sentence,
-                evidence_map,
-                verifier,
-                per_sentence_timeout_s,
-            )
+        rec = classify_sentence(
+            sentence,
+            evidence_map,
+            verifier,
+            per_sentence_timeout_s,
+        )
         recs.append(rec)
         caveat = _caveat_for(rec)
         if caveat:
@@ -427,23 +352,10 @@ def apply_support_gate(
         "caveated_unmatched": sum(
             1 for rec in recs if rec.get("mode") == "unmatched_citation"
         ),
-        "caveated_uncited": sum(
-            1
-            for rec in recs
-            if rec.get("mode") == "uncited_all_evidence_gate"
-            and rec.get("verdict") == UNSUPPORTED
-        ),
         "caveated_unverified": sum(
             1
             for rec in recs
-            if rec.get("mode")
-            in {"verifier_unavailable", "budget_exhausted", "uncited_verifier_unavailable"}
-        ),
-        "uncited_checked": sum(
-            1
-            for rec in recs
-            if rec.get("mode")
-            in {"uncited_all_evidence_gate", "uncited_verifier_unavailable"}
+            if rec.get("mode") in {"verifier_unavailable", "budget_exhausted"}
         ),
         "budget_exhausted": any(rec.get("mode") == "budget_exhausted" for rec in recs),
         "verifier": _verifier_name(verifier),
@@ -525,37 +437,9 @@ def observe_focused_support_gate(
                 shadow_id,
             )
         return outcome.gated_marked_draft
-    except Exception as exc:
-        failure_row = {
-            "shadow_id": shadow_id,
-            "ts": ts,
-            "surface": surface,
-            "boot_id": boot_id,
-            "post_audit": True,
-            "audit_available": None,
-            "flag_count": None,
-            "flag_kinds": [],
-            "rewritten": None,
-            "mode": "gate",
-            "skipped_reason": None,
-            "sentence_count": 0,
-            "unsupported_count": 0,
-            "supported_count": 0,
-            "skipped_count": 0,
-            "status": "gate_failed",
-            "error_class": exc.__class__.__name__,
-            "gate_applied": True,
-            "sentences": [],
-        }
-        row_written = emit_support_row(failure_row)
-        logger.warning(
-            "support_gate_failed surface=%s error_class=%s row_written=%s",
-            surface,
-            exc.__class__.__name__,
-            row_written,
-            exc_info=True,
-        )
-        return _append_gate_failure_caveat(reply)
+    except Exception:
+        logger.warning("support_gate_failed surface=%s", surface, exc_info=True)
+        return reply
 
 
 def decide_support_path(*, gate_enabled: bool, shadow_enabled: bool) -> str:

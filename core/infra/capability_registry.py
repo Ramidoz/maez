@@ -86,31 +86,22 @@ def _list_modules() -> list[str]:
     return sorted(out)
 
 
-def _systemctl_service_cmd(*, user: bool) -> list[str]:
-    cmd = ["systemctl"]
-    if user:
-        cmd.append("--user")
-    cmd.extend(
-        [
-            "list-units",
-            "--all",
-            "--no-pager",
-            "--no-legend",
-            "--type=service",
-            "maez*",
-            "llama*",
-            "ollama*",
-            "minicheck*",
-            "searxng*",
-        ]
-    )
-    return cmd
-
-
-def _parse_service_lines(raw: str) -> dict[str, str]:
+def _list_services() -> dict[str, str]:
+    """systemd unit states for maez* and llama* units. Returns
+    {unit_name: state} where state is 'active' | 'inactive' | 'failed'
+    | 'unknown'. If systemctl is unavailable, returns {'unavailable': reason}."""
+    try:
+        out = subprocess.check_output(
+            ["systemctl", "list-units", "--all", "--no-pager", "--no-legend",
+             "--type=service", "maez*", "llama*"],
+            timeout=2.0, stderr=subprocess.DEVNULL,
+        ).decode("utf-8", errors="replace")
+    except (subprocess.TimeoutExpired, FileNotFoundError,
+            subprocess.CalledProcessError):
+        return {"_unavailable": "systemctl not reachable"}
     result: dict[str, str] = {}
-    for line in raw.splitlines():
-        toks = line.strip().split(None, 4)
+    for line in out.splitlines():
+        toks = line.strip().split(None, 3)
         if len(toks) < 4:
             continue
         unit = toks[0]
@@ -118,44 +109,6 @@ def _parse_service_lines(raw: str) -> dict[str, str]:
             name = unit[:-len(".service")]
             state = toks[2]  # active | inactive | failed
             result[name] = state
-    return result
-
-
-def _merge_service_state(result: dict[str, str], name: str, state: str) -> None:
-    current = result.get(name)
-    if current == "active":
-        return
-    if state == "active" or current is None:
-        result[name] = state
-
-
-def _list_services() -> dict[str, str]:
-    """systemd unit states for maez* and llama* units. Returns
-    {unit_name: state} where state is 'active' | 'inactive' | 'failed'
-    | 'unknown'. If systemctl is unavailable, returns {'unavailable': reason}.
-
-    Maez runs as user services on Rohit's workstation. Query the user manager
-    first, then system scope as a fallback/supplement, and prefer an active
-    state over an inactive duplicate.
-    """
-    result: dict[str, str] = {}
-    failures: list[str] = []
-    for scope, user in (("user", True), ("system", False)):
-        try:
-            out = subprocess.check_output(
-                _systemctl_service_cmd(user=user),
-                timeout=2.0,
-                stderr=subprocess.DEVNULL,
-            ).decode("utf-8", errors="replace")
-        except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.CalledProcessError):
-            failures.append(scope)
-            continue
-        for name, state in _parse_service_lines(out).items():
-            _merge_service_state(result, name, state)
-    if not result:
-        if failures:
-            return {"_unavailable": f"systemctl not reachable ({', '.join(failures)})"}
-        return {}
     return result
 
 
@@ -254,44 +207,20 @@ def describe() -> dict[str, Any]:
     return snapshot
 
 
-def _runtime_services_for_prompt() -> dict[str, Any]:
-    try:
-        from core.infra.runtime_services import runtime_services_snapshot_cached
-
-        return runtime_services_snapshot_cached(timeout_s=0.25)
-    except Exception as e:
-        return {
-            "schema_version": "maez_runtime_services.v0",
-            "overall": "unknown",
-            "services": {},
-            "_unavailable": f"runtime_services probe failed: {e}",
-        }
-
-
-def _runtime_services_prompt_line(snapshot: dict[str, Any]) -> str:
-    overall = str(snapshot.get("overall") or "unknown")
-    services = snapshot.get("services") or {}
-    parts: list[str] = []
-    for key in sorted(services):
-        item = services.get(key) or {}
-        status = str(item.get("status") or "unknown")
-        reasons = item.get("degraded_reasons") or []
-        suffix = f" ({', '.join(str(reason) for reason in reasons[:2])})" if reasons else ""
-        parts.append(f"{key}={status}{suffix}")
-    if not parts:
-        unavailable = snapshot.get("_unavailable")
-        detail = f"; {unavailable}" if unavailable else ""
-        return f"Runtime services: overall {overall}; no service details available{detail}."
-    return f"Runtime services: overall {overall}. " + "; ".join(parts) + "."
-
-
 def prompt_snippet() -> str:
     """Compact, prompt-suitable rendering of the registry. Kept short
     (<800 chars) so it doesn't bloat every turn's context. The closing
     instruction is the load-bearing part — tells the model what to do
     when a claim isn't grounded here."""
     d = describe()
-    runtime_services_line = _runtime_services_prompt_line(_runtime_services_for_prompt())
+    services_active = sorted([
+        k for k, v in d["services"].items() if v == "active"
+        and not k.startswith("_")
+    ])
+    services_inactive = sorted([
+        k for k, v in d["services"].items() if v != "active"
+        and not k.startswith("_")
+    ])
     modules = ", ".join(d["modules"])
     disabled = ", ".join(
         f"{k} ({v.split(';')[0]})" for k, v in d["disabled_features"].items()
@@ -358,7 +287,8 @@ def prompt_snippet() -> str:
     base = (
         "# CAPABILITIES (source of truth for self-description)\n"
         f"Modules on disk: {modules}.\n"
-        f"{runtime_services_line}\n"
+        f"Services active: {', '.join(services_active) or '(none)'}.\n"
+        f"Services inactive/stopped: {', '.join(services_inactive) or '(none)'}.\n"
         f"Disabled features: {disabled}.\n"
         "Schedules: 30-second reasoning cycle; daily consolidation at "
         "03:00 local; nightly journal at 23:00 local; curiosity check-in "

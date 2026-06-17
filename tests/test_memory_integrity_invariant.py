@@ -431,7 +431,6 @@ class DaemonHandleMessageContract(unittest.TestCase):
             def __init__(self):
                 self.living_recall = ({}, {})
                 self.living_recall_calls = []
-                self.stored_records = []
 
             def recall_for_telegram(self, _text):
                 return {}
@@ -446,8 +445,7 @@ class DaemonHandleMessageContract(unittest.TestCase):
             def format_for_prompt(self, _recalled, max_chars=None):
                 return "MEMORY BLOCK"
 
-            def store_telegram(self, *args, **kwargs):
-                self.stored_records.append((args, kwargs))
+            def store_telegram(self, *_args, **_kwargs):
                 return "raw-memory-id"
 
         class FreshState:
@@ -471,77 +469,6 @@ class DaemonHandleMessageContract(unittest.TestCase):
         daemon.boot_time = "bootA"
         daemon._last_recall_receipt = None
         return daemon
-
-    def test_legacy_fresh_turn_carries_thin_directive_and_support_gate(self):
-        from daemon import maez_daemon
-
-        captured = {}
-        gate_calls = []
-        daemon = self._build_daemon_for_handle_message()
-        web_context = (
-            "[WEB SEARCH: 'anthropic'] quality=thin result_count=1 snippet_chars=80\n"
-            "[WEB SEARCH: 'anthropic'] 1 results - 2026-06-17\n"
-            "  1. Anthropic announces Claude Opus 4.5\n"
-            "     Anthropic released Claude Opus 4.5 for developers."
-        )
-
-        def fake_gate(reply, evidence_map, **kwargs):
-            gate_calls.append((reply, evidence_map, kwargs))
-            return f"{reply} I couldn't confirm this from the source I cited."
-
-        with self._handle_message_mock_stack(
-            maez_daemon,
-            captured,
-            needs_web_search=True,
-            web_context=web_context,
-            reply="Anthropic launched Mythos 5 [E1].",
-        ), mock.patch.dict(
-            os.environ,
-            {
-                "MAEZ_RECALL_TRIAD_ENABLED": "0",
-                "MAEZ_THIN_EVIDENCE_HONESTY_ENABLED": "1",
-                "MAEZ_EVIDENCE_PRECEDENCE_ENABLED": "1",
-                "MAEZ_SUPPORT_GATE_ENABLED": "1",
-                "MAEZ_GROUNDING_SHADOW_ENABLED": "0",
-                "MAEZ_SELF_CLAIM_HYGIENE_ENABLED": "1",
-            },
-            clear=False,
-        ), mock.patch(
-            "core.cognition.grounding_shadow.observe_focused_support_gate",
-            side_effect=fake_gate,
-        ), mock.patch(
-            "core.routing.focused_cognition.focused_synthesize",
-            side_effect=AssertionError("focused synthesis must not run"),
-        ):
-            reply = maez_daemon.MaezDaemon.handle_message(
-                daemon,
-                "latest news about Anthropic",
-                source="telegram_surface",
-                chat_id="chat-legacy-fresh",
-            )
-
-        self.assertIn("I couldn't confirm this from the source I cited.", reply)
-        self.assertIn("Anthropic launched Mythos 5", reply)
-        self.assertEqual(len(gate_calls), 1)
-        _reply, evidence_map, kwargs = gate_calls[0]
-        self.assertEqual(evidence_map, {"E1": web_context})
-        self.assertEqual(kwargs["surface"], "telegram_surface")
-        self.assertEqual(len(daemon.memory.stored_records), 2)
-        owner_record, reply_record = daemon.memory.stored_records
-        self.assertIn("the owner (telegram_surface): latest news about Anthropic", owner_record[0][0])
-        self.assertEqual(owner_record[1]["provenance_source"], "user_utterance")
-        self.assertEqual(owner_record[1]["trust_tier"], "lived")
-        self.assertIn("I couldn't confirm this from the source I cited.", reply_record[0][0])
-        self.assertEqual(reply_record[1]["provenance_source"], "self_web_claim")
-        self.assertEqual(reply_record[1]["trust_tier"], "untrusted")
-        prompt_text = "\n".join(
-            str(message.get("content") or "")
-            for message in captured["messages"]
-            if isinstance(message, dict)
-        )
-        self.assertIn("THIN", prompt_text)
-        self.assertIn("limited information", prompt_text)
-        self.assertNotIn("You may NOT claim the relevant source", prompt_text)
 
     @contextlib.contextmanager
     def _handle_message_mock_stack(

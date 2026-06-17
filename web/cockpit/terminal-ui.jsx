@@ -960,16 +960,10 @@ function PendingCommand({ p }) {
 function ServicesPane() {
   const sim = useSim();
   const entries = Object.entries(sim.state.health);
-  const attention = entries.filter(([, v]) => !['healthy', 'asleep'].includes(v.status)).length;
-  const statusColor = (status) => (
-    status === 'healthy' ? A.green
-      : status === 'asleep' ? A.textDim
-      : status === 'unknown' ? A.orange
-      : A.red
-  );
+  const inactive = entries.filter(([, v]) => v.status !== 'active').length;
   return (
-    <Card title="Services" subtitle={`${entries.length} runtime organs · ${attention} attention`}
-      icon={<Dot c={attention ? A.orange : A.green} size={6} pulse={!attention} />} iconColor={attention ? A.orange : A.green}
+    <Card title="Services" subtitle={`${entries.length} tracked · ${inactive} attention`}
+      icon={<Dot c={inactive ? A.orange : A.green} size={6} pulse={!inactive} />} iconColor={inactive ? A.orange : A.green}
       right={<LiveBadge endpoint="services" compact />}>
       <div className="ap-scroll" style={{ margin: '-4px -4px', overflow: 'auto', maxHeight: '100%', paddingRight: 4 }}>
         {entries.map(([name, v]) => (
@@ -977,9 +971,9 @@ function ServicesPane() {
             display: 'flex', alignItems: 'center', gap: 10, padding: '7px 10px', borderRadius: 8,
             border: '0.5px solid transparent', transition: `all 180ms`,
           }}>
-            <Dot c={statusColor(v.status)} pulse={v.status === 'healthy'} size={5} />
+            <Dot c={v.status === 'active' ? A.green : v.status === 'unknown' ? A.orange : A.red} pulse={v.status === 'active'} size={5} />
             <span style={{ flex: 1, fontFamily: A.sans, fontSize: 12.5, color: A.text }}>{name}</span>
-            <span style={{ fontFamily: A.mono, fontSize: 10, color: A.textDim }}>{v.status || 'unknown'}</span>
+            <span style={{ fontFamily: A.mono, fontSize: 10, color: A.textDim }}>{v.port ? `:${v.port}` : '—'}</span>
             {v.ms != null && (
               <span style={{ fontFamily: A.mono, fontSize: 10, color: A.textFaint, minWidth: 34, textAlign: 'right' }}>{v.ms}ms</span>
             )}

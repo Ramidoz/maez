@@ -7,12 +7,10 @@ unknown.
 from __future__ import annotations
 
 import logging
+import os
 import time
 import json
 from collections.abc import Callable, Sequence
-
-from core.infra.env_flags import strict_env_flag
-from core.infra.runtime_services import support_honesty_status
 
 logger = logging.getLogger("maez")
 
@@ -24,8 +22,6 @@ _ENTRY_SOURCE = {
     "page read": "flag",
     "recall": "flag",
     "search commitment": "flag",
-    "support gate": "probe",
-    "grounding shadow": "probe",
     "felt time": "probe",
 }
 _VOICE_BOUNDARY_INSTRUCTION = (
@@ -37,7 +33,12 @@ _VOICE_BOUNDARY_INSTRUCTION = (
 
 
 def evidence_precedence_enabled() -> bool:
-    return strict_env_flag("MAEZ_EVIDENCE_PRECEDENCE_ENABLED")
+    return (
+        (os.environ.get("MAEZ_EVIDENCE_PRECEDENCE_ENABLED", "") or "")
+        .strip()
+        .lower()
+        in {"1", "true", "yes", "on"}
+    )
 
 
 def voice_boundary_enabled() -> bool:
@@ -46,7 +47,12 @@ def voice_boundary_enabled() -> bool:
     Deliberately rejects the house-wide ``bool(os.environ.get(...))`` footgun
     (``"0"`` would read truthy). Mirrors ``evidence_precedence_enabled``.
     """
-    return strict_env_flag("MAEZ_VOICE_BOUNDARY_ENABLED")
+    return (
+        (os.environ.get("MAEZ_VOICE_BOUNDARY_ENABLED", "") or "")
+        .strip()
+        .lower()
+        in {"1", "true", "yes", "on"}
+    )
 
 
 def reset_card_cache() -> None:
@@ -69,23 +75,9 @@ def _flag_probe(
     off_text: str = "off",
 ) -> Callable[[], str]:
     def _probe() -> str:
-        return on_text if strict_env_flag(env_name) else off_text
+        return on_text if os.environ.get(env_name) else off_text
 
     return _probe
-
-
-def _support_gate_probe() -> str:
-    if not strict_env_flag("MAEZ_SUPPORT_GATE_ENABLED"):
-        return "off"
-    status = support_honesty_status()
-    return "on" if status == "healthy" else status
-
-
-def _grounding_shadow_probe() -> str:
-    if not strict_env_flag("MAEZ_GROUNDING_SHADOW_ENABLED"):
-        return "off"
-    status = support_honesty_status()
-    return "on" if status == "healthy" else status
 
 
 def _felt_time_probe() -> str:
@@ -106,8 +98,6 @@ def _default_registry() -> Sequence[tuple[str, Callable[[], str]]]:
             "search commitment",
             _flag_probe("MAEZ_SEARCH_COMMITMENT_ENABLED", "gatekeeper mode", "off"),
         ),
-        ("support gate", _support_gate_probe),
-        ("grounding shadow", _grounding_shadow_probe),
         ("felt time", _felt_time_probe),
     )
 

@@ -114,20 +114,6 @@ _SELF_CAPABILITY_RE = re.compile(
     r"capabilit(?:y|ies))\b.*\b(?:you|your|maez|yourself)\b",
     re.IGNORECASE,
 )
-_SELF_REF_RE = re.compile(r"\b(?:you|your|maez|yourself)\b", re.IGNORECASE)
-_SELF_DIRECT_COMPLAINT_RE = re.compile(
-    r"\b(?:you|maez|yourself)\b.{0,35}\b(?:unable|can't|cannot|can not|won't|fail(?:ed|ing|s)?|useless)\b"
-    r"|\b(?:can't|cannot|can not|won't)\s+(?:you|maez)\b"
-    r"|\b(?:you|maez)\b.{0,15}\bnot working\b"
-    r"|\b(?:you|maez)\b.{0,20}\bkeep(?:s)?\b.{0,60}\b(?:wrong|fail(?:ed|ing|s)?)\b"
-    r"|\b(?:you|maez)\b.{0,20}\bseem(?:s|ed)?\b.{0,40}\bunable\b",
-    re.IGNORECASE,
-)
-_SELF_CAPABILITY_OBJECT_COMPLAINT_RE = re.compile(
-    r"\byour\s+(?:web search|search tools?|search|tools?|page read(?:ing)?|web sense|search sense|capabilit(?:y|ies))\b"
-    r".{0,45}\b(?:broken|useless|fail(?:ed|ing|s)?|does(?:n't| not) work|don't work|not working|unable)\b",
-    re.IGNORECASE,
-)
 # Generic Reddit talk selects the owned Reddit substrate.
 _REDDIT_ANCHOR_RE = re.compile(r"\b(reddit|local ?llama|r/[A-Za-z0-9_]+)\b", re.IGNORECASE)
 # A syntactically valid subreddit anchor additionally selects LIVE_REDDIT.
@@ -249,13 +235,8 @@ class Layer0Dispatcher:
         inventory: InventorySummary,
     ) -> CompositionSpec:
         del surface  # Layer 0 records shape; downstream surfaces consume separately.
+        explicit_fetch = bool(_EXPLICIT_FETCH_RE.search(utterance))
         explicit_memory = bool(_EXPLICIT_MEMORY_RE.search(utterance))
-        self_capability_complaint = (
-            evidence_precedence_enabled() and _is_self_capability_complaint(utterance)
-        )
-        explicit_fetch = (
-            bool(_EXPLICIT_FETCH_RE.search(utterance)) and not self_capability_complaint
-        )
         content_anchored = bool(_CONTENT_ANCHOR_RE.search(utterance))
         owner_url_present = page_read_enabled() and bool(extract_first_url(utterance))
         self_capability_question = (
@@ -263,9 +244,7 @@ class Layer0Dispatcher:
         )
         current_world_request = sense_enabled() and _is_current_world_request(utterance)
         source_anchor_candidates = _source_anchor_candidates(utterance)
-        live_reddit_anchor = (
-            _has_subreddit_anchor(utterance) and not self_capability_complaint
-        )
+        live_reddit_anchor = _has_subreddit_anchor(utterance)
         scores = self.score_classes(utterance)
         accepted = _accepted_classes(scores, self.thresholds)
         limitations = list(inventory.availability_limitations)
@@ -290,7 +269,7 @@ class Layer0Dispatcher:
             else:
                 hint = CompositionHint.FRESH_ONLY
                 framing = ProvenanceFraming.FRESH_ONLY
-        elif (self_capability_question or self_capability_complaint) and not explicit_memory:
+        elif self_capability_question and not explicit_memory:
             substrate_sources = _available_substrates(
                 inventory,
                 _substrate_candidates(source_anchor_candidates),
@@ -537,16 +516,6 @@ def _is_self_capability_question(utterance: str) -> bool:
     if not _QUESTION_SHAPE_RE.search(utterance):
         return False
     return bool(_SELF_CAPABILITY_RE.search(utterance or ""))
-
-
-def _is_self_capability_complaint(utterance: str) -> bool:
-    text = utterance or ""
-    if not _SELF_REF_RE.search(text):
-        return False
-    return bool(
-        _SELF_DIRECT_COMPLAINT_RE.search(text)
-        or _SELF_CAPABILITY_OBJECT_COMPLAINT_RE.search(text)
-    )
 
 
 def _substrate_candidates(source_anchor_candidates: Sequence[SubstrateSource]) -> list[SubstrateSource]:
