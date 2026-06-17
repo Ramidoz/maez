@@ -2,8 +2,8 @@
 // Aesthetic: live instrument room, warm glass, legible telemetry.
 // The cockpit should help the owner observe Maez without mistaking demo
 // placeholders for live truth.
-// Rich interactive chat: model picker, thinking toggle, tool menu, attachments,
-// inline approval, tool-call cards, streaming with thinking trace.
+// Rich interactive chat: real cockpit bridge, honest body-state badges,
+// inline approval, tool-call cards, and live waiting state.
 (function() {
 
 // inject fonts + css
@@ -280,16 +280,6 @@ function useSparkValues(getter, len = 40) {
   return vals;
 }
 
-// ═══ models ═══════════════════════════════════════════════════════
-
-const MODELS = [
-  { id: 'local-qwen',    name: 'Maez · Qwen 3.6',   sub: 'on-device · 35B · instant', family: 'local', badge: 'Local', color: A.green, ctx: '128K', speed: 'fast' },
-  { id: 'local-vision',  name: 'Maez · Vision',     sub: 'on-device · multimodal',     family: 'local', badge: 'Local', color: A.mint,  ctx: '64K',  speed: 'fast' },
-  { id: 'claude-sonnet', name: 'Claude Sonnet 4.6', sub: 'cloud · balanced',           family: 'claude',badge: 'Cloud', color: A.blue,  ctx: '200K', speed: 'med' },
-  { id: 'claude-opus',   name: 'Claude Opus 4.7',   sub: 'cloud · deepest reasoning',  family: 'claude',badge: 'Cloud', color: A.purple,ctx: '200K', speed: 'slow' },
-  { id: 'auto',          name: 'Auto',              sub: 'maez picks — usually local', family: 'auto',  badge: 'Smart', color: A.orange,ctx: 'auto', speed: 'adaptive' },
-];
-
 // ═══ chat — the centerpiece ═══════════════════════════════════════
 
 const SESSION_COLORS = { blue: A.blue, purple: A.purple, green: A.green, orange: A.orange, pink: A.pink, cyan: A.cyan, indigo: A.indigo, mint: A.mint };
@@ -394,17 +384,10 @@ function ActivityVisualizer() {
 function ChatPane({ tall, showSidebar = true, selectedTurn, onSelectTurn }) {
   const sim = useSim();
   const [input, setInput] = React.useState('');
-  const [modelId, setModelId] = React.useState('auto');
-  const [thinking, setThinking] = React.useState(true);
-  const [webSearch, setWebSearch] = React.useState(false);
-  const [modelOpen, setModelOpen] = React.useState(false);
-  const [toolsOpen, setToolsOpen] = React.useState(false);
-  const [attachOpen, setAttachOpen] = React.useState(false);
   const scrollRef = React.useRef(null);
   const taRef = React.useRef(null);
   const sendBusy = Boolean(sim.state.chat._awaitingReply || sim.state.chat.streaming);
 
-  const model = MODELS.find(m => m.id === modelId);
   const session = sim.state.chat.sessions.find(s => s.id === sim.state.chat.activeSessionId) || sim.state.chat.sessions[0];
   const sessionColor = SESSION_COLORS[session?.color] || A.blue;
 
@@ -512,7 +495,7 @@ function ChatPane({ tall, showSidebar = true, selectedTurn, onSelectTurn }) {
             />
           );
         })}
-        {sim.state.chat.streaming && <StreamingMessage text={sim.state.chat.streamBuf} route={sim.state.chat._route} model={sim.state.chat._model} showThinking={thinking} />}
+        {sim.state.chat.streaming && <StreamingMessage text={sim.state.chat.streamBuf} route={sim.state.chat._route} model={sim.state.chat._model} showThinking={true} />}
         {sim.state.chat._awaitingReply && !sim.state.chat.streaming && (
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '12px 6px', fontSize: 12, color: A.textDim }}>
             <MaezAvatar size={28} />
@@ -544,57 +527,17 @@ function ChatPane({ tall, showSidebar = true, selectedTurn, onSelectTurn }) {
           </div>
 
           {/* bottom row */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 10px 10px' }}>
-            {/* attach */}
-            <div style={{ position: 'relative' }}>
-              <button className="ap-btn" onClick={() => { setAttachOpen(!attachOpen); setModelOpen(false); setToolsOpen(false); }}
-                style={composerIconBtn(attachOpen)}>{Icon.plus(15)}</button>
-              {attachOpen && <AttachMenu onClose={() => setAttachOpen(false)} />}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 10px 10px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', minWidth: 0 }}>
+              <Chip color={A.green} style={{ fontSize: 10.5 }}>
+                <Dot c={A.green} size={4} pulse /> Live bridge
+              </Chip>
+              <Chip color={A.blue} tone="ghost" style={{ fontSize: 10.5 }} title="body state, not a control">
+                body state, not a control
+              </Chip>
             </div>
-
-            {/* tools */}
-            <div style={{ position: 'relative' }}>
-              <button className="ap-btn" onClick={() => { setToolsOpen(!toolsOpen); setModelOpen(false); setAttachOpen(false); }}
-                style={composerIconBtn(toolsOpen)}>{Icon.tool(14)}</button>
-              {toolsOpen && <ToolsMenu onClose={() => setToolsOpen(false)} webSearch={webSearch} setWebSearch={setWebSearch} />}
-            </div>
-
-            {/* thinking toggle */}
-            <button className="ap-btn" onClick={() => setThinking(!thinking)}
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: 5, height: 28, padding: '0 10px',
-                borderRadius: 8, border: `0.5px solid ${thinking ? A.purple + '66' : A.stroke}`,
-                background: thinking ? `${A.purple}1f` : 'transparent',
-                color: thinking ? A.purple : A.textDim, fontSize: 11.5, fontWeight: 500,
-              }}>
-              {Icon.brain(13)}
-              <span>Extended Thinking</span>
-              <span style={{ width: 22, height: 12, borderRadius: 999, background: thinking ? A.purple : A.textGhost, position: 'relative', transition: `background 200ms ${A.easing}` }}>
-                <span style={{ position: 'absolute', top: 1, left: thinking ? 11 : 1, width: 10, height: 10, borderRadius: '50%', background: '#fff', transition: `left 200ms ${A.easing}`, boxShadow: '0 1px 2px rgba(0,0,0,0.3)' }} />
-              </span>
-            </button>
-
-            {webSearch && <Chip color={A.cyan}>{Icon.globe(10)} Web</Chip>}
 
             <div style={{ flex: 1 }} />
-
-            {/* model picker */}
-            <div style={{ position: 'relative' }}>
-              <button className="ap-btn" onClick={() => { setModelOpen(!modelOpen); setToolsOpen(false); setAttachOpen(false); }}
-                style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 6, height: 28, padding: '0 10px',
-                  borderRadius: 8, border: `0.5px solid ${A.stroke}`, background: A.surfaceRaised,
-                  color: A.text, fontSize: 11.5, fontWeight: 500,
-                }}>
-                <Dot c={model.color} size={6} />
-                <span>{model.name.replace('Maez · ', '').replace('Claude ', '')}</span>
-                {Icon.chevronDown(11)}
-              </button>
-              {modelOpen && <ModelMenu current={modelId} onSelect={(id) => { setModelId(id); setModelOpen(false); }} onClose={() => setModelOpen(false)} />}
-            </div>
-
-            {/* mic */}
-            <button className="ap-btn" style={composerIconBtn(false)}>{Icon.mic(14)}</button>
 
             {/* send */}
             <button className="ap-btn" onClick={submit} disabled={sendBusy || !input.trim()}
@@ -633,134 +576,6 @@ function ChatPane({ tall, showSidebar = true, selectedTurn, onSelectTurn }) {
   );
 
   return chatBody;
-}
-
-function composerIconBtn(active) {
-  return {
-    width: 30, height: 28, borderRadius: 8,
-    background: active ? A.surfaceRaised : 'transparent',
-    border: `0.5px solid ${active ? A.strokeHi : 'transparent'}`,
-    color: active ? A.text : A.textDim,
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-  };
-}
-
-function ModelMenu({ current, onSelect, onClose }) {
-  React.useEffect(() => {
-    const h = () => onClose();
-    setTimeout(() => document.addEventListener('click', h, { once: true }), 0);
-    return () => document.removeEventListener('click', h);
-  }, []);
-  return (
-    <div className="ap-glass ap-menu" onClick={(e) => e.stopPropagation()}
-      style={{
-        position: 'absolute', bottom: 36, right: 0, width: 280,
-        background: A.surfaceHi, border: `0.5px solid ${A.strokeHi}`, borderRadius: 14,
-        boxShadow: '0 20px 50px -10px rgba(0,0,0,0.7)', padding: 5, zIndex: 100,
-      }}>
-      <div style={{ padding: '8px 10px 6px', fontSize: 10, color: A.textFaint, fontWeight: 600, letterSpacing: 0.6, textTransform: 'uppercase' }}>Model</div>
-      {MODELS.map(m => {
-        const active = current === m.id;
-        return (
-          <button key={m.id} className="ap-btn" onClick={() => onSelect(m.id)}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '8px 10px',
-              background: active ? A.surfaceRaised : 'transparent', border: 'none', borderRadius: 8,
-              color: A.text, textAlign: 'left', marginBottom: 1,
-            }}>
-            <Dot c={m.color} size={8} />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 12.5, fontWeight: 500, color: A.text }}>{m.name}</div>
-              <div style={{ fontSize: 10.5, color: A.textDim, marginTop: 1 }}>{m.sub}</div>
-            </div>
-            <Chip color={m.color} tone="soft" style={{ fontSize: 9 }}>{m.badge}</Chip>
-            {active && <span style={{ color: A.blue }}>{Icon.check(13)}</span>}
-          </button>
-        );
-      })}
-      <div style={{ borderTop: `0.5px solid ${A.stroke}`, margin: '6px 0 0', padding: '8px 10px', fontSize: 10.5, color: A.textFaint, fontFamily: A.mono, lineHeight: 1.5 }}>
-        Auto routes to Claude for code-heavy, long-context, or deep reasoning — otherwise local.
-      </div>
-    </div>
-  );
-}
-
-function ToolsMenu({ onClose, webSearch, setWebSearch }) {
-  React.useEffect(() => {
-    const h = () => onClose();
-    setTimeout(() => document.addEventListener('click', h, { once: true }), 0);
-    return () => document.removeEventListener('click', h);
-  }, []);
-  const [selected, setSelected] = React.useState({ shell: true, memory: true, web: webSearch, code: true, vision: false });
-  const tools = [
-    { k: 'shell',  label: 'Shell commands',   desc: 'Run bash, check services — with approval', icon: Icon.terminal(13), color: A.green },
-    { k: 'memory', label: 'Memory recall',     desc: 'Search Chroma archive · three tiers',       icon: Icon.memory(13),   color: A.orange },
-    { k: 'web',    label: 'Web search',        desc: 'Fetch up-to-date info from the web',        icon: Icon.globe(13),    color: A.cyan },
-    { k: 'code',   label: 'Code execution',    desc: 'Python sandbox · scratch work',             icon: Icon.code(13),     color: A.purple },
-    { k: 'vision', label: 'Vision',            desc: 'Screenshots, photos, diagrams',             icon: Icon.image(13),    color: A.pink },
-  ];
-  return (
-    <div className="ap-glass ap-menu" onClick={(e) => e.stopPropagation()}
-      style={{
-        position: 'absolute', bottom: 36, left: 0, width: 320,
-        background: A.surfaceHi, border: `0.5px solid ${A.strokeHi}`, borderRadius: 14,
-        boxShadow: '0 20px 50px -10px rgba(0,0,0,0.7)', padding: 5, zIndex: 100,
-      }}>
-      <div style={{ padding: '8px 10px 6px', fontSize: 10, color: A.textFaint, fontWeight: 600, letterSpacing: 0.6, textTransform: 'uppercase' }}>Tools</div>
-      {tools.map(t => {
-        const on = selected[t.k];
-        return (
-          <button key={t.k} className="ap-btn"
-            onClick={() => { const n = { ...selected, [t.k]: !on }; setSelected(n); if (t.k === 'web') setWebSearch(!on); }}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '8px 10px',
-              background: on ? A.surfaceRaised : 'transparent', border: 'none', borderRadius: 8,
-              color: A.text, textAlign: 'left', marginBottom: 1,
-            }}>
-            <div style={{ width: 26, height: 26, borderRadius: 7, background: `${t.color}22`, color: t.color, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{t.icon}</div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 12.5, fontWeight: 500, color: A.text }}>{t.label}</div>
-              <div style={{ fontSize: 10.5, color: A.textDim, marginTop: 1 }}>{t.desc}</div>
-            </div>
-            <span style={{ width: 26, height: 14, borderRadius: 999, background: on ? A.green : A.textGhost, position: 'relative', flexShrink: 0, transition: `background 200ms ${A.easing}` }}>
-              <span style={{ position: 'absolute', top: 1, left: on ? 13 : 1, width: 12, height: 12, borderRadius: '50%', background: '#fff', transition: `left 200ms ${A.easing}`, boxShadow: '0 1px 2px rgba(0,0,0,0.3)' }} />
-            </span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function AttachMenu({ onClose }) {
-  React.useEffect(() => {
-    const h = () => onClose();
-    setTimeout(() => document.addEventListener('click', h, { once: true }), 0);
-    return () => document.removeEventListener('click', h);
-  }, []);
-  const items = [
-    { label: 'Upload file',      icon: Icon.attach(13), color: A.blue },
-    { label: 'Paste screenshot', icon: Icon.image(13),  color: A.pink },
-    { label: 'Include signals',  icon: Icon.sparkle(13),color: A.orange },
-    { label: 'Reference memory', icon: Icon.memory(13), color: A.purple },
-    { label: 'Pin this thread',  icon: Icon.check(13),  color: A.green },
-  ];
-  return (
-    <div className="ap-glass ap-menu" onClick={(e) => e.stopPropagation()}
-      style={{
-        position: 'absolute', bottom: 36, left: 0, width: 220,
-        background: A.surfaceHi, border: `0.5px solid ${A.strokeHi}`, borderRadius: 14,
-        boxShadow: '0 20px 50px -10px rgba(0,0,0,0.7)', padding: 5, zIndex: 100, transformOrigin: 'bottom left',
-      }}>
-      {items.map(i => (
-        <button key={i.label} className="ap-btn"
-          style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '8px 10px', background: 'transparent', border: 'none', borderRadius: 8, color: A.text, textAlign: 'left' }}>
-          <span style={{ color: i.color }}>{i.icon}</span>
-          <span style={{ fontSize: 12.5, fontWeight: 500 }}>{i.label}</span>
-        </button>
-      ))}
-    </div>
-  );
 }
 
 function MaezAvatar({ size = 32 }) {

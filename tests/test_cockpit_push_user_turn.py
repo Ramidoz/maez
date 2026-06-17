@@ -53,6 +53,26 @@ class CockpitPushUserTurnTests(unittest.TestCase):
         self.assertNotIn('src="sim.jsx"', src)
         self.assertNotIn('src="terminal-ui.jsx"', src)
 
+    def test_composer_does_not_render_unwired_prototype_controls(self) -> None:
+        """The composer should not show knobs that do not affect the live request."""
+        src = TERMINAL_UI.read_text(encoding="utf-8")
+
+        self.assertNotIn("Extended Thinking", src)
+        self.assertNotIn("ModelMenu", src)
+        self.assertNotIn("ToolsMenu", src)
+        self.assertNotIn("AttachMenu", src)
+        self.assertNotIn("Shell commands", src)
+        self.assertNotIn("Claude Opus", src)
+        self.assertNotIn("Upload file", src)
+        self.assertNotIn("Icon.mic(14)", src)
+
+    def test_composer_shows_read_only_live_body_status(self) -> None:
+        """The simplified composer should expose true state instead of fake switches."""
+        src = TERMINAL_UI.read_text(encoding="utf-8")
+
+        self.assertIn("Live bridge", src)
+        self.assertIn("body state, not a control", src)
+
 
 if __name__ == "__main__":
     unittest.main()
