@@ -402,6 +402,7 @@ function ChatPane({ tall, showSidebar = true, selectedTurn, onSelectTurn }) {
   const [attachOpen, setAttachOpen] = React.useState(false);
   const scrollRef = React.useRef(null);
   const taRef = React.useRef(null);
+  const sendBusy = Boolean(sim.state.chat._awaitingReply || sim.state.chat.streaming);
 
   const model = MODELS.find(m => m.id === modelId);
   const session = sim.state.chat.sessions.find(s => s.id === sim.state.chat.activeSessionId) || sim.state.chat.sessions[0];
@@ -420,14 +421,15 @@ function ChatPane({ tall, showSidebar = true, selectedTurn, onSelectTurn }) {
   // Real chat: post to maez-web's /api/v1/cockpit/message proxy, which
   // forwards to the daemon's /message endpoint. One web origin, no
   // browser-direct daemon calls (Workstation v1 / Session 1). The
-  // proxy timeout is 15s; on daemon-unreachable it returns 502 with
+  // proxy timeout is long enough for local synthesis; on daemon-unreachable it returns 502 with
   // a structured error which the catch block surfaces.
-  const submit = async () => {
-    const text = input.trim();
-    if (!text) return;
+  const submitText = async (text) => {
+    const textToSend = String(text || '').trim();
+    if (!textToSend) return;
+    if (sendBusy) return;
     setInput('');
     // Optimistically show the user turn + a "thinking" placeholder
-    sim.pushUserTurn ? sim.pushUserTurn(text) : sim.sendMessage(text);
+    sim.pushUserTurn ? sim.pushUserTurn(textToSend) : sim.sendMessage(textToSend);
     // Build prior-turn history for the daemon to thread into synthesis.
     // Without this, "Hi" mid-session re-greets because handle_message
     // gets no chat_history (2026-04-27 incident). pushUserTurn appended
@@ -445,7 +447,7 @@ function ChatPane({ tall, showSidebar = true, selectedTurn, onSelectTurn }) {
       const res = await fetch('/api/v1/cockpit/message', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, source: 'cockpit', history }),
+        body: JSON.stringify({ text: textToSend, source: 'cockpit', history }),
       });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
@@ -466,6 +468,8 @@ function ChatPane({ tall, showSidebar = true, selectedTurn, onSelectTurn }) {
       });
     }
   };
+
+  const submit = () => submitText(input);
 
   const chatBody = (
     <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
@@ -593,15 +597,15 @@ function ChatPane({ tall, showSidebar = true, selectedTurn, onSelectTurn }) {
             <button className="ap-btn" style={composerIconBtn(false)}>{Icon.mic(14)}</button>
 
             {/* send */}
-            <button className="ap-btn" onClick={submit} disabled={!input.trim()}
+            <button className="ap-btn" onClick={submit} disabled={sendBusy || !input.trim()}
               style={{
                 width: 30, height: 30, borderRadius: 8, border: 'none',
-                background: input.trim() ? A.aiGrad : A.surfaceRaised,
-                backgroundSize: '200% 200%', animation: input.trim() ? 'ap-ai-shift 3s ease infinite' : 'none',
-                color: input.trim() ? '#fff' : A.textFaint,
+                background: input.trim() && !sendBusy ? A.aiGrad : A.surfaceRaised,
+                backgroundSize: '200% 200%', animation: input.trim() && !sendBusy ? 'ap-ai-shift 3s ease infinite' : 'none',
+                color: input.trim() && !sendBusy ? '#fff' : A.textFaint,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                boxShadow: input.trim() ? `0 4px 14px -4px ${A.indigo}aa` : 'none',
-                opacity: input.trim() ? 1 : 0.6,
+                boxShadow: input.trim() && !sendBusy ? `0 4px 14px -4px ${A.indigo}aa` : 'none',
+                opacity: input.trim() && !sendBusy ? 1 : 0.6,
               }}>{Icon.send(14)}</button>
           </div>
         </div>
@@ -614,10 +618,11 @@ function ChatPane({ tall, showSidebar = true, selectedTurn, onSelectTurn }) {
             { t: 'Explain the Covenant', c: A.purple },
             { t: 'What did I do yesterday?', c: A.orange },
           ].map(s => (
-            <button key={s.t} className="ap-btn" onClick={() => sim.sendMessage(s.t)}
+            <button key={s.t} className="ap-btn" onClick={() => submitText(s.t)} disabled={sendBusy}
               style={{
                 background: `${s.c}14`, border: `0.5px solid ${s.c}33`, color: A.text,
                 fontSize: 11.5, padding: '5px 11px', borderRadius: 999, fontFamily: A.sans,
+                opacity: sendBusy ? 0.5 : 1,
               }}>
               <span style={{ color: s.c, marginRight: 5 }}>✦</span>{s.t}
             </button>
@@ -909,7 +914,7 @@ function StreamingMessage({ text, route, model, showThinking }) {
             ))}
           </span>
         </div>
-        {showThinking && <ThinkingBlock text="Checking working memory for the rgb context from earlier. VRAM has headroom (1.6GB free). No need to route to Claude." streaming />}
+        {showThinking && <ThinkingBlock text="Waiting for Maez's live reply from the cockpit bridge." streaming />}
         <div style={{ color: A.text, fontSize: 14, lineHeight: 1.55, fontFamily: A.sans, whiteSpace: 'pre-wrap' }}>
           {text}
           <span style={{ display: 'inline-block', width: 2, height: 14, background: A.blue, marginLeft: 2, verticalAlign: 'middle', borderRadius: 1, animation: 'ap-pulse 1s ease-in-out infinite' }} />
