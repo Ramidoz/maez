@@ -24,6 +24,7 @@ const SIM = (() => {
       'maez-web':            { port: 11437, status: 'unknown', vram: 0, ms: null },
       'llama-server':        { port: 8080,  status: 'unknown', vram: 0, ms: null },
     },
+    runtimeServices: { schema_version: 'maez_runtime_services.v0', overall: 'unknown', services: {} },
     gpu: { vramUsed: 0, vramTotal: 24, temp: 0, power: 0, util: 0 },
     cpu: { util: 14, temp: 48, load: [0.92, 1.12, 0.88] },
     signals: [
@@ -536,22 +537,8 @@ const SIM = (() => {
       const r = await fetch('/api/v1/services');
       if (!r.ok) { markOffline('services', r.status); return; }
       const d = await r.json();
-      if (!d.services) return;
       markLive('services');
-      // Overlay real status onto whatever's in state.health that matches
-      const rename = {
-        'maez': 'maez (daemon)',
-      };
-      const newHealth = { ...state.health };
-      for (const [name, info] of Object.entries(d.services)) {
-        const key = rename[name] || name;
-        if (newHealth[key]) {
-          newHealth[key].status = info.status === 'active' ? 'active' : 'inactive';
-        } else {
-          newHealth[key] = { port: null, status: info.status === 'active' ? 'active' : 'inactive', vram: 0, ms: null };
-        }
-      }
-      state.health = newHealth;
+      state.runtimeServices = d.runtime_services || { schema_version: 'maez_runtime_services.v0', overall: 'unknown', services: {} };
       emit();
     } catch (e) { markOffline('services', e); }
   };

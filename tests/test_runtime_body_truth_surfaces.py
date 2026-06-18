@@ -41,3 +41,14 @@ class PlannerNoAllServicesUp(unittest.TestCase):
         src = (pathlib.Path(__file__).resolve().parents[1] / "ui" / "project-planner.html").read_text()
         self.assertNotIn("all services up", src)
         self.assertIn("runtime_services", src)
+
+
+class CockpitReadsRuntimeServices(unittest.TestCase):
+    def test_servicespane_reads_runtimeServices_and_tick_stays_dead(self):
+        import pathlib
+        root = pathlib.Path(__file__).resolve().parents[1]
+        tui = (root / "web" / "cockpit" / "terminal-ui.jsx").read_text()
+        sim = (root / "web" / "cockpit" / "sim.jsx").read_text()
+        self.assertIn("runtimeServices", tui)          # ServicesPane renders the real snapshot
+        self.assertIn("healthy", tui)                  # the new status vocab is handled
+        self.assertNotIn("\n  setInterval(tick", sim)  # the fake simulator stays dead (uncommented call absent)
