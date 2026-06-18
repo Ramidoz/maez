@@ -98,10 +98,13 @@ perception: a flag would only add an "asleep" seam to the truth.
 - Port/author the focused **body-truth** web tests that prove: `/api/v1/services` returns the v0
   schema with per-organ status; **`/api/maez-state` carries `runtime_services` with a real `overall`**;
   and **`project-planner.html` derives its State line from `runtime_services.overall` with NO "all
-  services up" string remaining** (on the quarry the relevant files are `tests/test_web_runtime_truth.py`
-  + `tests/test_maez_body_organ_view.py`). **Scope-guard:** port ONLY the assertions about
-  runtime-body-truth on the two IN surfaces; drop any `/api/v1/now`/capability-card/owner-spine/S7
-  cases (those belong to later organs). Task 0 triages each test file.
+  services up" string remaining** (on the quarry the relevant file is `tests/test_web_runtime_truth.py`).
+  **`tests/test_maez_body_organ_view.py` is OUT** — its runtime-services case asserts the daemon
+  `_body_health` / `/health` *embedding*, which is the separate daemon-`/health` organ (marked OUT
+  below); do NOT port it (at most reuse it later as a negative guard proving the embedding is *not*
+  ported). **Scope-guard:** port ONLY the assertions about runtime-body-truth on the two IN surfaces;
+  drop any `/api/v1/now`/capability-card/owner-spine/S7/daemon-`/health` cases (those belong to later
+  organs). Task 0 triages each test file.
 - All ported tests pass on main: `/home/rohit/maez/.venv/bin/python -B -m unittest tests.<module>`
   (named modules, never full-discover).
 
