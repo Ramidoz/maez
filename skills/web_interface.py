@@ -149,6 +149,23 @@ def _is_private_owner_bridge(user_record: dict | None) -> bool:
     return bool(user_record and user_record.get("private_owner_bridge"))
 
 
+def _is_owner(user_record: dict | None) -> bool:
+    """Web-native owner check. Reads ONLY web_owner; never telegram-derived fields."""
+    return bool(user_record and user_record.get("web_owner"))
+
+
+_LOOPBACK_EXACT = {"::1"}
+
+
+def _request_is_loopback() -> bool:
+    """True only when the real TCP peer is loopback. Reads request.remote_addr
+    (the raw WSGI peer — no ProxyFix is installed). NEVER consults
+    X-Forwarded-For / X-Real-IP, which an attacker could set. Covers IPv4
+    127.0.0.0/8, IPv6 ::1, and IPv4-mapped-IPv6 ::ffff:127.x."""
+    addr = (getattr(request, "remote_addr", "") or "").strip()
+    return addr.startswith("127.") or addr.startswith("::ffff:127.") or addr in _LOOPBACK_EXACT
+
+
 def _render_identity_reply(*, display: str, linked_user: bool) -> str:
     """Render the /chat identity short-circuit reply.
 
