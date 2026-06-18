@@ -1,6 +1,6 @@
 # Handoff — Cockpit Real-State Bridge (Organ 2) — REVIEW GATE
 
-**Date:** 2026-06-18. **Branch:** `cockpit-real-state-bridge-organ` (tip `72210c0`, local-only, NOT pushed, NOT merged).
+**Date:** 2026-06-18. **Branch:** `cockpit-real-state-bridge-organ` (tip = the handoff-correction commit at HEAD; see `git log`, local-only, NOT pushed, NOT merged).
 **Status:** built + Claude two-stage reviewed (spec + code-quality) per task. **STOPPED at the review gate** — awaiting Codex cross-lane review, then owner breath. NOT `LIVE_WITNESSED`.
 **Arc:** decompose-the-organism Organ 2 ([[project_organism_decompose_organs]]). Spec @24a5fd9, plan @796416c.
 
@@ -8,14 +8,16 @@
 
 HARDENS the existing-but-exposed cockpit real-state bridge: closes the daemon's **open** `/internal/cockpit/state` with an S7 gate, **owner-gates** the web `/api/v1/daemon/state`, and makes the web proxy **actually send** the S7 token — so the daemon's live in-memory state is read only by the owner over an authenticated nerve. No rebuild; existing functions modified in place. UI unchanged.
 
-## Commits (4)
+## Commits (6)
 
 - `0bcd39b` docs(proof): Task 0 — consumer inventory, clean separation, imports (**VERDICT GO**).
 - `7f12739` feat: S7-gate the daemon `/internal/cockpit/state` (close the open nerve) [amended w/ test-mixin refactor].
 - `4917422` feat: web real-state proxy sends the S7 token + honest unreachable reason.
 - `72210c0` feat: owner-gate `/api/v1/daemon/state` (close the open web endpoint).
+- `47c2002` docs(handoff): this handoff (initial).
+- HEAD — fix: close the proxy's HTTPError response (silence ResourceWarning) + this handoff correction (Codex HOLD: owner-breath order, tip).
 
-Net diff vs main: `daemon/maez_daemon.py +2`, `skills/web_interface.py +36`, two test files, one proof doc. **370 insertions, surgical.**
+Net diff vs main: `daemon/maez_daemon.py +2`, `skills/web_interface.py +37`, two test files, one proof doc. Surgical.
 
 ## Verification (whole-organ, in this worktree)
 
@@ -41,10 +43,12 @@ ruff check daemon/maez_daemon.py skills/web_interface.py tests/*  → All checks
 
 ## Owner breath (after Codex PASS + merge — owner-sovereign, do NOT do for them)
 
+**ORDER MATTERS — set the flag BEFORE the restart.** `skills/web_interface.py` reads `MAEZ_COCKPIT_REAL_STATE` from `os.environ` at request time, and a process's `os.environ` is populated at START from its service environment. So if you set the flag *after* restarting, the live `maez-web` keeps serving the legacy log-scrape (flag-off) until another restart — a false witness against the wrong path. Provision the token AND set the flag, THEN restart, THEN witness.
+
 1. Merge `cockpit-real-state-bridge-organ` → main (local fast-forward; main stays unpushed).
 2. **Provision the S7 token for BOTH services** — add `S7_INTERNAL_CHANNEL_TOKEN=<secret>` to **`config/secrets.local.env`** for both `maez` (daemon) and `maez-web` (NOT model.env — the secrets loader purges launch-env secrets; that was the #2 root cause). It is already a managed secret (`core/infra/secrets.py:22`).
-3. Restart both `maez` (daemon) and `maez-web`.
-4. **Flip `MAEZ_COCKPIT_REAL_STATE=1`** (default off keeps the legacy log-scrape).
+3. **Set `MAEZ_COCKPIT_REAL_STATE=1` in the `maez-web` service environment** (default off keeps the legacy log-scrape). Only the web reads this flag; the daemon endpoint is always-on S7-gated regardless. Set it now, before the restart, so the new process loads it.
+4. **Restart both** `maez` (daemon) and `maez-web` — the new processes pick up the token (both) and the flag (web) from their environment.
 5. **Browser-witness** (logged in as the web owner): the cockpit DaemonPane shows REAL daemon state — live `cycle_count`, `cognition.score`, `last_thought`, `valence`, `reasoning_loop` (not the reconstruction). And a headerless probe of the daemon endpoint 403s:
    `curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:11435/internal/cockpit/state` → **403**.
 6. Token wrong/absent while flag-on → cockpit shows honest `unreachable` (reason `s7_internal_channel_untrusted`), never a fake state.
