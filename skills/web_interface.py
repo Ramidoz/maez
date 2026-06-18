@@ -1581,6 +1581,8 @@ def api_daemon_state():
       - ON: proxy the daemon's fast /internal/cockpit/state verbatim — real
         in-memory substrate state, true-by-construction, no fabricated mood.
     """
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
     if strict_env_flag("MAEZ_COCKPIT_REAL_STATE"):
         return jsonify(_daemon_cockpit_state_proxy())
     return _api_daemon_state_log_scrape()
@@ -9784,6 +9786,10 @@ def _owner_private_auth_ok() -> bool:
     except Exception as exc:
         logger.warning("owner gate degraded (%s); loopback-only recovery", exc, exc_info=True)
         return _request_is_loopback()
+
+
+def _owner_private_auth_required_response():
+    return jsonify({"ok": False, "error": "owner_auth_required"}), 401
 
 
 def _debug_auth_ok():

@@ -168,7 +168,8 @@ class TestWebProxyFlag(unittest.TestCase):
 
     def test_flag_off_uses_log_scrape_shape(self):
         wi, client = self._client()
-        with mock.patch.dict(os.environ, {}, clear=False):
+        with mock.patch.object(wi, "_owner_private_auth_ok", return_value=True), \
+                mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("MAEZ_COCKPIT_REAL_STATE", None)
             with mock.patch.object(wi, "_tail_log_lines", return_value=[]):
                 resp = client.get("/api/v1/daemon/state")
@@ -193,7 +194,8 @@ class TestWebProxyFlag(unittest.TestCase):
             def __exit__(self, *a):
                 return False
 
-        with mock.patch.dict(os.environ, {"MAEZ_COCKPIT_REAL_STATE": "1", "S7_INTERNAL_CHANNEL_TOKEN": "test-tok"}, clear=False):
+        with mock.patch.object(wi, "_owner_private_auth_ok", return_value=True), \
+                mock.patch.dict(os.environ, {"MAEZ_COCKPIT_REAL_STATE": "1", "S7_INTERNAL_CHANNEL_TOKEN": "test-tok"}, clear=False):
             with mock.patch("urllib.request.urlopen", return_value=_Resp(real_payload)):
                 resp = client.get("/api/v1/daemon/state")
         self.assertEqual(resp.status_code, 200)
@@ -201,7 +203,8 @@ class TestWebProxyFlag(unittest.TestCase):
 
     def test_flag_on_unreachable_is_honest(self):
         wi, client = self._client()
-        with mock.patch.dict(os.environ, {"MAEZ_COCKPIT_REAL_STATE": "1", "S7_INTERNAL_CHANNEL_TOKEN": "test-tok"}, clear=False):
+        with mock.patch.object(wi, "_owner_private_auth_ok", return_value=True), \
+                mock.patch.dict(os.environ, {"MAEZ_COCKPIT_REAL_STATE": "1", "S7_INTERNAL_CHANNEL_TOKEN": "test-tok"}, clear=False):
             with mock.patch("urllib.request.urlopen", side_effect=OSError("refused")):
                 resp = client.get("/api/v1/daemon/state")
         body = resp.get_json()
@@ -222,6 +225,31 @@ class TestWebProxyFlag(unittest.TestCase):
         for v in falsy:
             with mock.patch.dict(os.environ, {"MAEZ_COCKPIT_REAL_STATE": v}, clear=False):
                 self.assertFalse(strict_env_flag("MAEZ_COCKPIT_REAL_STATE"), v)
+
+
+# ── Part 3b: daemon-state endpoint owner gate (always-on) ─────────────────
+
+
+class DaemonStateEndpointOwnerGate(unittest.TestCase):
+    def _client(self):
+        import skills.web_interface as wi
+        wi.app.config["TESTING"] = True
+        return wi, wi.app.test_client()
+
+    def test_non_owner_gets_401(self):
+        wi, client = self._client()
+        with mock.patch.object(wi, "_owner_private_auth_ok", return_value=False):
+            r = client.get("/api/v1/daemon/state")
+        self.assertEqual(r.status_code, 401)
+        self.assertEqual(r.get_json().get("error"), "owner_auth_required")
+
+    def test_owner_flag_on_no_token_is_unreachable_no_scrape(self):
+        wi, client = self._client()
+        with mock.patch.object(wi, "_owner_private_auth_ok", return_value=True), \
+                mock.patch.dict(os.environ, {"MAEZ_COCKPIT_REAL_STATE": "1"}, clear=False):
+            os.environ.pop("S7_INTERNAL_CHANNEL_TOKEN", None)
+            r = client.get("/api/v1/daemon/state")
+        self.assertEqual(r.get_json(), {"status": "unreachable", "reason": "s7_internal_channel_untrusted"})
 
 
 # ── Part 4: web proxy sends the S7 internal-channel token ─────────────────
