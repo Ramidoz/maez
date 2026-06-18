@@ -1565,6 +1565,7 @@ def _daemon_cockpit_state_proxy(timeout=1.5):
             return json.loads(r.read().decode("utf-8"))
     except _urlerr.HTTPError as e:
         reason = "s7_internal_channel_untrusted" if e.code == 403 else "daemon_error"
+        e.close()  # HTTPError holds the response fp open; close it to avoid a ResourceWarning
         return {"status": "unreachable", "reason": reason}
     except Exception as e:
         logger.debug("daemon cockpit-state unreachable: %s", e)
