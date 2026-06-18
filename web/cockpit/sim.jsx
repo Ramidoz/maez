@@ -696,6 +696,10 @@ const SIM = (() => {
       if (!r.ok) { markOffline('chat', r.status); return; }
       const d = await r.json();
       markLive('chat');
+      if (state.chat._awaitingReply || state.chat.streaming) {
+        emit();
+        return;
+      }
       if (Array.isArray(d.sessions) && d.sessions.length) {
         state.chat.sessions = d.sessions;
         state.chat.activeSessionId = d.activeSessionId || d.sessions[0].id;

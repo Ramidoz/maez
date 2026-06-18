@@ -293,7 +293,7 @@ function SessionSidebar({ compact }) {
       <div style={{ padding: '14px 14px 10px', display: 'flex', alignItems: 'center', gap: 8 }}>
         <span style={{ fontFamily: A.sans, fontSize: 12, color: A.text, fontWeight: 600, letterSpacing: -0.1, flex: 1 }}>Conversations</span>
         <button className="ap-btn" onClick={() => sim.newSession()} title="New conversation"
-          style={{ width: 24, height: 24, borderRadius: 7, background: A.aiGrad, backgroundSize: '200% 200%', animation: 'ap-ai-shift 4s ease infinite', border: 'none', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: `0 2px 10px -2px ${A.indigo}99` }}>{Icon.plus(13)}</button>
+          style={{ width: 24, height: 24, borderRadius: 7, backgroundImage: A.aiGrad, backgroundSize: '200% 200%', animation: 'ap-ai-shift 4s ease infinite', border: 'none', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: `0 2px 10px -2px ${A.indigo}99` }}>{Icon.plus(13)}</button>
       </div>
       <div style={{ padding: '0 10px 8px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 7, background: A.surfaceLo, border: `0.5px solid ${A.stroke}`, borderRadius: 8, padding: '6px 9px' }}>
@@ -543,7 +543,8 @@ function ChatPane({ tall, showSidebar = true, selectedTurn, onSelectTurn }) {
             <button className="ap-btn" onClick={submit} disabled={sendBusy || !input.trim()}
               style={{
                 width: 30, height: 30, borderRadius: 8, border: 'none',
-                background: input.trim() && !sendBusy ? A.aiGrad : A.surfaceRaised,
+                backgroundColor: input.trim() && !sendBusy ? 'transparent' : A.surfaceRaised,
+                backgroundImage: input.trim() && !sendBusy ? A.aiGrad : 'none',
                 backgroundSize: '200% 200%', animation: input.trim() && !sendBusy ? 'ap-ai-shift 3s ease infinite' : 'none',
                 color: input.trim() && !sendBusy ? '#fff' : A.textFaint,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -582,7 +583,7 @@ function MaezAvatar({ size = 32 }) {
   return (
     <div style={{
       width: size, height: size, borderRadius: '50%', position: 'relative', flexShrink: 0,
-      background: A.aiGrad, backgroundSize: '200% 200%',
+      backgroundImage: A.aiGrad, backgroundSize: '200% 200%',
       animation: 'ap-ai-shift 6s ease infinite',
       boxShadow: `0 0 ${size}px -4px rgba(191, 90, 242, 0.6), inset 0 0 ${size/3}px rgba(255,255,255,0.2)`,
     }}>

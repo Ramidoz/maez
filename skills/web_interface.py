@@ -251,6 +251,11 @@ def _normalize_chat_history_record(role: str, content: str, timestamp: str) -> l
         ]
         return [msg for msg in messages if msg is not None]
 
+    maez_only = re.match(r"^\s*Maez\s*:\s*(?P<reply>.*?)\s*$", text, re.IGNORECASE | re.DOTALL)
+    if maez_only:
+        message = _chat_history_message("assistant", maez_only.group("reply"), timestamp)
+        return [message] if message else []
+
     message = _chat_history_message(role, text, timestamp)
     return [message] if message else []
 
@@ -5996,6 +6001,19 @@ def api_chat_sessions():
         if not content:
             return "", ""
         text = content.strip()
+
+        # Newer web/cockpit records can store a full exchange in one row.
+        # Split that storage form at the server boundary so the cockpit
+        # receives real turns instead of rendering "Maez replied: ..." as
+        # owner text.
+        for pattern in (_OWNER_ASKED_EXCHANGE_RE, _OWNER_DAEMON_EXCHANGE_RE):
+            match = pattern.match(text)
+            if match:
+                return match.group("user").strip()[:800], match.group("reply").strip()[:800]
+
+        maez_only = _re.match(r"^\s*Maez\s*:\s*(?P<reply>.*?)\s*$", text, _re.IGNORECASE | _re.DOTALL)
+        if maez_only:
+            return "", maez_only.group("reply").strip()[:800]
 
         # Find the Maez reply marker. In practice it's either the line
         # prefix "Maez:" or the final paragraph after all the scaffolding.

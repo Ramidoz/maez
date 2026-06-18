@@ -8,6 +8,7 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parent.parent
 if str(_REPO) not in sys.path:
@@ -53,6 +54,26 @@ class WebChatHistoryNormalizationTests(unittest.TestCase):
         self.assertEqual(out[0]["content"], "Hi Maez")
         self.assertEqual(out[1]["content"], "Hey Rohit.")
 
+    def test_standalone_maez_record_displays_as_assistant(self):
+        from skills.web_interface import _normalize_chat_history_record
+
+        out = _normalize_chat_history_record(
+            role="user",
+            content="Maez: The web search returned sparse results.",
+            timestamp="2026-06-17T22:01:30+00:00",
+        )
+
+        self.assertEqual(
+            out,
+            [
+                {
+                    "role": "assistant",
+                    "content": "The web search returned sparse results.",
+                    "timestamp": "2026-06-17T22:01:30+00:00",
+                }
+            ],
+        )
+
     def test_normal_user_record_stays_user(self):
         from skills.web_interface import _normalize_chat_history_record
 
@@ -70,6 +91,65 @@ class WebChatHistoryNormalizationTests(unittest.TestCase):
                     "content": "plain user message",
                     "timestamp": "2026-06-17T22:02:00+00:00",
                 }
+            ],
+        )
+
+    def test_cockpit_sessions_endpoint_splits_owner_asked_records(self):
+        import skills.web_interface as wi
+
+        class FakeMemoryManager:
+            def get_telegram_exchanges(self, limit=6):
+                return [
+                    {
+                        "content": (
+                            "the owner asked: Summarize today's signals\n"
+                            "Maez replied: The web search returned sparse results."
+                        ),
+                        "metadata": {"timestamp": "2026-06-17T19:25:01+00:00"},
+                    }
+                ]
+
+        with patch("memory.memory_manager.MemoryManager", return_value=FakeMemoryManager()):
+            client = wi.app.test_client()
+            res = client.get("/api/v1/chat/sessions")
+
+        self.assertEqual(res.status_code, 200)
+        history = res.get_json()["sessions"][0]["history"]
+        self.assertEqual(
+            [(turn["role"], turn["content"]) for turn in history],
+            [
+                ("user", "Summarize today's signals"),
+                ("assistant", "The web search returned sparse results."),
+            ],
+        )
+
+    def test_cockpit_sessions_endpoint_treats_standalone_maez_rows_as_assistant(self):
+        import skills.web_interface as wi
+
+        class FakeMemoryManager:
+            def get_telegram_exchanges(self, limit=6):
+                return [
+                    {
+                        "content": "Summarize today's signals",
+                        "metadata": {"timestamp": "2026-06-17T19:24:55+00:00"},
+                    },
+                    {
+                        "content": 'Maez: The web search returned sparse results.',
+                        "metadata": {"timestamp": "2026-06-17T19:25:01+00:00"},
+                    },
+                ]
+
+        with patch("memory.memory_manager.MemoryManager", return_value=FakeMemoryManager()):
+            client = wi.app.test_client()
+            res = client.get("/api/v1/chat/sessions")
+
+        self.assertEqual(res.status_code, 200)
+        history = res.get_json()["sessions"][0]["history"]
+        self.assertEqual(
+            [(turn["role"], turn["content"]) for turn in history],
+            [
+                ("user", "Summarize today's signals"),
+                ("assistant", "The web search returned sparse results."),
             ],
         )
 

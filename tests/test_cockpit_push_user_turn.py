@@ -73,6 +73,13 @@ class CockpitPushUserTurnTests(unittest.TestCase):
         self.assertIn("Live bridge", src)
         self.assertIn("body state, not a control", src)
 
+    def test_chat_session_poll_does_not_overwrite_optimistic_turns_in_flight(self) -> None:
+        """The 20s history poll must not erase a locally pending user turn."""
+        src = SIM.read_text(encoding="utf-8")
+
+        self.assertIn("if (state.chat._awaitingReply || state.chat.streaming)", src)
+        self.assertIn("return;", src[src.index("if (state.chat._awaitingReply") : src.index("setInterval(_pollDaemon")])
+
 
 if __name__ == "__main__":
     unittest.main()
