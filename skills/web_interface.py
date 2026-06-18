@@ -9756,17 +9756,22 @@ else:
 def _owner_private_auth_ok() -> bool:
     """Owner-private gate. Activation is owner_claimed() only (no feature flag).
     unclaimed+loopback -> allow (local recovery); unclaimed+remote -> deny (no owner data);
-    claimed -> require the COOKIE-resolved owner identity (no ?test_t=/?web_token= bypass)."""
-    if not accounts.owner_claimed():
+    claimed -> require the COOKIE-resolved owner identity (no ?test_t=/?web_token= bypass).
+    On account-store failure: loopback (physical body) keeps recovery, remote fails closed."""
+    try:
+        if not accounts.owner_claimed():
+            return _request_is_loopback()
+        token = (request.cookies.get(AUTH_COOKIE, "") or "").strip()
+        if not token:
+            return False
+        user = accounts.get_by_token(token)
+        if not user:
+            return False
+        record = accounts.get_user_record(user.get("uuid", "")) or {}
+        return _is_owner(record)
+    except Exception as exc:
+        logger.warning("owner gate degraded (%s); loopback-only recovery", exc, exc_info=True)
         return _request_is_loopback()
-    token = (request.cookies.get(AUTH_COOKIE, "") or "").strip()
-    if not token:
-        return False
-    user = accounts.get_by_token(token)
-    if not user:
-        return False
-    record = accounts.get_user_record(user.get("uuid", "")) or {}
-    return _is_owner(record)
 
 
 def _debug_auth_ok():

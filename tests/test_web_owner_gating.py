@@ -79,3 +79,24 @@ class NoTelegramAtWebEdge(unittest.TestCase):
         # exactly one: the `def _is_private_owner_bridge(...)` line
         self.assertEqual(len(hits), 1, hits)
         self.assertTrue(hits[0].lstrip().startswith("def _is_private_owner_bridge"))
+
+
+class DegradedStoreUnreachable(unittest.TestCase):
+    def test_loopback_recovers_remote_fails_closed_on_store_error(self):
+        broken = mock.Mock()
+        broken.owner_claimed.side_effect = RuntimeError("db down")
+        for loopback, expected in ((True, True), (False, False)):
+            req = mock.Mock(remote_addr=("127.0.0.1" if loopback else "203.0.113.7"),
+                            headers={}, cookies={}, args={})
+            with mock.patch.object(W, "accounts", broken), mock.patch.object(W, "request", req):
+                self.assertEqual(W._owner_private_auth_ok(), expected, f"loopback={loopback}")
+
+    def test_midgate_store_failure_also_fails_safe(self):
+        broken = mock.Mock()
+        broken.owner_claimed.return_value = True          # passes the first call
+        broken.get_by_token.side_effect = RuntimeError("db down mid-gate")
+        for loopback, expected in ((True, True), (False, False)):
+            req = mock.Mock(remote_addr=("127.0.0.1" if loopback else "203.0.113.7"),
+                            headers={}, cookies={"maez_token": "t"}, args={})
+            with mock.patch.object(W, "accounts", broken), mock.patch.object(W, "request", req):
+                self.assertEqual(W._owner_private_auth_ok(), expected, f"loopback={loopback}")
