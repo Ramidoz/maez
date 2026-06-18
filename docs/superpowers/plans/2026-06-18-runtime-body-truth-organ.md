@@ -397,7 +397,15 @@ Expected: all green; ruff clean.
 
 - [ ] **Step 2: Write the handoff + commit (docs)**
 
-Cover: branch tip, the Task-0 proof outputs, the diff (organ + 2 endpoints + planner + cockpit), test results, and the **Codex cross-lane anchors**: (1) clean separation — no owner-spine/S7/web-owner import in any ported file; (2) both lying mouths fixed (cockpit `/api/v1/services` + planner `/api/maez-state`); (3) `/api/v1/now`, `capability_registry`, `capability_card`, daemon `/health` embedding all OUT (confirm the diff doesn't touch them); (4) `#3` live — `maez_daemon` reads healthy not false-degraded; (5) `tick()` stays dead. Then the **owner breath**: restart `maez-web` → witness in the browser BOTH surfaces — the cockpit Living Senses shows differentiated organ statuses (`maez_daemon: healthy`, not degraded), and the project planner's State line reads "body <overall>" with no "all services up." `curl /api/v1/services` shows the v0 schema. Not `LIVE_WITNESSED` until the owner confirms both surfaces.
+Cover: branch tip, the Task-0 proof outputs, the diff (organ + 2 endpoints + planner + cockpit), test results, and the **Codex cross-lane anchors**: (1) clean separation — no owner-spine/S7/web-owner import in any ported file; (2) both lying mouths fixed (cockpit `/api/v1/services` + planner `/api/maez-state`); (3) `/api/v1/now`, `capability_registry`, `capability_card`, daemon `/health` embedding all OUT (confirm the diff doesn't touch them); (4) `#3` live — `maez_daemon` reads healthy not false-degraded; (5) `tick()` stays dead.
+
+Then the **gate sequence** — tests + ruff green → Codex cross-lane review → **owner breath** (restart `maez-web`) → **BROWSER VERIFICATION** (owner-driven; this is a *visible*-body organ, so the witness is visual, not just curl). The handoff must list this explicit browser checklist as the `LIVE_WITNESSED` criteria:
+- **Cockpit Living Senses** shows differentiated `healthy`/`degraded`/`asleep`/`unknown` per organ — and specifically `maez_daemon: healthy` (NOT false-degraded; proves #3 live).
+- **Project planner** State line reads "body <overall>" — **no "all services up"** anywhere.
+- **No fake "services active" / "all up"** language remains on any body surface.
+- **Layout still fits** — the cockpit Living Senses pane renders cleanly, no overflow/broken-grid regression from the ServicesPane rewrite.
+
+Also record the CLI corroboration: `curl -s http://127.0.0.1:11437/api/v1/services | python -m json.tool | head` shows `schema_version: maez_runtime_services.v0` with `maez_daemon` healthy. **Not `LIVE_WITNESSED` until the owner confirms all four browser checks on both surfaces.**
 ```bash
 git add docs/handoffs/2026-06-18-runtime-body-truth-organ-handoff.md
 git commit -m "docs(handoff): runtime body truth organ — review gate + owner-breath sequence
