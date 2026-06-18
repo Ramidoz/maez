@@ -2001,44 +2001,24 @@ def api_s7_guarded_card_execute(request_id: str):
     return _s7_cockpit_ceremony_deferred(route)
 
 
+def _runtime_services_state(timeout_s: float = 0.35) -> dict:
+    from core.infra.runtime_services import runtime_services_snapshot_cached
+    return runtime_services_snapshot_cached(timeout_s=timeout_s)
+
+
 @app.route("/api/v1/services")
 def api_services():
-    """systemctl status for maez/llama/ollama units."""
-    import subprocess as _sp
-
-    out = {}
+    """Runtime service readiness from Maez's contract-aware body snapshot."""
     try:
-        r = _sp.run(
-            [
-                "systemctl",
-                "list-units",
-                "--type=service",
-                "--all",
-                "--no-pager",
-                "--no-legend",
-                "maez*",
-                "llama*",
-                "ollama*",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=3.0,
-            check=False,
-            env=sanitize_env(),
-        )
-        for line in (r.stdout or "").splitlines():
-            toks = line.strip().split(None, 4)
-            if len(toks) < 4 or not toks[0].endswith(".service"):
-                continue
-            name = toks[0][: -len(".service")]
-            out[name] = {
-                "status": toks[2],
-                "sub": toks[3] if len(toks) > 3 else "",
-                "desc": toks[4] if len(toks) > 4 else "",
-            }
+        snapshot = _runtime_services_state()
     except Exception as e:
         return jsonify({"error": str(e), "services": {}}), 500
-    return jsonify({"services": out})
+    return jsonify(
+        {
+            "runtime_services": snapshot,
+            "services": snapshot.get("services") or {},
+        }
+    )
 
 
 @app.route("/api/v1/gpu")
