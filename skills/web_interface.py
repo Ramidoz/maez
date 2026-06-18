@@ -6297,7 +6297,7 @@ def chat():
     display = user.get("display_name", "someone")
     uid = user.get("uuid", "")
     user_full = accounts.get_user_record(uid) or {}
-    owner_bridge = _is_private_owner_bridge(user_full)
+    owner_bridge = _is_owner(user_full)
     _subjective_duration = None
     _subjective_duration_owner_auth = None
     if owner_bridge:
@@ -6987,7 +6987,7 @@ def history():
     uid = user.get("uuid", "")
     user_full = accounts.get_user_record(uid) or {}
     tg_id = user_full.get("telegram_id")
-    owner_bridge = _is_private_owner_bridge(user_full)
+    owner_bridge = _is_owner(user_full)
     all_msgs = []
     if owner_bridge:
         all_msgs.extend(_load_private_owner_history())
@@ -9744,27 +9744,35 @@ else:
 # ── /debug cockpit (Slice A) ─────────────────────────────────────────────
 # Read-only owner-scoped surface for debugging Maez internals: daemon
 # cycles, wondering state, approval cards, fabrication signal. All routes
-# below are GET-only and gate on the owner-scoped auth pattern used by
-# other private surfaces in this file: test_t dev bypass OR a valid token
-# whose user is flagged private_owner_bridge=True. API handlers reuse
-# existing helpers (_service_state_cached, _daemon_health) — no new
+# below are GET-only and gate on _debug_auth_ok(), which delegates to the
+# web-native owner-private matrix (_owner_private_auth_ok): unclaimed+loopback
+# is open for local recovery, remote requires the cookie-resolved web_owner
+# identity. No ?test_t=/?web_token= bypass. Activation is owner_claimed() only.
+# API handlers reuse existing helpers (_service_state_cached, _daemon_health) — no new
 # daemon imports. Slice A ships only the route skeleton + services pane;
 # wondering-core and cards/shells/fabrication panes come in slices B + C.
 
 
-def _debug_auth_ok():
-    """Gate for /debug and /api/debug/*. Test_t bypass matches existing
-    private-surface pattern; production requires a real owner-bridge token.
-    Returns True if the caller is authorized."""
-    if request.args.get("test_t", "").strip():
-        return True
-    token = _request_token()
+def _owner_private_auth_ok() -> bool:
+    """Owner-private gate. Activation is owner_claimed() only (no feature flag).
+    unclaimed+loopback -> allow (local recovery); unclaimed+remote -> deny (no owner data);
+    claimed -> require the COOKIE-resolved owner identity (no ?test_t=/?web_token= bypass)."""
+    if not accounts.owner_claimed():
+        return _request_is_loopback()
+    token = (request.cookies.get(AUTH_COOKIE, "") or "").strip()
     if not token:
         return False
     user = accounts.get_by_token(token)
     if not user:
         return False
-    return _is_private_owner_bridge(user)
+    record = accounts.get_user_record(user.get("uuid", "")) or {}
+    return _is_owner(record)
+
+
+def _debug_auth_ok():
+    """Owner-private gate (web-native). Replaces the telegram-derived check and
+    the ?test_t= dev bypass; delegates to the loopback/claimed matrix."""
+    return _owner_private_auth_ok()
 
 
 @app.route("/debug")
