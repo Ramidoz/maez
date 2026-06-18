@@ -124,3 +124,28 @@ never the slow `/health`, so it cannot false-degrade on `/health` latency). **Re
 actual Flask route, 6/6 iterations: `maez_daemon: healthy`, contract ok, 0-3ms.** #3's full-`read()`
 remains in the organ (correct for any `/health` consumer) but the daemon contract no longer depends on
 `/health` at all. 20 tests OK, ruff clean.
+
+## Final live witness (Codex browser pass) — LIVE_WITNESSED 2026-06-18
+
+Merged to `main` at `8c5898c`; owner restarted `maez-web.service`; Codex verified with Firefox
+Playwright against the running cockpit.
+
+Data-layer proof:
+- `/api/v1/services` returned `schema_version=maez_runtime_services.v0`, `overall=healthy`,
+  `maez_daemon=healthy`, `maez_web=healthy`, `primary_brain=healthy`, optional organs `asleep`.
+- `/api/maez-state` carried `runtime_services` with the same `overall=healthy` map.
+
+Visual proof:
+- Cockpit Dashboard Senses card showed `3/3 organs healthy` and "Maez's runtime body is healthy."
+- Cockpit Technical `Living Senses` showed `body healthy · 8 organs · 0 attention`, with
+  `maez_daemon`, `maez_web`, and `primary_brain` healthy; optional organs asleep.
+- Journal/planner showed `STATE BASE ONLY · BODY HEALTHY`.
+- No `services active` or `all services up` strings appeared on the witnessed body surfaces.
+
+Artifacts:
+- `output/playwright/runtime-body-cockpit-technical-live-clean.png`
+- `output/playwright/runtime-body-planner-live-clean.png`
+
+Honest UI note: the Technical view is dense and the `Living Senses` card scrolls/clips lower rows at a
+desktop viewport, but the layout is functional and the status text is truthful. This is a polish item,
+not a witness blocker.
