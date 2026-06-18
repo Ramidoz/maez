@@ -1,6 +1,6 @@
 # Runtime Body Truth (organ) — review-gate handoff
 
-**Date:** 2026-06-18. Branch `runtime-body-truth-organ` (tip `ce70d4b`), worktree-built off `main`.
+**Date:** 2026-06-18. Branch `runtime-body-truth-organ` (last code commit `b4b922a`; this handoff is HEAD), worktree-built off `main`.
 **Status:** built + Claude-lane reviewed (light on Task 0/1, full two-stage on Tasks 2-4) + STOPPED at
 the review gate. **Not merged, not restarted, not `LIVE_WITNESSED`.** Awaiting Codex cross-lane review,
 then the owner's two-surface browser breath.
@@ -28,6 +28,7 @@ project planner render the real statuses; the fake simulator stays dead. Always-
 | `7e1c5cc` | `/api/maez-state` carries `runtime_services`; planner reads `overall` (kills "all services up") |
 | `410c5ee` | cockpit `ServicesPane` renders per-organ statuses (tick stays dead) |
 | `ce70d4b` | cockpit `index.html` Senses card → `runtime_services` (kills "services active" + fixes orphan) |
+| `b4b922a` | **HOLD fix:** realistic daemon `/health` contract timeout (3.0s, no false-degrade) + runnable probe |
 
 10 files, +993/-65. Scope sweep: **no owner-spine/S7 import anywhere; `/api/v1/now`,
 `capability_registry`, `capability_card`, daemon `/health` all untouched.**
@@ -85,3 +86,25 @@ Tests + ruff green → Codex cross-lane PASS → **owner restarts `maez-web`** �
 CLI corroboration: `curl -s http://127.0.0.1:11437/api/v1/services | python -m json.tool | head` shows
 `schema_version: maez_runtime_services.v0` with `maez_daemon` healthy. **Not `LIVE_WITNESSED` until the
 owner confirms all four browser checks on both surfaces.**
+
+## Cross-lane review (Codex) — HOLD resolved
+
+Codex returned **HOLD** on one must-fix + two should-fix; all resolved:
+- **MF1 (the witness-blocker):** the daemon `/health` contract was given the snapshot's 0.35s general
+  budget, but `/health` takes ~1.7s → it timed out → `maez_daemon` false-degraded **even after #3's
+  full-body read** (the timeout was a second cause #3 had masked). Fixed @`b4b922a`: a dedicated
+  `_DAEMON_HEALTH_TIMEOUT_S = 3.0` for the daemon contract only (other probes keep the fast 0.35s);
+  RED-proven regression test in `test_runtime_services.py`. **Re-verified live (test-client):
+  `maez_daemon: healthy`, contract ok, latency ~1.1s.**
+- **SF2:** the probe script now has a `sys.path` bootstrap — runs as both `python
+  scripts/maez_runtime_services_probe.py` and `python -m scripts.maez_runtime_services_probe`.
+- **SF3:** this handoff's branch-tip reference corrected.
+
+**Witness note for the owner (standalone vs live):** a standalone test-client snapshot shows
+`primary_brain` (and therefore `overall`) degraded — but that is a **context artifact**, not a slice
+bug: `served_model_alias` short-circuits to "unknown" when `active_backend()` isn't resolved (the
+standalone python lacks the live process's `MAEZ_LLM_BACKEND` env). In the **live maez-web process**
+(after your restart) it probes llama-server `/props` and reads the real alias — `primary_brain` reads
+healthy, exactly as it did in the organism witness. So at the browser witness: **`maez_daemon: healthy`
+is the load-bearing check** (the false-degrade this organ + #3 exist to kill); the `overall` will
+reflect honest real service states (a genuinely-asleep service correctly shows `asleep`).
