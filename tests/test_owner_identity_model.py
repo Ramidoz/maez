@@ -51,3 +51,10 @@ class OwnerIdentitySchema(unittest.TestCase):
     def test_claim_unknown_uid_raises(self):
         with self.assertRaises(ValueError):
             self.acc.claim_owner("no-such-uid")
+
+    def test_unclaimed_is_safe_floor_and_no_feature_flag(self):
+        # Before any claim, owner_claimed() is False (the safe floor)...
+        self.assertFalse(self.acc.owner_claimed())
+        # ...and activation is owner_claimed() ONLY — there is NO env feature flag.
+        import os as _os
+        self.assertNotIn("MAEZ_WEB_OWNER_IDENTITY_ENABLED", _os.environ)

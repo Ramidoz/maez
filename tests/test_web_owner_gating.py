@@ -100,3 +100,15 @@ class DegradedStoreUnreachable(unittest.TestCase):
                             headers={}, cookies={"maez_token": "t"}, args={})
             with mock.patch.object(W, "accounts", broken), mock.patch.object(W, "request", req):
                 self.assertEqual(W._owner_private_auth_ok(), expected, f"loopback={loopback}")
+
+
+class NeverLockout(unittest.TestCase):
+    def test_remote_stays_locked_out_but_local_recovery_path_exists(self):
+        # Owner claimed but the cookie/account can't resolve -> remote denied...
+        acc = mock.Mock(owner_claimed=lambda: True, get_by_token=lambda t: None)
+        req_remote = mock.Mock(remote_addr="203.0.113.7", headers={}, cookies={}, args={})
+        with mock.patch.object(W, "accounts", acc), mock.patch.object(W, "request", req_remote):
+            self.assertFalse(W._owner_private_auth_ok())
+        # ...and the LOCAL recovery mechanism (the CLI rebind path) structurally exists.
+        cli = __import__("scripts.maez_cli", fromlist=["cmd_own_claim"])
+        self.assertTrue(hasattr(cli, "cmd_own_claim"))
