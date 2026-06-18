@@ -35,6 +35,7 @@ SECRET_NAMES: frozenset[str] = frozenset(
         "OLLAMA_API_KEY",
         "OPENAI_API_KEY",
         "OPENROUTER_API_KEY",
+        "S7_INTERNAL_CHANNEL_TOKEN",
         "TELEGRAM_WEBHOOK_SECRET",
         "XAI_API_KEY",
     }

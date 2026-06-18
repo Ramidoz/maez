@@ -309,7 +309,14 @@ def _s7_internal_channel_trusted(req) -> bool:
     """Return true only for the reviewed cockpit-to-daemon private channel."""
     token = os.environ.get(S7_INTERNAL_CHANNEL_TOKEN_ENV, "")
     presented = req.headers.get(S7_INTERNAL_CHANNEL_HEADER, "")
-    if not token or not presented:
+    if not token:
+        if presented:
+            logger.warning(
+                "S7 internal channel token absent from os.environ "
+                "(purged or unprovisioned); rejecting internal channel request"
+            )
+        return False
+    if not presented:
         return False
     if req.headers.get("Origin"):
         return False

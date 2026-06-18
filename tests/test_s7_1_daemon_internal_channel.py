@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+from daemon import maez_daemon as D
 from daemon.maez_daemon import MaezDaemon
 
 NOW = "2026-05-18T11:00:00+00:00"
@@ -48,6 +49,21 @@ class _RouteAuthenticationVerifier:
             "user_presence": True,
             "user_verification": True,
         }
+
+
+class S7InternalChannelRuntimeToken(unittest.TestCase):
+    def test_presented_internal_channel_logs_when_runtime_token_absent(self):
+        req = SimpleNamespace(
+            headers={
+                D.S7_INTERNAL_CHANNEL_HEADER: "presented-token",
+            }
+        )
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertLogs("maez", level="WARNING") as logs:
+                self.assertFalse(D._s7_internal_channel_trusted(req))
+
+        rendered = "\n".join(logs.output)
+        self.assertIn("S7 internal channel token absent from os.environ", rendered)
 
 
 class _FixedDateTime:

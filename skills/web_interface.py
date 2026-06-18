@@ -36,7 +36,7 @@ from core.infra.secrets import (
 load_ordinary_config_for_process()
 load_secrets_for_process(
     required={"MAEZ_IPHONE_INGEST_TOKEN"},
-    optional={"LANGFUSE_SECRET_KEY", "MAEZ_GITHUB_TOKEN"},
+    optional={"LANGFUSE_SECRET_KEY", "MAEZ_GITHUB_TOKEN", "S7_INTERNAL_CHANNEL_TOKEN"},
     populate_environ=True,
 )
 

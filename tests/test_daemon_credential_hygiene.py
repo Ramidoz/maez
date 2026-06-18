@@ -149,6 +149,31 @@ class TestSecretLoader(unittest.TestCase):
         self.assertEqual(report.missing_required_count, 0)
         self.assertEqual(report.missing_optional_count, 1)
 
+    def test_s7_internal_channel_token_is_managed_secret_from_local_fallback(self):
+        from core.infra.secrets import SECRET_NAMES, is_secret_name, load_secrets_for_process
+
+        self.assertTrue(is_secret_name("S7_INTERNAL_CHANNEL_TOKEN"))
+        self.assertIn("S7_INTERNAL_CHANNEL_TOKEN", SECRET_NAMES)
+        self.fallback.write_text(
+            "S7_INTERNAL_CHANNEL_TOKEN=managed-s7-token\n",
+            encoding="utf-8",
+        )
+
+        with patch.dict(
+            os.environ,
+            {"S7_INTERNAL_CHANNEL_TOKEN": "launch-env-token-must-not-survive"},
+            clear=True,
+        ):
+            report = load_secrets_for_process(
+                required=set(),
+                optional=set(SECRET_NAMES),
+                fallback_file=self.fallback,
+                populate_environ=True,
+            )
+            self.assertEqual(os.environ.get("S7_INTERNAL_CHANNEL_TOKEN"), "managed-s7-token")
+
+        self.assertEqual(report.get_secret("S7_INTERNAL_CHANNEL_TOKEN"), "managed-s7-token")
+
     def test_normal_loader_purges_inherited_legacy_secret_env(self):
         from core.infra.secrets import load_secrets_for_process
 
@@ -317,6 +342,25 @@ class TestRepoPosture(unittest.TestCase):
     def test_web_interface_requires_iphone_ingest_token_at_startup(self):
         text = Path("skills/web_interface.py").read_text(encoding="utf-8")
         self.assertIn('required={"MAEZ_IPHONE_INGEST_TOKEN"}', text)
+
+    def test_web_interface_loads_s7_internal_channel_token_as_optional_secret(self):
+        tree = ast.parse(Path("skills/web_interface.py").read_text(encoding="utf-8"))
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "load_secrets_for_process"
+        ]
+        self.assertEqual(len(calls), 1)
+        optional_kw = next(kw for kw in calls[0].keywords if kw.arg == "optional")
+        self.assertIsInstance(optional_kw.value, ast.Set)
+        optional_names = {
+            elt.value
+            for elt in optional_kw.value.elts
+            if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+        }
+        self.assertIn("S7_INTERNAL_CHANNEL_TOKEN", optional_names)
 
     def test_github_publish_does_not_place_token_in_remote_url(self):
         text = Path("skills/github_publish.py").read_text(encoding="utf-8")
