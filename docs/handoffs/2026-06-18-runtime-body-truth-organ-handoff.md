@@ -18,7 +18,7 @@ Ports ONLY the read-only `runtime_services` snapshot organ (incl fix #3) + its d
 project planner render the real statuses; the fake simulator stays dead. Always-on, no feature flag
 (read-only perception). No owner-spine/S7/web-owner/capability-card/daemon-`/health` code came along.
 
-## Commit chain (6)
+## Commit chain (7)
 
 | SHA | What |
 |---|---|
@@ -56,7 +56,7 @@ body surfaces.
 ## Tests
 
 `/home/rohit/maez/.venv/bin/python -B -m unittest tests.test_runtime_services
-tests.test_runtime_body_truth_surfaces` → **19 OK** (14 organ + 5 surfaces). Ruff clean on all touched
+tests.test_runtime_body_truth_surfaces` → **20 OK** (15 organ + 5 surfaces). Ruff clean on all touched
 python. Surface tests use portable `Path(__file__).resolve().parents[1]` paths (fixed in review — they
 must pass from the main checkout after merge).
 
