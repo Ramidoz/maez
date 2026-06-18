@@ -218,6 +218,11 @@ class UserAccounts:
             conn.commit()
         logger.info("Private owner bridge linked for %s", uid)
 
+    _CLEAR_OWNER_SQL = (
+        "UPDATE users SET web_owner=0, relationship=NULL, trust_tier=0, "
+        "provenance=NULL, consent=NULL, access_scope=NULL WHERE web_owner=1"
+    )
+
     def owner_claimed(self) -> bool:
         with self._conn() as conn:
             return conn.execute("SELECT 1 FROM users WHERE web_owner=1 LIMIT 1").fetchone() is not None
@@ -251,7 +256,7 @@ class UserAccounts:
         if not self.get_user_record(uid):
             raise ValueError(f"no such account: {uid}")
         with self._conn() as conn:
-            conn.execute("UPDATE users SET web_owner=0 WHERE web_owner=1")
+            conn.execute(self._CLEAR_OWNER_SQL)
             conn.execute(
                 "UPDATE users SET web_owner=1, relationship='owner', trust_tier=3, "
                 "provenance='local-owner-claim', consent=?, access_scope='owner-private' WHERE uuid=?",
@@ -262,7 +267,7 @@ class UserAccounts:
 
     def reset_owner(self) -> int:
         with self._conn() as conn:
-            cur = conn.execute("UPDATE users SET web_owner=0 WHERE web_owner=1")
+            cur = conn.execute(self._CLEAR_OWNER_SQL)
             conn.commit()
             return cur.rowcount
 

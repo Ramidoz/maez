@@ -58,3 +58,31 @@ class OwnerIdentitySchema(unittest.TestCase):
         # ...and activation is owner_claimed() ONLY — there is NO env feature flag.
         import os as _os
         self.assertNotIn("MAEZ_WEB_OWNER_IDENTITY_ENABLED", _os.environ)
+
+    def test_rebind_clears_stale_owner_metadata_on_old_owner(self):
+        self.acc.register("alex", "pw")
+        uid2 = self.acc.get_by_username("alex")["uuid"]
+        self.acc.claim_owner(self.uid)
+        self.acc.rebind_owner(uid2)
+        old = self.acc.get_user_record(self.uid)   # the demoted ex-owner
+        self.assertEqual(old["web_owner"], 0)
+        self.assertIsNone(old["relationship"])
+        self.assertEqual(old["trust_tier"], 0)
+        self.assertIsNone(old["provenance"])
+        self.assertIsNone(old["consent"])
+        self.assertIsNone(old["access_scope"])
+        new = self.acc.get_user_record(uid2)        # new owner keeps the metadata
+        self.assertEqual(new["web_owner"], 1)
+        self.assertEqual(new["relationship"], "owner")
+        self.assertEqual(new["trust_tier"], 3)
+
+    def test_reset_clears_stale_owner_metadata(self):
+        self.acc.claim_owner(self.uid)
+        self.acc.reset_owner()
+        rec = self.acc.get_user_record(self.uid)
+        self.assertEqual(rec["web_owner"], 0)
+        self.assertIsNone(rec["relationship"])
+        self.assertEqual(rec["trust_tier"], 0)
+        self.assertIsNone(rec["provenance"])
+        self.assertIsNone(rec["consent"])
+        self.assertIsNone(rec["access_scope"])
