@@ -15,11 +15,6 @@ from core.routing.llm_client import served_model_alias
 
 SCHEMA_VERSION = "maez_runtime_services.v0"
 
-# The daemon /health endpoint is deliberately slow (~1.7s: it gathers body/brain/perimeter
-# state). Give its HTTP contract a realistic budget so a healthy daemon is not false-degraded
-# by the snapshot's small general probe timeout. (Cached 15s, so the cost is amortized.)
-_DAEMON_HEALTH_TIMEOUT_S = 3.0
-
 _CACHE: dict[str, Any] | None = None
 _CACHE_TS = 0.0
 _CACHE_TTL_S = 15.0
@@ -294,9 +289,10 @@ def runtime_services_snapshot(
             _generic_json_contract(
                 "daemon_health",
                 method="GET",
-                url="http://127.0.0.1:11435/health",
+                # /operator/health is a fast liveness payload (~5ms); /health runs perception_snapshot() (nvidia-smi, 1-3s+) and would false-degrade a healthy-but-slow daemon.
+                url="http://127.0.0.1:11435/operator/health",
                 http_json=http_json,
-                timeout_s=max(timeout_s, _DAEMON_HEALTH_TIMEOUT_S),
+                timeout_s=timeout_s,
             )
             if probe_daemon_http_contract
             else {

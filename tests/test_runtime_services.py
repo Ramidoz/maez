@@ -286,27 +286,28 @@ class RuntimeServiceSnapshotTests(unittest.TestCase):
         self.assertEqual(missing["load_state"], "unknown")
         self.assertEqual(missing["active_state"], "unknown")
 
-    def test_daemon_health_contract_gets_realistic_timeout_not_general_default(self):
+    def test_daemon_contract_uses_fast_operator_health_not_slow_health(self):
         from core.infra import runtime_services as rs
 
-        seen_timeouts = {}
+        seen_urls = []
 
         def recording_http_json(method, url, payload=None, timeout_s=0.35):
-            seen_timeouts[url] = timeout_s
-            # simulate the slow /health: only OK if given a realistic budget (>=1s)
-            ok = ("11435/health" not in url) or (timeout_s >= 1.0)
-            return {"ok": ok, "json": {"status": "healthy"}, "latency_ms": 10}
+            seen_urls.append(url)
+            # model reality: the slow /health would hang/fail; /operator/health is fast & ok
+            if url.rstrip("/").endswith("11435/health"):
+                return {"ok": False, "json": {}, "latency_ms": 4000}   # slow /health -> would-be timeout
+            return {"ok": True, "json": {"status": "ok"}, "latency_ms": 5}
 
         fakes = self._healthy_fakes()
         fakes["http_json"] = recording_http_json
         with mock.patch.dict("os.environ", {}, clear=True):
             snap = rs.runtime_services_snapshot(timeout_s=0.35, **fakes)
-
-        daemon_url = "http://127.0.0.1:11435/health"
-        # the daemon contract was probed with a realistic budget, NOT the 0.35 general default
-        self.assertGreaterEqual(seen_timeouts.get(daemon_url, 0.0), 1.0)
-        # and so the healthy daemon is NOT false-degraded by the small default
-        self.assertNotEqual(snap["services"]["maez_daemon"]["status"], "degraded")
+        # the daemon contract probes the FAST operator endpoint...
+        self.assertTrue(any("/operator/health" in u for u in seen_urls), seen_urls)
+        # ...and NEVER the slow /health (so it cannot false-degrade on /health latency)
+        self.assertFalse(any(u.rstrip("/").endswith("11435/health") for u in seen_urls), seen_urls)
+        # ...so a healthy daemon reads healthy even though the modeled /health is slow/failing
+        self.assertEqual(snap["services"]["maez_daemon"]["status"], "healthy")
 
     def test_probe_main_exits_two_on_degraded_required_service(self):
         from scripts import maez_runtime_services_probe as probe
