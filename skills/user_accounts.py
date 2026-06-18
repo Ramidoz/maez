@@ -107,6 +107,10 @@ class UserAccounts:
             'share_config': "TEXT DEFAULT '{}'",
             'telegram_profile_id': 'TEXT',
             'notes': 'TEXT',
+            'web_owner': 'INTEGER DEFAULT 0',
+            'provenance': 'TEXT',
+            'consent': 'TEXT',
+            'access_scope': 'TEXT',
         }
         with self._conn() as conn:
             existing = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
@@ -244,7 +248,8 @@ class UserAccounts:
         with self._conn() as conn:
             row = conn.execute(
                 "SELECT uuid, username, display_name, trust_tier, relationship, "
-                "rohit_confirmed, share_config, telegram_id, telegram_profile_id "
+                "rohit_confirmed, share_config, telegram_id, telegram_profile_id, "
+                "web_owner, provenance, consent, access_scope "
                 "FROM users WHERE uuid=?",
                 (uid,),
             ).fetchone()
@@ -272,6 +277,10 @@ class UserAccounts:
             "telegram_id": row[7],
             "telegram_profile_id": row[8],
             "private_owner_bridge": private_owner_bridge,
+            "web_owner": int(row[9] or 0),
+            "provenance": row[10],
+            "consent": row[11],
+            "access_scope": row[12],
         }
 
     def has_private_owner_bridge(self, uid: str) -> bool:
