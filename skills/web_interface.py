@@ -7183,6 +7183,15 @@ def api_maez_state():
     daemon_health.pop("clinical_boundary", None)
     daemon_health.pop("voice_continuity", None)
     daemon_health.pop("successor_governance", None)
+    try:
+        runtime_services = _runtime_services_state(timeout_s=0.35)
+    except Exception as e:
+        runtime_services = {
+            "schema_version": "maez_runtime_services.v0",
+            "overall": "unknown",
+            "services": {},
+            "error": str(e)[:160],
+        }
     return jsonify(
         {
             "daemon": daemon_health,
@@ -7194,6 +7203,7 @@ def api_maez_state():
             },
             "model": _model_state(),
             "services": _journal_services_state(),
+            "runtime_services": runtime_services,
             "soul": _soul_state(),
             "thunder": _thunder_state(),
             "users_registered": accounts.count(),

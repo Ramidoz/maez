@@ -2012,9 +2012,7 @@
       if (heroMeta) {
         const dae = state.daemon || {};
         const m = state.model || {};
-        const services = state.services || {};
-        const allUp = ['maez', 'maez_web', 'llama_server', 'llama_server_vision']
-          .every((k) => services[k] === 'active');
+        const overall = (state.runtime_services && state.runtime_services.overall) || 'unknown';
         const cyc = (dae.cycle_count != null) ? Number(dae.cycle_count).toLocaleString() : null;
         const cog = (dae.cognition_score != null) ? dae.cognition_score : null;
         const adapter = m.merged_adapter ? 'merged adapter · live' : 'base only';
@@ -2027,7 +2025,7 @@
         heroMeta.innerHTML =
           '<div><span class="k">Entry</span> <span class="v">' + escHtml(entryLabel) + '</span></div>' +
           '<div><span class="k">Brain</span> <span class="v">' + escHtml(m.base || 'gemma-4-26B-A4B') + '</span></div>' +
-          '<div><span class="k">State</span> <span class="v ember">' + escHtml(adapter) + (allUp ? ' · all services up' : ' · degraded') + '</span></div>' +
+          '<div><span class="k">State</span> <span class="v ember">' + escHtml(adapter) + ' · body ' + escHtml(overall) + '</span></div>' +
           '<div><span class="k">' + (cyc ? 'Cycles' : 'Daemon') + '</span> <span class="v">' + (cyc ? cyc : (dae.status || 'unknown')) + (cog != null ? ' · cog ' + escHtml(cog) : '') + '</span></div>';
       }
     }
