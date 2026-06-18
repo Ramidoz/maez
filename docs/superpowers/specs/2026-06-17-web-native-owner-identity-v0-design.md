@@ -67,7 +67,9 @@ invoked as a `maez` subcommand) that:
   moves owner to a new account. `maez own-claim --reset` (same guard) clears owner → returns to the
   unclaimed state.
 - **Audited:** every claim/rebind/reset writes an audit record (timestamp, euid, account uuid, action)
-  to the existing audit trail.
+  to the **owner-identity audit sink**. The sink is *named, not assumed*: **Task 0** of the plan
+  either proves a suitable existing append-only sink or defines a small append-only
+  `owner_identity_audit` (sqlite table or jsonl). It is not left as "existing audit trail" prose.
 
 ### 2. Data model — complete the existing scaffold (no parallel system)
 
@@ -98,6 +100,11 @@ Replace `_is_private_owner_bridge` usage at the web edge with:
   never upgrade a request to "local"). If a reverse proxy is ever introduced, a request is treated as
   **remote unless proven loopback** (fail-safe).
 
+**Activation — no feature flag.** v0 has **no** `MAEZ_WEB_OWNER_IDENTITY_ENABLED` or any rollout flag.
+`owner_claimed()` is the *only* activation state; gating is purely a function of claim-state ×
+request-locality. The unclaimed state is itself the safe floor — adding a flag would create a second,
+contradictory off-state, which at an auth boundary is how lockout bugs are born.
+
 **Owner-private route decision (the core rule):**
 
 | state | loopback (physical body) | remote (network) |
@@ -124,8 +131,9 @@ floor that makes removing the bypass safe (you can't copy a URL into being the o
 be locked out at the machine).
 
 **Scope discipline (the NO-GO lesson — load-bearing):** v0 does **not** mass-gate `/api/v1/*`. It
-gates only an **explicitly enumerated** set of genuinely owner-private routes (the spec's plan lists
-them), and **each enumerated route is proven owner-reachable** (owner allowed, non-owner denied,
+gates only an **explicitly enumerated** set of genuinely owner-private routes — the list is
+**produced by Task 0 of the plan before any gating code is written** — and **each enumerated route is
+proven owner-reachable** (owner allowed, non-owner denied,
 unclaimed-loopback reachable) before merge. General localhost cockpit data that is reachable today
 stays reachable; we do not tighten everything at once.
 
@@ -170,15 +178,18 @@ channel is a different concern and is **not** part of v0.)
   → deny; remote is never upgraded to local via `X-Forwarded-For`.
 - **Structural never-lockout:** owner proof present but store unreachable → loopback retains recovery,
   remote fails closed (no owner data); after a simulated lockout, a local rebind restores access.
-- **Migration safety:** the additive columns leave existing rows valid; flag/feature off or unclaimed
-  → today's behavior preserved (no new lockout).
+- **Migration safety / activation:** the additive columns leave existing rows valid. Before any owner
+  is claimed, **non-enumerated** routes preserve today's behavior; **enumerated** owner-private routes
+  follow the loopback/remote unclaimed matrix. There is **no separate feature flag** in v0;
+  `owner_claimed()` is the only activation state (no new lockout).
 - **Live witness before merge (non-negotiable, the scar):** claim locally → owner-private works in the
   browser → unclaimed fallback verified → rebind recovery verified. **Not `LIVE_WITNESSED` until Rohit
   confirms in the browser.** Cross-lane reviewed (this is the auth boundary).
 
 ## Scope
 
-- **IN:** the `maez own-claim` CLI (claim/rebind/reset, TTY+uid, audited, confirm); the additive
+- **IN:** the `maez own-claim` CLI (claim/rebind/reset, TTY+uid, audited, confirm); the named
+  owner-identity audit sink (proven-or-defined in Task 0); the additive
   `web_owner`/`provenance`/`consent`/`access_scope` schema seams; `_is_owner` + `owner_claimed()` +
   `_request_is_loopback()`; the owner-private gating decision with the loopback/remote matrix; the
   enumerated owner-private route list each proven owner-reachable; honest degraded states; tests +
