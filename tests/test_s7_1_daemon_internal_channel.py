@@ -97,7 +97,15 @@ class _CountingActionEngine:
         return SimpleNamespace(success=True, output="executed", error="")
 
 
-class S71DaemonInternalChannelTests(unittest.TestCase):
+class _DaemonAppClientMixin:
+    """Captured-app test-client helper shared by daemon-route test cases.
+
+    Provides only the ``_run_health_server`` capture machinery (and its
+    ``_FakeServer``/``_StopServer`` deps) so a TestCase can drive the daemon's
+    Flask app under a Werkzeug test client — without inheriting any sibling's
+    test methods.
+    """
+
     def _client(self, configure_daemon=None):
         daemon = MaezDaemon.__new__(MaezDaemon)
         daemon._health_server = None
@@ -126,6 +134,8 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
                 daemon._run_health_server()
         return captured["app"].test_client()
 
+
+class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
     def _destructive_envelope(self, request_id: str):
         from core.governance import operator_user_boundary as s7
 
@@ -2641,3 +2651,41 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.get_json()["error"], "s7_internal_channel_untrusted")
+
+
+class CockpitStateS7Gate(_DaemonAppClientMixin, unittest.TestCase):
+    """The fast real-state nerve /internal/cockpit/state must require the S7
+    internal channel — close the open nerve that caused the organism NO-GO."""
+
+    def test_valid_s7_header_returns_200(self):
+        env = {"S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret"}
+        with patch.dict(os.environ, env, clear=False):
+            response = self._client().get(
+                "/internal/cockpit/state",
+                headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+            )
+
+        # _build_cockpit_state tolerates missing attrs (nulls, no crash).
+        self.assertEqual(response.status_code, 200)
+
+    def test_headerless_returns_403(self):
+        env = {"S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret"}
+        with patch.dict(os.environ, env, clear=False):
+            response = self._client().get("/internal/cockpit/state")
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.get_json().get("error"), "s7_internal_channel_untrusted")
+
+    def test_valid_header_plus_origin_still_403(self):
+        env = {"S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret"}
+        with patch.dict(os.environ, env, clear=False):
+            response = self._client().get(
+                "/internal/cockpit/state",
+                headers={
+                    "X-Maez-S7-Internal-Channel": "test-channel-secret",
+                    "Origin": "http://127.0.0.1:11437",
+                },
+            )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.get_json().get("error"), "s7_internal_channel_untrusted")
