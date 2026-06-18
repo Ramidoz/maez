@@ -19,3 +19,35 @@ class OwnerIdentitySchema(unittest.TestCase):
     def test_existing_rows_stay_valid(self):
         acc2 = UserAccounts(db_path=self.db)  # re-runs _migrate
         self.assertIsNotNone(acc2.get_by_username("rohit"))
+
+    def test_claim_is_idempotent_and_sets_owner_fields(self):
+        self.assertFalse(self.acc.owner_claimed())
+        self.assertEqual(self.acc.claim_owner(self.uid), "claimed")
+        self.assertTrue(self.acc.owner_claimed())
+        rec = self.acc.get_user_record(self.uid)
+        self.assertEqual(rec["web_owner"], 1)
+        self.assertEqual(rec["relationship"], "owner")
+        self.assertEqual(rec["trust_tier"], 3)
+        self.assertEqual(rec["provenance"], "local-owner-claim")
+        self.assertEqual(self.acc.claim_owner(self.uid), "noop")
+
+    def test_claim_refuses_when_other_owner_exists(self):
+        self.acc.register("alex", "pw")
+        uid2 = self.acc.get_by_username("alex")["uuid"]
+        self.acc.claim_owner(self.uid)
+        with self.assertRaises(ValueError):
+            self.acc.claim_owner(uid2)
+
+    def test_rebind_moves_owner_and_reset_clears(self):
+        self.acc.register("alex", "pw")
+        uid2 = self.acc.get_by_username("alex")["uuid"]
+        self.acc.claim_owner(self.uid)
+        self.assertEqual(self.acc.rebind_owner(uid2), "rebound")
+        self.assertEqual(self.acc.get_owner()["uuid"], uid2)
+        self.assertEqual(self.acc.get_user_record(self.uid)["web_owner"], 0)
+        self.assertEqual(self.acc.reset_owner(), 1)
+        self.assertFalse(self.acc.owner_claimed())
+
+    def test_claim_unknown_uid_raises(self):
+        with self.assertRaises(ValueError):
+            self.acc.claim_owner("no-such-uid")

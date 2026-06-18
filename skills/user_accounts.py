@@ -218,6 +218,54 @@ class UserAccounts:
             conn.commit()
         logger.info("Private owner bridge linked for %s", uid)
 
+    def owner_claimed(self) -> bool:
+        with self._conn() as conn:
+            return conn.execute("SELECT 1 FROM users WHERE web_owner=1 LIMIT 1").fetchone() is not None
+
+    def get_owner(self) -> Optional[dict]:
+        with self._conn() as conn:
+            row = conn.execute("SELECT uuid, username FROM users WHERE web_owner=1 LIMIT 1").fetchone()
+        return {"uuid": row[0], "username": row[1]} if row else None
+
+    def _owner_consent_stamp(self) -> str:
+        return json.dumps({"kind": "owner-self-consent", "at": time.time()})
+
+    def claim_owner(self, uid: str, *, provenance: str = "local-owner-claim") -> str:
+        if not self.get_user_record(uid):
+            raise ValueError(f"no such account: {uid}")
+        existing = self.get_owner()
+        if existing and existing["uuid"] == uid:
+            return "noop"
+        if existing and existing["uuid"] != uid:
+            raise ValueError(f"owner already claimed by {existing['username']}; use rebind")
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE users SET web_owner=1, relationship='owner', trust_tier=3, "
+                "provenance=?, consent=?, access_scope='owner-private' WHERE uuid=?",
+                (provenance, self._owner_consent_stamp(), uid),
+            )
+            conn.commit()
+        return "claimed"
+
+    def rebind_owner(self, uid: str) -> str:
+        if not self.get_user_record(uid):
+            raise ValueError(f"no such account: {uid}")
+        with self._conn() as conn:
+            conn.execute("UPDATE users SET web_owner=0 WHERE web_owner=1")
+            conn.execute(
+                "UPDATE users SET web_owner=1, relationship='owner', trust_tier=3, "
+                "provenance='local-owner-claim', consent=?, access_scope='owner-private' WHERE uuid=?",
+                (self._owner_consent_stamp(), uid),
+            )
+            conn.commit()
+        return "rebound"
+
+    def reset_owner(self) -> int:
+        with self._conn() as conn:
+            cur = conn.execute("UPDATE users SET web_owner=0 WHERE web_owner=1")
+            conn.commit()
+            return cur.rowcount
+
     def update_last_seen(self, uid: str):
         with self._conn() as conn:
             conn.execute("UPDATE users SET last_seen=? WHERE uuid=?", (time.time(), uid))
