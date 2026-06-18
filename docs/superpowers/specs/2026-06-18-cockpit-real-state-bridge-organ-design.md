@@ -23,9 +23,11 @@ A builder must MODIFY the existing functions, never duplicate them:
 
 **What's missing is exactly the hardening:** the daemon `/internal/cockpit/state` is **open** (no S7
 gate, `maez_daemon.py:10303`); the web `/api/v1/daemon/state` has **no owner gate** and the proxy sends
-**no S7 header** (`web_interface.py:1537`). On current `main`, the daemon's live in-memory state (mood,
-cognition, scratchpad, valence) is readable on the local machine without any auth. This organ closes
-both gaps.
+**no S7 header** (`web_interface.py:1537`). On current `main`, the daemon's live in-memory state —
+`cycle_count`, `last_thought`, `cognition`, `valence`, `reasoning_loop`, the health rails, the env
+flags, and `sampled_at` (`_build_cockpit_state` deliberately **omits** mood/uncertainty and does **not**
+expose a scratchpad; the scratchpad is only in the legacy *log-scrape* shape) — is readable on the local
+machine without any auth. This organ closes both gaps.
 
 ## What is already on main (so the organ composes)
 
@@ -55,6 +57,7 @@ is its only consumer, so this breaks nothing.)
   reason on failure — **no scrape fallback, no fabricated state**:
 ```python
 def _daemon_cockpit_state_proxy(timeout=1.5):
+    import urllib.error as _urlerr   # web_interface.py only imports urllib.request at top — match the file's local-import style
     try:
         headers = _s7_internal_channel_headers()           # raises if token absent
     except RuntimeError:
@@ -63,7 +66,7 @@ def _daemon_cockpit_state_proxy(timeout=1.5):
         req = urllib.request.Request(DAEMON_COCKPIT_STATE_URL, headers=headers, method="GET")
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
+    except _urlerr.HTTPError as e:
         reason = "s7_internal_channel_untrusted" if e.code == 403 else "daemon_error"
         return {"status": "unreachable", "reason": reason}
     except Exception:
@@ -110,10 +113,11 @@ read is **owner-private** and **read-only**. Token provisioning is the owner's b
 ## Task 0 — proof gate (refinement 5 + Organ-1 lessons)
 
 Docs/proof only, committed first. If any proof refutes the design, STOP and patch.
-- **Consumer inventory (load-bearing):** prove the web `_daemon_cockpit_state_proxy` is the **ONLY**
-  consumer of the daemon `/internal/cockpit/state` (grep all `internal/cockpit/state` / `DAEMON_COCKPIT_STATE_URL`
-  references across daemon+web+cockpit+tests). If anything else reads it ungated, always-on S7 gating
-  would break it — STOP for a scope decision.
+- **Consumer inventory (load-bearing):** prove the web `_daemon_cockpit_state_proxy` is the **only
+  PRODUCTION consumer** of the daemon `/internal/cockpit/state` (grep all `internal/cockpit/state` /
+  `DAEMON_COCKPIT_STATE_URL` references across daemon+web+cockpit+tests, and **classify** each as
+  production vs test — test references to the route are expected and do NOT refute the design). If any
+  non-test code reads it ungated, always-on S7 gating would break it — STOP for a scope decision.
 - **Clean separation:** the daemon handler + the web proxy import/call NO web-owner-spine
   (`_proxy_web_owner_message_to_daemon`, `handle_message` spine) or voice-spine code. Grep to prove.
 - **Import resolution:** `_owner_private_auth_ok`, `_s7_internal_channel_trusted`, `strict_env_flag`,
@@ -127,7 +131,14 @@ Docs/proof only, committed first. If any proof refutes the design, STOP and patc
   inject an owner session) — they must NOT depend on the live `users.db`. The quarry's
   `tests/test_cockpit_real_state_bridge.py` currently calls `/api/v1/daemon/state` without owner-gate
   setup; the ported tests add a hermetic `_owner_session()` (patch the gate True/False).
-- Daemon `/internal/cockpit/state`: with a valid S7 header → 200 + state; headerless / wrong token → 403.
+- Daemon `/internal/cockpit/state`: valid S7 header → 200 + state; headerless / wrong token → 403.
+- **Origin-spoof rejection (pin it on this endpoint):** valid S7 header **plus** an `Origin` header →
+  still **403**. `_s7_internal_channel_trusted` already has the no-Origin guard, but this is the new open
+  nerve being closed, so the test pins browser-origin spoofing failing directly on this route.
+- **The web proxy actually SENDS the S7 token (not just returns a payload):** patch `urllib.request.urlopen`
+  to **capture the outgoing `Request`** and assert `req.get_header("X-maez-s7-internal-channel")` (urllib
+  title-cases header keys) equals the managed token — a mock that only returns a payload would pass even
+  if the header were never sent, so the test must inspect the request, not just the response.
 - Web `/api/v1/daemon/state`: non-owner → 401; owner + flag-off → log-scrape shape; owner + flag-on +
   token → real proxy; owner + flag-on + **no token → `{"status":"unreachable","reason":
   "s7_internal_channel_untrusted"}`** (no scrape fallback); daemon-down → `unreachable` (reason
