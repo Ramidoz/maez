@@ -52,3 +52,10 @@ class CockpitReadsRuntimeServices(unittest.TestCase):
         self.assertIn("runtimeServices", tui)          # ServicesPane renders the real snapshot
         self.assertIn("healthy", tui)                  # the new status vocab is handled
         self.assertNotIn("\n  setInterval(tick", sim)  # the fake simulator stays dead (uncommented call absent)
+
+    def test_index_html_senses_reads_runtimeServices_no_services_active(self):
+        import pathlib
+        idx = (pathlib.Path(__file__).resolve().parents[1] / "web" / "cockpit" / "index.html").read_text()
+        self.assertNotIn("services active", idx)        # the lying-mouth language is gone
+        self.assertIn("runtimeServices", idx)           # Senses card reads the real snapshot
+        self.assertIn("organs healthy", idx)            # honest body-truth metric
