@@ -119,3 +119,21 @@ Each module is green alone; combined is green. Ruff clean on all touched source.
    unclaimed/loopback fallback keeps you reachable; `maez own-claim --rebind` recovers if needed.
 5. Only after the browser witness → mark `LIVE_WITNESSED`. If anything refutes, record NO-GO with the
    failing step. **Do not relabel `BUILT_BRANCH_VERIFIED` as witnessed without the browser breath.**
+
+## Live Switch-Over Witness
+
+**Status: LIVE_WITNESSED** — 2026-06-17.
+Main commit: 9aa44b4 (merged ff). Owner claimed `rohit` locally (`maez own-claim`, audit
+`action=claim account=rohit euid=1000`); maez-web restarted (PID 771844).
+
+Witnessed on the running daemon (every gate-matrix cell):
+- claimed + **owner** cookie → `/api/debug/services` **200 ALLOW** (gate recognizes `rohit` as
+  web_owner; owner NOT locked out — the slice's whole purpose, proven live).
+- claimed + no cookie → **401 DENY**.
+- `?web_token=bogus` → **401 DENY** (URL-token bypass dead).
+- `/api/v1/now` (not owner-private) → **200 OPEN** (no mass-gating; the NO-GO guard holds live).
+- claim persisted: `web_owner=1`, `relationship=owner`, `trust_tier=3`, `provenance=local-owner-claim`,
+  `access_scope=owner-private`; audit jsonl written.
+
+Note: owner-private surfaces (`/debug`, `/api/debug/*`) now require being logged in as `rohit`; the
+general cockpit (`/api/v1/*`) is unchanged (localhost-open). Fix-forward #1 COMPLETE.
