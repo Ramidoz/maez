@@ -18,7 +18,7 @@ Ports ONLY the read-only `runtime_services` snapshot organ (incl fix #3) + its d
 project planner render the real statuses; the fake simulator stays dead. Always-on, no feature flag
 (read-only perception). No owner-spine/S7/web-owner/capability-card/daemon-`/health` code came along.
 
-## Commit chain (7)
+## Commit chain (8)
 
 | SHA | What |
 |---|---|
@@ -28,7 +28,8 @@ project planner render the real statuses; the fake simulator stays dead. Always-
 | `7e1c5cc` | `/api/maez-state` carries `runtime_services`; planner reads `overall` (kills "all services up") |
 | `410c5ee` | cockpit `ServicesPane` renders per-organ statuses (tick stays dead) |
 | `ce70d4b` | cockpit `index.html` Senses card → `runtime_services` (kills "services active" + fixes orphan) |
-| `b4b922a` | **HOLD fix:** realistic daemon `/health` contract timeout (3.0s, no false-degrade) + runnable probe |
+| `b4b922a` | HOLD fix v1: daemon `/health` contract timeout 3.0s (superseded) + runnable probe |
+| `a912a0d` | **HOLD fix v2 (real):** daemon contract probes fast `/operator/health` (~3ms) — no false-degrade |
 
 10 files, +993/-65. Scope sweep: **no owner-spine/S7 import anywhere; `/api/v1/now`,
 `capability_registry`, `capability_card`, daemon `/health` all untouched.**
@@ -108,3 +109,18 @@ standalone python lacks the live process's `MAEZ_LLM_BACKEND` env). In the **liv
 healthy, exactly as it did in the organism witness. So at the browser witness: **`maez_daemon: healthy`
 is the load-bearing check** (the false-degrade this organ + #3 exist to kill); the `overall` will
 reflect honest real service states (a genuinely-asleep service correctly shows `asleep`).
+
+## Cross-lane review (Codex) — round 2 (HOLD resolved properly)
+
+Codex re-review cleared SF2/SF3 but kept the HOLD: the 3.0s timeout (v1 fix) was insufficient — live
+`/health` latency is highly variable (observed 1169ms → 3005ms), so it intermittently still exceeded
+3.0s and false-degraded `maez_daemon` through the real `/api/v1/services` route. **Root insight:**
+`/health` runs `perception_snapshot()` (nvidia-smi etc.) every call — it is the wrong tool for a
+liveness contract; chasing the timeout is whack-a-mole. **Real fix @`a912a0d`:** the daemon contract
+now probes the daemon's **fast `/operator/health`** liveness payload (~3-5ms, non-S7-gated, still
+verifies the daemon *responds*) instead of `/health`; the `_DAEMON_HEALTH_TIMEOUT_S` band-aid is
+removed. The regression now models the real boundary (the contract must use `/operator/health` and
+never the slow `/health`, so it cannot false-degrade on `/health` latency). **Re-verified through the
+actual Flask route, 6/6 iterations: `maez_daemon: healthy`, contract ok, 0-3ms.** #3's full-`read()`
+remains in the organ (correct for any `/health` consumer) but the daemon contract no longer depends on
+`/health` at all. 20 tests OK, ruff clean.
