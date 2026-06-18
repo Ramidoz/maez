@@ -193,7 +193,7 @@ class TestWebProxyFlag(unittest.TestCase):
             def __exit__(self, *a):
                 return False
 
-        with mock.patch.dict(os.environ, {"MAEZ_COCKPIT_REAL_STATE": "1"}, clear=False):
+        with mock.patch.dict(os.environ, {"MAEZ_COCKPIT_REAL_STATE": "1", "S7_INTERNAL_CHANNEL_TOKEN": "test-tok"}, clear=False):
             with mock.patch("urllib.request.urlopen", return_value=_Resp(real_payload)):
                 resp = client.get("/api/v1/daemon/state")
         self.assertEqual(resp.status_code, 200)
@@ -201,11 +201,13 @@ class TestWebProxyFlag(unittest.TestCase):
 
     def test_flag_on_unreachable_is_honest(self):
         wi, client = self._client()
-        with mock.patch.dict(os.environ, {"MAEZ_COCKPIT_REAL_STATE": "1"}, clear=False):
+        with mock.patch.dict(os.environ, {"MAEZ_COCKPIT_REAL_STATE": "1", "S7_INTERNAL_CHANNEL_TOKEN": "test-tok"}, clear=False):
             with mock.patch("urllib.request.urlopen", side_effect=OSError("refused")):
                 resp = client.get("/api/v1/daemon/state")
         body = resp.get_json()
-        self.assertEqual(body, {"status": "unreachable"})
+        # proxy now carries an honest reason for the unreachable state
+        self.assertEqual(body["status"], "unreachable")
+        self.assertEqual(body["reason"], "daemon_unreachable")
         # honest fallback NEVER carries scraped/seed data
         self.assertNotIn("mood", body)
         self.assertNotIn("scratchpad", body)
@@ -220,6 +222,56 @@ class TestWebProxyFlag(unittest.TestCase):
         for v in falsy:
             with mock.patch.dict(os.environ, {"MAEZ_COCKPIT_REAL_STATE": v}, clear=False):
                 self.assertFalse(strict_env_flag("MAEZ_COCKPIT_REAL_STATE"), v)
+
+
+# ── Part 4: web proxy sends the S7 internal-channel token ─────────────────
+
+
+class ProxySendsS7Token(unittest.TestCase):
+    def test_proxy_sends_managed_token_header(self):
+        import skills.web_interface as wi
+        captured = {}
+
+        class _Resp:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): return json.dumps({"status": "ok", "cycle_count": 7}).encode()
+
+        def fake_urlopen(req, timeout=None):
+            captured["req"] = req                  # capture the OUTGOING Request object
+            return _Resp()
+
+        with mock.patch.dict(os.environ, {"S7_INTERNAL_CHANNEL_TOKEN": "tok-123"}, clear=False), \
+             mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            out = wi._daemon_cockpit_state_proxy()
+        self.assertEqual(out["cycle_count"], 7)
+        # the header was actually SENT (urllib title-cases the key):
+        self.assertEqual(captured["req"].get_header("X-maez-s7-internal-channel"), "tok-123")
+
+    def test_proxy_no_token_is_unreachable_with_reason(self):
+        import skills.web_interface as wi
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("S7_INTERNAL_CHANNEL_TOKEN", None)
+            out = wi._daemon_cockpit_state_proxy()
+        self.assertEqual(out, {"status": "unreachable", "reason": "s7_internal_channel_untrusted"})
+
+    def test_proxy_daemon_403_is_untrusted_reason(self):
+        import skills.web_interface as wi
+        import urllib.error
+        def fake_urlopen(req, timeout=None):
+            raise urllib.error.HTTPError("u", 403, "forbidden", {}, None)
+        with mock.patch.dict(os.environ, {"S7_INTERNAL_CHANNEL_TOKEN": "tok"}, clear=False), \
+             mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            out = wi._daemon_cockpit_state_proxy()
+        self.assertEqual(out, {"status": "unreachable", "reason": "s7_internal_channel_untrusted"})
+
+    def test_proxy_daemon_down_is_unreachable_reason(self):
+        import skills.web_interface as wi
+        with mock.patch.dict(os.environ, {"S7_INTERNAL_CHANNEL_TOKEN": "tok"}, clear=False), \
+             mock.patch("urllib.request.urlopen", side_effect=OSError("refused")):
+            out = wi._daemon_cockpit_state_proxy()
+        self.assertEqual(out["status"], "unreachable")
+        self.assertEqual(out["reason"], "daemon_unreachable")
 
 
 # ── Part 5: COCKPIT_DIR hermetic-path fix ─────────────────────────────────

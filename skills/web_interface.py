@@ -1534,19 +1534,41 @@ def _tail_log_lines(path: str, n: int = 200) -> list:
         return []
 
 
+_S7_INTERNAL_CHANNEL_HEADER = "X-Maez-S7-Internal-Channel"
+_S7_INTERNAL_CHANNEL_TOKEN_ENV = "S7_INTERNAL_CHANNEL_TOKEN"
+
+
+def _s7_internal_channel_headers() -> dict[str, str]:
+    token = os.environ.get(_S7_INTERNAL_CHANNEL_TOKEN_ENV, "").strip()
+    if not token:
+        raise RuntimeError("s7_internal_channel_untrusted")
+    return {_S7_INTERNAL_CHANNEL_HEADER: token}
+
+
 def _daemon_cockpit_state_proxy(timeout=1.5):
     """Proxy the daemon's fast real-state endpoint verbatim.
 
     Mirrors `_daemon_health()`: short timeout, returns the daemon JSON as-is.
-    On unreachable returns an honest {"status": "unreachable"} — NEVER falls
-    back to scraped/seed data (the covenant forbids fabricated inner life).
+    Sends the managed S7 internal-channel token so the (now-gated) daemon
+    endpoint trusts the call. On unreachable returns an honest
+    {"status": "unreachable", "reason": ...} — NEVER falls back to scraped/seed
+    data (the covenant forbids fabricated inner life).
     """
+    import urllib.error as _urlerr
     try:
-        with urllib.request.urlopen(DAEMON_COCKPIT_STATE_URL, timeout=timeout) as r:
+        headers = _s7_internal_channel_headers()
+    except RuntimeError:
+        return {"status": "unreachable", "reason": "s7_internal_channel_untrusted"}
+    try:
+        req = urllib.request.Request(DAEMON_COCKPIT_STATE_URL, headers=headers, method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8"))
+    except _urlerr.HTTPError as e:
+        reason = "s7_internal_channel_untrusted" if e.code == 403 else "daemon_error"
+        return {"status": "unreachable", "reason": reason}
     except Exception as e:
         logger.debug("daemon cockpit-state unreachable: %s", e)
-        return {"status": "unreachable"}
+        return {"status": "unreachable", "reason": "daemon_unreachable"}
 
 
 @app.route("/api/v1/daemon/state")
