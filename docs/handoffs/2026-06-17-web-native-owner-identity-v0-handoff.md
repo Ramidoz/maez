@@ -30,6 +30,19 @@ without failing open to the network.
 | `8532b60` | 5 | owner-private gate matrix; drop `?test_t=`/`?web_token=`; migrate `/chat` + `/history` to `_is_owner` |
 | `ca84164` | 6 | honest degraded gate (store-failure → loopback recovers, remote fails closed) |
 | `55c0faf` | 7 | structural never-lockout + no-feature-flag migration-safety tests |
+| `43e8b82` | fix | **Codex HOLD:** clear stale owner metadata on rebind/reset (shared `_CLEAR_OWNER_SQL`) |
+
+## Cross-lane review (Codex) — HOLD resolved
+
+Codex review returned **HOLD** on one must-fix: `rebind_owner`/`reset_owner` cleared only `web_owner`,
+leaving stale owner-role metadata (`relationship='owner'`, `trust_tier=3`, `provenance`, `access_scope`,
+`consent`) on demoted/cleared rows — identity-foundation drift (not an auth/lockout bug, since auth keys
+on `web_owner`). Claude verified the repro independently, fixed it at `43e8b82` (both paths route through a
+shared `_CLEAR_OWNER_SQL` so they can't drift; clear scoped `WHERE web_owner=1` so non-owner/telegram rows
+are untouched), added RED-first regression tests (`test_rebind_clears_stale_owner_metadata_on_old_owner`,
+`test_reset_clears_stale_owner_metadata`), and re-verified pristine demote + reset. Everything else Codex
+checked passed (XFF-proof loopback, no phantom flag, gate delegation, `?test_t=`/`?web_token=` removed,
+no `/api/v1/*` touched, single `_is_private_owner_bridge` ref). **29 tests OK, ruff clean.**
 
 ## Task 0 proof artifacts (the GO gate)
 
@@ -56,10 +69,10 @@ Activation is `owner_claimed()` **only** — no feature flag; the unclaimed stat
 Cookie-only when claimed (URL tokens are structurally inert). The local TTY+uid `maez own-claim`
 rebind/reset path is the always-available recovery mechanism.
 
-## Tests (27 in the slice, all green)
+## Tests (29 in the slice, all green)
 
 `/home/rohit/maez/.venv/bin/python -B -m unittest tests.test_owner_identity_model
-tests.test_owner_claim_cli tests.test_web_owner_gating` → **27 OK** (7 model + 7 CLI + 13 gating).
+tests.test_owner_claim_cli tests.test_web_owner_gating` → **29 OK** (9 model + 7 CLI + 13 gating).
 Each module is green alone; combined is green. Ruff clean on all touched source.
 
 ## Codex cross-lane review anchors (please verify these)
