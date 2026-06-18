@@ -69,6 +69,8 @@ from core.audit_log import (  # noqa: E402 — must come after sys.path insert
     AuditLog,
     DIRECT_EDIT_SOURCE_CLI,
 )
+from skills.user_accounts import UserAccounts, DB_PATH  # noqa: E402
+from core.governance import owner_identity_audit  # noqa: E402
 
 
 # -------------------------------------------------------------------- #
@@ -315,6 +317,70 @@ def cmd_exit(args: argparse.Namespace) -> int:
 
 
 # -------------------------------------------------------------------- #
+#  own-claim (web-native owner identity — local, TTY+uid guarded)        #
+# -------------------------------------------------------------------- #
+
+def _default_is_interactive() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _default_uid_ok() -> bool:
+    return os.geteuid() == os.stat(DB_PATH).st_uid
+
+
+def _default_confirm(prompt: str) -> bool:
+    return input(prompt).strip().lower() == "yes"
+
+
+def cmd_own_claim(args, *, accounts=None, audit_path=None,
+                  is_interactive=None, uid_ok=None, confirm=None) -> int:
+    accounts = accounts or UserAccounts()
+    is_interactive = is_interactive or _default_is_interactive
+    uid_ok = uid_ok or _default_uid_ok
+    confirm = confirm or _default_confirm
+
+    def audit(action, account):
+        owner_identity_audit.record(action, account=account, euid=os.geteuid(),
+                                    **({"path": audit_path} if audit_path else {}))
+
+    if not is_interactive():
+        print("refused: owner-claim must be run from an interactive local terminal.", file=sys.stderr)
+        return 2
+    if not uid_ok():
+        print("refused: must run as the user that owns the account store.", file=sys.stderr)
+        return 2
+    if args.reset:
+        if not confirm("Type 'yes' to CLEAR the web owner identity: "):
+            print("aborted.", file=sys.stderr)
+            return 1
+        n = accounts.reset_owner()
+        audit("reset", None)
+        print(f"owner cleared ({n} account(s)).")
+        return 0
+    username = (args.account or "").strip()
+    rec = accounts.get_by_username(username) if username else None
+    if not rec:
+        print(f"refused: no account named {username!r}.", file=sys.stderr)
+        return 2
+    action = "rebind" if args.rebind else "claim"
+    if not confirm(f"Type 'yes' to set owner = {rec['username']} ({rec['uuid']}): "):
+        print("aborted.", file=sys.stderr)
+        return 1
+    try:
+        if args.rebind:
+            result = accounts.rebind_owner(rec["uuid"])
+        else:
+            result = accounts.claim_owner(rec["uuid"])
+    except ValueError as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 2
+    if result != "noop":            # a no-op re-claim mutated nothing -> no audit row
+        audit(action, rec["username"])
+    print(f"owner {result}: {rec['username']}.")
+    return 0
+
+
+# -------------------------------------------------------------------- #
 #  Entry point                                                           #
 # -------------------------------------------------------------------- #
 
@@ -357,11 +423,19 @@ def main() -> int:
              "the currently-active session from daemon/builder_mode_current.txt.",
     )
 
+    # own-claim — local-only web-native owner identity bootstrap
+    p_claim = subparsers.add_parser("own-claim", help="Claim web-native owner identity (local only).")
+    p_claim.add_argument("--account", help="username to mark as owner")
+    p_claim.add_argument("--rebind", action="store_true", help="move owner to --account")
+    p_claim.add_argument("--reset", action="store_true", help="clear the web owner")
+
     args = parser.parse_args()
     if args.command == "enter":
         return cmd_enter(args)
     elif args.command == "exit":
         return cmd_exit(args)
+    elif args.command == "own-claim":
+        return cmd_own_claim(args)
     else:
         parser.print_help()
         return 2
