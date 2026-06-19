@@ -83,6 +83,13 @@ async def run_inbound_turn(
     user_id: str,
     channel: str,
     owner_auth_factory: Callable[[], Any],
+    # ORGAN 3b: per-descriptor felt-time opt-in. When True, owner_auth_factory()
+    # is constructed (granting subjective-duration / felt-time) even if the
+    # global surface_parity flag is off. DEFAULT False => byte-identical to
+    # today for every caller that omits the key (telegram-V2 and any other):
+    # parity off + felt_time_enabled False => factory not called. Lets the
+    # cockpit grant felt-time on its OWN flag without flipping global parity.
+    felt_time_enabled: bool = False,
     observe_turn_label: str = "telegram_turn",
     chat_history_turns: int,
     # SLICE 2 covenant levers (DEFAULT preserves Telegram byte-identity):
@@ -415,7 +422,7 @@ async def run_inbound_turn(
         # working set internally when photo_analysis is present. The audit is
         # owned by handle_message; the core does NOT double-audit.
         subjective_duration_owner_auth = None
-        if surface_parity_enabled():
+        if surface_parity_enabled() or felt_time_enabled:
             try:
                 subjective_duration_owner_auth = owner_auth_factory()
             except Exception:
