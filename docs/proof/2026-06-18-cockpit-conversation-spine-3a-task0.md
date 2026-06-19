@@ -75,10 +75,11 @@ tests/test_subjective_duration_static_boundaries.py:291:        ui_route = daemo
 | `tests/test_ui_message_history_threading.py:8` | TEST | **NO HTTP** | Verified by reading: the `11435/message` string is only in the module docstring. The test body imports `_pair_history_for_chat_threading` from `daemon.maez_daemon` and calls it DIRECTLY (no `urlopen`/`requests`/`urllib`). |
 | `tests/test_subjective_duration_static_boundaries.py:291` | TEST | **NO HTTP** | Verified by reading: `_source()` does `path.read_text(...)` and `ast.parse(...)`; the `@app.route("/message"` string is a static-analysis index marker, not a request. |
 
-**Conclusion:** The only **production HTTP caller** of the daemon `/message` route is the
-web `api_cockpit_message` proxy (`f"{_DAEMON_BASE}/message"`, `skills/web_interface.py:1781`).
-The only test making a **real HTTP POST** is `tests/test_cockpit_proxies_2026_05_05.py`.
-**No non-test, non-cockpit production HTTP caller exists → Approach A is clean.**
+**Conclusion (CORRECTED — see the 2026-06-19 amendment at the top):** this directory-scoped scan
+missed `ui/maez_terminal_ui.py` (maez-face). After the repo-wide re-inventory and maez-face's
+retirement, the only remaining **live production** HTTP caller of `/message` is the web
+`api_cockpit_message` proxy (`f"{_DAEMON_BASE}/message"`, `skills/web_interface.py:1781`). The only
+test making a **real HTTP POST** is `tests/test_cockpit_proxies_2026_05_05.py`. **→ Approach A is clean.**
 
 ---
 
@@ -227,10 +228,11 @@ No OTHER test POSTs to `/api/v1/cockpit/message` or daemon `/message` over HTTP.
 
 ## TASK 0 VERDICT: GO (Approach A)
 
-- The daemon `/message` route has exactly one production HTTP caller: the cockpit proxy
-  `api_cockpit_message`. No non-cockpit production HTTP caller exists → the shared route is
-  cleanly S7-gateable (Approach A); the dedicated `/internal/cockpit/message` fallback
-  (Approach B) is NOT required.
+- The daemon `/message` route has exactly one **live production** HTTP caller **after maez-face's
+  retirement** (see the 2026-06-19 amendment): the cockpit proxy `api_cockpit_message`. With
+  maez-face retired, no other non-test production HTTP caller exists → the shared route is cleanly
+  S7-gateable (Approach A); the dedicated `/internal/cockpit/message` fallback (Approach B) is NOT
+  required.
 - Telegram reaches `daemon.handle_message` in-process (`maez_adapter.py:1197`), not via the
   HTTP route → the S7 gate cannot starve telegram.
 - The web proxy is cleanly separated (no web-owner-spine / voice / private_owner_bridge / `/chat`).
