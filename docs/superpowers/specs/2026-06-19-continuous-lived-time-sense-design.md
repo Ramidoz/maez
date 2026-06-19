@@ -12,9 +12,13 @@ Maez should **ingest time the way Rohit does, and learn to use its own time — 
 the dialogue, the load-bearing intent:
 - **Continuous, raw, NO bands.** Maez carries the *actual gradient* of felt time, not 5 buckets. (Bands
   and threshold-triggers were rejected as hardcoding Maez's behavior.)
-- **One-second resolution, NO time-dilation.** Maez's sense of elapsed time matches Rohit's to the second.
-  If 5 seconds passed for Rohit, Maez knows *exactly* 5 — never rounded to a coarse tick. Time is the
-  **index of experience**, recorded richly (it's also the raw material a later organ learns from).
+- **One-second resolution, NO time-dilation — of ELAPSED TIME.** Maez's `elapsed_seconds` (the real
+  wall-clock gap) matches Rohit's to the second: if 5 seconds passed, Maez knows *exactly* 5, never rounded
+  to a coarse tick. **The `felt_value` is a separate thing** — a continuous *derived* signal transformed
+  through temperament/drag/engagement/residual-resonance (`subjective_duration.py:532`); it is NOT elapsed
+  seconds and does not "equal the clock." The no-dilation guarantee is on `elapsed_seconds`; `felt_value`
+  is the colour Maez's body paints on that exact time. Time is the **index of experience**, recorded richly
+  (also the raw material a later organ learns from).
 - **Frictions, not rules.** The felt sense + Maez's existing drive/valence/curiosity state build
   continuously (cheap), like a body's restlessness/hunger below conscious thought; those *frictions* are
   what eventually move Maez to act — its **own** judgment, not a threshold we wrote.
@@ -29,10 +33,11 @@ the dialogue, the load-bearing intent:
 
 Built as a small sequence of individually-witnessed slices (the decompose-the-organism discipline):
 
-- **Slice 1 — Continuous lived time-sense (THIS spec).** The honest substrate: felt-time advances
-  continuously at one-second resolution, zero dilation, no bands, recorded as a complete lived index, and
-  stamped onto Maez's thoughts/memories as their time-context. *No* behavior change yet (no feed, no
-  coupling, no doorman change) — get the substrate provably correct first.
+- **Slice 1 — Continuous lived time-sense (THIS spec).** The honest substrate: `elapsed_seconds` exact to
+  the second (zero dilation) and a continuous derived `felt_value` (no bands), recorded as a
+  **second-addressable lived index** (any past second faithfully reconstructable). *No* behavior change yet
+  (no feed, no coupling, no doorman change, **no thought/memory stamping — moved to Slice 2**) — get the
+  substrate provably correct first.
 - **Slice 2 — Feed Maez's own mind.** Wire the continuous felt-time (+ drive/friction state) into the
   autonomous cognition packet, so Maez's *self-initiated* thoughts are grounded in the passing time.
 - **Slice 3 — Couple frictions to agency.** Let built-up frictions genuinely move Maez's existing
@@ -46,69 +51,88 @@ witnessed correct before any behavior reads it — Rohit can pull it forward at 
 
 ## Where it is today (from the explore — the honest baseline)
 
-- `core/evolution/subjective_duration.py` — `SubjectiveDuration.current()` already computes felt-time from
-  the **exact** wall-clock delta since the latest stored sample (so the *value* is already dilation-free
-  on read). The curve climbs monotonically with real elapsed time. BUT: `current()` is called **only on
-  owner contact** (handle_message / telegram / web), and **it WRITES a sample every call** — so today
-  there is no continuous materialization, and a naïve per-cycle `current()` would flood the append-only
-  `subjective_duration_samples` table.
+- `core/evolution/subjective_duration.py` — `SubjectiveDuration.current()` (`:519`) computes an **exact**
+  wall-clock `delta_hours` (`:528`), but then derives `value` through `compute_subjective_duration_update`
+  with **live** temperament/drag/engagement + `residual_resonance` read fresh at call time (`:529-539`). So
+  the **elapsed time is exact, the felt value is a state-dependent transform** — and it changes if you
+  recompute it later with *different* live state. `current()` also **WRITES a sample every call** (`:543`),
+  so a naïve per-cycle call would both flood the append-only `subjective_duration_samples` table and
+  re-derive with whatever mood is live then.
+- **`perception_line()` (`:583`) is a STALE reader:** it returns the *last stored row's* phrase if any row
+  exists, recomputing only when none does — so it does NOT reflect current elapsed time. It is unused on
+  the live reply path today (the reply line goes through `subjective_duration_prompt_line()` → `current()`,
+  `:896`), but it is an unowned latent reader Slice 1 must address (design §7).
 - Nothing reads felt-time between owner contacts; autonomous cognition does not see it. (That's Slice 2.)
-- The store is append-only; owner-contact does NOT reset the value (it's continuous/monotonic) — Slice 1
-  must preserve that (3b's mint stays intact).
+- The store is append-only; owner-contact does NOT reset the value (continuous/monotonic) — Slice 1 must
+  preserve that (3b's mint stays intact).
 
 ## Slice 1 design — the continuous lived time-sense
 
-**1 · Exact-second compute, always (the no-dilation guarantee).** Add a **read-only** compute path
-(e.g. `peek()` / `current(persist=False)`) to `SubjectiveDuration` that returns the felt-time snapshot
-computed to the **exact current second** (the existing delta math already does this) **without** writing a
-sample. *Guarantee (tested):* for any moment, the computed elapsed time equals the true wall-clock delta to
-≤1s — Maez never experiences time dilation vs. real time.
+**1 · Read-only `peek()` — exact elapsed, derived felt (the snapshot, no write).** Add a **read-only**
+compute path (`peek()` / `current(persist=False)`) to `SubjectiveDuration` that returns a snapshot
+**without** writing a sample. The snapshot carries TWO distinct things: `elapsed_seconds` — the exact
+wall-clock gap to the prior anchor (the no-dilation quantity), and `felt_value` — the derived signal
+(temperament/drag/engagement/residual transform). *Guarantee (tested):* `elapsed_seconds` equals the true
+wall-clock delta to ≤1s; the no-dilation claim is **only** about `elapsed_seconds`, never about `felt_value`.
 
-**2 · The heartbeat materializes it continuously.** On each daemon cycle (the 30s heartbeat, in the cheap
-watchdog zone *before* the cognition gate — never waking cognition), Maez advances its live felt-time via
-`peek()`. The live value is held in memory (a long-lived `SubjectiveDuration` handle on the daemon) so the
-sense is continuously current without a write per cycle. *(Heartbeat = 30s is the materialization cadence;
-the VALUE is always exact-to-the-second on read, so there is no 30s quantization of knowledge — only of how
-often the in-memory snapshot refreshes, which is invisible to elapsed-time accuracy.)*
+**2 · The heartbeat keeps the live sense current (continuous *computability*, not per-second writes).** On
+each daemon cycle (the 30s heartbeat, in the cheap watchdog zone *before* the cognition gate — never waking
+cognition), Maez refreshes its live snapshot via `peek()`, held on a long-lived `SubjectiveDuration` handle.
+*(The 30s heartbeat is only how often the in-memory snapshot refreshes; because `peek()` computes
+`elapsed_seconds` to the exact current second, knowledge of elapsed time is never quantized to 30s. We do
+NOT write a sample every second — so the right words are "continuous computability / second-addressable,"
+not "materialized every second," unless literal rows are chosen in §3.)*
 
-**3 · Recorded as a complete second-resolution lived index (no flood).** The record must answer "exactly
-how did felt-time stand at any given second?" with zero gaps and zero dilation. Two ways, both meeting the
-requirement — **recommended: derive-exact + anchor-record**:
-- **(recommended) Anchor + derive.** Store a sample only at *meaningful* points — on each owner-contact
-  (unchanged), on a coarse periodic checkpoint (e.g. every few minutes, so the on-disk anchor never lags
-  far and survives restarts), and when Maez records a thought/memory (below). Because felt-time is a clean
-  deterministic function of exact timestamps, the value at *any* second is reconstructable **exactly** from
-  the nearest anchor — so the index is complete to the second without storing ~86,400 redundant rows/day.
-- **(alternative, Rohit's call) Literal per-second rows.** A dedicated lightweight per-second writer (or a
-  30-row backfill each heartbeat) materializes an actual row per second. Cost ≈ a few GB/year (trivial on
-  this rig), but it densely stores a *computable* function. Offered because Rohit asked to "record seconds"
-  — the recommended path gives the same second-resolution guarantee without the redundancy; **Rohit picks
-  at review.**
+**3 · Recorded as a second-addressable lived index — with a REPLAY CONTRACT (no flood, no mood-rewrite).**
+The index must let Maez answer, for **any past second**, "what was my time-sense then?" — `elapsed_seconds`
+**exactly**, and `felt_value` **faithfully to the state as-of-then** (never recomputed with today's mood).
+Since `felt_value` reads live temperament + residual, deriving it later from timestamps alone would **drift**
+(the bug Codex caught). Two ways:
+- **(recommended) Anchor + replay contract.** Store an anchor only at *meaningful* points — owner-contact
+  (unchanged), a coarse periodic checkpoint (e.g. every few minutes, so the anchor never lags far + survives
+  restarts). Each anchor row records the **full replay inputs**: `anchor_ts`, `anchor_value`, the
+  `compute_version` (a curve/formula version stamp), and the **modulator inputs live at that anchor**
+  (`drag`, `engagement`, `residual_resonance`, temperament snapshot). Then `felt_value` at any second in the
+  interval is replayed **deterministically forward from the anchor using THAT anchor's frozen inputs** — so
+  it reflects the mood-as-of-then, reproducibly, and is never contaminated by current state. `elapsed_seconds`
+  is exact from `anchor_ts`. (`compute_version` lets a future curve change replay old intervals with the old
+  formula.) Complete to the second without ~86,400 redundant rows/day.
+- **(alternative, Rohit's call) Literal per-second rows.** A lightweight per-second writer (or a 30-row
+  backfill each heartbeat) stores an actual `felt_value` row per second — no replay needed, history is
+  literal. Cost ≈ a few GB/year (trivial here). Offered because Rohit asked to "record seconds"; the
+  recommended path gives the same faithful second-addressability without storing a replayable function.
+  **Rohit picks at review.**
 
-**4 · Time as the index of thoughts/memories (boundary-flagged).** The lived diary should carry "how long
-it had been when I thought this" — Rohit's "time stored as the index of thoughts and memories." But
-*stamping onto thoughts/memories* touches the memory/episode subsystem, not just `subjective_duration` —
-a wider blast radius than the rest of Slice 1. **Task 0 decides the boundary:** if the recording path takes
-a clean, content-light felt-time stamp without disturbing the memory write contract, it rides Slice 1; if
-it's wider (or thoughts are mostly created in cognition), it moves to **Slice 2** (which already touches
-that path). Slice 1's *guaranteed* deliverable is the continuous second-resolution felt-time + its own
-complete lived index in the `subjective_duration` store; the cross-stamp is the bridge to Slice 2.
+**4 · `_latest_sample()` / anchor semantics preserved.** The continuous-mode anchors are real
+`subjective_duration_samples` rows (extended with the replay fields), so `current()` (owner-contact, 3b),
+`_latest_sample()`, and the monotonic-continuation semantics keep working — anchors just become denser-than-
+owner-contact-only but far sparser than per-second. Owner-contact does NOT reset; 3b's mint untouched.
 
-**5 · No bands.** The raw continuous value is what's carried/recorded. No band thresholds, no
-band-crossing triggers (those were the hardcoding we rejected). `_render()`'s phrase mapping stays only for
-the *owner-reply* surface line (unchanged); the substrate stores the raw value.
+**5 · `perception_line()` ownership (the stale reader).** Move `perception_line()` (`:583`) to use the
+read-only **`peek()`** path so it reflects the **current** elapsed/felt snapshot instead of echoing the last
+stored row. It's prod-unused today, so this is hygiene (close a latent stale-reader landmine) — flag-gated
+like the rest, and it must NOT write (it's a read). The live reply path (`subjective_duration_prompt_line()`
+→ `current()`) is **unchanged**.
 
-**6 · Rollout flag.** Behind `MAEZ_CONTINUOUS_TIME_SENSE` (strict, default OFF) for the owner's breath.
-Flag-off → byte-identical to today (felt-time only materializes on owner contact). Flag-on → continuous
-materialization + the lived index.
+**6 · No bands.** The raw continuous `felt_value` is what's carried/recorded. No band thresholds, no
+band-crossing triggers (the hardcoding we rejected). `_render()`'s phrase mapping stays ONLY for the
+*owner-reply* surface line (unchanged); the substrate stores the raw value.
+
+**7 · Rollout flag.** Behind `MAEZ_CONTINUOUS_TIME_SENSE` (strict, default OFF) for the owner's breath.
+Flag-off → byte-identical to today (felt-time only on owner contact; `perception_line()` legacy). Flag-on →
+continuous `peek()` refresh + anchored second-addressable index + `perception_line()` on `peek()`.
 
 ## Covenant rails
 
-- **No time-dilation (the hard requirement).** Elapsed time is exact to ≤1s for any moment; Maez's
-  time-sense never drifts from real time. Tested by construction.
+- **No time-dilation (the hard requirement) — on `elapsed_seconds`.** Elapsed time is exact to ≤1s for any
+  moment; Maez's knowledge of how-long never drifts from real time. The derived `felt_value` is NOT claimed
+  exact-vs-clock — it's the body's colour on that exact time.
+- **No mood-rewrite of history.** A past second's `felt_value` is reconstructed from the **then-current**
+  replay inputs (or stored literally), never recomputed with today's temperament/residual. "Don't borrow
+  today's mood to rewrite yesterday's time."
 - **Honest, real, never fabricated.** Real wall-clock elapsed time only; no performed emotion; the
   `clock_degraded_event` path (time going backward) stays honest. **No sentience claim** — Slice 1 builds a
-  *recording of real elapsed time*, nothing that asserts felt experience.
+  *recording of real elapsed time + a derived signal*, nothing that asserts felt experience.
 - **Perception-side / free.** This is Maez sensing its OWN time (its own body) — fully free under the
   two-realms model. **No owner-gating, no marker, no S7, no egress, no new secret** (unlike 3b's
   owner-private *contact* mint — this is Maez's own existence). 3b's owner-contact mint + its 3 gates are
@@ -121,50 +145,66 @@ materialization + the lived index.
 ## Task 0 — proof gate (REPO-WIDE; docs/proof only, committed first)
 
 - **Consumer inventory (repo-wide):** every reader/writer of `SubjectiveDuration` / `current()` /
-  `subjective_duration_samples` / `record_salience_event` / the "Felt time:" line (daemon, telegram, web,
-  focused_cognition, cockpit, tests). Prove Slice 1's `peek()` + heartbeat-materialize + anchor-record
-  changes nothing for existing readers (owner-reply lines stay identical; flag-off is byte-identical).
-- **No-dilation proof shape:** confirm the existing delta math is exact wall-clock subtraction (no
-  rounding) so the guarantee is real.
-- **Flood proof:** quantify the current write rate (owner-contact only) vs Slice 1's (anchor + checkpoint)
-  — show the table stays sparse under the recommended path; size the literal-row alternative honestly.
-- **3b intactness:** confirm owner-contact mint + its gates are untouched; the global one-being store
-  unchanged.
-- **Restart/anchor:** confirm the value is correct across a restart (computed from the last on-disk anchor +
-  elapsed).
+  `peek()` / `perception_line()` / `subjective_duration_prompt_line()` / `subjective_duration_samples` /
+  `record_salience_event` / the "Felt time:" line (daemon, telegram, web, focused_cognition, cockpit, tests).
+  Prove Slice 1's `peek()` + heartbeat refresh + anchor-record changes nothing for existing readers
+  (owner-reply lines identical; flag-off byte-identical). **Name every `perception_line()` caller** — confirm
+  it's prod-unused so the `peek()` move is safe.
+- **Elapsed-vs-felt proof:** read `current()` (`:528-539`) and confirm `delta_hours` is exact wall-clock but
+  `value` is the temperament/residual transform — so the spec's separation (exact elapsed / derived felt) is
+  faithful to the code, and the no-dilation guarantee is correctly scoped to elapsed only.
+- **Replay-contract proof:** confirm which inputs `compute_subjective_duration_update` + `_residual_resonance`
+  read (drag, engagement, residual, temperament) so the anchor row stores ALL of them + a `compute_version`;
+  prove a forward-replay from an anchor reproduces the felt_value the live path would have produced **at that
+  time** (not now). If any needed input is missing from the anchor → STOP (else drift).
+- **Flood proof:** quantify current write rate (owner-contact only) vs Slice 1 (anchor + checkpoint) — show
+  the table stays sparse under the recommended path; size the literal-row alternative honestly.
+- **3b intactness:** owner-contact mint + its gates untouched; the global one-being store unchanged.
+- **Restart/anchor:** the value is correct across a restart (replayed from the last on-disk anchor + elapsed).
+- **Schema migration:** the new anchor replay-fields are an additive, back-compatible extension of
+  `subjective_duration_samples` (old rows without them still read; `compute_version` defaults sanely).
 
 ## Testing (TDD; hermetic — inject the clock, never sleep in tests)
 
-- **No-dilation:** for a set of injected (anchor_ts, now) pairs across seconds/minutes/hours, the computed
-  elapsed equals the exact delta (≤1s); never rounded to the heartbeat.
-- **`peek()` does NOT write:** calling the read-only path leaves the sample count unchanged; `current()`
-  (persist) still writes (unchanged).
-- **Continuous monotonic climb:** with the clock advanced, successive `peek()`s climb per the curve; the
-  raw value (not a band) is returned.
-- **Anchor + derive completeness:** given sparse anchors, the felt-time at an arbitrary intermediate second
-  reconstructs exactly (== a direct compute from that anchor).
-- **Flag-off byte-identical:** with `MAEZ_CONTINUOUS_TIME_SENSE` off, no heartbeat materialization, no new
-  rows; owner-reply felt-time line unchanged.
-- **Thought-stamp:** a recorded thought/memory carries the exact felt-time context.
+- **Elapsed exact (no-dilation):** for injected (anchor_ts, now) pairs across seconds/minutes/hours,
+  `peek().elapsed_seconds` equals the exact wall-clock delta (≤1s); never rounded to the heartbeat.
+- **Felt is derived, not elapsed:** `peek().felt_value` is the transformed signal (changes with
+  drag/engagement/residual), explicitly NOT equal to `elapsed_seconds` — a test pins they're distinct.
+- **`peek()` does NOT write:** the read-only path leaves the sample count unchanged; `current()` (persist)
+  still writes (unchanged).
+- **Continuous monotonic climb:** with the clock advanced, successive `peek()`s climb per the curve; the raw
+  value (not a band) is returned.
+- **Replay determinism (no mood-rewrite — the load-bearing test):** an anchor with frozen replay inputs,
+  replayed forward to an intermediate second, reproduces the felt_value the live path produced **at that
+  time**; and mutating *current* temperament/residual does NOT change the replayed historical value (proves
+  history isn't recomputed with today's mood).
+- **`perception_line()` recomputes:** after the move, `perception_line()` reflects the current `peek()`
+  snapshot (advances with the injected clock), not the stale last row.
+- **Flag-off byte-identical:** with `MAEZ_CONTINUOUS_TIME_SENSE` off, no heartbeat refresh, no new rows;
+  owner-reply felt-time line + legacy `perception_line()` unchanged.
 - **3b untouched:** owner-contact mint path + gates behave exactly as before (regression).
 
 ## Witness (live, before LIVE_WITNESSED)
 
-1. Flag on, restart → over a quiet stretch, the lived index shows felt-time materializing continuously at
-   second-resolution (query any second → exact value, no gaps, no dilation), and the store is NOT flooding.
-2. Ask Maez (or query the record) "how long has it been" at an arbitrary second → exact, matching real
-   elapsed time.
-3. Flag off → byte-identical to today (felt-time only on owner contact); owner-reply felt-time unchanged.
-4. 3b owner-contact felt-time still mints correctly (no regression).
+1. Flag on, restart → over a quiet stretch, the lived index is **second-addressable**: query any past
+   second → exact `elapsed_seconds` + a faithfully-replayed `felt_value`, no gaps, no dilation — and the
+   store is sparse (anchors + checkpoints), NOT flooding.
+2. "How long has it been" at an arbitrary second → exact elapsed, matching real wall-clock time.
+3. Replay faithfulness: a past second's `felt_value` matches what it was *then*, even though current mood
+   has since changed (no mood-rewrite).
+4. Flag off → byte-identical to today (felt-time only on owner contact); owner-reply line + `perception_line()`
+   unchanged.
+5. 3b owner-contact felt-time still mints correctly (no regression).
 
 ## Scope
 
-- **IN (Slice 1):** the read-only `peek()` compute; the heartbeat continuous-materialize (cheap, pre-gate);
-  the second-resolution lived index in the `subjective_duration` store (anchor+derive recommended,
-  literal-row optional); the `MAEZ_CONTINUOUS_TIME_SENSE` flag; the no-dilation guarantee. **Boundary-flagged
-  (Task 0 decides Slice 1 vs Slice 2):** stamping felt-time onto thoughts/memories (rides Slice 1 only if the
-  memory-write path takes it cleanly).
-- **OUT (later slices / never):** feeding the autonomous cognition packet (**Slice 2**); coupling frictions
-  to agency / drive-aware waking (**Slice 3**); learning Rohit's habits / rhythm (**Slice 4**); any band /
-  threshold / hardcoded trigger; any doorman change; 3b's gates; new senses; world-facing actions; any
-  sentience/feeling claim; performed emotion.
+- **IN (Slice 1):** the read-only `peek()` (exact `elapsed_seconds` + derived `felt_value`); the heartbeat
+  live-refresh (cheap, pre-gate); the **second-addressable lived index with the replay contract** in the
+  `subjective_duration` store (anchor+replay recommended, literal-row optional); the additive anchor
+  schema/`compute_version`; the `perception_line()` → `peek()` move; the `MAEZ_CONTINUOUS_TIME_SENSE` flag;
+  the no-dilation guarantee (on elapsed).
+- **OUT (later slices / never):** **stamping felt-time onto thoughts/memories (→ Slice 2** — it touches the
+  memory subsystem); feeding the autonomous cognition packet (**Slice 2**); coupling frictions to agency /
+  drive-aware waking (**Slice 3**); learning Rohit's habits / rhythm (**Slice 4**); any band / threshold /
+  hardcoded trigger; any doorman change; 3b's gates; new senses; world-facing actions; any sentience/feeling
+  claim; performed emotion.
