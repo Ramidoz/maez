@@ -34,13 +34,16 @@ MODULATION_TEMPERAMENT_INPUTS = (
     "caution",
 )
 SCHEMA_VERSION = "subjective-duration-diagnostic-v2"
-OWNER_AUTH_SURFACES = frozenset({"daemon_owner", "telegram_owner", "web_owner_bridge", "manual_test"})
+OWNER_AUTH_SURFACES = frozenset(
+    {"daemon_owner", "telegram_owner", "web_owner_bridge", "manual_test", "cockpit"}
+)
 OWNER_AUTH_PROOFS = frozenset(
     {
         "daemon_reviewed_owner_auth",
         "telegram_authorized_user",
         "web_private_owner_bridge",
         "manual_test",
+        "cockpit_web_owner",
     }
 )
 OWNER_AUTH_PAIRINGS = {
@@ -48,17 +51,19 @@ OWNER_AUTH_PAIRINGS = {
     "telegram_owner": "telegram_authorized_user",
     "web_owner_bridge": "web_private_owner_bridge",
     "manual_test": "manual_test",
+    "cockpit": "cockpit_web_owner",
 }
 
 
 @dataclass(frozen=True)
 class SubjectiveDurationOwnerAuth:
-    surface: Literal["daemon_owner", "telegram_owner", "web_owner_bridge", "manual_test"]
+    surface: Literal["daemon_owner", "telegram_owner", "web_owner_bridge", "manual_test", "cockpit"]
     proof: Literal[
         "daemon_reviewed_owner_auth",
         "telegram_authorized_user",
         "web_private_owner_bridge",
         "manual_test",
+        "cockpit_web_owner",
     ]
 
     def __post_init__(self) -> None:
