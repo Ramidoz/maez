@@ -114,7 +114,7 @@ Web-native owner identity only — never the telegram-derived `private_owner_bri
 ([[feedback_visible_substrate_state_not_chain_of_thought]] — honest substrate state, not performed
 continuity). Other surfaces are untouched unless explicitly granted later.
 
-## Task 0 — proof gate (REPO-WIDE; docs/proof only, committed first)
+## Task 0 — proof gate (docs/proof only, committed first)
 
 The Task-0 inventory is **repo-wide by default** — never a hand-picked directory list (the maez-face
 lesson, 3rd recurrence). If any proof refutes the design, STOP and patch.
