@@ -2602,6 +2602,15 @@ def cockpit_felt_time_enabled() -> bool:
     return strict_env_flag("MAEZ_COCKPIT_FELT_TIME")
 
 
+def continuous_time_sense_enabled() -> bool:
+    """Return True iff MAEZ_CONTINUOUS_TIME_SENSE is 1/true/yes/on. DEFAULT OFF. When on, the heartbeat
+    keeps Maez's lived time-sense current (read-only peek) + writes a sparse anchor (~5 min). No LLM, no
+    cognition wake."""
+    from core.infra.env_flags import strict_env_flag
+
+    return strict_env_flag("MAEZ_CONTINUOUS_TIME_SENSE")
+
+
 _OWNER_AUTHENTICATED_HEADER = "X-Maez-Owner-Authenticated"
 
 
@@ -2845,6 +2854,15 @@ logger.addHandler(stream_handler)
 
 
 class MaezDaemon:
+    _CONTINUOUS_TIME_ANCHOR_INTERVAL_S = 300   # sparse checkpoint — NOT per-second/per-cycle
+
+    def _time_sense_handle(self):
+        if self._time_sense is None:
+            from core.evolution import subjective_duration as _sd
+
+            self._time_sense = _sd.SubjectiveDuration()
+        return self._time_sense
+
     def __init__(self):
         self.running = False
         self.boot_time = None
@@ -2858,6 +2876,11 @@ class MaezDaemon:
         # memory so the face can read REAL state instead of scraping logs.
         self._last_cycle_text = ""
         self._last_valence_reading = None
+        # Continuous time-sense heartbeat (flag-gated, default OFF): a long-lived
+        # SubjectiveDuration handle + the last sparse-anchor timestamp. The handle
+        # is constructed lazily on first tick via `_time_sense_handle()`.
+        self._time_sense = None
+        self._last_time_anchor_ts = None
         self._cycle_stage = "not_started"
         self._cycle_stage_started_at = None
         self._soul_hash = None
@@ -8765,6 +8788,18 @@ class MaezDaemon:
                     self._enter_watchdog_safe_standby(halt)
                     break
                 raise
+
+            if continuous_time_sense_enabled():
+                try:
+                    _ts = self._time_sense_handle()
+                    _ts.peek()                                  # refresh the live sense (read-only, exact)
+                    _now = datetime.now(timezone.utc)
+                    _last = self._last_time_anchor_ts
+                    if _last is None or (_now - _last).total_seconds() >= self._CONTINUOUS_TIME_ANCHOR_INTERVAL_S:
+                        _ts.current()                           # ONE sparse anchor (stamps compute_version)
+                        self._last_time_anchor_ts = _now
+                except Exception:
+                    logger.debug("continuous time-sense tick skipped", exc_info=True)
 
             self.cycle_count += 1
             self.last_cycle_time = datetime.now(timezone.utc).isoformat()
