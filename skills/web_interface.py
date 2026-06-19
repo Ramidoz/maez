@@ -1771,11 +1771,21 @@ def api_cockpit_message():
     surface "(cockpit couldn't reach daemon)" the same way it does
     today.
     """
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
+    try:
+        s7_headers = _s7_internal_channel_headers()
+    except RuntimeError:
+        return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 502
+
     import urllib.request as _urlreq
     import urllib.error as _urlerr
 
     body = request.get_data() or b"{}"
-    headers = {"Content-Type": request.headers.get("Content-Type", "application/json")}
+    headers = {
+        "Content-Type": request.headers.get("Content-Type", "application/json"),
+        **s7_headers,
+    }
     try:
         req = _urlreq.Request(
             f"{_DAEMON_BASE}/message",
@@ -1794,6 +1804,8 @@ def api_cockpit_message():
             payload = e.read()
         except Exception:
             payload = str(e).encode("utf-8")
+        finally:
+            e.close()
         return (payload, e.code, {"Content-Type": "application/json"})
     except Exception as e:
         return jsonify(

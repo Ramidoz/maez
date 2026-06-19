@@ -25,6 +25,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 from unittest.mock import patch, MagicMock
 from urllib.error import HTTPError, URLError
 
@@ -34,13 +35,17 @@ if str(REPO) not in sys.path:
 
 
 def _make_urlopen_response(body: bytes, status: int = 200,
-                           ctype: str = "application/json"):
-    """Build a context-manager-shaped object that mimics urlopen()."""
+                           ctype: str = "application/json",
+                           content_type: str | None = None):
+    """Build a context-manager-shaped object that mimics urlopen().
+
+    Accepts either ``ctype`` (legacy) or ``content_type`` (alias used by
+    newer tests that drive a non-JSON daemon Content-Type)."""
     cm = MagicMock()
     response = MagicMock()
     response.read.return_value = body
     response.status = status
-    response.headers = {"Content-Type": ctype}
+    response.headers = {"Content-Type": content_type or ctype}
     cm.__enter__.return_value = response
     cm.__exit__.return_value = False
     return cm
@@ -70,7 +75,9 @@ class CockpitMessageProxy(unittest.TestCase):
         with patch.object(wi, "_urlreq", create=True, new=None):
             pass  # no-op; the real import is inside the route, not module-level
 
-        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        with mock.patch.object(wi, "_owner_private_auth_ok", return_value=True), \
+             mock.patch.dict(os.environ, {"S7_INTERNAL_CHANNEL_TOKEN": "t"}, clear=False), \
+             patch("urllib.request.urlopen", side_effect=fake_urlopen):
             r = self.client.post(
                 "/api/v1/cockpit/message",
                 data=sent_body,
@@ -94,7 +101,10 @@ class CockpitMessageProxy(unittest.TestCase):
                 fp=_FakeFile(daemon_err_body),
             )
 
-        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        from skills import web_interface as wi
+        with mock.patch.object(wi, "_owner_private_auth_ok", return_value=True), \
+             mock.patch.dict(os.environ, {"S7_INTERNAL_CHANNEL_TOKEN": "t"}, clear=False), \
+             patch("urllib.request.urlopen", side_effect=fake_urlopen):
             r = self.client.post(
                 "/api/v1/cockpit/message",
                 data=b"{}",
@@ -107,7 +117,10 @@ class CockpitMessageProxy(unittest.TestCase):
         def fake_urlopen(req, timeout=None):
             raise URLError("connection refused")
 
-        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        from skills import web_interface as wi
+        with mock.patch.object(wi, "_owner_private_auth_ok", return_value=True), \
+             mock.patch.dict(os.environ, {"S7_INTERNAL_CHANNEL_TOKEN": "t"}, clear=False), \
+             patch("urllib.request.urlopen", side_effect=fake_urlopen):
             r = self.client.post(
                 "/api/v1/cockpit/message",
                 data=b"{}",
@@ -410,6 +423,60 @@ class CockpitS7WebAuthnDeferredProxy(unittest.TestCase):
         self.assertIn("disableCredentialForProof", text)
         self.assertIn("bufferToB64url", text)
         self.assertIn("b64urlToBuffer", text)
+
+
+class CockpitMessageGate(unittest.TestCase):
+    def setUp(self):
+        import skills.web_interface as wi
+        self.wi = wi
+        wi.app.config["TESTING"] = True
+        self.client = wi.app.test_client()
+
+    def test_non_owner_gets_401_before_body(self):
+        with mock.patch.object(self.wi, "_owner_private_auth_ok", return_value=False):
+            r = self.client.post("/api/v1/cockpit/message", json={"text": "hi"})
+        self.assertEqual(r.status_code, 401)
+        self.assertEqual(r.get_json().get("error"), "owner_auth_required")
+
+    def test_owner_no_token_is_502_failed_send(self):
+        with mock.patch.object(self.wi, "_owner_private_auth_ok", return_value=True), \
+             mock.patch.dict(os.environ, {}, clear=False), \
+             mock.patch("urllib.request.urlopen", side_effect=AssertionError("must not send without token")) as up:
+            os.environ.pop("S7_INTERNAL_CHANNEL_TOKEN", None)
+            r = self.client.post("/api/v1/cockpit/message", json={"text": "hi"})
+        self.assertEqual(r.status_code, 502)
+        self.assertEqual(r.get_json(), {"ok": False, "error": "s7_internal_channel_untrusted"})
+        up.assert_not_called()
+
+    def test_owner_with_token_sends_s7_header(self):
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["req"] = req
+            return _make_urlopen_response(b'{"reply":"ok"}', status=200)
+        with mock.patch.object(self.wi, "_owner_private_auth_ok", return_value=True), \
+             mock.patch.dict(os.environ, {"S7_INTERNAL_CHANNEL_TOKEN": "tok-123"}, clear=False), \
+             mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            r = self.client.post("/api/v1/cockpit/message", json={"text": "hi"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(captured["req"].get_header("X-maez-s7-internal-channel"), "tok-123")
+
+    def test_preserves_daemon_content_type(self):
+        def fake_urlopen(req, timeout=None):
+            return _make_urlopen_response(b"plain reply", status=200, content_type="text/plain")
+        with mock.patch.object(self.wi, "_owner_private_auth_ok", return_value=True), \
+             mock.patch.dict(os.environ, {"S7_INTERNAL_CHANNEL_TOKEN": "t"}, clear=False), \
+             mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            r = self.client.post("/api/v1/cockpit/message", json={"text": "hi"})
+        self.assertEqual(r.headers.get("Content-Type"), "text/plain")
+
+    def test_daemon_down_is_502_unreachable(self):
+        with mock.patch.object(self.wi, "_owner_private_auth_ok", return_value=True), \
+             mock.patch.dict(os.environ, {"S7_INTERNAL_CHANNEL_TOKEN": "t"}, clear=False), \
+             mock.patch("urllib.request.urlopen", side_effect=OSError("refused")):
+            r = self.client.post("/api/v1/cockpit/message", json={"text": "hi"})
+        self.assertEqual(r.status_code, 502)
+        self.assertEqual(r.get_json().get("error"), "daemon_unreachable")
 
 
 class _FakeFile:
