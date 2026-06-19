@@ -2592,7 +2592,22 @@ def cockpit_core_enabled() -> bool:
     return strict_env_flag("MAEZ_COCKPIT_CORE")
 
 
-def _build_cockpit_inbound_descriptor(daemon, *, text: str, chat_history) -> dict:
+def cockpit_felt_time_enabled() -> bool:
+    """Return True iff ``MAEZ_COCKPIT_FELT_TIME`` is 1/true/yes/on. DEFAULT OFF.
+
+    Gates whether the cockpit owner turn mints felt-time (owner-only inner life).
+    """
+    from core.infra.env_flags import strict_env_flag
+
+    return strict_env_flag("MAEZ_COCKPIT_FELT_TIME")
+
+
+_OWNER_AUTHENTICATED_HEADER = "X-Maez-Owner-Authenticated"
+
+
+def _build_cockpit_inbound_descriptor(
+    daemon, *, text: str, chat_history, owner_authenticated: bool = False
+) -> dict:
     """Assemble the keyword descriptor for run_inbound_turn from a cockpit turn.
 
     SLICE 2 covenant decisions (fixed — do not expand here):
@@ -2639,6 +2654,14 @@ def _build_cockpit_inbound_descriptor(daemon, *, text: str, chat_history) -> dic
         # this already-clean content; fall open to [] when absent.
         return list(chat_history or [])
 
+    from core.evolution.subjective_duration import SubjectiveDurationOwnerAuth
+
+    # Three gates, ALL required: the cockpit felt-time flag AND the proven-owner
+    # marker (and the route is S7-gated upstream). The factory closure gates on
+    # ``felt_time_on`` itself, so the global surface_parity flag cannot leak
+    # cockpit felt-time. One global one-being clock.
+    felt_time_on = cockpit_felt_time_enabled() and owner_authenticated
+
     return dict(
         daemon=daemon,
         text=text or "",
@@ -2651,7 +2674,16 @@ def _build_cockpit_inbound_descriptor(daemon, *, text: str, chat_history) -> dic
         owner_surface_label="cockpit",
         user_id="rohit",
         channel="web_chat_owner",
-        owner_auth_factory=lambda: None,
+        owner_auth_factory=(
+            (
+                lambda: SubjectiveDurationOwnerAuth(
+                    surface="cockpit", proof="cockpit_web_owner"
+                )
+            )
+            if felt_time_on
+            else (lambda: None)
+        ),
+        felt_time_enabled=felt_time_on,
         observe_turn_label="cockpit_turn",
         chat_history_turns=_COCKPIT_CHAT_HISTORY_TURNS,
         action_engine=None,
@@ -10713,10 +10745,14 @@ class MaezDaemon:
                 # loop is running on the Flask request thread); inside the
                 # coroutine, run_inbound_turn's own asyncio.get_event_loop()
                 # returns that running loop for its run_in_executor offloads.
+                owner_authenticated = (
+                    request.headers.get(_OWNER_AUTHENTICATED_HEADER) == "1"
+                )
                 descriptor = _build_cockpit_inbound_descriptor(
                     self,
                     text=text,
                     chat_history=chat_history,
+                    owner_authenticated=owner_authenticated,
                 )
                 # Degrade honestly: an S4/early exception from run_inbound_turn
                 # (before its own internal try/except wraps synthesis) returns a

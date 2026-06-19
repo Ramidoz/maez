@@ -25,6 +25,9 @@ import os
 import unittest
 from unittest import mock
 
+from daemon.maez_daemon import MaezDaemon
+from tests.test_s7_1_daemon_internal_channel import _DaemonAppClientMixin
+
 
 # --- Fakes -----------------------------------------------------------------
 
@@ -233,6 +236,114 @@ class CockpitRouteBranchTests(unittest.TestCase):
         )
         # No brain-loop ran (get_pipeline None) -> empty transcript synthesized.
         self.assertEqual(call["kwargs"].get("transcript"), "")
+
+
+class CockpitFeltTimeDescriptor(unittest.TestCase):
+    def _descriptor(self, *, flag, owner_authenticated):
+        from daemon import maez_daemon as md
+
+        env = {}
+        if flag:
+            env["MAEZ_COCKPIT_FELT_TIME"] = "1"
+        with mock.patch.dict(os.environ, env, clear=False):
+            if not flag:
+                os.environ.pop("MAEZ_COCKPIT_FELT_TIME", None)
+            return md._build_cockpit_inbound_descriptor(
+                _FakeDaemon(),
+                text="hi",
+                chat_history=None,
+                owner_authenticated=owner_authenticated,
+            )
+
+    def test_flag_off_factory_none_even_with_marker(self):
+        d = self._descriptor(flag=False, owner_authenticated=True)
+        self.assertIsNone(d["owner_auth_factory"]())
+        self.assertFalse(d["felt_time_enabled"])
+
+    def test_flag_on_no_marker_factory_none(self):
+        d = self._descriptor(flag=True, owner_authenticated=False)
+        self.assertIsNone(d["owner_auth_factory"]())
+        self.assertFalse(d["felt_time_enabled"])
+
+    def test_flag_on_with_marker_mints_cockpit_auth(self):
+        d = self._descriptor(flag=True, owner_authenticated=True)
+        auth = d["owner_auth_factory"]()
+        self.assertEqual(
+            (auth.surface, auth.proof), ("cockpit", "cockpit_web_owner")
+        )
+        self.assertTrue(d["felt_time_enabled"])
+
+    def test_no_leak_via_surface_parity(self):
+        # The factory gates on felt_time_on (flag AND marker) and NEVER reads
+        # surface_parity. The parity patch below is intentionally INERT — the
+        # factory never consults it. We force parity globally ON only to
+        # document the safety: even so, with the cockpit flag OFF the factory
+        # still returns None -> a globally-ON parity flag cannot leak cockpit
+        # felt-time. (run_inbound_turn may CALL the factory under parity, but it
+        # gets None.)
+        with mock.patch(
+            "daemon.inbound_core.surface_parity_enabled", return_value=True
+        ):
+            d = self._descriptor(flag=False, owner_authenticated=True)
+            self.assertIsNone(d["owner_auth_factory"]())
+
+
+class CockpitFeltTimeMessageRouteMarker(
+    _DaemonAppClientMixin, unittest.TestCase
+):
+    """The S7-gated /message route reads X-Maez-Owner-Authenticated: 1 and
+    threads it to _build_cockpit_inbound_descriptor as owner_authenticated."""
+
+    def _drive(self, *, owner_header):
+        from daemon import maez_daemon as md
+
+        captured = {}
+
+        def _fake_descriptor(daemon, *, text, chat_history, owner_authenticated):
+            captured["owner_authenticated"] = owner_authenticated
+            # Return a minimal descriptor; run_inbound_turn is patched to a
+            # no-op so none of these keys are exercised.
+            return {"owner_authenticated": owner_authenticated}
+
+        async def _fake_run_inbound_turn(**_kwargs):
+            return "ok"
+
+        daemon = MaezDaemon.__new__(MaezDaemon)
+        daemon._health_server = None
+
+        headers = {"X-Maez-S7-Internal-Channel": "test-channel-secret"}
+        if owner_header is not None:
+            headers["X-Maez-Owner-Authenticated"] = owner_header
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
+                "MAEZ_COCKPIT_CORE": "1",
+            },
+            clear=False,
+        ):
+            with mock.patch.object(
+                md, "_build_cockpit_inbound_descriptor", _fake_descriptor
+            ):
+                with mock.patch(
+                    "daemon.inbound_core.run_inbound_turn",
+                    _fake_run_inbound_turn,
+                ):
+                    client = self._client_for_daemon(daemon)
+                    resp = client.post(
+                        "/message", json={"text": "hello"}, headers=headers
+                    )
+        self.assertEqual(resp.status_code, 200, resp.get_data(as_text=True))
+        return captured
+
+    def test_owner_marker_present_captures_true(self):
+        captured = self._drive(owner_header="1")
+        self.assertIs(captured["owner_authenticated"], True)
+
+    def test_owner_marker_absent_captures_false(self):
+        captured = self._drive(owner_header=None)
+        self.assertIs(captured["owner_authenticated"], False)
 
 
 if __name__ == "__main__":
