@@ -479,6 +479,75 @@ class CockpitMessageGate(unittest.TestCase):
         self.assertEqual(r.get_json().get("error"), "daemon_unreachable")
 
 
+class CockpitOwnerMarker(unittest.TestCase):
+    def setUp(self):
+        import skills.web_interface as wi
+        self.wi = wi
+        wi.app.config["TESTING"] = True
+        self.client = wi.app.test_client()
+
+    def _send_capturing(self):
+        captured = {}
+        def fake_urlopen(req, timeout=None):
+            captured["req"] = req
+            return _make_urlopen_response(b'{"reply":"ok"}', status=200)
+        return captured, fake_urlopen
+
+    def test_claimed_owner_cookie_stamps_marker(self):
+        captured, fake = self._send_capturing()
+        with mock.patch.object(self.wi, "_owner_private_auth_ok", return_value=True), \
+             mock.patch.object(self.wi, "_request_has_web_owner_cookie", return_value=True), \
+             mock.patch.dict(os.environ, {"S7_INTERNAL_CHANNEL_TOKEN": "t"}, clear=False), \
+             mock.patch("urllib.request.urlopen", side_effect=fake):
+            r = self.client.post("/api/v1/cockpit/message", json={"text": "hi"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(captured["req"].get_header("X-maez-owner-authenticated"), "1")
+
+    def test_local_recovery_send_allowed_marker_absent(self):
+        captured, fake = self._send_capturing()
+        with mock.patch.object(self.wi, "_owner_private_auth_ok", return_value=True), \
+             mock.patch.object(self.wi, "_request_has_web_owner_cookie", return_value=False), \
+             mock.patch.dict(os.environ, {"S7_INTERNAL_CHANNEL_TOKEN": "t"}, clear=False), \
+             mock.patch("urllib.request.urlopen", side_effect=fake):
+            r = self.client.post("/api/v1/cockpit/message", json={"text": "hi"})
+        self.assertEqual(r.status_code, 200)
+        self.assertIsNone(captured["req"].get_header("X-maez-owner-authenticated"))
+
+    def test_non_owner_401_no_send(self):
+        with mock.patch.object(self.wi, "_owner_private_auth_ok", return_value=False):
+            r = self.client.post("/api/v1/cockpit/message", json={"text": "hi"})
+        self.assertEqual(r.status_code, 401)
+
+
+class RequestHasWebOwnerCookie(unittest.TestCase):
+    def setUp(self):
+        import skills.web_interface as wi
+        self.wi = wi
+
+    def test_unclaimed_returns_false(self):
+        with self.wi.app.test_request_context("/"):
+            with mock.patch.object(self.wi.accounts, "owner_claimed", return_value=False):
+                self.assertFalse(self.wi._request_has_web_owner_cookie())
+
+    def test_store_error_returns_false(self):
+        with self.wi.app.test_request_context("/"):
+            with mock.patch.object(self.wi.accounts, "owner_claimed", side_effect=RuntimeError("db down")):
+                self.assertFalse(self.wi._request_has_web_owner_cookie())
+
+    def test_no_cookie_returns_false(self):
+        with self.wi.app.test_request_context("/"):
+            with mock.patch.object(self.wi.accounts, "owner_claimed", return_value=True):
+                self.assertFalse(self.wi._request_has_web_owner_cookie())
+
+    def test_claimed_owner_cookie_returns_true(self):
+        with self.wi.app.test_request_context("/", headers={"Cookie": f"{self.wi.AUTH_COOKIE}=tok"}):
+            with mock.patch.object(self.wi.accounts, "owner_claimed", return_value=True), \
+                 mock.patch.object(self.wi.accounts, "get_by_token", return_value={"uuid": "u1"}), \
+                 mock.patch.object(self.wi.accounts, "get_user_record", return_value={"web_owner": 1}), \
+                 mock.patch.object(self.wi, "_is_owner", return_value=True):
+                self.assertTrue(self.wi._request_has_web_owner_cookie())
+
+
 class _FakeFile:
     """Tiny stand-in for the .read() interface HTTPError exposes via fp.
 

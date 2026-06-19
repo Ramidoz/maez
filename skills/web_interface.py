@@ -1786,6 +1786,8 @@ def api_cockpit_message():
         "Content-Type": request.headers.get("Content-Type", "application/json"),
         **s7_headers,
     }
+    if _request_has_web_owner_cookie():
+        headers[_OWNER_AUTHENTICATED_HEADER] = "1"
     try:
         req = _urlreq.Request(
             f"{_DAEMON_BASE}/message",
@@ -9799,6 +9801,28 @@ def _owner_private_auth_ok() -> bool:
     except Exception as exc:
         logger.warning("owner gate degraded (%s); loopback-only recovery", exc, exc_info=True)
         return _request_is_loopback()
+
+
+_OWNER_AUTHENTICATED_HEADER = "X-Maez-Owner-Authenticated"
+
+
+def _request_has_web_owner_cookie() -> bool:
+    """Stricter than _owner_private_auth_ok: a COOKIE that resolves to a CLAIMED web_owner.
+    No unclaimed-loopback recovery, no degraded-store fallback — felt-time (owner-only inner
+    life) requires proven owner identity, not access. Returns False on any uncertainty."""
+    try:
+        if not accounts.owner_claimed():
+            return False
+        token = (request.cookies.get(AUTH_COOKIE, "") or "").strip()
+        if not token:
+            return False
+        user = accounts.get_by_token(token)
+        if not user:
+            return False
+        record = accounts.get_user_record(user.get("uuid", "")) or {}
+        return _is_owner(record)
+    except Exception:
+        return False
 
 
 def _owner_private_auth_required_response():
