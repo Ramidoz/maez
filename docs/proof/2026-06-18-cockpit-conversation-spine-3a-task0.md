@@ -10,6 +10,36 @@ hole). Later tasks will (1) S7-gate the daemon `/message` route, (2) owner-gate 
 S7-header the web `api_cockpit_message` send. Task 0 proves the path is cleanly gateable
 and that 3a's Organ-2 dependencies resolve on this base — BEFORE any gating code lands.
 
+---
+
+## AMENDMENT 2026-06-19 — missed caller (Codex HOLD), repo-wide re-inventory
+
+**The original inventory below was scoped too narrowly** (`daemon/ skills/ web/ scripts/
+tests/ core/`) and MISSED `ui/`. Codex cross-lane review caught a second production caller:
+`ui/maez_terminal_ui.py` (the **maez-face** terminal UI) hardcodes
+`MESSAGE_URL = "http://localhost:11435/message"` (`:21`) and `_send_message` (`:619`) POSTs
+to it with **no S7 header** — so the always-on `/message` gate would 403 it → "(no response)".
+
+**Repo-wide re-inventory** (`grep -rn '11435/message\|/message\b' --include=*.py --include=*.jsx
+--include=*.js --include=*.sh .`, filtered to HTTP POSTers): the production callers of daemon
+`/message` are exactly two — (a) the web `api_cockpit_message` proxy (`skills/web_interface.py`),
+and (b) `ui/maez_terminal_ui.py` (`_send_message`). Everything else is the cockpit web UI routing
+through `/api/v1/cockpit/message`, or tests.
+
+**Resolution — owner decision 2026-06-19: RETIRE maez-face from the production surface inventory.**
+The terminal-UI face is superseded by the face visual-direction work. It is removed from the live
+surface inventory, so the only remaining **live production** HTTP caller of `/message` is the web
+cockpit proxy → **Approach A's always-on gate is safe.** In-repo retirement (this branch):
+- `ui/maez_terminal_ui.py` — RETIRED header added (do-not-run; would 403 without an S7 trusted path).
+- `PROGRESS_PUBLIC.md` — `maez-face.service` + autostart moved to **Stopped/disabled**.
+- **Owner-sovereign live steps (handoff):** `systemctl disable --now maez-face.service` and remove
+  `~/.config/autostart/maez-face.desktop` so it is no longer a live mouth.
+
+**Process lesson:** the Task-0 consumer inventory must scan the WHOLE repo, not a hand-picked
+directory list — the consumer boundary was under-mapped (the Organ-1/-2 lesson, recurring).
+
+---
+
 - **Approach A** = gate the shared `/message` route (preferred).
 - **Approach B** (fallback) = a dedicated `/internal/cockpit/message` route, used ONLY if
   a non-cockpit *production* HTTP caller of `/message` exists.

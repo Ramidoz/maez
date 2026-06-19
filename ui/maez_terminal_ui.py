@@ -1,5 +1,14 @@
 #!/usr/bin/env python3
-"""Maez Terminal UI — Persistent cyberpunk terminal face. Shadow-buffered rendering."""
+"""Maez Terminal UI — Persistent cyberpunk terminal face. Shadow-buffered rendering.
+
+RETIRED 2026-06-19 (owner decision) — superseded by the face visual-direction work.
+This is NO LONGER a production surface. It posts to the daemon ``/message`` route WITHOUT
+the S7 internal-channel header (see ``_send_message``); since Organ 3a (cockpit conversation
+spine) S7-gates ``/message`` always-on, running this UI would get HTTP 403 and render
+"(no response)". Do NOT re-enable it as a live mouth without first giving it a deliberate
+trusted S7 path (set ``X-Maez-S7-Internal-Channel`` from the managed token), the way the
+cockpit web proxy and the daemon internal channel do. Kept in-tree for reference, not run.
+"""
 
 import json
 import random

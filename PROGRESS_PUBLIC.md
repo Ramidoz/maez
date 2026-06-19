@@ -128,12 +128,9 @@ Every 30 seconds, this happens:
 | Service | File | Port | What It Does | Starts On |
 |---|---|---|---|---|
 | `maez.service` | `/etc/systemd/system/maez.service` | 11435 (HTTP/REST), 11436 (WebSocket) | Main daemon: reasoning loop, perception, memory, Telegram bot, action engine, health API, WebSocket broadcast | Boot (after network + ollama) |
-| `maez-face.service` | `/etc/systemd/system/maez-face.service` | — | Runs terminal UI in a tmux session (`maez-face`), auto-restarts on failure | Boot (after maez.service) |
 | `ollama.service` | System-installed | 11434 | Serves gemma4:26b for local inference | Boot |
 
-**GNOME autostart:** `~/.config/autostart/maez-face.desktop` opens a gnome-terminal attached to the `maez-face` tmux session on graphical login.
-
-**Stopped/disabled:** `maez-ui.service` (old HTTP-served browser UI, replaced by maez-face).
+**Stopped/disabled:** `maez-ui.service` (old HTTP-served browser UI, replaced by maez-face); `maez-face.service` + `~/.config/autostart/maez-face.desktop` (terminal-UI face, **RETIRED 2026-06-19** — superseded by the face visual-direction work; it posted to daemon `/message` without the S7 header, so it is no longer a live mouth after Organ 3a S7-gated `/message`).
 
 ---
 

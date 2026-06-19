@@ -40,13 +40,25 @@ ruff check daemon/maez_daemon.py skills/web_interface.py tests/*  → All checks
 10. **No inbound-path change** — `cockpit_core` / felt-time / tools / the descriptors are untouched. 3a secures *who may send*, not the turn that runs.
 11. **Built on the merged Organ-2 base** — reuses `_s7_internal_channel_headers` + `_owner_private_auth_required_response` (no duplication); the web gate is idiomatic with the Organ-2 sibling `api_daemon_state`.
 
+## Codex HOLD (2026-06-19) — RESOLVED: a missed `/message` caller
+
+Codex caught that Task 0's inventory was scoped too narrowly (it missed `ui/`): the **maez-face**
+terminal UI (`ui/maez_terminal_ui.py:21,619`) POSTs to daemon `/message` WITHOUT an S7 header, so the
+always-on gate would 403 it. **Repo-wide re-inventory** found exactly two production callers — the web
+cockpit proxy and maez-face. **Owner decision: RETIRE maez-face** (superseded by the face
+visual-direction work). In-repo: RETIRED header on `ui/maez_terminal_ui.py`; `maez-face.service` +
+autostart moved to Stopped/disabled in `PROGRESS_PUBLIC.md`; Task-0 proof amended. With maez-face
+retired, the only remaining **live production** caller of `/message` is the web cockpit proxy →
+Approach A's always-on gate is safe. (Process lesson recorded: Task-0 inventory scans the WHOLE repo.)
+
 ## Owner breath (after Codex PASS + merge — owner-sovereign, do NOT do for them)
 
 **No new secret.** 3a uses the SAME `S7_INTERNAL_CHANNEL_TOKEN` already provisioned + live for Organ 2 — nothing to add to `config/secrets.local.env`, no flag (both gates are always-on).
 
-1. Merge `cockpit-conversation-spine-3a-secure` → main (local; main stays unpushed).
-2. Restart `maez` (daemon) + `maez-web` so the gated routes go live. (Token already present from Organ 2's breath.)
-3. **Witness:**
+1. **Retire maez-face live** (so the gate doesn't 403 a running face): `systemctl disable --now maez-face.service` and remove `~/.config/autostart/maez-face.desktop`. (If maez-face isn't installed on this box, nothing to do — it's already not a live mouth.)
+2. Merge `cockpit-conversation-spine-3a-secure` → main (local; main stays unpushed).
+3. Restart `maez` (daemon) + `maez-web` so the gated routes go live. (Token already present from Organ 2's breath.)
+4. **Witness:**
    - Owner sends a message from the cockpit → gets Maez's reply (the send now flows owner-gated + S7-locked into the same conversation).
    - Non-owner / no-cookie POST to `/api/v1/cockpit/message` → **401** `owner_auth_required`.
    - Headerless probe of the daemon route → **403**:
