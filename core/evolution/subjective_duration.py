@@ -455,6 +455,31 @@ def _diagnostic_row(
     }
 
 
+CURRENT_COMPUTE_VERSION = 1
+
+
+def config_for_version(compute_version: int) -> "SubjectiveDurationConfig":
+    """Map a stored compute_version to the curve config that produced it, so old intervals
+    replay under their original formula — never today's. v1 == the original curve constants."""
+    return SubjectiveDurationConfig()
+
+
+def replay_felt_value(anchor_row: "Mapping[str, object]", *, at_ts: datetime) -> float:
+    """Reconstruct felt_value at `at_ts` by replaying FORWARD from `anchor_row` using the anchor's
+    FROZEN modulators + compute_version. Reads ONLY the anchor — never live temperament/residual.
+    anchor_row needs: ts (aware dt), value, drag_multiplier, engagement_multiplier,
+    residual_resonance, compute_version."""
+    delta_hours = max(0.0, (at_ts - anchor_row["ts"]).total_seconds() / 3600.0)
+    return compute_subjective_duration_update(
+        prior_value=float(anchor_row["value"]),
+        delta_hours=delta_hours,
+        drag_multiplier=float(anchor_row["drag_multiplier"]),
+        engagement_multiplier=float(anchor_row["engagement_multiplier"]),
+        residual_multiplier=1.0 + (0.35 * float(anchor_row["residual_resonance"])),
+        config=config_for_version(int(anchor_row.get("compute_version", 1))),
+    )
+
+
 class SubjectiveDuration:
     """Append-only continuous felt-time store.
 
@@ -492,6 +517,7 @@ class SubjectiveDuration:
                     engagement_multiplier REAL NOT NULL,
                     residual_resonance REAL NOT NULL,
                     retrospective_density REAL NOT NULL,
+                    compute_version INTEGER NOT NULL DEFAULT 1,
                     metadata_json TEXT NOT NULL DEFAULT '{}'
                 );
                 CREATE TABLE IF NOT EXISTS subjective_duration_salience_events (
@@ -514,6 +540,11 @@ class SubjectiveDuration:
                 CREATE INDEX IF NOT EXISTS idx_sd_events_ts ON subjective_duration_salience_events(ts_utc);
                 """
             )
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(subjective_duration_samples)")}
+            if "compute_version" not in cols:
+                conn.execute("ALTER TABLE subjective_duration_samples "
+                             "ADD COLUMN compute_version INTEGER NOT NULL DEFAULT 1")
+                conn.commit()
             _migrate_meaningful_salience_seam(conn)
 
     def current(self, *, now_utc: str | datetime | None = None) -> SubjectiveDurationSnapshot:
