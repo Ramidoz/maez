@@ -1,7 +1,7 @@
-# Handoff — Cockpit Real-State Bridge (Organ 2) — REVIEW GATE
+# Handoff — Cockpit Real-State Bridge (Organ 2) — LIVE WITNESSED
 
-**Date:** 2026-06-18. **Branch:** `cockpit-real-state-bridge-organ` (tip = the handoff-correction commit at HEAD; see `git log`, local-only, NOT pushed, NOT merged).
-**Status:** built + Claude two-stage reviewed (spec + code-quality) per task. **STOPPED at the review gate** — awaiting Codex cross-lane review, then owner breath. NOT `LIVE_WITNESSED`.
+**Date:** 2026-06-18. **Merged:** main @`1d63b24` (local-only, NOT pushed).
+**Status:** **LIVE_WITNESSED** — built + Claude two-stage reviewed (spec + code-quality) per task, Codex cross-lane PASS, merged, provisioned, restarted, and live-witnessed.
 **Arc:** decompose-the-organism Organ 2 ([[project_organism_decompose_organs]]). Spec @24a5fd9, plan @796416c.
 
 ## What this organ does (one line)
@@ -41,7 +41,7 @@ ruff check daemon/maez_daemon.py skills/web_interface.py tests/*  → All checks
 
 **Noted for Codex (not a defect, future DRY):** the web file already has a sibling `_s7_cockpit_proxy_to_daemon()` (message-direction, web-owner-spine territory) that inlines the same `X-Maez-S7-Internal-Channel` pattern; the new `_s7_internal_channel_headers()` could later consolidate it, but that's OUT of this slice's scope (it touches the web-owner spine). Left untouched deliberately.
 
-## Owner breath (after Codex PASS + merge — owner-sovereign, do NOT do for them)
+## Owner breath recipe (completed 2026-06-18)
 
 **ORDER MATTERS — set the flag BEFORE the restart.** `skills/web_interface.py` reads `MAEZ_COCKPIT_REAL_STATE` from `os.environ` at request time, and a process's `os.environ` is populated at START from its service environment. So if you set the flag *after* restarting, the live `maez-web` keeps serving the legacy log-scrape (flag-off) until another restart — a false witness against the wrong path. Provision the token AND set the flag, THEN restart, THEN witness.
 
@@ -53,4 +53,23 @@ ruff check daemon/maez_daemon.py skills/web_interface.py tests/*  → All checks
    `curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:11435/internal/cockpit/state` → **403**.
 6. Token wrong/absent while flag-on → cockpit shows honest `unreachable` (reason `s7_internal_channel_untrusted`), never a fake state.
 
-Only after the browser witness → mark **LIVE_WITNESSED** and record in [[project_organism_decompose_organs]] (Organ 2). Next organs: web-owner shared spine → voice spine → coherence ceremony.
+## Final live witness — LIVE_WITNESSED 2026-06-18
+
+Operational setup:
+
+- `S7_INTERNAL_CHANNEL_TOKEN` provisioned in `config/secrets.local.env` (managed secret source), not `model.env`.
+- Stale inline `Environment=S7_INTERNAL_CHANNEL_TOKEN=...` removed from the web service drop-in so the S7 token has one managed source.
+- `MAEZ_COCKPIT_REAL_STATE=1` was already present in the web service environment before restart.
+- `maez.service` and `maez-web.service` restarted; both came back active with new PIDs (`2948 -> 53464`, `2949 -> 53465`).
+
+Witnesses:
+
+- Headerless daemon endpoint: `GET http://127.0.0.1:11435/internal/cockpit/state` returned `403` with `{"error":"s7_internal_channel_untrusted","ok":false}`.
+- Managed-token daemon endpoint returned the real in-memory cockpit state with keys including `cycle_count`, `last_thought`, `cognition`, `valence`, `reasoning_loop`, `sampled_at`, and `status=alive`.
+- Web proxy without owner cookie returned `401 {"error":"owner_auth_required","ok":false}`.
+- Web proxy with the existing web-owner cookie returned `200` and the real daemon state (`cycle_count=13`, `last_thought=Soul config was modified recently, but no anomalies require attention. HEARTBEAT_OK`, `cognition`, `valence`, `reasoning_loop`, `status=alive`).
+- Post-restart journal scan found no recent daemon/web errors.
+
+Browser automation note: a local Playwright package was installed under `/tmp` only, but the cached browser revision did not match and system Firefox hung in headless launch. The API witness still proves the load-bearing Organ 2 contract: owner-gated web proxy -> S7-headered daemon nerve -> real in-memory state, with no-cookie and no-token failures closed.
+
+Next organs: cockpit conversation spine 3a (secure `/api/v1/cockpit/message` + daemon `/message`) -> web-owner shared spine -> voice spine -> coherence ceremony.
