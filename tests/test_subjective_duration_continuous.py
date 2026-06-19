@@ -35,6 +35,67 @@ class ReplayFeltValue(unittest.TestCase):
                          sd.SubjectiveDurationConfig().base_rate_per_hour)
 
 
+class PeekReadOnly(unittest.TestCase):
+    def _inst(self):
+        return sd.SubjectiveDuration(db_path=os.path.join(tempfile.mkdtemp(), "sd.db"))
+
+    def _count(self, inst):
+        with sqlite3.connect(inst.db_path) as conn:
+            return conn.execute("SELECT COUNT(*) FROM subjective_duration_samples").fetchone()[0]
+
+    def test_peek_does_not_write_but_current_does(self):
+        inst = self._inst()
+        before = self._count(inst)
+        inst.peek(now_utc=datetime(2026, 6, 19, 12, 0, 0, tzinfo=UTC))
+        self.assertEqual(self._count(inst), before)              # peek wrote nothing
+        inst.current(now_utc=datetime(2026, 6, 19, 12, 0, 30, tzinfo=UTC))
+        self.assertEqual(self._count(inst), before + 1)          # current still writes
+
+    def test_elapsed_is_exact_felt_is_derived(self):
+        inst = self._inst()
+        t0 = datetime(2026, 6, 19, 12, 0, 0, tzinfo=UTC)
+        inst.current(now_utc=t0)                                 # anchor row
+        snap = inst.peek(now_utc=t0 + timedelta(hours=2))
+        self.assertAlmostEqual(snap.elapsed_seconds, 7200.0, places=3)   # exact wall-clock
+        self.assertNotAlmostEqual(snap.felt_value, 7200.0, places=3)     # felt != elapsed
+        self.assertLessEqual(snap.felt_value, 10.0)                      # 0-10 curve, not seconds
+        self.assertEqual(snap.felt_value, snap.value)                    # felt_value aliases value
+
+    def test_monotonic_climb_no_band(self):
+        inst = self._inst()
+        t0 = datetime(2026, 6, 19, 12, 0, 0, tzinfo=UTC)
+        inst.current(now_utc=t0)
+        a = inst.peek(now_utc=t0 + timedelta(hours=1)).felt_value
+        b = inst.peek(now_utc=t0 + timedelta(hours=3)).felt_value
+        self.assertGreater(b, a)                                 # raw continuous value climbs
+
+    def test_current_stores_computed_modulators_and_replays(self):
+        # The stored anchor's modulators must be EXACTLY what _compute produced, AND replaying the
+        # persisted row forward through Task 1's replay_felt_value must reproduce a faithful felt value.
+        inst = self._inst()
+        t0 = datetime(2026, 6, 19, 12, 0, 0, tzinfo=UTC)
+        snap = inst.current(now_utc=t0)             # writes the anchor; snap == what _compute produced
+        inst.peek(now_utc=t0 + timedelta(hours=4))  # read-only; must not perturb the stored anchor
+        with sqlite3.connect(inst.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT * FROM subjective_duration_samples ORDER BY sample_id DESC LIMIT 1").fetchone()
+        # (1) the stored modulators ARE the computed ones (not asserted in prose anymore)
+        self.assertAlmostEqual(row["drag_multiplier"], snap.drag_multiplier, places=9)
+        self.assertAlmostEqual(row["engagement_multiplier"], snap.engagement_multiplier, places=9)
+        self.assertAlmostEqual(row["residual_resonance"], snap.residual_resonance, places=9)
+        self.assertAlmostEqual(row["value"], snap.value, places=9)
+        self.assertEqual(row["compute_version"], sd.CURRENT_COMPUTE_VERSION)
+        # (2) replay from the STORED row reproduces a forward-replayed felt value, deterministically
+        anchor = {"ts": t0, "value": row["value"], "drag_multiplier": row["drag_multiplier"],
+                  "engagement_multiplier": row["engagement_multiplier"],
+                  "residual_resonance": row["residual_resonance"],
+                  "compute_version": row["compute_version"]}
+        at = t0 + timedelta(hours=2)
+        replayed = sd.replay_felt_value(anchor, at_ts=at)
+        self.assertEqual(replayed, sd.replay_felt_value(anchor, at_ts=at))   # deterministic
+        self.assertGreaterEqual(replayed, row["value"])                       # climbs forward from the anchor
+
+
 class SchemaMigration(unittest.TestCase):
     def test_old_db_without_compute_version_migrates_to_v1(self):
         d = tempfile.mkdtemp()

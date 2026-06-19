@@ -84,6 +84,13 @@ class SubjectiveDurationSnapshot:
     render_band: str
     surface_phrase: str
     source_ref_digest: str | None
+    elapsed_seconds: float = 0.0
+    drag_multiplier: float = 0.0
+    engagement_multiplier: float = 0.0
+
+    @property
+    def felt_value(self) -> float:
+        return self.value
 
 
 @dataclass(frozen=True)
@@ -458,13 +465,13 @@ def _diagnostic_row(
 CURRENT_COMPUTE_VERSION = 1
 
 
-def config_for_version(compute_version: int) -> "SubjectiveDurationConfig":
+def config_for_version(compute_version: int) -> SubjectiveDurationConfig:
     """Map a stored compute_version to the curve config that produced it, so old intervals
     replay under their original formula — never today's. v1 == the original curve constants."""
     return SubjectiveDurationConfig()
 
 
-def replay_felt_value(anchor_row: "Mapping[str, object]", *, at_ts: datetime) -> float:
+def replay_felt_value(anchor_row: Mapping[str, object], *, at_ts: datetime) -> float:
     """Reconstruct felt_value at `at_ts` by replaying FORWARD from `anchor_row` using the anchor's
     FROZEN modulators + compute_version. Reads ONLY the anchor — never live temperament/residual.
     anchor_row needs: ts (aware dt), value, drag_multiplier, engagement_multiplier,
@@ -547,13 +554,16 @@ class SubjectiveDuration:
                 conn.commit()
             _migrate_meaningful_salience_seam(conn)
 
-    def current(self, *, now_utc: str | datetime | None = None) -> SubjectiveDurationSnapshot:
-        now = _normalize_event_time(now_utc or datetime.now(UTC))
+    def _compute(self, now: datetime) -> SubjectiveDurationSnapshot:
+        """Pure read-only felt-time computation — NEVER writes a sample.
+
+        On clock-degraded (now < latest ts) it records the degraded salience event and
+        returns the last row's snapshot (which lacks elapsed_seconds/modulators — that's the
+        honest-failure path, not the hot path)."""
         latest = self._latest_sample()
         if latest is not None and now < latest["ts"]:
             self._record_clock_degraded_event(now=now, latest=latest)
             return self._snapshot_from_row(latest, source_ref_digest=None)
-
         prior_value = 0.0 if latest is None else float(latest["value"])
         prior_ts = now if latest is None else latest["ts"]
         delta_hours = max(0.0, (now - prior_ts).total_seconds() / 3600.0)
@@ -570,26 +580,7 @@ class SubjectiveDuration:
         )
         retrospective_density = self._retrospective_density(now, temperament)
         render_band, surface_phrase = _render(value)
-        ts_iso = now.isoformat()
-        with closing(sqlite3.connect(self.db_path)) as conn:
-            conn.execute(
-                "INSERT INTO subjective_duration_samples "
-                "(ts_utc, value, felt_time_rate, drag_multiplier, engagement_multiplier, "
-                "residual_resonance, retrospective_density, metadata_json) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    ts_iso,
-                    value,
-                    felt_time_rate,
-                    drag,
-                    engagement,
-                    residual,
-                    retrospective_density,
-                    "{}",
-                ),
-            )
-            conn.commit()
-        snapshot = SubjectiveDurationSnapshot(
+        return SubjectiveDurationSnapshot(
             value=value,
             felt_time_rate=felt_time_rate,
             residual_resonance=residual,
@@ -597,19 +588,55 @@ class SubjectiveDuration:
             render_band=render_band,
             surface_phrase=surface_phrase,
             source_ref_digest=None,
+            elapsed_seconds=(now - prior_ts).total_seconds(),
+            drag_multiplier=drag,
+            engagement_multiplier=engagement,
         )
+
+    def peek(self, *, now_utc: str | datetime | None = None) -> SubjectiveDurationSnapshot:
+        now = _normalize_event_time(now_utc or datetime.now(UTC))
+        return self._compute(now)  # NO write
+
+    def current(self, *, now_utc: str | datetime | None = None) -> SubjectiveDurationSnapshot:
+        now = _normalize_event_time(now_utc or datetime.now(UTC))
+        latest = self._latest_sample()
+        if latest is not None and now < latest["ts"]:
+            # clock-degraded early-return: _compute records the degraded event and returns the
+            # last row's snapshot; current() must NOT insert a sample on this path.
+            return self._compute(now)
+        snap = self._compute(now)
+        ts_iso = now.isoformat()
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            conn.execute(
+                "INSERT INTO subjective_duration_samples "
+                "(ts_utc, value, felt_time_rate, drag_multiplier, engagement_multiplier, "
+                "residual_resonance, retrospective_density, metadata_json, compute_version) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    ts_iso,
+                    snap.value,
+                    snap.felt_time_rate,
+                    snap.drag_multiplier,
+                    snap.engagement_multiplier,
+                    snap.residual_resonance,
+                    snap.retrospective_density,
+                    "{}",
+                    CURRENT_COMPUTE_VERSION,
+                ),
+            )
+            conn.commit()
         self._write_diagnostic(
             _diagnostic_row(
                 timestamp_utc=ts_iso,
                 event_type="sample",
-                value=value,
-                felt_time_rate=felt_time_rate,
-                render_band=render_band,
-                residual_resonance=residual,
-                retrospective_density=retrospective_density,
+                value=snap.value,
+                felt_time_rate=snap.felt_time_rate,
+                render_band=snap.render_band,
+                residual_resonance=snap.residual_resonance,
+                retrospective_density=snap.retrospective_density,
             )
         )
-        return snapshot
+        return snap
 
     def perception_line(self, *, owner_auth: SubjectiveDurationOwnerAuth | None = None) -> str:
         if owner_auth is not None and not isinstance(owner_auth, SubjectiveDurationOwnerAuth):
