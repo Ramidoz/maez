@@ -66,6 +66,9 @@ class SubjectiveDurationSubstrateTests(unittest.TestCase):
                 "render_band",
                 "surface_phrase",
                 "source_ref_digest",
+                "elapsed_seconds",
+                "drag_multiplier",
+                "engagement_multiplier",
             ],
         )
         self.assertTrue(is_dataclass(SubjectiveDurationOwnerAuth))
