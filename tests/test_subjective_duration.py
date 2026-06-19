@@ -81,14 +81,17 @@ class SubjectiveDurationSubstrateTests(unittest.TestCase):
             log_path = Path(td) / "subjective_duration.jsonl"
             sd = SubjectiveDuration(db_path=store, diagnostic_log_path=log_path)
 
-            snap = sd.current(now_utc=datetime(2026, 5, 24, 12, 0, tzinfo=UTC))
+            fresh = datetime(2026, 5, 24, 12, 0, tzinfo=UTC)
+            snap = sd.current(now_utc=fresh)
 
             self.assertEqual(snap.value, 0.0)
             self.assertEqual(snap.render_band, "light")
             self.assertEqual(snap.surface_phrase, "time feels light right now")
-            self.assertIn("time feels light right now", sd.perception_line())
-            self.assertNotIn("2026-", sd.perception_line())
-            self.assertNotIn("seconds", sd.perception_line().lower())
+            # perception_line recomputes to exact-now (peek); pin now_utc=fresh so the felt phrase is
+            # deterministic at the fresh moment instead of echoing the stored row.
+            self.assertIn("time feels light right now", sd.perception_line(now_utc=fresh))
+            self.assertNotIn("2026-", sd.perception_line(now_utc=fresh))
+            self.assertNotIn("seconds", sd.perception_line(now_utc=fresh).lower())
 
             row = json.loads(log_path.read_text(encoding="utf-8").splitlines()[-1])
             self.assertEqual(set(row), DIAGNOSTIC_KEYS)
@@ -122,15 +125,17 @@ class SubjectiveDurationSubstrateTests(unittest.TestCase):
                 db_path=db_path,
                 diagnostic_log_path=Path(td) / "subjective_duration.jsonl",
             )
-            sd.current(now_utc=datetime(2026, 5, 24, 12, 0, tzinfo=UTC))
+            t0 = datetime(2026, 5, 24, 12, 0, tzinfo=UTC)
+            sd.current(now_utc=t0)
 
+            # Poison the stored row's surface phrase. perception_line() recomputes the band at
+            # read-time (peek) and must NEVER echo this stored phrase.
             with closing(sqlite3.connect(db_path)) as conn:
                 conn.execute(
                     "UPDATE subjective_duration_samples "
-                    "SET value = ?, metadata_json = ? "
+                    "SET metadata_json = ? "
                     "WHERE sample_id = (SELECT MAX(sample_id) FROM subjective_duration_samples)",
                     (
-                        1.5,
                         json.dumps(
                             {
                                 "render_band": "light",
@@ -141,7 +146,9 @@ class SubjectiveDurationSubstrateTests(unittest.TestCase):
                 )
                 conn.commit()
 
-            line = sd.perception_line()
+            # 4h of elapsed quiet -> recomputed felt value lands in the mildly-stretched band,
+            # so the read-time phrase mapping (spec thresholds) yields "a little stretch".
+            line = sd.perception_line(now_utc=t0 + timedelta(hours=4))
 
             self.assertIn("time has a little stretch to it", line)
             self.assertNotIn("stale stored phrase", line)

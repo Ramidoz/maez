@@ -638,11 +638,11 @@ class SubjectiveDuration:
         )
         return snap
 
-    def perception_line(self, *, owner_auth: SubjectiveDurationOwnerAuth | None = None) -> str:
+    def perception_line(self, *, owner_auth: SubjectiveDurationOwnerAuth | None = None,
+                        now_utc: str | datetime | None = None) -> str:
         if owner_auth is not None and not isinstance(owner_auth, SubjectiveDurationOwnerAuth):
             return ""
-        latest = self._latest_sample()
-        snap = self._snapshot_from_row(latest, source_ref_digest=None) if latest is not None else self.current()
+        snap = self.peek(now_utc=now_utc)   # recompute to exact-now (read-only); never echo the stale row
         return f"Felt time: {snap.surface_phrase}."
 
     def record_salience_event(

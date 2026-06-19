@@ -116,3 +116,26 @@ class SchemaMigration(unittest.TestCase):
             cols = {r[1] for r in conn.execute("PRAGMA table_info(subjective_duration_samples)")}
             self.assertIn("compute_version", cols)
             self.assertEqual(conn.execute("SELECT compute_version FROM subjective_duration_samples").fetchone()[0], 1)
+
+
+class PerceptionLineRecomputes(unittest.TestCase):
+    def test_perception_line_advances_with_clock_not_stale_row(self):
+        inst = sd.SubjectiveDuration(db_path=os.path.join(tempfile.mkdtemp(), "sd.db"))
+        t0 = datetime(2026, 6, 19, 12, 0, 0, tzinfo=UTC)
+        inst.current(now_utc=t0)                       # one stored row (the stale one it used to echo)
+        # 8h later, perception_line must reflect the RECOMPUTED felt time, not the stored row's phrase
+        line_later = inst.perception_line(now_utc=t0 + timedelta(hours=8))
+        stale = f"Felt time: {inst._snapshot_from_row(inst._latest_sample(), source_ref_digest=None).surface_phrase}."
+        self.assertNotEqual(line_later, stale)         # recomputed, didn't echo the old row
+        self.assertTrue(line_later.startswith("Felt time:"))
+
+    def test_perception_line_is_read_only(self):
+        inst = sd.SubjectiveDuration(db_path=os.path.join(tempfile.mkdtemp(), "sd.db"))
+        t0 = datetime(2026, 6, 19, 12, 0, 0, tzinfo=UTC)
+        inst.current(now_utc=t0)
+        with sqlite3.connect(inst.db_path) as conn:
+            before = conn.execute("SELECT COUNT(*) FROM subjective_duration_samples").fetchone()[0]
+        inst.perception_line(now_utc=t0 + timedelta(hours=4))
+        with sqlite3.connect(inst.db_path) as conn:
+            after = conn.execute("SELECT COUNT(*) FROM subjective_duration_samples").fetchone()[0]
+        self.assertEqual(before, after)                # peek-based: no write
