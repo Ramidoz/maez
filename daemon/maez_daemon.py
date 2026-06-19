@@ -10678,6 +10678,8 @@ class MaezDaemon:
 
         @app.route("/message", methods=["POST"])
         def message():
+            if not _s7_internal_channel_trusted(request):
+                return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
             data = request.get_json(silent=True) or {}
             text = data.get("text", "").strip()
             if not text:

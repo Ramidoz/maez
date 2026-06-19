@@ -2689,3 +2689,74 @@ class CockpitStateS7Gate(_DaemonAppClientMixin, unittest.TestCase):
 
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.get_json().get("error"), "s7_internal_channel_untrusted")
+
+
+class MessageRouteS7Gate(_DaemonAppClientMixin, unittest.TestCase):
+    """The daemon /message write hole is S7-gated BEFORE body parse.
+
+    Telegram reaches handle_message in-process (not via /message), so this gate
+    only constrains the HTTP cockpit-proxy caller. Always-on, no flag.
+    """
+
+    def test_valid_s7_header_clears_the_gate(self):
+        env = {"S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret"}
+        with patch.dict(os.environ, env, clear=False):
+            client = self._client()
+            r = client.post(
+                "/message",
+                headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+                json={"text": "hi"},
+            )
+        # Gate passes; downstream may 200/4xx — just not the gate's 403.
+        self.assertNotEqual(r.status_code, 403)
+
+    def test_headerless_returns_403(self):
+        env = {"S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret"}
+        with patch.dict(os.environ, env, clear=False):
+            client = self._client()
+            r = client.post("/message", json={"text": "hi"})
+
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(r.get_json().get("error"), "s7_internal_channel_untrusted")
+
+    def test_wrong_token_returns_403(self):
+        env = {"S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret"}
+        with patch.dict(os.environ, env, clear=False):
+            client = self._client()
+            r = client.post(
+                "/message",
+                headers={"X-Maez-S7-Internal-Channel": "nope"},
+                json={"text": "hi"},
+            )
+
+        self.assertEqual(r.status_code, 403)
+
+    def test_valid_header_plus_origin_still_403(self):
+        # no-Origin CSRF guard, PINNED on /message (valid token proves the
+        # 403 comes from the Origin guard, not a missing token).
+        env = {"S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret"}
+        with patch.dict(os.environ, env, clear=False):
+            client = self._client()
+            r = client.post(
+                "/message",
+                headers={
+                    "X-Maez-S7-Internal-Channel": "test-channel-secret",
+                    "Origin": "http://127.0.0.1:11437",
+                },
+                json={"text": "hi"},
+            )
+
+        self.assertEqual(r.status_code, 403)
+
+    def test_gate_runs_before_body_parse(self):
+        # malformed body + no token -> still 403, never 400.
+        env = {"S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret"}
+        with patch.dict(os.environ, env, clear=False):
+            client = self._client()
+            r = client.post(
+                "/message",
+                data=b"not json",
+                content_type="application/json",
+            )
+
+        self.assertEqual(r.status_code, 403)
