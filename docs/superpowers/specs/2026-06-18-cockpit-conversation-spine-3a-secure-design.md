@@ -58,22 +58,31 @@ def api_cockpit_message():
     try:
         req = _urlreq.Request(f"{_DAEMON_BASE}/message", data=body, headers=headers, method="POST")
         with _urlreq.urlopen(req, timeout=_COCKPIT_PROXY_TIMEOUT_S) as resp:
-            return Response(resp.read(), status=resp.status, mimetype="application/json")
+            payload = resp.read()
+            status = resp.status
+            ctype = resp.headers.get("Content-Type", "application/json")
+        return (payload, status, {"Content-Type": ctype})        # PRESERVE existing contract (daemon CT)
     except _urlerr.HTTPError as e:
-        payload = e.read()
-        e.close()                                    # (3) close the HTTPError response (Organ-2 lesson)
-        return Response(payload, status=e.code, mimetype="application/json")
-    except Exception:
-        return jsonify({"ok": False, "error": "daemon_unreachable"}), 502
+        try:
+            payload = e.read()
+        except Exception:
+            payload = str(e).encode("utf-8")                     # keep existing read fallback
+        finally:
+            e.close()                                            # (3) close even if e.read() failed (Organ-2 lesson)
+        return (payload, e.code, {"Content-Type": "application/json"})
+    except Exception as e:
+        return jsonify({"ok": False, "error": "daemon_unreachable", "detail": str(e)[:200]}), 502
 ```
 - (1) The owner gate runs **before** `request.get_data()` — an unauthenticated write never enters parsing.
 - (2) A missing token is a **non-2xx structured error** (`502` + `{"ok": false, "error":
   "s7_internal_channel_untrusted"}`). The UI already treats non-OK as "couldn't reach Maez" — correct: the
   owner's message was **not delivered**, never a fabricated reply.
-- (3) The `HTTPError` branch **closes `e`** after reading (Organ 2's `97bc454` cleanup lesson), so no
-  ResourceWarning. (Keep the existing branch's behavior of surfacing the daemon's status/body to the UI.)
-- The exact `Response`/`_DAEMON_BASE`/`_COCKPIT_PROXY_TIMEOUT_S` usage stays as the existing route's; only
-  the gate, the S7 header, the missing-token 502, and the `e.close()` are added.
+- (3) **Preserve the existing response contract** — success returns the daemon's `(payload, status,
+  Content-Type)` tuple unchanged (do NOT hardcode `application/json` or drop the daemon's Content-Type); the
+  `HTTPError` branch keeps the existing `e.read()`→`str(e)` fallback and **closes `e` in a `finally`** so the
+  ResourceWarning fix (Organ 2's `97bc454`) survives even if `e.read()` raises. Only **four** things are
+  added to the route: the owner gate, the S7 header (`**s7_headers`), the missing-token 502, and the
+  `finally: e.close()`. `_DAEMON_BASE`/`_COCKPIT_PROXY_TIMEOUT_S`/the tuple-return shape stay as today's.
 
 **2 · Daemon side — gate BEFORE parsing (refinements 1, 4).** Add to the existing `/message` route, as the
 very first statements:
@@ -120,14 +129,17 @@ If any proof refutes the design, STOP and patch.
   **only production HTTP caller** of the daemon `/message` route (grep `"/message"`, `:11435/message`,
   `_DAEMON_BASE` across daemon+web+cockpit+scripts+tests; **classify** each hit production vs test — test
   refs are expected and do NOT refute). If a non-test, non-cockpit production HTTP caller exists →
-  Approach B (dedicated route). Confirmed-likely: cockpit proxy only; `tests/test_cockpit_proxies_2026_05_05.py`
-  + `tests/test_ui_message_history_threading.py` POST `/message` directly (test refs).
+  Approach B (dedicated route). Confirmed: cockpit proxy is the only production HTTP caller; the only test
+  that makes a real HTTP POST is `tests/test_cockpit_proxies_2026_05_05.py` (`self.client.post` + patched
+  `urlopen`). **NOT** HTTP callers (do not chase them): `tests/test_ui_message_history_threading.py` calls
+  `_pair_history_for_chat_threading` **directly** (no HTTP, despite a docstring mention of the POST), and
+  `tests/test_subjective_duration_static_boundaries.py` only `read_text`+`ast.parse`-slices the route source.
 - **Telegram-path proof:** confirm telegram reaches `handle_message` in-process (maez_adapter), NOT via the
   HTTP `/message` route — so the daemon S7 gate cannot starve telegram.
-- **Existing-test-breakage inventory (Organ-2 lesson):** list every test that POSTs to `/api/v1/cockpit/message`
-  (now owner-gated → needs an owner mock) or to daemon `/message` (now S7-gated → needs the header).
-  `tests/test_cockpit_proxies_2026_05_05.py`, `tests/test_ui_message_history_threading.py` must be updated,
-  not left to break.
+- **Existing-test-breakage inventory (Organ-2 lesson):** the only test that exercises the gated HTTP path is
+  `tests/test_cockpit_proxies_2026_05_05.py` (POSTs `/api/v1/cockpit/message` → now owner-gated → needs an
+  owner mock; its `urlopen` assertion now also sees the S7 header). It must be **updated, not left to break**.
+  Re-grep to confirm no other test POSTs to `/api/v1/cockpit/message` or daemon `/message` over HTTP.
 - **Clean separation:** the gated routes call NO new web-owner-spine (`_proxy_web_owner_message_to_daemon`,
   the quarry `/chat` bridge) or voice code; 3a touches only the existing two functions.
 - **Import resolution (on the Organ-2-merged base):** `_owner_private_auth_ok`,
@@ -146,8 +158,12 @@ If any proof refutes the design, STOP and patch.
   `{"ok": false, "error": "s7_internal_channel_untrusted"}`; **valid token + `Origin` header → 403** (pin the
   no-Origin guard on the now-gated route). Gate asserted to run **before** `get_json` (a malformed-body
   request with no token still 403s, never 400).
-- **Update the existing /message tests** (`test_cockpit_proxies_2026_05_05`, `test_ui_message_history_threading`)
-  to carry the S7 header / owner mock so they exercise the gated path instead of breaking.
+- **Preserve-contract test:** owner + token + a daemon success with a non-JSON Content-Type → the proxy
+  returns the daemon's Content-Type unchanged (guards against re-introducing the hardcoded `application/json`).
+- **Update the existing HTTP test** (`test_cockpit_proxies_2026_05_05`) to mock the owner gate and assert the
+  outgoing Request carries the S7 header, so it exercises the gated path instead of breaking. (Do NOT touch
+  `test_ui_message_history_threading` / `test_subjective_duration_static_boundaries` — neither makes an HTTP
+  call.)
 - Scope-guard: only the message-spine cases; no felt-time / action-engine / `/chat` cases.
 
 ## Witness (live, before LIVE_WITNESSED)
@@ -162,7 +178,8 @@ Owner breath = the **same** S7 token Organ 2 provisions (no new secret); merge a
 ## Scope
 
 - **IN:** the web `api_cockpit_message` owner-gate + S7-header + missing-token-502 + HTTPError-close; the
-  daemon `/message` S7 gate (Approach A); the hermetic tests + the two existing-/message-test updates.
+  daemon `/message` S7 gate (Approach A); the hermetic tests + the one existing-HTTP-test update
+  (`test_cockpit_proxies_2026_05_05`).
 - **OUT (deferred):** felt-time on the cockpit turn (**3b**); the action engine — tools/cards/search/proposals
   + the web approval ceremony (**3c**); the web `/chat` route + any `private_owner_bridge`/telegram-derived
   owner path (the NO-GO landmine — never); the voice spine (Organ 4); the coherence ceremony (Organ 5); any
