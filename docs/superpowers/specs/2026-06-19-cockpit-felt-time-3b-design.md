@@ -35,9 +35,37 @@ are sub-organ 3c.
 
 **1 · The owner marker (web → daemon) — "S7 proves the pipe, the marker proves the person."**
 - Add a shared constant `_OWNER_AUTHENTICATED_HEADER = "X-Maez-Owner-Authenticated"` (web + daemon).
-- In `api_cockpit_message` (`skills/web_interface.py:1764`), AFTER the existing `_owner_private_auth_ok()`
-  gate (3a), add `X-Maez-Owner-Authenticated: 1` to the S7-forwarded request headers. A non-owner never
-  reaches this line (the web edge 401s first); the marker is only ever set on an owner-authenticated send.
+- **The marker requires STRICTER proof than the 3a access gate.** `_owner_private_auth_ok()`
+  (`skills/web_interface.py:9783`) is an *access / never-lockout* gate — it returns True on THREE paths:
+  claimed+cookie→`_is_owner` (the real owner proof), **unclaimed+loopback** (`:9790`, local recovery), and
+  **degraded-store→loopback** (`:9801`, fail-open on the physical body). The first is owner-proof; the
+  other two are "local access without a proven owner." Felt-time is owner-only inner life, so the marker
+  must mean a **proven** owner, not mere access.
+- Add a stricter helper `_request_has_web_owner_cookie()` — True **only** on the claimed-cookie-resolved
+  path, with NO loopback recovery and NO degraded-store fallback:
+  ```python
+  def _request_has_web_owner_cookie() -> bool:
+      """Stricter than _owner_private_auth_ok: a COOKIE that resolves to a CLAIMED web_owner.
+      No unclaimed-loopback recovery, no degraded-store fallback — felt-time (owner-only inner
+      life) requires proven owner identity, not access. Returns False on any uncertainty."""
+      try:
+          if not accounts.owner_claimed():
+              return False                      # unclaimed -> not a proven owner (NO loopback recovery)
+          token = (request.cookies.get(AUTH_COOKIE, "") or "").strip()
+          if not token:
+              return False
+          user = accounts.get_by_token(token)
+          if not user:
+              return False
+          record = accounts.get_user_record(user.get("uuid", "")) or {}
+          return _is_owner(record)              # web_owner only (never private_owner_bridge)
+      except Exception:
+          return False                          # degraded store -> FAIL CLOSED (no loopback recovery)
+  ```
+- In `api_cockpit_message` (`skills/web_interface.py:1764`): the SEND is still allowed by the broad 3a
+  `_owner_private_auth_ok()` gate (never-lockout, unchanged). But the marker is stamped **only when
+  `_request_has_web_owner_cookie()` is True** — so a local-recovery or degraded-store session may send,
+  yet earns NO felt-time. A non-owner is 401'd before either check (3a, unchanged).
 - In the daemon `/message` handler (`daemon/maez_daemon.py:10679`, already S7-gated by 3a so the marker is
   only trustable on a trusted call), read `owner_authenticated = request.headers.get(
   _OWNER_AUTHENTICATED_HEADER) == "1"` and pass `owner_authenticated=owner_authenticated` into
@@ -100,8 +128,11 @@ lesson, 3rd recurrence). If any proof refutes the design, STOP and patch.
   NOT set `felt_time_enabled` — so 3b cannot change telegram's felt-time either way.
 - **OWNER_AUTH validation:** the new `("cockpit","cockpit_web_owner")` pair passes
   `SubjectiveDurationOwnerAuth` construction (and a mismatched pair still raises).
-- **Owner-signal flow:** confirm the daemon `/message` reads the marker only inside the S7-gated handler
-  (3a), and the web proxy sets it only after `_owner_private_auth_ok()`.
+- **Owner-signal flow + marker strictness:** confirm the daemon `/message` reads the marker only inside
+  the S7-gated handler (3a), and the web proxy stamps it only when `_request_has_web_owner_cookie()` is
+  True. Prove the strict helper EXCLUDES both `_owner_private_auth_ok()` loopback paths (unclaimed-loopback
+  `:9790` and degraded-store `:9801`) — read both helpers side by side and confirm the strict one returns
+  False where the access gate returns True-via-loopback.
 - **Existing-test inventory:** `tests/test_cockpit_inbound_core.py` asserts `owner_auth_factory()` is
   None (`:221`) — it must be UPDATED (factory is None when flag/marker absent, mints when present), not
   left to break. Grep for any other test asserting the cockpit factory / descriptor shape.
@@ -121,9 +152,16 @@ lesson, 3rd recurrence). If any proof refutes the design, STOP and patch.
 - **Daemon `/message` marker read:** an S7-trusted POST with `X-Maez-Owner-Authenticated: 1` →
   `owner_authenticated` flows True into the descriptor; without the header → False. (Marker is moot
   without S7 — headerless is already 403 from 3a.)
-- **Web proxy sets the marker:** owner-authenticated send → the outgoing Request carries
-  `X-Maez-Owner-Authenticated: 1` (capture the Request, the 3a/Organ-2 mutation-proof shape); non-owner →
-  401 before any send (3a, unchanged).
+- **Web proxy stamps the marker ONLY on proven owner (strictness matrix — the load-bearing tests):**
+  - claimed `web_owner` cookie → send 200 + outgoing Request carries `X-Maez-Owner-Authenticated: 1`
+    (capture the Request, the 3a/Organ-2 mutation-proof shape).
+  - non-owner → **401** before any send (3a, unchanged).
+  - **unclaimed + loopback recovery** (`owner_claimed()` False, loopback) → `_owner_private_auth_ok()`
+    allows the send, but `_request_has_web_owner_cookie()` is False → **marker ABSENT** (no felt-time).
+  - **degraded account store** (`accounts.*` raises) + loopback → send may be allowed, but the strict
+    helper fails closed → **marker ABSENT**.
+  - `_request_has_web_owner_cookie()` unit matrix: claimed+owner-cookie → True; unclaimed → False;
+    no/invalid cookie → False; store raises → False.
 - **No felt-time leak via the global parity flag (safety-critical):** with `surface_parity_enabled()`
   TRUE but `MAEZ_COCKPIT_FELT_TIME` OFF (or the owner marker absent), the cockpit turn forwards
   `subjective_duration_owner_auth=None` — because the factory itself gates on `felt_time_enabled`
@@ -140,13 +178,17 @@ lesson, 3rd recurrence). If any proof refutes the design, STOP and patch.
 2. Cross-surface one-being check: a telegram message, then shortly after a cockpit message → the cockpit
    turn feels "you were just here," not "gone for days" (shared clock).
 3. Flag OFF (default) → cockpit turn behaves exactly as 3a (no felt-time) — the safe baseline.
-4. A cockpit call without the owner marker (or non-owner) → no felt-time minted (owner-only).
-Owner breath: flip `MAEZ_COCKPIT_FELT_TIME=1` in the daemon env, restart, witness. (No new secret.)
+4. A cockpit call without the owner marker (or non-owner, or unclaimed-loopback recovery) → no felt-time
+   minted (owner-only — proven-owner, not mere access).
+Owner breath: flip `MAEZ_COCKPIT_FELT_TIME=1` in the daemon env, then **restart BOTH `maez` and
+`maez-web`** — the flag lives in the daemon env, but `maez-web` must reload to pick up the new
+marker-stamping code (`_request_has_web_owner_cookie` + the `X-Maez-Owner-Authenticated` header).
+Then witness. (No new secret.)
 
 ## Scope
 
-- **IN:** the `cockpit` OWNER_AUTH pairing; the `X-Maez-Owner-Authenticated` marker (web set + daemon
-  read); `_build_cockpit_inbound_descriptor` felt-time mint + `felt_time_enabled`; the
+- **IN:** the `cockpit` OWNER_AUTH pairing; the stricter `_request_has_web_owner_cookie()` helper; the
+  `X-Maez-Owner-Authenticated` marker (web stamps it only on the strict proof + daemon read); `_build_cockpit_inbound_descriptor` felt-time mint + `felt_time_enabled`; the
   `MAEZ_COCKPIT_FELT_TIME` flag + `cockpit_felt_time_enabled()`; the bounded `run_inbound_turn` call-gate
   (`felt_time_enabled` param + `or` in the gate); the tests + the `test_cockpit_inbound_core` update.
 - **OUT:** tools/cards/search/proposals + the web approval ceremony (**3c**); the global
