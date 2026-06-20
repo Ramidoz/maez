@@ -265,8 +265,6 @@ def _caveat_for(rec: dict) -> str | None:
         return "I couldn't confirm this from the source I cited."
     if mode == "unmatched_citation":
         return "I cited a source I can't match here."
-    if mode in {"verifier_unavailable", "budget_exhausted"}:
-        return "I couldn't verify this before sending."
     return None
 
 

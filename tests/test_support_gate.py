@@ -65,19 +65,35 @@ class ApplySupportGateTest(unittest.TestCase):
         self.assertIn("I cited a source I can't match here.", out.gated_marked_draft)
         self.assertEqual(v.calls, [])
 
-    def test_budget_exhausted_gets_unverified_caveat(self):
+    def test_budget_exhausted_records_but_does_not_caveat(self):
         from core.cognition.support_verifier import FakeSupportVerifier, SUPPORTED
 
         v = FakeSupportVerifier(default=(SUPPORTED, 0.99))
 
         out = self._gate(
-            "First [E1]. Second [E2].",
-            {"E1": "a", "E2": "b"},
+            "First [E1].",
+            {"E1": "a"},
             v,
             budget_s=-1.0,
         )
 
-        self.assertIn("I couldn't verify this before sending.", out.gated_marked_draft)
+        self.assertNotIn("I couldn't verify this before sending.", out.gated_marked_draft)
+        self.assertEqual(out.support_row["status"], "budget_exceeded")
+        self.assertEqual(out.support_row["sentences"][0]["mode"], "budget_exhausted")
+        self.assertEqual(out.gate_receipt["caveated_unverified"], 1)
+
+    def test_verifier_unavailable_records_but_does_not_caveat(self):
+        from core.cognition.support_verifier import FakeSupportVerifier
+
+        v = FakeSupportVerifier(raises=RuntimeError("down"))
+
+        out = self._gate("Claim [E1].", {"E1": "x"}, v)
+
+        self.assertIn("Claim [E1].", out.gated_marked_draft)
+        self.assertNotIn("I couldn't verify this before sending.", out.gated_marked_draft)
+        self.assertEqual(out.support_row["status"], "verifier_unavailable")
+        self.assertEqual(out.support_row["sentences"][0]["mode"], "verifier_unavailable")
+        self.assertEqual(out.gate_receipt["caveated_unverified"], 1)
 
     def test_no_citation_sentence_unchanged(self):
         from core.cognition.support_verifier import FakeSupportVerifier
