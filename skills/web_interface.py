@@ -9788,21 +9788,20 @@ def _owner_private_auth_ok() -> bool:
     try:
         if not accounts.owner_claimed():
             return _request_is_loopback()
-        # Claimed owner on a single-user local machine: the real loopback peer IS the owner, so grant
-        # owner-private ACCESS (read/chat) without a cookie. Remote requests still require the cookie below.
-        # NOTE: the STRICT proof (_request_has_web_owner_cookie) is intentionally NOT given this recovery —
-        # armed S7 / 3b felt-time stay cookie-gated. Loopback safety: _request_is_loopback() reads the raw
-        # WSGI peer (no ProxyFix, never X-Forwarded-For); maez-web binds 127.0.0.1 only.
+        # Claimed owner: resolve any cookie identity FIRST — an explicit identity WINS over loopback, so a
+        # logged-in NON-owner on the machine is NOT laundered into owner access just by being on loopback.
+        token = (request.cookies.get(AUTH_COOKIE, "") or "").strip()
+        if token:
+            user = accounts.get_by_token(token)
+            if user:
+                record = accounts.get_user_record(user.get("uuid", "")) or {}
+                return _is_owner(record)   # owner cookie -> True; non-owner cookie -> False (even on loopback)
+        # No usable cookie identity: a real-loopback request IS the physical owner -> soft access (read/chat).
+        # Remote with no usable cookie falls through to deny. The STRICT proof (_request_has_web_owner_cookie)
+        # is unchanged -> armed S7 / 3b felt-time stay cookie-gated. Loopback = raw WSGI peer (no ProxyFix).
         if _request_is_loopback():
             return True
-        token = (request.cookies.get(AUTH_COOKIE, "") or "").strip()
-        if not token:
-            return False
-        user = accounts.get_by_token(token)
-        if not user:
-            return False
-        record = accounts.get_user_record(user.get("uuid", "")) or {}
-        return _is_owner(record)
+        return False
     except Exception as exc:
         logger.warning("owner gate degraded (%s); loopback-only recovery", exc, exc_info=True)
         return _request_is_loopback()

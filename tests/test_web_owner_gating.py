@@ -60,7 +60,7 @@ class OwnerPrivateGate(unittest.TestCase):
 
     def test_no_query_token_bypass_when_claimed(self):
         acc = mock.Mock(owner_claimed=lambda: True, get_by_token=lambda t: None)
-        req = mock.Mock(remote_addr="127.0.0.1", headers={}, cookies={},
+        req = mock.Mock(remote_addr="203.0.113.7", headers={}, cookies={},
                         args={"web_token": "x", "test_t": "1"})
         with mock.patch.object(W, "accounts", acc), mock.patch.object(W, "request", req):
             self.assertFalse(W._owner_private_auth_ok())
