@@ -29,8 +29,11 @@ the cockpit recognizes you (read + chat) with no login; armed S7 / felt-time-min
    cockpit felt-time-mint still ride it (no loopback recovery, no degraded fallback).
 4. **`/app` (and `/app/`) parked by an UNCONDITIONAL redirect to `/cockpit`** — the redirect happens BEFORE any
    `?test_t=` bypass / token check / old-UI serve. No secret path to the old surface remains.
-5. **UI entry links repointed to the cockpit** — the home/login JS "Resume the channel" / "Enter the channel"
-   targets (`/app`) become `/cockpit`. `/login` stays for account/session management only, not the daily front door.
+5. **Every live `/app` entry reference repointed (REPO-WIDE inventory, not just `ui/index.html`/`ui/login.html`).**
+   Task 0 inventories EVERY producer of a `/app` link/target across the repo and classifies each (see below).
+   All live-served entry links (home/login JS, embedded JS in `skills/web_interface.py`, the
+   `("/app", "Channel")` nav tuple, served static surfaces) are repointed to `/cockpit` or dropped — no surface
+   left teaching the old architecture. `/login` stays for account/session management only, not the daily front door.
 6. **`ui/app.html` retained with a parked header** (not deleted) — reversible (flip the route back); the parked
    thread UI may return later as a polished front-door.
 
@@ -59,7 +62,18 @@ log in once.
 
 - The route serving `ui/app.html` (the thread UI) → **unconditional `redirect('/cockpit')`** at the very top of
   the handler, before any `?test_t=`/token/serve logic. Same for `/app/`.
-- Repoint the home (`ui/index.html`) and login (`ui/login.html`) entry links from `/app` to `/cockpit`.
+- **REPO-WIDE `/app` inventory (Task 0, the recurring consumer-boundary lesson — repo-wide, never a hand-picked
+  file list).** Grep every producer of a `/app` reference across `skills/`, `ui/`, `daemon/`, `core/`, `tests/`,
+  `docs/` and classify EACH as exactly one of:
+  - **`repoint to /cockpit`** — a live-served entry link (home/login JS, embedded JS in `skills/web_interface.py`,
+    any served static surface like `ui/dashboard_public.html` / `ui/progress_public.html` / `ui/analytics_local.html`
+    if live) → change the target to `/cockpit`.
+  - **`drop from nav`** — the `("/app", "Channel")` nav tuple (and any nav entry) → removed.
+  - **`parked app internal`** — references INSIDE `ui/app.html` itself (the parked surface's own internals) →
+    left as-is (it's parked, not live).
+  - **`archival/static OUT`** — a static/archival surface not in any live served path → left, labeled OUT.
+  - **`test/doc`** — references in tests or docs → left (or updated only if they assert live entry behavior).
+  Every live producer must end as `repoint`/`drop`; nothing live left teaching the old route.
 - Add a parked header comment to `ui/app.html` (kept in repo; reversible). The `/chat` POST API is NOT removed
   (the cockpit may reuse the send path) — only the thread-UI *surface* is parked.
 
@@ -78,7 +92,9 @@ cockpit-private route.** (Recorded as a standing constraint in the handoff + mem
 
 1. Claimed+loopback → access; claimed+remote+no-cookie → 401; strict gate unchanged (felt-time still cookie-gated).
 2. **No half-park** — `/app`/`/app/` redirect is unconditional (the `?test_t=` path cannot reach the old UI);
-   entry links repointed.
+   and the REPO-WIDE `/app` inventory is complete — every live-served entry producer is repointed/dropped (no
+   button still says "Channel"/"Conversation" and bounces), with each remaining `/app` reference deliberately
+   classified `parked-internal`/`archival-OUT`/`test-doc`.
 3. **Loopback is real-peer-only** — a simulated non-loopback `remote_addr` (or an `X-Forwarded-For` spoof) does
    NOT get access without the cookie.
 4. `ui/app.html` retained (not deleted); reversible.
@@ -93,12 +109,19 @@ cockpit-private route.** (Recorded as a standing constraint in the handoff + mem
 - strict gate unchanged: `_request_has_web_owner_cookie()` still False on loopback-no-cookie (felt-time stays gated).
 - spoof: `remote_addr` non-loopback OR `X-Forwarded-For: 127.0.0.1` from a non-loopback peer → no access.
 - park: `/app` + `/app/` → 302→/cockpit even WITH `?test_t=...` (the bypass cannot serve the old UI).
-- entry links: `ui/index.html`/`ui/login.html` no longer contain a daily-entry `/app` target (now `/cockpit`).
+- entry links (the ACTUAL served surfaces, per the Task-0 inventory — NOT just two files): a coverage test
+  asserts no **live-served** entry surface still emits a daily-entry `/app` target — including the embedded JS
+  in `skills/web_interface.py` and the served static pages (home/login + any `repoint`-classified surface); the
+  `("/app", "Channel")` nav tuple is gone. (`parked app internal` / `archival OUT` / `test/doc` references are
+  allowed to retain `/app`.)
 
 ## Scope guard
 
 **IN:** the `_owner_private_auth_ok` loopback-for-claimed change; the unconditional `/app` park redirect; the
-entry-link repoint; the `app.html` parked header; the Task-0 security proof; tests.
+**repo-wide `/app` inventory + repoint/drop of every live producer** (the `("/app","Channel")` nav tuple, embedded
+JS in `skills/web_interface.py`, and whichever served static surfaces Task 0 classifies `repoint`); the `app.html`
+parked header; the Task-0 security proof; tests. (The exact file set is the Task-0 inventory's `repoint`/`drop`
+list — not a pre-guessed list.)
 **OUT (never/later):** the strict cookie gate; the daemon S7 `/message` gate; the daemon 3b felt-time mint; Telegram;
 deleting `app.html`; building a new front-door; the parked time-sense Slice A; the merged honesty-layer work; any
 reverse-proxy support (explicitly deferred — would require revisiting the loopback grant).
