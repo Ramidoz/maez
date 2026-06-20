@@ -131,8 +131,10 @@ layering — `EpisodeStore` does not import the daemon's handle).
 4. **Not LLM-owned.** The stamp value is substrate-computed, never model-authored.
 5. **No durable band.** No bucket/category column on memories; only value + exact elapsed + frozen phrase +
    compute_version.
-6. **Flag-off byte-identical.** Feed → no line. Stamp → columns present but always NULL (no read path changes).
-   Each flag independent; both require the substrate.
+6. **Flag-off behavior identical; schema migration additive + inert.** Feed → no line. Stamp → the four
+   columns exist (additive migration) but are always NULL and no read path changes — so *behavior/output* is
+   identical to today, even though the schema is not literally identical. Each flag independent; both require
+   the substrate.
 7. **Untouched:** 3b owner-contact mint + its gates; the Slice-1 heartbeat/anchors; the foreground reply line
    (daemon:5673); `cycle_packet.py` purity.
 8. **Perception-side / free.** Feed + stamp of Maez's own time are inner-life — no owner-gate / marker / S7 /
