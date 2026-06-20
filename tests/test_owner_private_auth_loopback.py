@@ -1,5 +1,10 @@
+import os
 import unittest
 from unittest import mock
+
+# Inject dummy secrets so skills.web_interface can be imported standalone (matches test_web_owner_gating).
+os.environ.setdefault("MAEZ_IPHONE_INGEST_TOKEN", "dummy-test")
+os.environ.setdefault("MAEZ_SECRETS_DISABLE_NEW_LOADER", "1")
 import skills.web_interface as wi
 
 
