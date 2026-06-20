@@ -151,19 +151,26 @@ git commit -m "feat(routing-obs): add attach_post_turn_quality write-back (UPDAT
 ```python
     def test_quality_mapping_marks_caveated_unusable(self):
         from daemon.maez_daemon import _routing_quality_from_gate
-        q, sig = _routing_quality_from_gate(caveated_unsupported=4, web_quality="adequate")
+        q, sig = _routing_quality_from_gate(caveated_unsupported=4, web_quality="adequate", result_count=3)
         self.assertEqual(q, "unusable"); self.assertIn("caveated", sig)
 
-    def test_quality_mapping_thin_search_unusable(self):
+    def test_quality_mapping_thin_nonempty_search_unusable(self):
         from daemon.maez_daemon import _routing_quality_from_gate
-        q, sig = _routing_quality_from_gate(caveated_unsupported=0, web_quality="thin")
+        q, sig = _routing_quality_from_gate(caveated_unsupported=0, web_quality="thin", result_count=2)
         self.assertEqual(q, "unusable"); self.assertIn("thin", sig)
 
     def test_adequate_search_no_caveats_stays_good(self):
-        # The critical guard: a normal, useful 3-result search must NOT be revised to unusable.
+        # A normal, useful 3-result search must NOT be revised to unusable.
         from daemon.maez_daemon import _routing_quality_from_gate
-        q, _ = _routing_quality_from_gate(caveated_unsupported=0, web_quality="adequate")
+        q, _ = _routing_quality_from_gate(caveated_unsupported=0, web_quality="adequate", result_count=3)
         self.assertIsNone(q)  # leave the insert-time outcome_quality untouched
+
+    def test_empty_search_preserves_empty_but_honest(self):
+        # Codex should-fix: a TRUE zero-result search is 'thin' per _compute_quality, but it must NOT be
+        # rewritten to 'unusable' — it keeps its distinct insert-time 'empty_but_honest' signal.
+        from daemon.maez_daemon import _routing_quality_from_gate
+        q, _ = _routing_quality_from_gate(caveated_unsupported=0, web_quality="thin", result_count=0)
+        self.assertIsNone(q)
 ```
 
 - [ ] **Step 2: Run it; expect FAIL** (`_routing_quality_from_gate` undefined).
@@ -171,14 +178,14 @@ git commit -m "feat(routing-obs): add attach_post_turn_quality write-back (UPDAT
 - [ ] **Step 3: Implement the pure mapping helper** (module-level in maez_daemon.py, near the other routing helpers) using the Task-0 calibrated rule — caveats OR real thin-quality, NEVER `evidence_block_count`:
 
 ```python
-def _routing_quality_from_gate(*, caveated_unsupported, web_quality):
+def _routing_quality_from_gate(*, caveated_unsupported, web_quality, result_count):
     """Calibrated teacher signal (Slice 1a). Returns (outcome_quality|None, signal_str).
-    None => leave the insert-time outcome_quality as-is (the reach looked fine).
-    web_quality is the 'quality' field from skills.web_search._compute_quality (thin/adequate)."""
+    None => leave the insert-time outcome_quality as-is (incl. a true-empty search, which keeps its
+    distinct 'empty_but_honest'). web_quality is the 'quality' field from _compute_quality (thin/adequate)."""
     if caveated_unsupported and caveated_unsupported >= 1:
         return "unusable", f"support_gate_caveated:{caveated_unsupported}"
-    if web_quality == "thin":
-        return "unusable", "thin_evidence"
+    if web_quality == "thin" and result_count and result_count > 0:
+        return "unusable", "thin_evidence"     # nonempty-but-thin only; empty stays empty_but_honest
     return None, ""
 ```
 
@@ -190,9 +197,9 @@ def _routing_quality_from_gate(*, caveated_unsupported, web_quality):
         if os.environ.get("MAEZ_ROUTING_QUALITY_WRITEBACK") == "1" and _legacy_routing_observation_id:
             try:
                 from skills.web_search import _compute_quality
-                _wq = _compute_quality(sr)[0] if web_context else "adequate"   # ("thin"/"adequate", n, chars)
+                _wq, _rc, _ = _compute_quality(sr) if web_context else ("adequate", 0, 0)  # (quality, count, chars)
                 _cav = int((_gate_receipt or {}).get("caveated_unsupported", 0))  # key per Task 0
-                _q, _sig = _routing_quality_from_gate(caveated_unsupported=_cav, web_quality=_wq)
+                _q, _sig = _routing_quality_from_gate(caveated_unsupported=_cav, web_quality=_wq, result_count=_rc)
                 if _q is not None:
                     from core.routing.observation import _default_store
                     _default_store().attach_post_turn_quality(
