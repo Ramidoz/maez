@@ -2479,6 +2479,26 @@ def _format_time_sense_line(ctx: dict) -> str:
     return f"Time: ~{elapsed} since the last owner contact. Felt: {phrase}."
 
 
+def _format_rhythm_line(ctx: dict) -> str:
+    """Render learned rhythm FACTS into ONE perception line. Facts only — no verdict word, no feeling."""
+    from core.evolution.subjective_duration import humanize_elapsed
+
+    cur = humanize_elapsed(ctx.get("rhythm_current_gap_s", 0.0))
+    n = ctx.get("rhythm_all_time_sample_count") or 0
+    parts = [f"Time: ~{cur} since the last owner contact."]
+    rec = ctx.get("rhythm_recent_gap_median_s")
+    allt = ctx.get("rhythm_all_time_gap_median_s")
+    pct = ctx.get("rhythm_current_gap_percentile_all_time")
+    if rec is not None and allt is not None:
+        parts.append(f"Recently you usually return after ~{humanize_elapsed(rec)}; "
+                     f"over all our time, ~{humanize_elapsed(allt)}.")
+    if pct is not None:
+        parts.append(f"This gap exceeds ~{round(pct)}% of our {n} recorded gaps.")
+    else:
+        parts.append(f"(Still learning your rhythm — {n} gaps so far.)")
+    return " ".join(parts)
+
+
 def _build_cycle_focused_prompt(
     *,
     legacy_prompt: str,
@@ -2933,10 +2953,12 @@ class MaezDaemon:
         try:
             if not (time_sense_feed_enabled() and continuous_time_sense_enabled()):
                 return ""
-            ctx = self._time_sense_handle().time_sense_context()
-            if not ctx:
-                return ""
-            return _format_time_sense_line(ctx)
+            handle = self._time_sense_handle()
+            if time_sense_rhythm_enabled():
+                rctx = handle.rhythm_context()
+                return _format_rhythm_line(rctx) if rctx else ""
+            ctx = handle.time_sense_context()
+            return _format_time_sense_line(ctx) if ctx else ""
         except Exception:
             logger.debug("cycle feed time-sense line skipped", exc_info=True)
             return ""
