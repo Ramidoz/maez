@@ -171,6 +171,25 @@ class EpisodeStore:
                     felt_compute_version = ctx.get("felt_compute_version")
             except Exception:
                 felt_value = felt_elapsed_s = felt_phrase = felt_compute_version = None
+        rhythm_current_gap_s = rhythm_recent_gap_median_s = rhythm_all_time_gap_median_s = None
+        rhythm_recent_sample_count = rhythm_all_time_sample_count = None
+        rhythm_current_gap_percentile_all_time = rhythm_recent_gap_iqr_s = rhythm_all_time_gap_iqr_s = None
+        if self._rhythm_reader is not None:
+            try:
+                rctx = self._rhythm_reader()
+                if rctx:
+                    rhythm_current_gap_s = rctx.get("rhythm_current_gap_s")
+                    rhythm_recent_gap_median_s = rctx.get("rhythm_recent_gap_median_s")
+                    rhythm_all_time_gap_median_s = rctx.get("rhythm_all_time_gap_median_s")
+                    rhythm_recent_sample_count = rctx.get("rhythm_recent_sample_count")
+                    rhythm_all_time_sample_count = rctx.get("rhythm_all_time_sample_count")
+                    rhythm_current_gap_percentile_all_time = rctx.get("rhythm_current_gap_percentile_all_time")
+                    rhythm_recent_gap_iqr_s = rctx.get("rhythm_recent_gap_iqr_s")
+                    rhythm_all_time_gap_iqr_s = rctx.get("rhythm_all_time_gap_iqr_s")
+            except Exception:
+                rhythm_current_gap_s = rhythm_recent_gap_median_s = rhythm_all_time_gap_median_s = None
+                rhythm_recent_sample_count = rhythm_all_time_sample_count = None
+                rhythm_current_gap_percentile_all_time = rhythm_recent_gap_iqr_s = rhythm_all_time_gap_iqr_s = None
         with self._connect() as c:
             with c:
                 c.execute(
@@ -179,8 +198,11 @@ class EpisodeStore:
                     "participants_json, emotional_tone, importance, "
                     "open_loop, source_memory_ids_json, source_kind, status, "
                     "authorship, memory_voice, "
-                    "felt_value, felt_elapsed_s, felt_phrase, felt_compute_version"
-                    ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "felt_value, felt_elapsed_s, felt_phrase, felt_compute_version, "
+                    "rhythm_current_gap_s, rhythm_recent_gap_median_s, rhythm_all_time_gap_median_s, "
+                    "rhythm_recent_sample_count, rhythm_all_time_sample_count, "
+                    "rhythm_current_gap_percentile_all_time, rhythm_recent_gap_iqr_s, rhythm_all_time_gap_iqr_s"
+                    ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         episode_id,
                         _now_iso(),
@@ -200,6 +222,14 @@ class EpisodeStore:
                         felt_elapsed_s,
                         felt_phrase,
                         felt_compute_version,
+                        rhythm_current_gap_s,
+                        rhythm_recent_gap_median_s,
+                        rhythm_all_time_gap_median_s,
+                        rhythm_recent_sample_count,
+                        rhythm_all_time_sample_count,
+                        rhythm_current_gap_percentile_all_time,
+                        rhythm_recent_gap_iqr_s,
+                        rhythm_all_time_gap_iqr_s,
                     ),
                 )
         return episode_id

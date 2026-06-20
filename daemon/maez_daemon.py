@@ -2643,6 +2643,14 @@ def time_sense_feed_enabled() -> bool:
     return strict_env_flag("MAEZ_TIME_SENSE_FEED")
 
 
+def time_sense_rhythm_enabled() -> bool:
+    """Return True iff MAEZ_RHYTHM_FELT_TIME is on. DEFAULT OFF. Selects the CONTENT source (learned rhythm
+    facts vs the legacy curve). FEED/STAMP remain the mouths."""
+    from core.infra.env_flags import strict_env_flag
+
+    return strict_env_flag("MAEZ_RHYTHM_FELT_TIME")
+
+
 _OWNER_AUTHENTICATED_HEADER = "X-Maez-Owner-Authenticated"
 
 
@@ -2901,9 +2909,22 @@ class MaezDaemon:
         try:
             if not (time_sense_stamp_enabled() and continuous_time_sense_enabled()):
                 return None
+            if time_sense_rhythm_enabled():
+                return None                  # rhythm is the source -> curve stamp stays silent (felt_* NULL)
             return self._time_sense_handle().time_sense_context()
         except Exception:
             logger.debug("episode felt-time reader skipped", exc_info=True)
+            return None
+
+    def _episode_rhythm_reader(self):
+        """Injected into EpisodeStore: rhythm facts or None. Gated by MAEZ_RHYTHM_FELT_TIME AND STAMP AND the
+        substrate. Read-only; never raises into a memory write."""
+        try:
+            if not (time_sense_rhythm_enabled() and time_sense_stamp_enabled() and continuous_time_sense_enabled()):
+                return None
+            return self._time_sense_handle().rhythm_context()
+        except Exception:
+            logger.debug("episode rhythm reader skipped", exc_info=True)
             return None
 
     def _cycle_feed_time_sense_line(self) -> str:
@@ -2971,6 +2992,7 @@ class MaezDaemon:
         self.lived_episodes = EpisodeStore(
             str(_lived_dir / "lived_episodes.db"),
             felt_time_reader=self._episode_felt_time_reader,
+            rhythm_reader=self._episode_rhythm_reader,
         )
         self.lived_graph = RelationshipGraph(str(_lived_dir / "lived_graph.db"))
         self._m1_lock = threading.Lock()
