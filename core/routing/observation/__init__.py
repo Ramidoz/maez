@@ -194,6 +194,9 @@ class RoutingObservationStore:
             with conn:
                 if "post_turn_signal" not in existing:
                     conn.execute("ALTER TABLE routing_observations ADD COLUMN post_turn_signal TEXT")
+                for _col in ("request_class_id TEXT", "request_class_score REAL", "request_class_version TEXT"):
+                    if _col.split()[0] not in existing:
+                        conn.execute(f"ALTER TABLE routing_observations ADD COLUMN {_col}")
 
     def table_names(self) -> set[str]:
         with self._connect() as conn:
@@ -252,6 +255,9 @@ class RoutingObservationStore:
         turn_id: str | None = None,
         empty_reason: str | None = None,
         error_class: str | None = None,
+        request_class_id: str | None = None,
+        request_class_score: float | None = None,
+        request_class_version: str | None = None,
     ) -> str:
         return self._record(
             user_text=user_text,
@@ -270,6 +276,9 @@ class RoutingObservationStore:
             turn_id=turn_id,
             empty_reason=empty_reason,
             error_class=error_class,
+            request_class_id=request_class_id,
+            request_class_score=request_class_score,
+            request_class_version=request_class_version,
         )
 
     def record_legacy_web_search_observation(
@@ -286,6 +295,9 @@ class RoutingObservationStore:
         turn_id: str | None = None,
         empty_reason: str | None = None,
         error_class: str | None = None,
+        request_class_id: str | None = None,
+        request_class_score: float | None = None,
+        request_class_version: str | None = None,
     ) -> str:
         return self._record(
             user_text=user_text,
@@ -304,6 +316,9 @@ class RoutingObservationStore:
             turn_id=turn_id,
             empty_reason=empty_reason,
             error_class=error_class,
+            request_class_id=request_class_id,
+            request_class_score=request_class_score,
+            request_class_version=request_class_version,
         )
 
     def _record(
@@ -325,6 +340,9 @@ class RoutingObservationStore:
         turn_id: str | None,
         empty_reason: str | None,
         error_class: str | None,
+        request_class_id: str | None = None,
+        request_class_score: float | None = None,
+        request_class_version: str | None = None,
     ) -> str:
         row_id = uuid.uuid4().hex
         source_availability = {}
@@ -363,7 +381,10 @@ class RoutingObservationStore:
             "owner_feedback_kind": None,
             "owner_feedback_text": None,
             "owner_feedback_observed_at": None,
-            "producer_version": "routing_observation_v1",
+            "request_class_id": request_class_id,
+            "request_class_score": request_class_score,
+            "request_class_version": request_class_version,
+            "producer_version": "routing_observation_v2",
         }
         columns = tuple(row.keys())
         placeholders = ", ".join("?" for _ in columns)
@@ -569,6 +590,9 @@ def record_legacy_web_search_observation(
     latency_ms: float | None = None,
     empty_reason: str | None = None,
     error_class: str | None = None,
+    request_class_id: str | None = None,
+    request_class_score: float | None = None,
+    request_class_version: str | None = None,
 ) -> str:
     return _default_store().record_legacy_web_search_observation(
         user_text=user_text,
@@ -581,4 +605,7 @@ def record_legacy_web_search_observation(
         latency_ms=latency_ms,
         empty_reason=empty_reason,
         error_class=error_class,
+        request_class_id=request_class_id,
+        request_class_score=request_class_score,
+        request_class_version=request_class_version,
     )

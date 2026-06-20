@@ -5914,6 +5914,14 @@ class MaezDaemon:
             try:
                 from core.routing.observation import record_legacy_web_search_observation
 
+                _cls_id = _cls_score = _cls_ver = None
+                if os.environ.get("MAEZ_ROUTING_CLASS_CAPTURE") == "1":
+                    try:
+                        from core.routing.observation_class import classify_request_class
+                        _cls_id, _cls_score, _cls_ver = classify_request_class(text)
+                    except Exception as _ce:
+                        logger.debug("request-class capture skipped: %s", _ce)
+
                 _routing_obs_count = int(sr.get("result_count", 0) or 0)
                 _legacy_routing_observation_id = record_legacy_web_search_observation(
                     user_text=text,
@@ -5928,6 +5936,9 @@ class MaezDaemon:
                         else "empty_but_honest"
                     ),
                     latency_ms=(time.monotonic() - _routing_obs_started) * 1000,
+                    request_class_id=_cls_id,
+                    request_class_score=_cls_score,
+                    request_class_version=_cls_ver,
                 )
             except Exception as _routing_obs_exc:
                 logger.debug(
@@ -6009,6 +6020,16 @@ class MaezDaemon:
                         record_legacy_web_search_observation,
                     )
 
+                    _cls_id = _cls_score = _cls_ver = None
+                    if os.environ.get("MAEZ_ROUTING_CLASS_CAPTURE") == "1":
+                        try:
+                            from core.routing.observation_class import (
+                                classify_request_class,
+                            )
+                            _cls_id, _cls_score, _cls_ver = classify_request_class(text)
+                        except Exception as _ce:
+                            logger.debug("request-class capture skipped: %s", _ce)
+
                     _routing_obs_count = int(sr.get("result_count", 0) or 0)
                     _legacy_routing_observation_id = (
                         record_legacy_web_search_observation(
@@ -6027,6 +6048,9 @@ class MaezDaemon:
                             ),
                             latency_ms=(time.monotonic() - _routing_obs_started)
                             * 1000,
+                            request_class_id=_cls_id,
+                            request_class_score=_cls_score,
+                            request_class_version=_cls_ver,
                         )
                     )
                 except Exception as _routing_obs_exc:
