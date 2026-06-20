@@ -2470,11 +2470,36 @@ def _maybe_read_cycle_valence(
     )
 
 
+def _format_time_sense_line(ctx: dict) -> str:
+    """Render a felt-time context into ONE perception line. Perception, never directive."""
+    from core.evolution.subjective_duration import humanize_elapsed
+
+    elapsed = humanize_elapsed(ctx.get("seconds_since_last_owner_contact", 0.0))
+    phrase = ctx.get("felt_phrase", "")
+    return f"Time: ~{elapsed} since the last owner contact. Felt: {phrase}."
+
+
+def _cycle_feed_time_sense_line(daemon) -> str:
+    """The feed line for the autonomous cycle, or '' when absent (flags off / context None).
+    Gated by MAEZ_TIME_SENSE_FEED AND the substrate flag; reads the truthful context only."""
+    try:
+        if not (time_sense_feed_enabled() and continuous_time_sense_enabled()):
+            return ""
+        ctx = daemon._time_sense_handle().time_sense_context()
+        if not ctx:
+            return ""
+        return _format_time_sense_line(ctx)
+    except Exception:
+        logger.debug("cycle feed time-sense line skipped", exc_info=True)
+        return ""
+
+
 def _build_cycle_focused_prompt(
     *,
     legacy_prompt: str,
     candidates,
     budget_tokens: int = 3000,
+    time_sense_line: str = "",
 ) -> CycleFocusedPromptDecision:
     if not _cycle_focused_enabled():
         return CycleFocusedPromptDecision(prompt=legacy_prompt)
@@ -2486,7 +2511,13 @@ def _build_cycle_focused_prompt(
             budget_tokens=budget_tokens,
         )
         working_set = _cycle_packet.build_cycle_packet(items)
+        _preamble = (
+            f"=== TIME SENSE (perception) ===\n{time_sense_line}\n\n"
+            if time_sense_line
+            else ""
+        )
         prompt = (
+            f"{_preamble}"
             "=== CYCLE EVIDENCE (cite [E#]) ===\n"
             f"{working_set.ordered_evidence_text}\n\n"
             "=== CYCLE REFLECTION INSTRUCTION ===\n"
@@ -2617,6 +2648,14 @@ def time_sense_stamp_enabled() -> bool:
     from core.infra.env_flags import strict_env_flag
 
     return strict_env_flag("MAEZ_TIME_SENSE_STAMP")
+
+
+def time_sense_feed_enabled() -> bool:
+    """Return True iff MAEZ_TIME_SENSE_FEED is on. DEFAULT OFF. When on (AND the substrate is on), the
+    autonomous focused-cognition packet carries a felt-time perception line."""
+    from core.infra.env_flags import strict_env_flag
+
+    return strict_env_flag("MAEZ_TIME_SENSE_FEED")
 
 
 _OWNER_AUTHENTICATED_HEADER = "X-Maez-Owner-Authenticated"
@@ -2881,6 +2920,11 @@ class MaezDaemon:
         except Exception:
             logger.debug("episode felt-time reader skipped", exc_info=True)
             return None
+
+    def _cycle_feed_time_sense_line(self) -> str:
+        """The feed line for the autonomous cycle, or '' when absent (flags off / context None).
+        Gated by MAEZ_TIME_SENSE_FEED AND the substrate flag; reads the truthful context only."""
+        return _cycle_feed_time_sense_line(self)
 
     def __init__(self):
         self.running = False
@@ -5188,6 +5232,7 @@ class MaezDaemon:
         _cycle_prompt_decision = _build_cycle_focused_prompt(
             legacy_prompt=legacy_prompt,
             candidates=_cycle_candidates,
+            time_sense_line=self._cycle_feed_time_sense_line(),
         )
         prompt = _cycle_prompt_decision.prompt
         # Store the actual prompt sent to the model for corrective retry use.
