@@ -462,6 +462,23 @@ def _diagnostic_row(
     }
 
 
+def humanize_elapsed(seconds: float) -> str:
+    """Render elapsed seconds as a coarse human phrase for the felt-time perception line."""
+    s = max(0.0, float(seconds))
+    if s < 60:
+        return "under a minute"
+    minutes = int(s // 60)
+    if minutes < 60:
+        return f"{minutes}m"
+    hours = minutes // 60
+    rem_min = minutes % 60
+    if hours < 24:
+        return f"{hours}h {rem_min}m" if rem_min else f"{hours}h"
+    days = hours // 24
+    rem_hr = hours % 24
+    return f"{days}d {rem_hr}h" if rem_hr else f"{days}d"
+
+
 CURRENT_COMPUTE_VERSION = 1
 
 
@@ -597,6 +614,40 @@ class SubjectiveDuration:
         now = _normalize_event_time(now_utc or datetime.now(UTC))
         snap, _degraded_latest = self._compute(now)   # truly read-only — ignores the degraded signal
         return snap
+
+    def time_sense_context(self, *, now: str | datetime | None = None) -> dict | None:
+        """Truthful read-only felt-time context for Slice-2 feed/stamp. Returns a valid context
+        {felt_value, felt_phrase, felt_compute_version, seconds_since_last_owner_contact} or None.
+        None (without writing) when: the clock is degraded, or there is no real owner-contact
+        reference. NEVER records a clock_degraded_event (that write belongs to current())."""
+        now_dt = _normalize_event_time(now or datetime.now(UTC))
+        snap, degraded_latest = self._compute(now_dt)
+        if degraded_latest is not None:
+            return None                      # clock-degraded -> absent, not stale-as-alive (no write)
+        seconds_since = self._seconds_since_last_owner_contact(now_dt)
+        if seconds_since is None:
+            return None                      # no real owner-contact reference yet
+        return {
+            "felt_value": snap.value,
+            "felt_phrase": snap.surface_phrase,
+            "felt_compute_version": CURRENT_COMPUTE_VERSION,
+            "seconds_since_last_owner_contact": seconds_since,
+        }
+
+    def _seconds_since_last_owner_contact(self, now: datetime) -> float | None:
+        """Wall-clock seconds since the latest REAL owner_contact salience event (canary/scratch
+        rows excluded). None if there is no such row or the clock is before it."""
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            row = conn.execute(
+                "SELECT ts_utc FROM subjective_duration_salience_events "
+                "WHERE salience_event_kind = 'owner_contact' AND is_canary = 0 AND owner_auth_class != '' "
+                "ORDER BY event_id DESC LIMIT 1"
+            ).fetchone()
+        if row is None:
+            return None
+        contact_ts = _normalize_event_time(row[0])
+        delta = (now - contact_ts).total_seconds()
+        return delta if delta >= 0 else None
 
     def current(self, *, now_utc: str | datetime | None = None) -> SubjectiveDurationSnapshot:
         now = _normalize_event_time(now_utc or datetime.now(UTC))
