@@ -1,10 +1,7 @@
 import unittest
 from unittest import mock
 import daemon.maez_daemon as d
-from daemon.maez_daemon import (  # noqa: F401  (imported to pin the symbol exists)
-    _build_cycle_focused_prompt,
-    _cycle_feed_time_sense_line,
-)
+from daemon.maez_daemon import _build_cycle_focused_prompt
 
 # The focused-cognition packet is gated by MAEZ_CYCLE_FOCUSED_ENABLED (default OFF;
 # the live autonomous path turns it on). The injection tests exercise that built path,

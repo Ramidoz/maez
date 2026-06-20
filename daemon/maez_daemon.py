@@ -2479,21 +2479,6 @@ def _format_time_sense_line(ctx: dict) -> str:
     return f"Time: ~{elapsed} since the last owner contact. Felt: {phrase}."
 
 
-def _cycle_feed_time_sense_line(daemon) -> str:
-    """The feed line for the autonomous cycle, or '' when absent (flags off / context None).
-    Gated by MAEZ_TIME_SENSE_FEED AND the substrate flag; reads the truthful context only."""
-    try:
-        if not (time_sense_feed_enabled() and continuous_time_sense_enabled()):
-            return ""
-        ctx = daemon._time_sense_handle().time_sense_context()
-        if not ctx:
-            return ""
-        return _format_time_sense_line(ctx)
-    except Exception:
-        logger.debug("cycle feed time-sense line skipped", exc_info=True)
-        return ""
-
-
 def _build_cycle_focused_prompt(
     *,
     legacy_prompt: str,
@@ -2924,7 +2909,16 @@ class MaezDaemon:
     def _cycle_feed_time_sense_line(self) -> str:
         """The feed line for the autonomous cycle, or '' when absent (flags off / context None).
         Gated by MAEZ_TIME_SENSE_FEED AND the substrate flag; reads the truthful context only."""
-        return _cycle_feed_time_sense_line(self)
+        try:
+            if not (time_sense_feed_enabled() and continuous_time_sense_enabled()):
+                return ""
+            ctx = self._time_sense_handle().time_sense_context()
+            if not ctx:
+                return ""
+            return _format_time_sense_line(ctx)
+        except Exception:
+            logger.debug("cycle feed time-sense line skipped", exc_info=True)
+            return ""
 
     def __init__(self):
         self.running = False
