@@ -1,6 +1,6 @@
 # Handoff — Learned Tool-Routing Slice 1 (the priors spine) — REVIEW GATE
 
-**Date:** 2026-06-20. **Branch:** `learned-routing-slice1` (tip `bd1d48e`; local-only, NOT pushed, NOT merged).
+**Date:** 2026-06-20. **Branch:** `learned-routing-slice1` (last code commit `2519b82`; this handoff is the doc commit on top; local-only, NOT pushed, NOT merged).
 **Status:** built (Task 0 + 6 implementation commits) + Claude two-stage reviewed per the owner's calibration (Task 0 light; Tasks 2/3/5 FULL spec+quality; Tasks 1/4 light controller-verified). **STOPPED at the review gate** — awaiting Codex cross-lane, then owner breath. NOT live (all four flags default-off).
 **Spec:** `docs/superpowers/specs/2026-06-20-learned-tool-routing-organ-design.md`. **Plan:** `docs/superpowers/plans/2026-06-20-learned-tool-routing-slice1.md`.
 
@@ -18,6 +18,7 @@ Closes the learning loop on routing: it teaches the existing `routing_observatio
 - `61422a7` **Task 4 (1c)** — pure priors reader (`learn_priors` → `RoutingPrior`, honest cold-start).
 - `dc8854f` **Task 5 (behavior)** — shadow log + flag-gated learned veto over `needs_web_search`.
 - `bd1d48e` cleanup — drop dead `_BAD` constant.
+- `2519b82` test-hygiene — tearDown temp DBs (close+unlink), no ResourceWarning.
 
 ## The four flags (all default-off = byte-identical)
 
