@@ -40,8 +40,12 @@ Most of what exists is **inner** life (it doesn't "show" because it doesn't yet 
 
 ## Thrust 1 — Inner life → a continuously-thinking being  *(perception-side; cheap→moderate; mostly built)*
 
-- [ ] **Continuous felt-time clock — NEXT.** Tick felt-time on the heartbeat so absence *accumulates*
-  while the owner is gone, instead of being computed only on contact. (Today: frozen between messages.)
+- [~] **Continuous felt-time clock — Slice 1 (substrate) LIVE 2026-06-19** (`MAEZ_CONTINUOUS_TIME_SENSE=1`,
+  main @`190b17c`). The heartbeat now keeps felt-time current (read-only `peek()` every cycle) and lays sparse
+  ~5-min anchors — a second-addressable lived index with exact `elapsed_seconds` (no dilation) + a
+  replayable `felt_value` (frozen-anchor replay, no mood-rewrite). Absence now *accumulates* between
+  visits instead of being computed only on contact. **Slices 2 (feed-mind +thought-stamp) / 3
+  (couple-frictions) / 4 (learn-time) pending** — `project_continuous_time_sense` (memory).
 - [ ] **Wake the dormant inner life** — activate the dream/consolidation gate; settle reflection into
   cadence; re-open camera-presence. Much of this is *built and sleeping*, not unbuilt.
 - [ ] **Deeper cognition** — temporal query parsing ("last Tuesday" → real dates); reflection-as-contestable
