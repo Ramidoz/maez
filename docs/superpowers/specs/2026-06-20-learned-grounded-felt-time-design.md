@@ -2,8 +2,10 @@
 
 **Date:** 2026-06-20. **Status:** design, owner-approved (with three corrections folded) — awaiting spec review.
 **Arc:** the **foundation** of Thrust 1 (`docs/MAEZ_GESTATION_ROADMAP.md`) — it reorders the old Slice 3/4. Builds on:
-Slice 1 substrate LIVE (`MAEZ_CONTINUOUS_TIME_SENSE=1`), Slice 2 feed-mind LIVE-merged
-(`MAEZ_TIME_SENSE_FEED`/`STAMP`); see `project_continuous_time_sense` (memory).
+Slice 1 substrate LIVE (`MAEZ_CONTINUOUS_TIME_SENSE=1`); **Slice 2 feed-mind merged-asleep / built into main
+— `MAEZ_TIME_SENSE_FEED` and `MAEZ_TIME_SENSE_STAMP` are default-OFF and NOT owner-witnessed-live** (the
+witness surfaced the pinned-curve finding below; they may stay off). See `project_continuous_time_sense`
+(memory).
 
 ## Why this exists (the finding)
 
@@ -69,6 +71,38 @@ only — **no labels, no buckets, no verdict**):
   (`feedback_visible_substrate_state_not_chain_of_thought`, `project_content_honesty_arc`). No faked/performed
   feeling; grounded, not invented.
 
+## Separate boxes — rhythm facts get their OWN columns (never overload `felt_*`)
+
+The legacy curve stamp uses `felt_value` / `felt_elapsed_s` / `felt_phrase` / `felt_compute_version`. The
+rhythm facts are a **different kind of thing** (raw learned data, not a feeling verdict). They get their own
+schema — **do NOT pour medians/percentiles into `felt_value` or synthesize a `felt_phrase` from them** (that
+would smuggle the verdict back through a side door). Dedicated additive nullable columns:
+
+`rhythm_current_gap_s`, `rhythm_recent_gap_median_s`, `rhythm_all_time_gap_median_s`,
+`rhythm_recent_sample_count`, `rhythm_all_time_sample_count`, `rhythm_current_gap_percentile_all_time`,
+optional `rhythm_recent_gap_iqr_s` / `rhythm_all_time_gap_iqr_s`. Legacy `felt_*` and new `rhythm_*` stay in
+separate boxes, always.
+
+## Flag matrix — the rhythm flag changes the CONTENT source; feed/stamp flags are the MOUTHS
+
+A new flag `MAEZ_RHYTHM_FELT_TIME` (default OFF) selects the **content source** (legacy curve vs learned
+rhythm). The existing `MAEZ_TIME_SENSE_FEED` / `MAEZ_TIME_SENSE_STAMP` still control **whether the mouths are
+open** (whether the cycle feed / episode stamp act at all). All AND-gated with the substrate
+(`MAEZ_CONTINUOUS_TIME_SENSE`). Explicit matrix:
+
+| `RHYTHM` | `FEED` | `STAMP` | Behavior |
+|---|---|---|---|
+| off | on | — | existing Slice-2 **curve-based** feed line (unchanged) |
+| off | — | on | existing Slice-2 **curve-based** stamp (`felt_*`, unchanged) |
+| **on** | on | — | feed renders **rhythm facts** instead of the curve phrase |
+| **on** | — | on | stamp writes the **`rhythm_*` columns** (legacy `felt_*` left NULL — we stop recording the verdict) |
+| on | off | off | **no behavior** — rhythm flag alone changes nothing until a mouth is open |
+| off | off | off | default — behavior-identical to today |
+
+**Decision (the "instead of / in addition to" fork):** when `RHYTHM` is on, the stamp writes **only** the
+`rhythm_*` columns and leaves `felt_*` NULL — it does not also re-record the curve verdict. Separate boxes,
+and we stop writing the thing we're retiring.
+
 ## Build BESIDE the old curve — repoint incrementally (NOT a single swap)
 
 The hardcoded curve doesn't only feed Slice 2's cycle — it also feeds the **owner-facing** "Felt time: …"
@@ -79,23 +113,27 @@ rhythm layer is witnessed.** Decompose-the-organism, rails-before-hands.
 
 **Staging (each its own slice: brainstorm-already-done → plan → subagent-driven → Claude two-stage + Codex
 cross-lane → STOP at gate → owner breath):**
-- **Slice A (this arc's first):** add the rhythm reader (the facts) **beside** the curve, behind a new flag
-  (e.g. `MAEZ_RHYTHM_FELT_TIME`); **repoint the cycle feed + the episode stamp** to the rhythm facts (the
-  feed renders the raw facts; the stamp records them). The old `time_sense_context`/curve stay untouched and
-  still serve the foreground. Flag-off → behavior-identical.
+- **Slice A (this arc's first):** add the rhythm reader (the facts) **beside** the curve, behind the new
+  `MAEZ_RHYTHM_FELT_TIME` flag; add the dedicated `rhythm_*` stamp columns; **repoint the cycle feed + the
+  episode stamp** to the rhythm facts *when the rhythm flag is on* (feed renders the raw facts; stamp writes
+  the `rhythm_*` columns, `felt_*` left NULL). The old `time_sense_context`/curve and `felt_*` columns stay
+  untouched and still serve the foreground + the rhythm-off path. Flag-off → behavior-identical.
 - **Slice B:** repoint the **foreground/cockpit** "Felt time: …" lines to the rhythm facts (the owner-facing
   surfaces — more careful; 3b mint semantics preserved).
-- **Slice C:** **retire the dead curve** — remove `compute_subjective_duration_update`, the temperament
-  modulators, `_render` bands, `felt_value`/`felt_phrase`, and the now-unused `time_sense_context` — once
-  nothing reads them.
+- **Slice C:** **retire the dead curve** — stop all reads/writes of `compute_subjective_duration_update`, the
+  temperament modulators, `_render` bands, and the legacy `felt_*` columns, and the now-unused
+  `time_sense_context` — once nothing reads them. **Leave the legacy `felt_*` columns in place as nullable
+  historical rows** (never-delete-memory; SQLite column-drop is unsafe); a physical column removal is a
+  separate migration only if explicitly proven safe.
 - **Then:** the old "couple frictions to agency" rides on top of a felt-time that **actually varies**.
 
 ## Kept vs torn out
 
 - **Kept:** the exact clock; the `owner_contact` event history (the raw material); Slice-1 heartbeat/anchors;
   Slice-2's feed/stamp wiring, flags, and truthful-reader seam (we swap *content*, not plumbing).
-- **Torn out (Slice C, last):** the `0.42/0.18` curve, the temperament modulators, the `_render` phrase-bands,
-  the stored `felt_value`/`felt_phrase`.
+- **Retired (Slice C, last) — reads/writes only:** the `0.42/0.18` curve, the temperament modulators, the
+  `_render` phrase-bands, and reads/writes of the legacy `felt_*` columns. The `felt_*` **columns themselves
+  stay** as nullable legacy history (never-delete-memory) unless a separate migration proves removal safe.
 
 ## Invariants (verify in review)
 
@@ -104,8 +142,12 @@ cross-lane → STOP at gate → owner breath):**
    contacts** — canary/`manual_test`/scratch excluded (reuse Slice-2 filter). 4. **Honest cold-start** —
    `None`/"still learning," never a fabricated stat. 5. **Truthful-reader `None`** on degraded/no-contact —
    never a frozen clock as alive. 6. **Build-beside, flag-off behavior-identical** — the old curve + all its
-   surfaces unchanged until deliberately repointed. 7. **Perception-side/free** — Maez's own time; no
-   owner-gate/egress/secret. 8. **No single bold swap** — incremental repoint, curve removed last.
+   surfaces unchanged until deliberately repointed; `MAEZ_RHYTHM_FELT_TIME` default-OFF. 7. **Separate
+   boxes** — rhythm facts write ONLY `rhythm_*` columns; never overload `felt_value`/`felt_phrase`; rhythm-on
+   stamp leaves `felt_*` NULL. 8. **Mouths vs source** — the rhythm flag selects content; `FEED`/`STAMP`
+   still gate whether the surfaces act (per the flag matrix). 9. **Perception-side/free** — Maez's own time;
+   no owner-gate/egress/secret. 10. **No single bold swap** — incremental repoint, curve reads/writes removed
+   last, columns preserved.
 
 ## Scope guard (Slice A)
 
