@@ -21,6 +21,13 @@ class BackstageLabelStripTest(unittest.TestCase):
 
         self.assertEqual(stripped, "says web sense is on.")
 
+    def test_strip_does_not_leave_space_before_punctuation(self):
+        from core.safety.audited_output import _strip_backstage_labels
+
+        stripped = _strip_backstage_labels("This is what I am building next [CAPABILITY_STATE].")
+
+        self.assertEqual(stripped, "This is what I am building next.")
+
     def test_audit_early_skip_path_strips_backstage_label(self):
         from core.safety.audited_output import audit_assistant_text
 

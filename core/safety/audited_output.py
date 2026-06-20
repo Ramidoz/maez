@@ -57,7 +57,9 @@ _BACKSTAGE_LABEL_RE = re.compile(r"\[CAPABILITY_STATE\]|\bCAPABILITY_STATE\b")
 def _strip_backstage_labels(text: str) -> str:
     """Remove private control labels without touching citations or user brackets."""
     stripped = _BACKSTAGE_LABEL_RE.sub("", text or "")
-    return re.sub(r"[ \t]{2,}", " ", stripped).strip(" \t")
+    stripped = re.sub(r"[ \t]{2,}", " ", stripped)
+    stripped = re.sub(r"\s+([.,!?;:])", r"\1", stripped)
+    return stripped.strip(" \t")
 
 
 def _buffer_audit_flags(flags) -> None:
