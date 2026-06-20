@@ -399,8 +399,11 @@ def observe_focused_support_gate(
     boot_id,
     shadow_id,
     ts,
-) -> str:
-    """SYNC support gate: caveat marked draft and write gate telemetry."""
+) -> tuple:
+    """SYNC support gate: caveat marked draft and write gate telemetry.
+
+    Returns (gated_reply, gate_receipt). gate_receipt is the dict computed by
+    apply_support_gate (carries caveated_unsupported etc.), or None on failure."""
     try:
         verifier = HttpSupportVerifier()
         outcome = apply_support_gate(
@@ -434,10 +437,10 @@ def observe_focused_support_gate(
                 surface,
                 shadow_id,
             )
-        return outcome.gated_marked_draft
+        return outcome.gated_marked_draft, receipt
     except Exception:
         logger.warning("support_gate_failed surface=%s", surface, exc_info=True)
-        return reply
+        return reply, None
 
 
 def decide_support_path(*, gate_enabled: bool, shadow_enabled: bool) -> str:

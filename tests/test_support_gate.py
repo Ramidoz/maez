@@ -244,7 +244,7 @@ class ObserveFocusedSupportGateTest(unittest.TestCase):
                 ),
                 self.assertLogs("maez.grounding_shadow", level="INFO") as cm,
             ):
-                gated = gs.observe_focused_support_gate(
+                gated, receipt = gs.observe_focused_support_gate(
                     "Claim [E1].",
                     {"E1": "x"},
                     surface="cockpit",
@@ -254,6 +254,7 @@ class ObserveFocusedSupportGateTest(unittest.TestCase):
                 )
 
             self.assertIn("I couldn't confirm this from the source I cited.", gated)
+            self.assertIn("caveated_unsupported", receipt)
             self.assertTrue(any("support_gate_applied" in message for message in cm.output))
             self.assertTrue(any("row_written=True" in message for message in cm.output))
             with open(path, encoding="utf-8") as f:
@@ -276,7 +277,7 @@ class ObserveFocusedSupportGateTest(unittest.TestCase):
             mock.patch.object(gs, "emit_support_row", return_value=False),
             self.assertLogs("maez.grounding_shadow", level="INFO") as cm,
         ):
-            gated = gs.observe_focused_support_gate(
+            gated, _receipt = gs.observe_focused_support_gate(
                 "Claim [E1].",
                 {"E1": "x"},
                 surface="cockpit",
@@ -297,7 +298,7 @@ class ObserveFocusedSupportGateTest(unittest.TestCase):
             mock.patch.object(gs, "apply_support_gate", side_effect=RuntimeError("boom")),
             self.assertLogs("maez.grounding_shadow", level="WARNING") as cm,
         ):
-            gated = gs.observe_focused_support_gate(
+            gated, receipt = gs.observe_focused_support_gate(
                 "Claim [E1].",
                 {"E1": "x"},
                 surface="cockpit",
@@ -307,6 +308,7 @@ class ObserveFocusedSupportGateTest(unittest.TestCase):
             )
 
         self.assertEqual(gated, "Claim [E1].")
+        self.assertIsNone(receipt)
         self.assertTrue(any("support_gate_failed" in message for message in cm.output))
 
 

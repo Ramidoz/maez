@@ -24,3 +24,23 @@ class WriteBackTest(unittest.TestCase):
 
     def test_attach_unknown_id_is_silent_noop(self):
         self.store.attach_post_turn_quality("nope", outcome_quality="unusable", post_turn_signal="x")
+
+    def test_quality_mapping_marks_caveated_unusable(self):
+        from daemon.maez_daemon import _routing_quality_from_gate
+        q, sig = _routing_quality_from_gate(caveated_unsupported=4, web_quality="adequate", result_count=3)
+        self.assertEqual(q, "unusable"); self.assertIn("caveated", sig)
+
+    def test_quality_mapping_thin_nonempty_search_unusable(self):
+        from daemon.maez_daemon import _routing_quality_from_gate
+        q, sig = _routing_quality_from_gate(caveated_unsupported=0, web_quality="thin", result_count=2)
+        self.assertEqual(q, "unusable"); self.assertIn("thin", sig)
+
+    def test_adequate_search_no_caveats_stays_good(self):
+        from daemon.maez_daemon import _routing_quality_from_gate
+        q, _ = _routing_quality_from_gate(caveated_unsupported=0, web_quality="adequate", result_count=3)
+        self.assertIsNone(q)
+
+    def test_empty_search_preserves_empty_but_honest(self):
+        from daemon.maez_daemon import _routing_quality_from_gate
+        q, _ = _routing_quality_from_gate(caveated_unsupported=0, web_quality="thin", result_count=0)
+        self.assertIsNone(q)

@@ -1066,6 +1066,17 @@ def _daemon_parallel_web_search_enabled(
     )
 
 
+def _routing_quality_from_gate(*, caveated_unsupported, web_quality, result_count):
+    """Calibrated teacher signal (Slice 1a). Returns (outcome_quality|None, signal_str).
+    None => leave the insert-time outcome_quality as-is (incl. a true-empty search, which keeps its
+    distinct 'empty_but_honest'). web_quality is the 'quality' field from _compute_quality (thin/adequate)."""
+    if caveated_unsupported and caveated_unsupported >= 1:
+        return "unusable", f"support_gate_caveated:{caveated_unsupported}"
+    if web_quality == "thin" and result_count > 0:
+        return "unusable", "thin_evidence"
+    return None, ""
+
+
 def _focused_cognition_enabled(*, recall_stack_config=None) -> bool:
     if recall_stack_config is None:
         from core.routing.recall_stack_config import resolve_recall_stack
@@ -5865,6 +5876,8 @@ class MaezDaemon:
         _legacy_routing_observation_id = None
         _empty_web_search = False
         _routing_obs_tool = None
+        _wb_web_quality = "adequate"
+        _wb_result_count = 0
         if (
             not authoritative_tool_reply
             and _daemon_parallel_web_search_enabled(
@@ -5885,6 +5898,9 @@ class MaezDaemon:
             else:
                 sr = web_search(text, max_results=3)
             web_context = web_format(sr, include_quality=True)
+            from skills.web_search import _compute_quality
+            if web_context:
+                _wb_web_quality, _wb_result_count = _compute_quality(sr)[:2]
             from core.routing.focused_cognition import (
                 is_empty_search_result as _is_empty_search_result,
             )
@@ -5975,6 +5991,9 @@ class MaezDaemon:
                 _routing_obs_tool = "photo_freshness_web_search"
                 sr = web_search(_photo_freshness_query, max_results=3)
                 web_context = web_format(sr)
+                from skills.web_search import _compute_quality
+                if web_context:
+                    _wb_web_quality, _wb_result_count = _compute_quality(sr)[:2]
                 from core.routing.focused_cognition import (
                     is_empty_search_result as _is_empty_search_result,
                 )
@@ -7117,6 +7136,7 @@ class MaezDaemon:
             temporal_anchor_result=_temporal_anchor_result,
             trace=_trace,
         )
+        _gate_receipt = None
         try:
             if (
                 _grounding_shadow_post_audit_ready
@@ -7134,7 +7154,7 @@ class MaezDaemon:
                     shadow_enabled=strict_env_flag("MAEZ_GROUNDING_SHADOW_ENABLED"),
                 )
                 if _support_path == "sync_gate":
-                    reply = observe_focused_support_gate(
+                    reply, _gate_receipt = observe_focused_support_gate(
                         reply,
                         _focused_support_evidence_map,
                         surface=source,
@@ -7156,6 +7176,24 @@ class MaezDaemon:
                 "focused grounding shadow/gate skipped: %s",
                 _grounding_shadow_exc,
             )
+        if os.environ.get("MAEZ_ROUTING_QUALITY_WRITEBACK") == "1" and _legacy_routing_observation_id:
+            try:
+                _cav = int((_gate_receipt or {}).get("caveated_unsupported", 0))
+                _q, _sig = _routing_quality_from_gate(
+                    caveated_unsupported=_cav,
+                    web_quality=_wb_web_quality,
+                    result_count=_wb_result_count,
+                )
+                if _q is not None:
+                    from core.routing.observation import _default_store
+
+                    _default_store().attach_post_turn_quality(
+                        _legacy_routing_observation_id,
+                        outcome_quality=_q,
+                        post_turn_signal=_sig,
+                    )
+            except Exception as _wbe:
+                logger.debug("routing quality write-back skipped: %s", _wbe)
         try:
             from core.routing.recall_outcome import RecallOutcome, classify_outcome
             from core.routing.recall_receipt import (
