@@ -186,6 +186,14 @@ class RoutingObservationStore:
                     "CREATE INDEX IF NOT EXISTS idx_routing_observations_shape "
                     "ON routing_observations(utterance_shape)"
                 )
+            # forward-only post-turn columns (added after v1 ship; nullable)
+            existing = {
+                r["name"]
+                for r in conn.execute("PRAGMA table_info(routing_observations)").fetchall()
+            }
+            with conn:
+                if "post_turn_signal" not in existing:
+                    conn.execute("ALTER TABLE routing_observations ADD COLUMN post_turn_signal TEXT")
 
     def table_names(self) -> set[str]:
         with self._connect() as conn:
@@ -210,6 +218,21 @@ class RoutingObservationStore:
         if row is None:
             raise KeyError(row_id)
         return row
+
+    def attach_post_turn_quality(self, row_id, *, outcome_quality, post_turn_signal):
+        """Post-synthesis write-back: revise outcome_quality + record the signal that
+        caused it, keyed by the row id captured at insert. Silent no-op on unknown id /
+        db error — this runs in the reply path and must NEVER raise."""
+        try:
+            with self._connect() as conn:
+                with conn:
+                    conn.execute(
+                        "UPDATE routing_observations SET outcome_quality = ?, post_turn_signal = ? "
+                        "WHERE id = ?",
+                        (outcome_quality, post_turn_signal, row_id),
+                    )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("attach_post_turn_quality skipped (%s)", exc)
 
     def record_dispatcher_observation(
         self,
