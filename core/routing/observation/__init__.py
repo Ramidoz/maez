@@ -222,6 +222,15 @@ class RoutingObservationStore:
             raise KeyError(row_id)
         return row
 
+    def iter_rows_for_priors(self):
+        """Forward rows carrying a learnt class (request_class_id NOT NULL), newest first."""
+        with self._connect() as conn:
+            return conn.execute(
+                "SELECT request_class_id, chosen_tool, outcome_quality, created_at "
+                "FROM routing_observations WHERE request_class_id IS NOT NULL "
+                "ORDER BY created_at DESC"
+            ).fetchall()
+
     def attach_post_turn_quality(self, row_id, *, outcome_quality, post_turn_signal):
         """Post-synthesis write-back: revise outcome_quality + record the signal that
         caused it, keyed by the row id captured at insert. Silent no-op on unknown id /
