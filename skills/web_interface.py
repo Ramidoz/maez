@@ -9790,6 +9790,13 @@ def _owner_private_auth_ok() -> bool:
     try:
         if not accounts.owner_claimed():
             return _request_is_loopback()
+        # Claimed owner on a single-user local machine: the real loopback peer IS the owner, so grant
+        # owner-private ACCESS (read/chat) without a cookie. Remote requests still require the cookie below.
+        # NOTE: the STRICT proof (_request_has_web_owner_cookie) is intentionally NOT given this recovery —
+        # armed S7 / 3b felt-time stay cookie-gated. Loopback safety: _request_is_loopback() reads the raw
+        # WSGI peer (no ProxyFix, never X-Forwarded-For); maez-web binds 127.0.0.1 only.
+        if _request_is_loopback():
+            return True
         token = (request.cookies.get(AUTH_COOKIE, "") or "").strip()
         if not token:
             return False
