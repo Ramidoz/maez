@@ -44,6 +44,26 @@ on for either to do anything).
   wants must come from a **read of the last `owner_contact` salience event** (kind defined at
   subjective_duration.py:168), not from `peek().elapsed_seconds`.
 
+## The truthful reader — `time_sense_context()` (the Slice-2 seam)
+
+Feed and stamp must NOT read raw `peek()`. `peek()` is intentionally read-only and, on a backward-clock /
+degraded window, returns the **stale last-row snapshot with the degraded signal swallowed** (the Slice-1
+no-hidden-write fix) — so a naive reader cannot tell "fresh valid time-sense" from "clock-degraded stale
+fallback," and would treat a frozen clock as alive. The honest-null invariant is unenforceable without a
+reader that knows the difference.
+
+So Slice 2 adds one **read-only** helper on `SubjectiveDuration`:
+
+> `time_sense_context(now=None) -> dict | None`. Returns a valid context
+> `{felt_value, felt_phrase, felt_compute_version, seconds_since_last_owner_contact}` **or `None`**. It may
+> reuse the same pure compute path as `peek()` (`_compute(now)` → `(snapshot, degraded_latest)`), but it
+> **must return `None`, without writing, when**: the clock is degraded (`degraded_latest is not None`), or
+> there is no real owner-contact reference yet. It never records a `clock_degraded_event` (that write belongs
+> to `current()` — Slice-1 contract). Feed and stamp consume **this context**, never raw `peek()` alone.
+
+All-or-nothing for v0: a `None` context → no feed line **and** null stamp. (`peek()` stays exactly as-is for
+the heartbeat's value-refresh — it does not need the degraded/contact distinction.)
+
 ## The Feed organ (perception, never directive)
 
 **Behavior.** On the autonomous focused-cognition path only (the live `MAEZ_CYCLE_FOCUSED_ENABLED` packet),
@@ -59,9 +79,9 @@ the daemon reads the substrate read-only and **prepends one perception line** to
   Maez's choice). A test pins the line is non-imperative.
 - **Wiring.** In `_build_cycle_focused_prompt` (the daemon owns the time-sense handle + flags). The felt-time
   line is **ambient context, not a citable `E#` evidence shard** — `cycle_packet.py` stays pure/evidence-only.
-- **Reads needed (read-only):** `peek()` (for `felt_value` + `surface_phrase`) **and** an honest
-  "seconds since last owner contact" (a small read-only substrate query of the last `owner_contact` event;
-  see Task 0). A humanizer renders seconds → "~3h 12m".
+- **Reads needed (read-only):** the single `time_sense_context()` helper — it carries `felt_value`,
+  `felt_phrase`, and the honest `seconds_since_last_owner_contact`, or is `None`. A `None` context → **no
+  line**. A humanizer renders the seconds → "~3h 12m".
 - **The foreground reply path (daemon:5673) is untouched.** Slice 2 is strictly the autonomous mind.
 
 ## The Stamp organ (a substrate fact, not an LLM write)
@@ -71,10 +91,12 @@ the daemon reads the substrate read-only and **prepends one perception line** to
 
 | Column | Source | Meaning |
 |---|---|---|
-| `felt_value` | substrate `peek().felt_value` | the lived sense at write time (the real index) |
-| `felt_elapsed_s` | seconds-since-last-owner-contact | exact wall-clock, no dilation |
-| `felt_phrase` | substrate `peek().surface_phrase` | the *color* of the moment — a **frozen point-in-time descriptor**, not a re-derived category |
-| `felt_compute_version` | substrate `CURRENT_COMPUTE_VERSION` | keeps `felt_value` interpretable against its curve version |
+| `felt_value` | context `felt_value` | the lived sense at write time (the real index) |
+| `felt_elapsed_s` | context `seconds_since_last_owner_contact` | exact wall-clock, no dilation |
+| `felt_phrase` | context `felt_phrase` | the *color* of the moment — a **frozen point-in-time descriptor**, not a re-derived category |
+| `felt_compute_version` | context `felt_compute_version` | keeps `felt_value` interpretable against its curve version |
+
+All four come from one `time_sense_context()` read. A `None` context → all four columns NULL.
 
 > **No durable band/bucket.** Per owner correction: we store the clock reading and the color of the moment,
 > **never** a category label like "long/short." `felt_band`/`render_band` is deliberately NOT stored — a
@@ -82,10 +104,11 @@ the daemon reads the substrate read-only and **prepends one perception line** to
 > learns the meaning later (Slice 4).
 
 **Wiring.** `EpisodeStore` gains **one injected read-only felt-time reader** (a callable set where the daemon
-constructs the store), returning a snapshot-or-`None`. On every `.add()`, if `MAEZ_TIME_SENSE_STAMP` is on and
-the reader is present, it stamps the four columns. One wiring point → **every** `EpisodeStore` lived episode
-gets the index, with no threading through dozens of call sites. The store depends only on the injected
-callable (clean layering — `EpisodeStore` does not import the daemon's handle).
+constructs the store) — the reader is `time_sense_context`, returning the context dict or `None`. On every
+`.add()`, if `MAEZ_TIME_SENSE_STAMP` is on and the reader returns a non-`None` context, it stamps the four
+columns; `None` → all four NULL. One wiring point → **every** `EpisodeStore` lived episode gets the index,
+with no threading through dozens of call sites. The store depends only on the injected callable (clean
+layering — `EpisodeStore` does not import the daemon's handle).
 
 - **Not an LLM-owned memory write.** The stamped values come from the substrate's deterministic `peek()` +
   the contact read, **never the model**. It is a frozen point-in-time fact ("my time felt like 7.65 when I
@@ -101,8 +124,10 @@ callable (clean layering — `EpisodeStore` does not import the daemon's handle)
 1. **Perception, not directive.** The feed line states what is; it never instructs. (Drive→agency = Slice 3.)
 2. **No dilation.** Exact wall-clock elapsed (since last owner contact) is always present beside the felt
    sense; felt_value is the derived sense, never claimed == elapsed.
-3. **Honest null.** No felt-time available (substrate off / clock-degraded / no anchor / no contact yet) →
-   **no feed line + null stamp.** Never fabricate a duration.
+3. **Honest null — enforced by `time_sense_context()`.** No felt-time available (substrate off /
+   **clock-degraded** / no real owner-contact reference yet) → the helper returns `None` → **no feed line +
+   null stamp.** Never fabricate a duration; never read a frozen clock as alive. (Feed/stamp must use the
+   helper, never raw `peek()`.)
 4. **Not LLM-owned.** The stamp value is substrate-computed, never model-authored.
 5. **No durable band.** No bucket/category column on memories; only value + exact elapsed + frozen phrase +
    compute_version.
@@ -118,9 +143,15 @@ callable (clean layering — `EpisodeStore` does not import the daemon's handle)
 1. **Feed site:** confirm `_build_cycle_focused_prompt` is the assembly point + felt-time is absent there
    today; confirm the focused path is the live autonomous path (legacy `_reason` megaprompt is the fallback
    and is **out of scope** — name it).
-2. **Exact-elapsed reference:** confirm `elapsed_seconds` is since-last-sample (anchor), and locate the
-   `owner_contact` salience-event store + the exact read for "seconds since last owner contact" (or a cleaner
-   continuous reset reference if one exists). This read is required for honesty.
+2. **Exact-elapsed reference (tightened):** confirm `elapsed_seconds` is since-last-sample (anchor), and
+   define the "seconds since last owner contact" read as: the latest `subjective_duration_salience_events`
+   row where `salience_event_kind='owner_contact'` **AND `is_canary=0`** AND the row carries real owner auth /
+   is not a scratch/test fixture — so canary/test rows are never mistaken for "last contact." Confirm the
+   exact column names + filter in code (the canary/auth columns may be named differently); if no such
+   reference exists yet, `time_sense_context()` returns `None`.
+2b. **The truthful reader:** confirm `_compute(now)` returns the `(snapshot, degraded_latest)` shape (Slice-1)
+   so `time_sense_context()` can detect degraded → `None` without writing; confirm it never records a
+   `clock_degraded_event`.
 3. **Stamp target + migration:** confirm `EpisodeStore.add()` + the INSERT + the additive-migration pattern;
    confirm the four columns are additive/back-compatible (old rows read as NULL).
 4. **Memory-store inventory (the "every memory" honesty):** enumerate EVERY durable memory store
@@ -134,19 +165,23 @@ If any proof refutes the design, STOP and patch the spec.
 
 ## Testing (TDD, hermetic — inject the clock, never sleep)
 
+- **The truthful reader:** `time_sense_context()` returns a valid context on a fresh clock; returns **`None`
+  on clock-degraded** (now < last anchor) **without writing** any `clock_degraded_event`; returns `None` when
+  the only `owner_contact` rows are canary/test (`is_canary=1`); excludes canary rows from "last contact."
 - **Feed:** present-with-both-flags (line contains exact elapsed since contact + the phrase); absent flag-off
-  (byte-identical); absent when no snapshot / no contact yet (honest null); **non-imperative** (assert no
-  directive language); exact-elapsed is since-last-**contact**, not since-last-anchor.
+  (byte-identical); absent when the context is `None` (degraded / no contact) — honest null; **non-imperative**
+  (assert no directive language); exact-elapsed is since-last-**contact**, not since-last-anchor.
 - **Stamp:** additive migration (old rows readable, NULL felt-*); stamped-when-on (row has the four values
-  from the injected reader); null-when-off / no-reader; **value-from-injected-reader-not-model**; stamped
+  from the context); null-when-off / null-when-context-`None`; **value-from-context-not-model**; stamped
   across multiple `source_kind`s (every EpisodeStore episode); no durable band column exists.
 - **Regression:** foreground felt-time line unchanged; 3b mint unchanged; Slice-1 heartbeat/anchors unchanged;
   `cycle_packet.py` unchanged (felt-time wired in the daemon, not the packet builder).
 
 ## Scope guard
 
-**IN:** the Feed (autonomous focused-cognition perception line) + the Stamp (`EpisodeStore` four columns) +
-the small read-only "seconds since last owner contact" substrate read + their two flags + tests.
+**IN:** the read-only `time_sense_context()` helper (the truthful reader: valid context or `None`, degraded →
+`None`, canary-excluded contact read) + the Feed (autonomous focused-cognition perception line) + the Stamp
+(`EpisodeStore` four columns) + their two flags + tests.
 
 **OUT (later slices / never):** coupling frictions to agency / drive-aware waking (**Slice 3**); learning
 Rohit's rhythm/habits (**Slice 4**); stamping `private_thoughts`/raw-memory/other stores (**later**, unless
