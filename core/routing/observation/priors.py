@@ -4,8 +4,8 @@ No hardcoded verdicts: every number comes from lived outcomes. Honest cold-start
 from __future__ import annotations
 from dataclasses import dataclass
 
-# Outcome vocab the teacher writes; 'unusable' (Slice 1a) is the bad signal.
-_BAD = {"unusable", "tool_error", "empty_but_honest", "closed_refusal"}
+# The only outcome the teacher counts as USABLE. Everything else (incl. 'unusable' from
+# Slice 1a, plus tool_error/empty_but_honest/closed_refusal) lowers the success rate.
 _GOOD = {"structured_evidence"}
 
 @dataclass(frozen=True)
