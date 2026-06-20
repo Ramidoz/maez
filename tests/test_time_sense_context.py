@@ -69,6 +69,26 @@ class TimeSenseContext(unittest.TestCase):
         self.assertIsNotNone(ctx)
         self.assertAlmostEqual(ctx["seconds_since_last_owner_contact"], 4 * 3600.0, places=1)  # used the REAL row
 
+    def test_manual_test_contact_ignored_for_real_one(self):
+        # owner_auth_class='manual_test' is a scratch fixture, NOT a real owner contact — a newer
+        # manual_test row must be ignored in favor of an older REAL (e.g. cockpit) owner-contact row.
+        inst = self._inst()
+        t0 = datetime(2026, 6, 20, 12, 0, 0, tzinfo=UTC)
+        inst.current(now_utc=t0)
+        _insert_owner_contact(inst.db_path, ts=t0 + timedelta(hours=3), owner_auth_class="manual_test")  # newer, scratch
+        _insert_owner_contact(inst.db_path, ts=t0, owner_auth_class="cockpit")                            # older, real
+        ctx = inst.time_sense_context(now=t0 + timedelta(hours=4))
+        self.assertIsNotNone(ctx)
+        self.assertAlmostEqual(ctx["seconds_since_last_owner_contact"], 4 * 3600.0, places=1)  # used the REAL cockpit row
+
+    def test_none_when_only_manual_test_contact(self):
+        # Only a manual_test owner_contact exists -> no REAL contact reference -> None (no false "Rohit was here").
+        inst = self._inst()
+        t0 = datetime(2026, 6, 20, 12, 0, 0, tzinfo=UTC)
+        inst.current(now_utc=t0)
+        _insert_owner_contact(inst.db_path, ts=t0, owner_auth_class="manual_test")
+        self.assertIsNone(inst.time_sense_context(now=t0 + timedelta(hours=1)))
+
 
 class HumanizeElapsed(unittest.TestCase):
     def test_humanizes_hours_and_minutes(self):

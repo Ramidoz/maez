@@ -94,3 +94,13 @@ class StampWiring(unittest.TestCase):
         ep_id = self._add(store)                 # a memory write must NEVER fail due to the stamp
         self.assertIsNotNone(self._row(store, ep_id))
         self.assertIsNone(self._row(store, ep_id)["felt_value"])
+
+    def test_stamps_from_live_context_key(self):
+        # The LIVE time_sense_context() emits `seconds_since_last_owner_contact` (NOT `felt_elapsed_s`);
+        # the stamp must map that real producer key into the felt_elapsed_s column.
+        ctx = {"felt_value": 2.0, "seconds_since_last_owner_contact": 7200.0,
+               "felt_phrase": "a stretch", "felt_compute_version": 1}
+        store = self._store(lambda: ctx)
+        row = self._row(store, self._add(store))
+        self.assertAlmostEqual(row["felt_elapsed_s"], 7200.0)   # live producer key -> column
+        self.assertAlmostEqual(row["felt_value"], 2.0)

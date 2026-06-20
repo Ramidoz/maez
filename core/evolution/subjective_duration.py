@@ -53,6 +53,11 @@ OWNER_AUTH_PAIRINGS = {
     "manual_test": "manual_test",
     "cockpit": "cockpit_web_owner",
 }
+# A "last owner contact" reference must come from a REAL production surface, never the manual_test
+# scratch fixture — else a test row seeds a false "Rohit was here". owner_auth_class stores the SURFACE
+# (see record_salience_event), so this is OWNER_AUTH_SURFACES minus the scratch surface. Derived (not a
+# hand-list) so a future real surface is auto-included while manual_test is always excluded.
+REAL_OWNER_CONTACT_AUTH_CLASSES = frozenset(OWNER_AUTH_SURFACES - {"manual_test"})
 
 
 @dataclass(frozen=True)
@@ -637,11 +642,15 @@ class SubjectiveDuration:
     def _seconds_since_last_owner_contact(self, now: datetime) -> float | None:
         """Wall-clock seconds since the latest REAL owner_contact salience event (canary/scratch
         rows excluded). None if there is no such row or the clock is before it."""
+        classes = tuple(sorted(REAL_OWNER_CONTACT_AUTH_CLASSES))
+        placeholders = ",".join("?" for _ in classes)
         with closing(sqlite3.connect(self.db_path)) as conn:
             row = conn.execute(
                 "SELECT ts_utc FROM subjective_duration_salience_events "
-                "WHERE salience_event_kind = 'owner_contact' AND is_canary = 0 AND owner_auth_class != '' "
-                "ORDER BY event_id DESC LIMIT 1"
+                "WHERE salience_event_kind = 'owner_contact' AND is_canary = 0 "
+                f"AND owner_auth_class IN ({placeholders}) "
+                "ORDER BY event_id DESC LIMIT 1",
+                classes,
             ).fetchone()
         if row is None:
             return None
