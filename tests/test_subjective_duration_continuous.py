@@ -1,4 +1,5 @@
 import os, sqlite3, tempfile, unittest
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from core.evolution import subjective_duration as sd
 
@@ -40,8 +41,12 @@ class PeekReadOnly(unittest.TestCase):
         return sd.SubjectiveDuration(db_path=os.path.join(tempfile.mkdtemp(), "sd.db"))
 
     def _count(self, inst):
-        with sqlite3.connect(inst.db_path) as conn:
+        with closing(sqlite3.connect(inst.db_path)) as conn:
             return conn.execute("SELECT COUNT(*) FROM subjective_duration_samples").fetchone()[0]
+
+    def _salience_count(self, inst):
+        with closing(sqlite3.connect(inst.db_path)) as conn:
+            return conn.execute("SELECT COUNT(*) FROM subjective_duration_salience_events").fetchone()[0]
 
     def test_peek_does_not_write_but_current_does(self):
         inst = self._inst()
@@ -76,7 +81,7 @@ class PeekReadOnly(unittest.TestCase):
         t0 = datetime(2026, 6, 19, 12, 0, 0, tzinfo=UTC)
         snap = inst.current(now_utc=t0)             # writes the anchor; snap == what _compute produced
         inst.peek(now_utc=t0 + timedelta(hours=4))  # read-only; must not perturb the stored anchor
-        with sqlite3.connect(inst.db_path) as conn:
+        with closing(sqlite3.connect(inst.db_path)) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute("SELECT * FROM subjective_duration_samples ORDER BY sample_id DESC LIMIT 1").fetchone()
         # (1) the stored modulators ARE the computed ones (not asserted in prose anymore)
@@ -95,12 +100,33 @@ class PeekReadOnly(unittest.TestCase):
         self.assertEqual(replayed, sd.replay_felt_value(anchor, at_ts=at))   # deterministic
         self.assertGreaterEqual(replayed, row["value"])                       # climbs forward from the anchor
 
+    def test_peek_does_not_write_on_clock_degraded(self):
+        # The read-only heartbeat path must NOT write a clock_degraded_event during a clock-skew window
+        # (Codex HOLD: peek's _compute used to record it -> a "read" with a hidden pen).
+        inst = self._inst()
+        t1 = datetime(2026, 6, 19, 12, 0, 0, tzinfo=UTC)
+        inst.current(now_utc=t1)                                   # anchor at t1
+        before = self._salience_count(inst)
+        inst.peek(now_utc=t1 - timedelta(hours=1))                 # clock went BACKWARD -> degraded
+        self.assertEqual(self._salience_count(inst), before)       # peek wrote NO salience event
+        self.assertEqual(self._count(inst), 1)                     # and no sample either
+
+    def test_current_still_records_clock_degraded(self):
+        # The WRITER path keeps today's honesty behavior: a degraded current() records the event once.
+        inst = self._inst()
+        t1 = datetime(2026, 6, 19, 12, 0, 0, tzinfo=UTC)
+        inst.current(now_utc=t1)
+        before = self._salience_count(inst)
+        inst.current(now_utc=t1 - timedelta(hours=1))              # degraded via current()
+        self.assertEqual(self._salience_count(inst), before + 1)   # recorded exactly once
+        self.assertEqual(self._count(inst), 1)                     # still NO sample insert on degraded
+
 
 class SchemaMigration(unittest.TestCase):
     def test_old_db_without_compute_version_migrates_to_v1(self):
         d = tempfile.mkdtemp()
         path = os.path.join(d, "sd.db")
-        with sqlite3.connect(path) as conn:
+        with closing(sqlite3.connect(path)) as conn:
             conn.execute(
                 "CREATE TABLE subjective_duration_samples ("
                 "sample_id INTEGER PRIMARY KEY AUTOINCREMENT, ts_utc TEXT NOT NULL, value REAL NOT NULL,"
@@ -112,7 +138,7 @@ class SchemaMigration(unittest.TestCase):
                          "VALUES ('2026-06-19T12:00:00+00:00', 1.0, 0.5, 1.0, 0.5, 0.0, 0.0)")
             conn.commit()
         sd.SubjectiveDuration(db_path=path)   # __init__ -> _initialize -> migration
-        with sqlite3.connect(path) as conn:
+        with closing(sqlite3.connect(path)) as conn:
             cols = {r[1] for r in conn.execute("PRAGMA table_info(subjective_duration_samples)")}
             self.assertIn("compute_version", cols)
             self.assertEqual(conn.execute("SELECT compute_version FROM subjective_duration_samples").fetchone()[0], 1)
@@ -133,9 +159,9 @@ class PerceptionLineRecomputes(unittest.TestCase):
         inst = sd.SubjectiveDuration(db_path=os.path.join(tempfile.mkdtemp(), "sd.db"))
         t0 = datetime(2026, 6, 19, 12, 0, 0, tzinfo=UTC)
         inst.current(now_utc=t0)
-        with sqlite3.connect(inst.db_path) as conn:
+        with closing(sqlite3.connect(inst.db_path)) as conn:
             before = conn.execute("SELECT COUNT(*) FROM subjective_duration_samples").fetchone()[0]
         inst.perception_line(now_utc=t0 + timedelta(hours=4))
-        with sqlite3.connect(inst.db_path) as conn:
+        with closing(sqlite3.connect(inst.db_path)) as conn:
             after = conn.execute("SELECT COUNT(*) FROM subjective_duration_samples").fetchone()[0]
         self.assertEqual(before, after)                # peek-based: no write

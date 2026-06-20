@@ -554,16 +554,16 @@ class SubjectiveDuration:
                 conn.commit()
             _migrate_meaningful_salience_seam(conn)
 
-    def _compute(self, now: datetime) -> SubjectiveDurationSnapshot:
-        """Pure read-only felt-time computation — NEVER writes a sample.
+    def _compute(self, now: datetime) -> tuple[SubjectiveDurationSnapshot, Mapping[str, object] | None]:
+        """PURE read-only felt-time computation — writes NOTHING (no sample, no salience event).
 
-        On clock-degraded (now < latest ts) it records the degraded salience event and
-        returns the last row's snapshot (which lacks elapsed_seconds/modulators — that's the
-        honest-failure path, not the hot path)."""
+        Returns (snapshot, degraded_latest): on clock-degraded (now < latest ts) the snapshot is
+        the last row's (which lacks elapsed_seconds/modulators — the honest-failure path) and
+        degraded_latest is that row, so the WRITER (current()) can record the degraded salience
+        event. On the normal path degraded_latest is None. peek() ignores it (truly read-only)."""
         latest = self._latest_sample()
         if latest is not None and now < latest["ts"]:
-            self._record_clock_degraded_event(now=now, latest=latest)
-            return self._snapshot_from_row(latest, source_ref_digest=None)
+            return self._snapshot_from_row(latest, source_ref_digest=None), latest
         prior_value = 0.0 if latest is None else float(latest["value"])
         prior_ts = now if latest is None else latest["ts"]
         delta_hours = max(0.0, (now - prior_ts).total_seconds() / 3600.0)
@@ -591,20 +591,20 @@ class SubjectiveDuration:
             elapsed_seconds=(now - prior_ts).total_seconds(),
             drag_multiplier=drag,
             engagement_multiplier=engagement,
-        )
+        ), None
 
     def peek(self, *, now_utc: str | datetime | None = None) -> SubjectiveDurationSnapshot:
         now = _normalize_event_time(now_utc or datetime.now(UTC))
-        return self._compute(now)  # NO write
+        snap, _degraded_latest = self._compute(now)   # truly read-only — ignores the degraded signal
+        return snap
 
     def current(self, *, now_utc: str | datetime | None = None) -> SubjectiveDurationSnapshot:
         now = _normalize_event_time(now_utc or datetime.now(UTC))
-        latest = self._latest_sample()
-        if latest is not None and now < latest["ts"]:
-            # clock-degraded early-return: _compute records the degraded event and returns the
-            # last row's snapshot; current() must NOT insert a sample on this path.
-            return self._compute(now)
-        snap = self._compute(now)
+        snap, degraded_latest = self._compute(now)
+        if degraded_latest is not None:
+            # clock-degraded: current() OWNS the honesty write (once); NO sample insert on this path.
+            self._record_clock_degraded_event(now=now, latest=degraded_latest)
+            return snap
         ts_iso = now.isoformat()
         with closing(sqlite3.connect(self.db_path)) as conn:
             conn.execute(
