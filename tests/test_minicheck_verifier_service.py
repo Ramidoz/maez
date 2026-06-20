@@ -28,6 +28,13 @@ class ServiceShapeTests(unittest.TestCase):
         body = mod.handle_support({})
         self.assertIn("error", body)
 
+    def test_health_payload_matches_runtime_services_contract(self):
+        mod = self._load()
+        self.assertEqual(
+            mod.health_payload(),
+            {"status": "ok", "contract": "minicheck_support.v1"},
+        )
+
     def test_module_loads_without_touching_model(self):
         self._load()
 
