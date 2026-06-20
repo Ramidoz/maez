@@ -11,6 +11,7 @@ import json
 import math
 import os
 import sqlite3
+import statistics
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -484,6 +485,28 @@ def humanize_elapsed(seconds: float) -> str:
     return f"{days}d {rem_hr}h" if rem_hr else f"{days}d"
 
 
+RHYTHM_RECENT_WINDOW = 20      # transparency knob (surfaced via recent_sample_count); NOT a feeling-decision
+RHYTHM_MIN_GAPS = 3            # data-sufficiency floor for comparison facts; below it -> None (honest cold-start)
+
+
+def _gaps_seconds(timestamps: "list[datetime]") -> "list[float]":
+    ts = sorted(timestamps)
+    return [(ts[i] - ts[i - 1]).total_seconds() for i in range(1, len(ts))]
+
+
+def _percentile_strictly_below(value: float, population: "list[float]") -> "float | None":
+    if not population:
+        return None
+    return 100.0 * sum(1 for g in population if g < value) / len(population)
+
+
+def _iqr(values: "list[float]") -> "float | None":
+    if len(values) < 2:
+        return None
+    q = statistics.quantiles(values, n=4)   # [Q1, Q2, Q3]
+    return q[2] - q[0]
+
+
 CURRENT_COMPUTE_VERSION = 1
 
 
@@ -657,6 +680,53 @@ class SubjectiveDuration:
         contact_ts = _normalize_event_time(row[0])
         delta = (now - contact_ts).total_seconds()
         return delta if delta >= 0 else None
+
+    def _real_owner_contact_timestamps(self) -> "list[datetime]":
+        """All REAL owner_contact timestamps (canary/manual_test/scratch excluded), chronological."""
+        classes = tuple(sorted(REAL_OWNER_CONTACT_AUTH_CLASSES))
+        placeholders = ",".join("?" for _ in classes)
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            rows = conn.execute(
+                "SELECT ts_utc FROM subjective_duration_salience_events "
+                "WHERE salience_event_kind = 'owner_contact' AND is_canary = 0 "
+                f"AND owner_auth_class IN ({placeholders})",
+                classes,
+            ).fetchall()
+        return sorted(_normalize_event_time(r[0]) for r in rows)
+
+    def rhythm_context(self, *, now: str | datetime | None = None) -> dict | None:
+        """Read-only LEARNED rhythm FACTS for Slice-A feed/stamp. Returns raw facts (no verdict/label/
+        phrase) or None. None (no write) on clock-degraded or no real owner-contact reference. Comparison
+        facts (medians/percentile/IQR) are None below RHYTHM_MIN_GAPS (honest cold-start)."""
+        now_dt = _normalize_event_time(now or datetime.now(UTC))
+        _snap, degraded_latest = self._compute(now_dt)
+        if degraded_latest is not None:
+            return None                          # clock-degraded -> absent (no write)
+        contacts = self._real_owner_contact_timestamps()
+        if not contacts:
+            return None                          # no real owner-contact reference yet
+        current_gap = (now_dt - contacts[-1]).total_seconds()
+        if current_gap < 0:
+            return None                          # contact after now -> no negative gap
+        gaps = _gaps_seconds(contacts)
+        recent = gaps[-RHYTHM_RECENT_WINDOW:]
+        ctx = {
+            "rhythm_current_gap_s": current_gap,
+            "rhythm_recent_sample_count": len(recent),
+            "rhythm_all_time_sample_count": len(gaps),
+            "rhythm_recent_gap_median_s": None,
+            "rhythm_all_time_gap_median_s": None,
+            "rhythm_current_gap_percentile_all_time": None,
+            "rhythm_recent_gap_iqr_s": None,
+            "rhythm_all_time_gap_iqr_s": None,
+        }
+        if len(gaps) >= RHYTHM_MIN_GAPS:         # data-sufficiency floor
+            ctx["rhythm_recent_gap_median_s"] = statistics.median(recent)
+            ctx["rhythm_all_time_gap_median_s"] = statistics.median(gaps)
+            ctx["rhythm_current_gap_percentile_all_time"] = _percentile_strictly_below(current_gap, gaps)
+            ctx["rhythm_recent_gap_iqr_s"] = _iqr(recent)
+            ctx["rhythm_all_time_gap_iqr_s"] = _iqr(gaps)
+        return ctx
 
     def current(self, *, now_utc: str | datetime | None = None) -> SubjectiveDurationSnapshot:
         now = _normalize_event_time(now_utc or datetime.now(UTC))
