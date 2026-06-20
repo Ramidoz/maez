@@ -664,7 +664,7 @@ function storeSession(token, name) {
 
 function syncEntryLinks() {
   const hasToken = Boolean(currentToken());
-  const href = hasToken ? '/app' : '/login';
+  const href = hasToken ? '/cockpit' : '/login';
   const label = hasToken ? 'Continue talking' : 'Start yours';
   const topbarLink = document.getElementById('channelLink');
   const heroLink = document.getElementById('heroPrimary');
@@ -693,7 +693,7 @@ function switchMode(nextMode) {
 
 function enterApp(token, name) {
   storeSession(token, name);
-  location.replace('/app');
+  location.replace('/cockpit');
 }
 
 function renderLinkPrompt(data) {
@@ -852,7 +852,7 @@ async function boot() {
   try {
     const response = await fetch('/history?web_token=' + encodeURIComponent(token));
     if (response.ok) {
-      location.replace('/app');
+      location.replace('/cockpit');
       return;
     }
   } catch (e) {}

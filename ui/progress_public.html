@@ -964,7 +964,7 @@ function syncEntryLinks() {
   const channelLink = document.getElementById('channelLink');
   const plannerLink = document.getElementById('plannerLink');
   if (channelLink) {
-    channelLink.href = hasToken ? '/app' : '/login';
+    channelLink.href = hasToken ? '/cockpit' : '/login';
     channelLink.textContent = hasToken ? 'continue' : 'talk to it';
   }
   if (plannerLink) {

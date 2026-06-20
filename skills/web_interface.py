@@ -109,7 +109,6 @@ ANALYTICS_FUNNEL = (
     ("/progress", "Progress"),
     ("/dashboard", "Architecture"),
     ("/login", "Login"),
-    ("/app", "Channel"),
 )
 PRIVATE_OWNER_PROFILE_ID = "private_owner"
 
@@ -1076,13 +1075,12 @@ def index():
 
 
 @app.route("/app")
+@app.route("/app/")
 def app_shell():
-    if request.args.get("test_t", "").strip():
-        return send_file(os.path.join(UI_DIR, "app.html"), mimetype="text/html")
-    token = _request_token()
-    if not token or not accounts.get_by_token(token):
-        return redirect("/login")
-    return send_file(os.path.join(UI_DIR, "app.html"), mimetype="text/html")
+    # PARKED 2026-06-20: thread-UI surface retired (cockpit + Telegram is the live set). Redirect
+    # UNCONDITIONALLY to /cockpit BEFORE any test_t/token/serve — no secret path to the old UI. ui/app.html
+    # retained (reversible); the /chat POST API is unchanged. See the cockpit-reauth-park-app slice.
+    return redirect("/cockpit")
 
 
 @app.route("/progress")

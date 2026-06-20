@@ -1697,7 +1697,7 @@ em { font-style: italic; }
   }
 
   const hasToken = Boolean(localStorage.getItem('maez_token') || getCookie('maez_token'));
-  const entryHref = hasToken ? '/app' : '/login';
+  const entryHref = hasToken ? '/cockpit' : '/login';
   const refs = [
     { id: 'maezChannelLink',  open: 'talk to it',             resume: 'continue' },
     { id: 'routeChannelLink', open: 'Sign in as a guest →',   resume: 'Continue talking →' },
