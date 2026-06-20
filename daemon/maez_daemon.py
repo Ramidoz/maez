@@ -1077,6 +1077,14 @@ def _routing_quality_from_gate(*, caveated_unsupported, web_quality, result_coun
     return None, ""
 
 
+def _prior_vetoes_reflex(prior, *, min_conf=0.6, max_success=0.4):
+    """A learned prior suppresses the keyword reflex only when CONFIDENT that this
+    request-class + tool tends to fail (low usable rate). Conservative by design."""
+    if prior is None:
+        return False
+    return prior.confidence >= min_conf and prior.success_rate <= max_success
+
+
 def _focused_cognition_enabled(*, recall_stack_config=None) -> bool:
     if recall_stack_config is None:
         from core.routing.recall_stack_config import resolve_recall_stack
@@ -5878,13 +5886,29 @@ class MaezDaemon:
         _routing_obs_tool = None
         _wb_web_quality = "adequate"
         _wb_result_count = 0
+        _prior = None
+        if os.environ.get("MAEZ_ROUTING_PRIORS_SHADOW") == "1" or \
+           os.environ.get("MAEZ_ROUTING_PRIORS_ENABLED") == "1":
+            try:
+                from core.routing.observation import _default_store
+                from core.routing.observation.priors import learn_priors
+                from core.routing.observation_class import classify_request_class
+                _cls = classify_request_class(text)[0]
+                _prior = learn_priors(_default_store()).get((_cls, "web_search"))
+                logger.info("routing_prior_shadow class=%s prior=%s would_veto=%s",
+                            _cls, _prior, _prior_vetoes_reflex(_prior))
+            except Exception as _pe:
+                logger.debug("routing prior shadow skipped: %s", _pe)
+        _reflex = needs_web_search(text)
+        if os.environ.get("MAEZ_ROUTING_PRIORS_ENABLED") == "1" and _prior_vetoes_reflex(_prior):
+            _reflex = False  # learned override: this class+tool has lived bad — don't reflexively search
         if (
             not authoritative_tool_reply
             and _daemon_parallel_web_search_enabled(
                 transcript,
                 recall_stack_config=_recall_stack_config,
             )
-            and needs_web_search(text)
+            and _reflex
         ):
             logger.info("Web search triggered for: %s", text[:80])
             _routing_obs_started = time.monotonic()
