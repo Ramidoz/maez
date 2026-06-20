@@ -184,6 +184,18 @@ class RuntimeServiceSnapshotTests(unittest.TestCase):
         self.assertEqual(snap["services"]["subscription_proxy"]["status"], "asleep")
         self.assertEqual(snap["overall"], "healthy")
 
+    def test_overclaim_judge_is_required_by_default_semantic_audit(self):
+        from core.infra import runtime_services as rs
+
+        with mock.patch.dict("os.environ", {}, clear=True):
+            service = rs.runtime_services_snapshot(**self._healthy_fakes())[
+                "services"
+            ]["overclaim_judge"]
+
+        self.assertTrue(service["configured"])
+        self.assertEqual(service["required_by"], ["always"])
+        self.assertEqual(service["status"], "healthy")
+
     def test_primary_brain_degraded_when_served_model_alias_is_unknown(self):
         from core.infra import runtime_services as rs
 

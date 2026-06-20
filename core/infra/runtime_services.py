@@ -357,7 +357,7 @@ def runtime_services_snapshot(
     )
     add_service(
         "overclaim_judge",
-        required_by=[],
+        required_by=["always"],
         unit_name="llama-judge.service",
         port=("127.0.0.1", 8081),
     )
