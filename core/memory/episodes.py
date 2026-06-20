@@ -51,7 +51,15 @@ CREATE TABLE IF NOT EXISTS episodes (
     felt_value REAL,
     felt_elapsed_s REAL,
     felt_phrase TEXT,
-    felt_compute_version INTEGER
+    felt_compute_version INTEGER,
+    rhythm_current_gap_s REAL,
+    rhythm_recent_gap_median_s REAL,
+    rhythm_all_time_gap_median_s REAL,
+    rhythm_recent_sample_count INTEGER,
+    rhythm_all_time_sample_count INTEGER,
+    rhythm_current_gap_percentile_all_time REAL,
+    rhythm_recent_gap_iqr_s REAL,
+    rhythm_all_time_gap_iqr_s REAL
 );
 
 CREATE INDEX IF NOT EXISTS episodes_status_idx ON episodes(status);
@@ -77,6 +85,16 @@ _MIGRATIONS: tuple[str, ...] = (
     "ALTER TABLE episodes ADD COLUMN felt_elapsed_s REAL",
     "ALTER TABLE episodes ADD COLUMN felt_phrase TEXT",
     "ALTER TABLE episodes ADD COLUMN felt_compute_version INTEGER",
+    # 2026-06-20: Slice-A learned rhythm facts (separate box from the curve's felt_*). Raw learned data,
+    # NEVER a feeling verdict; existing rows stay NULL.
+    "ALTER TABLE episodes ADD COLUMN rhythm_current_gap_s REAL",
+    "ALTER TABLE episodes ADD COLUMN rhythm_recent_gap_median_s REAL",
+    "ALTER TABLE episodes ADD COLUMN rhythm_all_time_gap_median_s REAL",
+    "ALTER TABLE episodes ADD COLUMN rhythm_recent_sample_count INTEGER",
+    "ALTER TABLE episodes ADD COLUMN rhythm_all_time_sample_count INTEGER",
+    "ALTER TABLE episodes ADD COLUMN rhythm_current_gap_percentile_all_time REAL",
+    "ALTER TABLE episodes ADD COLUMN rhythm_recent_gap_iqr_s REAL",
+    "ALTER TABLE episodes ADD COLUMN rhythm_all_time_gap_iqr_s REAL",
 )
 
 
@@ -97,9 +115,11 @@ class EpisodeStore:
     covenant is structural here.
     """
 
-    def __init__(self, db_path: str, *, felt_time_reader: "Optional[Callable[[], Optional[dict]]]" = None):
+    def __init__(self, db_path: str, *, felt_time_reader: "Optional[Callable[[], Optional[dict]]]" = None,
+                 rhythm_reader: "Optional[Callable[[], Optional[dict]]]" = None):
         self._path = Path(db_path)
         self._felt_time_reader = felt_time_reader
+        self._rhythm_reader = rhythm_reader
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as c:
             with c:
