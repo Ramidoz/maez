@@ -47,7 +47,11 @@ CREATE TABLE IF NOT EXISTS episodes (
     memory_voice TEXT,
     superseded_at TEXT,
     superseded_reason TEXT,
-    superseded_by TEXT
+    superseded_by TEXT,
+    felt_value REAL,
+    felt_elapsed_s REAL,
+    felt_phrase TEXT,
+    felt_compute_version INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS episodes_status_idx ON episodes(status);
@@ -67,6 +71,12 @@ _MIGRATIONS: tuple[str, ...] = (
     "ALTER TABLE episodes ADD COLUMN superseded_at TEXT",
     "ALTER TABLE episodes ADD COLUMN superseded_reason TEXT",
     "ALTER TABLE episodes ADD COLUMN superseded_by TEXT",
+    # 2026-06-20: Slice-2 felt-time index (continuous lived time-sense). Frozen point-in-time
+    # readings from the substrate; NEVER a durable band/bucket. Existing rows stay NULL.
+    "ALTER TABLE episodes ADD COLUMN felt_value REAL",
+    "ALTER TABLE episodes ADD COLUMN felt_elapsed_s REAL",
+    "ALTER TABLE episodes ADD COLUMN felt_phrase TEXT",
+    "ALTER TABLE episodes ADD COLUMN felt_compute_version INTEGER",
 )
 
 
