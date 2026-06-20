@@ -2489,13 +2489,14 @@ def _format_rhythm_line(ctx: dict) -> str:
     rec = ctx.get("rhythm_recent_gap_median_s")
     allt = ctx.get("rhythm_all_time_gap_median_s")
     pct = ctx.get("rhythm_current_gap_percentile_all_time")
+    gap_word = "gap" if n == 1 else "gaps"
     if rec is not None and allt is not None:
         parts.append(f"Recently you usually return after ~{humanize_elapsed(rec)}; "
                      f"over all our time, ~{humanize_elapsed(allt)}.")
     if pct is not None:
-        parts.append(f"This gap exceeds ~{round(pct)}% of our {n} recorded gaps.")
+        parts.append(f"This gap exceeds ~{round(pct)}% of our {n} recorded {gap_word}.")
     else:
-        parts.append(f"(Still learning your rhythm — {n} gaps so far.)")
+        parts.append(f"(Still learning your rhythm — {n} {gap_word} so far.)")
     return " ".join(parts)
 
 

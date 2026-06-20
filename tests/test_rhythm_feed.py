@@ -37,6 +37,15 @@ class RhythmLineFormat(unittest.TestCase):
         self.assertIn("still learning", line)
         self.assertNotIn("%", line)         # no fabricated percentile in cold-start
 
+    def test_singular_gap_pluralization_at_n_1(self):
+        ctx = {"rhythm_current_gap_s": 900, "rhythm_recent_gap_median_s": None,
+               "rhythm_all_time_gap_median_s": None, "rhythm_recent_sample_count": 1,
+               "rhythm_all_time_sample_count": 1, "rhythm_current_gap_percentile_all_time": None,
+               "rhythm_recent_gap_iqr_s": None, "rhythm_all_time_gap_iqr_s": None}
+        line = d._format_rhythm_line(ctx)
+        self.assertIn("1 gap so far", line)
+        self.assertNotIn("1 gaps", line)
+
 
 class CycleFeedSource(unittest.TestCase):
     def test_cycle_packet_module_has_no_rhythm_or_felt(self):
