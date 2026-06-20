@@ -38,3 +38,59 @@ class StampSchema(unittest.TestCase):
             conn.row_factory = sqlite3.Row
             row = conn.execute("SELECT * FROM episodes WHERE id='ep-old'").fetchone()
         self.assertIsNone(row["felt_value"])        # old row keeps felt-* NULL (historical meaning preserved)
+
+
+class StampWiring(unittest.TestCase):
+    def _store(self, reader):
+        return EpisodeStore(os.path.join(tempfile.mkdtemp(), "ep.db"), felt_time_reader=reader)
+
+    def _add(self, store, source_kind="pursuit_surface"):
+        return store.add(title="t", summary="s", participants=["Maez"],
+                         source_memory_ids=["m1"], source_kind=source_kind)
+
+    def _row(self, store, ep_id):
+        return store.get(ep_id)
+
+    def test_stamps_from_context_when_reader_returns_context(self):
+        ctx = {"felt_value": 7.65, "felt_elapsed_s": 11520.0,
+               "felt_phrase": "a long quiet stretch", "felt_compute_version": 1}
+        store = self._store(lambda: ctx)
+        row = self._row(store, self._add(store))
+        self.assertAlmostEqual(row["felt_value"], 7.65)
+        self.assertAlmostEqual(row["felt_elapsed_s"], 11520.0)
+        self.assertEqual(row["felt_phrase"], "a long quiet stretch")
+        self.assertEqual(row["felt_compute_version"], 1)
+
+    def test_null_when_reader_returns_none(self):
+        store = self._store(lambda: None)
+        row = self._row(store, self._add(store))
+        self.assertIsNone(row["felt_value"])
+        self.assertIsNone(row["felt_elapsed_s"])
+        self.assertIsNone(row["felt_phrase"])
+
+    def test_null_when_no_reader_injected(self):
+        store = EpisodeStore(os.path.join(tempfile.mkdtemp(), "ep.db"))   # reader defaults None
+        row = self._row(store, self._add(store))
+        self.assertIsNone(row["felt_value"])
+
+    def test_value_comes_from_reader_not_args(self):
+        # The stamp must come from the injected substrate reader, never from add() arguments.
+        ctx = {"felt_value": 3.0, "felt_elapsed_s": 60.0, "felt_phrase": "p", "felt_compute_version": 1}
+        store = self._store(lambda: ctx)
+        row = self._row(store, self._add(store))
+        self.assertAlmostEqual(row["felt_value"], 3.0)   # from the reader
+
+    def test_stamps_across_source_kinds(self):
+        ctx = {"felt_value": 1.0, "felt_elapsed_s": 1.0, "felt_phrase": "p", "felt_compute_version": 1}
+        store = self._store(lambda: ctx)
+        for kind in ("pursuit_surface", "owner_contact", "reflection", "followup_doc"):
+            row = self._row(store, self._add(store, source_kind=kind))
+            self.assertAlmostEqual(row["felt_value"], 1.0)   # EVERY EpisodeStore episode
+
+    def test_reader_exception_does_not_break_the_write(self):
+        def _boom():
+            raise RuntimeError("substrate hiccup")
+        store = self._store(_boom)
+        ep_id = self._add(store)                 # a memory write must NEVER fail due to the stamp
+        self.assertIsNotNone(self._row(store, ep_id))
+        self.assertIsNone(self._row(store, ep_id)["felt_value"])

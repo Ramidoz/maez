@@ -27,7 +27,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Callable, Optional, Sequence
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS episodes (
@@ -97,8 +97,9 @@ class EpisodeStore:
     covenant is structural here.
     """
 
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str, *, felt_time_reader: "Optional[Callable[[], Optional[dict]]]" = None):
         self._path = Path(db_path)
+        self._felt_time_reader = felt_time_reader
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as c:
             with c:
@@ -139,6 +140,17 @@ class EpisodeStore:
                 "Episode requires at least one source_memory_id (ADR 0019 evidence requirement)"
             )
         episode_id = f"ep-{uuid.uuid4().hex[:12]}"
+        felt_value = felt_elapsed_s = felt_phrase = felt_compute_version = None
+        if self._felt_time_reader is not None:
+            try:
+                ctx = self._felt_time_reader()
+                if ctx:
+                    felt_value = ctx.get("felt_value")
+                    felt_elapsed_s = ctx.get("seconds_since_last_owner_contact", ctx.get("felt_elapsed_s"))
+                    felt_phrase = ctx.get("felt_phrase")
+                    felt_compute_version = ctx.get("felt_compute_version")
+            except Exception:
+                felt_value = felt_elapsed_s = felt_phrase = felt_compute_version = None
         with self._connect() as c:
             with c:
                 c.execute(
@@ -146,8 +158,9 @@ class EpisodeStore:
                     "id, created_at, occurred_at, title, summary, "
                     "participants_json, emotional_tone, importance, "
                     "open_loop, source_memory_ids_json, source_kind, status, "
-                    "authorship, memory_voice"
-                    ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "authorship, memory_voice, "
+                    "felt_value, felt_elapsed_s, felt_phrase, felt_compute_version"
+                    ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         episode_id,
                         _now_iso(),
@@ -163,6 +176,10 @@ class EpisodeStore:
                         "active",
                         authorship,
                         memory_voice,
+                        felt_value,
+                        felt_elapsed_s,
+                        felt_phrase,
+                        felt_compute_version,
                     ),
                 )
         return episode_id

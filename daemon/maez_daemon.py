@@ -2611,6 +2611,14 @@ def continuous_time_sense_enabled() -> bool:
     return strict_env_flag("MAEZ_CONTINUOUS_TIME_SENSE")
 
 
+def time_sense_stamp_enabled() -> bool:
+    """Return True iff MAEZ_TIME_SENSE_STAMP is on. DEFAULT OFF. When on (AND the substrate is on),
+    every EpisodeStore lived episode is stamped with the felt-time index."""
+    from core.infra.env_flags import strict_env_flag
+
+    return strict_env_flag("MAEZ_TIME_SENSE_STAMP")
+
+
 _OWNER_AUTHENTICATED_HEADER = "X-Maez-Owner-Authenticated"
 
 
@@ -2863,6 +2871,17 @@ class MaezDaemon:
             self._time_sense = _sd.SubjectiveDuration()
         return self._time_sense
 
+    def _episode_felt_time_reader(self):
+        """Injected into EpisodeStore: returns the substrate felt-time context or None. Gated by
+        MAEZ_TIME_SENSE_STAMP AND the substrate flag. Read-only; never raises into a memory write."""
+        try:
+            if not (time_sense_stamp_enabled() and continuous_time_sense_enabled()):
+                return None
+            return self._time_sense_handle().time_sense_context()
+        except Exception:
+            logger.debug("episode felt-time reader skipped", exc_info=True)
+            return None
+
     def __init__(self):
         self.running = False
         self.boot_time = None
@@ -2911,7 +2930,10 @@ class MaezDaemon:
             _lived_dir = _mem_dir()
         except Exception:
             _lived_dir = Path(__file__).resolve().parent.parent / "memory"
-        self.lived_episodes = EpisodeStore(str(_lived_dir / "lived_episodes.db"))
+        self.lived_episodes = EpisodeStore(
+            str(_lived_dir / "lived_episodes.db"),
+            felt_time_reader=self._episode_felt_time_reader,
+        )
         self.lived_graph = RelationshipGraph(str(_lived_dir / "lived_graph.db"))
         self._m1_lock = threading.Lock()
         try:
