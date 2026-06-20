@@ -8,6 +8,13 @@ class WriteBackTest(unittest.TestCase):
         self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         self.store = RoutingObservationStore(db_path=self.tmp.name)
 
+    def tearDown(self):
+        self.tmp.close()
+        try:
+            os.unlink(self.tmp.name)
+        except OSError:
+            pass
+
     def _row(self):
         return self.store.record_legacy_web_search_observation(
             user_text="summarize today's signals", surface="cockpit", chat_id=None,
