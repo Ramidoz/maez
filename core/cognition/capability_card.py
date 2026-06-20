@@ -28,7 +28,8 @@ _VOICE_BOUNDARY_INSTRUCTION = (
     "Use CAPABILITY_STATE as private grounding for current self-capability "
     "questions. Do not quote field names or dashboard phrasing. Render the "
     "truth in your own voice. Memories may contextualize, but they do not "
-    "override this state for what your body can do now."
+    "override this state for what your body can do now. Do not write "
+    "CAPABILITY_STATE or [CAPABILITY_STATE] in the reply."
 )
 
 

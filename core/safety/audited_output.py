@@ -46,9 +46,18 @@ memory pattern that handles this.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Optional
 
 logger = logging.getLogger("maez.audited_output")
+
+_BACKSTAGE_LABEL_RE = re.compile(r"\[CAPABILITY_STATE\]|\bCAPABILITY_STATE\b")
+
+
+def _strip_backstage_labels(text: str) -> str:
+    """Remove private control labels without touching citations or user brackets."""
+    stripped = _BACKSTAGE_LABEL_RE.sub("", text or "")
+    return re.sub(r"[ \t]{2,}", " ", stripped).strip(" \t")
 
 
 def _buffer_audit_flags(flags) -> None:
@@ -149,7 +158,7 @@ def audit_assistant_text(
             # claims. Sending them through the semantic self-claim judge can
             # erase the refusal wording and make the safety boundary less
             # legible while adding no grounding value.
-            return text
+            return _strip_backstage_labels(text)
 
     # Derive tool-continuation from transcript presence unless caller
     # explicitly forced the value. Single knob, minimal API surface.
@@ -163,7 +172,7 @@ def audit_assistant_text(
             surface,
             semantic_self_claim_skip_reason,
         )
-        return text
+        return _strip_backstage_labels(text)
 
     try:
         from core.safety.self_claim_audit import audit as _audit
@@ -173,7 +182,7 @@ def audit_assistant_text(
             "(storing RAW text; fix-forward only): %s",
             surface, exc,
         )
-        return text
+        return _strip_backstage_labels(text)
 
     # 2026-05-05 wmctrl-incident fix: when the caller didn't supply a
     # signal manifest, fall back to a default-built manifest naming
@@ -217,7 +226,7 @@ def audit_assistant_text(
             "text; fix-forward only): %s",
             surface, exc,
         )
-        return text
+        return _strip_backstage_labels(text)
 
     # AuditResult.text is the rewritten form when rewritten=True, else
     # the original text. Either way, returning result.text honors the
@@ -226,4 +235,4 @@ def audit_assistant_text(
     # Grounding-shadow entailment now runs at the focused-cognition seam where
     # the cited [E#] working-set labels exist; this audit helper only sees the
     # older evidence envelope, whose claimable set is empty on live paths.
-    return getattr(result, "text", text) or text
+    return _strip_backstage_labels(getattr(result, "text", text) or text)
