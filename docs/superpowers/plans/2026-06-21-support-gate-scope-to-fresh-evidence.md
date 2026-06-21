@@ -17,8 +17,8 @@
 ## File Structure
 
 - **`core/routing/focused_cognition.py`** (modify): add `turn_has_fresh_evidence(working_set) -> bool` (pure; reads `item.source_type`; uses the existing `_FRESH_SOURCE_TYPES`).
-- **`daemon/maez_daemon.py`** (modify, one seam ~7277): gate the `decide_support_path`/`observe_focused_support*` block on the predicate; always emit `support_gate_scope`.
-- **Tests:** `tests/test_turn_has_fresh_evidence.py` (the predicate), `tests/test_support_gate_scope_seam.py` (source-order: predicate gates the gate; receipt present).
+- **`daemon/maez_daemon.py`** (modify): extract `_run_support_scope(reply, working_set, evidence_map, ...) -> (reply, gate_receipt)` — the testable scope decision (predicate → receipt → gate-only-when-fresh) — and call it at the seam (~7277) in place of the inline block.
+- **Tests:** `tests/test_turn_has_fresh_evidence.py` (the predicate), `tests/test_support_gate_scope_seam.py` (BEHAVIOR: recall-only → observers `assert_not_called` + reply unchanged + receipt; fresh → gate called).
 - **Docs:** `docs/proof/2026-06-21-support-gate-scope-task0.md` (the repo-wide `source_type` inventory), `docs/handoffs/2026-06-21-support-gate-scope-handoff.md`.
 
 ---
@@ -105,59 +105,88 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 **Files:** Modify `daemon/maez_daemon.py` (the seam ~7277). Test `tests/test_support_gate_scope_seam.py`.
 
-- [ ] **Step 1: Write the failing source-order test** (proves the predicate gates the gate without invoking a full turn):
+- [ ] **Step 1: Write the failing BEHAVIOR test** (Codex: prove runtime behavior, not source layout — extract a testable helper). `tests/test_support_gate_scope_seam.py`:
 ```python
-import os, unittest, pathlib
+import os, unittest
+from types import SimpleNamespace
+from unittest import mock
 os.environ.setdefault("MAEZ_IPHONE_INGEST_TOKEN", "dummy-test")
 os.environ.setdefault("MAEZ_SECRETS_DISABLE_NEW_LOADER", "1")
+import daemon.maez_daemon as d
 
-class SupportGateScopeSeamTest(unittest.TestCase):
-    def test_predicate_gates_the_support_gate(self):
-        import daemon.maez_daemon as d
-        src = pathlib.Path(d.__file__).read_text()
-        self.assertIn("turn_has_fresh_evidence(_focused_working_set)", src)        # predicate read at the seam
-        self.assertIn("support_gate_scope", src)                                   # always-on scope receipt
-        self.assertIn("skipped_recall_only", src)
-        # the receipt is emitted BEFORE the support-path decision; the gate runs only when fresh
-        i_recv = src.index("support_gate_scope")
-        i_decide = src.index("_support_path = decide_support_path")
-        self.assertLess(i_recv, i_decide)                                          # scope decided before convening
-        # decide_support_path / the gate call live under the fresh guard
-        seg = src[src.index("turn_has_fresh_evidence(_focused_working_set)"):]
-        self.assertIn("if _fresh", seg[:600])
+def _ws(*types):
+    return SimpleNamespace(items=[SimpleNamespace(source_type=t) for t in types])
+
+class SupportScopeBehaviorTest(unittest.TestCase):
+    def test_recall_only_never_invokes_minicheck_reply_unchanged(self):
+        # The load-bearing invariant: a recall-only working set -> the observers are NEVER called,
+        # the reply is unchanged, and the scope receipt logs skipped_recall_only.
+        with mock.patch("core.cognition.grounding_shadow.observe_focused_support_gate") as g, \
+             mock.patch("core.cognition.grounding_shadow.observe_focused_support") as s, \
+             self.assertLogs(d.logger.name, level="INFO") as logs:
+            reply, receipt = d._run_support_scope(
+                "good morning, the rig is humming", _ws("memory_context", "memory_evidence"),
+                {"E1": "x"}, surface="telegram_surface", boot_id=None, shadow_id="sid", ts=0)
+        g.assert_not_called(); s.assert_not_called()                       # courtroom stayed CLOSED
+        self.assertEqual(reply, "good morning, the rig is humming")        # voice untouched
+        self.assertIsNone(receipt)
+        self.assertTrue(any("support_gate_scope" in m and "skipped_recall_only" in m for m in logs.output))
+
+    def test_fresh_web_convenes_the_gate(self):
+        os.environ["MAEZ_SUPPORT_GATE_ENABLED"] = "1"
+        try:
+            with mock.patch("core.cognition.grounding_shadow.observe_focused_support_gate",
+                            return_value=("gated reply", {"caveated_unsupported": 0})) as g, \
+                 self.assertLogs(d.logger.name, level="INFO") as logs:
+                reply, receipt = d._run_support_scope(
+                    "Anthropic shipped X [E1]", _ws("web_context"), {"E1": "x"},
+                    surface="cockpit", boot_id=None, shadow_id="sid", ts=0)
+            g.assert_called_once()                                         # courtroom convened on web
+            self.assertEqual(reply, "gated reply")
+            self.assertTrue(any("support_gate_scope" in m and "path=gated" in m for m in logs.output))
+        finally:
+            os.environ.pop("MAEZ_SUPPORT_GATE_ENABLED", None)
 ```
-Run; confirm FAIL.
+Run; confirm FAIL (`_run_support_scope` missing).
 
-- [ ] **Step 2: Wire the scope guard at the seam.** Read the real block at ~7277. Inside the existing outer `if (_grounding_shadow_post_audit_ready and _focused_used and _focused_support_evidence_map):`, compute the predicate FIRST, emit the receipt always, and run MiniCheck only when fresh:
+- [ ] **Step 2: Extract the helper + call it at the seam.** Add a module-level `_run_support_scope` to `daemon/maez_daemon.py` (near the other support helpers); it owns the scope decision so it's unit-testable:
 ```python
-                from core.routing.focused_cognition import turn_has_fresh_evidence
-                _fresh = turn_has_fresh_evidence(_focused_working_set)
-                logger.info("support_gate_scope surface=%s fresh_evidence=%s path=%s",
-                            source, _fresh, "gated" if _fresh else "skipped_recall_only")
-                if _fresh:
-                    from core.cognition.grounding_shadow import (
-                        decide_support_path,
-                        observe_focused_support,
-                        observe_focused_support_gate,
-                    )
-                    _support_path = decide_support_path(
-                        gate_enabled=strict_env_flag("MAEZ_SUPPORT_GATE_ENABLED"),
-                        shadow_enabled=strict_env_flag("MAEZ_GROUNDING_SHADOW_ENABLED"),
-                    )
-                    if _support_path == "sync_gate":
-                        reply, _gate_receipt = observe_focused_support_gate(
-                            reply, _focused_support_evidence_map, surface=source,
-                            boot_id=os.environ.get("MAEZ_BOOT_ID"), shadow_id=uuid.uuid4().hex,
-                            ts=int(time.time()))
-                    elif _support_path == "async_shadow":
-                        observe_focused_support(
-                            reply, _focused_support_evidence_map, surface=source,
-                            boot_id=os.environ.get("MAEZ_BOOT_ID"), shadow_id=uuid.uuid4().hex,
-                            ts=int(time.time()))
+def _run_support_scope(reply, working_set, evidence_map, *, surface, boot_id, shadow_id, ts):
+    """Scope the support gate to FRESH/non-recall evidence. Recall-only / conversational turns skip
+    MiniCheck entirely (no courtroom around Maez's voice); always emit the support_gate_scope receipt.
+    Returns (reply, gate_receipt) — reply is unchanged unless the sync gate actually ran."""
+    from core.routing.focused_cognition import turn_has_fresh_evidence
+    _fresh = turn_has_fresh_evidence(working_set)
+    logger.info("support_gate_scope surface=%s fresh_evidence=%s path=%s",
+                surface, _fresh, "gated" if _fresh else "skipped_recall_only")
+    if not _fresh:
+        return reply, None
+    from core.cognition.grounding_shadow import (
+        decide_support_path, observe_focused_support, observe_focused_support_gate,
+    )
+    _support_path = decide_support_path(
+        gate_enabled=strict_env_flag("MAEZ_SUPPORT_GATE_ENABLED"),
+        shadow_enabled=strict_env_flag("MAEZ_GROUNDING_SHADOW_ENABLED"),
+    )
+    gate_receipt = None
+    if _support_path == "sync_gate":
+        reply, gate_receipt = observe_focused_support_gate(
+            reply, evidence_map, surface=surface, boot_id=boot_id, shadow_id=shadow_id, ts=ts)
+    elif _support_path == "async_shadow":
+        observe_focused_support(
+            reply, evidence_map, surface=surface, boot_id=boot_id, shadow_id=shadow_id, ts=ts)
+    return reply, gate_receipt
 ```
-i.e. the ENTIRE `decide_support_path`/`observe_*` block moves under `if _fresh:`; when not fresh, only the `support_gate_scope ... skipped_recall_only` receipt fires and MiniCheck is never invoked. Keep the existing `from core.cognition.grounding_shadow import (...)` import INSIDE the `if _fresh:` (so a recall-only turn doesn't even import the gate). Preserve the surrounding `try/except _grounding_shadow_exc`.
+Then REPLACE the inline block at the seam (~7277, inside the existing `if _grounding_shadow_post_audit_ready and _focused_used and _focused_support_evidence_map:` and its `try/except _grounding_shadow_exc`) with a single call:
+```python
+                reply, _gate_receipt = _run_support_scope(
+                    reply, _focused_working_set, _focused_support_evidence_map,
+                    surface=source, boot_id=os.environ.get("MAEZ_BOOT_ID"),
+                    shadow_id=uuid.uuid4().hex, ts=int(time.time()))
+```
+Confirm `logger` is the module logger the test patches via `d.logger.name` (it is — module-level `logger`). The lazy imports stay INSIDE `_run_support_scope` (a recall-only turn never imports the gate). `_gate_receipt` was initialized `= None` before the block (Slice-1) — keep that.
 
-- [ ] **Step 3: Run the seam test; confirm PASS.** Confirm the recall-only path is byte-identical to gate-off (no `reply` reassignment when not fresh → reply unchanged).
+- [ ] **Step 3: Run the behavior test; confirm both PASS** — recall-only → observers `assert_not_called` + reply unchanged + `skipped_recall_only`; fresh → gate called + `path=gated`.
 
 - [ ] **Step 4: Regression — the gate still works on fresh turns.** Run the existing gate/shadow tests: `MAEZ_CONFIG=/home/rohit/maez/config /home/rohit/maez/.venv/bin/python -B -m unittest tests.test_support_gate tests.test_grounding_shadow` → all OK (the per-sentence caveat logic is untouched; only the convening is scoped). If any test assumed the gate runs on a recall-only/no-fresh working set, update it to reflect the scoped behavior (NOT by weakening the caveat assertions — by giving it a fresh working set).
 
@@ -195,7 +224,7 @@ fresh/web factual claims still get checked. Re-enable MAEZ_SUPPORT_GATE_ENABLED=
 
 ## Self-Review
 
-**Spec coverage:** scoped rule (fresh/web → gate; recall-only → skip both gate+shadow) → Task 2 (the `if _fresh:` guard moves the WHOLE decide_support_path/observe_* block); predicate reads working set not map → Task 1 + the test; always-emit receipt → Task 2 (`support_gate_scope` before the guard); `_FRESH_SOURCE_TYPES` seam-specific + repo-wide inventory + photo_vision + STOP → Task 0; per-sentence logic untouched → Task 2 only moves the convening, Task 3 diff-confirms; fail-safe toward the voice → Task 1 (`except → False`). OUT (per-sentence mixed-turn refinement, MiniCheck tuning) untouched. Covered.
+**Spec coverage:** scoped rule (fresh/web → gate; recall-only → skip both gate+shadow) → Task 2 `_run_support_scope` (the whole decide_support_path/observe_* block runs only under `if _fresh`), **proven by a BEHAVIOR test** (mocked observers `assert_not_called` on recall-only — Codex's requirement, not source-order); predicate reads working set not map → Task 1 + the test; always-emit receipt → Task 2 (`support_gate_scope` logged before the gate, asserted via `assertLogs`); `_FRESH_SOURCE_TYPES` seam-specific + repo-wide inventory + photo_vision + STOP → Task 0; per-sentence logic untouched → Task 2 only moves the convening, Task 3 diff-confirms; fail-safe toward the voice → Task 1 (`except → False`). OUT (per-sentence mixed-turn refinement, MiniCheck tuning) untouched. Covered.
 
 **Placeholder scan:** No TBD; all code concrete. The predicate location (focused_cognition.py) avoids a circular import (Task 0 Step 4 confirms; the daemon already imports from focused_cognition).
 
