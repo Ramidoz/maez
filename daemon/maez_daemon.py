@@ -1089,6 +1089,23 @@ def _veto_ledger_enabled() -> bool:
     return os.environ.get("MAEZ_VETO_LEDGER") == "1"
 
 
+def _routing_beta_shadow_enabled() -> bool:
+    return os.environ.get("MAEZ_ROUTING_BETA_SHADOW") == "1"
+
+
+def _routing_beta_veto_enabled() -> bool:
+    return os.environ.get("MAEZ_ROUTING_BETA_ENABLED") == "1"
+
+
+def _routing_prior_consult_enabled() -> bool:
+    return (
+        os.environ.get("MAEZ_ROUTING_PRIORS_SHADOW") == "1"
+        or os.environ.get("MAEZ_ROUTING_PRIORS_ENABLED") == "1"
+        or _routing_beta_shadow_enabled()
+        or _routing_beta_veto_enabled()
+    )
+
+
 def _veto_ledger_get(ledger):
     """Return a VetoLedger, building one if this turn hasn't yet. NEVER relies on a sibling
     block's import — an import inside another if/try can leave the name unbound and silently
@@ -5901,22 +5918,32 @@ class MaezDaemon:
         _wb_web_quality = "adequate"
         _wb_result_count = 0
         _prior = None
+        _belief_cmp = None
         _cls = None
         _override_event_id = None
         _ledger = None
         _routing_turn_outcome_quality = None
-        if os.environ.get("MAEZ_ROUTING_PRIORS_SHADOW") == "1" or \
-           os.environ.get("MAEZ_ROUTING_PRIORS_ENABLED") == "1":
+        if _routing_prior_consult_enabled():
             try:
                 from core.routing.observation import _default_store
                 from core.routing.observation.priors import learn_priors
                 from core.routing.observation_class import classify_request_class
                 _cls = classify_request_class(text)[0]
                 _prior = learn_priors(_default_store()).get((_cls, "web_search"))
-                logger.info("routing_prior_shadow class=%s prior=%s would_veto=%s",
-                            _cls, _prior, _prior_vetoes_reflex(_prior))
+                if os.environ.get("MAEZ_ROUTING_PRIORS_SHADOW") == "1" \
+                   or os.environ.get("MAEZ_ROUTING_PRIORS_ENABLED") == "1":
+                    logger.info("routing_prior_shadow class=%s prior=%s would_veto=%s",
+                                _cls, _prior, _prior_vetoes_reflex(_prior))
+                if _routing_beta_shadow_enabled() or _routing_beta_veto_enabled():
+                    from core.routing.observation.priors import compare_beliefs
+                    _belief_cmp = compare_beliefs(_default_store()).get((_cls, "web_search"))
+                    if _belief_cmp is not None:
+                        logger.info("routing_belief_compare class=%s n=%s usable=%s n8_veto=%s beta_veto=%s "
+                                    "n8_conf=%.3f beta_p=%.3f", _cls, _belief_cmp.n, _belief_cmp.usable,
+                                    _belief_cmp.n8_would_veto, _belief_cmp.beta_would_veto,
+                                    _belief_cmp.n8_confidence, _belief_cmp.beta_p_below)
             except Exception as _pe:
-                logger.debug("routing prior shadow skipped: %s", _pe)
+                logger.debug("routing prior/belief consult skipped: %s", _pe)
         _reflex = needs_web_search(text)
         _would_web_search = None
         if _veto_ledger_enabled() and os.environ.get("MAEZ_ROUTING_PRIORS_ENABLED") == "1":
@@ -5932,7 +5959,10 @@ class MaezDaemon:
                     _override_event_id = _open.id if _open is not None else None
                 except Exception as _le:
                     logger.debug("veto ledger override check skipped: %s", _le)
-        if os.environ.get("MAEZ_ROUTING_PRIORS_ENABLED") == "1" and _prior_vetoes_reflex(_prior) \
+        _veto_decision = _prior_vetoes_reflex(_prior)
+        if _routing_beta_veto_enabled() and _belief_cmp is not None:
+            _veto_decision = _belief_cmp.beta_would_veto  # graduation: Beta replaces n/8 (owner-flipped)
+        if os.environ.get("MAEZ_ROUTING_PRIORS_ENABLED") == "1" and _veto_decision \
            and _override_event_id is None:
             _reflex = False  # learned veto
             if _veto_ledger_enabled() and _cls is not None and _would_web_search:
