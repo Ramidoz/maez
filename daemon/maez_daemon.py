@@ -1085,6 +1085,20 @@ def _prior_vetoes_reflex(prior, *, min_conf=0.6, max_success=0.4):
     return prior.confidence >= min_conf and prior.success_rate <= max_success
 
 
+def _veto_ledger_enabled() -> bool:
+    return os.environ.get("MAEZ_VETO_LEDGER") == "1"
+
+
+def _veto_ledger_get(ledger):
+    """Return a VetoLedger, building one if this turn hasn't yet. NEVER relies on a sibling
+    block's import — an import inside another if/try can leave the name unbound and silently
+    skip recording the veto (feature looks live, notebook never opens)."""
+    if ledger is not None:
+        return ledger
+    from core.routing.veto_ledger import VetoLedger
+    return VetoLedger()
+
+
 def _focused_cognition_enabled(*, recall_stack_config=None) -> bool:
     if recall_stack_config is None:
         from core.routing.recall_stack_config import resolve_recall_stack
@@ -5887,6 +5901,10 @@ class MaezDaemon:
         _wb_web_quality = "adequate"
         _wb_result_count = 0
         _prior = None
+        _cls = None
+        _override_event_id = None
+        _ledger = None
+        _routing_turn_outcome_quality = None
         if os.environ.get("MAEZ_ROUTING_PRIORS_SHADOW") == "1" or \
            os.environ.get("MAEZ_ROUTING_PRIORS_ENABLED") == "1":
             try:
@@ -5900,8 +5918,32 @@ class MaezDaemon:
             except Exception as _pe:
                 logger.debug("routing prior shadow skipped: %s", _pe)
         _reflex = needs_web_search(text)
-        if os.environ.get("MAEZ_ROUTING_PRIORS_ENABLED") == "1" and _prior_vetoes_reflex(_prior):
-            _reflex = False  # learned override: this class+tool has lived bad — don't reflexively search
+        _would_web_search = None
+        if _veto_ledger_enabled() and os.environ.get("MAEZ_ROUTING_PRIORS_ENABLED") == "1":
+            _would_web_search = bool(
+                not authoritative_tool_reply
+                and _daemon_parallel_web_search_enabled(transcript, recall_stack_config=_recall_stack_config)
+                and _reflex
+            )
+            if _cls is not None and _would_web_search and _prior_vetoes_reflex(_prior):
+                try:  # seam 2: open same-class veto in window -> lift the veto ONCE (re-ask)
+                    _ledger = _veto_ledger_get(_ledger)
+                    _open = _ledger.find_open_for_class(_cls, "web_search", now=time.time())
+                    _override_event_id = _open.id if _open is not None else None
+                except Exception as _le:
+                    logger.debug("veto ledger override check skipped: %s", _le)
+        if os.environ.get("MAEZ_ROUTING_PRIORS_ENABLED") == "1" and _prior_vetoes_reflex(_prior) \
+           and _override_event_id is None:
+            _reflex = False  # learned veto
+            if _veto_ledger_enabled() and _cls is not None and _would_web_search:
+                try:
+                    _ledger = _veto_ledger_get(_ledger)
+                    _ledger.record_veto(
+                        class_id=_cls, tool="web_search", prior_n=_prior.n,
+                        prior_success_rate=_prior.success_rate, prior_confidence=_prior.confidence,
+                        turn_id=_user_msg_turn_id, surface=source, now=time.time())
+                except Exception as _re:
+                    logger.debug("veto event record skipped: %s", _re)
         if (
             not authoritative_tool_reply
             and _daemon_parallel_web_search_enabled(
@@ -5963,6 +6005,11 @@ class MaezDaemon:
                     request_class_id=_cls_id,
                     request_class_score=_cls_score,
                     request_class_version=_cls_ver,
+                )
+                _routing_turn_outcome_quality = (
+                    "structured_evidence"
+                    if _routing_obs_count > 0
+                    else "empty_but_honest"
                 )
             except Exception as _routing_obs_exc:
                 logger.debug(
@@ -7233,6 +7280,7 @@ class MaezDaemon:
                     result_count=_wb_result_count,
                 )
                 if _q is not None:
+                    _routing_turn_outcome_quality = _q
                     from core.routing.observation import _default_store
 
                     _default_store().attach_post_turn_quality(
@@ -7242,6 +7290,15 @@ class MaezDaemon:
                     )
             except Exception as _wbe:
                 logger.debug("routing quality write-back skipped: %s", _wbe)
+        if _veto_ledger_enabled() and _override_event_id is not None \
+           and _routing_turn_outcome_quality is not None:
+            try:  # seam 3: classify the lifted veto ONLY from a real outcome
+                _ledger = _veto_ledger_get(_ledger)
+                _ledger.attach_reask_outcome(
+                    _override_event_id, reask_turn_id=_user_msg_turn_id,
+                    reask_outcome_quality=_routing_turn_outcome_quality)
+            except Exception as _ce:
+                logger.debug("veto reask classify skipped: %s", _ce)
         try:
             from core.routing.recall_outcome import RecallOutcome, classify_outcome
             from core.routing.recall_receipt import (
