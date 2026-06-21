@@ -95,13 +95,14 @@ class _Verdict:
 
 
 class _FakeVerifier:
-    def __init__(self, label):
+    def __init__(self, label, score=0.9):
         self._label = label
+        self._score = score
         self.calls = 0
 
     def predict(self, premise, hypothesis):
         self.calls += 1
-        return _Verdict(self._label)
+        return _Verdict(self._label, score=self._score)
 
 
 class TestOrchestration(unittest.TestCase):
@@ -152,6 +153,12 @@ class TestOrchestration(unittest.TestCase):
         r = check_memory_fresh_conflict(self._ws_with(), _FakeVerifier("neutral"))
         self.assertEqual(r.verdict, "ambiguous")
         self.assertEqual(r.reason_code, "non_decisive")
+
+    def test_contradiction_confidence_is_clash_strength(self):
+        # grounded score 0.05 -> strong contradiction -> confidence 0.95 (NOT 0.05)
+        r = check_memory_fresh_conflict(self._ws_with(), _FakeVerifier("contradicts", score=0.05))
+        self.assertEqual(r.verdict, "contradiction")
+        self.assertAlmostEqual(r.confidence, 0.95, places=4)
 
 
 class TestRedaction(unittest.TestCase):

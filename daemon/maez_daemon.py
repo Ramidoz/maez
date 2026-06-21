@@ -1121,9 +1121,11 @@ def _run_mem_fresh_conflict_sense(working_set, *, surface):
             return
         logger.info(
             "mem_fresh_conflict_sense surface=%s verdict=%s mem_id=%s fresh_id=%s "
+            "mem_label=%s fresh_label=%s "
             "confidence=%s verifier=%s reason_code=%s pair_count=%s pair_limit_exceeded=%s "
             "mem_sha256=%s fresh_sha256=%s",
             surface, receipt.verdict, receipt.mem_id, receipt.fresh_id,
+            receipt.mem_label, receipt.fresh_label,
             receipt.confidence, receipt.verifier, receipt.reason_code,
             receipt.pair_count, receipt.pair_limit_exceeded,
             receipt.mem_sha256, receipt.fresh_sha256,
@@ -7332,6 +7334,9 @@ class MaezDaemon:
                     shadow_id=uuid.uuid4().hex,
                     ts=int(time.time()),
                 )
+                # Shadow sense shares this post-audit block with _run_support_scope; the
+                # coupling is incidental — any trusted-memory↔fresh turn populates the
+                # support evidence map, so no in-scope turn is dropped.
                 if _focused_working_set is not None:
                     _run_mem_fresh_conflict_sense(_focused_working_set, surface=source)
         except Exception as _grounding_shadow_exc:

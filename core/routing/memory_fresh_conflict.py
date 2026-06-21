@@ -128,13 +128,18 @@ def check_memory_fresh_conflict(
         label = getattr(verdict, "label", "unavailable")
         if label == "contradicts":
             rev = getattr(verdict, "revision", None)
+            _grounded = getattr(verdict, "score", None)
+            # verdict.score is the GROUNDED score (1 - P(contradiction)) per the verifier
+            # protocol; the contradiction's confidence is its complement, so the receipt
+            # number reads as clash STRENGTH (high = strong), not backwards.
+            _confidence = round(1.0 - _grounded, 4) if _grounded is not None else None
             return MemoryFreshConflictReceipt(
                 verdict="contradiction",
                 mem_id=getattr(mem, "local_label", None),
                 mem_label=getattr(mem, "source_type", None),
                 fresh_id=getattr(fr, "local_label", None),
                 fresh_label=getattr(fr, "source_type", None),
-                confidence=getattr(verdict, "score", None),
+                confidence=_confidence,
                 verifier=f"{verifier_name}@{rev}" if rev else verifier_name,
                 mem_sha256=_sha256(claim),
                 fresh_sha256=_sha256(getattr(fr, "text", "") or ""),
