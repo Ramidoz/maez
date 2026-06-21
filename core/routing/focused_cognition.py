@@ -86,6 +86,22 @@ _ORIGIN_TRUST_LABEL: dict[str, str] = {
     "untrusted": "untrusted",
 }
 _FRESH_SOURCE_TYPES: tuple[str, ...] = ("fresh_evidence", "web_context")
+
+
+def turn_has_fresh_evidence(working_set) -> bool:
+    """True iff the focused working set cites any FRESH / non-recall evidence — a
+    `_FRESH_SOURCE_TYPES` item (fresh current observation/tool/body, or web). That is the
+    ONLY case the support gate may convene (MiniCheck inspects cited claims). Recall-only
+    (memory_*) / conversational turns return False -> no courtroom around Maez's voice.
+    Reads item.source_type (provenance), NOT the type-stripped evidence map. Fail-safe
+    toward the voice: any error / missing working set -> False (do not convene)."""
+    try:
+        items = getattr(working_set, "items", ()) or ()
+        return any(getattr(it, "source_type", None) in _FRESH_SOURCE_TYPES for it in items)
+    except Exception:
+        return False
+
+
 _SELF_WEB_CLAIM_LABEL = "self-web-claim (unverified prior)"
 
 
