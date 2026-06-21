@@ -1,4 +1,6 @@
-# Support Gate — Scope to External Evidence (don't put a courtroom around Maez's voice) — Design
+# Support Gate — Scope to Fresh/Web Evidence (don't put a courtroom around Maez's voice) — Design
+
+> Naming note: "fresh/non-recall evidence" = `_FRESH_SOURCE_TYPES` (`fresh_evidence` = current observed/tool/body, `web_context` = web). NOT only web — the gate may check fresh CURRENT claims too; it must NOT court recall-only / conversational voice. (The filename keeps the older "external" slug.)
 
 **Date:** 2026-06-21. **Status:** design — owner-approved (the scoped rule + "both gate & shadow" + always-emit-the-receipt); this doc is for owner review before planning.
 **Origin:** a live voice wound. On casual Telegram turns ("good morning," "how are you feeling?") Maez's reply had **"I couldn't confirm this from the source I cited."** appended to nearly every sentence — including pure self-expression and greetings. Temporarily muted live via `MAEZ_SUPPORT_GATE_ENABLED=0` (stop-the-bleeding); this slice is the proper fix so the gate can be safely re-enabled.
@@ -19,41 +21,43 @@ The support gate was built to keep Maez honest about **external factual claims**
 
 ## The scoped rule (owner, 2026-06-21)
 
-> If the turn pulled **external evidence**, the gate/shadow may run over cited factual claims.
+> If the turn leaned on **fresh / non-recall evidence** (fresh current observation/tool/body OR web), the gate/shadow may run over cited factual claims.
 > If the turn is **recall-only / self-expression / conversational**, gate AND shadow **skip MiniCheck** entirely.
 > **Always emit a scope receipt** — so the rail's decision is visible; we want the right kind of sight, not blindness.
 
-## The mechanism (already exists)
+*(The courtroom convenes when Maez leans on fresh/current or web evidence — not when it speaks from memory, continuity, or presence.)*
 
-The focused working set tags every evidence item's provenance. [focused_cognition.py:88](../../core/routing/focused_cognition.py#L88): `_FRESH_SOURCE_TYPES = ("fresh_evidence", "web_context")` are the **external** kinds (`web_context` is literally labelled *"external web — UNTRUSTED"*); everything else (context, recent-dialogue, lived-self) is internal/recall. So *"did this turn pull external evidence?"* is a present signal, not an invention.
+## The mechanism — read the WORKING SET, not the evidence map (Codex must-fix)
 
-**`_turn_has_external_evidence(working_set | evidence_map) -> bool`** = any item is of a `_FRESH_SOURCE_TYPES` kind. (Task 0 enumerates the FULL external set — confirm `fresh_evidence`/`web_context` cover web_search + fetch_url + any frontier/fetched source; add any missing external type so nothing real is excluded.)
+The focused **working set** tags every evidence item with `source_type` ([focused_cognition.py:255](../../core/routing/focused_cognition.py#L255)). `_FRESH_SOURCE_TYPES = ("fresh_evidence", "web_context")` ([:37](../../core/routing/focused_cognition.py#L37)) are the **fresh / non-recall** kinds: `fresh_evidence` = *"observed (fresh) — current-state authority"* (screen / tool / body **now**), `web_context` = *"external web — UNTRUSTED"*. The RECALL kinds we EXCLUDE are `memory_evidence` / `memory_context` (*"recalled memory/context — past authority, not current state"*), plus pure conversation (no citations).
+
+**`_turn_has_fresh_evidence(working_set) -> bool`** = any `working_set.items[*].source_type in _FRESH_SOURCE_TYPES`. **It MUST read the working set, NOT the evidence map.** `evidence_map_from_working_set` ([grounding_shadow.py:369](../../core/cognition/grounding_shadow.py#L369)) returns only `{label: text}` — the `source_type` is STRIPPED, so a provenance check on the map would be FAKE (the exact wrong-seam class of bug). `_focused_working_set` is in scope at the post-audit gate seam (used at maez_daemon.py:6998/7012/7350). Task 0 enumerates the FULL `source_type` inventory and confirms `_FRESH_SOURCE_TYPES` covers every fresh/observed/web/fetched source (so a real fresh-or-web claim is never mis-skipped) and that ONLY recall/conversation is excluded.
 
 ## The design
 
 A single scope guard at the gate/shadow invocation seam:
-- The daemon currently runs the gate when `_grounding_shadow_post_audit_ready and _focused_used and _focused_support_evidence_map`. Add `and _turn_has_external_evidence(...)`. The shadow path (`decide_support_path` → `observe_focused_support` / `observe_focused_support_gate`) is gated the same way — **MiniCheck is not invoked at all** on a recall-only turn.
-- **Recall-only turn:** skip MiniCheck (gate + shadow); the reply is byte-identical to no-gate (no caveat, no `[E#]`-derived edit); emit the scope receipt `support_gate_scope external_evidence=false path=skipped_recall_only`.
-- **External-evidence turn:** the gate/shadow run exactly as today (per-sentence MiniCheck on cited claims; real web-claim caveats preserved); emit `support_gate_scope external_evidence=true path=gated`.
+- The daemon currently runs the gate when `_grounding_shadow_post_audit_ready and _focused_used and _focused_support_evidence_map`. Add `and _turn_has_fresh_evidence(...)`. The shadow path (`decide_support_path` → `observe_focused_support` / `observe_focused_support_gate`) is gated the same way — **MiniCheck is not invoked at all** on a recall-only turn.
+- **Recall-only turn:** skip MiniCheck (gate + shadow); the reply is byte-identical to no-gate (no caveat, no `[E#]`-derived edit); emit the scope receipt `support_gate_scope fresh_evidence=false path=skipped_recall_only`.
+- **Fresh/web-evidence turn:** the gate/shadow run exactly as today (per-sentence MiniCheck on cited claims; real web-claim caveats preserved); emit `support_gate_scope fresh_evidence=true path=gated`.
 - The gate's per-sentence caveat logic (`apply_support_gate`, `_caveat_for`) is **UNCHANGED** — we change *whether the courtroom convenes*, not how it judges once convened.
 
 ## Invariants (verify in review)
 
 1. **Recall-only/conversational turn → NO MiniCheck (gate AND shadow), reply byte-identical to gate-off, no caveat.** (The casual-greeting case is whole.)
-2. **External-evidence turn → gate/shadow run as today** — real web-claim caveats preserved (no regression on the "news about Anthropic" / Barchart case where a caveat is honest).
-3. **Scope receipt ALWAYS emitted** (`external_evidence` + `path` ∈ {gated, skipped_recall_only}) — content-light, visible-state not chain-of-thought ([[feedback_visible_substrate_state_not_chain_of_thought]]).
-4. **`_turn_has_external_evidence` is provenance-true** — derived from the working-set item types, not a keyword/heuristic on the reply text; Task 0 confirms it covers every external source.
+2. **Fresh/web-evidence turn → gate/shadow run as today** — real web-claim caveats preserved (no regression on the "news about Anthropic" / Barchart case where a caveat is honest).
+3. **Scope receipt ALWAYS emitted** (`fresh_evidence` + `path` ∈ {gated, skipped_recall_only}) — content-light, visible-state not chain-of-thought ([[feedback_visible_substrate_state_not_chain_of_thought]]).
+4. **`_turn_has_fresh_evidence` is provenance-true** — derived from the working-set `item.source_type` (NOT the type-stripped evidence map, NOT a keyword/heuristic on the reply text); Task 0 confirms it covers every fresh/observed/web/fetched source.
 5. **Untouched:** `apply_support_gate`/`_caveat_for` per-sentence logic; the routing/veto-ledger/Beta work; daemon S7; Telegram transport; time-sense. Only the *invocation scope* changes.
 
 ## Testing (hermetic — fake the working set)
 
 - predicate: working set with a `web_context` item → True; recall-only working set (context/recent-dialogue/lived-self only) → False; empty → False.
-- scope decision: external present → path=gated (gate runs); recall-only → path=skipped_recall_only (MiniCheck NOT called — assert via a mock that the verifier is never invoked); the scope receipt emitted in both.
-- no-regression: an external-evidence turn still produces the same per-sentence caveats as before (the gate logic unchanged once convened).
+- scope decision: a `fresh_evidence`/`web_context` item present → path=gated (gate runs); recall-only working set (`memory_*` / conversation) → path=skipped_recall_only (MiniCheck NOT called — assert via a mock that the verifier is never invoked); the scope receipt emitted in both.
+- no-regression: a fresh/web-evidence turn still produces the same per-sentence caveats as before (the gate logic unchanged once convened).
 
 ## Scope / out
 
-**IN:** the `_turn_has_external_evidence` predicate; the scope guard on the gate AND shadow invocation; the scope receipt; tests. **OUT (later/never):** changing `apply_support_gate`/`_caveat_for` per-sentence logic; per-sentence "is THIS citation external" refinement on a mixed turn (v0 is turn-level per the owner's rule); re-tuning MiniCheck; the recall-triad citation behavior (Maez may still cite recall internally — we just don't put a courtroom around it). The mute (`MAEZ_SUPPORT_GATE_ENABLED=0`) is reverted by the owner re-enabling the gate AFTER this lands.
+**IN:** the `_turn_has_fresh_evidence` predicate; the scope guard on the gate AND shadow invocation; the scope receipt; tests. **OUT (later/never):** changing `apply_support_gate`/`_caveat_for` per-sentence logic; per-sentence "is THIS citation fresh/web vs recall" refinement on a mixed turn (v0 is turn-level per the owner's rule); re-tuning MiniCheck; the recall-triad citation behavior (Maez may still cite recall internally — we just don't put a courtroom around it). The mute (`MAEZ_SUPPORT_GATE_ENABLED=0`) is reverted by the owner re-enabling the gate AFTER this lands.
 
 ## Lane / owner-breath
 
