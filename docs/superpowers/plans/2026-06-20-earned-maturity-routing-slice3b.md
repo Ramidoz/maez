@@ -36,7 +36,7 @@
 
 **Files:** Create `docs/proof/2026-06-20-slice3b-task0.md`.
 
-- [ ] **Step 1: Seam (HARD).** Confirm the prior consult at [maez_daemon.py:5912-5916](../../daemon/maez_daemon.py#L5912) (`learn_priors(_default_store()).get((_cls, "web_search"))` + the `routing_prior_shadow` log) is where the comparison is computed/logged; `_cls`, `_default_store` in scope. Confirm the veto application below it (the `if PRIORS_ENABLED and _prior_vetoes_reflex(_prior) and _override_event_id is None: _reflex=False` line) is where `MAEZ_ROUTING_BETA_ENABLED` swaps the verdict. Record both line numbers.
+- [ ] **Step 1: Seam + the consult-guard to EXPAND (HARD).** Record the exact existing consult guard (`if os.environ.get("MAEZ_ROUTING_PRIORS_SHADOW") == "1" or os.environ.get("MAEZ_ROUTING_PRIORS_ENABLED") == "1":`, ~5910) — Task 2 changes it to `_routing_prior_consult_enabled()` so a Beta-only flag isn't a false-witness trap (the consult computes `_cls`; if it doesn't run, the Beta shadow sleeps). Confirm `learn_priors(_default_store()).get((_cls, "web_search"))` + the `routing_prior_shadow` log (~5912-5916) and that `_cls`/`_default_store` are in scope. Confirm the veto application below it (`if PRIORS_ENABLED and _prior_vetoes_reflex(_prior) and _override_event_id is None: _reflex=False`) is where `MAEZ_ROUTING_BETA_ENABLED` swaps the verdict — and that the `PRIORS_ENABLED` lead-condition stays (Beta changes the verdict, never whether the veto may fire). Record all line numbers.
 - [ ] **Step 2: scipy (HARD).** Confirm `from scipy.stats import beta as _beta_dist; _beta_dist.cdf(0.4, 1, 6)` ≈ 0.953 (= `1 - 0.6**6`). Record that scipy is lazy-imported ONLY inside the flag-gated path (it is heavy; must not load when the flags are off).
 - [ ] **Step 3: The verdict statistic.** Record: `beta_would_veto = P(work_rate ≤ max_success) ≥ credence`, where `P(...) = beta.cdf(max_success, prior_alpha + usable, prior_beta + (n - usable))`. Defaults: `prior_alpha=1.0, prior_beta=1.0` (uniform/skeptical), `max_success=0.4`, `credence=0.9`, `min_observations=3`. The `n/8` verdict mirrors Slice 1: `n8_would_veto = (_confidence(n) ≥ 0.6 and success_rate ≤ 0.4)` for `n ≥ 3`. Hand-verify the three calibration anchors (Step in Task 1) and record them.
 - [ ] **Step 4: Scope.** Only `priors.py` + the 2 daemon seams + tests + docs. The `n/8` `learn_priors`/`_prior_vetoes_reflex` path stays LIVE (3b adds a parallel belief; off-flag the veto still uses `n/8`). Commit.
@@ -208,33 +208,71 @@ class BetaSeamTest(unittest.TestCase):
             self.assertTrue(_routing_beta_shadow_enabled()); self.assertTrue(_routing_beta_veto_enabled())
         finally:
             os.environ.pop("MAEZ_ROUTING_BETA_SHADOW", None); os.environ.pop("MAEZ_ROUTING_BETA_ENABLED", None)
+
+    _ALL = ["MAEZ_ROUTING_PRIORS_SHADOW", "MAEZ_ROUTING_PRIORS_ENABLED",
+            "MAEZ_ROUTING_BETA_SHADOW", "MAEZ_ROUTING_BETA_ENABLED"]
+    def _clear(self):
+        for k in self._ALL: os.environ.pop(k, None)
+
+    def test_consult_reachable_with_beta_shadow_only(self):  # the false-witness fix
+        from daemon.maez_daemon import _routing_prior_consult_enabled
+        self._clear(); os.environ["MAEZ_ROUTING_BETA_SHADOW"] = "1"
+        try: self.assertTrue(_routing_prior_consult_enabled())  # consult runs -> Beta shadow not asleep
+        finally: self._clear()
+
+    def test_consult_reachable_with_beta_enabled_only(self):
+        from daemon.maez_daemon import _routing_prior_consult_enabled
+        self._clear(); os.environ["MAEZ_ROUTING_BETA_ENABLED"] = "1"
+        try: self.assertTrue(_routing_prior_consult_enabled())  # comparison computed; veto still needs PRIORS_ENABLED
+        finally: self._clear()
+
+    def test_consult_off_when_all_four_off(self):  # byte-identical / no scipy
+        from daemon.maez_daemon import _routing_prior_consult_enabled
+        self._clear()
+        self.assertFalse(_routing_prior_consult_enabled())
 ```
 Run; confirm FAIL.
 
-- [ ] **Step 2: Add the flag helpers** (module-level near `_veto_ledger_enabled`):
+- [ ] **Step 2: Add the flag helpers** (module-level near `_veto_ledger_enabled`). `_routing_prior_consult_enabled` is the KEY fix: the consult that computes `_cls`/`_prior`/`_belief_cmp` must run whenever ANY of the four flags is on — otherwise `MAEZ_ROUTING_BETA_SHADOW=1` alone leaves the shadow asleep (a false-witness trap):
 ```python
 def _routing_beta_shadow_enabled() -> bool:
     return os.environ.get("MAEZ_ROUTING_BETA_SHADOW") == "1"
 def _routing_beta_veto_enabled() -> bool:
     return os.environ.get("MAEZ_ROUTING_BETA_ENABLED") == "1"
+def _routing_prior_consult_enabled() -> bool:
+    return (
+        os.environ.get("MAEZ_ROUTING_PRIORS_SHADOW") == "1"
+        or os.environ.get("MAEZ_ROUTING_PRIORS_ENABLED") == "1"
+        or _routing_beta_shadow_enabled()
+        or _routing_beta_veto_enabled()
+    )
 ```
-Run; the 2 tests PASS.
+Run; the helper tests PASS.
 
-- [ ] **Step 3: Shadow-log the comparison** at the prior-consult seam (inside the existing `if SHADOW or ENABLED` block ~5910, after the `routing_prior_shadow` log). Init `_belief_cmp = None` near `_prior = None` (~5903). Then:
+- [ ] **Step 3: Expand the consult guard (the false-witness fix) + shadow-log the comparison.** Init `_belief_cmp = None` near `_prior = None` (~5903). **Change the EXISTING Slice-1 consult guard** (`if os.environ.get("MAEZ_ROUTING_PRIORS_SHADOW") == "1" or os.environ.get("MAEZ_ROUTING_PRIORS_ENABLED") == "1":`, ~5910) to `if _routing_prior_consult_enabled():` so `_cls`/`_prior` are computed whenever ANY of the four flags is on. Keep the existing `routing_prior_shadow` log gated on its OWN flags (so it doesn't fire spuriously for Beta-only), and add the Beta block gated on the Beta flags. The block becomes:
 ```python
-        if _routing_beta_shadow_enabled() or _routing_beta_veto_enabled():
+        if _routing_prior_consult_enabled():
             try:
-                from core.routing.observation.priors import compare_beliefs
-                _belief_cmp = compare_beliefs(_default_store()).get((_cls, "web_search"))
-                if _belief_cmp is not None:
-                    logger.info("routing_belief_compare class=%s n=%s usable=%s n8_veto=%s beta_veto=%s "
-                                "n8_conf=%.3f beta_p=%.3f", _cls, _belief_cmp.n, _belief_cmp.usable,
-                                _belief_cmp.n8_would_veto, _belief_cmp.beta_would_veto,
-                                _belief_cmp.n8_confidence, _belief_cmp.beta_p_below)
-            except Exception as _be:
-                logger.debug("routing belief compare skipped: %s", _be)
+                from core.routing.observation.priors import learn_priors
+                from core.routing.observation_class import classify_request_class
+                _cls = classify_request_class(text)[0]
+                _prior = learn_priors(_default_store()).get((_cls, "web_search"))
+                if os.environ.get("MAEZ_ROUTING_PRIORS_SHADOW") == "1" \
+                   or os.environ.get("MAEZ_ROUTING_PRIORS_ENABLED") == "1":
+                    logger.info("routing_prior_shadow class=%s prior=%s would_veto=%s",
+                                _cls, _prior, _prior_vetoes_reflex(_prior))
+                if _routing_beta_shadow_enabled() or _routing_beta_veto_enabled():
+                    from core.routing.observation.priors import compare_beliefs
+                    _belief_cmp = compare_beliefs(_default_store()).get((_cls, "web_search"))
+                    if _belief_cmp is not None:
+                        logger.info("routing_belief_compare class=%s n=%s usable=%s n8_veto=%s beta_veto=%s "
+                                    "n8_conf=%.3f beta_p=%.3f", _cls, _belief_cmp.n, _belief_cmp.usable,
+                                    _belief_cmp.n8_would_veto, _belief_cmp.beta_would_veto,
+                                    _belief_cmp.n8_confidence, _belief_cmp.beta_p_below)
+            except Exception as _pe:
+                logger.debug("routing prior/belief consult skipped: %s", _pe)
 ```
-(`_cls` is already computed at 5914; ensure this runs after it. The whole block is inside the flag-gated consult, so scipy loads only when a Beta flag is on.)
+This is a restructure of the existing Slice-1 consult (read it first; the imports of `learn_priors`/`classify_request_class` already exist there — keep them). scipy loads only inside the Beta sub-block → only when a Beta flag is on.
 
 - [ ] **Step 4: The default-off Beta veto-swap.** At the veto application, compute the verdict, swapping to Beta only when `MAEZ_ROUTING_BETA_ENABLED`:
 ```python
@@ -248,7 +286,7 @@ Run; the 2 tests PASS.
 ```
 Read the real veto-application block (post-3a it has the `_override_event_id is None` + the ledger record). Replace ONLY the `_prior_vetoes_reflex(_prior)` test with `_veto_decision`; leave the ledger record + override logic intact.
 
-- [ ] **Step 5: Off = byte-identical.** Both Beta flags off → `_belief_cmp` stays None, `_veto_decision == _prior_vetoes_reflex(_prior)` (the swap `if` is False), no scipy import, no log → the veto is exactly Slice 3a/1. State how you confirmed.
+- [ ] **Step 5: Off = byte-identical + the veto still requires PRIORS_ENABLED.** With ALL FOUR flags off, `_routing_prior_consult_enabled()` is False → the consult never runs, `_belief_cmp` stays None, no scipy import, no log, and `_veto_decision == _prior_vetoes_reflex(_prior)` with the swap `if` False → the veto is exactly Slice 3a/1. Separately confirm: `MAEZ_ROUTING_BETA_ENABLED=1` alone (PRIORS_ENABLED off) computes `_belief_cmp` but does NOT veto — the veto application still leads with `if os.environ.get("MAEZ_ROUTING_PRIORS_ENABLED") == "1" and _veto_decision ...`, so Beta changes *which* verdict, never *whether* the veto is allowed to fire. State how you confirmed both.
 
 - [ ] **Step 6: Run + ruff + commit** (behavior commit — `## Predicted effect`):
 ```bash
@@ -285,7 +323,7 @@ for label, usable, n in [('thin-2',0,2),('3-streak',0,3),('4-streak',0,4),('5-st
     print(f'{label:12} n={n} usable={usable} rate={rate:.2f} | n8_conf={n8c:.2f} n8_veto={n8v} | beta_p={p:.2f} beta_veto={bv}')
 "
 ```
-The handoff MUST show: thin → both abstain; consistent streak → both veto (gate 4); **mixed → n8 vetoes but Beta abstains (gate 5)**; useful → neither vetoes.
+The handoff MUST show the honest progression (NOT a blanket "consistent → both veto"): **thin (2-streak) → both abstain**; **3-streak → both abstain**; **4-streak → they diverge** (n8 abstains, Beta vetoes — Beta is *more* willing at 4 straight failures; surface this honestly, it's a tuning signal for the prior/credence); **5-streak → both veto (gate 4)**; **mixed (3-of-5) → n8 vetoes but Beta abstains (gate 5, the keystone)**; **useful-5 → neither vetoes**. Only the 5-streak is "both veto"; the table must not overstate agreement.
 
 - [ ] **Step 3: Off byte-identical confirm** — both Beta flags unset → no scipy import, no comparison, veto uses `n/8` exactly as Slice 1/3a.
 
@@ -299,6 +337,6 @@ The handoff MUST show: thin → both abstain; consistent streak → both veto (g
 
 **Spec coverage:** Beta-Binomial belief (posterior + credible statistic) → Task 1 `beta_belief`; side-by-side shadow (gate 1) → `compare_beliefs` + Task 2 Step 3 log; skeptical prior / thin uncertain (gate 2) → `test_beta_belief_thin_stays_uncertain` + `test_thin_both_abstain`; no behavior change until proven (gate 3) → both flags default-off + ENABLED not flipped + Task 2 Step 5; Barchart still vetoes but not sufficient (gate 4) → `test_consistent_both_veto` + the handoff framing; mixed → Beta less confident (gate 5) → `test_mixed_n8_overclaims_beta_abstains` (the keystone) + the calibration table; fixed prior in 3b, earned in 3c → noted in `beta_belief` docstring + handoff; off=byte-identical → Task 2 Step 5. OUT (3c earned threshold) untouched. Covered.
 
-**Placeholder scan:** scipy is lazy-imported inside `beta_belief` (only runs when a flag is on, Task 0 Step 2 confirms it's heavy). The veto-swap (Task 2 Step 4) says "read the real post-3a veto-application block and replace ONLY the `_prior_vetoes_reflex(_prior)` test" — Task 0 Step 1 pins the line. No TBD; all code concrete.
+**Placeholder scan:** scipy is lazy-imported inside `beta_belief` (only runs when a flag is on, Task 0 Step 2 confirms it's heavy). The veto-swap (Task 2 Step 4) says "read the real post-3a veto-application block and replace ONLY the `_prior_vetoes_reflex(_prior)` test" — Task 0 Step 1 pins the line. **The false-witness fix:** `_routing_prior_consult_enabled()` (4-flag OR) replaces the existing 2-flag consult guard so `MAEZ_ROUTING_BETA_SHADOW=1` alone reaches the consult — tested by `test_consult_reachable_with_beta_shadow_only`; all-four-off tested by `test_consult_off_when_all_four_off`. The calibration table states the honest progression (only 5-streak is both-veto; 4-streak diverges). No TBD; all code concrete.
 
 **Type consistency:** `beta_belief(usable, n, *, prior_alpha, prior_beta, max_success) -> (mean, p_below)`; `compare_beliefs(store, *, min_observations, n8_min_conf, max_success, credence, prior_alpha, prior_beta) -> dict[(cls,tool)->BeliefComparison]`; `BeliefComparison` fields used identically in Task 1 tests + Task 2 seam (`.n`, `.usable`, `.n8_would_veto`, `.beta_would_veto`, `.n8_confidence`, `.beta_p_below`, `.beta_mean`). `_confidence`/`_GOOD` reused from Slice 1 unchanged. The n8 verdict mirrors `_prior_vetoes_reflex` defaults (0.6/0.4).
