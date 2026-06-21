@@ -21,6 +21,20 @@
 4. the Barchart-class still vetoes under Beta — but that alone is NOT graduation;
 5. on MIXED evidence Beta is *less* confident than `n/8` (abstains where `n/8` vetoes) — else the model isn't earning its keep.
 
+## Hardcoded scaffolding — named honestly (3b fixes the *reading*, 3c earns the *caution*)
+
+3b still hardcodes the caution settings. This is acceptable ONLY because 3b is shadow and **3c is the slice that makes every one of these LEARNED** — naming them here so it isn't hidden:
+
+| Hardcoded in 3b | meaning | earned in 3c |
+|---|---|---|
+| `prior_alpha=1, prior_beta=1` | starting skepticism (uniform) | the prior moves with the global "age" + per-class re-ask outcomes |
+| `credence=0.9` | "how sure before I veto" | the act-threshold earned from `likely_right`/`likely_wrong` |
+| `max_success=0.4` | "useful-rate at/below this = bad" | (likely stays a definition, but reviewable) |
+| `min_observations=3` | n/8's cold-start floor | subsumed by the posterior's own width |
+| `0.6 / 0.4` (n/8 side) | Slice-1 veto thresholds | retired when n/8 is retired |
+
+**The honest split:** *3b — given FIXED caution, does Beta read the evidence better than n/8? 3c — let Maez EARN and move the caution itself.* 3b must not be presented as "no more hardcoding" — it is a better belief with still-fixed parameters. The `Beta(1,1)+0.9` 4-streak eagerness (above) is the live proof those parameters are ours, not yet earned.
+
 ---
 
 ## File Structure
@@ -230,6 +244,19 @@ class BetaSeamTest(unittest.TestCase):
         from daemon.maez_daemon import _routing_prior_consult_enabled
         self._clear()
         self.assertFalse(_routing_prior_consult_enabled())
+
+    def test_beta_swap_inside_priors_enabled_authority(self):
+        # Beta changes WHICH verdict, never WHETHER the veto may fire: the swap assigns _veto_decision
+        # (flag-gated), and the veto application still LEADS with MAEZ_ROUTING_PRIORS_ENABLED.
+        import pathlib, daemon.maez_daemon as d
+        src = pathlib.Path(d.__file__).read_text()
+        self.assertIn("_veto_decision = _prior_vetoes_reflex(_prior)", src)   # default verdict = n/8
+        self.assertIn("_veto_decision = _belief_cmp.beta_would_veto", src)    # Beta swap (the verdict only)
+        self.assertIn("_routing_beta_veto_enabled()", src)                    # swap is flag-gated
+        auth = 'MAEZ_ROUTING_PRIORS_ENABLED") == "1" and _veto_decision'
+        self.assertIn(auth, src)                                             # authority leads with PRIORS_ENABLED
+        # the swap sets the verdict BEFORE the authority check — it never bypasses it
+        self.assertLess(src.index("_veto_decision = _belief_cmp.beta_would_veto"), src.index(auth))
 ```
 Run; confirm FAIL.
 
@@ -253,6 +280,7 @@ Run; the helper tests PASS.
 ```python
         if _routing_prior_consult_enabled():
             try:
+                from core.routing.observation import _default_store
                 from core.routing.observation.priors import learn_priors
                 from core.routing.observation_class import classify_request_class
                 _cls = classify_request_class(text)[0]
@@ -323,7 +351,7 @@ for label, usable, n in [('thin-2',0,2),('3-streak',0,3),('4-streak',0,4),('5-st
     print(f'{label:12} n={n} usable={usable} rate={rate:.2f} | n8_conf={n8c:.2f} n8_veto={n8v} | beta_p={p:.2f} beta_veto={bv}')
 "
 ```
-The handoff MUST show the honest progression (NOT a blanket "consistent → both veto"): **thin (2-streak) → both abstain**; **3-streak → both abstain**; **4-streak → they diverge** (n8 abstains, Beta vetoes — Beta is *more* willing at 4 straight failures; surface this honestly, it's a tuning signal for the prior/credence); **5-streak → both veto (gate 4)**; **mixed (3-of-5) → n8 vetoes but Beta abstains (gate 5, the keystone)**; **useful-5 → neither vetoes**. Only the 5-streak is "both veto"; the table must not overstate agreement.
+The handoff MUST show the honest progression (NOT a blanket "consistent → both veto"): **thin (2-streak) → both abstain**; **3-streak → both abstain**; **4-streak → they diverge** (n8 abstains, Beta vetoes — Beta is *more* willing at 4 straight failures). **This is a TUNING WARNING, NOT a graduation win:** `Beta(1,1)`+`credence 0.9` may be too eager for "one streak shouldn't over-confide." 3b is shadow, so it's safe to observe — but the receipt must flag it as a reason to consider a more skeptical prior (e.g. `Beta(1,2)`) or higher credence, decided with the owner before any `BETA_ENABLED` flip. Do NOT present the 4-streak veto as evidence Beta is saner; **5-streak → both veto (gate 4)**; **mixed (3-of-5) → n8 vetoes but Beta abstains (gate 5, the keystone)**; **useful-5 → neither vetoes**. Only the 5-streak is "both veto"; the table must not overstate agreement.
 
 - [ ] **Step 3: Off byte-identical confirm** — both Beta flags unset → no scipy import, no comparison, veto uses `n/8` exactly as Slice 1/3a.
 
