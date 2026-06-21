@@ -14,14 +14,14 @@ The detector hunts a **real clash** (premise-vs-claim CONTRADICTION), never "the
 
 `core/routing/photo_contradiction.py` already provides: the `ContradictionVerifier` Protocol (`predict(premise, hypothesis) -> ClaimVerdict`), a swappable verifier, and a content-light `ContradictionReceipt` (`contradicted_claim_ids`, `sense_note`, counts). Slice 1 reuses these, generalizing "photo claims vs context" → "**trusted-memory claims vs fresh evidence**":
 - **Pair** each TRUSTED-memory working-set item against the turn's FRESH items, in the SAME focused working set.
-- **Trusted memory only** (`EvidenceItem`, [focused_cognition.py:255-276](../../core/routing/focused_cognition.py#L255)): `origin_trust in {"lived","covenant"}` / owner-authored provenance; **EXCLUDE `self_web_claim`** (Thread C's untrusted marker) and any non-trusted recall. Random recalled material is NOT paired.
+- **Trusted memory only — EXACT, fail-closed** (`EvidenceItem`, [focused_cognition.py:255-276](../../core/routing/focused_cognition.py#L255)): a memory item qualifies IFF `origin_trust in {"lived","covenant"}` **AND** `origin_provenance != "self_web_claim"`. **`origin_trust is None` or any unknown value → EXCLUDED** (fail-closed — vague trust metadata must NEVER count as sacred memory). No "owner-authored provenance" catch-all. Random / untrusted recall is NOT paired.
 - **Fresh items**: `source_type in _FRESH_SOURCE_TYPES` (`fresh_evidence`, `web_context`) — reuse the predicate from the support-gate-scope slice.
 - **Run the high-precision contradiction sense** (premise=fresh text, hypothesis=memory claim). The verifier is swappable (the honesty receipt is the invariant — [[feedback_verifier_swappable_receipt_invariant]]); Task 0 auditions the contradiction verifier (the photo one's verifier, or a frontier/NLI judge), MiniCheck listed only as an auxiliary candidate.
 
 ## Slice 1 — the SHADOW detector (THIS spec)
 
 - At the focused-cognition seam (where `_focused_working_set` holds both fresh + memory), when a turn has BOTH a trusted-memory item and a fresh item, run the contradiction sense over the (fresh, trusted-memory-claim) pairs.
-- Emit a **content-light receipt**: `mem_fresh_conflict_sense mem_id=.. fresh_id=.. verdict=contradiction|none|ambiguous confidence=.. sense_note=..` — NO claim text dumped (visible-state, not chain-of-thought [[feedback_visible_substrate_state_not_chain_of_thought]]).
+- Emit a **REDACTED receipt — content-light for REAL** (must-fix): the photo `ContradictionReceipt`/`ReceiptClaimDetail`/`ClaimVerdict` carry claim+premise TEXT (`claim_details[].text`, free-text `reason`/`sense_note`) — those MUST NOT be logged. This slice defines a SEPARATE redacted struct/projection: `mem_fresh_conflict_sense mem_id=.. mem_label=.. fresh_id=.. fresh_label=.. verdict=contradiction|neutral|ambiguous confidence=.. verifier=<name@version> mem_sha256=.. fresh_sha256=.. reason_code=..` — IDs, source labels, content **DIGESTS** (sha256), verdict, confidence, verifier name/version, a FIXED reason CODE. **NO memory text, NO fresh text, NO claim snippets** in any log/receipt ([[feedback_visible_substrate_state_not_chain_of_thought]], [[feedback_perception_free_egress_disciplined]]).
 - **LOG ONLY — NO reply change, no governance, no surfacing.** This slice just learns whether the sense fires on *real* clashes and stays silent otherwise.
 - **Fail-safe toward the memory:** verifier unavailable / low confidence / no fresh+trusted pair → `ambiguous` or no receipt, NEVER a contradiction accusation.
 - Flag-gated, default-off = byte-identical.
@@ -38,8 +38,10 @@ Always surface; never silently resolve ([[feedback_disagreement_is_signal]]).
 
 1. **Precision is the whole game.** Task 0 auditions the contradiction verifier and records a small labeled set (real clashes vs thin/irrelevant/partial fresh sources) — the detector must FIRE on real contradictions and stay SILENT on mere absence-of-support / thin sources. If it can't hit high precision, STOP (a crying-wolf detector is worse than none).
 2. **Contradiction, not support.** The verifier interface is `predict(premise, hypothesis) -> {contradiction|neutral|entailment}` (NLI-shaped) or the photo verdict; MiniCheck's "supported/unsupported" is NOT wired as the contradiction signal.
-3. **Trusted-only pairing.** Confirm the working-set items carry `origin_trust`/`origin_provenance` at this seam; pair only `lived`/`covenant`, exclude `self_web_claim`/untrusted. (Verify the fields are populated, not always None.)
-4. **Shadow inert.** Flag-off = byte-identical; no reply touched; the sense never runs when off.
+3. **Trusted fields populated, or STOP (must-fix).** Task 0 PROVES `origin_trust`/`origin_provenance` are actually populated on memory items at THIS focused seam (not always `None`). If they are not reliably set, **STOP and build the provenance plumbing first** — a fail-closed predicate over always-`None` fields silently pairs nothing (a hollow detector). Pair only `lived`/`covenant` AND not `self_web_claim`.
+4. **Pairing granularity proven BEFORE a detector lands (should-fix).** Whole-long-memory vs whole-fresh-item is noisy and kills precision. Task 0 fixes the exact pairing/chunking strategy (e.g. per-extracted-claim, with a bounded pair-budget per turn) and validates it on the labeled set; a `claim_limit_exceeded`-style cap is recorded honestly, never silently truncated.
+5. **Receipt redaction (must-fix).** Task 0 confirms the redacted receipt logs NO claim/memory/fresh text — only IDs, labels, digests, verdict, confidence, verifier@version, reason code. A test asserts no item `text` leaks into the logged receipt.
+6. **Shadow inert.** Flag-off = byte-identical; no reply touched; the sense never runs when off.
 
 ## Scope / out
 
