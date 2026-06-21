@@ -6,6 +6,7 @@ os.environ.setdefault("MAEZ_IPHONE_INGEST_TOKEN", "dummy-test")
 os.environ.setdefault("MAEZ_SECRETS_DISABLE_NEW_LOADER", "1")
 
 import daemon.maez_daemon as d
+from core.routing.memory_fresh_conflict import MemoryFreshConflictReceipt
 
 
 class _Item:
@@ -36,7 +37,7 @@ class TestConflictSenseSeam(unittest.TestCase):
         with mock.patch.dict(os.environ, {"MAEZ_MEM_FRESH_CONFLICT_SENSE": "1"}), \
              mock.patch.object(d, "check_memory_fresh_conflict") as chk, \
              self.assertLogs(d.logger.name) as logs:
-            chk.return_value = d.MemoryFreshConflictReceipt(
+            chk.return_value = MemoryFreshConflictReceipt(
                 verdict="contradiction", mem_id="E2", fresh_id="E1",
                 mem_sha256="a" * 64, fresh_sha256="b" * 64, reason_code="trusted_clash")
             d._run_mem_fresh_conflict_sense(self._ws(), surface="telegram")

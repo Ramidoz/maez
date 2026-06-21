@@ -116,7 +116,6 @@ from core.time.temporal_spine import temporal_spine_health
 from core.routing.llm_client import served_model_alias
 from core.routing.recall_stack_config import resolve_recall_stack
 from core.routing.memory_fresh_conflict import (
-    MemoryFreshConflictReceipt,
     check_memory_fresh_conflict,
     memory_fresh_conflict_sense_enabled,
 )
