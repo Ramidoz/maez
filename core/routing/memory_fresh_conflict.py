@@ -81,3 +81,70 @@ def extract_memory_claims(text: str, *, limit: int = 5) -> list[str]:
         if len(claims) >= limit:
             break
     return claims
+
+
+from core.routing.observation import _sha256
+
+
+def check_memory_fresh_conflict(
+    working_set,
+    verifier,
+    *,
+    claim_limit: int = 5,
+    pair_budget: int = 6,
+):
+    """Pair trusted-memory claims (hypothesis) against fresh items (premise);
+    predict contradiction. Returns a redacted MemoryFreshConflictReceipt, or None
+    if there is no trusted-memory↔fresh pair to judge. Fail-safe toward the memory:
+    any non-'contradicts'/'grounded' verdict → 'ambiguous', never an accusation."""
+    mems = trusted_memory_items(working_set)
+    fresh = fresh_items(working_set)
+    if not mems or not fresh:
+        return None
+
+    pairs = []  # (fresh_item, mem_item, claim_text)
+    for mem in mems:
+        for claim in extract_memory_claims(getattr(mem, "text", "") or "", limit=claim_limit):
+            for fr in fresh:
+                pairs.append((fr, mem, claim))
+    if not pairs:
+        return None
+
+    pair_limit_exceeded = len(pairs) > pair_budget
+    budgeted = pairs[:pair_budget]
+
+    saw_unavailable = False
+    verifier_name = type(verifier).__name__
+    for fr, mem, claim in budgeted:
+        try:
+            verdict = verifier.predict(getattr(fr, "text", "") or "", claim)
+        except Exception:
+            saw_unavailable = True
+            continue
+        label = getattr(verdict, "label", "unavailable")
+        if label == "contradicts":
+            rev = getattr(verdict, "revision", None)
+            return MemoryFreshConflictReceipt(
+                verdict="contradiction",
+                mem_id=getattr(mem, "local_label", None),
+                mem_label=getattr(mem, "source_type", None),
+                fresh_id=getattr(fr, "local_label", None),
+                fresh_label=getattr(fr, "source_type", None),
+                confidence=getattr(verdict, "score", None),
+                verifier=f"{verifier_name}@{rev}" if rev else verifier_name,
+                mem_sha256=_sha256(claim),
+                fresh_sha256=_sha256(getattr(fr, "text", "") or ""),
+                reason_code="trusted_clash",
+                pair_count=len(budgeted),
+                pair_limit_exceeded=pair_limit_exceeded,
+            )
+        if label != "grounded":
+            saw_unavailable = True
+
+    return MemoryFreshConflictReceipt(
+        verdict="ambiguous" if saw_unavailable else "none",
+        verifier=verifier_name,
+        reason_code="verifier_unavailable" if saw_unavailable else "clear",
+        pair_count=len(budgeted),
+        pair_limit_exceeded=pair_limit_exceeded,
+    )

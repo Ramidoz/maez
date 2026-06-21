@@ -80,5 +80,68 @@ class TestSelectors(unittest.TestCase):
         self.assertTrue(all(isinstance(c, str) and c for c in claims))
 
 
+from core.routing.memory_fresh_conflict import check_memory_fresh_conflict
+
+
+class _Verdict:
+    def __init__(self, label, score=0.9, reason=None):
+        self.label = label
+        self.score = score
+        self.latency_s = 0.0
+        self.model_id = "nli-test"
+        self.revision = "rev1"
+        self.sha256 = "c" * 64
+        self.reason = reason
+
+
+class _FakeVerifier:
+    def __init__(self, label):
+        self._label = label
+        self.calls = 0
+
+    def predict(self, premise, hypothesis):
+        self.calls += 1
+        return _Verdict(self._label)
+
+
+class TestOrchestration(unittest.TestCase):
+    def _ws_with(self, mem_trust="lived"):
+        mem = _Item("E2", "memory_evidence", "Maez's latest model is Claude 3.",
+                    origin_trust=mem_trust)
+        fresh = _Item("E1", "web_context", "Anthropic released Claude Opus 4.8 in 2026.")
+        return _WS(items=(fresh, mem))
+
+    def test_contradiction_emits_redacted_receipt(self):
+        r = check_memory_fresh_conflict(self._ws_with(), _FakeVerifier("contradicts"))
+        self.assertEqual(r.verdict, "contradiction")
+        self.assertEqual(r.mem_id, "E2")
+        self.assertEqual(r.fresh_id, "E1")
+        self.assertEqual(len(r.mem_sha256), 64)
+        self.assertNotIn("Claude", str(vars(r)))
+
+    def test_grounded_is_none_verdict(self):
+        r = check_memory_fresh_conflict(self._ws_with(), _FakeVerifier("grounded"))
+        self.assertEqual(r.verdict, "none")
+
+    def test_unavailable_is_ambiguous_never_accuse(self):
+        r = check_memory_fresh_conflict(self._ws_with(), _FakeVerifier("unavailable"))
+        self.assertEqual(r.verdict, "ambiguous")
+
+    def test_no_trusted_memory_returns_none_receipt(self):
+        ws = self._ws_with(mem_trust=None)
+        self.assertIsNone(check_memory_fresh_conflict(ws, _FakeVerifier("contradicts")))
+
+    def test_pair_budget_caps_predict_calls(self):
+        mem = _Item("E2", "memory_evidence",
+                    "A. B. C. D. E. F. G. H.", origin_trust="lived")
+        fresh1 = _Item("E1", "web_context", "fresh one")
+        fresh2 = _Item("E3", "web_context", "fresh two")
+        ws = _WS(items=(fresh1, fresh2, mem))
+        v = _FakeVerifier("grounded")
+        r = check_memory_fresh_conflict(ws, v, claim_limit=5, pair_budget=3)
+        self.assertLessEqual(v.calls, 3)
+        self.assertTrue(r.pair_limit_exceeded)
+
+
 if __name__ == "__main__":
     unittest.main()
