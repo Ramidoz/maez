@@ -142,6 +142,17 @@ class TestOrchestration(unittest.TestCase):
         self.assertLessEqual(v.calls, 3)
         self.assertTrue(r.pair_limit_exceeded)
 
+    def test_pair_count_is_pairs_examined_not_budget(self):
+        # first (and only) pair contradicts -> pair_count must be 1, not pair_budget
+        r = check_memory_fresh_conflict(self._ws_with(), _FakeVerifier("contradicts"),
+                                        pair_budget=6)
+        self.assertEqual(r.pair_count, 1)
+
+    def test_neutral_verdict_is_ambiguous_non_decisive(self):
+        r = check_memory_fresh_conflict(self._ws_with(), _FakeVerifier("neutral"))
+        self.assertEqual(r.verdict, "ambiguous")
+        self.assertEqual(r.reason_code, "non_decisive")
+
 
 if __name__ == "__main__":
     unittest.main()

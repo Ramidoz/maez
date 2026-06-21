@@ -96,7 +96,8 @@ def check_memory_fresh_conflict(
     """Pair trusted-memory claims (hypothesis) against fresh items (premise);
     predict contradiction. Returns a redacted MemoryFreshConflictReceipt, or None
     if there is no trusted-memory↔fresh pair to judge. Fail-safe toward the memory:
-    any non-'contradicts'/'grounded' verdict → 'ambiguous', never an accusation."""
+    any non-'contradicts'/'grounded' verdict → 'ambiguous', never an accusation.
+    Returns on the first contradicting pair; remaining budgeted pairs are not evaluated."""
     mems = trusted_memory_items(working_set)
     fresh = fresh_items(working_set)
     if not mems or not fresh:
@@ -113,9 +114,12 @@ def check_memory_fresh_conflict(
     pair_limit_exceeded = len(pairs) > pair_budget
     budgeted = pairs[:pair_budget]
 
-    saw_unavailable = False
+    saw_unavailable = False   # verifier raised, or returned label "unavailable"
+    saw_nondecisive = False   # verifier returned a real label that is neither contradicts nor grounded
     verifier_name = type(verifier).__name__
+    pairs_examined = 0
     for fr, mem, claim in budgeted:
+        pairs_examined += 1
         try:
             verdict = verifier.predict(getattr(fr, "text", "") or "", claim)
         except Exception:
@@ -135,16 +139,26 @@ def check_memory_fresh_conflict(
                 mem_sha256=_sha256(claim),
                 fresh_sha256=_sha256(getattr(fr, "text", "") or ""),
                 reason_code="trusted_clash",
-                pair_count=len(budgeted),
+                pair_count=pairs_examined,
                 pair_limit_exceeded=pair_limit_exceeded,
             )
-        if label != "grounded":
+        if label == "grounded":
+            continue
+        if label == "unavailable":
             saw_unavailable = True
+        else:
+            saw_nondecisive = True
 
+    if saw_unavailable:
+        reason_code = "verifier_unavailable"
+    elif saw_nondecisive:
+        reason_code = "non_decisive"
+    else:
+        reason_code = "clear"
     return MemoryFreshConflictReceipt(
-        verdict="ambiguous" if saw_unavailable else "none",
+        verdict="ambiguous" if (saw_unavailable or saw_nondecisive) else "none",
         verifier=verifier_name,
-        reason_code="verifier_unavailable" if saw_unavailable else "clear",
-        pair_count=len(budgeted),
+        reason_code=reason_code,
+        pair_count=pairs_examined,
         pair_limit_exceeded=pair_limit_exceeded,
     )
