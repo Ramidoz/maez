@@ -154,5 +154,20 @@ class TestOrchestration(unittest.TestCase):
         self.assertEqual(r.reason_code, "non_decisive")
 
 
+class TestRedaction(unittest.TestCase):
+    def test_no_memory_or_fresh_text_anywhere_in_receipt(self):
+        SECRET_MEM = "ZZSECRETMEMZZ is the remembered fact."
+        SECRET_FRESH = "ZZSECRETFRESHZZ is the fresh source."
+        mem = _Item("E2", "memory_evidence", SECRET_MEM, origin_trust="lived")
+        fresh = _Item("E1", "web_context", SECRET_FRESH)
+        ws = _WS(items=(fresh, mem))
+        r = check_memory_fresh_conflict(ws, _FakeVerifier("contradicts"))
+        blob = repr(vars(r))
+        self.assertNotIn("ZZSECRETMEM", blob)
+        self.assertNotIn("ZZSECRETFRESH", blob)
+        # digests ARE present (proof we saw the text but stored only its hash)
+        self.assertEqual(len(r.mem_sha256), 64)
+
+
 if __name__ == "__main__":
     unittest.main()
