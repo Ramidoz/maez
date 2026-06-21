@@ -4,22 +4,29 @@
 
 ## REPO-WIDE `source_type` inventory (Codex guard — not just `_AUTHORITY_LABEL`)
 
-`grep -rhoE "source_type=[\"'][a-z_]+[\"']" core/ daemon/ skills/` → 9 real values, classified vs THIS gate seam:
+**Inventory method (corrected — Codex HOLD):** a literal `source_type="..."` grep UNDERCOUNTS — source types are also declared as dict KEYS in `_PRIORITY`/`_AUTHORITY_LABEL` ([focused_cognition.py](../../core/routing/focused_cognition.py)) and `_CRITICAL_SOURCE_TYPES` ([cycle_packet.py:29](../../core/cognition/cycle_packet.py#L29)). The full repo-wide universe (literal assigns + every dict key) is below; classified vs THIS owner-reply support-gate seam (maez_daemon.py:7277, inside `handle_message`).
 
-| source_type | class | reaches gate seam? | in `_FRESH_SOURCE_TYPES`? | verdict |
+| source_type | class | reaches THIS gate seam? | in `_FRESH_SOURCE_TYPES`? | verdict |
 |---|---|---|---|---|
 | `fresh_evidence` | fresh/current (observed/tool/body) | YES (focused branch) | **YES** | gated ✓ |
 | `web_context` | web (external) | YES (focused branch) | **YES** | gated ✓ |
+| `rss` | raw web-search result FIELD (`web_search.py:425`) | NO — folded into a `web_context` item at the working set (`focused_cognition.py:1300`) | n/a | gated VIA `web_context` ✓ |
 | `memory_evidence` | recall (past) | yes | no | correctly EXCLUDED (recall) |
 | `memory_context` | recall (past) | yes | no | correctly EXCLUDED (recall) |
 | `dialogue_anchor` | recall/continuity | yes | no | correctly EXCLUDED (recall) |
 | `owner_message_context` | recall/context | yes | no | correctly EXCLUDED (recall) |
 | `temporal_recall_status` | recall status | yes | no | correctly EXCLUDED (recall) |
-| `signal_absence` | absence marker (not a claim) | yes | no | correctly EXCLUDED (no claim to check) |
-| `empty_result` | absence marker (not a claim) | yes | no | correctly EXCLUDED (no claim to check) |
+| `signal_absence` | absence marker (not a claim) | yes | no | correctly EXCLUDED (no claim) |
+| `empty_result` | absence marker (not a claim) | yes | no | correctly EXCLUDED (no claim) |
 | `photo_vision` | fresh (first-party vision) | **NO** (see below) | no | OUT-of-v0 with proof |
+| `action_outcome` | SELF — "recent action outcome, what Maez just did" | **cycle-packet path** (autonomous reflection, maez_daemon.py:5132-5233), NOT owner-reply gate | no | OUT-of-this-seam; even if recalled → self/voice → correctly excluded |
+| `open_loop` | SELF — "unresolved want or wondering" | cycle-packet path | no | OUT-of-this-seam; self/voice if recalled → excluded |
+| `builder_event` | SELF — "self-modification activity" | cycle-packet path | no | OUT-of-this-seam; self/voice if recalled → excluded |
+| `quality_signal` | SELF — "self-critique signal" | cycle-packet path | no | OUT-of-this-seam; self/voice if recalled → excluded |
 
-(`observed` appears in `_AUTHORITY_LABEL` as a *label* for fresh items, not a distinct assigned `source_type` — fresh observations are tagged `fresh_evidence`, which IS gated.)
+(`observed` is an `_AUTHORITY_LABEL` *label* for fresh items, not a distinct assigned `source_type` — fresh observations are tagged `fresh_evidence`, gated.)
+
+**On the cycle/self types (`action_outcome`/`open_loop`/`builder_event`/`quality_signal`):** they live in the autonomous **cycle-packet/reflection** path, not the owner-reply support-gate seam. Critically, they are **Maez's own actions / wants / self-critique = self-expression/voice**, not external fresh/web fact — so even if a future change recalled one into an owner-reply working set, EXCLUDING it is the CORRECT behavior (gating Maez's "what I just did" as an unsupported external claim is the SAME voice-bug this slice fixes). They are not "fresh/web evidence the gate should check."
 
 ## `photo_vision` — fresh, but does NOT reach this seam (HARD item, PASS)
 
@@ -27,7 +34,7 @@ The photo-synthesis branch ([maez_daemon.py:6816-6840](../../daemon/maez_daemon.
 
 ## Predicate-completeness STOP (PASS)
 
-Every source_type classified "fresh/current AND reaches this seam" — `fresh_evidence`, `web_context` — IS in `_FRESH_SOURCE_TYPES`. No fresh-and-reaching type is missing. Recall (`memory_*`, `dialogue_anchor`, `owner_message_context`, `temporal_recall_status`) and absence markers (`signal_absence`, `empty_result`) are intentionally excluded. **GO.**
+Across the FULL repo-wide universe, the only source types that are **external fresh/web AND reach this owner-reply gate seam** are `fresh_evidence` and `web_context` — both IN `_FRESH_SOURCE_TYPES`. `rss` reaches it folded into `web_context` (gated). No external-fresh/web type is missing. Everything else is intentionally excluded: recall (`memory_*`, `dialogue_anchor`, `owner_message_context`, `temporal_recall_status`), absence markers (`signal_absence`, `empty_result`), self/voice (`action_outcome`/`open_loop`/`builder_event`/`quality_signal` — cycle-path, and voice-not-fact if ever recalled), and `photo_vision` (doesn't reach the seam). **GO.**
 
 ## Seam proof (PASS)
 
