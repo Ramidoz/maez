@@ -10,7 +10,7 @@ The support gate was cross-examining Maez's **conversational/recall voice** — 
 
 ## Commits
 
-- `84b23f5` docs(proof): Task 0 — repo-wide `source_type` inventory (9 values), `photo_vision` proven OUT, predicate-completeness STOP passes.
+- `84b23f5` + `de9ab64` docs(proof): Task 0 — full repo-wide `source_type` inventory (focused + cycle/self + `rss`), `photo_vision` proven OUT, predicate-completeness STOP passes.
 - `01e47ec` **Task 1** — `turn_has_fresh_evidence(working_set)` predicate (pure; reads `item.source_type`; fail-safe → False). 6/6.
 - `babccc9` **Task 2 (behavior)** — `_run_support_scope` helper + the scoped seam; behavior test proves recall-only → observers never called.
 
