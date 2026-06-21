@@ -115,6 +115,11 @@ from core.safety.clinical_boundary import (
 from core.time.temporal_spine import temporal_spine_health
 from core.routing.llm_client import served_model_alias
 from core.routing.recall_stack_config import resolve_recall_stack
+from core.routing.memory_fresh_conflict import (
+    MemoryFreshConflictReceipt,
+    check_memory_fresh_conflict,
+    memory_fresh_conflict_sense_enabled,
+)
 from core.voice_continuity import voice_continuity_health
 from core.health.fd_forensics import fd_forensics_snapshot
 from core.governance.successor_governance import successor_governance_health
@@ -1102,6 +1107,29 @@ def _run_support_scope(reply, working_set, evidence_map, *, surface, boot_id, sh
         observe_focused_support(
             reply, evidence_map, surface=surface, boot_id=boot_id, shadow_id=shadow_id, ts=ts)
     return reply, gate_receipt
+
+
+def _run_mem_fresh_conflict_sense(working_set, *, surface):
+    """SHADOW: sense a trusted-memory↔fresh contradiction; log a redacted receipt.
+    Never mutates the reply. Flag-gated; fail-safe (any error → silent no-op)."""
+    if not memory_fresh_conflict_sense_enabled():
+        return
+    try:
+        from core.routing.photo_contradiction import LocalNLIContradictionVerifier
+        receipt = check_memory_fresh_conflict(working_set, LocalNLIContradictionVerifier())
+        if receipt is None:
+            return
+        logger.info(
+            "mem_fresh_conflict_sense surface=%s verdict=%s mem_id=%s fresh_id=%s "
+            "confidence=%s verifier=%s reason_code=%s pair_count=%s pair_limit_exceeded=%s "
+            "mem_sha256=%s fresh_sha256=%s",
+            surface, receipt.verdict, receipt.mem_id, receipt.fresh_id,
+            receipt.confidence, receipt.verifier, receipt.reason_code,
+            receipt.pair_count, receipt.pair_limit_exceeded,
+            receipt.mem_sha256, receipt.fresh_sha256,
+        )
+    except Exception as exc:  # fail-safe: a sense must never break a turn
+        logger.info("mem_fresh_conflict_sense surface=%s error=%s", surface, type(exc).__name__)
 
 
 def _prior_vetoes_reflex(prior, *, min_conf=0.6, max_success=0.4):
@@ -7304,6 +7332,8 @@ class MaezDaemon:
                     shadow_id=uuid.uuid4().hex,
                     ts=int(time.time()),
                 )
+                if _focused_working_set is not None:
+                    _run_mem_fresh_conflict_sense(_focused_working_set, surface=source)
         except Exception as _grounding_shadow_exc:
             logger.debug(
                 "focused grounding shadow/gate skipped: %s",
