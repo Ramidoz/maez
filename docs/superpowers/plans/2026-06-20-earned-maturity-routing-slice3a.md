@@ -28,7 +28,7 @@
 **Files:** Create `docs/proof/2026-06-20-slice3a-task0.md`.
 
 - [ ] **Step 1: Seam 1 — record point (HARD).** Confirm at [maez_daemon.py:5903](../../daemon/maez_daemon.py#L5903) the veto fires (`_reflex = False`) when `MAEZ_ROUTING_PRIORS_ENABLED=1 and _prior_vetoes_reflex(_prior)`, and that `_cls` (the class, [:5896](../../daemon/maez_daemon.py#L5896)), `_prior`, `_user_msg_turn_id` ([:5659](../../daemon/maez_daemon.py#L5659)), and `source` (surface) are all in scope there. Note that `_cls`/`_prior` are computed only inside the `SHADOW or ENABLED` block — so a `_cls = None` guard is needed before use.
-- [ ] **Step 2: Seam 2 — override point (HARD).** Confirm the gate condition's `_reflex` ([:5911](../../daemon/maez_daemon.py#L5911)) is the single lever; an override must run BEFORE [:5903](../../daemon/maez_daemon.py#L5903) so it can prevent the veto from forcing `_reflex=False`. Confirm `text`/`_cls` are available to compute the class for the ledger lookup at the gate-top.
+- [ ] **Step 2: Seam 2 — override point + the "would a search run" conditions (HARD).** Confirm the gate condition's `_reflex` ([:5911](../../daemon/maez_daemon.py#L5911)) is the single lever; an override must run BEFORE [:5903](../../daemon/maez_daemon.py#L5903) so it can prevent the veto from forcing `_reflex=False`. **Record the EXACT search-gate conditions** ([:5905-5912](../../daemon/maez_daemon.py#L5905)): `not authoritative_tool_reply and _daemon_parallel_web_search_enabled(transcript, recall_stack_config=_recall_stack_config) and _reflex` — `_would_web_search` (Task 2) MUST mirror these so a veto is recorded only when a search would otherwise have fired (must-fix 1). Confirm `authoritative_tool_reply`, `transcript`, `_recall_stack_config` are all in scope at the gate-top.
 - [ ] **Step 3: Seam 3 — classify point (HARD).** Confirm at the writeback block ([:7227](../../daemon/maez_daemon.py#L7227)) the override turn's `outcome_quality` is computed (`_routing_quality_from_gate` → `_q`, or the insert-time `structured_evidence` when `_q is None`), and that a function-scoped `_override_event_id` set at seam 2 is still in scope there to attach. Record the exact `outcome_quality` values available: `structured_evidence` (useful), `unusable`/`empty_but_honest` (reach failed), `tool_error`/`closed_refusal` (indeterminate).
 - [ ] **Step 4: Window + lazy `uncontested` + scope.** Record the window definition (`_REASK_WINDOW_S`, default 3600s — a "what counts as a re-ask" definition, NOT a trust knob) and that `uncontested` is resolved lazily on ledger read (no scheduler). Confirm scope is only `veto_ledger.py` + the 3 daemon seams + tests + docs; nothing touches the strict honesty gate, S7, Telegram, time-sense, cockpit-reauth. Commit.
 
@@ -251,55 +251,62 @@ def _veto_ledger_enabled() -> bool:
     return os.environ.get("MAEZ_VETO_LEDGER") == "1"
 ```
 
-- [ ] **Step 4: Seam 2 — override at the gate-top** (insert AFTER `_prior`/`_cls` are computed, i.e. after the shadow block ~5901, BEFORE `_reflex = needs_web_search(text)` at 5902). Initialize `_override_event_id = None` near the other `_wb_*` inits (~5887). Then:
-
-```python
-        _override_event_id = None
-        _ledger = None
-        if _veto_ledger_enabled() and _cls is not None \
-           and os.environ.get("MAEZ_ROUTING_PRIORS_ENABLED") == "1" and _prior_vetoes_reflex(_prior):
-            try:
-                from core.routing.veto_ledger import VetoLedger
-                _ledger = VetoLedger()
-                _open = _ledger.find_open_for_class(_cls, "web_search", now=time.time())
-                if _open is not None:
-                    _override_event_id = _open.id  # re-ask: lift the veto this once, go look
-            except Exception as _le:
-                logger.debug("veto ledger override check skipped: %s", _le)
-```
-(Read the real code first; ensure `_cls = None` is initialized before the shadow block at ~5889 so it is always bound.)
-
-- [ ] **Step 5: Seam 1 — record the veto when it fires** (at 5903-5904). Change the veto application so the override prevents it AND a fired veto is recorded:
+- [ ] **Step 4: Initialize the seam locals + the "would a search actually run" guard (must-fix 1 & 3).** Near `_prior = None` (~5889) add `_cls = None`, `_override_event_id = None`, `_ledger = None`, `_routing_turn_outcome_quality = None` (so an exception in the prior block never leaves them unbound). Then, AFTER `_reflex = needs_web_search(text)` (5902) and BEFORE the veto application (5903), compute the guard + the override — **a veto is only real evidence if a search would otherwise have fired** (same conditions as the actual search gate 5905-5912, NOT just `_prior_vetoes_reflex`):
 
 ```python
         _reflex = needs_web_search(text)
+        _would_web_search = None
+        if _veto_ledger_enabled() and os.environ.get("MAEZ_ROUTING_PRIORS_ENABLED") == "1":
+            # The prior only truly SUPPRESSES a search when one would otherwise have run.
+            _would_web_search = bool(
+                not authoritative_tool_reply
+                and _daemon_parallel_web_search_enabled(transcript, recall_stack_config=_recall_stack_config)
+                and _reflex
+            )
+            if _cls is not None and _would_web_search and _prior_vetoes_reflex(_prior):
+                try:  # seam 2: an open same-class veto within the window -> lift the veto ONCE (re-ask)
+                    from core.routing.veto_ledger import VetoLedger
+                    _ledger = VetoLedger()
+                    _open = _ledger.find_open_for_class(_cls, "web_search", now=time.time())
+                    _override_event_id = _open.id if _open is not None else None
+                except Exception as _le:
+                    logger.debug("veto ledger override check skipped: %s", _le)
+```
+
+- [ ] **Step 5: Seam 1 — fire the veto + record ONLY a veto that suppressed a real search (must-fix 1).** Replace the Slice-1 veto application (5903-5904) so (a) the override prevents the veto, and (b) a fired veto is recorded only when `_would_web_search` was true:
+
+```python
         if os.environ.get("MAEZ_ROUTING_PRIORS_ENABLED") == "1" and _prior_vetoes_reflex(_prior) \
            and _override_event_id is None:
-            _reflex = False  # learned veto fires
-            if _veto_ledger_enabled() and _cls is not None:
+            _reflex = False  # learned veto
+            if _veto_ledger_enabled() and _cls is not None and _would_web_search:
                 try:
-                    (_ledger or __import__("core.routing.veto_ledger", fromlist=["VetoLedger"]).VetoLedger()
-                     ).record_veto(class_id=_cls, tool="web_search", prior_n=_prior.n,
+                    (_ledger or VetoLedger()).record_veto(
+                        class_id=_cls, tool="web_search", prior_n=_prior.n,
                         prior_success_rate=_prior.success_rate, prior_confidence=_prior.confidence,
                         turn_id=_user_msg_turn_id, surface=source, now=time.time())
                 except Exception as _re:
                     logger.debug("veto event record skipped: %s", _re)
 ```
-(When `_override_event_id` is set, the veto does NOT fire → the search runs → classified at seam 3.)
+Byte-identical off: when `MAEZ_VETO_LEDGER` is off, `_would_web_search`/`_override_event_id` stay None → the `if` reduces to Slice 1's `if ENABLED and _prior_vetoes_reflex(_prior) and None is None: _reflex=False`. (Keep the lazy `from core.routing.veto_ledger import VetoLedger` available in scope; `_ledger` is reused from Step 4 when present.)
 
-- [ ] **Step 6: Seam 3 — classify the override turn's outcome** at the writeback block (~7227, after `_q`/the outcome is known). Add alongside the existing writeback:
+- [ ] **Step 6: Capture the REAL turn outcome (must-fix 2), then Seam 3 — classify only from it.**
+  - (a) Where the routing observation is recorded with its insert-time quality (~5950, `outcome_quality=("structured_evidence" if _routing_obs_count > 0 else "empty_but_honest")`), ALSO set `_routing_turn_outcome_quality` to that exact value (capture the same expression into the var).
+  - (b) At the writeback block (~7227), when the calibrated outcome is computed and non-None (Slice 1's `_q` / its real name per Task 0 Step 3), set `_routing_turn_outcome_quality = <that value>` (the `unusable` revision overrides the insert-time value).
+  - (c) Then classify — **only from a real outcome, never a default**:
 
 ```python
-        if _veto_ledger_enabled() and _override_event_id is not None:
+        if _veto_ledger_enabled() and _override_event_id is not None \
+           and _routing_turn_outcome_quality is not None:
             try:
                 from core.routing.veto_ledger import VetoLedger
-                _oq = _q if ('_q' in dir() and _q is not None) else "structured_evidence"  # writeback's outcome, else insert-time
-                VetoLedger().attach_reask_outcome(_override_event_id,
-                    reask_turn_id=_user_msg_turn_id, reask_outcome_quality=_oq)
+                (_ledger or VetoLedger()).attach_reask_outcome(
+                    _override_event_id, reask_turn_id=_user_msg_turn_id,
+                    reask_outcome_quality=_routing_turn_outcome_quality)
             except Exception as _ce:
                 logger.debug("veto reask classify skipped: %s", _ce)
 ```
-(Use the SAME `outcome_quality` the writeback computed: `unusable` if caveated/thin else the insert-time `structured_evidence`. Read the writeback block to bind `_oq` correctly to the real variable — do NOT invent `_q` if its name differs; Task 0 Step 3 recorded the real name.)
+If `_routing_turn_outcome_quality` is None (no real second reach happened), do **NOT** classify — leave the event open (it becomes `uncontested` on the next ledger read after the window, or stays open for a later indeterminate reach). **Never invent `structured_evidence`.**
 
 - [ ] **Step 7: Off = byte-identical.** With `MAEZ_VETO_LEDGER` unset: `_veto_ledger_enabled()` is False → no override check, no record, no classify → the veto behaves exactly as Slice 1 (and with `PRIORS_ENABLED` also off, the whole block is inert). State how you confirmed.
 
@@ -343,8 +350,8 @@ MAEZ_CONFIG=/home/rohit/maez/config /home/rohit/maez/.venv/bin/python -B -m unit
 
 ## Self-Review
 
-**Spec coverage:** veto-event ledger w/ prior snapshot → Task 1 (`record_veto`) + seam 1; exact-repeat override (lift once) → seam 2 + the `_override_event_id` guard (no loop: an open event is found once, then classified→closed); classify from 2nd outcome → seam 3 + `classify_outcome`; four-way honest classification incl. `uncontested` distinct + lazy → Task 1 (`_resolve_expired`, `classify_outcome`); `likely_right` requires reach-also-failed → `_REACH_FAILED` mapping; exact-repeat-only v0 → `find_open_for_class` keys on the exact-hash class from `classify_request_class`; off=byte-identical → flag guards every seam (Task 2 Step 7); shadow-for-maturity (no threshold change) → no maturity code in 3a; window-not-a-trust-knob → `_REASK_WINDOW_S` named + Task 0 Step 4. OUT (3b/3c) untouched. Covered.
+**Spec coverage:** veto-event ledger w/ prior snapshot → Task 1 (`record_veto`) + seam 1; **record only a veto that suppressed a REAL search (must-fix 1)** → `_would_web_search` guard (Task 2 Step 4/5); exact-repeat override (lift once) → seam 2 + the `_override_event_id` guard (no loop: an open event is found once, then classified→closed); **classify only from a REAL second outcome, never a default (must-fix 2)** → `_routing_turn_outcome_quality` captured at the actual search, classify gated on `is not None` (Task 2 Step 6); four-way honest classification incl. `uncontested` distinct + lazy → Task 1 (`_resolve_expired`, `classify_outcome`); `likely_right` requires reach-also-failed → `_REACH_FAILED` mapping; exact-repeat-only v0 → `find_open_for_class` keys on the exact-hash class from `classify_request_class`; off=byte-identical → flag guards every seam (Task 2 Step 7); shadow-for-maturity (no threshold change) → no maturity code in 3a; window-not-a-trust-knob → `_REASK_WINDOW_S` named + Task 0 Step 4. OUT (3b/3c) untouched. Covered.
 
-**Placeholder scan:** the one soft spot is seam 3's outcome variable name (`_q`) — Task 0 Step 3 pins the REAL name and Task 2 Step 6 says bind to it, not invent. No TBD/TODO; all code is concrete.
+**Placeholder scan:** seam 3 binds the writeback's REAL outcome var (Task 0 Step 3 pins the name) into `_routing_turn_outcome_quality` — the dangerous `_q in dir() else "structured_evidence"` default is removed; classification only fires when a real outcome exists. `_cls`/`_override_event_id`/`_ledger`/`_routing_turn_outcome_quality` all initialized before use (must-fix 3). No TBD/TODO; all code concrete.
 
 **Type consistency:** `VetoLedger.record_veto(*, class_id, tool, prior_n, prior_success_rate, prior_confidence, turn_id, surface, now) -> str`; `find_open_for_class(class_id, tool, *, now, within_s) -> VetoEvent|None`; `attach_reask_outcome(event_id, *, reask_turn_id, reask_outcome_quality) -> str`; `classify_outcome(str) -> str`; `VetoEvent` fields consistent across Task 1 ↔ Task 2 usage. The seam reads `_prior.n/.success_rate/.confidence` — matches `RoutingPrior(request_class, chosen_tool, n, success_rate, confidence)` from Slice 1.
