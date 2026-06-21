@@ -1,6 +1,8 @@
-"""Learned routing priors (Slice 1c). Reads forward routing observations and learns,
+"""Learned routing priors. Reads forward routing observations and learns,
 per (request_class, chosen_tool), how often that reach produced a USABLE outcome.
-No hardcoded verdicts: every number comes from lived outcomes. Honest cold-start."""
+The OUTCOME counts come only from lived outcomes (honest cold-start). Slice 3b adds a
+Beta-Binomial belief beside the older n/8 curve; the caution parameters (prior, credence,
+thresholds) are FIXED scaffolding here and are EARNED later in Slice 3c."""
 from __future__ import annotations
 from dataclasses import dataclass
 
