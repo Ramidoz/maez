@@ -240,15 +240,44 @@ class SeamHelperTest(unittest.TestCase):
         os.environ["MAEZ_VETO_LEDGER"] = "1"
         try: self.assertTrue(_veto_ledger_enabled())
         finally: os.environ.pop("MAEZ_VETO_LEDGER", None)
+
+    def test_ledger_get_opens_notebook_when_none(self):
+        # The first-veto failure class: no sibling block imported the ledger, the override lookup
+        # found nothing -> the record path must STILL open the notebook and record.
+        import tempfile
+        from daemon.maez_daemon import _veto_ledger_get
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        os.environ["MAEZ_VETO_LEDGER_DB_PATH"] = tmp.name
+        try:
+            led = _veto_ledger_get(None)            # builds fresh, no sibling import
+            self.assertIsNotNone(led)
+            rid = led.record_veto(class_id="SIG", tool="web_search", prior_n=5,
+                prior_success_rate=0.0, prior_confidence=0.625, turn_id="t1", surface="cockpit", now=1000.0)
+            self.assertIsNotNone(rid)
+            self.assertIs(_veto_ledger_get(led), led)  # reuses an existing ledger unchanged
+        finally:
+            os.environ.pop("MAEZ_VETO_LEDGER_DB_PATH", None)
+            tmp.close()
+            try: os.unlink(tmp.name)
+            except OSError: pass
 ```
 
 - [ ] **Step 2: Run it; expect FAIL.**
 
-- [ ] **Step 3: Add the helper** (module-level, near `_prior_vetoes_reflex` ~:1080):
+- [ ] **Step 3: Add the helpers** (module-level, near `_prior_vetoes_reflex` ~:1080). `_veto_ledger_get` is the **notebook-opener** — each seam calls it so NO block ever relies on a name imported in a sibling block (the silent-skip bug):
 
 ```python
 def _veto_ledger_enabled() -> bool:
     return os.environ.get("MAEZ_VETO_LEDGER") == "1"
+
+def _veto_ledger_get(ledger):
+    """Return a VetoLedger, building one if this turn hasn't yet. NEVER relies on a sibling
+    block's import — an import inside another `if`/`try` can leave the name unbound and silently
+    skip recording the veto (feature looks live, notebook never opens)."""
+    if ledger is not None:
+        return ledger
+    from core.routing.veto_ledger import VetoLedger
+    return VetoLedger()
 ```
 
 - [ ] **Step 4: Initialize the seam locals + the "would a search actually run" guard (must-fix 1 & 3).** Near `_prior = None` (~5889) add `_cls = None`, `_override_event_id = None`, `_ledger = None`, `_routing_turn_outcome_quality = None` (so an exception in the prior block never leaves them unbound). Then, AFTER `_reflex = needs_web_search(text)` (5902) and BEFORE the veto application (5903), compute the guard + the override — **a veto is only real evidence if a search would otherwise have fired** (same conditions as the actual search gate 5905-5912, NOT just `_prior_vetoes_reflex`):
@@ -265,8 +294,7 @@ def _veto_ledger_enabled() -> bool:
             )
             if _cls is not None and _would_web_search and _prior_vetoes_reflex(_prior):
                 try:  # seam 2: an open same-class veto within the window -> lift the veto ONCE (re-ask)
-                    from core.routing.veto_ledger import VetoLedger
-                    _ledger = VetoLedger()
+                    _ledger = _veto_ledger_get(_ledger)
                     _open = _ledger.find_open_for_class(_cls, "web_search", now=time.time())
                     _override_event_id = _open.id if _open is not None else None
                 except Exception as _le:
@@ -281,14 +309,15 @@ def _veto_ledger_enabled() -> bool:
             _reflex = False  # learned veto
             if _veto_ledger_enabled() and _cls is not None and _would_web_search:
                 try:
-                    (_ledger or VetoLedger()).record_veto(
+                    _ledger = _veto_ledger_get(_ledger)   # opens the notebook even if seam 2 didn't
+                    _ledger.record_veto(
                         class_id=_cls, tool="web_search", prior_n=_prior.n,
                         prior_success_rate=_prior.success_rate, prior_confidence=_prior.confidence,
                         turn_id=_user_msg_turn_id, surface=source, now=time.time())
                 except Exception as _re:
                     logger.debug("veto event record skipped: %s", _re)
 ```
-Byte-identical off: when `MAEZ_VETO_LEDGER` is off, `_would_web_search`/`_override_event_id` stay None → the `if` reduces to Slice 1's `if ENABLED and _prior_vetoes_reflex(_prior) and None is None: _reflex=False`. (Keep the lazy `from core.routing.veto_ledger import VetoLedger` available in scope; `_ledger` is reused from Step 4 when present.)
+Byte-identical off: when `MAEZ_VETO_LEDGER` is off, `_would_web_search`/`_override_event_id` stay None → the `if` reduces to Slice 1's `if ENABLED and _prior_vetoes_reflex(_prior) and None is None: _reflex=False`. The `_veto_ledger_get(_ledger)` opener never relies on seam 2 having imported anything — it builds a ledger if `_ledger` is still None (the first-veto / no-open-event path).
 
 - [ ] **Step 6: Capture the REAL turn outcome (must-fix 2), then Seam 3 — classify only from it.**
   - (a) Where the routing observation is recorded with its insert-time quality (~5950, `outcome_quality=("structured_evidence" if _routing_obs_count > 0 else "empty_but_honest")`), ALSO set `_routing_turn_outcome_quality` to that exact value (capture the same expression into the var).
@@ -299,8 +328,8 @@ Byte-identical off: when `MAEZ_VETO_LEDGER` is off, `_would_web_search`/`_overri
         if _veto_ledger_enabled() and _override_event_id is not None \
            and _routing_turn_outcome_quality is not None:
             try:
-                from core.routing.veto_ledger import VetoLedger
-                (_ledger or VetoLedger()).attach_reask_outcome(
+                _ledger = _veto_ledger_get(_ledger)   # opener; never relies on a sibling import
+                _ledger.attach_reask_outcome(
                     _override_event_id, reask_turn_id=_user_msg_turn_id,
                     reask_outcome_quality=_routing_turn_outcome_quality)
             except Exception as _ce:
@@ -352,6 +381,6 @@ MAEZ_CONFIG=/home/rohit/maez/config /home/rohit/maez/.venv/bin/python -B -m unit
 
 **Spec coverage:** veto-event ledger w/ prior snapshot → Task 1 (`record_veto`) + seam 1; **record only a veto that suppressed a REAL search (must-fix 1)** → `_would_web_search` guard (Task 2 Step 4/5); exact-repeat override (lift once) → seam 2 + the `_override_event_id` guard (no loop: an open event is found once, then classified→closed); **classify only from a REAL second outcome, never a default (must-fix 2)** → `_routing_turn_outcome_quality` captured at the actual search, classify gated on `is not None` (Task 2 Step 6); four-way honest classification incl. `uncontested` distinct + lazy → Task 1 (`_resolve_expired`, `classify_outcome`); `likely_right` requires reach-also-failed → `_REACH_FAILED` mapping; exact-repeat-only v0 → `find_open_for_class` keys on the exact-hash class from `classify_request_class`; off=byte-identical → flag guards every seam (Task 2 Step 7); shadow-for-maturity (no threshold change) → no maturity code in 3a; window-not-a-trust-knob → `_REASK_WINDOW_S` named + Task 0 Step 4. OUT (3b/3c) untouched. Covered.
 
-**Placeholder scan:** seam 3 binds the writeback's REAL outcome var (Task 0 Step 3 pins the name) into `_routing_turn_outcome_quality` — the dangerous `_q in dir() else "structured_evidence"` default is removed; classification only fires when a real outcome exists. `_cls`/`_override_event_id`/`_ledger`/`_routing_turn_outcome_quality` all initialized before use (must-fix 3). No TBD/TODO; all code concrete.
+**Placeholder scan:** seam 3 binds the writeback's REAL outcome var (Task 0 Step 3 pins the name) into `_routing_turn_outcome_quality` — the dangerous `_q in dir() else "structured_evidence"` default is removed; classification only fires when a real outcome exists. `_cls`/`_override_event_id`/`_ledger`/`_routing_turn_outcome_quality` all initialized before use (must-fix 3). **All three seams open the ledger via `_veto_ledger_get(_ledger)`** — no block relies on a name imported in a sibling block, so the first-veto/no-open-event path still records (the silent-skip bug Codex flagged), proven by `test_ledger_get_opens_notebook_when_none`. No TBD/TODO; all code concrete.
 
 **Type consistency:** `VetoLedger.record_veto(*, class_id, tool, prior_n, prior_success_rate, prior_confidence, turn_id, surface, now) -> str`; `find_open_for_class(class_id, tool, *, now, within_s) -> VetoEvent|None`; `attach_reask_outcome(event_id, *, reask_turn_id, reask_outcome_quality) -> str`; `classify_outcome(str) -> str`; `VetoEvent` fields consistent across Task 1 ↔ Task 2 usage. The seam reads `_prior.n/.success_rate/.confidence` — matches `RoutingPrior(request_class, chosen_tool, n, success_rate, confidence)` from Slice 1.
