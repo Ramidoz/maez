@@ -1077,6 +1077,33 @@ def _routing_quality_from_gate(*, caveated_unsupported, web_quality, result_coun
     return None, ""
 
 
+def _run_support_scope(reply, working_set, evidence_map, *, surface, boot_id, shadow_id, ts):
+    """Scope the support gate to FRESH/non-recall evidence. Recall-only / conversational turns skip
+    MiniCheck entirely (no courtroom around Maez's voice); always emit the support_gate_scope receipt.
+    Returns (reply, gate_receipt) — reply is unchanged unless the sync gate actually ran."""
+    from core.routing.focused_cognition import turn_has_fresh_evidence
+    _fresh = turn_has_fresh_evidence(working_set)
+    logger.info("support_gate_scope surface=%s fresh_evidence=%s path=%s",
+                surface, _fresh, "gated" if _fresh else "skipped_recall_only")
+    if not _fresh:
+        return reply, None
+    from core.cognition.grounding_shadow import (
+        decide_support_path, observe_focused_support, observe_focused_support_gate,
+    )
+    _support_path = decide_support_path(
+        gate_enabled=strict_env_flag("MAEZ_SUPPORT_GATE_ENABLED"),
+        shadow_enabled=strict_env_flag("MAEZ_GROUNDING_SHADOW_ENABLED"),
+    )
+    gate_receipt = None
+    if _support_path == "sync_gate":
+        reply, gate_receipt = observe_focused_support_gate(
+            reply, evidence_map, surface=surface, boot_id=boot_id, shadow_id=shadow_id, ts=ts)
+    elif _support_path == "async_shadow":
+        observe_focused_support(
+            reply, evidence_map, surface=surface, boot_id=boot_id, shadow_id=shadow_id, ts=ts)
+    return reply, gate_receipt
+
+
 def _prior_vetoes_reflex(prior, *, min_conf=0.6, max_success=0.4):
     """A learned prior suppresses the keyword reflex only when CONFIDENT that this
     request-class + tool tends to fail (low usable rate). Conservative by design."""
@@ -7268,34 +7295,15 @@ class MaezDaemon:
                 and _focused_used
                 and _focused_support_evidence_map
             ):
-                from core.cognition.grounding_shadow import (
-                    decide_support_path,
-                    observe_focused_support,
-                    observe_focused_support_gate,
+                reply, _gate_receipt = _run_support_scope(
+                    reply,
+                    _focused_working_set,
+                    _focused_support_evidence_map,
+                    surface=source,
+                    boot_id=os.environ.get("MAEZ_BOOT_ID"),
+                    shadow_id=uuid.uuid4().hex,
+                    ts=int(time.time()),
                 )
-
-                _support_path = decide_support_path(
-                    gate_enabled=strict_env_flag("MAEZ_SUPPORT_GATE_ENABLED"),
-                    shadow_enabled=strict_env_flag("MAEZ_GROUNDING_SHADOW_ENABLED"),
-                )
-                if _support_path == "sync_gate":
-                    reply, _gate_receipt = observe_focused_support_gate(
-                        reply,
-                        _focused_support_evidence_map,
-                        surface=source,
-                        boot_id=os.environ.get("MAEZ_BOOT_ID"),
-                        shadow_id=uuid.uuid4().hex,
-                        ts=int(time.time()),
-                    )
-                elif _support_path == "async_shadow":
-                    observe_focused_support(
-                        reply,
-                        _focused_support_evidence_map,
-                        surface=source,
-                        boot_id=os.environ.get("MAEZ_BOOT_ID"),
-                        shadow_id=uuid.uuid4().hex,
-                        ts=int(time.time()),
-                    )
         except Exception as _grounding_shadow_exc:
             logger.debug(
                 "focused grounding shadow/gate skipped: %s",

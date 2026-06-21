@@ -327,24 +327,31 @@ class FlagMatrixTest(unittest.TestCase):
 
 class DaemonSupportGateSourceTests(unittest.TestCase):
     def test_daemon_reads_gate_flag_independently_at_marked_draft_seam(self):
+        # The flag-reads + observer dispatch now live in the module-level helper
+        # `_run_support_scope`, which is CALLED at the marked-draft seam (after the
+        # fragment guard, before retain_receipt). This asserts the seam ordering at
+        # the call site; the flag-independent decide_support_path body is covered by
+        # the helper + tests/test_support_gate_scope_seam.py.
         src = Path("daemon/maez_daemon.py").read_text()
         guard_idx = src.find("reply = self._trf_apply_fragment_guard(")
         receipt_idx = src.find("retain_receipt(", guard_idx)
         render_idx = src.find("reply = render_natural(", guard_idx)
-        gate_flag_idx = src.find('strict_env_flag("MAEZ_SUPPORT_GATE_ENABLED")', guard_idx)
-        shadow_flag_idx = src.find('strict_env_flag("MAEZ_GROUNDING_SHADOW_ENABLED")', guard_idx)
-        gate_call_idx = src.find("observe_focused_support_gate(", guard_idx)
-        async_call_idx = src.find("observe_focused_support(", guard_idx)
+        scope_call_idx = src.find("_run_support_scope(", guard_idx)
+
+        # the helper body still reads both flags independently and dispatches both observers
+        helper_def_idx = src.find("def _run_support_scope(")
+        self.assertGreater(helper_def_idx, 0)
+        helper_body = src[helper_def_idx:src.find("\n\ndef ", helper_def_idx)]
+        self.assertIn('strict_env_flag("MAEZ_SUPPORT_GATE_ENABLED")', helper_body)
+        self.assertIn('strict_env_flag("MAEZ_GROUNDING_SHADOW_ENABLED")', helper_body)
+        self.assertIn("observe_focused_support_gate(", helper_body)
+        self.assertIn("observe_focused_support(", helper_body)
 
         self.assertGreater(guard_idx, 0)
         self.assertGreater(receipt_idx, guard_idx)
         self.assertGreater(render_idx, receipt_idx)
-        self.assertGreater(gate_flag_idx, guard_idx)
-        self.assertGreater(shadow_flag_idx, guard_idx)
-        self.assertGreater(gate_call_idx, guard_idx)
-        self.assertGreater(async_call_idx, guard_idx)
-        self.assertLess(gate_call_idx, receipt_idx)
-        self.assertLess(async_call_idx, receipt_idx)
+        self.assertGreater(scope_call_idx, guard_idx)
+        self.assertLess(scope_call_idx, receipt_idx)
 
 
 class RenderNaturalSurvivalTest(unittest.TestCase):

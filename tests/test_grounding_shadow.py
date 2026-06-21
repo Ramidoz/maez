@@ -520,20 +520,26 @@ class HookTests(unittest.TestCase):
 
 class DaemonFocusedSupportHookOrderTests(unittest.TestCase):
     def test_focused_support_observes_after_fragment_guard(self):
+        # The observer dispatch now lives in `_run_support_scope`, which is CALLED at
+        # the seam (after the fragment guard, before retain_receipt). Assert the call
+        # site ordering; the observer calls themselves are verified in the helper body.
         src = Path("daemon/maez_daemon.py").read_text()
         audit_idx = src.find("reply = audit_assistant_text(")
         guard_idx = src.find("reply = self._trf_apply_fragment_guard(", audit_idx)
-        gate_idx = src.find("observe_focused_support_gate(", guard_idx)
-        observe_idx = src.find("observe_focused_support(", guard_idx)
+        scope_call_idx = src.find("_run_support_scope(", guard_idx)
         receipt_idx = src.find("retain_receipt(", guard_idx)
         render_idx = src.find("reply = render_natural(", guard_idx)
 
+        helper_def_idx = src.find("def _run_support_scope(")
+        self.assertGreater(helper_def_idx, 0)
+        helper_body = src[helper_def_idx:src.find("\n\ndef ", helper_def_idx)]
+        self.assertIn("observe_focused_support_gate(", helper_body)
+        self.assertIn("observe_focused_support(", helper_body)
+
         self.assertGreater(audit_idx, 0)
         self.assertGreater(guard_idx, audit_idx)
-        self.assertGreater(observe_idx, guard_idx)
-        self.assertGreater(gate_idx, guard_idx)
-        self.assertLess(observe_idx, receipt_idx)
-        self.assertLess(gate_idx, receipt_idx)
+        self.assertGreater(scope_call_idx, guard_idx)
+        self.assertLess(scope_call_idx, receipt_idx)
         self.assertLess(receipt_idx, render_idx)
 
 
