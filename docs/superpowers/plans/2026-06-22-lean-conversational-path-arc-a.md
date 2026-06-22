@@ -326,8 +326,13 @@ class SelfCapabilityQuestionTests(unittest.TestCase):
 
         expected = {
             "What's the state of your web search tools?": True,
-            "can you read pages right now?": True,
-            "what can you do?": True,
+            "can you use your page read tools?": True,
+            "what capabilities do you have?": True,
+            # The current predicate does not treat broad ability questions as
+            # self-capability. Arc A reuses the existing organ; it does not
+            # widen it under the cover of extraction.
+            "can you read pages right now?": False,
+            "what can you do?": False,
             "your web search tools are acting strange": False,
             "how are you?": False,
             "latest Anthropic news": False,
