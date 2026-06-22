@@ -434,6 +434,9 @@ class GroundednessVerdict:
     verdict: str
     citation_coverage: float
     unmatched: list[str]
+    reply_grounding: float = 0.0
+    grounded_sentences: int = 0
+    total_sentences: int = 0
 
 
 @dataclass(frozen=True)
@@ -1472,6 +1475,18 @@ def synthesize_photo_turn(
     )
 
 
+_REPLY_SENTENCE_RE = re.compile(r"[^.!?]+[.!?]?")
+
+
+def _reply_sentences(reply: str) -> list[str]:
+    """Deterministic sentence split; keeps inline [E#] markers with their sentence."""
+    return [s.strip() for s in _REPLY_SENTENCE_RE.findall(reply or "") if s.strip()]
+
+
+def _sentence_is_grounded(sentence: str, valid_labels: set[str]) -> bool:
+    return any(f"E{m.group(1)}" in valid_labels for m in _CITE_RE.finditer(sentence))
+
+
 def check_groundedness(
     result: FocusedResult,
     working_set: WorkingSet,
@@ -1481,6 +1496,13 @@ def check_groundedness(
     unmatched = sorted(cited - valid_labels)
     matched = cited & valid_labels
     coverage = len(matched) / len(valid_labels) if valid_labels else 0.0
+
+    sentences = _reply_sentences(result.reply)
+    total_sentences = len(sentences)
+    grounded_sentences = sum(
+        1 for s in sentences if _sentence_is_grounded(s, valid_labels)
+    )
+    reply_grounding = grounded_sentences / total_sentences if total_sentences else 0.0
 
     if not cited:
         verdict = "no_citations"
@@ -1493,6 +1515,9 @@ def check_groundedness(
         verdict=verdict,
         citation_coverage=coverage,
         unmatched=unmatched,
+        reply_grounding=reply_grounding,
+        grounded_sentences=grounded_sentences,
+        total_sentences=total_sentences,
     )
 
 
