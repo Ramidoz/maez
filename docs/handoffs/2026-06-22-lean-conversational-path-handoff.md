@@ -139,10 +139,13 @@ Codex code review should focus on:
    - "proceed with what you proposed"
    - "what's the latest news about Anthropic?"
    - "what is the state of your web search tools?"
+   - "what do you remember about the Reddit thing?"
+   - "remind me what I said about the Reddit thing"
    - a date-addressed memory question
 4. Inspect `lean_conversation_shadow` receipts:
    - casual turns eligible;
-   - fresh/news/body/date turns not eligible;
+   - fresh/news/body/date/explicit-memory turns not eligible;
+   - odd memory-ask phrasings are watched for possible `bodyish_lean_leak`-style future tuning, rather than silently trusted;
    - no meaningful `bodyish_lean_leak=True` on turns that should be full;
    - `legacy_prompt_chars` and `lean_prompt_chars_est` show the cage shrinking without logging prompt text.
 5. If shadow is clean, restart with `MAEZ_LEAN_CONVERSATION_ENABLED=1`.
