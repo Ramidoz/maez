@@ -1344,7 +1344,7 @@ def _log_recall_outcome(*, rec) -> None:
         rec.denial_kind,
         format_log_value(rec.had_confirmed),
         format_log_value(rec.citation_coverage),
-        format_log_value(getattr(rec, "reply_grounding", None)),
+        format_log_value(rec.reply_grounding),
         rec.receipt_or_na,
         rec.latency_ms,
         format_log_value(rec.focused_elapsed_ms),
