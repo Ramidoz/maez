@@ -664,6 +664,18 @@ def _passes_recall_floor(mem: dict, *, floor: float) -> bool:
     return float(dist) < floor
 
 
+def _apply_recall_floor(mems: list[dict], *, floor: float) -> list[dict]:
+    """Apply the relevance floor only when explicitly enabled.
+
+    When enabled, returning an empty list is intentional: if no recalled item
+    clears the bar, the live thread should carry the turn instead of a forced
+    weak memory.
+    """
+    if not recall_floor_enabled():
+        return mems
+    return [mem for mem in mems if _passes_recall_floor(mem, floor=floor)]
+
+
 _REDDIT_SOURCE_BOOST_MAX_AGE_HOURS = 24.0
 _LAST_NIGHT_MIN_AGE_HOURS = 6.0
 _LAST_NIGHT_MAX_AGE_HOURS = 24.0
@@ -2425,6 +2437,9 @@ class MemoryManager:
                 would_empty,
                 recall_floor_enabled(),
             )
+
+        raw = _apply_recall_floor(raw, floor=floor)
+        daily = _apply_recall_floor(daily, floor=floor)
 
         cutoff_h = max(0.0, float(evidence_recency_days)) * 24.0
 

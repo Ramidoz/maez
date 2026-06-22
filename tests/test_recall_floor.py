@@ -1,6 +1,8 @@
 import unittest
+from unittest import mock
 
 from memory.memory_manager import (
+    _apply_recall_floor,
     _passes_recall_floor,
     recall_floor_enabled,
     recall_floor_shadow_enabled,
@@ -31,3 +33,25 @@ class TestFloorPredicate(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestApplyFloor(unittest.TestCase):
+    _raw = [
+        {"id": "a", "distance": 0.40},
+        {"id": "b", "distance": 0.90},
+        {"id": "c", "distance": 0.95},
+    ]
+
+    def test_off_keeps_all(self):
+        with mock.patch.dict("os.environ", {"MAEZ_RECALL_FLOOR_ENABLED": "0"}):
+            self.assertEqual(_apply_recall_floor(self._raw, floor=0.75), self._raw)
+
+    def test_on_drops_irrelevant(self):
+        with mock.patch.dict("os.environ", {"MAEZ_RECALL_FLOOR_ENABLED": "1"}):
+            kept = _apply_recall_floor(self._raw, floor=0.75)
+        self.assertEqual([mem["id"] for mem in kept], ["a"])
+
+    def test_on_all_irrelevant_returns_empty(self):
+        flood = [{"id": "x", "distance": 0.85}, {"id": "y", "distance": 0.92}]
+        with mock.patch.dict("os.environ", {"MAEZ_RECALL_FLOOR_ENABLED": "1"}):
+            self.assertEqual(_apply_recall_floor(flood, floor=0.75), [])
