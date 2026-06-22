@@ -4,6 +4,7 @@ from unittest import mock
 from memory.memory_manager import (
     _apply_recall_floor,
     _passes_recall_floor,
+    _recall_floor_teacher_signal,
     recall_floor_enabled,
     recall_floor_shadow_enabled,
 )
@@ -55,3 +56,29 @@ class TestApplyFloor(unittest.TestCase):
         flood = [{"id": "x", "distance": 0.85}, {"id": "y", "distance": 0.92}]
         with mock.patch.dict("os.environ", {"MAEZ_RECALL_FLOOR_ENABLED": "1"}):
             self.assertEqual(_apply_recall_floor(flood, floor=0.75), [])
+
+
+class TestTeacherSignal(unittest.TestCase):
+    def test_tighten_only_when_diary_heavy_lowground_and_no_memory_ask(self):
+        signal = _recall_floor_teacher_signal(
+            diary_heavy=True,
+            reply_grounding=0.0,
+            asked_for_memory=False,
+        )
+        self.assertTrue(signal["tighten"])
+
+    def test_warm_greeting_does_not_tighten(self):
+        signal = _recall_floor_teacher_signal(
+            diary_heavy=False,
+            reply_grounding=0.0,
+            asked_for_memory=False,
+        )
+        self.assertFalse(signal["tighten"])
+
+    def test_explicit_memory_ask_does_not_tighten(self):
+        signal = _recall_floor_teacher_signal(
+            diary_heavy=True,
+            reply_grounding=0.0,
+            asked_for_memory=True,
+        )
+        self.assertFalse(signal["tighten"])

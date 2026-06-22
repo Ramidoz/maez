@@ -676,6 +676,28 @@ def _apply_recall_floor(mems: list[dict], *, floor: float) -> list[dict]:
     return [mem for mem in mems if _passes_recall_floor(mem, floor=floor)]
 
 
+def _recall_floor_teacher_signal(
+    *,
+    diary_heavy: bool,
+    reply_grounding: float | None,
+    asked_for_memory: bool,
+) -> dict:
+    """Collect the compound teacher signal for future floor adaptation.
+
+    This intentionally does not mutate the floor. Low grounding tightens only
+    when it coincides with diary-heavy recall on a non-memory ask, so ordinary
+    warmth or explicit memory questions are not punished.
+    """
+    low_grounding = reply_grounding is not None and reply_grounding <= 0.1
+    tighten = bool(diary_heavy and low_grounding and not asked_for_memory)
+    return {
+        "tighten": tighten,
+        "diary_heavy": bool(diary_heavy),
+        "reply_grounding": reply_grounding,
+        "asked_for_memory": bool(asked_for_memory),
+    }
+
+
 _REDDIT_SOURCE_BOOST_MAX_AGE_HOURS = 24.0
 _LAST_NIGHT_MIN_AGE_HOURS = 6.0
 _LAST_NIGHT_MAX_AGE_HOURS = 24.0
