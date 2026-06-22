@@ -651,12 +651,13 @@ class DialogueAwareAssembleTests(unittest.TestCase):
                 )
             },
         ]
-        ws = assemble_working_set(
-            transcript=_FRESH,
-            web_context="",
-            owner_question="Which one matters most?",
-            chat_history=history,
-        )
+        with mock.patch.dict(os.environ, {"MAEZ_LIVE_THREAD_ANCHOR": "1"}):
+            ws = assemble_working_set(
+                transcript=_FRESH,
+                web_context="",
+                owner_question="Which one matters most?",
+                chat_history=history,
+            )
         self.assertIsNotNone(ws)
         assert ws is not None
         self.assertEqual(ws.items[0].source_type, "fresh_evidence")

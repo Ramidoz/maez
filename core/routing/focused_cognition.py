@@ -844,7 +844,8 @@ def assemble_working_set(
         and not date_cue
     ):
         return None
-    if live_thread_anchor_enabled() and chat_history:
+    anchor_flag_on = live_thread_anchor_enabled()
+    if anchor_flag_on and chat_history:
         anchors = dialogue_anchor_items(chat_history, limit_pairs=2)
     else:
         anchors = (
@@ -876,17 +877,18 @@ def assemble_working_set(
 
     raw_items: list[tuple[str, str, str | None, dict | None, str | None, str | None]] = []
     if dialogue_authoritative:
-        for marker, body in _split_blocks(transcript or ""):
-            source_type = _SOURCE_TYPE[marker]
-            if source_type != "fresh_evidence":
-                continue
-            for item_text in _atomic_items(body):
-                raw_items.append((source_type, item_text, None, None, None, None))
+        if anchor_flag_on:
+            for marker, body in _split_blocks(transcript or ""):
+                source_type = _SOURCE_TYPE[marker]
+                if source_type != "fresh_evidence":
+                    continue
+                for item_text in _atomic_items(body):
+                    raw_items.append((source_type, item_text, None, None, None, None))
 
-        web_context = web_context or ""
-        if web_context.strip() and _WEB_NO_RESULTS not in web_context:
-            for item_text in _atomic_items(web_context):
-                raw_items.append(("web_context", item_text, None, None, None, None))
+            web_context = web_context or ""
+            if web_context.strip() and _WEB_NO_RESULTS not in web_context:
+                for item_text in _atomic_items(web_context):
+                    raw_items.append(("web_context", item_text, None, None, None, None))
     else:
         if structured_recall_items is not None:
             for item in structured_recall_items:
