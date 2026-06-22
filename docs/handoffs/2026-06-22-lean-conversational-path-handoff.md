@@ -8,6 +8,7 @@
 
 - Task 0 proof gate: `docs/proof/2026-06-22-lean-conversation-task0.md`.
 - Shared self-capability question predicate: `core/routing/self_capability_question.py`.
+- Shared explicit-memory question predicate: `core/routing/explicit_memory_question.py`.
 - Layer0 delegates to the shared predicate without widening the existing regex behavior.
 - Focused lean decision, receipt, and render helpers: `core/routing/focused_cognition.py`.
 - Daemon metadata threading: `daemon/maez_daemon.py`.
@@ -31,6 +32,7 @@ The reviews found real seams and the branch now pins them:
 3. `lean_prompt_chars_est` counts the lean system prompt plus the owner question, matching the legacy prompt-size comparison shape.
 4. The daemon passes `_date_addressed_turn`, `_legacy_prompt_chars`, and `_rk_turn_kind` into `_focused_synthesize(...)`.
 5. The stale focused-synthesis test double in `test_memory_integrity_invariant.py` now accepts and asserts the new metadata, so dated focused turns do not silently fall into the error path.
+6. Final code review found that non-date explicit-memory asks would have leaned and dropped memory evidence. Layer0's existing explicit-memory predicate is now shared, and lean fails those turns toward the full focused prompt. `test_explicit_memory_question_uses_full_prompt_not_lean` guards the regression.
 
 ## Invariants for Review
 
@@ -40,12 +42,13 @@ The reviews found real seams and the branch now pins them:
 4. Lean prompt includes no recalled diary/evidence text; only `_VOICE_CARD_TEXT` plus optional `dialogue_anchor` text.
 5. Fresh/web turns use the full focused prompt.
 6. Self-capability/body questions fail toward the full focused prompt using the exact shared predicate.
-7. Date-addressed turns use the full focused prompt.
-8. Lean rendering does not mutate Chroma/core/daily/raw memory and imports no memory manager path.
-9. Focused telemetry and `reply_grounding` still record lean turns. `reply_grounding=0.0` on lean self-expression is expected, not failure.
-10. Support-gate scope remains fresh/web-gated and unchanged.
-11. Core-pair anchor/floor organs remain untouched.
-12. Cold-open contextless turns are out of v0 scope and may still hit legacy synthesis.
+7. Explicit-memory questions fail toward the full focused prompt using the exact shared Layer0 predicate.
+8. Date-addressed turns use the full focused prompt.
+9. Lean rendering does not mutate Chroma/core/daily/raw memory and imports no memory manager path.
+10. Focused telemetry and `reply_grounding` still record lean turns. `reply_grounding=0.0` on lean self-expression is expected, not failure.
+11. Support-gate scope remains fresh/web-gated and unchanged.
+12. Core-pair anchor/floor organs remain untouched.
+13. Cold-open contextless turns are out of v0 scope and may still hit legacy synthesis.
 
 ## Verification
 
@@ -88,6 +91,7 @@ Claude/Codex review verified these two failures are byte-identical on `main` and
 ```text
 /home/rohit/maez/.venv/bin/ruff check \
   core/routing/focused_cognition.py \
+  core/routing/explicit_memory_question.py \
   core/routing/self_capability_question.py \
   core/dispatcher/layer0.py \
   daemon/maez_daemon.py \
@@ -110,6 +114,7 @@ Claude covenant review should focus on:
 
 - A1: subtraction only; `_VOICE_CARD_TEXT` untouched; no new voice script.
 - A2: fresh/web/body/date honesty rails preserved; body carve-out reuses the exact predicate and fails toward full.
+- A2/A3: explicit-memory asks keep the full recall/evidence path and do not lean.
 - A3: no diary continuity items in lean v0; anchor + question only.
 - A4: subjective witness first; meter stays active but lean conversational turns may show `reply_grounding=0.0`.
 - A5/B1: no support/core-pair regression and no memory mutation.
@@ -118,6 +123,7 @@ Codex code review should focus on:
 
 - delayed full-prompt construction on applied lean;
 - daemon metadata threading and dated-turn full-path behavior;
+- explicit-memory question full-path behavior;
 - receipt content-lightness and prompt-size arithmetic;
 - stale test doubles accepting the new `focused_synthesize(...)` kwargs;
 - flag-off full prompt behavior.

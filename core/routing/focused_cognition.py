@@ -456,6 +456,7 @@ class LeanConversationDecision:
     fresh_evidence: bool
     date_addressed: bool
     self_capability_question: bool
+    explicit_memory_question: bool
     bodyish_lean_leak: bool
     dialogue_anchor_count: int
     source_types: tuple[str, ...]
@@ -506,10 +507,12 @@ def _decide_lean_conversation(
         bodyish_self_capability_candidate,
         is_self_capability_question,
     )
+    from core.routing.explicit_memory_question import is_explicit_memory_question
 
     source_types = _working_set_source_types(working_set)
     fresh = turn_has_fresh_evidence(working_set)
     self_cap = is_self_capability_question(working_set.owner_question)
+    explicit_memory = is_explicit_memory_question(working_set.owner_question)
     bodyish = bodyish_self_capability_candidate(working_set.owner_question)
     anchor_count = _dialogue_anchor_count(working_set)
     bodyish_leak = bodyish and not self_cap
@@ -521,6 +524,7 @@ def _decide_lean_conversation(
             fresh_evidence=fresh,
             date_addressed=date_addressed,
             self_capability_question=self_cap,
+            explicit_memory_question=explicit_memory,
             bodyish_lean_leak=bodyish_leak,
             dialogue_anchor_count=anchor_count,
             source_types=source_types,
@@ -532,6 +536,7 @@ def _decide_lean_conversation(
             fresh_evidence=fresh,
             date_addressed=date_addressed,
             self_capability_question=self_cap,
+            explicit_memory_question=explicit_memory,
             bodyish_lean_leak=bodyish_leak,
             dialogue_anchor_count=anchor_count,
             source_types=source_types,
@@ -543,6 +548,19 @@ def _decide_lean_conversation(
             fresh_evidence=fresh,
             date_addressed=date_addressed,
             self_capability_question=self_cap,
+            explicit_memory_question=explicit_memory,
+            bodyish_lean_leak=bodyish_leak,
+            dialogue_anchor_count=anchor_count,
+            source_types=source_types,
+        )
+    if explicit_memory:
+        return LeanConversationDecision(
+            eligible=False,
+            reason="explicit_memory_question",
+            fresh_evidence=fresh,
+            date_addressed=date_addressed,
+            self_capability_question=self_cap,
+            explicit_memory_question=explicit_memory,
             bodyish_lean_leak=bodyish_leak,
             dialogue_anchor_count=anchor_count,
             source_types=source_types,
@@ -553,6 +571,7 @@ def _decide_lean_conversation(
         fresh_evidence=fresh,
         date_addressed=date_addressed,
         self_capability_question=self_cap,
+        explicit_memory_question=explicit_memory,
         bodyish_lean_leak=bodyish_leak,
         dialogue_anchor_count=anchor_count,
         source_types=source_types,
@@ -571,7 +590,8 @@ def _emit_lean_conversation_receipt(
 ) -> None:
     logger.info(
         "%s eligible=%s reason=%s source_types=%s fresh_evidence=%s "
-        "date_addressed=%s self_capability_question=%s bodyish_lean_leak=%s "
+        "date_addressed=%s self_capability_question=%s "
+        "explicit_memory_question=%s bodyish_lean_leak=%s "
         "dialogue_anchor_count=%d legacy_prompt_chars=%s "
         "lean_prompt_chars_est=%d focused_items_count=%d surface=%s "
         "turn_kind=%s",
@@ -582,6 +602,7 @@ def _emit_lean_conversation_receipt(
         decision.fresh_evidence,
         decision.date_addressed,
         decision.self_capability_question,
+        decision.explicit_memory_question,
         decision.bodyish_lean_leak,
         decision.dialogue_anchor_count,
         "null" if legacy_prompt_chars is None else int(legacy_prompt_chars),

@@ -79,5 +79,29 @@ class SelfCapabilityQuestionTests(unittest.TestCase):
                 self.assertEqual(is_self_capability_question(text), value)
 
 
+class ExplicitMemoryQuestionTests(unittest.TestCase):
+    def test_layer0_explicit_memory_regex_is_shared(self):
+        from core.dispatcher import layer0
+        from core.routing.explicit_memory_question import EXPLICIT_MEMORY_RE
+
+        self.assertIs(layer0._EXPLICIT_MEMORY_RE, EXPLICIT_MEMORY_RE)
+
+    def test_golden_sample_set_pins_current_memory_request_shape(self):
+        from core.routing.explicit_memory_question import is_explicit_memory_question
+
+        expected = {
+            "what do you remember about qwen?": True,
+            "answer from memory": True,
+            "what's in your notebook about yesterday?": True,
+            "look in your notebook": True,
+            "do you remember yesterday?": False,
+            "how are you?": False,
+        }
+
+        for text, value in expected.items():
+            with self.subTest(text=text):
+                self.assertEqual(is_explicit_memory_question(text), value)
+
+
 if __name__ == "__main__":
     unittest.main()

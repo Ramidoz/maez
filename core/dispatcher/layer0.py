@@ -28,6 +28,7 @@ from core.dispatcher.spec import (
     SourceLabel,
     SubstrateSource,
 )
+from core.routing import explicit_memory_question as _explicit_memory_question
 from core.routing import self_capability_question as _self_capability_question
 from core.search.page_extract import extract_first_url
 from core.search.sense_flag import page_read_enabled, sense_enabled
@@ -87,10 +88,7 @@ _EXPLICIT_FETCH_RE = re.compile(
     r"\b(search|google|look up|fetch|check the internet|go check)\b",
     re.IGNORECASE,
 )
-_EXPLICIT_MEMORY_RE = re.compile(
-    r"\b(what do you remember|from memory|in your notebook|what's in your notebook)\b",
-    re.IGNORECASE,
-)
+_EXPLICIT_MEMORY_RE = _explicit_memory_question.EXPLICIT_MEMORY_RE
 _CONTENT_ANCHOR_RE = re.compile(
     r"\b(qwen|reddit|online|local ?llama|telegram|github|calendar|project|status)\b",
     re.IGNORECASE,
