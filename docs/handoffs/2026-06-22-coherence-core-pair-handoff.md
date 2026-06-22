@@ -18,6 +18,8 @@ Commit stack from `main` at build time:
 - `6324a07` `test(coherence-core-pair): keep unittest main blocks at file end`
 - `7f54001` `docs(handoff): refresh coherence core pair commit stack`
 - `a8d85d8` `fix(live-thread-anchor): preserve fresh evidence in dialogue turns`
+- `5c1cbb3` `docs(handoff): record fresh-dialogue anchor fix`
+- `62a836c` `fix(live-thread-anchor): gate dialogue fresh repair with anchor flag`
 
 Task 0 derived `_RECALL_RELEVANCE_FLOOR_DEFAULT = 0.7800` from live `living_recall_candidate` telemetry. The proof is in `docs/proof/2026-06-22-recall-floor-task0.md`.
 
@@ -33,7 +35,7 @@ Behavior:
 - `_FRESH_SOURCE_TYPES` (`fresh_evidence`, `web_context`) rank first.
 - `dialogue_anchor` ranks below fresh/web and above recalled memory.
 - DIRECT/fail-safe continuity no longer lets the anchor outrank fresh/web.
-- Dialogue-authoritative turns still suppress stale recalled memory, but retain `fresh_evidence` and `web_context` so current evidence can stay the figure while the anchor rides behind it.
+- When `MAEZ_LIVE_THREAD_ANCHOR=1`, dialogue-authoritative turns still suppress stale recalled memory, but retain `fresh_evidence` and `web_context` so current evidence can stay the figure while the anchor rides behind it.
 - `MAEZ_LIVE_THREAD_ANCHOR` default-off preserves old gated behavior.
 - Flag-on computes recent dialogue anchors on ordinary focused turns, capped to two pairs; continuity/date paths keep their stricter cap.
 
@@ -67,9 +69,9 @@ Predicted live effect:
 
 ## Invariants for Codex Cross-Lane Review
 
-1. **Fresh/web precedence:** In ordinary and DIRECT branches, both `fresh_evidence` and `web_context` outrank `dialogue_anchor`.
+1. **Fresh/web precedence:** In ordinary and DIRECT branches, both `fresh_evidence` and `web_context` outrank `dialogue_anchor` when the anchor flag is active.
 2. **Anchor as figure only when no fresh/web:** On ordinary turns without fresh/web, `dialogue_anchor` outranks recalled memory.
-3. **Default-off safety:** With all new flags off, existing focused/recalled behavior is byte-identical except inert helper definitions.
+3. **Default-off safety:** With all new flags off, existing focused/recalled behavior is byte-identical except inert helper definitions; DIRECT/ANAPHORIC turns stay legacy anchor-only even if fresh/web was available.
 4. **Drop-all correctness:** When enabled and all known-distance candidates fail the floor, recall returns an empty list rather than forcing top-1.
 5. **Shadow content-light:** `recall_floor_shadow` logs counts and booleans, not memory text.
 6. **No memory mutation:** The floor never deletes Chroma rows and does not write to `memory_scoring`.
