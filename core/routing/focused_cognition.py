@@ -1479,7 +1479,12 @@ _REPLY_SENTENCE_RE = re.compile(r"[^.!?]+[.!?]?")
 
 
 def _reply_sentences(reply: str) -> list[str]:
-    """Deterministic sentence split; keeps inline [E#] markers with their sentence."""
+    """Deterministic sentence split; keeps inline [E#] markers with their sentence.
+
+    v0 approximation: splits on . ! ? so a decimal ("3.5") or abbreviation ("Dr.")
+    over-counts sentences. This can only DEFLATE reply_grounding (more ungrounded
+    fragments), never inflate it — it never marks a fragment falsely grounded.
+    """
     return [s.strip() for s in _REPLY_SENTENCE_RE.findall(reply or "") if s.strip()]
 
 

@@ -64,6 +64,14 @@ class TestReplyGrounding(unittest.TestCase):
         self.assertEqual(check_groundedness(r, ws).reply_grounding,
                          check_groundedness(r, ws).reply_grounding)
 
+    def test_no_punctuation_single_clause(self):
+        ws = _ws(3)
+        r = _result("just one grounded clause [E1]", {"E1"})
+        v = check_groundedness(r, ws)
+        self.assertEqual(v.total_sentences, 1)
+        self.assertEqual(v.grounded_sentences, 1)
+        self.assertEqual(v.reply_grounding, 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()
