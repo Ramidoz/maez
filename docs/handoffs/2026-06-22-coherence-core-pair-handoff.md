@@ -14,6 +14,7 @@ Commit stack from `main` at build time:
 - `a055586` `feat(recall-floor): add base-distance floor shadow receipt`
 - `a6d742d` `feat(recall-floor): actuate drop-all behind flag`
 - `6328379` `feat(recall-floor): add compound teacher signal collect-only`
+- `6324a07` `test(coherence-core-pair): keep unittest main blocks at file end`
 
 Task 0 derived `_RECALL_RELEVANCE_FLOOR_DEFAULT = 0.7800` from live `living_recall_candidate` telemetry. The proof is in `docs/proof/2026-06-22-recall-floor-task0.md`.
 
