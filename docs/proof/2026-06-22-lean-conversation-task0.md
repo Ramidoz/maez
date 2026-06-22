@@ -149,6 +149,63 @@ Focused call witness:
 Decision:
 - Task 3 may thread these variables into `focused_synthesize(...)` without stale or guessed values.
 
+## Prompt-shape receipt sizing and non-persistence
+
+Verdict: GO.
+
+Existing numeric sizing pattern:
+- `daemon/maez_daemon.py:6950-6954` computes `_legacy_prompt_chars` as an integer sum of the legacy message contents immediately before focused synthesis.
+- `core/routing/focused_cognition.py:1585-1588` stores focused telemetry sizes as numeric columns: `working_set_chars`, `working_set_tokens_est`, `legacy_prompt_chars`, and `legacy_prompt_tokens_est`.
+- `core/routing/focused_cognition.py:1641-1654` inserts only integer sizing values for the working set and legacy prompt. It does not persist raw prompt text.
+
+Existing no-raw-text guard:
+- `tests/test_focused_cognition.py:1107-1138` stores a focused run with a raw evidence marker and asserts that marker does not appear in the persisted focused store row.
+
+Arc A receipt decision:
+- Full-path size comes from the already-in-scope `_legacy_prompt_chars` integer.
+- Lean-path size can be computed inside `focused_synthesize(...)` from the locally constructed lean prompt and owner question, then emitted only as `lean_prompt_chars_est`.
+- The lean receipt must log numeric sizes (`legacy_prompt_chars`, `lean_prompt_chars_est`, item counts, flags, and reasons) and must not log reply text, memory text, raw prompt text, or evidence text.
+
+Decision:
+- Task 2 can compute old-vs-lean prompt size without adding any raw prompt persistence. Task 4 must keep the existing focused telemetry store active and content-light.
+
+## Core-pair anchor/floor unchanged
+
+Verdict: GO.
+
+Core-pair code is present on this `main`-based worktree:
+- `core/routing/focused_cognition.py:92-98` defines `live_thread_anchor_enabled(...)`.
+- `core/routing/focused_cognition.py:847-855` gates always-on dialogue anchors behind `MAEZ_LIVE_THREAD_ANCHOR` while preserving legacy anchor behavior when the flag is off.
+- `core/routing/focused_cognition.py:879-890` includes fresh/web evidence in direct/anaphoric turns only inside the anchor-flag branch, preserving flag-off staging.
+- `memory/memory_manager.py:646-651` defines `MAEZ_RECALL_FLOOR_SHADOW` and `MAEZ_RECALL_FLOOR_ENABLED`.
+- `memory/memory_manager.py:654-676` implements the recall-floor pass/drop logic without memory mutation.
+- `memory/memory_manager.py:2444-2464` logs `recall_floor_shadow` and applies the floor at recall time only.
+
+Test witness:
+
+```text
+/home/rohit/maez/.venv/bin/python -m unittest tests.test_live_thread_anchor tests.test_recall_floor -v
+```
+
+Output:
+
+```text
+Ran 24 tests in 0.005s
+
+OK
+```
+
+The 24 passing tests include:
+- both fresh source types (`fresh_evidence`, `web_context`) outranking the anchor in ordinary and direct turns;
+- flag-off direct turns preserving legacy anchor-only behavior;
+- floor flag defaults off;
+- drop-all-to-empty only when enabled;
+- missing-distance fail-safe keeps candidates;
+- the compound teacher signal never tightens on warmth alone or explicit memory asks.
+
+Decision:
+- Arc A must not modify the core-pair anchor/floor code. Later verification should show only Arc A files plus proof/handoff docs changed.
+
 ## Commands Run
 
 Task 0 commands were run from the isolated worktree, with `/home/rohit/maez/.venv/bin/python` substituted only for `.venv/bin/python` because the worktree venv was missing.
@@ -182,6 +239,7 @@ rg -n "_reply_decision.mode is ReplyMode.FOCUSED|ReplyMode.HONEST_EMPTY|ReplyMod
 sed -n '6625,6665p' daemon/maez_daemon.py
 sed -n '6960,7030p' daemon/maez_daemon.py
 rg -n "_legacy_prompt_chars|_date_addressed_turn|_rk_turn_kind" daemon/maez_daemon.py | head -40
+/home/rohit/maez/.venv/bin/python -m unittest tests.test_live_thread_anchor tests.test_recall_floor -v
 ```
 
 Additional line-number witnesses:
