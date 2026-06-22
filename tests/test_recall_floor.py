@@ -31,11 +31,6 @@ class TestFloorPredicate(unittest.TestCase):
     def test_missing_distance_passes_failsafe(self):
         self.assertTrue(_passes_recall_floor({}, floor=0.75))
 
-
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestApplyFloor(unittest.TestCase):
     _raw = [
         {"id": "a", "distance": 0.40},
@@ -82,3 +77,7 @@ class TestTeacherSignal(unittest.TestCase):
             asked_for_memory=True,
         )
         self.assertFalse(signal["tighten"])
+
+
+if __name__ == "__main__":
+    unittest.main()

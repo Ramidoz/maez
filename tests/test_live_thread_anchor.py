@@ -82,11 +82,6 @@ class TestAnchorRankingDirect(unittest.TestCase):
         )
         self.assertEqual(order[0], "web_context")
 
-
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestAnchorFlag(unittest.TestCase):
     def test_flag_off_by_default(self):
         self.assertFalse(live_thread_anchor_enabled(env={}))
@@ -131,3 +126,7 @@ class TestAnchorUngate(unittest.TestCase):
         labels = [it.source_type for it in ws.items]
         self.assertIn("dialogue_anchor", labels)
         self.assertEqual(ws.items[0].source_type, "dialogue_anchor")
+
+
+if __name__ == "__main__":
+    unittest.main()
