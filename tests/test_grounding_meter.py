@@ -1,7 +1,10 @@
+import tempfile
 import unittest
+from pathlib import Path
 
 from core.routing.focused_cognition import (
     GroundednessVerdict,
+    FocusedCognitionStore,
     check_groundedness,
     FocusedResult,
     WorkingSet,
@@ -71,6 +74,34 @@ class TestReplyGrounding(unittest.TestCase):
         self.assertEqual(v.total_sentences, 1)
         self.assertEqual(v.grounded_sentences, 1)
         self.assertEqual(v.reply_grounding, 1.0)
+
+
+class TestStoreColumns(unittest.TestCase):
+    def _store(self):
+        d = tempfile.mkdtemp()
+        return FocusedCognitionStore(db_path=Path(d) / "fc.db")
+
+    def test_record_persists_grounding_numbers(self):
+        store = self._store()
+        ws = _ws(3)
+        r = _result("Fact [E1]. Filler.", {"E1"})
+        v = check_groundedness(r, ws)
+        rid = store.record(surface="telegram_surface", chat_id=None, working_set=ws,
+                           result=r, verdict=v, legacy_prompt_chars=None,
+                           fallback_reason=None, routing_observation_id=None)
+        row = store.get(rid)
+        self.assertAlmostEqual(row["reply_grounding"], 0.5)
+        self.assertEqual(row["grounded_sentences"], 1)
+        self.assertEqual(row["total_sentences"], 2)
+        # content-light: the reply text must NOT appear in any column
+        self.assertNotIn("Fact", " ".join(str(row[k]) for k in row.keys()))
+
+    def test_migration_idempotent(self):
+        d = tempfile.mkdtemp()
+        p = Path(d) / "fc.db"
+        FocusedCognitionStore(db_path=p)   # creates + migrates
+        FocusedCognitionStore(db_path=p)   # re-open: migration must NOT error
+        self.assertTrue(p.exists())
 
 
 if __name__ == "__main__":

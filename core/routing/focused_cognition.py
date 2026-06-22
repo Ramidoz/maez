@@ -1566,6 +1566,17 @@ class FocusedCognitionStore:
                     )
                     """
                 )
+                for _col, _coltype in (
+                    ("reply_grounding", "REAL"),
+                    ("grounded_sentences", "INTEGER"),
+                    ("total_sentences", "INTEGER"),
+                ):
+                    try:
+                        conn.execute(
+                            f"ALTER TABLE focused_cognition_runs ADD COLUMN {_col} {_coltype}"
+                        )
+                    except sqlite3.OperationalError:
+                        pass  # column already exists — idempotent
 
     def record(
         self,
@@ -1612,6 +1623,15 @@ class FocusedCognitionStore:
             "citation_coverage": float(coverage),
             "unmatched_citations_json": json.dumps(unmatched, sort_keys=True),
             "groundedness_verdict": groundedness,
+            "reply_grounding": (
+                float(verdict.reply_grounding) if verdict is not None else None
+            ),
+            "grounded_sentences": (
+                int(verdict.grounded_sentences) if verdict is not None else None
+            ),
+            "total_sentences": (
+                int(verdict.total_sentences) if verdict is not None else None
+            ),
             "fallback_reason": fallback_reason,
             "routing_observation_id": routing_observation_id,
         }
