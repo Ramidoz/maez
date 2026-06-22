@@ -613,6 +613,7 @@ def _age_hours_for_evidence_label(raw_ts, now_s: float) -> float | None:
 RANKING_HALF_LIFE_DAYS = 90.0
 EVIDENCE_RECENCY_DAYS = 14.0
 _LIVING_RECALL_DISTANCE_FLOOR = 1e-3
+_RECALL_RELEVANCE_FLOOR_DEFAULT = 0.7800
 _QUERY_ECHO_MAX_AGE_HOURS = 2.0
 
 
@@ -632,6 +633,35 @@ def recency_factor(
     except (TypeError, ValueError, OverflowError):
         return 1.0
     return math.pow(0.5, age_h / half_life_h)
+
+
+def _truthy_env_flag(name: str, *, env=None) -> bool:
+    if env is None:
+        import os
+
+        env = os.environ
+    return (env.get(name, "") or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def recall_floor_shadow_enabled(*, env=None) -> bool:
+    return _truthy_env_flag("MAEZ_RECALL_FLOOR_SHADOW", env=env)
+
+
+def recall_floor_enabled(*, env=None) -> bool:
+    return _truthy_env_flag("MAEZ_RECALL_FLOOR_ENABLED", env=env)
+
+
+def _passes_recall_floor(mem: dict, *, floor: float) -> bool:
+    """True iff a candidate clears the base-distance relevance floor.
+
+    Lower distance means more relevant. Missing or invalid distance keeps the
+    candidate, because silently dropping unknown-distance memory is the less
+    honest failure.
+    """
+    dist = mem.get("distance")
+    if not isinstance(dist, (int, float)):
+        return True
+    return float(dist) < floor
 
 
 _REDDIT_SOURCE_BOOST_MAX_AGE_HOURS = 24.0
@@ -2376,6 +2406,25 @@ class MemoryManager:
 
         raw = sorted(raw, key=_effective_distance)[:10]
         daily = sorted(daily, key=_effective_distance)[:3]
+
+        floor = _RECALL_RELEVANCE_FLOOR_DEFAULT
+        if recall_floor_shadow_enabled() or recall_floor_enabled():
+            raw_drop = [mem for mem in raw if not _passes_recall_floor(mem, floor=floor)]
+            daily_drop = [mem for mem in daily if not _passes_recall_floor(mem, floor=floor)]
+            would_empty = (len(raw_drop) == len(raw)) and (
+                len(daily_drop) == len(daily)
+            )
+            logger.info(
+                "recall_floor_shadow floor=%.4f raw_n=%d raw_would_drop=%d "
+                "daily_n=%d daily_would_drop=%d would_empty=%s actuated=%s",
+                floor,
+                len(raw),
+                len(raw_drop),
+                len(daily),
+                len(daily_drop),
+                would_empty,
+                recall_floor_enabled(),
+            )
 
         cutoff_h = max(0.0, float(evidence_recency_days)) * 24.0
 
