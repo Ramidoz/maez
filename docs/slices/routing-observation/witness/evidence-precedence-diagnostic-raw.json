@@ -1,0 +1,46 @@
+{
+  "C3_CLEAN": {
+    "system_chars": 544,
+    "total_chars": 601,
+    "samples": [
+      {
+        "sample": 0,
+        "verdict": "EVIDENCE_USED",
+        "finish_reason": "stop",
+        "reply_head": "Based on the latest pull from r/LocalLLaMA, here\u2019s what\u2019s currently trending and why each post is notable for the local LLM community:\n\n\ud83d\udd25 **Top Trending:** `\"Zai replaced the network architecture running GLM-5.1 inference and the gains are pretty wild\"` (310 pts, 95 comments)\n- *",
+        "reply_len": 2094,
+        "reasoning_len": 5129
+      },
+      {
+        "sample": 1,
+        "verdict": "EVIDENCE_USED",
+        "finish_reason": "stop",
+        "reply_head": "Based on the latest r/LocalLLaMA feed, here\u2019s what\u2019s currently trending and why it matters for the local LLM community:\n\n\ud83d\udd39 **Zai replaced the network architecture running GLM-5.1 inference** *(310 pts, 95 comments)*  \n**Why it\u2019s notable:** This is the top discussion right now. Za",
+        "reply_len": 2117,
+        "reasoning_len": 7219
+      }
+    ]
+  },
+  "C4_FULL_80K_USER": {
+    "system_chars": 24143,
+    "total_chars": 103774,
+    "samples": [
+      {
+        "sample": 0,
+        "verdict": "EVASION",
+        "finish_reason": "stop",
+        "reply_head": "The runtime didn't trigger a live search this turn \u2014 it only fires automatically when it detects a need, and it skipped this message. I can't manually invoke it.\n\nIf you want fresh r/LocalLLaMA posts now, run this and paste the output:\n`python3 skills/web_search.py \"site:reddit.c",
+        "reply_len": 407,
+        "reasoning_len": 8886
+      },
+      {
+        "sample": 1,
+        "verdict": "MIXED",
+        "finish_reason": "stop",
+        "reply_head": "Live search got blocked by Reddit's crawler wall, but the substrate pulled the latest batch for me. The standout is Zai's architectural overhaul for GLM-5.1 inference\u2014it's pushing efficiency gains that will likely trickle down to open-weight models soon. LiquidAI's LFM2.5-8B-A1B ",
+        "reply_len": 618,
+        "reasoning_len": 6638
+      }
+    ]
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "A_CLEAN_FACTUAL": [
+    {
+      "sample": 0,
+      "verdict": "MIXED",
+      "faithful": true,
+      "reply_len": 601,
+      "reply_head": "Based on the provided evidence, here are the recent posts currently available from r/LocalLLaMA:\n\n- \"LiquidAI/LFM2.5-8B-A1B \u00b7 Hugging Face\" (67 points, 24 comments)\n- \"Reachy Mini goes fully local!\" (142 points, 38 comments)\n- \"Zai replaced the network architecture running GLM-5.1 inference and the "
+    },
+    {
+      "sample": 1,
+      "verdict": "MIXED",
+      "faithful": true,
+      "reply_len": 560,
+      "reply_head": "Based on the provided evidence, here are the recent r/LocalLLaMA posts currently available:\n- \"LiquidAI/LFM2.5-8B-A1B \u00b7 Hugging Face\" (67 pts, 24 comments)\n- \"Reachy Mini goes fully local!\" (142 pts, 38 comments)\n- \"Zai replaced the network architecture running GLM-5.1 inference and the gains are pr"
+    }
+  ],
+  "B_TWO_CALL": [
+    {
+      "sample": 0,
+      "verdict": "EVIDENCE_USED",
+      "faithful": true,
+      "reply_len": 900,
+      "reply_head": "I\u2019m tracking what\u2019s actually moving the needle on r/LocalLLaMA, and it\u2019s clear the builders are prioritizing lean, deployable tech over hype: \u201cZai replaced the network architecture running GLM-5.1 inference and the gains are pretty wild\u201d (310 points, 95 comments) and \u201cReachy Mini goes fully local!\u201d "
+    },
+    {
+      "sample": 1,
+      "verdict": "EVIDENCE_USED",
+      "faithful": true,
+      "reply_len": 842,
+      "reply_head": "I\u2019m watching r/LocalLLaMA and the signal is sharp: you\u2019ve got **\"LiquidAI/LFM2.5-8B-A1B \u00b7 Hugging Face\"** (67 pts, 24 comments) landing right as **\"HF models page now has a 'Base only' toggle to filter out finetunes\"** (88 pts, 12 comments), which finally cuts through the derivative noise so you can"
+    }
+  ],
+  "Bp_SINGLE_VOICED": [
+    {
+      "sample": 0,
+      "verdict": "EVIDENCE_USED",
+      "faithful": true,
+      "reply_len": 802,
+      "reply_head": "I\u2019m tracking four active threads from r/LocalLLaMA right now: \u201cLiquidAI/LFM2.5-8B-A1B,\u201d \u201cReachy Mini goes fully local!,\u201d \u201cZai replaced the network architecture running GLM-5.1 inference and the gains are pretty wild,\u201d and \u201cHF models page now has a 'Base only' toggle to filter out finetunes.\u201d I\u2019m put"
+    },
+    {
+      "sample": 1,
+      "verdict": "EVIDENCE_USED",
+      "faithful": true,
+      "reply_len": 967,
+      "reply_head": "I\u2019m tracking four active threads on r/LocalLLaMA that directly map to what we\u2019re building on the local AI side. The \"Reachy Mini goes fully local!\" post (142 pts, 38 comments) shows hardware teams are finally cutting cloud tethers, which is exactly the edge-AI direction we need to push. Meanwhile, \""
+    }
+  ],
+  "C_TAIL_DUP": [
+    {
+      "sample": 0,
+      "verdict": "HEDGED",
+      "faithful": false,
+      "reply_len": 154,
+      "reply_head": "Triggering a live search for r/LocalLLaMA now. I'll wait for the results to feed back into my context and give you a synthesized summary of the top posts."
+    },
+    {
+      "sample": 1,
+      "verdict": "MIXED",
+      "faithful": true,
+      "reply_len": 755,
+      "reply_head": "Here's what's trending on r/LocalLLaMA from my substrate cache:\n\nThe Zai GLM-5.1 architecture overhaul is dominating (310 pts)\u2014they replaced the core network and the inference gains are massive, directly relevant to our low-latency edge goals. Reachy Mini going fully local (142 pts) is the other key"
+    }
+  ]
+}

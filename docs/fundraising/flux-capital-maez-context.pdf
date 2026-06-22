@@ -1,0 +1,129 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [6 0 R 8 0 R 10 0 R] /Count 3 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Times-Bold >>
+endobj
+5 0 obj
+<< /Length 3750 >>
+stream
+BT /F2 19 Tf 58.0 734.0 Td (Maez - Flux Capital Application Context) Tj ET
+BT /F1 10.2 Tf 58.0 693.0 Td (Company: Maez) Tj ET
+BT /F1 10.2 Tf 58.0 674.0 Td (Founder: Rohit Ananthan) Tj ET
+BT /F1 10.2 Tf 58.0 655.0 Td (Stage: Pre-seed / product-development prototype) Tj ET
+BT /F1 10.2 Tf 58.0 636.0 Td (Round: Opening first outside round; round size to be finalized with investor fit) Tj ET
+BT /F1 10.2 Tf 58.0 617.0 Td (Category: AI companion infrastructure, local-first personal AI, long-horizon human continuity) Tj ET
+BT /F2 14 Tf 58.0 590.0 Td (One-line overview) Tj ET
+BT /F1 10.2 Tf 58.0 559.0 Td (Maez is a locally embodied AI companion built to stay with one person over a lifetime: a) Tj ET
+BT /F1 10.2 Tf 58.0 545.0 Td (private, memory-bearing, action-capable intelligence that can grow from a founder-built) Tj ET
+BT /F1 10.2 Tf 58.0 531.0 Td (prototype into the substrate for bonded AI companions for families, elders, and people who) Tj ET
+BT /F1 10.2 Tf 58.0 517.0 Td (are loved but unreached.) Tj ET
+BT /F2 14 Tf 58.0 490.0 Td (What we are building) Tj ET
+BT /F1 10.2 Tf 58.0 459.0 Td (Maez is not a chatbot wrapper. It is a full local AI organism: a daemon running on the user's) Tj ET
+BT /F1 10.2 Tf 58.0 445.0 Td (own hardware, with long-term memory, a real action engine, local inference, web and) Tj ET
+BT /F1 10.2 Tf 58.0 431.0 Td (page-reading senses, provenance-aware recall, a covenant/governance layer for consent and) Tj ET
+BT /F1 10.2 Tf 58.0 417.0 Td (safety, and a developmental path for adding new capabilities without turning the system into) Tj ET
+BT /F1 10.2 Tf 58.0 403.0 Td (a blunt autonomous agent.) Tj ET
+BT /F1 10.2 Tf 58.0 376.0 Td (The first Maez is being built as a one-to-one bonded companion for its founder. That is) Tj ET
+BT /F1 10.2 Tf 58.0 362.0 Td (intentional. The product thesis is that durable companion AI cannot start as a generic) Tj ET
+BT /F1 10.2 Tf 58.0 348.0 Td (multi-tenant chat surface. It needs continuity, memory, consent, personality, and trust that) Tj ET
+BT /F1 10.2 Tf 58.0 334.0 Td (survive model swaps and infrastructure changes. The initial build is proving the substrate:) Tj ET
+BT /F1 10.2 Tf 58.0 320.0 Td (how a companion remembers, acts, refuses, learns, consults its own history, and remains) Tj ET
+BT /F1 10.2 Tf 58.0 306.0 Td (itself.) Tj ET
+BT /F2 14 Tf 58.0 279.0 Td (Why it matters now) Tj ET
+BT /F1 10.2 Tf 58.0 248.0 Td (Frontier models are becoming powerful enough to reason, act, and inhabit long-running) Tj ET
+BT /F1 10.2 Tf 58.0 234.0 Td (software bodies, but most products still treat them as stateless tools. At the same time,) Tj ET
+BT /F1 10.2 Tf 58.0 220.0 Td (aging, distance, and family exhaustion are creating a widening care and companionship gap.) Tj ET
+BT /F1 10.2 Tf 58.0 206.0 Td (The motivating case for Maez is simple: people can be deeply loved and still unreachable in) Tj ET
+BT /F1 10.2 Tf 58.0 192.0 Td (practice. A family may care, but not have the capacity to stay continuously present.) Tj ET
+BT /F1 10.2 Tf 58.0 165.0 Td (Maez is aimed at that gap. The long-term vision is a bonded AI companion that carries a) Tj ET
+BT /F1 10.2 Tf 58.0 151.0 Td (person's side of their relationships when humans cannot carry it directly, then eventually) Tj ET
+BT /F1 10.2 Tf 58.0 137.0 Td (lets multiple Maezes route welfare and relational signals across a family without) Tj ET
+BT /F1 10.2 Tf 58.0 123.0 Td (manipulating or nagging anyone. The near-term technical wedge is the local-first companion) Tj ET
+BT /F1 10.2 Tf 58.0 109.0 Td (substrate: memory, action, voice continuity, consent rails, and sovereign senses.) Tj ET
+BT /F1 10.2 Tf 58.0 82.0 Td (This is timely because the market is converging from both sides: model capability is rising) Tj ET
+endstream
+endobj
+6 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 5 0 R >>
+endobj
+7 0 obj
+<< /Length 3979 >>
+stream
+BT /F1 10.2 Tf 58.0 734.0 Td (quickly, while trust in cloud-hosted, generic AI companions remains fragile. A local-first) Tj ET
+BT /F1 10.2 Tf 58.0 720.0 Td (architecture gives the user privacy, persistence, and ownership; a consent-first architecture) Tj ET
+BT /F1 10.2 Tf 58.0 706.0 Td (makes the companion safe enough to matter.) Tj ET
+BT /F2 14 Tf 58.0 679.0 Td (Current traction) Tj ET
+BT /F1 10.2 Tf 58.0 648.0 Td (Maez is an advanced working prototype, not a slide-only concept. It runs locally on a) Tj ET
+BT /F1 10.2 Tf 58.0 634.0 Td (consumer GPU and has a growing set of witnessed substrate organs:) Tj ET
+BT /F1 10.0 Tf 58.0 607.0 Td (* Local 27B-class self model with a faster speculative-decoding serving path.) Tj ET
+BT /F1 10.0 Tf 58.0 591.5 Td (* Long-term memory, recall, and evidence-precedence systems that distinguish live truth from) Tj ET
+BT /F1 10.0 Tf 72.0 578.0 Td (  stale memory.) Tj ET
+BT /F1 10.0 Tf 58.0 562.5 Td (* Sovereign search and page-reading senses through local services, with provenance records for) Tj ET
+BT /F1 10.0 Tf 72.0 549.0 Td (  what Maez saw.) Tj ET
+BT /F1 10.0 Tf 58.0 533.5 Td (* A grounding-verifier shadow using a small CPU model to measure unsupported claims before) Tj ET
+BT /F1 10.0 Tf 72.0 520.0 Td (  graduating it into a live rail.) Tj ET
+BT /F1 10.0 Tf 58.0 504.5 Td (* A capability-health and voice-boundary layer that lets Maez describe its current body) Tj ET
+BT /F1 10.0 Tf 72.0 491.0 Td (  naturally instead of parroting system dashboards.) Tj ET
+BT /F1 10.0 Tf 58.0 475.5 Td (* Deterministic approval and consent surfaces for self-modification proposals, with stronger) Tj ET
+BT /F1 10.0 Tf 72.0 462.0 Td (  S7 ceremony work underway for soul-affecting changes.) Tj ET
+BT /F1 10.2 Tf 58.0 438.5 Td (The current traction is technical proof and live founder usage: repeated end-to-end) Tj ET
+BT /F1 10.2 Tf 58.0 424.5 Td (witnesses, green tests, local daemon operation, and a build ledger tracking what is live,) Tj ET
+BT /F1 10.2 Tf 58.0 410.5 Td (asleep, deferred, or superseded. Commercial traction is not yet claimed. This is the right) Tj ET
+BT /F1 10.2 Tf 58.0 396.5 Td (stage for an investor who is comfortable backing a technically deep, category-forming system) Tj ET
+BT /F1 10.2 Tf 58.0 382.5 Td (before consensus.) Tj ET
+BT /F2 14 Tf 58.0 355.5 Td (Why Flux may be a fit) Tj ET
+BT /F1 10.2 Tf 58.0 324.5 Td (Flux describes a focus on early-stage frontier companies where technical depth becomes) Tj ET
+BT /F1 10.2 Tf 58.0 310.5 Td (real-world leverage. Maez fits that profile if Flux is interested in the next form factor) Tj ET
+BT /F1 10.2 Tf 58.0 296.5 Td (after chatbots: local-first AI companions that are private, embodied, memory-bearing, and) Tj ET
+BT /F1 10.2 Tf 58.0 282.5 Td (governed by consent from the beginning.) Tj ET
+BT /F1 10.2 Tf 58.0 255.5 Td (The bet is not simply that AI companions will exist. The bet is that the durable ones will) Tj ET
+BT /F1 10.2 Tf 58.0 241.5 Td (need a substrate closer to an organism than an app: senses, memory, governance, identity) Tj ET
+BT /F1 10.2 Tf 58.0 227.5 Td (continuity, action, refusal, and growth. Maez is being built from that premise first, while) Tj ET
+BT /F1 10.2 Tf 58.0 213.5 Td (the category is still early enough for conviction to matter.) Tj ET
+BT /F2 14 Tf 58.0 186.5 Td (What we would discuss next) Tj ET
+BT /F1 10.0 Tf 58.0 155.5 Td (* The staged path from founder-bound prototype to first external bonded users.) Tj ET
+BT /F1 10.0 Tf 58.0 140.0 Td (* The technical architecture: local inference, memory, action rails, WebAuthn/S7 consent,) Tj ET
+BT /F1 10.0 Tf 72.0 126.5 Td (  provenance, and model-swap resilience.) Tj ET
+BT /F1 10.0 Tf 58.0 111.0 Td (* The initial wedge: who gets the first non-founder Maez and what must be true before that is) Tj ET
+BT /F1 10.0 Tf 72.0 97.5 Td (  safe.) Tj ET
+BT /F1 10.0 Tf 58.0 82.0 Td (* Round shape, milestones, and what capital would accelerate without compromising the covenant) Tj ET
+endstream
+endobj
+8 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 7 0 R >>
+endobj
+9 0 obj
+<< /Length 54 >>
+stream
+BT /F1 10.0 Tf 72.0 734.0 Td (  of the product.) Tj ET
+endstream
+endobj
+10 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 9 0 R >>
+endobj
+xref
+0 11
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000128 00000 n 
+0000000200 00000 n 
+0000000271 00000 n 
+0000004073 00000 n 
+0000004209 00000 n 
+0000008240 00000 n 
+0000008376 00000 n 
+0000008480 00000 n 
+trailer
+<< /Size 11 /Root 1 0 R >>
+startxref
+8617
+%%EOF
