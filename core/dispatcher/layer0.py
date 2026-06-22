@@ -28,6 +28,7 @@ from core.dispatcher.spec import (
     SourceLabel,
     SubstrateSource,
 )
+from core.routing import self_capability_question as _self_capability_question
 from core.search.page_extract import extract_first_url
 from core.search.sense_flag import page_read_enabled, sense_enabled
 from memory.embedder import MiniLMEncoder, get_encoder
@@ -94,10 +95,7 @@ _CONTENT_ANCHOR_RE = re.compile(
     r"\b(qwen|reddit|online|local ?llama|telegram|github|calendar|project|status)\b",
     re.IGNORECASE,
 )
-_QUESTION_SHAPE_RE = re.compile(
-    r"^\s*(what|who|when|where|why|how|is|are|do|does|did|can|could|should|has|have|tell me|any)\b|[?]",
-    re.IGNORECASE,
-)
+_QUESTION_SHAPE_RE = _self_capability_question.QUESTION_SHAPE_RE
 _CURRENT_WORLD_MARKER_RE = re.compile(
     r"\b(latest|nowadays|current|recent|news|release|price|today)\b"
     r"|what(?:'s| is) (?:new|happening)",
@@ -107,13 +105,7 @@ _CONVERSATIONAL_TODAY_RE = re.compile(
     r"\b(how are you|how're you|how you doing|how are things|how is your day|how's your day)\b.*\btoday\b",
     re.IGNORECASE,
 )
-_SELF_CAPABILITY_RE = re.compile(
-    r"\b(?:you|your|maez|yourself)\b.*\b(?:web search|search tools?|page read|page reading|"
-    r"web sense|search sense|tools?|capabilit(?:y|ies))\b"
-    r"|\b(?:web search|search tools?|page read|page reading|web sense|search sense|tools?|"
-    r"capabilit(?:y|ies))\b.*\b(?:you|your|maez|yourself)\b",
-    re.IGNORECASE,
-)
+_SELF_CAPABILITY_RE = _self_capability_question.SELF_CAPABILITY_RE
 # Generic Reddit talk selects the owned Reddit substrate.
 _REDDIT_ANCHOR_RE = re.compile(r"\b(reddit|local ?llama|r/[A-Za-z0-9_]+)\b", re.IGNORECASE)
 # A syntactically valid subreddit anchor additionally selects LIVE_REDDIT.
@@ -513,9 +505,7 @@ def _is_current_world_request(utterance: str) -> bool:
 
 
 def _is_self_capability_question(utterance: str) -> bool:
-    if not _QUESTION_SHAPE_RE.search(utterance):
-        return False
-    return bool(_SELF_CAPABILITY_RE.search(utterance or ""))
+    return _self_capability_question.is_self_capability_question(utterance)
 
 
 def _substrate_candidates(source_anchor_candidates: Sequence[SubstrateSource]) -> list[SubstrateSource]:
