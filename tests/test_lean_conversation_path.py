@@ -345,5 +345,83 @@ class LeanConversationDaemonThreadingTests(unittest.TestCase):
         self.assertEqual("_rk_turn_kind", ast.unparse(kwargs["turn_kind"]))
 
 
+class LeanConversationTelemetryTests(unittest.TestCase):
+    def tearDown(self):
+        os.environ.pop("MAEZ_LEAN_CONVERSATION_ENABLED", None)
+
+    def test_lean_reply_still_gets_grounding_meter_values(self):
+        from core.routing.focused_cognition import check_groundedness, focused_synthesize
+
+        os.environ["MAEZ_LEAN_CONVERSATION_ENABLED"] = "1"
+        result = focused_synthesize(
+            _working_set(),
+            surface="telegram",
+            chat_fn=lambda **_k: _response("I am here."),
+            model="m",
+        )
+        verdict = check_groundedness(result, _working_set())
+
+        self.assertEqual(verdict.reply_grounding, 0.0)
+        self.assertEqual(verdict.total_sentences, 1)
+        self.assertEqual(verdict.grounded_sentences, 0)
+
+    def test_focused_store_accepts_lean_result_with_reply_grounding(self):
+        from tempfile import TemporaryDirectory
+
+        from core.routing.focused_cognition import (
+            FocusedCognitionStore,
+            check_groundedness,
+            focused_synthesize,
+        )
+
+        os.environ["MAEZ_LEAN_CONVERSATION_ENABLED"] = "1"
+        ws = _working_set()
+        result = focused_synthesize(
+            ws,
+            surface="telegram",
+            chat_fn=lambda **_k: _response("I am here."),
+            model="m",
+        )
+        verdict = check_groundedness(result, ws)
+
+        with TemporaryDirectory() as tmp:
+            store = FocusedCognitionStore(db_path=f"{tmp}/focused.db")
+            row_id = store.record(
+                surface="telegram",
+                chat_id=None,
+                working_set=ws,
+                result=result,
+                verdict=verdict,
+                legacy_prompt_chars=3200,
+                fallback_reason=None,
+                routing_observation_id=None,
+            )
+            row = store.get(row_id)
+
+        self.assertEqual(row["reply_grounding"], 0.0)
+        self.assertEqual(row["grounded_sentences"], 0)
+        self.assertEqual(row["total_sentences"], 1)
+
+    def test_support_scope_still_gates_fresh_web_turns(self):
+        from core.routing.focused_cognition import focused_synthesize
+
+        os.environ["MAEZ_LEAN_CONVERSATION_ENABLED"] = "1"
+        captured = {}
+
+        def chat_fn(**kwargs):
+            captured["system"] = kwargs["messages"][0]["content"]
+            return _response("The web says X [E1].")
+
+        focused_synthesize(
+            _working_set(source_type="web_context"),
+            surface="telegram",
+            chat_fn=chat_fn,
+            model="m",
+        )
+
+        self.assertIn("=== EVIDENCE (cite [E#]) ===", captured["system"])
+        self.assertIn("external web", captured["system"])
+
+
 if __name__ == "__main__":
     unittest.main()
