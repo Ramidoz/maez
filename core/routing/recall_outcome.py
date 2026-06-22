@@ -72,6 +72,7 @@ class RecallOutcome:
     ack_required: bool = False
     ack_status: str = "not_eligible"
     ack_emit_ms: int | None = None
+    reply_grounding: float | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.reply_path, ReplyPath):

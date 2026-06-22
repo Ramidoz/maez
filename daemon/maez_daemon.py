@@ -1333,7 +1333,7 @@ def _log_recall_outcome(*, rec) -> None:
 
     logger.info(
         "recall_outcome schema_version=%s mode=%s turn_kind=%s outcome_class=%s "
-        "denial_kind=%s had_confirmed=%s citation_coverage=%s receipt_or_na=%s "
+        "denial_kind=%s had_confirmed=%s citation_coverage=%s reply_grounding=%s receipt_or_na=%s "
         "latency_ms=%s focused_elapsed_ms=%s reply_path=%s shadow_pair_id=%s "
         "receipt_eligible=%s receipt_after_ms=%s ack_required=%s "
         "ack_status=%s ack_emit_ms=%s",
@@ -1344,6 +1344,7 @@ def _log_recall_outcome(*, rec) -> None:
         rec.denial_kind,
         format_log_value(rec.had_confirmed),
         format_log_value(rec.citation_coverage),
+        format_log_value(getattr(rec, "reply_grounding", None)),
         rec.receipt_or_na,
         rec.latency_ms,
         format_log_value(rec.focused_elapsed_ms),
@@ -6647,6 +6648,7 @@ class MaezDaemon:
         _rk_cited_mixed = False
         _rk_unmatched = 0
         _rk_coverage = None
+        _rk_reply_grounding = None
         _rk_focused_elapsed = None
         _rk_turn_kind = (
             "both"
@@ -7006,6 +7008,7 @@ class MaezDaemon:
                         _rk_cited_mixed = _rk_support == "mixed"
                         _rk_unmatched = len(getattr(_focused_verdict, "unmatched", []) or [])
                         _rk_coverage = getattr(_focused_verdict, "citation_coverage", None)
+                        _rk_reply_grounding = getattr(_focused_verdict, "reply_grounding", None)
                         _focused_reply = (_focused_result.reply or "").strip()
                         _record_focused_cognition_run(
                             surface=source,
@@ -7387,6 +7390,7 @@ class MaezDaemon:
                 _rk_cited_mixed = False
                 _rk_unmatched = 0
                 _rk_coverage = None
+                _rk_reply_grounding = None
                 _rk_focused_elapsed = None
             _rk_mode = "recall_triad" if _recall_stack_config.triad_on else "legacy"
             if _recall_stack_config.triad_on and _focused_working_set is not None:
@@ -7484,6 +7488,7 @@ class MaezDaemon:
                     _had_confirmed if _recall_stack_config.triad_on else None
                 ),
                 citation_coverage=_rk_coverage,
+                reply_grounding=_rk_reply_grounding,
                 receipt_or_na=(
                     _recall_carrier_receipt
                     if _recall_stack_config.triad_on
