@@ -50,12 +50,13 @@ _PRIORITY: dict[str, int] = {
     "fresh_evidence": 0,
     "action_outcome": 0,
     "signal_absence": 0,
+    "web_context": 0,
+    "dialogue_anchor": 1,
     "open_loop": 1,
     "builder_event": 1,
     "quality_signal": 1,
-    "memory_evidence": 1,
-    "memory_context": 1,
-    "web_context": 2,
+    "memory_evidence": 2,
+    "memory_context": 2,
 }
 _RANK_DATE_CONFIRMED = 0
 _RANK_TEMPORAL_STATUS = 1
@@ -753,9 +754,11 @@ def _ranked_items_for_state(
             dialogue_state.kind == ContinuityKind.DIRECT
             or dialogue_state.fail_safe_legacy
         ):
-            if source_type == "dialogue_anchor":
+            if source_type in _FRESH_SOURCE_TYPES:
                 return 0
-            return _PRIORITY.get(source_type, 9) + 1
+            if source_type == "dialogue_anchor":
+                return 1
+            return _PRIORITY.get(source_type, 9) + 2
         if dialogue_state.kind == ContinuityKind.ANAPHORIC:
             if source_type == "dialogue_anchor":
                 return 3
