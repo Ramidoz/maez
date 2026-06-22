@@ -89,6 +89,15 @@ _ORIGIN_TRUST_LABEL: dict[str, str] = {
 _FRESH_SOURCE_TYPES: tuple[str, ...] = ("fresh_evidence", "web_context")
 
 
+def live_thread_anchor_enabled(env=os.environ) -> bool:
+    return (env.get("MAEZ_LIVE_THREAD_ANCHOR", "") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
 def turn_has_fresh_evidence(working_set) -> bool:
     """True iff the focused working set cites any FRESH / non-recall evidence — a
     `_FRESH_SOURCE_TYPES` item (fresh current observation/tool/body, or web). That is the
@@ -835,11 +844,14 @@ def assemble_working_set(
         and not date_cue
     ):
         return None
-    anchors = (
-        dialogue_anchor_items(chat_history)
-        if dialogue_state.needs_dialogue or dialogue_state.fail_safe_legacy or date_cue
-        else []
-    )
+    if live_thread_anchor_enabled() and chat_history:
+        anchors = dialogue_anchor_items(chat_history, limit_pairs=2)
+    else:
+        anchors = (
+            dialogue_anchor_items(chat_history)
+            if dialogue_state.needs_dialogue or dialogue_state.fail_safe_legacy or date_cue
+            else []
+        )
     dialogue_authoritative = (
         dialogue_state.kind in (ContinuityKind.DIRECT, ContinuityKind.ANAPHORIC)
         and not override_continuity

@@ -1,8 +1,12 @@
 import unittest
+import os
+from unittest import mock
 
 from core.routing.focused_cognition import (
     ContinuityKind,
     DialogueContinuityState,
+    assemble_working_set,
+    live_thread_anchor_enabled,
     _ranked_items_for_state,
 )
 
@@ -81,3 +85,49 @@ class TestAnchorRankingDirect(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAnchorFlag(unittest.TestCase):
+    def test_flag_off_by_default(self):
+        self.assertFalse(live_thread_anchor_enabled(env={}))
+
+    def test_flag_on(self):
+        self.assertTrue(
+            live_thread_anchor_enabled(env={"MAEZ_LIVE_THREAD_ANCHOR": "1"})
+        )
+
+
+class TestAnchorUngate(unittest.TestCase):
+    _history = [
+        {
+            "content": (
+                "Rohit: I'll search Fable 5\n"
+                "Maez: Say the word and I'll search it."
+            )
+        }
+    ]
+
+    def test_flag_off_ordinary_turn_has_no_anchor(self):
+        with mock.patch.dict(os.environ, {"MAEZ_LIVE_THREAD_ANCHOR": "0"}):
+            ws = assemble_working_set(
+                transcript="[memory evidence] old note",
+                web_context="",
+                owner_question="sure",
+                chat_history=self._history,
+            )
+        labels = [it.source_type for it in (ws.items if ws else [])]
+        self.assertNotIn("dialogue_anchor", labels)
+
+    def test_flag_on_ordinary_turn_has_anchor_as_figure(self):
+        with mock.patch.dict(os.environ, {"MAEZ_LIVE_THREAD_ANCHOR": "1"}):
+            ws = assemble_working_set(
+                transcript="[memory evidence] old note",
+                web_context="",
+                owner_question="sure",
+                chat_history=self._history,
+            )
+        self.assertIsNotNone(ws)
+        assert ws is not None
+        labels = [it.source_type for it in ws.items]
+        self.assertIn("dialogue_anchor", labels)
+        self.assertEqual(ws.items[0].source_type, "dialogue_anchor")
