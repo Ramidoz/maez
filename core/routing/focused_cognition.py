@@ -875,7 +875,19 @@ def assemble_working_set(
         return None
 
     raw_items: list[tuple[str, str, str | None, dict | None, str | None, str | None]] = []
-    if not dialogue_authoritative:
+    if dialogue_authoritative:
+        for marker, body in _split_blocks(transcript or ""):
+            source_type = _SOURCE_TYPE[marker]
+            if source_type != "fresh_evidence":
+                continue
+            for item_text in _atomic_items(body):
+                raw_items.append((source_type, item_text, None, None, None, None))
+
+        web_context = web_context or ""
+        if web_context.strip() and _WEB_NO_RESULTS not in web_context:
+            for item_text in _atomic_items(web_context):
+                raw_items.append(("web_context", item_text, None, None, None, None))
+    else:
         if structured_recall_items is not None:
             for item in structured_recall_items:
                 source_type = str(getattr(item, "source_type", "") or "")

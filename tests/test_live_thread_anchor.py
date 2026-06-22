@@ -127,6 +127,36 @@ class TestAnchorUngate(unittest.TestCase):
         self.assertIn("dialogue_anchor", labels)
         self.assertEqual(ws.items[0].source_type, "dialogue_anchor")
 
+    def test_direct_turn_with_web_keeps_web_as_figure(self):
+        with mock.patch.dict(os.environ, {"MAEZ_LIVE_THREAD_ANCHOR": "1"}):
+            ws = assemble_working_set(
+                transcript="[memory evidence] old note",
+                web_context="- current web result",
+                owner_question="what were we talking about earlier?",
+                chat_history=self._history,
+            )
+        self.assertIsNotNone(ws)
+        assert ws is not None
+        labels = [it.source_type for it in ws.items]
+        self.assertIn("web_context", labels)
+        self.assertIn("dialogue_anchor", labels)
+        self.assertEqual(ws.items[0].source_type, "web_context")
+
+    def test_direct_turn_with_fresh_keeps_fresh_as_figure(self):
+        with mock.patch.dict(os.environ, {"MAEZ_LIVE_THREAD_ANCHOR": "1"}):
+            ws = assemble_working_set(
+                transcript="[fresh evidence]\n- current sensor result",
+                web_context="",
+                owner_question="what were we talking about earlier?",
+                chat_history=self._history,
+            )
+        self.assertIsNotNone(ws)
+        assert ws is not None
+        labels = [it.source_type for it in ws.items]
+        self.assertIn("fresh_evidence", labels)
+        self.assertIn("dialogue_anchor", labels)
+        self.assertEqual(ws.items[0].source_type, "fresh_evidence")
+
 
 if __name__ == "__main__":
     unittest.main()

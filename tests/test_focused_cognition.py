@@ -634,7 +634,7 @@ class DialogueAwareAssembleTests(unittest.TestCase):
         self.assertIsNotNone(ws)
         self.assertEqual(ws.items[0].source_type, "dialogue_anchor")
 
-    def test_anaphoric_uses_only_newest_dialogue_anchor(self):
+    def test_anaphoric_keeps_fresh_and_newest_dialogue_anchor(self):
         history = [
             {
                 "content": (
@@ -659,10 +659,11 @@ class DialogueAwareAssembleTests(unittest.TestCase):
         )
         self.assertIsNotNone(ws)
         assert ws is not None
-        self.assertEqual(len(ws.items), 1)
-        self.assertEqual(ws.items[0].source_type, "dialogue_anchor")
-        self.assertIn("direct-continuity fix", ws.items[0].text)
-        self.assertNotIn("bare temporal words are freshness", ws.items[0].text)
+        self.assertEqual(ws.items[0].source_type, "fresh_evidence")
+        anchors = [item for item in ws.items if item.source_type == "dialogue_anchor"]
+        self.assertEqual(len(anchors), 1)
+        self.assertIn("direct-continuity fix", anchors[0].text)
+        self.assertNotIn("bare temporal words are freshness", anchors[0].text)
 
     def test_normal_evidence_excludes_dialogue_anchor(self):
         ws = assemble_working_set(
