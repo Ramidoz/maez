@@ -1566,17 +1566,21 @@ class FocusedCognitionStore:
                     )
                     """
                 )
+                _existing_cols = {
+                    _row[1]
+                    for _row in conn.execute(
+                        "PRAGMA table_info(focused_cognition_runs)"
+                    )
+                }
                 for _col, _coltype in (
                     ("reply_grounding", "REAL"),
                     ("grounded_sentences", "INTEGER"),
                     ("total_sentences", "INTEGER"),
                 ):
-                    try:
+                    if _col not in _existing_cols:
                         conn.execute(
                             f"ALTER TABLE focused_cognition_runs ADD COLUMN {_col} {_coltype}"
                         )
-                    except sqlite3.OperationalError:
-                        pass  # column already exists — idempotent
 
     def record(
         self,

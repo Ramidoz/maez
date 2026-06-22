@@ -103,6 +103,18 @@ class TestStoreColumns(unittest.TestCase):
         FocusedCognitionStore(db_path=p)   # re-open: migration must NOT error
         self.assertTrue(p.exists())
 
+    def test_verdict_none_writes_null_grounding(self):
+        store = self._store()
+        ws = _ws(2)
+        r = _result("anything", set())
+        rid = store.record(surface="telegram_surface", chat_id=None, working_set=ws,
+                           result=r, verdict=None, legacy_prompt_chars=None,
+                           fallback_reason=None, routing_observation_id=None)
+        row = store.get(rid)
+        self.assertIsNone(row["reply_grounding"])
+        self.assertIsNone(row["grounded_sentences"])
+        self.assertIsNone(row["total_sentences"])
+
 
 if __name__ == "__main__":
     unittest.main()
