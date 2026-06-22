@@ -85,6 +85,10 @@ This deliberately closes the diary-flood backdoor. "One or two relevant continui
 
 The live-thread anchor is not diary evidence. It is recent dialogue context and is already ranked below fresh/web evidence by the core-pair slice.
 
+## Known Scope Boundary
+
+Arc A v0 lives inside focused cognition, so it only fires when a focused working set exists. A truly contextless cold-open turn with no chat history and no recall can still fall through to the legacy synthesis path, including the core-dump risk named in the audit. That is not fixed here. It is named so the witness does not mistake it for a lean-path regression; the real fix is Arc B's memory projection/core-dump defuser or a later lean-legacy pass.
+
 ## Honesty Posture
 
 Lean turns are ordinary conversation, not grounded factual answers. They may have `reply_grounding=0.0`, and that is expected. A low grounding meter on a lean greeting is not a regression; it means Maez is not pretending conversational presence is evidence-backed factual reporting.
@@ -137,7 +141,7 @@ Unit and integration tests must cover:
 3. fresh/web working set -> full prompt, not lean;
 4. self-capability question -> full prompt, not lean;
 5. date-addressed turn -> full prompt, not lean;
-6. no memory mutation or store write occurs from lean rendering;
+6. no Chroma/core/daily/raw memory mutation occurs from lean rendering; focused-cognition telemetry and `reply_grounding` storage stay intact;
 7. support-gate scope remains unchanged and still gates fresh/web turns;
 8. `reply_grounding=0.0` on a lean casual turn is treated as expected in witness notes, not as failure;
 9. default-off behavior is byte-identical except inert helper definitions and no receipts.
@@ -153,6 +157,8 @@ Natural probe witness set:
 7. a date-addressed memory question.
 
 The witness passes only if casual turns feel present and stop reciting status/courtroom/diary apparatus, while news/body/date turns still keep their rails.
+
+The witness should specifically watch whether the unchanged 172-character voice card still over-steers lean greetings toward "local AI / what we are building." If it does, that is the already-deferred voice-card v0.1 follow-up, not a reason to re-import the apparatus.
 
 ## Scope
 
