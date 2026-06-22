@@ -136,3 +136,17 @@ docs/eval/runs/*.json
 # Brain benchmark raw answer/evidence dumps are quarantined local artifacts.
 logs/brain_bench_debug/
 .claude/
+
+# Tooling / agent-harness / IDE dirs — not part of Maez's body, never committed
+.vscode/
+.agents/
+.superpowers/
+.playwright-cli/
+
+# Scratch + generated artifacts (these inflate Maez's body-truth git count as "noise")
+output/
+tmpx_*/
+*.mp4
+/maez_emergence.py
+/maez_architecture_explained.py
+/maez_architecture_ascii.py
