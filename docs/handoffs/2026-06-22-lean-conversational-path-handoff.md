@@ -51,6 +51,8 @@ The reviews found real seams and the branch now pins them:
 
 Whole-slice verification from the worktree used `/home/rohit/maez/.venv/bin/python` because the linked worktree has no local `.venv`.
 
+The primary slice/regression pack passed:
+
 ```text
 /home/rohit/maez/.venv/bin/python -m unittest \
   tests.test_lean_conversation_path \
@@ -67,6 +69,21 @@ Whole-slice verification from the worktree used `/home/rohit/maez/.venv/bin/pyth
 ```
 
 Result: `Ran 153 tests ... OK`.
+
+Post-review correction: the branch also touches `tests/test_memory_integrity_invariant.py`, so the full module was run after the initial handoff:
+
+```text
+/home/rohit/maez/.venv/bin/python -m unittest tests.test_memory_integrity_invariant -b
+```
+
+Result: `Ran 95 tests ... FAILED (failures=2)`.
+
+The two failures are:
+
+- `test_adapter_does_not_import_self_claim_audit`
+- `test_soul_web_search_section_matches_inline_search_reality`
+
+Claude/Codex review verified these two failures are byte-identical on `main` and on this branch. They are pre-existing soul-prose / adapter-import drifts, not lean-path regressions. The lean-path regression in this file (`DaemonHandleMessageContract.test_slow_synthesis_fires_one_progress_receipt`) passes in the slice pack above.
 
 ```text
 /home/rohit/maez/.venv/bin/ruff check \
