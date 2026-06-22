@@ -1,8 +1,8 @@
 # Grounding-Meter Task 0 — Constructor Inventory (Trailing Defaults Safety Proof)
 
-**Date:** 2026-06-22  
-**Branch:** grounding-meter-slice1  
-**Investigator:** Task 0 STOP-gate agent  
+**Date:** 2026-06-22
+**Branch:** grounding-meter-slice1
+**Investigator:** Task 0 STOP-gate agent
 **Purpose:** Prove that adding 3 trailing defaulted fields to `GroundednessVerdict` and 1
 trailing defaulted field to `RecallOutcome` breaks no existing constructor call.
 
