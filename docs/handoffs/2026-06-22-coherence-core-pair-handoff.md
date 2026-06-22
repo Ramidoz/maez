@@ -14,7 +14,10 @@ Commit stack from `main` at build time:
 - `a055586` `feat(recall-floor): add base-distance floor shadow receipt`
 - `a6d742d` `feat(recall-floor): actuate drop-all behind flag`
 - `6328379` `feat(recall-floor): add compound teacher signal collect-only`
+- `fb05bb9` `docs(handoff): coherence core pair review gate`
 - `6324a07` `test(coherence-core-pair): keep unittest main blocks at file end`
+- `7f54001` `docs(handoff): refresh coherence core pair commit stack`
+- `a8d85d8` `fix(live-thread-anchor): preserve fresh evidence in dialogue turns`
 
 Task 0 derived `_RECALL_RELEVANCE_FLOOR_DEFAULT = 0.7800` from live `living_recall_candidate` telemetry. The proof is in `docs/proof/2026-06-22-recall-floor-task0.md`.
 
@@ -30,6 +33,7 @@ Behavior:
 - `_FRESH_SOURCE_TYPES` (`fresh_evidence`, `web_context`) rank first.
 - `dialogue_anchor` ranks below fresh/web and above recalled memory.
 - DIRECT/fail-safe continuity no longer lets the anchor outrank fresh/web.
+- Dialogue-authoritative turns still suppress stale recalled memory, but retain `fresh_evidence` and `web_context` so current evidence can stay the figure while the anchor rides behind it.
 - `MAEZ_LIVE_THREAD_ANCHOR` default-off preserves old gated behavior.
 - Flag-on computes recent dialogue anchors on ordinary focused turns, capped to two pairs; continuity/date paths keep their stricter cap.
 
@@ -86,7 +90,9 @@ Run the final whole-slice command before merge:
 MAEZ_CONFIG=/home/rohit/maez/config /home/rohit/maez/.venv/bin/python -B -m unittest \
   tests.test_live_thread_anchor tests.test_focused_cognition tests.test_recall_floor \
   tests.test_living_recall tests.test_recall_outcome tests.test_recall_shadow -v
-ruff check core/routing/focused_cognition.py memory/memory_manager.py tests/test_live_thread_anchor.py tests/test_recall_floor.py
+/home/rohit/maez/.venv/bin/ruff check \
+  core/routing/focused_cognition.py memory/memory_manager.py \
+  tests/test_live_thread_anchor.py tests/test_recall_floor.py tests/test_focused_cognition.py
 git diff --check main...HEAD
 ```
 
