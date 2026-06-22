@@ -166,7 +166,80 @@ Owner witness note:
 - A fresh-session contextless greeting may still hit legacy synthesis. That is not an Arc A regression; it belongs to Arc B core-dump defuser or a future lean-legacy pass.
 ```
 
-- [ ] **Step 5: Commit proof**
+- [ ] **Step 5: Prove must-rail paths are structurally outside lean**
+
+Run:
+
+```bash
+cd /home/rohit/maez
+sed -n '1,90p' core/routing/reply_mode.py
+sed -n '6600,6665p' daemon/maez_daemon.py
+rg -n "_reply_decision.mode is ReplyMode.FOCUSED|ReplyMode.HONEST_EMPTY|ReplyMode.TOOL|ReplyMode.CLINICAL|ReplyMode.CAMERA|ReplyMode.ECHO|photo_vision|focused_synthesize" daemon/maez_daemon.py core/routing tests | head -120
+```
+
+Expected:
+
+- `resolve_reply_mode(...)` chooses clinical/camera/tool/echo before focused;
+- honest-empty is a distinct path and does not call `focused_synthesize(...)`;
+- photo vision uses its own focused-photo path and does not use the lean renderer;
+- Arc A lean rendering is reachable only through `ReplyMode.FOCUSED`.
+
+Record this section:
+
+```markdown
+## Must-rail path exclusion
+
+Verdict: GO.
+
+Reply-mode order:
+- Clinical, camera, tool, and echo return before focused.
+- Honest-empty is separate from focused.
+
+Photo/vision:
+- Photo synthesis uses its own path and is not routed through the lean renderer.
+
+Decision:
+- Lean eligibility still checks fresh/date/self-capability, but tool-authoritative,
+  clinical, camera, echo, honest-empty, and photo turns are excluded structurally
+  by the production call path. If a future reply-mode change routes those through
+  `focused_synthesize(...)`, Task 0 must be revisited.
+```
+
+- [ ] **Step 6: Prove daemon metadata variables are in scope**
+
+Run:
+
+```bash
+cd /home/rohit/maez
+sed -n '6625,6665p' daemon/maez_daemon.py
+sed -n '6960,7030p' daemon/maez_daemon.py
+rg -n "_legacy_prompt_chars|_date_addressed_turn|_rk_turn_kind" daemon/maez_daemon.py | head -40
+```
+
+Expected:
+
+- `_date_addressed_turn` is defined before the focused call;
+- `_rk_turn_kind` is defined before the focused call;
+- `_legacy_prompt_chars` is computed immediately before the focused call and is in scope for the call.
+
+Record this section:
+
+```markdown
+## Daemon metadata scope
+
+Verdict: GO.
+
+In-scope variables at the focused call:
+- `_date_addressed_turn`: defined before reply-mode resolution.
+- `_rk_turn_kind`: defined before focused synthesis.
+- `_legacy_prompt_chars`: computed immediately before `_focused_synthesize(...)`.
+
+Decision:
+- Task 3 may thread these variables into `focused_synthesize(...)` without stale
+  or guessed values.
+```
+
+- [ ] **Step 7: Commit proof**
 
 Run:
 
@@ -248,6 +321,23 @@ class SelfCapabilityQuestionTests(unittest.TestCase):
                     is_self_capability_question(sample),
                 )
 
+    def test_golden_sample_set_pins_no_widening(self):
+        from core.routing.self_capability_question import is_self_capability_question
+
+        expected = {
+            "What's the state of your web search tools?": True,
+            "can you read pages right now?": True,
+            "what can you do?": True,
+            "your web search tools are acting strange": False,
+            "how are you?": False,
+            "latest Anthropic news": False,
+            "search the web for Anthropic": False,
+        }
+
+        for text, value in expected.items():
+            with self.subTest(text=text):
+                self.assertEqual(is_self_capability_question(text), value)
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -267,6 +357,8 @@ Expected:
 - FAIL with `ModuleNotFoundError: No module named 'core.routing.self_capability_question'`.
 
 - [ ] **Step 3: Create shared predicate module**
+
+Move the literal regex definitions out of `core/dispatcher/layer0.py` into `core/routing/self_capability_question.py`. Do not retype from memory. Use copy/paste from the current source and verify the staged diff shows the same regex bodies moved, not changed.
 
 Create `core/routing/self_capability_question.py`:
 
@@ -327,7 +419,23 @@ def _is_self_capability_question(utterance: str) -> bool:
 
 Do not change `emit_spec(...)`; it must still gate this predicate with `evidence_precedence_enabled()`.
 
-- [ ] **Step 5: Run tests**
+- [ ] **Step 5: Verify literal move before running tests**
+
+Run:
+
+```bash
+cd /home/rohit/maez
+git diff -- core/dispatcher/layer0.py core/routing/self_capability_question.py
+```
+
+Expected:
+
+- `_QUESTION_SHAPE_RE` and `_SELF_CAPABILITY_RE` disappear from `layer0.py`;
+- the same regex bodies appear in `self_capability_question.py`;
+- `layer0._is_self_capability_question(...)` delegates to `_shared_is_self_capability_question(...)`;
+- no other Layer0 routing branch changes.
+
+- [ ] **Step 6: Run tests**
 
 Run:
 
@@ -340,7 +448,7 @@ Expected:
 
 - PASS.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 Run:
 
