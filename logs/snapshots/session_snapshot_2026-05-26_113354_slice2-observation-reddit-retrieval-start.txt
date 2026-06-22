@@ -1,0 +1,50 @@
+Maez — session snapshot
+
+BUILD: Sessions slice2-observation-reddit-retrieval-start
+DATE: 2026-05-26
+AGENT: Codex
+HEAD: 2d406dd
+COMMITS_SINCE: 12 hours ago
+COMMIT_COUNT: 10
+TEST_FUNCTIONS: 4807
+
+========================================
+WHAT CHANGED TODAY
+========================================
+
+- 2026-05-26 09:56 — 2d406dd83 (Maez): chore(curiosity): ignore drive-curiosity master key
+- 2026-05-26 09:25 — eb611e90d (Maez): feat(curiosity): add saturation register
+- 2026-05-26 09:13 — 34c529974 (Maez): feat(curiosity): add drive-curiosity diagnostic stream
+- 2026-05-26 08:51 — 2edca1fee (Maez): feat(curiosity): wire subjective-duration meaningful-event producer
+- 2026-05-26 08:31 — 8325ca6f9 (Maez): test(curiosity): stabilize pursuit fail-open wiring assertion
+- 2026-05-26 08:19 — 2b06d8365 (Maez): feat(curiosity): close autonomy suppression feedback loop
+- 2026-05-26 07:48 — 39c6c2cc3 (Maez): feat(curiosity): add extraction-shape outreach gate
+- 2026-05-26 00:11 — 1d5099c53 (Maez): feat(curiosity): add reflection-before-interruption audit
+- 2026-05-25 23:59 — 01245f70e (Maez): feat(curiosity): add signal-quality outreach gate
+- 2026-05-25 23:47 — 83262d9ce (Maez): feat(curiosity): add autonomy preference composition
+
+========================================
+PRODUCTION STATE
+========================================
+
+- maez.service: active (PID 2225749)
+- maez-observe-sidecar.service: not-installed
+- maez-web.service: not-installed
+- maez-watchdog.service: not-installed
+- maez-subscription-proxy.service: active (PID 1529800)
+- llama-server.service: active (PID 3188)
+- lived episodes: 32
+- private thoughts (count only): 3848
+- wonderings: 9
+- inner residue events (count only): 256
+- entity index entries: 48
+- entity mentions: 89
+- entity aliases: 7
+- fast-conversation turns: 37
+
+========================================
+NEXT SESSION PRIORITIES
+========================================
+
+- Track A anchor: docs/TRACK_A.md
+- Run the substrate observation greps from docs/handoffs/2026-05-01.md if present

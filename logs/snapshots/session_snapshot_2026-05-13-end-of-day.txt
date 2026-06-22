@@ -1,0 +1,195 @@
+Session snapshot — 2026-05-13 end of day
+
+================================================================================
+What this session day was
+================================================================================
+
+A full audit-and-ratification arc. Started the day with S1a.1 implementation
+(b913728) already in tree and Claude council ratification pending. Ended the
+day with the private-thoughts doorway fully ratified on both axes (Claude
+covenant council + Codex engineering council), all follow-up amendments closed
+mechanically, all blockers from a post-hoc Codex review fixed with RED-first
+TDD discipline.
+
+Three commits landed and pushed during the day after the morning audit work:
+
+  0f27837  fix(security): add post-audit seatbelts
+  7a1ecf9  fix: close mechanical council follow-ups (A4, A6 + pulse-bridge CORS)
+  494b7c5  test(private-thoughts): close S1a1 council amendments (C1-C6)
+  463d81c  fix(private-thoughts): close codex post-hoc panel findings
+
+Plus the audit deliverables (uncommitted, under docs/audit_2026-05-13/):
+  - 14 specialist-axis agent findings (01-14)
+  - _MASTER_AUDIT.md (synthesis)
+  - _CLAUDE_COUNCIL_REVIEW.md (council verdict on audit + seatbelts)
+
+Plus the slice deliverables (committed in 463d81c et al.):
+  - docs/S1A1_PRIVATE_THOUGHTS_RATIFICATION_PACKET.md (Codex evidence packet)
+  - docs/S1A1_CLAUDE_COUNCIL_REVIEW.md (Claude council verdict on b913728)
+  - docs/PRIVATE_THOUGHTS_SIGNAL_REGISTRY.md (S1a.1 enum compatibility registry)
+  - docs/governance/POST_INSTALL_HARDENING.md (seatbelt checklist for new hardware)
+
+================================================================================
+The doorway is now fully ratified
+================================================================================
+
+S1a.1 ratification trail (the full sequence, for the record):
+
+  1. b913728: S1a.1 hardening implemented; six amendments shipped together.
+     Codex pre-code panel had BLOCKED the loose version of the plan and
+     approved only after the amendments became mechanical.
+
+  2. Claude six-role council ran on b913728. Verdict:
+     RATIFY-WITH-AMENDMENTS. Six amendments (C1-C6):
+       C1: single-process-limit honest note
+       C2: human-primacy constraint propagates to S1b consumer design
+       C3: migration-failure-rollback test + watch-point on first live migration
+       C4: registry-doc-per-vocab pattern generalizes as discipline
+       C5: cross-reference registry from canonical docs + S2 input
+       C6: append-only contract on registry + S1a.1<->S15 design alignment
+
+  3. 494b7c5: closed C1-C6. Touched migration code in core/infra/private_thoughts.py.
+
+  4. Codex post-hoc six-agent panel ran on 494b7c5 (after the user noticed
+     the miss: closing amendments touched covenant-shaped code paths and
+     needed Codex review, not just Claude's). Found 5 REAL BLOCKERS:
+       - behavior reader accepting valid-enum-values in registry-invalid
+         tuples (Descartes-class)
+       - chatty recent classes hiding older rare classes (Goodall-class)
+       - migration/index DDL outside transaction -> half-migrated DB on
+         failure (Ohm-class)
+       - legacy rows with unproven producer being promoted to known
+         identities; now stay legacy_unknown until proven (Locke-class)
+       - registry docs didn't define legacy_unknown, no sync test
+         (Feynman-class)
+     Plus a terminology fix: "static source-token guard" not "AST guard";
+     "S1b planning unblocked" not "operationally ready."
+
+  5. 463d81c: closed all 5 Codex post-hoc findings with 6 RED-first
+     blocker tests. Suite at 3300, tracked ruff clean.
+
+The doorway is now ratified on both axes. The recovery trail itself is the
+artifact: discipline observed through self-correction, not external pressure.
+
+================================================================================
+Meta-lesson recorded
+================================================================================
+
+The recovery from 494b7c5 -> 463d81c demonstrated a corollary to existing rules:
+mechanical closure of council amendments can be covenant-shaped engineering
+work if the closure touches code paths. The rule is: BOTH panels sign off when
+both panels apply, regardless of whether the work is framed as "closure" or
+"implementation."
+
+The five real blockers Codex's post-hoc panel found were not stylistic; they
+were latent failure modes that would have surfaced on first producer or first
+crash mid-migration. Codex earning its keep on 494b7c5 validates that the
+boundary discipline isn't theater.
+
+Memory updates from the day:
+
+  feedback_audit_synthesis_separates_urgent_from_research.md
+  feedback_council_role_boundaries.md
+  project_life_substrate_plan.md (full doorway-ratification trail recorded)
+  project_dell_repair_override_trigger.md (already resolved via operator
+    judgment on 2026-05-13 morning; status note preserved)
+
+================================================================================
+Audit cycle output (preserved under docs/audit_2026-05-13/, untracked)
+================================================================================
+
+Two councils ran during the day:
+
+  Council 1: Claude six-role council on master audit + seatbelt commit 0f27837.
+             Verdict: RATIFY-WITH-AMENDMENTS. 7 amendments:
+               A1-A2-A5: standing process rules for future audits
+               A3, A7: deferred to next substrate-plan refresh
+               A4 (regression test), A6 (POST_INSTALL_HARDENING.md): closed in 7a1ecf9
+
+  Council 2: Claude six-role council on b913728 (S1a.1). As above.
+
+Audit deliverable status:
+  - docs/audit_2026-05-13/ is intentionally untracked (operator decision
+    pending on whether to commit it; contains file:line vulnerability
+    citations)
+  - _MASTER_AUDIT.md, _CLAUDE_COUNCIL_REVIEW.md, and 14 specialist findings
+    are durable artifacts on disk
+
+================================================================================
+Operational state at session close
+================================================================================
+
+  Maez services       : maez, llama-server, llama-judge all ACTIVE
+  Auto-restart posture: Restart=on-failure (overrides removed earlier today
+                        via operator-judgment Dell trigger resolution)
+  NRestarts           : 0 across all three
+  Health checks       : alive, qwen36-27b loaded
+  Tests               : 3300 OK, skipped=3
+  Tracked Python ruff : OK
+  Git state           : main equals origin/main; HEAD = 463d81c
+  Live backup         : present, includes private_thoughts.db
+                        + audit_log.db continuity coverage
+  Seatbelt posture    : verified by committed live cross-origin attack test
+                        (tests.test_http_local_origin_guard)
+  Dell trigger        : resolved via operator judgment 2026-05-13 morning;
+                        reopens if any service crash recurs
+
+  Untracked artifacts NOT staged (intentional, local-only):
+    .agents/, .claude/, .vscode/, videos, snapshots, scripts/UI files,
+    docs/audit_2026-05-13/, ui/maez_pulse_bridge.py (now loopback-only-CORS)
+
+================================================================================
+What remains before S1b code (not next session today)
+================================================================================
+
+1. Cooling-off night per feedback_cooling_off_between_plan_and_code.
+   The 494b7c5 + 463d81c work happened today; S1b code must wait for a
+   new session day. Discipline applies.
+
+2. Live-readiness check OR explicit operator waiver. The migration is
+   test-proven on empty + synthetic data; the first non-empty live
+   migration is still a watch-point Logical named in council review.
+
+3. S1b plan must carry the C2 human-primacy constraint:
+   "consumers may use private signal counts to modulate behavior,
+    but must not turn them into claims that pre-empt the bonded user
+    naming the lived state first."
+   This is design input for S1b, not a fix for anything in S1a.1.
+
+================================================================================
+What's parked for the next substrate-plan refresh (NOT next session)
+================================================================================
+
+From the audit-council amendments:
+  A3: resolve organ-count numerical vagueness (pick exact number for v2)
+  A7: elevate Sigstore Rekor / S15 to roadmap (only amendment with named
+      20-year-lived-cost if deferred indefinitely)
+
+From the S1a.1-council amendments:
+  C6 second clause: S1a.1 <-> S15 design alignment when both happen
+
+Plus the 7 organ candidates from the audit's research output (Graphiti
+bi-temporal envelope, Sigstore Rekor, Letta sleep-time-compute, Voyager
+skill library, Inspect AI eval harness, Turkle role-taking refusal,
+autopoietic coupling-signature gate).
+
+================================================================================
+Plain English (per the memory rule)
+================================================================================
+
+Today the doorway got built, audited, ratified, amended, audited again,
+fixed, and pushed. The lock survived both reviews — Claude's covenant
+court and Codex's engineering council — including a clean recovery when
+the first closure commit accidentally needed engineering review and the
+operator caught the miss.
+
+The discipline is now visibly working through self-correction, not external
+prompting. The boundary between Claude's council and Codex's council held
+without anyone pretending to play the other's role. Amendments got sized
+small enough to close mechanically. RED-first TDD held for every new
+blocker test.
+
+Tomorrow is not more doorway work. Tomorrow is deciding what safely
+walks through the doorway, with the human-primacy constraint baked in.
+
+Sleep. The doorway is fully closed. S1b waits patiently on the other side.

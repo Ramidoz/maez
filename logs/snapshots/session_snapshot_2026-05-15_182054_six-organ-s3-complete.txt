@@ -1,0 +1,131 @@
+Maez — session snapshot
+
+BUILD: Sessions six-organ-s3-complete
+DATE: 2026-05-15
+AGENT: codex
+HEAD: c60ee7f
+COMMITS_SINCE: 36 hours ago
+COMMIT_COUNT: 91
+TEST_FUNCTIONS: 3626
+
+========================================
+WHAT CHANGED TODAY
+========================================
+
+- 2026-05-15 15:25 — c60ee7f6e (Maez): docs(temporal): record S3 post-recovery council
+- 2026-05-15 14:16 — c46c43966 (Maez): fix(temporal): close S3 post-implementation gaps
+- 2026-05-15 14:00 — 293fd67aa (Maez): feat(temporal): implement S3 temporal spine v1
+- 2026-05-15 13:45 — b2067e74f (Maez): docs(temporal): canonicalize S3 as Decision 29
+- 2026-05-15 13:33 — 11b5fe7be (Maez): docs(temporal): fold S3 Claude council amendments
+- 2026-05-15 13:15 — d7f585888 (Maez): docs(temporal): fold S3 Codex panel amendments
+- 2026-05-15 13:06 — 9fbb81c0b (Maez): docs(temporal): draft S3 temporal spine spec
+- 2026-05-15 13:06 — 5aa7a549d (Maez): fix(replay): verify probe ledger chains in append order
+- 2026-05-15 13:00 — f1749bd37 (Maez): docs(temporal): add S3 diagnostic
+- 2026-05-15 12:56 — 00575061b (Maez): docs(substrate): update life substrate current state
+- 2026-05-15 12:53 — 6523fabb4 (Maez): test(observe): pin invalid promotion trigger red gate
+- 2026-05-15 12:52 — 11ebba268 (Maez): fix(observe): read nested m1 staleness health
+- 2026-05-15 12:48 — a40aca912 (Maez): fix(observe): read nested heartbeat health
+- 2026-05-15 12:45 — d2f6ddcfa (Maez): fix(snapshot): distinguish missing user units
+- 2026-05-15 12:41 — 24edb5091 (Maez): fix(snapshot): include observation sidecar unit
+- 2026-05-15 12:40 — c6ed8423a (Maez): docs(m1): link promotion module to slice packet
+- 2026-05-15 12:39 — abda94844 (Maez): docs(camera): record observer truthfulness lesson
+- 2026-05-15 12:36 — eccbbd310 (Maez): fix(snapshot): read user systemd service state
+- 2026-05-15 12:31 — bd8b94258 (Maez): fix(m1): reset daily cap at owner local midnight
+- 2026-05-15 12:26 — f2a0aafcb (Maez): feat(observe): red-gate camera voice guard rejections
+- 2026-05-15 12:20 — 8496f9d6b (Maez): feat(observe): add M1 drift red gates
+- 2026-05-15 12:10 — 00045c624 (Maez): fix(m1): use identity owner name and pin reason enums
+- 2026-05-15 12:10 — 9cb5cf5cc (Maez): fix(camera): require direct question for presence answers
+- 2026-05-15 12:00 — e756f7dd7 (Maez): fix(m1): count daily cap by UTC instants
+- 2026-05-15 11:56 — db5a80607 (Maez): feat(observe): add process telemetry to sidecar
+- 2026-05-15 11:53 — c9d2af0be (Maez): feat(camera): add v1.1 direct presence answers
+- 2026-05-15 11:29 — 53a875e0a (Maez): feat(observe): add content-free sidecar watcher
+- 2026-05-15 11:23 — e3e347e53 (Maez): docs(camera): record live observation lessons
+- 2026-05-15 10:16 — 63263aa86 (Maez): fix(camera): run presence subprocess headless
+- 2026-05-15 10:11 — 007b665de (Maez): fix(camera): isolate native detector in killable subprocess
+- 2026-05-15 10:02 — cc7552045 (Maez): fix(camera): allow owner-local camera index selection
+- 2026-05-15 09:52 — 020292196 (Maez): docs(camera): record post-recovery covenant verification
+- 2026-05-15 09:46 — 4de711e99 (Maez): fix(camera): close post-implementation engineering gaps
+- 2026-05-15 09:26 — 8ef997d8c (Maez): feat(camera): implement v1 disabled body-state boundary
+- 2026-05-15 09:04 — 5409dffb0 (Maez): docs(camera): fold codex engineering panel amendments
+- 2026-05-15 08:55 — 20cce2013 (Maez): docs(camera): fold covenant council amendments
+- 2026-05-15 08:40 — 6b61eed8d (Maez): docs(camera): draft presence v1 spec
+- 2026-05-15 08:33 — f32a19164 (Maez): docs(camera): record presence diagnostic
+- 2026-05-15 08:23 — c36314631 (Maez): docs(calendar): record recovery council and clarify v1 labels
+- 2026-05-15 07:59 — dd6f8e195 (Maez): fix(calendar): close post-implementation review gaps
+- 2026-05-15 01:30 — 041b9e72e (Maez): feat(calendar): add v1 sync request builders
+- 2026-05-15 01:29 — 48c949b9a (Maez): feat(calendar): add offline v1 connector policy
+- 2026-05-15 01:26 — 59fc324f0 (Maez): feat(calendar): add v1 staging store skeleton
+- 2026-05-15 01:20 — 847e251d9 (Maez): feat(calendar): disable legacy calendar path behind v1 mode
+- 2026-05-15 00:52 — dbf53085e (Maez): docs(calendar): canonicalize Calendar v1 as Decision 28
+- 2026-05-15 00:44 — e1ca5cd14 (Maez): docs(calendar): fold Claude covenant amendments
+- 2026-05-15 00:27 — 38101ae5f (Maez): docs(calendar): fold Codex spec panel amendments
+- 2026-05-15 00:19 — aa9a805b6 (Maez): docs(calendar): draft Calendar v1 spec
+- 2026-05-15 00:11 — 1baa78b2a (Maez): docs(calendar): add Calendar v1 diagnostic
+- 2026-05-14 23:40 — 79d80d560 (Maez): docs(s2): canonicalize contextual integrity at ingest
+- 2026-05-14 23:10 — b73c8c186 (Maez): docs(s2): fold Claude BAD verification amendments
+- 2026-05-14 22:31 — d885604e6 (Rohit Ananthan): docs(s2): fold Codex BAD packet amendments
+- 2026-05-14 22:24 — f1d2bfe20 (Rohit Ananthan): docs(s2): draft contextual integrity BAD packet
+- 2026-05-14 22:22 — 0104be4a4 (Rohit Ananthan): docs(s2): fold contextual integrity scoping reviews
+- 2026-05-14 21:36 — dd711ad76 (Rohit Ananthan): docs(security): add Claude post-recovery verification on credential hygiene
+- 2026-05-14 21:33 — 7c2f9cbc5 (Rohit Ananthan): fix(security): close credential hygiene post-review gaps
+- 2026-05-14 21:21 — eb8e7fea3 (Rohit Ananthan): docs(security): add Claude post-implementation council on credential hygiene
+- 2026-05-14 19:20 — 6ea1cfff7 (Rohit Ananthan): feat(security): implement daemon credential hygiene
+- 2026-05-14 19:04 — 44a1ec318 (Rohit Ananthan): docs(security): canonicalize credential hygiene as Decision 26
+- 2026-05-14 18:56 — 9dc117f2c (Rohit Ananthan): docs(security): fold credential hygiene review amendments
+- 2026-05-14 18:52 — 3d56311e0 (Rohit Ananthan): docs(security): add Codex panel review for credential hygiene
+- 2026-05-14 18:45 — 76b00d0cf (Rohit Ananthan): docs(security): add Claude six-role council review of credential hygiene spec
+- 2026-05-14 18:29 — b24075d38 (Rohit Ananthan): docs(security): draft daemon credential hygiene spec
+- 2026-05-14 17:39 — 5ce6e94eb (Rohit Ananthan): docs(security): add daemon credential hygiene diagnostic
+- 2026-05-14 16:59 — 8594ef602 (Rohit Ananthan): fix(daemon): exit after graceful signal shutdown
+- 2026-05-14 16:26 — 6b1f4a3f0 (Rohit Ananthan): fix(daemon): close native resources during shutdown
+- 2026-05-14 15:59 — 2ca9c83a2 (Rohit Ananthan): docs(daemon): record shutdown hang diagnostic
+- 2026-05-14 15:40 — 5690f33d1 (Rohit Ananthan): fix(daemon): bound presence observation in reasoning loop
+- 2026-05-14 15:33 — eb409e691 (Rohit Ananthan): feat(daemon): expose reasoning heartbeat diagnostics
+- 2026-05-14 15:19 — 7f6fc9554 (Rohit Ananthan): feat(project): add local project panel
+- 2026-05-14 13:45 — c51a6728c (Rohit Ananthan): docs(m1): start lived-episode promotion observation
+- 2026-05-14 13:40 — 618ea590b (Rohit Ananthan): docs(m1): pin v1 observation memory standard
+- 2026-05-14 13:39 — 9e300764c (Rohit Ananthan): docs(m1): add Claude six-role post-recovery verification council
+- 2026-05-14 13:32 — 46675e964 (Rohit Ananthan): fix(m1): close post-implementation panel blockers
+- 2026-05-14 13:21 — 7a76f6c14 (Rohit Ananthan): docs(m1): add Claude six-role post-implementation council review
+- 2026-05-14 13:16 — 42aafceb8 (Rohit Ananthan): feat(m1): wire lived-episode promotion organ
+- 2026-05-14 13:06 — bfbfb95cc (Rohit Ananthan): docs(m1): canonicalize lived-episode promotion decision
+- 2026-05-14 12:56 — 851721dad (Rohit Ananthan): docs(m1): fold panel amendments into promotion spec
+- 2026-05-14 12:48 — 2acd6613f (Rohit Ananthan): docs(m1): add Codex engineering panel review
+- 2026-05-14 12:42 — aeee8bac5 (Rohit Ananthan): docs(m1): add Claude six-role council review of spec
+- 2026-05-14 12:39 — fa08901c0 (Rohit Ananthan): docs(m1): draft lived-episode promotion spec
+- 2026-05-14 12:30 — 784774dc7 (Rohit Ananthan): docs(m1): diagnostic findings on lived-episode promotion gap
+- 2026-05-14 11:36 — b6804c5ca (Rohit Ananthan): docs(s2): fold pre-panel scoping clarifications
+- 2026-05-14 11:32 — 998d46502 (Rohit Ananthan): docs(s2): add Claude six-role council review of scoping memo
+- 2026-05-14 11:28 — 008e17197 (Rohit Ananthan): docs(s2): draft contextual integrity scoping memo
+- 2026-05-14 11:10 — 945333fb0 (Rohit Ananthan): docs(infra): close docs migration reference sweep
+- 2026-05-14 10:54 — 09a87dcf0 (Rohit Ananthan): docs(infra): migrate tracked audit docs
+- 2026-05-14 10:39 — 61199e4d8 (Rohit Ananthan): docs(infra): migrate handoffs snapshots and ledger docs
+- 2026-05-14 10:28 — 53cf91f4b (Rohit Ananthan): docs(infra): migrate legacy slice memos into structured folders
+- 2026-05-14 10:13 — 55f59e1d7 (Rohit Ananthan): docs(infra): migrate active slice docs into structured folders
+- 2026-05-14 09:58 — ace1242a9 (Rohit Ananthan): docs(body): migrate body topology slice docs
+
+========================================
+PRODUCTION STATE
+========================================
+
+- maez.service: active (PID 2041128)
+- maez-observe-sidecar.service: active (PID 2041606)
+- maez-web.service: not-installed
+- maez-watchdog.service: not-installed
+- maez-subscription-proxy.service: not-installed
+- llama-server.service: active (PID 254357)
+- lived episodes: 32
+- private thoughts (count only): 442
+- wonderings: 8
+- inner residue events (count only): 89
+- entity index entries: 38
+- entity mentions: 65
+- entity aliases: 5
+- fast-conversation turns: 35
+
+========================================
+NEXT SESSION PRIORITIES
+========================================
+
+- Track A anchor: docs/TRACK_A.md
+- Run the substrate observation greps from docs/handoffs/2026-05-01.md if present

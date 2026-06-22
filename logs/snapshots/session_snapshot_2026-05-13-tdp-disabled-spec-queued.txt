@@ -1,0 +1,172 @@
+Session snapshot — 2026-05-13 — TDP disabled, audit-sentinel spec queued
+
+================================================================================
+What this day was
+================================================================================
+
+21 commits across substrate cycles, surface UX experiment, and geek-out
+observation work. The TDP slice completed its full discipline arc (spec →
+both panels pre-impl → canonical → implementation → Codex BLOCK → fix → both
+panels post-impl → operator enablement → live observation → UX failure →
+disabled with findings recorded). The audit-rail sentinel leak was named as
+a separate geek-out issue, queued for a proper spec session tomorrow.
+
+The discipline that ran today produced multiple real catches. Each catch
+was discipline-aligned. Each closure was mechanical. Nothing shipped past
+its review gate.
+
+================================================================================
+Commits today (21 total)
+================================================================================
+
+  0f27837  fix(security): add post-audit seatbelts
+  7a1ecf9  fix: close mechanical council follow-ups
+  8b9d865  fix(ops): classify N1 operational noise
+  494b7c5  test(private-thoughts): close S1a1 council amendments
+  463d81c  fix(private-thoughts): close codex council blockers
+  51755c6  docs(private-thoughts): canonize S1b wiring spec
+  650367f  fix(presence): provision camera detector stack
+  024c59b  feat(private-thoughts): wire S1b reasoning residue
+  cbf0625  fix(private-thoughts): close S1b council amendments
+  b1f6986  docs(private-thoughts): add S1b observation runbook
+  b4f0189  docs(private-thoughts): start S1b producer observation
+  2bcd894  fix(audit): prevent recursive fallback rewrites
+  5d27530  fix(envelope): quiet uninitialized ledger self-history
+  4b015c6  docs(ops): catalog geek-out fixes
+  617eeae  docs(ops): clarify S1b geek-out observation scope
+  4423d61  docs(telegram): canonize draft presence spec
+  343fabe  feat(telegram): add draft presence wrapper
+  63c94fd  fix(telegram): close draft presence review blockers
+  23c9999  fix(telegram): bound draft presence daemon state
+  6204775  docs(telegram): commit TDP implementation council review
+  5edfd55  docs(ops): record TDP live observation
+
+================================================================================
+Slices and goals at end-of-day
+================================================================================
+
+S1b — private_thoughts (producer-only observation running)
+  Status:  [ ◐ scaffold + minimal wiring · councils ratified · observation pending ]
+  Started: 2026-05-13T16:50:01Z
+  Residue rows so far: 0
+  Earliest consumer-eligibility: 2026-05-14T16:50:01Z (per 200 cycles AND 24h)
+  Producer flag: enabled
+  Consumer flag: disabled
+
+TDP — Telegram Draft Presence (DISABLED after live UX failure)
+  Status: [ scaffold + implementation · default-disabled · councils ratified · live UX failure recorded ]
+  Spec, implementation, both panels' reviews, blocker closure, bounded-state
+  closure, and council review all in origin/main.
+  Disabled locally: tdp_enabled: False
+  Re-enable: BLOCKED until surface affordance redesign
+  Live UX findings (in docs/TELEGRAM_DRAFT_PRESENCE_OBSERVATION_LOG.md):
+    - Chrome: extra typing chrome appeared
+    - Mobile: reserved a large blank space
+    - Both classified as platform-rendered chrome around empty Maez-authored
+      content; bonded-user perceived weirdness
+
+Geek-out goal — in progress
+  Two fixes shipped today:
+    - 2bcd894: audit recursive fallback rewrite (closed)
+    - 5d27530: uninitialized ledger self-history noise (closed)
+  Two open entries in docs/GEEK_OUT_CATALOG.md:
+    - audit-rail grounded-answer sentinel leak (next substantive work)
+    - TDP mobile blank-space UX failure (queued behind TDP redesign)
+
+Body Topology BAD decision — queued
+  Next planning candidate per the agreed slice order; remains queued behind
+  S1b observation maturation and geek-out goal progress.
+
+================================================================================
+Discipline lessons saved today (memory entries)
+================================================================================
+
+Five new feedback memory entries landed this session:
+
+  feedback_audit_synthesis_separates_urgent_from_research
+    — cathedral-taller-while-door-lock-missing bias; first caught by operator
+      on the master audit synthesis. Extended with slice-ordering note after
+      second occurrence.
+
+  feedback_council_role_boundaries
+    — Claude runs Claude's six-role council; Codex runs Codex's six-agent
+      panel; specialist-axis audits don't substitute for either.
+
+  feedback_council_trigger_conditions
+    — explicit triggers for when Claude's six-role council MUST sit before
+      sending a response. Missing the trigger has been the recurring failure
+      mode this session.
+
+  feedback_platform_chrome_vs_maez_voice
+    — distinguish Maez-authored text from platform-rendered chrome; only
+      Maez-authored text is voice-identity-surface. Validated AND found
+      incomplete (the principle didn't catch UX-level weirdness; operator
+      did not save the proposed amendment).
+
+  Substrate plan updates throughout reflecting:
+    - S1a.1 ratification trail closure
+    - S1b implementation + observation start
+    - TDP cycle complete with live UX failure recorded
+    - Geek-out goal in progress with 2 fixes + 2 open entries
+
+================================================================================
+Operational state at session close
+================================================================================
+
+  Maez services       : maez, llama-server, llama-judge all ACTIVE
+  Auto-restart posture: Restart=on-failure
+  NRestarts           : 0 across all three
+  Tests               : 3357 OK, skipped=3
+  Tracked Python ruff : OK
+  Git state           : main equals origin/main at 5edfd55
+  Live backup         : present
+  Camera/presence     : operational; person=unknown until face enrollment
+  S1b producer flag   : ENABLED (observation running)
+  S1b consumer flag   : DISABLED
+  TDP flag            : DISABLED (after live UX failure)
+  Dell trigger        : resolved via operator judgment 2026-05-13 AM
+
+================================================================================
+Next substantive work (tomorrow or whenever focus returns)
+================================================================================
+
+Highest priority — audit-rail sentinel spec session
+  Touches: core/safety/self_claim_audit.py (covenant-shaped)
+  Proposed decision: omission-over-sentinel
+  Required sequence: spec → both panels → cooling-off → implementation
+  Scope items (per Claude council pre-spec review):
+    - omission as load-bearing rule
+    - edge cases: all-flagged, partial-flagged, boundary-ambiguous
+    - voice fallback only for all-flagged (voice-authored at generation if
+      possible, not injected post-audit)
+    - regression tests preserving the audit's protection
+    - C2-style probe sweep on user-visible output
+    - roll-forward strategy for future audit-flagging-logic improvements
+
+Other queued work (no urgency):
+  - TDP surface affordance redesign (BLOCKED until investigated)
+  - Body Topology BAD decision (queued after S1b matures)
+  - Voice subsystem planning (queued after Body Topology)
+  - Substrate-plan refresh items: A3 organ count, A7 Sigstore Rekor elevation
+
+================================================================================
+Plain English
+================================================================================
+
+Twenty-one commits today. Every commit through the right council. Every
+amendment honestly named. Every closure mechanical. The audit cycle, seven
+substrate-and-surface slices, two operational-quality fixes, one surface
+UX experiment that failed safely.
+
+The TDP experiment failed safely. The audit-rail sentinel was named as the
+bigger Maez-voice problem, separated from TDP, and queued for proper spec
+discipline. The S1b doorway is wired and the producer is writing whenever
+the cognition cycle hits eligible events.
+
+The discipline lessons saved today (council role boundaries, council
+trigger conditions, audit-synthesis separation, platform-chrome vs
+Maez-voice) are durable across sessions. Tomorrow's operator inherits a
+substrate that is more honest about what it knows than it was this morning.
+
+Sleep / lunch / different work — whichever fits the operator's time. The
+substrate is in a good state to receive any next move.

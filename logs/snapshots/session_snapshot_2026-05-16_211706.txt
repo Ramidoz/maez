@@ -1,0 +1,62 @@
+Maez — session snapshot
+
+BUILD: Sessions auto
+DATE: 2026-05-17
+AGENT: Claude
+HEAD: 674a079
+COMMITS_SINCE: 12 hours ago
+COMMIT_COUNT: 22
+TEST_FUNCTIONS: 4037
+
+========================================
+WHAT CHANGED TODAY
+========================================
+
+- 2026-05-16 20:50 — 674a07967 (Maez): docs(s6): align successor non-goal with authorship amendment
+- 2026-05-16 20:49 — 2f67c2dc1 (Maez): docs(s6): record amendment canonicalization check
+- 2026-05-16 20:35 — 4445cf81e (Maez): docs(s6): canonicalize persisted-authorship amendment
+- 2026-05-16 20:31 — ab477cc3f (Maez): docs(s6): record amendment Codex second-fold
+- 2026-05-16 20:29 — 1e28e7edc (Maez): docs(s6): record amendment covenant second-fold
+- 2026-05-16 20:17 — 0f9e2908c (Maez): docs(s6): fold persisted-authorship amendment diagnostic
+- 2026-05-16 20:12 — fcc95f0ac (Maez): docs(s6): record persisted-authorship amendment reviews
+- 2026-05-16 19:49 — 45062412b (Maez): docs(s6): diagnose persisted-authorship amendment path
+- 2026-05-16 19:23 — 28da567ff (Maez): fix(s6): harden successor marker seam spoof check
+- 2026-05-16 18:50 — 5a19d7de5 (Maez): fix(s6): recover successor governance authority seams
+- 2026-05-16 18:20 — 52440fb31 (Maez): feat(s6): implement successor governance v1
+- 2026-05-16 17:48 — abe86d52a (Maez): docs(research): record Gemini frontier scout triage
+- 2026-05-16 12:58 — 59a1251af (Maez): docs(s6): canonicalize successor governance v1
+- 2026-05-16 12:54 — bbd83dec9 (Maez): docs(s6): record second-fold verifications
+- 2026-05-16 12:38 — 2fab26066 (Maez): docs(s6): fold spec review amendments
+- 2026-05-16 12:11 — d649ae1dd (Maez): docs(s6): draft successor governance spec
+- 2026-05-16 11:50 — 940e8797b (Maez): docs(s6): add successor governance diagnostic
+- 2026-05-16 11:43 — ab147466a (Maez): docs(substrate): mark S5 implemented and pushed
+- 2026-05-16 10:38 — 5283b5fc2 (Maez): docs(s5): record final covenant confirmation
+- 2026-05-16 10:26 — 5881cd8e5 (Maez): fix(s5): load continuity artifacts in health projection
+- 2026-05-16 09:57 — 310663da8 (Maez): fix(s5): seal voice continuity recovery seams
+- 2026-05-16 09:26 — 24b4eeb68 (Maez): fix(s5): close voice continuity recovery seams
+
+========================================
+PRODUCTION STATE
+========================================
+
+- maez.service: active (PID 2196582)
+- maez-observe-sidecar.service: active (PID 2155653)
+- maez-web.service: not-installed
+- maez-watchdog.service: not-installed
+- maez-subscription-proxy.service: not-installed
+- llama-server.service: active (PID 254357)
+- lived episodes: 32
+- private thoughts (count only): 752
+- wonderings: 8
+- inner residue events (count only): 35
+- entity index entries: 38
+- entity mentions: 65
+- entity aliases: 5
+- fast-conversation turns: 35
+
+========================================
+NEXT SESSION PRIORITIES
+========================================
+
+- Track A anchor: docs/TRACK_A.md
+- Run the substrate observation greps from docs/handoffs/2026-05-01.md if present

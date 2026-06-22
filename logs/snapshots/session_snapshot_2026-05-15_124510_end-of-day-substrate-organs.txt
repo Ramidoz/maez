@@ -1,0 +1,72 @@
+Maez — session snapshot
+
+BUILD: Sessions end-of-day-substrate-organs
+DATE: 2026-05-15
+AGENT: Codex
+HEAD: d2f6ddc
+COMMITS_SINCE: 12 hours ago
+COMMIT_COUNT: 32
+TEST_FUNCTIONS: 3577
+
+========================================
+WHAT CHANGED TODAY
+========================================
+
+- 2026-05-15 12:45 — d2f6ddcfa (Maez): fix(snapshot): distinguish missing user units
+- 2026-05-15 12:41 — 24edb5091 (Maez): fix(snapshot): include observation sidecar unit
+- 2026-05-15 12:40 — c6ed8423a (Maez): docs(m1): link promotion module to slice packet
+- 2026-05-15 12:39 — abda94844 (Maez): docs(camera): record observer truthfulness lesson
+- 2026-05-15 12:36 — eccbbd310 (Maez): fix(snapshot): read user systemd service state
+- 2026-05-15 12:31 — bd8b94258 (Maez): fix(m1): reset daily cap at owner local midnight
+- 2026-05-15 12:26 — f2a0aafcb (Maez): feat(observe): red-gate camera voice guard rejections
+- 2026-05-15 12:20 — 8496f9d6b (Maez): feat(observe): add M1 drift red gates
+- 2026-05-15 12:10 — 00045c624 (Maez): fix(m1): use identity owner name and pin reason enums
+- 2026-05-15 12:10 — 9cb5cf5cc (Maez): fix(camera): require direct question for presence answers
+- 2026-05-15 12:00 — e756f7dd7 (Maez): fix(m1): count daily cap by UTC instants
+- 2026-05-15 11:56 — db5a80607 (Maez): feat(observe): add process telemetry to sidecar
+- 2026-05-15 11:53 — c9d2af0be (Maez): feat(camera): add v1.1 direct presence answers
+- 2026-05-15 11:29 — 53a875e0a (Maez): feat(observe): add content-free sidecar watcher
+- 2026-05-15 11:23 — e3e347e53 (Maez): docs(camera): record live observation lessons
+- 2026-05-15 10:16 — 63263aa86 (Maez): fix(camera): run presence subprocess headless
+- 2026-05-15 10:11 — 007b665de (Maez): fix(camera): isolate native detector in killable subprocess
+- 2026-05-15 10:02 — cc7552045 (Maez): fix(camera): allow owner-local camera index selection
+- 2026-05-15 09:52 — 020292196 (Maez): docs(camera): record post-recovery covenant verification
+- 2026-05-15 09:46 — 4de711e99 (Maez): fix(camera): close post-implementation engineering gaps
+- 2026-05-15 09:26 — 8ef997d8c (Maez): feat(camera): implement v1 disabled body-state boundary
+- 2026-05-15 09:04 — 5409dffb0 (Maez): docs(camera): fold codex engineering panel amendments
+- 2026-05-15 08:55 — 20cce2013 (Maez): docs(camera): fold covenant council amendments
+- 2026-05-15 08:40 — 6b61eed8d (Maez): docs(camera): draft presence v1 spec
+- 2026-05-15 08:33 — f32a19164 (Maez): docs(camera): record presence diagnostic
+- 2026-05-15 08:23 — c36314631 (Maez): docs(calendar): record recovery council and clarify v1 labels
+- 2026-05-15 07:59 — dd6f8e195 (Maez): fix(calendar): close post-implementation review gaps
+- 2026-05-15 01:30 — 041b9e72e (Maez): feat(calendar): add v1 sync request builders
+- 2026-05-15 01:29 — 48c949b9a (Maez): feat(calendar): add offline v1 connector policy
+- 2026-05-15 01:26 — 59fc324f0 (Maez): feat(calendar): add v1 staging store skeleton
+- 2026-05-15 01:20 — 847e251d9 (Maez): feat(calendar): disable legacy calendar path behind v1 mode
+- 2026-05-15 00:52 — dbf53085e (Maez): docs(calendar): canonicalize Calendar v1 as Decision 28
+
+========================================
+PRODUCTION STATE
+========================================
+
+- maez.service: active (PID 1732366)
+- maez-observe-sidecar.service: active (PID 1722733)
+- maez-web.service: not-installed
+- maez-watchdog.service: not-installed
+- maez-subscription-proxy.service: not-installed
+- llama-server.service: active (PID 254357)
+- lived episodes: 32
+- private thoughts (count only): 351
+- wonderings: 8
+- inner residue events (count only): 8
+- entity index entries: 38
+- entity mentions: 65
+- entity aliases: 5
+- fast-conversation turns: 35
+
+========================================
+NEXT SESSION PRIORITIES
+========================================
+
+- Track A anchor: docs/TRACK_A.md
+- Run the substrate observation greps from docs/handoffs/2026-05-01.md if present

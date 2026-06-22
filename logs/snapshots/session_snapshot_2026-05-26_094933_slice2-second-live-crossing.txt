@@ -1,0 +1,65 @@
+Maez — session snapshot
+
+BUILD: Sessions slice2-second-live-crossing
+DATE: 2026-05-26
+AGENT: Codex
+HEAD: eb611e9
+COMMITS_SINCE: 12 hours ago
+COMMIT_COUNT: 10
+TEST_FUNCTIONS: 4807
+
+========================================
+WHAT CHANGED TODAY
+========================================
+
+- 2026-05-26 09:25 — eb611e90d (Maez): feat(curiosity): add saturation register
+- 2026-05-26 09:13 — 34c529974 (Maez): feat(curiosity): add drive-curiosity diagnostic stream
+- 2026-05-26 08:51 — 2edca1fee (Maez): feat(curiosity): wire subjective-duration meaningful-event producer
+- 2026-05-26 08:31 — 8325ca6f9 (Maez): test(curiosity): stabilize pursuit fail-open wiring assertion
+- 2026-05-26 08:19 — 2b06d8365 (Maez): feat(curiosity): close autonomy suppression feedback loop
+- 2026-05-26 07:48 — 39c6c2cc3 (Maez): feat(curiosity): add extraction-shape outreach gate
+- 2026-05-26 00:11 — 1d5099c53 (Maez): feat(curiosity): add reflection-before-interruption audit
+- 2026-05-25 23:59 — 01245f70e (Maez): feat(curiosity): add signal-quality outreach gate
+- 2026-05-25 23:47 — 83262d9ce (Maez): feat(curiosity): add autonomy preference composition
+- 2026-05-25 23:27 — 47171c079 (Maez): feat(curiosity): add autonomy policy charter floor
+
+========================================
+PRODUCTION STATE
+========================================
+
+- maez.service: active (PID 2225749)
+- maez-observe-sidecar.service: not-installed
+- maez-web.service: not-installed
+- maez-watchdog.service: not-installed
+- maez-subscription-proxy.service: active (PID 1529800)
+- llama-server.service: active (PID 3188)
+- lived episodes: 32
+- private thoughts (count only): 3815
+- wonderings: 9
+- inner residue events (count only): 218
+- entity index entries: 48
+- entity mentions: 89
+- entity aliases: 7
+- fast-conversation turns: 37
+
+========================================
+NEXT SESSION PRIORITIES
+========================================
+
+- Track A anchor: docs/TRACK_A.md
+- Run the substrate observation greps from docs/handoffs/2026-05-01.md if present
+
+========================================
+LIVE VERIFICATION ANCHOR
+========================================
+
+- Slice 2 substrate feature-complete at HEAD eb611e9.
+- Live checkout was fast-forwarded from fbe78e1 to eb611e9 on 2026-05-26 before the second crossing; maez.service was restarted as a user service and is active at PID 2225749 from /home/rohit/maez.
+- Pre-crossing backups were written at 20260526T144456Z for memory/wonderings.db, memory/subjective_duration.db, and memory/temperament.db under memory/backups/*_pre_second_crossing_fbe78e1_20260526T144456Z. New §10/§11/§12/§20 files did not exist before materialization.
+- Second live crossing token: SLICE2_SECOND_CROSSING_1779806874.
+- Stage 2 SD reflex canary: live subjective_duration event_id 5 (is_canary=1, producer_ref drive_driven_curiosity) was refused by SUBJECTIVE_DURATION_MEANINGFUL_EVENT producer; wonderings row count stayed 9.
+- Stage 3 gate-chain canary: signal gate allowed one canary dispatch row, reflection audit proceeded, extraction gate blocked bait-pattern text. owner_outreach_dispatches id 1 has delivered_utc NULL; no utterance was delivered.
+- Stage 4 diagnostic audit: logs/drive_driven_curiosity_diagnostics.jsonl materialized with 5 uniform closed-vocabulary rows: master_key_initialized, signal_gate_decision, reflection_audit, suppression_event, extraction_gate_block. memory/drive_curiosity_master.key materialized at 32 bytes; per-bond HMAC digest distinction verified.
+- Stage 5 suppression feedback: parsed EXTRACTION_BLOCKED suppression event excludes delivered samples from OWNER_OBSERVED denominator. Baseline synthetic 5-sample preference formed; same samples with suppression window returned None.
+- Stage 6 saturation read: compute_saturation("firstborn") returned open_object_count=0, weighted_salience=0, carrying_capacity=10.0, press=0.0. Row counts before/after saturation were identical: wonderings=9, subjective_events=5, temperament_events=0, owner_outreach=1, reflection_audits=1, diagnostics=5.
+- Final service journal after restart showed only expected systemd stop/start entries; maez.service remained active.

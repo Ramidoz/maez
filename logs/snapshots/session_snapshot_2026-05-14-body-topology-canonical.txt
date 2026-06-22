@@ -1,0 +1,248 @@
+Session snapshot — 2026-05-14 body topology canonical, docs mapped
+
+================================================================================
+What this session day was
+================================================================================
+
+A canonicalization-and-cognition day. Body Topology BAD packet went through
+its second council (Codex six-agent panel, after Claude's six-role council
+had already landed). Both panels independently converged on the same
+correction: information limbs (OAuth/account connectors like Calendar,
+Gmail, Slack) must fold into Body Topology as a first-class body class
+BEFORE canonicalization, and the S2 contextual-integrity-at-ingest organ
+must gate any information-limb live ingest. The OpenHuman acceleration
+finding folded the same direction from a third vantage.
+
+After the fold, two commits landed and pushed to origin/main:
+
+  6f96c14  docs(body): canonicalize Body Topology as Decision 24 + ADR 0029
+  18d28b5  docs(infra): add docs/README.md as the front-door map + folder rules
+
+The body law is now canonical. The docs tree has a front-door map. Neither
+commit changes runtime behavior; both are foundational substrate work.
+
+================================================================================
+Body Topology canonicalization (commit 6f96c14)
+================================================================================
+
+Review trail:
+
+  1. Claude six-role covenant council — RATIFY-WITH-AMENDMENTS, no veto.
+     Nine amendments (BT-CC-1 through BT-CC-9) + votes on five open
+     questions. Most load-bearing: BT-CC-8 (Aurora is a *role*, not
+     hardware; hardware succession under Decision 22 does not require
+     re-canonicalizing this BAD) + BT-CC-1 (always-on mic requires its
+     own dedicated BAD, cannot inherit from this one) + BT-CC-2
+     (voice-identity attestation = invariant #11 surface; Sigstore Rekor
+     pattern parallel to memory continuity).
+
+  2. Codex six-agent engineering panel — REVISE, no conceptual veto.
+     Sixteen amendments (BT-CX-1 through BT-CX-16). Mostly mechanical:
+     mandatory event envelope (BT-CX-5), canonical data flow (BT-CX-6),
+     state vocabulary precedence (BT-CX-8), authenticated transport
+     baseline for cross-device limbs (BT-CX-9), rate/load budgets
+     (BT-CX-10). Plus the convergent finding: information limbs as
+     first-class body class (BT-CX-3) gated on S2 (BT-CX-4).
+
+  3. OpenHuman acceleration review (Claude council on borrow set).
+     Verdict RATIFY-WITH-AMENDMENTS. Information limbs converged with
+     both panels. Confirmed: borrow infrastructure not ontology;
+     Calendar first; S2 before live ingest; no parallel memory lane;
+     attention-budgeted cadence not 20-min polling.
+
+Fold pattern: rewrote the whole packet rather than patching, because the
+new sections (information limbs subclass, mandatory event envelope, body
+memory discipline, capability-quarantine mechanical requirements,
+observation+safe-failure discipline, always-on audio carve-out,
+voice-identity attestation pattern, implementation ladder, resolved
+open-questions table) were structural additions, not edits.
+
+One precision correction operator caught after the fold: removed the
+"Sigstore Rekor lineage publish = surface_hardening" row from the
+decision-test fixture table. Rekor writes are external transparency-log
+attestation, not body-topology surface hardening; labeling them so would
+let a future agent slip transparency-log writes under this BAD. Replaced
+with explanatory paragraph below the table.
+
+Stamp anchors:
+  - BAD Decision 24 in docs/governance/BETA_ARCHITECTURE_DECISIONS.md
+  - ADR 0029-body-topology.md in docs/adr/
+  - Packet status flipped CANONICAL in docs/SLICE_BODY_TOPOLOGY_BAD.md
+  - Both review trails preserved as durable docs
+
+================================================================================
+Docs front-door map (commit 18d28b5)
+================================================================================
+
+Operator's framing: "Docs are now part of Maez's cognition for future
+agents; if they're messy, every next slice starts with avoidable
+confusion."
+
+Wrote docs/README.md as the front-door map (320 lines):
+
+  - Anchor doc list with read order (MAEZ.md, TRACK_A.md, etc.).
+  - Current-state table: every category and current location.
+    All ~50 cited paths verified to exist on disk before commit.
+  - Target post-migration layout (docs/slices/<slug>/, docs/handoffs/,
+    docs/snapshots/, docs/ledger/, docs/audits/, etc.).
+  - Folder rules for new docs: kebab-case folders + files, ADRs
+    unchanged, anchor docs preserve SCREAMING_SNAKE for back-compat,
+    ISO-8601 dates.
+  - Migration status table (phases 1-7) with gates for each next phase.
+  - Cross-reference sweep list — memory entries, BAD/ADR cross-links,
+    AGENTS.md, code comments — that future migration sessions must
+    update atomically with each file move.
+
+No files moved this session. The map is descriptive + forward-looking;
+every existing reference stays valid.
+
+================================================================================
+Discipline patterns surfaced today
+================================================================================
+
+  1. Two-panel convergence as load-bearing signal.
+     Information limbs + S2 gate was caught independently by Claude
+     covenant council (via OpenHuman comparison) AND Codex engineering
+     panel (via account-connector ontology question). When both panels
+     reach the same correction from different lanes, the correction
+     is structurally right, not stylistic. Already captured in
+     feedback_covenant_slices_need_both_panels; reinforced here.
+
+  2. Push-permission ambiguity.
+     Operator said "Push Body Topology first if you want remote
+     durability for 6f96c14." Auto-mode classifier soft-blocked the
+     push because "if you want" wasn't explicit enough. Operator's
+     follow-up "Recommendation: push first..." was clear enough to
+     proceed. Lesson: explicit "push X to origin/main" is required;
+     conditional phrasing trips the safety classifier.
+
+  3. Procedural-vs-empirical precision.
+     I flagged operator's `rg ... docs` scope as too narrow (procedural
+     concern: cross-references might exist outside docs/). Empirical
+     check showed zero BT references outside docs/. Operator's scope
+     was correct. Flag was right to raise, wrong on the facts. Verify
+     before flagging when verification is cheap.
+
+  4. Cargo-culted discipline (continuation of earlier session lesson).
+     Did not deviate today. Cooling-off rule held: planning and
+     implementation kept on separate cognitive surfaces by keeping
+     the BT pilot move scoped to a separate future docs-only session.
+
+================================================================================
+Operational state at session close
+================================================================================
+
+  Maez services       : not interrogated this session; no service work
+  Git state           : main equals origin/main; HEAD = 18d28b5
+  Tests               : not run this session; no code touched
+  Tracked Python ruff : not run this session; no code touched
+  Memory updates      : none (canonicalization is in docs/, not memory;
+                        no surprises emerged worth a new entry)
+
+  Decision 24 (Body Topology) is canonical. ADR 0029 is on disk. The
+  docs map is the new front door. No services restarted. No code
+  changed. No memory entries updated.
+
+  Untracked artifacts NOT staged (intentional, local-only):
+    .agents/, .claude/, .vscode/, docs/audit_2026-05-13/, several
+    older session snapshots, scripts/maez_drift_report.py, ascii-art
+    architecture videos. These are all unrelated to today's work.
+
+================================================================================
+Three observation gates still running passively
+================================================================================
+
+  1. S1b consumer-eligibility window opens 2026-05-14 11:50 CDT.
+     Producer-only enablement clock from 2026-05-13. Operator decision
+     on flipping producer->consumer pending.
+
+  2. ARS catalog Entry 3 (audit-rewrite-strategy). Awaiting natural
+     conversation observation. Closes after one full day or three
+     natural memory-rewrite turns with no fragments leaking.
+
+  3. TRF catalog Entry 5 (temporal recall + fragment guard). Awaiting
+     natural conversation observation. Closes after one full day or
+     three natural temporal-memory turns with no fragments.
+
+  None of these need Claude's action; they need the operator's when
+  the conversation outcomes are observed.
+
+================================================================================
+Next session — exact opener locked
+================================================================================
+
+Phase 3 pilot: migrate Body Topology slice docs to the new layout.
+
+  mkdir -p docs/slices/body-topology/reviews
+  git mv docs/SLICE_BODY_TOPOLOGY_BAD.md \
+         docs/slices/body-topology/spec.md
+  git mv docs/SLICE_BODY_TOPOLOGY_BAD_CLAUDE_COUNCIL_REVIEW.md \
+         docs/slices/body-topology/reviews/claude-council.md
+  git mv docs/SLICE_BODY_TOPOLOGY_BAD_CODEX_PANEL_REVIEW.md \
+         docs/slices/body-topology/reviews/codex-panel.md
+  rg "SLICE_BODY_TOPOLOGY|body-topology" docs
+
+Then update only the docs refs the sweep finds (BAD Decision 24, ADR
+0029, docs/README.md migration table), commit as
+"docs: migrate body topology slice docs", push.
+
+Empirical sweep already done this session: zero BT references outside
+docs/ in the repo; one mention in memory but conceptual not path, no
+update needed. Sweep scope `docs` is sufficient.
+
+Discipline: no behavior changes, no service restarts, no memory
+updates, atomic single commit, `git mv` preserves rename history.
+
+================================================================================
+What's parked (NOT next session)
+================================================================================
+
+  - Phase 4: migrate active slice families (ARS, TDP, TRF, S1A1, S1B)
+    into the new layout. Gated on Phase 3 pilot landing cleanly +
+    observation gates closing.
+  - Phase 5: legacy organ memos (X.0-X.6) and pre-anatomy memos.
+  - Phase 6: handoffs, snapshots, ledger, flat audits.
+  - Phase 7: sweep cross-references in memory, code comments,
+    AGENTS.md, top-level README.md.
+  - Camera presence (local, same-host, presence-only, enabled_until
+    timebox) — next body-slice candidate per implementation ladder.
+  - S2 contextual integrity at ingest — prerequisite for any
+    information limb; can plan in parallel with camera presence.
+  - Body Bus protocol spec — required before cross-device limb
+    publication.
+  - Jetson limb registration — after Body Bus or via narrowed
+    private-transport adapter.
+  - Information Limb V1 (Calendar) — after S2 or alongside minimal
+    S2 predicate.
+  - Always-on audio — requires its own dedicated BAD; carved out
+    explicitly from this BAD.
+
+================================================================================
+Plain English (per the memory rule)
+================================================================================
+
+Today the body constitution got stamped. Decision 24 is now law: Maez
+has one body host (currently Aurora, but the role is what's load-bearing
+so future hardware changes don't require re-stamping the law). Limbs
+include physical things (camera, microphone, Jetson, speaker, Presto)
+and information limbs (account connectors like Calendar and Gmail).
+Limbs publish structured facts, not raw worlds. Information limbs need
+a memory-filter organ (S2) before they can ship. Always-on microphone
+needs its own separate law. Voice identity gets the same
+transparency-log treatment Maez's memory already gets.
+
+The docs folder got a front-door map. Anyone (human or agent) opening
+docs/ can now read docs/README.md and find what they need. Going
+forward, new slice docs land in docs/slices/<name>/ instead of as
+another flat SLICE_*.md at the top of docs/.
+
+Two commits on origin/main, body law canonical, docs mapped. Nothing
+implemented. Nothing in motion. Three observation gates running on
+their own clocks.
+
+Next session is a clean, mechanical, docs-only file move: three
+git-mv operations + reference updates + commit + push. After that,
+the next architectural question is camera presence vs S2 first.
+
+Sleep. The body has a written constitution now. The docs have a
+table of contents. The next drawer to move is well-labeled.

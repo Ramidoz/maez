@@ -1,0 +1,64 @@
+Maez — session snapshot
+
+BUILD: Sessions slice2-live-canary
+DATE: 2026-05-26
+AGENT: Codex
+HEAD: fbe78e1
+COMMITS_SINCE: 2026-05-25 00:00
+COMMIT_COUNT: 11
+TEST_FUNCTIONS: 4712
+
+========================================
+WHAT CHANGED TODAY
+========================================
+
+- 2026-05-25 20:18 — fbe78e125 (Maez): fix(curiosity): project neutral baseline for live canaries
+- 2026-05-25 20:15 — 67705d384 (Maez): fix(curiosity): keep live canaries from mutating temperament
+- 2026-05-25 19:49 — 8856eef69 (Maez): test(curiosity): support live-path canary seam rows
+- 2026-05-25 19:34 — b592c4614 (Maez): test(curiosity): add scratch producer canary
+- 2026-05-25 19:20 — df07923f2 (Maez): feat(curiosity): wire wonderings-backed producers
+- 2026-05-25 18:59 — 69ff32b8f (Maez): feat(curiosity): add producer ceremony
+- 2026-05-25 18:45 — ba4a54548 (Maez): feat(curiosity): land Slice 2 first write-paths
+- 2026-05-25 18:13 — fb76a135d (Maez): docs(curiosity): preserve pre-split review history
+- 2026-05-25 18:11 — f0d14e324 (Maez): docs(curiosity): canonicalize drive-driven curiosity spec
+- 2026-05-25 14:05 — 211ace64c (Maez): feat(felt-time): implement meaningful salience seam
+- 2026-05-25 13:24 — a23fa4b5f (Maez): docs(felt-time): canonicalize subjective_duration meaningful-salience seam spec v1
+
+========================================
+PRODUCTION STATE
+========================================
+
+- maez.service: active (PID 1938945)
+- maez-observe-sidecar.service: not-installed
+- maez-web.service: not-installed
+- maez-watchdog.service: not-installed
+- maez-subscription-proxy.service: active (PID 1529800)
+- llama-server.service: active (PID 3188)
+- lived episodes: 32
+- private thoughts (count only): 3681
+- wonderings: 9
+- inner residue events (count only): 71
+- entity index entries: 48
+- entity mentions: 89
+- entity aliases: 7
+- fast-conversation turns: 37
+
+========================================
+NEXT SESSION PRIORITIES
+========================================
+
+- Track A anchor: docs/TRACK_A.md
+- Run the substrate observation greps from docs/handoffs/2026-05-01.md if present
+
+========================================
+LIVE VERIFICATION ANCHOR
+========================================
+
+- Slice 2 live curiosity canary crossed at HEAD fbe78e1.
+- Live backups before migration/canary: memory/backups/wonderings_pre_8856eef_20260526T011102Z.db, memory/backups/subjective_duration_pre_8856eef_20260526T011102Z.db, plus pre-live-canary fbe78e1 backups for wonderings/subjective_duration/temperament at 20260526T011900Z.
+- Live Wonderings migration verified: wonderings.bond_id, wonderings.resolved_at, wondering_drive_metadata sidecar, FK to wonderings(id), idx_wondering_drive_metadata_bond, and Wonderings._conn() PRAGMA foreign_keys=ON with negative FK refusal.
+- Live canary token: SLICE2_LIVE_CURIOSITY_CANARY_1779758374.
+- Live canary wondering_id: 9; status resolved; sidecar subject_kind owner_bond_relational; resolution_marker_type explicit_owner_resolved.
+- Live canary subjective_duration_event_id: 5; producer_event_id wondering:9:priority:owner_bond:resolution:explicit_owner_resolved:1779758374; producer_ref drive_driven_curiosity; is_canary=1; meaningfulness_score=0.25.
+- Non-disturbance verified: temperament_event_id=None, curiosity stayed None, no curiosity temperament_events rows, residual stayed 0.0, recent meaningful-event count stayed 0.0.
+- maez.service restarted on fbe78e1 and remained active after canary; journal after restart showed only expected stop/start systemd entries.

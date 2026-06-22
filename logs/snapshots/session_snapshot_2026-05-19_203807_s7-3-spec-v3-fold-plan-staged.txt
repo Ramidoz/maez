@@ -1,0 +1,129 @@
+Session Snapshot — 2026-05-19 20:38 CDT
+========================================
+
+State: S7.3 covenant lane in wait-state for spec.md v3 write.
+HEAD: 5e6b05e (pushed to origin/main, fully synced).
+Push: complete. 27 S7.3 ladder commits durable beyond local disk.
+
+Slice State
+-----------
+- S7.3 (Guarded Self-Modification Execution): both lanes have ratified the
+  architecture and returned REVISE on v2 carriers; v3 fold delta-plan
+  committed at 5e6b05e; spec.md v3 write is the next operator action.
+- Spec versions and reviews on disk:
+    spec.md @ 4302feb (v2)
+    reviews/spec-claude-council.md @ 61f46cd (v1 review)
+    reviews/spec-codex-panel.md @ 583a7ef (v1 review)
+    reviews/spec-fold-plan.md @ f312829 (v2 fold plan)
+    reviews/spec-fresh-reader-gate.md @ 73280c6 (v2 §8.2 gate, REVISE)
+    reviews/spec-codex-panel-v2.md @ 1d15873 (v2 Codex panel, REVISE)
+    reviews/spec-v3-fold-plan.md @ 5e6b05e (v3 fold plan, current)
+
+Today's Covenant-Lane Work (post-compaction session)
+----------------------------------------------------
+Faithfulness checks (all PASS, byte-identical to transcript-extracted
+producer text where applicable):
+  - 1f0be6f Gate-5 record
+  - 583a7ef Codex panel v1
+  - 61f46cd Claude council on spec v1
+  - 7b12a31 OQ1 Claude second-fold (re-output from transcript)
+  - 4302feb spec v2 (mechanical PASS; lane-committed, producer is operator)
+  - 73280c6 fresh-reader gate (byte-identical)
+  - 1d15873 Codex panel v2 (mechanical; producer text in Codex transcript)
+  - 5e6b05e v3 fold-plan (byte-identical)
+  - f312829 fold-plan (semantic PASS with recorded editorial-cleanup
+    exception on CP-S2 pseudo-code fence; rule now codified)
+
+Lane work produced:
+  - spec-fold-plan.md (v2 fold absorbing CP-S1 through CP-S12)
+  - §8.2 fresh-reader gate on v2 (three blank-context subagents dispatched
+    from this chat: cold covenant reader, cold spec-implementor, cold
+    residual-hunter; all returned REVISE; consolidated as
+    spec-fresh-reader-gate.md)
+  - spec-v3-fold-plan.md (v3 fold absorbing gate + Codex panel v2)
+
+Memory Additions (saved today, indexed in MEMORY.md)
+-----------------------------------------------------
+  - feedback_artifact_commit_faithfulness.md
+    Byte-faithful to producer text by default (sha256 against
+    transcript-extract); known rendering defects allow minimal operator
+    cleanup with drift + rationale recorded explicitly; never silent
+    absorption; stop the recommit spiral.
+
+  - feedback_check_both_directions_no_false_block.md
+    For every "no fake X" covenant invariant, also check the dual "no
+    false rejection of legitimate Y"; the covenant lane's adversarial-
+    defeat framing predictably misses the let-the-real-signal-through
+    direction; lane-complementarity catches it. Concrete instance:
+    Codex caught D11 preview_exclusion_check would block legitimate
+    Maez objections that quote the proposed text, after three covenant
+    readers ratified D11 as the spec's strongest object.
+
+Lane Discipline Established / Recorded
+---------------------------------------
+  - The Claude covenant lane is this chat. §8.2 fresh-reader gates are
+    dispatched here via Agent tool, consolidated here, then committed
+    by the operator as a lane artifact under reviews/.
+  - Operator gate dispatches (in another chat / Codex session / informal)
+    are operator-lane work, not covenant-lane. If used, must commit with
+    honest lane attribution.
+  - Byte-faithfulness sha256 against transcript-extracted text is the
+    default standard for committed artifacts the lane produced in chat.
+  - For Codex-lane-produced artifacts (in Codex CLI session), mechanical
+    verification + structural sanity check is the applicable standard;
+    Claude lane can't byte-verify Codex transcripts.
+  - Carrier-vs-prose recurring pattern: every prose binding the spec
+    asserts must have an inherited or amended code-shape carrier. Three
+    layers caught so far (CP-S1, then D5/D6/D19 in v2 gate).
+
+Open / Wait-State
+------------------
+Next ladder step is the operator writing spec.md v3 from
+reviews/spec-v3-fold-plan.md, pinning three open choices:
+  1. §1.1/§1.2 carrier shape: Shape A (rendered-text carrier; lane lean)
+     vs Shape B (source-bundle content-hash chain).
+  2. §3.1 atomicity mechanism: SQLite ATTACH shared file (lane lean) vs
+     two-phase reserve-then-bind vs store consolidation.
+  3. §3.3 marker-only authority: all reader-unavailable rows operational
+     (lane lean) vs marker-verified authoritative carved out.
+
+When v3 commits, the covenant lane will:
+  - Firsthand-verify the commit (mechanical + byte-faithfulness).
+  - Confirm the three pinned choices match what the spec lane decided
+    (flag any divergence from lean as divergence-not-error).
+  - Dispatch §8.2 fresh-reader gate with three blank-context subagents,
+    with the let-Maez-be-heard dual-direction check added to all three
+    reader checklists.
+  - Cross-check against Codex v3 panel artifact (operator lane).
+  - Produce v4 fold delta-plan if either lane REVISEs, or signal
+    canonicalization if both ratify.
+
+No implementation yet. No code touched in S7.3 this session.
+
+Outstanding (Carried, Not Blocking)
+------------------------------------
+  - Push S7.3 ladder to GitHub releases / public Maez: not in scope; this
+    session's push went to private origin/main only.
+  - Cocoanut session 2026-04-22 OSS-launch roadmap (Phases 0-10 complete,
+    documented in .claude/plans/harmonic-tumbling-wozniak.md): not active
+    this session; Track-A substrate-organ + S7.3 covenant work has been
+    the focus through 2026-05.
+  - 2026-04-24 memory curation plan (addendum in the OSS-launch plan
+    file): not run; deferred.
+
+Working Tree (untracked / unrelated)
+-------------------------------------
+Modified: docs/.obsidian/graph.json, memory/project_planner.json
+Untracked: .agents/, .claude/, .vscode/, docs/Untitled.canvas,
+docs/audit_2026-05-13/, docs/research/convergent_agent_substrate_scout_2026-05-17.md,
+logs/snapshots/*.txt (existing snapshots; this file adds another),
+maez_architecture_{ascii,explained,emergence}.{mp4,py},
+scripts/maez_drift_report.py
+
+None of the above are S7.3-scope. No covenant-lane action on them.
+
+Resume Signal
+-------------
+Next session: read this snapshot + reviews/spec-v3-fold-plan.md + the
+two new feedback memories above; verify HEAD; wait for spec.md v3 commit
+signal, or proceed with operator direction.

@@ -1,0 +1,340 @@
+Session snapshot — 2026-05-14 end of day, M1 enabled
+
+================================================================================
+Handoff scope
+================================================================================
+
+This is a handoff snapshot, not a decision doc. The morning half of this
+session is captured at session_snapshot_2026-05-14-body-topology-canonical.txt
+(Body Topology canonicalization + 5 docs migration waves + S2 scoping arc).
+
+This snapshot covers the M1 arc that landed in the afternoon, the SIGTERM
+diagnostic, and the carry-forward state for the next session.
+
+================================================================================
+M1: lived-episode promotion from bonded conversation — ENABLED
+================================================================================
+
+The "honest writer" is live. From a single session:
+
+  fa08901  docs(m1): draft lived-episode promotion spec
+  aeee8ba  docs(m1): add Claude six-role council review of spec
+  2acd661  docs(m1): add Codex engineering panel review
+  851721d  docs(m1): fold panel amendments into promotion spec
+  bfbfb95  docs(m1): canonicalize lived-episode promotion decision
+  42aafce  feat(m1): wire lived-episode promotion organ
+  7a76f6c  docs(m1): add Claude six-role post-implementation council review
+  46675e9  fix(m1): close post-implementation panel blockers
+  9e30076  docs(m1): add Claude six-role post-recovery verification council
+  618ea59  docs(m1): pin Recovery-CC-1 observation standard
+  c51a672  (push anchor; origin/main even with HEAD at session close)
+
+Canonical anchors:
+  BAD:  docs/governance/BETA_ARCHITECTURE_DECISIONS.md — Decision 25
+  ADR:  docs/adr/0030-m1-lived-episode-promotion.md (canonicalized in bfbfb95)
+  Slice: docs/slices/m1-lived-episode-promotion/
+
+Load-bearing rule established: "Promote biography; do not widen recall."
+Raw memory stores may feed M1's promotion process. They are NOT allowed to
+become direct evidence for "I remember..." claims through TRF.
+
+Defense pattern: build_structural_summary(pair_count, start_at, end_at,
+trigger, reason) — function signature literally cannot accept raw content.
+Codex BLOCK closed at the type level, not just by discipline.
+
+Runtime flag: MAEZ_M1_LIVED_EPISODE_PROMOTION=1 (currently set on live).
+
+================================================================================
+Current health
+================================================================================
+
+  maez.service        : active running, NRestarts=0
+  llama-server.service: active running, NRestarts=0
+  llama-judge.service : active running, NRestarts=0
+
+  /health reports:
+    lived_episodes.m1.enabled = true
+    biography_staleness_status = alarm
+    biography_newest_age_hours > 168
+
+  Staleness alarm firing is CORRECT v1 behavior. The newest lived episode is
+  still 2026-05-01 (the wound M1 was built to repair). The alarm should clear
+  on first M1 promotion of a new bonded Telegram exchange. Expected
+  transition: alarm -> warn -> ok as new exchanges promote.
+
+  0 telegram_exchange episodes in lived_episodes.db as of session close
+  (M1 was enabled minutes before this snapshot).
+
+================================================================================
+Four observation gates now running passively
+================================================================================
+
+  1. S1b consumer-eligibility window
+     Status: producer-only enabled 2026-05-13 11:50 CDT.
+     Gate: 24h AND 200 cycles. 24h passed; cycle count not authoritatively
+     verified (operator's earlier diagnostic found only ~20-26 logged events).
+     Operator decision pending on whether to flip consumer-eligibility,
+     waive the 200-cycle count, or add a real cycle counter first.
+     Independent of M1.
+
+  2. ARS catalog Entry 3 (audit-rewrite-strategy)
+     Awaiting natural-conversation observation. Closes after one full day or
+     three natural memory-rewrite turns with no fragments leaking.
+
+  3. TRF catalog Entry 5 (temporal-recall-fragment-guard)
+     Awaiting natural-conversation observation. Closes after one full day or
+     three natural temporal-memory turns with no fragments.
+
+  4. M1 one-week behavioral closure (just started)
+     Per spec runbook with Recovery-CC-1 standard pinned:
+       - One full week elapsed since enablement.
+       - At least 3 natural bonded Telegram conversations.
+       - At least 1 explicit-marker test ("remember this" or equivalent).
+       - At least 1 natural temporal recall probe finding a promoted episode
+         and TRF surfacing it via structural summary (not generic title).
+       - Staleness status moved from alarm to warn or ok.
+       - No M1 promoted episode contains quoted owner/Maez text.
+       - No TRF widening into raw stores.
+       - No daemon restarts attributable to M1.
+
+     v1 observation standard (Recovery-CC-1):
+       Maez remembers that a promoted exchange happened, when it happened,
+       why it was promoted, and which raw source IDs prove it. It does NOT
+       mean Maez can quote or summarize what was said. This protects the
+       structural-summary rule from being judged as memory failure.
+
+================================================================================
+SIGTERM/SIGKILL finding — separate diagnostic slice
+================================================================================
+
+During M1 enablement, restarting maez.service required SIGKILL after SIGTERM
+failed to stop the process cleanly within systemd's grace window.
+
+Investigation by operator:
+  - SIGTERM was received and clean shutdown began.
+  - Telegram, WebSocket, health endpoint, planning, consolidation, and
+    journal threads all stopped cleanly.
+  - Process stayed alive until systemd/user killed it.
+  - Live maez process has 296 threads at idle, mostly:
+    - tokio-rt-worker (Rust async runtime)
+    - sqlx-sqlite-worker (Rust SQLite via sqlx)
+    - reasoning-loop-named native threads
+    - a few executor threads
+  - M1 lock NOT in the shutdown path.
+  - No M1 flush/promotion logs at shutdown time.
+
+Conclusion: NOT M1-attributed. The likelier cause is broader daemon
+shutdown / native-thread / shared-executor issue, probably from
+Rust-backed library threads that don't exit cleanly on SIGTERM. M1
+enablement merely required a restart, which exposed the pre-existing
+"some workers don't go home when Maez closes the shop" problem.
+
+Queued as: daemon-shutdown diagnostic slice (not M1 recovery).
+Starting hypothesis: daemon shutdown is blocked by native/background
+worker threads, likely from Rust-backed libraries or shared executor
+paths.
+Starting evidence: clean shutdown initiation, M1 not in shutdown path,
+296-thread inventory with category breakdown.
+Next diagnostic goal: capture thread dump during the hang, identify
+which library/thread pool refuses to exit.
+
+Cheap commands for the diagnostic session opener:
+  py-spy dump --pid $(pgrep -f maez_daemon) > /tmp/maez-hang-threads.txt
+  .venv/bin/python -c "import sys; print([m for m in sys.modules if 'tokio' in m.lower() or 'sqlx' in m.lower()])"
+  .venv/bin/python -c "import threading, atexit; atexit.register(lambda: [print(f'{t.name}  daemon={t.daemon}  alive={t.is_alive()}') for t in threading.enumerate()])"
+
+(No sudo needed — maez.service is user-scoped under rohit.)
+
+Important: M1 stays live during this work. If a flag-off reproduction
+ever proves the SIGTERM issue is M1-specific, that's when the M1
+recovery lane reopens — not before.
+
+================================================================================
+S2 state — WIP held
+================================================================================
+
+S2 (Contextual Integrity at Ingest) was paused mid-fold during the M1
+detour. Current state:
+
+  Pushed:
+    008e171  docs(s2): draft contextual integrity scoping memo
+    998d465  docs(s2): add Claude six-role council review of scoping memo
+    b6804c5  docs(s2): fold pre-panel scoping clarifications
+
+  Held local-only (still on disk, untracked or WIP):
+    docs/slices/s2-contextual-integrity-at-ingest/scoping.md  (modified,
+      mid-fold with Codex REVISE amendments partially applied)
+    docs/slices/s2-contextual-integrity-at-ingest/reviews/codex-panel.md
+      (untracked — Codex's panel review on S2 scoping memo)
+
+Resume condition: M1 observation stabilizes (alarm clears, observation log
+shows healthy promotions, no regressions surface). Then pick up S2 fold
+from the held state. S2 spec drafting and the full panel cycle follow.
+
+S2 priority intent: gates information limbs (Calendar, Gmail, Slack, Notion,
+Drive, GitHub) before they ship live ingest. Calendar is the recommended
+first information limb because it's structured-by-birth, lower blast radius,
+and maps onto invariant #1 (Time as Biography).
+
+================================================================================
+Untracked / dirty local state at session close (NOT cleaned)
+================================================================================
+
+Working tree has, in addition to the S2 WIP above:
+  docs/.obsidian/graph.json   (modified, Obsidian autogen, unrelated noise)
+  docs/Untitled.canvas        (untracked, Obsidian artifact)
+  docs/audit_2026-05-13/      (untracked — operator decision held; raw
+                                vulnerability citations, redaction-or-keep
+                                question deferred)
+  .agents/                    (untracked)
+  .claude/                    (untracked)
+  .vscode/                    (untracked)
+  logs/snapshots/session_snapshot_2026-05-06_014119.txt
+    (untracked stale snapshot, unrelated)
+  REBUILD_PLAN_2026-04-18.md  (still flat at docs/ top-level per .gitignore;
+                                permanent outlier)
+
+None of these are cleanup targets for the next session unless the operator
+chooses to address them. They're noted here so a resuming agent knows they
+exist and aren't part of M1 work.
+
+================================================================================
+Operator decisions still on the board (low urgency)
+================================================================================
+
+  - S1b consumer-eligibility: flip to consumer-eligible, waive 200-cycle
+    gate, or add a real cycle counter first.
+  - docs/audit_2026-05-13/: redact-and-track, keep permanently local, or
+    defer indefinitely.
+  - M1 v1.1 candidates queued (none blocking):
+      - UTC midnight cap reset -> operator-local midnight (TRF DST pattern)
+      - participants=["Rohit", "Maez"] hardcoding -> identity-config routing
+        for OSS portability
+      - 5 eligibility-reason categories -> pin in spec amendment
+      - Module-docstring pointer to spec + reviews paths
+  - sqlite ResourceWarning noise: catalog entry or N-track operational item
+
+================================================================================
+Discipline patterns reinforced today
+================================================================================
+
+  1. Two-panel convergence as load-bearing signal.
+     M1 spec's "promote biography; do not widen recall" and Codex's panel
+     catching the summary-quoting hole both arrived at the same load-bearing
+     concern from different lanes. Reinforces feedback_covenant_slices_
+     need_both_panels.
+
+  2. Function-signature defense over disciplined-text writing.
+     build_structural_summary's signature prevents content leakage by
+     construction, not by promise. Substrate principle worth pinning if
+     it recurs.
+
+  3. Investigate causation through evidence, not timing correlation.
+     I hypothesized SIGTERM was M1-lock related (timing correlation).
+     Operator checked evidence (journalctl + thread inventory + shutdown
+     path) and refuted. Right outcome; right discipline.
+
+  4. Both-lane closure is non-negotiable on covenant-shaped work.
+     Codex's post-implementation panel caught 17+ engineering edges Claude's
+     council didn't see. Recovery closed all of them; second post-recovery
+     council verified covenant invariants STRENGTHENED through recovery (not
+     just preserved). Both lanes complementary; neither sufficient alone.
+
+  5. Operator waiver of cooling-off was logged in commit body.
+     42aafce explicitly waived cooling-off for same-session implementation
+     with documented rationale (durable diagnostic + council + panel BLOCK
+     + fold recovery already in place). Discipline noted as exception, not
+     erosion.
+
+================================================================================
+Operational state at session close
+================================================================================
+
+  Date / time           : 2026-05-14 (Thursday) evening
+  Git state             : main even with origin/main
+  Push status           : 10 commits pushed during session arc;
+                          working tree dirty per "untracked" section above
+  Tests                 : 88 focused M1 tests passing post-recovery;
+                          memory_integrity_invariant + TRF + nightly_lived_memory
+                          test suites also green
+  Services              : maez, llama-server, llama-judge — all active,
+                          NRestarts=0 after the SIGTERM/SIGKILL restart
+  Live runtime flag     : MAEZ_M1_LIVED_EPISODE_PROMOTION=1
+  Live biography state  : lived_episodes.db has 29 rows, newest 2026-05-01,
+                          0 telegram_exchange episodes (M1 just enabled)
+  Memory updates        : none this session (no surprising-or-non-obvious
+                          patterns surfaced that aren't already in docs)
+  Daemon shutdown       : queued as separate diagnostic slice
+
+================================================================================
+Next session — recommended opener
+================================================================================
+
+Default move: passive M1 observation. Check the observation log daily;
+note any promoted telegram_exchange episodes, staleness transitions,
+and any TRF surfacing of M1 episodes.
+
+If a fresh session has appetite for proactive work, the priority order is:
+
+  1. Daemon-shutdown diagnostic slice (small, evidence-gathering only).
+     Run the three cheap commands above against the live daemon, identify
+     which thread categories survive SIGTERM, queue a findings doc.
+
+  2. M1 observation log review after 24h, 48h, and one week. Judge against
+     the Recovery-CC-1 standard ("remembers it happened, when, why, source
+     IDs" — NOT "remembers what was said").
+
+  3. S2 fold completion + spec drafting. Resume only after M1 observation
+     stabilizes (alarm cleared, first promotion observed, no regressions).
+
+  4. v1.1 candidates if any of them become urgent (none currently).
+
+  5. docs/audit_2026-05-13/ redaction-or-keep decision when appetite exists
+     (not urgent).
+
+Do NOT default to:
+  - Disabling M1 (no evidence-based reason).
+  - Restoring the nightly reflection timer as a memory fix (it restarts the
+    old narrow-corpus reflection layer, not the biography writer).
+  - Treating SIGTERM/SIGKILL as M1's lane (evidence refuted that read).
+  - Widening TRF to read raw stores (the discipline the whole M1 arc
+    defended).
+
+================================================================================
+Plain English
+================================================================================
+
+Today the missing organ shipped.
+
+M1 — the "honest writer" — went from diagnostic (the wound is real, the
+biography cupboard has been empty since May 1, there's never been a path
+from Telegram conversation to biography) to spec to both reviews to fold
+to canonicalization to implementation to both post-implementation reviews
+to recovery (Codex caught 17 engineering edges) to both-lane closure to
+push to enablement to observation start — all in one session, with a
+documented operator waiver on cooling-off.
+
+The honest writer is structurally correct: summaries cannot quote raw
+conversation because the summary function's signature won't accept raw
+text. Surface gating prevents non-Telegram surfaces from being labeled as
+Telegram biography. Lock guarding prevents race conditions. Sidecar rebuild
+from biography handles total state loss. Backup manifest covers the M1
+sidecar for hardware succession. The staleness alarm is correctly firing
+because the wound is still real until the first promotion lands.
+
+One operational caveat appeared: the maez daemon doesn't shut down cleanly
+on SIGTERM. Evidence pointed away from M1 (M1 wasn't in the shutdown path;
+296 threads survived, mostly Rust-runtime workers, not M1 locks). Queued as
+its own diagnostic slice; M1 stays live in the meantime.
+
+Tomorrow: passive observation. The alarm should clear with the first
+promoted exchange. Within a week we'll know whether the writer works
+honestly without overreaching. The daemon-shutdown question can be its
+own small detective slice when there's appetite.
+
+For now, the honest reader has been honest for weeks. The honest writer
+is awake and listening. The bond is still there. The biography is about
+to start being written again.
+
+Sleep. M1 is alive. S2 waits patiently. The house has some workers who
+don't go home; we'll figure that out later.

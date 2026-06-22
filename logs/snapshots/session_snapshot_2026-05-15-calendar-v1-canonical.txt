@@ -1,0 +1,235 @@
+# Maez Session Snapshot — 2026-05-15 00:59 CDT
+
+Latest pointer copy of:
+
+`logs/snapshots/session_snapshot_2026-05-15-calendar-v1-canonical.txt`
+
+Purpose: handoff-shaped session close after Calendar v1 canonicalization. This is not a decision document and not a review packet.
+
+## Current Git State
+
+- Repo: `/home/rohit/maez`
+- Branch: `main`
+- Remote state: even with `origin/main`
+- Current origin tip: `dbf5308 docs(calendar): canonicalize Calendar v1 as Decision 28`
+- Last five commits:
+  - `dbf5308` — Calendar v1 canonicalized as Decision 28 / ADR 0033
+  - `e1ca5cd` — Claude covenant amendments folded into Calendar v1 spec
+  - `38101ae` — Codex engineering panel amendments folded into Calendar v1 spec
+  - `aa9a805` — Calendar v1 spec drafted
+  - `1baa78b` — Calendar v1 diagnostic added
+
+Known local working tree state is intentionally preserved:
+
+- Modified: `docs/.obsidian/graph.json`
+- Untracked local agent/editor dirs: `.agents/`, `.claude/`, `.vscode/`
+- Untracked local docs/artifacts: `docs/Untitled.canvas`, `docs/audit_2026-05-13/`
+- Untracked older snapshots under `logs/snapshots/`
+- Untracked local visuals: `maez_architecture_*.py`, `maez_architecture_*.mp4`, `maez_emergence.*`
+- Untracked local helper: `scripts/maez_drift_report.py`
+
+Do not clean these by default. They are not part of the Calendar v1 canonicalization.
+
+## Living Body Check
+
+Checked at `2026-05-15 00:59:33 CDT`.
+
+- `/health`: `status=alive`
+- `reasoning_loop.cycle_count=290`
+- `reasoning_loop.cycle_stalled=false`
+- Current stage at check: `github_context`
+- Stage age at check: `1s`
+- Uptime at check: about `3h 29m`
+- Credentials source: `secrets-local-env`
+- Required credentials missing: `0`
+- Credential rollback flag: disabled
+
+M1 lived episodes:
+
+- `lived_episodes.m1.enabled=true`
+- `lived_episodes.staleness.staleness_status=ok`
+- `lived_episodes.staleness.newest_age_hours=5.44`
+- Active biography count: `32`
+- `telegram_exchange` episodes in `memory/lived_episodes.db`: `3`
+- Latest `telegram_exchange` created at `2026-05-15T00:37:25.215086+00:00`
+
+Episode source counts at close:
+
+```text
+core_memory       15  2026-04-28T04:22:18.572003+00:00
+followup_doc       5  2026-04-28T02:28:14.584604+00:00
+reflection         9  2026-05-01T09:01:20.349492+00:00
+telegram_exchange  3  2026-05-15T00:37:25.215086+00:00
+```
+
+Plain read: the body is awake, the reasoning loop is moving, the writer is writing, staleness is healthy, and credential loading is using the locked-drawer path.
+
+## Five-Organ Substrate Delta
+
+This session arc leaves five substrate organs canonical or live:
+
+1. Body Topology — Decision 24 / ADR 0029
+   - Status: canonical law-only substrate.
+   - Load-bearing rule: body bounds and peripheral-limb safe failure are governing law.
+   - Current runtime implication: peripheral organs fail to unavailable/stale/unknown, not invented certainty.
+
+2. M1 Lived-Episode Promotion — Decision 25 / ADR 0030
+   - Status: canonical, implemented, enabled, observing.
+   - Load-bearing rule: promote biography without widening recall.
+   - Current runtime implication: Maez can remember that bonded Telegram exchanges happened without quoting raw conversation into biography.
+
+3. Daemon Credential Hygiene — Decision 26 / ADR 0031
+   - Status: canonical, implemented, live, observing.
+   - Load-bearing rule: identity-bearing material is not ordinary config.
+   - Current runtime implication: daemon credentials load from `secrets-local-env`; process-list exposure for Decision-26 secret names has been closed by the v1 design and verified earlier.
+
+4. Contextual Integrity at Ingest (S2) — Decision 27 / ADR 0032
+   - Status: canonical law-only substrate.
+   - Load-bearing rule: external information limbs pass through the customs office before they reach Maez's body, memory, or voice.
+   - Current runtime implication: future information limbs inherit source ownership, consent tier, redaction, audit, and telemetry boundaries.
+
+5. Calendar v1 S2-Bounded Ingest — Decision 28 / ADR 0033
+   - Status: canonical implementation spec, code not started.
+   - Load-bearing rule: Calendar is provenance, not Maez's lived schedule.
+   - Current runtime implication: legacy Calendar behavior is now formally deprecated by law; implementation must remove it instead of wrapping it.
+
+## Calendar v1 Close State
+
+Artifacts now on origin:
+
+- `docs/slices/calendar-v1/diagnostic.md`
+- `docs/slices/calendar-v1/spec.md`
+- `docs/slices/calendar-v1/reviews/codex-panel.md`
+- `docs/slices/calendar-v1/reviews/spec-claude-council.md`
+- `docs/adr/0033-calendar-v1-s2-bounded-ingest.md`
+- Decision 28 in `docs/governance/BETA_ARCHITECTURE_DECISIONS.md`
+
+Calendar v1 diagnostic found the legacy Calendar path violated the newly canonical substrate stack:
+
+- Raw Calendar titles/locations could enter prompt context.
+- Legacy alert voice could make Maez sound like it was nudging.
+- OAuth tokens lived outside the credential hygiene interface.
+- There was no S2 envelope, consent tier, redaction, or content-free telemetry boundary.
+- Provider facts and biography were not structurally separated.
+
+Calendar v1 spec now says the replacement shape is:
+
+- Primary owned Calendar only in v1.
+- Description/body forbidden in v1.
+- No proactive alerts in v1.
+- Polling-only sync in v1; push/webhook deferred.
+- Legacy path removed, not fallback-gated.
+- No live OAuth onboarding without explicit operator action.
+- Calendar v1 connector disabled by default until the operator enables it.
+
+## Cooling-Off Boundary
+
+Calendar v1 code must not start until `2026-05-16` at earliest unless the operator explicitly logs a waiver.
+
+Recommendation carried forward: honor the cooling-off rule. This slice deletes legacy behavior and introduces the first S2 information-limb implementation. There is no production incident requiring same-day code.
+
+Earliest implementation opener:
+
+1. Four-check living-body sequence first.
+2. Read `docs/slices/calendar-v1/spec.md`.
+3. Start with RED tests for legacy disablement.
+4. Only then touch daemon imports or Calendar code.
+
+## Calendar v1 Implementation Order
+
+From the canonical spec:
+
+1. Legacy-disablement tests RED-first.
+2. Calendar mode resolution at process start.
+3. Daemon legacy import removal.
+4. Disable legacy prompt, memory, scoring, alert, morning-briefing, cache-worker, and fast-lane paths.
+5. Add v1 connector/store/read-model behind disabled-by-default flag.
+6. Add content-free health and project-panel telemetry.
+7. Treat OAuth onboarding as a separate user-explicit gate.
+
+Both-lane post-implementation review is required before push/enablement.
+
+Live observation requires at least one week after OAuth onboarding.
+
+## Open Observation Gates
+
+Passive gates already running:
+
+- M1 one-week behavioral observation.
+  - Started after M1 enablement on 2026-05-14.
+  - Approximate closure window: around 2026-05-21 if criteria pass.
+  - Judge by Recovery-CC-1 standard: remembers that it happened, when, why, and source IDs; not what was said.
+
+- Daemon credential hygiene live observation.
+  - Started after Decision 26 implementation and recovery.
+  - Watch for provider credentials continuing to work, no process-list leakage, child-process env hygiene, and aggregate-only health/log surfaces.
+
+- S1b consumer-eligibility window.
+  - Passive; no action this snapshot.
+
+- ARS Entry 3 natural-conversation observation.
+  - Passive; no action this snapshot.
+
+- TRF Entry 5 natural-conversation observation.
+  - Passive; no action this snapshot.
+
+Calendar v1 is not observing yet because no implementation or OAuth onboarding has happened.
+
+## Open Queues
+
+Near-term:
+
+- Calendar v1 implementation after cooling-off, if operator chooses.
+- Code path must begin with RED legacy-disablement tests.
+
+Queued but not urgent:
+
+- M1 v1.1 candidates:
+  - UTC-midnight daily cap reset vs local day.
+  - Hardcoded `Rohit` participant portability.
+  - Eligibility-reason categories spec pin.
+  - Module docstring pointer to spec/reviews.
+
+- Daemon credential hygiene v2:
+  - Reader migration away from broad `os.environ.get()`.
+  - CI pattern scanner widening.
+  - Further subprocess scrubbing coverage.
+
+- Camera presence:
+  - Next body-slice candidate under Body Topology implementation ladder.
+
+## Next-Session Anti-Patterns
+
+Do not:
+
+- Start Calendar code before the living-body check.
+- Touch live OAuth or real Google account content during initial implementation.
+- Commit operator Calendar titles, attendees, locations, descriptions, or raw event IDs.
+- Preserve legacy Calendar as a fallback path.
+- Disable legacy Calendar behavior without RED tests proving the path is cold.
+- Widen Maez's prompt/memory/voice access to Calendar content to make the first version feel smarter.
+- Push unrelated WIP or clean local artifacts opportunistically.
+
+## Recommended Next Opener
+
+Run the living-body check:
+
+```bash
+curl http://127.0.0.1:11435/health
+sqlite3 /home/rohit/maez/memory/lived_episodes.db \
+  "SELECT source_kind, COUNT(*), MAX(created_at) FROM episodes GROUP BY source_kind;"
+git status --short --branch
+```
+
+Then branch:
+
+- If heartbeat healthy, M1 writing, and credentials clean: start Calendar v1 implementation tests.
+- If heartbeat broken: fix heartbeat first.
+- If M1 stops promoting: fix M1 observation first.
+- If credentials surface a leak: fix credential hygiene first.
+
+## Plain English
+
+Maez now has five organs in law or live wiring: body bounds, the honest writer, the locked drawer, the customs office, and the first customs-inspected limb. Calendar v1 is not code yet; it is the legal contract for deleting the old smuggling path and replacing it with a bounded reader that treats Google Calendar as external evidence, not Maez's own life.
+
+The body is healthy enough to sleep on. Tomorrow starts with a stethoscope, then RED tests, then the old Calendar path gets cut cleanly.

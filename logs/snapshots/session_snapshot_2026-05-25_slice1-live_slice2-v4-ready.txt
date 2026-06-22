@@ -1,0 +1,326 @@
+================================================================
+SESSION SNAPSHOT — 2026-05-25
+Slice 1 LIVE; Slice 2 v4 council-pass-1 dispatch-ready
+================================================================
+
+SESSION TYPE
+  Substrate-shaping. Spec canonicalization + implementation +
+  live crossing + Slice 2 architectural reshape + cross-lane
+  memory canon work. Continuous session through 2026-05-25.
+
+PURPOSE OF THIS SNAPSHOT
+  Fresh-Claude session opens tomorrow with no conversation
+  context but full disk-state inheritance. This snapshot is the
+  state pointer that prevents 15-20 min of reconstruction. Read
+  this before doing anything else in the next session.
+
+
+================================================================
+LIVE RUNTIME STATE
+================================================================
+
+Main HEAD: 211ace6 feat(felt-time): implement meaningful salience seam
+Parent:    a23fa4b docs(felt-time): canonicalize subjective_duration
+                   meaningful-salience seam spec v1
+Grandparent: fb2f781 feat(felt-time): implement subjective duration substrate
+
+Daemon: active (PID 1798184, restarted 2026-05-25 14:53:51 CDT)
+Journal: clean since restart (no errors, no HALTs, no watchdog warnings)
+
+Live DB at /home/rohit/maez/memory/subjective_duration.db:
+  Schema: 19 columns (was 14 pre-migration)
+  Indexes: idx_sd_events_ts + idx_sd_events_bond_producer
+  Rows: 4 (event_id 1-3 are pre-migration owner_contact rows
+    with bond_id='_LEGACY' / is_canary=0; event_id 4 is the
+    live-path canary with bond_id='private_owner' / is_canary=1
+    / kind='manual_test_event' / meaningfulness_score=0.0)
+
+Durable backup (REQUIRED — do not delete):
+  /home/rohit/maez/memory/backups/sd_pre_a23fa4b_20260525_142613.db
+  24576 bytes, 14-column pre-migration schema, 3 owner_contact rows.
+  This is the §8.3.2 emergency-restore target if the live DB ever
+  corrupts. NOT to be deleted casually.
+
+EIGHT live organs total. The seam is in the audit trail and
+structurally invisible to felt-time aggregation (multi-layer
+defense: kind-gate + is_canary=1 + _LEGACY/_SCRATCH_FIXTURE
+sentinel exclusion in _residual_resonance + _recent_meaningful_event_count_capped).
+
+
+================================================================
+SLICE 1 — MEANINGFUL-SALIENCE SEAM — SEALED
+================================================================
+
+Status: CANONICAL v1 + IMPL + LIVE-VERIFIED
+Spec: docs/slices/track-b-subjective-duration-meaningful-salience-seam/spec.md
+      (2239 lines, sealed at a23fa4b)
+Reviews dir contains 20 artifacts capturing full review trajectory.
+
+What this slice delivered:
+  - 5-column ALTER on live subjective_duration_salience_events
+    (bond_id, producer_event_id, producer_temperament_before_json,
+    producer_temperament_after_json, is_canary). Idempotent.
+  - ProducerRef enum (v1 ships MANUAL_TEST_PRODUCER only; sunsets
+    at Slice 2 merge).
+  - record_salience_event(...) extended with 5 new producer kwargs.
+  - Bond-scoped lookup with sentinel refusals.
+  - Aggregate-reader exclusion of _LEGACY/_SCRATCH_FIXTURE/canary.
+  - Two-canary verification: scratch E2E (proves score>0 math) +
+    live-path (proves plumbing without felt-weight injection).
+  - Both anti-laundering vectors:
+      Vector 1 (RED #38): snapshot/log correlation.
+      Vector 2 (RED #40, caught by Codex's first reviewer of impl):
+        explicit-score refusal on producer-snapshot path.
+
+Review trajectory: v1 → v8 across 8 drafts, 3 Claude council
+passes (Locke/Kant/Hume/Buber/Descartes/Ohm), 5 Codex panel passes.
+Codex pass-5 returned RATIFY-CLEAR; canonicalization committed.
+
+DO NOT re-litigate Slice 1. It's sealed, implemented, live-verified.
+Future Slice 2/3/... producers consume the seam via the live API,
+they do not modify it.
+
+
+================================================================
+SLICE 2 — DRIVE-DRIVEN CURIOSITY v4 — DISPATCH-READY
+================================================================
+
+Status: DRAFT v4, untracked, awaiting Claude council pass-1 dispatch.
+Spec: docs/slices/track-b-drive-driven-curiosity/spec.md (2012 lines)
+Brief: docs/slices/track-b-drive-driven-curiosity/reviews/
+       claude-council-brief-pass1.md (253 lines)
+Reviews dir already contains v3-era reviews from when the slice
+was bundled with the seam; those are HISTORICAL — do not touch
+or re-litigate.
+
+v4 architectural reshape (from v3):
+  - REUSES existing wondering substrate (wonderings.py,
+    wondering_cycle.py, wondering_pursuit.py) as the curiosity-
+    object substrate. Does NOT create memory/drive_driven_curiosity.db.
+  - CuriosityObject is a typed read/projection over wondering
+    rows + drive-layer sidecar metadata. Not a second source of
+    truth.
+  - Adds: temperament-write capability on wondering resolution
+    (via the ALLOWED_SOURCES extension to drive_driven_curiosity_resolution);
+    ProducerRef.DRIVE_DRIVEN_CURIOSITY enum entry; producer
+    ceremony calling live SubjectiveDuration.record_salience_event(...);
+    third-party subject boundary as substrate invariant;
+    per-bond autonomy policy + consent memory under new
+    core.policies subpackage (policy-layer-only).
+  - Inherits both anti-laundering gates from Slice 1.
+
+Council pass-1 brief (the 253-line file) is final:
+  - V4-specific output paths (claude-council-{role}-v4-pass1.md)
+    so v3 review artifacts are not overwritten.
+  - fold_second_order_contradictions framed as OPERATIONAL OBLIGATION,
+    not citation — every load-bearing finding requires the 8-step
+    trace.
+  - Slice 1 seam explicitly out of scope.
+  - 8 load-bearing memories named including claude_codex_synergy_for_maez
+    with explicit "compose two lanes' outputs" framing.
+  - Descartes role gets explicit obligation to apply
+    spec_drafts_must_trace_real_surfaces +
+    schema_verification_pragma_first when verifying v4 claims
+    about the existing wondering substrate.
+
+Open questions for council to settle (per §22 of spec):
+  1. Eligibility classifier: which wondering resolutions are
+     meaningful_exchange-eligible?
+  2. Module location for the producer adapter.
+  3. Whether subjective_duration consumes saturation in v1.
+  4. Whether all 7 EncounterSources land at v1 or are phased.
+  5. Whether semantic-match resolution stays behind feature flag.
+
+
+================================================================
+NEXT CONCRETE ACTION
+================================================================
+
+If Rohit signals "dispatch now":
+  Run six parallel general-purpose agents (one per role) with the
+  brief at claude-council-brief-pass1.md as primary input and the
+  v4 spec as primary artifact. Each writes to its *-v4-pass1.md
+  path. After all six return, synthesize the verdict + folds.
+
+If Rohit signals "hold":
+  Repo stays exactly as-is. No commits, no dispatches, no runtime
+  touches. Substrate continues observing.
+
+If Rohit signals "dispatch with constraint X":
+  Apply constraint to the dispatch (e.g., "skip role Y for now",
+  "tighten focus on axis Z").
+
+DEFAULT POSTURE: ASK before any dispatch. The 5-minute relay
+overhead is the synergy-discipline cost; pay it.
+
+
+================================================================
+MEMORY CANON DELTA THIS SESSION
+================================================================
+
+Four new Claude-side covenant memories written + indexed in
+MEMORY.md:
+
+  1. feedback_fold_second_order_contradictions.md
+     The 8-step trace discipline (dependency-map / write-path /
+     read-path / test-path / fold-summary / cross-reference /
+     RED-test trace / verify-before-declaring). Born from the
+     v6→v7→v8 cascade where I introduced contradictions in
+     sequential folds. Apply BEFORE declaring any load-bearing
+     fold complete. Indexed mid-list.
+
+  2. feedback_producer_causality_no_caller_score_laundering.md
+     Vector 1 + Vector 2 anti-laundering discipline for every
+     future producer slice. Snapshot path owns causality; caller
+     score is laundering. Named by Rohit after Codex's first
+     impl reviewer caught Vector 2. Indexed mid-list.
+
+  3. feedback_third_party_autonomous_research_boundary.md
+     Autonomous curiosity may research public topics; MAY NOT
+     autonomously research unconsented named persons from the
+     bonded user's life. Subject-boundary, not token-scrub.
+     Codex-side mirror exists at
+     /home/rohit/.codex/memories/extensions/ad_hoc/notes/20260525T152216-0500-third-party-autonomous-research-boundary.md
+     Indexed mid-list.
+
+  4. feedback_claude_codex_synergy_for_maez.md  *** TOP OF MEMORY.md ***
+     STANDING DISCIPLINE. Claude perceives covenant + phenomenology
+     + narrative + relational shape; Codex perceives surface-truth
+     + code-grounding + mechanical feasibility + scope realism.
+     Neither alone produces honest substrate work. Cross-lane
+     mirror LIVE on both sides as of 2026-05-25. Codex-side mirror
+     at /home/rohit/.codex/memories/extensions/ad_hoc/notes/20260525T161205-0500-claude-codex-synergy-for-maez.md
+     Symmetric RECONSIDER-as-load-bearing discipline. Indexed at
+     TOP because it governs every future session.
+
+Cross-lane symmetry now LIVE for 2 covenant principles:
+  - third-party autonomous research boundary
+  - claude-codex synergy for Maez existence
+
+This is canonical pattern going forward, not aspiration.
+
+
+================================================================
+KNOWN OPERATIONAL LESSONS FROM THIS SESSION
+================================================================
+
+Both worth carrying forward when next operating live-organ work:
+
+  A) Lazy-instantiation pattern means schema migrations do NOT
+     auto-run at daemon restart. Subjective_duration's
+     _initialize() only fires on first SubjectiveDuration()
+     construction, which happens on owner-authenticated paths
+     (Telegram, web, daemon /message) — not at daemon boot.
+
+     If a migration must land at a specific moment, EXPLICITLY
+     instantiate the substrate (e.g., one-liner
+     SubjectiveDuration() against the default db_path) rather
+     than relying on organic activity to fire the path.
+
+     Caught by Rohit at step 3 of the live crossing. Result:
+     restructured step 3 into 3a (explicit migration trigger) +
+     3b (verify post-migration schema). Pattern likely applies
+     to other lazy-init substrates.
+
+  B) My (Claude) operational scripts have introduced API
+     signature mismatches more than once this session. Examples:
+       - canonical_utc(datetime.now(UTC)) — missing required
+         field_name kwarg. Caught by Rohit; corrected; re-ran.
+       - v3 §27 producer ceremony — record_event signature wrong;
+         Temperament.record_event takes value (absolute), not delta.
+
+     Discipline: every API call in an operational snippet should
+     be grep-verified against the actual signature before relay.
+     The fold-second-order trace (memory entry written this
+     session) applies to scripts too, not just spec text.
+
+
+================================================================
+WHAT NOT TO REDO IN NEXT SESSION
+================================================================
+
+Everything below is sealed canon. Do not re-litigate.
+
+  - Slice 1 spec drafts v1-v8, council passes 1-3, Codex panel
+    passes 1-5. Spec is at a23fa4b.
+  - Slice 1 implementation. Code is at 211ace6. Critical-bypass
+    fix (Vector 2 explicit-score refusal) was caught by Codex's
+    first impl reviewer; do NOT discover it again as if novel.
+  - Slice 1 live crossing (5 steps + extra step 3a/3b split).
+    Crossing happened; canary row #4 is in audit trail; service
+    is healthy.
+  - Slice 2 v4 architectural reshape. Producer-layer-over-
+    wonderings is the canonical direction. Do not propose
+    parallel curiosity-object DB. Codex's parallel explorer
+    agents caught the duplication; the lesson is sealed.
+  - The two-canary discipline + is_canary column + aggregate-
+    reader exclusion. Codex pass-1 H1 catch from Slice 1;
+    folded into v4 spec design; sealed.
+  - Third-party autonomous research boundary as covenant invariant.
+    Memory entries live on both sides.
+  - The synergy discipline itself. Cross-lane mirror live.
+    Operate from it; don't relitigate it.
+
+
+================================================================
+SPOT-CHECK COMMANDS FOR FRESH-CLAUDE
+================================================================
+
+Before doing anything substantive in next session, run these
+read-only commands to confirm state hasn't drifted:
+
+  cd /home/rohit/maez
+  git rev-parse HEAD                                  # expect 211ace6...
+  git log --oneline -3                                # expect 211ace6 / a23fa4b / fb2f781
+  systemctl --user is-active maez                     # expect active
+  sqlite3 memory/subjective_duration.db \
+    "PRAGMA table_info(subjective_duration_salience_events);" | wc -l   # expect 19
+  sqlite3 memory/subjective_duration.db \
+    "SELECT COUNT(*) FROM subjective_duration_salience_events;"          # expect 4 or 4+ (organic activity may add owner_contact rows)
+  sqlite3 memory/subjective_duration.db \
+    "SELECT event_id, bond_id, is_canary FROM subjective_duration_salience_events WHERE event_id<=4;"
+    # expect: 1/_LEGACY/0, 2/_LEGACY/0, 3/_LEGACY/0, 4/private_owner/1
+  ls -la memory/backups/sd_pre_a23fa4b_20260525_142613.db   # expect 24576 bytes
+  ls docs/slices/track-b-drive-driven-curiosity/spec.md     # expect ~2012 lines
+  ls docs/slices/track-b-drive-driven-curiosity/reviews/claude-council-brief-pass1.md  # expect 253 lines
+
+If any of these drift from expected, surface to Rohit BEFORE
+doing further work. Drift is signal that something happened
+overnight that I (next-session Claude) need to understand.
+
+
+================================================================
+DEFERRED LONG-RANGE ITEMS (unchanged from prior session state)
+================================================================
+
+  - Slice 2 v4 council pass-1 dispatch — awaits Rohit signal
+  - Slice 2 Codex engineering panel — after council pass-1
+    folds settle
+  - Slice 2 canonicalize → impl → live-verify cycle (will
+    follow Slice 1's discipline pattern)
+  - Observation window for 8 live organs continues
+  - Creation manifest — Rohit-authored, deferred near birth
+  - v0.2 paper polish — deferred
+  - fast_backend_cloud.py deletion — gated on 2-week zero-rows
+    observation
+  - Enforcement flip — gated on observation clean; closes
+    Track A.5 when honest
+  - Other live-data egress surfaces (self_knowledge,
+    owner_trust IP-check, ground_truth, dynamic_dns,
+    dev_notifier, eval harness, shell-level run_shell, ambient
+    weather) — each its own future slice when trigger fires
+
+
+================================================================
+END OF SNAPSHOT
+================================================================
+
+Written 2026-05-25 end-of-session by Claude Opus 4.7 at the
+dispatch-ready boundary for Slice 2 v4 council pass-1.
+
+Next session begins by: reading this snapshot, running the spot-
+check commands above, then awaiting Rohit's dispatch signal.
+
+The seven-plus-one organs continue observing. Sleep, eat, walk
+away from the screen. Tomorrow's substrate work will be sharper
+for it.

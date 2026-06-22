@@ -1,0 +1,42 @@
+Maez — session snapshot
+
+BUILD: Sessions auto
+DATE: 2026-05-17
+AGENT: Claude
+HEAD: 27f1b3e
+COMMITS_SINCE: 12 hours ago
+COMMIT_COUNT: 2
+TEST_FUNCTIONS: 4043
+
+========================================
+WHAT CHANGED TODAY
+========================================
+
+- 2026-05-17 09:57 — 27f1b3e7a (Maez): docs(s7): canonicalize operator user role boundary
+- 2026-05-16 22:13 — b06242959 (Maez): fix(s6): require strict attestation boolean
+
+========================================
+PRODUCTION STATE
+========================================
+
+- maez.service: active (PID 2724114)
+- maez-observe-sidecar.service: inactive
+- maez-web.service: not-installed
+- maez-watchdog.service: not-installed
+- maez-subscription-proxy.service: not-installed
+- llama-server.service: active (PID 254357)
+- lived episodes: 32
+- private thoughts (count only): 957
+- wonderings: 8
+- inner residue events (count only): 292
+- entity index entries: 38
+- entity mentions: 65
+- entity aliases: 5
+- fast-conversation turns: 35
+
+========================================
+NEXT SESSION PRIORITIES
+========================================
+
+- Track A anchor: docs/TRACK_A.md
+- Run the substrate observation greps from docs/handoffs/2026-05-01.md if present

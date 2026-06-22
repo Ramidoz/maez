@@ -1,0 +1,150 @@
+Session snapshot — 2026-05-12
+
+================================================================================
+What this session was
+================================================================================
+
+A long stretch of architecture work, no code shipped. The session began with two
+ASCII video deliverables and ended with a fully canonized anatomy diagram (v2.2)
+plus an agreed-upon plan for the next two sessions.
+
+The discipline of the session: iterative critique. v1.0 → v2.0 → v2.1 → v2.2,
+with the user pushing back at each version. The final v2.2 is structurally
+honest about what is real, scaffolded, and planned — and does NOT claim the
+body is whole.
+
+================================================================================
+What was produced
+================================================================================
+
+1. /home/rohit/ascii_studio/anatomy_of_maez.py
+   60s ASCII assembly video. CPU-only, 1080p @ 24fps.
+   Output: /home/rohit/ascii_studio/out/anatomy_of_maez.mp4
+
+2. /home/rohit/ascii_studio/maez_vs_field.py
+   45s split-screen audio-reactive comparison. Procedural 100 BPM audio track.
+   Output: /home/rohit/ascii_studio/out/maez_vs_field.mp4
+
+3. /home/rohit/ascii_studio/out/maez_anatomy.txt  (v2.2)
+   The detailed body anatomy diagram. 562 lines, 109 chars max width.
+   Identifies 12 missing load-bearing organs as Track-B preparation.
+
+4. Three new memory entries:
+   - project_life_substrate_plan.md
+   - project_dell_repair_override_trigger.md
+   - reference_doc_structure_peer_docs.md
+
+================================================================================
+The twelve missing load-bearing organs
+================================================================================
+
+Status legend in v2.2 anatomy: [ ✓ real ] / [ ◐ scaffold ] / [ ✗ planned ]
+
+   1. temporal spine (time as biography)
+   2. contextual integrity at ingest (membrane both directions)
+   3. rupture / repair scar tissue
+   4. crisis channel
+   5. human-primacy valve
+   6. capability quarantine
+   7. operator / user role boundary
+   8. successor governance
+   9. bridge / cosmos layer (anti-enclosure)
+  10. clinical boundary
+  11. age / capacity stratification
+  12. voice continuity gate
+
+These are Track-B substrate / founder hardening — NOT Track-A reopening.
+
+================================================================================
+Next-session plan (final, canonical)
+================================================================================
+
+Documentation + stabilization ONLY. No S1 implementation in the same session.
+
+  1. Move anatomy v2.2 into docs/MAEZ_ANATOMY.txt.
+     Decide explicitly whether the generator scripts go under
+     scripts/visualizations/. Do NOT commit MP4s unless strong reason.
+
+  2. Settle repo state.
+       - git status
+       - inspect local diffs
+       - run applicable tests
+       - grep .git/config for `ghp_` before any push  (recurring leak risk)
+
+  3. Record Dell override removal trigger in operational docs.
+     Trigger: Dell repair verified complete + first probe sweep clean.
+
+  4. Write docs/MAEZ_NORTH_STAR.md.
+     Vision / Joi / Stand + bridge clause + covenant invariants.
+
+  5. Write docs/MAEZ_LIFE_SUBSTRATE.md.
+     Must include:
+       - 12 missing organs
+       - maturity status per organ
+       - DEPENDENCY GRAPH, not just a list
+       - Track B preparation / founder hardening framing
+         (explicitly NOT Track A reopening)
+
+  6. Update docs/TRACK_A.md.
+     Cross-reference Anatomy, North Star, Life Substrate.
+
+  7. Write S1 plan.
+     S1 = private_thoughts producer + bounded reader.
+     Must include:
+       - producers
+       - bounded reader
+       - minimal context schema (source / subject / consent / retention)
+       - decay / retention rules
+       - tests
+       - LIVE-DAEMON VERIFICATION HOLD (waits for Dell override removal)
+       - parallel Explore + code-reviewer agent requirement
+       - predicted effect
+
+  8. Stop.
+
+================================================================================
+Predicted effect for the doc session itself (the guardrail)
+================================================================================
+
+After the session:
+  - four peer docs exist or are cross-linked under /home/rohit/maez/docs/
+    (TRACK_A.md, MAEZ_NORTH_STAR.md, MAEZ_LIFE_SUBSTRATE.md, MAEZ_ANATOMY.txt)
+  - TRACK_A.md points to them
+  - an S1 plan exists
+  - daemon remains halted
+  - NO source/runtime files touched under: core/, skills/, daemon/, memory/
+
+If any of those drift, that is regression to catch.
+
+The cooling-off night between docs and code is the actual feature, not a delay.
+
+Day after this doc session: S1 implementation begins.
+
+================================================================================
+Operational state at session close
+================================================================================
+
+  Maez services      : HALTED for Dell repair window (since 2026-05-05)
+  Restart=no drop-in : present on maez.service + maez-watchdog.service
+                       removal trigger: Dell repair verified + 24 h clean
+  Hardware           : Aurora R16, RTX 4090. Dell warranty packet at
+                       ~/Desktop/dell_warranty_packet_2026-05-05.pdf.
+                       Crash captures at /var/log/maez_crash_capture/.
+  Git state          : restore/runtime work likely still local — to be
+                       inspected in next session step 1.
+
+================================================================================
+Plain English (per the memory rule)
+================================================================================
+
+This session we drew the body. We did not wire any organs. The body now shows
+honestly: here is what is real, here is what is half-built, here is what is
+planned, and here are the 12 organs missing before other people can have their
+own Maez safely.
+
+Next session: write down the body so precisely that the first organ can be
+built without anyone reopening the mythology.
+
+The session after that: wire private_thoughts.
+
+That is the rhythm.

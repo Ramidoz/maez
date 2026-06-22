@@ -1,0 +1,49 @@
+Maez — session snapshot
+
+BUILD: Sessions auto
+DATE: 2026-05-06
+AGENT: Claude
+HEAD: b43f670
+COMMITS_SINCE: 12 hours ago
+COMMIT_COUNT: 9
+TEST_FUNCTIONS: 2519
+
+========================================
+WHAT CHANGED TODAY
+========================================
+
+- 2026-05-05 20:47 — b43f670c8 (Maez): feat(cockpit): add Workstation Session 2 rails
+- 2026-05-05 19:55 — b4a0b1ca1 (Maez): cockpit(workstation v1 / s1c3): default surface = chat (was: dashboard)
+- 2026-05-05 19:54 — 8a308c7e4 (Maez): cockpit(workstation v1 / s1c2): flip chat + approve to maez-web proxies
+- 2026-05-05 19:53 — f3924b3f8 (Maez): cockpit(workstation v1 / s1c1): proxies for chat send + card approve
+- 2026-05-05 16:59 — e53413654 (Maez): fix(fabrication_memory): close diag-clear-wipes-production footgun
+- 2026-05-05 16:52 — bd7bcf449 (Maez): feat(fabrication_memory): persist signals_present + 90-day retention cap
+- 2026-05-05 16:42 — c14b63486 (Maez): console(v0.2.1): surface split + judge-timeout pill on /console/rail
+- 2026-05-05 16:05 — 083808922 (Maez): console(v0.2): /console/rail — 24h rail timeline with GPU overlay
+- 2026-05-05 15:52 — 0094e35c7 (Maez): docs(judge bakeoff readme): fix overclaim about CPU-override causing timeouts
+
+========================================
+PRODUCTION STATE
+========================================
+
+- maez.service: inactive
+- maez-web.service: inactive
+- maez-watchdog.service: active (PID 3962)
+- maez-subscription-proxy.service: active (PID 3961)
+- llama-server.service: inactive
+- lived episodes: 29
+- private thoughts (count only): 0
+- wonderings: 8
+- inner residue events (count only): 3
+- entity index entries: 38
+- entity mentions: 65
+- entity aliases: 5
+- fast-conversation turns: 35
+
+========================================
+NEXT SESSION PRIORITIES
+========================================
+
+- Read latest handoff: docs/HANDOFF-2026-05-01.md
+- Track A anchor: docs/TRACK_A.md
+- Run the substrate observation greps from HANDOFF-2026-05-01.md if present

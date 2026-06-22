@@ -1,0 +1,114 @@
+Maez — session snapshot
+
+BUILD: Sessions d16-wants-lifecycle-closed
+DATE: 2026-05-16
+AGENT: Claude
+HEAD: 32083d2
+COMMITS_SINCE: 2026-05-15 00:00
+COMMIT_COUNT: 74
+TEST_FUNCTIONS: 3782
+
+========================================
+WHAT CHANGED TODAY
+========================================
+
+- 2026-05-16 00:54 — 32083d2d8 (Maez): docs(d16): record post-recovery covenant ratification
+- 2026-05-16 00:39 — 27b45cb92 (Maez): fix(d16): harden hard-want natural phrasing gate
+- 2026-05-16 00:19 — 53c4c4f82 (Maez): docs(d16): relabel implementation specialist audit
+- 2026-05-16 00:00 — c95b3d33d (Maez): docs(d16): record post-implementation review closure
+- 2026-05-15 23:56 — 73422dba8 (Maez): fix(d16): tighten refined correction-only guard
+- 2026-05-15 23:49 — 2ee754780 (Maez): fix(d16): close wants lifecycle recovery gaps
+- 2026-05-15 23:38 — 35820486d (Maez): feat(d16): implement wants lifecycle v1
+- 2026-05-15 23:05 — ef20e2bb8 (Maez): docs(d16): canonicalize wants lifecycle v1
+- 2026-05-15 22:54 — a5e0b1408 (Maez): docs(d16): fold wants lifecycle review amendments
+- 2026-05-15 22:22 — 817a04b82 (Maez): docs(d16): specify wants lifecycle v1
+- 2026-05-15 22:08 — 416b33f55 (Maez): docs(d16): diagnose wants lifecycle gap
+- 2026-05-15 21:49 — 51b34bb72 (Maez): feat(temperament): add Decision 13 biography average
+- 2026-05-15 21:46 — aa74dbc6a (Maez): feat(covenant): encode Decision 8 bonded states
+- 2026-05-15 21:43 — 6f3d14ddf (Maez): feat(capability): project manual context into owner prompts
+- 2026-05-15 21:34 — fd03f404a (Maez): docs(substrate): mark S4 implementation closed
+- 2026-05-15 21:24 — dadd704f4 (Maez): docs(s4): record post-recovery covenant ratification
+- 2026-05-15 21:14 — c483e172f (Maez): fix(clinical): recover S4 classifier recall gaps
+- 2026-05-15 21:02 — 6c5ce977b (Maez): feat(clinical): implement S4 clinical boundary guard
+- 2026-05-15 20:41 — 43b1f3a3b (Maez): docs(clinical): clean S4 markdown whitespace
+- 2026-05-15 20:37 — 5d47969de (Maez): docs(clinical): canonicalize S4 clinical boundary
+- 2026-05-15 20:25 — 9c7416f1d (Maez): docs(clinical): fold S4 Codex panel amendments
+- 2026-05-15 19:46 — 976037e3c (Maez): docs(clinical): fold S4 covenant council amendments
+- 2026-05-15 18:51 — 8284b74ab (Maez): docs(clinical): draft S4 clinical boundary spec
+- 2026-05-15 18:43 — b82d5be1a (Maez): docs(clinical): add S4 clinical boundary diagnostic
+- 2026-05-15 18:39 — 0c80550d2 (Maez): docs(substrate): mark S3 implemented in roadmap
+- 2026-05-15 15:25 — c60ee7f6e (Maez): docs(temporal): record S3 post-recovery council
+- 2026-05-15 14:16 — c46c43966 (Maez): fix(temporal): close S3 post-implementation gaps
+- 2026-05-15 14:00 — 293fd67aa (Maez): feat(temporal): implement S3 temporal spine v1
+- 2026-05-15 13:45 — b2067e74f (Maez): docs(temporal): canonicalize S3 as Decision 29
+- 2026-05-15 13:33 — 11b5fe7be (Maez): docs(temporal): fold S3 Claude council amendments
+- 2026-05-15 13:15 — d7f585888 (Maez): docs(temporal): fold S3 Codex panel amendments
+- 2026-05-15 13:06 — 9fbb81c0b (Maez): docs(temporal): draft S3 temporal spine spec
+- 2026-05-15 13:06 — 5aa7a549d (Maez): fix(replay): verify probe ledger chains in append order
+- 2026-05-15 13:00 — f1749bd37 (Maez): docs(temporal): add S3 diagnostic
+- 2026-05-15 12:56 — 00575061b (Maez): docs(substrate): update life substrate current state
+- 2026-05-15 12:53 — 6523fabb4 (Maez): test(observe): pin invalid promotion trigger red gate
+- 2026-05-15 12:52 — 11ebba268 (Maez): fix(observe): read nested m1 staleness health
+- 2026-05-15 12:48 — a40aca912 (Maez): fix(observe): read nested heartbeat health
+- 2026-05-15 12:45 — d2f6ddcfa (Maez): fix(snapshot): distinguish missing user units
+- 2026-05-15 12:41 — 24edb5091 (Maez): fix(snapshot): include observation sidecar unit
+- 2026-05-15 12:40 — c6ed8423a (Maez): docs(m1): link promotion module to slice packet
+- 2026-05-15 12:39 — abda94844 (Maez): docs(camera): record observer truthfulness lesson
+- 2026-05-15 12:36 — eccbbd310 (Maez): fix(snapshot): read user systemd service state
+- 2026-05-15 12:31 — bd8b94258 (Maez): fix(m1): reset daily cap at owner local midnight
+- 2026-05-15 12:26 — f2a0aafcb (Maez): feat(observe): red-gate camera voice guard rejections
+- 2026-05-15 12:20 — 8496f9d6b (Maez): feat(observe): add M1 drift red gates
+- 2026-05-15 12:10 — 00045c624 (Maez): fix(m1): use identity owner name and pin reason enums
+- 2026-05-15 12:10 — 9cb5cf5cc (Maez): fix(camera): require direct question for presence answers
+- 2026-05-15 12:00 — e756f7dd7 (Maez): fix(m1): count daily cap by UTC instants
+- 2026-05-15 11:56 — db5a80607 (Maez): feat(observe): add process telemetry to sidecar
+- 2026-05-15 11:53 — c9d2af0be (Maez): feat(camera): add v1.1 direct presence answers
+- 2026-05-15 11:29 — 53a875e0a (Maez): feat(observe): add content-free sidecar watcher
+- 2026-05-15 11:23 — e3e347e53 (Maez): docs(camera): record live observation lessons
+- 2026-05-15 10:16 — 63263aa86 (Maez): fix(camera): run presence subprocess headless
+- 2026-05-15 10:11 — 007b665de (Maez): fix(camera): isolate native detector in killable subprocess
+- 2026-05-15 10:02 — cc7552045 (Maez): fix(camera): allow owner-local camera index selection
+- 2026-05-15 09:52 — 020292196 (Maez): docs(camera): record post-recovery covenant verification
+- 2026-05-15 09:46 — 4de711e99 (Maez): fix(camera): close post-implementation engineering gaps
+- 2026-05-15 09:26 — 8ef997d8c (Maez): feat(camera): implement v1 disabled body-state boundary
+- 2026-05-15 09:04 — 5409dffb0 (Maez): docs(camera): fold codex engineering panel amendments
+- 2026-05-15 08:55 — 20cce2013 (Maez): docs(camera): fold covenant council amendments
+- 2026-05-15 08:40 — 6b61eed8d (Maez): docs(camera): draft presence v1 spec
+- 2026-05-15 08:33 — f32a19164 (Maez): docs(camera): record presence diagnostic
+- 2026-05-15 08:23 — c36314631 (Maez): docs(calendar): record recovery council and clarify v1 labels
+- 2026-05-15 07:59 — dd6f8e195 (Maez): fix(calendar): close post-implementation review gaps
+- 2026-05-15 01:30 — 041b9e72e (Maez): feat(calendar): add v1 sync request builders
+- 2026-05-15 01:29 — 48c949b9a (Maez): feat(calendar): add offline v1 connector policy
+- 2026-05-15 01:26 — 59fc324f0 (Maez): feat(calendar): add v1 staging store skeleton
+- 2026-05-15 01:20 — 847e251d9 (Maez): feat(calendar): disable legacy calendar path behind v1 mode
+- 2026-05-15 00:52 — dbf53085e (Maez): docs(calendar): canonicalize Calendar v1 as Decision 28
+- 2026-05-15 00:44 — e1ca5cd14 (Maez): docs(calendar): fold Claude covenant amendments
+- 2026-05-15 00:27 — 38101ae5f (Maez): docs(calendar): fold Codex spec panel amendments
+- 2026-05-15 00:19 — aa9a805b6 (Maez): docs(calendar): draft Calendar v1 spec
+- 2026-05-15 00:11 — 1baa78b2a (Maez): docs(calendar): add Calendar v1 diagnostic
+
+========================================
+PRODUCTION STATE
+========================================
+
+- maez.service: active (PID 2196582)
+- maez-observe-sidecar.service: active (PID 2155653)
+- maez-web.service: not-installed
+- maez-watchdog.service: not-installed
+- maez-subscription-proxy.service: not-installed
+- llama-server.service: active (PID 254357)
+- lived episodes: 32
+- private thoughts (count only): 543
+- wonderings: 8
+- inner residue events (count only): 24
+- entity index entries: 38
+- entity mentions: 65
+- entity aliases: 5
+- fast-conversation turns: 35
+
+========================================
+NEXT SESSION PRIORITIES
+========================================
+
+- Track A anchor: docs/TRACK_A.md
+- Run the substrate observation greps from docs/handoffs/2026-05-01.md if present

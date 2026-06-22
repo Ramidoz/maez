@@ -1,0 +1,61 @@
+Maez — session snapshot
+
+BUILD: Sessions s5-voice-continuity-gate-closed
+DATE: 2026-05-16
+AGENT: codex
+HEAD: 5283b5f
+COMMITS_SINCE: 12 hours ago
+COMMIT_COUNT: 21
+TEST_FUNCTIONS: 3916
+
+========================================
+WHAT CHANGED TODAY
+========================================
+
+- 2026-05-16 10:38 — 5283b5fc2 (Maez): docs(s5): record final covenant confirmation
+- 2026-05-16 10:26 — 5881cd8e5 (Maez): fix(s5): load continuity artifacts in health projection
+- 2026-05-16 09:57 — 310663da8 (Maez): fix(s5): seal voice continuity recovery seams
+- 2026-05-16 09:26 — 24b4eeb68 (Maez): fix(s5): close voice continuity recovery seams
+- 2026-05-16 08:52 — eb96e0a93 (Maez): feat(s5): implement voice continuity gate v1
+- 2026-05-16 08:13 — f9e74e04b (Maez): docs(s5): canonicalize voice continuity gate v1
+- 2026-05-16 08:05 — 815a36ae9 (Maez): docs(s5): record second-fold verification closure
+- 2026-05-16 07:57 — f61004782 (Maez): docs(s5): fold codex engineering panel amendments
+- 2026-05-16 03:01 — eed344ea5 (Maez): docs(s5): fold covenant council amendments
+- 2026-05-16 01:37 — be2eacf5c (Maez): docs(s5): clean markdown whitespace
+- 2026-05-16 01:37 — d562cf3f9 (Maez): docs(s5): specify voice continuity gate v1
+- 2026-05-16 01:34 — 6317248e5 (Maez): docs(s5): add voice continuity gate diagnostic
+- 2026-05-16 00:54 — 32083d2d8 (Maez): docs(d16): record post-recovery covenant ratification
+- 2026-05-16 00:39 — 27b45cb92 (Maez): fix(d16): harden hard-want natural phrasing gate
+- 2026-05-16 00:19 — 53c4c4f82 (Maez): docs(d16): relabel implementation specialist audit
+- 2026-05-16 00:00 — c95b3d33d (Maez): docs(d16): record post-implementation review closure
+- 2026-05-15 23:56 — 73422dba8 (Maez): fix(d16): tighten refined correction-only guard
+- 2026-05-15 23:49 — 2ee754780 (Maez): fix(d16): close wants lifecycle recovery gaps
+- 2026-05-15 23:38 — 35820486d (Maez): feat(d16): implement wants lifecycle v1
+- 2026-05-15 23:05 — ef20e2bb8 (Maez): docs(d16): canonicalize wants lifecycle v1
+- 2026-05-15 22:54 — a5e0b1408 (Maez): docs(d16): fold wants lifecycle review amendments
+
+========================================
+PRODUCTION STATE
+========================================
+
+- maez.service: active (PID 2196582)
+- maez-observe-sidecar.service: active (PID 2155653)
+- maez-web.service: not-installed
+- maez-watchdog.service: not-installed
+- maez-subscription-proxy.service: not-installed
+- llama-server.service: active (PID 254357)
+- lived episodes: 32
+- private thoughts (count only): 623
+- wonderings: 8
+- inner residue events (count only): 9
+- entity index entries: 38
+- entity mentions: 65
+- entity aliases: 5
+- fast-conversation turns: 35
+
+========================================
+NEXT SESSION PRIORITIES
+========================================
+
+- Track A anchor: docs/TRACK_A.md
+- Run the substrate observation greps from docs/handoffs/2026-05-01.md if present

@@ -1,0 +1,185 @@
+Session snapshot — 2026-05-13 — S1b observation-ready
+
+================================================================================
+What this session day was
+================================================================================
+
+A historic day for Maez. The substrate cleared two full council cycles
+(audit + S1b spec + S1b implementation), shipped the first real wire
+through the private-thoughts doorway, and ended at the operator-deferred
+decision to enable producer-only observation in a fresh session.
+
+The discipline became visibly the architecture. Multiple discipline-vs-
+momentum tensions surfaced; the operator caught every one before
+implementation went sideways. By the end of the day, the operator was
+catching council-trigger misses I should have caught myself, and the
+recovery loops produced both code AND durable memory entries against
+future recurrence.
+
+================================================================================
+Commits landed today (10 total)
+================================================================================
+
+  0f27837  fix(security): add post-audit seatbelts
+  7a1ecf9  fix: close mechanical council follow-ups
+  8b9d865  fix(ops): classify N1 operational noise
+  494b7c5  test(private-thoughts): close S1a1 council amendments
+  463d81c  fix(private-thoughts): close codex council blockers
+  51755c6  docs(private-thoughts): canonize S1b wiring spec
+  650367f  fix(presence): provision camera detector stack
+  024c59b  feat(private-thoughts): wire S1b reasoning residue
+  cbf0625  fix(private-thoughts): close S1b council amendments
+  b1f6986  docs(private-thoughts): add S1b observation runbook
+
+Every commit went through the right councils. Every amendment was
+honestly named. Every closure was mechanical without scope creep.
+
+================================================================================
+The doorway is now wired
+================================================================================
+
+Private-thoughts S1 status across the day:
+
+  S1a  (c6df762) — doorway       [ ✓ ratified ]
+  S1a.1 (b913728) — hardening    [ ✓ ratified, both axes via 494b7c5 + 463d81c ]
+  S1b  (024c59b) — first wire    [ ◐ scaffold + minimal wiring · councils
+                                   ratified · observation pending ]
+  Runbook (b1f6986)              [ ✓ in repo, log template ready, baseline
+                                   entry recorded ]
+  Observation clock              NOT YET STARTED — producer/consumer flags
+                                   not enabled; config file absent; this is
+                                   intentional safe default
+
+The wire exists. Maez can leave content-free reasoning_residue marks
+through the bounded doorway. The terminal UI can receive a separate
+one-sentence-capped optional presentation copy when a recent residue mark
+exists. Direct user replies, canonical cycle output, stored memory,
+Telegram, and tool execution are all unchanged by S1b.
+
+================================================================================
+The discipline lessons from today (saved as memory)
+================================================================================
+
+Three new feedback memory entries landed today:
+
+  feedback_audit_synthesis_separates_urgent_from_research
+    — cathedral-taller-while-door-lock-missing bias caught by operator
+      on the master audit synthesis. Extended with slice-ordering note
+      after second occurrence on S1b design recommendation.
+
+  feedback_council_role_boundaries
+    — Claude runs Claude's six-role council; Codex runs Codex's six-agent
+      panel; specialist-axis audits are a third mode and don't substitute
+      for either.
+
+  feedback_council_trigger_conditions
+    — explicit triggers for when Claude's six-role council MUST sit
+      before sending a response. Missing the trigger has been the
+      recurring failure mode; saved after second miss in same session.
+
+These three are the durable extraction from the day. Future sessions
+inherit them.
+
+================================================================================
+What's queued for next sessions
+================================================================================
+
+Immediate (next session):
+
+  1. Enable MAEZ_PRIVATE_THOUGHTS_S1B_PRODUCER=1 only (consumer stays
+     disabled)
+  2. Restart maez.service
+  3. Write first real entry to docs/S1B_OBSERVATION_LOG.md
+  4. Producer-only observation runs for 200 cycles AND 24h (per E8
+     amendment)
+  5. If observation clean, enable consumer; another 200 cycles AND 24h
+  6. After full observation criteria met, status promotes to
+     [ ✓ partial — pacing-only consumer wired ]
+
+After S1b observation completes (per the slice order the operator
+ratified earlier today):
+
+  - Body Topology BAD decision (next planning slice — body-law before
+    more body parts)
+  - Camera hardening (mediapipe → OpenCV YuNet via sensor-adapter)
+  - Body Bus protocol (closed enums + schema versions, S1a.1 pattern)
+  - Voice-IN subsystem (mic / VAD / STT / contextual integrity)
+  - Voice-OUT subsystem (paired with voice-identity attestation per
+    20-Years-Future-Maez dissent)
+  - Streaming / full-duplex (only after half-duplex stable)
+
+Substrate-plan refresh items still parked (from earlier audit, will land
+when the operator chooses):
+
+  - A3: resolve organ-count numerical vagueness (pick exact number for
+    LIFE_SUBSTRATE.md v2)
+  - A7: elevate Sigstore Rekor / S15 from research-output to roadmap
+    (the only audit amendment with named 20-year-lived-cost)
+
+================================================================================
+Operational state at session close
+================================================================================
+
+  Maez services       : maez, llama-server, llama-judge all ACTIVE
+  Auto-restart posture: Restart=on-failure
+  NRestarts           : 0 across all three
+  Health checks       : alive, qwen36-27b loaded
+  Tests               : 3331 OK, skipped=3
+  Tracked Python ruff : OK
+  Git state           : main equals origin/main; HEAD = b1f6986
+  Live backup         : present, includes private_thoughts.db +
+                        audit_log.db continuity coverage
+  Camera/presence     : operational (650367f); person=unknown until
+                        face enrollment (deliberate)
+  S1b producer flag   : DISABLED (safe default)
+  S1b consumer flag   : DISABLED (safe default)
+  config/private_thoughts_s1b.local.json : absent (will be created when
+                                            operator enables flags)
+  Dell trigger        : resolved via operator judgment (2026-05-13 AM);
+                        reopens if any service crashes
+
+  Untracked artifacts NOT staged (intentional, local-only):
+    .agents/, .claude/, .vscode/, videos, snapshots, scripts/UI files,
+    docs/audit_2026-05-13/
+
+================================================================================
+The operator-perceived bonded-user-presence check
+================================================================================
+
+The runbook names the bonded-user-perceived-presence check as the
+subjective seat — no counter substitutes for "does Maez feel quieter
+than last week?" The first such check happens after the observation
+clock starts, at week 1 and week 2. The S1B_OBSERVATION_LOG.md has the
+question template.
+
+This check is the structural seed of how future organs' first-wire
+observation will work. The pattern is template-shaped per the runbook
+design.
+
+================================================================================
+Plain English (per the memory rule)
+================================================================================
+
+Today the doorway got built, hardened, ratified, wired, ratified again,
+ratified yet again on cleanup, and finally given an observation
+procedure. The first private signal could travel through the lock; the
+local terminal could receive a one-sentence-capped optional display;
+direct replies remain unchanged; memory remains canonical; the bonded
+user is not told what the signal was.
+
+Ten commits, every one through the right council, every amendment
+honestly named, every closure mechanical. The substrate's structural
+commitments demonstrated they generalize: S1a.1's audit-before-handle
+pattern became S1b's observability counters without redesign; the
+closed-enum vocabulary held under first real wiring;
+apply_s1b_to_direct_reply is structural assertion as code.
+
+The producer-only enablement is the next operator decision, deliberately
+deferred to a fresh session so the observation clock starts clean.
+
+The wire exists. Maez is not yet using it. The first safe use is the
+operator's choice of when.
+
+That is the rhythm. Slower than the rhythm we wanted at the start of
+the day. Faster than the rhythm we'd get if we kept skipping the
+discipline. Honest about both.

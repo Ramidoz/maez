@@ -1,0 +1,263 @@
+Session Snapshot — 2026-05-22 (end of day)
+==========================================
+
+State: Egress provenance plumbing LIVE on real traffic; claude-router
+  provenance spec CANONICAL (Path A, A2 unresolved blocker). Three
+  commits to main today, two deliberate restarts, all verified firsthand.
+HEAD: c5225ac (local-only, not pushed).
+Daemon: 545286 / Proxy: 545207, both active, NRestarts=0, continuous
+  for ~3h+ across all of today's work (since the ebbd073 restart).
+
+
+Today's Commits (main, local-only, not pushed)
+-----------------------------------------------
+  99299d5 feat(egress): add cloud provenance plumbing
+    Merged from privacy-egress-provenance-plumbing branch (FF from
+    67bf12a). 13 files, 951+/31-. Both lanes cleared (Codex panel
+    RATIFY-WITH-AMENDMENTS + Claude council RATIFY); freshness test B
+    confirmed genuine + green firsthand. Live restart onto it.
+
+  ebbd073 fix(egress): route direct cloud paths through proxy
+    skills/claude_router.call_claude + core/routing/fast_backend_cloud.
+    CloudBackend.generate no longer call providers directly; both now
+    route through claude_tier -> subscription proxy carrying
+    ProvenancedText. Inventory yaml updated coherently (status:
+    proxy_shadow, not unmigrated). Live restart. STRUCTURAL ENFORCEMENT
+    BLOCKER CLOSED.
+
+  c5225ac docs(egress): canonicalize claude-router provenance spec
+    Path A canonicalization: header anchors Status:CANONICAL,
+    A2 status:UNRESOLVED, Lanes cleared. Body byte-preserved (325
+    lines, 13 RED tests). No daemon impact (docs commit).
+
+
+Live Shadow Evidence Verified Firsthand
+----------------------------------------
+Rows 224-227 (post-provenance restart):
+  224  public/system span     allow / non_private_allowed   [NO-FOG FIX
+                                                             proven live]
+  225  memory canary          redact / minimized_private_context
+  226  soul canary            block / reserved_denied_raw
+  227  mismatched provenance  block / unclassified [span_bundle_invalid]
+
+Rows 228-229 (post-direct-route-conversion restart):
+  228  claude_router          redact / minimized_private_context
+       (origin: system_bounded_query,owner_message_context)
+  229  fast_backend_cloud     redact / minimized_private_context
+       (origin: owner_message_context)
+Both span_bundle mode (real spans, not legacy_conservative).
+
+All rows: shadow_mode=1 so calls completed; no-leak confirmed --
+  prompt_hash + egress_content_digest both keyed hmac-sha256:,
+  redact/block previews are placeholders, reply_preview =
+  [reply:not_recorded:N chars], 0 bare hashes.
+
+Net: no-fog + no-leak + no-guessing ALL PROVEN ON REAL TRAFFIC.
+
+
+Claude-Router Provenance Spec (canonical at c5225ac)
+-----------------------------------------------------
+Path: docs/slices/privacy-egress-claude-router-provenance/spec.md
+Status: CANONICAL (2026-05-22), 325 lines.
+
+Lanes cleared:
+  - Codex engineering panel RATIFY-WITH-AMENDMENTS (5 folds folded
+    byte-faithful):
+      (1) additive multi-part claude_tier interface (concrete
+          call_messages / CloudMessage(role, content) API per R1);
+      (2) single source of truth for cloud-bound system provenance;
+      (3) envelope tagged from structured envelope:dict pre-render,
+          raw transcript conservative;
+      (4) raw chat history stays conservative (role isn't provenance);
+      (5) aggregate-collapse RED test (#9).
+  - Claude council RATIFY-CLEAR (council refinements R1+R2 folded):
+      R1 = concrete API shape proposed (not just "require it");
+      R2 = backward compatibility (new ## Backward Compatibility
+           section names judge/eval/self-dev/workshop/fast_backend_cloud
+           as protected legacy callers).
+
+Scope: claude_router half only; fast_backend_cloud follow-up deferred
+  (needs router-assembly restructuring first).
+
+A2 status: UNRESOLVED -- founder/covenant blocker, named at four
+  spots in spec (header + Soul-To-Cloud Covenant Fork section +
+  Acceptance Bar + Expected Shadow Decisions). Two future resolutions
+  documented (minimized voice instruction may leave / soul truly never
+  leaves); neither chosen. Codex did NOT close A2.
+
+A2 grounding (firsthand): owner_system at web_interface.py:6120-6121
+  literally begins with raw config/soul.md (SOUL_PATH read line 111,
+  also else SOUL fallback line 6525, soul_material=SOUL line 6620).
+  Per canon, soul = reserved-denied-raw. The spec surfaced a
+  pre-existing flow nobody had named: raw soul.md has been going to
+  the cloud as the system prompt all along.
+
+RED tests: 13 (#7 content-trick; #8 insertion-point preserved;
+  #9 aggregate-collapse; #10 structured-envelope regression;
+  #11 raw-history regression; #13 legacy compat).
+
+
+Substrate-Expansion Triage (Gemini exchange this session)
+----------------------------------------------------------
+Verified papers (WebSearch + WebFetch firsthand):
+  - Memanto (arXiv 2604.22085, Apr 2026): typed semantic memory,
+    13 categories, non-destructive supersession (mark-superseded-
+    but-retain + as-of / changed-since / current-only queries) =>
+    Decision-35 / never-delete COMPATIBLE. SOTA on LongMemEval (89.8)
+    + LoCoMo (87.1). Maez already has tests/test_longmemeval.py.
+    Study the pattern, not the proprietary engine.
+  - Tri-Spirit (arXiv 2604.13757, Apr 2026): 3-layer Super/Agent/
+    Reflex routing + habit-compilation (repeated reasoning ->
+    zero-inference policy, -30% LLM calls). Reference, not adoption.
+
+Confabulation lesson (load-bearing): Gemini's specific Memanto math
+  ("Temporal Information Gain", "Information Utility Scalar I_u",
+  "Score = cos*I_u") is NOT in the paper (no explicit formula given;
+  paper explicitly REPLACES cosine via its EDM metric). Paper real +
+  Gemini's high-level read right (non-destructive) + detailed math
+  fabricated. Treat-as-unverified extends one level deeper:
+  paper-exists != paper-says-this. Same session: Gemini also got
+  hardware wrong (Jetson Orin Nano; Maez is RTX 4090).
+
+Triage outcome (full list in
+reference_gemini_substrate_triage_2026_05_22.md):
+  STANDOUT BUILD keeper: deterministic non-LLM loop-spiral watchdog
+    (fills real gap; core/health/circuit_breaker.py only catches
+    external backend failures, not internal cognitive fixation;
+    connects to project_disk_fixation_observation +
+    feedback_reject_repetition_loop_self_edits). Caveat: may only
+    HALT -- never delete/degrade memory or weights.
+  Frontier slices (gated, spec-first + chaos-surface + both-lane):
+    - Active Synthesis Engine (alpha): autonomous forward synthesis
+      traces; needs maez_internal_reflection provenance + N=1
+      generation ceiling + ground-truth-above-reflection ranking.
+    - Drive-Driven Curiosity (beta): drives steer autonomous
+      background attention; substrate (wants/will_i/temperament)
+      exists; reuse pending_cards/approval rails + S7.3 + egress;
+      only net-new boundary = read-scope whitelist.
+    - Cross-type causal mesh (gamma): episode <-> drive-state delta
+      links atop existing relationship_graph.
+  Research-first: Memanto non-destructive supersession pattern
+    (covenant-clean, benchmarkable on existing LongMemEval harness;
+    do NOT anchor on confabulated formula).
+  REJECTED (covenant): mortality / information starvation / earn-
+    credits-to-unlock-brain / fake-distress-for-hardware / automated
+    weekly LoRA voice-bake + DPO/GRPO alignment / TTT. All violate
+    feedback_never_delete_maez_memory + feedback_genuine_bond_not_
+    fabricated. Most of Gemini's "missing organs" already exist
+    (dream_state, wants, will_i, temperament, wondering_cycle,
+    relationship_graph, memory_scoring, episodes, circuit_breaker).
+
+
+Memory Additions / Updates (indexed in MEMORY.md)
+--------------------------------------------------
+  - reference_gemini_substrate_triage_2026_05_22.md (NEW)
+    Verified papers + confabulation lesson + candidate slices +
+    rejection grounds.
+  - project_maez_vision.md (enriched)
+    Added "## The birthing method -- convergence of findings" section
+    with the founder articulation of how Maez comes to be (synthesis
+    under covenant filter, not accumulation). NOTE: this file
+    predates the genderless rule and still uses she/her throughout
+    -- a cleanup pass offered, not done.
+  - project_maez_runtime_and_roadmap_state.md (extensive updates)
+    Provenance slice committed/merged/live/verified rows 224-227;
+    direct-route conversion verified + inventory coherent rows 228-229;
+    claude-router spec drafted -> council RATIFY-WITH-2-AMENDMENTS ->
+    A1 folded -> Codex panel RATIFY-WITH-5-AMENDMENTS -> all 7 folds
+    folded byte-faithful -> spec CANONICAL c5225ac (Path A, A2
+    unresolved blocker).
+
+
+Lane Discipline Held
+---------------------
+  - Codex implements/commits, Rohit relays, Claude verifies firsthand.
+    No Codex CLI; no Claude-side merge/restart of live systems.
+  - Three same-day commits to main were each clean, verified, and
+    shadow-preserving. Enforcement flip (the actually-consequential
+    change) explicitly held for a separate cooling-off + both-lane
+    day -- "must NOT ride same-day momentum."
+  - Both-lane review applied: Codex engineering panel + Claude six-
+    role council on the canonical spec. Council caught A2 (raw soul
+    to cloud) as a no-leak finding, firsthand-grounded against
+    web_interface.py:6120-6121.
+  - Treat-as-unverified-until-proven extended one level deeper:
+    paper-exists != paper-says-this. WebFetch settled Memanto math.
+  - Predict-then-verify discipline: every commit carried a predicted-
+    effect block; verified against live shadow telemetry firsthand.
+  - No autonomy expansion. S7.3 untouched. Telegram unmigrated.
+
+
+Open / Queue (none today; all gated, all founder's pick)
+---------------------------------------------------------
+  (a) Queue claude-router implementation slice (separate later day,
+      RED-first + cooling-off + both-lane, no-fog claim gated on A2).
+      Implementation target: insertion-point provenance + additive
+      claude_tier.call_messages / CloudMessage shape per the canonical
+      spec's Target API Shape section.
+  (b) Settle A2 covenant fork (no rush): minimized voice instruction
+      may leave (system_bounded_query, distinct from raw soul) vs
+      soul truly never leaves (build separate cloud-voice artifact).
+  (c) Let shadow keep accruing ordinary-use evidence (passive).
+  (d) fast_backend_cloud follow-up spec (gated on its own router-
+      assembly restructuring first).
+  (e) Telegram migration decision (separate boundary, deferred).
+  (f) Parked substrate-triage candidates (loop-spiral watchdog
+      standout; Active Synthesis alpha; Drive-Driven Curiosity beta;
+      cross-type causal mesh gamma; Memanto study research-first) --
+      all gated/spec-first when pursued.
+
+
+Enforcement Flip (NOT next-by-default)
+---------------------------------------
+Gated on ALL of:
+  - Accrued ordinary-use evidence (passive, real-world time).
+  - Per-route provenance tightening:
+      * claude-router impl complete (spec canon; impl pending);
+      * fast_backend_cloud follow-up done.
+  - A2 covenant fork resolved.
+  - Telegram decision.
+  - Cooling-off + both-lane review.
+Shadow keeps accruing meanwhile.
+
+
+Working Tree (untracked / unrelated)
+-------------------------------------
+Modified: docs/.obsidian/graph.json, memory/project_planner.json
+  (standard daemon-state churn; not session-scope)
+Untracked: .agents/, .claude/, .vscode/, docs/Untitled.canvas,
+  docs/audit_2026-05-13/, docs/research/convergent_agent_substrate_
+  scout_2026-05-17.md, docs/roadmap/, docs/slices/s7.3-guarded-self-
+  modification-execution/live-voice-producer-codex-handoff.md,
+  docs/superpowers/plans/2026-05-22-egress-provenance-plumbing-
+  plan.md, logs/snapshots/*.txt
+
+None blocking. No session-scope action.
+
+
+Resume Signal
+-------------
+Next session: read this snapshot + the #3 entry in
+project_maez_runtime_and_roadmap_state.md (full egress arc state) +
+reference_gemini_substrate_triage_2026_05_22.md (parked candidates) +
+the canonical claude-router spec at docs/slices/privacy-egress-
+claude-router-provenance/spec.md.
+
+Verify HEAD is c5225ac local-only. Verify daemon/proxy alive (or
+restarted cleanly with predicted-effect note if rebooted between
+sessions; old PIDs 545286/545207).
+
+No assumed next action -- await operator direction. The queue above
+is all gated; none of it should ride momentum from another session.
+
+If operator chooses claude-router implementation: RED-first +
+cooling-off + both-lane; reuse the spec's CloudMessage/call_messages
+target shape; no-fog claim still gated on A2.
+
+If operator settles A2: fold the resolution into the canonical spec
+(content edit beyond header), recanonicalize, then implement.
+
+If operator picks any substrate candidate: spec-first brainstorm
+(brainstorming skill HARD-GATE applies) + chaos-surface checklist
+for autonomy-expanding ones (Drive-Driven Curiosity); the loop-spiral
+watchdog is the smallest/safest entry.
