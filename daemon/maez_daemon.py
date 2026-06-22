@@ -6961,6 +6961,9 @@ class MaezDaemon:
                             _focused_result = _focused_synthesize(
                                 _focused_working_set,
                                 surface=source,
+                                date_addressed=_date_addressed_turn,
+                                legacy_prompt_chars=_legacy_prompt_chars,
+                                turn_kind=_rk_turn_kind,
                             )
                             logger.info(
                                 "focused_synthesis_timing prompt_build_ms=%s "

@@ -149,6 +149,37 @@ class LeanConversationPathTests(unittest.TestCase):
         self.assertNotIn("how are you?", joined)
         self.assertNotIn("I am here.", joined)
 
+    def test_receipt_lean_prompt_size_counts_user_message(self):
+        from core.routing.focused_cognition import focused_synthesize
+
+        os.environ["MAEZ_LEAN_CONVERSATION_ENABLED"] = "1"
+        ws = _working_set()
+        long_question = "how are you " + ("really " * 40)
+        ws = ws.__class__(
+            items=ws.items,
+            ordered_evidence_text=ws.ordered_evidence_text,
+            owner_question=long_question,
+            working_set_chars=ws.working_set_chars,
+            working_set_tokens_est=ws.working_set_tokens_est,
+            citation_render_version=ws.citation_render_version,
+            thin_evidence=ws.thin_evidence,
+        )
+
+        with self.assertLogs("maez.focused", level="INFO") as logs:
+            focused_synthesize(
+                ws,
+                surface="telegram",
+                chat_fn=lambda **_k: _response("I am here."),
+                model="m",
+                legacy_prompt_chars=5000,
+            )
+
+        joined = "\n".join(logs.output)
+        marker = "lean_prompt_chars_est="
+        size = int(joined.split(marker, 1)[1].split(" ", 1)[0])
+        self.assertGreater(size, len(long_question))
+        self.assertIn(str(size), joined)
+
     def test_enabled_lean_does_not_build_full_capability_card(self):
         import core.routing.focused_cognition as fc
 
@@ -286,6 +317,32 @@ class LeanConversationPathTests(unittest.TestCase):
 
         loaded = set(sys.modules) - before
         self.assertFalse(any(name == "memory.memory_manager" for name in loaded))
+
+
+class LeanConversationDaemonThreadingTests(unittest.TestCase):
+    def test_daemon_threads_lean_metadata_to_focused_synthesize(self):
+        import ast
+        from pathlib import Path
+
+        src = Path("daemon/maez_daemon.py").read_text()
+        tree = ast.parse(src)
+        focused_calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_focused_synthesize"
+        ]
+
+        self.assertEqual(1, len(focused_calls))
+        kwargs = {keyword.arg: keyword.value for keyword in focused_calls[0].keywords}
+
+        self.assertIn("date_addressed", kwargs)
+        self.assertIn("legacy_prompt_chars", kwargs)
+        self.assertIn("turn_kind", kwargs)
+        self.assertEqual("_date_addressed_turn", ast.unparse(kwargs["date_addressed"]))
+        self.assertEqual("_legacy_prompt_chars", ast.unparse(kwargs["legacy_prompt_chars"]))
+        self.assertEqual("_rk_turn_kind", ast.unparse(kwargs["turn_kind"]))
 
 
 if __name__ == "__main__":

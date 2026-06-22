@@ -1236,6 +1236,7 @@ def focused_synthesize(
     lean_enabled = _lean_conversation_enabled()
     if shadow_enabled or lean_enabled:
         lean_system = _lean_system_prompt(working_set)
+        lean_prompt_chars_est = len(lean_system) + len(working_set.owner_question or "")
         decision = _decide_lean_conversation(
             working_set,
             date_addressed=date_addressed,
@@ -1246,7 +1247,7 @@ def focused_synthesize(
                 decision,
                 surface=surface,
                 legacy_prompt_chars=legacy_prompt_chars,
-                lean_prompt_chars_est=len(lean_system),
+                lean_prompt_chars_est=lean_prompt_chars_est,
                 focused_items_count=len(working_set.items or []),
                 turn_kind=turn_kind,
             )
@@ -1259,7 +1260,7 @@ def focused_synthesize(
                 decision,
                 surface=surface,
                 legacy_prompt_chars=legacy_prompt_chars,
-                lean_prompt_chars_est=len(lean_system),
+                lean_prompt_chars_est=lean_prompt_chars_est,
                 focused_items_count=len(working_set.items or []),
                 turn_kind=turn_kind,
             )

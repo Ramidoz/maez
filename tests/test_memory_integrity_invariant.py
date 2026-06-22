@@ -652,7 +652,19 @@ class DaemonHandleMessageContract(unittest.TestCase):
             if on_complete is not None:
                 on_complete("ok", time.monotonic())
 
-        def slow_synthesize(_working_set, *, surface):
+        def slow_synthesize(
+            _working_set,
+            *,
+            surface,
+            date_addressed=False,
+            legacy_prompt_chars=None,
+            turn_kind=None,
+        ):
+            captured["focused_metadata"] = {
+                "date_addressed": date_addressed,
+                "legacy_prompt_chars": legacy_prompt_chars,
+                "turn_kind": turn_kind,
+            }
             receipt_seen.wait(timeout=1.0)
             return FocusedResult("April 27 answer [E1]", ["E1"], 120)
 
@@ -681,6 +693,14 @@ class DaemonHandleMessageContract(unittest.TestCase):
                 )
 
         self.assertEqual(reply, "April 27 answer [E1]")
+        self.assertEqual(
+            captured["focused_metadata"],
+            {
+                "date_addressed": True,
+                "legacy_prompt_chars": mock.ANY,
+                "turn_kind": "dated",
+            },
+        )
         self.assertEqual(receipts, [WORKING_RECEIPT_TEXT])
         line = self._recall_outcome_lines(logs)[-1]
         self.assertIn("receipt_eligible=true", line)
