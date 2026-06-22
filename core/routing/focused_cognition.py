@@ -450,6 +450,182 @@ class GroundednessVerdict:
 
 
 @dataclass(frozen=True)
+class LeanConversationDecision:
+    eligible: bool
+    reason: str
+    fresh_evidence: bool
+    date_addressed: bool
+    self_capability_question: bool
+    bodyish_lean_leak: bool
+    dialogue_anchor_count: int
+    source_types: tuple[str, ...]
+
+
+def _lean_conversation_shadow_enabled(env=os.environ) -> bool:
+    return (env.get("MAEZ_LEAN_CONVERSATION_SHADOW", "") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _lean_conversation_enabled(env=os.environ) -> bool:
+    return (env.get("MAEZ_LEAN_CONVERSATION_ENABLED", "") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _working_set_source_types(working_set: WorkingSet) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(
+            source_type
+            for item in (getattr(working_set, "items", ()) or ())
+            if (source_type := str(getattr(item, "source_type", "") or ""))
+        )
+    )
+
+
+def _dialogue_anchor_count(working_set: WorkingSet) -> int:
+    return sum(
+        1
+        for item in (getattr(working_set, "items", ()) or ())
+        if getattr(item, "source_type", None) == "dialogue_anchor"
+    )
+
+
+def _decide_lean_conversation(
+    working_set: WorkingSet,
+    *,
+    date_addressed: bool = False,
+) -> LeanConversationDecision:
+    from core.routing.self_capability_question import (
+        bodyish_self_capability_candidate,
+        is_self_capability_question,
+    )
+
+    source_types = _working_set_source_types(working_set)
+    fresh = turn_has_fresh_evidence(working_set)
+    self_cap = is_self_capability_question(working_set.owner_question)
+    bodyish = bodyish_self_capability_candidate(working_set.owner_question)
+    anchor_count = _dialogue_anchor_count(working_set)
+    bodyish_leak = bodyish and not self_cap
+
+    if fresh:
+        return LeanConversationDecision(
+            eligible=False,
+            reason="fresh_evidence",
+            fresh_evidence=fresh,
+            date_addressed=date_addressed,
+            self_capability_question=self_cap,
+            bodyish_lean_leak=bodyish_leak,
+            dialogue_anchor_count=anchor_count,
+            source_types=source_types,
+        )
+    if date_addressed:
+        return LeanConversationDecision(
+            eligible=False,
+            reason="date_addressed",
+            fresh_evidence=fresh,
+            date_addressed=date_addressed,
+            self_capability_question=self_cap,
+            bodyish_lean_leak=bodyish_leak,
+            dialogue_anchor_count=anchor_count,
+            source_types=source_types,
+        )
+    if self_cap:
+        return LeanConversationDecision(
+            eligible=False,
+            reason="self_capability_question",
+            fresh_evidence=fresh,
+            date_addressed=date_addressed,
+            self_capability_question=self_cap,
+            bodyish_lean_leak=bodyish_leak,
+            dialogue_anchor_count=anchor_count,
+            source_types=source_types,
+        )
+    return LeanConversationDecision(
+        eligible=True,
+        reason="eligible",
+        fresh_evidence=fresh,
+        date_addressed=date_addressed,
+        self_capability_question=self_cap,
+        bodyish_lean_leak=bodyish_leak,
+        dialogue_anchor_count=anchor_count,
+        source_types=source_types,
+    )
+
+
+def _emit_lean_conversation_receipt(
+    event: str,
+    decision: LeanConversationDecision,
+    *,
+    surface: str,
+    legacy_prompt_chars: int | None,
+    lean_prompt_chars_est: int,
+    focused_items_count: int,
+    turn_kind: str | None,
+) -> None:
+    logger.info(
+        "%s eligible=%s reason=%s source_types=%s fresh_evidence=%s "
+        "date_addressed=%s self_capability_question=%s bodyish_lean_leak=%s "
+        "dialogue_anchor_count=%d legacy_prompt_chars=%s "
+        "lean_prompt_chars_est=%d focused_items_count=%d surface=%s "
+        "turn_kind=%s",
+        event,
+        decision.eligible,
+        decision.reason,
+        ",".join(decision.source_types) if decision.source_types else "none",
+        decision.fresh_evidence,
+        decision.date_addressed,
+        decision.self_capability_question,
+        decision.bodyish_lean_leak,
+        decision.dialogue_anchor_count,
+        "null" if legacy_prompt_chars is None else int(legacy_prompt_chars),
+        int(lean_prompt_chars_est),
+        int(focused_items_count),
+        surface,
+        turn_kind or "unknown",
+    )
+
+
+def _lean_dialogue_anchor_text(working_set: WorkingSet) -> str:
+    anchors = [
+        item.text.strip()
+        for item in (working_set.items or [])
+        if item.source_type == "dialogue_anchor" and item.text.strip()
+    ]
+    if not anchors:
+        return ""
+    return "RECENT DIALOGUE (for continuity only):\n" + "\n\n".join(anchors[:2])
+
+
+def _lean_system_prompt(working_set: WorkingSet) -> str:
+    parts = [_VOICE_CARD_TEXT]
+    anchor = _lean_dialogue_anchor_text(working_set)
+    if anchor:
+        parts.append(anchor)
+    return "\n\n".join(parts)
+
+
+def _full_focused_system_prompt(working_set: WorkingSet, *, surface: str) -> str:
+    return (
+        f"{_voice_card(surface)}\n\n"
+        f"{_citation_instruction(
+            working_set.citation_render_version,
+            thin_evidence=working_set.thin_evidence,
+        )}\n\n"
+        f"{_TRUST_TIER_INSTRUCTION}\n\n"
+        f"{_ORIGIN_TRUST_INSTRUCTION}\n\n"
+        f"=== EVIDENCE (cite [E#]) ===\n"
+        f"{working_set.ordered_evidence_text}"
+    )
+
+
+@dataclass(frozen=True)
 class HonestEmptyResult:
     reply: str
     mode: str
@@ -1037,6 +1213,9 @@ def focused_synthesize(
     surface: str,
     chat_fn=None,
     model=None,
+    date_addressed: bool = False,
+    legacy_prompt_chars: int | None = None,
+    turn_kind: str | None = None,
 ) -> FocusedResult:
     import time as _time
 
@@ -1053,17 +1232,41 @@ def focused_synthesize(
         model = PRIMARY_MODEL
 
     _t0 = _time.monotonic()
-    system = (
-        f"{_voice_card(surface)}\n\n"
-        f"{_citation_instruction(
-            working_set.citation_render_version,
-            thin_evidence=working_set.thin_evidence,
-        )}\n\n"
-        f"{_TRUST_TIER_INSTRUCTION}\n\n"
-        f"{_ORIGIN_TRUST_INSTRUCTION}\n\n"
-        f"=== EVIDENCE (cite [E#]) ===\n"
-        f"{working_set.ordered_evidence_text}"
-    )
+    shadow_enabled = _lean_conversation_shadow_enabled()
+    lean_enabled = _lean_conversation_enabled()
+    if shadow_enabled or lean_enabled:
+        lean_system = _lean_system_prompt(working_set)
+        decision = _decide_lean_conversation(
+            working_set,
+            date_addressed=date_addressed,
+        )
+        if shadow_enabled:
+            _emit_lean_conversation_receipt(
+                "lean_conversation_shadow",
+                decision,
+                surface=surface,
+                legacy_prompt_chars=legacy_prompt_chars,
+                lean_prompt_chars_est=len(lean_system),
+                focused_items_count=len(working_set.items or []),
+                turn_kind=turn_kind,
+            )
+
+        use_lean = lean_enabled and decision.eligible
+        if use_lean:
+            system = lean_system
+            _emit_lean_conversation_receipt(
+                "lean_conversation_applied",
+                decision,
+                surface=surface,
+                legacy_prompt_chars=legacy_prompt_chars,
+                lean_prompt_chars_est=len(lean_system),
+                focused_items_count=len(working_set.items or []),
+                turn_kind=turn_kind,
+            )
+        else:
+            system = _full_focused_system_prompt(working_set, surface=surface)
+    else:
+        system = _full_focused_system_prompt(working_set, surface=surface)
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": working_set.owner_question},
