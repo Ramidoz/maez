@@ -3,7 +3,17 @@ from __future__ import annotations
 import re
 
 EXPLICIT_MEMORY_RE = re.compile(
-    r"\b(what do you remember|from memory|in your notebook|what's in your notebook)\b",
+    r"\b("
+    r"what do you remember|"
+    r"do you remember|"
+    r"do you recall|"
+    r"remember when|"
+    r"from memory|"
+    r"in your notebook|"
+    r"what's in your notebook|"
+    r"(?:your\s+)?(?:first|earliest)\s+memory|"
+    r"tell me about\b.+\bfrom (?:before|earlier)"
+    r")\b",
     re.IGNORECASE,
 )
 

@@ -309,6 +309,37 @@ class LeanConversationPathTests(unittest.TestCase):
         self.assertIn("=== EVIDENCE (cite [E#]) ===", captured["system"])
         self.assertIn("diary flood should not appear", captured["system"])
 
+    def test_natural_memory_questions_use_full_prompt_not_lean(self):
+        from core.routing.focused_cognition import focused_synthesize
+
+        os.environ["MAEZ_LEAN_CONVERSATION_ENABLED"] = "1"
+
+        for question in (
+            "Do you remember the initial days of our build?",
+            "Fine tell me your first memory",
+        ):
+            with self.subTest(question=question):
+                ws = _working_set(source_type="memory_context")
+                ws = ws.__class__(
+                    items=ws.items,
+                    ordered_evidence_text=ws.ordered_evidence_text,
+                    owner_question=question,
+                    working_set_chars=ws.working_set_chars,
+                    working_set_tokens_est=ws.working_set_tokens_est,
+                    citation_render_version=ws.citation_render_version,
+                    thin_evidence=ws.thin_evidence,
+                )
+                captured = {}
+
+                def chat_fn(*, captured=captured, **kwargs):
+                    captured["system"] = kwargs["messages"][0]["content"]
+                    return _response("I remember this from memory [E1].")
+
+                focused_synthesize(ws, surface="telegram", chat_fn=chat_fn, model="m")
+
+                self.assertIn("=== EVIDENCE (cite [E#]) ===", captured["system"])
+                self.assertIn("diary flood should not appear", captured["system"])
+
     def test_shadow_receipt_includes_date_addressed_state(self):
         from core.routing.focused_cognition import focused_synthesize
 

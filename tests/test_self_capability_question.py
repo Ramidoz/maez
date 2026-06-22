@@ -91,10 +91,18 @@ class ExplicitMemoryQuestionTests(unittest.TestCase):
 
         expected = {
             "what do you remember about qwen?": True,
+            "do you remember the initial days of our build?": True,
+            "do you recall the initial days of our build?": True,
+            "remember when we first built the cockpit?": True,
             "answer from memory": True,
             "what's in your notebook about yesterday?": True,
             "look in your notebook": True,
-            "do you remember yesterday?": False,
+            "fine tell me your first memory": True,
+            "tell me your earliest memory": True,
+            "tell me about the Reddit thing from before": True,
+            "tell me about that from earlier": True,
+            "remember to check the logs later": False,
+            "tell me about OpenAI": False,
             "how are you?": False,
         }
 
