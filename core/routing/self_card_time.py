@@ -6,17 +6,59 @@ scores owner reaction, and never writes to soul or memory.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime
 import hashlib
 import math
 from pathlib import Path
+import sqlite3
+from urllib.parse import quote
 
 
 SELF_CARD_TIME_HIGH_PERCENTILE = 75.0  # TEMPORARY anti-spam scaffold, not salience.
 SELF_CARD_TIME_LOW_PERCENTILE = 10.0  # TEMPORARY anti-spam scaffold, not salience.
 SELF_CARD_TIME_COLD_START_MIN_S = 15 * 60  # TEMPORARY anti-spam scaffold.
 _SOURCE = "subjective_duration.rhythm_context"
+_REQUIRED_TABLE_COLUMNS = {
+    "subjective_duration_samples": frozenset(
+        {
+            "sample_id",
+            "ts_utc",
+            "value",
+            "felt_time_rate",
+            "drag_multiplier",
+            "engagement_multiplier",
+            "residual_resonance",
+            "retrospective_density",
+            "compute_version",
+            "metadata_json",
+        }
+    ),
+    "subjective_duration_salience_events": frozenset(
+        {
+            "event_id",
+            "ts_utc",
+            "salience_event_kind",
+            "producer_ref",
+            "owner_auth_class",
+            "source_ref_digest",
+            "meaningfulness_score",
+            "meaningfulness_input_count",
+            "temperament_delta_mean",
+            "temperament_delta_max",
+            "temperament_before_digest",
+            "temperament_after_digest",
+            "explicit_salience_marker_present",
+            "metadata_json",
+            "bond_id",
+            "producer_event_id",
+            "producer_temperament_before_json",
+            "producer_temperament_after_json",
+            "is_canary",
+        }
+    ),
+}
 _FORBIDDEN_FEELING_WORDS = (
     "miss",
     "lonely",
@@ -62,12 +104,78 @@ def _clean_number(value: object) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def _clean_count(value: object) -> int | None:
+    number = _clean_number(value)
+    if number is None or number < 0 or not number.is_integer():
+        return None
+    return int(number)
+
+
+def _sqlite_readonly_uri(path: Path) -> str:
+    return f"file:{quote(str(path.resolve(strict=False)), safe='/')}?mode=ro"
+
+
+def _has_initialized_subjective_duration_schema(path: Path) -> bool:
+    try:
+        if not path.is_file() or path.stat().st_size <= 0:
+            return False
+        with closing(sqlite3.connect(_sqlite_readonly_uri(path), uri=True)) as conn:
+            for table, required_columns in _REQUIRED_TABLE_COLUMNS.items():
+                rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+                columns = {str(row[1]) for row in rows}
+                if not required_columns.issubset(columns):
+                    return False
+    except (OSError, sqlite3.Error):
+        return False
+    return True
+
+
+def _read_only_subjective_duration(path: Path):
+    from core.evolution.subjective_duration import SubjectiveDuration, SubjectiveDurationConfig
+
+    # SubjectiveDuration.__init__ owns schema setup and migrations; this adapter is a reader only.
+    handle = SubjectiveDuration.__new__(SubjectiveDuration)
+    handle.db_path = path
+    handle.config = SubjectiveDurationConfig()
+    handle.temperament_reader = dict
+    return handle
+
+
+def _valid_duration(value: object) -> bool:
+    number = _clean_number(value)
+    return number is not None and number >= 0.0
+
+
+def _valid_sample_counts(ctx: Mapping[str, object]) -> bool:
+    return (
+        _clean_count(ctx.get("rhythm_recent_sample_count")) is not None
+        and _clean_count(ctx.get("rhythm_all_time_sample_count")) is not None
+    )
+
+
+def _valid_comparison_facts(ctx: Mapping[str, object]) -> bool:
+    all_time_count = _clean_count(ctx.get("rhythm_all_time_sample_count"))
+    return (
+        all_time_count is not None
+        and all_time_count > 0
+        and _valid_duration(ctx.get("rhythm_recent_gap_median_s"))
+        and _valid_duration(ctx.get("rhythm_all_time_gap_median_s"))
+    )
+
+
 def _reason(ctx: Mapping[str, object]) -> str | None:
     current = _clean_number(ctx.get("rhythm_current_gap_s"))
     if current is None or current < 0.0:
         return None
-    pct = _clean_number(ctx.get("rhythm_current_gap_percentile_all_time"))
+    if not _valid_sample_counts(ctx):
+        return None
+    pct_raw = ctx.get("rhythm_current_gap_percentile_all_time")
+    pct = _clean_number(pct_raw)
+    if pct_raw is not None and (pct is None or pct < 0.0 or pct > 100.0):
+        return None
     if pct is not None:
+        if not _valid_comparison_facts(ctx):
+            return None
         if pct >= SELF_CARD_TIME_HIGH_PERCENTILE:
             return "percentile_high"
         if pct <= SELF_CARD_TIME_LOW_PERCENTILE:
@@ -83,13 +191,13 @@ def rhythm_time_line_provider(
     db_path: Path | str | None = None,
     now: str | datetime | None = None,
 ) -> Mapping[str, object] | None:
-    from core.evolution.subjective_duration import SubjectiveDuration, subjective_duration_db_path
+    from core.evolution.subjective_duration import subjective_duration_db_path
 
     path = Path(db_path) if db_path is not None else subjective_duration_db_path()
     try:
-        if not path.exists():
+        if not _has_initialized_subjective_duration_schema(path):
             return None
-        handle = SubjectiveDuration(db_path=path)
+        handle = _read_only_subjective_duration(path)
         return handle.rhythm_context(now=now)
     except Exception:
         return None
@@ -106,7 +214,7 @@ def _render(ctx: Mapping[str, object], reason: str) -> str:
     recent = ctx.get("rhythm_recent_gap_median_s")
     all_time = ctx.get("rhythm_all_time_gap_median_s")
     pct = _clean_number(ctx.get("rhythm_current_gap_percentile_all_time"))
-    sample_count = max(0, int(_clean_number(ctx.get("rhythm_all_time_sample_count")) or 0))
+    sample_count = _clean_count(ctx.get("rhythm_all_time_sample_count")) or 0
     gap_word = "gap" if sample_count == 1 else "gaps"
     parts = [current]
     if recent is not None and all_time is not None:
