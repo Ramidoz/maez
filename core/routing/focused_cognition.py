@@ -1389,7 +1389,9 @@ def focused_synthesize(
         except Exception:
             logger.debug("self_card_time_line_skipped", exc_info=True)
             time_line_candidate = None
-    time_line_applied = self_card_enabled and self_card_time_enabled
+    actual_time_line_applied = bool(
+        time_line_candidate is not None and self_card_enabled and self_card_time_enabled
+    )
     if (
         self_card_shadow
         or self_card_enabled
@@ -1398,7 +1400,7 @@ def focused_synthesize(
     ):
         card = _safe_self_card(
             time_line_candidate=time_line_candidate,
-            time_line_applied=time_line_applied,
+            time_line_applied=actual_time_line_applied,
         )
         if card is not None:
             if self_card_shadow:
@@ -1413,7 +1415,7 @@ def focused_synthesize(
                 _emit_self_card_time_receipt(
                     "self_card_time_shadow",
                     card,
-                    applied=time_line_applied,
+                    applied=actual_time_line_applied,
                     surface=surface,
                     turn_kind=turn_kind,
                 )

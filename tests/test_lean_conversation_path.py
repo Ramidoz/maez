@@ -552,6 +552,38 @@ class LeanConversationPathTests(unittest.TestCase):
         self.assertNotIn("8h", joined)
         self.assertNotIn("Time since contact", captured["system"])
 
+    def test_self_card_time_shadow_reports_not_applied_when_candidate_absent(self):
+        from core.routing.focused_cognition import focused_synthesize
+
+        os.environ["MAEZ_SELF_CARD_TIME_SHADOW"] = "1"
+        os.environ["MAEZ_SELF_CARD_TIME_ENABLED"] = "1"
+        os.environ["MAEZ_SELF_CARD_ENABLED"] = "1"
+        captured = {}
+
+        def chat_fn(**kwargs):
+            captured["system"] = kwargs["messages"][0]["content"]
+            return _response("I am here.")
+
+        with mock.patch(
+            "core.routing.self_card_time.build_self_card_time_line",
+            return_value=None,
+        ), self.assertLogs("maez.focused", level="INFO") as logs:
+            focused_synthesize(
+                _working_set(),
+                surface="telegram",
+                chat_fn=chat_fn,
+                model="m",
+                legacy_prompt_chars=3200,
+            )
+
+        joined = "\n".join(logs.output)
+        self.assertIn("self_card_time_shadow", joined)
+        self.assertIn(" applied=False ", joined)
+        self.assertIn("time_line_present=False", joined)
+        self.assertIn("time_line_applied=False", joined)
+        self.assertIn("SELF CARD", captured["system"])
+        self.assertNotIn("Time since contact", captured["system"])
+
     def test_self_card_time_enabled_adds_line_to_lean_prompt(self):
         from core.routing.self_card_time import SelfCardTimeLine
         from core.routing.focused_cognition import focused_synthesize
