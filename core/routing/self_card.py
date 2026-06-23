@@ -53,10 +53,26 @@ class SelfCardLine:
 @dataclass(frozen=True)
 class SelfCard:
     lines: tuple[SelfCardLine, ...]
+    time_line_candidate: object | None = None
+    time_line_applied: bool = False
+
+    def _render_lines(self) -> tuple[SelfCardLine, ...]:
+        if self.time_line_candidate is None or not self.time_line_applied:
+            return self.lines
+        return (
+            *self.lines,
+            SelfCardLine(
+                label=self.time_line_candidate.label,
+                text=self.time_line_candidate.text,
+                source=self.time_line_candidate.source,
+                source_ref=self.time_line_candidate.source_ref,
+                source_sha256=self.time_line_candidate.source_sha256,
+            ),
+        )
 
     @property
     def text(self) -> str:
-        rendered = "\n".join(line.render() for line in self.lines)
+        rendered = "\n".join(line.render() for line in self._render_lines())
         return (
             "SELF CARD (deterministic mirror; facts, not style)\n"
             f"{rendered}"
@@ -83,6 +99,30 @@ class SelfCard:
             "local_rendered_chars": sum(len(line.text) for line in local_lines),
             "body_state_source": body_lines[0].source if body_lines else "none",
             "style_directive_hits": style_directive_hits(self.text),
+            "time_line_present": bool(self.time_line_candidate is not None),
+            "time_line_applied": bool(
+                self.time_line_candidate is not None and self.time_line_applied
+            ),
+            "time_line_reason": (
+                getattr(self.time_line_candidate, "reason", "none")
+                if self.time_line_candidate is not None
+                else "none"
+            ),
+            "time_line_source": (
+                getattr(self.time_line_candidate, "source", "none")
+                if self.time_line_candidate is not None
+                else "none"
+            ),
+            "time_line_chars": (
+                len(getattr(self.time_line_candidate, "text", ""))
+                if self.time_line_candidate is not None
+                else 0
+            ),
+            "time_line_sha256": (
+                getattr(self.time_line_candidate, "source_sha256", "")
+                if self.time_line_candidate is not None
+                else ""
+            ),
         }
 
 
@@ -338,6 +378,8 @@ def assemble_self_card(
     local_max_items: int = 3,
     local_recency_days: int | None = 45,
     now: datetime | None = None,
+    time_line_candidate: object | None = None,
+    time_line_applied: bool = False,
 ) -> SelfCard:
     provider = body_state_provider or _default_body_state_provider
     lines: list[SelfCardLine] = [
@@ -354,7 +396,11 @@ def assemble_self_card(
         )
     )
     lines.append(_body_line(provider))
-    return SelfCard(lines=tuple(lines))
+    return SelfCard(
+        lines=tuple(lines),
+        time_line_candidate=time_line_candidate,
+        time_line_applied=time_line_applied,
+    )
 
 
 def _read(path: Path) -> str:
@@ -373,6 +419,8 @@ def assemble_self_card_from_paths(
     local_max_items: int = 3,
     local_recency_days: int | None = 45,
     now: datetime | None = None,
+    time_line_candidate: object | None = None,
+    time_line_applied: bool = False,
 ) -> SelfCard:
     if base_path is None or local_path is None:
         from core.infra import paths
@@ -387,4 +435,6 @@ def assemble_self_card_from_paths(
         local_max_items=local_max_items,
         local_recency_days=local_recency_days,
         now=now,
+        time_line_candidate=time_line_candidate,
+        time_line_applied=time_line_applied,
     )

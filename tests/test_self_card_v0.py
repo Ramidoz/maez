@@ -189,6 +189,103 @@ class SelfCardAssemblerTests(unittest.TestCase):
         self.assertIn("runtime body overall: unknown", card.text)
         self.assertNotIn("Rohit", card.text)
 
+    def test_time_line_candidate_stays_out_of_text_until_applied(self):
+        from core.routing.self_card import assemble_self_card
+        from core.routing.self_card_time import SelfCardTimeLine
+
+        time_line = SelfCardTimeLine(
+            label="Time since contact",
+            text="~8h since owner contact. above ~91% of recorded gaps (226 gaps).",
+            source="subjective_duration.rhythm_context",
+            source_ref="percentile_high",
+            source_sha256="abc123",
+            reason="percentile_high",
+        )
+
+        card = assemble_self_card(
+            base_text=BASE_FIXTURE,
+            local_text=LOCAL_FIXTURE,
+            body_state_provider=_body_line,
+            time_line_candidate=time_line,
+            time_line_applied=False,
+        )
+
+        self.assertNotIn("Time since contact", card.text)
+        self.assertNotIn("~8h since owner contact", card.text)
+        receipt = card.receipt()
+        self.assertTrue(receipt["time_line_present"])
+        self.assertFalse(receipt["time_line_applied"])
+        self.assertEqual(receipt["time_line_reason"], "percentile_high")
+        self.assertEqual(receipt["time_line_source"], "subjective_duration.rhythm_context")
+        self.assertEqual(receipt["time_line_chars"], len(time_line.text))
+        self.assertEqual(receipt["time_line_sha256"], "abc123")
+        self.assertNotIn("time_line_source_ref", receipt)
+        self.assertNotIn("8h", str(receipt))
+        self.assertNotIn("owner contact", str(receipt))
+
+    def test_time_line_enabled_renders_factual_line(self):
+        from core.routing.self_card import assemble_self_card
+        from core.routing.self_card_time import SelfCardTimeLine
+
+        time_line = SelfCardTimeLine(
+            label="Time since contact",
+            text="~8h since owner contact. above ~91% of recorded gaps (226 gaps).",
+            source="subjective_duration.rhythm_context",
+            source_ref="percentile_high",
+            source_sha256="abc123",
+            reason="percentile_high",
+        )
+
+        card = assemble_self_card(
+            base_text=BASE_FIXTURE,
+            local_text=LOCAL_FIXTURE,
+            body_state_provider=_body_line,
+            time_line_candidate=time_line,
+            time_line_applied=True,
+        )
+
+        self.assertIn("Time since contact", card.text)
+        self.assertIn("~8h since owner contact", card.text)
+        receipt = card.receipt()
+        self.assertTrue(receipt["time_line_present"])
+        self.assertTrue(receipt["time_line_applied"])
+        self.assertEqual(receipt["time_line_reason"], "percentile_high")
+        self.assertNotIn("8h", str(receipt))
+        self.assertNotIn("owner contact", str(receipt))
+
+    def test_assemble_from_paths_threads_time_line_candidate(self):
+        from core.routing.self_card import assemble_self_card_from_paths
+        from core.routing.self_card_time import SelfCardTimeLine
+
+        time_line = SelfCardTimeLine(
+            label="Time since contact",
+            text="~8h since owner contact. above ~91% of recorded gaps (226 gaps).",
+            source="subjective_duration.rhythm_context",
+            source_ref="percentile_high",
+            source_sha256="abc123",
+            reason="percentile_high",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "soul.base.md"
+            local = Path(tmp) / "soul.local.md"
+            base.write_text(BASE_FIXTURE)
+            local.write_text(LOCAL_FIXTURE)
+
+            card = assemble_self_card_from_paths(
+                base_path=base,
+                local_path=local,
+                body_state_provider=_body_line,
+                time_line_candidate=time_line,
+                time_line_applied=False,
+            )
+
+        self.assertNotIn("Time since contact", card.text)
+        receipt = card.receipt()
+        self.assertTrue(receipt["time_line_present"])
+        self.assertFalse(receipt["time_line_applied"])
+        self.assertEqual(receipt["time_line_reason"], "percentile_high")
+
 
 if __name__ == "__main__":
     unittest.main()
