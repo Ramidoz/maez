@@ -46,4 +46,3 @@ Production grep found no existing approval-path caller that records `event_type=
 - Deny/ignore must not satisfy wants.
 - The hook must use `basis="owner_confirmed"` and must never use `self_observed_resolution`.
 - `owner_confirmed` here means a direct owner answer to this specific terminal proposal, not an owner-reaction or engagement reward signal.
-

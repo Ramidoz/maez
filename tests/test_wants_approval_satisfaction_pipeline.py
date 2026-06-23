@@ -11,6 +11,7 @@ import unittest
 from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from core.audit_log import AuditLog
 from core.decision_pipeline import DecisionPipeline, PipelineStatus
@@ -197,12 +198,51 @@ class WantsApprovalSatisfactionPipelineTests(unittest.TestCase):
 
 class TelegramPipelineConstructionTests(unittest.TestCase):
     def test_telegram_pipeline_threads_daemon_wants_store(self):
-        source = (_REPO / "skills" / "telegram_voice.py").read_text()
+        from core import audit_log as audit_module
+        from core import decision_pipeline as decision_module
+        from core import pending_cards as cards_module
+        from skills import approval_card as approval_card_module
+        from skills.telegram_voice import TelegramVoice
 
-        self.assertTrue(
-            'wants=getattr(self.daemon, "wants", None)' in source,
-            "_get_pipeline must pass daemon.wants into DecisionPipeline",
-        )
+        captured: dict[str, object] = {}
+
+        class _FakePipeline:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+        class _FakeCardStore:
+            pass
+
+        class _FakeAuditLog:
+            pass
+
+        class _FakeRenderer:
+            def __init__(self, **kwargs):
+                captured["renderer_kwargs"] = kwargs
+
+        wants_store = object()
+        dream_store = object()
+        voice = TelegramVoice.__new__(TelegramVoice)
+        voice.actions = object()
+        voice.daemon = SimpleNamespace(wants=wants_store, dream=dream_store)
+        voice.authorized_user = 123
+        voice._decision_pipeline = None
+        voice._send_card_message = lambda *args, **kwargs: None
+        voice._expire_stale_cards_at_startup = lambda pipe: 0
+
+        with (
+            patch.object(decision_module, "DecisionPipeline", _FakePipeline),
+            patch.object(cards_module, "PendingCardStore", _FakeCardStore),
+            patch.object(audit_module, "AuditLog", _FakeAuditLog),
+            patch.object(approval_card_module, "TelegramTextRenderer", _FakeRenderer),
+        ):
+            pipe = voice._get_pipeline()
+
+        self.assertIs(pipe, voice._decision_pipeline)
+        self.assertIs(captured["wants"], wants_store)
+        self.assertIs(captured["dream"], dream_store)
+        self.assertIsInstance(captured["card_store"], _FakeCardStore)
+        self.assertIsInstance(captured["audit_log"], _FakeAuditLog)
 
 
 if __name__ == "__main__":
