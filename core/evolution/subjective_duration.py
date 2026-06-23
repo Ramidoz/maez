@@ -162,6 +162,11 @@ def _default_db_path() -> Path:
         return Path(__file__).resolve().parents[2] / "memory" / "subjective_duration.db"
 
 
+def subjective_duration_db_path() -> Path:
+    """Return the configured subjective-duration DB path without initializing the store."""
+    return _default_db_path()
+
+
 def _default_log_path() -> Path:
     override = os.environ.get("MAEZ_SUBJECTIVE_DURATION_LOG")
     if override:
