@@ -5,6 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from core.evolution import want_pursuit_bridge as wpb
+from core.evolution import wants as wants_mod
 from core.evolution import wonderings
 
 
@@ -54,6 +55,149 @@ class _FakeCards:
                 self.params = {"want_id": wid}
 
         return [_C(w) for w in self._ids]
+
+
+class _TerminalCard:
+    def __init__(
+        self,
+        *,
+        action=wpb.TERMINAL_PROPOSAL_ACTION,
+        want_id="want-1",
+        proposed="satisfied",
+        request_id="card-abc",
+    ):
+        self.action = action
+        self.request_id = request_id
+        self.params = {"want_id": want_id, "proposed": proposed}
+
+
+class TerminalApprovalSatisfactionTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = TemporaryDirectory()
+        self.wants = wants_mod.Wants(Path(self._tmp.name) / "wants.db")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _create_want(self, statement="I want the quiet light to stay on."):
+        return self.wants.record_event(statement=statement)
+
+    def test_terminal_approval_records_owner_confirmed_satisfaction(self):
+        want_id = self._create_want()
+
+        got = wpb.record_terminal_approval_satisfaction(
+            self.wants,
+            _TerminalCard(want_id=want_id, request_id="req-123"),
+        )
+
+        self.assertEqual(got, want_id)
+        history = self.wants.history(want_id)
+        self.assertEqual([row["event_type"] for row in history], ["satisfied", "created"])
+        latest = history[0]
+        self.assertEqual(latest["statement"], "I want the quiet light to stay on.")
+        evidence = latest["evidence"]
+        self.assertEqual(evidence["basis"], "owner_confirmed")
+        self.assertEqual(evidence["source"], "decision_pipeline")
+        self.assertTrue(evidence["summary"].strip())
+        self.assertEqual(evidence["external_object_ref"], "pending_card:req-123")
+        self.assertNotIn("self_observed_resolution", evidence)
+
+    def test_terminal_approval_removes_want_from_active_wants(self):
+        want_id = self._create_want()
+
+        wpb.record_terminal_approval_satisfaction(
+            self.wants,
+            _TerminalCard(want_id=want_id),
+        )
+
+        self.assertNotIn(want_id, {row["want_id"] for row in self.wants.active_wants()})
+
+    def test_wrong_action_writes_nothing(self):
+        want_id = self._create_want()
+
+        got = wpb.record_terminal_approval_satisfaction(
+            self.wants,
+            _TerminalCard(action="run_shell", want_id=want_id),
+        )
+
+        self.assertIsNone(got)
+        self.assertEqual(self.wants.count(), 1)
+        self.assertEqual(self.wants.current_state(want_id)["event_type"], "created")
+
+    def test_terminal_card_without_satisfied_proposal_writes_nothing(self):
+        want_id = self._create_want()
+
+        got = wpb.record_terminal_approval_satisfaction(
+            self.wants,
+            _TerminalCard(want_id=want_id, proposed="returned"),
+        )
+
+        self.assertIsNone(got)
+        self.assertEqual(self.wants.count(), 1)
+        self.assertEqual(self.wants.current_state(want_id)["event_type"], "created")
+
+    def test_terminal_card_with_missing_params_writes_nothing(self):
+        want_id = self._create_want()
+        card = _TerminalCard(want_id=want_id)
+        card.params = None
+
+        got = wpb.record_terminal_approval_satisfaction(self.wants, card)
+
+        self.assertIsNone(got)
+        self.assertEqual(self.wants.count(), 1)
+        self.assertEqual(self.wants.current_state(want_id)["event_type"], "created")
+
+    def test_missing_want_id_writes_nothing(self):
+        self._create_want()
+
+        got = wpb.record_terminal_approval_satisfaction(
+            self.wants,
+            _TerminalCard(want_id=""),
+        )
+
+        self.assertIsNone(got)
+        self.assertEqual(self.wants.count(), 1)
+
+    def test_missing_want_writes_nothing(self):
+        self._create_want()
+
+        got = wpb.record_terminal_approval_satisfaction(
+            self.wants,
+            _TerminalCard(want_id="not-present"),
+        )
+
+        self.assertIsNone(got)
+        self.assertEqual(self.wants.count(), 1)
+
+    def test_missing_wants_store_writes_nothing(self):
+        got = wpb.record_terminal_approval_satisfaction(
+            None,
+            _TerminalCard(want_id="any"),
+        )
+
+        self.assertIsNone(got)
+
+    def test_already_satisfied_want_writes_nothing(self):
+        want_id = self._create_want()
+        self.wants.record_event(
+            want_id=want_id,
+            statement="I want the quiet light to stay on.",
+            event_type=wants_mod.EVENT_SATISFIED,
+            evidence={
+                "basis": "owner_confirmed",
+                "source": "owner",
+                "summary": "Owner confirmed it was met.",
+                "external_object_ref": "object:prior",
+            },
+        )
+
+        got = wpb.record_terminal_approval_satisfaction(
+            self.wants,
+            _TerminalCard(want_id=want_id),
+        )
+
+        self.assertIsNone(got)
+        self.assertEqual(self.wants.count(), 2)
 
 
 class SelectWantTests(unittest.TestCase):

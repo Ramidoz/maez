@@ -1,13 +1,16 @@
 """Want->Pursuit bridge v0.
 
-The bridge seeds work orders into the existing wondering workshop and raises
-advisory satisfied-proposals. It writes nothing to the want ledger.
+The bridge seeds work orders into the existing wondering workshop, raises
+advisory satisfied-proposals, and can record owner-confirmed satisfaction
+when the owner approves one of those proposals.
 """
 
 from __future__ import annotations
 
 import logging
 from typing import Any
+
+from core.evolution import wants as wants_mod
 
 _LOG = logging.getLogger(__name__)
 
@@ -35,6 +38,40 @@ def want_id_from_source(source: str) -> str | None:
 
 def want_pursuit_trail(wonderings_store: Any, want_id: str) -> list[dict]:
     return wonderings_store.list_by_source(source_for(want_id))
+
+
+def record_terminal_approval_satisfaction(wants_store: Any, card: Any) -> str | None:
+    """Record owner-confirmed satisfaction for an approved terminal want card."""
+    if wants_store is None:
+        return None
+
+    if getattr(card, "action", None) != TERMINAL_PROPOSAL_ACTION:
+        return None
+
+    params = getattr(card, "params", None) or {}
+    if params.get("proposed") != "satisfied":
+        return None
+
+    want_id = str(params.get("want_id") or "").strip()
+    request_id = str(getattr(card, "request_id", "") or "").strip()
+    if not want_id or not request_id:
+        return None
+
+    current = wants_store.current_state(want_id)
+    if not current or current.get("active_state") != "active":
+        return None
+
+    return wants_store.record_event(
+        want_id=want_id,
+        statement=str(current.get("statement") or ""),
+        event_type=wants_mod.EVENT_SATISFIED,
+        evidence={
+            "basis": "owner_confirmed",
+            "source": "decision_pipeline",
+            "summary": "Owner confirmed this pending terminal proposal.",
+            "external_object_ref": f"pending_card:{request_id}",
+        },
+    )
 
 
 def _has_open_want_wondering(wonderings_store: Any) -> bool:
