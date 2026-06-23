@@ -51,24 +51,51 @@ class SelfCardLine:
 
 
 @dataclass(frozen=True)
+class _TimeLineCandidate:
+    label: str
+    text: str
+    source: str
+    source_ref: str
+    source_sha256: str
+    reason: str
+
+    def as_line(self) -> SelfCardLine:
+        return SelfCardLine(
+            label=self.label,
+            text=self.text,
+            source=self.source,
+            source_ref=self.source_ref,
+            source_sha256=self.source_sha256,
+        )
+
+
+def _normalize_time_line_candidate(candidate: object | None) -> _TimeLineCandidate | None:
+    if candidate is None:
+        return None
+    fields = {
+        "label": getattr(candidate, "label", None),
+        "text": getattr(candidate, "text", None),
+        "source": getattr(candidate, "source", None),
+        "source_ref": getattr(candidate, "source_ref", None),
+        "source_sha256": getattr(candidate, "source_sha256", None),
+        "reason": getattr(candidate, "reason", None),
+    }
+    if not all(isinstance(value, str) for value in fields.values()):
+        return None
+    return _TimeLineCandidate(**fields)
+
+
+@dataclass(frozen=True)
 class SelfCard:
     lines: tuple[SelfCardLine, ...]
     time_line_candidate: object | None = None
     time_line_applied: bool = False
 
     def _render_lines(self) -> tuple[SelfCardLine, ...]:
-        if self.time_line_candidate is None or not self.time_line_applied:
+        time_line = _normalize_time_line_candidate(self.time_line_candidate)
+        if time_line is None or not self.time_line_applied:
             return self.lines
-        return (
-            *self.lines,
-            SelfCardLine(
-                label=self.time_line_candidate.label,
-                text=self.time_line_candidate.text,
-                source=self.time_line_candidate.source,
-                source_ref=self.time_line_candidate.source_ref,
-                source_sha256=self.time_line_candidate.source_sha256,
-            ),
-        )
+        return (*self.lines, time_line.as_line())
 
     @property
     def text(self) -> str:
@@ -79,49 +106,44 @@ class SelfCard:
         )
 
     def receipt(self) -> dict[str, object]:
+        rendered_lines = self._render_lines()
+        time_line = _normalize_time_line_candidate(self.time_line_candidate)
+        card_text = self.text
         local_lines = [
             line
-            for line in self.lines
+            for line in rendered_lines
             if line.source == "soul.local" and line.source_ref != "none_recent"
         ]
         body_lines = [
-            line for line in self.lines if line.label.lower().startswith("body state")
+            line
+            for line in rendered_lines
+            if line.label.lower().startswith("body state")
         ]
         return {
             "schema_version": "maez_self_card.v0",
-            "card_chars": len(self.text),
-            "card_sha256": _sha256(self.text),
-            "line_count": len(self.lines),
-            "line_sources": [line.source for line in self.lines],
-            "line_source_refs": [line.source_ref for line in self.lines],
-            "line_sha256": [line.source_sha256 for line in self.lines],
+            "card_chars": len(card_text),
+            "card_sha256": _sha256(card_text),
+            "line_count": len(rendered_lines),
+            "line_sources": [line.source for line in rendered_lines],
+            "line_source_refs": [line.source_ref for line in rendered_lines],
+            "line_sha256": [line.source_sha256 for line in rendered_lines],
             "local_selected_count": len(local_lines),
             "local_rendered_chars": sum(len(line.text) for line in local_lines),
             "body_state_source": body_lines[0].source if body_lines else "none",
-            "style_directive_hits": style_directive_hits(self.text),
-            "time_line_present": bool(self.time_line_candidate is not None),
-            "time_line_applied": bool(
-                self.time_line_candidate is not None and self.time_line_applied
-            ),
+            "style_directive_hits": style_directive_hits(card_text),
+            "time_line_present": bool(time_line is not None),
+            "time_line_applied": bool(time_line is not None and self.time_line_applied),
             "time_line_reason": (
-                getattr(self.time_line_candidate, "reason", "none")
-                if self.time_line_candidate is not None
-                else "none"
+                time_line.reason if time_line is not None else "none"
             ),
             "time_line_source": (
-                getattr(self.time_line_candidate, "source", "none")
-                if self.time_line_candidate is not None
-                else "none"
+                time_line.source if time_line is not None else "none"
             ),
             "time_line_chars": (
-                len(getattr(self.time_line_candidate, "text", ""))
-                if self.time_line_candidate is not None
-                else 0
+                len(time_line.text) if time_line is not None else 0
             ),
             "time_line_sha256": (
-                getattr(self.time_line_candidate, "source_sha256", "")
-                if self.time_line_candidate is not None
-                else ""
+                time_line.source_sha256 if time_line is not None else ""
             ),
         }
 

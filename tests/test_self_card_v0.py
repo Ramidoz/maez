@@ -253,6 +253,59 @@ class SelfCardAssemblerTests(unittest.TestCase):
         self.assertNotIn("8h", str(receipt))
         self.assertNotIn("owner contact", str(receipt))
 
+    def test_time_line_enabled_receipt_includes_rendered_line_provenance(self):
+        from core.routing.self_card import assemble_self_card
+        from core.routing.self_card_time import SelfCardTimeLine
+
+        time_line = SelfCardTimeLine(
+            label="Time since contact",
+            text="~8h since owner contact. above ~91% of recorded gaps (226 gaps).",
+            source="subjective_duration.rhythm_context",
+            source_ref="percentile_high",
+            source_sha256="abc123",
+            reason="percentile_high",
+        )
+
+        card = assemble_self_card(
+            base_text=BASE_FIXTURE,
+            local_text=LOCAL_FIXTURE,
+            body_state_provider=_body_line,
+            time_line_candidate=time_line,
+            time_line_applied=True,
+        )
+
+        receipt = card.receipt()
+
+        self.assertEqual(receipt["line_count"], len(receipt["line_sources"]))
+        self.assertEqual(receipt["line_count"], len(receipt["line_source_refs"]))
+        self.assertEqual(receipt["line_count"], len(receipt["line_sha256"]))
+        self.assertEqual(receipt["line_sources"][-1], "subjective_duration.rhythm_context")
+        self.assertEqual(receipt["line_source_refs"][-1], "percentile_high")
+        self.assertEqual(receipt["line_sha256"][-1], "abc123")
+        self.assertEqual(receipt["time_line_chars"], len(time_line.text))
+        self.assertNotIn("8h", str(receipt))
+        self.assertNotIn("owner contact", str(receipt))
+
+    def test_malformed_time_line_candidate_is_treated_as_absent(self):
+        from core.routing.self_card import assemble_self_card
+
+        card = assemble_self_card(
+            base_text=BASE_FIXTURE,
+            local_text=LOCAL_FIXTURE,
+            body_state_provider=_body_line,
+            time_line_candidate=object(),
+            time_line_applied=True,
+        )
+
+        self.assertNotIn("Time since contact", card.text)
+        receipt = card.receipt()
+        self.assertFalse(receipt["time_line_present"])
+        self.assertFalse(receipt["time_line_applied"])
+        self.assertEqual(receipt["time_line_reason"], "none")
+        self.assertEqual(receipt["time_line_source"], "none")
+        self.assertEqual(receipt["time_line_chars"], 0)
+        self.assertEqual(receipt["time_line_sha256"], "")
+
     def test_assemble_from_paths_threads_time_line_candidate(self):
         from core.routing.self_card import assemble_self_card_from_paths
         from core.routing.self_card_time import SelfCardTimeLine
