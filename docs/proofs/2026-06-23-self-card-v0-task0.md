@@ -14,7 +14,7 @@ GO.
 ## Soul Source Shape
 
 - `config/soul.base.md` has stable covenant and identity prose. v0 may extract factual relationship/identity lines from these sections, but must not copy voice/style instructions such as "be direct" or "speak only when it matters."
-- `config/soul.local.md` is not a typed schema. It is free-form dated notes plus legacy headings. v0 must therefore select recent note records by deterministic parse/order, dedupe repeated fragments, and cap the rendered local text by budget.
+- `config/soul.local.md` is not a typed schema. It is free-form dated notes plus legacy headings. v0 must therefore select note records inside an explicit recency window by deterministic parse/order, dedupe repeated fragments, and cap the rendered local text by budget. If no notes are recent, v0 must render an honest empty local line rather than stale audit rot.
 - `core.evolution.soul_loader` already treats note records as timestamp-delimited, not blank-line-delimited. The self-card selector should reuse that shape rather than split on arbitrary blank lines.
 
 ## Focused Seam
@@ -28,5 +28,5 @@ GO.
 
 - A1: assembled card text must contain zero style directives. Any "be warm", "talk like this", "dense/opinionated/useful", or "local AI / what we're building" steer is a fail.
 - B1: assembler reads `soul.base.md` and `soul.local.md`; it never writes to soul, Chroma, lived memory, raw memory, or the combined soul mirror.
-- Bound: `soul.local` must be recency-selected, size-capped, and deduped. A verbatim dump fails the review gate.
+- Bound: `soul.local` must be recency-windowed, size-capped, and deduped. A verbatim or stale dump fails the review gate.
 - Receipt: shadow logs source ids, counts, sizes, and hashes only. It must never log soul text.

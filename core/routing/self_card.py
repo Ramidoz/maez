@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 import hashlib
 from pathlib import Path
 import re
@@ -63,7 +63,11 @@ class SelfCard:
         )
 
     def receipt(self) -> dict[str, object]:
-        local_lines = [line for line in self.lines if line.source == "soul.local"]
+        local_lines = [
+            line
+            for line in self.lines
+            if line.source == "soul.local" and line.source_ref != "none_recent"
+        ]
         body_lines = [
             line for line in self.lines if line.label.lower().startswith("body state")
         ]
@@ -124,10 +128,13 @@ def _extract_bond_line(base_text: str) -> SelfCardLine:
         )
     covenant_idx = base_text.find("TRUST COVENANT:")
     source = base_text[covenant_idx:] if covenant_idx >= 0 else base_text
-    text = (
-        "The owner and Maez are in a trusted partnership, not a tool/user "
-        "relationship."
+    match = re.search(
+        r"(This is not a tool and user relationship\.\s+"
+        r"This is a partnership between two\s+intelligences building something together\.)",
+        source,
+        flags=re.IGNORECASE,
     )
+    text = _compact(match.group(1)) if match else "source unavailable"
     return SelfCardLine(
         label="Bond",
         text=text,
@@ -207,10 +214,22 @@ def select_recent_local_notes(
     *,
     max_chars: int = 520,
     max_items: int = 3,
+    recency_days: int | None = 45,
+    now: datetime | None = None,
 ) -> tuple[_LocalNote, ...]:
     notes = _parse_local_notes(local_text)
     if not notes or max_chars <= 0 or max_items <= 0:
         return ()
+    if recency_days is not None:
+        reference = now or datetime.now()
+        cutoff = reference - timedelta(days=recency_days)
+        notes = tuple(
+            note
+            for note in notes
+            if note.timestamp is not None and note.timestamp >= cutoff
+        )
+        if not notes:
+            return ()
 
     def sort_key(note: _LocalNote) -> tuple[datetime, int]:
         return (
@@ -252,19 +271,23 @@ def _local_lines(
     *,
     local_max_chars: int,
     local_max_items: int,
+    local_recency_days: int | None,
+    now: datetime | None,
 ) -> tuple[SelfCardLine, ...]:
     notes = select_recent_local_notes(
         local_text,
         max_chars=local_max_chars,
         max_items=local_max_items,
+        recency_days=local_recency_days,
+        now=now,
     )
     if not notes:
         return (
             SelfCardLine(
                 label="Recent self-understanding",
-                text="source unavailable",
+                text="no recent self-understanding logged yet",
                 source="soul.local",
-                source_ref="none",
+                source_ref="none_recent",
                 source_sha256=_sha256(""),
             ),
         )
@@ -313,6 +336,8 @@ def assemble_self_card(
     body_state_provider: BodyStateProvider | None = None,
     local_max_chars: int = 520,
     local_max_items: int = 3,
+    local_recency_days: int | None = 45,
+    now: datetime | None = None,
 ) -> SelfCard:
     provider = body_state_provider or _default_body_state_provider
     lines: list[SelfCardLine] = [
@@ -324,6 +349,8 @@ def assemble_self_card(
             local_text,
             local_max_chars=local_max_chars,
             local_max_items=local_max_items,
+            local_recency_days=local_recency_days,
+            now=now,
         )
     )
     lines.append(_body_line(provider))
@@ -344,6 +371,8 @@ def assemble_self_card_from_paths(
     body_state_provider: BodyStateProvider | None = None,
     local_max_chars: int = 520,
     local_max_items: int = 3,
+    local_recency_days: int | None = 45,
+    now: datetime | None = None,
 ) -> SelfCard:
     if base_path is None or local_path is None:
         from core.infra import paths
@@ -356,4 +385,6 @@ def assemble_self_card_from_paths(
         body_state_provider=body_state_provider,
         local_max_chars=local_max_chars,
         local_max_items=local_max_items,
+        local_recency_days=local_recency_days,
+        now=now,
     )

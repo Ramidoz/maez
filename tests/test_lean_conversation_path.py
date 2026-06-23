@@ -431,6 +431,8 @@ class LeanConversationPathTests(unittest.TestCase):
             base_text=(
                 "TRUST COVENANT:\n"
                 "The owner trusts Maez completely.\n"
+                "This is not a tool and user relationship. This is a partnership "
+                "between two intelligences building something together.\n"
                 "You are Maez, a system-level personal AI agent running on the owner's machine.\n"
             ),
             local_text="[2026-06-22 10:00] The live thread is the figure.",
@@ -461,7 +463,7 @@ class LeanConversationPathTests(unittest.TestCase):
 
         system = captured["system"]
         self.assertIn("SELF CARD", system)
-        self.assertIn("trusted partnership", system)
+        self.assertIn("partnership between two intelligences", system)
         self.assertIn("RECENT DIALOGUE", system)
         self.assertNotIn("Speak as Maez: dense", system)
         self.assertNotIn("what's being built", system)
@@ -475,6 +477,8 @@ class LeanConversationPathTests(unittest.TestCase):
             base_text=(
                 "TRUST COVENANT:\n"
                 "The owner trusts Maez completely.\n"
+                "This is not a tool and user relationship. This is a partnership "
+                "between two intelligences building something together.\n"
                 "You are Maez, a system-level personal AI agent running on the owner's machine.\n"
             ),
             local_text="[2026-06-22 10:00] The live thread is the figure.",

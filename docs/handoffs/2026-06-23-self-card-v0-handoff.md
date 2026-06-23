@@ -10,7 +10,7 @@
 
 - `core/routing/self_card.py`
   - Deterministic self-card assembler.
-  - Reads `soul.base.md` + bounded/deduped recent `soul.local.md`.
+  - Reads `soul.base.md` + recency-windowed/bounded/deduped recent `soul.local.md`.
   - Adds a computed body-state line from runtime-services snapshot provider.
   - Emits a content-light receipt: counts, hashes, sources, sizes.
   - No LLM call, no writes, no memory/soul mutation.
@@ -28,7 +28,27 @@
 
 Recorded in `docs/proofs/2026-06-23-self-card-v0-task0.md`.
 
-Key result: `soul.local.md` is free-form timestamped prose, not a structured schema. v0 therefore selects recent timestamped records, dedupes by normalized body, and caps local text by budget.
+Key result: `soul.local.md` is free-form timestamped prose, not a structured schema. v0 therefore selects timestamped records inside the recency window, dedupes by normalized body, and caps local text by budget. If nothing is recent, it renders honest-empty.
+
+## Covenant HOLD Resolution
+
+Claude's review found that live `soul.local.md` only had stale April audit/cognition-quality notes. The first implementation bounded the dump correctly but would still feed those stale self-criticism notes into "recent self-understanding."
+
+Fix:
+
+- Added a default 45-day `soul.local` recency window.
+- A no-recent-local state renders: `no recent self-understanding logged yet`.
+- `local_selected_count` and `local_rendered_chars` are `0` for that honest-empty state.
+- The Bond line now excerpts the actual `soul.base` sentence instead of using a paraphrase:
+  `This is not a tool and user relationship. This is a partnership between two intelligences building something together.`
+
+Live assembled-card check after the fix:
+
+- line count: 4
+- `local_selected_count=0`
+- `local_rendered_chars=0`
+- `style_directive_hits=()`
+- no April `Cognition quality low` / `git_workflow` notes in the card.
 
 ## Covenant Review Anchors
 
@@ -40,8 +60,8 @@ Key result: `soul.local.md` is free-form timestamped prose, not a structured sch
   - `assemble_self_card_from_paths(...)` reads source files directly and does not call `current_soul()` or any writer.
   - Test asserts `soul.base.md` / `soul.local.md` content and mtimes are unchanged after assembly.
 - Bound:
-  - `soul.local` rendered text is capped (`local_rendered_chars`), newest-first, max-items bounded, normalized dedupe.
-  - Real current receipt: 3 local lines selected, `local_rendered_chars=520`, no full local dump.
+  - `soul.local` rendered text is capped (`local_rendered_chars`), newest-first inside the recency window, max-items bounded, normalized dedupe.
+  - Real current receipt: no recent local lines selected, `local_selected_count=0`, `local_rendered_chars=0`, and an honest-empty local line. No stale audit rot.
 - Receipt:
   - `self_card_shadow` logs card hash, line count, line sources/source refs, local counts/chars, body-state source, style-hit names.
   - It never logs soul text. Test uses `SECRET_*` fixture text to prove no leak.
@@ -83,7 +103,7 @@ Do not flip live flags until covenant review passes.
 3. Witness `self_card_shadow` receipts:
    - `status=ok`
    - `style_directive_hits=none`
-   - `local_selected_count>0`
+   - `local_selected_count=0` is expected with today's stale `soul.local`; if fresh self-understanding exists later, it should become `>0`
    - no soul text in logs
 4. Then set `MAEZ_SELF_CARD_ENABLED=1`.
 5. Witness:

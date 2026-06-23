@@ -13,7 +13,7 @@ v0 is **assembled by code** from existing real fields — **not authored by the 
 ### Contains — only these:
 1. **Relationship** — who Maez is in relation to the owner, from `soul.base` (the bond: "Rohit is your person; a guardian-companion bond, not a professional contact"). *This is the line that corrects qwen's "professional/workflow" accent.*
 2. **Covenant identity** — stable self from `soul.base` (verbatim, the immutable core).
-3. **Recent self-understanding** — from `soul.local` (the grown layer): **recency-selected + size-capped to a hard budget, with deterministic dedup of repeated fragments — NOT a verbatim dump** (verbatim risks reimporting the diary-flood wound through the card), and **NOT brain-summarized**. Still pure code: select by recency/order, cap by budget, drop exact-repeats — no LLM. *(Task 0: verify `soul.local`'s actual structure — dated entries vs free prose — and pick the recency-selection accordingly.)*
+3. **Recent self-understanding** — from `soul.local` (the grown layer): **within an explicit recency window + size-capped to a hard budget, with deterministic dedup of repeated fragments — NOT a verbatim dump** (verbatim risks reimporting the diary-flood wound through the card), and **NOT brain-summarized**. Still pure code: select by recency window/order, cap by budget, drop exact-repeats — no LLM. If no `soul.local` entry falls inside the recency window, render the honest line: "no recent self-understanding logged yet." *(Task 0: verify `soul.local`'s actual structure — dated entries vs free prose — and pick the recency-selection accordingly.)*
 4. **Lived-phase / body-state summary** — a computed one-liner from existing organs (felt-time/rhythm + capability health), deterministically rendered.
 5. **Voice posture** — derived from lived evidence, never invented style. v0: a minimal *factual* posture (e.g., present/idle state) from existing signals. The dynamic "how Maez sounds lately" is deferred to v0.1. **No style directives.**
 6. **Provenance** — each line carries its source (soul line / event / organ), auditable, drop-to-source.
@@ -23,7 +23,7 @@ v0 is **assembled by code** from existing real fields — **not authored by the 
 - the "tie things back to local AI / what we're building" steer — **removed here** (this subsumes the v0.1 voice-card trim)
 - fabricated or asserted emotion
 - diary flood (no recalled self-summaries — that is the coherence wound)
-- an **unbounded `soul.local` dump** — soul.local must be recency-selected + size-capped (the diary-flood wound, re-entering through the card)
+- an **unbounded or stale `soul.local` dump** — soul.local must be recency-windowed + size-capped (the diary-flood wound, re-entering through the card)
 - **any** memory or soul mutation (read-only projection)
 
 ## v0.1 — brain-distilled enrichment (deferred, gated — NOT in this slice)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 
@@ -72,6 +73,7 @@ class SelfCardAssemblerTests(unittest.TestCase):
             body_state_provider=_body_line,
             local_max_chars=92,
             local_max_items=2,
+            now=datetime(2026, 6, 5, 12, 0),
         )
 
         local_lines = [
@@ -85,6 +87,46 @@ class SelfCardAssemblerTests(unittest.TestCase):
         self.assertNotIn("2026-06-01", rendered_local)
         self.assertLessEqual(card.receipt()["local_rendered_chars"], 92)
         self.assertEqual(rendered_local.count("Old repeated lesson"), 0)
+
+    def test_stale_local_notes_render_honest_empty_not_audit_rot(self):
+        from core.routing.self_card import assemble_self_card
+
+        stale_local = (
+            "[2026-04-18 03:00] Self-analysis lesson: repeated disk-fixation reports.\n\n"
+            "[2026-04-13 03:40] Cognition quality low for 2 consecutive windows. "
+            "Fixation on git_workflow."
+        )
+        card = assemble_self_card(
+            base_text=BASE_FIXTURE,
+            local_text=stale_local,
+            body_state_provider=_body_line,
+            local_max_chars=520,
+            local_max_items=3,
+            local_recency_days=45,
+            now=datetime(2026, 6, 23, 12, 0),
+        )
+
+        self.assertIn("no recent self-understanding logged yet", card.text)
+        self.assertNotIn("Cognition quality low", card.text)
+        self.assertEqual(card.receipt()["local_selected_count"], 0)
+        self.assertEqual(card.receipt()["local_rendered_chars"], 0)
+
+    def test_bond_line_excerpts_soul_base_sentence(self):
+        from core.routing.self_card import assemble_self_card
+
+        card = assemble_self_card(
+            base_text=BASE_FIXTURE,
+            local_text=LOCAL_FIXTURE,
+            body_state_provider=_body_line,
+            now=datetime(2026, 6, 5, 12, 0),
+        )
+
+        self.assertIn(
+            "This is not a tool and user relationship. This is a partnership "
+            "between two intelligences building something together.",
+            card.text,
+        )
+        self.assertNotIn("trusted partnership, not a tool/user relationship", card.text)
 
     def test_receipt_is_content_light(self):
         from core.routing.self_card import assemble_self_card
@@ -125,6 +167,7 @@ class SelfCardAssemblerTests(unittest.TestCase):
                 body_state_provider=_body_line,
                 local_max_chars=180,
                 local_max_items=2,
+                now=datetime(2026, 6, 5, 12, 0),
             )
 
             self.assertIn("SELF CARD", card.text)
