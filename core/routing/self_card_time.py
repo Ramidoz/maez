@@ -141,11 +141,6 @@ def _read_only_subjective_duration(path: Path):
     return handle
 
 
-def _valid_duration(value: object) -> bool:
-    number = _clean_number(value)
-    return number is not None and number >= 0.0
-
-
 def _valid_sample_counts(ctx: Mapping[str, object]) -> bool:
     return (
         _clean_count(ctx.get("rhythm_recent_sample_count")) is not None
@@ -153,14 +148,32 @@ def _valid_sample_counts(ctx: Mapping[str, object]) -> bool:
     )
 
 
+def _median_pair(ctx: Mapping[str, object]) -> tuple[float | None, float | None] | None:
+    recent_raw = ctx.get("rhythm_recent_gap_median_s")
+    all_time_raw = ctx.get("rhythm_all_time_gap_median_s")
+    if recent_raw is None and all_time_raw is None:
+        return None, None
+    if recent_raw is None or all_time_raw is None:
+        return None
+    recent = _clean_number(recent_raw)
+    all_time = _clean_number(all_time_raw)
+    if recent is None or all_time is None or recent < 0.0 or all_time < 0.0:
+        return None
+    return recent, all_time
+
+
+def _has_median_pair(medians: tuple[float | None, float | None] | None) -> bool:
+    return medians is not None and medians != (None, None)
+
+
+def _valid_optional_medians(ctx: Mapping[str, object]) -> bool:
+    return _median_pair(ctx) is not None
+
+
 def _valid_comparison_facts(ctx: Mapping[str, object]) -> bool:
     all_time_count = _clean_count(ctx.get("rhythm_all_time_sample_count"))
-    return (
-        all_time_count is not None
-        and all_time_count > 0
-        and _valid_duration(ctx.get("rhythm_recent_gap_median_s"))
-        and _valid_duration(ctx.get("rhythm_all_time_gap_median_s"))
-    )
+    medians = _median_pair(ctx)
+    return all_time_count is not None and all_time_count > 0 and _has_median_pair(medians)
 
 
 def _reason(ctx: Mapping[str, object]) -> str | None:
@@ -168,6 +181,8 @@ def _reason(ctx: Mapping[str, object]) -> str | None:
     if current is None or current < 0.0:
         return None
     if not _valid_sample_counts(ctx):
+        return None
+    if not _valid_optional_medians(ctx):
         return None
     pct_raw = ctx.get("rhythm_current_gap_percentile_all_time")
     pct = _clean_number(pct_raw)
@@ -203,22 +218,32 @@ def rhythm_time_line_provider(
         return None
 
 
-def _human(seconds: object) -> str:
+def _human(seconds: object) -> str | None:
     from core.evolution.subjective_duration import humanize_elapsed
 
-    return humanize_elapsed(_clean_number(seconds) or 0.0)
+    number = _clean_number(seconds)
+    if number is None or number < 0.0:
+        return None
+    return humanize_elapsed(number)
 
 
 def _render(ctx: Mapping[str, object], reason: str) -> str:
-    current = f"~{_human(ctx.get('rhythm_current_gap_s'))} since owner contact"
-    recent = ctx.get("rhythm_recent_gap_median_s")
-    all_time = ctx.get("rhythm_all_time_gap_median_s")
+    current_human = _human(ctx.get("rhythm_current_gap_s"))
+    if current_human is None:
+        return ""
+    current = f"~{current_human} since owner contact"
+    medians = _median_pair(ctx)
     pct = _clean_number(ctx.get("rhythm_current_gap_percentile_all_time"))
     sample_count = _clean_count(ctx.get("rhythm_all_time_sample_count")) or 0
     gap_word = "gap" if sample_count == 1 else "gaps"
     parts = [current]
-    if recent is not None and all_time is not None:
-        parts.append(f"recent usual ~{_human(recent)}; all-time usual ~{_human(all_time)}")
+    if _has_median_pair(medians):
+        recent, all_time = medians
+        recent_human = _human(recent)
+        all_time_human = _human(all_time)
+        if recent_human is None or all_time_human is None:
+            return ""
+        parts.append(f"recent usual ~{recent_human}; all-time usual ~{all_time_human}")
     if pct is not None:
         relation = "above" if reason == "percentile_high" else "below"
         parts.append(f"{relation} ~{round(pct)}% of recorded gaps ({sample_count} {gap_word})")
@@ -240,6 +265,8 @@ def build_self_card_time_line(
     if reason is None:
         return None
     text = _render(ctx, reason)
+    if not text:
+        return None
     if any(word in text.lower() for word in _FORBIDDEN_FEELING_WORDS):
         return None
     digest_basis = "|".join(

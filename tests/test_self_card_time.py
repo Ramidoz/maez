@@ -174,6 +174,19 @@ class SelfCardTimeLineTests(unittest.TestCase):
         self.assertEqual(after.st_size, 0)
         self.assertEqual(before.st_size, after.st_size)
 
+    def test_default_provider_returns_none_for_malformed_nonempty_db_without_writing(self):
+        from core.routing.self_card_time import rhythm_time_line_provider
+
+        path = Path(tempfile.mkdtemp()) / "malformed-subjective-duration.db"
+        with closing(sqlite3.connect(path)) as conn:
+            conn.execute("CREATE TABLE unrelated_table (id INTEGER PRIMARY KEY)")
+            conn.commit()
+        before_bytes = path.read_bytes()
+
+        self.assertIsNone(rhythm_time_line_provider(db_path=path))
+
+        self.assertEqual(path.read_bytes(), before_bytes)
+
     def test_invalid_percentile_range_omits_line(self):
         from core.routing.self_card_time import build_self_card_time_line
 
@@ -186,6 +199,44 @@ class SelfCardTimeLineTests(unittest.TestCase):
                     "rhythm_recent_sample_count": 20,
                     "rhythm_all_time_sample_count": 226,
                     "rhythm_current_gap_percentile_all_time": percentile,
+                }
+
+                self.assertIsNone(build_self_card_time_line(lambda ctx=ctx: ctx))
+
+    def test_cold_start_invalid_present_medians_omit_line(self):
+        from core.routing.self_card_time import build_self_card_time_line
+
+        invalid_median_pairs = (
+            (-1, 8 * 60),
+            ("not-a-number", 8 * 60),
+            (24 * 60, float("nan")),
+            (24 * 60, float("inf")),
+        )
+        for recent, all_time in invalid_median_pairs:
+            with self.subTest(recent=recent, all_time=all_time):
+                ctx = {
+                    "rhythm_current_gap_s": 30 * 60,
+                    "rhythm_recent_gap_median_s": recent,
+                    "rhythm_all_time_gap_median_s": all_time,
+                    "rhythm_recent_sample_count": 1,
+                    "rhythm_all_time_sample_count": 1,
+                    "rhythm_current_gap_percentile_all_time": None,
+                }
+
+                self.assertIsNone(build_self_card_time_line(lambda ctx=ctx: ctx))
+
+    def test_cold_start_partial_medians_omit_line(self):
+        from core.routing.self_card_time import build_self_card_time_line
+
+        for recent, all_time in ((24 * 60, None), (None, 8 * 60)):
+            with self.subTest(recent=recent, all_time=all_time):
+                ctx = {
+                    "rhythm_current_gap_s": 30 * 60,
+                    "rhythm_recent_gap_median_s": recent,
+                    "rhythm_all_time_gap_median_s": all_time,
+                    "rhythm_recent_sample_count": 1,
+                    "rhythm_all_time_sample_count": 1,
+                    "rhythm_current_gap_percentile_all_time": None,
                 }
 
                 self.assertIsNone(build_self_card_time_line(lambda ctx=ctx: ctx))
