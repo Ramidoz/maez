@@ -699,6 +699,26 @@ class SubjectiveDuration:
             ).fetchall()
         return sorted(_normalize_event_time(r[0]) for r in rows)
 
+    def _rhythm_context_for_gap(self, gap_seconds: float, gaps: "list[float]") -> dict:
+        recent = gaps[-RHYTHM_RECENT_WINDOW:]
+        ctx = {
+            "rhythm_current_gap_s": gap_seconds,
+            "rhythm_recent_sample_count": len(recent),
+            "rhythm_all_time_sample_count": len(gaps),
+            "rhythm_recent_gap_median_s": None,
+            "rhythm_all_time_gap_median_s": None,
+            "rhythm_current_gap_percentile_all_time": None,
+            "rhythm_recent_gap_iqr_s": None,
+            "rhythm_all_time_gap_iqr_s": None,
+        }
+        if len(gaps) >= RHYTHM_MIN_GAPS:         # data-sufficiency floor
+            ctx["rhythm_recent_gap_median_s"] = statistics.median(recent)
+            ctx["rhythm_all_time_gap_median_s"] = statistics.median(gaps)
+            ctx["rhythm_current_gap_percentile_all_time"] = _percentile_strictly_below(gap_seconds, gaps)
+            ctx["rhythm_recent_gap_iqr_s"] = _iqr(recent)
+            ctx["rhythm_all_time_gap_iqr_s"] = _iqr(gaps)
+        return ctx
+
     def rhythm_context(self, *, now: str | datetime | None = None) -> dict | None:
         """Read-only LEARNED rhythm FACTS for Slice-A feed/stamp. Returns raw facts (no verdict/label/
         phrase) or None. None (no write) on clock-degraded or no real owner-contact reference. Comparison
@@ -714,24 +734,28 @@ class SubjectiveDuration:
         if current_gap < 0:
             return None                          # contact after now -> no negative gap
         gaps = _gaps_seconds(contacts)
-        recent = gaps[-RHYTHM_RECENT_WINDOW:]
-        ctx = {
-            "rhythm_current_gap_s": current_gap,
-            "rhythm_recent_sample_count": len(recent),
-            "rhythm_all_time_sample_count": len(gaps),
-            "rhythm_recent_gap_median_s": None,
-            "rhythm_all_time_gap_median_s": None,
-            "rhythm_current_gap_percentile_all_time": None,
-            "rhythm_recent_gap_iqr_s": None,
-            "rhythm_all_time_gap_iqr_s": None,
-        }
-        if len(gaps) >= RHYTHM_MIN_GAPS:         # data-sufficiency floor
-            ctx["rhythm_recent_gap_median_s"] = statistics.median(recent)
-            ctx["rhythm_all_time_gap_median_s"] = statistics.median(gaps)
-            ctx["rhythm_current_gap_percentile_all_time"] = _percentile_strictly_below(current_gap, gaps)
-            ctx["rhythm_recent_gap_iqr_s"] = _iqr(recent)
-            ctx["rhythm_all_time_gap_iqr_s"] = _iqr(gaps)
-        return ctx
+        return self._rhythm_context_for_gap(current_gap, gaps)
+
+    def completed_gap_rhythm_context(self, *, now: str | datetime | None = None) -> dict | None:
+        """Read-only rhythm facts for the last completed owner-contact gap.
+
+        Owner reply paths can record the current message as an owner_contact before prompt assembly.
+        This reader uses the just-completed gap between the two latest real contacts, so a greeting
+        after an absence carries the absence instead of collapsing to "just now".
+        """
+        now_dt = _normalize_event_time(now or datetime.now(UTC))
+        _snap, degraded_latest = self._compute(now_dt)
+        if degraded_latest is not None:
+            return None
+        contacts = self._real_owner_contact_timestamps()
+        if len(contacts) < 2:
+            return None
+        if contacts[-1] > now_dt:
+            return None
+        gaps = _gaps_seconds(contacts)
+        if not gaps:
+            return None
+        return self._rhythm_context_for_gap(gaps[-1], gaps)
 
     def current(self, *, now_utc: str | datetime | None = None) -> SubjectiveDurationSnapshot:
         now = _normalize_event_time(now_utc or datetime.now(UTC))

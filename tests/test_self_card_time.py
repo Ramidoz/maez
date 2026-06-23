@@ -60,6 +60,20 @@ class SelfCardTimeLineTests(unittest.TestCase):
 
         self.assertIsNone(build_self_card_time_line(lambda: ctx))
 
+    def test_low_percentile_gap_omits_line(self):
+        from core.routing.self_card_time import build_self_card_time_line
+
+        ctx = {
+            "rhythm_current_gap_s": 4.0,
+            "rhythm_recent_gap_median_s": 20 * 60,
+            "rhythm_all_time_gap_median_s": 30 * 60,
+            "rhythm_recent_sample_count": 20,
+            "rhythm_all_time_sample_count": 100,
+            "rhythm_current_gap_percentile_all_time": 1.0,
+        }
+
+        self.assertIsNone(build_self_card_time_line(lambda: ctx))
+
     def test_cold_start_under_floor_omits_line(self):
         from core.routing.self_card_time import build_self_card_time_line
 
@@ -116,7 +130,7 @@ class SelfCardTimeLineTests(unittest.TestCase):
         receipt = line.receipt()
 
         self.assertEqual(receipt["time_line_reason"], "percentile_high")
-        self.assertEqual(receipt["time_line_source"], "subjective_duration.rhythm_context")
+        self.assertEqual(receipt["time_line_source"], "subjective_duration.completed_gap_rhythm_context")
         self.assertIn("time_line_sha256", receipt)
         self.assertNotIn("8h", str(receipt))
         self.assertNotIn("owner contact", str(receipt))
@@ -135,6 +149,11 @@ class SelfCardTimeLineTests(unittest.TestCase):
                 "(ts_utc, salience_event_kind, owner_auth_class, is_canary) VALUES (?,?,?,?)",
                 (t0.isoformat(), "owner_contact", "cockpit", 0),
             )
+            conn.execute(
+                "INSERT INTO subjective_duration_salience_events "
+                "(ts_utc, salience_event_kind, owner_auth_class, is_canary) VALUES (?,?,?,?)",
+                ((t0 + timedelta(minutes=30)).isoformat(), "owner_contact", "cockpit", 0),
+            )
             conn.commit()
             before = (
                 conn.execute("SELECT COUNT(*) FROM subjective_duration_samples").fetchone()[0],
@@ -142,7 +161,7 @@ class SelfCardTimeLineTests(unittest.TestCase):
             )
 
         line = build_self_card_time_line(
-            lambda: rhythm_time_line_provider(db_path=inst.db_path, now=t0 + timedelta(minutes=30))
+            lambda: rhythm_time_line_provider(db_path=inst.db_path, now=t0 + timedelta(minutes=30, seconds=10))
         )
 
         with closing(sqlite3.connect(inst.db_path)) as conn:
@@ -151,6 +170,49 @@ class SelfCardTimeLineTests(unittest.TestCase):
                 conn.execute("SELECT COUNT(*) FROM subjective_duration_salience_events").fetchone()[0],
             )
         self.assertIsNotNone(line)
+        self.assertEqual(before, after)
+
+    def test_default_provider_uses_previous_completed_gap_after_current_turn_contact(self):
+        from core.evolution.subjective_duration import SubjectiveDuration
+        from core.routing.self_card_time import build_self_card_time_line, rhythm_time_line_provider
+
+        root = tempfile.mkdtemp()
+        inst = SubjectiveDuration(db_path=os.path.join(root, "subjective_duration.db"))
+        t0 = datetime(2026, 6, 20, 8, 0, tzinfo=timezone.utc)
+        contacts = (
+            t0,
+            t0 + timedelta(minutes=8),
+            t0 + timedelta(minutes=16),
+            t0 + timedelta(minutes=24),
+            t0 + timedelta(hours=8, minutes=24),
+        )
+        inst.current(now_utc=t0)
+        with closing(sqlite3.connect(inst.db_path)) as conn:
+            for ts in contacts:
+                conn.execute(
+                    "INSERT INTO subjective_duration_salience_events "
+                    "(ts_utc, salience_event_kind, owner_auth_class, is_canary) VALUES (?,?,?,?)",
+                    (ts.isoformat(), "owner_contact", "cockpit", 0),
+                )
+            conn.commit()
+            before = (
+                conn.execute("SELECT COUNT(*) FROM subjective_duration_samples").fetchone()[0],
+                conn.execute("SELECT COUNT(*) FROM subjective_duration_salience_events").fetchone()[0],
+            )
+
+        line = build_self_card_time_line(
+            lambda: rhythm_time_line_provider(db_path=inst.db_path, now=contacts[-1] + timedelta(seconds=10))
+        )
+
+        with closing(sqlite3.connect(inst.db_path)) as conn:
+            after = (
+                conn.execute("SELECT COUNT(*) FROM subjective_duration_samples").fetchone()[0],
+                conn.execute("SELECT COUNT(*) FROM subjective_duration_salience_events").fetchone()[0],
+            )
+        self.assertIsNotNone(line)
+        self.assertEqual(line.reason, "percentile_high")
+        self.assertIn("~8h", line.text)
+        self.assertNotIn("10s", line.text)
         self.assertEqual(before, after)
 
     def test_default_provider_returns_none_when_store_missing(self):

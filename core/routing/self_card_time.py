@@ -17,9 +17,8 @@ from urllib.parse import quote
 
 
 SELF_CARD_TIME_HIGH_PERCENTILE = 75.0  # TEMPORARY anti-spam scaffold, not salience.
-SELF_CARD_TIME_LOW_PERCENTILE = 10.0  # TEMPORARY anti-spam scaffold, not salience.
 SELF_CARD_TIME_COLD_START_MIN_S = 15 * 60  # TEMPORARY anti-spam scaffold.
-_SOURCE = "subjective_duration.rhythm_context"
+_SOURCE = "subjective_duration.completed_gap_rhythm_context"
 _REQUIRED_TABLE_COLUMNS = {
     "subjective_duration_samples": frozenset(
         {
@@ -193,8 +192,6 @@ def _reason(ctx: Mapping[str, object]) -> str | None:
             return None
         if pct >= SELF_CARD_TIME_HIGH_PERCENTILE:
             return "percentile_high"
-        if pct <= SELF_CARD_TIME_LOW_PERCENTILE:
-            return "percentile_low"
         return None
     if current >= SELF_CARD_TIME_COLD_START_MIN_S:
         return "cold_start_elapsed_floor"
@@ -213,7 +210,7 @@ def rhythm_time_line_provider(
         if not _has_initialized_subjective_duration_schema(path):
             return None
         handle = _read_only_subjective_duration(path)
-        return handle.rhythm_context(now=now)
+        return handle.completed_gap_rhythm_context(now=now)
     except Exception:
         return None
 
