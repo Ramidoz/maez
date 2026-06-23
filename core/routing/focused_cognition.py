@@ -480,6 +480,69 @@ def _lean_conversation_enabled(env=os.environ) -> bool:
     }
 
 
+def _self_card_shadow_enabled(env=os.environ) -> bool:
+    return (env.get("MAEZ_SELF_CARD_SHADOW", "") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _self_card_enabled(env=os.environ) -> bool:
+    return (env.get("MAEZ_SELF_CARD_ENABLED", "") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _safe_self_card():
+    try:
+        from core.routing.self_card import assemble_self_card_from_paths
+
+        return assemble_self_card_from_paths()
+    except Exception:
+        logger.warning(
+            "self_card_assembly_failed fallback=legacy_voice_card",
+            exc_info=True,
+        )
+        return None
+
+
+def _emit_self_card_receipt(
+    event: str,
+    card,
+    *,
+    applied: bool,
+    surface: str,
+    turn_kind: str | None,
+) -> None:
+    receipt = card.receipt()
+    style_hits = receipt.get("style_directive_hits") or ()
+    logger.info(
+        "%s status=ok applied=%s card_chars=%d card_sha256=%s "
+        "line_count=%d line_sources=%s line_source_refs=%s "
+        "local_selected_count=%d local_rendered_chars=%d "
+        "body_state_source=%s style_directive_hits=%s surface=%s "
+        "turn_kind=%s",
+        event,
+        bool(applied),
+        int(receipt.get("card_chars", 0) or 0),
+        str(receipt.get("card_sha256", "")),
+        int(receipt.get("line_count", 0) or 0),
+        ",".join(str(x) for x in receipt.get("line_sources", ()) or ()),
+        ",".join(str(x) for x in receipt.get("line_source_refs", ()) or ()),
+        int(receipt.get("local_selected_count", 0) or 0),
+        int(receipt.get("local_rendered_chars", 0) or 0),
+        str(receipt.get("body_state_source", "unknown")),
+        ",".join(str(x) for x in style_hits) if style_hits else "none",
+        surface,
+        turn_kind or "unknown",
+    )
+
+
 def _working_set_source_types(working_set: WorkingSet) -> tuple[str, ...]:
     return tuple(
         dict.fromkeys(
@@ -624,17 +687,26 @@ def _lean_dialogue_anchor_text(working_set: WorkingSet) -> str:
     return "RECENT DIALOGUE (for continuity only):\n" + "\n\n".join(anchors[:2])
 
 
-def _lean_system_prompt(working_set: WorkingSet) -> str:
-    parts = [_VOICE_CARD_TEXT]
+def _lean_system_prompt(
+    working_set: WorkingSet,
+    *,
+    voice_card_text: str | None = None,
+) -> str:
+    parts = [voice_card_text or _VOICE_CARD_TEXT]
     anchor = _lean_dialogue_anchor_text(working_set)
     if anchor:
         parts.append(anchor)
     return "\n\n".join(parts)
 
 
-def _full_focused_system_prompt(working_set: WorkingSet, *, surface: str) -> str:
+def _full_focused_system_prompt(
+    working_set: WorkingSet,
+    *,
+    surface: str,
+    voice_card_text: str | None = None,
+) -> str:
     return (
-        f"{_voice_card(surface)}\n\n"
+        f"{_voice_card(surface, voice_card_text=voice_card_text)}\n\n"
         f"{_citation_instruction(
             working_set.citation_render_version,
             thin_evidence=working_set.thin_evidence,
@@ -1221,11 +1293,12 @@ def assemble_working_set(
     )
 
 
-def _voice_card(surface: str) -> str:
+def _voice_card(surface: str, *, voice_card_text: str | None = None) -> str:
     # Voice surfaces are excluded by the daemon gate in v1.
     del surface
     card = _focused_capability_card()
-    return f"{_VOICE_CARD_TEXT}\n\n{card}" if card else _VOICE_CARD_TEXT
+    base = voice_card_text or _VOICE_CARD_TEXT
+    return f"{base}\n\n{card}" if card else base
 
 
 def focused_synthesize(
@@ -1255,8 +1328,27 @@ def focused_synthesize(
     _t0 = _time.monotonic()
     shadow_enabled = _lean_conversation_shadow_enabled()
     lean_enabled = _lean_conversation_enabled()
+    self_card_shadow = _self_card_shadow_enabled()
+    self_card_enabled = _self_card_enabled()
+    voice_card_text = _VOICE_CARD_TEXT
+    if self_card_shadow or self_card_enabled:
+        card = _safe_self_card()
+        if card is not None:
+            if self_card_shadow:
+                _emit_self_card_receipt(
+                    "self_card_shadow",
+                    card,
+                    applied=self_card_enabled,
+                    surface=surface,
+                    turn_kind=turn_kind,
+                )
+            if self_card_enabled:
+                voice_card_text = card.text
     if shadow_enabled or lean_enabled:
-        lean_system = _lean_system_prompt(working_set)
+        lean_system = _lean_system_prompt(
+            working_set,
+            voice_card_text=voice_card_text,
+        )
         lean_prompt_chars_est = len(lean_system) + len(working_set.owner_question or "")
         decision = _decide_lean_conversation(
             working_set,
@@ -1286,9 +1378,17 @@ def focused_synthesize(
                 turn_kind=turn_kind,
             )
         else:
-            system = _full_focused_system_prompt(working_set, surface=surface)
+            system = _full_focused_system_prompt(
+                working_set,
+                surface=surface,
+                voice_card_text=voice_card_text,
+            )
     else:
-        system = _full_focused_system_prompt(working_set, surface=surface)
+        system = _full_focused_system_prompt(
+            working_set,
+            surface=surface,
+            voice_card_text=voice_card_text,
+        )
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": working_set.owner_question},

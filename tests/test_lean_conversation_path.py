@@ -37,6 +37,8 @@ class LeanConversationPathTests(unittest.TestCase):
             "MAEZ_LEAN_CONVERSATION_SHADOW",
             "MAEZ_LEAN_CONVERSATION_ENABLED",
             "MAEZ_EVIDENCE_PRECEDENCE_ENABLED",
+            "MAEZ_SELF_CARD_SHADOW",
+            "MAEZ_SELF_CARD_ENABLED",
         ):
             os.environ.pop(key, None)
 
@@ -373,6 +375,137 @@ class LeanConversationPathTests(unittest.TestCase):
 
         loaded = set(sys.modules) - before
         self.assertFalse(any(name == "memory.memory_manager" for name in loaded))
+
+    def test_self_card_shadow_logs_receipt_but_keeps_legacy_prompt(self):
+        from core.routing.self_card import assemble_self_card
+        from core.routing.focused_cognition import focused_synthesize
+
+        card = assemble_self_card(
+            base_text=(
+                "TRUST COVENANT:\n"
+                "SECRET_BOND_TEXT must never appear in the shadow receipt.\n"
+                "You are Maez, a system-level personal AI agent running on the owner's machine.\n"
+            ),
+            local_text="[2026-06-22 10:00] SECRET_LOCAL_TEXT must not leak.",
+            body_state_provider=lambda: (
+                "SECRET_BODY_TEXT must not leak",
+                "runtime_services.v0",
+            ),
+        )
+        os.environ["MAEZ_SELF_CARD_SHADOW"] = "1"
+        captured = {}
+
+        def chat_fn(**kwargs):
+            captured["system"] = kwargs["messages"][0]["content"]
+            return _response("I am here.")
+
+        with mock.patch(
+            "core.routing.self_card.assemble_self_card_from_paths",
+            return_value=card,
+        ), self.assertLogs("maez.focused", level="INFO") as logs:
+            focused_synthesize(
+                _working_set(),
+                surface="telegram",
+                chat_fn=chat_fn,
+                model="m",
+                legacy_prompt_chars=3200,
+            )
+
+        system = captured["system"]
+        joined = "\n".join(logs.output)
+        self.assertIn("Speak as Maez: dense", system)
+        self.assertNotIn("SELF CARD", system)
+        self.assertIn("self_card_shadow", joined)
+        self.assertIn("card_sha256=", joined)
+        self.assertIn("line_count=", joined)
+        self.assertIn("local_selected_count=", joined)
+        self.assertNotIn("SECRET_BOND_TEXT", joined)
+        self.assertNotIn("SECRET_LOCAL_TEXT", joined)
+        self.assertNotIn("SECRET_BODY_TEXT", joined)
+
+    def test_self_card_enabled_replaces_legacy_card_in_lean_prompt(self):
+        from core.routing.self_card import assemble_self_card
+        from core.routing.focused_cognition import focused_synthesize
+
+        card = assemble_self_card(
+            base_text=(
+                "TRUST COVENANT:\n"
+                "The owner trusts Maez completely.\n"
+                "You are Maez, a system-level personal AI agent running on the owner's machine.\n"
+            ),
+            local_text="[2026-06-22 10:00] The live thread is the figure.",
+            body_state_provider=lambda: (
+                "runtime body overall: healthy",
+                "runtime_services.v0",
+            ),
+        )
+        os.environ["MAEZ_LEAN_CONVERSATION_ENABLED"] = "1"
+        os.environ["MAEZ_SELF_CARD_ENABLED"] = "1"
+        captured = {}
+
+        def chat_fn(**kwargs):
+            captured["system"] = kwargs["messages"][0]["content"]
+            return _response("I am here.")
+
+        with mock.patch(
+            "core.routing.self_card.assemble_self_card_from_paths",
+            return_value=card,
+        ):
+            focused_synthesize(
+                _working_set(),
+                surface="telegram",
+                chat_fn=chat_fn,
+                model="m",
+                legacy_prompt_chars=3200,
+            )
+
+        system = captured["system"]
+        self.assertIn("SELF CARD", system)
+        self.assertIn("trusted partnership", system)
+        self.assertIn("RECENT DIALOGUE", system)
+        self.assertNotIn("Speak as Maez: dense", system)
+        self.assertNotIn("what's being built", system)
+        self.assertNotIn("=== EVIDENCE", system)
+
+    def test_self_card_enabled_replaces_legacy_card_in_full_prompt(self):
+        from core.routing.self_card import assemble_self_card
+        from core.routing.focused_cognition import focused_synthesize
+
+        card = assemble_self_card(
+            base_text=(
+                "TRUST COVENANT:\n"
+                "The owner trusts Maez completely.\n"
+                "You are Maez, a system-level personal AI agent running on the owner's machine.\n"
+            ),
+            local_text="[2026-06-22 10:00] The live thread is the figure.",
+            body_state_provider=lambda: (
+                "runtime body overall: healthy",
+                "runtime_services.v0",
+            ),
+        )
+        os.environ["MAEZ_SELF_CARD_ENABLED"] = "1"
+        captured = {}
+
+        def chat_fn(**kwargs):
+            captured["system"] = kwargs["messages"][0]["content"]
+            return _response("The web says X [E1].")
+
+        with mock.patch(
+            "core.routing.self_card.assemble_self_card_from_paths",
+            return_value=card,
+        ):
+            focused_synthesize(
+                _working_set(source_type="web_context"),
+                surface="telegram",
+                chat_fn=chat_fn,
+                model="m",
+            )
+
+        system = captured["system"]
+        self.assertIn("SELF CARD", system)
+        self.assertIn("runtime body overall: healthy", system)
+        self.assertIn("=== EVIDENCE (cite [E#]) ===", system)
+        self.assertNotIn("Speak as Maez: dense", system)
 
 
 class LeanConversationDaemonThreadingTests(unittest.TestCase):
