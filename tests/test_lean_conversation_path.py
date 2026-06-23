@@ -39,6 +39,8 @@ class LeanConversationPathTests(unittest.TestCase):
             "MAEZ_EVIDENCE_PRECEDENCE_ENABLED",
             "MAEZ_SELF_CARD_SHADOW",
             "MAEZ_SELF_CARD_ENABLED",
+            "MAEZ_SELF_CARD_TIME_SHADOW",
+            "MAEZ_SELF_CARD_TIME_ENABLED",
         ):
             os.environ.pop(key, None)
 
@@ -510,6 +512,135 @@ class LeanConversationPathTests(unittest.TestCase):
         self.assertIn("runtime body overall: healthy", system)
         self.assertIn("=== EVIDENCE (cite [E#]) ===", system)
         self.assertNotIn("Speak as Maez: dense", system)
+
+    def test_self_card_time_shadow_logs_without_applying_line(self):
+        from core.routing.self_card_time import SelfCardTimeLine
+        from core.routing.focused_cognition import focused_synthesize
+
+        os.environ["MAEZ_SELF_CARD_TIME_SHADOW"] = "1"
+        line = SelfCardTimeLine(
+            label="Time since contact",
+            text="~8h since owner contact. above ~91% of recorded gaps (226 gaps).",
+            source="subjective_duration.rhythm_context",
+            source_ref="percentile_high",
+            source_sha256="abc123",
+            reason="percentile_high",
+        )
+        captured = {}
+
+        def chat_fn(**kwargs):
+            captured["system"] = kwargs["messages"][0]["content"]
+            return _response("I am here.")
+
+        with mock.patch(
+            "core.routing.self_card_time.build_self_card_time_line",
+            return_value=line,
+        ), self.assertLogs("maez.focused", level="INFO") as logs:
+            focused_synthesize(
+                _working_set(),
+                surface="telegram",
+                chat_fn=chat_fn,
+                model="m",
+                legacy_prompt_chars=3200,
+            )
+
+        joined = "\n".join(logs.output)
+        self.assertIn("self_card_time_shadow", joined)
+        self.assertIn("time_line_present=True", joined)
+        self.assertIn("time_line_applied=False", joined)
+        self.assertIn("time_line_reason=percentile_high", joined)
+        self.assertNotIn("8h", joined)
+        self.assertNotIn("Time since contact", captured["system"])
+
+    def test_self_card_time_enabled_adds_line_to_lean_prompt(self):
+        from core.routing.self_card_time import SelfCardTimeLine
+        from core.routing.focused_cognition import focused_synthesize
+
+        os.environ["MAEZ_LEAN_CONVERSATION_ENABLED"] = "1"
+        os.environ["MAEZ_SELF_CARD_ENABLED"] = "1"
+        os.environ["MAEZ_SELF_CARD_TIME_ENABLED"] = "1"
+        line = SelfCardTimeLine(
+            label="Time since contact",
+            text="~8h since owner contact. above ~91% of recorded gaps (226 gaps).",
+            source="subjective_duration.rhythm_context",
+            source_ref="percentile_high",
+            source_sha256="abc123",
+            reason="percentile_high",
+        )
+        captured = {}
+
+        def chat_fn(**kwargs):
+            captured["system"] = kwargs["messages"][0]["content"]
+            return _response("I am here.")
+
+        with mock.patch(
+            "core.routing.self_card_time.build_self_card_time_line",
+            return_value=line,
+        ):
+            focused_synthesize(
+                _working_set(),
+                surface="telegram",
+                chat_fn=chat_fn,
+                model="m",
+                legacy_prompt_chars=3200,
+            )
+
+        self.assertIn("SELF CARD", captured["system"])
+        self.assertIn("Time since contact", captured["system"])
+        self.assertIn("~8h since owner contact", captured["system"])
+        self.assertNotIn("missed", captured["system"].lower())
+
+    def test_time_flags_off_do_not_import_or_read_time_line(self):
+        from core.routing.focused_cognition import focused_synthesize
+
+        sys.modules.pop("core.routing.self_card_time", None)
+        focused_synthesize(
+            _working_set(),
+            surface="telegram",
+            chat_fn=lambda **_k: _response("I am here."),
+            model="m",
+            legacy_prompt_chars=3200,
+        )
+
+        self.assertNotIn("core.routing.self_card_time", sys.modules)
+
+    def test_time_enabled_without_self_card_enabled_keeps_legacy_prompt(self):
+        from core.routing.self_card_time import SelfCardTimeLine
+        from core.routing.focused_cognition import focused_synthesize
+
+        os.environ["MAEZ_SELF_CARD_TIME_ENABLED"] = "1"
+        line = SelfCardTimeLine(
+            label="Time since contact",
+            text="~8h since owner contact. above ~91% of recorded gaps (226 gaps).",
+            source="subjective_duration.rhythm_context",
+            source_ref="percentile_high",
+            source_sha256="abc123",
+            reason="percentile_high",
+        )
+        captured = {}
+
+        def chat_fn(**kwargs):
+            captured["system"] = kwargs["messages"][0]["content"]
+            return _response("I am here.")
+
+        with mock.patch(
+            "core.routing.self_card_time.build_self_card_time_line",
+            return_value=line,
+        ) as build:
+            focused_synthesize(
+                _working_set(),
+                surface="telegram",
+                chat_fn=chat_fn,
+                model="m",
+                legacy_prompt_chars=3200,
+            )
+
+        build.assert_called_once_with()
+        system = captured["system"]
+        self.assertIn("Speak as Maez: dense", system)
+        self.assertNotIn("SELF CARD", system)
+        self.assertNotIn("Time since contact", system)
+        self.assertNotIn("~8h since owner contact", system)
 
 
 class LeanConversationDaemonThreadingTests(unittest.TestCase):

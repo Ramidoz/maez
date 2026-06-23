@@ -498,11 +498,32 @@ def _self_card_enabled(env=os.environ) -> bool:
     }
 
 
-def _safe_self_card():
+def _self_card_time_shadow_enabled(env=os.environ) -> bool:
+    return (env.get("MAEZ_SELF_CARD_TIME_SHADOW", "") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _self_card_time_enabled(env=os.environ) -> bool:
+    return (env.get("MAEZ_SELF_CARD_TIME_ENABLED", "") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _safe_self_card(*, time_line_candidate=None, time_line_applied: bool = False):
     try:
         from core.routing.self_card import assemble_self_card_from_paths
 
-        return assemble_self_card_from_paths()
+        return assemble_self_card_from_paths(
+            time_line_candidate=time_line_candidate,
+            time_line_applied=time_line_applied,
+        )
     except Exception:
         logger.warning(
             "self_card_assembly_failed fallback=legacy_voice_card",
@@ -538,6 +559,32 @@ def _emit_self_card_receipt(
         int(receipt.get("local_rendered_chars", 0) or 0),
         str(receipt.get("body_state_source", "unknown")),
         ",".join(str(x) for x in style_hits) if style_hits else "none",
+        surface,
+        turn_kind or "unknown",
+    )
+
+
+def _emit_self_card_time_receipt(
+    event: str,
+    card,
+    *,
+    applied: bool,
+    surface: str,
+    turn_kind: str | None,
+) -> None:
+    receipt = card.receipt()
+    logger.info(
+        "%s status=ok applied=%s time_line_present=%s time_line_applied=%s "
+        "time_line_reason=%s time_line_source=%s time_line_chars=%d "
+        "time_line_sha256=%s surface=%s turn_kind=%s",
+        event,
+        bool(applied),
+        bool(receipt.get("time_line_present", False)),
+        bool(receipt.get("time_line_applied", False)),
+        str(receipt.get("time_line_reason", "none")),
+        str(receipt.get("time_line_source", "none")),
+        int(receipt.get("time_line_chars", 0) or 0),
+        str(receipt.get("time_line_sha256", "")),
         surface,
         turn_kind or "unknown",
     )
@@ -1330,15 +1377,43 @@ def focused_synthesize(
     lean_enabled = _lean_conversation_enabled()
     self_card_shadow = _self_card_shadow_enabled()
     self_card_enabled = _self_card_enabled()
+    self_card_time_shadow = _self_card_time_shadow_enabled()
+    self_card_time_enabled = _self_card_time_enabled()
     voice_card_text = _VOICE_CARD_TEXT
-    if self_card_shadow or self_card_enabled:
-        card = _safe_self_card()
+    time_line_candidate = None
+    if self_card_time_shadow or self_card_time_enabled:
+        try:
+            from core.routing.self_card_time import build_self_card_time_line
+
+            time_line_candidate = build_self_card_time_line()
+        except Exception:
+            logger.debug("self_card_time_line_skipped", exc_info=True)
+            time_line_candidate = None
+    time_line_applied = self_card_enabled and self_card_time_enabled
+    if (
+        self_card_shadow
+        or self_card_enabled
+        or self_card_time_shadow
+        or self_card_time_enabled
+    ):
+        card = _safe_self_card(
+            time_line_candidate=time_line_candidate,
+            time_line_applied=time_line_applied,
+        )
         if card is not None:
             if self_card_shadow:
                 _emit_self_card_receipt(
                     "self_card_shadow",
                     card,
                     applied=self_card_enabled,
+                    surface=surface,
+                    turn_kind=turn_kind,
+                )
+            if self_card_time_shadow:
+                _emit_self_card_time_receipt(
+                    "self_card_time_shadow",
+                    card,
+                    applied=time_line_applied,
                     surface=surface,
                     turn_kind=turn_kind,
                 )
