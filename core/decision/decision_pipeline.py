@@ -362,6 +362,7 @@ class DecisionPipeline:
     renderer: Any = None                 # CardRenderer protocol; optional for tests
     get_cards_for: Optional[Callable[[str, str], list[CardRecord]]] = None
     dream: Any = None
+    wants: Any = None
 
     # Which actions are eligible for Lane 0 immediate-run (read-only).
     # The classifier is authoritative — this is just a safety check.
@@ -1600,6 +1601,13 @@ class DecisionPipeline:
 
     def _action_requires_s7_authorization(self, action: str, params: dict | None) -> bool:
         try:
+            from core.evolution.want_pursuit_bridge import TERMINAL_PROPOSAL_ACTION
+
+            if action == TERMINAL_PROPOSAL_ACTION:
+                return False
+        except Exception:
+            pass
+        try:
             from core.governance import operator_user_boundary as s7
 
             work_class = s7.derive_work_class(action=action, params=params or {})
@@ -1659,6 +1667,76 @@ class DecisionPipeline:
 
     def _card_requires_s7_authorization(self, card: CardRecord) -> bool:
         return self._action_requires_s7_authorization(card.action, card.params)
+
+    def _handle_terminal_want_approval(self, card: CardRecord) -> PipelineResult | None:
+        from core.evolution.want_pursuit_bridge import (
+            TERMINAL_PROPOSAL_ACTION,
+            record_terminal_approval_satisfaction,
+        )
+
+        if card.action != TERMINAL_PROPOSAL_ACTION:
+            return None
+
+        want_id = record_terminal_approval_satisfaction(self.wants, card)
+        if want_id:
+            out = "Owner confirmed this terminal want proposal."
+            try:
+                card = self.card_store.mark_done(
+                    card.request_id,
+                    output=out,
+                    completed_action_summary=out,
+                )
+            except CardStoreError as e:
+                logger.warning(
+                    "card %s already terminal at terminal-want satisfaction (%s); "
+                    "outcome recorded to audit only",
+                    card.request_id,
+                    e,
+                )
+            self.audit_log.record_outcome(
+                _resolve_audit_request_id(card),
+                outcome="want_satisfied_owner_confirmed",
+                notes=f"want_id={want_id}",
+            )
+            if self.renderer:
+                self.renderer.send_resolution(card)
+            return PipelineResult(
+                status=PipelineStatus.EXECUTED,
+                message=out,
+                card=card,
+                execution_success=True,
+                execution_output=out,
+                execution_error=None,
+            )
+
+        err = (
+            "Terminal want proposal approval could not record "
+            "owner-confirmed satisfaction."
+        )
+        try:
+            card = self.card_store.mark_failed(card.request_id, error=err)
+        except CardStoreError as e:
+            logger.warning(
+                "card %s already terminal at terminal-want failure (%s); "
+                "outcome recorded to audit only",
+                card.request_id,
+                e,
+            )
+        self.audit_log.record_outcome(
+            _resolve_audit_request_id(card),
+            outcome="approved_and_failed",
+            notes=err[:400],
+        )
+        if self.renderer:
+            self.renderer.send_resolution(card)
+        return PipelineResult(
+            status=PipelineStatus.EXECUTED,
+            message=err,
+            card=card,
+            execution_success=False,
+            execution_output="",
+            execution_error=err,
+        )
 
     def _block_s7_card(self, card: CardRecord, *, reason: str) -> PipelineResult:
         try:
@@ -1740,6 +1818,10 @@ class DecisionPipeline:
                 message="Card expired — state changed since creation. Re-ask to run a fresh audit.",
                 card=card,
             )
+
+        terminal_want_result = self._handle_terminal_want_approval(card)
+        if terminal_want_result is not None:
+            return terminal_want_result
 
         # A-core #8: will-I check before card-approved execution.
         will_refuse = self._will_i_check(

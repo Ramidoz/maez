@@ -349,6 +349,13 @@ def _validate_proposed_action_summary(summary: Optional[str]) -> None:
 def _s7_guarded_work_class(action: str, params: dict | None) -> bool:
     """Return True when S7 says a card needs artifact-backed approval."""
     try:
+        from core.evolution.want_pursuit_bridge import TERMINAL_PROPOSAL_ACTION
+
+        if action == TERMINAL_PROPOSAL_ACTION:
+            return False
+    except Exception:
+        pass
+    try:
         from core.governance import operator_user_boundary as s7
 
         work_class = s7.derive_work_class(action=action, params=params or {})
