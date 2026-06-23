@@ -11,6 +11,7 @@ DAEMON = ROOT / "daemon" / "maez_daemon.py"
 TELEGRAM = ROOT / "skills" / "telegram_voice.py"
 WEB = ROOT / "skills" / "web_interface.py"
 SURFACE_ADAPTER = ROOT / "skills" / "surface" / "maez_adapter.py"
+SELF_CARD_TIME = ROOT / "core" / "routing" / "self_card_time.py"
 
 
 def _source(path: Path) -> str:
@@ -221,7 +222,9 @@ class SubjectiveDurationStaticBoundaryTests(unittest.TestCase):
 
     def test_reviewed_prompt_surfaces_do_not_import_subjective_duration_at_module_scope(self):
         violations: list[str] = []
-        for path in [DAEMON, TELEGRAM, WEB, SURFACE_ADAPTER]:
+        # self_card_time is the Slice A reviewed read-only prompt adapter. It may
+        # lazily import subjective_duration helpers, but never at module scope.
+        for path in [DAEMON, TELEGRAM, WEB, SURFACE_ADAPTER, SELF_CARD_TIME]:
             tree = ast.parse(_source(path), filename=str(path))
             module_level = ast.Module(body=list(tree.body), type_ignores=[])
             for node in module_level.body:
@@ -238,6 +241,10 @@ class SubjectiveDurationStaticBoundaryTests(unittest.TestCase):
             DAEMON.relative_to(ROOT),
             TELEGRAM.relative_to(ROOT),
             WEB.relative_to(ROOT),
+            # Slice A reviewed read-only prompt adapter. It reads rhythm facts
+            # for a deterministic self-card candidate; it is not an outbound
+            # sender or owner-contact surface.
+            SELF_CARD_TIME.relative_to(ROOT),
         }
         violations: list[str] = []
 
@@ -246,6 +253,30 @@ class SubjectiveDurationStaticBoundaryTests(unittest.TestCase):
             tree = ast.parse(_source(path), filename=str(path))
             if _imports_subjective_duration(tree) and rel not in allowed_importers:
                 violations.append(str(rel))
+
+        self.assertEqual([], violations)
+
+    def test_self_card_time_adapter_has_no_outbound_send_markers(self):
+        outbound_markers = {
+            "send_envelope",
+            "send_telegram",
+            "send_telegram_async",
+            "send_exec_approval",
+            "send_model_picker",
+            "create_approval_card",
+            "approval_card",
+            "crisis_signal_writer",
+            "_alert_rohit",
+            "_maybe_tell_owner_unprompted",
+            "_send_telegram_notice",
+            "send_dev",
+        }
+        tree = ast.parse(_source(SELF_CARD_TIME), filename=str(SELF_CARD_TIME))
+        violations = [
+            f"{SELF_CARD_TIME.relative_to(ROOT)}:{node.lineno}:{_call_name(node)}"
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and _call_name(node) in outbound_markers
+        ]
 
         self.assertEqual([], violations)
 
