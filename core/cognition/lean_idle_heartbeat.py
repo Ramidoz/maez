@@ -12,6 +12,14 @@ import hashlib
 import json
 import re
 
+from core.infra.private_thoughts import (
+    AllowedFlow,
+    ConsentTier,
+    ProducerId,
+    RetentionRule,
+    SignalKind,
+)
+
 
 HEARTBEAT_VERSION = "lean_idle_heartbeat.v0"
 HEARTBEAT_OK = "HEARTBEAT_OK"
@@ -50,6 +58,16 @@ class PrivateNote:
     text: str
     sha256: str
     chars: int
+
+
+@dataclass(frozen=True)
+class LeanIdleResult:
+    intercepted: bool
+    stored: bool
+    thought_id: int | None
+    return_text: str | None
+    skip_reason: str
+    receipt: dict[str, object]
 
 
 def _sha256(text: str) -> str:
@@ -115,3 +133,187 @@ def sanitize_private_note(raw_text: object) -> PrivateNote | None:
     if len(text) > MAX_PRIVATE_NOTE_CHARS:
         text = text[: MAX_PRIVATE_NOTE_CHARS - 4].rstrip() + " ..."
     return PrivateNote(text=text, sha256=_sha256(text), chars=len(text))
+
+
+def _response_content(response: object) -> str:
+    message = getattr(response, "message", None)
+    if message is not None and hasattr(message, "content"):
+        return str(message.content or "")
+    return str(response or "")
+
+
+def _recent_output_hashes(private_thoughts: object, *, limit: int = 3) -> set[str]:
+    try:
+        rows = private_thoughts.recent(limit=20)
+    except Exception:
+        return set()
+    hashes: set[str] = set()
+    for row in rows:
+        context = row.get("context") or {}
+        if context.get("source") != HEARTBEAT_VERSION:
+            continue
+        extra = context.get("extra") or {}
+        value = extra.get("output_sha256")
+        if isinstance(value, str) and value:
+            hashes.add(value)
+            if len(hashes) >= limit:
+                break
+    return hashes
+
+
+def _base_receipt(
+    *,
+    prompt: LeanIdlePrompt,
+    facts: LeanIdleFacts,
+    mode: str,
+    llm_called: bool,
+    note: PrivateNote | None = None,
+    skip_reason: str = "none",
+    would_store: bool = False,
+    stored: bool = False,
+) -> dict[str, object]:
+    return {
+        "schema_version": HEARTBEAT_VERSION,
+        "eligible": True,
+        "mode": mode,
+        "cycle": int(facts.cycle),
+        "doorman_reason": facts.doorman_reason,
+        "prompt_chars": prompt.chars,
+        "prompt_sha256": prompt.sha256,
+        "fact_keys": ",".join(prompt.fact_keys),
+        "llm_called": bool(llm_called),
+        "would_store": bool(would_store),
+        "stored": bool(stored),
+        "skip_reason": skip_reason,
+        "output_chars": 0 if note is None else note.chars,
+        "output_sha256": "" if note is None else note.sha256,
+    }
+
+
+def run_lean_idle_heartbeat(
+    *,
+    facts: LeanIdleFacts,
+    chat_fn,
+    model: str,
+    private_thoughts: object | None,
+    enabled: bool,
+    shadow: bool,
+) -> LeanIdleResult:
+    prompt = build_lean_idle_prompt(facts)
+    mode = "enabled" if enabled else "shadow" if shadow else "disabled"
+    if not enabled and not shadow:
+        receipt = _base_receipt(
+            prompt=prompt,
+            facts=facts,
+            mode=mode,
+            llm_called=False,
+            skip_reason="disabled",
+        )
+        return LeanIdleResult(False, False, None, None, "disabled", receipt)
+
+    response = chat_fn(
+        model=model,
+        messages=[
+            {"role": "system", "content": "You are writing a private idle notebook note."},
+            {"role": "user", "content": prompt.text},
+        ],
+        think=False,
+        options={"temperature": 0.35, "num_predict": 220},
+    )
+    note = sanitize_private_note(_response_content(response))
+    if note is None:
+        receipt = _base_receipt(
+            prompt=prompt,
+            facts=facts,
+            mode=mode,
+            llm_called=True,
+            skip_reason="heartbeat_ok_or_rejected",
+        )
+        return LeanIdleResult(
+            intercepted=bool(enabled),
+            stored=False,
+            thought_id=None,
+            return_text=HEARTBEAT_OK if enabled else None,
+            skip_reason="heartbeat_ok_or_rejected",
+            receipt=receipt,
+        )
+
+    if not enabled:
+        receipt = _base_receipt(
+            prompt=prompt,
+            facts=facts,
+            mode=mode,
+            llm_called=True,
+            note=note,
+            would_store=True,
+            stored=False,
+        )
+        return LeanIdleResult(False, False, None, None, "shadow_only", receipt)
+
+    if private_thoughts is None:
+        receipt = _base_receipt(
+            prompt=prompt,
+            facts=facts,
+            mode=mode,
+            llm_called=True,
+            note=note,
+            would_store=True,
+            stored=False,
+            skip_reason="private_thoughts_unavailable",
+        )
+        return LeanIdleResult(
+            True,
+            False,
+            None,
+            HEARTBEAT_OK,
+            "private_thoughts_unavailable",
+            receipt,
+        )
+
+    if note.sha256 in _recent_output_hashes(private_thoughts):
+        receipt = _base_receipt(
+            prompt=prompt,
+            facts=facts,
+            mode=mode,
+            llm_called=True,
+            note=note,
+            would_store=True,
+            stored=False,
+            skip_reason="duplicate_recent_output",
+        )
+        return LeanIdleResult(True, False, None, HEARTBEAT_OK, "duplicate_recent_output", receipt)
+
+    thought_id = private_thoughts.record_signal(
+        content=note.text,
+        signal_kind=SignalKind.SELF_WONDERING,
+        producer_id=ProducerId.SELF_WONDERING,
+        source=HEARTBEAT_VERSION,
+        subject="maez_internal_state",
+        consent_tier=ConsentTier.OWNER_PRIVATE,
+        retention=RetentionRule.UNTIL_REVIEWED,
+        allowed_flows=(AllowedFlow.PRIVATE_READER, AllowedFlow.AUDIT_TRACE),
+        context_extra={
+            "cycle": int(facts.cycle),
+            "doorman_reason": facts.doorman_reason,
+            "prompt_chars": prompt.chars,
+            "prompt_sha256": prompt.sha256,
+            "output_chars": note.chars,
+            "output_sha256": note.sha256,
+            "model": str(model),
+            "producer_version": HEARTBEAT_VERSION,
+            "fact_keys": list(prompt.fact_keys),
+            "shadow": bool(shadow),
+            "enabled": bool(enabled),
+        },
+        memory_phase="gestation",
+    )
+    receipt = _base_receipt(
+        prompt=prompt,
+        facts=facts,
+        mode=mode,
+        llm_called=True,
+        note=note,
+        would_store=True,
+        stored=True,
+    )
+    return LeanIdleResult(True, True, int(thought_id), HEARTBEAT_OK, "none", receipt)

@@ -1,13 +1,29 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+import tempfile
 import unittest
 
 from core.cognition.lean_idle_heartbeat import (
+    HEARTBEAT_OK,
     HEARTBEAT_VERSION,
     LeanIdleFacts,
     build_lean_idle_prompt,
+    run_lean_idle_heartbeat,
     sanitize_private_note,
 )
+from core.infra.private_thoughts import PrivateThoughts
+
+
+class _FakeMessage:
+    def __init__(self, content: str):
+        self.content = content
+
+
+class _FakeResponse:
+    def __init__(self, content: str):
+        self.message = _FakeMessage(content)
 
 
 class LeanIdleHeartbeatTest(unittest.TestCase):
@@ -66,6 +82,94 @@ class LeanIdleHeartbeatTest(unittest.TestCase):
         ):
             with self.subTest(raw=raw):
                 self.assertIsNone(sanitize_private_note(raw))
+
+    def test_enabled_records_private_self_wondering_with_content_light_context(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = PrivateThoughts(db_path=Path(td) / "private_thoughts.db")
+
+            result = run_lean_idle_heartbeat(
+                facts=LeanIdleFacts(
+                    cycle=7,
+                    doorman_reason="wake_min_floor",
+                    self_card_text="SELF CARD\n- Bond: partnership",
+                ),
+                chat_fn=lambda **_kwargs: _FakeResponse(
+                    "<final>A quiet private note for continuity.</final>"
+                ),
+                model="test-model",
+                private_thoughts=store,
+                enabled=True,
+                shadow=False,
+            )
+
+            self.assertTrue(result.intercepted)
+            self.assertEqual(result.return_text, HEARTBEAT_OK)
+            self.assertTrue(result.stored)
+            row = store.get_thought(result.thought_id)
+            assert row is not None
+            self.assertEqual(row["provenance"], "self_wondering")
+            self.assertEqual(row["producer_id"], "self_wondering")
+            self.assertEqual(row["signal_kind"], "self_wondering")
+            self.assertEqual(row["signal_class"], "self_observation")
+            self.assertEqual(row["context"]["source"], HEARTBEAT_VERSION)
+            self.assertEqual(row["context"]["subject"], "maez_internal_state")
+            self.assertEqual(
+                row["context"]["allowed_flows"],
+                ["private_reader", "audit_trace"],
+            )
+            extra = row["context"]["extra"]
+            self.assertEqual(extra["cycle"], 7)
+            self.assertEqual(extra["doorman_reason"], "wake_min_floor")
+            self.assertNotIn("A quiet private note", json.dumps(extra))
+            self.assertNotIn("SELF CARD", json.dumps(extra))
+
+    def test_shadow_runs_but_does_not_store_or_intercept(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = PrivateThoughts(db_path=Path(td) / "private_thoughts.db")
+
+            result = run_lean_idle_heartbeat(
+                facts=LeanIdleFacts(
+                    cycle=8,
+                    doorman_reason="wake_min_floor",
+                    self_card_text="SELF CARD\n- Bond: partnership",
+                ),
+                chat_fn=lambda **_kwargs: _FakeResponse("<final>A private note.</final>"),
+                model="test-model",
+                private_thoughts=store,
+                enabled=False,
+                shadow=True,
+            )
+
+            self.assertFalse(result.intercepted)
+            self.assertFalse(result.stored)
+            self.assertIsNone(result.return_text)
+            self.assertEqual(store.count(), 0)
+            self.assertTrue(result.receipt["would_store"])
+            self.assertFalse(result.receipt["stored"])
+
+    def test_duplicate_recent_output_skips_second_private_row(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = PrivateThoughts(db_path=Path(td) / "private_thoughts.db")
+            kwargs = dict(
+                facts=LeanIdleFacts(
+                    cycle=9,
+                    doorman_reason="wake_min_floor",
+                    self_card_text="SELF CARD\n- Bond: partnership",
+                ),
+                chat_fn=lambda **_kwargs: _FakeResponse("<final>Same private note.</final>"),
+                model="test-model",
+                private_thoughts=store,
+                enabled=True,
+                shadow=False,
+            )
+
+            first = run_lean_idle_heartbeat(**kwargs)
+            second = run_lean_idle_heartbeat(**kwargs)
+
+            self.assertTrue(first.stored)
+            self.assertFalse(second.stored)
+            self.assertEqual(second.skip_reason, "duplicate_recent_output")
+            self.assertEqual(store.count(), 1)
 
 
 if __name__ == "__main__":
