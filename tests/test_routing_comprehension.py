@@ -250,6 +250,23 @@ class RoutingComprehensionPureTests(unittest.TestCase):
         fake_chat.assert_called_once()
         self.assertEqual(fake_chat.call_args.kwargs["purpose"], "routing_comprehension")
 
+    def test_llm_judge_import_failure_fails_to_ambiguous(self) -> None:
+        real_import = __import__
+
+        def fail_model_config(name, *args, **kwargs):
+            if name == "core.model_config":
+                raise ImportError("model config unavailable")
+            return real_import(name, *args, **kwargs)
+
+        with mock.patch("builtins.__import__", side_effect=fail_model_config):
+            decision = rc.LlmEligibilityJudge().decide(
+                rc.JudgeContext(current_turn="please check")
+            )
+
+        self.assertEqual(decision.decision, rc.Decision.AMBIGUOUS)
+        self.assertEqual(decision.confidence, 0.0)
+        self.assertEqual(decision.reason_code, "judge_unavailable")
+
 
 def _spec(
     *,

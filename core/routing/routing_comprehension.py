@@ -146,10 +146,10 @@ def render_judge_prompt(context: JudgeContext) -> str:
 
 class LlmEligibilityJudge:
     def decide(self, context: JudgeContext) -> JudgeDecision:
-        from ..llm_client import chat
-        from ..model_config import PRIMARY_MODEL
-
         try:
+            from ..llm_client import chat
+            from ..model_config import PRIMARY_MODEL
+
             response = chat(
                 model=PRIMARY_MODEL,
                 messages=[
