@@ -190,6 +190,28 @@ class RoutingComprehensionPureTests(unittest.TestCase):
         self.assertIn("https://example.test/source", text)
         self.assertIn("diag-1", text)
 
+    def test_receipt_context_text_bounds_retained_fields(self) -> None:
+        long_kind = "k" * 500
+        long_query = "q" * 1200
+        long_source_tail = "s" * 1200
+        long_source = "https://example.test/" + long_source_tail
+        long_diagnostic = "d" * 500
+
+        text = rc.receipt_context_text(
+            rc.PriorToolReceipt(
+                kind=long_kind,
+                query=long_query,
+                sources=tuple(long_source for _ in range(8)),
+                diagnostic_id=long_diagnostic,
+            )
+        )
+
+        self.assertLessEqual(len(text), 900)
+        self.assertNotIn(long_kind, text)
+        self.assertNotIn(long_query, text)
+        self.assertNotIn(long_source, text)
+        self.assertNotIn(long_diagnostic, text)
+
     def test_env_helpers(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=True):
             self.assertFalse(rc.shadow_enabled())

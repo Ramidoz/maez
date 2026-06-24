@@ -24,6 +24,10 @@ query_char_cap = 300
 reason_char_cap = 80
 prompt_char_cap = 6000
 source_list_cap = 5
+receipt_context_char_cap = 900
+receipt_kind_char_cap = 60
+receipt_source_char_cap = 50
+receipt_diagnostic_char_cap = 80
 
 
 Decision = StrEnum(
@@ -232,19 +236,28 @@ def receipt_context_text(receipt: PriorToolReceipt | None) -> str:
             "No retained web receipt is available for this chat. "
             "Say that plainly; do not invent a search."
         )
+    kind = _clip(receipt.kind, receipt_kind_char_cap) or "unknown"
     query = _clip(receipt.query or "", query_char_cap) or "unknown query"
-    sources = "\n".join(f"- {url}" for url in receipt.sources[:source_list_cap])
+    diagnostic_id = (
+        _clip(receipt.diagnostic_id or "", receipt_diagnostic_char_cap) or "unknown"
+    )
+    sources = "\n".join(
+        f"- {_clip(str(url), receipt_source_char_cap)}"
+        for url in receipt.sources[:source_list_cap]
+        if str(url).strip()
+    )
     if not sources:
         sources = "- none retained"
-    return (
+    text = (
         "=== PRIOR TOOL CONTEXT ===\n"
-        f"Prior tool: {receipt.kind}\n"
+        f"Prior tool: {kind}\n"
         f"Prior query: {query}\n"
-        f"Diagnostic id: {receipt.diagnostic_id or 'unknown'}\n"
+        f"Diagnostic id: {diagnostic_id}\n"
         f"Sources retained:\n{sources}\n"
         "Use this retained proof if the owner asks what was checked. "
         "Do not search again."
     )
+    return _clip(text, receipt_context_char_cap)
 
 
 def _tool_context_line(receipt: PriorToolReceipt | None) -> str:
@@ -300,9 +313,13 @@ def _clamp_confidence(value: float) -> float:
 
 def _clip(value: str, cap: int) -> str:
     text = str(value or "").strip()
+    if cap <= 0:
+        return ""
     if len(text) <= cap:
         return text
-    return text[: max(0, cap - 1)].rstrip() + "..."
+    if cap <= 3:
+        return "." * cap
+    return text[: cap - 3].rstrip() + "..."
 
 
 def _compact_reason(value: str) -> str:
