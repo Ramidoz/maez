@@ -62,7 +62,10 @@ LLAMACPP_BASE_URL = os.environ.get('MAEZ_LLAMACPP_URL', 'http://127.0.0.1:8080/v
 # with continuous batching + prompt cache. This alias must match the --alias
 # flag passed to llama-server at launch, or be ignored (llama-server accepts
 # any string when only one model is loaded).
+from core.model_config import PRIMARY_BASE_URL as _PRIMARY_BASE_URL
 from core.model_config import PRIMARY_MODEL as _PRIMARY_MODEL
+PRIMARY_BASE_URL = _PRIMARY_BASE_URL
+PRIMARY_MODEL = _PRIMARY_MODEL
 # MAEZ_LLAMACPP_MODEL is a legacy override; prefer MAEZ_PRIMARY_MODEL via model_config.
 LLAMACPP_MODEL    = os.environ.get('MAEZ_LLAMACPP_MODEL', _PRIMARY_MODEL)
 
@@ -158,6 +161,9 @@ class _LlmResponse:
     resp.message.content without caring which backend produced it."""
     message: _LlmMessage
     server_prompt_ms: Optional[int] = None
+    finish_reason: Optional[str] = None
+    backend: Optional[str] = None
+    thinking_suppressed: Optional[bool] = None
 
 
 class _LlamaCppStreamParser:
@@ -479,23 +485,105 @@ def _ollama_options(options: Optional[dict]) -> Optional[dict]:
 
 
 # ── llamacpp path via OpenAI-compat client ───────────────────────────
-_openai_client_singleton = None
+_openai_client_singletons: dict[str, Any] = {}
 
 
-def _get_openai_client():
+def _normalize_openai_base_url(base_url: str) -> str:
+    base = str(base_url or "").rstrip("/")
+    if not base:
+        base = "http://127.0.0.1:8080"
+    if not base.endswith("/v1"):
+        base = f"{base}/v1"
+    return base
+
+
+def _get_openai_client_for_base(base_url: str):
     """Lazy singleton for the OpenAI client pointed at llama-server. Only
     constructed when a llamacpp call actually happens, so the ollama path
     never imports or touches openai."""
-    global _openai_client_singleton
-    if _openai_client_singleton is None:
+    normalized = _normalize_openai_base_url(base_url)
+    client = _openai_client_singletons.get(normalized)
+    if client is None:
         from openai import OpenAI
         # llama-cpp-python's server accepts any api_key; we pass 'llamacpp'
         # as a non-empty placeholder because OpenAI client requires a value.
-        _openai_client_singleton = OpenAI(
-            base_url=LLAMACPP_BASE_URL,
+        client = OpenAI(
+            base_url=normalized,
             api_key='llamacpp',
         )
-    return _openai_client_singleton
+        _openai_client_singletons[normalized] = client
+    return client
+
+
+def _get_openai_client():
+    return _get_openai_client_for_base(LLAMACPP_BASE_URL)
+
+
+def _thinking_suppressed(
+    *,
+    think: Optional[bool],
+    options: Optional[dict],
+) -> bool:
+    try:
+        return _chat_template_kwargs(think=think, options=options).get("enable_thinking") is False
+    except Exception:
+        return think is False
+
+
+def _chat_openai_compat(
+    *,
+    base_url: str,
+    backend_label: str,
+    model: str,
+    messages: list[dict],
+    stream: bool = False,
+    think: Optional[bool] = None,
+    options: Optional[dict] = None,
+    timeout_s: Optional[float] = None,
+) -> _LlmResponse:
+    if stream:
+        raise BackendError("direct OpenAI-compatible classifier calls must be non-streaming")
+
+    client = _get_openai_client_for_base(base_url)
+    messages = _sanitize_messages_for_llamacpp(messages)
+
+    temperature = 0.7
+    max_tokens = 512
+    if options:
+        temperature = float(options.get('temperature', temperature))
+        max_tokens = int(options.get('num_predict', max_tokens))
+
+    extra_body: dict = {}
+    merged = _chat_template_kwargs(think=think, options=options)
+    if merged:
+        extra_body['chat_template_kwargs'] = merged
+
+    try:
+        completion = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            extra_body=extra_body if extra_body else None,
+            timeout=timeout_s,
+        )
+    except Exception as e:
+        raise BackendError(f'{backend_label} chat failed: {e!r}') from e
+
+    try:
+        first = completion.choices[0]
+        content = first.message.content or ''
+        finish_reason = str(getattr(first, 'finish_reason', '') or '')
+        content = _strip_special_tokens(content)
+    except Exception as e:
+        raise BackendError(f'{backend_label} response parse failed: {e!r}') from e
+
+    return _LlmResponse(
+        message=_LlmMessage(content=content, thinking=None),
+        finish_reason=finish_reason,
+        backend=backend_label,
+        thinking_suppressed=_thinking_suppressed(think=think, options=options),
+    )
 
 
 def _chat_llamacpp(
@@ -514,8 +602,17 @@ def _chat_llamacpp(
     templates honor an equivalent via `chat_template_kwargs.enable_thinking`
     inside the extra_body, which this function forwards when `think=False`.
     """
-    client = _get_openai_client()
-    messages = _sanitize_messages_for_llamacpp(messages)
+    if not stream:
+        return _chat_openai_compat(
+            base_url=LLAMACPP_BASE_URL,
+            backend_label=BACKEND_LLAMACPP,
+            model=LLAMACPP_MODEL,
+            messages=messages,
+            stream=False,
+            think=think,
+            options=options,
+            timeout_s=timeout_s,
+        )
 
     # Map ollama options.temperature/num_predict to OpenAI kwargs.
     temperature = 0.7
@@ -544,35 +641,17 @@ def _chat_llamacpp(
             extra_body['chat_template_kwargs'] = merged
 
     try:
-        if stream:
-            return iter(_start_llamacpp_stream(
-                model=effective_model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                extra_body=extra_body,
-                timeout_s=timeout_s,
-            ))
-
-        completion = client.chat.completions.create(
+        messages = _sanitize_messages_for_llamacpp(messages)
+        return iter(_start_llamacpp_stream(
             model=effective_model,
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
-            extra_body=extra_body if extra_body else None,
-            timeout=timeout_s,
-        )
+            extra_body=extra_body,
+            timeout_s=timeout_s,
+        ))
     except Exception as e:
         raise BackendError(f'llamacpp chat failed: {e!r}') from e
-
-    # Adapt to ollama-shaped response
-    try:
-        content = completion.choices[0].message.content or ''
-        content = _strip_special_tokens(content)
-    except Exception as e:
-        raise BackendError(f'llamacpp response parse failed: {e!r}') from e
-
-    return _LlmResponse(message=_LlmMessage(content=content, thinking=None))
 
 
 def _start_llamacpp_stream(
@@ -646,6 +725,26 @@ def start_cancellable_chat(
     )
 
 
+def _chat_primary_openai(
+    model: str,
+    messages: list[dict],
+    stream: bool = False,
+    think: Optional[bool] = None,
+    options: Optional[dict] = None,
+) -> _LlmResponse:
+    if stream:
+        raise BackendError("primary direct classifier calls must be non-streaming")
+    return _chat_openai_compat(
+        base_url=PRIMARY_BASE_URL,
+        backend_label="primary_openai",
+        model=model or PRIMARY_MODEL,
+        messages=messages,
+        stream=False,
+        think=think,
+        options=options,
+    )
+
+
 def chat_direct(
     model: str,
     messages: list[dict],
@@ -655,26 +754,18 @@ def chat_direct(
 ) -> Any:
     """Direct non-gateway chat for tiny deterministic classifier calls.
 
-    Owner-facing and long-running brain calls should continue to use
-    ``chat()``, which goes through the priority gateway. This path is for
-    short judges that need the backend's non-stream response shape.
+    This intentionally uses the configured primary OpenAI-compatible
+    endpoint, not the legacy backend selector. The routing-comprehension
+    judge needs the same chat-template kwargs behavior proven on
+    MAEZ_PRIMARY_BASE_URL.
     """
     del purpose
-    backend = active_backend()
-    if backend == BACKEND_LLAMACPP:
-        return _chat_llamacpp(
-            model=model,
-            messages=messages,
-            stream=False,
-            think=think,
-            options=options,
-        )
-    return _chat_ollama(
+    return _chat_primary_openai(
         model=model,
         messages=messages,
         stream=False,
         think=think,
-        options=_ollama_options(options),
+        options=options,
     )
 
 

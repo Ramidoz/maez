@@ -66,10 +66,13 @@ class RoutingTest(unittest.TestCase):
         self.assertEqual(response.message.content, "timed reply")
         self.assertEqual(response.server_prompt_ms, 1234)
 
-    def test_llm_client_direct_chat_bypasses_gateway_and_preserves_options(self):
+    def test_chat_direct_uses_primary_openai_endpoint_when_backend_unset(self):
         gateway = BrainGateway()
         response = types.SimpleNamespace(
-            message=types.SimpleNamespace(content='{"ok": true}')
+            message=types.SimpleNamespace(content='{"ok": true}'),
+            finish_reason="stop",
+            backend="primary_openai",
+            thinking_suppressed=True,
         )
         options = {
             "temperature": 0.0,
@@ -78,13 +81,17 @@ class RoutingTest(unittest.TestCase):
         }
 
         with (
-            mock.patch.dict(os.environ, {"MAEZ_LLM_BACKEND": "llamacpp"}, clear=False),
+            mock.patch.dict(os.environ, {}, clear=False),
             mock.patch("core.routing.brain_gateway.GATEWAY", gateway),
-            mock.patch.object(llm_client, "_chat_llamacpp", return_value=response) as fake_chat,
+            mock.patch.object(
+                llm_client,
+                "_chat_primary_openai",
+                return_value=response,
+            ) as fake_chat,
         ):
             out = llm_client.chat_direct(
-                model="m",
-                messages=[{"role": "user", "content": "hi"}],
+                model="qwen36-27b",
+                messages=[{"role": "user", "content": "classify"}],
                 think=False,
                 options=options,
                 purpose="routing_comprehension",
@@ -92,13 +99,94 @@ class RoutingTest(unittest.TestCase):
 
         self.assertIs(out, response)
         fake_chat.assert_called_once_with(
-            model="m",
-            messages=[{"role": "user", "content": "hi"}],
+            model="qwen36-27b",
+            messages=[{"role": "user", "content": "classify"}],
             stream=False,
             think=False,
             options=options,
         )
         self.assertEqual(list(gateway.events), [])
+
+    def test_primary_openai_direct_records_finish_backend_and_thinking_state(self):
+        choice = types.SimpleNamespace(
+            message=types.SimpleNamespace(content='{"decision":"ambiguous"}'),
+            finish_reason="stop",
+        )
+        completion = types.SimpleNamespace(choices=[choice])
+        client = types.SimpleNamespace(
+            chat=types.SimpleNamespace(
+                completions=types.SimpleNamespace(
+                    create=mock.Mock(return_value=completion)
+                )
+            )
+        )
+
+        with (
+            mock.patch(
+                "core.routing.llm_client._get_openai_client_for_base",
+                return_value=client,
+            ),
+            mock.patch(
+                "core.routing.llm_client.PRIMARY_BASE_URL",
+                "http://127.0.0.1:8080",
+            ),
+            mock.patch(
+                "core.routing.llm_client.PRIMARY_MODEL",
+                "qwen36-27b",
+            ),
+        ):
+            out = llm_client._chat_primary_openai(
+                model="qwen36-27b",
+                messages=[{"role": "user", "content": "classify"}],
+                stream=False,
+                think=False,
+                options={
+                    "temperature": 0.0,
+                    "num_predict": 320,
+                    "chat_template_kwargs": {"enable_thinking": False},
+                },
+            )
+
+        self.assertEqual(out.message.content, '{"decision":"ambiguous"}')
+        self.assertEqual(out.finish_reason, "stop")
+        self.assertEqual(out.backend, "primary_openai")
+        self.assertTrue(out.thinking_suppressed)
+        kwargs = client.chat.completions.create.call_args.kwargs
+        self.assertEqual(kwargs["model"], "qwen36-27b")
+        self.assertEqual(kwargs["max_tokens"], 320)
+        self.assertEqual(
+            kwargs["extra_body"],
+            {"chat_template_kwargs": {"enable_thinking": False}},
+        )
+
+    def test_primary_openai_direct_records_length_finish_reason(self):
+        choice = types.SimpleNamespace(
+            message=types.SimpleNamespace(content=""),
+            finish_reason="length",
+        )
+        completion = types.SimpleNamespace(choices=[choice])
+        client = types.SimpleNamespace(
+            chat=types.SimpleNamespace(
+                completions=types.SimpleNamespace(
+                    create=mock.Mock(return_value=completion)
+                )
+            )
+        )
+
+        with mock.patch(
+            "core.routing.llm_client._get_openai_client_for_base",
+            return_value=client,
+        ):
+            out = llm_client._chat_primary_openai(
+                model="qwen36-27b",
+                messages=[],
+                stream=False,
+                think=False,
+                options={"num_predict": 320},
+            )
+
+        self.assertEqual(out.finish_reason, "length")
+        self.assertTrue(out.thinking_suppressed)
 
     def test_llamacpp_chat_template_kwargs_explicitly_disable_thinking(self):
         with mock.patch(
