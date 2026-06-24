@@ -1841,6 +1841,28 @@ def _env_flag(name: str, *, environ: object | None = None) -> bool:
     return (env.get(name, "") or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _lean_idle_heartbeat_shadow_enabled(environ: object | None = None) -> bool:
+    return _env_flag("MAEZ_LEAN_IDLE_HEARTBEAT_SHADOW", environ=environ)
+
+
+def _lean_idle_heartbeat_enabled(environ: object | None = None) -> bool:
+    return _env_flag("MAEZ_LEAN_IDLE_HEARTBEAT_ENABLED", environ=environ)
+
+
+def _lean_idle_heartbeat_any_enabled(environ: object | None = None) -> bool:
+    return _lean_idle_heartbeat_shadow_enabled(environ) or _lean_idle_heartbeat_enabled(environ)
+
+
+def _lean_idle_heartbeat_eligible(gate_decision: object) -> bool:
+    return (
+        bool(getattr(gate_decision, "doorman_enabled", False))
+        and bool(getattr(gate_decision, "wake", False))
+        and bool(getattr(gate_decision, "floor_wake", False))
+        and str(getattr(gate_decision, "reason_code", "")) == "wake_min_floor"
+        and tuple(getattr(gate_decision, "signals_present", ()) or ()) == ("min_floor_due",)
+    )
+
+
 def _wrap_daemon_web_context(web_context: str, *, path: str) -> str:
     """Wrap a daemon web_context block in the un-spoofable containment envelope
     (legacy/voice prompt throats). Flag-off or empty -> returns web_context unchanged
@@ -4935,6 +4957,101 @@ class MaezDaemon:
         except Exception as exc:
             logger.warning("S1b consumer returned neutral after error: %s", exc)
             return None
+
+    def _lean_idle_self_card_text(self) -> str:
+        try:
+            from core.routing.self_card import assemble_self_card_from_paths
+            from core.routing.self_card_time import build_self_card_time_line
+
+            time_candidate = None
+            time_applied = False
+            if _env_flag("MAEZ_SELF_CARD_TIME_SHADOW") or _env_flag(
+                "MAEZ_SELF_CARD_TIME_ENABLED"
+            ):
+                time_candidate = build_self_card_time_line()
+                time_applied = _env_flag("MAEZ_SELF_CARD_TIME_ENABLED")
+            return assemble_self_card_from_paths(
+                time_line_candidate=time_candidate,
+                time_line_applied=time_applied,
+            ).text
+        except Exception:
+            return "SELF CARD (unavailable)"
+
+    def _lean_idle_private_signal_summary(self) -> dict:
+        try:
+            store = getattr(self, "private_thoughts", None)
+            if store is None:
+                return {}
+            derived = store.derived_signals(limit=10)
+            classes = derived.get("signal_classes", {}) if isinstance(derived, dict) else {}
+            summary = {}
+            for name, value in classes.items():
+                if isinstance(value, dict):
+                    summary[str(name)] = int(value.get("count", 0) or 0)
+            return summary
+        except Exception:
+            return {}
+
+    def _maybe_run_lean_idle_heartbeat(
+        self,
+        snap: dict,
+        gate_decision: object,
+    ) -> str | None:
+        if not _lean_idle_heartbeat_any_enabled():
+            return None
+        if not _lean_idle_heartbeat_eligible(gate_decision):
+            return None
+        enabled = _lean_idle_heartbeat_enabled()
+        shadow = _lean_idle_heartbeat_shadow_enabled()
+        from core.routing.cancellable_brain_call import BrainPreempted
+
+        try:
+            from core import llm_client as _llm_client
+            from core.cognition.lean_idle_heartbeat import (
+                LeanIdleFacts,
+                run_lean_idle_heartbeat,
+            )
+
+            result = run_lean_idle_heartbeat(
+                facts=LeanIdleFacts(
+                    cycle=int(getattr(self, "cycle_count", 0)),
+                    doorman_reason=str(getattr(gate_decision, "reason_code", "")),
+                    self_card_text=self._lean_idle_self_card_text(),
+                    private_signal_summary=self._lean_idle_private_signal_summary(),
+                ),
+                chat_fn=_llm_client.chat,
+                model=MODEL,
+                private_thoughts=getattr(self, "private_thoughts", None),
+                enabled=enabled,
+                shadow=shadow,
+            )
+        except BrainPreempted:
+            raise
+        except Exception as exc:
+            logger.info(
+                "lean_idle_heartbeat receipt=%s",
+                json.dumps(
+                    {
+                        "schema_version": "lean_idle_heartbeat.v0",
+                        "eligible": True,
+                        "mode": "enabled" if enabled else "shadow",
+                        "cycle": int(getattr(self, "cycle_count", 0)),
+                        "doorman_reason": str(getattr(gate_decision, "reason_code", "")),
+                        "llm_called": False,
+                        "stored": False,
+                        "skip_reason": "error",
+                        "error_class": exc.__class__.__name__,
+                    },
+                    sort_keys=True,
+                ),
+            )
+            return _HEARTBEAT_OK if enabled else None
+
+        logger.info(
+            "lean_idle_heartbeat receipt=%s",
+            json.dumps(result.receipt, sort_keys=True),
+        )
+        return result.return_text if result.intercepted else None
 
     def _trf_apply_fragment_guard(
         self,
@@ -9565,17 +9682,24 @@ class MaezDaemon:
                         self.cycle_count,
                         sorted(stale),
                     )
-                self._mark_cycle_stage("reasoning_model")
-                try:
-                    result = self._reason(snap, stale_fields=stale)
-                except BrainPreempted:
-                    cycle_preempted = True
-                    logger.info(
-                        "Cycle %d: brain preempted by foreground; yielding cycle",
-                        self.cycle_count,
-                    )
-                    self._s1b_flush_residue_events()
-                    result = None
+                _lean_idle_result = self._maybe_run_lean_idle_heartbeat(
+                    snap,
+                    _cycle_doorman_gate,
+                )
+                if _lean_idle_result is not None:
+                    result = _lean_idle_result
+                else:
+                    self._mark_cycle_stage("reasoning_model")
+                    try:
+                        result = self._reason(snap, stale_fields=stale)
+                    except BrainPreempted:
+                        cycle_preempted = True
+                        logger.info(
+                            "Cycle %d: brain preempted by foreground; yielding cycle",
+                            self.cycle_count,
+                        )
+                        self._s1b_flush_residue_events()
+                        result = None
             if result is None:
                 # Either gate skipped, or _reason couldn't run. No-op.
                 _cycle_apply_quiet_counter_result(
