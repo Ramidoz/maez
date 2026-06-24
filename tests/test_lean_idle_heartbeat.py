@@ -54,6 +54,28 @@ class LeanIdleHeartbeatTest(unittest.TestCase):
         self.assertEqual(prompt.version, HEARTBEAT_VERSION)
         self.assertIn("self_card", prompt.fact_keys)
 
+    def test_prompt_does_not_assign_feelings(self) -> None:
+        prompt = build_lean_idle_prompt(
+            LeanIdleFacts(
+                cycle=45,
+                doorman_reason="wake_min_floor",
+                self_card_text="SELF CARD\n- Body state: runtime body overall: ok",
+            )
+        )
+        lowered = prompt.text.lower()
+
+        for forbidden in (
+            "lonely",
+            "missed",
+            "worried",
+            "longing",
+            "sad",
+            "happy",
+            "comforted",
+            "feel about",
+        ):
+            self.assertNotIn(forbidden, lowered)
+
     def test_sanitizer_accepts_private_note_and_caps_length(self) -> None:
         raw = (
             "<final>"
