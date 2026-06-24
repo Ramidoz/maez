@@ -1341,6 +1341,207 @@ class RoutingComprehensionShadow(unittest.TestCase):
         self.assertIsNone(seen["prior_receipt"])
         self.assertIn("No retained web receipt is available", result)
 
+    def test_witness_personal_vulnerable_turn_vetoes(self):
+        from core import brain_loop
+        from core.routing import routing_comprehension as rc
+
+        case = self
+        seen = {}
+        spec = self._web_spec()
+
+        class FakeJudge:
+            def decide(self, context):
+                seen["current_turn"] = context.current_turn
+                case.assertIn("insecure", context.current_turn)
+                return rc.JudgeDecision(
+                    decision=rc.Decision.PERSONAL_OR_RELATIONAL,
+                    confidence=0.97,
+                    reason_code="owner_sharing_personal_state",
+                )
+
+        with (
+            self._patched_dispatcher(brain_loop, spec, seen),
+            patch.dict(
+                os.environ,
+                {
+                    "MAEZ_RECALL_TRIAD_ENABLED": "1",
+                    "MAEZ_ROUTING_COMPREHENSION_SHADOW": "0",
+                    "MAEZ_ROUTING_COMPREHENSION_ENABLED": "1",
+                },
+            ),
+            patch(
+                "core.routing.routing_comprehension.default_judge",
+                return_value=FakeJudge(),
+            ),
+        ):
+            with self.assertLogs("core.routing.routing_comprehension", level="INFO") as logs:
+                brain_loop.run_brain_loop(
+                    "I did legs today, I'm insecure about my legs",
+                    action_engine=object(),
+                    get_pipeline=lambda: None,
+                    surface="telegram_surface",
+                    chat_id="chat",
+                )
+
+        self.assertEqual(seen["current_turn"], "I did legs today, I'm insecure about my legs")
+        self.assertEqual(seen["external_sources"], [])
+        joined = "\n".join(logs.output)
+        self.assertIn("decision=personal_or_relational", joined)
+        self.assertIn("veto_applied=True", joined)
+
+    def test_witness_thread_followup_vetoes_and_uses_receipt(self):
+        from core import brain_loop
+        from core.routing import routing_comprehension as rc
+
+        seen = {}
+        spec = self._web_spec()
+
+        class FakeJudge:
+            def decide(self, context):
+                seen["prior_receipt"] = context.prior_receipt
+                return rc.JudgeDecision(
+                    decision=rc.Decision.THREAD_FOLLOWUP_ANSWERABLE,
+                    confidence=0.97,
+                    reason_code="asks_about_prior_tool_use",
+                )
+
+        with (
+            self._patched_dispatcher(brain_loop, spec, seen),
+            patch.dict(
+                os.environ,
+                {
+                    "MAEZ_RECALL_TRIAD_ENABLED": "1",
+                    "MAEZ_ROUTING_COMPREHENSION_SHADOW": "0",
+                    "MAEZ_ROUTING_COMPREHENSION_ENABLED": "1",
+                },
+            ),
+            patch(
+                "core.routing.routing_comprehension.default_judge",
+                return_value=FakeJudge(),
+            ),
+            patch(
+                "core.routing.attribution_render.last_web_receipt_context",
+                return_value=rc.PriorToolReceipt(
+                    kind="web_search",
+                    query="I did legs today, I'm insecure about my legs",
+                    sources=("https://source.test/a",),
+                    diagnostic_id="diag-4",
+                ),
+            ),
+        ):
+            with self.assertLogs("core.routing.routing_comprehension", level="INFO") as logs:
+                result = brain_loop.run_brain_loop(
+                    "What did you check online for that?",
+                    action_engine=object(),
+                    get_pipeline=lambda: None,
+                    surface="telegram_surface",
+                    chat_id="chat",
+                )
+
+        self.assertEqual(seen["external_sources"], [])
+        self.assertEqual(seen["prior_receipt"].diagnostic_id, "diag-4")
+        self.assertIn("Prior query: I did legs today", result)
+        joined = "\n".join(logs.output)
+        self.assertIn("decision=thread_followup_answerable", joined)
+        self.assertIn("veto_applied=True", joined)
+
+    def test_witness_latest_openai_still_searches(self):
+        from core import brain_loop
+        from core.routing import routing_comprehension as rc
+
+        seen = {}
+        spec = self._web_spec()
+
+        class FakeJudge:
+            def decide(self, context):
+                seen["current_turn"] = context.current_turn
+                return rc.JudgeDecision(
+                    decision=rc.Decision.EXTERNAL_INFO_REQUESTED,
+                    confidence=0.98,
+                    reason_code="owner_requests_current_information",
+                )
+
+        with (
+            self._patched_dispatcher(brain_loop, spec, seen),
+            patch.dict(
+                os.environ,
+                {
+                    "MAEZ_RECALL_TRIAD_ENABLED": "1",
+                    "MAEZ_ROUTING_COMPREHENSION_SHADOW": "0",
+                    "MAEZ_ROUTING_COMPREHENSION_ENABLED": "1",
+                },
+            ),
+            patch(
+                "core.routing.routing_comprehension.default_judge",
+                return_value=FakeJudge(),
+            ),
+        ):
+            with self.assertLogs("core.routing.routing_comprehension", level="INFO") as logs:
+                brain_loop.run_brain_loop(
+                    "What's the latest on OpenAI today?",
+                    action_engine=object(),
+                    get_pipeline=lambda: None,
+                    surface="telegram_surface",
+                    chat_id="chat",
+                )
+
+        self.assertEqual(seen["current_turn"], "What's the latest on OpenAI today?")
+        self.assertEqual(seen["external_sources"], ["WEB_SEARCH"])
+        joined = "\n".join(logs.output)
+        self.assertIn("decision=external_info_requested", joined)
+        self.assertIn("veto_applied=False", joined)
+
+    def test_witness_emotional_data_request_still_searches(self):
+        from core import brain_loop
+        from core.routing import routing_comprehension as rc
+
+        case = self
+        seen = {}
+        spec = self._web_spec()
+
+        class FakeJudge:
+            def decide(self, context):
+                seen["current_turn"] = context.current_turn
+                case.assertIn("anxious", context.current_turn)
+                return rc.JudgeDecision(
+                    decision=rc.Decision.EXTERNAL_INFO_REQUESTED,
+                    confidence=0.98,
+                    reason_code="owner_requests_current_price",
+                )
+
+        with (
+            self._patched_dispatcher(brain_loop, spec, seen),
+            patch.dict(
+                os.environ,
+                {
+                    "MAEZ_RECALL_TRIAD_ENABLED": "1",
+                    "MAEZ_ROUTING_COMPREHENSION_SHADOW": "0",
+                    "MAEZ_ROUTING_COMPREHENSION_ENABLED": "1",
+                },
+            ),
+            patch(
+                "core.routing.routing_comprehension.default_judge",
+                return_value=FakeJudge(),
+            ),
+        ):
+            with self.assertLogs("core.routing.routing_comprehension", level="INFO") as logs:
+                brain_loop.run_brain_loop(
+                    "I feel anxious about Nvidia stock today; check the latest price",
+                    action_engine=object(),
+                    get_pipeline=lambda: None,
+                    surface="telegram_surface",
+                    chat_id="chat",
+                )
+
+        self.assertEqual(
+            seen["current_turn"],
+            "I feel anxious about Nvidia stock today; check the latest price",
+        )
+        self.assertEqual(seen["external_sources"], ["WEB_SEARCH"])
+        joined = "\n".join(logs.output)
+        self.assertIn("decision=external_info_requested", joined)
+        self.assertIn("veto_applied=False", joined)
+
     from contextlib import contextmanager
 
     @contextmanager
