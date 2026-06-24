@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 from dataclasses import dataclass
 from enum import StrEnum
@@ -28,6 +29,7 @@ receipt_context_char_cap = 900
 receipt_kind_char_cap = 60
 receipt_source_char_cap = 50
 receipt_diagnostic_char_cap = 80
+veto_confidence_floor = 0.90
 
 
 Decision = StrEnum(
@@ -77,7 +79,7 @@ class JudgeDecision:
 
     @property
     def vetoes_web_search(self) -> bool:
-        return self.decision in veto_decisions
+        return self.decision in veto_decisions and self.confidence >= veto_confidence_floor
 
 
 class EligibilityJudge(Protocol):
@@ -308,6 +310,8 @@ def _strip_json_fence(text: str) -> str:
 
 
 def _clamp_confidence(value: float) -> float:
+    if not math.isfinite(value):
+        return 0.0
     return max(0.0, min(1.0, value))
 
 

@@ -107,12 +107,12 @@ After review PASS only:
 3. Enable shadow first: `MAEZ_ROUTING_COMPREHENSION_SHADOW=1`, with `MAEZ_ROUTING_COMPREHENSION_ENABLED=0`.
 4. Run the four probes:
    - `I did legs today, I'm insecure about my legs` -> receipt says `personal_or_relational`; search still runs in shadow.
-   - `What did you check online for that?` after a retained web receipt -> receipt says `thread_followup_answerable`; search still runs in shadow and transcript has receipt context.
+   - `What did you check online for that?` after a retained web receipt -> receipt says `thread_followup_answerable`; search still runs in shadow and the transcript is not changed yet.
    - `What's the latest on OpenAI today?` -> receipt says `external_info_requested`; search runs.
    - `I feel anxious about Nvidia stock today; check the latest price` -> receipt says `external_info_requested`; search runs.
 5. Enable enforcement only after shadow witness looks right: `MAEZ_ROUTING_COMPREHENSION_ENABLED=1`.
 6. Re-run the four probes:
-   - first two remove `WEB_SEARCH`;
+   - first two remove `WEB_SEARCH`; the follow-up answer gets retained receipt context when available, or an honest no-receipt context when unavailable;
    - last two keep `WEB_SEARCH`.
 
 ## Predicted Effect

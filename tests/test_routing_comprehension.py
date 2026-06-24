@@ -47,6 +47,17 @@ class RoutingComprehensionPureTests(unittest.TestCase):
         self.assertEqual(out.confidence, 0.0)
         self.assertEqual(out.reason_code, "parse_error")
 
+    def test_parse_non_finite_confidence_clamps_to_zero(self) -> None:
+        for value in ("NaN", "Infinity", "-Infinity"):
+            out = rc.parse_judge_response(
+                '{"decision":"personal_or_relational","confidence":"'
+                + value
+                + '","reason_code":"x"}'
+            )
+
+            self.assertEqual(out.confidence, 0.0)
+            self.assertFalse(out.vetoes_web_search)
+
     def test_prompt_is_bounded_and_contains_no_witness_phrases(self) -> None:
         ctx = rc.JudgeContext(
             current_turn="x" * 5000,
@@ -140,6 +151,18 @@ class RoutingComprehensionPureTests(unittest.TestCase):
             out = rc.apply_web_search_veto(
                 spec,
                 rc.JudgeDecision(decision=decision, confidence=0.5, reason_code="x"),
+            )
+            self.assertIs(out, spec)
+
+    def test_low_confidence_veto_labels_leave_spec_identity(self) -> None:
+        spec = _spec(external_sources=[ExternalSource.WEB_SEARCH])
+        for decision in (
+            rc.Decision.PERSONAL_OR_RELATIONAL,
+            rc.Decision.THREAD_FOLLOWUP_ANSWERABLE,
+        ):
+            out = rc.apply_web_search_veto(
+                spec,
+                rc.JudgeDecision(decision=decision, confidence=0.89, reason_code="x"),
             )
             self.assertIs(out, spec)
 

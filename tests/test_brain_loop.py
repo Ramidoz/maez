@@ -1243,6 +1243,48 @@ class RoutingComprehensionShadow(unittest.TestCase):
 
         self.assertEqual(seen["external_sources"], ["WEB_SEARCH"])
 
+    def test_low_confidence_personal_decision_keeps_web_search(self):
+        from core import brain_loop
+        from core.routing import routing_comprehension as rc
+
+        seen = {}
+        spec = self._web_spec()
+
+        class FakeJudge:
+            def decide(self, context):
+                return rc.JudgeDecision(
+                    decision=rc.Decision.PERSONAL_OR_RELATIONAL,
+                    confidence=0.89,
+                    reason_code="uncertain_personal",
+                )
+
+        with (
+            self._patched_dispatcher(brain_loop, spec, seen),
+            patch.dict(
+                os.environ,
+                {
+                    "MAEZ_RECALL_TRIAD_ENABLED": "1",
+                    "MAEZ_ROUTING_COMPREHENSION_ENABLED": "1",
+                },
+            ),
+            patch(
+                "core.routing.routing_comprehension.default_judge",
+                return_value=FakeJudge(),
+            ),
+        ):
+            with self.assertLogs("core.routing.routing_comprehension", level="INFO") as logs:
+                result = brain_loop.run_brain_loop(
+                    "I did legs today",
+                    action_engine=object(),
+                    get_pipeline=lambda: None,
+                    surface="telegram_surface",
+                    chat_id="chat",
+                )
+
+        self.assertEqual(result, "MERGED")
+        self.assertEqual(seen["external_sources"], ["WEB_SEARCH"])
+        self.assertIn("veto_applied=False", "\n".join(logs.output))
+
     def test_thread_followup_veto_appends_prior_receipt_context(self):
         from core import brain_loop
         from core.routing import routing_comprehension as rc
@@ -1340,6 +1382,59 @@ class RoutingComprehensionShadow(unittest.TestCase):
         self.assertEqual(seen["external_sources"], [])
         self.assertIsNone(seen["prior_receipt"])
         self.assertIn("No retained web receipt is available", result)
+
+    def test_low_confidence_thread_followup_keeps_search_and_no_receipt_context(self):
+        from core import brain_loop
+        from core.routing import routing_comprehension as rc
+
+        seen = {}
+        spec = self._web_spec()
+
+        class FakeJudge:
+            def decide(self, context):
+                seen["prior_receipt"] = context.prior_receipt
+                return rc.JudgeDecision(
+                    decision=rc.Decision.THREAD_FOLLOWUP_ANSWERABLE,
+                    confidence=0.89,
+                    reason_code="uncertain_followup",
+                )
+
+        with (
+            self._patched_dispatcher(brain_loop, spec, seen),
+            patch.dict(
+                os.environ,
+                {
+                    "MAEZ_RECALL_TRIAD_ENABLED": "1",
+                    "MAEZ_ROUTING_COMPREHENSION_ENABLED": "1",
+                },
+            ),
+            patch(
+                "core.routing.routing_comprehension.default_judge",
+                return_value=FakeJudge(),
+            ),
+            patch(
+                "core.routing.attribution_render.last_web_receipt_context",
+                return_value=rc.PriorToolReceipt(
+                    kind="web_search",
+                    query="prior query",
+                    sources=("https://source.test/a",),
+                    diagnostic_id="diag-low",
+                ),
+            ),
+        ):
+            with self.assertLogs("core.routing.routing_comprehension", level="INFO") as logs:
+                result = brain_loop.run_brain_loop(
+                    "What did you check online for that?",
+                    action_engine=object(),
+                    get_pipeline=lambda: None,
+                    surface="telegram_surface",
+                    chat_id="chat",
+                )
+
+        self.assertEqual(seen["external_sources"], ["WEB_SEARCH"])
+        self.assertEqual(seen["prior_receipt"].diagnostic_id, "diag-low")
+        self.assertNotIn("PRIOR TOOL CONTEXT", result)
+        self.assertIn("veto_applied=False", "\n".join(logs.output))
 
     def test_witness_personal_vulnerable_turn_vetoes(self):
         from core import brain_loop
