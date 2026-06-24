@@ -783,6 +783,7 @@ def _run_dispatcher_pipeline(
         "chat_history": chat_history,
     }
     _routing_comprehension_veto_applied = False
+    _routing_comprehension_context_block = ""
     try:
         from core.dispatcher.spec import ExternalSource as _RCExternalSource
         from core.routing import routing_comprehension as _routing_comprehension
@@ -795,11 +796,21 @@ def _run_dispatcher_pipeline(
                 source="WEB_SEARCH",
                 reason=_routing_comprehension_trigger_reason(layer0_spec, spec),
             )
+            try:
+                from core.routing.attribution_render import (
+                    last_web_receipt_context as _last_web_receipt_context,
+                )
+
+                _routing_comprehension_prior_receipt = _last_web_receipt_context(
+                    chat_id
+                )
+            except Exception:
+                _routing_comprehension_prior_receipt = None
             _routing_comprehension_context = _routing_comprehension.JudgeContext(
                 current_turn=user_text,
                 dialogue_tail=_routing_comprehension_dialogue_tail(chat_history),
                 trigger=_routing_comprehension_trigger,
-                prior_receipt=None,
+                prior_receipt=_routing_comprehension_prior_receipt,
             )
             _routing_comprehension_decision = (
                 _routing_comprehension.default_judge().decide(
@@ -816,6 +827,17 @@ def _run_dispatcher_pipeline(
                 )
                 _routing_comprehension_veto_applied = _new_spec is not spec
                 spec = _new_spec
+            if (
+                _routing_comprehension.enabled()
+                and _routing_comprehension_decision.decision
+                == _routing_comprehension.Decision.THREAD_FOLLOWUP_ANSWERABLE
+                and _routing_comprehension_veto_applied
+            ):
+                _routing_comprehension_context_block = (
+                    _routing_comprehension.receipt_context_text(
+                        _routing_comprehension_prior_receipt
+                    )
+                )
             _routing_comprehension_receipt = _routing_comprehension.shadow_receipt(
                 surface=surface,
                 chat_id=chat_id,
@@ -1063,8 +1085,11 @@ def _run_dispatcher_pipeline(
         )
     except Exception as exc:
         logger.debug("routing observation dispatcher turn skipped: %s", exc)
+    _prompt_block = rendered_turn.prompt_block
+    if _routing_comprehension_context_block:
+        _prompt_block = f"{_prompt_block}\n\n{_routing_comprehension_context_block}"
     return _DispatcherPathResult(
-        transcript=rendered_turn.prompt_block,
+        transcript=_prompt_block,
         should_run_jarvis=False,
         recall_items=getattr(rendered_turn, "recall_items", ()),
     )

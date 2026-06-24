@@ -37,10 +37,20 @@ def render_natural(marked_draft, *, web_evidence_present: bool):
         return marked_draft
 
 
-def retain_receipt(chat_id: str, *, marked: str, sources: list[str]) -> None:
+def retain_receipt(
+    chat_id: str,
+    *,
+    marked: str,
+    sources: list[str],
+    observation=None,
+) -> None:
     try:
         key = str(chat_id)
-        _RECEIPTS[key] = {"marked": marked, "sources": list(sources or [])}
+        _RECEIPTS[key] = {
+            "marked": marked,
+            "sources": list(sources or []),
+            "observation": _receipt_observation(observation),
+        }
         _RECEIPTS.move_to_end(key)
         while len(_RECEIPTS) > _MAX_RECEIPTS:
             _RECEIPTS.popitem(last=False)
@@ -50,6 +60,31 @@ def retain_receipt(chat_id: str, *, marked: str, sources: list[str]) -> None:
 
 def last_receipt(chat_id: str):
     return _RECEIPTS.get(str(chat_id))
+
+
+def last_web_receipt_context(chat_id: str):
+    try:
+        receipt = last_receipt(chat_id)
+        if not receipt:
+            return None
+        observation = receipt.get("observation") or {}
+        if not isinstance(observation, dict):
+            return None
+        query = observation.get("query")
+        diagnostic_id = observation.get("diagnostic_id")
+        if not query and not diagnostic_id:
+            return None
+
+        from core.routing.routing_comprehension import PriorToolReceipt
+
+        return PriorToolReceipt(
+            kind=str(observation.get("kind") or "web_search"),
+            query=str(query or ""),
+            sources=tuple(str(item) for item in (receipt.get("sources") or [])[:5]),
+            diagnostic_id=str(diagnostic_id or ""),
+        )
+    except Exception:
+        return None
 
 
 def receipts_reply(chat_id: str) -> str:
@@ -95,3 +130,14 @@ def stash_turn_evidence(
 
 def pop_turn_evidence(chat_id) -> dict:
     return _TURN_EVIDENCE.pop(str(chat_id or ""), dict(_EMPTY_TURN))
+
+
+def _receipt_observation(observation):
+    if not isinstance(observation, dict):
+        return None
+    kept = {}
+    for key in ("kind", "query", "diagnostic_id"):
+        value = observation.get(key)
+        if value is not None:
+            kept[key] = str(value)
+    return kept or None

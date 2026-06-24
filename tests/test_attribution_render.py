@@ -89,6 +89,58 @@ class RenderTests(unittest.TestCase):
         self.assertTrue(got["web_present"])
         self.assertEqual(got["sources"], ["https://a.example/page"])
 
+    def test_retain_receipt_keeps_optional_observation_metadata(self):
+        ar.retain_receipt(
+            "receipt-meta-chat",
+            marked="Answer [E1]",
+            sources=["https://source.test/a"],
+            observation={
+                "query": "Pretty nice. I did legs today.",
+                "diagnostic_id": "diag-1",
+                "kind": "web_search",
+                "evidence_texts": ["full evidence body must not be retained"],
+            },
+        )
+
+        receipt = ar.last_receipt("receipt-meta-chat")
+
+        self.assertEqual(
+            receipt["observation"]["query"],
+            "Pretty nice. I did legs today.",
+        )
+        self.assertNotIn("evidence_texts", receipt["observation"])
+        self.assertEqual(receipt["sources"], ["https://source.test/a"])
+
+    def test_last_web_receipt_context_returns_none_without_web_observation(self):
+        self.assertIsNone(ar.last_web_receipt_context("no-such-chat"))
+
+    def test_last_web_receipt_context_requires_query_or_diagnostic(self):
+        ar.retain_receipt(
+            "receipt-kind-only-chat",
+            marked="Answer [E1]",
+            sources=["https://source.test/a"],
+            observation={"kind": "web_search"},
+        )
+
+        self.assertIsNone(ar.last_web_receipt_context("receipt-kind-only-chat"))
+
+    def test_last_web_receipt_context_shapes_prior_tool_receipt(self):
+        ar.retain_receipt(
+            "receipt-context-chat",
+            marked="Answer [E1]",
+            sources=["https://source.test/a"],
+            observation={
+                "query": "What is happening with OpenAI?",
+                "diagnostic_id": "diag-2",
+            },
+        )
+
+        got = ar.last_web_receipt_context("receipt-context-chat")
+
+        self.assertEqual(got.kind, "web_search")
+        self.assertEqual(got.query, "What is happening with OpenAI?")
+        self.assertEqual(got.sources, ("https://source.test/a",))
+        self.assertEqual(got.diagnostic_id, "diag-2")
 
     def test_receipts_reply_full_and_empty(self):
         ar.retain_receipt("c9", marked="claim [E1]", sources=["https://a", "https://b"])

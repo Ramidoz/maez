@@ -7574,6 +7574,7 @@ class MaezDaemon:
                     str(chat_id or ""),
                     marked=reply,
                     sources=_turn_ev.get("sources") or [],
+                    observation=_turn_ev.get("observation"),
                 )
                 try:
                     from core.cognition.evidence_precedence_shadow import (
