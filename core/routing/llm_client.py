@@ -470,6 +470,14 @@ def _chat_ollama(
         raise BackendError(f'ollama chat failed: {e!r}') from e
 
 
+def _ollama_options(options: Optional[dict]) -> Optional[dict]:
+    if options is None:
+        return None
+    cleaned = dict(options)
+    cleaned.pop('chat_template_kwargs', None)
+    return cleaned
+
+
 # ── llamacpp path via OpenAI-compat client ───────────────────────────
 _openai_client_singleton = None
 
@@ -530,12 +538,8 @@ def _chat_llamacpp(
     # a given kwarg will simply ignore it.
     from core.model_config import PRIMARY_CHAT_KWARGS as _cfg_kwargs
     extra_body: dict = {}
-    if _cfg_kwargs or think is not None:
-        merged = dict(_cfg_kwargs)
-        if think is False:
-            merged['enable_thinking'] = False
-        elif think is True:
-            merged['enable_thinking'] = True
+    if _cfg_kwargs or think is not None or (options and options.get('chat_template_kwargs')):
+        merged = _chat_template_kwargs(think=think, options=options)
         if merged:
             extra_body['chat_template_kwargs'] = merged
 
@@ -618,12 +622,8 @@ def start_cancellable_chat(
         from core.model_config import PRIMARY_CHAT_KWARGS as _cfg_kwargs
 
         extra_body: dict = {}
-        if _cfg_kwargs or think is not None:
-            merged = dict(_cfg_kwargs)
-            if think is False:
-                merged['enable_thinking'] = False
-            elif think is True:
-                merged['enable_thinking'] = True
+        if _cfg_kwargs or think is not None or (options and options.get('chat_template_kwargs')):
+            merged = _chat_template_kwargs(think=think, options=options)
             if merged:
                 extra_body['chat_template_kwargs'] = merged
         stream = _start_llamacpp_stream(
@@ -641,8 +641,40 @@ def start_cancellable_chat(
             messages=messages,
             stream=True,
             think=think,
+            options=_ollama_options(options),
+        )
+    )
+
+
+def chat_direct(
+    model: str,
+    messages: list[dict],
+    think: Optional[bool] = None,
+    options: Optional[dict] = None,
+    purpose: Any = None,
+) -> Any:
+    """Direct non-gateway chat for tiny deterministic classifier calls.
+
+    Owner-facing and long-running brain calls should continue to use
+    ``chat()``, which goes through the priority gateway. This path is for
+    short judges that need the backend's non-stream response shape.
+    """
+    del purpose
+    backend = active_backend()
+    if backend == BACKEND_LLAMACPP:
+        return _chat_llamacpp(
+            model=model,
+            messages=messages,
+            stream=False,
+            think=think,
             options=options,
         )
+    return _chat_ollama(
+        model=model,
+        messages=messages,
+        stream=False,
+        think=think,
+        options=_ollama_options(options),
     )
 
 
@@ -681,7 +713,7 @@ def chat(
             messages=messages,
             stream=True,
             think=think,
-            options=options,
+            options=_ollama_options(options),
         )
 
     from core.routing import brain_gateway
@@ -707,6 +739,25 @@ def chat(
         message=_LlmMessage(content=reply, thinking=None),
         server_prompt_ms=server_prompt_ms,
     )
+
+
+def _chat_template_kwargs(
+    *,
+    think: Optional[bool],
+    options: Optional[dict],
+) -> dict:
+    from core.model_config import PRIMARY_CHAT_KWARGS as _cfg_kwargs
+
+    merged = dict(_cfg_kwargs)
+    if options:
+        explicit = options.get('chat_template_kwargs')
+        if isinstance(explicit, dict):
+            merged.update(explicit)
+    if think is False:
+        merged['enable_thinking'] = False
+    elif think is True:
+        merged['enable_thinking'] = True
+    return merged
 
 
 # ── prompt-completion entry point (for /api/generate callers) ──────

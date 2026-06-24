@@ -66,6 +66,52 @@ class RoutingTest(unittest.TestCase):
         self.assertEqual(response.message.content, "timed reply")
         self.assertEqual(response.server_prompt_ms, 1234)
 
+    def test_llm_client_direct_chat_bypasses_gateway_and_preserves_options(self):
+        gateway = BrainGateway()
+        response = types.SimpleNamespace(
+            message=types.SimpleNamespace(content='{"ok": true}')
+        )
+        options = {
+            "temperature": 0.0,
+            "num_predict": 320,
+            "chat_template_kwargs": {"enable_thinking": False},
+        }
+
+        with (
+            mock.patch.dict(os.environ, {"MAEZ_LLM_BACKEND": "llamacpp"}, clear=False),
+            mock.patch("core.routing.brain_gateway.GATEWAY", gateway),
+            mock.patch.object(llm_client, "_chat_llamacpp", return_value=response) as fake_chat,
+        ):
+            out = llm_client.chat_direct(
+                model="m",
+                messages=[{"role": "user", "content": "hi"}],
+                think=False,
+                options=options,
+                purpose="routing_comprehension",
+            )
+
+        self.assertIs(out, response)
+        fake_chat.assert_called_once_with(
+            model="m",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            think=False,
+            options=options,
+        )
+        self.assertEqual(list(gateway.events), [])
+
+    def test_llamacpp_chat_template_kwargs_explicitly_disable_thinking(self):
+        with mock.patch(
+            "core.model_config.PRIMARY_CHAT_KWARGS",
+            {"enable_thinking": True, "other": "kept"},
+        ):
+            out = llm_client._chat_template_kwargs(
+                think=False,
+                options={"chat_template_kwargs": {"enable_thinking": False}},
+            )
+
+        self.assertEqual(out, {"enable_thinking": False, "other": "kept"})
+
     def test_llm_client_stream_true_preserves_legacy_iterator_shape(self):
         legacy_stream = iter(
             [types.SimpleNamespace(message=types.SimpleNamespace(content="chunk"))]

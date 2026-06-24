@@ -150,17 +150,21 @@ def render_judge_prompt(context: JudgeContext) -> str:
 class LlmEligibilityJudge:
     def decide(self, context: JudgeContext) -> JudgeDecision:
         try:
-            from ..llm_client import chat
+            from ..llm_client import chat_direct
             from ..model_config import PRIMARY_MODEL
 
-            response = chat(
+            response = chat_direct(
                 model=PRIMARY_MODEL,
                 messages=[
                     {"role": "system", "content": "Return strict JSON only."},
                     {"role": "user", "content": render_judge_prompt(context)},
                 ],
                 think=False,
-                options={"temperature": 0.0, "num_predict": 320},
+                options={
+                    "temperature": 0.0,
+                    "num_predict": 320,
+                    "chat_template_kwargs": {"enable_thinking": False},
+                },
                 purpose="routing_comprehension",
             )
             message = getattr(response, "message", None)

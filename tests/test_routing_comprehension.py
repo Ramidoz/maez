@@ -264,7 +264,7 @@ class RoutingComprehensionPureTests(unittest.TestCase):
     def test_default_judge_returns_llm_judge(self) -> None:
         self.assertIsInstance(rc.default_judge(), rc.LlmEligibilityJudge)
 
-    def test_llm_judge_uses_core_chat_and_parses_response(self) -> None:
+    def test_llm_judge_uses_direct_chat_with_explicit_thinking_suppression(self) -> None:
         response = SimpleNamespace(
             message=SimpleNamespace(
                 content=(
@@ -274,7 +274,10 @@ class RoutingComprehensionPureTests(unittest.TestCase):
             )
         )
 
-        with mock.patch("core.llm_client.chat", return_value=response) as fake_chat:
+        with (
+            mock.patch("core.llm_client.chat", side_effect=AssertionError("gateway path")),
+            mock.patch("core.llm_client.chat_direct", return_value=response, create=True) as fake_chat,
+        ):
             decision = rc.LlmEligibilityJudge().decide(
                 rc.JudgeContext(current_turn="please look this up")
             )
@@ -284,6 +287,11 @@ class RoutingComprehensionPureTests(unittest.TestCase):
         self.assertEqual(decision.reason_code, "owner_asks_lookup")
         fake_chat.assert_called_once()
         self.assertEqual(fake_chat.call_args.kwargs["purpose"], "routing_comprehension")
+        self.assertFalse(fake_chat.call_args.kwargs["think"])
+        self.assertEqual(
+            fake_chat.call_args.kwargs["options"]["chat_template_kwargs"],
+            {"enable_thinking": False},
+        )
         self.assertGreaterEqual(fake_chat.call_args.kwargs["options"]["num_predict"], 240)
 
     def test_llm_judge_import_failure_fails_to_ambiguous(self) -> None:

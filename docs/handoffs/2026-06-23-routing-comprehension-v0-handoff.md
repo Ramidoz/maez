@@ -123,6 +123,37 @@ environment). The required proof is therefore the daemon shadow re-witness:
 receipts must show real typed decisions, not `parse_error`, before
 `MAEZ_ROUTING_COMPREHENSION_ENABLED=1` is considered.
 
+### Second HOLD Fix
+
+The next shadow run proved the judge understands when it parses:
+
+- legs / vulnerable turn -> `personal_or_relational confidence=0.95`
+- "what did you check online" -> `thread_followup_answerable confidence=0.95`
+
+But parse errors were still intermittent. Live env already had
+`MAEZ_PRIMARY_CHAT_KWARGS={"enable_thinking": false}`, so the remaining
+difference was the call path: `llm_client.chat()` enters the priority gateway,
+which collects a streaming response. The clean manual proof hit the local
+qwen endpoint as a direct non-stream chat request with
+`chat_template_kwargs={"enable_thinking": false}`.
+
+The second fix is therefore also narrow:
+
+- Add `llm_client.chat_direct()` for tiny deterministic classifier calls that
+  need the backend's non-stream response shape.
+- Keep normal owner replies on `llm_client.chat()` and the priority gateway.
+- Route only the routing-comprehension judge through `chat_direct()`.
+- Pass `chat_template_kwargs={"enable_thinking": false}` explicitly in the
+  judge options, in addition to `think=False`.
+- Keep the balanced-JSON parser and 320-token budget from the first HOLD fix.
+
+The shadow re-witness remains mandatory before enablement: all applicable
+probes must show typed decisions and no `parse_error`.
+
+Separate finding, not this slice: the Nvidia probe was intercepted by the S4
+clinical boundary before routing comprehension ran. That is a higher-precedence
+meaning-bouncer problem (`anxious` -> clinical reflex) and needs its own ticket.
+
 After review PASS only:
 
 1. Merge the reviewed branch.
