@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Protocol
 
@@ -29,6 +30,8 @@ receipt_context_char_cap = 900
 receipt_kind_char_cap = 60
 receipt_source_char_cap = 50
 receipt_diagnostic_char_cap = 80
+diagnostic_value_cap = 80
+sha256_hex_len = 64
 veto_confidence_floor = 0.90
 
 
@@ -72,10 +75,20 @@ class JudgeContext:
 
 
 @dataclass(frozen=True)
+class JudgeDiagnostics:
+    output_chars: int = 0
+    finish_reason: str = ""
+    backend: str = "unknown"
+    thinking_suppressed: bool = False
+    raw_sha256: str = ""
+
+
+@dataclass(frozen=True)
 class JudgeDecision:
     decision: Decision
     confidence: float
     reason_code: str
+    diagnostics: JudgeDiagnostics = field(default_factory=JudgeDiagnostics)
 
     @property
     def vetoes_web_search(self) -> bool:
@@ -98,7 +111,15 @@ def any_enabled() -> bool:
     return shadow_enabled() or enabled()
 
 
-def parse_judge_response(raw: str) -> JudgeDecision:
+def parse_judge_response(
+    raw: str,
+    *,
+    diagnostics: JudgeDiagnostics | None = None,
+) -> JudgeDecision:
+    diag = diagnostics or JudgeDiagnostics(
+        output_chars=len(str(raw or "")),
+        raw_sha256=_sha256_text(raw),
+    )
     try:
         text = _strip_json_fence(str(raw or "").strip())
         text = _extract_json_object(text)
@@ -110,12 +131,14 @@ def parse_judge_response(raw: str) -> JudgeDecision:
             decision=decision,
             confidence=confidence,
             reason_code=reason_code,
+            diagnostics=diag,
         )
     except Exception:
         return JudgeDecision(
             decision=ambiguous_decision,
             confidence=0.0,
             reason_code="parse_error",
+            diagnostics=diag,
         )
 
 
@@ -168,13 +191,22 @@ class LlmEligibilityJudge:
                 purpose="routing_comprehension",
             )
             message = getattr(response, "message", None)
-            return parse_judge_response(getattr(message, "content", "") or "")
+            raw = getattr(message, "content", "") or ""
+            return parse_judge_response(
+                raw,
+                diagnostics=_diagnostics_from_response(raw, response),
+            )
         except Exception as exc:
             log.debug("routing comprehension judge unavailable: %s", exc)
             return JudgeDecision(
                 decision=ambiguous_decision,
                 confidence=0.0,
                 reason_code="judge_unavailable",
+                diagnostics=JudgeDiagnostics(
+                    finish_reason="backend_error",
+                    backend="unavailable",
+                    thinking_suppressed=False,
+                ),
             )
 
 
@@ -224,6 +256,7 @@ def shadow_receipt(
     veto_applied: bool,
 ) -> str:
     del chat_id
+    diag = decision.diagnostics
     return (
         "routing_comprehension "
         f"surface={surface} "
@@ -232,7 +265,12 @@ def shadow_receipt(
         f"reason={decision.reason_code} "
         f"trigger={_compact_reason(trigger.reason)} "
         f"enabled={bool(enabled)} "
-        f"veto_applied={bool(veto_applied)}"
+        f"veto_applied={bool(veto_applied)} "
+        f"output_chars={max(0, int(diag.output_chars))} "
+        f"finish_reason={_compact_diagnostic(diag.finish_reason)} "
+        f"backend={_compact_diagnostic(diag.backend)} "
+        f"thinking_suppressed={bool(diag.thinking_suppressed)} "
+        f"raw_sha256={_clip(diag.raw_sha256, sha256_hex_len)}"
     )
 
 
@@ -371,3 +409,23 @@ def _compact_reason(value: str) -> str:
         for char in str(value or "")
     )
     return (compact.strip("_") or "unspecified")[:reason_char_cap]
+
+
+def _compact_diagnostic(value: str) -> str:
+    return _compact_reason(value)[:diagnostic_value_cap]
+
+
+def _sha256_text(text: str) -> str:
+    return hashlib.sha256(str(text or "").encode("utf-8")).hexdigest()
+
+
+def _diagnostics_from_response(raw: str, response) -> JudgeDiagnostics:
+    return JudgeDiagnostics(
+        output_chars=len(str(raw or "")),
+        finish_reason=_compact_diagnostic(
+            str(getattr(response, "finish_reason", "") or "")
+        ),
+        backend=_compact_diagnostic(str(getattr(response, "backend", "") or "unknown")),
+        thinking_suppressed=bool(getattr(response, "thinking_suppressed", False)),
+        raw_sha256=_sha256_text(raw),
+    )

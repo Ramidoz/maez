@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import inspect
 import os
 import unittest
@@ -46,6 +47,28 @@ class RoutingComprehensionPureTests(unittest.TestCase):
         self.assertEqual(out.decision, rc.Decision.AMBIGUOUS)
         self.assertEqual(out.confidence, 0.0)
         self.assertEqual(out.reason_code, "parse_error")
+
+    def test_parse_error_carries_content_light_diagnostics(self) -> None:
+        raw = "<think>lots</think>"
+        diagnostics = rc.JudgeDiagnostics(
+            output_chars=len(raw),
+            finish_reason="length",
+            backend="primary_openai",
+            thinking_suppressed=False,
+            raw_sha256=hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+        )
+
+        out = rc.parse_judge_response(raw, diagnostics=diagnostics)
+
+        self.assertEqual(out.reason_code, "parse_error")
+        self.assertEqual(out.diagnostics.output_chars, len(raw))
+        self.assertEqual(out.diagnostics.finish_reason, "length")
+        self.assertEqual(out.diagnostics.backend, "primary_openai")
+        self.assertFalse(out.diagnostics.thinking_suppressed)
+        self.assertEqual(
+            out.diagnostics.raw_sha256,
+            hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+        )
 
     def test_parse_wrapped_json_decision_from_thinking_model_output(self) -> None:
         out = rc.parse_judge_response(
@@ -203,6 +226,42 @@ class RoutingComprehensionPureTests(unittest.TestCase):
         self.assertNotIn("123456", receipt)
         self.assertNotIn("insecure", receipt.lower())
 
+    def test_shadow_receipt_includes_diagnostics_without_raw_output(self) -> None:
+        raw = (
+            '{"decision":"personal_or_relational","confidence":0.95,'
+            '"reason_code":"owner_sharing"}'
+        )
+        decision = rc.JudgeDecision(
+            decision=rc.Decision.PERSONAL_OR_RELATIONAL,
+            confidence=0.95,
+            reason_code="owner_sharing",
+            diagnostics=rc.JudgeDiagnostics(
+                output_chars=len(raw),
+                finish_reason="stop",
+                backend="primary_openai",
+                thinking_suppressed=True,
+                raw_sha256=hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+            ),
+        )
+
+        receipt = rc.shadow_receipt(
+            surface="telegram_surface",
+            chat_id="secret-chat",
+            decision=decision,
+            trigger=rc.SearchTrigger(source="WEB_SEARCH", reason="current_world_request"),
+            enabled=False,
+            veto_applied=False,
+        )
+
+        self.assertIn("output_chars=", receipt)
+        self.assertIn("finish_reason=stop", receipt)
+        self.assertIn("backend=primary_openai", receipt)
+        self.assertIn("thinking_suppressed=True", receipt)
+        self.assertIn("raw_sha256=", receipt)
+        self.assertNotIn(raw, receipt)
+        self.assertNotIn("secret-chat", receipt)
+        self.assertNotIn('personal_or_relational","confidence', receipt)
+
     def test_receipt_context_text_is_honest_with_no_prior_receipt(self) -> None:
         text = rc.receipt_context_text(None)
 
@@ -293,6 +352,36 @@ class RoutingComprehensionPureTests(unittest.TestCase):
             {"enable_thinking": False},
         )
         self.assertGreaterEqual(fake_chat.call_args.kwargs["options"]["num_predict"], 240)
+
+    def test_llm_judge_threads_response_metadata_into_decision(self) -> None:
+        raw = (
+            '{"decision":"external_info_requested","confidence":0.95,'
+            '"reason_code":"owner_asks_lookup"}'
+        )
+        response = SimpleNamespace(
+            message=SimpleNamespace(content=raw),
+            finish_reason="stop",
+            backend="primary_openai",
+            thinking_suppressed=True,
+        )
+
+        with (
+            mock.patch("core.llm_client.chat", side_effect=AssertionError("gateway path")),
+            mock.patch("core.llm_client.chat_direct", return_value=response, create=True),
+        ):
+            decision = rc.LlmEligibilityJudge().decide(
+                rc.JudgeContext(current_turn="please look this up")
+            )
+
+        self.assertEqual(decision.decision, rc.Decision.EXTERNAL_INFO_REQUESTED)
+        self.assertEqual(decision.diagnostics.finish_reason, "stop")
+        self.assertEqual(decision.diagnostics.backend, "primary_openai")
+        self.assertTrue(decision.diagnostics.thinking_suppressed)
+        self.assertEqual(decision.diagnostics.output_chars, len(raw))
+        self.assertEqual(
+            decision.diagnostics.raw_sha256,
+            hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+        )
 
     def test_llm_judge_import_failure_fails_to_ambiguous(self) -> None:
         real_import = __import__
