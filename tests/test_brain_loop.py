@@ -1120,6 +1120,13 @@ class RoutingComprehensionShadow(unittest.TestCase):
                     decision=rc.Decision.PERSONAL_OR_RELATIONAL,
                     confidence=0.96,
                     reason_code="owner_sharing_personal_state",
+                    diagnostics=rc.JudgeDiagnostics(
+                        output_chars=107,
+                        finish_reason="stop",
+                        backend="primary_openai",
+                        thinking_suppressed=True,
+                        raw_sha256="a" * 64,
+                    ),
                 )
 
         with (
@@ -1153,6 +1160,11 @@ class RoutingComprehensionShadow(unittest.TestCase):
         self.assertIn("decision=personal_or_relational", joined)
         self.assertIn("enabled=False", joined)
         self.assertIn("veto_applied=False", joined)
+        self.assertIn("output_chars=107", joined)
+        self.assertIn("finish_reason=stop", joined)
+        self.assertIn("backend=primary_openai", joined)
+        self.assertIn("thinking_suppressed=True", joined)
+        self.assertIn("raw_sha256=" + "a" * 64, joined)
         self.assertEqual(seen["judge_context"].current_turn, "I did legs today")
         self.assertEqual(
             seen["judge_context"].dialogue_tail,

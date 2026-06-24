@@ -158,6 +158,10 @@ class RoutingComprehensionPureTests(unittest.TestCase):
         self.assertNotIn("_RE", src)
         for forbidden in ("insecure", "legs", "nvidia", "openai", "i feel", "today"):
             self.assertNotIn(forbidden, src.lower())
+        for diagnostic_only in ("output_chars", "finish_reason", "raw_sha256"):
+            self.assertIn(diagnostic_only, src)
+        for forbidden in ("gym", "stock", "price", "vulnerable"):
+            self.assertNotIn(forbidden, src.lower())
 
     def test_veto_removes_web_search_keeps_substrate(self) -> None:
         spec = _spec(
