@@ -81,7 +81,7 @@ class RoutingTest(unittest.TestCase):
         }
 
         with (
-            mock.patch.dict(os.environ, {}, clear=False),
+            mock.patch.dict(os.environ, {}, clear=True),
             mock.patch("core.routing.brain_gateway.GATEWAY", gateway),
             mock.patch.object(
                 llm_client,
@@ -89,6 +89,7 @@ class RoutingTest(unittest.TestCase):
                 return_value=response,
             ) as fake_chat,
         ):
+            self.assertNotIn("MAEZ_LLM_BACKEND", os.environ)
             out = llm_client.chat_direct(
                 model="qwen36-27b",
                 messages=[{"role": "user", "content": "classify"}],
