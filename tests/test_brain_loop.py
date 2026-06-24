@@ -1161,6 +1161,88 @@ class RoutingComprehensionShadow(unittest.TestCase):
         self.assertEqual(seen["judge_context"].trigger.source, "WEB_SEARCH")
         self.assertIsNone(seen["judge_context"].prior_receipt)
 
+    def test_enabled_personal_decision_removes_web_search_before_fanout(self):
+        from core import brain_loop
+        from core.routing import routing_comprehension as rc
+
+        seen = {}
+        spec = self._web_spec()
+
+        class FakeJudge:
+            def decide(self, context):
+                return rc.JudgeDecision(
+                    decision=rc.Decision.PERSONAL_OR_RELATIONAL,
+                    confidence=0.97,
+                    reason_code="owner_sharing_personal_state",
+                )
+
+        with (
+            self._patched_dispatcher(brain_loop, spec, seen),
+            patch.dict(
+                os.environ,
+                {
+                    "MAEZ_RECALL_TRIAD_ENABLED": "1",
+                    "MAEZ_ROUTING_COMPREHENSION_SHADOW": "0",
+                    "MAEZ_ROUTING_COMPREHENSION_ENABLED": "1",
+                },
+            ),
+            patch(
+                "core.routing.routing_comprehension.default_judge",
+                return_value=FakeJudge(),
+            ),
+        ):
+            with self.assertLogs("core.routing.routing_comprehension", level="INFO") as logs:
+                result = brain_loop.run_brain_loop(
+                    "Pretty nice. I did legs today. I have always been insecure about my legs.",
+                    action_engine=object(),
+                    get_pipeline=lambda: None,
+                    surface="telegram_surface",
+                    chat_id="chat",
+                )
+
+        self.assertEqual(result, "MERGED")
+        self.assertEqual(seen["external_sources"], [])
+        self.assertIn("veto_applied=True", "\n".join(logs.output))
+
+    def test_enabled_external_info_decision_keeps_web_search(self):
+        from core import brain_loop
+        from core.routing import routing_comprehension as rc
+
+        seen = {}
+        spec = self._web_spec()
+
+        class FakeJudge:
+            def decide(self, context):
+                return rc.JudgeDecision(
+                    decision=rc.Decision.EXTERNAL_INFO_REQUESTED,
+                    confidence=0.98,
+                    reason_code="owner_requests_current_data",
+                )
+
+        with (
+            self._patched_dispatcher(brain_loop, spec, seen),
+            patch.dict(
+                os.environ,
+                {
+                    "MAEZ_RECALL_TRIAD_ENABLED": "1",
+                    "MAEZ_ROUTING_COMPREHENSION_ENABLED": "1",
+                },
+            ),
+            patch(
+                "core.routing.routing_comprehension.default_judge",
+                return_value=FakeJudge(),
+            ),
+        ):
+            brain_loop.run_brain_loop(
+                "I feel anxious about Nvidia stock today; check the latest price",
+                action_engine=object(),
+                get_pipeline=lambda: None,
+                surface="telegram_surface",
+                chat_id="chat",
+            )
+
+        self.assertEqual(seen["external_sources"], ["WEB_SEARCH"])
+
     from contextlib import contextmanager
 
     @contextmanager

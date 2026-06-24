@@ -782,6 +782,7 @@ def _run_dispatcher_pipeline(
         "chat_id": chat_id,
         "chat_history": chat_history,
     }
+    _routing_comprehension_veto_applied = False
     try:
         from core.dispatcher.spec import ExternalSource as _RCExternalSource
         from core.routing import routing_comprehension as _routing_comprehension
@@ -805,13 +806,23 @@ def _run_dispatcher_pipeline(
                     _routing_comprehension_context
                 )
             )
+            if (
+                _routing_comprehension.enabled()
+                and _routing_comprehension_decision.vetoes_web_search
+            ):
+                _new_spec = _routing_comprehension.apply_web_search_veto(
+                    spec,
+                    _routing_comprehension_decision,
+                )
+                _routing_comprehension_veto_applied = _new_spec is not spec
+                spec = _new_spec
             _routing_comprehension_receipt = _routing_comprehension.shadow_receipt(
                 surface=surface,
                 chat_id=chat_id,
                 decision=_routing_comprehension_decision,
                 trigger=_routing_comprehension_trigger,
                 enabled=_routing_comprehension.enabled(),
-                veto_applied=False,
+                veto_applied=_routing_comprehension_veto_applied,
             )
             logging.getLogger("core.routing.routing_comprehension").info(
                 _routing_comprehension_receipt
