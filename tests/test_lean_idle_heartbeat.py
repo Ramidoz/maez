@@ -147,6 +147,29 @@ class LeanIdleHeartbeatTest(unittest.TestCase):
             self.assertTrue(result.receipt["would_store"])
             self.assertFalse(result.receipt["stored"])
 
+    def test_enabled_heartbeat_ok_stores_nothing_and_intercepts(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = PrivateThoughts(db_path=Path(td) / "private_thoughts.db")
+
+            result = run_lean_idle_heartbeat(
+                facts=LeanIdleFacts(
+                    cycle=18,
+                    doorman_reason="wake_min_floor",
+                    self_card_text="SELF CARD\n- Bond: partnership",
+                ),
+                chat_fn=lambda **_kwargs: _FakeResponse("<final>HEARTBEAT_OK</final>"),
+                model="test-model",
+                private_thoughts=store,
+                enabled=True,
+                shadow=False,
+            )
+
+            self.assertTrue(result.intercepted)
+            self.assertEqual(result.return_text, HEARTBEAT_OK)
+            self.assertFalse(result.stored)
+            self.assertEqual(result.skip_reason, "heartbeat_ok_or_rejected")
+            self.assertEqual(store.count(), 0)
+
     def test_duplicate_recent_output_skips_second_private_row(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             store = PrivateThoughts(db_path=Path(td) / "private_thoughts.db")
