@@ -47,6 +47,18 @@ class RoutingComprehensionPureTests(unittest.TestCase):
         self.assertEqual(out.confidence, 0.0)
         self.assertEqual(out.reason_code, "parse_error")
 
+    def test_parse_wrapped_json_decision_from_thinking_model_output(self) -> None:
+        out = rc.parse_judge_response(
+            "I will classify the routing case first.\n"
+            '{"decision":"personal_or_relational","confidence":0.94,'
+            '"reason_code":"owner_sharing_personal_state"}\n'
+            "That is the final routing decision."
+        )
+
+        self.assertEqual(out.decision, rc.Decision.PERSONAL_OR_RELATIONAL)
+        self.assertEqual(out.confidence, 0.94)
+        self.assertEqual(out.reason_code, "owner_sharing_personal_state")
+
     def test_parse_non_finite_confidence_clamps_to_zero(self) -> None:
         for value in ("NaN", "Infinity", "-Infinity"):
             out = rc.parse_judge_response(
@@ -272,6 +284,7 @@ class RoutingComprehensionPureTests(unittest.TestCase):
         self.assertEqual(decision.reason_code, "owner_asks_lookup")
         fake_chat.assert_called_once()
         self.assertEqual(fake_chat.call_args.kwargs["purpose"], "routing_comprehension")
+        self.assertGreaterEqual(fake_chat.call_args.kwargs["options"]["num_predict"], 240)
 
     def test_llm_judge_import_failure_fails_to_ambiguous(self) -> None:
         real_import = __import__

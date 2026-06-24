@@ -101,6 +101,7 @@ def any_enabled() -> bool:
 def parse_judge_response(raw: str) -> JudgeDecision:
     try:
         text = _strip_json_fence(str(raw or "").strip())
+        text = _extract_json_object(text)
         payload = json.loads(text)
         decision = Decision(str(payload.get("decision") or ambiguous_decision.value))
         confidence = _clamp_confidence(float(payload.get("confidence", 0.0)))
@@ -159,7 +160,7 @@ class LlmEligibilityJudge:
                     {"role": "user", "content": render_judge_prompt(context)},
                 ],
                 think=False,
-                options={"temperature": 0.0, "num_predict": 120},
+                options={"temperature": 0.0, "num_predict": 320},
                 purpose="routing_comprehension",
             )
             message = getattr(response, "message", None)
@@ -307,6 +308,39 @@ def _strip_json_fence(text: str) -> str:
     if lines and lines[-1].startswith("```"):
         lines = lines[:-1]
     return "\n".join(lines).strip()
+
+
+def _extract_json_object(text: str) -> str:
+    if not text:
+        return text
+    start = text.find("{")
+    if start < 0:
+        return text
+
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : index + 1].strip()
+
+    return text[start:].strip()
 
 
 def _clamp_confidence(value: float) -> float:

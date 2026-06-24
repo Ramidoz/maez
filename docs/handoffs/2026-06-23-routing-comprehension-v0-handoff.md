@@ -100,6 +100,29 @@ exit 0, no output
 
 ## Owner Witness
 
+### Post-Merge HOLD Fix
+
+The first live shadow run found a real inertness bug before enforcement flipped:
+the model call ran, but the receipt reported
+`decision=ambiguous confidence=0.000 reason=parse_error`. That means the
+judge was awake but its output was not being parsed, so enabling would have
+given false confidence while changing nothing.
+
+The fix is deliberately narrow:
+
+- `parse_judge_response()` now extracts the first balanced JSON object from
+  wrapped/thinking-model output before parsing.
+- The judge budget is raised from 120 to 320 tokens so the JSON object is less
+  likely to be truncated.
+- The no-regex/no-keyword structural guard still passes; the judge remains a
+  comprehension call, not a surface-word bouncer.
+
+The direct shell probe in the worktree cannot be used as a model witness on
+this box (`ConnectError('[Errno 111] Connection refused')` outside the daemon
+environment). The required proof is therefore the daemon shadow re-witness:
+receipts must show real typed decisions, not `parse_error`, before
+`MAEZ_ROUTING_COMPREHENSION_ENABLED=1` is considered.
+
 After review PASS only:
 
 1. Merge the reviewed branch.
