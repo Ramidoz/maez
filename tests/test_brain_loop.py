@@ -1045,5 +1045,193 @@ class AdapterPassesChatHistory(unittest.TestCase):
                           f"{captured_kwargs['chat_history']!r}")
 
 
+class RoutingComprehensionShadow(unittest.TestCase):
+    def _web_spec(self):
+        from core.dispatcher.spec import (
+            CompositionHint,
+            CompositionSpec,
+            ExternalSource,
+            InventoryWitness,
+            ProvenanceFraming,
+            SourceAvailability,
+            SubstrateSource,
+        )
+
+        return CompositionSpec(
+            substrate_sources=[SubstrateSource.TELEGRAM_SEMANTIC],
+            external_sources=[ExternalSource.WEB_SEARCH],
+            composition_hint=CompositionHint.PARALLEL,
+            provenance_framing=(
+                ProvenanceFraming.HYBRID_FRESH_VALIDATES_SUBSTRATE_CONTEXTUALIZES
+            ),
+            inventory_witness=InventoryWitness.MIXED,
+            source_availability={
+                SubstrateSource.TELEGRAM_SEMANTIC: SourceAvailability.EXECUTABLE_PRESENT,
+                ExternalSource.WEB_SEARCH: SourceAvailability.EXECUTABLE_PRESENT,
+            },
+            availability_limitations=[],
+            freshness_window=None,
+            trust_scope_union=None,
+        )
+
+    def test_default_off_never_calls_comprehension_judge(self):
+        from core import brain_loop
+
+        seen = {}
+        spec = self._web_spec()
+
+        with (
+            self._patched_dispatcher(brain_loop, spec, seen),
+            patch.dict(
+                os.environ,
+                {
+                    "MAEZ_RECALL_TRIAD_ENABLED": "1",
+                    "MAEZ_ROUTING_COMPREHENSION_SHADOW": "0",
+                    "MAEZ_ROUTING_COMPREHENSION_ENABLED": "0",
+                },
+            ),
+            patch(
+                "core.routing.routing_comprehension.default_judge",
+                side_effect=AssertionError("judge must not run"),
+            ),
+        ):
+            result = brain_loop.run_brain_loop(
+                "I did legs today",
+                action_engine=object(),
+                get_pipeline=lambda: None,
+                surface="telegram_surface",
+                chat_id="chat",
+            )
+
+        self.assertEqual(result, "MERGED")
+        self.assertEqual(seen["external_sources"], ["WEB_SEARCH"])
+
+    def test_shadow_logs_decision_but_external_search_still_runs(self):
+        from core import brain_loop
+        from core.routing import routing_comprehension as rc
+
+        seen = {}
+        spec = self._web_spec()
+
+        class FakeJudge:
+            def decide(self, context):
+                seen["judge_context"] = context
+                return rc.JudgeDecision(
+                    decision=rc.Decision.PERSONAL_OR_RELATIONAL,
+                    confidence=0.96,
+                    reason_code="owner_sharing_personal_state",
+                )
+
+        with (
+            self._patched_dispatcher(brain_loop, spec, seen),
+            patch.dict(
+                os.environ,
+                {
+                    "MAEZ_RECALL_TRIAD_ENABLED": "1",
+                    "MAEZ_ROUTING_COMPREHENSION_SHADOW": "1",
+                    "MAEZ_ROUTING_COMPREHENSION_ENABLED": "0",
+                },
+            ),
+            patch(
+                "core.routing.routing_comprehension.default_judge",
+                return_value=FakeJudge(),
+            ),
+        ):
+            with self.assertLogs("core.routing.routing_comprehension", level="INFO") as logs:
+                result = brain_loop.run_brain_loop(
+                    "I did legs today",
+                    action_engine=object(),
+                    get_pipeline=lambda: None,
+                    surface="telegram_surface",
+                    chat_id="chat",
+                    chat_history=[{"content": "rohit: Hey\nmaez: Hi"}],
+                )
+
+        self.assertEqual(result, "MERGED")
+        self.assertEqual(seen["external_sources"], ["WEB_SEARCH"])
+        joined = "\n".join(logs.output)
+        self.assertIn("decision=personal_or_relational", joined)
+        self.assertIn("enabled=False", joined)
+        self.assertIn("veto_applied=False", joined)
+        self.assertEqual(seen["judge_context"].current_turn, "I did legs today")
+        self.assertEqual(
+            seen["judge_context"].dialogue_tail,
+            ("rohit: Hey\nmaez: Hi",),
+        )
+        self.assertEqual(seen["judge_context"].trigger.source, "WEB_SEARCH")
+        self.assertIsNone(seen["judge_context"].prior_receipt)
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _patched_dispatcher(self, brain_loop, spec, seen):
+        from core.dispatcher.external_sources import ExternalFanoutResult
+
+        class FakeLayer0:
+            def __init__(self, *, index):
+                pass
+
+            def emit_spec(self, user_text, *, surface, inventory):
+                return spec
+
+        class FakeLayer1:
+            def __init__(self, *, adapters, branch_timeout_s=None, global_deadline_s=None):
+                pass
+
+            def run(self, spec, *, utterance, conversation_state, fanout_generation_id=None):
+                return SimpleNamespace(
+                    branch_results=(),
+                    recall_blocks=(),
+                    fanout_generation_id=fanout_generation_id,
+                    sealed_at=1.0,
+                    budget_events=(),
+                )
+
+        class FakeExternalFanout:
+            def run(self, spec, *, utterance, conversation_state, fanout_generation_id):
+                seen["external_sources"] = [
+                    source.value for source in spec.external_sources
+                ]
+                return ExternalFanoutResult(
+                    fanout_generation_id=fanout_generation_id,
+                    sealed_at=1.0,
+                    branch_results=(),
+                    fresh_blocks=(),
+                    availability_limitations=(),
+                )
+
+        class FakeFSM:
+            def apply_repair(self, **kwargs):
+                return kwargs["current_spec"]
+
+            def record_completed_spec(self, **kwargs):
+                seen["recorded_spec"] = kwargs["spec"]
+
+        def fake_merge(spec_arg, layer1_result, external_result, **kwargs):
+            return SimpleNamespace(
+                prompt_block="MERGED",
+                effective_spec=spec_arg,
+                refusal_reason=None,
+                audit_envelope={},
+                recall_items=(),
+                source_summaries=(),
+                fresh_attempt_outcome="ALL_SUCCEEDED",
+            )
+
+        with (
+            patch.object(brain_loop, "_dispatcher_index", return_value=object()),
+            patch.object(brain_loop, "_dispatcher_repair_fsm", return_value=FakeFSM()),
+            patch("core.dispatcher.layer0.Layer0Dispatcher", FakeLayer0),
+            patch("core.dispatcher.layer1.Layer1Fanout", FakeLayer1),
+            patch(
+                "core.dispatcher.external_sources.ExternalFanout",
+                return_value=FakeExternalFanout(),
+            ),
+            patch("core.dispatcher.merge.merge_fanout_results", side_effect=fake_merge),
+            patch("core.routing.observation.record_dispatcher_turn_observation"),
+        ):
+            yield
+
+
 if __name__ == "__main__":
     unittest.main()

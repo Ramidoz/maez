@@ -98,6 +98,33 @@ def _emit_search_progress(send_intermediate, external_sources, *, stage: str, co
         logging.getLogger("maez").debug("search progress emit failed", exc_info=True)
 
 
+def _routing_comprehension_dialogue_tail(chat_history) -> tuple[str, ...]:
+    if not chat_history:
+        return ()
+    out: list[str] = []
+    for exchange in list(chat_history)[-4:]:
+        if isinstance(exchange, dict):
+            text = str(exchange.get("content") or "").strip()
+        else:
+            text = str(exchange or "").strip()
+        if text:
+            out.append(text[:700])
+    return tuple(out)
+
+
+def _routing_comprehension_trigger_reason(layer0_spec, spec) -> str:
+    try:
+        if getattr(spec, "composition_hint", None):
+            return str(getattr(spec.composition_hint, "value", spec.composition_hint))
+        if getattr(layer0_spec, "to_dict", None):
+            original = layer0_spec.to_dict()
+        else:
+            original = {}
+        return str(original.get("composition_hint") or "web_search_selected")
+    except Exception:
+        return "web_search_selected"
+
+
 @dataclass(frozen=True)
 class _DispatcherPathResult:
     transcript: str = ""
@@ -755,6 +782,45 @@ def _run_dispatcher_pipeline(
         "chat_id": chat_id,
         "chat_history": chat_history,
     }
+    try:
+        from core.dispatcher.spec import ExternalSource as _RCExternalSource
+        from core.routing import routing_comprehension as _routing_comprehension
+
+        if (
+            _routing_comprehension.any_enabled()
+            and _RCExternalSource.WEB_SEARCH in list(spec.external_sources or [])
+        ):
+            _routing_comprehension_trigger = _routing_comprehension.SearchTrigger(
+                source="WEB_SEARCH",
+                reason=_routing_comprehension_trigger_reason(layer0_spec, spec),
+            )
+            _routing_comprehension_context = _routing_comprehension.JudgeContext(
+                current_turn=user_text,
+                dialogue_tail=_routing_comprehension_dialogue_tail(chat_history),
+                trigger=_routing_comprehension_trigger,
+                prior_receipt=None,
+            )
+            _routing_comprehension_decision = (
+                _routing_comprehension.default_judge().decide(
+                    _routing_comprehension_context
+                )
+            )
+            _routing_comprehension_receipt = _routing_comprehension.shadow_receipt(
+                surface=surface,
+                chat_id=chat_id,
+                decision=_routing_comprehension_decision,
+                trigger=_routing_comprehension_trigger,
+                enabled=_routing_comprehension.enabled(),
+                veto_applied=False,
+            )
+            logging.getLogger("core.routing.routing_comprehension").info(
+                _routing_comprehension_receipt
+            )
+    except Exception as _routing_comprehension_exc:
+        logging.getLogger("core.routing.routing_comprehension").debug(
+            "routing comprehension skipped: %s",
+            _routing_comprehension_exc,
+        )
     layer1 = Layer1Fanout(
         adapters=_dispatcher_recall_adapters(
             user_text,
