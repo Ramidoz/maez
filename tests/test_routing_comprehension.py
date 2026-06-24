@@ -41,12 +41,39 @@ class RoutingComprehensionPureTests(unittest.TestCase):
         self.assertEqual(out.confidence, 0.91)
         self.assertEqual(out.reason_code, "owner_sharing_personal_state")
 
+    def test_parse_valid_json_default_diagnostics_include_length_and_hash(self) -> None:
+        raw = (
+            '{"decision":"personal_or_relational","confidence":0.91,'
+            '"reason_code":"owner_sharing_personal_state"}'
+        )
+
+        out = rc.parse_judge_response(raw)
+
+        self.assertEqual(out.decision, rc.Decision.PERSONAL_OR_RELATIONAL)
+        self.assertEqual(out.diagnostics.output_chars, len(raw))
+        self.assertEqual(
+            out.diagnostics.raw_sha256,
+            hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+        )
+
     def test_parse_invalid_json_fails_to_ambiguous(self) -> None:
         out = rc.parse_judge_response("not json")
 
         self.assertEqual(out.decision, rc.Decision.AMBIGUOUS)
         self.assertEqual(out.confidence, 0.0)
         self.assertEqual(out.reason_code, "parse_error")
+
+    def test_parse_error_default_diagnostics_include_length_and_hash(self) -> None:
+        raw = "not json"
+
+        out = rc.parse_judge_response(raw)
+
+        self.assertEqual(out.reason_code, "parse_error")
+        self.assertEqual(out.diagnostics.output_chars, len(raw))
+        self.assertEqual(
+            out.diagnostics.raw_sha256,
+            hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+        )
 
     def test_parse_error_carries_content_light_diagnostics(self) -> None:
         raw = "<think>lots</think>"
