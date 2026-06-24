@@ -171,6 +171,43 @@ class LeanIdleHeartbeatTest(unittest.TestCase):
             self.assertEqual(second.skip_reason, "duplicate_recent_output")
             self.assertEqual(store.count(), 1)
 
+    def test_module_does_not_import_forbidden_organs(self) -> None:
+        src = Path("core/cognition/lean_idle_heartbeat.py").read_text()
+        for forbidden in (
+            "developmental_heartbeat",
+            "dream_state",
+            "store_core",
+            "apply_dream",
+            "memory.store",
+            "_ws_broadcast",
+            "web_search",
+            "owner replied",
+            "owner seemed pleased",
+        ):
+            self.assertNotIn(forbidden, src)
+
+    def test_receipt_contains_no_raw_prompt_or_output(self) -> None:
+        prompt_secret = "SELF CARD SECRET RAW PROMPT"
+        output_secret = "private hidden thought output"
+        result = run_lean_idle_heartbeat(
+            facts=LeanIdleFacts(
+                cycle=17,
+                doorman_reason="wake_min_floor",
+                self_card_text=prompt_secret,
+            ),
+            chat_fn=lambda **_kwargs: _FakeResponse(f"<final>{output_secret}</final>"),
+            model="test-model",
+            private_thoughts=None,
+            enabled=True,
+            shadow=False,
+        )
+
+        rendered = json.dumps(result.receipt)
+        self.assertNotIn(prompt_secret, rendered)
+        self.assertNotIn(output_secret, rendered)
+        self.assertIn("prompt_sha256", result.receipt)
+        self.assertIn("output_sha256", result.receipt)
+
 
 if __name__ == "__main__":
     unittest.main()

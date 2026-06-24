@@ -125,6 +125,23 @@ class LeanIdleDaemonTest(unittest.TestCase):
         self.assertIsNone(result)
         runner.assert_not_called()
 
+    def test_daemon_seam_keeps_non_floor_safety_wakes_legacy(self) -> None:
+        from daemon.maez_daemon import _lean_idle_heartbeat_eligible
+
+        for reason, signals in (
+            ("wake_new_failure", ("new_failure",)),
+            ("wake_open_want", ("open_want",)),
+            ("wake_memory_delta", ("memory_delta",)),
+            ("wake_scheduled", ("scheduled_due",)),
+            ("wake_perception_changed", ("perception_changed",)),
+        ):
+            with self.subTest(reason=reason):
+                self.assertFalse(
+                    _lean_idle_heartbeat_eligible(
+                        _gate(floor=False, reason=reason, signals=signals)
+                    )
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
