@@ -61,6 +61,15 @@ class PrivateNote:
 
 
 @dataclass(frozen=True)
+class ModelDiagnostics:
+    output_chars: int = 0
+    finish_reason: str = ""
+    backend: str = ""
+    thinking_suppressed: bool = False
+    raw_sha256: str = ""
+
+
+@dataclass(frozen=True)
 class LeanIdleResult:
     intercepted: bool
     stored: bool
@@ -72,6 +81,10 @@ class LeanIdleResult:
 
 def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def _sha256_full(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _compact(text: object) -> str:
@@ -142,6 +155,16 @@ def _response_content(response: object) -> str:
     return str(response or "")
 
 
+def _response_diagnostics(raw: str, response: object) -> ModelDiagnostics:
+    return ModelDiagnostics(
+        output_chars=len(str(raw or "")),
+        finish_reason=_compact(getattr(response, "finish_reason", ""))[:80],
+        backend=_compact(getattr(response, "backend", ""))[:80],
+        thinking_suppressed=bool(getattr(response, "thinking_suppressed", False)),
+        raw_sha256=_sha256_full(raw),
+    )
+
+
 def _recent_output_hashes(private_thoughts: object, *, limit: int = 3) -> set[str]:
     try:
         rows = private_thoughts.recent(limit=20)
@@ -168,10 +191,12 @@ def _base_receipt(
     mode: str,
     llm_called: bool,
     note: PrivateNote | None = None,
+    diagnostics: ModelDiagnostics | None = None,
     skip_reason: str = "none",
     would_store: bool = False,
     stored: bool = False,
 ) -> dict[str, object]:
+    diagnostics = diagnostics or ModelDiagnostics()
     return {
         "schema_version": HEARTBEAT_VERSION,
         "eligible": True,
@@ -185,7 +210,12 @@ def _base_receipt(
         "would_store": bool(would_store),
         "stored": bool(stored),
         "skip_reason": skip_reason,
-        "output_chars": 0 if note is None else note.chars,
+        "output_chars": diagnostics.output_chars,
+        "finish_reason": diagnostics.finish_reason,
+        "backend": diagnostics.backend,
+        "thinking_suppressed": diagnostics.thinking_suppressed,
+        "raw_sha256": diagnostics.raw_sha256,
+        "note_chars": 0 if note is None else note.chars,
         "output_sha256": "" if note is None else note.sha256,
     }
 
@@ -218,15 +248,23 @@ def run_lean_idle_heartbeat(
             {"role": "user", "content": prompt.text},
         ],
         think=False,
-        options={"temperature": 0.35, "num_predict": 220},
+        options={
+            "temperature": 0.35,
+            "num_predict": 220,
+            "chat_template_kwargs": {"enable_thinking": False},
+        },
+        purpose="lean_idle_heartbeat",
     )
-    note = sanitize_private_note(_response_content(response))
+    raw_response = _response_content(response)
+    diagnostics = _response_diagnostics(raw_response, response)
+    note = sanitize_private_note(raw_response)
     if note is None:
         receipt = _base_receipt(
             prompt=prompt,
             facts=facts,
             mode=mode,
             llm_called=True,
+            diagnostics=diagnostics,
             skip_reason="heartbeat_ok_or_rejected",
         )
         return LeanIdleResult(
@@ -245,6 +283,7 @@ def run_lean_idle_heartbeat(
             mode=mode,
             llm_called=True,
             note=note,
+            diagnostics=diagnostics,
             would_store=True,
             stored=False,
         )
@@ -257,6 +296,7 @@ def run_lean_idle_heartbeat(
             mode=mode,
             llm_called=True,
             note=note,
+            diagnostics=diagnostics,
             would_store=True,
             stored=False,
             skip_reason="private_thoughts_unavailable",
@@ -277,6 +317,7 @@ def run_lean_idle_heartbeat(
             mode=mode,
             llm_called=True,
             note=note,
+            diagnostics=diagnostics,
             would_store=True,
             stored=False,
             skip_reason="duplicate_recent_output",
@@ -299,6 +340,11 @@ def run_lean_idle_heartbeat(
             "prompt_sha256": prompt.sha256,
             "output_chars": note.chars,
             "output_sha256": note.sha256,
+            "model_output_chars": diagnostics.output_chars,
+            "finish_reason": diagnostics.finish_reason,
+            "backend": diagnostics.backend,
+            "thinking_suppressed": diagnostics.thinking_suppressed,
+            "raw_sha256": diagnostics.raw_sha256,
             "model": str(model),
             "producer_version": HEARTBEAT_VERSION,
             "fact_keys": list(prompt.fact_keys),
@@ -313,6 +359,7 @@ def run_lean_idle_heartbeat(
         mode=mode,
         llm_called=True,
         note=note,
+        diagnostics=diagnostics,
         would_store=True,
         stored=True,
     )

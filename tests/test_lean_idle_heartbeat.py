@@ -22,8 +22,18 @@ class _FakeMessage:
 
 
 class _FakeResponse:
-    def __init__(self, content: str):
+    def __init__(
+        self,
+        content: str,
+        *,
+        finish_reason: str = "",
+        backend: str = "",
+        thinking_suppressed: bool = False,
+    ):
         self.message = _FakeMessage(content)
+        self.finish_reason = finish_reason
+        self.backend = backend
+        self.thinking_suppressed = thinking_suppressed
 
 
 class LeanIdleHeartbeatTest(unittest.TestCase):
@@ -252,6 +262,62 @@ class LeanIdleHeartbeatTest(unittest.TestCase):
         self.assertNotIn(output_secret, rendered)
         self.assertIn("prompt_sha256", result.receipt)
         self.assertIn("output_sha256", result.receipt)
+
+    def test_quiet_receipt_records_raw_model_diagnostics_without_text(self) -> None:
+        raw = HEARTBEAT_OK
+
+        result = run_lean_idle_heartbeat(
+            facts=LeanIdleFacts(
+                cycle=19,
+                doorman_reason="wake_min_floor",
+                self_card_text="SELF CARD\n- Bond: partnership",
+            ),
+            chat_fn=lambda **_kwargs: _FakeResponse(
+                raw,
+                finish_reason="stop",
+                backend="primary_openai",
+                thinking_suppressed=True,
+            ),
+            model="test-model",
+            private_thoughts=None,
+            enabled=False,
+            shadow=True,
+        )
+
+        rendered = json.dumps(result.receipt)
+        self.assertEqual(result.receipt["output_chars"], len(raw))
+        self.assertEqual(result.receipt["finish_reason"], "stop")
+        self.assertEqual(result.receipt["backend"], "primary_openai")
+        self.assertTrue(result.receipt["thinking_suppressed"])
+        self.assertIn("raw_sha256", result.receipt)
+        self.assertNotIn(raw, rendered)
+
+    def test_model_call_uses_thinking_suppression_template_kwargs(self) -> None:
+        calls: list[dict] = []
+
+        def chat_fn(**kwargs):
+            calls.append(kwargs)
+            return _FakeResponse(HEARTBEAT_OK)
+
+        run_lean_idle_heartbeat(
+            facts=LeanIdleFacts(
+                cycle=20,
+                doorman_reason="wake_min_floor",
+                self_card_text="SELF CARD\n- Bond: partnership",
+            ),
+            chat_fn=chat_fn,
+            model="test-model",
+            private_thoughts=None,
+            enabled=False,
+            shadow=True,
+        )
+
+        self.assertEqual(calls[0]["think"], False)
+        self.assertEqual(calls[0]["purpose"], "lean_idle_heartbeat")
+        self.assertEqual(
+            calls[0]["options"]["chat_template_kwargs"],
+            {"enable_thinking": False},
+        )
 
 
 if __name__ == "__main__":

@@ -81,6 +81,10 @@ class LeanIdleDaemonTest(unittest.TestCase):
 
         self.assertIsNone(result)
         runner.assert_called_once()
+        self.assertEqual(
+            runner.call_args.kwargs["chat_fn"].__name__,
+            "chat_direct",
+        )
 
     def test_enabled_floor_wake_returns_heartbeat_ok(self) -> None:
         from daemon.maez_daemon import MaezDaemon, _HEARTBEAT_OK

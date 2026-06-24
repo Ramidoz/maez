@@ -5019,7 +5019,7 @@ class MaezDaemon:
                     self_card_text=self._lean_idle_self_card_text(),
                     private_signal_summary=self._lean_idle_private_signal_summary(),
                 ),
-                chat_fn=_llm_client.chat,
+                chat_fn=_llm_client.chat_direct,
                 model=MODEL,
                 private_thoughts=getattr(self, "private_thoughts", None),
                 enabled=enabled,
