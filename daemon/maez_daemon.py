@@ -4992,6 +4992,90 @@ class MaezDaemon:
         except Exception:
             return {}
 
+    def _lean_idle_time_facts(self) -> dict:
+        try:
+            rctx = self._time_sense_handle().rhythm_context()
+            if not isinstance(rctx, dict):
+                return {}
+            mapping = {
+                "owner_contact_gap_s": rctx.get("rhythm_current_gap_s"),
+                "recent_usual_gap_s": rctx.get("rhythm_recent_gap_median_s"),
+                "all_time_usual_gap_s": rctx.get("rhythm_all_time_gap_median_s"),
+                "gap_percentile_all_time": rctx.get(
+                    "rhythm_current_gap_percentile_all_time"
+                ),
+            }
+            return {key: value for key, value in mapping.items() if value is not None}
+        except Exception:
+            return {}
+
+    def _lean_idle_body_state(self) -> dict:
+        state: dict = {}
+        try:
+            op = self._operator_health()
+            if isinstance(op, dict):
+                overall = op.get("mode")
+                if isinstance(overall, str) and overall:
+                    state["daemon_overall"] = overall
+                backup = op.get("backup_freshness_class")
+                if isinstance(backup, str) and backup:
+                    state["backup_freshness"] = backup
+        except Exception:
+            pass
+        try:
+            wd = self._watchdog_health()
+            watchdog = wd.get("watchdog_state") if isinstance(wd, dict) else None
+            if isinstance(watchdog, str) and watchdog:
+                state["watchdog"] = watchdog
+        except Exception:
+            pass
+        return state
+
+    def _lean_idle_open_loops(self) -> dict:
+        try:
+            count = 0
+            classes: list[str] = []
+            saw_seam = False
+            wants = getattr(self, "wants", None)
+            if wants is not None and hasattr(wants, "active_wants"):
+                saw_seam = True
+                active = list(wants.active_wants(limit=50) or [])
+                if active:
+                    count += len(active)
+                    classes.append("wants")
+            try:
+                cards = self._want_pursuit_card_store()
+                if cards is not None and hasattr(cards, "list_open_by_action"):
+                    saw_seam = True
+                    from core.evolution.want_pursuit_bridge import (
+                        TERMINAL_PROPOSAL_ACTION,
+                    )
+
+                    pending = list(
+                        cards.list_open_by_action(TERMINAL_PROPOSAL_ACTION) or []
+                    )
+                    if pending:
+                        count += len(pending)
+                        classes.append("proposals")
+            except Exception:
+                pass
+            if not saw_seam:
+                return {}
+            return {"open_loop_count": count, "open_loop_classes": classes}
+        except Exception:
+            return {}
+
+    def _lean_idle_recent_private_thoughts(self) -> tuple:
+        try:
+            store = getattr(self, "private_thoughts", None)
+            if store is None:
+                return ()
+            from core.cognition.lean_idle_heartbeat import select_private_reader_thoughts
+
+            return select_private_reader_thoughts(store.recent(limit=20))
+        except Exception:
+            return ()
+
     def _maybe_run_lean_idle_heartbeat(
         self,
         snap: dict,
