@@ -91,8 +91,17 @@ class DeriveOutcomeTest(unittest.TestCase):
 
 
 class AssignArmTest(unittest.TestCase):
+    def test_cold_start_gets_own_arm_not_control_none(self) -> None:
+        arm, rows = assign_arm([], pulse_signature="anything", cold_start=True)
+
+        self.assertEqual(arm, "cold_start")
+        self.assertEqual(
+            list(rows),
+            [{"fact_key": "none", "change_kind": "none"}],
+        )
+
     def test_no_change_is_control_none_with_sentinel(self) -> None:
-        arm, rows = assign_arm([], pulse_signature="anything")
+        arm, rows = assign_arm([], pulse_signature="anything", cold_start=False)
 
         self.assertEqual(WITHHOLD_EVERY, 5)
         self.assertEqual(arm, "control_none")
@@ -104,7 +113,9 @@ class AssignArmTest(unittest.TestCase):
     def test_change_preserves_fact_identity(self) -> None:
         proposals = [{"fact_key": "time_facts", "change_kind": "changed"}]
 
-        arm, rows = assign_arm(proposals, pulse_signature="sig-not-withheld")
+        arm, rows = assign_arm(
+            proposals, pulse_signature="sig-not-withheld", cold_start=False
+        )
 
         self.assertIn(arm, ("proposed", "control_withheld"))
         self.assertEqual(list(rows), proposals)
@@ -114,14 +125,18 @@ class AssignArmTest(unittest.TestCase):
         signature = None
         for i in range(100):
             candidate = f"sig-X-{i}"
-            arm, _ = assign_arm(proposals, pulse_signature=candidate)
+            arm, _ = assign_arm(proposals, pulse_signature=candidate, cold_start=False)
             if arm == "control_withheld":
                 signature = candidate
                 break
         self.assertIsNotNone(signature)
 
-        first_arm, first_rows = assign_arm(proposals, pulse_signature=signature)
-        second_arm, second_rows = assign_arm(proposals, pulse_signature=signature)
+        first_arm, first_rows = assign_arm(
+            proposals, pulse_signature=signature, cold_start=False
+        )
+        second_arm, second_rows = assign_arm(
+            proposals, pulse_signature=signature, cold_start=False
+        )
 
         self.assertEqual(first_arm, second_arm)
         self.assertEqual(first_arm, "control_withheld")

@@ -62,10 +62,15 @@ def derive_outcome(window_results: list[dict] | None) -> dict:
 def assign_arm(
     proposals: list[dict] | None,
     pulse_signature: str,
+    *,
+    cold_start: bool = False,
 ) -> tuple[str, tuple[dict, ...]]:
     """Assign a counterfactual arm without judging or steering."""
+    sentinel = ({"fact_key": "none", "change_kind": "none"},)
+    if cold_start:
+        return "cold_start", sentinel
     if not proposals:
-        return "control_none", ({"fact_key": "none", "change_kind": "none"},)
+        return "control_none", sentinel
     digest = int(hashlib.sha256(str(pulse_signature).encode("utf-8")).hexdigest(), 16)
     arm = "control_withheld" if digest % WITHHOLD_EVERY == 0 else "proposed"
     rows = tuple(
