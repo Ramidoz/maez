@@ -3455,6 +3455,9 @@ class MaezDaemon:
         self._presence_cycle_counter = 0
         self.PRESENCE_EVERY_N_CYCLES = 2  # every ~60 seconds
         self._salience_broker_baseline: dict | None = None
+        self._salience_pending: dict | None = None
+        self._salience_pulse_seq = 0
+        self._salience_ledger = None
         self._greeted_this_session = False
         self._last_departure_time: float | None = None
         self._last_greeted_at = 0.0
@@ -5114,6 +5117,82 @@ class MaezDaemon:
         logger.info("salience_broker receipt=%s", json.dumps(receipt, sort_keys=True))
         return receipt
 
+    def _salience_ledger_get(self):
+        ledger = getattr(self, "_salience_ledger", None)
+        if ledger is not None:
+            return ledger
+        from core.cognition.salience_ledger import (
+            SalienceLedger,
+            salience_ledger_db_path,
+        )
+
+        ledger = SalienceLedger(salience_ledger_db_path())
+        self._salience_ledger = ledger
+        return ledger
+
+    def _record_salience_outcomes(
+        self,
+        proposals: list,
+        heartbeat_outcome: dict,
+        *,
+        strategy: str,
+    ) -> str | None:
+        if not _salience_broker_shadow_enabled():
+            return None
+        from core.cognition.salience_ledger import derive_outcome
+
+        self._salience_pulse_seq = int(getattr(self, "_salience_pulse_seq", 0)) + 1
+        pulse_id = f"seq{self._salience_pulse_seq}"
+        current = {
+            "pulse_id": pulse_id,
+            "strategy": str(strategy or "changed_since_last"),
+            "proposals": list(proposals or []),
+            "outcome": dict(heartbeat_outcome or {}),
+        }
+        prior = getattr(self, "_salience_pending", None)
+        if prior is not None and prior.get("proposals"):
+            try:
+                outcome = derive_outcome([prior.get("outcome", {}), current["outcome"]])
+                ledger = self._salience_ledger_get()
+                prior_strategy = str(prior.get("strategy") or "changed_since_last")
+                for proposal in prior.get("proposals", []):
+                    fact_key = str(proposal.get("fact_key", ""))
+                    change_kind = str(proposal.get("change_kind", ""))
+                    proposal_hash = hashlib.sha256(
+                        json.dumps(
+                            {
+                                "pulse_id": prior["pulse_id"],
+                                "strategy": prior_strategy,
+                                "fact_key": fact_key,
+                                "change_kind": change_kind,
+                            },
+                            sort_keys=True,
+                        ).encode("utf-8")
+                    ).hexdigest()[:16]
+                    ledger.record(
+                        pulse_id=prior["pulse_id"],
+                        strategy=prior_strategy,
+                        fact_key=fact_key,
+                        change_kind=change_kind,
+                        proposal_hash=proposal_hash,
+                        outcome=outcome,
+                    )
+            except Exception as exc:
+                logger.info(
+                    "salience_ledger receipt=%s",
+                    json.dumps(
+                        {
+                            "schema_version": "salience_ledger.v0",
+                            "skip_reason": "error",
+                            "error_class": exc.__class__.__name__,
+                            "proposal_count": len(prior.get("proposals", [])),
+                        },
+                        sort_keys=True,
+                    ),
+                )
+        self._salience_pending = current
+        return pulse_id
+
     def _maybe_run_lean_idle_heartbeat(
         self,
         snap: dict,
@@ -5131,9 +5210,25 @@ class MaezDaemon:
             "open_loops": self._lean_idle_open_loops(),
             "recent_private_thoughts": self._lean_idle_recent_private_thoughts(),
         }
+        broker_receipt = None
+        proposals = []
+        strategy = "changed_since_last"
         if broker_active:
-            self._maybe_run_salience_broker(window)
+            broker_receipt = self._maybe_run_salience_broker(window)
+            if broker_receipt:
+                proposals = list(broker_receipt.get("proposals", []) or [])
+                strategy = str(broker_receipt.get("strategy") or strategy)
         if not heartbeat_active:
+            if broker_active:
+                self._record_salience_outcomes(
+                    proposals,
+                    {
+                        "note_chars": 0,
+                        "stored": False,
+                        "skip_reason": "heartbeat_ok_or_rejected",
+                    },
+                    strategy=strategy,
+                )
             return None
         enabled = _lean_idle_heartbeat_enabled()
         shadow = _lean_idle_heartbeat_shadow_enabled()
@@ -5166,29 +5261,51 @@ class MaezDaemon:
         except BrainPreempted:
             raise
         except Exception as exc:
+            error_receipt = {
+                "schema_version": "lean_idle_heartbeat.v0",
+                "eligible": True,
+                "mode": "enabled" if enabled else "shadow",
+                "cycle": int(getattr(self, "cycle_count", 0)),
+                "doorman_reason": str(getattr(gate_decision, "reason_code", "")),
+                "llm_called": False,
+                "stored": False,
+                "skip_reason": "error",
+                "error_class": exc.__class__.__name__,
+            }
             logger.info(
                 "lean_idle_heartbeat receipt=%s",
-                json.dumps(
-                    {
-                        "schema_version": "lean_idle_heartbeat.v0",
-                        "eligible": True,
-                        "mode": "enabled" if enabled else "shadow",
-                        "cycle": int(getattr(self, "cycle_count", 0)),
-                        "doorman_reason": str(getattr(gate_decision, "reason_code", "")),
-                        "llm_called": False,
-                        "stored": False,
-                        "skip_reason": "error",
-                        "error_class": exc.__class__.__name__,
-                    },
-                    sort_keys=True,
-                ),
+                json.dumps(error_receipt, sort_keys=True),
             )
+            if broker_active:
+                self._record_salience_outcomes(
+                    proposals,
+                    {"note_chars": 0, "stored": False, "skip_reason": "error"},
+                    strategy=strategy,
+                )
             return _HEARTBEAT_OK if enabled else None
 
         logger.info(
             "lean_idle_heartbeat receipt=%s",
             json.dumps(result.receipt, sort_keys=True),
         )
+        if broker_active:
+            receipt = getattr(result, "receipt", {}) or {}
+            self._record_salience_outcomes(
+                proposals,
+                {
+                    "note_chars": int(receipt.get("note_chars") or 0),
+                    "stored": bool(getattr(result, "stored", receipt.get("stored", False))),
+                    "skip_reason": str(
+                        getattr(
+                            result,
+                            "skip_reason",
+                            receipt.get("skip_reason", "heartbeat_ok_or_rejected"),
+                        )
+                        or "heartbeat_ok_or_rejected"
+                    ),
+                },
+                strategy=strategy,
+            )
         return result.return_text if result.intercepted else None
 
     def _trf_apply_fragment_guard(
