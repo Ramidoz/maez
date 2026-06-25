@@ -69,7 +69,19 @@ class SalienceBrokerTest(unittest.TestCase):
         receipt = broker_receipt(propose_changes(current, baseline), cold_start=False)
         blob = str(receipt).lower()
 
-        for forbidden in ("important", "unusual", "deserves", "matters", "should", "secret"):
+        for forbidden in (
+            "importance",
+            "important",
+            "notable",
+            "priority",
+            "score",
+            "secret",
+            "should",
+            "unusual",
+            "urgent",
+            "deserves",
+            "matters",
+        ):
             self.assertNotIn(forbidden, blob)
         self.assertEqual(receipt["strategy"], STRATEGY)
         self.assertEqual(receipt["watched_keys"], list(WATCHED_KEYS))

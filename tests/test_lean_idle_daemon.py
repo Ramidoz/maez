@@ -352,6 +352,32 @@ class LeanIdleDaemonTest(unittest.TestCase):
         self.assertEqual(facts.open_loops["open_loop_count"], 2)
         self.assertEqual(facts.recent_private_thoughts, ("a prior thought",))
 
+    def test_heartbeat_shadow_without_broker_leaves_broker_baseline_untouched(self) -> None:
+        from daemon.maez_daemon import MaezDaemon
+        import core.cognition.lean_idle_heartbeat as lih
+
+        daemon = object.__new__(MaezDaemon)
+        daemon.cycle_count = 8
+        daemon.private_thoughts = None
+        daemon._salience_broker_baseline = None
+        daemon._lean_idle_self_card_text = lambda: "SELF"
+        daemon._lean_idle_private_signal_summary = lambda: {}
+        daemon._lean_idle_time_facts = lambda: {"owner_contact_gap_s": 60}
+        daemon._lean_idle_body_state = lambda: {"watchdog": "ok"}
+        daemon._lean_idle_open_loops = lambda: {}
+        daemon._lean_idle_recent_private_thoughts = lambda: ()
+
+        def capture(*, facts, **kwargs):
+            return lih.LeanIdleResult(False, False, None, None, "shadow_only", {})
+
+        with mock.patch.dict(
+            "os.environ", {"MAEZ_LEAN_IDLE_HEARTBEAT_SHADOW": "1"}, clear=True
+        ):
+            with mock.patch.object(lih, "run_lean_idle_heartbeat", capture):
+                daemon._maybe_run_lean_idle_heartbeat({}, _gate())
+
+        self.assertIsNone(daemon._salience_broker_baseline)
+
     def test_shadow_calls_runner_but_does_not_intercept(self) -> None:
         from daemon.maez_daemon import MaezDaemon
 
