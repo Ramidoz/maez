@@ -7,6 +7,7 @@ from core.cognition.salience_broker import (
     WATCHED_KEYS,
     broker_receipt,
     fact_signatures,
+    percentile_band,
     propose_changes,
 )
 
@@ -28,8 +29,22 @@ class SalienceBrokerTest(unittest.TestCase):
         self.assertEqual(propose_changes(current, None), [])
 
     def test_changed_fact_is_proposed_as_observation(self) -> None:
-        baseline = fact_signatures(self._facts(time_facts={"owner_contact_gap_s": 30}))
-        current = fact_signatures(self._facts(time_facts={"owner_contact_gap_s": 999}))
+        baseline = fact_signatures(
+            self._facts(
+                time_facts={
+                    "owner_contact_gap_s": 30,
+                    "gap_percentile_all_time": 40,
+                }
+            )
+        )
+        current = fact_signatures(
+            self._facts(
+                time_facts={
+                    "owner_contact_gap_s": 999,
+                    "gap_percentile_all_time": 95,
+                }
+            )
+        )
 
         proposals = propose_changes(current, baseline)
 
@@ -88,4 +103,76 @@ class SalienceBrokerTest(unittest.TestCase):
         self.assertEqual(
             receipt["proposals"],
             [{"fact_key": "body_state", "change_kind": "changed"}],
+        )
+
+
+def _time_window(percentile, gap):
+    return {
+        "time_facts": {
+            "owner_contact_gap_s": gap,
+            "gap_percentile_all_time": percentile,
+        },
+        "body_state": {},
+        "open_loops": {},
+        "recent_private_thoughts": (),
+    }
+
+
+class TimeFactsProjectionTest(unittest.TestCase):
+    def test_within_band_is_no_change(self) -> None:
+        baseline = fact_signatures(_time_window(91, 30000))
+        current = fact_signatures(_time_window(93, 33000))
+
+        self.assertEqual(propose_changes(current, baseline), [])
+
+    def test_band_crossing_is_change(self) -> None:
+        baseline = fact_signatures(_time_window(60, 100))
+        current = fact_signatures(_time_window(95, 200))
+
+        proposals = propose_changes(current, baseline)
+
+        self.assertEqual([proposal.fact_key for proposal in proposals], ["time_facts"])
+
+    def test_reset_shows_as_downward_band_change(self) -> None:
+        baseline = fact_signatures(_time_window(95, 999999))
+        current = fact_signatures(_time_window(5, 10))
+
+        proposals = propose_changes(current, baseline)
+
+        self.assertEqual([proposal.fact_key for proposal in proposals], ["time_facts"])
+
+    def test_raw_gap_excluded_from_time_signature(self) -> None:
+        baseline = fact_signatures(_time_window(95, 100))
+        current = fact_signatures(_time_window(95, 999999))
+
+        self.assertEqual(baseline["time_facts"], current["time_facts"])
+
+    def test_percentile_band_coarse_labels(self) -> None:
+        self.assertEqual(percentile_band(10), "ordinary")
+        self.assertEqual(percentile_band(60), "elevated")
+        self.assertEqual(percentile_band(80), "unusual")
+        self.assertEqual(percentile_band(95), "extreme")
+        self.assertEqual(percentile_band(None), "unknown")
+
+    def test_other_facts_unchanged(self) -> None:
+        baseline = fact_signatures(
+            {
+                "time_facts": {},
+                "body_state": {"watchdog": "ok"},
+                "open_loops": {},
+                "recent_private_thoughts": (),
+            }
+        )
+        current = fact_signatures(
+            {
+                "time_facts": {},
+                "body_state": {"watchdog": "stale"},
+                "open_loops": {},
+                "recent_private_thoughts": (),
+            }
+        )
+
+        self.assertEqual(
+            [proposal.fact_key for proposal in propose_changes(current, baseline)],
+            ["body_state"],
         )

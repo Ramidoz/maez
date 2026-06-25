@@ -14,6 +14,9 @@ import json
 BROKER_VERSION = "salience_broker.v0"
 STRATEGY = "changed_since_last"
 WATCHED_KEYS = ("time_facts", "body_state", "open_loops", "recent_private_thoughts")
+_BAND_ORDINARY_MAX = 50.0
+_BAND_ELEVATED_MAX = 75.0
+_BAND_UNUSUAL_MAX = 90.0
 
 
 @dataclass(frozen=True)
@@ -30,9 +33,38 @@ def _signature(value: object) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
+def percentile_band(percentile: object) -> str:
+    if percentile is None:
+        return "unknown"
+    try:
+        value = float(percentile)
+    except (TypeError, ValueError):
+        return "unknown"
+    if value < _BAND_ORDINARY_MAX:
+        return "ordinary"
+    if value < _BAND_ELEVATED_MAX:
+        return "elevated"
+    if value < _BAND_UNUSUAL_MAX:
+        return "unusual"
+    return "extreme"
+
+
+def _project_for_salience(key: str, value: object) -> object:
+    if key == "time_facts" and isinstance(value, Mapping):
+        return {
+            "percentile_band": percentile_band(
+                value.get("gap_percentile_all_time")
+            )
+        }
+    return value
+
+
 def fact_signatures(facts: Mapping[str, object]) -> dict[str, str]:
     window = facts or {}
-    return {key: _signature(window.get(key)) for key in WATCHED_KEYS}
+    return {
+        key: _signature(_project_for_salience(key, window.get(key)))
+        for key in WATCHED_KEYS
+    }
 
 
 def _change_kind(baseline_signature: str, current_signature: str) -> str:
