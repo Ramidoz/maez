@@ -109,10 +109,76 @@ def _content_light_json(value: Mapping[str, object] | None) -> str:
     return json.dumps(safe, sort_keys=True)
 
 
+def _render_facts_block(title: str, items: list[tuple[str, object]]) -> str:
+    lines = [f"- {key}: {value}" for key, value in items if value is not None]
+    if not lines:
+        return ""
+    return f"\n{title}\n" + "\n".join(lines) + "\n"
+
+
+def _time_block(time_facts: Mapping[str, object] | None) -> str:
+    if not time_facts:
+        return ""
+    order = (
+        "owner_contact_gap_s",
+        "recent_usual_gap_s",
+        "all_time_usual_gap_s",
+        "gap_percentile_all_time",
+    )
+    return _render_facts_block("TIME", [(key, time_facts.get(key)) for key in order])
+
+
+def _body_block(body_state: Mapping[str, object] | None) -> str:
+    if not body_state:
+        return ""
+    order = ("daemon_overall", "watchdog", "backup_freshness")
+    return _render_facts_block("BODY", [(key, body_state.get(key)) for key in order])
+
+
+def _loops_block(open_loops: Mapping[str, object] | None) -> str:
+    if not open_loops:
+        return ""
+    classes = open_loops.get("open_loop_classes") or []
+    classes_str = ", ".join(str(item) for item in classes) if classes else None
+    return _render_facts_block(
+        "OPEN LOOPS",
+        [
+            ("open_loop_count", open_loops.get("open_loop_count")),
+            ("open_loop_classes", classes_str),
+        ],
+    )
+
+
+def _recent_thoughts_block(thoughts: tuple[str, ...]) -> str:
+    if not thoughts:
+        return ""
+    body = "\n".join(
+        f'- "{_compact(thought)}"'
+        for thought in thoughts
+        if _compact(thought)
+    )
+    if not body:
+        return ""
+    return (
+        "\nRECENT PRIVATE THOUGHTS\n"
+        "These are what you already thought; only carry something new, not a restatement.\n"
+        f"{body}\n"
+    )
+
+
 def build_lean_idle_prompt(facts: LeanIdleFacts) -> LeanIdlePrompt:
     self_card = _compact(facts.self_card_text)
     private_summary = _content_light_json(facts.private_signal_summary)
-    fact_keys = ("self_card", "cycle", "doorman_reason", "private_signal_summary")
+    fact_keys = (
+        "self_card",
+        "cycle",
+        "doorman_reason",
+        "private_signal_summary",
+        "time_facts",
+        "body_state",
+        "open_loops",
+        "recent_private_thoughts",
+    )
     text = (
         "LEAN IDLE HEARTBEAT\n"
         "This is a private notebook beat, not a reply to the owner.\n"
@@ -125,6 +191,10 @@ def build_lean_idle_prompt(facts: LeanIdleFacts) -> LeanIdlePrompt:
         f"- private_signal_summary: {private_summary}\n\n"
         "SELF CARD\n"
         f"{self_card}\n"
+        + _time_block(facts.time_facts)
+        + _body_block(facts.body_state)
+        + _loops_block(facts.open_loops)
+        + _recent_thoughts_block(facts.recent_private_thoughts)
     )
     return LeanIdlePrompt(
         text=text,

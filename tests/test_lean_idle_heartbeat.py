@@ -86,6 +86,69 @@ class LeanIdleHeartbeatTest(unittest.TestCase):
         self.assertEqual(prompt.version, HEARTBEAT_VERSION)
         self.assertIn("self_card", prompt.fact_keys)
 
+    def test_prompt_renders_time_body_loops_and_recent_thoughts(self) -> None:
+        prompt = build_lean_idle_prompt(
+            LeanIdleFacts(
+                cycle=7,
+                doorman_reason="wake_min_floor",
+                self_card_text="SELF",
+                time_facts={
+                    "owner_contact_gap_s": 3600,
+                    "recent_usual_gap_s": 1800,
+                    "all_time_usual_gap_s": 2400,
+                    "gap_percentile_all_time": 82,
+                },
+                body_state={
+                    "daemon_overall": "degraded",
+                    "watchdog": "ok",
+                    "backup_freshness": "unavailable",
+                },
+                open_loops={
+                    "open_loop_count": 3,
+                    "open_loop_classes": ["wants", "routing_shadow"],
+                },
+                recent_private_thoughts=("I keep returning to the routing question",),
+            )
+        )
+
+        self.assertIn("owner_contact_gap_s: 3600", prompt.text)
+        self.assertIn("gap_percentile_all_time: 82", prompt.text)
+        self.assertIn("backup_freshness: unavailable", prompt.text)
+        self.assertIn("open_loop_count: 3", prompt.text)
+        self.assertIn("routing_shadow", prompt.text)
+        self.assertIn("I keep returning to the routing question", prompt.text)
+        self.assertIn("only carry something new", prompt.text.lower())
+
+    def test_prompt_omits_recent_usual_gap_when_none(self) -> None:
+        prompt = build_lean_idle_prompt(
+            LeanIdleFacts(
+                cycle=1,
+                doorman_reason="wake_min_floor",
+                self_card_text="SELF",
+                time_facts={
+                    "owner_contact_gap_s": 10,
+                    "recent_usual_gap_s": None,
+                    "all_time_usual_gap_s": 20,
+                    "gap_percentile_all_time": 5,
+                },
+            )
+        )
+
+        self.assertIn("owner_contact_gap_s: 10", prompt.text)
+        self.assertNotIn("recent_usual_gap_s", prompt.text)
+
+    def test_prompt_unchanged_shape_when_no_evolving_material(self) -> None:
+        prompt = build_lean_idle_prompt(
+            LeanIdleFacts(
+                cycle=1,
+                doorman_reason="wake_min_floor",
+                self_card_text="SELF",
+            )
+        )
+
+        self.assertNotIn("TIME", prompt.text)
+        self.assertNotIn("OPEN LOOPS", prompt.text)
+
     def test_prompt_does_not_assign_feelings(self) -> None:
         prompt = build_lean_idle_prompt(
             LeanIdleFacts(
