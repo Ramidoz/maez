@@ -5136,33 +5136,38 @@ class MaezDaemon:
         heartbeat_outcome: dict,
         *,
         strategy: str,
+        pulse_signature: str,
     ) -> str | None:
         if not _salience_broker_shadow_enabled():
             return None
-        from core.cognition.salience_ledger import derive_outcome
+        from core.cognition.salience_ledger import assign_arm, derive_outcome
 
         self._salience_pulse_seq = int(getattr(self, "_salience_pulse_seq", 0)) + 1
         pulse_id = f"seq{self._salience_pulse_seq}"
+        arm, rows = assign_arm(list(proposals or []), pulse_signature)
         current = {
             "pulse_id": pulse_id,
             "strategy": str(strategy or "changed_since_last"),
-            "proposals": list(proposals or []),
+            "arm": arm,
+            "rows": [dict(row) for row in rows],
             "outcome": dict(heartbeat_outcome or {}),
         }
         prior = getattr(self, "_salience_pending", None)
-        if prior is not None and prior.get("proposals"):
+        if prior is not None:
             try:
                 outcome = derive_outcome([prior.get("outcome", {}), current["outcome"]])
                 ledger = self._salience_ledger_get()
                 prior_strategy = str(prior.get("strategy") or "changed_since_last")
-                for proposal in prior.get("proposals", []):
-                    fact_key = str(proposal.get("fact_key", ""))
-                    change_kind = str(proposal.get("change_kind", ""))
+                prior_arm = str(prior.get("arm") or "proposed")
+                for row in prior.get("rows", []):
+                    fact_key = str(row.get("fact_key", ""))
+                    change_kind = str(row.get("change_kind", ""))
                     proposal_hash = hashlib.sha256(
                         json.dumps(
                             {
                                 "pulse_id": prior["pulse_id"],
                                 "strategy": prior_strategy,
+                                "arm": prior_arm,
                                 "fact_key": fact_key,
                                 "change_kind": change_kind,
                             },
@@ -5172,6 +5177,7 @@ class MaezDaemon:
                     ledger.record(
                         pulse_id=prior["pulse_id"],
                         strategy=prior_strategy,
+                        arm=prior_arm,
                         fact_key=fact_key,
                         change_kind=change_kind,
                         proposal_hash=proposal_hash,
@@ -5185,7 +5191,8 @@ class MaezDaemon:
                             "schema_version": "salience_ledger.v0",
                             "skip_reason": "error",
                             "error_class": exc.__class__.__name__,
-                            "proposal_count": len(prior.get("proposals", [])),
+                            "arm": str(prior.get("arm") or ""),
+                            "row_count": len(prior.get("rows", [])),
                         },
                         sort_keys=True,
                     ),
@@ -5213,7 +5220,27 @@ class MaezDaemon:
         broker_receipt = None
         proposals = []
         strategy = "changed_since_last"
+        pulse_signature = "salience-broker-off"
         if broker_active:
+            try:
+                from core.cognition.salience_broker import fact_signatures
+
+                pulse_signature = hashlib.sha256(
+                    json.dumps(
+                        fact_signatures(window),
+                        sort_keys=True,
+                    ).encode("utf-8")
+                ).hexdigest()[:16]
+            except Exception as exc:
+                pulse_signature = hashlib.sha256(
+                    json.dumps(
+                        {
+                            "skip_reason": "signature_error",
+                            "error_class": exc.__class__.__name__,
+                        },
+                        sort_keys=True,
+                    ).encode("utf-8")
+                ).hexdigest()[:16]
             broker_receipt = self._maybe_run_salience_broker(window)
             if broker_receipt:
                 proposals = list(broker_receipt.get("proposals", []) or [])
@@ -5228,6 +5255,7 @@ class MaezDaemon:
                         "skip_reason": "heartbeat_ok_or_rejected",
                     },
                     strategy=strategy,
+                    pulse_signature=pulse_signature,
                 )
             return None
         enabled = _lean_idle_heartbeat_enabled()
@@ -5281,6 +5309,7 @@ class MaezDaemon:
                     proposals,
                     {"note_chars": 0, "stored": False, "skip_reason": "error"},
                     strategy=strategy,
+                    pulse_signature=pulse_signature,
                 )
             return _HEARTBEAT_OK if enabled else None
 
@@ -5305,6 +5334,7 @@ class MaezDaemon:
                     ),
                 },
                 strategy=strategy,
+                pulse_signature=pulse_signature,
             )
         return result.return_text if result.intercepted else None
 

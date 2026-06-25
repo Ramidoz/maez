@@ -220,20 +220,105 @@ class LeanIdleDaemonTest(unittest.TestCase):
                     "skip_reason": "heartbeat_ok_or_rejected",
                 },
                 strategy="changed_since_last",
+                pulse_signature="sig1",
             )
             daemon._record_salience_outcomes(
                 [],
                 {"note_chars": 80, "stored": True, "skip_reason": "none"},
                 strategy="changed_since_last",
+                pulse_signature="sig2",
             )
 
         rows = daemon._salience_ledger.recent(limit=5)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["pulse_id"], "seq1")
         self.assertEqual(rows[0]["strategy"], "changed_since_last")
+        self.assertIn(rows[0]["arm"], ("proposed", "control_withheld"))
         self.assertEqual(rows[0]["fact_key"], "time_facts")
         self.assertEqual(rows[0]["change_kind"], "changed")
         self.assertTrue(rows[0]["non_duplicate_stored"])
+
+    def test_quiet_pulse_records_control_none_baseline(self) -> None:
+        import pathlib
+        import tempfile
+        from core.cognition.salience_ledger import SalienceLedger
+        from daemon.maez_daemon import MaezDaemon
+
+        daemon = object.__new__(MaezDaemon)
+        daemon._salience_pending = None
+        daemon._salience_pulse_seq = 0
+        daemon._salience_ledger = SalienceLedger(
+            pathlib.Path(tempfile.mkdtemp()) / "salience.db"
+        )
+
+        with mock.patch.dict(
+            "os.environ", {"MAEZ_SALIENCE_BROKER_SHADOW": "1"}, clear=False
+        ):
+            daemon._record_salience_outcomes(
+                [],
+                {
+                    "note_chars": 0,
+                    "stored": False,
+                    "skip_reason": "heartbeat_ok_or_rejected",
+                },
+                strategy="changed_since_last",
+                pulse_signature="sigA",
+            )
+            daemon._record_salience_outcomes(
+                [],
+                {
+                    "note_chars": 0,
+                    "stored": False,
+                    "skip_reason": "heartbeat_ok_or_rejected",
+                },
+                strategy="changed_since_last",
+                pulse_signature="sigB",
+            )
+
+        rows = daemon._salience_ledger.recent(limit=5)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["arm"], "control_none")
+        self.assertEqual(
+            (rows[0]["fact_key"], rows[0]["change_kind"]), ("none", "none")
+        )
+        self.assertEqual(rows[0]["unmoved"], 1)
+
+    def test_arm_does_not_change_the_outcome(self) -> None:
+        import pathlib
+        import tempfile
+        from core.cognition.salience_ledger import SalienceLedger
+        from daemon.maez_daemon import MaezDaemon
+
+        daemon = object.__new__(MaezDaemon)
+        daemon._salience_pending = None
+        daemon._salience_pulse_seq = 0
+        daemon._salience_ledger = SalienceLedger(
+            pathlib.Path(tempfile.mkdtemp()) / "salience.db"
+        )
+
+        with mock.patch.dict(
+            "os.environ", {"MAEZ_SALIENCE_BROKER_SHADOW": "1"}, clear=False
+        ):
+            daemon._record_salience_outcomes(
+                [{"fact_key": "time_facts", "change_kind": "changed"}],
+                {
+                    "note_chars": 0,
+                    "stored": False,
+                    "skip_reason": "heartbeat_ok_or_rejected",
+                },
+                strategy="changed_since_last",
+                pulse_signature="sig1",
+            )
+            daemon._record_salience_outcomes(
+                [],
+                {"note_chars": 80, "stored": True, "skip_reason": "none"},
+                strategy="changed_since_last",
+                pulse_signature="sig2",
+            )
+
+        row = daemon._salience_ledger.recent(limit=5)[0]
+        self.assertIn(row["arm"], ("proposed", "control_withheld"))
+        self.assertEqual(row["non_duplicate_stored"], 1)
 
     def test_salience_off_records_nothing(self) -> None:
         import pathlib
@@ -255,6 +340,7 @@ class LeanIdleDaemonTest(unittest.TestCase):
                 [{"fact_key": "x", "change_kind": "changed"}],
                 {"note_chars": 0},
                 strategy="changed_since_last",
+                pulse_signature="sig-off",
             )
 
         self.assertIsNone(result)
@@ -267,7 +353,8 @@ class LeanIdleDaemonTest(unittest.TestCase):
         daemon._salience_pending = {
             "pulse_id": "seq1",
             "strategy": "changed_since_last",
-            "proposals": [{"fact_key": "time_facts", "change_kind": "changed"}],
+            "arm": "proposed",
+            "rows": [{"fact_key": "time_facts", "change_kind": "changed"}],
             "outcome": {"note_chars": 0, "stored": False, "skip_reason": "heartbeat_ok"},
         }
         daemon._salience_pulse_seq = 1
@@ -285,14 +372,12 @@ class LeanIdleDaemonTest(unittest.TestCase):
                 [{"fact_key": "body_state", "change_kind": "changed"}],
                 {"note_chars": 0, "stored": False, "skip_reason": "heartbeat_ok"},
                 strategy="changed_since_last",
+                pulse_signature="sig3",
             )
 
         self.assertEqual(pulse_id, "seq2")
         self.assertEqual(daemon._salience_pending["pulse_id"], "seq2")
-        self.assertEqual(
-            daemon._salience_pending["proposals"],
-            [{"fact_key": "body_state", "change_kind": "changed"}],
-        )
+        self.assertEqual(daemon._salience_pending["rows"][0]["fact_key"], "body_state")
 
     def test_salience_broker_only_records_blank_heartbeat_outcome(self) -> None:
         from daemon.maez_daemon import MaezDaemon
@@ -307,8 +392,15 @@ class LeanIdleDaemonTest(unittest.TestCase):
         daemon._lean_idle_open_loops = lambda: {}
         daemon._lean_idle_recent_private_thoughts = lambda: ()
         captured = {}
-        daemon._record_salience_outcomes = lambda proposals, heartbeat, *, strategy: captured.update(
-            {"proposals": proposals, "heartbeat": heartbeat, "strategy": strategy}
+        daemon._record_salience_outcomes = (
+            lambda proposals, heartbeat, *, strategy, pulse_signature: captured.update(
+                {
+                    "proposals": proposals,
+                    "heartbeat": heartbeat,
+                    "strategy": strategy,
+                    "pulse_signature": pulse_signature,
+                }
+            )
         )
 
         with mock.patch.dict(
@@ -318,6 +410,7 @@ class LeanIdleDaemonTest(unittest.TestCase):
 
         self.assertEqual(captured["proposals"], [])
         self.assertEqual(captured["strategy"], "changed_since_last")
+        self.assertIn("pulse_signature", captured)
         self.assertEqual(
             captured["heartbeat"],
             {
@@ -343,8 +436,15 @@ class LeanIdleDaemonTest(unittest.TestCase):
         daemon._lean_idle_open_loops = lambda: {}
         daemon._lean_idle_recent_private_thoughts = lambda: ()
         captured = {}
-        daemon._record_salience_outcomes = lambda proposals, heartbeat, *, strategy: captured.update(
-            {"proposals": proposals, "heartbeat": heartbeat, "strategy": strategy}
+        daemon._record_salience_outcomes = (
+            lambda proposals, heartbeat, *, strategy, pulse_signature: captured.update(
+                {
+                    "proposals": proposals,
+                    "heartbeat": heartbeat,
+                    "strategy": strategy,
+                    "pulse_signature": pulse_signature,
+                }
+            )
         )
 
         with mock.patch.dict(
@@ -368,6 +468,7 @@ class LeanIdleDaemonTest(unittest.TestCase):
         )
         self.assertEqual(captured["heartbeat"]["skip_reason"], "error")
         self.assertFalse(captured["heartbeat"]["stored"])
+        self.assertIn("pulse_signature", captured)
 
     def test_heartbeat_path_default_off_keeps_broker_and_adapters_asleep(self) -> None:
         from daemon.maez_daemon import MaezDaemon

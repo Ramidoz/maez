@@ -111,14 +111,22 @@ class AssignArmTest(unittest.TestCase):
 
     def test_withheld_is_deterministic_and_keeps_fact_identity(self) -> None:
         proposals = [{"fact_key": "body_state", "change_kind": "changed"}]
+        signature = None
+        for i in range(100):
+            candidate = f"sig-X-{i}"
+            arm, _ = assign_arm(proposals, pulse_signature=candidate)
+            if arm == "control_withheld":
+                signature = candidate
+                break
+        self.assertIsNotNone(signature)
 
-        first_arm, first_rows = assign_arm(proposals, pulse_signature="sig-X")
-        second_arm, second_rows = assign_arm(proposals, pulse_signature="sig-X")
+        first_arm, first_rows = assign_arm(proposals, pulse_signature=signature)
+        second_arm, second_rows = assign_arm(proposals, pulse_signature=signature)
 
         self.assertEqual(first_arm, second_arm)
+        self.assertEqual(first_arm, "control_withheld")
         self.assertEqual(list(first_rows), list(second_rows))
-        if first_arm == "control_withheld":
-            self.assertEqual(first_rows[0]["fact_key"], "body_state")
+        self.assertEqual(first_rows[0]["fact_key"], "body_state")
 
     def test_no_randomness_imported(self) -> None:
         import inspect
