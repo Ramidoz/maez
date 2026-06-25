@@ -42,6 +42,10 @@ class LeanIdleFacts:
     doorman_reason: str
     self_card_text: str
     private_signal_summary: Mapping[str, object] | None = None
+    time_facts: Mapping[str, object] | None = None
+    body_state: Mapping[str, object] | None = None
+    open_loops: Mapping[str, object] | None = None
+    recent_private_thoughts: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -37,6 +37,28 @@ class _FakeResponse:
 
 
 class LeanIdleHeartbeatTest(unittest.TestCase):
+    def test_lean_idle_facts_accepts_evolving_material_with_safe_defaults(self) -> None:
+        facts = LeanIdleFacts(
+            cycle=1,
+            doorman_reason="wake_min_floor",
+            self_card_text="card",
+        )
+        self.assertIsNone(facts.time_facts)
+        self.assertIsNone(facts.body_state)
+        self.assertIsNone(facts.open_loops)
+        self.assertEqual(facts.recent_private_thoughts, ())
+
+        enriched = LeanIdleFacts(
+            cycle=1,
+            doorman_reason="wake_min_floor",
+            self_card_text="card",
+            time_facts={"owner_contact_gap_s": 30},
+            body_state={"watchdog": "ok"},
+            open_loops={"open_loop_count": 2},
+            recent_private_thoughts=("a thought",),
+        )
+        self.assertEqual(enriched.recent_private_thoughts, ("a thought",))
+
     def test_prompt_is_lean_and_excludes_flood_sources(self) -> None:
         prompt = build_lean_idle_prompt(
             LeanIdleFacts(
