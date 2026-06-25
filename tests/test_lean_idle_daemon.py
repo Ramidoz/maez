@@ -188,6 +188,60 @@ class LeanIdleDaemonTest(unittest.TestCase):
         self.assertIsNone(result)
         runner.assert_not_called()
 
+    def test_default_off_reads_no_enrichment_seams(self) -> None:
+        from daemon.maez_daemon import MaezDaemon
+
+        daemon = object.__new__(MaezDaemon)
+        calls = {"n": 0}
+
+        def tick(*args, **kwargs):
+            calls["n"] += 1
+            return {}
+
+        daemon._lean_idle_time_facts = tick
+        daemon._lean_idle_body_state = tick
+        daemon._lean_idle_open_loops = tick
+        daemon._lean_idle_recent_private_thoughts = tick
+
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertIsNone(daemon._maybe_run_lean_idle_heartbeat({}, _gate()))
+
+        self.assertEqual(calls["n"], 0)
+
+    def test_enriched_facts_threaded_into_heartbeat(self) -> None:
+        from daemon.maez_daemon import MaezDaemon
+        import core.cognition.lean_idle_heartbeat as lih
+
+        daemon = object.__new__(MaezDaemon)
+        daemon.cycle_count = 7
+        daemon.private_thoughts = None
+        daemon._lean_idle_self_card_text = lambda: "SELF"
+        daemon._lean_idle_private_signal_summary = lambda: {}
+        daemon._lean_idle_time_facts = lambda: {"owner_contact_gap_s": 3600}
+        daemon._lean_idle_body_state = lambda: {"watchdog": "ok"}
+        daemon._lean_idle_open_loops = lambda: {
+            "open_loop_count": 2,
+            "open_loop_classes": ["wants"],
+        }
+        daemon._lean_idle_recent_private_thoughts = lambda: ("a prior thought",)
+        captured = {}
+
+        def capture(*, facts, **kwargs):
+            captured["facts"] = facts
+            return lih.LeanIdleResult(False, False, None, None, "shadow_only", {})
+
+        with mock.patch.dict(
+            "os.environ", {"MAEZ_LEAN_IDLE_HEARTBEAT_SHADOW": "1"}, clear=True
+        ):
+            with mock.patch.object(lih, "run_lean_idle_heartbeat", capture):
+                daemon._maybe_run_lean_idle_heartbeat({}, _gate())
+
+        facts = captured["facts"]
+        self.assertEqual(facts.time_facts, {"owner_contact_gap_s": 3600})
+        self.assertEqual(facts.body_state, {"watchdog": "ok"})
+        self.assertEqual(facts.open_loops["open_loop_count"], 2)
+        self.assertEqual(facts.recent_private_thoughts, ("a prior thought",))
+
     def test_shadow_calls_runner_but_does_not_intercept(self) -> None:
         from daemon.maez_daemon import MaezDaemon
 
