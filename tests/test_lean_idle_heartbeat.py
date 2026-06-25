@@ -171,6 +171,32 @@ class LeanIdleHeartbeatTest(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, lowered)
 
+    def test_renderer_never_emits_interpretive_framing(self) -> None:
+        import re
+
+        from core.cognition.lean_idle_heartbeat import FORBIDDEN_RENDER_WORDS
+
+        prompt = build_lean_idle_prompt(
+            LeanIdleFacts(
+                cycle=1,
+                doorman_reason="wake_min_floor",
+                self_card_text="Maez is a system-level agent.",
+                time_facts={
+                    "owner_contact_gap_s": 3600,
+                    "all_time_usual_gap_s": 1800,
+                    "gap_percentile_all_time": 90,
+                },
+                body_state={"watchdog": "ok", "backup_freshness": "unavailable"},
+                open_loops={"open_loop_count": 1, "open_loop_classes": ["wants"]},
+                recent_private_thoughts=("a neutral note",),
+            )
+        )
+        for word in FORBIDDEN_RENDER_WORDS:
+            self.assertIsNone(
+                re.search(rf"\b{word}\b", prompt.text, re.IGNORECASE),
+                f"renderer emitted framing word: {word}",
+            )
+
     def test_sanitizer_accepts_private_note_and_caps_length(self) -> None:
         raw = (
             "<final>"

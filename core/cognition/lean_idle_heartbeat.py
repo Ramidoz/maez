@@ -24,6 +24,7 @@ from core.infra.private_thoughts import (
 HEARTBEAT_VERSION = "lean_idle_heartbeat.v0"
 HEARTBEAT_OK = "HEARTBEAT_OK"
 MAX_PRIVATE_NOTE_CHARS = 600  # TEMPORARY scaffold, not learned salience.
+FORBIDDEN_RENDER_WORDS = ("lonely", "missed", "long", "should", "worry", "feel")
 
 _FINAL_TAG_RE = re.compile(r"<final>(.*?)</final>", re.DOTALL | re.IGNORECASE)
 _OWNER_ADDRESS_RE = re.compile(
