@@ -74,6 +74,7 @@ class SalienceLedger:
                     row_id               INTEGER PRIMARY KEY AUTOINCREMENT,
                     pulse_id             TEXT NOT NULL,
                     strategy             TEXT NOT NULL,
+                    arm                  TEXT NOT NULL DEFAULT 'proposed',
                     fact_key             TEXT NOT NULL,
                     change_kind          TEXT NOT NULL,
                     proposal_hash        TEXT NOT NULL,
@@ -85,6 +86,15 @@ class SalienceLedger:
                 )
                 """
             )
+            cols = [
+                row[1]
+                for row in conn.execute("PRAGMA table_info(salience_ledger)").fetchall()
+            ]
+            if "arm" not in cols:
+                conn.execute(
+                    "ALTER TABLE salience_ledger "
+                    "ADD COLUMN arm TEXT NOT NULL DEFAULT 'proposed'"
+                )
             conn.commit()
         finally:
             conn.close()
@@ -94,6 +104,7 @@ class SalienceLedger:
         *,
         pulse_id: str,
         strategy: str,
+        arm: str,
         fact_key: str,
         change_kind: str,
         proposal_hash: str,
@@ -103,13 +114,14 @@ class SalienceLedger:
         try:
             conn.execute(
                 """INSERT INTO salience_ledger
-                   (pulse_id, strategy, fact_key, change_kind, proposal_hash,
+                   (pulse_id, strategy, arm, fact_key, change_kind, proposal_hash,
                     thought_formed, non_duplicate_stored, repetition_signal,
                     unmoved, schema_version)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     str(pulse_id),
                     str(strategy),
+                    str(arm),
                     str(fact_key),
                     str(change_kind),
                     str(proposal_hash),

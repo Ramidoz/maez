@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pathlib
+import sqlite3
 import tempfile
 import unittest
 from unittest import mock
@@ -100,6 +101,7 @@ class SalienceLedgerStoreTest(unittest.TestCase):
         ledger.record(
             pulse_id="p1",
             strategy="changed_since_last",
+            arm="proposed",
             fact_key="time_facts",
             change_kind="changed",
             proposal_hash="abc123",
@@ -116,6 +118,76 @@ class SalienceLedgerStoreTest(unittest.TestCase):
         self.assertEqual(row["proposal_hash"], "abc123")
         self.assertTrue(row["non_duplicate_stored"])
 
+    def test_fresh_schema_has_arm_column(self) -> None:
+        ledger = self._ledger()
+
+        self.assertIn("arm", ledger.column_names())
+
+    def test_record_persists_arm(self) -> None:
+        ledger = self._ledger()
+        outcome = derive_outcome(
+            [{"note_chars": 0, "stored": False, "skip_reason": "heartbeat_ok"}]
+        )
+
+        ledger.record(
+            pulse_id="p1",
+            strategy="changed_since_last",
+            arm="control_none",
+            fact_key="none",
+            change_kind="none",
+            proposal_hash="abc",
+            outcome=outcome,
+        )
+
+        self.assertEqual(ledger.recent(1)[0]["arm"], "control_none")
+
+    def test_existing_rows_migrate_to_proposed(self) -> None:
+        path = pathlib.Path(tempfile.mkdtemp()) / "old.db"
+        conn = sqlite3.connect(path)
+        try:
+            conn.execute(
+                """CREATE TABLE salience_ledger (
+                    row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    pulse_id TEXT NOT NULL,
+                    strategy TEXT NOT NULL,
+                    fact_key TEXT NOT NULL,
+                    change_kind TEXT NOT NULL,
+                    proposal_hash TEXT NOT NULL,
+                    thought_formed INTEGER NOT NULL,
+                    non_duplicate_stored INTEGER NOT NULL,
+                    repetition_signal TEXT NOT NULL,
+                    unmoved INTEGER NOT NULL,
+                    schema_version TEXT NOT NULL
+                )"""
+            )
+            conn.execute(
+                """INSERT INTO salience_ledger (
+                    pulse_id, strategy, fact_key, change_kind, proposal_hash,
+                    thought_formed, non_duplicate_stored, repetition_signal,
+                    unmoved, schema_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    "seq2",
+                    "changed_since_last",
+                    "time_facts",
+                    "changed",
+                    "h",
+                    0,
+                    0,
+                    "not_applicable",
+                    1,
+                    "salience_ledger.v0",
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        ledger = SalienceLedger(path)
+        row = ledger.recent(1)[0]
+
+        self.assertEqual(row["arm"], "proposed")
+
     def test_store_is_content_light(self) -> None:
         ledger = self._ledger()
         outcome = derive_outcome(
@@ -131,6 +203,7 @@ class SalienceLedgerStoreTest(unittest.TestCase):
         ledger.record(
             pulse_id="p2",
             strategy="changed_since_last",
+            arm="proposed",
             fact_key="recent_private_thoughts",
             change_kind="appeared",
             proposal_hash="deadbeef",
