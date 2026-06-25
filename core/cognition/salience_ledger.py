@@ -7,12 +7,14 @@ loop's own per-pulse signals; `unmoved` is neutral, never failure.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sqlite3
 from pathlib import Path
 
 LEDGER_VERSION = "salience_ledger.v0"
 SALIENCE_LEDGER_PATH_ENV = "MAEZ_SALIENCE_LEDGER_PATH"
+WITHHOLD_EVERY = 5
 
 
 def _default_salience_ledger_path() -> Path:
@@ -55,6 +57,25 @@ def derive_outcome(window_results: list[dict] | None) -> dict:
         "repetition_signal": "duplicate" if duplicate else "not_applicable",
         "unmoved": not thought_formed and not non_duplicate_stored,
     }
+
+
+def assign_arm(
+    proposals: list[dict] | None,
+    pulse_signature: str,
+) -> tuple[str, tuple[dict, ...]]:
+    """Assign a counterfactual arm without judging or steering."""
+    if not proposals:
+        return "control_none", ({"fact_key": "none", "change_kind": "none"},)
+    digest = int(hashlib.sha256(str(pulse_signature).encode("utf-8")).hexdigest(), 16)
+    arm = "control_withheld" if digest % WITHHOLD_EVERY == 0 else "proposed"
+    rows = tuple(
+        {
+            "fact_key": str(proposal.get("fact_key", "")),
+            "change_kind": str(proposal.get("change_kind", "")),
+        }
+        for proposal in proposals
+    )
+    return arm, rows
 
 
 class SalienceLedger:

@@ -9,6 +9,8 @@ from unittest import mock
 from core.cognition.salience_ledger import (
     LEDGER_VERSION,
     SalienceLedger,
+    WITHHOLD_EVERY,
+    assign_arm,
     derive_outcome,
     salience_ledger_db_path,
 )
@@ -86,6 +88,45 @@ class DeriveOutcomeTest(unittest.TestCase):
                 "unmoved": True,
             },
         )
+
+
+class AssignArmTest(unittest.TestCase):
+    def test_no_change_is_control_none_with_sentinel(self) -> None:
+        arm, rows = assign_arm([], pulse_signature="anything")
+
+        self.assertEqual(WITHHOLD_EVERY, 5)
+        self.assertEqual(arm, "control_none")
+        self.assertEqual(
+            list(rows),
+            [{"fact_key": "none", "change_kind": "none"}],
+        )
+
+    def test_change_preserves_fact_identity(self) -> None:
+        proposals = [{"fact_key": "time_facts", "change_kind": "changed"}]
+
+        arm, rows = assign_arm(proposals, pulse_signature="sig-not-withheld")
+
+        self.assertIn(arm, ("proposed", "control_withheld"))
+        self.assertEqual(list(rows), proposals)
+
+    def test_withheld_is_deterministic_and_keeps_fact_identity(self) -> None:
+        proposals = [{"fact_key": "body_state", "change_kind": "changed"}]
+
+        first_arm, first_rows = assign_arm(proposals, pulse_signature="sig-X")
+        second_arm, second_rows = assign_arm(proposals, pulse_signature="sig-X")
+
+        self.assertEqual(first_arm, second_arm)
+        self.assertEqual(list(first_rows), list(second_rows))
+        if first_arm == "control_withheld":
+            self.assertEqual(first_rows[0]["fact_key"], "body_state")
+
+    def test_no_randomness_imported(self) -> None:
+        import inspect
+        import core.cognition.salience_ledger as module
+
+        source = inspect.getsource(module)
+        self.assertNotIn("import random", source)
+        self.assertNotIn("Math.random", source)
 
 
 class SalienceLedgerStoreTest(unittest.TestCase):
