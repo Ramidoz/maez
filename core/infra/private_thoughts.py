@@ -754,6 +754,49 @@ class PrivateThoughts:
             conn.close()
         return [self._row_to_dict(r) for r in rows]
 
+    def recent_by_source(
+        self,
+        source: str,
+        *,
+        limit: int = 2,
+        required_flow: str = AllowedFlow.PRIVATE_READER.value,
+        consent: str = ConsentTier.OWNER_PRIVATE.value,
+        phase: str = "gestation",
+    ) -> list[dict]:
+        """Recent rows for exactly one context.source, newest first.
+
+        The source identity lives in context_json, not in provenance: provenance is
+        the generic signal kind. Consent, flow, and phase are enforced in SQL so
+        unrelated producers cannot be exposed or bury this source before LIMIT.
+        """
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT * FROM private_thoughts
+                WHERE json_extract(context_json, '$.source') = ?
+                  AND memory_phase = ?
+                  AND json_extract(context_json, '$.consent_tier') = ?
+                  AND EXISTS (
+                        SELECT 1 FROM json_each(context_json, '$.allowed_flows')
+                        WHERE value = ?
+                  )
+                ORDER BY thought_id DESC
+                LIMIT ?
+                """,
+                (
+                    str(source),
+                    str(phase),
+                    str(consent),
+                    str(required_flow),
+                    int(limit),
+                ),
+            ).fetchall()
+        finally:
+            conn.close()
+        return [self._row_to_dict(r) for r in rows]
+
     def count(self) -> int:
         """Total number of private thoughts recorded."""
         conn = sqlite3.connect(self.db_path)
