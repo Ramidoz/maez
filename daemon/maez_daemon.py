@@ -5137,6 +5137,7 @@ class MaezDaemon:
         *,
         strategy: str,
         pulse_signature: str,
+        cold_start: bool = False,
     ) -> str | None:
         if not _salience_broker_shadow_enabled():
             return None
@@ -5144,7 +5145,11 @@ class MaezDaemon:
 
         self._salience_pulse_seq = int(getattr(self, "_salience_pulse_seq", 0)) + 1
         pulse_id = f"seq{self._salience_pulse_seq}"
-        arm, rows = assign_arm(list(proposals or []), pulse_signature)
+        arm, rows = assign_arm(
+            list(proposals or []),
+            pulse_signature,
+            cold_start=bool(cold_start),
+        )
         current = {
             "pulse_id": pulse_id,
             "strategy": str(strategy or "changed_since_last"),
@@ -5221,6 +5226,7 @@ class MaezDaemon:
         proposals = []
         strategy = "changed_since_last"
         pulse_signature = "salience-broker-off"
+        cold_start = False
         if broker_active:
             try:
                 from core.cognition.salience_broker import fact_signatures
@@ -5245,6 +5251,7 @@ class MaezDaemon:
             if broker_receipt:
                 proposals = list(broker_receipt.get("proposals", []) or [])
                 strategy = str(broker_receipt.get("strategy") or strategy)
+                cold_start = bool(broker_receipt.get("cold_start", False))
         if not heartbeat_active:
             if broker_active:
                 self._record_salience_outcomes(
@@ -5256,6 +5263,7 @@ class MaezDaemon:
                     },
                     strategy=strategy,
                     pulse_signature=pulse_signature,
+                    cold_start=cold_start,
                 )
             return None
         enabled = _lean_idle_heartbeat_enabled()
@@ -5310,6 +5318,7 @@ class MaezDaemon:
                     {"note_chars": 0, "stored": False, "skip_reason": "error"},
                     strategy=strategy,
                     pulse_signature=pulse_signature,
+                    cold_start=cold_start,
                 )
             return _HEARTBEAT_OK if enabled else None
 
@@ -5335,6 +5344,7 @@ class MaezDaemon:
                 },
                 strategy=strategy,
                 pulse_signature=pulse_signature,
+                cold_start=cold_start,
             )
         return result.return_text if result.intercepted else None
 
