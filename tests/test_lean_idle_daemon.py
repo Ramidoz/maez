@@ -90,7 +90,7 @@ class LeanIdleDaemonTest(unittest.TestCase):
         daemon = self._daemon()
 
         class Store:
-            def recent(self, limit=20):
+            def recent_by_source(self, source, *, limit=2):
                 return [
                     {
                         "content": "kept",
@@ -115,6 +115,41 @@ class LeanIdleDaemonTest(unittest.TestCase):
         daemon.private_thoughts = Store()
 
         self.assertEqual(daemon._lean_idle_recent_private_thoughts(), ("kept",))
+
+    def test_recent_private_thoughts_uses_source_scoped_reader(self) -> None:
+        from core.cognition.lean_idle_heartbeat import HEARTBEAT_VERSION
+
+        daemon = self._daemon()
+        seen = {}
+
+        class Store:
+            def recent_by_source(self, source, *, limit=2, **kw):
+                seen["source"] = source
+                seen["limit"] = limit
+                return [
+                    {
+                        "content": "kept",
+                        "memory_phase": "gestation",
+                        "context": {
+                            "source": source,
+                            "consent_tier": "owner_private",
+                            "allowed_flows": ["private_reader"],
+                        },
+                    }
+                ]
+
+            def recent(self, limit=20):
+                seen["used_recent"] = True
+                return []
+
+        daemon.private_thoughts = Store()
+
+        out = daemon._lean_idle_recent_private_thoughts()
+
+        self.assertEqual(seen["source"], HEARTBEAT_VERSION)
+        self.assertEqual(seen["limit"], 2)
+        self.assertNotIn("used_recent", seen)
+        self.assertEqual(out, ("kept",))
 
     def test_open_loops_adapter_is_class_only(self) -> None:
         daemon = self._daemon()

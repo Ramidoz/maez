@@ -5070,9 +5070,14 @@ class MaezDaemon:
             store = getattr(self, "private_thoughts", None)
             if store is None:
                 return ()
-            from core.cognition.lean_idle_heartbeat import select_private_reader_thoughts
+            from core.cognition.lean_idle_heartbeat import (
+                HEARTBEAT_VERSION,
+                select_private_reader_thoughts,
+            )
 
-            return select_private_reader_thoughts(store.recent(limit=20))
+            return select_private_reader_thoughts(
+                store.recent_by_source(HEARTBEAT_VERSION, limit=2)
+            )
         except Exception:
             return ()
 
