@@ -1853,6 +1853,10 @@ def _lean_idle_heartbeat_any_enabled(environ: object | None = None) -> bool:
     return _lean_idle_heartbeat_shadow_enabled(environ) or _lean_idle_heartbeat_enabled(environ)
 
 
+def _salience_broker_shadow_enabled(environ: object | None = None) -> bool:
+    return _env_flag("MAEZ_SALIENCE_BROKER_SHADOW", environ=environ)
+
+
 def _lean_idle_heartbeat_eligible(gate_decision: object) -> bool:
     return (
         bool(getattr(gate_decision, "doorman_enabled", False))
@@ -3450,6 +3454,7 @@ class MaezDaemon:
         self._last_presence_snap: CameraPresenceState | None = self._camera_presence_state
         self._presence_cycle_counter = 0
         self.PRESENCE_EVERY_N_CYCLES = 2  # every ~60 seconds
+        self._salience_broker_baseline: dict | None = None
         self._greeted_this_session = False
         self._last_departure_time: float | None = None
         self._last_greeted_at = 0.0
@@ -5081,14 +5086,54 @@ class MaezDaemon:
         except Exception:
             return ()
 
+    def _maybe_run_salience_broker(self, window: dict) -> dict | None:
+        if not _salience_broker_shadow_enabled():
+            return None
+        try:
+            from core.cognition.salience_broker import (
+                broker_receipt,
+                fact_signatures,
+                propose_changes,
+            )
+
+            baseline = getattr(self, "_salience_broker_baseline", None)
+            current = fact_signatures(window)
+            proposals = propose_changes(current, baseline)
+            receipt = broker_receipt(proposals, cold_start=baseline is None)
+            self._salience_broker_baseline = current
+        except Exception as exc:
+            receipt = {
+                "schema_version": "salience_broker.v0",
+                "strategy": "changed_since_last",
+                "cold_start": getattr(self, "_salience_broker_baseline", None) is None,
+                "proposal_count": 0,
+                "proposals": [],
+                "skip_reason": "error",
+                "error_class": exc.__class__.__name__,
+            }
+        logger.info("salience_broker receipt=%s", json.dumps(receipt, sort_keys=True))
+        return receipt
+
     def _maybe_run_lean_idle_heartbeat(
         self,
         snap: dict,
         gate_decision: object,
     ) -> str | None:
-        if not _lean_idle_heartbeat_any_enabled():
+        heartbeat_active = _lean_idle_heartbeat_any_enabled()
+        broker_active = _salience_broker_shadow_enabled()
+        if not heartbeat_active and not broker_active:
             return None
         if not _lean_idle_heartbeat_eligible(gate_decision):
+            return None
+        window = {
+            "time_facts": self._lean_idle_time_facts(),
+            "body_state": self._lean_idle_body_state(),
+            "open_loops": self._lean_idle_open_loops(),
+            "recent_private_thoughts": self._lean_idle_recent_private_thoughts(),
+        }
+        if broker_active:
+            self._maybe_run_salience_broker(window)
+        if not heartbeat_active:
             return None
         enabled = _lean_idle_heartbeat_enabled()
         shadow = _lean_idle_heartbeat_shadow_enabled()
@@ -5107,10 +5152,10 @@ class MaezDaemon:
                     doorman_reason=str(getattr(gate_decision, "reason_code", "")),
                     self_card_text=self._lean_idle_self_card_text(),
                     private_signal_summary=self._lean_idle_private_signal_summary(),
-                    time_facts=self._lean_idle_time_facts(),
-                    body_state=self._lean_idle_body_state(),
-                    open_loops=self._lean_idle_open_loops(),
-                    recent_private_thoughts=self._lean_idle_recent_private_thoughts(),
+                    time_facts=window["time_facts"],
+                    body_state=window["body_state"],
+                    open_loops=window["open_loops"],
+                    recent_private_thoughts=window["recent_private_thoughts"],
                 ),
                 chat_fn=_llm_client.chat_direct,
                 model=MODEL,

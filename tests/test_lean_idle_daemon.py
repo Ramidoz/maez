@@ -151,6 +151,81 @@ class LeanIdleDaemonTest(unittest.TestCase):
         self.assertNotIn("used_recent", seen)
         self.assertEqual(out, ("kept",))
 
+    def test_salience_broker_cold_start_then_change(self) -> None:
+        from daemon.maez_daemon import MaezDaemon
+
+        daemon = object.__new__(MaezDaemon)
+        daemon._salience_broker_baseline = None
+        window1 = {
+            "time_facts": {"owner_contact_gap_s": 30},
+            "body_state": {},
+            "open_loops": {},
+            "recent_private_thoughts": (),
+        }
+        window2 = {
+            "time_facts": {"owner_contact_gap_s": 999},
+            "body_state": {},
+            "open_loops": {},
+            "recent_private_thoughts": (),
+        }
+
+        with mock.patch.dict(
+            "os.environ", {"MAEZ_SALIENCE_BROKER_SHADOW": "1"}, clear=True
+        ):
+            first = daemon._maybe_run_salience_broker(window1)
+            second = daemon._maybe_run_salience_broker(window2)
+
+        self.assertTrue(first["cold_start"])
+        self.assertEqual(first["proposal_count"], 0)
+        self.assertFalse(second["cold_start"])
+        self.assertEqual(
+            second["proposals"],
+            [{"fact_key": "time_facts", "change_kind": "changed"}],
+        )
+
+    def test_salience_broker_off_is_noop(self) -> None:
+        from daemon.maez_daemon import MaezDaemon
+
+        daemon = object.__new__(MaezDaemon)
+        daemon._salience_broker_baseline = None
+
+        with mock.patch.dict(
+            "os.environ", {"MAEZ_SALIENCE_BROKER_SHADOW": ""}, clear=True
+        ):
+            self.assertIsNone(daemon._maybe_run_salience_broker({"time_facts": {"x": 1}}))
+        self.assertIsNone(daemon._salience_broker_baseline)
+
+    def test_heartbeat_path_default_off_keeps_broker_and_adapters_asleep(self) -> None:
+        from daemon.maez_daemon import MaezDaemon
+
+        daemon = object.__new__(MaezDaemon)
+        touched = {"count": 0}
+
+        def touch(*args, **kwargs):
+            touched["count"] += 1
+            return {}
+
+        for name in (
+            "_lean_idle_time_facts",
+            "_lean_idle_body_state",
+            "_lean_idle_open_loops",
+            "_lean_idle_recent_private_thoughts",
+            "_maybe_run_salience_broker",
+        ):
+            setattr(daemon, name, touch)
+
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "MAEZ_LEAN_IDLE_HEARTBEAT_SHADOW": "",
+                "MAEZ_LEAN_IDLE_HEARTBEAT_ENABLED": "",
+                "MAEZ_SALIENCE_BROKER_SHADOW": "",
+            },
+            clear=True,
+        ):
+            self.assertIsNone(daemon._maybe_run_lean_idle_heartbeat({}, _gate()))
+        self.assertEqual(touched["count"], 0)
+
     def test_open_loops_adapter_is_class_only(self) -> None:
         daemon = self._daemon()
 
