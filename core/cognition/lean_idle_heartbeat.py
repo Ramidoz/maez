@@ -223,6 +223,35 @@ def sanitize_private_note(raw_text: object) -> PrivateNote | None:
     return PrivateNote(text=text, sha256=_sha256(text), chars=len(text))
 
 
+def select_private_reader_thoughts(
+    rows: list[dict],
+    *,
+    version: str = HEARTBEAT_VERSION,
+    limit: int = 2,
+    clip: int = 140,
+) -> tuple[str, ...]:
+    """Surface heartbeat thoughts only through the full private-reader envelope."""
+    out: list[str] = []
+    for row in rows or []:
+        context = row.get("context") or {}
+        if context.get("source") != version:
+            continue
+        if context.get("consent_tier") != ConsentTier.OWNER_PRIVATE.value:
+            continue
+        flows = context.get("allowed_flows") or []
+        if AllowedFlow.PRIVATE_READER.value not in flows:
+            continue
+        if (row.get("memory_phase") or context.get("memory_phase")) != "gestation":
+            continue
+        text = _compact(row.get("content"))
+        if not text:
+            continue
+        out.append(text[:clip])
+        if len(out) >= limit:
+            break
+    return tuple(out)
+
+
 def _response_content(response: object) -> str:
     message = getattr(response, "message", None)
     if message is not None and hasattr(message, "content"):

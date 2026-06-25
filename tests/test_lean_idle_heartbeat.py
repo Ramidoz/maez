@@ -37,6 +37,25 @@ class _FakeResponse:
 
 
 class LeanIdleHeartbeatTest(unittest.TestCase):
+    def _pt_row(
+        self,
+        *,
+        source: str = "lean_idle_heartbeat.v0",
+        consent: str = "owner_private",
+        flows: tuple[str, ...] = ("private_reader",),
+        phase: str = "gestation",
+        content: str = "a thought",
+    ) -> dict:
+        return {
+            "content": content,
+            "memory_phase": phase,
+            "context": {
+                "source": source,
+                "consent_tier": consent,
+                "allowed_flows": list(flows),
+            },
+        }
+
     def test_lean_idle_facts_accepts_evolving_material_with_safe_defaults(self) -> None:
         facts = LeanIdleFacts(
             cycle=1,
@@ -196,6 +215,40 @@ class LeanIdleHeartbeatTest(unittest.TestCase):
                 re.search(rf"\b{word}\b", prompt.text, re.IGNORECASE),
                 f"renderer emitted framing word: {word}",
             )
+
+    def test_selector_surfaces_only_full_envelope_rows(self) -> None:
+        from core.cognition.lean_idle_heartbeat import select_private_reader_thoughts
+
+        rows = [self._pt_row(content="good one")]
+
+        self.assertEqual(select_private_reader_thoughts(rows), ("good one",))
+
+    def test_selector_rejects_any_envelope_violation(self) -> None:
+        from core.cognition.lean_idle_heartbeat import select_private_reader_thoughts
+
+        bad_rows = [
+            self._pt_row(source="some_other_producer"),
+            self._pt_row(consent="owner_shareable"),
+            self._pt_row(flows=("audit_trace",)),
+            self._pt_row(phase="lived"),
+            self._pt_row(content="   "),
+        ]
+        for row in bad_rows:
+            with self.subTest(row=row):
+                self.assertEqual(select_private_reader_thoughts([row]), ())
+
+    def test_selector_clips_and_caps(self) -> None:
+        from core.cognition.lean_idle_heartbeat import select_private_reader_thoughts
+
+        rows = [
+            self._pt_row(content="x" * 500),
+            self._pt_row(content="y"),
+            self._pt_row(content="z"),
+        ]
+        out = select_private_reader_thoughts(rows, limit=2, clip=140)
+
+        self.assertEqual(len(out), 2)
+        self.assertEqual(len(out[0]), 140)
 
     def test_sanitizer_accepts_private_note_and_caps_length(self) -> None:
         raw = (
