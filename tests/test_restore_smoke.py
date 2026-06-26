@@ -5,7 +5,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.backup.drill import required_store_entries, verify_backup_entry
+from scripts.backup.drill import (
+    required_store_entries,
+    run_restore_smoke_test,
+    verify_backup_entry,
+)
 
 
 def _mkdb(path: Path, table: str, rows: int) -> None:
@@ -23,8 +27,14 @@ def _sha(path: Path) -> str:
 
 
 class RestoreSmokeTest(unittest.TestCase):
-    def _backup(self) -> Path:
-        root = Path(tempfile.mkdtemp())
+    def _backup(
+        self,
+        *,
+        parent: Path | None = None,
+        name: str = "2026-06-26T03-59-05",
+    ) -> Path:
+        root = (parent or Path(tempfile.mkdtemp())) / name
+        root.mkdir(parents=True)
         (root / "memory").mkdir()
         db = root / "memory" / "salience_ledger.db"
         _mkdb(db, "salience_ledger", 7)
@@ -42,6 +52,17 @@ class RestoreSmokeTest(unittest.TestCase):
             encoding="utf-8",
         )
         return root
+
+    def _state_manifest(self) -> dict:
+        return {
+            "entries": [
+                {
+                    "type": "sqlite_db",
+                    "path": "memory/salience_ledger.db",
+                    "class": "required_welfare",
+                },
+            ]
+        }
 
     def test_selects_required_welfare_and_continuity(self):
         state_manifest = {
@@ -116,6 +137,62 @@ class RestoreSmokeTest(unittest.TestCase):
         )
         self.assertEqual(record["status"], "fail")
         self.assertIn("sha256", record["detail"].lower())
+
+    def test_smoke_run_writes_report_for_latest_finalized_backup(self):
+        root = Path(tempfile.mkdtemp())
+        backup_root = root / "backups"
+        backup_root.mkdir()
+        self._backup(parent=backup_root, name="2026-06-26T03-59-05")
+        latest = self._backup(parent=backup_root, name="2026-06-26T04-59-05")
+        report = run_restore_smoke_test(
+            backup_root=backup_root,
+            state_manifest=self._state_manifest(),
+            log_dir=root / "logs",
+            timestamp="2026-06-26T05-00-00",
+        )
+
+        self.assertEqual(report["overall_status"], "pass")
+        self.assertEqual(report["snapshot_path"], str(latest))
+        self.assertEqual(report["required_count"], 1)
+        self.assertEqual(report["checks"][0]["row_counts"]["salience_ledger"], 7)
+        self.assertTrue(Path(report["report_path"]).is_file())
+
+    def test_smoke_ignores_newer_in_progress_backup(self):
+        root = Path(tempfile.mkdtemp())
+        backup_root = root / "backups"
+        backup_root.mkdir()
+        finalized = self._backup(parent=backup_root, name="2026-06-26T03-59-05")
+        in_progress = backup_root / "2026-06-26T04-59-05.in-progress"
+        in_progress.mkdir()
+        (in_progress / "manifest.json").write_text(
+            json.dumps({"timestamp": "bad", "files": []}),
+            encoding="utf-8",
+        )
+
+        report = run_restore_smoke_test(
+            backup_root=backup_root,
+            state_manifest=self._state_manifest(),
+            log_dir=root / "logs",
+            timestamp="2026-06-26T05-00-00",
+        )
+
+        self.assertEqual(report["overall_status"], "pass")
+        self.assertEqual(report["snapshot_path"], str(finalized))
+
+    def test_smoke_reports_unavailable_when_no_finalized_backup(self):
+        root = Path(tempfile.mkdtemp())
+        backup_root = root / "backups"
+        backup_root.mkdir()
+        report = run_restore_smoke_test(
+            backup_root=backup_root,
+            state_manifest=self._state_manifest(),
+            log_dir=root / "logs",
+            timestamp="2026-06-26T05-00-00",
+        )
+
+        self.assertEqual(report["overall_status"], "unavailable")
+        self.assertIn("no finalized", report["detail"])
+        self.assertTrue(Path(report["report_path"]).is_file())
 
 
 if __name__ == "__main__":

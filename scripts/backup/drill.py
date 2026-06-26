@@ -52,6 +52,7 @@ import logging
 import os
 import shutil
 import sqlite3
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -297,6 +298,122 @@ def verify_backup_entry(
         "status": "skip",
         "detail": f"restore smoke does not inspect type {entry_type!r}",
     }
+
+
+def _latest_finalized_backup(backup_root: Path) -> Path | None:
+    if not backup_root.is_dir():
+        return None
+    candidates = [
+        child
+        for child in backup_root.iterdir()
+        if child.is_dir()
+        and not child.name.endswith(".in-progress")
+        and (child / "manifest.json").is_file()
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda p: p.name)
+
+
+def _write_report_log(log_dir: Path, report: dict) -> Path:
+    ts = report.get("timestamp", "unknown")
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"backup_drill_{ts}.json"
+    report["report_path"] = str(log_path)
+    log_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    return log_path
+
+
+def run_restore_smoke_test(
+    *,
+    backup_root: Path,
+    state_manifest: dict,
+    log_dir: Path,
+    timestamp: str | None = None,
+) -> dict:
+    """Verify the latest backup artifact can carry required stores.
+
+    This is artifact-self-consistent: it verifies the backup against
+    its own recorded manifest and never compares to live ``memory/``.
+    """
+    ts = timestamp or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
+    latest = _latest_finalized_backup(backup_root)
+    if latest is None:
+        report = {
+            "schema_version": _RESTORE_SMOKE_SCHEMA_VERSION,
+            "timestamp": ts,
+            "backup_root": str(backup_root),
+            "snapshot_path": "",
+            "overall_status": "unavailable",
+            "detail": "no finalized backup found",
+            "required_count": 0,
+            "checks": [],
+        }
+        _write_report_log(log_dir, report)
+        return report
+
+    manifest_path = latest / "manifest.json"
+    try:
+        artifact_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        report = {
+            "schema_version": _RESTORE_SMOKE_SCHEMA_VERSION,
+            "timestamp": ts,
+            "backup_root": str(backup_root),
+            "snapshot_path": str(latest),
+            "overall_status": "fail",
+            "detail": f"manifest read failed: {type(exc).__name__}: {exc}",
+            "required_count": 0,
+            "checks": [],
+        }
+        _write_report_log(log_dir, report)
+        return report
+
+    files_by_path = {
+        str(entry.get("path")): entry
+        for entry in (artifact_manifest.get("files") or [])
+        if isinstance(entry, dict) and entry.get("path")
+    }
+    required_entries = required_store_entries(state_manifest)
+    tmp_root = Path(tempfile.mkdtemp(prefix="maez-restore-smoke-"))
+    try:
+        checks = [
+            verify_backup_entry(
+                entry,
+                backup_dir=latest,
+                files_by_path=files_by_path,
+                tmp_root=tmp_root,
+            )
+            for entry in required_entries
+        ]
+    finally:
+        shutil.rmtree(tmp_root, ignore_errors=True)
+
+    has_failure = any(check.get("status") == "fail" for check in checks)
+    status = "fail" if has_failure or not required_entries else "pass"
+    detail = (
+        "required stores verified"
+        if status == "pass"
+        else "one or more required stores failed restore smoke verification"
+    )
+    if not required_entries:
+        detail = "state manifest contains no required welfare or continuity stores"
+    report = {
+        "schema_version": _RESTORE_SMOKE_SCHEMA_VERSION,
+        "timestamp": ts,
+        "backup_root": str(backup_root),
+        "snapshot_path": str(latest),
+        "snapshot_timestamp": artifact_manifest.get("timestamp"),
+        "overall_status": status,
+        "detail": detail,
+        "required_count": len(required_entries),
+        "checks": checks,
+    }
+    _write_report_log(log_dir, report)
+    return report
 
 
 def build_drill_report(
@@ -781,15 +898,7 @@ def run_drill(
 def _write_drill_log(source_root: Path, report: dict) -> Path:
     """Persist the drill report as a JSON log so the operator and
     cockpit can read it later."""
-    ts = report.get("timestamp", "unknown")
-    log_dir = source_root / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = log_dir / f"backup_drill_{ts}.json"
-    log_path.write_text(
-        json.dumps(report, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-    return log_path
+    return _write_report_log(source_root / "logs", report)
 
 
 # ── CLI ────────────────────────────────────────────────────────────
@@ -814,8 +923,19 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--backup-root",
         type=Path,
-        default=_DEFAULT_BACKUP_ROOT,
-        help=f"Drill destination (default: {_DEFAULT_BACKUP_ROOT}).",
+        default=None,
+        help=(
+            f"Drill destination (default full drill: {_DEFAULT_BACKUP_ROOT}; "
+            "default --smoke: $MAEZ_BACKUP_ROOT or ~/maez-backups)."
+        ),
+    )
+    p.add_argument(
+        "--smoke",
+        action="store_true",
+        help=(
+            "Run the read-only restore smoke test against the latest finalized "
+            "backup artifact instead of creating a new drill backup."
+        ),
     )
     p.add_argument(
         "--keep",
@@ -830,9 +950,36 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s [%(levelname)s] %(message)s",
     )
 
+    source_root = args.source_root.resolve()
+    if args.smoke:
+        from scripts.backup.inventory import load_default_manifest
+
+        smoke_backup_root = (
+            args.backup_root
+            or Path(os.environ.get("MAEZ_BACKUP_ROOT") or Path.home() / "maez-backups")
+        ).resolve()
+        report = run_restore_smoke_test(
+            backup_root=smoke_backup_root,
+            state_manifest=load_default_manifest(),
+            log_dir=source_root / "logs",
+        )
+        print(f"\nRestore smoke {report['overall_status'].upper()}")
+        print(f"  backup root: {report['backup_root']}")
+        print(f"  snapshot: {report['snapshot_path'] or '?'}")
+        print(f"  required stores: {report['required_count']}")
+        print(f"  report: {report.get('report_path', '?')}")
+        fail_count = sum(1 for c in report["checks"] if c["status"] == "fail")
+        if fail_count:
+            print("\nFailed checks:")
+            for c in report["checks"]:
+                if c["status"] == "fail":
+                    print(f"  - {c['path']}: {c['detail']}")
+        print()
+        return 0 if report["overall_status"] == "pass" else 4
+
     report = run_drill(
-        source_root=args.source_root.resolve(),
-        backup_root=args.backup_root.resolve(),
+        source_root=source_root,
+        backup_root=(args.backup_root or _DEFAULT_BACKUP_ROOT).resolve(),
         keep=args.keep,
     )
 
