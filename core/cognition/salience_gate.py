@@ -174,3 +174,45 @@ def evaluate_gate(rows: list[dict] | None, *, welfare: dict | None = None) -> di
             "canary_blocked": welfare.get("backup_freshness") != "fresh",
         },
     }
+
+
+def welfare_baseline(
+    *,
+    private_thoughts=None,
+    operator_health: dict | None = None,
+    watchdog: dict | None = None,
+) -> dict:
+    """Content-light reference snapshot of Maez with no steering active."""
+    op = dict(operator_health or {})
+    wd = dict(watchdog or {})
+    private_count = 0
+    dedup_proxy = None
+    try:
+        if private_thoughts is not None:
+            private_count = int(private_thoughts.count())
+            recent = list(private_thoughts.recent(limit=50) or [])
+            if recent:
+                hashed_rows = 0
+                for row in recent:
+                    context = row.get("context") or {}
+                    extra = context.get("extra") or {}
+                    if extra.get("output_sha256"):
+                        hashed_rows += 1
+                dedup_proxy = hashed_rows / len(recent)
+    except Exception:
+        dedup_proxy = None
+
+    return {
+        "schema_version": GATE_VERSION,
+        "internal": {
+            "private_thought_count": private_count,
+            "dedup_proxy": dedup_proxy,
+        },
+        "substrate": {
+            "backup_freshness": op.get("backup_freshness_class"),
+            "watchdog": wd.get("watchdog_state"),
+        },
+        "voice_relationship": {
+            "note": "captured by human witness checklist, not numbers",
+        },
+    }

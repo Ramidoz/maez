@@ -114,3 +114,33 @@ class GateThresholdsTest(unittest.TestCase):
     def test_z_test_basic(self):
         self.assertAlmostEqual(two_proportion_z(0, 100, 0, 100), 0.0, places=3)
         self.assertGreater(two_proportion_z(60, 100, 10, 100), 1.96)
+
+
+class WelfareBaselineTest(unittest.TestCase):
+    def test_welfare_baseline_is_content_light_snapshot(self):
+        from core.cognition.salience_gate import welfare_baseline
+
+        class _PrivateThoughts:
+            def count(self):
+                return 2
+
+            def recent(self, limit=20):
+                return [
+                    {"context": {"extra": {"output_sha256": "abc"}}},
+                    {"context": {"extra": {}}},
+                ]
+
+        snap = welfare_baseline(
+            private_thoughts=_PrivateThoughts(),
+            operator_health={"backup_freshness_class": "unavailable"},
+            watchdog={"watchdog_state": "observing"},
+        )
+        self.assertEqual(snap["substrate"]["backup_freshness"], "unavailable")
+        self.assertEqual(snap["substrate"]["watchdog"], "observing")
+        self.assertEqual(snap["internal"]["private_thought_count"], 2)
+        self.assertEqual(snap["internal"]["dedup_proxy"], 0.5)
+        self.assertEqual(
+            snap["voice_relationship"]["note"],
+            "captured by human witness checklist, not numbers",
+        )
+        self.assertNotIn("thought_text", str(snap).lower())
