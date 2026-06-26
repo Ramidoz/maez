@@ -3905,13 +3905,33 @@ class MaezDaemon:
             else "degraded",
             service_mode="running",
             uptime_class="fresh",
-            backup_freshness_class="unavailable",
+            backup_freshness_class=self._backup_freshness_class(),
             queue_counts=queue_counts,
             red_gate_modes=red_gate_modes,
             manual_recovery_required=False,
             track_b_confidentiality_mode="track_b_confidentiality_not_ready",
             data_freshness_class=data_freshness_class,
         )
+
+    def _backup_freshness_class(self) -> str:
+        """Read the backup rail without letting backup inspection break health."""
+        try:
+            from core.health.backup_freshness import backup_freshness
+            from scripts.backup.inventory import load_default_manifest
+
+            manifest = load_default_manifest()
+            required_paths = {
+                entry["path"]
+                for entry in manifest.get("entries", ())
+                if entry.get("class") in {"required_continuity", "required_welfare"}
+            }
+            return backup_freshness(
+                backup_root=os.environ.get("MAEZ_BACKUP_ROOT") or (Path.home() / "maez-backups"),
+                required_paths=required_paths,
+            )
+        except Exception as exc:
+            logger.warning("backup freshness unavailable: %s", exc)
+            return "unavailable"
 
     def _mark_cycle_stage(self, stage: str) -> None:
         """Record the current daemon-cycle stage for hang diagnosis."""

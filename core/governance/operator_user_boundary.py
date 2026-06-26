@@ -246,6 +246,7 @@ OPERATOR_SERVICE_MODES = frozenset({
 })
 
 OPERATOR_FRESHNESS_CLASSES = frozenset({
+    "coverage_gap",
     "fresh",
     "stale",
     "unavailable",
