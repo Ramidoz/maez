@@ -1,0 +1,15 @@
+[Unit]
+Description=Fire maez-backup-drill.service daily (restorability kept-true witness)
+
+[Timer]
+# Daily at 03:00 — after the 00:00 backup, so the drill verifies a
+# freshly finalized snapshot. Owner-adjustable: edit the rendered file
+# directly (same convention as maez-backup.timer).
+OnCalendar=*-*-* 03:00:00
+# Fire on next boot if the machine was off at the scheduled time.
+Persistent=true
+
+Unit=maez-backup-drill.service
+
+[Install]
+WantedBy=timers.target

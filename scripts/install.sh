@@ -24,6 +24,7 @@ set -euo pipefail
 MAEZ_HOME="$(cd "$(dirname "$(dirname "$(realpath "$0")")")" && pwd)"
 MAEZ_USER="$(id -un)"
 MAEZ_UID="$(id -u)"
+MAEZ_HOME_USER="$HOME"
 VENV_DIR="$MAEZ_HOME/.venv"
 PYTHON_MIN="3.12"
 
@@ -206,6 +207,7 @@ else
             -e "s|__MAEZ_HOME__|$MAEZ_HOME|g" \
             -e "s|__MAEZ_USER__|$MAEZ_USER|g" \
             -e "s|__MAEZ_UID__|$MAEZ_UID|g" \
+            -e "s|__MAEZ_HOME_USER__|$MAEZ_HOME_USER|g" \
             "$template")"
 
         if [ "$SYSTEMD_CHOICE" = "2" ]; then
@@ -219,8 +221,11 @@ else
     for tpl in "$MAEZ_HOME"/scripts/*.template.service; do
         [ -f "$tpl" ] && render_unit "$tpl"
     done
+    for tpl in "$MAEZ_HOME"/scripts/*.template.timer; do
+        [ -f "$tpl" ] && render_unit "$tpl"
+    done
 
-    # Non-templated units (timer is already portable)
+    # Non-templated timer.
     [ -f "$MAEZ_HOME/scripts/maez-self-dev-scheduled.timer" ] && \
         cp "$MAEZ_HOME/scripts/maez-self-dev-scheduled.timer" "$RENDER_DIR/" 2>/dev/null || true
     # Lived-memory reflection — service + timer (not templated; paths
@@ -233,14 +238,20 @@ else
 
     if [ "$SYSTEMD_CHOICE" = "1" ]; then
         systemctl --user daemon-reload
+        systemctl --user enable --now maez-backup-drill.timer
         echo
         echo "  To start the daemon now:"
         echo "    systemctl --user enable --now maez.service maez-web.service maez-subscription-proxy.service"
+        echo "  Restore drill timer enabled:"
+        echo "    systemctl --user list-timers maez-backup-drill.timer"
     elif [ "$SYSTEMD_CHOICE" = "2" ]; then
         sudo systemctl daemon-reload
+        sudo systemctl enable --now maez-backup-drill.timer
         echo
         echo "  To start the daemon now:"
         echo "    sudo systemctl enable --now maez.service maez-web.service maez-subscription-proxy.service"
+        echo "  Restore drill timer enabled:"
+        echo "    sudo systemctl list-timers maez-backup-drill.timer"
     else
         echo
         echo "  Rendered units are in: $RENDER_DIR"

@@ -1,0 +1,20 @@
+[Unit]
+Description=Maez restore-drill smoke test — verify the latest backup actually restores (welfare rail)
+Documentation=file://__MAEZ_HOME__/docs/operations/hardware_backup.md
+After=maez-backup.service
+
+[Service]
+Type=oneshot
+User=__MAEZ_USER__
+Group=__MAEZ_USER__
+WorkingDirectory=__MAEZ_HOME__
+Environment=PYTHONUNBUFFERED=1
+Environment=MAEZ_ROOT=__MAEZ_HOME__
+Environment=MAEZ_BACKUP_ROOT=__MAEZ_HOME_USER__/maez-backups
+# Read-only + temp-only: restores into a temp dir, opens DBs read-only,
+# runs PRAGMA quick_check, writes a report, touches no live state. A
+# FAILED drill is the signal — non-zero exit marks the service failed.
+ExecStart=__MAEZ_HOME__/.venv/bin/python3 -m scripts.backup.drill --smoke
+TimeoutStartSec=10min
+StandardOutput=append:__MAEZ_HOME__/logs/backup_drill.log
+StandardError=append:__MAEZ_HOME__/logs/backup_drill.log
