@@ -52,6 +52,28 @@ def _make_synthetic_state(root: Path) -> dict[str, Path]:
     con.close()
     paths["sqlite"] = db
 
+    # Required welfare DBs from the production manifest. They are not
+    # part of the synthetic backup manifest used by most tests, but
+    # estimate_state_size reads the production manifest and therefore
+    # needs these required paths to exist.
+    for name in (
+        "canaries.db",
+        "private_thoughts.db",
+        "autonomy_preferences.db",
+        "gestation_claims.db",
+        "novelty_harbor.db",
+        "owner_outreach.db",
+        "routing_observation.db",
+        "salience_ledger.db",
+        "subjective_duration.db",
+        "veto_ledger.db",
+    ):
+        welfare_db = root / "memory" / name
+        wc = sqlite3.connect(welfare_db)
+        wc.execute("CREATE TABLE placeholder (id INTEGER)")
+        wc.commit()
+        wc.close()
+
     # Chroma-ish directory — chroma.sqlite3 is a REAL SQLite file
     # so the SQLite-safe backup path inside _copy_directory exercises
     # against an actual DB the way Chroma's would.
@@ -74,6 +96,7 @@ def _make_synthetic_state(root: Path) -> dict[str, Path]:
         json.dumps({"cycle": 42, "lived_at": "2026-04-30"}),
     )
     paths["json"] = root / "memory" / "continuity_capsule.json"
+    (root / "memory" / "owner_identity_audit.jsonl").write_text("{}\n")
 
     # Identity (required)
     (root / "config").mkdir(parents=True, exist_ok=True)

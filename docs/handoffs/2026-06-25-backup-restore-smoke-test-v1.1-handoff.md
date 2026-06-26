@@ -24,10 +24,11 @@ The old full drill path remains intact. This slice does not touch the daemon, ba
 
 ```bash
 MAEZ_CONFIG=/home/rohit/maez/config /home/rohit/maez/.venv/bin/python -B -m unittest tests.test_restore_smoke -v
+MAEZ_CONFIG=/home/rohit/maez/config /home/rohit/maez/.venv/bin/python -B -m unittest tests.test_restore_smoke tests.test_backup_freshness tests.test_backup_manifest_coverage tests.test_hardware_backup -v
 MAEZ_CONFIG=/home/rohit/maez/config /home/rohit/maez/.venv/bin/ruff check scripts/backup/drill.py tests/test_restore_smoke.py
 ```
 
-Result at handoff: both green.
+Result at handoff: smoke suite 7 OK; nearby backup suite 53 OK; ruff clean.
 
 ## Review Checklist
 
