@@ -59,7 +59,12 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _DRILL_VERSION = 1
+_RESTORE_SMOKE_SCHEMA_VERSION = "backup_restore_smoke.v1.1"
 _DEFAULT_BACKUP_ROOT = Path("/var/tmp/maez-backup-drill")
+_RESTORE_SMOKE_REQUIRED_CLASSES = frozenset({
+    "required_continuity",
+    "required_welfare",
+})
 
 
 # ── helpers ────────────────────────────────────────────────────────
@@ -147,6 +152,151 @@ def sqlite_row_count(db_path: Path, table: str) -> int | None:
             con.close()
     except sqlite3.DatabaseError:
         return None
+
+
+def required_store_entries(state_manifest: dict) -> list[dict]:
+    """Return manifest entries the restore smoke test must verify.
+
+    The backup manifest is the single source of truth: do not keep a
+    second hardcoded list of stores here.
+    """
+    entries = state_manifest.get("entries") or []
+    return [
+        entry
+        for entry in entries
+        if entry.get("class") in _RESTORE_SMOKE_REQUIRED_CLASSES
+    ]
+
+
+def _quote_sqlite_identifier(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _artifact_file_check(
+    *,
+    rel_path: str,
+    backup_dir: Path,
+    files_by_path: dict[str, dict],
+) -> tuple[bool, str, Path | None]:
+    manifest_record = files_by_path.get(rel_path)
+    if manifest_record is None:
+        return False, "missing from backup manifest", None
+    artifact_path = backup_dir / rel_path
+    if not artifact_path.is_file():
+        return False, "missing from backup artifact", None
+    recorded_sha = str(manifest_record.get("sha256") or "")
+    actual_sha = _sha256(artifact_path)
+    if recorded_sha != actual_sha:
+        return False, f"sha256 mismatch recorded={recorded_sha} actual={actual_sha}", None
+    return True, "sha256 ok", artifact_path
+
+
+def _sqlite_table_counts(db_path: Path) -> tuple[str, dict[str, int]]:
+    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        quick_check_row = con.execute("PRAGMA quick_check").fetchone()
+        quick_check = str(quick_check_row[0]) if quick_check_row else ""
+        table_rows = con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+        ).fetchall()
+        row_counts: dict[str, int] = {}
+        for row in table_rows:
+            table = str(row[0])
+            quoted = _quote_sqlite_identifier(table)
+            count_row = con.execute(
+                f"SELECT COUNT(*) FROM {quoted}"  # noqa: S608 - table name is quoted from sqlite_master
+            ).fetchone()
+            row_counts[table] = int(count_row[0]) if count_row else 0
+        return quick_check, row_counts
+    finally:
+        con.close()
+
+
+def verify_backup_entry(
+    entry: dict,
+    *,
+    backup_dir: Path,
+    files_by_path: dict[str, dict],
+    tmp_root: Path,
+) -> dict:
+    """Verify one required manifest entry against the backup artifact.
+
+    This compares the artifact to its own recorded ``manifest.json``.
+    It deliberately does not compare to the live repo.
+    """
+    rel_path = str(entry.get("path") or "")
+    entry_type = str(entry.get("type") or "")
+    record = {
+        "path": rel_path,
+        "type": entry_type,
+        "class": entry.get("class"),
+    }
+    if not rel_path:
+        return {**record, "status": "fail", "detail": "manifest entry missing path"}
+
+    if entry_type == "sqlite_db":
+        ok, detail, artifact_path = _artifact_file_check(
+            rel_path=rel_path,
+            backup_dir=backup_dir,
+            files_by_path=files_by_path,
+        )
+        if not ok or artifact_path is None:
+            return {**record, "status": "fail", "detail": detail}
+        tmp_db = tmp_root / rel_path
+        tmp_db.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(artifact_path, tmp_db)
+        try:
+            quick_check, row_counts = _sqlite_table_counts(tmp_db)
+        except sqlite3.DatabaseError as exc:
+            return {
+                **record,
+                "status": "fail",
+                "detail": f"sqlite open failed: {type(exc).__name__}: {exc}",
+            }
+        status = "pass" if quick_check == "ok" else "fail"
+        return {
+            **record,
+            "status": status,
+            "detail": "sqlite quick_check ok" if status == "pass" else "sqlite quick_check failed",
+            "quick_check": quick_check,
+            "row_counts": row_counts,
+        }
+
+    if entry_type in {"file", "secret_file"}:
+        ok, detail, _ = _artifact_file_check(
+            rel_path=rel_path,
+            backup_dir=backup_dir,
+            files_by_path=files_by_path,
+        )
+        return {**record, "status": "pass" if ok else "fail", "detail": detail}
+
+    if entry_type == "directory":
+        prefix = rel_path.rstrip("/") + "/"
+        child_paths = sorted(p for p in files_by_path if p.startswith(prefix))
+        if not child_paths:
+            return {**record, "status": "fail", "detail": "directory has no manifest files"}
+        failures = []
+        for child in child_paths:
+            ok, detail, _ = _artifact_file_check(
+                rel_path=child,
+                backup_dir=backup_dir,
+                files_by_path=files_by_path,
+            )
+            if not ok:
+                failures.append(f"{child}: {detail}")
+        if failures:
+            return {**record, "status": "fail", "detail": "; ".join(failures[:3])}
+        return {
+            **record,
+            "status": "pass",
+            "detail": f"{len(child_paths)} files present with matching sha256",
+        }
+
+    return {
+        **record,
+        "status": "skip",
+        "detail": f"restore smoke does not inspect type {entry_type!r}",
+    }
 
 
 def build_drill_report(
