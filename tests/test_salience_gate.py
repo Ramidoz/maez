@@ -1,4 +1,6 @@
 import unittest
+from pathlib import Path
+import tempfile
 
 from core.cognition.salience_gate import (
     MAX_FACT_SHARE,
@@ -144,3 +146,29 @@ class WelfareBaselineTest(unittest.TestCase):
             "captured by human witness checklist, not numbers",
         )
         self.assertNotIn("thought_text", str(snap).lower())
+
+
+class GateReportTest(unittest.TestCase):
+    def test_gate_report_runs_over_a_db(self):
+        from core.cognition.salience_gate import gate_report
+        from core.cognition.salience_ledger import SalienceLedger
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = SalienceLedger(Path(tmp) / "salience.db")
+            rep = gate_report(
+                ledger_path=ledger.db_path,
+                welfare={"backup_freshness": "unavailable"},
+            )
+        self.assertEqual(rep["gate_state"], "BASELINE_ONLY")
+        self.assertEqual(rep["counts"]["total"], 0)
+
+    def test_gate_report_missing_db_is_baseline_only(self):
+        from core.cognition.salience_gate import gate_report
+
+        with tempfile.TemporaryDirectory() as tmp:
+            rep = gate_report(
+                ledger_path=Path(tmp) / "missing.db",
+                welfare={"backup_freshness": "fresh"},
+            )
+        self.assertEqual(rep["gate_state"], "BASELINE_ONLY")
+        self.assertEqual(rep["counts"]["total"], 0)

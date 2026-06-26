@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from collections import Counter
 import math
+from pathlib import Path
+import sqlite3
 
 GATE_VERSION = "salience_gate.v0"
 
@@ -216,3 +218,30 @@ def welfare_baseline(
             "note": "captured by human witness checklist, not numbers",
         },
     }
+
+
+def gate_report(*, ledger_path: str | Path, welfare: dict | None = None) -> dict:
+    """Read the ledger on demand and evaluate it without creating or writing DBs."""
+    path = Path(ledger_path)
+    if not path.exists():
+        return evaluate_gate([], welfare=welfare or {})
+
+    uri = f"file:{path.resolve()}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    try:
+        conn.row_factory = sqlite3.Row
+        rows = [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT arm, fact_key, thought_formed, non_duplicate_stored,
+                       repetition_signal, unmoved
+                FROM salience_ledger
+                """
+            ).fetchall()
+        ]
+    except sqlite3.OperationalError:
+        rows = []
+    finally:
+        conn.close()
+    return evaluate_gate(rows, welfare=welfare or {})
