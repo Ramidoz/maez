@@ -469,7 +469,7 @@ class PromotionBehaviorTests(M1PromotionTestCase):
 
     def test_m1_rejects_invalid_s4_policy_with_content_free_counter(self):
         with self.assertRaises(ValueError):
-            self.promoter.mark_current_window_s4_policy("symptom_fear")  # type: ignore[arg-type]
+            self.promoter.mark_current_window_s4_policy("not_a_real_s4_policy")  # type: ignore[arg-type]
 
         self.assertEqual(
             self.promoter.status_health()["invalid_s4_skip_reason_rejected_count"],

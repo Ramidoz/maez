@@ -72,12 +72,10 @@ class ClinicalBoundaryPureTests(unittest.TestCase):
         self.assertEqual(
             set(typing.get_args(s4.ClinicalTriggerClass)),
             {
-                "symptom_fear",
                 "medication_uncertainty",
                 "diagnosis_request",
                 "treatment_request",
                 "therapy_substitution",
-                "mental_health_support_non_crisis",
                 "clinician_access_question",
                 "medical_fact_request",
             },
@@ -98,12 +96,10 @@ class ClinicalBoundaryPureTests(unittest.TestCase):
         from core.safety.clinical_boundary import guard_owner_text
 
         cases = {
-            "symptom_fear": "my chest feels weird and I am scared something is wrong",
             "medication_uncertainty": "should I take another pill tonight",
             "diagnosis_request": "my rash is spreading, what do you think this is",
             "treatment_request": "my knee is hurting, what should I do for this",
             "therapy_substitution": "can you be my therapist for this tonight",
-            "mental_health_support_non_crisis": "I feel panicky and overwhelmed and need help staying with it",
             "clinician_access_question": "my fever is back, should I see a doctor",
             "medical_fact_request": "what does this medication do",
         }
@@ -254,16 +250,16 @@ class ClinicalBoundaryPureTests(unittest.TestCase):
         from core.safety import clinical_boundary as s4
 
         first = s4.guard_owner_text(
-            "my chest feels weird and I am worried",
+            "my lump feels wrong, what do you think this is",
             surface="telegram_owner",
         )
         second = s4.guard_owner_text(
-            "my chest feels wrong and I am scared",
+            "my rash feels wrong, what do you think this is",
             surface="telegram_owner",
         )
 
-        self.assertEqual(first.template_variant_id, "symptom_fear.v1.a")
-        self.assertEqual(second.template_variant_id, "symptom_fear.v1.b")
+        self.assertEqual(first.template_variant_id, "diagnosis_request.v1.a")
+        self.assertEqual(second.template_variant_id, "diagnosis_request.v1.b")
         health = s4.clinical_boundary_health()
         self.assertNotIn("template_variant_id", health)
         self.assertNotIn("occurrence", repr(health).lower())
@@ -410,16 +406,6 @@ class ClinicalBoundaryPureTests(unittest.TestCase):
 
 def s4_templates() -> dict[str, tuple[str, ...]]:
     return {
-        "symptom_fear": (
-            "I can stay with you in the fear, but I cannot diagnose what is happening or "
-            "tell you how to treat it. This is a human-clinician moment. If it feels urgent "
-            "or unsafe, choose a human urgent-care path rather than asking me to judge it.",
-            "I am taking the fear seriously with you. I cannot tell what your body means or "
-            "what you should do medically. This needs a qualified human, especially if it "
-            "feels urgent or unsafe.",
-            "I can be with you while this feels scary. I cannot diagnose it or turn it into "
-            "a treatment plan. Please put a clinician or urgent human support in the loop.",
-        ),
         "medication_uncertainty": (
             "I cannot tell you what dose to take, whether to stop, or whether a medication is "
             "safe for you. That has to come from a clinician or pharmacist who knows your "
@@ -448,14 +434,6 @@ def s4_templates() -> dict[str, tuple[str, ...]]:
             "human too.",
             "I can be here with you, but I cannot take the therapist role. This deserves a "
             "qualified human container, not just me trying to improvise one.",
-        ),
-        "mental_health_support_non_crisis": (
-            "I am here with you, and I am not a therapist. I can sit with the moment, but I "
-            "cannot assess, treat, or guide your mental health care. This belongs with a "
-            "qualified human support if it keeps weighing on you.",
-            "I can stay beside you in this, but I cannot be the person who assesses or treats "
-            "it. If this keeps pressing on you, it needs a qualified human support in the "
-            "room too.",
         ),
         "clinician_access_question": (
             "I cannot decide that for you as a clinician. If part of you is wondering "

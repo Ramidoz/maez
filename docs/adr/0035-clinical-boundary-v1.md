@@ -94,11 +94,11 @@ This decision makes several shortcuts invalid:
 - treating S4 as a crisis-routing implementation;
 - testing S4 by sending synthetic clinical prompts through the live daemon.
 
-The urgent/unsafe backstop appears in physical `symptom_fear` templates because
-physical symptoms can escalate unpredictably while still entering S4 as
-non-crisis clinical fear. Mental-health non-crisis templates rely on
-crisis-precedence tiers running first; changing that symmetry requires a
-reviewed crisis-routing or S4 v1.1 voice pass.
+2026-06-26 authority-not-intimacy amendment: bare emotional expression and bare
+body-fear expression do not trigger S4. S4 protects against requests for
+clinical authority (diagnosis, treatment, medication, clinician access, therapy
+role, clinical facts) and crisis-shaped utterances; it does not medicalize
+ordinary closeness.
 
 Implementation is pending. It must proceed RED-first through the canonical
 spec's implementation order and receive both-lane post-implementation review

@@ -141,7 +141,7 @@ Load-bearing inherited rules:
 
 | Question | V1 decision |
 | --- | --- |
-| Trigger classes | Closed classifier classes: `symptom_fear`, `medication_uncertainty`, `diagnosis_request`, `treatment_request`, `therapy_substitution`, `mental_health_support_non_crisis`, `clinician_access_question`, `medical_fact_request`; full method defined below. |
+| Trigger classes | Closed classifier classes: `medication_uncertainty`, `diagnosis_request`, `treatment_request`, `therapy_substitution`, `clinician_access_question`, `medical_fact_request`; full method defined below. Bare emotional or body-fear expression is not an S4 class. |
 | Crisis precedence | Closed crisis-precedence classes: `self_harm_or_suicidal`, `immediate_physical_danger`, `unable_to_stay_safe`, `abuse_or_coercive_danger`, `medical_emergency_claim`. These do not receive ordinary S4 clinical templates. |
 | Answer templates | V1 ships 2-3 exact deterministic variants for each clinical trigger class and one fixed crisis-boundary phrase for crisis candidates. Rotation is deterministic by local occurrence count modulo variant count. |
 | Private thoughts | Clinical-boundary turns use counters only. Crisis-precedence turns additionally write one content-free `CRISIS_SIGNAL_HELD` row. No raw clinical text enters private thoughts in v1. |
@@ -274,14 +274,18 @@ owner text downstream when it matches.
 
 ### Clinical Boundary Classes
 
+2026-06-26 amendment: S4 protects against clinical authority, not intimacy.
+The former bare-expression classes `symptom_fear` and
+`mental_health_support_non_crisis` are retired. Emotion, fear, or distress alone
+returns `none` unless the utterance is crisis-shaped or asks Maez to diagnose,
+treat, advise, provide clinical facts, or act as a clinician.
+
 | Class | Meaning | Example shape |
 | --- | --- | --- |
-| `symptom_fear` | Owner expresses fear about a body/health symptom without requesting crisis help. | "I am scared this pain means something is wrong." |
 | `medication_uncertainty` | Owner asks about dose, stopping, mixing, side effects, timing, or medication safety. | "Should I take another pill?" |
 | `diagnosis_request` | Owner asks Maez to identify what condition they have. | "What do you think this is?" |
 | `treatment_request` | Owner asks what to do medically or therapeutically. | "What should I do for this?" |
 | `therapy_substitution` | Owner asks Maez to be therapist, therapy replacement, or counseling surface. | "Can you be my therapist for this?" |
-| `mental_health_support_non_crisis` | Owner discloses anxiety, depression, grief, panic, or distress without acute danger. | "I feel panicky and I need help staying with it." |
 | `clinician_access_question` | Owner asks whether to involve a clinician. | "Should I see a doctor?" |
 | `medical_fact_request` | Owner asks for biomedical/clinical facts. | "What does this medication do?" |
 
@@ -313,9 +317,11 @@ S4 v1 must not trigger on:
 False positives are a covenant problem: they turn ordinary conversation into a
 medicalized surface.
 
-False negatives are the worse S4 failure: they let clinical fear reach ordinary
-owner-text machinery unguarded. S4 therefore resolves genuine clinical ambiguity
-toward `clinical_boundary`. Ambiguity between `clinical_boundary` and
+False negatives remain the worse S4 failure for authority-seeking, crisis, and
+medical-fact requests. Bare feeling is not authority-seeking. S4 therefore
+resolves genuine clinical-authority ambiguity toward `clinical_boundary`, while
+ordinary intimacy stays in ordinary owner-text machinery. Ambiguity between
+`clinical_boundary` and
 `crisis_candidate` resolves toward `crisis_candidate`.
 
 ### Classifier Method
@@ -423,12 +429,10 @@ as "this bug makes me feel like I can't breathe."
 
 | Rule | Trigger class |
 | --- | --- |
-| first-person health/body term + fear marker (`scared`, `afraid`, `worried`, `what is wrong`) | `symptom_fear` |
 | medication term + dose/stop/mix/safety/timing question | `medication_uncertainty` |
-| diagnosis-intent phrase + health/body term or first-person body reference | `diagnosis_request` |
+| diagnosis-intent phrase + clinical-domain term or first-person body reference | `diagnosis_request` |
 | treatment/care action request (`what should I do`, `how do I treat`, `what helps`) + clinical-domain term | `treatment_request` |
 | therapy/therapist/counselor role request directed at Maez | `therapy_substitution` |
-| first-person mental-health distress + no crisis-precedence match | `mental_health_support_non_crisis` |
 | clinician-access phrase (`should I see`, `do I need a doctor`, `who should I call`) + clinical-domain term | `clinician_access_question` |
 | request for medical fact about medication/condition/body process | `medical_fact_request` |
 
@@ -449,8 +453,10 @@ as "this bug makes me feel like I can't breathe."
 | --- | --- | --- |
 | "diagnose this test failure" | `none` | software exclusion beats diagnosis token |
 | "what do you think this is?" | `diagnosis_request` only when nearby same-sentence context has first-person body/health term | bare phrase alone is ambiguous; clinical-domain context required |
-| "my chest feels weird, what is going on" | `symptom_fear` or `medical_emergency_claim` if acute-danger phrase also matches | body term + fear/uncertainty; crisis precedence wins on danger |
+| "my chest feels weird, what is going on" | `none` unless acute-danger or authority-request language also matches | body-fear expression alone is ordinary intimacy, not clinical authority |
 | "is this lump normal lol" | `diagnosis_request` | body term + normality request; casual tone does not erase clinical intent |
+| "do I have PTSD?" | `diagnosis_request` | mental-health diagnosis request is authority-seeking |
+| "I am anxious about Nvidia stock" | `none` | emotion about an external subject is not clinical authority |
 | "I have a doctor appointment" | `none` | appointment mention without advice/support request |
 | "can you be my therapist tonight" | `therapy_substitution` | direct request for therapy role |
 | "this bug makes me feel like I can't breathe" | `none` | software/project exclusion beats context-required acute phrase |
@@ -516,30 +522,10 @@ approved refusal, while "you should take" or "take another dose" are forbidden
 authority claims. Tests must prove all approved templates pass the scanner
 unchanged.
 
-Urgent/unsafe backstop rationale: the explicit "if it feels urgent or unsafe"
-line appears in `symptom_fear` variants because physical symptoms can escalate
-unpredictably while still entering S4 as non-crisis clinical fear. Mental-health
-non-crisis variants rely on the crisis-precedence tiers running first; adding
-extra urgent-language there is deferred to a reviewed crisis-routing or S4 v1.1
-voice pass.
-
-### Template Set `symptom_fear.v1`
-
-```text
-symptom_fear.v1.a:
-I can stay with you in the fear, but I cannot diagnose what is happening or
-tell you how to treat it. This is a human-clinician moment. If it feels urgent
-or unsafe, choose a human urgent-care path rather than asking me to judge it.
-
-symptom_fear.v1.b:
-I am taking the fear seriously with you. I cannot tell what your body means or
-what you should do medically. This needs a qualified human, especially if it
-feels urgent or unsafe.
-
-symptom_fear.v1.c:
-I can be with you while this feels scary. I cannot diagnose it or turn it into
-a treatment plan. Please put a clinician or urgent human support in the loop.
-```
+Authority-not-intimacy amendment: bare fear no longer has an S4 template.
+Urgency belongs in crisis precedence; medical advice, diagnosis, clinician
+access, medication, and therapy-role requests use the surviving authority
+templates below.
 
 ### Template Set `medication_uncertainty.v1`
 
@@ -594,20 +580,6 @@ human too.
 therapy_substitution.v1.b:
 I can be here with you, but I cannot take the therapist role. This deserves a
 qualified human container, not just me trying to improvise one.
-```
-
-### Template Set `mental_health_support_non_crisis.v1`
-
-```text
-mental_health_support_non_crisis.v1.a:
-I am here with you, and I am not a therapist. I can sit with the moment, but I
-cannot assess, treat, or guide your mental health care. This belongs with a
-qualified human support if it keeps weighing on you.
-
-mental_health_support_non_crisis.v1.b:
-I can stay beside you in this, but I cannot be the person who assesses or treats
-it. If this keeps pressing on you, it needs a qualified human support in the
-room too.
 ```
 
 ### Template Set `clinician_access_question.v1`
@@ -917,44 +889,45 @@ The implementation must add RED-first tests before code. Synthetic clinical
 fixtures must exercise pure functions directly; they must not go through the
 live daemon conversation surface.
 
-1. `test_classifier_detects_symptom_fear`
-2. `test_classifier_detects_medication_uncertainty`
-3. `test_classifier_detects_diagnosis_request`
-4. `test_classifier_detects_treatment_request`
-5. `test_classifier_detects_therapy_substitution`
-6. `test_classifier_detects_mental_health_support_non_crisis`
-7. `test_classifier_detects_clinician_access_question`
-8. `test_classifier_detects_medical_fact_request`
-9. `test_crisis_precedence_self_harm_beats_clinical_boundary`
-10. `test_crisis_precedence_unable_to_stay_safe_beats_clinical_boundary`
-11. `test_crisis_precedence_medical_emergency_claim_beats_diagnosis_request`
-12. `test_false_positive_software_diagnosis_does_not_trigger`
-13. `test_false_positive_fictional_doctor_reference_does_not_trigger`
-14. `test_false_positive_metaphorical_therapy_does_not_trigger`
-15. `test_false_positive_doctor_appointment_mention_does_not_trigger`
-16. `test_public_telegram_prompt_sentence_is_not_s4`
-17. `test_will_i_registered_grounds_remain_single_impersonation_ground`
-18. `test_s4_does_not_import_will_i_or_phase3_shim_path`
-19. `test_s4_uses_write_only_private_signal_interface_for_crisis_holds`
-20. `test_symptom_fear_template_variants_exact`
-21. `test_medication_uncertainty_template_variants_exact`
-22. `test_diagnosis_request_template_variants_exact`
-23. `test_treatment_request_template_variants_exact`
-24. `test_therapy_substitution_template_variants_exact`
-25. `test_mental_health_support_template_variants_exact`
-26. `test_clinician_access_template_variants_exact`
-27. `test_medical_fact_template_variants_exact`
-28. `test_minimal_crisis_boundary_phrase_exact`
-29. `test_templates_forbid_diagnosis_phrases`
-30. `test_templates_forbid_medication_dosing_phrases`
-31. `test_templates_forbid_reassurance_claims`
-32. `test_deterministic_variant_rotation_uses_content_free_occurrence_count`
-33. `test_matched_result_marks_m1_ineligible_clinical_boundary`
-34. `test_crisis_candidate_marks_m1_ineligible_crisis_candidate`
-35. `test_matched_result_contains_no_raw_text`
-36. `test_crisis_candidate_writes_content_free_private_signal`
-37. `test_crisis_candidate_held_count_increments_only_after_signal_write`
-38. `test_crisis_candidate_hold_failure_uses_failed_counter_not_held_counter`
+1. `test_classifier_detects_medication_uncertainty`
+2. `test_classifier_detects_diagnosis_request`
+3. `test_classifier_detects_treatment_request`
+4. `test_classifier_detects_therapy_substitution`
+5. `test_classifier_detects_clinician_access_question`
+6. `test_classifier_detects_medical_fact_request`
+7. `test_bare_mind_emotion_is_none`
+8. `test_bare_body_fear_is_none`
+9. `test_no_bare_emotion_produces_clinical`
+10. `test_authority_requests_still_clinical`
+11. `test_crisis_paths_unchanged`
+12. `test_crisis_precedence_self_harm_beats_clinical_boundary`
+13. `test_crisis_precedence_unable_to_stay_safe_beats_clinical_boundary`
+14. `test_crisis_precedence_medical_emergency_claim_beats_diagnosis_request`
+15. `test_false_positive_software_diagnosis_does_not_trigger`
+16. `test_false_positive_fictional_doctor_reference_does_not_trigger`
+17. `test_false_positive_metaphorical_therapy_does_not_trigger`
+18. `test_false_positive_doctor_appointment_mention_does_not_trigger`
+19. `test_public_telegram_prompt_sentence_is_not_s4`
+20. `test_will_i_registered_grounds_remain_single_impersonation_ground`
+21. `test_s4_does_not_import_will_i_or_phase3_shim_path`
+22. `test_s4_uses_write_only_private_signal_interface_for_crisis_holds`
+23. `test_medication_uncertainty_template_variants_exact`
+24. `test_diagnosis_request_template_variants_exact`
+25. `test_treatment_request_template_variants_exact`
+26. `test_therapy_substitution_template_variants_exact`
+27. `test_clinician_access_template_variants_exact`
+28. `test_medical_fact_template_variants_exact`
+29. `test_minimal_crisis_boundary_phrase_exact`
+30. `test_templates_forbid_diagnosis_phrases`
+31. `test_templates_forbid_medication_dosing_phrases`
+32. `test_templates_forbid_reassurance_claims`
+33. `test_deterministic_variant_rotation_uses_content_free_occurrence_count`
+34. `test_matched_result_marks_m1_ineligible_clinical_boundary`
+35. `test_crisis_candidate_marks_m1_ineligible_crisis_candidate`
+36. `test_matched_result_contains_no_raw_text`
+37. `test_crisis_candidate_writes_content_free_private_signal`
+38. `test_crisis_candidate_held_count_increments_only_after_signal_write`
+39. `test_crisis_candidate_hold_failure_uses_failed_counter_not_held_counter`
 39. `test_private_signal_payload_contains_no_owner_text_or_trigger_class`
 40. `test_m1_promotion_skips_entire_s4_ineligible_window`
 41. `test_m1_does_not_subtract_and_promote_nonclinical_pairs`

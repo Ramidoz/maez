@@ -185,7 +185,7 @@ class ClinicalBoundarySidecarTests(unittest.TestCase):
                     "clinical_boundary_guard_rejected_count": 0,
                     "invalid_trigger_class_rejected_count": 0,
                     "m1_ineligible_mark_count": 13,
-                    "template_variant_id": "symptom_fear.v1.a",
+                    "template_variant_id": "diagnosis_request.v1.a",
                 },
                 "camera_presence": {"mode": "disabled", "enabled": False},
                 "lived_episodes": {"m1": {"enabled": True}},
@@ -198,7 +198,7 @@ class ClinicalBoundarySidecarTests(unittest.TestCase):
         self.assertEqual(sample["clinical_boundary_present"], True)
         self.assertNotIn("clinical_boundary", sample)
         self.assertNotIn("clinical_boundary_triggered_count", repr(sample))
-        self.assertNotIn("symptom_fear", repr(sample))
+        self.assertNotIn("diagnosis_request", repr(sample))
         self.assertEqual(red_gates(sample), [])
 
     def test_sidecar_red_gates_s4_invalid_and_failed_counters_without_counter_values(self):

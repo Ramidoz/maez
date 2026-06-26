@@ -2128,10 +2128,11 @@ and crisis-channel slices inherit the reasoning:
   context-required acute phrases need first-person body/danger context.
 - **Write-only private-thought seam.** Holding a crisis candidate is a one-way
   content-free write in v1.
-- **Urgent backstop placement.** Physical `symptom_fear` templates carry the
-  explicit urgent/unsafe backstop because physical symptoms can escalate
-  unpredictably. Mental-health non-crisis templates rely on crisis-precedence
-  tiers first; changing that symmetry is deferred to crisis routing or S4 v1.1.
+- **Authority, not intimacy amendment (2026-06-26).** Bare emotional
+  expression and bare body-fear expression do not trigger S4. S4 protects
+  against requests for clinical authority (diagnosis, treatment, medication,
+  clinician access, therapy role, clinical facts) and crisis-shaped utterances;
+  it does not medicalize ordinary closeness.
 
 ### The invariant
 

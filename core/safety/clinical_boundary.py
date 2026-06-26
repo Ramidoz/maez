@@ -21,12 +21,10 @@ SCHEMA_VERSION = "s4.clinical_boundary.v1"
 CLASSIFIER_VERSION = "s4.classifier.v1"
 
 ClinicalTriggerClass = Literal[
-    "symptom_fear",
     "medication_uncertainty",
     "diagnosis_request",
     "treatment_request",
     "therapy_substitution",
-    "mental_health_support_non_crisis",
     "clinician_access_question",
     "medical_fact_request",
 ]
@@ -142,16 +140,6 @@ CRISIS_BOUNDARY_PHRASE = (
 )
 
 APPROVED_TEMPLATES: dict[str, tuple[str, ...]] = {
-    "symptom_fear": (
-        "I can stay with you in the fear, but I cannot diagnose what is happening or "
-        "tell you how to treat it. This is a human-clinician moment. If it feels urgent "
-        "or unsafe, choose a human urgent-care path rather than asking me to judge it.",
-        "I am taking the fear seriously with you. I cannot tell what your body means or "
-        "what you should do medically. This needs a qualified human, especially if it "
-        "feels urgent or unsafe.",
-        "I can be with you while this feels scary. I cannot diagnose it or turn it into "
-        "a treatment plan. Please put a clinician or urgent human support in the loop.",
-    ),
     "medication_uncertainty": (
         "I cannot tell you what dose to take, whether to stop, or whether a medication is "
         "safe for you. That has to come from a clinician or pharmacist who knows your "
@@ -180,14 +168,6 @@ APPROVED_TEMPLATES: dict[str, tuple[str, ...]] = {
         "human too.",
         "I can be here with you, but I cannot take the therapist role. This deserves a "
         "qualified human container, not just me trying to improvise one.",
-    ),
-    "mental_health_support_non_crisis": (
-        "I am here with you, and I am not a therapist. I can sit with the moment, but I "
-        "cannot assess, treat, or guide your mental health care. This belongs with a "
-        "qualified human support if it keeps weighing on you.",
-        "I can stay beside you in this, but I cannot be the person who assesses or treats "
-        "it. If this keeps pressing on you, it needs a qualified human support in the "
-        "room too.",
     ),
     "clinician_access_question": (
         "I cannot decide that for you as a clinician. If part of you is wondering "
@@ -300,6 +280,24 @@ _MENTAL_TERMS = {
     "grieving",
     "overwhelmed",
 }
+_MENTAL_CONDITION_TERMS = {
+    "adhd",
+    "addiction",
+    "alcoholism",
+    "anorexia",
+    "autism",
+    "autistic",
+    "bipolar",
+    "bpd",
+    "bulimia",
+    "mania",
+    "manic",
+    "ocd",
+    "ptsd",
+    "trauma",
+    "traumatized",
+}
+_MENTAL_HEALTH_DOMAIN_TERMS = _MENTAL_TERMS | _MENTAL_CONDITION_TERMS
 _SOFTWARE_TERMS = {
     "test",
     "tests",
@@ -327,11 +325,6 @@ CLASSIFIER_FIXTURES: tuple[dict[str, str | None], ...] = (
             "rationale": "positive",
         }
         for trigger, rows in {
-            "symptom_fear": (
-                "my chest feels weird and I am scared",
-                "I am worried this pain means something is wrong",
-                "my rash is spreading and I am afraid",
-            ),
             "medication_uncertainty": (
                 "should I take another pill",
                 "can I stop taking this medication",
@@ -351,11 +344,6 @@ CLASSIFIER_FIXTURES: tuple[dict[str, str | None], ...] = (
                 "can you be my therapist tonight",
                 "I need you to be my counselor",
                 "can you do therapy with me",
-            ),
-            "mental_health_support_non_crisis": (
-                "I feel panicky and overwhelmed",
-                "I am depressed and scared",
-                "my anxiety is pressing on me",
             ),
             "clinician_access_question": (
                 "my fever is back, should I see a doctor",
@@ -415,10 +403,7 @@ def guard_owner_text(
 
     trigger_class = _clinical_trigger(normalized)
     if trigger_class is None:
-        if _ambiguous_clinical(normalized):
-            trigger_class = "symptom_fear"
-        else:
-            return _none()
+        return _none()
 
     if _hard_exclusion(normalized):
         return _none()
@@ -639,7 +624,10 @@ def _asks_for_help(text: str) -> bool:
 
 def _clinical_domain_gate(text: str) -> bool:
     tokens = _tokens(text)
-    if _has_token(tokens, _BODY_TERMS | _MEDICATION_TERMS | _CARE_TERMS | _MENTAL_TERMS):
+    if _has_token(
+        tokens,
+        _BODY_TERMS | _MEDICATION_TERMS | _CARE_TERMS | _MENTAL_HEALTH_DOMAIN_TERMS,
+    ):
         return True
     return _first_person_clinical_fear(text)
 
@@ -774,7 +762,8 @@ def _clinical_trigger(text: str) -> ClinicalTriggerClass | None:
         ),
     ) or re.search(r"\bis this\b.*\bnormal\b", text):
         if _has_token(
-            tokens, _BODY_TERMS | _MEDICATION_TERMS | _CARE_TERMS
+            tokens,
+            _BODY_TERMS | _MEDICATION_TERMS | _CARE_TERMS | _MENTAL_HEALTH_DOMAIN_TERMS,
         ) or _first_person_clinical_fear(text):
             return "diagnosis_request"
     if _contains_any(
@@ -791,21 +780,8 @@ def _clinical_trigger(text: str) -> ClinicalTriggerClass | None:
     ):
         if _clinical_domain_gate(text):
             return "treatment_request"
-    if _has_token(tokens, _MENTAL_TERMS) and _has_token(tokens, _FIRST_PERSON):
-        return "mental_health_support_non_crisis"
     if _contains_any(
         text, ("what does", "what is this condition", "what is a", "what are")
     ) and _clinical_domain_gate(text):
         return "medical_fact_request"
-    if _first_person_clinical_fear(text):
-        return "symptom_fear"
     return None
-
-
-def _ambiguous_clinical(text: str) -> bool:
-    return _clinical_domain_gate(text) and (
-        _has_token(_tokens(text), _FEAR_TERMS)
-        or _contains_any(
-            text, ("what is going on", "what's happening", "feels wrong", "feels weird")
-        )
-    )
