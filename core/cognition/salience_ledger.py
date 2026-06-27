@@ -8,6 +8,7 @@ loop's own per-pulse signals; `unmoved` is neutral, never failure.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import sqlite3
 from pathlib import Path
@@ -15,6 +16,34 @@ from pathlib import Path
 LEDGER_VERSION = "salience_ledger.v0"
 SALIENCE_LEDGER_PATH_ENV = "MAEZ_SALIENCE_LEDGER_PATH"
 WITHHOLD_EVERY = 5
+
+
+def new_run_id(*, now_ms: int, pid: int) -> str:
+    """Process-stable, restart-distinct run identity for pulse_ids."""
+    return f"r{int(now_ms)}_{int(pid)}"
+
+
+def make_pulse_id(run_id: str, seq: int) -> str:
+    """Compose a globally unique pulse page number: run identity plus seq."""
+    return f"{run_id}.seq{int(seq)}"
+
+
+def make_proposal_hash(
+    *, pulse_id: str, strategy: str, arm: str, fact_key: str, change_kind: str
+) -> str:
+    """Bind a proposal row to its full pulse_id, not a bare local counter."""
+    return hashlib.sha256(
+        json.dumps(
+            {
+                "pulse_id": str(pulse_id),
+                "strategy": str(strategy),
+                "arm": str(arm),
+                "fact_key": str(fact_key),
+                "change_kind": str(change_kind),
+            },
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()[:16]
 
 
 def _default_salience_ledger_path() -> Path:
