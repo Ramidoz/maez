@@ -204,6 +204,7 @@ class LeanIdleDaemonTest(unittest.TestCase):
         daemon = object.__new__(MaezDaemon)
         daemon._salience_pending = None
         daemon._salience_pulse_seq = 0
+        daemon._salience_run_id = "r1000_42"
         daemon._salience_ledger = SalienceLedger(
             pathlib.Path(tempfile.mkdtemp()) / "salience.db"
         )
@@ -233,12 +234,54 @@ class LeanIdleDaemonTest(unittest.TestCase):
 
         rows = daemon._salience_ledger.recent(limit=5)
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["pulse_id"], "seq1")
+        self.assertEqual(rows[0]["pulse_id"], "r1000_42.seq1")
         self.assertEqual(rows[0]["strategy"], "changed_since_last")
         self.assertIn(rows[0]["arm"], ("proposed", "control_withheld"))
         self.assertEqual(rows[0]["fact_key"], "time_facts")
         self.assertEqual(rows[0]["change_kind"], "changed")
         self.assertTrue(rows[0]["non_duplicate_stored"])
+
+    def test_salience_pulse_id_uses_process_run_namespace(self) -> None:
+        from daemon.maez_daemon import MaezDaemon
+
+        daemon = object.__new__(MaezDaemon)
+        daemon._salience_pending = None
+        daemon._salience_pulse_seq = 0
+        daemon._salience_run_id = None
+
+        with (
+            mock.patch.dict(
+                "os.environ", {"MAEZ_SALIENCE_BROKER_SHADOW": "1"}, clear=False
+            ),
+            mock.patch("daemon.maez_daemon.time.time", side_effect=[1.234, 9.999]),
+            mock.patch("daemon.maez_daemon.os.getpid", side_effect=[42, 99]),
+        ):
+            pulse_id = daemon._record_salience_outcomes(
+                [],
+                {
+                    "note_chars": 0,
+                    "stored": False,
+                    "skip_reason": "heartbeat_ok_or_rejected",
+                },
+                strategy="changed_since_last",
+                pulse_signature="sig-run",
+                cold_start=False,
+            )
+            pulse_id_2 = daemon._record_salience_outcomes(
+                [],
+                {
+                    "note_chars": 0,
+                    "stored": False,
+                    "skip_reason": "heartbeat_ok_or_rejected",
+                },
+                strategy="changed_since_last",
+                pulse_signature="sig-run-2",
+                cold_start=False,
+            )
+
+        self.assertEqual(pulse_id, "r1234_42.seq1")
+        self.assertEqual(pulse_id_2, "r1234_42.seq2")
+        self.assertEqual(daemon._salience_pending["pulse_id"], "r1234_42.seq2")
 
     def test_quiet_pulse_records_control_none_baseline(self) -> None:
         import pathlib
@@ -408,6 +451,7 @@ class LeanIdleDaemonTest(unittest.TestCase):
             "outcome": {"note_chars": 0, "stored": False, "skip_reason": "heartbeat_ok"},
         }
         daemon._salience_pulse_seq = 1
+        daemon._salience_run_id = "r1000_42"
 
         class BrokenLedger:
             def record(self, **kwargs):
@@ -426,8 +470,8 @@ class LeanIdleDaemonTest(unittest.TestCase):
                 cold_start=False,
             )
 
-        self.assertEqual(pulse_id, "seq2")
-        self.assertEqual(daemon._salience_pending["pulse_id"], "seq2")
+        self.assertEqual(pulse_id, "r1000_42.seq2")
+        self.assertEqual(daemon._salience_pending["pulse_id"], "r1000_42.seq2")
         self.assertEqual(daemon._salience_pending["rows"][0]["fact_key"], "body_state")
 
     def test_salience_broker_only_records_blank_heartbeat_outcome(self) -> None:

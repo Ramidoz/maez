@@ -3457,6 +3457,7 @@ class MaezDaemon:
         self._salience_broker_baseline: dict | None = None
         self._salience_pending: dict | None = None
         self._salience_pulse_seq = 0
+        self._salience_run_id = None
         self._salience_ledger = None
         self._greeted_this_session = False
         self._last_departure_time: float | None = None
@@ -5161,10 +5162,21 @@ class MaezDaemon:
     ) -> str | None:
         if not _salience_broker_shadow_enabled():
             return None
-        from core.cognition.salience_ledger import assign_arm, derive_outcome
+        from core.cognition.salience_ledger import (
+            assign_arm,
+            derive_outcome,
+            make_proposal_hash,
+            make_pulse_id,
+            new_run_id,
+        )
 
+        if getattr(self, "_salience_run_id", None) is None:
+            self._salience_run_id = new_run_id(
+                now_ms=int(time.time() * 1000),
+                pid=os.getpid(),
+            )
         self._salience_pulse_seq = int(getattr(self, "_salience_pulse_seq", 0)) + 1
-        pulse_id = f"seq{self._salience_pulse_seq}"
+        pulse_id = make_pulse_id(self._salience_run_id, self._salience_pulse_seq)
         arm, rows = assign_arm(
             list(proposals or []),
             pulse_signature,
@@ -5187,18 +5199,13 @@ class MaezDaemon:
                 for row in prior.get("rows", []):
                     fact_key = str(row.get("fact_key", ""))
                     change_kind = str(row.get("change_kind", ""))
-                    proposal_hash = hashlib.sha256(
-                        json.dumps(
-                            {
-                                "pulse_id": prior["pulse_id"],
-                                "strategy": prior_strategy,
-                                "arm": prior_arm,
-                                "fact_key": fact_key,
-                                "change_kind": change_kind,
-                            },
-                            sort_keys=True,
-                        ).encode("utf-8")
-                    ).hexdigest()[:16]
+                    proposal_hash = make_proposal_hash(
+                        pulse_id=prior["pulse_id"],
+                        strategy=prior_strategy,
+                        arm=prior_arm,
+                        fact_key=fact_key,
+                        change_kind=change_kind,
+                    )
                     ledger.record(
                         pulse_id=prior["pulse_id"],
                         strategy=prior_strategy,
