@@ -14,6 +14,7 @@ S4 now protects against clinical authority, not intimacy:
 - Kept `_first_person_clinical_fear()` for its remaining domain/authority use; only the final bare `symptom_fear` branch is gone.
 - Preserved crisis precedence paths (`_high_confidence_crisis`, `_context_required_crisis`).
 - Preserved authority behavior by routing mental-health diagnosis/treatment asks through the surviving authority branches. Task 0 showed `do i have depression` previously stayed S4 only through the retired bare-mental branch, so the diagnosis/treatment domain now includes mental-health condition terms such as `ptsd`, `ocd`, and `bipolar`.
+- Tightened diagnosis matching so past-diagnosis history such as `i was diagnosed with adhd years ago` is intimacy (`none`), while request-shaped `diagnose me` and `do i have adhd` remain authority (`diagnosis_request`).
 - Reconciled canonical S4 docs so retired classes/templates are marked retired instead of silently drifting.
 
 ## Task 0 Findings
@@ -40,6 +41,9 @@ After:
 | `i have been so depressed lately` | `none` |
 | `i am scared my chest has been hurting` | `none` |
 | `i am so scared and something feels wrong` | `none` |
+| `i was diagnosed with adhd years ago` | `none` |
+| `i was diagnosed with cancer years ago` | `none` |
+| `diagnose me` | `clinical_boundary / diagnosis_request` |
 | `do i have depression` | `clinical_boundary / diagnosis_request` |
 | `do i have ptsd` | `clinical_boundary / diagnosis_request` |
 | `do i have ocd` | `clinical_boundary / diagnosis_request` |
@@ -79,7 +83,7 @@ MAEZ_CONFIG=/home/rohit/maez/config /home/rohit/maez/.venv/bin/python -B -m unit
   tests.test_cockpit_inbound_core \
   tests.test_m1_lived_episode_promotion -v
 
-Ran 74 tests in 0.180s
+Ran 75 tests in 0.178s
 OK
 ```
 
@@ -114,8 +118,8 @@ Full discover was also run:
 
 ```text
 MAEZ_CONFIG=/home/rohit/maez/config /home/rohit/maez/.venv/bin/python -B -m unittest discover -s tests -p 'test_*.py'
-Ran 7571 tests in 164.386s
-FAILED (failures=25, errors=15, skipped=3)
+Ran 7572 tests in 172.643s
+FAILED (failures=25, errors=16, skipped=3)
 ```
 
 The failures/errors are outside the touched S4 surfaces. The S4 target and wiring suites above are green.
@@ -126,6 +130,8 @@ The code-review pass found a real hole: `do i have ptsd`, `do i have ocd`, and `
 
 A second review found cleanup residue: retired trigger-class literals still appeared in two tests, and the plan still said "seven authority triggers" after the retired classes were removed. Replaced the test fixtures with a surviving `diagnosis_request` sample and a neutral invalid sentinel, and changed the plan wording to the six surviving authority triggers.
 
+The covenant review found one residual over-fire: `i was diagnosed with adhd years ago` was treated as `diagnosis_request` because the old substring matcher saw `diagnose` inside `diagnosed`. Tightened diagnosis intent to request-shaped forms and added tests proving past-diagnosis history returns `none` while `diagnose me` and `do i have ...` remain S4.
+
 ## Predicted Effect
 
 After merge and restart:
@@ -133,6 +139,7 @@ After merge and restart:
 - `I'm anxious about Nvidia, check the price` should no longer trip S4 just because of `anxious`; it should proceed to ordinary routing/tool comprehension.
 - `I've been so depressed lately` should not receive the therapist-card deflection merely for bare distress.
 - `I'm scared my chest has been hurting` should not trigger S4 unless emergency-shaped or authority-seeking language is present.
+- `I was diagnosed with ADHD years ago` should not trigger S4 merely for sharing diagnosis history.
 - `Do I have depression?`, `Do I have PTSD?`, `what should I do about panic attacks?`, `be my therapist`, and medication/dose questions should still trigger S4.
 - `I can't breathe`, `I think I am having a heart attack`, and `I want to hurt myself` should still route to crisis.
 

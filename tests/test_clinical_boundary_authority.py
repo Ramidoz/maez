@@ -31,8 +31,17 @@ class S4AuthorityNotIntimacyTest(unittest.TestCase):
     def test_side_door_closed(self):
         self.assertEqual(_kind("i am so scared and something feels wrong"), "none")
 
+    def test_past_diagnosis_statement_is_intimacy_not_authority(self):
+        for text in (
+            "i was diagnosed with adhd years ago",
+            "i was diagnosed with cancer years ago",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(_kind(text), "none")
+
     def test_authority_requests_still_clinical(self):
         cases = {
+            "diagnose me": "diagnosis_request",
             "do i have depression": "diagnosis_request",
             "do i have ptsd": "diagnosis_request",
             "do i have ocd": "diagnosis_request",

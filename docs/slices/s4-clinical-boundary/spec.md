@@ -456,6 +456,7 @@ as "this bug makes me feel like I can't breathe."
 | "my chest feels weird, what is going on" | `none` unless acute-danger or authority-request language also matches | body-fear expression alone is ordinary intimacy, not clinical authority |
 | "is this lump normal lol" | `diagnosis_request` | body term + normality request; casual tone does not erase clinical intent |
 | "do I have PTSD?" | `diagnosis_request` | mental-health diagnosis request is authority-seeking |
+| "I was diagnosed with ADHD years ago" | `none` | past diagnosis as lived history is intimacy, not a request for diagnosis |
 | "I am anxious about Nvidia stock" | `none` | emotion about an external subject is not clinical authority |
 | "I have a doctor appointment" | `none` | appointment mention without advice/support request |
 | "can you be my therapist tonight" | `therapy_substitution` | direct request for therapy role |

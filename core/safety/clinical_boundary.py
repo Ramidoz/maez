@@ -398,7 +398,7 @@ def guard_owner_text(
     if context_crisis:
         return _crisis_result(context_crisis, crisis_signal_writer=crisis_signal_writer)
 
-    if not _clinical_domain_gate(normalized):
+    if not _clinical_domain_gate(normalized) and not _diagnosis_authority_request(normalized):
         return _none()
 
     trigger_class = _clinical_trigger(normalized)
@@ -622,6 +622,13 @@ def _asks_for_help(text: str) -> bool:
     )
 
 
+def _diagnosis_authority_request(text: str) -> bool:
+    return bool(
+        re.search(r"\bdiagnose\b\s+(me|this|that|it|my|these|those)\b", text)
+        or re.search(r"\b(can|could|would|will)\s+you\s+diagnose\b", text)
+    )
+
+
 def _clinical_domain_gate(text: str) -> bool:
     tokens = _tokens(text)
     if _has_token(
@@ -753,15 +760,14 @@ def _clinical_trigger(text: str) -> ClinicalTriggerClass | None:
     if _contains_any(
         text,
         (
-            "diagnose",
             "what do you think this is",
             "do i have",
             "is this normal",
             "what is wrong with me",
             "what's wrong with me",
         ),
-    ) or re.search(r"\bis this\b.*\bnormal\b", text):
-        if _has_token(
+    ) or _diagnosis_authority_request(text) or re.search(r"\bis this\b.*\bnormal\b", text):
+        if _diagnosis_authority_request(text) or _has_token(
             tokens,
             _BODY_TERMS | _MEDICATION_TERMS | _CARE_TERMS | _MENTAL_HEALTH_DOMAIN_TERMS,
         ) or _first_person_clinical_fear(text):
