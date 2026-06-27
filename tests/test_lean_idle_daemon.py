@@ -242,12 +242,18 @@ class LeanIdleDaemonTest(unittest.TestCase):
         self.assertTrue(rows[0]["non_duplicate_stored"])
 
     def test_salience_pulse_id_uses_process_run_namespace(self) -> None:
+        import pathlib
+        import tempfile
+        from core.cognition.salience_ledger import SalienceLedger
         from daemon.maez_daemon import MaezDaemon
 
         daemon = object.__new__(MaezDaemon)
         daemon._salience_pending = None
         daemon._salience_pulse_seq = 0
         daemon._salience_run_id = None
+        daemon._salience_ledger = SalienceLedger(
+            pathlib.Path(tempfile.mkdtemp()) / "salience.db"
+        )
 
         with (
             mock.patch.dict(
@@ -282,6 +288,9 @@ class LeanIdleDaemonTest(unittest.TestCase):
         self.assertEqual(pulse_id, "r1234_42.seq1")
         self.assertEqual(pulse_id_2, "r1234_42.seq2")
         self.assertEqual(daemon._salience_pending["pulse_id"], "r1234_42.seq2")
+        rows = daemon._salience_ledger.recent(limit=5)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["pulse_id"], "r1234_42.seq1")
 
     def test_quiet_pulse_records_control_none_baseline(self) -> None:
         import pathlib
