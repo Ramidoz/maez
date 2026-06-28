@@ -762,7 +762,7 @@ body::after {
     <a href="/progress" class="active" aria-current="page" style="text-transform:none;">build log</a>
     <a href="https://github.com/Ramidoz/maez/blob/main/MAEZ_PITCH.md" target="_blank" rel="noreferrer" aria-label="pitch document (opens in new tab)" style="text-transform:none;">pitch</a>
     <a href="https://github.com/Ramidoz/maez" target="_blank" rel="noreferrer" aria-label="github repository (opens in new tab)" style="text-transform:none;">github</a>
-    <a class="cta" id="channelLink" href="/login" data-analytics-label="progress_topbar_channel" style="text-transform:none;">talk to it</a>
+    <a class="cta" id="channelLink" href="/cockpit" data-analytics-label="progress_topbar_channel" style="text-transform:none;">owner cockpit</a>
   </nav>
 </header>
 
@@ -810,7 +810,7 @@ body::after {
           <div class="maez-crosslinks">
             <a href="/">Why Maez exists</a>
             <a href="https://github.com/Ramidoz/maez/blob/main/MAEZ_PITCH.md" target="_blank" rel="noreferrer">Architecture (pitch)</a>
-            <a href="/login">Guest conversation</a>
+            <a href="/cockpit">Owner cockpit</a>
           </div>
         </article>
 
@@ -857,7 +857,7 @@ body::after {
         <div class="maez-crosslinks">
           <a href="/">Why Maez exists</a>
           <a href="https://github.com/Ramidoz/maez/blob/main/MAEZ_PITCH.md" target="_blank" rel="noreferrer">Architecture (pitch)</a>
-          <a href="/login">Guest conversation</a>
+          <a href="/cockpit">Owner cockpit</a>
         </div>
       </div>
       <div class="status-grid">
@@ -908,10 +908,10 @@ body::after {
         <a class="button ghost" href="https://github.com/Ramidoz/maez/blob/main/MAEZ_PITCH.md" target="_blank" rel="noreferrer" data-analytics-label="progress_route_pitch" style="text-transform:none;">Read the pitch →</a>
       </article>
       <article class="bridge-card">
-        <div class="card-num" style="text-transform:none;font-style:italic;">Private planner</div>
-        <h3 style="text-transform:none;font-family:'Fraunces',Georgia,serif;font-weight:400;letter-spacing:-0.02em;">Builder-facing <span class="amber" style="font-style:italic;">editing layer.</span></h3>
-        <p style="font-family:'Newsreader',Georgia,serif;">The public board is read-only. The private planner is where public items are edited and private ideas can stay off the public surface.</p>
-        <a class="button primary" id="plannerLink" href="/login" data-analytics-label="progress_private_planner" style="text-transform:none;">Open private board →</a>
+        <div class="card-num" style="text-transform:none;font-style:italic;">Owner cockpit</div>
+        <h3 style="text-transform:none;font-family:'Fraunces',Georgia,serif;font-weight:400;letter-spacing:-0.02em;">Builder-facing <span class="amber" style="font-style:italic;">cockpit.</span></h3>
+        <p style="font-family:'Newsreader',Georgia,serif;">The public board is read-only. Private state and owner actions stay on the owner cockpit, not on this public surface.</p>
+        <a class="button primary" id="plannerLink" href="/cockpit" data-analytics-label="progress_private_planner" style="text-transform:none;">Open cockpit →</a>
       </article>
     </div>
   </section>
@@ -923,7 +923,6 @@ body::after {
   </footer>
 </main>
 
-<script src="/maez_analytics.js" defer></script>
 <script>
 const STATUS_ORDER = ['done', 'in_progress', 'next', 'planned'];
 const STATUS_META = {
@@ -964,12 +963,12 @@ function syncEntryLinks() {
   const channelLink = document.getElementById('channelLink');
   const plannerLink = document.getElementById('plannerLink');
   if (channelLink) {
-    channelLink.href = hasToken ? '/cockpit' : '/login';
-    channelLink.textContent = hasToken ? 'continue' : 'talk to it';
+    channelLink.href = '/cockpit';
+    channelLink.textContent = hasToken ? 'continue' : 'owner cockpit';
   }
   if (plannerLink) {
-    plannerLink.href = hasToken ? '/planner' : '/login';
-    plannerLink.textContent = hasToken ? 'Open private board' : 'Sign in, then open board';
+    plannerLink.href = '/cockpit';
+    plannerLink.textContent = hasToken ? 'Open cockpit' : 'Owner cockpit';
   }
 }
 

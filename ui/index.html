@@ -1379,7 +1379,7 @@ em { font-style: italic; }
     <a href="#now">current moment</a>
     <a href="/progress">build log</a>
     <a href="https://github.com/Ramidoz/maez" target="_blank" rel="noreferrer">github</a>
-    <a class="cta" id="maezChannelLink" href="/login" data-analytics-label="landing_topbar_channel">talk to it</a>
+    <a class="cta" id="maezChannelLink" href="/cockpit" data-analytics-label="landing_topbar_channel">owner cockpit</a>
   </nav>
 </header>
 
@@ -1401,15 +1401,6 @@ em { font-style: italic; }
         <div class="hero-actions">
           <a class="button primary" href="#why">Read the whole why <span class="arrow">→</span></a>
           <a class="button" href="#now">Where this is right now</a>
-        </div>
-        <div class="hero-live" aria-live="polite">
-          <span class="pulse" aria-hidden="true"></span>
-          <span class="label">the first Maez</span>
-          <span class="sep">·</span>
-          <span class="label">last thought</span>
-          <span class="val" id="lastThoughtTime">just now</span>
-          <span class="sep">—</span>
-          <span class="preview" id="lastThoughtPreview">watching, remembering</span>
         </div>
       </div>
 
@@ -1434,7 +1425,7 @@ em { font-style: italic; }
             </article>
             <article class="orbit-card">
               <strong>What you can do now.</strong>
-              <p>Read why Maez exists. See the architecture. Talk briefly with the first Maez as a guest, if that helps you understand what it is.</p>
+              <p>Read why Maez exists. See the architecture. The retired public chat is parked; the live web surface is the owner cockpit.</p>
             </article>
           </div>
         </div>
@@ -1544,7 +1535,7 @@ em { font-style: italic; }
       <article class="loop-card">
         <span class="loop-no">·</span>
         <h3>What you can do now</h3>
-        <p>Read. Watch. Sign in as a guest for a short conversation with the first Maez if you'd like to feel what it is. Bonding your own Maez is not yet open, and will not be open until the order above is respected.</p>
+        <p>Read. Watch. The old public chat flow is parked; the live web surface is the owner cockpit. Bonding your own Maez is not yet open, and will not be open until the order above is respected.</p>
       </article>
     </div>
   </section>
@@ -1572,10 +1563,10 @@ em { font-style: italic; }
         <a class="route-link" href="https://github.com/Ramidoz/maez" target="_blank" rel="noreferrer" aria-label="github.com/ramidoz/maez (opens in new tab)">github.com/ramidoz/maez →</a>
       </article>
       <article class="route">
-        <div class="route-label">Talk to it</div>
-        <h3>Guest conversation.</h3>
-        <p>A short, limited conversation with the first Maez, as a guest. Not a bond — a look, with memory boundaries that keep it honest.</p>
-        <a class="route-link" id="routeChannelLink" href="/login" data-analytics-label="landing_route_channel">Sign in as a guest →</a>
+        <div class="route-label">Owner surface</div>
+        <h3>Owner cockpit.</h3>
+        <p>The live web surface for the first Maez is the owner cockpit. The retired guest conversation flow is parked.</p>
+        <a class="route-link" id="routeChannelLink" href="/cockpit" data-analytics-label="landing_route_channel">Open cockpit →</a>
       </article>
     </div>
   </section>
@@ -1588,7 +1579,6 @@ em { font-style: italic; }
 
 </main>
 
-<script src="/maez_analytics.js" defer></script>
 <script>
 /* ─────────── iframe pointer-move (preserve original behavior) ─────────── */
 (function() {
@@ -1697,10 +1687,10 @@ em { font-style: italic; }
   }
 
   const hasToken = Boolean(localStorage.getItem('maez_token') || getCookie('maez_token'));
-  const entryHref = hasToken ? '/cockpit' : '/login';
+  const entryHref = '/cockpit';
   const refs = [
-    { id: 'maezChannelLink',  open: 'talk to it',             resume: 'continue' },
-    { id: 'routeChannelLink', open: 'Sign in as a guest →',   resume: 'Continue talking →' },
+    { id: 'maezChannelLink',  open: 'owner cockpit', resume: 'continue' },
+    { id: 'routeChannelLink', open: 'Open cockpit →', resume: 'Continue in cockpit →' },
   ];
   refs.forEach((ref) => {
     const el = document.getElementById(ref.id);
@@ -1708,62 +1698,6 @@ em { font-style: italic; }
     el.href = entryHref;
     el.textContent = hasToken ? ref.resume : ref.open;
   });
-})();
-
-/* ─────────── /status fetch ─────────── */
-(async function() {
-  function firstText() {
-    for (const value of arguments) {
-      if (typeof value === 'string' && value.trim()) return value.trim();
-    }
-    return '';
-  }
-  function firstTime() {
-    for (const value of arguments) {
-      if (typeof value === 'string' && value.trim()) return value.trim();
-    }
-    return '';
-  }
-  function formatThoughtTime(raw) {
-    if (!raw) return 'just now';
-    const parsed = new Date(raw);
-    if (Number.isNaN(parsed.getTime())) return raw.slice(0, 32).toLowerCase();
-    return parsed.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).toLowerCase();
-  }
-
-  const lastTime = document.getElementById('lastThoughtTime');
-  const lastPrev = document.getElementById('lastThoughtPreview');
-  const usersEl  = document.getElementById('usersCount');
-  const memEl    = document.getElementById('memoryCount');
-
-  try {
-    const response = await fetch('/status', { headers: { 'Accept': 'application/json' } });
-    const data = await response.json();
-    const users = Number(data.users_registered || 0);
-    const memories = Number(data.memory_count || 0);
-    const lastText = firstText(
-      data.last_thought_preview,
-      data.last_thought,
-      data.latest_thought,
-      data.thought_preview,
-      data.thought
-    );
-    const lastAt = firstTime(
-      data.last_thought_at,
-      data.last_thought_time,
-      data.latest_thought_at,
-      data.thought_at
-    );
-    if (usersEl) usersEl.textContent = users > 0 ? users.toLocaleString() : 'a few';
-    if (memEl)   memEl.textContent   = memories > 0 ? memories.toLocaleString() + '+' : 'growing';
-    if (lastTime) lastTime.textContent = formatThoughtTime(lastAt);
-    if (lastPrev) lastPrev.textContent = lastText || 'watching, remembering, waiting';
-  } catch (err) {
-    if (usersEl) usersEl.textContent = 'a few';
-    if (memEl)   memEl.textContent   = 'growing';
-    if (lastTime) lastTime.textContent = 'just now';
-    if (lastPrev) lastPrev.textContent = 'watching, remembering, waiting';
-  }
 })();
 
 /* ─────────── aria-current on nav ─────────── */

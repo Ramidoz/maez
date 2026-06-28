@@ -812,6 +812,13 @@ def _attach_auth_cookie(response, token):
 
 @app.before_request
 def local_origin_write_guard():
+    endpoint = request.endpoint or ""
+    if endpoint == "login":
+        return _legacy_surface_parked_response("/login", page=request.method == "GET")
+    if endpoint in _LEGACY_PARKED_PAGE_ENDPOINTS:
+        return _legacy_surface_parked_response(_LEGACY_PARKED_PAGE_ENDPOINTS[endpoint], page=True)
+    if endpoint in _LEGACY_PARKED_API_ENDPOINTS:
+        return _legacy_surface_parked_response(_LEGACY_PARKED_API_ENDPOINTS[endpoint])
     return reject_untrusted_browser_write(request)
 
 
@@ -1081,6 +1088,23 @@ def app_shell():
     # UNCONDITIONALLY to /cockpit BEFORE any test_t/token/serve — no secret path to the old UI. ui/app.html
     # retained (reversible); the /chat POST API is unchanged. See the cockpit-reauth-park-app slice.
     return redirect("/cockpit")
+
+
+_LEGACY_SURFACE_PARKED_ERROR = "legacy_surface_parked"
+
+
+def _legacy_surface_parked_response(surface: str, *, page: bool = False):
+    """Reversible parking for retired public web doors."""
+    logger.info("legacy web surface parked: %s", surface)
+    if page:
+        return redirect("/cockpit")
+    return jsonify(
+        {
+            "error": _LEGACY_SURFACE_PARKED_ERROR,
+            "message": "This legacy public Maez web surface is parked. Use /cockpit.",
+            "surface": surface,
+        }
+    ), 410
 
 
 @app.route("/progress")
@@ -9857,6 +9881,109 @@ def _request_has_web_owner_cookie() -> bool:
 
 def _owner_private_auth_required_response():
     return jsonify({"ok": False, "error": "owner_auth_required"}), 401
+
+
+def _api_v1_owner_gate_required():
+    """Return an auth-required response for owner-private /api/v1 routes, else None."""
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
+    return None
+
+
+_LEGACY_PARKED_PAGE_ENDPOINTS = {
+    "planner_page": "/planner",
+    "analytics_page": "/analytics",
+    "journal_page": "/journal",
+    "debug_page": "/debug",
+    "debug_flow_mock": "/debug/flow",
+    "debug_flow_static": "/debug/flow/static",
+    "debug_card_default": "/debug/card-default",
+}
+
+
+_LEGACY_PARKED_API_ENDPOINTS = {
+    "register": "/register",
+    "link_telegram": "/link-telegram",
+    "chat": "/chat",
+    "history": "/history",
+    "analytics_collect": "/api/analytics",
+    "analytics_summary": "/api/analytics-summary",
+    "planner_board": "/api/planner-board",
+    "status": "/status",
+    "api_maez_state": "/api/maez-state",
+    "api_session_timeline": "/api/session-timeline",
+    "fast_reply_adapter": "/v1/fast-reply",
+    "api_debug_services": "/api/debug/services",
+    "api_debug_wonderings": "/api/debug/wonderings",
+    "api_debug_canary_leaks": "/api/debug/canary-leaks",
+    "api_debug_trace_labels": "/api/debug/trace-labels",
+    "api_debug_memory_view": "/api/debug/memory-view",
+    "api_debug_pursuit_decisions": "/api/debug/pursuit-decisions",
+    "api_debug_wondering_events": "/api/debug/wondering-events",
+    "api_debug_cycle_timeline": "/api/debug/cycle-timeline",
+    "api_debug_cards": "/api/debug/cards",
+    "api_debug_recent_shells": "/api/debug/recent-shells",
+    "api_debug_fabrication_feed": "/api/debug/fabrication-feed",
+    "api_debug_stats": "/api/debug/stats",
+}
+
+
+_API_V1_OWNER_GATED_ENDPOINTS = {
+    "api_daemon_state",
+    "api_cards_list",
+    "api_card_deny",
+    "api_card_approve",
+    "api_s7_webauthn_status",
+    "api_services",
+    "api_gpu",
+    "api_signals",
+    "api_soul",
+    "api_memory",
+    "api_lived_memory",
+    "api_lived_memory_episodes",
+    "api_lived_memory_graph",
+    "api_lived_memory_echoes",
+    "api_lived_memory_predictions",
+    "api_lived_memory_brief",
+    "api_turn_latest",
+    "api_now",
+    "api_rail_timeline",
+    "api_dreams",
+    "api_quality",
+    "api_workshop_list",
+    "api_workshop_create",
+    "api_workshop_get",
+    "api_workshop_turn",
+    "api_workshop_update_model",
+    "api_workshop_apply",
+    "api_workshop_delete",
+    "api_self_dev_resolve",
+    "api_self_dev",
+    "api_identity",
+    "api_router",
+    "api_logs",
+    "api_dream_action",
+    "api_chat_sessions",
+}
+
+
+@app.before_request
+def _park_legacy_public_web_doors():
+    endpoint = request.endpoint or ""
+    if endpoint == "login":
+        return _legacy_surface_parked_response("/login", page=request.method == "GET")
+    if endpoint in _LEGACY_PARKED_PAGE_ENDPOINTS:
+        return _legacy_surface_parked_response(_LEGACY_PARKED_PAGE_ENDPOINTS[endpoint], page=True)
+    if endpoint in _LEGACY_PARKED_API_ENDPOINTS:
+        return _legacy_surface_parked_response(_LEGACY_PARKED_API_ENDPOINTS[endpoint])
+    return None
+
+
+@app.before_request
+def _gate_owner_private_api_v1_doors():
+    if (request.endpoint or "") in _API_V1_OWNER_GATED_ENDPOINTS:
+        return _api_v1_owner_gate_required()
+    return None
 
 
 def _debug_auth_ok():

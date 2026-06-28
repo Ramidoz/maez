@@ -381,7 +381,7 @@ strong { font-weight: 400; color: var(--text); }
     <a href="/progress" style="text-transform:none;">build log</a>
     <a href="/dashboard" style="text-transform:none;">how it thinks</a>
     <a href="/privacy" class="active" style="text-transform:none;">privacy</a>
-    <a class="cta" href="/login" data-analytics-label="privacy_topbar_channel" style="text-transform:none;">start yours</a>
+    <a class="cta" href="/cockpit" data-analytics-label="privacy_topbar_channel" style="text-transform:none;">owner cockpit</a>
   </nav>
 </header>
 
@@ -403,10 +403,10 @@ strong { font-weight: 400; color: var(--text); }
       <h2 class="section-title" style="text-transform:none;font-family:'Fraunces',Georgia,serif;font-weight:400;letter-spacing:-0.025em;">The one-minute <span class="amber" style="font-style:italic;">read.</span></h2>
     </div>
     <div class="rows">
-      <div class="row"><div class="label">Anonymous pageviews &amp; button clicks</div><div class="tag yes">Collected</div></div>
-      <div class="row"><div class="label">Coarse device type (desktop / mobile / tablet)</div><div class="tag yes">Collected</div></div>
-      <div class="row"><div class="label">Where visitors arrived from (referrer group)</div><div class="tag yes">Collected</div></div>
-      <div class="row"><div class="label">Your conversation with Maez (so it can remember you)</div><div class="tag yes">Stored per-account</div></div>
+      <div class="row"><div class="label">Public page analytics from this surface</div><div class="tag no">Parked</div></div>
+      <div class="row"><div class="label">Coarse device type (desktop / mobile / tablet)</div><div class="tag no">Not collected here</div></div>
+      <div class="row"><div class="label">Where visitors arrived from (referrer group)</div><div class="tag no">Not collected here</div></div>
+      <div class="row"><div class="label">Public web conversations with Maez</div><div class="tag no">Parked</div></div>
       <div class="row"><div class="label">Message contents sent off this server</div><div class="tag no">Never</div></div>
       <div class="row"><div class="label">Third-party trackers, ad networks, fingerprinting</div><div class="tag no">Never</div></div>
       <div class="row"><div class="label">Cross-site identity or profiling</div><div class="tag no">Never</div></div>
@@ -417,13 +417,12 @@ strong { font-weight: 400; color: var(--text); }
   <section class="section">
     <div class="split">
       <article class="panel collect">
-        <h3>What the site analytics collects</h3>
+        <h3>What the parked public surface no longer collects</h3>
         <ul>
-          <li>Anonymous pageviews — which routes people visit</li>
-          <li>Explicit CTA clicks — which buttons get pressed</li>
-          <li>Coarse device bucket — desktop, mobile, or tablet</li>
-          <li>Referrer grouping — roughly where a visit came from</li>
-          <li>Timestamp of the event</li>
+          <li>The old local analytics collector is parked with the legacy public app.</li>
+          <li>These kept pages do not load the retired analytics script.</li>
+          <li>The public progress board only shows items explicitly marked public.</li>
+          <li>The live web surface is the owner cockpit, not the old guest channel.</li>
         </ul>
       </article>
       <article class="panel reject">
@@ -449,25 +448,25 @@ strong { font-weight: 400; color: var(--text); }
       <div class="kv-row">
         <div class="kv-key">Site analytics</div>
         <div class="kv-val">
-          Written to a local append-only file on the machine that runs Maez. Never leaves this server, never ships to any analytics provider, never joins an ad network.
+          The old local analytics collector wrote to the Maez machine when it was active. It is parked now; these kept public pages no longer send analytics events.
         </div>
       </div>
       <div class="kv-row">
         <div class="kv-key">Your conversations</div>
         <div class="kv-val">
-          If you create an account, your conversations with Maez are stored per-user in an isolated memory store on the same machine. Other users <strong>cannot</strong> see your memory. This is what lets Maez remember you across sessions — it is the whole promise of the product, not a side effect.
+          The public guest/account web conversation system is parked. Owner-private conversations live on owner-controlled surfaces, not on this public site.
         </div>
       </div>
       <div class="kv-row">
         <div class="kv-key">Account data</div>
         <div class="kv-val">
-          Username, a display name you choose, and a password hash. Email is <strong>not required</strong>. The less we hold, the less there is to worry about.
+          The public account system is parked; this surface does not create new public accounts.
         </div>
       </div>
       <div class="kv-row">
         <div class="kv-key">Cookies &amp; local storage</div>
         <div class="kv-val">
-          One authentication token (<code>maez_token</code>) so you stay signed in. No ad cookies, no analytics cookies, no cross-site trackers. Clearing your browser storage signs you out — nothing else breaks.
+          These kept public pages do not set a Maez account token. Old legacy app pages may still contain account-token code, but their routes are parked.
         </div>
       </div>
       <div class="kv-row">
@@ -487,13 +486,13 @@ strong { font-weight: 400; color: var(--text); }
     </div>
     <div class="prose">
       <p>
-        <strong>You can browse without an account.</strong> The public pages — landing, progress, architecture, this page — do not require a sign-in. Analytics still sees the anonymous pageview, nothing more.
+        <strong>You can browse without an account.</strong> The public pages — landing, progress, architecture, this page — do not require a sign-in and no longer send the old analytics beacon.
       </p>
       <p>
-        <strong>You can talk to Maez without linking other identities.</strong> The public Telegram bot and the web channel are separate doorways. Linking them is optional and only happens if you explicitly choose to.
+        <strong>The old public doorways are parked.</strong> The live web entry is the owner cockpit. Public conversation surfaces can come back only through a deliberate, reviewed slice.
       </p>
       <p>
-        <strong>You can ask for your memory to be forgotten.</strong> Maez's design philosophy is that nothing is deleted — memory is continuity. But if you want your conversation history removed, reach out via the channels below and the owner will handle it personally.
+        <strong>Earlier public test data is handled deliberately.</strong> Maez's design philosophy is that memory is continuity, so any cleanup of old public-test data is handled by the owner as an explicit maintenance act.
       </p>
       <p>
         <strong>You can read the code.</strong> The public repository at <a href="https://github.com/Ramidoz/maez" style="color: var(--teal-hi); border-bottom: 1px dashed rgba(232, 163, 58, 0.4);">ramidoz/maez</a> is the same code that serves this site. If a claim on this page stops being true, the code will show it first.
@@ -527,6 +526,5 @@ strong { font-weight: 400; color: var(--text); }
   </footer>
 </main>
 
-<script src="/maez_analytics.js"></script>
 </body>
 </html>
