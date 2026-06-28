@@ -1857,6 +1857,10 @@ def _salience_broker_shadow_enabled(environ: object | None = None) -> bool:
     return _env_flag("MAEZ_SALIENCE_BROKER_SHADOW", environ=environ)
 
 
+def _fresh_moment_receipts_shadow_enabled(environ: object | None = None) -> bool:
+    return _env_flag("MAEZ_FRESH_MOMENT_RECEIPTS_SHADOW", environ=environ)
+
+
 def _lean_idle_heartbeat_eligible(gate_decision: object) -> bool:
     return (
         bool(getattr(gate_decision, "doorman_enabled", False))
@@ -3459,6 +3463,7 @@ class MaezDaemon:
         self._salience_pulse_seq = 0
         self._salience_run_id = None
         self._salience_ledger = None
+        self._fresh_moment_receipts = None
         self._greeted_this_session = False
         self._last_departure_time: float | None = None
         self._last_greeted_at = 0.0
@@ -5151,6 +5156,74 @@ class MaezDaemon:
         self._salience_ledger = ledger
         return ledger
 
+    def _fresh_moment_receipts_get(self):
+        store = getattr(self, "_fresh_moment_receipts", None)
+        if store is not None:
+            return store
+        from core.cognition.fresh_moment_receipts import (
+            FreshMomentReceipts,
+            fresh_moment_receipts_db_path,
+        )
+
+        store = FreshMomentReceipts(fresh_moment_receipts_db_path())
+        self._fresh_moment_receipts = store
+        return store
+
+    def _maybe_record_fresh_moment_receipt(self, result) -> int | None:
+        if not _fresh_moment_receipts_shadow_enabled():
+            return None
+        receipt = getattr(result, "receipt", {}) or {}
+        if not bool(getattr(result, "stored", receipt.get("stored", False))):
+            return None
+        thought_id = getattr(result, "thought_id", None)
+        if thought_id is None:
+            return None
+        content_sha256 = str(receipt.get("output_sha256") or "").strip()
+        if not content_sha256:
+            return None
+        try:
+            from core.cognition.fresh_moment_receipts import FRESH_MOMENT_BOND_ID
+            from core.cognition.lean_idle_heartbeat import HEARTBEAT_VERSION
+
+            receipt_id = self._fresh_moment_receipts_get().record_private_thought_landed(
+                thought_id=int(thought_id),
+                source=HEARTBEAT_VERSION,
+                bond_id=FRESH_MOMENT_BOND_ID,
+                content_sha256=content_sha256,
+                content_len=int(receipt.get("note_chars") or 0),
+            )
+            logger.info(
+                "fresh_moment_receipt receipt=%s",
+                json.dumps(
+                    {
+                        "schema_version": "fresh_moment_receipts.v0",
+                        "moment_kind": "private_thought_landed",
+                        "stored": True,
+                        "receipt_id": int(receipt_id),
+                        "thought_id": int(thought_id),
+                        "source": HEARTBEAT_VERSION,
+                        "bond_id": FRESH_MOMENT_BOND_ID,
+                    },
+                    sort_keys=True,
+                ),
+            )
+            return int(receipt_id)
+        except Exception as exc:
+            logger.info(
+                "fresh_moment_receipt receipt=%s",
+                json.dumps(
+                    {
+                        "schema_version": "fresh_moment_receipts.v0",
+                        "moment_kind": "private_thought_landed",
+                        "stored": False,
+                        "skip_reason": "error",
+                        "error_class": exc.__class__.__name__,
+                    },
+                    sort_keys=True,
+                ),
+            )
+            return None
+
     def _record_salience_outcomes(
         self,
         proposals: list,
@@ -5353,6 +5426,7 @@ class MaezDaemon:
             "lean_idle_heartbeat receipt=%s",
             json.dumps(result.receipt, sort_keys=True),
         )
+        self._maybe_record_fresh_moment_receipt(result)
         if broker_active:
             receipt = getattr(result, "receipt", {}) or {}
             self._record_salience_outcomes(

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
+import tempfile
 import unittest
 
 
@@ -849,6 +851,366 @@ class LeanIdleDaemonTest(unittest.TestCase):
                         _gate(floor=False, reason=reason, signals=signals)
                     )
                 )
+
+    def test_fresh_moment_receipt_records_from_stored_heartbeat_without_raw_text(self) -> None:
+        from core.cognition.fresh_moment_receipts import FreshMomentReceipts
+        from daemon.maez_daemon import MaezDaemon, _HEARTBEAT_OK
+
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "fresh_moment_receipts.db"
+            daemon = object.__new__(MaezDaemon)
+            daemon.cycle_count = 21
+            daemon.private_thoughts = object()
+            daemon._fresh_moment_receipts = FreshMomentReceipts(path)
+            daemon._salience_broker_baseline = None
+            daemon._lean_idle_self_card_text = lambda: "SELF CARD"
+            daemon._lean_idle_private_signal_summary = lambda: {}
+            daemon._lean_idle_time_facts = lambda: {}
+            daemon._lean_idle_body_state = lambda: {}
+            daemon._lean_idle_open_loops = lambda: {}
+            daemon._lean_idle_recent_private_thoughts = lambda: ()
+            secret = "SECRET PRIVATE THOUGHT TEXT"
+            fake_result = SimpleNamespace(
+                intercepted=True,
+                return_text=_HEARTBEAT_OK,
+                stored=True,
+                thought_id=77,
+                skip_reason="none",
+                receipt={
+                    "mode": "enabled",
+                    "stored": True,
+                    "note_chars": len(secret),
+                    "output_sha256": "0123456789abcdef",
+                    "skip_reason": "none",
+                },
+            )
+
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "MAEZ_LEAN_IDLE_HEARTBEAT_ENABLED": "1",
+                    "MAEZ_FRESH_MOMENT_RECEIPTS_SHADOW": "1",
+                },
+                clear=True,
+            ):
+                with mock.patch(
+                    "core.cognition.lean_idle_heartbeat.run_lean_idle_heartbeat",
+                    return_value=fake_result,
+                ):
+                    result = daemon._maybe_run_lean_idle_heartbeat({}, _gate())
+
+            rows = daemon._fresh_moment_receipts.recent(limit=5)
+            blob = path.read_bytes()
+
+        self.assertEqual(result, _HEARTBEAT_OK)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["moment_kind"], "private_thought_landed")
+        self.assertEqual(rows[0]["thought_id"], 77)
+        self.assertEqual(rows[0]["source"], "lean_idle_heartbeat.v0")
+        self.assertEqual(rows[0]["bond_id"], "private_owner")
+        self.assertEqual(rows[0]["content_sha256"], "0123456789abcdef")
+        self.assertEqual(rows[0]["content_len"], len(secret))
+        self.assertNotIn(secret.encode(), blob)
+
+    def test_fresh_moment_receipt_flag_off_records_nothing(self) -> None:
+        from core.cognition.fresh_moment_receipts import FreshMomentReceipts
+        from daemon.maez_daemon import MaezDaemon, _HEARTBEAT_OK
+
+        with tempfile.TemporaryDirectory() as td:
+            daemon = object.__new__(MaezDaemon)
+            daemon.cycle_count = 22
+            daemon.private_thoughts = object()
+            daemon._fresh_moment_receipts = FreshMomentReceipts(
+                Path(td) / "fresh_moment_receipts.db"
+            )
+            daemon._salience_broker_baseline = None
+            daemon._lean_idle_self_card_text = lambda: "SELF CARD"
+            daemon._lean_idle_private_signal_summary = lambda: {}
+            daemon._lean_idle_time_facts = lambda: {}
+            daemon._lean_idle_body_state = lambda: {}
+            daemon._lean_idle_open_loops = lambda: {}
+            daemon._lean_idle_recent_private_thoughts = lambda: ()
+            fake_result = SimpleNamespace(
+                intercepted=True,
+                return_text=_HEARTBEAT_OK,
+                stored=True,
+                thought_id=78,
+                skip_reason="none",
+                receipt={"stored": True, "note_chars": 4, "output_sha256": "abcd"},
+            )
+
+            with mock.patch.dict(
+                "os.environ",
+                {"MAEZ_LEAN_IDLE_HEARTBEAT_ENABLED": "1"},
+                clear=True,
+            ):
+                with mock.patch(
+                    "core.cognition.lean_idle_heartbeat.run_lean_idle_heartbeat",
+                    return_value=fake_result,
+                ):
+                    daemon._maybe_run_lean_idle_heartbeat({}, _gate())
+
+            rows = daemon._fresh_moment_receipts.recent(limit=5)
+
+        self.assertEqual(rows, [])
+
+    def test_fresh_moment_receipt_flag_off_does_not_initialize_store(self) -> None:
+        from daemon.maez_daemon import MaezDaemon, _HEARTBEAT_OK
+
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "fresh_moment_receipts.db"
+            daemon = object.__new__(MaezDaemon)
+            daemon.cycle_count = 22
+            daemon.private_thoughts = object()
+            daemon._fresh_moment_receipts = None
+            daemon._salience_broker_baseline = None
+            daemon._lean_idle_self_card_text = lambda: "SELF CARD"
+            daemon._lean_idle_private_signal_summary = lambda: {}
+            daemon._lean_idle_time_facts = lambda: {}
+            daemon._lean_idle_body_state = lambda: {}
+            daemon._lean_idle_open_loops = lambda: {}
+            daemon._lean_idle_recent_private_thoughts = lambda: ()
+            fake_result = SimpleNamespace(
+                intercepted=True,
+                return_text=_HEARTBEAT_OK,
+                stored=True,
+                thought_id=78,
+                skip_reason="none",
+                receipt={"stored": True, "note_chars": 4, "output_sha256": "abcd"},
+            )
+
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "MAEZ_LEAN_IDLE_HEARTBEAT_ENABLED": "1",
+                    "MAEZ_FRESH_MOMENT_RECEIPTS_PATH": str(path),
+                },
+                clear=True,
+            ):
+                with mock.patch(
+                    "core.cognition.lean_idle_heartbeat.run_lean_idle_heartbeat",
+                    return_value=fake_result,
+                ):
+                    daemon._maybe_run_lean_idle_heartbeat({}, _gate())
+
+            self.assertFalse(path.exists())
+
+    def test_fresh_moment_receipt_empty_heartbeat_does_not_initialize_store(self) -> None:
+        from daemon.maez_daemon import MaezDaemon, _HEARTBEAT_OK
+
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "fresh_moment_receipts.db"
+            daemon = object.__new__(MaezDaemon)
+            daemon.cycle_count = 22
+            daemon.private_thoughts = object()
+            daemon._fresh_moment_receipts = None
+            daemon._salience_broker_baseline = None
+            daemon._lean_idle_self_card_text = lambda: "SELF CARD"
+            daemon._lean_idle_private_signal_summary = lambda: {}
+            daemon._lean_idle_time_facts = lambda: {}
+            daemon._lean_idle_body_state = lambda: {}
+            daemon._lean_idle_open_loops = lambda: {}
+            daemon._lean_idle_recent_private_thoughts = lambda: ()
+            fake_result = SimpleNamespace(
+                intercepted=True,
+                return_text=_HEARTBEAT_OK,
+                stored=False,
+                thought_id=None,
+                skip_reason="heartbeat_ok",
+                receipt={
+                    "stored": False,
+                    "note_chars": 0,
+                    "output_sha256": "heartbeat-ok-hash",
+                },
+            )
+
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "MAEZ_LEAN_IDLE_HEARTBEAT_ENABLED": "1",
+                    "MAEZ_FRESH_MOMENT_RECEIPTS_SHADOW": "1",
+                    "MAEZ_FRESH_MOMENT_RECEIPTS_PATH": str(path),
+                },
+                clear=True,
+            ):
+                with mock.patch(
+                    "core.cognition.lean_idle_heartbeat.run_lean_idle_heartbeat",
+                    return_value=fake_result,
+                ):
+                    daemon._maybe_run_lean_idle_heartbeat({}, _gate())
+
+            self.assertFalse(path.exists())
+
+    def test_fresh_moment_receipt_writer_failsoft(self) -> None:
+        from daemon.maez_daemon import MaezDaemon, _HEARTBEAT_OK
+
+        class BrokenReceipts:
+            def record_private_thought_landed(self, **_kwargs):
+                raise RuntimeError("boom")
+
+        daemon = object.__new__(MaezDaemon)
+        daemon.cycle_count = 23
+        daemon.private_thoughts = object()
+        daemon._fresh_moment_receipts = BrokenReceipts()
+        daemon._salience_broker_baseline = None
+        daemon._lean_idle_self_card_text = lambda: "SELF CARD"
+        daemon._lean_idle_private_signal_summary = lambda: {}
+        daemon._lean_idle_time_facts = lambda: {}
+        daemon._lean_idle_body_state = lambda: {}
+        daemon._lean_idle_open_loops = lambda: {}
+        daemon._lean_idle_recent_private_thoughts = lambda: ()
+        fake_result = SimpleNamespace(
+            intercepted=True,
+            return_text=_HEARTBEAT_OK,
+            stored=True,
+            thought_id=79,
+            skip_reason="none",
+            receipt={"stored": True, "note_chars": 4, "output_sha256": "abcd"},
+        )
+
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "MAEZ_LEAN_IDLE_HEARTBEAT_ENABLED": "1",
+                "MAEZ_FRESH_MOMENT_RECEIPTS_SHADOW": "1",
+            },
+            clear=True,
+        ):
+            with mock.patch(
+                "core.cognition.lean_idle_heartbeat.run_lean_idle_heartbeat",
+                return_value=fake_result,
+            ):
+                result = daemon._maybe_run_lean_idle_heartbeat({}, _gate())
+
+        self.assertEqual(result, _HEARTBEAT_OK)
+
+    def test_fresh_moment_receipt_does_not_mutate_private_thought_row(self) -> None:
+        from core.cognition.fresh_moment_receipts import FreshMomentReceipts
+        from core.infra.private_thoughts import PrivateThoughts
+        from daemon.maez_daemon import MaezDaemon, _HEARTBEAT_OK
+
+        with tempfile.TemporaryDirectory() as td:
+            private_store = PrivateThoughts(Path(td) / "private_thoughts.db")
+            thought_id = private_store.record_signal(
+                content="A private note that must not be copied.",
+                signal_kind="self_wondering",
+                producer_id="self_wondering",
+                source="lean_idle_heartbeat.v0",
+                subject="maez_internal_state",
+                consent_tier="owner_private",
+                retention="until_reviewed",
+                allowed_flows=("private_reader", "audit_trace"),
+                context_extra={"output_sha256": "before"},
+                memory_phase="gestation",
+            )
+            before = private_store.get_thought(thought_id)
+
+            daemon = object.__new__(MaezDaemon)
+            daemon.cycle_count = 24
+            daemon.private_thoughts = private_store
+            daemon._fresh_moment_receipts = FreshMomentReceipts(
+                Path(td) / "fresh_moment_receipts.db"
+            )
+            daemon._salience_broker_baseline = None
+            daemon._lean_idle_self_card_text = lambda: "SELF CARD"
+            daemon._lean_idle_private_signal_summary = lambda: {}
+            daemon._lean_idle_time_facts = lambda: {}
+            daemon._lean_idle_body_state = lambda: {}
+            daemon._lean_idle_open_loops = lambda: {}
+            daemon._lean_idle_recent_private_thoughts = lambda: ()
+            fake_result = SimpleNamespace(
+                intercepted=True,
+                return_text=_HEARTBEAT_OK,
+                stored=True,
+                thought_id=thought_id,
+                skip_reason="none",
+                receipt={
+                    "stored": True,
+                    "note_chars": 39,
+                    "output_sha256": "0123456789abcdef",
+                },
+            )
+
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "MAEZ_LEAN_IDLE_HEARTBEAT_ENABLED": "1",
+                    "MAEZ_FRESH_MOMENT_RECEIPTS_SHADOW": "1",
+                },
+                clear=True,
+            ):
+                with mock.patch(
+                    "core.cognition.lean_idle_heartbeat.run_lean_idle_heartbeat",
+                    return_value=fake_result,
+                ):
+                    daemon._maybe_run_lean_idle_heartbeat({}, _gate())
+
+            after = private_store.get_thought(thought_id)
+
+        self.assertEqual(before, after)
+
+    def test_fresh_moment_receipt_does_not_call_downstream_organs(self) -> None:
+        from core.cognition.fresh_moment_receipts import FreshMomentReceipts
+        from daemon.maez_daemon import MaezDaemon, _HEARTBEAT_OK
+
+        with tempfile.TemporaryDirectory() as td:
+            daemon = object.__new__(MaezDaemon)
+            daemon.cycle_count = 25
+            daemon.private_thoughts = object()
+            daemon._fresh_moment_receipts = FreshMomentReceipts(
+                Path(td) / "fresh_moment_receipts.db"
+            )
+            daemon._salience_broker_baseline = None
+            daemon._lean_idle_self_card_text = lambda: "SELF CARD"
+            daemon._lean_idle_private_signal_summary = lambda: {}
+            daemon._lean_idle_time_facts = lambda: {}
+            daemon._lean_idle_body_state = lambda: {}
+            daemon._lean_idle_open_loops = lambda: {}
+            daemon._lean_idle_recent_private_thoughts = lambda: ()
+            fake_result = SimpleNamespace(
+                intercepted=True,
+                return_text=_HEARTBEAT_OK,
+                stored=True,
+                thought_id=81,
+                skip_reason="none",
+                receipt={
+                    "stored": True,
+                    "note_chars": 8,
+                    "output_sha256": "0123456789abcdef",
+                },
+            )
+
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "MAEZ_LEAN_IDLE_HEARTBEAT_ENABLED": "1",
+                    "MAEZ_FRESH_MOMENT_RECEIPTS_SHADOW": "1",
+                    "MAEZ_SALIENCE_BROKER_SHADOW": "",
+                },
+                clear=True,
+            ):
+                with mock.patch(
+                    "core.cognition.lean_idle_heartbeat.run_lean_idle_heartbeat",
+                    return_value=fake_result,
+                ), mock.patch(
+                    "core.evolution.wonderings.Wonderings.add",
+                    side_effect=AssertionError("wonderings must not be written"),
+                ), mock.patch(
+                    "core.evolution.wants.Wants.record_event",
+                    side_effect=AssertionError("wants must not be written"),
+                ), mock.patch(
+                    "core.cognition.salience_ledger.SalienceLedger.record",
+                    side_effect=AssertionError("salience must not be written"),
+                ), mock.patch(
+                    "core.actions.action_engine.ActionEngine.write_soul_note",
+                    side_effect=AssertionError("soul must not be written"),
+                ):
+                    result = daemon._maybe_run_lean_idle_heartbeat({}, _gate())
+
+            rows = daemon._fresh_moment_receipts.recent(limit=5)
+
+        self.assertEqual(result, _HEARTBEAT_OK)
+        self.assertEqual(len(rows), 1)
 
 
 if __name__ == "__main__":
