@@ -8,7 +8,9 @@ from unittest import mock
 
 os.environ.setdefault("MAEZ_IPHONE_INGEST_TOKEN", "dummy-test-token")
 os.environ.setdefault("MAEZ_SECRETS_DISABLE_NEW_LOADER", "1")
-os.environ.pop("MAEZ_LIVE_FAST_LANE_ENABLED", None)
+# Keep the ambient module import hermetic even on machines where the
+# feature flag is enabled in owner-local config.
+os.environ["MAEZ_LIVE_FAST_LANE_ENABLED"] = "0"
 
 import skills.web_interface as wi
 
@@ -150,8 +152,24 @@ class LegacyDoorParkingTests(unittest.TestCase):
         self.assertNotIn("web_token", payload)
 
     def test_fast_reply_absent_when_feature_flag_off(self):
-        rules = {rule.rule for rule in wi.app.url_map.iter_rules()}
-        self.assertNotIn("/v1/fast-reply", rules)
+        code = textwrap.dedent(
+            """
+            import os
+            os.environ["MAEZ_SECRETS_DISABLE_NEW_LOADER"] = "1"
+            os.environ["MAEZ_IPHONE_INGEST_TOKEN"] = "dummy-test-token"
+            os.environ["MAEZ_LIVE_FAST_LANE_ENABLED"] = "0"
+            import skills.web_interface as wi
+            print(any(rule.rule == "/v1/fast-reply" for rule in wi.app.url_map.iter_rules()))
+            """
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        self.assertEqual(result.stdout.strip(), "False")
 
     def test_fast_reply_parked_when_feature_flag_on(self):
         code = textwrap.dedent(

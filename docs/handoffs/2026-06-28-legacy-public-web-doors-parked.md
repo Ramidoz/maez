@@ -4,11 +4,11 @@
 
 Branch: `park-legacy-public-web-doors`
 
-Commits:
+Commits currently on the branch:
 
 - `13c5f11 docs(web): classify legacy public web doors`
 - `c676d1b fix(web): park legacy public maez-web doors`
-- `8e36771 docs(web): hand off legacy door parking review`
+- final test/docs handoff commit: see `git log --oneline -5` for the current hash. The exact hash changes whenever this handoff is corrected, so it is not self-listed here.
 
 Stop point: review gate. Do not merge/restart until owner/Claude review clears the branch.
 
@@ -58,6 +58,7 @@ RED evidence:
 
 - `tests.test_legacy_public_web_doors_parked` initially failed before implementation with parked routes still live, `/api/v1/*` state routes ungated, and kept pages still pointing at retired doors.
 - Review follow-up regression `test_kept_pages_do_not_advertise_parked_guest_or_account_surfaces` failed on stale kept-page guest/account/analytics copy before the copy fix.
+- Claude review found `test_fast_reply_absent_when_feature_flag_off` was non-hermetic when the owner-local fast-lane flag is enabled. It now runs in an isolated subprocess with `MAEZ_LIVE_FAST_LANE_ENABLED=0`, while the sibling test still proves `MAEZ_LIVE_FAST_LANE_ENABLED=1` parks `/v1/fast-reply`.
 
 GREEN evidence:
 
@@ -80,6 +81,14 @@ Result: `Ran 96 tests in 1.710s - OK`.
 ```
 
 Result: `All checks passed!`
+
+```bash
+MAEZ_LIVE_FAST_LANE_ENABLED=1 \
+  /home/rohit/maez/.venv/bin/python -m unittest \
+  tests.test_legacy_public_web_doors_parked.LegacyDoorParkingTests.test_fast_reply_absent_when_feature_flag_off
+```
+
+Result: `Ran 1 test - OK`; the off assertion is hermetic even when the parent process has the flag on.
 
 ```bash
 git diff --check 13c5f11..HEAD
