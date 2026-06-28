@@ -1178,11 +1178,20 @@ _S7_WEBAUTHN_PROOF_PAGE = r"""<!DOCTYPE html>
     button.secondary { background: #7b4f28; }
     pre { white-space: pre-wrap; background: #1f1914; color: #f8f3e8; padding: 14px; border-radius: 12px; }
     .warn { color: #7b2f16; font-weight: 700; }
+    .hint { color: #5a4636; }
   </style>
 </head>
 <body>
   <h1>S7.1 Manual Physical-Key Proof</h1>
   <p class="warn">Local proof surface only. Use Rohit's local browser at http://localhost:11437 with real physical security keys.</p>
+  <section>
+    <h2>Readiness</h2>
+    <ul class="hint">
+      <li>Open this page from http://localhost:11437 so the WebAuthn origin matches the ceremony.</li>
+      <li>Confirm the maez-web proxy has its local channel token before registering.</li>
+      <li>Mint a fresh bootstrap intent, then paste its one-time id and token below.</li>
+    </ul>
+  </section>
   <section>
     <h2>Status</h2>
     <button onclick="loadStatus()">Refresh status</button>
@@ -1309,8 +1318,25 @@ function appendLog(label, payload) {
   log.value += `\n[${new Date().toISOString()}] ${label}\n${JSON.stringify(payload, null, 2)}\n`;
   log.scrollTop = log.scrollHeight;
 }
+function s7ReceiptForError(error) {
+  const receipts = {
+    s7_internal_channel_untrusted: "maez-web proxy is missing its local channel token. Add or rotate the local token there, then restart maez-web.",
+    s7_ceremony_deferred: "The live WebAuthn ceremony flag is off. Enable the ceremony flag before trying this key step.",
+    s7_bootstrap_required: "Mint a fresh bootstrap intent and paste its one-time id and token before registering the primary key.",
+    s7_bootstrap_invalid: "The bootstrap intent or token is invalid or expired. Mint a fresh bootstrap intent and try again.",
+    s7_challenge_replayed: "The browser challenge expired or was already used. Start the key step again from register begin.",
+    s7_webauthn_dependency_missing: "The WebAuthn verifier dependency is unavailable. Fix the local dependency before registering a key.",
+  };
+  return receipts[error] || "";
+}
+function describeS7Receipt(payload) {
+  if (!payload || typeof payload !== "object") return payload;
+  const receipt = s7ReceiptForError(payload.error);
+  if (!receipt) return payload;
+  return {...payload, owner_receipt: receipt};
+}
 function describeError(err) {
-  if (err && err.payload) return err.payload;
+  if (err && err.payload) return describeS7Receipt(err.payload);
   return {
     name: err && err.name ? err.name : "Error",
     message: err && err.message ? err.message : String(err),
@@ -1332,7 +1358,7 @@ async function loadStatus() {
     document.getElementById("status").textContent = JSON.stringify(status, null, 2);
     appendLog("status", status);
   } catch (err) {
-    appendLog("status error", err.payload || String(err));
+    appendLog("status error", describeError(err));
   }
 }
 async function registerCredential(kind) {
