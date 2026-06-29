@@ -215,7 +215,7 @@ class R4_IdentityReplyNoFalseBodyClaim(unittest.TestCase):
         / vision perception. Body-truth-aware rendering is the
         contract: only signals actually reachable from the calling
         process appear in the reply."""
-        from skills.web_interface import _render_identity_reply
+        from core.routing.identity_reply import render_identity_reply
         from core.infra import body_capabilities as bc
         from unittest import mock
 
@@ -243,10 +243,10 @@ class R4_IdentityReplyNoFalseBodyClaim(unittest.TestCase):
         }
         with mock.patch.object(bc, "body_capabilities",
                                return_value=fake_snap):
-            reply_linked = _render_identity_reply(
+            reply_linked = render_identity_reply(
                 display="Friend", linked_user=True,
             )
-            reply_guest = _render_identity_reply(
+            reply_guest = render_identity_reply(
                 display="Friend", linked_user=False,
             )
         for reply, label in [
@@ -277,7 +277,7 @@ class R4_IdentityReplyNoFalseBodyClaim(unittest.TestCase):
         """When desktop IS reachable + brain reachable, the
         sensor clause may name those signals — but only those, not
         a blanket 'world' claim."""
-        from skills.web_interface import _render_identity_reply
+        from core.routing.identity_reply import render_identity_reply
         from core.infra import body_capabilities as bc
         from unittest import mock
 
@@ -296,7 +296,7 @@ class R4_IdentityReplyNoFalseBodyClaim(unittest.TestCase):
         }
         with mock.patch.object(bc, "body_capabilities",
                                return_value=fake_snap):
-            reply = _render_identity_reply(
+            reply = render_identity_reply(
                 display="Owner", linked_user=True,
             )
         self.assertIn(

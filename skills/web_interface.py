@@ -53,6 +53,10 @@ from core.safety.clinical_boundary import (
     PrivateThoughtsCrisisSignalWriter,
     guard_owner_text,
 )
+from core.routing.identity_reply import (
+    is_identity_question,
+    render_identity_reply as _render_identity_reply,
+)
 
 logger = logging.getLogger("maez.web")
 logging.basicConfig(level=logging.INFO)
@@ -163,68 +167,6 @@ def _request_is_loopback() -> bool:
     127.0.0.0/8, IPv6 ::1, and IPv4-mapped-IPv6 ::ffff:127.x."""
     addr = (getattr(request, "remote_addr", "") or "").strip()
     return addr.startswith("127.") or addr.startswith("::ffff:127.") or addr in _LOOPBACK_EXACT
-
-
-def _render_identity_reply(*, display: str, linked_user: bool) -> str:
-    """Render the /chat identity short-circuit reply.
-
-    R4 follow-up (Codex 2026-05-04 review of d99602e): the previous
-    inline string for linked_user contained an unconditional
-    perception claim of the form "I ... [verb-of-sensing] his
-    world ..." that is FALSE under the daemon's actual runtime
-    (DISPLAY=:1, X session unreachable).
-    Wrapping it in audit_assistant_text() is insufficient because
-    the audit's fall-open path on judge_unavailable returns
-    rewritten=False and the false claim passes through unchanged.
-    Verified empirically against the real audit code.
-
-    Structural fix: never make the false claim. The baseline
-    asserts only what is universally true regardless of body
-    state — Maez runs on the owner's machine, remembers
-    conversations across surfaces, doesn't forget between
-    sessions. An optional "Available signals: ..." clause is
-    appended ONLY when body_capabilities reports those signals
-    are actually reachable from this process — same shape as
-    core.infra.fast_prompt_builder.compact_identity().
-    """
-    if linked_user:
-        baseline = (
-            f"Hi {display}. I'm Maez — a persistent AI presence "
-            f"built by the owner. I run on his machine, remember "
-            f"every conversation we have across Telegram and the "
-            f"web, and don't forget between sessions. You and I "
-            f"have history — ask me anything."
-        )
-    else:
-        baseline = (
-            f"Hi {display}. I'm Maez — a persistent AI presence "
-            f"built by the owner. I run locally on his machine, "
-            f"and I remember every conversation we have. I don't "
-            f"forget between sessions. What's on your mind?"
-        )
-
-    # Body-truth-aware sensor clause. Mirrors compact_identity()'s
-    # shape: only name signals that are actually verifiable from
-    # the calling process. Probe failure → conservative shape (no
-    # clause). The clause is omitted entirely when no signals
-    # are reachable (the daemon's typical state today).
-    sensor_clause = ""
-    try:
-        from core.infra import body_capabilities as _bc
-
-        snap = _bc.body_capabilities()
-        env = snap.get("env") or {}
-        signals: list[str] = []
-        if env.get("DISPLAY") and snap.get("desktop_session_reachable"):
-            signals.append("desktop")
-        services = snap.get("services") or {}
-        if services.get("brain_8080"):
-            signals.append("memory")
-        if signals:
-            sensor_clause = f" Right now I can verify: {', '.join(signals)}."
-    except Exception:
-        sensor_clause = ""
-    return baseline + sensor_clause
 
 
 _OWNER_ASKED_EXCHANGE_RE = re.compile(
@@ -6548,18 +6490,7 @@ def chat():
         # a canonical identity string instantly — no LLM call, no refusal
         # risk. Canonical text is a projection of soul.md's public-facing
         # identity; future session can parse soul.md at runtime.
-        IDENTITY_KEYWORDS = (
-            "who are you",
-            "what are you",
-            "tell me about yourself",
-            "what is maez",
-            "who is this",
-            "tell me about maez",
-            "what can you do",
-            "introduce yourself",
-        )
-        msg_lower = message.lower().strip()
-        if any(kw in msg_lower for kw in IDENTITY_KEYWORDS):
+        if is_identity_question(message):
             identity_reply = _render_identity_reply(
                 display=display,
                 linked_user=linked_user,

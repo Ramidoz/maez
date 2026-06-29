@@ -31,6 +31,10 @@ class HistoryToMessages(unittest.TestCase):
         from core.brain.conversation_history import history_to_messages
         return history_to_messages(history)
 
+    def _latest_anchor(self, history):
+        from core.brain.conversation_history import latest_dialogue_anchor_text
+        return latest_dialogue_anchor_text(history)
+
     def test_empty_history_returns_empty(self):
         self.assertEqual(self._convert(None), [])
         self.assertEqual(self._convert([]), [])
@@ -75,7 +79,7 @@ class HistoryToMessages(unittest.TestCase):
         ]
         self.assertEqual(self._convert(entries), [])
 
-    def test_protected_prompt_refusal_entries_rejected(self):
+    def test_protected_prompt_refusal_entries_thread_safe_placeholder(self):
         entries = [
             {
                 "content": (
@@ -94,10 +98,37 @@ class HistoryToMessages(unittest.TestCase):
 
         out = self._convert(entries)
 
-        self.assertEqual(len(out), 2)
-        self.assertEqual(out[0]["content"], "what is meta-harness?")
+        self.assertEqual(len(out), 4)
+        self.assertEqual(out[0]["content"], "what's the oldest thing you remember?")
+        self.assertEqual(
+            out[1],
+            {
+                "role": "assistant",
+                "content": "[Maez declined to quote its private instructions.]",
+            },
+        )
+        self.assertEqual(out[2]["content"], "what is meta-harness?")
         self.assertNotIn("protected covenant", str(out).lower())
         self.assertNotIn("system-prompt", str(out).lower())
+        self.assertNotIn("system prompt", str(out).lower())
+
+    def test_latest_dialogue_anchor_uses_safe_placeholder_for_refusal(self):
+        entries = [
+            {
+                "content": (
+                    "Rohit: who are you?\n"
+                    "Maez: [refused: I won't print protected "
+                    "covenant/system-prompt text verbatim. I can summarize.]"
+                ),
+            },
+        ]
+
+        anchor = self._latest_anchor(entries)
+
+        self.assertIn("User: who are you?", anchor)
+        self.assertIn("Maez: [Maez declined to quote its private instructions.]", anchor)
+        self.assertNotIn("protected covenant", anchor.lower())
+        self.assertNotIn("system-prompt", anchor.lower())
 
     def test_parser_prefix_agnostic(self):
         # Owner-side prefix is whatever display_name() configured —

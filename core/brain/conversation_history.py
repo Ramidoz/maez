@@ -38,6 +38,9 @@ _PROTECTED_PROMPT_REFUSAL_MARKERS = (
     "system-prompt",
     "system prompt",
 )
+_PROTECTED_PROMPT_REFUSAL_PLACEHOLDER = (
+    "[Maez declined to quote its private instructions.]"
+)
 
 
 def _is_protected_prompt_refusal(text: str) -> bool:
@@ -78,7 +81,7 @@ def _split_exchange(content: str) -> tuple[str, str] | None:
     if not user_msg or not assistant_msg:
         return None
     if _is_protected_prompt_refusal(assistant_msg):
-        return None
+        return user_msg, _PROTECTED_PROMPT_REFUSAL_PLACEHOLDER
     return user_msg, assistant_msg
 
 
@@ -107,3 +110,29 @@ def history_to_messages(
         out.append({"role": "user", "content": user_msg})
         out.append({"role": "assistant", "content": assistant_msg})
     return out
+
+
+def latest_dialogue_anchor_text(chat_history: Iterable[dict] | None) -> str:
+    """Return the newest safe user/Maez pair for continuity evidence.
+
+    Uses `history_to_messages()` so protected-prompt refusals are represented by
+    a content-light placeholder, not by the raw refusal string or protected
+    marker words.
+    """
+    messages = history_to_messages(chat_history)
+    pairs: list[tuple[str, str]] = []
+    pending_user: str | None = None
+    for message in messages:
+        role = message.get("role")
+        content = (message.get("content") or "").strip()
+        if not content:
+            continue
+        if role == "user":
+            pending_user = content
+        elif role == "assistant" and pending_user:
+            pairs.append((pending_user, content))
+            pending_user = None
+    if not pairs:
+        return ""
+    user_text, assistant_text = pairs[-1]
+    return f"User: {user_text}\nMaez: {assistant_text}"

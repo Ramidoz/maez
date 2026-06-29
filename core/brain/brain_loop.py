@@ -383,15 +383,12 @@ def _dispatcher_recall_adapters(
         ]
 
     def _latest_dialogue_anchor_text() -> str:
-        if not chat_history:
-            return ""
-        for exchange in reversed(list(chat_history)):
-            if isinstance(exchange, dict):
-                content = str(exchange.get("content") or "").strip()
-            else:
-                content = str(exchange or "").strip()
-            if content:
-                return content
+        try:
+            from core.brain.conversation_history import latest_dialogue_anchor_text
+
+            return latest_dialogue_anchor_text(chat_history)
+        except Exception:
+            pass
         return ""
 
     def _continuity_needs_dialogue_anchor() -> bool:

@@ -7243,6 +7243,8 @@ class MaezDaemon:
         _recall_shadow_attempt = False
         _recall_status_reply = None
         _recent_activity_status_reply = None
+        _identity_status_reply = None
+        _protected_refusal_followup_reply = None
         _receipt_box = None
         _receipt_timer = None
         _receipt_eligible_for_turn = False
@@ -7378,6 +7380,65 @@ class MaezDaemon:
                 logger.debug("recall self-status intercept skipped: %s", _status_exc)
 
         try:
+            from core.memory.identity import display_name as _identity_display_name
+            from core.routing.identity_reply import (
+                is_identity_question as _is_identity_question,
+                render_identity_reply as _render_identity_reply,
+            )
+
+            if (
+                _recall_status_reply is None
+                and _is_identity_question(text)
+                and not authoritative_tool_reply
+                and not transcript_context
+                and not (web_context or "").strip()
+            ):
+                try:
+                    _display = _identity_display_name() or "Rohit"
+                except Exception:
+                    _display = "Rohit"
+                _identity_status_reply = _render_identity_reply(
+                    display=_display,
+                    linked_user=True,
+                )
+                logger.info(
+                    "identity_status source=%s state=deterministic_shared",
+                    source,
+                )
+        except Exception as _identity_status_exc:
+            logger.debug(
+                "identity status intercept skipped: %s",
+                _identity_status_exc,
+            )
+
+        try:
+            from core.routing.protected_refusal_followup import (
+                protected_refusal_followup_reply as _protected_refusal_followup,
+            )
+
+            if (
+                _recall_status_reply is None
+                and _identity_status_reply is None
+                and not authoritative_tool_reply
+                and not transcript_context
+                and not (web_context or "").strip()
+            ):
+                _protected_refusal_followup_reply = _protected_refusal_followup(
+                    text,
+                    chat_history,
+                )
+                if _protected_refusal_followup_reply:
+                    logger.info(
+                        "protected_refusal_followup source=%s state=deterministic",
+                        source,
+                    )
+        except Exception as _protected_refusal_exc:
+            logger.debug(
+                "protected refusal followup skipped: %s",
+                _protected_refusal_exc,
+            )
+
+        try:
             from core.routing.recent_activity_status import (
                 build_recent_activity_status_reply as _build_recent_activity_status_reply,
                 is_recent_activity_status_query as _is_recent_activity_status_query,
@@ -7405,6 +7466,12 @@ class MaezDaemon:
 
         if _recall_status_reply is not None:
             reply = _recall_status_reply
+            _reply_path = ReplyPath.SELF_STATUS
+        elif _identity_status_reply is not None:
+            reply = _identity_status_reply
+            _reply_path = ReplyPath.SELF_STATUS
+        elif _protected_refusal_followup_reply is not None:
+            reply = _protected_refusal_followup_reply
             _reply_path = ReplyPath.SELF_STATUS
         elif _recent_activity_status_reply is not None:
             reply = _recent_activity_status_reply
