@@ -2247,6 +2247,36 @@ class DaemonHandleMessageContract(unittest.TestCase):
 
         fsyn.assert_not_called()
 
+    def test_recent_activity_probe_uses_deterministic_status_not_megaprompt(self):
+        from daemon import maez_daemon
+
+        captured: dict[str, list[dict]] = {}
+        daemon = self._build_daemon_for_handle_message()
+        daemon.cycle_count = 12
+
+        with self._handle_message_mock_stack(maez_daemon, captured):
+            reply = maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                "What are the things you did?",
+                source="telegram_surface",
+                transcript="",
+                chat_history=[],
+            )
+
+        self.assertIn("I don't have a completed action to report", reply)
+        self.assertIn("HEARTBEAT_OK", reply)
+        self.assertNotIn("verified", reply.lower())
+        self.assertNotIn("diagnostic", reply.lower())
+        self.assertNotIn("identity confirmation", reply.lower())
+        self.assertNotIn("runtime health", reply.lower())
+        self.assertNotIn("partnership model", reply.lower())
+        self.assertNotIn("messages", captured)
+        audit_mock = captured["audit_assistant_text_mock"]
+        self.assertEqual(
+            audit_mock.call_args.kwargs.get("semantic_self_claim_skip_reason"),
+            "deterministic_self_status",
+        )
+
     def test_focused_fallback_on_error_uses_legacy_megaprompt(self):
         from daemon import maez_daemon
 

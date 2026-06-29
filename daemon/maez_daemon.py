@@ -7242,6 +7242,7 @@ class MaezDaemon:
         _recall_outcome_rec = None
         _recall_shadow_attempt = False
         _recall_status_reply = None
+        _recent_activity_status_reply = None
         _receipt_box = None
         _receipt_timer = None
         _receipt_eligible_for_turn = False
@@ -7376,8 +7377,37 @@ class MaezDaemon:
             except Exception as _status_exc:
                 logger.debug("recall self-status intercept skipped: %s", _status_exc)
 
+        try:
+            from core.routing.recent_activity_status import (
+                build_recent_activity_status_reply as _build_recent_activity_status_reply,
+                is_recent_activity_status_query as _is_recent_activity_status_query,
+            )
+
+            if (
+                _recall_status_reply is None
+                and _is_recent_activity_status_query(text)
+                and not authoritative_tool_reply
+                and not transcript_context
+                and not (web_context or "").strip()
+            ):
+                _recent_activity_status_reply = _build_recent_activity_status_reply(
+                    cycle_count=getattr(self, "cycle_count", None),
+                )
+                logger.info(
+                    "recent_activity_status source=%s state=honest_empty",
+                    source,
+                )
+        except Exception as _activity_status_exc:
+            logger.debug(
+                "recent activity status intercept skipped: %s",
+                _activity_status_exc,
+            )
+
         if _recall_status_reply is not None:
             reply = _recall_status_reply
+            _reply_path = ReplyPath.SELF_STATUS
+        elif _recent_activity_status_reply is not None:
+            reply = _recent_activity_status_reply
             _reply_path = ReplyPath.SELF_STATUS
         elif _reply_decision.mode is ReplyMode.TOOL:
             reply = authoritative_tool_reply
