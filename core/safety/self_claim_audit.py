@@ -244,7 +244,9 @@ _UNSUPPORTED_INTERNAL_WORK_RE = re.compile(
     r"[^.!?]*\b(?:diagnostics?|internal\s+process(?:es)?|subsystems?|"
     r"runtime\s+health|maintenance|core\s+directive|trust_covenant|"
     r"covenant|context\s+window|residual\s+noise|self-model|"
-    r"self\s+model|soul\.local|operational\s+readiness)\b",
+    r"self\s+model|soul\.local|operational\s+readiness|"
+    r"partnership\s+model|tool-user\s+model|tool\s+user\s+model|"
+    r"identity|alignment|runtime\s+body)\b",
     re.IGNORECASE,
 )
 _UNSUPPORTED_VERIFY_SUMMARY_RE = re.compile(
@@ -253,8 +255,25 @@ _UNSUPPORTED_VERIFY_SUMMARY_RE = re.compile(
 )
 _UNSUPPORTED_INTERNAL_HEADING_RE = re.compile(
     r"\b(?:covenant\s+integrity\s+check|context\s+window\s+reset|"
-    r"runtime\s+health\s+scan|self-understanding\s+audit)\b"
+    r"runtime\s+health\s+(?:scan|check)|self-understanding\s+audit|"
+    r"identity\s+confirmation)\b"
     r"[^.!?\n]*(?:\n|$|[.!?])",
+    re.IGNORECASE,
+)
+_UNSUPPORTED_INTERNAL_STATE_CHECK_RE = re.compile(
+    r"\bI\s+(?:meant\s+I\s+)?(?:performed|did|made)\s+"
+    r"(?:a\s+)?(?:silent,\s+)?internal\s+state\s+check\b"
+    r"[^.!?]*(?:alignment|covenant|operational\s+readiness)\b",
+    re.IGNORECASE,
+)
+_UNSUPPORTED_INTERNAL_ENSURED_RE = re.compile(
+    r"\bI\s+(?:simply\s+)?ensured\b"
+    r"[^.!?]*(?:who\s+I\s+say\s+I\s+am|ready\s+to\s+work|"
+    r"alignment|operational\s+readiness)\b",
+    re.IGNORECASE,
+)
+_UNSUPPORTED_VERIFICATION_FRAME_RE = re.compile(
+    r"\bhere\s+is\s+exactly\s+what\s+that\s+verification\s+entailed\b:?",
     re.IGNORECASE,
 )
 
@@ -272,6 +291,9 @@ def check_completion_claims(text: str, *, grounded_by_tool: bool) -> list[Flag]:
         _UNSUPPORTED_INTERNAL_WORK_RE,
         _UNSUPPORTED_VERIFY_SUMMARY_RE,
         _UNSUPPORTED_INTERNAL_HEADING_RE,
+        _UNSUPPORTED_INTERNAL_STATE_CHECK_RE,
+        _UNSUPPORTED_INTERNAL_ENSURED_RE,
+        _UNSUPPORTED_VERIFICATION_FRAME_RE,
     ):
         for match in rx.finditer(text):
             flags.append(

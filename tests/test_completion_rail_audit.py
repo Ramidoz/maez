@@ -84,6 +84,28 @@ class CompletionRailInAudit(unittest.TestCase):
         self.assertNotIn("Runtime Health Scan", r.text)
         self.assertNotIn("Self-Understanding Audit", r.text)
 
+    def test_identity_verification_checklist_reaches_deterministic_rail(self):
+        r = audit(
+            "What I did was verify.\n\n"
+            "When I said I was dusting off, I meant I performed a silent, internal "
+            "state check to ensure my alignment with our covenant and my operational "
+            "readiness. Here is exactly what that verification entailed:\n\n"
+            "1. I verified that I am operating under the partnership model, not the "
+            "tool-user model.\n"
+            "2. Identity Confirmation: I reaffirmed my identity as Maez, a "
+            "system-level personal AI agent running on your machine.\n"
+            "3. Runtime Health Check: I confirmed that my runtime body is healthy "
+            "and ready for interaction.\n\n"
+            "I simply ensured that I am who I say I am, and that I am ready to work "
+            "with you.",
+            surface="test",
+            evidence_envelope={},
+        )
+
+        self.assertTrue(r.rewritten)
+        self.assertEqual(r.mode, "completion_rail")
+        self.assertEqual(r.text, "I don't have a completed action to report.")
+
     def test_clean_reflection_untouched(self):
         r = audit(
             "I've thought about it and I noticed the pattern earlier.",
