@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime, timezone
+from unittest import mock
 
 from core.body.desktop_presence_state import (
     DesktopPresenceState,
@@ -58,6 +59,39 @@ class DesktopPresenceStateTests(unittest.TestCase):
             self.assertEqual(state.sensor_state, "unavailable")
             self.assertEqual(state.reason, reason)
             self.assertIsNone(state.app_class, "blind must never carry an app class")
+
+    def test_wayland_availability_uses_gdbus_not_xdotool(self):
+        from core.body import desktop_presence_state as dps
+
+        def has_binary(name: str) -> bool:
+            return name == "gdbus"
+
+        with mock.patch.dict(
+            "os.environ",
+            {"XDG_SESSION_TYPE": "wayland", "WAYLAND_DISPLAY": "wayland-0"},
+            clear=True,
+        ), mock.patch.object(dps.body_capabilities, "has_binary", has_binary):
+            self.assertEqual(dps._desktop_availability(), ("available", ""))
+
+    def test_wayland_availability_reports_tools_missing_without_gdbus(self):
+        from core.body import desktop_presence_state as dps
+
+        with mock.patch.dict(
+            "os.environ",
+            {"XDG_SESSION_TYPE": "wayland", "WAYLAND_DISPLAY": "wayland-0"},
+            clear=True,
+        ), mock.patch.object(dps.body_capabilities, "has_binary", return_value=False):
+            self.assertEqual(dps._desktop_availability(), ("unavailable", "tools_missing"))
+
+    def test_x11_availability_still_requires_xdotool_and_session(self):
+        from core.body import desktop_presence_state as dps
+
+        with mock.patch.dict("os.environ", {"DISPLAY": ":0"}, clear=True), \
+            mock.patch.object(dps.body_capabilities, "has_binary", return_value=True), \
+            mock.patch.object(
+                dps.body_capabilities, "desktop_session_reachable", return_value=True
+            ):
+            self.assertEqual(dps._desktop_availability(), ("available", ""))
 
     def test_reachable_but_no_active_window_is_blind_not_fabricated(self):
         state = sample_desktop_presence(

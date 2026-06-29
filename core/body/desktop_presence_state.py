@@ -27,6 +27,13 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _is_wayland_session() -> bool:
+    return (
+        os.environ.get("XDG_SESSION_TYPE", "").strip().lower() == "wayland"
+        or bool(os.environ.get("WAYLAND_DISPLAY"))
+    )
+
+
 @dataclass(frozen=True)
 class DesktopPresenceState:
     sensor_state: str = "disabled"
@@ -62,6 +69,10 @@ class DesktopPresenceState:
 
 def _desktop_availability() -> tuple[str, str]:
     """Return (sensor_state, reason) for honest desktop reachability."""
+    if _is_wayland_session():
+        if not body_capabilities.has_binary("gdbus"):
+            return "unavailable", "tools_missing"
+        return "available", ""
     if not body_capabilities.has_binary("xdotool"):
         return "unavailable", "tools_missing"
     if not os.environ.get("DISPLAY"):
