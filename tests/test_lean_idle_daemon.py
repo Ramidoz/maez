@@ -819,6 +819,94 @@ class LeanIdleDaemonTest(unittest.TestCase):
             self.assertTrue(any(d["field"] == "cpu" for d in facts.body_state_window))
             self.assertNotIn("82.0", repr(facts.body_state_window))
 
+    def test_desktop_attention_shadow_flag_off_does_not_create_cache_or_sample(self) -> None:
+        from daemon.maez_daemon import MaezDaemon
+        import core.cognition.lean_idle_heartbeat as lih
+
+        daemon = object.__new__(MaezDaemon)
+        daemon.cycle_count = 7
+        daemon.private_thoughts = None
+        daemon._lean_idle_self_card_text = lambda: "SELF"
+        daemon._lean_idle_private_signal_summary = lambda: {}
+        daemon._lean_idle_time_facts = lambda: {}
+        daemon._lean_idle_body_state = lambda: {}
+        daemon._lean_idle_open_loops = lambda: {}
+        daemon._lean_idle_recent_private_thoughts = lambda: ()
+        captured = {}
+
+        def capture(*, facts, **kwargs):
+            captured["facts"] = facts
+            return lih.LeanIdleResult(False, False, None, None, "shadow_only", {})
+
+        with tempfile.TemporaryDirectory() as td:
+            cache_path = Path(td) / "desktop_attention_shadow_signatures.json"
+            with mock.patch.dict(
+                "os.environ",
+                {"MAEZ_LEAN_IDLE_HEARTBEAT_SHADOW": "1"},
+                clear=True,
+            ), mock.patch(
+                "core.cognition.desktop_attention_shadow.default_signature_path",
+                return_value=cache_path,
+            ), mock.patch(
+                "core.body.desktop_presence_state.sample_desktop_presence",
+                side_effect=AssertionError("must not sample when flag off"),
+            ), mock.patch.object(lih, "run_lean_idle_heartbeat", capture):
+                daemon._maybe_run_lean_idle_heartbeat({}, _gate())
+
+            self.assertFalse(cache_path.exists())
+            self.assertEqual(captured["facts"].desktop_attention_shadow, ())
+
+    def test_desktop_attention_shadow_flag_on_passes_directionless_entries(self) -> None:
+        from core.body.desktop_presence_state import DesktopPresenceState
+        from daemon.maez_daemon import MaezDaemon
+        import core.cognition.lean_idle_heartbeat as lih
+
+        daemon = object.__new__(MaezDaemon)
+        daemon.cycle_count = 7
+        daemon.private_thoughts = None
+        daemon._lean_idle_self_card_text = lambda: "SELF"
+        daemon._lean_idle_private_signal_summary = lambda: {}
+        daemon._lean_idle_time_facts = lambda: {}
+        daemon._lean_idle_body_state = lambda: {}
+        daemon._lean_idle_open_loops = lambda: {}
+        daemon._lean_idle_recent_private_thoughts = lambda: ()
+        captured = {}
+
+        def capture(*, facts, **kwargs):
+            captured["facts"] = facts
+            return lih.LeanIdleResult(False, False, None, None, "shadow_only", {})
+
+        states = [
+            DesktopPresenceState(sensor_state="available", app_class="code"),
+            DesktopPresenceState(sensor_state="available", app_class="signal"),
+        ]
+
+        with tempfile.TemporaryDirectory() as td:
+            cache_path = Path(td) / "desktop_attention_shadow_signatures.json"
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "MAEZ_LEAN_IDLE_HEARTBEAT_SHADOW": "1",
+                    "MAEZ_DESKTOP_ATTENTION_SHADOW": "1",
+                },
+                clear=True,
+            ), mock.patch(
+                "core.cognition.desktop_attention_shadow.default_signature_path",
+                return_value=cache_path,
+            ), mock.patch(
+                "core.body.desktop_presence_state.sample_desktop_presence",
+                side_effect=states,
+            ), mock.patch.object(lih, "run_lean_idle_heartbeat", capture):
+                daemon._maybe_run_lean_idle_heartbeat({}, _gate())
+                daemon._maybe_run_lean_idle_heartbeat({}, _gate())
+
+        entries = captured["facts"].desktop_attention_shadow
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["field"], "active_surface")
+        self.assertEqual(entries[0]["phrase"], "active surface changed")
+        self.assertNotIn("code", repr(entries))
+        self.assertNotIn("signal", repr(entries))
+
     def test_heartbeat_shadow_without_broker_leaves_broker_baseline_untouched(self) -> None:
         from daemon.maez_daemon import MaezDaemon
         import core.cognition.lean_idle_heartbeat as lih

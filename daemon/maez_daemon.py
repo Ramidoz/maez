@@ -1865,6 +1865,10 @@ def _world_window_shadow_enabled(environ: object | None = None) -> bool:
     return _env_flag("MAEZ_WORLD_WINDOW_SHADOW", environ=environ)
 
 
+def _desktop_attention_shadow_enabled(environ: object | None = None) -> bool:
+    return _env_flag("MAEZ_DESKTOP_ATTENTION_SHADOW", environ=environ)
+
+
 def _lean_idle_heartbeat_eligible(gate_decision: object) -> bool:
     return (
         bool(getattr(gate_decision, "doorman_enabled", False))
@@ -5327,6 +5331,7 @@ class MaezDaemon:
             "recent_private_thoughts": self._lean_idle_recent_private_thoughts(),
         }
         body_state_window: tuple[dict[str, object], ...] = ()
+        desktop_attention_shadow: tuple[dict[str, object], ...] = ()
         if _world_window_shadow_enabled():
             try:
                 from core.cognition.world_window import maybe_collect_body_state_window
@@ -5374,6 +5379,47 @@ class MaezDaemon:
                     json.dumps(
                         {
                             "schema_version": "body_state_window.v0",
+                            "skip_reason": "error",
+                            "error_class": exc.__class__.__name__,
+                        },
+                        sort_keys=True,
+                    ),
+                )
+        if heartbeat_active and _desktop_attention_shadow_enabled():
+            try:
+                from core.body.desktop_presence_state import (
+                    PERCEPTION_ENV as DESKTOP_PERCEPTION_ENV,
+                    sample_desktop_presence,
+                )
+                from core.cognition.desktop_attention_shadow import (
+                    maybe_collect_desktop_attention_shadow,
+                )
+
+                desktop_state = sample_desktop_presence({DESKTOP_PERCEPTION_ENV: "1"})
+                attention_result = maybe_collect_desktop_attention_shadow(
+                    desktop_state,
+                    enabled=True,
+                )
+                if attention_result is not None:
+                    desktop_attention_shadow = tuple(
+                        {
+                            "field": entry.field,
+                            "phrase": entry.phrase,
+                            "provenance": entry.provenance,
+                            "sensitivity": entry.sensitivity,
+                        }
+                        for entry in attention_result.entries
+                    )
+                    logger.info(
+                        "desktop_attention_shadow receipt=%s",
+                        json.dumps(attention_result.receipt_payload(), sort_keys=True),
+                    )
+            except Exception as exc:
+                logger.info(
+                    "desktop_attention_shadow receipt=%s",
+                    json.dumps(
+                        {
+                            "schema_version": "desktop_attention_shadow.v0",
                             "skip_reason": "error",
                             "error_class": exc.__class__.__name__,
                         },
@@ -5444,6 +5490,7 @@ class MaezDaemon:
                     time_facts=window["time_facts"],
                     body_state=window["body_state"],
                     body_state_window=body_state_window,
+                    desktop_attention_shadow=desktop_attention_shadow,
                     open_loops=window["open_loops"],
                     recent_private_thoughts=window["recent_private_thoughts"],
                 ),
