@@ -1861,6 +1861,10 @@ def _fresh_moment_receipts_shadow_enabled(environ: object | None = None) -> bool
     return _env_flag("MAEZ_FRESH_MOMENT_RECEIPTS_SHADOW", environ=environ)
 
 
+def _world_window_shadow_enabled(environ: object | None = None) -> bool:
+    return _env_flag("MAEZ_WORLD_WINDOW_SHADOW", environ=environ)
+
+
 def _lean_idle_heartbeat_eligible(gate_decision: object) -> bool:
     return (
         bool(getattr(gate_decision, "doorman_enabled", False))
@@ -5322,6 +5326,60 @@ class MaezDaemon:
             "open_loops": self._lean_idle_open_loops(),
             "recent_private_thoughts": self._lean_idle_recent_private_thoughts(),
         }
+        body_state_window: tuple[dict[str, object], ...] = ()
+        if _world_window_shadow_enabled():
+            try:
+                from core.cognition.world_window import maybe_collect_body_state_window
+
+                body_window_result = maybe_collect_body_state_window(
+                    snap or {},
+                    enabled=True,
+                )
+                if body_window_result is not None:
+                    body_state_window = tuple(
+                        {
+                            "field": delta.field,
+                            "phrase": delta.phrase,
+                            "provenance": delta.provenance,
+                            "sensitivity": delta.sensitivity,
+                        }
+                        for delta in body_window_result.deltas
+                    )
+                    logger.info(
+                        "world_window receipt=%s",
+                        json.dumps(
+                            {
+                                "schema_version": "body_state_window.v0",
+                                "cold_start": bool(body_window_result.cold_start),
+                                "delta_count": len(body_window_result.deltas),
+                                "deltas": [
+                                    {
+                                        "field": delta.field,
+                                        "provenance": delta.provenance,
+                                        "sensitivity": delta.sensitivity,
+                                    }
+                                    for delta in body_window_result.deltas
+                                ],
+                                "exclusions": [
+                                    {"field": item.field, "reason": item.reason}
+                                    for item in body_window_result.exclusions
+                                ],
+                            },
+                            sort_keys=True,
+                        ),
+                    )
+            except Exception as exc:
+                logger.info(
+                    "world_window receipt=%s",
+                    json.dumps(
+                        {
+                            "schema_version": "body_state_window.v0",
+                            "skip_reason": "error",
+                            "error_class": exc.__class__.__name__,
+                        },
+                        sort_keys=True,
+                    ),
+                )
         broker_receipt = None
         proposals = []
         strategy = "changed_since_last"
@@ -5385,6 +5443,7 @@ class MaezDaemon:
                     private_signal_summary=self._lean_idle_private_signal_summary(),
                     time_facts=window["time_facts"],
                     body_state=window["body_state"],
+                    body_state_window=body_state_window,
                     open_loops=window["open_loops"],
                     recent_private_thoughts=window["recent_private_thoughts"],
                 ),

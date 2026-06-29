@@ -138,6 +138,48 @@ class LeanIdleHeartbeatTest(unittest.TestCase):
         self.assertIn("I keep returning to the routing question", prompt.text)
         self.assertIn("only carry something new", prompt.text.lower())
 
+    def test_prompt_renders_body_state_window_without_hashes_or_raw_values(self) -> None:
+        prompt = build_lean_idle_prompt(
+            LeanIdleFacts(
+                cycle=7,
+                doorman_reason="wake_min_floor",
+                self_card_text="SELF",
+                body_state_window=(
+                    {
+                        "field": "cpu",
+                        "phrase": "cpu load or temperature band changed",
+                        "provenance": "perception_snapshot.cpu",
+                        "sensitivity": "safe_delta",
+                        "signature": "cpu:raw-82.123456:secret",
+                    },
+                ),
+            )
+        )
+
+        self.assertIn("BODY-STATE WINDOW", prompt.text)
+        self.assertIn("cpu load or temperature band changed", prompt.text)
+        self.assertIn("provenance: perception_snapshot.cpu", prompt.text)
+        self.assertIn("sensitivity: safe_delta", prompt.text)
+        self.assertNotIn("raw-82.123456", prompt.text)
+        self.assertNotIn("secret", prompt.text)
+        self.assertIn("body_state_window", prompt.fact_keys)
+        self.assertIn(
+            f"If nothing is worth privately carrying, answer exactly {HEARTBEAT_OK}.",
+            prompt.text,
+        )
+
+    def test_prompt_omits_body_state_window_when_empty(self) -> None:
+        prompt = build_lean_idle_prompt(
+            LeanIdleFacts(
+                cycle=7,
+                doorman_reason="wake_min_floor",
+                self_card_text="SELF",
+                body_state_window=(),
+            )
+        )
+
+        self.assertNotIn("BODY-STATE WINDOW", prompt.text)
+
     def test_prompt_omits_recent_usual_gap_when_none(self) -> None:
         prompt = build_lean_idle_prompt(
             LeanIdleFacts(

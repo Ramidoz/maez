@@ -737,6 +737,88 @@ class LeanIdleDaemonTest(unittest.TestCase):
         self.assertEqual(facts.open_loops["open_loop_count"], 2)
         self.assertEqual(facts.recent_private_thoughts, ("a prior thought",))
 
+    def test_world_window_flag_off_creates_no_signature_cache(self) -> None:
+        from daemon.maez_daemon import MaezDaemon
+        import core.cognition.lean_idle_heartbeat as lih
+
+        with tempfile.TemporaryDirectory() as td:
+            cache_path = Path(td) / "world_window_signatures.json"
+            daemon = object.__new__(MaezDaemon)
+            daemon.cycle_count = 7
+            daemon.private_thoughts = None
+            daemon._lean_idle_self_card_text = lambda: "SELF"
+            daemon._lean_idle_private_signal_summary = lambda: {}
+            daemon._lean_idle_time_facts = lambda: {}
+            daemon._lean_idle_body_state = lambda: {}
+            daemon._lean_idle_open_loops = lambda: {}
+            daemon._lean_idle_recent_private_thoughts = lambda: ()
+
+            def capture(*, facts, **kwargs):
+                return lih.LeanIdleResult(False, False, None, None, "shadow_only", {})
+
+            with mock.patch.dict(
+                "os.environ", {"MAEZ_LEAN_IDLE_HEARTBEAT_SHADOW": "1"}, clear=True
+            ):
+                with mock.patch(
+                    "core.cognition.world_window.default_signature_path",
+                    return_value=cache_path,
+                ):
+                    with mock.patch.object(lih, "run_lean_idle_heartbeat", capture):
+                        daemon._maybe_run_lean_idle_heartbeat(
+                            {"cpu": {"percent": 80.0}},
+                            _gate(),
+                        )
+
+            self.assertFalse(cache_path.exists())
+
+    def test_world_window_deltas_threaded_into_heartbeat_when_flag_on(self) -> None:
+        from daemon.maez_daemon import MaezDaemon
+        import core.cognition.lean_idle_heartbeat as lih
+
+        with tempfile.TemporaryDirectory() as td:
+            cache_path = Path(td) / "world_window_signatures.json"
+            daemon = object.__new__(MaezDaemon)
+            daemon.cycle_count = 7
+            daemon.private_thoughts = None
+            daemon._lean_idle_self_card_text = lambda: "SELF"
+            daemon._lean_idle_private_signal_summary = lambda: {}
+            daemon._lean_idle_time_facts = lambda: {}
+            daemon._lean_idle_body_state = lambda: {}
+            daemon._lean_idle_open_loops = lambda: {}
+            daemon._lean_idle_recent_private_thoughts = lambda: ()
+            captured = {}
+
+            def capture(*, facts, **kwargs):
+                captured["facts"] = facts
+                return lih.LeanIdleResult(False, False, None, None, "shadow_only", {})
+
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "MAEZ_LEAN_IDLE_HEARTBEAT_SHADOW": "1",
+                    "MAEZ_WORLD_WINDOW_SHADOW": "1",
+                },
+                clear=True,
+            ):
+                with mock.patch(
+                    "core.cognition.world_window.default_signature_path",
+                    return_value=cache_path,
+                ):
+                    with mock.patch.object(lih, "run_lean_idle_heartbeat", capture):
+                        daemon._maybe_run_lean_idle_heartbeat(
+                            {"cpu": {"percent": 2.0, "temperature_c": 40.0}},
+                            _gate(),
+                        )
+                        daemon._maybe_run_lean_idle_heartbeat(
+                            {"cpu": {"percent": 82.0, "temperature_c": 81.0}},
+                            _gate(),
+                        )
+
+            facts = captured["facts"]
+            self.assertTrue(cache_path.exists())
+            self.assertTrue(any(d["field"] == "cpu" for d in facts.body_state_window))
+            self.assertNotIn("82.0", repr(facts.body_state_window))
+
     def test_heartbeat_shadow_without_broker_leaves_broker_baseline_untouched(self) -> None:
         from daemon.maez_daemon import MaezDaemon
         import core.cognition.lean_idle_heartbeat as lih

@@ -45,6 +45,7 @@ class LeanIdleFacts:
     private_signal_summary: Mapping[str, object] | None = None
     time_facts: Mapping[str, object] | None = None
     body_state: Mapping[str, object] | None = None
+    body_state_window: tuple[Mapping[str, object], ...] = ()
     open_loops: Mapping[str, object] | None = None
     recent_private_thoughts: tuple[str, ...] = ()
 
@@ -136,6 +137,27 @@ def _body_block(body_state: Mapping[str, object] | None) -> str:
     return _render_facts_block("BODY", [(key, body_state.get(key)) for key in order])
 
 
+def _body_state_window_block(deltas: tuple[Mapping[str, object], ...]) -> str:
+    if not deltas:
+        return ""
+    lines: list[str] = []
+    for delta in deltas:
+        phrase = _compact(delta.get("phrase"))
+        if not phrase:
+            continue
+        provenance = _compact(delta.get("provenance"))
+        sensitivity = _compact(delta.get("sensitivity"))
+        parts = [phrase]
+        if provenance:
+            parts.append(f"provenance: {provenance}")
+        if sensitivity:
+            parts.append(f"sensitivity: {sensitivity}")
+        lines.append("- " + "; ".join(parts))
+    if not lines:
+        return ""
+    return "\nBODY-STATE WINDOW (changes since last beat)\n" + "\n".join(lines) + "\n"
+
+
 def _loops_block(open_loops: Mapping[str, object] | None) -> str:
     if not open_loops:
         return ""
@@ -177,6 +199,7 @@ def build_lean_idle_prompt(facts: LeanIdleFacts) -> LeanIdlePrompt:
         "private_signal_summary",
         "time_facts",
         "body_state",
+        "body_state_window",
         "open_loops",
         "recent_private_thoughts",
     )
@@ -194,6 +217,7 @@ def build_lean_idle_prompt(facts: LeanIdleFacts) -> LeanIdlePrompt:
         f"{self_card}\n"
         + _time_block(facts.time_facts)
         + _body_block(facts.body_state)
+        + _body_state_window_block(facts.body_state_window)
         + _loops_block(facts.open_loops)
         + _recent_thoughts_block(facts.recent_private_thoughts)
     )
