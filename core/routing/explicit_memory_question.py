@@ -12,6 +12,7 @@ EXPLICIT_MEMORY_RE = re.compile(
     r"in your notebook|"
     r"what's in your notebook|"
     r"(?:your\s+)?(?:first|earliest)\s+memory|"
+    r"(?:what(?:'s| is)\s+the\s+)?oldest\s+thing\s+you\s+remember|"
     r"tell me about\b.+\bfrom (?:before|earlier)"
     r")\b",
     re.IGNORECASE,

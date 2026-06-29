@@ -236,6 +236,15 @@ _NOTED_WRITE_RE = re.compile(
     r"(?:memory|the\s+\w+|my\s+\w+)\b",
     re.IGNORECASE,
 )
+_UNSUPPORTED_INTERNAL_WORK_RE = re.compile(
+    r"\bI(?:'ve|\s+have|\s+was|\s+am|\s+just|)?\s+"
+    r"(?:been\s+)?"
+    r"(?:running|ran|optimizing|optimized|checking|checked|monitoring|"
+    r"maintaining)\b"
+    r"[^.!?]*\b(?:diagnostics?|internal\s+process(?:es)?|subsystems?|"
+    r"runtime\s+health|maintenance)\b",
+    re.IGNORECASE,
+)
 
 
 def check_completion_claims(text: str, *, grounded_by_tool: bool) -> list[Flag]:
@@ -244,7 +253,12 @@ def check_completion_claims(text: str, *, grounded_by_tool: bool) -> list[Flag]:
         return []
 
     flags: list[Flag] = []
-    for rx in (_FIRST_PERSON_COMPLETION_RE, _NOTED_WRITE_RE, _BARE_COMPLETION_RE):
+    for rx in (
+        _FIRST_PERSON_COMPLETION_RE,
+        _NOTED_WRITE_RE,
+        _BARE_COMPLETION_RE,
+        _UNSUPPORTED_INTERNAL_WORK_RE,
+    ):
         for match in rx.finditer(text):
             flags.append(
                 Flag(

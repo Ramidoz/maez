@@ -99,6 +99,7 @@ class ExplicitMemoryQuestionTests(unittest.TestCase):
             "look in your notebook": True,
             "fine tell me your first memory": True,
             "tell me your earliest memory": True,
+            "what's the oldest thing you remember?": True,
             "tell me about the Reddit thing from before": True,
             "tell me about that from earlier": True,
             "remember to check the logs later": False,

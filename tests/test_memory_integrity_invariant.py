@@ -92,14 +92,11 @@ class AuditedOutputHelper(unittest.TestCase):
             else:
                 os.environ["MAEZ_SEMANTIC_AUDIT"] = prior
 
-    def test_transcript_derives_in_tool_continuation(self):
-        """When a non-empty transcript is passed, the audit is told to
-        skip the judge — real tool stdout grounds the claim by
-        construction. We assert via the underlying audit's return-shape:
-        with MAEZ_SEMANTIC_AUDIT=0, both paths return the original text
-        AND the helper's derived in_tool_continuation is what gets
-        passed through. The important functional contract: passing
-        transcript="" does not mistakenly mark tool continuation.
+    def test_transcript_is_not_a_tool_continuation_by_itself(self):
+        """A non-empty transcript may be ordinary conversation history.
+
+        Tool-output grounding is now an explicit caller decision; the helper
+        stays non-raising for both empty and non-empty transcript strings.
         """
         from core.safety.audited_output import audit_assistant_text
         out_empty = audit_assistant_text("text", surface="t", transcript="")
@@ -124,6 +121,31 @@ class AuditedOutputHelper(unittest.TestCase):
 
         self.assertEqual(out, "My dated memory is reachable from here.")
         audit_mock.assert_not_called()
+
+    def test_chat_transcript_does_not_mark_tool_continuation(self):
+        """Conversation history is not tool stdout.
+
+        A normal Telegram/chat turn has a non-empty transcript. That must not
+        make self-action claims skip the audit as "tool grounded".
+        """
+        from types import SimpleNamespace
+
+        from core.safety.audited_output import audit_assistant_text
+
+        with mock.patch("core.safety.self_claim_audit.audit") as audit_mock:
+            audit_mock.return_value = SimpleNamespace(
+                text="I ran internal diagnostics.",
+                rewritten=False,
+                mode="noop",
+                flags=[],
+            )
+            audit_assistant_text(
+                "I ran internal diagnostics.",
+                surface="telegram_surface",
+                transcript="Rohit: hey\nMaez: hey",
+            )
+
+        self.assertFalse(audit_mock.call_args.kwargs["in_tool_continuation"])
 
 
 class DaemonHandleMessageContract(unittest.TestCase):

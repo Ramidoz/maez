@@ -162,10 +162,11 @@ def audit_assistant_text(
             # legible while adding no grounding value.
             return _strip_backstage_labels(text)
 
-    # Derive tool-continuation from transcript presence unless caller
-    # explicitly forced the value. Single knob, minimal API surface.
+    # A transcript is often ordinary chat history, not tool stdout.
+    # Callers with real tool output must pass in_tool_continuation=True
+    # explicitly; conversation context alone must still be audited.
     if in_tool_continuation is None:
-        in_tool_continuation = bool(transcript.strip())
+        in_tool_continuation = False
 
     if semantic_self_claim_skip_reason:
         logger.info(
