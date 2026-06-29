@@ -180,6 +180,49 @@ class LeanIdleHeartbeatTest(unittest.TestCase):
 
         self.assertNotIn("BODY-STATE WINDOW", prompt.text)
 
+    def test_prompt_renders_desktop_attention_shadow_as_own_block(self) -> None:
+        prompt = build_lean_idle_prompt(
+            LeanIdleFacts(
+                cycle=7,
+                doorman_reason="wake_min_floor",
+                self_card_text="SELF",
+                desktop_attention_shadow=(
+                    {
+                        "field": "active_surface",
+                        "phrase": "active surface changed",
+                        "provenance": "desktop_presence_state.app_class",
+                        "sensitivity": "sensitive_delta",
+                        "signature": "raw-SECRET_APP_CLASS-secret",
+                    },
+                ),
+            )
+        )
+
+        self.assertIn("DESKTOP ATTENTION SHADOW", prompt.text)
+        self.assertIn("active surface changed", prompt.text)
+        self.assertIn("provenance: desktop_presence_state.app_class", prompt.text)
+        self.assertIn("sensitivity: sensitive_delta", prompt.text)
+        self.assertNotIn("BODY-STATE WINDOW", prompt.text)
+        self.assertNotIn("SECRET_APP_CLASS", prompt.text)
+        self.assertNotIn("raw-SECRET_APP_CLASS-secret", prompt.text)
+        self.assertIn("desktop_attention_shadow", prompt.fact_keys)
+        self.assertIn(
+            f"If nothing is worth privately carrying, answer exactly {HEARTBEAT_OK}.",
+            prompt.text,
+        )
+
+    def test_prompt_omits_desktop_attention_shadow_when_empty(self) -> None:
+        prompt = build_lean_idle_prompt(
+            LeanIdleFacts(
+                cycle=7,
+                doorman_reason="wake_min_floor",
+                self_card_text="SELF",
+                desktop_attention_shadow=(),
+            )
+        )
+
+        self.assertNotIn("DESKTOP ATTENTION SHADOW", prompt.text)
+
     def test_prompt_omits_recent_usual_gap_when_none(self) -> None:
         prompt = build_lean_idle_prompt(
             LeanIdleFacts(

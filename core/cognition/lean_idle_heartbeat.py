@@ -46,6 +46,7 @@ class LeanIdleFacts:
     time_facts: Mapping[str, object] | None = None
     body_state: Mapping[str, object] | None = None
     body_state_window: tuple[Mapping[str, object], ...] = ()
+    desktop_attention_shadow: tuple[Mapping[str, object], ...] = ()
     open_loops: Mapping[str, object] | None = None
     recent_private_thoughts: tuple[str, ...] = ()
 
@@ -158,6 +159,27 @@ def _body_state_window_block(deltas: tuple[Mapping[str, object], ...]) -> str:
     return "\nBODY-STATE WINDOW (changes since last beat)\n" + "\n".join(lines) + "\n"
 
 
+def _desktop_attention_shadow_block(entries: tuple[Mapping[str, object], ...]) -> str:
+    if not entries:
+        return ""
+    lines: list[str] = []
+    for entry in entries:
+        phrase = _compact(entry.get("phrase"))
+        if not phrase:
+            continue
+        provenance = _compact(entry.get("provenance"))
+        sensitivity = _compact(entry.get("sensitivity"))
+        parts = [phrase]
+        if provenance:
+            parts.append(f"provenance: {provenance}")
+        if sensitivity:
+            parts.append(f"sensitivity: {sensitivity}")
+        lines.append("- " + "; ".join(parts))
+    if not lines:
+        return ""
+    return "\nDESKTOP ATTENTION SHADOW (changes since last beat)\n" + "\n".join(lines) + "\n"
+
+
 def _loops_block(open_loops: Mapping[str, object] | None) -> str:
     if not open_loops:
         return ""
@@ -200,6 +222,7 @@ def build_lean_idle_prompt(facts: LeanIdleFacts) -> LeanIdlePrompt:
         "time_facts",
         "body_state",
         "body_state_window",
+        "desktop_attention_shadow",
         "open_loops",
         "recent_private_thoughts",
     )
@@ -218,6 +241,7 @@ def build_lean_idle_prompt(facts: LeanIdleFacts) -> LeanIdlePrompt:
         + _time_block(facts.time_facts)
         + _body_block(facts.body_state)
         + _body_state_window_block(facts.body_state_window)
+        + _desktop_attention_shadow_block(facts.desktop_attention_shadow)
         + _loops_block(facts.open_loops)
         + _recent_thoughts_block(facts.recent_private_thoughts)
     )
