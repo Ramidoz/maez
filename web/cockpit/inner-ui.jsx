@@ -1,3 +1,5 @@
+// PARKED 2026-06-29: unused cockpit asset. The live owner cockpit loads
+// sim.jsx + terminal-ui.jsx only; keep this source out of the truth surface.
 // Direction B — Inner Life
 // Warm, literary, scientific-instrument. Maez is a *being*, not a service.
 // Big type, generous whitespace, muted palette, personality foregrounded.

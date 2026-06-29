@@ -855,23 +855,24 @@ function ReadinessPane({ compact = false }) {
   const sim = useSim();
   const logs = sim.state.logs.cognition || [];
   const maezLogs = sim.state.logs.maez || [];
+  const daemon = sim.state.daemon || {};
   const recentRedactions = logs.concat(maezLogs).filter((l) =>
     String(l.msg || '').toLowerCase().includes('redacting stale fields')
   ).slice(-5);
   const silentCycles = maezLogs.filter((l) =>
     String(l.msg || '').toLowerCase().includes('heartbeat_ok')
   ).length;
-  const score = sim.state.daemon.score || 0;
-  const scoreLabel = score ? score.toFixed(2) : 'waiting';
   const scenario = '15/15';
-  const gateColor = score >= 0.5 ? A.green : A.orange;
+  const daemonState = daemon.status || 'unknown';
+  const gateColor = daemon.stalled ? A.red : A.green;
+  const cycleLabel = daemon.cycle ? `#${daemon.cycle.toLocaleString()}` : 'waiting';
   return (
     <Card title="Track A Readiness" subtitle="Acceptance gate · observation only"
       icon="◇" iconColor={gateColor}
       right={<LiveBadge endpoint="logs:cognition" label="logs" compact />}>
       <div style={{ display: 'grid', gridTemplateColumns: compact ? '1fr 1fr' : 'repeat(4, 1fr)', gap: 10, marginBottom: 12 }}>
         <StatusTile label="Scenario" value={scenario} sub="official continuity" color={A.green} />
-        <StatusTile label="Cognition" value={scoreLabel} sub="live daemon score" color={gateColor} />
+        <StatusTile label="Daemon" value={cycleLabel} sub={daemonState} color={gateColor} />
         <StatusTile label="Redactions" value={recentRedactions.length} sub="stale fields caught" color={A.orange} />
         <StatusTile label="Silent" value={silentCycles} sub="HEARTBEAT_OK lines" color={A.cyan} />
       </div>
@@ -966,18 +967,18 @@ function DaemonPane({ compact }) {
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: A.sans, fontSize: 9.5, color: A.textFaint, letterSpacing: 0.8, fontWeight: 600, textTransform: 'uppercase' }}>Current thought</div>
             <div style={{ fontFamily: A.sans, fontSize: 12, color: A.textSoft, lineHeight: 1.45, marginTop: 3, fontStyle: 'italic' }}>
-              "{d.currentThought}"
+              {d.currentThought ? `"${d.currentThought}"` : 'No live thought reported.'}
             </div>
           </div>
         </div>
         {!compact && (
           <div style={{ display: 'grid', gap: 10, borderTop: `0.5px solid ${A.stroke}`, paddingTop: 10 }}>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-              <Meter label="Cognition" value={d.score} color={d.score > 0.75 ? A.green : A.orange} />
-              {/* Uncertainty meter removed: no organ computes it (covenant — no fabricated inner life). */}
+              <StatusTile label="Status" value={d.status || 'unknown'} color={d.stalled ? A.red : A.green} />
+              <StatusTile label="Scratchpad" value={(d.scratchpad || []).length} color={A.indigo} />
             </div>
             <div style={{ fontFamily: A.sans, fontSize: 11.5, color: A.textDim, lineHeight: 1.45, background: A.surfaceLo, border: `0.5px solid ${A.stroke}`, borderRadius: 10, padding: 10 }}>
-              <span style={{ color: A.textSoft, fontWeight: 700 }}>{cognitionLabel(d.score)}.</span> {cognitionExplanation(d.score)}
+              This panel shows cycle, liveness, and scratchpad evidence only. The old self-quality rubric is offline.
             </div>
           </div>
         )}
@@ -1012,18 +1013,6 @@ function Meter({ label, value, color }) {
       </div>
     </div>
   );
-}
-
-function cognitionLabel(score) {
-  if (!score) return 'waiting for score';
-  if (score >= 0.75) return 'clear and useful';
-  if (score >= 0.5) return 'steady enough';
-  if (score >= 0.3) return 'careful / low novelty';
-  return 'needs attention';
-}
-
-function cognitionExplanation(score) {
-  return `Cognition score is Maez's own cycle-quality signal: grounding, novelty, continuity, specificity, and whether speaking is useful. It is not IQ or consciousness. ${score ? `Right now it means: ${cognitionLabel(score)}.` : 'Waiting for live daemon data.'}`;
 }
 
 function SignalsPane({ compact }) {
@@ -1620,24 +1609,22 @@ function DaemonDeep() {
   const d = sim.state.daemon;
   const steps = [
     { k: 'perceive', desc: 'Ingest signals' },
-    { k: 'reason',   desc: 'Weigh context' },
-    { k: 'score',    desc: 'Rate response' },
-    { k: 'evolve',   desc: 'Propose change' },
-    { k: 'message?', desc: 'Speak or stay' },
+    { k: 'assemble', desc: 'Build context' },
+    { k: 'guard',    desc: 'Check boundaries' },
+    { k: 'settle',   desc: 'Speak or stay quiet' },
+    { k: 'record',   desc: 'Record outcome' },
   ];
   const activeStep = Math.min(4, Math.floor(((30 - d.nextTickIn) / 30) * 5));
-  // Honest seed: the real current cognition score repeated (no Math.sin/random
-  // theater). Fills with real per-tick scores over the next ~32s.
-  const [hist, setHist] = React.useState(() => Array(40).fill(SIM.state.daemon.score || 0));
+  const [hist, setHist] = React.useState(() => Array(40).fill(Math.max(0, 30 - (SIM.state.daemon.nextTickIn || 30)) / 30));
   React.useEffect(() => {
-    const id = setInterval(() => setHist((h) => [...h.slice(1), SIM.state.daemon.score]), 800);
+    const id = setInterval(() => setHist((h) => [...h.slice(1), Math.max(0, 30 - (SIM.state.daemon.nextTickIn || 30)) / 30]), 800);
     return () => clearInterval(id);
   }, []);
 
   return (
     <div style={{ height: '100%', padding: 28, display: 'grid', gridTemplateColumns: '1fr 1fr', gridTemplateRows: 'auto 1fr', gap: 14, overflow: 'hidden' }}>
       <div style={{ gridColumn: '1 / span 2' }}>
-        <Card title="30-second loop" subtitle="perceive → reason → score → evolve → message"
+        <Card title="30-second loop" subtitle="perceive → assemble → guard → speak-or-stay"
           icon="◎" iconColor={A.indigo}
           right={<Chip color={A.indigo}>Cycle #{d.cycle.toLocaleString()}</Chip>}>
           <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>

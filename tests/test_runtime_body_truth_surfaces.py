@@ -25,14 +25,15 @@ class ApiV1Services(unittest.TestCase):
         self.assertEqual(body["services"]["maez_daemon"]["status"], "healthy")
 
 
-class ApiMaezState(unittest.TestCase):
-    def test_maez_state_carries_runtime_services(self):
+class LegacyApiMaezStateParked(unittest.TestCase):
+    def test_maez_state_legacy_read_door_is_parked(self):
         with mock.patch.object(W, "_runtime_services_state", return_value=_FAKE_SNAP):
             client = W.app.test_client()
             r = client.get("/api/maez-state")
-        self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.get_json()["runtime_services"]["overall"], "degraded")
-        self.assertIn("services", r.get_json())   # legacy journal services map preserved
+        self.assertEqual(r.status_code, 410)
+        body = r.get_json()
+        self.assertEqual(body["error"], "legacy_surface_parked")
+        self.assertEqual(body["surface"], "/api/maez-state")
 
 
 class PlannerNoAllServicesUp(unittest.TestCase):

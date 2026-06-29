@@ -1,4 +1,7 @@
 
+// PARKED 2026-06-29: unused cockpit asset. This design canvas is not loaded by
+// /cockpit; keep it explicitly parked until a future design slice revives it.
+
 // DesignCanvas.jsx — Figma-ish design canvas wrapper
 // Warm gray grid bg + Sections + Artboards + PostIt notes.
 // Artboards are reorderable (grip-drag), labels/titles are inline-editable,
@@ -619,4 +622,3 @@ function DCPostIt({ children, top, left, right, bottom, rotate = -2, width = 180
 }
 
 Object.assign(window, { DesignCanvas, DCSection, DCArtboard, DCPostIt });
-

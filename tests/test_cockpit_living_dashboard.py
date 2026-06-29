@@ -48,10 +48,11 @@ class CockpitLivingDashboardTests(unittest.TestCase):
         self.assertIn("Exact fragments", self.ui)
         self.assertIn("h.source", self.ui)
 
-    def test_cognition_score_has_plain_language_explanation(self):
-        self.assertIn("function cognitionLabel", self.ui)
-        self.assertIn("function cognitionExplanation", self.ui)
-        self.assertIn("It is not IQ or consciousness", self.ui)
+    def test_dead_daemon_cognition_score_is_not_displayed(self):
+        self.assertNotIn("function cognitionLabel", self.ui)
+        self.assertNotIn("function cognitionExplanation", self.ui)
+        self.assertNotIn("It is not IQ or consciousness", self.ui)
+        self.assertNotIn("live daemon score", self.ui)
 
 
 if __name__ == "__main__":
