@@ -222,6 +222,7 @@ class LeanIdleHeartbeatTest(unittest.TestCase):
         )
 
         self.assertNotIn("DESKTOP ATTENTION SHADOW", prompt.text)
+        self.assertNotIn("desktop_attention_shadow", prompt.fact_keys)
 
     def test_prompt_omits_recent_usual_gap_when_none(self) -> None:
         prompt = build_lean_idle_prompt(

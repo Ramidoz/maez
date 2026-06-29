@@ -10,6 +10,7 @@ Commits:
 - `4660da0` — dedicated desktop attention-shadow projector
 - `277dedd` — distinct lean-idle prompt block/fact key
 - `8541c63` — daemon wiring behind `MAEZ_DESKTOP_ATTENTION_SHADOW`
+- this commit — review-HOLD closure: desktop-attention fact key is invisible when empty/off
 
 ## What Changed
 
@@ -29,6 +30,7 @@ Commits:
   - New `desktop_attention_shadow` fact key.
   - New prompt block: `DESKTOP ATTENTION SHADOW`.
   - Does not reuse `body_state_window` / `BODY-STATE WINDOW`.
+  - Review-HOLD fix: the `desktop_attention_shadow` fact key is emitted only when desktop-attention entries exist. Empty/flag-off heartbeat prompts do not advertise the new fact key in receipts.
 
 - `daemon/maez_daemon.py`
   - New flag helper: `MAEZ_DESKTOP_ATTENTION_SHADOW`.
@@ -47,6 +49,9 @@ RED checks witnessed:
   - failed before `LeanIdleFacts.desktop_attention_shadow` existed.
 - `tests.test_lean_idle_daemon`
   - flag-on daemon test failed before daemon wiring produced attention entries.
+- Review-HOLD regression:
+  - `tests.test_lean_idle_heartbeat.LeanIdleHeartbeatTest.test_prompt_omits_desktop_attention_shadow_when_empty` failed after adding `assertNotIn("desktop_attention_shadow", prompt.fact_keys)`.
+  - The failure proved the code-quality review finding: empty desktop-attention material omitted the prompt block, but still changed the receipt-visible fact-key list.
 
 GREEN checks:
 
@@ -60,6 +65,17 @@ MAEZ_CONFIG=/home/rohit/maez/config .venv/bin/python -B -m unittest \
 ```
 
 Result: `Ran 91 tests ... OK`.
+
+Review-HOLD closure subset:
+
+```bash
+MAEZ_CONFIG=/home/rohit/maez/config .venv/bin/python -B -m unittest \
+  tests.test_lean_idle_heartbeat \
+  tests.test_lean_idle_daemon \
+  tests.test_desktop_attention_shadow -v
+```
+
+Result: `Ran 71 tests ... OK`.
 
 ```bash
 .venv/bin/python -B -m ruff check \

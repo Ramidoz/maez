@@ -214,7 +214,7 @@ def _recent_thoughts_block(thoughts: tuple[str, ...]) -> str:
 def build_lean_idle_prompt(facts: LeanIdleFacts) -> LeanIdlePrompt:
     self_card = _compact(facts.self_card_text)
     private_summary = _content_light_json(facts.private_signal_summary)
-    fact_keys = (
+    fact_keys_list = [
         "self_card",
         "cycle",
         "doorman_reason",
@@ -222,10 +222,12 @@ def build_lean_idle_prompt(facts: LeanIdleFacts) -> LeanIdlePrompt:
         "time_facts",
         "body_state",
         "body_state_window",
-        "desktop_attention_shadow",
         "open_loops",
         "recent_private_thoughts",
-    )
+    ]
+    if facts.desktop_attention_shadow:
+        fact_keys_list.insert(7, "desktop_attention_shadow")
+    fact_keys = tuple(fact_keys_list)
     text = (
         "LEAN IDLE HEARTBEAT\n"
         "This is a private notebook beat, not a reply to the owner.\n"
