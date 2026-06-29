@@ -130,7 +130,7 @@
     {
       "type": "sqlite_db",
       "path": "memory/fresh_moment_receipts.db",
-      "required": true,
+      "required": false,
       "class": "required_welfare",
       "comment": "Content-light sidecar receipts for Maez-internal fresh moments; no raw private thought text."
     },

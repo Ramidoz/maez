@@ -227,6 +227,7 @@ def verify_backup_entry(
     """
     rel_path = str(entry.get("path") or "")
     entry_type = str(entry.get("type") or "")
+    required = bool(entry.get("required", False))
     record = {
         "path": rel_path,
         "type": entry_type,
@@ -241,6 +242,16 @@ def verify_backup_entry(
             backup_dir=backup_dir,
             files_by_path=files_by_path,
         )
+        if (
+            not ok
+            and not required
+            and detail == "missing from backup manifest"
+        ):
+            return {
+                **record,
+                "status": "skip",
+                "detail": "optional store not present in backup artifact",
+            }
         if not ok or artifact_path is None:
             return {**record, "status": "fail", "detail": detail}
         tmp_db = tmp_root / rel_path
@@ -269,12 +280,28 @@ def verify_backup_entry(
             backup_dir=backup_dir,
             files_by_path=files_by_path,
         )
+        if (
+            not ok
+            and not required
+            and detail == "missing from backup manifest"
+        ):
+            return {
+                **record,
+                "status": "skip",
+                "detail": "optional store not present in backup artifact",
+            }
         return {**record, "status": "pass" if ok else "fail", "detail": detail}
 
     if entry_type == "directory":
         prefix = rel_path.rstrip("/") + "/"
         child_paths = sorted(p for p in files_by_path if p.startswith(prefix))
         if not child_paths:
+            if not required:
+                return {
+                    **record,
+                    "status": "skip",
+                    "detail": "optional directory not present in backup artifact",
+                }
             return {**record, "status": "fail", "detail": "directory has no manifest files"}
         failures = []
         for child in child_paths:

@@ -112,12 +112,63 @@ class RestoreSmokeTest(unittest.TestCase):
                 "type": "sqlite_db",
                 "path": "memory/subjective_duration.db",
                 "class": "required_welfare",
+                "required": True,
             },
             backup_dir=backup_dir,
             files_by_path={},
             tmp_root=Path(tempfile.mkdtemp()),
         )
         self.assertEqual(record["status"], "fail")
+
+    def test_missing_optional_welfare_store_skips(self):
+        backup_dir = self._backup()
+        record = verify_backup_entry(
+            {
+                "type": "sqlite_db",
+                "path": "memory/fresh_moment_receipts.db",
+                "class": "required_welfare",
+                "required": False,
+            },
+            backup_dir=backup_dir,
+            files_by_path={},
+            tmp_root=Path(tempfile.mkdtemp()),
+        )
+        self.assertEqual(record["status"], "skip")
+        self.assertIn("not present", record["detail"])
+
+    def test_smoke_passes_when_only_optional_welfare_store_is_absent(self):
+        root = Path(tempfile.mkdtemp())
+        backup_root = root / "backups"
+        backup_root.mkdir()
+        self._backup(parent=backup_root, name="2026-06-26T03-59-05")
+        state_manifest = {
+            "entries": [
+                {
+                    "type": "sqlite_db",
+                    "path": "memory/salience_ledger.db",
+                    "class": "required_welfare",
+                    "required": True,
+                },
+                {
+                    "type": "sqlite_db",
+                    "path": "memory/fresh_moment_receipts.db",
+                    "class": "required_welfare",
+                    "required": False,
+                },
+            ]
+        }
+
+        report = run_restore_smoke_test(
+            backup_root=backup_root,
+            state_manifest=state_manifest,
+            log_dir=root / "logs",
+            timestamp="2026-06-26T05-00-00",
+        )
+
+        self.assertEqual(report["overall_status"], "pass")
+        checks = {check["path"]: check for check in report["checks"]}
+        self.assertEqual(checks["memory/salience_ledger.db"]["status"], "pass")
+        self.assertEqual(checks["memory/fresh_moment_receipts.db"]["status"], "skip")
 
     def test_sha256_mismatch_fails(self):
         backup_dir = self._backup()
