@@ -732,9 +732,9 @@ class DreamState:
         # "same topic rephrased" loops (e.g. five dreams about
         # disk-oscillation that each use different filler vocabulary).
         try:
-            from core.cognition_quality import primary_topic as _primary_topic
+            from core.cognition.topic_taxonomy import primary_topic as _primary_topic
         except Exception:
-            return True  # topic module unavailable — pass on first-tier
+            return True  # topic helper unavailable — pass on first-tier
         cand_topic = _primary_topic(candidate.lower())
         if not cand_topic or cand_topic == "unknown":
             return True

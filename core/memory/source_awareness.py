@@ -28,7 +28,7 @@ SELF-EDIT SCOPE
 Every file has a self_edit_scope that governs what Maez may do:
 
   allowed     — Maez may modify this file directly.
-                Currently: core/cognition_quality.py
+                Currently: none.
   append_only — Maez may append new content but never overwrite
                 or delete existing content. This is how soul notes
                 work: new observations are appended, but HARD
@@ -168,7 +168,7 @@ INDEX_OTHER = []
 
 # ── Self-edit scope overrides ──
 _SCOPE_OVERRIDES = {
-    'core/cognition_quality.py': 'allowed',
+    'core/cognition_quality.py': 'read_only',
     'config/soul.md': 'append_only',
     'daemon/maez_daemon.py': 'forbidden',
     'memory/memory_manager.py': 'forbidden',
@@ -223,12 +223,12 @@ _EXT_TO_TYPE = {
 
 # ── Tags: map files to cognition taxonomy topics ──
 _FILE_TAGS = {
-    'core/cognition_quality.py': ['maez_self', 'development_tools'],
+    'core/cognition_quality.py': ['development_tools'],
     'core/action_engine.py': ['maez_self', 'security'],
     'core/perception.py': ['cpu_load', 'memory_usage', 'gpu_state', 'disk_usage', 'network', 'processes'],
     'daemon/maez_daemon.py': ['maez_self', 'system_monitoring'],
     'memory/memory_manager.py': ['maez_self'],
-    'memory/quality_tracker.py': ['maez_self'],
+    'memory/quality_tracker.py': ['security'],
     'skills/telegram_voice.py': ['telegram'],
     'skills/telegram_public.py': ['telegram', 'maez_self'],
     'skills/web_interface.py': ['telegram', 'network'],

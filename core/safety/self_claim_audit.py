@@ -60,10 +60,12 @@ _judge_unavailable_recent_count: int = 0
 _sentinel_blocked_last_warning_ts: float = 0.0
 _sentinel_blocked_recent_count: int = 0
 
-# Ensure cognition.log's FileHandler is attached. Daemon gets this for free
-# via core.cognition_quality at startup; CLI/web surfaces don't.
+# Ensure cognition.log's FileHandler is attached. CLI/web surfaces may import
+# this module without the daemon already owning the logger.
 try:
-    from core import cognition_quality as _cog_quality_bootstrap  # noqa: F401
+    from core.cognition.cognition_log import ensure_cognition_log_handler
+
+    ensure_cognition_log_handler()
 except Exception:
     pass
 

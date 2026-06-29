@@ -478,7 +478,7 @@ REGRESSION_THRESHOLD = 10
 PRE_PATCH_BASELINE_CYCLES = 10
 IMMEDIATE_HEALTH_TIMEOUT = 60
 LOCK_TIMEOUT_SECONDS = 900
-V1_ALLOWED_TARGET = "core/cognition_quality.py"
+V1_ALLOWED_TARGET = ""
 
 EVOLUTION_DB = f'{MAEZ_ROOT}/memory/evolution_track.db'
 
@@ -736,6 +736,9 @@ def _normalize_cooldown_key(weakness: str, target: str) -> str:
 def _check_policy(weakness: str, target_file: str, diff_text: str = "") -> str | None:
     """Check all candidate policies. Returns rejection_reason or None if OK."""
     reconcile_lock()
+
+    if not V1_ALLOWED_TARGET:
+        return "Self-edit target disabled: self-shaping feedback telemetry is offline"
 
     # Single active candidate
     lock = _get_lock_state()
@@ -1040,14 +1043,8 @@ def apply_candidate(candidate_id: int) -> dict:
             return {'error': f'Behavior validation failed: {beh_err}',
                     'rolled_back': True, 'layer': 'immediate'}
 
-        # Compute pre-patch score avg early (needed for continuity capsule)
+        # Score-shaped self-edit telemetry is offline in v0.
         _pre_score = 50.0
-        try:
-            from core.cognition_quality import _recent_scores as _rs
-            if len(_rs) >= PRE_PATCH_BASELINE_CYCLES:
-                _pre_score = sum(_rs[-PRE_PATCH_BASELINE_CYCLES:]) / PRE_PATCH_BASELINE_CYCLES
-        except Exception:
-            pass
 
         # Write continuity capsule BEFORE killing daemon
         try:
@@ -1099,15 +1096,8 @@ def apply_candidate(candidate_id: int) -> dict:
             return {'error': 'Health check failed', 'rolled_back': True, 'layer': 'immediate'}
 
         # Step 5 — DELAYED WATCHDOG SETUP (Layer 2)
-        # Compute pre-patch score average from cognition
+        # Score-shaped self-edit telemetry is offline in v0.
         pre_score_avg = 50.0
-        try:
-            from core.cognition_quality import _recent_scores
-            if len(_recent_scores) >= PRE_PATCH_BASELINE_CYCLES:
-                window = _recent_scores[-PRE_PATCH_BASELINE_CYCLES:]
-                pre_score_avg = sum(window) / len(window)
-        except Exception:
-            pass
 
         now = _dt.now(_tz.utc).isoformat()
         with _rail_conn() as conn:
@@ -1202,81 +1192,8 @@ def check_watchdog_candidates(memory_manager, telegram_callback=None):
     if not rows:
         return
 
-    # Get current cognition scores
-    try:
-        from core.cognition_quality import _recent_scores
-        if len(_recent_scores) < 5:
-            return  # not enough post-patch data yet
-        post_avg = sum(_recent_scores[-10:]) / min(len(_recent_scores), 10)
-    except Exception:
-        return
-
-    for cand_id, target, backup_path, pre_avg, threshold in rows:
-        regression = (pre_avg or 50) - post_avg
-
-        if regression > (threshold or REGRESSION_THRESHOLD):
-            # Delayed rollback
-            full_target = os.path.join(MAEZ_ROOT, target)
-            if backup_path and os.path.exists(backup_path):
-                try:
-                    shutil.copy2(backup_path, full_target)
-                    _restart_maez_service()
-                    _set_candidate_state(cand_id, 'rolled_back',
-                                         rollback_reason=f'Regression {regression:.1f} > {threshold:.1f}',
-                                         rollback_layer='delayed',
-                                         post_patch_score_avg=post_avg)
-                    with _rail_conn() as conn:
-                        conn.execute(
-                            "UPDATE deployments SET post_insight_rate=?, verdict='reverted' "
-                            "WHERE target_file=? AND verdict IS NULL",
-                            (post_avg, target),
-                        )
-                        conn.commit()
-                    msg = (f"Delayed rollback: {target} — score dropped "
-                           f"{pre_avg:.0f} → {post_avg:.0f} (regression={regression:.1f})")
-                    logger.info("Rail: %s", msg)
-                    _log_evolution({'action': 'DELAYED_ROLLBACK', 'target': target,
-                                    'result': f'{pre_avg:.0f}→{post_avg:.0f}'})
-                    if telegram_callback:
-                        telegram_callback(msg)
-                except Exception as e:
-                    logger.error("Rail: delayed rollback failed: %s", e)
-            else:
-                _set_candidate_state(cand_id, 'rolled_back',
-                                     rollback_reason='Regression detected but backup missing',
-                                     rollback_layer='delayed',
-                                     post_patch_score_avg=post_avg)
-                with _rail_conn() as conn:
-                    conn.execute(
-                        "UPDATE deployments SET post_insight_rate=?, verdict='reverted' "
-                        "WHERE target_file=? AND verdict IS NULL",
-                        (post_avg, target),
-                    )
-                    conn.commit()
-        else:
-            # Keep — resolved successfully
-            now = _dt.now(_tz.utc).isoformat()
-            _set_candidate_state(cand_id, 'kept',
-                                 post_patch_score_avg=post_avg)
-            with _rail_conn() as conn:
-                conn.execute("UPDATE candidates SET resolved_at=? WHERE id=?", (now, cand_id))
-                # Update deployments verdict
-                conn.execute(
-                    "UPDATE deployments SET post_insight_rate=?, verdict='kept' "
-                    "WHERE target_file=? AND verdict IS NULL",
-                    (post_avg, target),
-                )
-                conn.commit()
-            msg = f"Watchdog kept {target} — score {post_avg:.0f} (pre={pre_avg:.0f})"
-            logger.info("Rail: %s", msg)
-            if telegram_callback:
-                telegram_callback(msg)
-
-        # Mark resolved
-        with _rail_conn() as conn:
-            conn.execute("UPDATE watchdog_context SET resolved=1 WHERE candidate_id=?", (cand_id,))
-            conn.commit()
-        _release_lock(cand_id)
+    logger.debug("Delayed watchdog skipped: score-shaped self-edit telemetry is offline")
+    return
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1505,61 +1422,24 @@ _POSITIVE_LABELS = {'actionable', 'insightful', 'good_observation', 'neutral', '
 
 
 def _build_evidence_packet(critique: dict) -> dict:
-    """Build structured evidence packet from critique window.
-    IMPORTANT:
-      dominant_failure_mode = label-derived (fixation, vague, etc.)
-      dominant_topic = topic-derived (browser_usage, git_workflow, etc.)
-    These are different fields from different systems. Never conflate."""
+    """Build a neutral evidence packet without score-shaped live telemetry."""
+    sa_entry = None
     try:
-        from core.cognition_quality import (
-            _recent_scores, _recent_topics, _recent_labels,
-            get_behavior_policy,
-        )
-        import collections as _cc
-        window = min(len(_recent_scores), 20)
-        scores = _recent_scores[-window:]
-        topics = _recent_topics[-window:]
-        labels_window = _recent_labels[-window:]
-        primaries = [ll[0] if ll else 'unknown' for ll in labels_window]
-
-        # dominant_failure_mode — derived from LABELS, not topics
-        all_labels = [l for ll in labels_window for l in ll]
-        neg_labels = {k: v for k, v in _cc.Counter(all_labels).items()
-                      if k not in _POSITIVE_LABELS}
-        dominant_failure = max(neg_labels, key=neg_labels.get) if neg_labels else None
-
-        # Validate: must be a known label, not a topic value
-        if dominant_failure and dominant_failure not in VALID_FAILURE_LABELS:
-            logger.warning("dominant_failure_mode '%s' is not a valid label; coercing to None", dominant_failure)
-            dominant_failure = None
-
-        # dominant_topic — derived from TOPICS
-        dominant_topic = critique.get('dominant_topic', '')
-
-        policy = get_behavior_policy()
-
-        sa_entry = None
-        try:
+        if V1_ALLOWED_TARGET:
             from core.source_awareness import get_file
-            sa_entry = get_file(V1_ALLOWED_TARGET)
-        except Exception:
-            pass
 
-        return {
-            'scores': scores,
-            'primary_labels': primaries,
-            'topics': topics,
-            'dominant_failure_mode': dominant_failure,
-            'dominant_topic': dominant_topic,
-            'fixation_ratio': critique.get('fixation_ratio', 0),
-            'avg_score': critique.get('avg_score', 0),
-            'policy_directive': policy.get('directive', ''),
-            'policy_mode': policy.get('reflection_mode', 'normal'),
-            'source_awareness_scope': sa_entry.get('self_edit_scope') if sa_entry else None,
-        }
-    except Exception as e:
-        logger.error("Evidence packet build failed: %s", e)
-        return {'error': str(e)}
+            sa_entry = get_file(V1_ALLOWED_TARGET)
+    except Exception:
+        pass
+    return {
+        'dominant_failure_mode': critique.get('dominant_failure_mode'),
+        'dominant_topic': critique.get('dominant_topic', ''),
+        'fixation_ratio': critique.get('fixation_ratio', 0),
+        'avg_score': critique.get('avg_score'),
+        'policy_directive': '',
+        'policy_mode': 'offline',
+        'source_awareness_scope': sa_entry.get('self_edit_scope') if sa_entry else None,
+    }
 
 
 def _derive_weakness(critique: dict, evidence: dict) -> str:
@@ -2023,13 +1903,13 @@ def _generate_patch_intent(weakness: str, evidence: dict, editable_targets: list
         f"EVIDENCE FROM RECENT CYCLES:\n{evidence_block}\n"
         f"{family_hint}"
         f"{direction_block}\n\n"
-        f"EDITABLE TARGETS from core/cognition_quality.py:\n{targets_text}\n"
+        f"EDITABLE TARGETS from the selected file:\n{targets_text}\n"
         f"{retry_block}\n"
         f"Before producing JSON, reason through these four questions in one\n"
         f"or two short sentences each. Keep the reasoning compact — the JSON\n"
         f"is what will be applied.\n\n"
         f"  1. Failure pattern: what specific failure does the evidence above show?\n"
-        f"  2. Countermeasure: what kind of change to core/cognition_quality.py\n"
+        f"  2. Countermeasure: what kind of change to the selected file\n"
         f"     would reduce the frequency of that failure?\n"
         f"  3. Target: which listed target most directly implements that\n"
         f"     countermeasure? It MUST be a target whose name contains one of\n"
@@ -3034,6 +2914,15 @@ def check_proposal_trigger(critique: dict) -> dict | None:
     target = V1_ALLOWED_TARGET
     conditions = {}
 
+    if not target:
+        _log_evolution({
+            'action': 'PROPOSAL_SUPPRESSED',
+            'target': 'none',
+            'result': 'self-edit target disabled; score-shaped telemetry offline',
+        })
+        logger.info("Proposal trigger: suppressed (self-edit target disabled)")
+        return None
+
     # Condition 1: critique window just fired (caller guarantees this)
     conditions['critique_fired'] = True
 
@@ -3045,34 +2934,6 @@ def check_proposal_trigger(critique: dict) -> dict | None:
                         'result': f'score {avg} >= {PROPOSAL_SCORE_THRESHOLD}'})
         logger.info("Proposal trigger: suppressed (score %.1f >= %d)", avg, PROPOSAL_SCORE_THRESHOLD)
         return None
-
-    # Condition 3: supported failure mode present in recent labels.
-    # Session 11x: broadened from fixation-only to ANY failure mode the
-    # pipeline has direction rules for (fixation, weak_retrieval, vague).
-    # Without this, the trigger was silent unless Maez was literally
-    # stuck on one topic — which is rare after the merged-LoRA baseline
-    # rose. Broader detection = proposals fire on real quality dips even
-    # when they're not topic fixations.
-    _SUPPORTED_FAILURE_MODES = {'fixation', 'weak_retrieval', 'vague'}
-    try:
-        from core.cognition_quality import _recent_labels
-        import collections as _cc
-        window = min(len(_recent_labels), 20)
-        flat = [l for ll in _recent_labels[-window:] for l in ll]
-        label_counts = _cc.Counter(flat)
-        supported_count = sum(label_counts.get(m, 0) for m in _SUPPORTED_FAILURE_MODES)
-        has_supported_failure = supported_count > 0
-        present_modes = sorted(m for m in _SUPPORTED_FAILURE_MODES if label_counts.get(m, 0) > 0)
-    except Exception:
-        has_supported_failure = False
-        present_modes = []
-    conditions['supported_failure_present'] = has_supported_failure
-    if not has_supported_failure:
-        _log_evolution({'action': 'PROPOSAL_SUPPRESSED', 'target': target,
-                        'result': 'no supported failure mode in recent labels'})
-        logger.info("Proposal trigger: suppressed (no supported failure mode)")
-        return None
-    logger.info("Proposal trigger: supported failure modes present: %s", ', '.join(present_modes))
 
     # Condition 4: no active candidate in DB
     reconcile_lock()
@@ -3129,11 +2990,7 @@ def check_proposal_trigger(critique: dict) -> dict | None:
         return None
 
     # Condition 7: enough evidence
-    try:
-        from core.cognition_quality import _recent_scores
-        evidence_count = len(_recent_scores)
-    except Exception:
-        evidence_count = 0
+    evidence_count = 0
     conditions['enough_evidence'] = evidence_count >= MIN_EVIDENCE_CYCLES
     if not conditions['enough_evidence']:
         _log_evolution({'action': 'PROPOSAL_SUPPRESSED', 'target': target,

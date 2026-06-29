@@ -84,12 +84,8 @@ class TestBuildCockpitState(unittest.TestCase):
         self.assertEqual(state["status"], "ok")
         self.assertTrue(state["running"])
         self.assertEqual(state["last_cycle"], "2026-06-13T00:10:00+00:00")
-        # cognition mapped from _last_cog_metadata
-        self.assertEqual(state["cognition"]["score_0_100"], 73)
-        self.assertEqual(state["cognition"]["primary"], "actionable")
-        self.assertEqual(state["cognition"]["topic"], "cpu_load")
-        self.assertEqual(state["cognition"]["retried"], "improved")
-        self.assertIn("actionable", state["cognition"]["labels"])
+        # legacy cognition-score metadata is no longer a live cockpit signal
+        self.assertIsNone(state["cognition"])
         # valence retained verbatim from the reading telemetry
         self.assertEqual(state["valence"]["sign"], "neutral")
         # recall receipt fields surfaced

@@ -5037,55 +5037,14 @@ class TelegramVoice:
             await _reply_text(update, f"Error: {e}")
 
     async def _handle_cog_analyze(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Compact cognition snapshot — overrides old self-analysis /analyze."""
+        """Report that score-shaped cognition diagnostics are offline."""
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
-        try:
-            from core.cognition_quality import (
-                _recent_scores,
-                _recent_topics,
-                _recent_labels,
-                get_behavior_policy,
-            )
-            import collections as _cc
-
-            window = min(len(_recent_scores), 10)
-            if window == 0:
-                await _reply_text(update, "No cognition data yet.")
-                return
-            scores = _recent_scores[-window:]
-            topics = _recent_topics[-window:]
-            labels_window = _recent_labels[-window:]
-            avg = sum(scores) / len(scores)
-            tc = _cc.Counter(topics)
-            dominant_topic, dom_count = tc.most_common(1)[0]
-            flat = [l for ll in labels_window for l in ll]
-            neg = {
-                k: v
-                for k, v in _cc.Counter(flat).items()
-                if k in ("fixation", "vague", "baseline", "repetition")
-            }
-            failure = max(neg, key=neg.get) if neg else "none"
-            streak = 0
-            for t in reversed(topics):
-                if t == dominant_topic:
-                    streak += 1
-                else:
-                    break
-            policy = get_behavior_policy()
-            mode = policy.get("reflection_mode", "normal")
-            lines = [
-                "Cognition snapshot:",
-                f"  Last 10 scores: {scores}",
-                f"  Average:        {avg:.1f}/100",
-                f"  Dominant topic: {dominant_topic} ({dom_count}/{window})",
-                f"  Failure mode:   {failure}",
-                f"  Fixation streak: {streak}",
-                f"  Policy mode:    {mode}",
-            ]
-            await _reply_text(update, "\n".join(lines))
-        except Exception as e:
-            await _reply_text(update, f"Error: {e}")
+        await _reply_text(
+            update,
+            "Cognition diagnostics are offline. The old self-shaping score telemetry "
+            "is no longer part of Maez's live loop.",
+        )
 
     async def _handle_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Grouped command list."""
@@ -5100,7 +5059,7 @@ class TelegramVoice:
             "  /disk      Disk usage summary\n"
             "\n"
             "Cognition:\n"
-            "  /analyze   Cognition snapshot (last 10 cycles)\n"
+            "  /analyze   Cognition diagnostics status\n"
             "\n"
             "Evolution:\n"
             "  /proposals  Last 5 proposal candidates\n"
@@ -5321,7 +5280,7 @@ class TelegramVoice:
                 BotCommand("status", "System and cognition summary"),
                 BotCommand("git", "Git repo state"),
                 BotCommand("disk", "Disk usage summary"),
-                BotCommand("analyze", "Cognition snapshot"),
+                BotCommand("analyze", "Cognition diagnostics status"),
                 BotCommand("proposals", "Last 5 proposal candidates"),
                 BotCommand("show", "Show candidate by id"),
                 BotCommand("apply", "Apply candidate by id"),

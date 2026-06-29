@@ -2016,14 +2016,12 @@ class MemoryManager:
         return tagged
 
     def _topic_rerank(self, query: str, results: list[dict], n: int) -> list[dict]:
-        """Re-rank results by boosting topic matches and penalizing fixated topics.
+        """Re-rank results by topic matches and result diversity.
 
-        Three stages (2026-04-21 adds stage 3):
+        Two stages:
           1. Topic boost: down-weight distance when content matches the
              detected wing's keywords.
-          2. Anti-fixation: multiply distance by fixation penalty from
-             cognition_quality so over-represented TOPICS get pushed down.
-          3. MMR diversity: re-rank the top-K survivors with maximal
+          2. MMR diversity: re-rank the top-K survivors with maximal
              marginal relevance so multiple near-duplicate RESULTS on the
              same topic don't clone each other across slots. This breaks
              the disk-fixation drift where the topic router says "disk
@@ -2034,12 +2032,6 @@ class MemoryManager:
         logger.debug("[MEMORY] Wing: %s, query: %s", wing, query[:50])
         wing_keywords = WINGS.get(wing, [])
 
-        # Import anti-fixation penalty (safe fallback if unavailable)
-        try:
-            from core.cognition_quality import get_fixation_penalty, primary_topic
-        except ImportError:
-            get_fixation_penalty = lambda t: 1.0
-            primary_topic = lambda t: 'unknown'
         now_s = _now_seconds()
 
         for mem in results:
@@ -2051,11 +2043,6 @@ class MemoryManager:
                 dist *= 0.7
 
             dist *= _reddit_source_distance_factor(query, mem, now_s)
-
-            # Anti-fixation: penalize memories about recently over-represented topics
-            mem_topic = mem.get("metadata", {}).get("cog_topic") or primary_topic(content_lower)
-            penalty = get_fixation_penalty(mem_topic)
-            dist *= penalty
 
             mem["distance"] = dist
 

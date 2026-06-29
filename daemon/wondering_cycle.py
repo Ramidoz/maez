@@ -30,10 +30,13 @@ from core.routing.cancellable_brain_call import BrainPreempted
 
 logger = logging.getLogger("maez.wondering_cycle")
 # One-line outcome emits land on the cognition logger so all per-cycle
-# quality signals live in a single file (cognition.log). Logger name
-# matches the one set up in core/cognition_quality.py (its file handler
-# is attached to "maez.cognition") — use the same name so our lines
-# flow into the same file without needing our own handler.
+# probe records live in a single file (cognition.log).
+try:
+    from core.cognition.cognition_log import ensure_cognition_log_handler
+
+    ensure_cognition_log_handler()
+except Exception:
+    pass
 _cog_logger = logging.getLogger("maez.cognition")
 
 

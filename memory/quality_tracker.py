@@ -2,11 +2,11 @@
 # Licensed under the GNU Affero General Public License v3.0 or later.
 # See LICENSE for full text.
 """
-quality_tracker.py — Reasoning quality feedback loop for Maez
+quality_tracker.py — Action outcome ledger for Maez
 
 Every action Maez proposes is recorded here with its outcome.
-Maez queries this data periodically to understand what it gets right,
-what gets ignored, and where it should adjust.
+The live loop uses this as a consent/outcome ledger, not as a
+self-concept signal.
 
 Outcomes:
 - executed   : Tier 0/1 action ran automatically, no objection
@@ -15,7 +15,7 @@ Outcomes:
 - rejected   : Tier 3 action timed out without approval
 - superseded : Action became irrelevant before execution
 
-This data is Maez's mirror. Over time it learns what the owner values.
+Offline formatting helpers remain for historical diagnostics only.
 """
 
 import json
@@ -255,7 +255,7 @@ class QualityTracker:
         return stats
 
     def format_for_context(self, days: int = 7) -> str:
-        """Format quality stats for injection into reasoning prompt."""
+        """Format quality stats for offline diagnostics."""
         stats = self.get_stats(days)
         if stats['total'] == 0:
             return "[SELF-REFLECTION] No action history yet. Still learning."
@@ -280,7 +280,7 @@ class QualityTracker:
         return "\n".join(lines)
 
     def format_insight_for_soul(self, days: int = 30) -> Optional[str]:
-        """Generate a soul note if there's a meaningful pattern. Returns None if nothing.
+        """Generate a historical diagnostic note. Not called by the live loop.
 
         G.A.2 fix: ``approval_rate`` was originally read from this
         module's own ``get_stats`` which queries quality.db.

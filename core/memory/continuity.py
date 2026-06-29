@@ -84,7 +84,7 @@ _resume_cache: dict = {'text': None, 'generated_at': 0.0, 'mode': None,
 
 
 def _get_current_mode() -> str:
-    """Derive current_mode from cognition policy and evolution state."""
+    """Derive current_mode from evolution state."""
     global _mode_override
     if _mode_override:
         mode = _mode_override
@@ -127,59 +127,12 @@ def _get_current_mode() -> str:
     except Exception:
         pass
 
-    # Fall back to cognition policy mode
-    try:
-        from core.cognition_quality import get_behavior_policy
-        policy = get_behavior_policy()
-        mode = policy.get('reflection_mode', 'normal')
-        if mode == 'exploratory':
-            return 'exploratory'
-        elif mode == 'corrective':
-            return 'corrective'
-    except Exception:
-        pass
-
     return 'calm_monitoring'
 
 
 def _get_active_concerns() -> list[str]:
-    """Derive up to 5 recent actionable/insightful concerns, deduplicated by topic."""
-    try:
-        from core.cognition_quality import _recent_topics, _recent_labels, _recent_scores
-
-        # Determine current fixation topic to exclude
-        import collections as _c
-        fixation_topic = None
-        if len(_recent_topics) >= 5:
-            tc = _c.Counter(_recent_topics[-10:])
-            top, top_count = tc.most_common(1)[0]
-            if top_count / min(len(_recent_topics), 10) >= 0.5:
-                fixation_topic = top
-
-        concerns = []
-        seen_topics = set()
-        # Walk backwards through last 20 chronological thoughts
-        for i in range(len(_recent_topics) - 1, max(len(_recent_topics) - 20, -1), -1):
-            if i < 0 or i >= len(_recent_labels):
-                continue
-            labels = _recent_labels[i]
-            topic = _recent_topics[i]
-
-            if ('actionable' in labels or 'insightful' in labels) and 'fixation' not in labels:
-                if topic != fixation_topic and topic not in seen_topics:
-                    seen_topics.add(topic)
-                    readable = topic.replace('_', ' ')
-                    concerns.append(f"{readable} noted at score {_recent_scores[i]}")
-            if len(concerns) >= 5:
-                break
-
-        if not concerns and len(_recent_topics) > 20:
-            logger.debug("Continuity: no active concerns after 20+ cycles "
-                         "(all fixation or no actionable/insightful labels)")
-
-        return concerns
-    except Exception:
-        return []
+    """Return live active concerns without deriving them from a quality rubric."""
+    return []
 
 
 _NULL_COGNITION_WINDOW = {
@@ -190,42 +143,8 @@ _NULL_COGNITION_WINDOW = {
 
 
 def _get_cognition_window() -> dict:
-    """Snapshot of recent cognition state. Never returns {}."""
-    try:
-        from core.cognition_quality import _recent_topics, _recent_scores, _recent_labels
-        import collections
-        if not _recent_scores:
-            return dict(_NULL_COGNITION_WINDOW)
-        window = min(len(_recent_scores), 10)
-        scores = _recent_scores[-window:]
-        topics = _recent_topics[-window:]
-        avg = sum(scores) / len(scores)
-        tc = collections.Counter(topics)
-        dominant, dom_count = tc.most_common(1)[0]
-
-        # Dominant failure mode — most frequent negative label
-        flat = [l for ll in _recent_labels[-window:] for l in ll]
-        neg = {k: v for k, v in collections.Counter(flat).items()
-               if k in ('fixation', 'vague', 'baseline', 'repetition')}
-        failure = max(neg, key=neg.get) if neg else None
-
-        # Fixation streak
-        streak = 0
-        for t in reversed(topics):
-            if t == dominant:
-                streak += 1
-            else:
-                break
-
-        return {
-            'cycle_count': window,
-            'average_score': round(avg, 1),
-            'dominant_topic': dominant,
-            'dominant_failure_mode': failure,
-            'fixation_streak': streak,
-        }
-    except Exception:
-        return dict(_NULL_COGNITION_WINDOW)
+    """Return a stable, empty cognition window for old capsule readers."""
+    return dict(_NULL_COGNITION_WINDOW)
 
 
 def _get_pending_followups() -> list[dict]:

@@ -143,7 +143,6 @@ from skills.telegram_voice import TelegramVoice
 from skills.telegram_public import MaezPublicBot
 from core.action_engine import ActionEngine
 from skills.screen_perception import observe as screen_observe, ScreenObservation
-from memory.quality_tracker import QualityTracker
 from skills.github_skill import GitHubSkill
 from skills.reddit_skill import RedditSkill
 from skills.followup_queue import FollowUpQueue
@@ -157,15 +156,6 @@ from core.continuity import (
     archive_capsule as continuity_archive,
     CONTINUITY_CHECKPOINT_INTERVAL,
     POST_RESTART_INJECTION_CYCLES,
-)
-from core.cognition_quality import (
-    score_and_classify as cog_score_and_classify,
-    self_critique as cog_self_critique,
-    format_active_prompt as cog_format_active_prompt,
-    check_consolidation_quality as cog_check_consolidation,
-    get_behavior_policy as cog_get_behavior_policy,
-    should_retry as cog_should_retry,
-    build_retry_prompt as cog_build_retry_prompt,
 )
 from skills.disk_cleanup import scan as disk_scan, format_telegram_message as disk_msg
 from skills.self_analysis import analyze as self_analyze, format_for_telegram as analysis_telegram
@@ -2502,16 +2492,7 @@ def _build_cockpit_state(daemon) -> dict:
         default=None,
     )
 
-    cog = getattr(daemon, "_last_cog_metadata", None)
     cognition = None
-    if isinstance(cog, dict) and cog:
-        cognition = {
-            "score_0_100": cog.get("cog_score"),
-            "primary": cog.get("cog_primary"),
-            "labels": cog.get("cog_labels"),
-            "topic": cog.get("cog_topic"),
-            "retried": cog.get("cog_retried"),
-        }
 
     recall = None
     receipt = getattr(daemon, "_last_recall_receipt", None)
@@ -3296,9 +3277,6 @@ class MaezDaemon:
         self._last_calendar_snap = None
         self._calendar_cycle_counter = 0
         self.CALENDAR_OBSERVE_EVERY_N_CYCLES = 10  # every ~5 minutes
-        self._quality_tracker = QualityTracker()
-        self._reflection_cycle_counter = 0
-        self.REFLECTION_EVERY_N_CYCLES = 20  # every ~10 minutes
         # A-core #3 Step 3: builder-mode perception integration. The
         # daemon owns its own AuditLog reader and a persisted high-
         # water-mark so direct-edit events from CLI (Step 2) and
@@ -3456,8 +3434,6 @@ class MaezDaemon:
             self._s1b_consumer = None
             self._s1b_residue_events = []
 
-        self._cognition_critique_counter = 0
-        self._last_cognition_critique: dict | None = None
         self._last_reasoning_prompt: str = ""
         self._continuity_capsule: dict | None = None
         self._continuity_active = False
@@ -5824,28 +5800,6 @@ class MaezDaemon:
                 salience=70,
             )
             self._proactive_search_context = ""  # Clear after use
-
-        # Add self-reflection context
-        reflection_context = self._quality_tracker.format_for_context()
-        if reflection_context:
-            prompt += f"\n{reflection_context}\n"
-            _extend_cycle_candidates(
-                "quality_signal",
-                reflection_context,
-                durable_prefix="cycle_quality_signal",
-                salience=75,
-            )
-
-        # Add active cognition block — always populated once data exists
-        cog_context = cog_format_active_prompt()
-        if cog_context:
-            prompt += f"\n{cog_context}\n"
-            _extend_cycle_candidates(
-                "open_loop",
-                cog_context,
-                durable_prefix="cycle_active_cognition",
-                salience=85,
-            )
 
         # Add continuity block during orientation window
         if self._continuity_active and self._continuity_capsule:
@@ -9069,15 +9023,9 @@ class MaezDaemon:
                 summary = self.memory.consolidate_daily()
                 if summary:
                     logger.info("Daily consolidation complete: %d chars", len(summary))
-                    # Check consolidation quality
-                    cq = cog_check_consolidation(summary)
-                    quality_note = f"Quality: {'PASS' if cq['passed'] else 'FAIL'}"
-                    if not cq["passed"]:
-                        quality_note += f" ({', '.join(cq['reasons'])})"
                     send_dev(
                         f"Daily memory consolidation complete.\n"
-                        f"Stats: {self.memory.memory_stats()}\n"
-                        f"{quality_note}"
+                        f"Stats: {self.memory.memory_stats()}"
                     )
             except Exception as e:
                 logger.error("Daily consolidation error: %s", e)
@@ -9144,15 +9092,6 @@ class MaezDaemon:
 
                 analysis = _self_analyze(self.memory, self.actions) or {}
                 top_topics = []
-                try:
-                    # Best-effort top topics from cognition recent buffer
-                    from core.cognition_quality import _recent_topics
-                    import collections as _cc
-
-                    if _recent_topics:
-                        top_topics = _cc.Counter(_recent_topics[-50:]).most_common(3)
-                except Exception:
-                    pass
                 send_nightly_card(
                     memories_analyzed=analysis.get(
                         "total_analyzed", self.memory.memory_stats().get("raw", 0)
@@ -10009,60 +9948,6 @@ class MaezDaemon:
                 except Exception as e:
                     logger.error("Disk scan failed: %s", e)
 
-            # Cognition self-critique — every 20 cycles
-            self._mark_cycle_stage("cognition_self_critique")
-            self._cognition_critique_counter += 1
-            if self._cognition_critique_counter >= 20:
-                self._cognition_critique_counter = 0
-                try:
-                    critique = cog_self_critique()
-                    if critique:
-                        self._last_cognition_critique = critique
-                        if critique.get("should_write_soul_note") and critique.get(
-                            "soul_note_reason"
-                        ):
-                            reason = critique["soul_note_reason"]
-                            soul_text = self.system_prompt or ""
-                            if reason[:60] not in soul_text:
-                                logger.info("Cognition soul note: %s", reason[:100])
-                                self.actions.write_soul_note(reason)
-                            else:
-                                logger.debug("Cognition soul note deduped — already in soul.md")
-                except Exception as e:
-                    logger.debug("Cognition critique failed: %s", e)
-
-            # Self-reflection — periodic insight check
-            # 11u fix: dedup against soul.md AND track last-written insight
-            # to prevent the same insight being appended hundreds of times.
-            # The substring check alone failed when a consolidated lessons
-            # section paraphrased the insight (past vs present tense).
-            self._mark_cycle_stage("self_reflection")
-            self._reflection_cycle_counter += 1
-            if self._reflection_cycle_counter >= self.REFLECTION_EVERY_N_CYCLES:
-                self._reflection_cycle_counter = 0
-                try:
-                    insight = self._quality_tracker.format_insight_for_soul()
-                    if insight:
-                        # Dedup by key concepts, not exact text
-                        soul_lower = (self.system_prompt or "").lower()
-                        insight_lower = insight.lower()
-                        # If soul.md mentions "approval rate" AND this insight
-                        # is about approval rate, it's a duplicate lesson
-                        key_concepts = ["approval rate", "fixation", "repetition"]
-                        covered = sum(
-                            1 for k in key_concepts if k in soul_lower and k in insight_lower
-                        )
-                        # Also dedup against last-written insight
-                        last = getattr(self, "_last_reflection_insight", None)
-                        if covered > 0 or insight == last:
-                            logger.debug("Self-reflection deduped — concepts already in soul.md")
-                        else:
-                            logger.info("Self-reflection insight: %s", insight[:100])
-                            self.actions.write_soul_note(insight)
-                            self._last_reflection_insight = insight
-                except Exception as e:
-                    logger.warning("Self-reflection error: %s", e)
-
             # 2026-04-25 disk-fixation patches. See
             # core/cognition/perception_signature.py.
             #   Patch B: skip the LLM when perception axes match the
@@ -10113,8 +9998,6 @@ class MaezDaemon:
 
             _cycle_scheduled_due = (
                 self.cycle_count % 20 == 0
-                or self._cognition_critique_counter == 0
-                or self._reflection_cycle_counter == 0
                 or (
                     self.cycle_count % 240 == 0
                     and snap["disk"].get("/", {}).get("percent", 0) > 75
@@ -10322,132 +10205,12 @@ class MaezDaemon:
                 # Store response with full perception snapshot. Screen context
                 # is v1a ephemeral-only: it may shape the in-cycle prompt, but
                 # it is not appended to durable memory or metadata here.
-                self._mark_cycle_stage("cognition_score")
                 screen_activity = "unknown"
                 focus_level = "unknown"
 
                 next_event = "calendar_unavailable"
 
-                # Score and classify BEFORE storage — enriched metadata in one write
                 full_thought = result
-                cog_metadata = cog_score_and_classify(full_thought)
-                self._last_cog_metadata = cog_metadata
-
-                # Retry path: if thought is below floor or matches reject combos
-                try:
-                    if cog_should_retry(cog_metadata):
-                        self._s1b_note_residue_event("low_cognition_score")
-                        policy = cog_get_behavior_policy()
-                        retry_instruction = cog_build_retry_prompt(cog_metadata, policy)
-                        initial_score = cog_metadata.get("cog_score", 0)
-                        initial_labels = cog_metadata.get("cog_labels", "")
-                        logger.info(
-                            "Cycle %d: retry triggered (score=%d, labels=%s)",
-                            self.cycle_count,
-                            initial_score,
-                            initial_labels,
-                        )
-
-                        # One corrective retry — append instruction to existing prompt.
-                        # The retry is background work and enters the BrainGateway
-                        # lane directly; the old non-blocking ollama lock is no
-                        # longer a second coordinator.
-                        last_prompt = getattr(self, "_last_reasoning_prompt", "")
-                        try:
-                            # Session 11r: via llm_client (was missed in 11p batch)
-                            from core import llm_client as _llm_client
-                            from core.routing.brain_gateway import with_purpose as _brain_purpose
-                            from core.routing.cancellable_brain_call import BrainPreempted
-
-                            # Same stable system content as primary cycle —
-                            # keeps KV cache warm for retries too.
-                            retry_system = self.system_prompt + "\n\n" + _STATIC_CYCLE_INSTRUCTIONS
-                            with _brain_purpose("daemon_cycle_retry"):
-                                retry_response = _llm_client.chat(
-                                    model=MODEL,
-                                    messages=[
-                                        {"role": "system", "content": retry_system},
-                                        {"role": "user", "content": last_prompt},
-                                        {"role": "assistant", "content": result},
-                                        {"role": "user", "content": retry_instruction},
-                                    ],
-                                    think=False,
-                                    options={"temperature": 0.8, "num_predict": 300},
-                                )
-                            retry_content = (retry_response.message.content or "").strip()
-                            if retry_content and retry_content != "(empty response)":
-                                # 2026-04-23 memory-integrity contract:
-                                # audit the retry with the SAME cycle
-                                # signal manifest that gated the first
-                                # audit. The retry is a fresh assistant
-                                # text — it needs the same grounding
-                                # check, otherwise an improved-on-score
-                                # retry could still be fabricated and
-                                # land in raw memory unaudited. Rescore
-                                # the AUDITED retry, not the raw retry,
-                                # so the score reflects the actual text
-                                # that will be stored.
-                                try:
-                                    from core.safety.audited_output import (
-                                        audit_assistant_text as _aud_txt,
-                                    )
-
-                                    retry_content = _aud_txt(
-                                        retry_content,
-                                        surface="daemon_cycle_retry",
-                                        signals_present=_cycle_signals_present,
-                                        signals_absent=_cycle_signals_absent,
-                                        evidence_envelope=getattr(
-                                            self,
-                                            "_last_cycle_evidence_envelope",
-                                            None,
-                                        ),
-                                    )
-                                except Exception as _retry_aud_exc:
-                                    logger.warning(
-                                        "retry audit fail-open: %s",
-                                        _retry_aud_exc,
-                                    )
-
-                                # Re-score the (audited) retry
-                                retry_thought = retry_content
-                                retry_cog = cog_score_and_classify(retry_thought)
-
-                                if retry_cog.get("cog_score", 0) > initial_score:
-                                    # Retry is better — use it
-                                    full_thought = retry_thought
-                                    result = retry_content
-                                    cog_metadata = retry_cog
-                                    cog_metadata["cog_retried"] = "improved"
-                                    cog_metadata["cog_initial_score"] = initial_score
-                                    cog_metadata["cog_initial_labels"] = initial_labels
-                                    logger.info(
-                                        "Cycle %d: retry improved %d → %d",
-                                        self.cycle_count,
-                                        initial_score,
-                                        retry_cog.get("cog_score", 0),
-                                    )
-                                else:
-                                    # Retry didn't help — keep original
-                                    cog_metadata["cog_retried"] = "kept_original"
-                                    cog_metadata["cog_retry_score"] = retry_cog.get(
-                                        "cog_score", 0
-                                    )
-                                    logger.info(
-                                        "Cycle %d: retry not better (%d vs %d), keeping original",
-                                        self.cycle_count,
-                                        retry_cog.get("cog_score", 0),
-                                        initial_score,
-                                    )
-                        except BrainPreempted:
-                            raise
-                        except Exception as e:
-                            logger.debug("Retry generation failed: %s", e)
-                            cog_metadata["cog_retried"] = "failed"
-                except BrainPreempted:
-                    raise
-                except Exception as e:
-                    logger.debug("Retry check failed: %s", e)
 
                 self._s1b_flush_residue_events()
 
@@ -10462,7 +10225,6 @@ class MaezDaemon:
                     "focus_level": focus_level,
                     "next_event": next_event,
                 }
-                mem_metadata.update(cog_metadata)
                 self._mark_cycle_stage("memory_store")
                 self.memory.store(
                     full_thought,
@@ -10550,14 +10312,10 @@ class MaezDaemon:
                 if self._continuity_checkpoint_counter >= CONTINUITY_CHECKPOINT_INTERVAL:
                     self._continuity_checkpoint_counter = 0
                     try:
-                        _last_cog = getattr(self, "_last_cog_metadata", {})
                         continuity_checkpoint(
                             last_thought={
                                 "text": result[:200],
                                 "cycle": self.cycle_count,
-                                "score": _last_cog.get("cog_score", 0),
-                                "topic": _last_cog.get("cog_topic", ""),
-                                "labels": _last_cog.get("cog_labels", "").split(","),
                             }
                         )
                     except Exception as e:

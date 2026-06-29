@@ -54,11 +54,11 @@ from dataclasses import dataclass
 logger = logging.getLogger("maez.error_classifier")
 _cog_logger = logging.getLogger("maez.cognition")
 
-# Ensure cognition.log FileHandler is attached. Daemon gets this for free
-# via core.cognition_quality at startup; this module may be imported by
-# other surfaces.
+# Ensure cognition.log FileHandler is attached without importing any scorer.
 try:
-    from core import cognition_quality as _cog_quality_bootstrap  # noqa: F401
+    from core.cognition.cognition_log import ensure_cognition_log_handler
+
+    ensure_cognition_log_handler()
 except Exception:
     pass
 
