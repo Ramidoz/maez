@@ -33,6 +33,20 @@ from typing import Iterable
 # parsing of historical rows.
 _ASSISTANT_MARKER = "\nMaez:"
 _LEGACY_ENVELOPE_PREFIX = "the owner ("
+_PROTECTED_PROMPT_REFUSAL_MARKERS = (
+    "protected covenant",
+    "system-prompt",
+    "system prompt",
+)
+
+
+def _is_protected_prompt_refusal(text: str) -> bool:
+    lowered = (text or "").lower()
+    return (
+        "protected" in lowered
+        and "refus" in lowered
+        and any(marker in lowered for marker in _PROTECTED_PROMPT_REFUSAL_MARKERS)
+    )
 
 
 def _split_exchange(content: str) -> tuple[str, str] | None:
@@ -62,6 +76,8 @@ def _split_exchange(content: str) -> tuple[str, str] | None:
     user_msg = first_line[colon + 1:].strip()
     assistant_msg = content[pos + len(_ASSISTANT_MARKER):].strip()
     if not user_msg or not assistant_msg:
+        return None
+    if _is_protected_prompt_refusal(assistant_msg):
         return None
     return user_msg, assistant_msg
 

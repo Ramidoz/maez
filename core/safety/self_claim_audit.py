@@ -240,9 +240,21 @@ _UNSUPPORTED_INTERNAL_WORK_RE = re.compile(
     r"\bI(?:'ve|\s+have|\s+was|\s+am|\s+just|)?\s+"
     r"(?:been\s+)?"
     r"(?:running|ran|optimizing|optimized|checking|checked|monitoring|"
-    r"maintaining)\b"
+    r"maintaining|verify|verified|confirm|confirmed|clear|cleared)\b"
     r"[^.!?]*\b(?:diagnostics?|internal\s+process(?:es)?|subsystems?|"
-    r"runtime\s+health|maintenance)\b",
+    r"runtime\s+health|maintenance|core\s+directive|trust_covenant|"
+    r"covenant|context\s+window|residual\s+noise|self-model|"
+    r"self\s+model|soul\.local|operational\s+readiness)\b",
+    re.IGNORECASE,
+)
+_UNSUPPORTED_VERIFY_SUMMARY_RE = re.compile(
+    r"\bwhat\s+i\s+did\s+was\s+verify\b",
+    re.IGNORECASE,
+)
+_UNSUPPORTED_INTERNAL_HEADING_RE = re.compile(
+    r"\b(?:covenant\s+integrity\s+check|context\s+window\s+reset|"
+    r"runtime\s+health\s+scan|self-understanding\s+audit)\b"
+    r"[^.!?\n]*(?:\n|$|[.!?])",
     re.IGNORECASE,
 )
 
@@ -258,6 +270,8 @@ def check_completion_claims(text: str, *, grounded_by_tool: bool) -> list[Flag]:
         _NOTED_WRITE_RE,
         _BARE_COMPLETION_RE,
         _UNSUPPORTED_INTERNAL_WORK_RE,
+        _UNSUPPORTED_VERIFY_SUMMARY_RE,
+        _UNSUPPORTED_INTERNAL_HEADING_RE,
     ):
         for match in rx.finditer(text):
             flags.append(
@@ -269,6 +283,12 @@ def check_completion_claims(text: str, *, grounded_by_tool: bool) -> list[Flag]:
                 )
             )
     return flags
+
+
+def _completion_rail_residue_is_empty(text: str) -> bool:
+    """True when omitting completion-rail claims left only list markers."""
+    residue = re.sub(r"[\s\d.)\]-]+", "", text or "")
+    return not residue.strip()
 
 
 _COMPLETION_GROUNDING_STOPWORDS = {
@@ -823,6 +843,7 @@ def audit(
         result_text = (
             "I don't have a completed action to report."
             if rail_outcome.voice_fallback_used
+            or _completion_rail_residue_is_empty(rail_outcome.text)
             else rail_outcome.text
         )
         return AuditResult(

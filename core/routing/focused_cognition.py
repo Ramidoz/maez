@@ -752,6 +752,8 @@ def _full_focused_system_prompt(
     surface: str,
     voice_card_text: str | None = None,
 ) -> str:
+    memory_instruction = _explicit_memory_question_instruction(working_set.owner_question)
+    memory_section = f"\n\n{memory_instruction}\n\n" if memory_instruction else ""
     return (
         f"{_voice_card(surface, voice_card_text=voice_card_text)}\n\n"
         f"{_citation_instruction(
@@ -760,8 +762,29 @@ def _full_focused_system_prompt(
         )}\n\n"
         f"{_TRUST_TIER_INSTRUCTION}\n\n"
         f"{_ORIGIN_TRUST_INSTRUCTION}\n\n"
+        f"{memory_section}"
         f"=== EVIDENCE (cite [E#]) ===\n"
         f"{working_set.ordered_evidence_text}"
+    )
+
+
+def _explicit_memory_question_instruction(owner_question: str) -> str:
+    try:
+        from core.routing.explicit_memory_question import is_explicit_memory_question
+
+        explicit_memory = is_explicit_memory_question(owner_question)
+    except Exception:
+        explicit_memory = False
+    if not explicit_memory:
+        return ""
+    return (
+        "EXPLICIT MEMORY QUESTION:\n"
+        "- Instructions are not lived memories. The covenant, system prompt, "
+        "safety rules, and developer/operator instructions are not autobiographical "
+        "memory evidence.\n"
+        "- Answer from lived recall evidence only. If the lived evidence does not "
+        "support an oldest/earliest memory, say that plainly instead of treating "
+        "protected instructions as memory."
     )
 
 

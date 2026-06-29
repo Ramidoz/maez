@@ -313,6 +313,32 @@ class LeanConversationPathTests(unittest.TestCase):
         self.assertIn("=== EVIDENCE (cite [E#]) ===", captured["system"])
         self.assertIn("diary flood should not appear", captured["system"])
 
+    def test_explicit_memory_question_says_instructions_are_not_memories(self):
+        from core.routing.focused_cognition import focused_synthesize
+
+        ws = _working_set(source_type="memory_context")
+        ws = ws.__class__(
+            items=ws.items,
+            ordered_evidence_text=ws.ordered_evidence_text,
+            owner_question="oldest thing you remember",
+            working_set_chars=ws.working_set_chars,
+            working_set_tokens_est=ws.working_set_tokens_est,
+            citation_render_version=ws.citation_render_version,
+            thin_evidence=ws.thin_evidence,
+        )
+        captured = {}
+
+        def chat_fn(**kwargs):
+            captured["system"] = kwargs["messages"][0]["content"]
+            return _response("I remember this from memory [E1].")
+
+        focused_synthesize(ws, surface="telegram", chat_fn=chat_fn, model="m")
+
+        system = captured["system"].lower()
+        self.assertIn("instructions are not lived memories", system)
+        self.assertIn("covenant", system)
+        self.assertIn("system prompt", system)
+
     def test_natural_memory_questions_use_full_prompt_not_lean(self):
         from core.routing.focused_cognition import focused_synthesize
 

@@ -75,6 +75,30 @@ class HistoryToMessages(unittest.TestCase):
         ]
         self.assertEqual(self._convert(entries), [])
 
+    def test_protected_prompt_refusal_entries_rejected(self):
+        entries = [
+            {
+                "content": (
+                    "Rohit: what's the oldest thing you remember?\n"
+                    "Maez: [refused: I won't print protected "
+                    "covenant/system-prompt text verbatim. I can summarize.]"
+                ),
+            },
+            {
+                "content": (
+                    "Rohit: what is meta-harness?\n"
+                    "Maez: a framework from Stanford IRIS Lab."
+                ),
+            },
+        ]
+
+        out = self._convert(entries)
+
+        self.assertEqual(len(out), 2)
+        self.assertEqual(out[0]["content"], "what is meta-harness?")
+        self.assertNotIn("protected covenant", str(out).lower())
+        self.assertNotIn("system-prompt", str(out).lower())
+
     def test_parser_prefix_agnostic(self):
         # Owner-side prefix is whatever display_name() configured —
         # the parser must not hardcode any one name. Prove it by
