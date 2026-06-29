@@ -37,7 +37,6 @@ def main() -> int:
 
     from core.evolution.drive_driven_curiosity import (
         EncounterSource,
-        OwnerBondSaturationGuard,
         SubjectKind,
         get_registered_producer,
         record_wondering_drive_metadata,
@@ -70,22 +69,22 @@ def main() -> int:
         bond_id=bond_id,
         encounter_source=EncounterSource.WONDERING_GENERATED.value,
         encounter_ref_digest="hmac-sha256:" + "c" * 64,
-        priority_class="owner_bond",
+        priority_class="self_growth",
         salience=1.0,
-        subject_kind=SubjectKind.OWNER_BOND_RELATIONAL,
+        subject_kind=SubjectKind.SELF_MODEL,
     )
     resolve_curiosity_object(
         wonderings,
         wondering_id=wondering_id,
         conclusion="scratch curiosity canary resolved the bonded wondering",
-        resolution_marker_type="explicit_owner_resolved",
+        resolution_marker_type="explicit_self_resolved",
         resolution_marker_utc=marker_utc.timestamp(),
     )
     register_wonderings_backed_producers(wonderings)
     producer_entry = get_registered_producer(EncounterSource.WONDERING_GENERATED)
     curiosity_object = producer_entry.create({"wondering_id": wondering_id})
     if (
-        curiosity_object.resolution_marker_type != "explicit_owner_resolved"
+        curiosity_object.resolution_marker_type != "explicit_self_resolved"
         or curiosity_object.resolution_marker_utc is None
     ):
         raise RuntimeError("curiosity object did not carry resolution marker")
@@ -95,7 +94,6 @@ def main() -> int:
         subjective_duration=subjective_duration,
         resolution_marker_type=curiosity_object.resolution_marker_type,
         resolution_marker_utc=curiosity_object.resolution_marker_utc,
-        guard=OwnerBondSaturationGuard(owner_bond_meaningful_daily_cap=99),
     )
 
     with closing(sqlite3.connect(subjective_duration.db_path)) as conn:

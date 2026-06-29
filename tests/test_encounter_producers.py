@@ -299,7 +299,7 @@ class EncounterProducerRegistrationTests(unittest.TestCase):
             )
             temperament.record_event(parameter="curiosity", value=5.0)
             wid = store.add(
-                "what did that unresolved owner-bond question mean?",
+                "what did that unresolved self-growth question mean?",
                 source="manual",
                 bond_id="firstborn",
             )
@@ -309,9 +309,9 @@ class EncounterProducerRegistrationTests(unittest.TestCase):
                 bond_id="firstborn",
                 encounter_source="wondering_generated",
                 encounter_ref_digest="hmac-sha256:" + "8" * 64,
-                priority_class="owner_bond",
+                priority_class="self_growth",
                 salience=1.0,
-                subject_kind=self.curiosity.SubjectKind.OWNER_BOND_RELATIONAL,
+                subject_kind=self.curiosity.SubjectKind.SELF_MODEL,
             )
             self.curiosity.register_wonderings_backed_producers(store)
             obj = self.curiosity.get_registered_producer(
@@ -324,9 +324,6 @@ class EncounterProducerRegistrationTests(unittest.TestCase):
                 subjective_duration=subjective,
                 resolution_marker_type="explicit_owner_resolved",
                 resolution_marker_utc=datetime(2026, 5, 25, 12, 0, tzinfo=UTC),
-                guard=self.curiosity.OwnerBondSaturationGuard(
-                    owner_bond_meaningful_daily_cap=99
-                ),
             )
             record = subjective.lookup_meaningful_salience_event_record(
                 bond_id="firstborn",

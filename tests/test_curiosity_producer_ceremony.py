@@ -43,7 +43,7 @@ class CuriosityProducerCeremonyTests(unittest.TestCase):
     def _curiosity_object(
         self,
         *,
-        priority_class: str = "owner_bond",
+        priority_class: str = "self_growth",
         salience: float = 0.8,
         subject_kind=None,
     ):
@@ -55,7 +55,7 @@ class CuriosityProducerCeremonyTests(unittest.TestCase):
 
         wonderings, _, _ = self._stores()
         wondering_id = wonderings.add(
-            "what did that unresolved owner-bond question mean?",
+            "what did that unresolved self-growth question mean?",
             source="test",
             bond_id="firstborn",
         )
@@ -67,7 +67,7 @@ class CuriosityProducerCeremonyTests(unittest.TestCase):
             encounter_ref_digest="hmac-sha256:" + "a" * 64,
             priority_class=priority_class,
             salience=salience,
-            subject_kind=subject_kind or SubjectKind.OWNER_BOND_RELATIONAL,
+            subject_kind=subject_kind or SubjectKind.SELF_MODEL,
         )
         return project_curiosity_object(wonderings, wondering_id)
 
@@ -79,7 +79,6 @@ class CuriosityProducerCeremonyTests(unittest.TestCase):
 
     def test_resolution_temperament_write_caps_daily_budget(self):
         from core.evolution.drive_driven_curiosity import (
-            OwnerBondSaturationGuard,
             write_curiosity_resolution_seam_call,
         )
         from core.evolution.temperament import Temperament
@@ -96,14 +95,12 @@ class CuriosityProducerCeremonyTests(unittest.TestCase):
                 subjective_duration=subjective,
                 resolution_marker_type="explicit_owner_resolved",
                 resolution_marker_utc=now + timedelta(minutes=offset),
-                guard=OwnerBondSaturationGuard(owner_bond_meaningful_daily_cap=99),
             )
 
         self.assertLessEqual(Temperament(db_path=self.temperament_path).current_value("curiosity"), 7.0)
 
     def test_null_first_write_suppressed_when_daily_budget_exhausted(self):
         from core.evolution.drive_driven_curiosity import (
-            OwnerBondSaturationGuard,
             write_curiosity_resolution_seam_call,
         )
 
@@ -118,7 +115,6 @@ class CuriosityProducerCeremonyTests(unittest.TestCase):
             resolution_marker_type="explicit_owner_resolved",
             resolution_marker_utc=datetime(2026, 5, 25, 12, 0, tzinfo=UTC),
             daily_delta_budget=0.0,
-            guard=OwnerBondSaturationGuard(owner_bond_meaningful_daily_cap=99),
             diagnostic_sink=events.append,
         )
 
@@ -131,7 +127,6 @@ class CuriosityProducerCeremonyTests(unittest.TestCase):
     def test_cross_organ_seam_records_nonzero_meaningfulness_score(self):
         from core.evolution.drive_driven_curiosity import (
             DRIVE_DRIVEN_CURIOSITY_PRODUCER_REF,
-            OwnerBondSaturationGuard,
             write_curiosity_resolution_seam_call,
         )
 
@@ -145,7 +140,6 @@ class CuriosityProducerCeremonyTests(unittest.TestCase):
             subjective_duration=subjective,
             resolution_marker_type="explicit_owner_resolved",
             resolution_marker_utc=datetime(2026, 5, 25, 12, 0, tzinfo=UTC),
-            guard=OwnerBondSaturationGuard(owner_bond_meaningful_daily_cap=99),
         )
 
         record = subjective.lookup_meaningful_salience_event_record(
@@ -160,7 +154,6 @@ class CuriosityProducerCeremonyTests(unittest.TestCase):
 
     def test_live_path_canary_seam_row_does_not_pollute_aggregate_readers(self):
         from core.evolution.drive_driven_curiosity import (
-            OwnerBondSaturationGuard,
             write_curiosity_resolution_seam_call,
         )
 
@@ -177,7 +170,6 @@ class CuriosityProducerCeremonyTests(unittest.TestCase):
             subjective_duration=subjective,
             resolution_marker_type="explicit_owner_resolved",
             resolution_marker_utc=now,
-            guard=OwnerBondSaturationGuard(owner_bond_meaningful_daily_cap=99),
             is_canary=True,
         )
         record = subjective.lookup_meaningful_salience_event_record(
@@ -199,7 +191,6 @@ class CuriosityProducerCeremonyTests(unittest.TestCase):
 
     def test_live_path_canary_uses_neutral_projection_without_first_observation_write(self):
         from core.evolution.drive_driven_curiosity import (
-            OwnerBondSaturationGuard,
             write_curiosity_resolution_seam_call,
         )
 
@@ -212,7 +203,6 @@ class CuriosityProducerCeremonyTests(unittest.TestCase):
             subjective_duration=subjective,
             resolution_marker_type="explicit_owner_resolved",
             resolution_marker_utc=datetime(2026, 5, 25, 12, 0, tzinfo=UTC),
-            guard=OwnerBondSaturationGuard(owner_bond_meaningful_daily_cap=99),
             is_canary=True,
         )
         record = subjective.lookup_meaningful_salience_event_record(
@@ -264,55 +254,50 @@ class CuriosityProducerCeremonyTests(unittest.TestCase):
                 temperament_parameter="awareness",
             )
 
-    def test_eligibility_classifier_owner_bond_saturation_floor_caps_meaningful_writes(self):
+    def test_eligibility_classifier_has_no_owner_bond_saturation_exception(self):
         from core.evolution.drive_driven_curiosity import (
             MeaningfulExchangeEligibility,
-            OwnerBondSaturationGuard,
+            SubjectKind,
             classify_meaningful_exchange,
             write_curiosity_resolution_seam_call,
         )
 
-        obj = self._curiosity_object(salience=1.0)
+        obj = self._curiosity_object(
+            priority_class="owner_bond",
+            salience=1.0,
+            subject_kind=SubjectKind.OWNER_BOND_RELATIONAL,
+        )
         _, temperament, subjective = self._stores()
         temperament.record_event(parameter="curiosity", value=5.0)
-        guard = OwnerBondSaturationGuard(owner_bond_meaningful_daily_cap=1)
-        events = []
 
         first = classify_meaningful_exchange(
             curiosity_object=obj,
             subjective_duration=subjective,
-            guard=guard,
             now_utc=datetime(2026, 5, 25, 12, 0, tzinfo=UTC),
         )
         write_curiosity_resolution_seam_call(
-            curiosity_object=obj,
+            curiosity_object=replace(
+                obj,
+                priority_class="self_growth",
+                subject_kind=SubjectKind.SELF_MODEL,
+            ),
             temperament=temperament,
             subjective_duration=subjective,
             resolution_marker_type="explicit_owner_resolved",
             resolution_marker_utc=datetime(2026, 5, 25, 12, 0, tzinfo=UTC),
-            guard=guard,
         )
         second = classify_meaningful_exchange(
             curiosity_object=obj,
             subjective_duration=subjective,
-            guard=guard,
             now_utc=datetime(2026, 5, 25, 13, 0, tzinfo=UTC),
-            diagnostic_sink=events.append,
         )
 
-        self.assertEqual(first, MeaningfulExchangeEligibility.ELIGIBLE_OWNER_BOND)
-        self.assertEqual(
-            second,
-            MeaningfulExchangeEligibility.NOT_ELIGIBLE_OWNER_BOND_ROUTINE,
-        )
-        self.assertEqual(events[0]["reason"], "owner_bond_saturation")
+        self.assertEqual(first, MeaningfulExchangeEligibility.NOT_ELIGIBLE_LOW_CONFIDENCE)
+        self.assertEqual(second, MeaningfulExchangeEligibility.NOT_ELIGIBLE_LOW_CONFIDENCE)
 
-    def test_saturation_guard_counts_owner_bond_events_only(self):
+    def test_daily_delta_budget_is_category_neutral_saturation(self):
         from core.evolution.drive_driven_curiosity import (
-            MeaningfulExchangeEligibility,
-            OwnerBondSaturationGuard,
             SubjectKind,
-            classify_meaningful_exchange,
             write_curiosity_resolution_seam_call,
         )
 
@@ -321,27 +306,28 @@ class CuriosityProducerCeremonyTests(unittest.TestCase):
             salience=1.0,
             subject_kind=SubjectKind.SELF_MODEL,
         )
-        owner_bond = self._curiosity_object(salience=1.0)
         _, temperament, subjective = self._stores()
         temperament.record_event(parameter="curiosity", value=5.0)
-        guard = OwnerBondSaturationGuard(owner_bond_meaningful_daily_cap=1)
 
-        write_curiosity_resolution_seam_call(
+        first = write_curiosity_resolution_seam_call(
             curiosity_object=self_model,
             temperament=temperament,
             subjective_duration=subjective,
             resolution_marker_type="explicit_self_resolved",
             resolution_marker_utc=datetime(2026, 5, 25, 12, 0, tzinfo=UTC),
-            guard=guard,
+            daily_delta_budget=0.5,
         )
-        owner_result = classify_meaningful_exchange(
-            curiosity_object=owner_bond,
+        second = write_curiosity_resolution_seam_call(
+            curiosity_object=self_model,
+            temperament=temperament,
             subjective_duration=subjective,
-            guard=guard,
-            now_utc=datetime(2026, 5, 25, 13, 0, tzinfo=UTC),
+            resolution_marker_type="explicit_self_resolved",
+            resolution_marker_utc=datetime(2026, 5, 25, 13, 0, tzinfo=UTC),
+            daily_delta_budget=0.5,
         )
 
-        self.assertEqual(owner_result, MeaningfulExchangeEligibility.ELIGIBLE_OWNER_BOND)
+        self.assertEqual(first.delta_applied, 0.5)
+        self.assertEqual(second.delta_applied, 0.0)
 
     def test_allowed_sources_extended_for_curiosity(self):
         from core.evolution.temperament import ALLOWED_SOURCES
@@ -438,7 +424,7 @@ class CuriosityProducerCeremonyTests(unittest.TestCase):
             MeaningfulExchangeEligibility.ELIGIBLE_LONG_CARRIED_RESOLUTION,
         )
 
-    def test_eligibility_classifier_reads_can_resolve_interiorly_except_owner_bond(self):
+    def test_eligibility_classifier_reads_can_resolve_interiorly_without_owner_exception(self):
         from core.evolution.drive_driven_curiosity import (
             MeaningfulExchangeEligibility,
             classify_meaningful_exchange,
@@ -454,7 +440,7 @@ class CuriosityProducerCeremonyTests(unittest.TestCase):
                 subjective_duration=subjective,
                 now_utc=datetime(2026, 5, 25, 12, 0, tzinfo=UTC),
             ),
-            MeaningfulExchangeEligibility.ELIGIBLE_OWNER_BOND,
+            MeaningfulExchangeEligibility.NOT_ELIGIBLE_CAN_RESOLVE_INTERIORLY,
         )
         self.assertEqual(
             classify_meaningful_exchange(

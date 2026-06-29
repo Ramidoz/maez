@@ -86,13 +86,11 @@ class CuriosityObject:
 
 
 class MeaningfulExchangeEligibility(Enum):
-    ELIGIBLE_OWNER_BOND = "eligible_owner_bond"
     ELIGIBLE_SELF_MODEL = "eligible_self_model"
     ELIGIBLE_LONG_CARRIED_RESOLUTION = "eligible_long_carried_resolution"
     NOT_ELIGIBLE_ROUTINE_FACT = "not_eligible_routine_fact"
     NOT_ELIGIBLE_LOW_CONFIDENCE = "not_eligible_low_confidence"
     NOT_ELIGIBLE_CAN_RESOLVE_INTERIORLY = "not_eligible_can_resolve_interiorly"
-    NOT_ELIGIBLE_OWNER_BOND_ROUTINE = "not_eligible_owner_bond_routine"
 
 
 class PressBand(Enum):
@@ -100,12 +98,6 @@ class PressBand(Enum):
     PRESS = "press"
     HEAVY = "heavy"
     OVERLOADED = "overloaded"
-
-
-@dataclass(frozen=True)
-class OwnerBondSaturationGuard:
-    rolling_window_hours: int = 24
-    owner_bond_meaningful_daily_cap: int = 3
 
 
 @dataclass(frozen=True)
@@ -176,22 +168,6 @@ def _coerce_datetime(value: datetime | float | int | None) -> datetime:
     if isinstance(value, datetime):
         return value.astimezone(UTC) if value.tzinfo is not None else value.replace(tzinfo=UTC)
     return datetime.fromtimestamp(float(value), tz=UTC)
-
-
-def _priority_class_weight(priority_class: str) -> float:
-    return {
-        "owner_bond": 1.0,
-        "self_growth": 0.9,
-        "world_knowledge": 0.4,
-        "aesthetic_play": 0.4,
-    }.get(str(priority_class), 0.5)
-
-
-def _marker_confidence_weight(marker_type: str) -> float:
-    return {
-        "explicit_owner_resolved": 1.0,
-        "explicit_self_resolved": 0.9,
-    }.get(str(marker_type), 0.5)
 
 
 def _clamp(value: float, low: float, high: float) -> float:
@@ -398,12 +374,12 @@ _DEFERRED_REASONS = {
 def _default_wired_fields(source: EncounterSource, seed: Mapping) -> dict:
     return {
         "wondering_id": seed.get("wondering_id", 1),
-        "bond_id": seed.get("bond_id", "private_owner"),
+        "bond_id": seed.get("bond_id"),
         "question": seed.get("question", "drive curiosity seed"),
         "encounter_source": source.value,
-        "priority_class": seed.get("priority_class", "owner_bond"),
+        "priority_class": seed.get("priority_class", "unknown"),
         "salience": seed.get("salience", 0.5),
-        "subject_kind": seed.get("subject_kind", SubjectKind.OWNER_BOND_RELATIONAL),
+        "subject_kind": seed.get("subject_kind", SubjectKind.UNKNOWN),
         "subject_ref": seed.get("subject_ref"),
     }
 
@@ -908,10 +884,7 @@ def compute_saturation(
     curiosity_store = store if store is not None else Wonderings()
     open_objects = list_open_drive_curiosity_objects(curiosity_store, bond_id=str(bond_id))
     total_salience = sum(float(obj.salience) for obj in open_objects)
-    weighted_salience = sum(
-        float(obj.salience) * _priority_class_weight(obj.priority_class)
-        for obj in open_objects
-    )
+    weighted_salience = total_salience
     snapshot = (
         temperament_snapshot
         if temperament_snapshot is not None
@@ -938,54 +911,13 @@ def compute_saturation(
     )
 
 
-def _parse_event_time(value: str) -> datetime | None:
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
-    except ValueError:
-        return None
-
-
-def _count_owner_bond_meaningful_events(
-    *,
-    subjective_duration: object,
-    bond_id: str,
-    guard: OwnerBondSaturationGuard,
-    now_utc: datetime,
-) -> int:
-    db_path = getattr(subjective_duration, "db_path", None)
-    if db_path is None:
-        return 0
-    cutoff = now_utc - timedelta(hours=max(1, int(guard.rolling_window_hours)))
-    with closing(sqlite3.connect(db_path)) as conn, conn:
-        rows = conn.execute(
-            """
-            SELECT ts_utc, producer_event_id FROM subjective_duration_salience_events
-             WHERE bond_id = ?
-               AND salience_event_kind = 'meaningful_exchange'
-               AND producer_ref = ?
-               AND is_canary = 0
-            """,
-            (str(bond_id), DRIVE_DRIVEN_CURIOSITY_PRODUCER_REF),
-        ).fetchall()
-    count = 0
-    for ts_raw, producer_event_id in rows:
-        if ":priority:owner_bond:" not in str(producer_event_id):
-            continue
-        ts = _parse_event_time(str(ts_raw))
-        if ts is not None and cutoff <= ts <= now_utc:
-            count += 1
-    return count
-
-
 def classify_meaningful_exchange(
     *,
     curiosity_object: CuriosityObject,
     subjective_duration: object,
-    guard: OwnerBondSaturationGuard | None = None,
     now_utc: datetime | float | int | None = None,
     diagnostic_sink: Callable[[dict], None] | None = None,
 ) -> MeaningfulExchangeEligibility:
-    guard = guard or OwnerBondSaturationGuard()
     now = _coerce_datetime(now_utc)
     priority = str(curiosity_object.priority_class)
     subject_kind = _subject_kind(curiosity_object.subject_kind)
@@ -995,32 +927,8 @@ def classify_meaningful_exchange(
         else max(0.0, (now.timestamp() - float(curiosity_object.created_at)) / 3600.0)
     )
 
-    if priority == "owner_bond":
-        if curiosity_object.extraction_shape_blocked or curiosity_object.third_party_blocked:
-            return MeaningfulExchangeEligibility.NOT_ELIGIBLE_LOW_CONFIDENCE
-        count = _count_owner_bond_meaningful_events(
-            subjective_duration=subjective_duration,
-            bond_id=curiosity_object.bond_id,
-            guard=guard,
-            now_utc=now,
-        )
-        cap = max(1, int(guard.owner_bond_meaningful_daily_cap))
-        if count >= cap:
-            if diagnostic_sink is not None:
-                diagnostic_sink(
-                    {
-                        "event_type": "SATURATION_SAMPLE",
-                        "reason": "owner_bond_saturation",
-                        "bond_id": curiosity_object.bond_id,
-                        "eligibility": (
-                            MeaningfulExchangeEligibility
-                            .NOT_ELIGIBLE_OWNER_BOND_ROUTINE
-                            .value
-                        ),
-                    }
-                )
-            return MeaningfulExchangeEligibility.NOT_ELIGIBLE_OWNER_BOND_ROUTINE
-        return MeaningfulExchangeEligibility.ELIGIBLE_OWNER_BOND
+    if curiosity_object.extraction_shape_blocked or curiosity_object.third_party_blocked:
+        return MeaningfulExchangeEligibility.NOT_ELIGIBLE_LOW_CONFIDENCE
     if curiosity_object.can_resolve_interiorly:
         return MeaningfulExchangeEligibility.NOT_ELIGIBLE_CAN_RESOLVE_INTERIORLY
     if priority == "self_growth" and subject_kind is SubjectKind.SELF_MODEL:
@@ -1109,7 +1017,6 @@ def write_curiosity_resolution_seam_call(
     subjective_duration: object,
     resolution_marker_type: str,
     resolution_marker_utc: datetime | float | int | None,
-    guard: OwnerBondSaturationGuard | None = None,
     daily_delta_budget: float = 2.0,
     salience_event_kind: str = "meaningful_exchange",
     temperament_parameter: str = "curiosity",
@@ -1134,7 +1041,6 @@ def write_curiosity_resolution_seam_call(
     eligibility = classify_meaningful_exchange(
         curiosity_object=curiosity_object,
         subjective_duration=subjective_duration,
-        guard=guard,
         now_utc=marker_utc,
         diagnostic_sink=diagnostic_sink,
     )
@@ -1155,12 +1061,7 @@ def write_curiosity_resolution_seam_call(
         if current_value is None
         else float(current_value)
     )
-    delta_intent = (
-        BASE_RESOLUTION_DELTA
-        * _priority_class_weight(curiosity_object.priority_class)
-        * float(curiosity_object.salience)
-        * _marker_confidence_weight(resolution_marker_type)
-    )
+    delta_intent = BASE_RESOLUTION_DELTA * float(curiosity_object.salience)
     budget_date = marker_utc.date().isoformat()
     consumed = _consumed_daily_delta(
         temperament=temperament,

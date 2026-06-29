@@ -31,7 +31,7 @@ class CuriosityScratchCanaryTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertIn("curiosity scratch E2E canary passed", result.stdout)
         self.assertIn("meaningfulness_score=", result.stdout)
-        self.assertIn("resolution_marker_type=explicit_owner_resolved", result.stdout)
+        self.assertIn("resolution_marker_type=explicit_self_resolved", result.stdout)
         self.assertIn("resolution_marker_utc=", result.stdout)
 
     def test_scratch_curiosity_canary_refuses_existing_path(self):
