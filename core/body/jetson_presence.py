@@ -56,3 +56,29 @@ def parse_label(raw: object) -> JetsonPresenceReading | None:
         sensor_state=sensor_state,
         observed_at=observed_at,
     )
+
+
+def effective_state(
+    reading: JetsonPresenceReading | None,
+    *,
+    received_at: float | None,
+    now: float,
+    stale_after: float,
+) -> tuple[str, str]:
+    """Return the host-authoritative (owner_present, sensor_state).
+
+    Honesty rules, in precedence order:
+      1. No reading / never received -> (unknown, unavailable).
+      2. No fresh label within `stale_after` of host `received_at` -> (unknown, stale).
+         Sensor silence is NEVER read as `absent`.
+      3. A fresh `curtained` label outranks all other fresh states -> (unknown, curtained).
+      4. Otherwise pass the fresh label through.
+    `now` and `received_at` are host clock seconds; the Jetson's own ts is never used here.
+    """
+    if reading is None or received_at is None:
+        return ("unknown", "unavailable")
+    if (now - received_at) > stale_after:
+        return ("unknown", "stale")
+    if reading.sensor_state == "curtained":
+        return ("unknown", "curtained")
+    return (reading.owner_present, reading.sensor_state)

@@ -64,5 +64,41 @@ class ParseLabelTests(unittest.TestCase):
         self.assertIsNotNone(r)
 
 
+from core.body.jetson_presence import effective_state
+
+DEFAULT_STALE_AFTER_SECONDS = 180
+
+
+class EffectiveStateTests(unittest.TestCase):
+    def _reading(self, owner_present="present", sensor_state="available"):
+        return JetsonPresenceReading(owner_present, "high", sensor_state, "2026-06-29T19:00:00+00:00")
+
+    def test_fresh_present_passes_through(self):
+        owner, sensor = effective_state(self._reading(), received_at=1000.0, now=1010.0, stale_after=180)
+        self.assertEqual((owner, sensor), ("present", "available"))
+
+    def test_fresh_absent_passes_through(self):
+        owner, sensor = effective_state(self._reading(owner_present="absent"), received_at=1000.0, now=1010.0, stale_after=180)
+        self.assertEqual((owner, sensor), ("absent", "available"))
+
+    def test_stale_becomes_unknown_never_absent(self):
+        # received 200s ago, window 180 -> stale
+        owner, sensor = effective_state(self._reading(owner_present="present"), received_at=1000.0, now=1200.0, stale_after=180)
+        self.assertEqual(sensor, "stale")
+        self.assertEqual(owner, "unknown")  # the load-bearing rule: NOT "absent"
+
+    def test_stale_overrides_even_an_absent_label(self):
+        owner, sensor = effective_state(self._reading(owner_present="absent"), received_at=1000.0, now=1200.0, stale_after=180)
+        self.assertEqual((owner, sensor), ("unknown", "stale"))
+
+    def test_fresh_curtained_outranks(self):
+        owner, sensor = effective_state(self._reading(owner_present="unknown", sensor_state="curtained"), received_at=1000.0, now=1010.0, stale_after=180)
+        self.assertEqual((owner, sensor), ("unknown", "curtained"))
+
+    def test_no_reading_is_unavailable_unknown(self):
+        owner, sensor = effective_state(None, received_at=None, now=1010.0, stale_after=180)
+        self.assertEqual((owner, sensor), ("unknown", "unavailable"))
+
+
 if __name__ == "__main__":
     unittest.main()
