@@ -25,6 +25,17 @@ rsync -av --delete \
   --exclude '*' \
   "$HERE/jetson_presence/" "$JETSON:$DEST/jetson_presence/"
 
+# B1a: also deploy the model setup script + the TRACKED manifest (never the artifacts).
+# The trailing `--exclude '*'` means ONLY the allowlisted paths cross; *.onnx/*.engine
+# never match an --include, so they are structurally excluded.
+rsync -av \
+  --include 'setup_models.sh' \
+  --include 'models/' \
+  --include 'models/manifest.json' \
+  --exclude '*' \
+  "$HERE/" "$JETSON:$DEST/"
+echo "Deployed setup_models.sh + models/manifest.json (artifacts excluded by allowlist)."
+
 echo "Deployed source to $JETSON:$DEST/jetson_presence/"
 echo "Token + flag are provisioned on the Jetson env, NOT copied from the repo."
 echo "Run on device:  cd $DEST && MAEZ_JETSON_DEVICE_TOKEN=... python3 -m jetson_presence.run --once"
