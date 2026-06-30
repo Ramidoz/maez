@@ -52,7 +52,6 @@ Host imports the package via the existing `tests/_jetson_edge_path.py` helper (`
 
 ```python
 # tests/test_jetson_b1a_matcher.py
-import math
 import unittest
 import tests._jetson_edge_path  # noqa: F401
 from jetson_presence.b1a import matcher
@@ -102,7 +101,7 @@ import math
 
 
 def cosine_distance(a, b) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(y * y for y in b))
     if na == 0.0 or nb == 0.0:
@@ -221,7 +220,7 @@ def box_parity(onnx_box, onnx_score, trt_box, trt_score) -> bool:
 
 
 def _cosine_sim(a, b) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(y * y for y in b))
     if na == 0.0 or nb == 0.0:
