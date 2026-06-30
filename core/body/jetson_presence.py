@@ -17,6 +17,10 @@ _OWNER_PRESENT = frozenset({"present", "absent", "unknown"})
 _CONFIDENCE = frozenset({"low", "medium", "high"})
 _SENSOR_STATE_WIRE = frozenset({"available", "unavailable", "curtained", "unenrolled", "error"})
 
+# Only the contract crosses: the wire payload's key set must be EXACTLY these.
+# Any extra (visitor/raw-media/spatial) OR missing key rejects the label.
+_ALLOWED_KEYS = frozenset({"owner_present", "confidence", "sensor_state", "ts", "schema_version"})
+
 
 @dataclass(frozen=True)
 class JetsonPresenceReading:
@@ -29,6 +33,9 @@ class JetsonPresenceReading:
 def parse_label(raw: object) -> JetsonPresenceReading | None:
     """Validate a raw payload into a reading, or return None if malformed."""
     if not isinstance(raw, dict):
+        return None
+    # Strict key-set: only the contract crosses — no visitor/raw-media/spatial fields.
+    if set(raw.keys()) != _ALLOWED_KEYS:
         return None
     if raw.get("schema_version") != SCHEMA_VERSION:
         return None

@@ -63,6 +63,15 @@ class ParseLabelTests(unittest.TestCase):
         r = parse_label(self._valid() | {"owner_present": "present", "sensor_state": "available"})
         self.assertIsNotNone(r)
 
+    def test_extra_forbidden_fields_rejected(self):
+        # Covenant rail: only the contract crosses — no visitor/raw-media/spatial fields.
+        # A valid 5-key payload still parses...
+        self.assertIsNotNone(parse_label(self._valid()))
+        # ...but any extra key (even alongside the full valid set) is rejected.
+        for extra in ("other_person_present", "face_embedding", "frame_b64", "coordinates"):
+            with self.subTest(extra=extra):
+                self.assertIsNone(parse_label(self._valid() | {extra: "x"}))
+
 
 from core.body.jetson_presence import effective_state
 
