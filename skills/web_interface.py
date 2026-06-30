@@ -28,6 +28,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 from core.infra.secrets import (
+    get_secret,
     load_ordinary_config_for_process,
     load_secrets_for_process,
     sanitize_env,
@@ -36,7 +37,12 @@ from core.infra.secrets import (
 load_ordinary_config_for_process()
 load_secrets_for_process(
     required={"MAEZ_IPHONE_INGEST_TOKEN"},
-    optional={"LANGFUSE_SECRET_KEY", "MAEZ_GITHUB_TOKEN", "S7_INTERNAL_CHANNEL_TOKEN"},
+    optional={
+        "LANGFUSE_SECRET_KEY",
+        "MAEZ_GITHUB_TOKEN",
+        "S7_INTERNAL_CHANNEL_TOKEN",
+        "MAEZ_JETSON_DEVICE_TOKEN",
+    },
     populate_environ=True,
 )
 
@@ -9792,11 +9798,16 @@ def _jetson_device_auth_ok() -> bool:
     """Authenticate a Jetson edge device by a dedicated device token.
 
     Separate secret from S7_INTERNAL_CHANNEL_TOKEN (owner-authority) by design.
-    Fails closed when the token env is unset. Constant-time comparison.
+    Fails closed when the token is unset. Constant-time comparison.
+
+    Reads the loaded secret store FIRST (the production path: the new loader keeps the
+    token only if it is in load_secrets_for_process's optional set — see import-time call).
+    Falls back to os.environ as a backstop, because get_secret does NOT consult os.environ
+    on the non-rollback store path, and an env-provided token must still authenticate.
     """
     import hmac
 
-    configured = (os.environ.get("MAEZ_JETSON_DEVICE_TOKEN") or "").strip()
+    configured = (get_secret("MAEZ_JETSON_DEVICE_TOKEN") or os.environ.get("MAEZ_JETSON_DEVICE_TOKEN") or "").strip()
     if not configured:
         return False
     presented = (request.headers.get("X-Maez-Jetson-Token") or "").strip()

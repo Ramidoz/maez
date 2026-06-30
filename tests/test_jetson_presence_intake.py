@@ -1,5 +1,7 @@
 # tests/test_jetson_presence_intake.py
 import os
+import subprocess
+import sys
 import unittest
 from unittest import mock
 
@@ -129,6 +131,64 @@ class FreshnessWitnessTests(unittest.TestCase):
             owner, sensor = self.web._JETSON_PRESENCE_STORE.current(now=received_at + 10_000)
             self.assertEqual((owner, sensor), ("unknown", "stale"))
             self.assertNotEqual(owner, "absent")
+
+
+class RealSecretsImportRegressionTests(unittest.TestCase):
+    """The mock-patched DeviceAuthTests front-load the import before clear=True, so they
+    CANNOT catch the device token being purged at import. This drives the REAL import +
+    secrets-load path in a fresh subprocess.
+
+    The production loader (non-rollback) reads MAEZ_JETSON_DEVICE_TOKEN from the
+    secrets.local.env file, but only if the name is in the optional set (it gates the
+    `_parse_env_file` allowed-names filter); names absent from required|optional are
+    dropped at parse and then purged from os.environ, so `get_secret` returns None and
+    auth fails closed (401). With the name in optional, the token is loaded, survives the
+    purge, and `get_secret` returns it -> auth passes (200).
+
+    Hermetic: a temp config dir (MAEZ_CONFIG) holds a stand-in secrets.local.env so the
+    import-time load runs against it; no real config/services are touched. This exercises
+    the genuine import path (NOT a hand-rolled re-load), so it is sensitive to both the
+    optional-set entry and get_secret.
+    """
+
+    def test_device_token_survives_real_secrets_import(self):
+        import tempfile
+        known_token = "jetson-device-token-xyz"
+        td = tempfile.mkdtemp(prefix="jetson_secret_")
+        with open(os.path.join(td, "secrets.local.env"), "w") as fh:
+            fh.write("MAEZ_IPHONE_INGEST_TOKEN=dummy-required-token\n")
+            fh.write("MAEZ_JETSON_DEVICE_TOKEN=%s\n" % known_token)
+        # The subprocess does NOT re-load secrets — it relies entirely on web_interface's
+        # import-time load reading MAEZ_CONFIG/secrets.local.env, then POSTs to the endpoint.
+        code = (
+            "import skills.web_interface as web\n"
+            "from core.body.jetson_presence_store import JetsonPresenceStore\n"
+            "web._JETSON_PRESENCE_STORE = JetsonPresenceStore()\n"
+            "c = web.app.test_client()\n"
+            "body = {'owner_present': 'present', 'confidence': 'high',\n"
+            "        'sensor_state': 'available', 'ts': '2026-06-29T19:00:00+00:00',\n"
+            "        'schema_version': 'jetson_presence.v0'}\n"
+            "r = c.post('/api/v1/presence/jetson/intake', json=body,\n"
+            "           headers={'X-Maez-Jetson-Token': %r})\n"
+            "print(r.status_code)\n" % known_token
+        )
+        env = dict(os.environ)  # carry PATH/HOME/PYTHONPATH-style essentials
+        env.update({
+            "MAEZ_CONFIG": td,  # hermetic stand-in for config/ (holds secrets.local.env)
+            "MAEZ_JETSON_PRESENCE_SHADOW": "1",
+        })
+        # Token must come via the file, not the env, to prove the real load path keeps it.
+        env.pop("MAEZ_JETSON_DEVICE_TOKEN", None)
+        env.pop("MAEZ_IPHONE_INGEST_TOKEN", None)
+        proc = subprocess.run(
+            [sys.executable, "-B", "-c", code],
+            env=env, capture_output=True, text=True, timeout=120,
+        )
+        self.assertEqual(
+            proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else "",
+            "200",
+            msg=f"stdout={proc.stdout!r} stderr={proc.stderr!r}",
+        )
 
 
 if __name__ == "__main__":
