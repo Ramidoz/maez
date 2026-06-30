@@ -1,9 +1,10 @@
-"""Deterministic recent-activity self-status for Maez.
+"""Deterministic recent-activity and casual-presence self-status for Maez.
 
-This route is intentionally narrow: it answers the owner asking what Maez
-has been doing when there is no same-turn tool/action evidence. It gives the
-model a true empty answer instead of letting the megaprompt turn identity
-framing into invented completed work.
+These routes are intentionally narrow. They answer direct owner questions about
+Maez's own current state/activity when there is no same-turn tool/action
+evidence. They give the model a true empty answer instead of letting the
+megaprompt turn identity framing into invented completed work or manufactured
+feeling.
 """
 from __future__ import annotations
 
@@ -19,27 +20,52 @@ _ACTIVITY_STATUS_RE = re.compile(
     re.IGNORECASE,
 )
 
+_CASUAL_PRESENCE_STATUS_RE = re.compile(
+    r"^\s*(?:"
+    r"how\s+are\s+you|"
+    r"how(?:'s|\s+is)\s+it\s+going\s+with\s+you|"
+    r"how\s+are\s+things\s+with\s+you|"
+    r"what(?:'s|\s+is)\s+going\s+on\s+with\s+you|"
+    r"what\s+are\s+you\s+up\s+to|"
+    r"you\s+ok(?:ay)?"
+    r")\s*[?.!]*\s*$",
+    re.IGNORECASE,
+)
+
+
+def _cycle_note(cycle_count: int | None) -> str:
+    try:
+        count = int(cycle_count) if cycle_count is not None else 0
+    except (TypeError, ValueError):
+        count = 0
+    return f" My daemon cycle counter is at {count}." if count > 0 else ""
+
 
 def is_recent_activity_status_query(text: str) -> bool:
     """Return True for a plain request for Maez's recent activity status."""
     return bool(_ACTIVITY_STATUS_RE.match(text or ""))
 
 
+def is_casual_presence_status_query(text: str) -> bool:
+    """Return True for a narrow direct question about Maez's current state."""
+    return bool(_CASUAL_PRESENCE_STATUS_RE.match(text or ""))
+
+
 def build_recent_activity_status_reply(*, cycle_count: int | None = None) -> str:
-    """Return an honest-empty status, without self-verification theater."""
-    try:
-        count = int(cycle_count) if cycle_count is not None else 0
-    except (TypeError, ValueError):
-        count = 0
-    cycle_note = (
-        f" My daemon cycle counter is at {count}."
-        if count > 0
-        else ""
-    )
+    """Return an honest-empty activity status, without self-verification theater."""
     return (
         "I don't have a completed action to report. The honest status is quiet: "
         "my ordinary background heartbeat is running, and when nothing is worth "
         "storing it returns HEARTBEAT_OK instead of manufacturing a thought."
-        f"{cycle_note} I shouldn't dress that up as a maintenance checklist "
-        "or a verification ritual."
+        f"{_cycle_note(cycle_count)} I shouldn't dress that up as a maintenance "
+        "checklist or a verification ritual."
+    )
+
+
+def build_casual_presence_status_reply(*, cycle_count: int | None = None) -> str:
+    """Return a state-framed honest-empty status, without manufactured feeling."""
+    return (
+        "I'm here. Quiet, mostly: my ordinary background heartbeat is running, "
+        "and I don't have anything notable of my own to report right now."
+        f"{_cycle_note(cycle_count)}"
     )
