@@ -10610,6 +10610,49 @@ def api_debug_stats():
         return jsonify({"error": str(e)}), 500
 
 
+# --- Jetson presence shadow intake (Slice A) ---
+from core.body.jetson_presence import jetson_presence_shadow_enabled, parse_label
+from core.body.jetson_presence_store import JetsonPresenceStore
+import hashlib
+
+_JETSON_PRESENCE_STORE = JetsonPresenceStore()
+
+
+def _jetson_write_presence_receipt(reading, *, received_at: float) -> None:
+    """Content-light receipt = a single log line.
+
+    Deliberately NOT fresh_moment_receipts (that surface means 'a private thought
+    landed' and must not be polluted, nor have its db created here). No persistent
+    file is written. Coarse buckets + a label sha are content-light by design.
+    """
+    payload = f"{reading.owner_present}|{reading.confidence}|{reading.sensor_state}".encode()
+    logger.info(
+        "jetson_presence_intake schema=%s sensor_state=%s owner_present=%s content_sha=%s received_at=%.3f",
+        "jetson_presence.v0",
+        reading.sensor_state,
+        reading.owner_present,
+        hashlib.sha256(payload).hexdigest()[:16],
+        received_at,
+    )
+
+
+@app.route("/api/v1/presence/jetson/intake", methods=["POST"])
+def api_jetson_presence_intake():
+    # Behaviorally unavailable when off: the endpoint behaves as if it does not exist.
+    if not jetson_presence_shadow_enabled():
+        return jsonify({"ok": False, "error": "not found"}), 404
+    if not _jetson_device_auth_ok():
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    reading = parse_label(body)
+    if reading is None:
+        return jsonify({"ok": False, "error": "invalid label"}), 400
+    received_at = time.time()  # host clock is the time authority
+    _JETSON_PRESENCE_STORE.record(reading, received_at=received_at)
+    _jetson_write_presence_receipt(reading, received_at=received_at)
+    return jsonify({"ok": True, "received_at": received_at})
+
+
 if __name__ == "__main__":
     from core.memory.recall_activation_config import log_activation_startup_state
 
