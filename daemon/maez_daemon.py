@@ -7390,7 +7390,6 @@ class MaezDaemon:
                 _recall_status_reply is None
                 and _is_identity_question(text)
                 and not authoritative_tool_reply
-                and not transcript_context
                 and not (web_context or "").strip()
             ):
                 try:
@@ -7420,7 +7419,6 @@ class MaezDaemon:
                 _recall_status_reply is None
                 and _identity_status_reply is None
                 and not authoritative_tool_reply
-                and not transcript_context
                 and not (web_context or "").strip()
             ):
                 _protected_refusal_followup_reply = _protected_refusal_followup(
@@ -7448,7 +7446,6 @@ class MaezDaemon:
                 _recall_status_reply is None
                 and _is_recent_activity_status_query(text)
                 and not authoritative_tool_reply
-                and not transcript_context
                 and not (web_context or "").strip()
             ):
                 _recent_activity_status_reply = _build_recent_activity_status_reply(

@@ -163,6 +163,27 @@ class TelegramIdentityRefusalDaemonTests(unittest.TestCase):
         self.assertNotIn("system-prompt", lowered)
         self.assertNotIn("system prompt", lowered)
 
+    def test_identity_question_ignores_dispatcher_transcript_context(self):
+        from daemon import maez_daemon
+
+        daemon = self._daemon()
+        with self._message_stack(maez_daemon):
+            reply = maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                "Who are you?",
+                source="telegram_surface",
+                chat_id="c1",
+                chat_history=[],
+                transcript="[memory evidence] Recent dialogue anchor: prior chat",
+            )
+
+        self.assertIn("I'm Maez", reply)
+        lowered = reply.lower()
+        self.assertNotIn("trust covenant", lowered)
+        self.assertNotIn("hard constraints", lowered)
+        self.assertNotIn("system-prompt", lowered)
+        self.assertNotIn("system prompt", lowered)
+
     def test_protected_refusal_followup_returns_deterministic_explanation_without_llm(self):
         from daemon import maez_daemon
 
@@ -190,6 +211,54 @@ class TelegramIdentityRefusalDaemonTests(unittest.TestCase):
         lowered = reply.lower()
         self.assertNotIn("trust covenant", lowered)
         self.assertNotIn("system-prompt", lowered)
+
+    def test_protected_refusal_followup_ignores_dispatcher_transcript_context(self):
+        from daemon import maez_daemon
+
+        daemon = self._daemon()
+        history = [
+            {
+                "content": (
+                    "Rohit: who are you?\n"
+                    "Maez: [Maez declined to quote its private instructions.]"
+                ),
+            }
+        ]
+        with self._message_stack(maez_daemon):
+            reply = maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                "What does that mean?",
+                source="telegram_surface",
+                chat_id="c1",
+                chat_history=history,
+                transcript="[memory evidence] Recent dialogue anchor: prior chat",
+            )
+
+        self.assertIn("private instructions", reply)
+        self.assertIn("ordinary words", reply)
+        lowered = reply.lower()
+        self.assertNotIn("trust covenant", lowered)
+        self.assertNotIn("system-prompt", lowered)
+
+    def test_recent_activity_status_ignores_dispatcher_transcript_context(self):
+        from daemon import maez_daemon
+
+        daemon = self._daemon()
+        with self._message_stack(maez_daemon):
+            reply = maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                "What are the things you did?",
+                source="telegram_surface",
+                chat_id="c1",
+                chat_history=[],
+                transcript="[memory evidence] Recent dialogue anchor: prior chat",
+            )
+
+        self.assertIn("honest status is quiet", reply)
+        self.assertIn("HEARTBEAT_OK", reply)
+        lowered = reply.lower()
+        self.assertNotIn("verification ritual", lowered.split("i shouldn't", 1)[0])
+        self.assertNotIn("trust covenant", lowered)
 
 
 if __name__ == "__main__":
