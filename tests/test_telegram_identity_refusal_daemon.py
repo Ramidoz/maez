@@ -260,6 +260,99 @@ class TelegramIdentityRefusalDaemonTests(unittest.TestCase):
         self.assertNotIn("verification ritual", lowered.split("i shouldn't", 1)[0])
         self.assertNotIn("trust covenant", lowered)
 
+    def test_casual_presence_status_returns_deterministic_reply_without_llm_or_focused(self):
+        from daemon import maez_daemon
+
+        daemon = self._daemon()
+        with self._message_stack(maez_daemon):
+            with mock.patch(
+                "core.routing.focused_cognition.focused_synthesize",
+                side_effect=AssertionError("casual presence route should not call focused"),
+            ):
+                with self.assertLogs("maez", level="INFO") as logs:
+                    reply = maez_daemon.MaezDaemon.handle_message(
+                        daemon,
+                        "How are you?",
+                        source="telegram_surface",
+                        chat_id="c1",
+                        chat_history=[],
+                    )
+
+        self.assertIn("I'm here", reply)
+        self.assertIn("ordinary background heartbeat", reply)
+        self.assertIn("7", reply)
+        self.assertNotIn("completed action", reply.lower())
+        self.assertFalse(reply.rstrip().endswith("?"))
+        lowered = reply.lower()
+        for phrase in (
+            "i'm good",
+            "i'm great",
+            "ready to help",
+            "runtime health",
+            "diagnostic",
+            "identity confirmation",
+            "partnership model",
+            "trust covenant",
+            "what's on your mind",
+            "how about you",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertNotIn(phrase, lowered)
+
+        joined = "\n".join(logs.output)
+        self.assertIn(
+            "casual_presence_status source=telegram_surface state=honest_empty class=state",
+            joined,
+        )
+
+    def test_casual_presence_status_ignores_dispatcher_transcript_context(self):
+        from daemon import maez_daemon
+
+        daemon = self._daemon()
+        with self._message_stack(maez_daemon):
+            with mock.patch(
+                "core.routing.focused_cognition.focused_synthesize",
+                side_effect=AssertionError("casual presence route should not call focused"),
+            ):
+                reply = maez_daemon.MaezDaemon.handle_message(
+                    daemon,
+                    "What are you up to?",
+                    source="telegram_surface",
+                    chat_id="c1",
+                    chat_history=[],
+                    transcript="[memory evidence] Recent dialogue anchor: prior chat",
+                )
+
+        self.assertIn("I'm here", reply)
+        self.assertIn("ordinary background heartbeat", reply)
+        self.assertNotIn("completed action", reply.lower())
+
+    def test_casual_presence_status_guard_yields_to_tool_and_web(self):
+        import inspect
+        from daemon import maez_daemon
+
+        body_src = inspect.getsource(maez_daemon.MaezDaemon.handle_message)
+        marker = "is_casual_presence_status_query"
+        self.assertIn(marker, body_src)
+        start = body_src.index(marker)
+        guard_src = body_src[start: body_src.index("logger.info(", start)]
+
+        self.assertIn("not authoritative_tool_reply", guard_src)
+        self.assertIn('not (web_context or "").strip()', guard_src)
+        self.assertNotIn("transcript_context", guard_src)
+
+    def test_casual_presence_status_dispatch_precedes_focused(self):
+        import inspect
+        from daemon import maez_daemon
+
+        body_src = inspect.getsource(maez_daemon.MaezDaemon.handle_message)
+        i_presence = body_src.find("_casual_presence_status_reply is not None")
+        i_focused = body_src.find("_reply_decision.mode is ReplyMode.FOCUSED")
+
+        self.assertGreaterEqual(i_presence, 0)
+        self.assertGreaterEqual(i_focused, 0)
+        self.assertLess(i_presence, i_focused)
+
 
 if __name__ == "__main__":
     unittest.main()
