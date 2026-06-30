@@ -11,3 +11,13 @@ token
 *.secret
 __pycache__/
 *.pyc
+
+# B1a models: the root .gitignore ignores any `models/`, which would also hide this
+# device's TRACKED model manifest. Re-include the dir, then keep the heavy build
+# artifacts Jetson-local (never committed):
+!models/
+models/*.onnx
+models/*.engine
+models/*.plan
+models/*.npz
+models/*.npy

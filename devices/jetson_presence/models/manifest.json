@@ -1,0 +1,23 @@
+{
+  "schema": "jetson_b1a_models.v0",
+  "models": [
+    {
+      "name": "scrfd_500m",
+      "source_url": "https://github.com/deepinsight/insightface/releases/download/v0.7/scrfd_500m.onnx",
+      "sha256": "PENDING_LOCK",
+      "license": "MIT (InsightFace)",
+      "input_shape": [1, 3, 640, 640],
+      "precision": "fp32",
+      "engine_path": "models/scrfd_500m.fp32.engine"
+    },
+    {
+      "name": "arcface_w600k_r50",
+      "source_url": "https://github.com/deepinsight/insightface/releases/download/v0.7/w600k_r50.onnx",
+      "sha256": "PENDING_LOCK",
+      "license": "MIT (InsightFace)",
+      "input_shape": [1, 3, 112, 112],
+      "precision": "fp32",
+      "engine_path": "models/arcface_w600k_r50.fp32.engine"
+    }
+  ]
+}
