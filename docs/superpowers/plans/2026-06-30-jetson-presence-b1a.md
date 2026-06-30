@@ -251,7 +251,6 @@ git commit -m "feat(jetson-b1a): pure parity metrics (IoU/box/embedding) + tests
 ```python
 # tests/test_jetson_b1a_manifest.py
 import hashlib
-import json
 import os
 import tempfile
 import unittest
@@ -389,9 +388,22 @@ def verify_sha256(file_path: str, expected_hex: str) -> bool:
 - [ ] **Step 4: Run → PASS.** The shipped `sha256: "PENDING_LOCK"` is correct-by-design: the schema test checks fields exist; `verify_sha256` is tested on synthetic files; `hashes_locked()` proves the unlocked manifest cannot pass the build gate. Real hashes are computed by `lock-hashes` on the device, then committed.
 - [ ] **Step 5: Commit**
 
+**Gitignore note (folded into THIS task):** the repo root `.gitignore` has an unanchored `models/` rule that prunes `devices/jetson_presence/models/` — so the tracked manifest would be silently ignored. This task's commit must also append to `devices/jetson_presence/.gitignore` a re-include block (verified with `git check-ignore`):
+
+```gitignore
+# B1a models: root .gitignore ignores any `models/`, which would also hide this
+# device's TRACKED manifest. Re-include the dir, keep heavy artifacts Jetson-local:
+!models/
+models/*.onnx
+models/*.engine
+models/*.plan
+models/*.npz
+models/*.npy
+```
+
 ```bash
-git add devices/jetson_presence/models/manifest.json devices/jetson_presence/jetson_presence/b1a/manifest.py tests/test_jetson_b1a_manifest.py
-git commit -m "feat(jetson-b1a): model manifest + sha256 verify (artifacts gitignored)"
+git add devices/jetson_presence/models/manifest.json devices/jetson_presence/jetson_presence/b1a/manifest.py tests/test_jetson_b1a_manifest.py devices/jetson_presence/.gitignore
+git commit -m "feat(jetson-b1a): model manifest + sha256 verify + hash-lock gate (manifest tracked, artifacts gitignored)"
 ```
 
 ---
@@ -538,16 +550,7 @@ rsync -av \
 echo "Deployed setup_models.sh + models/manifest.json (artifacts excluded by allowlist)."
 ```
 
-- [ ] **Step 2: Extend `.gitignore`** — append:
-
-```gitignore
-# B1a model artifacts (Jetson-local, device-specific; never committed):
-*.onnx
-*.engine
-*.plan
-*.npz
-*.npy
-```
+- [ ] **Step 2: `.gitignore` — already done in Task 3.** The artifact globs + the `!models/` re-include (so the tracked manifest survives the root `models/` prune) landed with the manifest commit. Nothing to add here; just confirm `git check-ignore devices/jetson_presence/models/scrfd_500m.onnx` reports ignored and `...manifest.json` does not.
 
 - [ ] **Step 3: Write the two-phase `setup_models.sh`** (beside `deploy.sh`). **`lock-hashes` downloads + computes + records hashes and EXITS without compiling; `build` refuses unless every hash is locked, verifies each ONNX against its pinned hash, then compiles.** No engine is ever built from an unverified download (no TOFU):
 
@@ -660,8 +663,8 @@ Run: `bash -n devices/jetson_presence/deploy.sh devices/jetson_presence/setup_mo
 - [ ] **Step 5: Commit**
 
 ```bash
-git add devices/jetson_presence/deploy.sh devices/jetson_presence/.gitignore devices/jetson_presence/setup_models.sh
-git commit -m "feat(jetson-b1a): deploy manifest+setup, two-phase lock-hashes/build, gitignore artifacts"
+git add devices/jetson_presence/deploy.sh devices/jetson_presence/setup_models.sh
+git commit -m "feat(jetson-b1a): deploy manifest+setup, two-phase lock-hashes/build"
 ```
 
 > **DEVICE-BUILD NOTE (Tasks 6–7):** the remaining files contain **TensorRT inference internals that depend on the real model output layout** and cannot be honestly pre-written blind. They are implemented **on the device against the pulled models**, using the InsightFace ONNX models as the decode reference. The plan fixes their *interfaces*, their *covenant constraints*, and their *device witnesses*; the implementer writes the bodies with the models in front of them and keeps the structural guards (Task 4) green.
