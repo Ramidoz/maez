@@ -100,5 +100,24 @@ class EffectiveStateTests(unittest.TestCase):
         self.assertEqual((owner, sensor), ("unknown", "unavailable"))
 
 
+import os
+from unittest import mock
+from core.body.jetson_presence import jetson_presence_shadow_enabled
+
+
+class FlagTests(unittest.TestCase):
+    def test_default_off(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertFalse(jetson_presence_shadow_enabled())
+
+    def test_on_when_truthy(self):
+        with mock.patch.dict(os.environ, {"MAEZ_JETSON_PRESENCE_SHADOW": "1"}, clear=True):
+            self.assertTrue(jetson_presence_shadow_enabled())
+
+    def test_off_when_zero(self):
+        with mock.patch.dict(os.environ, {"MAEZ_JETSON_PRESENCE_SHADOW": "0"}, clear=True):
+            self.assertFalse(jetson_presence_shadow_enabled())
+
+
 if __name__ == "__main__":
     unittest.main()

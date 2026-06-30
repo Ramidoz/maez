@@ -82,3 +82,10 @@ def effective_state(
     if reading.sensor_state == "curtained":
         return ("unknown", "curtained")
     return (reading.owner_present, reading.sensor_state)
+
+
+def jetson_presence_shadow_enabled() -> bool:
+    """Default-off shadow flag. Behaviorally-unavailable-off: callers must skip all work when False."""
+    from core.infra.env_flags import strict_env_flag
+
+    return strict_env_flag("MAEZ_JETSON_PRESENCE_SHADOW")
