@@ -589,6 +589,15 @@ After merge + restart:
 4. Send `I'm bored with gadgets`
    - Expect no deterministic self-status intercept.
 
+## Follow-On Honesty Note
+
+The v0 state reply may say there is "nothing notable" because v0 has no
+salient-recent source beyond the existing heartbeat/cycle-count substrate. When
+future enrichment wires a real salient-recent source, that absence claim must
+become conditional on actually checking that source, or be softened to "nothing
+I'm actively surfacing." The fix that removes invented substance must not create
+the opposite lie: under-reporting a real recent inner event.
+
 ## Self-Review
 
 Spec coverage:
