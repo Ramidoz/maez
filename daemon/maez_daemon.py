@@ -7243,6 +7243,7 @@ class MaezDaemon:
         _recall_shadow_attempt = False
         _recall_status_reply = None
         _recent_activity_status_reply = None
+        _casual_presence_status_reply = None
         _identity_status_reply = None
         _protected_refusal_followup_reply = None
         _receipt_box = None
@@ -7438,11 +7439,26 @@ class MaezDaemon:
 
         try:
             from core.routing.recent_activity_status import (
+                build_casual_presence_status_reply as _build_casual_presence_status_reply,
                 build_recent_activity_status_reply as _build_recent_activity_status_reply,
+                is_casual_presence_status_query as _is_casual_presence_status_query,
                 is_recent_activity_status_query as _is_recent_activity_status_query,
             )
 
             if (
+                _recall_status_reply is None
+                and _is_casual_presence_status_query(text)
+                and not authoritative_tool_reply
+                and not (web_context or "").strip()
+            ):
+                _casual_presence_status_reply = _build_casual_presence_status_reply(
+                    cycle_count=getattr(self, "cycle_count", None),
+                )
+                logger.info(
+                    "casual_presence_status source=%s state=honest_empty class=state",
+                    source,
+                )
+            elif (
                 _recall_status_reply is None
                 and _is_recent_activity_status_query(text)
                 and not authoritative_tool_reply
@@ -7469,6 +7485,9 @@ class MaezDaemon:
             _reply_path = ReplyPath.SELF_STATUS
         elif _protected_refusal_followup_reply is not None:
             reply = _protected_refusal_followup_reply
+            _reply_path = ReplyPath.SELF_STATUS
+        elif _casual_presence_status_reply is not None:
+            reply = _casual_presence_status_reply
             _reply_path = ReplyPath.SELF_STATUS
         elif _recent_activity_status_reply is not None:
             reply = _recent_activity_status_reply
