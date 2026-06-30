@@ -107,5 +107,29 @@ class IntakeEndpointTests(unittest.TestCase):
                 fake_store.assert_not_called()  # the private-thought db is never instantiated
 
 
+class FreshnessWitnessTests(unittest.TestCase):
+    def setUp(self):
+        import skills.web_interface as web
+        self.web = web
+        self.web._JETSON_PRESENCE_STORE = JetsonPresenceStore()  # isolate store per test
+        self.client = web.app.test_client()
+
+    def test_silence_after_present_becomes_stale_not_absent(self):
+        env = {"MAEZ_JETSON_PRESENCE_SHADOW": "1", "MAEZ_JETSON_DEVICE_TOKEN": "secret"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            body = {"owner_present": "present", "confidence": "high",
+                    "sensor_state": "available", "ts": "2026-06-29T19:00:00+00:00",
+                    "schema_version": "jetson_presence.v0"}
+            resp = self.client.post("/api/v1/presence/jetson/intake", json=body,
+                                    headers={"X-Maez-Jetson-Token": "secret"})
+            received_at = resp.get_json()["received_at"]
+            # Fresh read: present
+            self.assertEqual(self.web._JETSON_PRESENCE_STORE.current(now=received_at + 1)[0], "present")
+            # Silence past the window: stale/unknown, NEVER absent
+            owner, sensor = self.web._JETSON_PRESENCE_STORE.current(now=received_at + 10_000)
+            self.assertEqual((owner, sensor), ("unknown", "stale"))
+            self.assertNotEqual(owner, "absent")
+
+
 if __name__ == "__main__":
     unittest.main()
