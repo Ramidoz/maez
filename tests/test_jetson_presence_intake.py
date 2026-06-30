@@ -14,12 +14,19 @@ import skills.web_interface  # noqa: E402,F401
 
 
 class DeviceAuthTests(unittest.TestCase):
-    def _auth(self, headers: dict):
+    def setUp(self):
         import skills.web_interface as web
+
+        self.web = web
+        self.secret_patch = mock.patch.object(web, "get_secret", return_value=None)
+        self.secret_patch.start()
+        self.addCleanup(self.secret_patch.stop)
+
+    def _auth(self, headers: dict):
         fake_req = mock.Mock()
         fake_req.headers = headers
-        with mock.patch.object(web, "request", fake_req):
-            return web._jetson_device_auth_ok()
+        with mock.patch.object(self.web, "request", fake_req):
+            return self.web._jetson_device_auth_ok()
 
     def test_correct_token_ok(self):
         with mock.patch.dict(os.environ, {"MAEZ_JETSON_DEVICE_TOKEN": "secret-abc"}, clear=True):
@@ -44,14 +51,20 @@ from core.body.jetson_presence_store import JetsonPresenceStore
 class IntakeEndpointTests(unittest.TestCase):
     def setUp(self):
         import skills.web_interface as web
+
         self.web = web
         self.web._JETSON_PRESENCE_STORE = JetsonPresenceStore()  # isolate store per test
+        self.secret_patch = mock.patch.object(self.web, "get_secret", return_value=None)
+        self.secret_patch.start()
+        self.addCleanup(self.secret_patch.stop)
         self.client = web.app.test_client()
 
     def _valid_body(self):
         return {
-            "owner_present": "present", "confidence": "high",
-            "sensor_state": "available", "ts": "2026-06-29T19:00:00+00:00",
+            "owner_present": "present",
+            "confidence": "high",
+            "sensor_state": "available",
+            "ts": "2026-06-29T19:00:00+00:00",
             "schema_version": "jetson_presence.v0",
         }
 
@@ -61,50 +74,65 @@ class IntakeEndpointTests(unittest.TestCase):
                 resp = self.client.post("/api/v1/presence/jetson/intake", json=self._valid_body())
                 self.assertEqual(resp.status_code, 404)
                 receipt.assert_not_called()
-                self.assertEqual(self.web._JETSON_PRESENCE_STORE.current(now=0.0), ("unknown", "unavailable"))
+                self.assertEqual(
+                    self.web._JETSON_PRESENCE_STORE.current(now=0.0), ("unknown", "unavailable")
+                )
 
     def test_bad_token_401_mutates_nothing(self):
         env = {"MAEZ_JETSON_PRESENCE_SHADOW": "1", "MAEZ_JETSON_DEVICE_TOKEN": "secret"}
         with mock.patch.dict(os.environ, env, clear=True):
             with mock.patch.object(self.web, "_jetson_write_presence_receipt") as receipt:
-                resp = self.client.post("/api/v1/presence/jetson/intake",
-                                        json=self._valid_body(),
-                                        headers={"X-Maez-Jetson-Token": "wrong"})
+                resp = self.client.post(
+                    "/api/v1/presence/jetson/intake",
+                    json=self._valid_body(),
+                    headers={"X-Maez-Jetson-Token": "wrong"},
+                )
                 self.assertEqual(resp.status_code, 401)
                 receipt.assert_not_called()
-                self.assertEqual(self.web._JETSON_PRESENCE_STORE.current(now=0.0), ("unknown", "unavailable"))
+                self.assertEqual(
+                    self.web._JETSON_PRESENCE_STORE.current(now=0.0), ("unknown", "unavailable")
+                )
 
     def test_valid_intake_stores_and_receipts(self):
         env = {"MAEZ_JETSON_PRESENCE_SHADOW": "1", "MAEZ_JETSON_DEVICE_TOKEN": "secret"}
         with mock.patch.dict(os.environ, env, clear=True):
             with mock.patch.object(self.web, "_jetson_write_presence_receipt") as receipt:
-                resp = self.client.post("/api/v1/presence/jetson/intake",
-                                        json=self._valid_body(),
-                                        headers={"X-Maez-Jetson-Token": "secret"})
+                resp = self.client.post(
+                    "/api/v1/presence/jetson/intake",
+                    json=self._valid_body(),
+                    headers={"X-Maez-Jetson-Token": "secret"},
+                )
                 self.assertEqual(resp.status_code, 200)
                 self.assertTrue(resp.get_json()["ok"])
                 receipt.assert_called_once()
                 # stored state is fresh present
-                owner, sensor = self.web._JETSON_PRESENCE_STORE.current(now=resp.get_json()["received_at"] + 1)
+                owner, sensor = self.web._JETSON_PRESENCE_STORE.current(
+                    now=resp.get_json()["received_at"] + 1
+                )
                 self.assertEqual(owner, "present")
 
     def test_malformed_body_is_400(self):
         env = {"MAEZ_JETSON_PRESENCE_SHADOW": "1", "MAEZ_JETSON_DEVICE_TOKEN": "secret"}
         with mock.patch.dict(os.environ, env, clear=True):
-            resp = self.client.post("/api/v1/presence/jetson/intake",
-                                    json={"owner_present": "maybe"},
-                                    headers={"X-Maez-Jetson-Token": "secret"})
+            resp = self.client.post(
+                "/api/v1/presence/jetson/intake",
+                json={"owner_present": "maybe"},
+                headers={"X-Maez-Jetson-Token": "secret"},
+            )
             self.assertEqual(resp.status_code, 400)
 
     def test_intake_does_not_touch_fresh_moment_receipts(self):
         """Covenant: presence intake must NEVER write to the private-thought surface."""
         import core.cognition.fresh_moment_receipts as fmr
+
         env = {"MAEZ_JETSON_PRESENCE_SHADOW": "1", "MAEZ_JETSON_DEVICE_TOKEN": "secret"}
         with mock.patch.dict(os.environ, env, clear=True):
             with mock.patch.object(fmr, "FreshMomentReceipts") as fake_store:
-                resp = self.client.post("/api/v1/presence/jetson/intake",
-                                        json=self._valid_body(),
-                                        headers={"X-Maez-Jetson-Token": "secret"})
+                resp = self.client.post(
+                    "/api/v1/presence/jetson/intake",
+                    json=self._valid_body(),
+                    headers={"X-Maez-Jetson-Token": "secret"},
+                )
                 self.assertEqual(resp.status_code, 200)
                 fake_store.assert_not_called()  # the private-thought db is never instantiated
 
@@ -112,21 +140,34 @@ class IntakeEndpointTests(unittest.TestCase):
 class FreshnessWitnessTests(unittest.TestCase):
     def setUp(self):
         import skills.web_interface as web
+
         self.web = web
         self.web._JETSON_PRESENCE_STORE = JetsonPresenceStore()  # isolate store per test
+        self.secret_patch = mock.patch.object(self.web, "get_secret", return_value=None)
+        self.secret_patch.start()
+        self.addCleanup(self.secret_patch.stop)
         self.client = web.app.test_client()
 
     def test_silence_after_present_becomes_stale_not_absent(self):
         env = {"MAEZ_JETSON_PRESENCE_SHADOW": "1", "MAEZ_JETSON_DEVICE_TOKEN": "secret"}
         with mock.patch.dict(os.environ, env, clear=True):
-            body = {"owner_present": "present", "confidence": "high",
-                    "sensor_state": "available", "ts": "2026-06-29T19:00:00+00:00",
-                    "schema_version": "jetson_presence.v0"}
-            resp = self.client.post("/api/v1/presence/jetson/intake", json=body,
-                                    headers={"X-Maez-Jetson-Token": "secret"})
+            body = {
+                "owner_present": "present",
+                "confidence": "high",
+                "sensor_state": "available",
+                "ts": "2026-06-29T19:00:00+00:00",
+                "schema_version": "jetson_presence.v0",
+            }
+            resp = self.client.post(
+                "/api/v1/presence/jetson/intake",
+                json=body,
+                headers={"X-Maez-Jetson-Token": "secret"},
+            )
             received_at = resp.get_json()["received_at"]
             # Fresh read: present
-            self.assertEqual(self.web._JETSON_PRESENCE_STORE.current(now=received_at + 1)[0], "present")
+            self.assertEqual(
+                self.web._JETSON_PRESENCE_STORE.current(now=received_at + 1)[0], "present"
+            )
             # Silence past the window: stale/unknown, NEVER absent
             owner, sensor = self.web._JETSON_PRESENCE_STORE.current(now=received_at + 10_000)
             self.assertEqual((owner, sensor), ("unknown", "stale"))
@@ -153,6 +194,7 @@ class RealSecretsImportRegressionTests(unittest.TestCase):
 
     def test_device_token_survives_real_secrets_import(self):
         import tempfile
+
         known_token = "jetson-device-token-xyz"
         td = tempfile.mkdtemp(prefix="jetson_secret_")
         with open(os.path.join(td, "secrets.local.env"), "w") as fh:
@@ -173,16 +215,21 @@ class RealSecretsImportRegressionTests(unittest.TestCase):
             "print(r.status_code)\n" % known_token
         )
         env = dict(os.environ)  # carry PATH/HOME/PYTHONPATH-style essentials
-        env.update({
-            "MAEZ_CONFIG": td,  # hermetic stand-in for config/ (holds secrets.local.env)
-            "MAEZ_JETSON_PRESENCE_SHADOW": "1",
-        })
+        env.update(
+            {
+                "MAEZ_CONFIG": td,  # hermetic stand-in for config/ (holds secrets.local.env)
+                "MAEZ_JETSON_PRESENCE_SHADOW": "1",
+            }
+        )
         # Token must come via the file, not the env, to prove the real load path keeps it.
         env.pop("MAEZ_JETSON_DEVICE_TOKEN", None)
         env.pop("MAEZ_IPHONE_INGEST_TOKEN", None)
         proc = subprocess.run(
             [sys.executable, "-B", "-c", code],
-            env=env, capture_output=True, text=True, timeout=120,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
         self.assertEqual(
             proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else "",
