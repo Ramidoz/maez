@@ -20,6 +20,11 @@ class RunBoundedTests(unittest.TestCase):
             run.main(["--loops", "3"])
         self.assertEqual(calls["n"], 3)
 
+    def test_rejects_non_positive_loop_count(self):
+        for value in ("0", "-1"):
+            with self.subTest(value=value), self.assertRaises(SystemExit):
+                run.main(["--loops", value])
+
     def test_once_runs_a_single_cycle(self):
         calls = {"n": 0}
         with (

@@ -39,7 +39,9 @@ def main(argv=None):
     g.add_argument("--once", action="store_true", help="run a single cycle")
     g.add_argument("--loops", type=int, default=1, help="run N cycles then exit (default 1)")
     args = parser.parse_args(argv)
-    loops = 1 if args.once else max(1, args.loops)
+    if args.loops < 1:
+        parser.error("--loops must be a positive integer")
+    loops = 1 if args.once else args.loops
 
     cfg = load_config()
     camera = Camera(device_index=cfg.device_index)

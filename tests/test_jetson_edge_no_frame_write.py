@@ -30,6 +30,12 @@ _FORBIDDEN_TOKENS = (
     '"w+b"',
     "'wb+'",
     '"wb+"',
+    "'r+'",
+    '"r+"',
+    "'r+b'",
+    '"r+b"',
+    "'rb+'",
+    '"rb+"',
     "'ab'",
     '"ab"',
     "'a+b'",
@@ -47,13 +53,16 @@ def _watch_file_writes():
     real_open = builtins.open
     real_path_open = pathlib.Path.open
 
+    def _is_write_mode(mode: str) -> bool:
+        return any(c in mode for c in "wax") or "+" in mode
+
     def _watch_open(path, mode="r", *a, **k):
-        if any(c in mode for c in "wax"):
+        if _is_write_mode(mode):
             writes.append((str(path), mode))
         return real_open(path, mode, *a, **k)
 
     def _watch_path_open(path, mode="r", *a, **k):
-        if any(c in mode for c in "wax"):
+        if _is_write_mode(mode):
             writes.append((str(path), mode))
         return real_path_open(path, mode, *a, **k)
 
@@ -124,6 +133,19 @@ class NoFrameWriteDynamicTests(unittest.TestCase):
                 writes,
                 [],
                 "write watcher failed to detect Path.open(..., 'w+b')",
+            )
+
+    def test_write_watcher_detects_read_write_binary_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            probe = pathlib.Path(tmp) / "maez_b0_write_probe.bin"
+            probe.write_bytes(b"seed")
+            with _watch_file_writes() as writes:
+                with probe.open("r+b"):
+                    pass
+            self.assertNotEqual(
+                writes,
+                [],
+                "write watcher failed to detect Path.open(..., 'r+b')",
             )
 
 
