@@ -9788,6 +9788,23 @@ def _owner_private_auth_ok() -> bool:
         return _request_is_loopback()
 
 
+def _jetson_device_auth_ok() -> bool:
+    """Authenticate a Jetson edge device by a dedicated device token.
+
+    Separate secret from S7_INTERNAL_CHANNEL_TOKEN (owner-authority) by design.
+    Fails closed when the token env is unset. Constant-time comparison.
+    """
+    import hmac
+
+    configured = (os.environ.get("MAEZ_JETSON_DEVICE_TOKEN") or "").strip()
+    if not configured:
+        return False
+    presented = (request.headers.get("X-Maez-Jetson-Token") or "").strip()
+    if not presented:
+        return False
+    return hmac.compare_digest(configured, presented)
+
+
 _OWNER_AUTHENTICATED_HEADER = "X-Maez-Owner-Authenticated"
 
 
