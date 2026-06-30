@@ -6,7 +6,7 @@
 Slice A built and witnessed the host **doorway** — strict five-field contract, device-token auth, content-light receipt, freshness rail. Slice B builds the **producer**: a camera app on the Orin Nano that decides "is Rohit at his desk" and emits the label. Nothing new crosses the wire — Slice B's whole job is to speak the contract Slice A already proved.
 
 ## Locked decisions (from the brainstorm)
-- **Recognition envelope: desk presence.** Optimize for the owner at the workstation, roughly frontal, ordinary light. Uncertain → `unknown`, never a guess. Robustness grows later, with more data and better hardware.
+- **Recognition envelope: desk presence.** Optimize for the owner at the workstation, roughly frontal, ordinary light. Uncertain → `unknown`, never a guess. Robustness grows later, with more data and better hardware. **This is an envelope, not a spatial model:** "desk presence" means "owner detected in the approved camera framing," nothing more — no `at_desk` field, no desk/room sub-zones, no spatial inference. The contract stays the five fields.
 - **Model path: A — open models → ONNX → TensorRT.** Own each stage (detector + embedding + threshold + decision rule), compiled to TensorRT on the Orin. Exact detector/embedding models pinned during B1 with a verification pass.
 - **Contract: unchanged.** `jetson_presence.v0` = `{owner_present, confidence, sensor_state, ts, schema_version}`, strict five-key (Slice A rejects extras). The Jetson emits exactly this.
 
@@ -46,10 +46,14 @@ The edge app (Python 3.10 + cv2 + tensorrt + requests). One loop, six small unit
 
 This mirrors the host's freshness rail (stale → `unknown`, never `absent`) — device and host honor the same rule.
 
+### B1 pre-code gates (Codex cross-lane; must be pinned in the B1 plan BEFORE any recognition/enrollment code)
+- **The reliable-observation-window input table.** Window reliability and label confidence may be computed **only** from owner-and-frame signals — camera open, frame health, exposure/blur, model loaded, enrollment available, cadence/window duration. They may **never** be computed from non-owner evidence — non-owner candidate count, non-owner face clarity, mismatch-vector strength, or any "someone who is not Rohit" signal. Non-owner candidates are discarded **before** confidence is computed. (This is R4 enforced at the confidence layer: occupancy must not leak through reliability.)
+- **The `unknown` confidence value is fixed.** Slice A requires a `confidence` on every label. `unknown` uses a **fixed** value (B0 and B1 v0: `low`), never varying with non-owner candidate quality — otherwise occupancy leaks through the `confidence` field. A future plan may refine this only with an explicit owner-and-frame-only rationale.
+
 ## Sub-slices (build order B0 → B1 → B2; each its own plan + witness)
 
 ### B0 — skeleton, curtain, no-frame-write, honest-unknown (no recognition)
-The loop captures and emits, but `owner_present` is always **`unknown`** (no model yet — honest by construction). Source lands under `devices/jetson_presence/` + a deploy step.
+The loop captures and emits, but `owner_present` is always **`unknown`** (no model yet — honest by construction), with a **fixed `confidence: low`** (never derived — the seed of the unknown-confidence gate). Source lands under `devices/jetson_presence/` + a deploy step.
 *Witnesses:*
 - **Curtain teardown:** draw the curtain → the app releases `/dev/video0` (provable: device re-openable by another process afterward) and emits `sensor_state: curtained, owner_present: unknown`.
 - **No frames written:** unit tests patch `cv2.imwrite`/sinks to raise-if-called; smoke witness diffs the runtime dir before/after → zero new files.
