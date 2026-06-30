@@ -1,0 +1,13 @@
+# Runtime artifacts that must stay Jetson-local (never committed):
+.env*
+secrets*
+runtime*
+state/
+logs/
+*.token
+token
+*.key
+*.pem
+*.secret
+__pycache__/
+*.pyc
