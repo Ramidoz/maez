@@ -1,0 +1,115 @@
+from __future__ import annotations
+
+import tempfile
+import unittest
+from pathlib import Path
+
+
+class RecallQualityShadowReviewTests(unittest.TestCase):
+    def test_parse_living_candidate_with_kind_and_type_weight(self):
+        from scripts.recall_quality_shadow_review import parse_living_candidate
+
+        line = (
+            "INFO living_recall_candidate id=abc123 base_distance=0.4400 "
+            "recency_factor=0.9900 effective_distance=0.4444 "
+            "shadow_promotion=0.1200 kind=reflection type_weight=0.25"
+        )
+        parsed = parse_living_candidate(line)
+        self.assertEqual(parsed["id"], "abc123")
+        self.assertAlmostEqual(parsed["base_distance"], 0.44)
+        self.assertAlmostEqual(parsed["shadow_promotion"], 0.12)
+        self.assertEqual(parsed["kind"], "reflection")
+        self.assertAlmostEqual(parsed["type_weight"], 0.25)
+
+    def test_parse_floor_shadow_counts(self):
+        from scripts.recall_quality_shadow_review import parse_floor_shadow
+
+        line = (
+            "INFO recall_floor_shadow floor=0.7800 raw_n=10 raw_would_drop=7 "
+            "daily_n=3 daily_would_drop=1 would_empty=False actuated=False"
+        )
+        parsed = parse_floor_shadow(line)
+        self.assertEqual(parsed["floor"], 0.78)
+        self.assertEqual(parsed["raw_would_drop"], 7)
+        self.assertFalse(parsed["would_empty"])
+
+    def test_summarize_logs_computes_kind_shares_from_shadow_logs(self):
+        from scripts.recall_quality_shadow_review import summarize_logs
+
+        log = "\n".join([
+            (
+                "INFO living_recall_candidate id=a base_distance=0.9000 "
+                "recency_factor=1.0000 effective_distance=0.9000 "
+                "shadow_promotion=0.1000 kind=unknown type_weight=1.00"
+            ),
+            (
+                "INFO living_recall_candidate id=b base_distance=0.3000 "
+                "recency_factor=1.0000 effective_distance=0.3000 "
+                "shadow_promotion=0.2000 kind=reflection type_weight=0.25"
+            ),
+            (
+                "INFO recall_floor_shadow floor=0.7800 raw_n=2 raw_would_drop=1 "
+                "daily_n=0 daily_would_drop=0 would_empty=False actuated=False"
+            ),
+        ])
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "maez.log"
+            path.write_text(log)
+            summary = summarize_logs(path)
+        self.assertEqual(summary["candidate_count"], 2)
+        self.assertEqual(summary["kinded_candidate_count"], 2)
+        self.assertAlmostEqual(summary["unknown_share"], 0.5)
+        self.assertAlmostEqual(summary["reflection_share"], 0.5)
+        self.assertEqual(summary["floor_receipt_count"], 1)
+
+    def test_write_markdown_includes_review_fields(self):
+        from scripts.recall_quality_shadow_review import (
+            summarize_replay_rows,
+            write_markdown,
+        )
+
+        rows = [
+            {"id": "r1", "distance": 0.90, "kind": "reflection", "would_drop": True},
+            {
+                "id": "r2",
+                "distance": 0.30,
+                "kind": "telegram_exchange",
+                "would_drop": False,
+            },
+            {"id": "r3", "distance": 0.82, "kind": "unknown", "would_drop": True},
+        ]
+        summary = summarize_replay_rows(rows)
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "review.md"
+            write_markdown(out, log_summary={"candidate_count": 2}, replay_summary=summary)
+            text = out.read_text()
+        self.assertIn("unknown_share", text)
+        self.assertIn("reflection_drop_share", text)
+        self.assertIn("review_status", text)
+
+    def test_probe_live_candidate_kinds_accepts_injected_manager(self):
+        from scripts.recall_quality_shadow_review import probe_live_candidate_kinds
+
+        class FakeManager:
+            def recall_for_telegram_living(self, query, *, record_recalls=True):
+                self.record_recalls = record_recalls
+                evidence = {"daily": [], "raw": []}
+                context = {
+                    "daily": [],
+                    "raw": [{
+                        "id": "reflection-row",
+                        "distance": 0.90,
+                        "metadata": {"source_kind": "reflection"},
+                    }],
+                }
+                return evidence, context
+
+        manager = FakeManager()
+        rows = probe_live_candidate_kinds(["how are you"], manager=manager)
+        self.assertFalse(manager.record_recalls)
+        self.assertEqual(rows[0]["query"], "how are you")
+        self.assertEqual(rows[0]["partition"], "context")
+        self.assertEqual(rows[0]["tier"], "raw")
+        self.assertEqual(rows[0]["id"], "reflection-row")
+        self.assertEqual(rows[0]["kind"], "reflection")
+        self.assertTrue(rows[0]["would_drop"])

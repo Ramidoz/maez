@@ -438,6 +438,51 @@ class ShadowPromotionTests(unittest.TestCase):
         self.assertIn("shadow_promotion=1.0000", logs_b)
 
 
+class RecallCandidateKindTests(unittest.TestCase):
+    def test_reflection_source_kind_is_classified(self):
+        from memory.memory_manager import (
+            _recall_candidate_kind,
+            _recall_candidate_type_weight,
+        )
+
+        mem = {"metadata": {"source_kind": "reflection"}}
+        self.assertEqual(_recall_candidate_kind(mem), "reflection")
+        self.assertLess(_recall_candidate_type_weight(mem), 1.0)
+
+    def test_maez_self_voice_is_classified(self):
+        from memory.memory_manager import (
+            _recall_candidate_kind,
+            _recall_candidate_type_weight,
+        )
+
+        mem = {"metadata": {"memory_voice": "maez_self"}}
+        self.assertEqual(_recall_candidate_kind(mem), "maez_self")
+        self.assertLess(_recall_candidate_type_weight(mem), 1.0)
+
+    def test_telegram_exchange_is_not_damped(self):
+        from memory.memory_manager import (
+            _recall_candidate_kind,
+            _recall_candidate_type_weight,
+        )
+
+        mem = {"metadata": {"type": "telegram_exchange"}}
+        self.assertEqual(_recall_candidate_kind(mem), "telegram_exchange")
+        self.assertEqual(_recall_candidate_type_weight(mem), 1.0)
+
+    def test_reasoning_and_unknown_candidates_are_not_damped(self):
+        from memory.memory_manager import (
+            _recall_candidate_kind,
+            _recall_candidate_type_weight,
+        )
+
+        reasoning = {"metadata": {"type": "reasoning"}}
+        unknown = {"metadata": {"type": "other"}}
+        self.assertEqual(_recall_candidate_kind(reasoning), "reasoning")
+        self.assertEqual(_recall_candidate_type_weight(reasoning), 1.0)
+        self.assertEqual(_recall_candidate_kind(unknown), "unknown")
+        self.assertEqual(_recall_candidate_type_weight(unknown), 1.0)
+
+
 class LivingRecallTelemetryTests(unittest.TestCase):
     def test_overfetch_does_not_record_unsurfaced_recall_stats(self):
         rows = [

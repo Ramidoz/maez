@@ -614,7 +614,41 @@ RANKING_HALF_LIFE_DAYS = 90.0
 EVIDENCE_RECENCY_DAYS = 14.0
 _LIVING_RECALL_DISTANCE_FLOOR = 1e-3
 _RECALL_RELEVANCE_FLOOR_DEFAULT = 0.7800
+_RECALL_TYPE_WEIGHTS = {
+    "reflection": 0.25,
+    "maez_self": 0.25,
+    "telegram_exchange": 1.0,
+    "reddit_post": 1.0,
+    "reasoning": 1.0,
+    "unknown": 1.0,
+}
 _QUERY_ECHO_MAX_AGE_HOURS = 2.0
+
+
+def _recall_candidate_kind(mem: dict) -> str:
+    """Classify a recall candidate for shadow type-weight proof."""
+    meta = mem.get("metadata") or {}
+    source_kind = str(meta.get("source_kind") or "").strip().lower()
+    authorship = str(meta.get("authorship") or "").strip().lower()
+    memory_voice = str(meta.get("memory_voice") or "").strip().lower()
+    row_type = str(meta.get("type") or "").strip().lower()
+    source = str(meta.get("source") or "").strip().lower()
+
+    if source_kind == "reflection" or authorship == "reflection_synthesis":
+        return "reflection"
+    if memory_voice == "maez_self":
+        return "maez_self"
+    if row_type == "telegram_exchange":
+        return "telegram_exchange"
+    if row_type == "reddit_post" or source.startswith("reddit/r/"):
+        return "reddit_post"
+    if row_type == "reasoning":
+        return "reasoning"
+    return "unknown"
+
+
+def _recall_candidate_type_weight(mem: dict) -> float:
+    return _RECALL_TYPE_WEIGHTS.get(_recall_candidate_kind(mem), 1.0)
 
 
 def recency_factor(
