@@ -463,6 +463,57 @@ class ShadowPromotionTests(unittest.TestCase):
         self.assertIn("shadow_promotion=1.0000", logs_b)
 
 
+class PromotionShadowCompareTests(unittest.TestCase):
+    def test_shadow_compare_logs_but_does_not_reorder_when_disabled(self):
+        reflection = _row(
+            "reflection",
+            content="reflection about a shared dinner thread",
+            days_ago=1,
+            distance=0.20,
+        )
+        reflection["metadata"]["source_kind"] = "reflection"
+        relational = _row(
+            "relational",
+            content="relational telegram exchange about dinner",
+            days_ago=1,
+            distance=0.21,
+        )
+        relational["metadata"]["type"] = "telegram_exchange"
+        mm = _manager(raw_rows=[reflection, relational])
+
+        def fake_get_stats(memory_id):
+            from core.memory_scoring import RecallStats
+
+            return RecallStats(memory_id=memory_id)
+
+        with (
+            mock.patch.dict(
+                os.environ,
+                {
+                    "MAEZ_RECALL_PROMOTION_SHADOW": "1",
+                    "MAEZ_RECALL_PROMOTION_ENABLED": "0",
+                    "MAEZ_RECALL_FLOOR_SHADOW": "0",
+                    "MAEZ_RECALL_FLOOR_ENABLED": "0",
+                },
+            ),
+            mock.patch(
+                "memory.memory_manager._now_seconds",
+                return_value=datetime(2026, 5, 29, 12, 0, tzinfo=timezone.utc).timestamp(),
+            ),
+            mock.patch("core.memory_scoring.record_recall", side_effect=lambda *a, **k: None),
+            mock.patch("core.memory_scoring.get_stats", side_effect=fake_get_stats),
+            mock.patch("core.memory_scoring.promotion_score", return_value=1.0),
+            self.assertLogs("maez", level="INFO") as logs,
+        ):
+            evidence, context = mm.recall_for_telegram_living("owner dinner")
+
+        served_order = _partition_ids(evidence, "raw") + _partition_ids(context, "raw")
+        self.assertEqual(served_order, ["reflection", "relational"])
+        log_text = "\n".join(logs.output)
+        self.assertIn("recall_promotion_shadow", log_text)
+        self.assertIn("applied=False", log_text)
+
+
 class PromotionRerankHelperTests(unittest.TestCase):
     def test_reflection_gets_less_promotion_boost_than_relational_candidate(self):
         from memory.memory_manager import _promotion_adjusted_distance

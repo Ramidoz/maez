@@ -2499,6 +2499,8 @@ class MemoryManager:
             self._recent_telegram_exchange_rows(self.raw, query),
         )
         now_s = _now_seconds()
+        promotion_by_id: dict[str, float | None] = {}
+        effective_by_id: dict[str, float] = {}
 
         def _keep_not_echo(mem: dict) -> bool:
             meta = mem.get("metadata") or {}
@@ -2519,12 +2521,15 @@ class MemoryManager:
             age_h = _age_hours_from_iso(meta.get("timestamp", ""), now_s)
             rf = recency_factor(age_h, half_life_days)
             effective = base / max(rf, _LIVING_RECALL_DISTANCE_FLOOR)
-            self._shadow_log_living(
+            shadow = self._shadow_log_living(
                 mem,
                 base_distance=base,
                 recency=rf,
                 effective_distance=effective,
             )
+            mem_id = str(mem.get("id", ""))
+            promotion_by_id[mem_id] = shadow
+            effective_by_id[mem_id] = effective
             return effective
 
         raw = sorted(raw, key=_effective_distance)[:10]
@@ -2551,6 +2556,30 @@ class MemoryManager:
 
         raw = _apply_recall_floor_with_fallback(raw, floor=floor, min_keep=1)
         daily = _apply_recall_floor_with_fallback(daily, floor=floor, min_keep=1)
+
+        def _ids_joined(mems: list[dict]) -> str:
+            return ",".join(str(mem.get("id", "")) for mem in mems)
+
+        def _promotion_rank_key(mem: dict) -> float:
+            mem_id = str(mem.get("id", ""))
+            return _promotion_adjusted_distance(
+                mem,
+                promotion=promotion_by_id.get(mem_id),
+                effective_distance=effective_by_id.get(mem_id, _distance_sort_key(mem)),
+            )
+
+        if recall_promotion_shadow_enabled() or recall_promotion_enabled():
+            raw_shadow = sorted(raw, key=_promotion_rank_key)
+            daily_shadow = sorted(daily, key=_promotion_rank_key)
+            logger.info(
+                "recall_promotion_shadow raw_before=%s raw_after=%s "
+                "daily_before=%s daily_after=%s applied=%s",
+                _ids_joined(raw),
+                _ids_joined(raw_shadow),
+                _ids_joined(daily),
+                _ids_joined(daily_shadow),
+                False,
+            )
 
         cutoff_h = max(0.0, float(evidence_recency_days)) * 24.0
 
