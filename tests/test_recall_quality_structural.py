@@ -15,15 +15,18 @@ PROMOTION_PARENT_MODULES = {"core", "core.memory"}
 PRODUCTION_EXCLUDE_PARTS = {
     ".git",
     ".ruff_cache",
+    ".venv",
     "__pycache__",
     "build",
     "dist",
     "docs",
     "htmlcov",
     "logs",
+    "node_modules",
     "research",
     "tests",
     "training",
+    "venv",
 }
 ROOT_LEVEL_PRODUCTION_FILES = (
     "cli.py",
@@ -108,7 +111,7 @@ def _promotion_flag_offenders(root: Path = REPO_ROOT) -> list[str]:
     expected_owner = root / "memory" / "memory_manager.py"
     offenders: list[str] = []
     for path in _production_python_paths(root):
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8", errors="replace")
         if "MAEZ_RECALL_PROMOTION_ENABLED" in text and path != expected_owner:
             offenders.append(str(path.relative_to(root)))
     return offenders
