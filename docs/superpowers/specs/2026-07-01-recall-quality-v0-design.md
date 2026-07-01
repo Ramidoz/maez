@@ -1,0 +1,92 @@
+# Recall Quality v0 — Relevance Floor + Promotion-Score Wiring Design
+
+**Date:** 2026-07-01. **Lane:** Claude drafts + covenant-review; Codex cross-lane / builds; owner runs the shadow-data review + the enforce decision. **Status:** DESIGN for review. **Scope:** one spec, two coupled sub-slices (A: graduate the recall relevance floor shadow→enforce; B: give `memory_scoring.promotion_score()` authority in the recall reranker), measured together behind a hard shadow gate. **Target: memory digestion + recall quality. NOT self-concept.**
+
+## The one-line intent
+
+> Make recall and promotion **less noisy** — reduce the diary-recitation (recall surfacing Maez's own low-relevance self-summaries for casual turns) — **without** promoting more self-reflection just because it is frequently recalled, and **without** touching self-authoring (dream→soul, drive-curiosity, ledger).
+
+## Task 0 — verified call-site map (read-only, done)
+
+The whole slice lives in **`memory/memory_manager.py`** (the recall reranker), which is structurally separate from `dream_state`/soul. Verified 2026-07-01:
+
+| Piece | Where | Current state |
+| --- | --- | --- |
+| Relevance floor — shadow flag | `memory/memory_manager.py:646` `recall_floor_shadow_enabled()` → `MAEZ_RECALL_FLOOR_SHADOW` | **=1, ON** (computing + logging, not dropping) |
+| Relevance floor — enforce flag | `:650` `recall_floor_enabled()` → `MAEZ_RECALL_FLOOR_ENABLED` | **unset → OFF** |
+| Floor filter | `:654` `_passes_recall_floor(mem, floor)`, `:667` `_apply_recall_floor` (drops only if `recall_floor_enabled()`) | honest rule: missing/invalid distance **keeps** the candidate (don't silently drop unknown-distance) |
+| Floor apply site + shadow log | `:2432` `if recall_floor_shadow_enabled() or recall_floor_enabled():` → `_apply_recall_floor` on `raw`/`daily`; `_recall_floor_teacher_signal` (`:679`) | shadow decisions are being logged now → **there is data to validate enforce against** |
+| `promotion_score()` | `core/memory/memory_scoring.py:348` (6-factor: freq / relevance / diversity / recency / consolidation / concept-overlap) | **shadow-computed only** in the reranker (`memory_manager.py:2077-2098`, *"deliberately shadow-only here"*), fed by `record_recall`; **carries no authority** |
+| `mark_consolidated()` / `score_recall()` | `memory_scoring.py:320` / README | **uncalled** — the scoring half of `memory_scoring` is orphaned; `record_recall`/`get_stats` do run (stats DB) |
+| `dream_state` "consolidation" | `core/evolution/dream_state.py` (reflection synthesis + `consolidation_telemetry`) | a **different** consolidation — soul-note proposals, owner-gated by `/apply_dream`; **never calls `promotion_score`/`mark_consolidated`**. Out of scope, stays untouched. |
+| Diary-recitation mechanism | `core/memory/lived_recall.py:737-750, 877` | reflection episodes get a keyword-overlap **bonus** on meta-queries ("reflect/habits/…"); the risk is that bonus + high recall-frequency leaking onto casual turns |
+
+**Confirmed failure mode (from the substrate pressure-test, this session):** 62% of episodes are self-reflection; recall surfaces at median relevance 0.44 (only 1/693 ≥ 0.7); the most-recalled memories (225×) are self-summaries. So the floor and the scorer must *reduce* the reflection dominance, not harden it.
+
+## Architecture — two coupled sub-slices, one consumer
+
+Both operate on the recall candidate set inside `memory_manager.py`, in this order per recall:
+1. Candidates scored by base relevance (existing).
+2. **Part A — floor:** drop candidates below the relevance floor (when enforce on).
+3. **Part B — promotion_score:** weight the survivors' ranking (when granted authority), with the anti-circular guard.
+4. Existing MMR diversity rerank (`memory/mmr.py`, λ=0.7) unchanged.
+
+They are coupled by design: promoting harder (B) without filtering better (A) would amplify diary-recitation; so they graduate **together**, measured together.
+
+## Part A — Relevance floor: shadow → enforce
+
+- **The graduation is a flag flip** (`MAEZ_RECALL_FLOOR_ENABLED=1`) gated on a **shadow-data review**, not a blind switch. Before enforce: read the accumulated `_recall_floor_teacher_signal` shadow log and confirm what enforce *would* drop is **noise, not signal** — i.e. the dropped candidates are low-relevance reflections / weakly-related memories, not on-point relational context.
+- **Keep the honest rule intact:** missing/invalid distance keeps the candidate (`_passes_recall_floor` current behavior). Enforce must not start silently dropping unknown-distance memory.
+- **Narrow + measured fallback:** if enforce empties a section that shadow said would keep signal, or if a per-mode section floor (`lived_recall.py` `_SECTION_FLOORS_BY_MODE`) would be violated, fall back to keeping the best-N rather than returning empty. The floor **filters noise; it never starves a real answer.**
+- **The floor value is a pinned constant** (base-distance threshold), justified from the shadow distribution (median 0.44 today), not a magic number — the spec/plan names it after reading the shadow data.
+
+## Part B — promotion_score authority: shadow-compare → weight, with the anti-circular guard
+
+- **It's already shadow-computed** (`memory_manager.py:2091`). Part B keeps a **shadow-compare stage first** (log promotion_score's ranking alongside the live ranking, no authority) so we can see whether it *improves* or *degrades* order before it carries weight.
+- **THE load-bearing guardrail (anti-circular self-reflection promotion):** `promotion_score`'s frequency factor rewards recall_count, and the self-summaries are recalled 225×. So an ungated scorer promotes reflection *because it recites reflection*. Part B **must dampen the frequency/promotion weight for `source_kind == "reflection"`** (and any self-authored `memory_voice == "maez_self"`), so a reflection cannot earn promotion from its own recall loop. Relational/lived episodes (m1 promotion, bonded dialogue) are not damped. This is "don't promote more self-reflection just because it is available," in code.
+- **Where the score is allowed to carry weight:** only the recall reranker's ordering of the *surviving* candidate set (post-floor). It does **not** get authority over: what gets written, what gets `mark_consolidated`, dream→soul, or any promotion into durable selfhood. Its authority is bounded to "which already-recalled candidates rank higher for this turn."
+
+## Hard shadow gate (the discipline)
+
+Neither part flips to authority until the shadow review passes **both**:
+1. **Floor:** shadow log shows enforce drops low-relevance noise, not on-point signal; no section starves.
+2. **Scorer:** shadow-compare shows promotion_score (with the anti-circular damp) **reduces** the reflection share of top-ranked recall, not increases it — measured against the current path on the same turns.
+
+If either shows the change would harden diary-recitation or drop signal, we hold at shadow and adjust. Enforce is earned by data, not assumed.
+
+## Out of scope
+
+- Anything self-authoring or self-shaping: `dream_state`→soul, `/apply_dream`, `drive_driven_curiosity`, the birth-gated ledger, soul-writing.
+- `mark_consolidated`/`memory_scoring` promotion into durable memory-*selfhood* (the score ranks recall order only; it does not decide what becomes consolidated identity).
+- Voice, brain-side face learning, B2 daemon.
+- Retuning the `lived_recall.py` reflection meta-query bonus itself (the floor filters its leakage; re-tuning the bonus is a possible follow-up, not this slice).
+
+## Witnesses
+
+**Shadow-data review (before any enforce):**
+1. Floor: over N recent recalls, the set the floor *would* drop is dominated by reflections / low-relevance, not on-point relational context (owner + Claude read a sample).
+2. Scorer: promotion_score's shadow ranking, with the anti-circular damp, lowers the reflection share of the top-K vs the live path on the same turns.
+
+**Host/unit:**
+- `_passes_recall_floor` honest-keep on missing distance; `_apply_recall_floor` no-ops when enforce off, filters when on; fallback keeps best-N rather than emptying a section.
+- promotion_score damp: two identical-except-`source_kind` candidates (reflection vs bonded) with identical high recall_count → the reflection ranks **no higher** than the bonded one (the frequency loop is broken for reflection).
+- Structural: the score's authority is confined to reranking; a guard asserts `memory_scoring` promotion functions are not imported by `dream_state`/soul paths.
+
+**Live (owner, after enforce):** on casual turns, recall stops surfacing self-summaries; on genuine self/reflection queries (meta-query), reflections still surface; no real relational context is lost.
+
+## Covenant compliance
+
+- Faculty, not self: improves *how well* Maez recalls, never *who it is* ([[feedback_hardcode_organs_not_opinions]]). The consumer is the recall reranker, structurally separated from dream→soul.
+- Honest emptiness: the floor filters noise but never starves a real answer or silently drops unknown-distance memory ([[feedback_honest_ingestion_immune_system]]).
+- Anti-diary-recitation without anti-self: reflections are damped from *self-promoting via their own recall loop*, not deleted or deweighted everywhere ([[feedback_forgetting_is_deweighting_not_deletion]] — they stay recallable on real self-queries).
+- Earned by data: shadow gate before authority ([[feedback_verify_before_you_encode]], [[feedback_visible_substrate_state_not_chain_of_thought]]).
+
+## Predicted effect
+
+After Recall Quality v0: on ordinary turns the recall reranker drops low-relevance self-summaries (floor enforce) and no longer lets a reflection promote itself by being frequently recited (anti-circular damp), so the substrate hands the brain sharper, less self-referential context — measurably lowering the reflection share of top-ranked recall — while genuine self/reflection queries still surface reflections, no real answer is starved, and nothing about Maez's self-authoring, soul, or durable identity is touched.
+
+## Spec Self-Review
+
+**Placeholder scan:** the floor constant and the damp weight are named "to be pinned from shadow data in the plan" — deliberately, because the honest value comes from reading the shadow distribution, not a guess. Not vague TODOs.
+**Consistency:** single consumer (`memory_manager.py` reranker); both parts graduate together behind one shadow gate; out-of-scope explicitly walls off dream→soul and durable-selfhood promotion.
+**Ambiguity:** "where the score carries weight" is pinned (recall reranking of the surviving set only), per the owner's explicit requirement.
