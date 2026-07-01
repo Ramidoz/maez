@@ -244,6 +244,8 @@ git commit -m "feat(jetson-b1a): pure parity metrics (IoU/box/embedding) + tests
 
 ## Task 3: model manifest + `manifest.py` verify (host-TDD)
 
+> **REVISED @a87cc3c (Codex cross-lane):** the code blocks below show the original `PENDING_LOCK` + standalone-`.onnx`-URL design. Those URLs 404'd, so the **shipped** manifest sources models from the real `buffalo_s.zip` pack with **real pinned pack+member sha256** and a truthful non-commercial license; `hashes_locked()` also covers the source-pack digest; the schema test asserts the new fields (`role`/`member`/pack) + that the shipped manifest is really locked. Trust the committed files (`devices/jetson_presence/models/manifest.json`, `.../b1a/manifest.py`, `tests/test_jetson_b1a_manifest.py`) over the snippets below.
+
 **Files:** Create `devices/jetson_presence/models/manifest.json`, `b1a/manifest.py`; Create `tests/test_jetson_b1a_manifest.py`
 
 - [ ] **Step 1: Failing test**
@@ -532,6 +534,8 @@ git commit -m "test(jetson-b1a): structural no-POST + no-crop-write guards over 
 
 ## Task 5: deploy path + `.gitignore` + two-phase `setup_models.sh`
 
+> **REVISED @a87cc3c (Codex cross-lane):** shipped `setup_models.sh` has the shebang on line 1 + mode 0755, and `build` now downloads the `buffalo_s.zip` pack, verifies the pack sha, extracts the members, verifies each member sha, then `trtexec`-compiles (the snippet below shows the earlier per-`.onnx` download form). `lock-hashes` is a re-lock helper only (the manifest ships real hashes). Trust the committed `devices/jetson_presence/setup_models.sh`.
+
 **Files:** Modify `devices/jetson_presence/deploy.sh`, `devices/jetson_presence/.gitignore`; Create `devices/jetson_presence/setup_models.sh`
 
 - [ ] **Step 1: Patch `deploy.sh` to also ship `setup_models.sh` + the tracked manifest.**
@@ -720,9 +724,11 @@ Expected: all PASS (matcher, parity metrics, manifest, both structural guards).
 
 ## On-device witnesses (owner-run, after review/merge — NOT part of the host build)
 
-1. **Deploy:** `bash devices/jetson_presence/deploy.sh` → confirm `setup_models.sh` **and** `models/manifest.json` arrive on the Jetson, and **no** `.onnx/.engine` artifact does (allowlist holds).
-2. **Deps + lock-hashes (one-time):** `setup_models.sh deps`, then `setup_models.sh lock-hashes` → downloads ONNX, computes the real sha256, writes them into `manifest.json`. **Review the diff, commit the real hashes.** No engine built yet.
-3. **Build (gated):** `setup_models.sh build` → first proves `hashes_locked` (refuses on any `PENDING_LOCK`), verifies each ONNX against its pinned sha (refuses on mismatch), then `trtexec`-compiles **FP32** engines. Confirm a tampered/unlocked manifest is *refused* (negative witness).
+> **Model source (repinned after Codex cross-lane, @a87cc3c):** models ship inside the real, verified **`buffalo_s.zip`** InsightFace release pack (my original standalone-`.onnx` URLs 404'd). Members: `det_500m.onnx` (SCRFD-500M detector = the spec's `scrfd_500m`) + `w600k_mbf.onnx` (ArcFace MobileFace embedding). The manifest pins **real** sha256 for the pack AND each member (measured from the official immutable release, independently recomputable), so there is **no trust-on-first-use** — the pinned hashes are the anchor, not whatever the first download happens to serve. Model license is stated truthfully: **non-commercial research use only** (InsightFace *code* is MIT; the *models* are not). `buffalo_l/w600k_r50` is the accuracy-upgrade path if the spike shows latency headroom.
+
+1. **Deploy:** `bash devices/jetson_presence/deploy.sh` → confirm `setup_models.sh` **and** `models/manifest.json` arrive on the Jetson, and **no** `.onnx/.engine/.zip` artifact does (allowlist holds).
+2. **Deps:** `bash devices/jetson_presence/setup_models.sh deps` → installs onnx/onnxruntime/pycuda/numpy. (No `lock-hashes` needed — the manifest already ships real pinned hashes; `lock-hashes` is only for swapping the pack later.)
+3. **Build (gated):** `bash devices/jetson_presence/setup_models.sh build` → proves `hashes_locked`, downloads `buffalo_s.zip`, **verifies the pack sha256**, extracts `det_500m.onnx`/`w600k_mbf.onnx`, **verifies each member sha256** (refuses on any mismatch), then `trtexec`-compiles **FP32** engines. Confirm a tampered pack/manifest is *refused* (negative witness — already proven on host against the real zip @a87cc3c; re-confirm on device).
 4. **Parity (R4):** run `run_parity` on a blank frame (→ no detection) and an owner frame (→ detection) → **box IoU > 0.99 & |score| < 0.01, embedding cosine > 0.999**. A miss on an FP16 engine is a real result, not an override.
 5. **Spike:** `python3 -m jetson_presence.b1a.spike --frames 30`:
    - owner present → `match` (distance below threshold);
