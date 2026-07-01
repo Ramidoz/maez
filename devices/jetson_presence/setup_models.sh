@@ -4,7 +4,7 @@
 # (gitignored). Models ship inside an InsightFace release zip pack; the manifest pins
 # the pack sha256 AND each extracted member sha256, so `build` needs no trust-on-first-use.
 # Usage:
-#   setup_models.sh deps         # install onnxruntime/cuda-python/numpy<2; requires python3-pip
+#   setup_models.sh deps         # install onnxruntime/cuda-python<13/numpy<2; requires python3-pip
 #   setup_models.sh build        # verify pack+member shas (refuse on any mismatch) then trtexec-compile
 #   setup_models.sh lock-hashes  # re-lock: download pack, recompute all shas, rewrite manifest, EXIT (no build)
 set -euo pipefail
@@ -26,7 +26,7 @@ cmd_deps() {
     echo "  python3 -m pip --version" >&2
     exit 2
   fi
-  "$PY" -m pip install --user --upgrade onnxruntime cuda-python 'numpy<2'
+  "$PY" -m pip install --user --upgrade onnxruntime 'cuda-python<13' 'numpy<2'
 }
 
 # Re-lock helper (only needed when swapping the pack/models): download, recompute every

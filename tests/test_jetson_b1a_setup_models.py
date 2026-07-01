@@ -13,7 +13,7 @@ class SetupModelsDepsTests(unittest.TestCase):
     def test_deps_pins_numpy_below_two_for_apt_opencv_compatibility(self):
         setup = SETUP_SCRIPT.read_text(encoding="utf-8")
 
-        self.assertIn("cuda-python", setup)
+        self.assertIn("'cuda-python<13'", setup)
         self.assertIn("onnxruntime", setup)
         self.assertIn("'numpy<2'", setup)
         self.assertNotIn(" pycuda ", setup)
