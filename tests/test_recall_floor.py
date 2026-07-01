@@ -169,5 +169,54 @@ class TestTeacherSignal(unittest.TestCase):
         self.assertFalse(signal["tighten"])
 
 
+class TestSelfDigestKind(unittest.TestCase):
+    def test_daily_consolidation_classifies_as_self_digest(self):
+        from memory.memory_manager import _recall_candidate_kind
+
+        row = {"metadata": {"type": "daily_consolidation"}}
+
+        self.assertEqual(_recall_candidate_kind(row), "self_digest")
+
+    def test_nightly_journal_classifies_as_self_digest(self):
+        from memory.memory_manager import _recall_candidate_kind
+
+        row = {"metadata": {"type": "core_memory", "source": "nightly_journal"}}
+
+        self.assertEqual(_recall_candidate_kind(row), "self_digest")
+
+    def test_unknown_memory_stays_unknown(self):
+        from memory.memory_manager import _recall_candidate_kind
+
+        row = {"metadata": {"type": "core_memory", "source": "ordinary_core"}}
+
+        self.assertEqual(_recall_candidate_kind(row), "unknown")
+
+
+class TestTypeAwareFloorFlags(unittest.TestCase):
+    def test_flags_off_by_default(self):
+        from memory.memory_manager import (
+            recall_type_floor_enabled,
+            recall_type_floor_shadow_enabled,
+        )
+
+        self.assertFalse(recall_type_floor_shadow_enabled(env={}))
+        self.assertFalse(recall_type_floor_enabled(env={}))
+
+    def test_shadow_and_enabled_flags(self):
+        from memory.memory_manager import (
+            recall_type_floor_enabled,
+            recall_type_floor_shadow_enabled,
+        )
+
+        self.assertTrue(
+            recall_type_floor_shadow_enabled(
+                env={"MAEZ_RECALL_TYPE_FLOOR_SHADOW": "1"}
+            )
+        )
+        self.assertTrue(
+            recall_type_floor_enabled(env={"MAEZ_RECALL_TYPE_FLOOR_ENABLED": "1"})
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -614,11 +614,15 @@ RANKING_HALF_LIFE_DAYS = 90.0
 EVIDENCE_RECENCY_DAYS = 14.0
 _LIVING_RECALL_DISTANCE_FLOOR = 1e-3
 _RECALL_RELEVANCE_FLOOR_DEFAULT = 0.7800
+_RECALL_SELF_DIGEST_FLOOR_DEFAULT = 0.7200
+_SELF_DIGEST_METADATA_TYPES = frozenset({"daily_consolidation"})
+_SELF_DIGEST_METADATA_SOURCES = frozenset({"nightly_journal"})
 _RECALL_PROMOTION_RERANK_STRENGTH = 0.20
 _LIVING_RECALL_INVALID_DISTANCE_RANK = 1_000_000.0
 _RECALL_TYPE_WEIGHTS = {
     "reflection": 0.25,
     "maez_self": 0.25,
+    "self_digest": 0.25,
     "telegram_exchange": 1.0,
     "reddit_post": 1.0,
     "reasoning": 1.0,
@@ -636,6 +640,10 @@ def _recall_candidate_kind(mem: dict) -> str:
     row_type = str(meta.get("type") or "").strip().lower()
     source = str(meta.get("source") or "").strip().lower()
 
+    if row_type in _SELF_DIGEST_METADATA_TYPES:
+        return "self_digest"
+    if source in _SELF_DIGEST_METADATA_SOURCES:
+        return "self_digest"
     if source_kind == "reflection" or authorship == "reflection_synthesis":
         return "reflection"
     if memory_voice == "maez_self":
@@ -685,6 +693,14 @@ def recall_floor_shadow_enabled(*, env=None) -> bool:
 
 def recall_floor_enabled(*, env=None) -> bool:
     return _truthy_env_flag("MAEZ_RECALL_FLOOR_ENABLED", env=env)
+
+
+def recall_type_floor_shadow_enabled(*, env=None) -> bool:
+    return _truthy_env_flag("MAEZ_RECALL_TYPE_FLOOR_SHADOW", env=env)
+
+
+def recall_type_floor_enabled(*, env=None) -> bool:
+    return _truthy_env_flag("MAEZ_RECALL_TYPE_FLOOR_ENABLED", env=env)
 
 
 def recall_promotion_shadow_enabled(*, env=None) -> bool:
