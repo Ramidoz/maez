@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the superseded type-aware recall floor with a content-blind context floor: casual turns require stronger relevance from any memory, memory-ask turns remain byte-equivalent to live v0, and kind labels survive only as telemetry.
+**Goal:** Replace the superseded type-aware recall floor with a content-blind context floor: casual turns require stronger relevance from raw/daily memory, core remains pass-through as the anchor tier, memory-ask turns remain byte-equivalent to live v0, and kind labels survive only as telemetry.
 
-**Architecture:** Keep v0's flat floor live and promotion parked. Remove v0.1's kind-based treatment path from `memory/memory_manager.py`, introduce new `MAEZ_RECALL_CONTEXT_FLOOR_*` flags, and apply a context-selected floor in shadow/enforce. The only `core/memory/lived_recall.py` change is a read-only telemetry line measuring the existing reflection meta-query bonus debt.
+**Architecture:** Keep v0's flat floor live and promotion parked. Remove v0.1's kind-based treatment path from `memory/memory_manager.py`, introduce new `MAEZ_RECALL_CONTEXT_FLOOR_*` flags, and apply a context-selected floor to raw/daily recall in shadow/enforce. Core is pass-through on all turns because Task 0 found a bond/identity anchor in the casual-core drop set. The only `core/memory/lived_recall.py` change is a read-only telemetry line measuring the existing reflection meta-query bonus debt.
 
 **Tech Stack:** Python stdlib, `unittest`, `ruff`; primary files are `memory/memory_manager.py`, `scripts/recall_quality_shadow_review.py`, `core/memory/lived_recall.py`, and focused tests under `tests/`.
 
@@ -18,13 +18,13 @@
 
 **Live posture before build:** v0 flat floor remains live; v0.1 type-floor shadow/enforce and promotion shadow/enforce are dark in owner-local config. Do not touch live config in this build.
 
-**Key implementation invariant:** current live v0 applies the flat floor to `raw` and `daily` recall, while `core` is not floored on memory-ask turns. v0.2 must preserve memory-ask behavior byte-equivalent to v0. Therefore:
+**Key implementation invariant:** current live v0 applies the flat floor to `raw` and `daily` recall, while `core` is not floored. Task 0 showed that semantic distance cannot safely separate core bond anchors from core journals, so v0.2 keeps `core` pass-through on every turn. Therefore:
 
 - on memory-ask turns, use v0 behavior: `raw` and `daily` use base floor `0.7800`; `core` is pass-through;
-- on casual turns, apply the content-blind casual floor to `raw`, `daily`, and `core`;
+- on casual turns, apply the content-blind casual floor to `raw` and `daily`; `core` is pass-through;
 - kind labels may be computed for logs/review artifacts only; they must not select floor values or fallback rescue order.
 
-**Core fork surfaced by review:** casual `core` flooring is a real design choice, not an invisible footnote. Keeping `core` pass-through on all turns would avoid anchor-risk but leave core-tier journals bubbling; flooring `core` on casual turns quiets those journals but newly gates candidates that v0 never gated. Task 0 therefore measures `core_newly_gated_on_casual` separately. If any newly gated core candidate is an on-point relational/bond anchor, STOP before implementation and choose either core pass-through or a re-pinned floor with Rohit.
+**Core fork resolved by owner review:** casual `core` flooring was measured and rejected. The `CORE_GATE` sample included `## Who Rohit Is`, and the live soul/self-card do not always-load owner identity; recall is the only path for that anchor. A floor cannot split core anchors from core journals because their distances overlap. v0.2 therefore floors raw/daily only and intentionally accepts residual core-tier journal bubbling as upstream promotion/curation debt for the later learned-relevance/promotion redesign.
 
 ## Files
 
@@ -59,7 +59,7 @@ Do not modify:
 - Create: `docs/proof/2026-07-01-recall-quality-v0-2-floor-derivation.md`
 - No runtime code changes.
 
-**Purpose:** Confirm that `0.7200` is supported by the all-kind distance distribution, not only by self-digest distances. The make-or-break checks are whether on-point relational candidates fall in the raw/daily tightened band and whether newly gated `core` candidates include on-point relational/bond anchors.
+**Purpose:** Confirm that `0.7200` is supported by the all-kind raw/daily distance distribution, not only by self-digest distances, and record why the casual-core-floor branch is rejected. The make-or-break check for the implemented floor is whether on-point relational candidates fall in the raw/daily tightened band. The `core_newly_gated_on_casual` sample is historical gate evidence showing why core must remain pass-through.
 
 - [ ] **Step 1: Run the all-kind candidate probe**
 
@@ -187,10 +187,10 @@ Expected current shape from the pre-plan probe:
 ```text
 floor=0.7200 drops=28 by_kind={'self_digest': 23, 'unknown': 5} relational_tightened_band=0 core_newly_gated_on_casual=14 core_by_kind={'self_digest': 9, 'unknown': 5} core_relational=0
 tightened_band_0.7200_to_0.7800 contains raw/daily self_digest rows and no telegram_exchange rows.
-core_newly_gated_at_0.7200 contains core self_digest rows plus reviewable unknown core rows; no telegram_exchange rows in the current snapshot.
+core_newly_gated_at_0.7200 contains core self_digest rows plus unknown core rows, including the owner-reviewed bond anchor "Who Rohit Is"; therefore core is pass-through in the implementation.
 ```
 
-If `relational_tightened_band` is greater than `0`, STOP and do not proceed to implementation. If `core_relational` is greater than `0`, STOP. If any `CORE_GATE` sample is owner-reviewed as an on-point relational/bond anchor despite its kind label, STOP. The floor or core-pass-through choice must be re-pinned by owner/Codex/Claude review before code is written.
+If raw/daily `relational_tightened_band` is greater than `0`, STOP and do not proceed to implementation. Do not use `core_relational == 0` as approval to floor core: owner review already found an on-point core bond anchor that the classifier called `unknown`, so core pass-through is the selected branch.
 
 - [ ] **Step 2: Commit the derivation artifact**
 
@@ -198,8 +198,8 @@ Create `docs/proof/2026-07-01-recall-quality-v0-2-floor-derivation.md` with thes
 
 - `# Recall Quality v0.2 Floor Derivation`
 - `## Command` containing the full shell command from Task 0 Step 1.
-- `## Result` containing `selected_casual_floor: 0.7200`, the observed `relational_tightened_band_at_0_7200`, `core_newly_gated_on_casual_at_0_7200`, `core_relational_at_0_7200`, `total_rows`, and `casual_rows`.
-- `## Review` containing this sentence: `PASS only if relational_tightened_band_at_0_7200 == 0, core_relational_at_0_7200 == 0, and neither tightened-band nor CORE_GATE samples are on-point relational/bond anchors.`
+- `## Result` containing `selected_casual_floor: 0.7200`, `selected_floor_scope: raw_daily_only`, `core_policy: pass_through_all_turns`, the observed `relational_tightened_band_at_0_7200`, `core_newly_gated_on_casual_at_0_7200`, `core_relational_at_0_7200`, `total_rows`, and `casual_rows`.
+- `## Review` containing this sentence: `Raw/daily floor PASS only if relational_tightened_band_at_0_7200 == 0. Casual core floor STOPPED because CORE_GATE contains an owner-reviewed bond/identity anchor; implementation keeps core pass-through on all turns.`
 - `## Raw Output` containing the full command output from Task 0 Step 1.
 
 Do not commit the artifact if any of those sections are absent.
@@ -337,7 +337,7 @@ No runtime behavior changes while MAEZ_RECALL_CONTEXT_FLOOR_* flags are unset. O
 - Modify: `memory/memory_manager.py`
 - Modify: `tests/test_recall_floor.py`
 
-**Goal:** Remove v0.1's kind-based floor and fallback decisions. Floor is selected by turn context only; fallback is best-by-distance only.
+**Goal:** Remove v0.1's kind-based floor and fallback decisions. Raw/daily floor is selected by turn context only; core is pass-through; fallback is best-by-distance only.
 
 - [ ] **Step 1: Write failing predicate tests**
 
@@ -420,7 +420,7 @@ class TestContextFloorPredicate(unittest.TestCase):
             )
         )
 
-    def test_casual_core_is_floor_gated_content_blind(self):
+    def test_casual_core_is_pass_through_because_core_carries_bond_anchors(self):
         from memory.memory_manager import _passes_context_recall_floor
 
         row = {
@@ -429,7 +429,7 @@ class TestContextFloorPredicate(unittest.TestCase):
             "metadata": {"type": "core_memory", "source": "nightly_journal"},
         }
 
-        self.assertFalse(
+        self.assertTrue(
             _passes_context_recall_floor(
                 row,
                 query_is_memory_ask=False,
@@ -458,7 +458,7 @@ class TestContextWholeRecallFallback(unittest.TestCase):
     def _ids(self, partitions, tier):
         return [row["id"] for row in partitions.get(tier, [])]
 
-    def test_casual_floor_drops_weak_memory_of_any_kind_when_real_memory_exists(self):
+    def test_casual_floor_drops_weak_raw_daily_memory_when_real_memory_exists(self):
         from memory.memory_manager import _apply_context_floor_to_partitions
 
         partitions = {
@@ -477,9 +477,9 @@ class TestContextWholeRecallFallback(unittest.TestCase):
 
         self.assertEqual(self._ids(filtered, "raw"), ["raw-good"])
         self.assertEqual(self._ids(filtered, "daily"), [])
-        self.assertEqual(self._ids(filtered, "core"), [])
+        self.assertEqual(self._ids(filtered, "core"), ["nightly-diary"])
         self.assertEqual(summary["fallback_rescue_kind"], None)
-        self.assertEqual(summary["would_drop_count"], 3)
+        self.assertEqual(summary["would_drop_count"], 2)
 
     def test_fallback_rescues_best_by_distance_even_when_best_is_diary(self):
         from memory.memory_manager import _apply_context_floor_to_partitions
@@ -572,7 +572,7 @@ def _candidate_context_floor(
     casual_floor: float,
     tier: str,
 ) -> float | None:
-    if query_is_memory_ask and tier == "core":
+    if tier == "core":
         return None
     return base_floor if query_is_memory_ask else casual_floor
 
@@ -761,7 +761,7 @@ class LivingRecallContextFloorTests(unittest.TestCase):
         row["metadata"]["type"] = "reasoning"
         return row
 
-    def test_context_floor_drops_weak_memory_of_any_kind_on_casual_turn(self):
+    def test_context_floor_drops_weak_raw_daily_memory_on_casual_turn(self):
         mm = _manager(
             raw_rows=[
                 self._reasoning("raw-real", distance=0.30),
@@ -787,7 +787,7 @@ class LivingRecallContextFloorTests(unittest.TestCase):
 
         self.assertEqual(_partition_ids(evidence, "raw"), ["raw-real"])
         self.assertEqual(_partition_ids(evidence, "daily"), [])
-        self.assertEqual(_partition_ids(context, "core"), [])
+        self.assertEqual(_partition_ids(context, "core"), ["nightly-diary"])
 
     def test_context_floor_shadow_does_not_change_live_recall(self):
         mm = _manager(
@@ -966,7 +966,7 @@ git commit -m "feat(recall): wire content-blind context floor
 
 ## Predicted effect
 
-With MAEZ_RECALL_CONTEXT_FLOOR_* unset, live recall remains unchanged. With SHADOW=1, Maez logs content-blind context-floor projections. With ENABLED=1, casual turns apply the stronger floor uniformly by relevance, while memory-ask turns preserve v0 recall shape."
+With MAEZ_RECALL_CONTEXT_FLOOR_* unset, live recall remains unchanged. With SHADOW=1, Maez logs content-blind context-floor projections. With ENABLED=1, casual turns apply the stronger floor to raw/daily recall while core remains pass-through; memory-ask turns preserve v0 recall shape."
 ```
 
 ---
@@ -978,7 +978,7 @@ With MAEZ_RECALL_CONTEXT_FLOOR_* unset, live recall remains unchanged. With SHAD
 - Modify: `tests/test_recall_quality_shadow_review.py`
 - Modify or create: `tests/test_recall_context_floor_shadow_review.py`
 
-**Goal:** The review artifact must measure the new thing: content-blind drops by kind, raw/daily relational starvation, newly gated `core` starvation, memory-ask byte-equivalence, and fallback rescue by distance.
+**Goal:** The review artifact must measure the new thing: content-blind raw/daily drops by kind, raw/daily relational starvation, core pass-through preservation, memory-ask byte-equivalence, and fallback rescue by distance.
 
 - [ ] **Step 1: Write failing parser tests**
 
@@ -1021,13 +1021,13 @@ class ContextFloorParserTests(unittest.TestCase):
         line = (
             "recall_context_floor_candidate tier=core id=core-high kind=unknown "
             "distance=0.9500 applied_floor=pass base_floor=0.7800 casual_floor=0.7200 "
-            "would_drop=False query_memory_ask=True retained=True preview=Core pass-through row"
+            "would_drop=False query_memory_ask=False retained=True preview=Core pass-through row"
         )
 
         row = parse_context_floor_candidate(line)
 
         self.assertIsNone(row["applied_floor"])
-        self.assertTrue(row["query_memory_ask"])
+        self.assertFalse(row["query_memory_ask"])
         self.assertTrue(row["retained"])
         self.assertEqual(row["preview"], "Core pass-through row")
 
@@ -1049,7 +1049,7 @@ class ContextFloorParserTests(unittest.TestCase):
 
 
 class ContextFloorSummaryTests(unittest.TestCase):
-    def test_summary_reports_relational_starvation_core_gating_and_memory_ask_tightening(self):
+    def test_summary_reports_raw_daily_relational_starvation_core_pass_through_and_memory_ask_tightening(self):
         rows = [
             {
                 "kind": "telegram_exchange",
@@ -1062,9 +1062,9 @@ class ContextFloorSummaryTests(unittest.TestCase):
                 "base_floor": 0.78,
             },
             {
-                "kind": "telegram_exchange",
-                "tier": "core",
-                "preview": "relational core sample",
+                "kind": "self_digest",
+                "tier": "daily",
+                "preview": "daily journal sample",
                 "query_memory_ask": False,
                 "would_drop": True,
                 "retained": False,
@@ -1072,13 +1072,13 @@ class ContextFloorSummaryTests(unittest.TestCase):
                 "base_floor": 0.78,
             },
             {
-                "kind": "self_digest",
+                "kind": "unknown",
                 "tier": "core",
-                "preview": "core journal sample",
+                "preview": "core anchor pass-through sample",
                 "query_memory_ask": False,
-                "would_drop": True,
-                "retained": False,
-                "applied_floor": 0.72,
+                "would_drop": False,
+                "retained": True,
+                "applied_floor": None,
                 "base_floor": 0.78,
             },
             {
@@ -1095,15 +1095,16 @@ class ContextFloorSummaryTests(unittest.TestCase):
 
         summary = summarize_context_floor_rows(rows)
 
-        self.assertEqual(summary["casual_drop_count"], 3)
-        self.assertEqual(summary["casual_drop_by_kind"]["telegram_exchange"], 2)
+        self.assertEqual(summary["casual_drop_count"], 2)
+        self.assertEqual(summary["casual_drop_by_kind"]["telegram_exchange"], 1)
+        self.assertEqual(summary["casual_drop_by_kind"]["self_digest"], 1)
         self.assertEqual(summary["casual_relational_tightened_count"], 1)
-        self.assertEqual(summary["core_newly_gated_on_casual_count"], 2)
-        self.assertEqual(summary["core_newly_gated_by_kind"]["telegram_exchange"], 1)
-        self.assertEqual(summary["core_relational_tightened_count"], 1)
+        self.assertEqual(summary["core_candidate_count"], 1)
+        self.assertEqual(summary["core_drop_count"], 0)
+        self.assertEqual(summary["core_pass_through_count"], 1)
         self.assertEqual(
-            summary["sample_core_newly_gated"][0]["preview"],
-            "relational core sample",
+            summary["sample_core_pass_through"][0]["preview"],
+            "core anchor pass-through sample",
         )
         self.assertEqual(summary["memory_ask_tightened_count"], 0)
         self.assertEqual(summary["memory_ask_kept_count"], 1)
@@ -1206,15 +1207,14 @@ def summarize_context_floor_rows(rows: list[dict]) -> dict:
         if row.get("tier") in {"raw", "daily"}
         and row.get("kind") in RELATIONAL_KINDS
     ]
-    core_newly_gated = [
-        row for row in casual_drops if row.get("tier") == "core"
-    ]
-    core_newly_gated_by_kind: dict[str, int] = {}
-    for row in core_newly_gated:
-        kind = str(row.get("kind") or "unknown")
-        core_newly_gated_by_kind[kind] = core_newly_gated_by_kind.get(kind, 0) + 1
-    core_relational = [
-        row for row in core_newly_gated if row.get("kind") in RELATIONAL_KINDS
+    core_candidates = [row for row in casual if row.get("tier") == "core"]
+    core_drops = [row for row in casual_drops if row.get("tier") == "core"]
+    core_pass_through = [
+        row
+        for row in casual
+        if row.get("tier") == "core"
+        and row.get("applied_floor") is None
+        and row.get("retained")
     ]
     memory_tightened = [
         row for row in memory_ask
@@ -1227,16 +1227,16 @@ def summarize_context_floor_rows(rows: list[dict]) -> dict:
         "casual_drop_count": len(casual_drops),
         "casual_drop_by_kind": casual_drop_by_kind,
         "casual_relational_tightened_count": len(relational_tightened),
-        "core_newly_gated_on_casual_count": len(core_newly_gated),
-        "core_newly_gated_by_kind": core_newly_gated_by_kind,
-        "core_relational_tightened_count": len(core_relational),
+        "core_candidate_count": len(core_candidates),
+        "core_drop_count": len(core_drops),
+        "core_pass_through_count": len(core_pass_through),
         "memory_ask_tightened_count": len(memory_tightened),
         "memory_ask_kept_count": len(memory_kept),
         "review_status": "review_required" if rows else "no_context_floor_rows",
         "sample_casual_drops": casual_drops[:20],
         "sample_relational_tightened": relational_tightened[:20],
-        "sample_core_newly_gated": core_newly_gated[:20],
-        "sample_core_relational": core_relational[:20],
+        "sample_core_drops": core_drops[:20],
+        "sample_core_pass_through": core_pass_through[:20],
         "sample_memory_ask_tightened": memory_tightened[:20],
     }
 ```
@@ -1343,7 +1343,8 @@ def write_markdown(
         "- HOLD if floor_would_empty_count suggests likely answer starvation.",
         "- PASS v0.2 only if casual_drop_count > 0.",
         "- PASS v0.2 only if casual_relational_tightened_count == 0, or every relational sample is owner-reviewed as off-point.",
-        "- PASS v0.2 only if core_relational_tightened_count == 0, and every sample_core_newly_gated row is owner-reviewed as not an on-point relational/bond anchor.",
+        "- PASS v0.2 only if core_drop_count == 0.",
+        "- PASS v0.2 only if core_pass_through_count == core_candidate_count.",
         "- PASS v0.2 only if memory_ask_tightened_count == 0.",
         "- PASS v0.2 only if memory_ask_kept_count > 0.",
         "- HOLD if fallback rescue is not best_by_distance.",
@@ -1767,7 +1768,8 @@ In `write_markdown`, replace type-aware gate bullets with:
 ```python
 "- PASS v0.2 only if casual_drop_count > 0.",
 "- PASS v0.2 only if casual_relational_tightened_count == 0, or every relational sample is owner-reviewed as off-point.",
-"- PASS v0.2 only if core_relational_tightened_count == 0, and every sample_core_newly_gated row is owner-reviewed as not an on-point relational/bond anchor.",
+"- PASS v0.2 only if core_drop_count == 0.",
+"- PASS v0.2 only if core_pass_through_count == core_candidate_count.",
 "- PASS v0.2 only if memory_ask_tightened_count == 0.",
 "- PASS v0.2 only if memory_ask_kept_count > 0.",
 "- HOLD if fallback rescue is not best_by_distance.",
@@ -1799,12 +1801,14 @@ Expected: artifact contains:
 ## Context Floor Summary
 casual_drop_count > 0
 casual_relational_tightened_count == 0
-core_relational_tightened_count == 0
+core_candidate_count is present
+core_drop_count == 0
+core_pass_through_count == core_candidate_count
 memory_ask_tightened_count == 0
 memory_ask_kept_count > 0
 ```
 
-If `casual_relational_tightened_count > 0` or `core_relational_tightened_count > 0`, STOP. If `sample_core_newly_gated` contains an owner-reviewed on-point relational/bond anchor despite its kind label, STOP. Do not commit an enforce recommendation. Hand the artifact to Rohit/Claude for floor/core-policy re-pin.
+If `casual_relational_tightened_count > 0`, `core_drop_count > 0`, or `core_pass_through_count != core_candidate_count`, STOP. Do not commit an enforce recommendation. Core candidates must log as pass-through; raw/daily relational starvation is the remaining floor gate.
 
 - [ ] **Step 5: Commit the artifact only if it is a reviewable gate artifact**
 
@@ -1814,7 +1818,7 @@ git commit -m "docs(recall): add v0.2 context floor shadow review
 
 ## Predicted effect
 
-No runtime behavior changes. The artifact records whether the content-blind casual floor quiets weak recall without starving raw/daily or core relational memory, or tightening memory-ask turns."
+No runtime behavior changes. The artifact records whether the content-blind casual floor quiets weak raw/daily recall without starving relational memory, dropping core anchors, or tightening memory-ask turns."
 ```
 
 Do not enable live flags in this task.
@@ -1886,7 +1890,8 @@ Create `docs/handoffs/2026-07-01-recall-quality-v0-2-for-review.md`:
 
 - v0.1 type-aware floor treatment removed from runtime code.
 - New content-blind `MAEZ_RECALL_CONTEXT_FLOOR_*` flags added.
-- Casual floor uses `0.7200`, derived from all-kind shadow data only if the core-newly-gated review is clean.
+- Casual raw/daily floor uses `0.7200`, derived from all-kind shadow data.
+- Core remains pass-through on all turns because Task 0 found an owner-reviewed bond/identity anchor in the core drop set.
 - Memory-ask turns preserve live v0 shape.
 - Fallback rescues best-by-distance only.
 - `_recall_candidate_kind` is telemetry plus parked promotion only.
@@ -1938,10 +1943,10 @@ Stop here for Codex/Claude review. Do not merge to `main`, do not push, do not e
 
 ## Self-Review
 
-**Spec coverage:** Covered content-blind context floor (Tasks 1-3), kind-blind fallback (Task 2), new flags (Tasks 1/3), v0.1 treatment removal (Tasks 2/3/8), kind telemetry but no kind decisions (Tasks 4/5), read-only `lived_recall.py` bonus telemetry (Task 6), all-kind floor derivation plus raw/daily relational and newly gated core starvation gates (Tasks 0/7), memory-ask byte-equivalence (Tasks 2/3/7), STOP at review gate (Task 8).
+**Spec coverage:** Covered content-blind raw/daily context floor (Tasks 1-3), kind-blind fallback (Task 2), core pass-through on all turns (Tasks 2-4/7), new flags (Tasks 1/3), v0.1 treatment removal (Tasks 2/3/8), kind telemetry but no kind decisions (Tasks 4/5), read-only `lived_recall.py` bonus telemetry (Task 6), all-kind raw/daily floor derivation plus historical core STOP evidence (Tasks 0/7), memory-ask byte-equivalence (Tasks 2/3/7), STOP at review gate (Task 8).
 
-**Placeholder scan:** The plan pins `0.7200` from a pre-plan all-kind probe and requires Task 0 to reproduce the derivation before implementation. There are no `TBD`/`TODO` placeholders; if Task 0 finds raw/daily relational starvation or newly gated core relational anchors, the plan explicitly stops rather than guessing a new value.
+**Placeholder scan:** The plan pins `0.7200` from a pre-plan all-kind probe and requires Task 0 to reproduce the derivation before implementation. There are no `TBD`/`TODO` placeholders; if Task 0 finds raw/daily relational starvation, the plan explicitly stops rather than guessing a new value. Core floor tuning is intentionally out of scope because Task 0 already selected core pass-through.
 
 **Type consistency:** Helper names are consistent: `recall_context_floor_*`, `_candidate_context_floor`, `_passes_context_recall_floor`, `_apply_context_floor_to_partitions`, `parse_context_floor_candidate`, `summarize_context_floor_rows`. Old `type_floor` names appear only as removal targets.
 
-**Important implementation nuance:** Memory-ask byte-equivalence to live v0 requires `core` pass-through on memory-ask turns. Casual turns may floor `core` candidates content-blindly only if Task 0 and Task 7 show the newly gated core set does not contain on-point relational/bond anchors. If that gate fails, the correct design fork is core pass-through on all turns or a re-pinned floor, not silent enforcement.
+**Important implementation nuance:** `core` is pass-through on all turns. This is not a kind preference; it is a tier architecture rule after Task 0 showed that core holds both bond anchors and journals at overlapping semantic distances. The residual core-journal bubbling is named as upstream promotion/curation debt, not papered over by a recall floor.

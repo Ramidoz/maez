@@ -122,6 +122,8 @@ PY
 ## Result
 
 - selected_casual_floor: 0.7200
+- selected_floor_scope: raw_daily_only
+- core_policy: pass_through_all_turns
 - total_rows: 128
 - casual_rows: 80
 - relational_tightened_band_at_0_7200: 0
@@ -130,9 +132,9 @@ PY
 
 ## Review
 
-PASS only if relational_tightened_band_at_0_7200 == 0, core_relational_at_0_7200 == 0, and neither tightened-band nor CORE_GATE samples are on-point relational/bond anchors.
+Raw/daily floor PASS only if relational_tightened_band_at_0_7200 == 0. Casual core floor STOPPED because CORE_GATE contains an owner-reviewed bond/identity anchor; implementation keeps core pass-through on all turns.
 
-Task 0 metric status: raw/daily relational band is empty and core_relational is 0. Owner review still needs to inspect the CORE_GATE unknown samples before implementation proceeds on the casual-core-floor branch.
+Task 0 metric status: raw/daily relational band is empty, so `0.7200` is acceptable for raw/daily casual recall. Owner review identified `## Who Rohit Is` in the CORE_GATE unknown samples as an on-point bond/identity anchor. Because the live soul/self-card do not always-load owner identity, recall is the only path for that anchor; core must therefore stay pass-through. Residual core-tier journal bubbling is upstream promotion/curation debt, not a recall-floor problem.
 
 ## Raw Output
 
