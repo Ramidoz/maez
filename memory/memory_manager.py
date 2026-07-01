@@ -717,7 +717,7 @@ def _promotion_adjusted_distance(
     if not isinstance(effective_distance, (int, float)):
         return math.inf
     effective = float(effective_distance)
-    if not math.isfinite(effective) or effective <= 0.0:
+    if not math.isfinite(effective) or effective < 0.0:
         return math.inf
 
     if isinstance(promotion, bool):

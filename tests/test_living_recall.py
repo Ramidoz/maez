@@ -442,6 +442,15 @@ class ShadowPromotionTests(unittest.TestCase):
                 return score_by_id[stats.memory_id]
 
             with (
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "MAEZ_RECALL_PROMOTION_SHADOW": "1",
+                        "MAEZ_RECALL_PROMOTION_ENABLED": "0",
+                        "MAEZ_RECALL_FLOOR_SHADOW": "0",
+                        "MAEZ_RECALL_FLOOR_ENABLED": "0",
+                    },
+                ),
                 mock.patch("memory.memory_manager._now_seconds", return_value=datetime(2026, 5, 29, 12, 0, tzinfo=timezone.utc).timestamp()),
                 mock.patch("core.memory_scoring.record_recall", side_effect=lambda *a, **k: None),
                 mock.patch("core.memory_scoring.get_stats", side_effect=fake_get_stats),
@@ -613,6 +622,49 @@ class PromotionShadowCompareTests(unittest.TestCase):
         self.assertIn("kind=reflection type_weight=0.25", log_text)
         self.assertIn("applied=True", log_text)
 
+    def test_enabled_promotion_keeps_exact_zero_distance_first(self):
+        exact = _row(
+            "exact-zero",
+            content="owner dinner exact match",
+            days_ago=1,
+            distance=0.0,
+        )
+        weaker = _row(
+            "weaker",
+            content="owner dinner weaker match",
+            days_ago=1,
+            distance=0.20,
+        )
+        mm = _manager(raw_rows=[exact, weaker])
+
+        def fake_get_stats(memory_id):
+            from core.memory_scoring import RecallStats
+
+            return RecallStats(memory_id=memory_id)
+
+        with (
+            mock.patch.dict(
+                os.environ,
+                {
+                    "MAEZ_RECALL_PROMOTION_SHADOW": "0",
+                    "MAEZ_RECALL_PROMOTION_ENABLED": "1",
+                    "MAEZ_RECALL_FLOOR_SHADOW": "0",
+                    "MAEZ_RECALL_FLOOR_ENABLED": "0",
+                },
+            ),
+            mock.patch(
+                "memory.memory_manager._now_seconds",
+                return_value=datetime(2026, 5, 29, 12, 0, tzinfo=timezone.utc).timestamp(),
+            ),
+            mock.patch("core.memory_scoring.record_recall", side_effect=lambda *a, **k: None),
+            mock.patch("core.memory_scoring.get_stats", side_effect=fake_get_stats),
+            mock.patch("core.memory_scoring.promotion_score", return_value=1.0),
+        ):
+            evidence, context = mm.recall_for_telegram_living("owner dinner")
+
+        served_order = _partition_ids(evidence, "raw") + _partition_ids(context, "raw")
+        self.assertEqual(served_order[:2], ["exact-zero", "weaker"])
+
 
 class PromotionRerankHelperTests(unittest.TestCase):
     def test_reflection_gets_less_promotion_boost_than_relational_candidate(self):
@@ -662,7 +714,6 @@ class PromotionRerankHelperTests(unittest.TestCase):
             None,
             float("nan"),
             float("inf"),
-            0.0,
             -0.01,
         ]
 
@@ -675,6 +726,17 @@ class PromotionRerankHelperTests(unittest.TestCase):
                 )
 
                 self.assertEqual(adjusted, math.inf)
+
+    def test_exact_zero_effective_distance_remains_best_sort_key(self):
+        from memory.memory_manager import _promotion_adjusted_distance
+
+        adjusted = _promotion_adjusted_distance(
+            {"metadata": {"type": "telegram_exchange"}},
+            promotion=1.0,
+            effective_distance=0.0,
+        )
+
+        self.assertEqual(adjusted, 0.0)
 
 
 class RecallCandidateKindTests(unittest.TestCase):
