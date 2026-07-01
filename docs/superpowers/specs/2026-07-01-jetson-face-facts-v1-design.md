@@ -35,7 +35,7 @@ The brain receives packets at a **new intake endpoint** and, in v1, validates + 
 
 ## The Contract — `jetson_face_facts.v0`
 
-A **new** contract, distinct from Slice-A's `jetson_presence.v0`. Strict key-set at both levels (extra keys rejected, same discipline as the presence contract). **Per-frame observation** carrying a `faces` list — the owner's fields reorganized so frame-level and face-level are honest, and so an empty room ("I looked, no one was there") is representable without inventing a face:
+A **new** contract, distinct from Slice-A's `jetson_presence.v0`. Strict key-set at both levels (extra keys rejected, same discipline as the presence contract). **Per-frame observation** carrying a `faces` list — the owner's fields reorganized so frame-level and face-level are honest, and so **"the detector found zero faces in this frame"** is representable without inventing a face. Note carefully: that is a fact about *detections*, not about the room. The eye may say "zero faces detected this frame"; it may **never** say "no one is here" — a person can be off-camera, back-turned, occluded, out of lens, or simply missed by the detector. Absence is a brain inference over many facts, never an eye claim.
 
 ```json
 {
@@ -57,12 +57,12 @@ A **new** contract, distinct from Slice-A's `jetson_presence.v0`. Strict key-set
 
 - **Frame-level:** `schema_version`, `model_id`, `sensor_state`, `frame_quality`, `ts`, `faces`.
 - **Face-level (0..N):** `embedding`, `det_score`, `box`, `track_id`.
-- `faces: []` with `sensor_state: available, frame_quality: good` is the honest "no one is here right now" fact. `curtained`/`error` carry an empty `faces` list.
+- `faces: []` with `sensor_state: available, frame_quality: good` is the honest **"the sensor was available and the model detected zero faces this frame"** fact — NOT "no one is here." `curtained`/`error` also carry an empty `faces` list (the eye wasn't looking / couldn't).
 
 **Why the extra fields (owner's rationale, kept):**
 - `model_id` is load-bearing — embeddings from different models are not comparable, and a future model swap must not silently corrupt the brain's learned clusters. The brain keys comparability on it.
 - `frame_quality` lets the brain *weight* perception without the eye ever deciding identity — a blurry face contributes weak geometry, not a verdict.
-- `track_id` is edge temporal smoothing only (same face across a few frames); it is still geometry, carries no identity, and the brain owns all long-term linking.
+- `track_id` is edge temporal smoothing only (same face across a few consecutive frames); it is still geometry, carries no identity, and the brain owns all long-term linking. **Hard constraint (else it becomes a stealth identity store):** `track_id` is in-memory only, short-lived, session-local, and **reset on every restart** — never stable across runs, never persisted, never a durable handle for a person. A structural guard asserts the edge writes no `track_id` (or any identity) store to disk.
 
 ## Retention — through existing machinery, nothing new
 
@@ -93,14 +93,14 @@ Full perception inward; discipline only where it faces outward.
 
 ## Relationship to Slice-A
 
-Face-Facts **supersedes** the `jetson_presence.v0` present/absent intake: the Jetson no longer decides presence, so nothing emits that label anymore. Presence, if Maez forms it, becomes an **internal brain derivation** from facts (future slice), not a doorway intake. The old presence doorway becomes vestigial; retiring it is a separate cleanup, not a v1 blocker. v1 **adds** the face-facts intake alongside it.
+Face-Facts **supersedes** the `jetson_presence.v0` present/absent intake: the Jetson no longer decides presence, so nothing emits that label anymore. Presence, if Maez forms it, becomes an **internal brain derivation** from facts (future slice), not a doorway intake. **Scope discipline:** v1 **adds** the face-facts intake and marks the old presence doorway *vestigial* — it does **not** retire, delete, or modify `jetson_presence.v0` inside this slice. Retiring the old contract is a separate, explicitly-scoped cleanup, never folded into v1.
 
 ## Structural Guards (v1)
 
 - **Jetson stateless / no edge identity store:** no durable write of embeddings, crops, frames, or an identity file on the edge (extends the B0/B1a no-frame-write guard to embeddings).
 - **No raw frame durable write** anywhere (edge or host).
 - **Host intake does not durably store embeddings in v1:** validate → content-light receipt → drop; a guard asserts the intake path opens no durable embedding/biometric store.
-- **Content-light receipt only:** the receipt logs face count / sensor_state / frame_quality / model_id / ts — never the embedding values.
+- **Content-light receipt only:** the receipt logs `face_count` / sensor_state / frame_quality / model_id / ts — never the embedding values, and **never an absence verdict** (`face_count=0`, never `owner_absent`/`room_empty`/`no_one_here` — that inference is not the eye's or the intake's to make).
 - **No downstream consumer** on the host (no prompt, heartbeat, memory promotion, cockpit, behavior).
 - **Strict contract:** extra keys rejected at frame and face level; `model_id` required; unknown `schema_version` rejected.
 - **No egress:** nothing forwards embeddings out of Maez's system.
@@ -109,7 +109,7 @@ Face-Facts **supersedes** the `jetson_presence.v0` present/absent intake: the Je
 
 **Host / unit:**
 1. Contract round-trips: a well-formed observation validates; extra key (frame or face level) → rejected; missing `model_id` → rejected; unknown `schema_version` → rejected.
-2. Empty room fact (`faces: []`, available/good) validates and is distinct from `curtained`/`error`.
+2. Zero-detection fact (`faces: []`, available/good = "detector found zero faces this frame") validates and is distinct from `curtained`/`error`. The receipt says `face_count=0`, never an absence verdict.
 3. Receipt is content-light: embedding values never appear in the receipt/log.
 4. Intake writes no durable embedding store (dynamic no-durable-write witness over the receive path).
 5. No consumer: receiving a packet triggers no prompt/heartbeat/memory/behavior.
