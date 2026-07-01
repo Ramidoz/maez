@@ -685,6 +685,16 @@ def recall_floor_enabled(*, env=None) -> bool:
     return _truthy_env_flag("MAEZ_RECALL_FLOOR_ENABLED", env=env)
 
 
+def _finite_distance(mem: dict) -> float | None:
+    dist = mem.get("distance")
+    if not isinstance(dist, (int, float)):
+        return None
+    value = float(dist)
+    if not math.isfinite(value):
+        return None
+    return value
+
+
 def _passes_recall_floor(mem: dict, *, floor: float) -> bool:
     """True iff a candidate clears the base-distance relevance floor.
 
@@ -692,10 +702,10 @@ def _passes_recall_floor(mem: dict, *, floor: float) -> bool:
     candidate, because silently dropping unknown-distance memory is the less
     honest failure.
     """
-    dist = mem.get("distance")
-    if not isinstance(dist, (int, float)):
+    dist = _finite_distance(mem)
+    if dist is None:
         return True
-    return float(dist) < floor
+    return dist < floor
 
 
 def _apply_recall_floor(mems: list[dict], *, floor: float) -> list[dict]:
@@ -711,10 +721,10 @@ def _apply_recall_floor(mems: list[dict], *, floor: float) -> list[dict]:
 
 
 def _distance_sort_key(mem: dict) -> float:
-    dist = mem.get("distance")
-    if isinstance(dist, (int, float)):
-        return float(dist)
-    return 1.0
+    dist = _finite_distance(mem)
+    if dist is None:
+        return 1.0
+    return dist
 
 
 def _apply_recall_floor_with_fallback(
@@ -731,6 +741,14 @@ def _apply_recall_floor_with_fallback(
     """
     kept = _apply_recall_floor(mems, floor=floor)
     if kept or not recall_floor_enabled() or min_keep <= 0:
+        if (
+            kept
+            and recall_floor_enabled()
+            and min_keep > 0
+            and not any(_finite_distance(mem) is not None for mem in kept)
+            and any(_finite_distance(mem) is not None for mem in mems)
+        ):
+            return sorted(mems, key=_distance_sort_key)[:min_keep]
         return kept
     return sorted(mems, key=_distance_sort_key)[:min_keep]
 

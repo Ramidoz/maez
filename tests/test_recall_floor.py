@@ -31,6 +31,11 @@ class TestFloorPredicate(unittest.TestCase):
     def test_missing_distance_passes_failsafe(self):
         self.assertTrue(_passes_recall_floor({}, floor=0.75))
 
+    def test_non_finite_distance_passes_failsafe(self):
+        self.assertTrue(_passes_recall_floor({"distance": float("nan")}, floor=0.75))
+        self.assertTrue(_passes_recall_floor({"distance": float("inf")}, floor=0.75))
+
+
 class TestApplyFloor(unittest.TestCase):
     _raw = [
         {"id": "a", "distance": 0.40},
@@ -83,6 +88,30 @@ class TestApplyFloorWithFallback(unittest.TestCase):
         with mock.patch.dict("os.environ", {"MAEZ_RECALL_FLOOR_ENABLED": "1"}):
             kept = _apply_recall_floor_with_fallback(rows, floor=0.78, min_keep=1)
         self.assertEqual([row["id"] for row in kept], ["unknown-distance"])
+
+    def test_non_finite_distance_does_not_win_fallback_over_finite_candidate(self):
+        from memory.memory_manager import _apply_recall_floor_with_fallback
+
+        rows = [
+            {"id": "nan-first", "distance": float("nan")},
+            {"id": "finite-best", "distance": 0.82},
+            {"id": "finite-worse", "distance": 0.95},
+        ]
+        with mock.patch.dict("os.environ", {"MAEZ_RECALL_FLOOR_ENABLED": "1"}):
+            kept = _apply_recall_floor_with_fallback(rows, floor=0.78, min_keep=1)
+        self.assertEqual([row["id"] for row in kept], ["finite-best"])
+
+    def test_infinite_distance_does_not_win_fallback_over_finite_candidate(self):
+        from memory.memory_manager import _apply_recall_floor_with_fallback
+
+        rows = [
+            {"id": "inf-first", "distance": float("inf")},
+            {"id": "finite-best", "distance": 0.82},
+            {"id": "finite-worse", "distance": 0.95},
+        ]
+        with mock.patch.dict("os.environ", {"MAEZ_RECALL_FLOOR_ENABLED": "1"}):
+            kept = _apply_recall_floor_with_fallback(rows, floor=0.78, min_keep=1)
+        self.assertEqual([row["id"] for row in kept], ["finite-best"])
 
 
 class TestTeacherSignal(unittest.TestCase):
