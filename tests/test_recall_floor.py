@@ -218,5 +218,108 @@ class TestTypeAwareFloorFlags(unittest.TestCase):
         )
 
 
+class TestMemoryAskGate(unittest.TestCase):
+    def test_casual_turn_is_not_memory_ask(self):
+        from memory.memory_manager import _is_recall_memory_ask
+
+        self.assertFalse(_is_recall_memory_ask("how are you"))
+        self.assertFalse(_is_recall_memory_ask("what did you do"))
+
+    def test_self_and_pattern_queries_are_memory_asks(self):
+        from memory.memory_manager import _is_recall_memory_ask
+
+        self.assertTrue(_is_recall_memory_ask("what have you noticed about yourself"))
+        self.assertTrue(
+            _is_recall_memory_ask("what patterns have you seen in your own reasoning")
+        )
+        self.assertTrue(_is_recall_memory_ask("what do you remember about your state"))
+
+
+class TestTypeAwareFloorPredicate(unittest.TestCase):
+    def test_self_digest_uses_tighter_floor_on_casual_turn(self):
+        from memory.memory_manager import (
+            _candidate_recall_floor,
+            _passes_type_aware_recall_floor,
+        )
+
+        row = {
+            "id": "daily",
+            "distance": 0.74,
+            "metadata": {"type": "daily_consolidation"},
+        }
+
+        self.assertEqual(
+            _candidate_recall_floor(
+                row,
+                query_is_memory_ask=False,
+                base_floor=0.78,
+                self_digest_floor=0.72,
+            ),
+            0.72,
+        )
+        self.assertFalse(
+            _passes_type_aware_recall_floor(
+                row,
+                query_is_memory_ask=False,
+                base_floor=0.78,
+                self_digest_floor=0.72,
+                tier="daily",
+            )
+        )
+
+    def test_self_digest_uses_normal_floor_on_memory_ask(self):
+        from memory.memory_manager import _passes_type_aware_recall_floor
+
+        row = {
+            "id": "daily",
+            "distance": 0.74,
+            "metadata": {"type": "daily_consolidation"},
+        }
+
+        self.assertTrue(
+            _passes_type_aware_recall_floor(
+                row,
+                query_is_memory_ask=True,
+                base_floor=0.78,
+                self_digest_floor=0.72,
+                tier="daily",
+            )
+        )
+
+    def test_core_non_self_digest_is_not_newly_floor_gated(self):
+        from memory.memory_manager import _passes_type_aware_recall_floor
+
+        row = {
+            "id": "ordinary-core",
+            "distance": 0.95,
+            "metadata": {"type": "core_memory", "source": "ordinary"},
+        }
+
+        self.assertTrue(
+            _passes_type_aware_recall_floor(
+                row,
+                query_is_memory_ask=False,
+                base_floor=0.78,
+                self_digest_floor=0.72,
+                tier="core",
+            )
+        )
+
+    def test_raw_and_daily_non_self_digest_keep_base_floor(self):
+        from memory.memory_manager import _passes_type_aware_recall_floor
+
+        row = {"id": "raw", "distance": 0.82, "metadata": {"type": "reasoning"}}
+
+        self.assertFalse(
+            _passes_type_aware_recall_floor(
+                row,
+                query_is_memory_ask=False,
+                base_floor=0.78,
+                self_digest_floor=0.72,
+                tier="raw",
+            )
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

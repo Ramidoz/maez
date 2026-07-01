@@ -763,6 +763,88 @@ def _passes_recall_floor(mem: dict, *, floor: float) -> bool:
     return dist < floor
 
 
+_RECALL_MEMORY_ASK_KEYWORDS = frozenset({
+    "habit",
+    "habits",
+    "lately",
+    "memories",
+    "memory",
+    "noticed",
+    "noticing",
+    "observe",
+    "observed",
+    "overall",
+    "pattern",
+    "patterns",
+    "recently",
+    "reflect",
+    "reflection",
+    "reflections",
+    "remember",
+    "state",
+    "summarize",
+    "summary",
+    "theme",
+    "themes",
+    "trend",
+    "trends",
+    "yourself",
+})
+
+
+def _query_tokens(text: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9']+", str(text or "").lower()))
+
+
+def _is_recall_memory_ask(query: str) -> bool:
+    tokens = _query_tokens(query)
+    if tokens & _RECALL_MEMORY_ASK_KEYWORDS:
+        return True
+    normalized = " ".join(str(query or "").lower().split())
+    return any(
+        phrase in normalized
+        for phrase in (
+            "about yourself",
+            "about your self",
+            "your own reasoning",
+            "your own state",
+            "your recent state",
+        )
+    )
+
+
+def _candidate_recall_floor(
+    mem: dict,
+    *,
+    query_is_memory_ask: bool,
+    base_floor: float,
+    self_digest_floor: float,
+) -> float:
+    if _recall_candidate_kind(mem) == "self_digest" and not query_is_memory_ask:
+        return self_digest_floor
+    return base_floor
+
+
+def _passes_type_aware_recall_floor(
+    mem: dict,
+    *,
+    query_is_memory_ask: bool,
+    base_floor: float,
+    self_digest_floor: float,
+    tier: str,
+) -> bool:
+    kind = _recall_candidate_kind(mem)
+    if tier == "core" and kind != "self_digest":
+        return True
+    floor = _candidate_recall_floor(
+        mem,
+        query_is_memory_ask=query_is_memory_ask,
+        base_floor=base_floor,
+        self_digest_floor=self_digest_floor,
+    )
+    return _passes_recall_floor(mem, floor=floor)
+
+
 def _apply_recall_floor(mems: list[dict], *, floor: float) -> list[dict]:
     """Apply the relevance floor only when explicitly enabled.
 
