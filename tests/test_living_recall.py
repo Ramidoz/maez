@@ -463,6 +463,46 @@ class ShadowPromotionTests(unittest.TestCase):
         self.assertIn("shadow_promotion=1.0000", logs_b)
 
 
+class PromotionRerankHelperTests(unittest.TestCase):
+    def test_reflection_gets_less_promotion_boost_than_relational_candidate(self):
+        from memory.memory_manager import _promotion_adjusted_distance
+
+        reflection = {"metadata": {"source_kind": "reflection"}}
+        relational = {"metadata": {"type": "telegram_exchange"}}
+
+        reflection_score = _promotion_adjusted_distance(
+            reflection,
+            promotion=1.0,
+            effective_distance=0.50,
+        )
+        relational_score = _promotion_adjusted_distance(
+            relational,
+            promotion=1.0,
+            effective_distance=0.50,
+        )
+
+        self.assertGreater(reflection_score, relational_score)
+
+    def test_unknown_candidate_gets_no_hidden_damp_vs_reasoning_candidate(self):
+        from memory.memory_manager import _promotion_adjusted_distance
+
+        unknown = {"metadata": {"type": "other"}}
+        reasoning = {"metadata": {"type": "reasoning"}}
+
+        unknown_score = _promotion_adjusted_distance(
+            unknown,
+            promotion=0.75,
+            effective_distance=0.50,
+        )
+        reasoning_score = _promotion_adjusted_distance(
+            reasoning,
+            promotion=0.75,
+            effective_distance=0.50,
+        )
+
+        self.assertEqual(unknown_score, reasoning_score)
+
+
 class RecallCandidateKindTests(unittest.TestCase):
     def test_reflection_source_kind_is_classified(self):
         from memory.memory_manager import (

@@ -614,6 +614,7 @@ RANKING_HALF_LIFE_DAYS = 90.0
 EVIDENCE_RECENCY_DAYS = 14.0
 _LIVING_RECALL_DISTANCE_FLOOR = 1e-3
 _RECALL_RELEVANCE_FLOOR_DEFAULT = 0.7800
+_RECALL_PROMOTION_RERANK_STRENGTH = 0.20
 _RECALL_TYPE_WEIGHTS = {
     "reflection": 0.25,
     "maez_self": 0.25,
@@ -685,6 +686,14 @@ def recall_floor_enabled(*, env=None) -> bool:
     return _truthy_env_flag("MAEZ_RECALL_FLOOR_ENABLED", env=env)
 
 
+def recall_promotion_shadow_enabled(*, env=None) -> bool:
+    return _truthy_env_flag("MAEZ_RECALL_PROMOTION_SHADOW", env=env)
+
+
+def recall_promotion_enabled(*, env=None) -> bool:
+    return _truthy_env_flag("MAEZ_RECALL_PROMOTION_ENABLED", env=env)
+
+
 def _finite_distance(mem: dict) -> float | None:
     dist = mem.get("distance")
     if isinstance(dist, bool):
@@ -695,6 +704,25 @@ def _finite_distance(mem: dict) -> float | None:
     if not math.isfinite(value):
         return None
     return value
+
+
+def _promotion_adjusted_distance(
+    mem: dict,
+    *,
+    promotion: float | None,
+    effective_distance: float,
+) -> float:
+    if isinstance(promotion, bool):
+        return effective_distance
+    if not isinstance(promotion, (int, float)):
+        return effective_distance
+    p = float(promotion)
+    if not math.isfinite(p):
+        return effective_distance
+
+    p = min(max(p, 0.0), 1.0)
+    weighted = p * _recall_candidate_type_weight(mem)
+    return effective_distance / (1.0 + _RECALL_PROMOTION_RERANK_STRENGTH * weighted)
 
 
 def _passes_recall_floor(mem: dict, *, floor: float) -> bool:
@@ -2152,7 +2180,7 @@ class MemoryManager:
         base_distance: float,
         recency: float,
         effective_distance: float,
-    ) -> None:
+    ) -> float | None:
         """Telemetry seam for v1 living recall.
 
         promotion_score is deliberately shadow-only here. It is computed
@@ -2173,13 +2201,16 @@ class MemoryManager:
         logger.info(
             "living_recall_candidate id=%s base_distance=%.4f "
             "recency_factor=%.4f effective_distance=%.4f "
-            "shadow_promotion=%s",
+            "shadow_promotion=%s kind=%s type_weight=%.2f",
             str(mem.get("id", ""))[:16],
             base_distance,
             recency,
             effective_distance,
             "None" if shadow is None else f"{shadow:.4f}",
+            _recall_candidate_kind(mem),
+            _recall_candidate_type_weight(mem),
         )
+        return shadow
 
     def _record_living_recall(self, query: str, *partitions: dict) -> None:
         try:
