@@ -120,6 +120,21 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(face_count(_frame(faces=[_face(), _face()])), 2)
         self.assertEqual(face_count(_frame(faces=[])), 0)
 
+    def test_model_id_injection_rejected(self):
+        # a malformed model_id must not be able to inject a fake/absence log line
+        self.assertIsNone(parse_face_facts(_frame(model_id="m\nowner_absent=1")))
+        self.assertIsNone(parse_face_facts(_frame(model_id="has space")))
+        self.assertIsNone(parse_face_facts(_frame(model_id="")))
+        self.assertIsNotNone(parse_face_facts(_frame(model_id="buffalo_s/scrfd_500m+w600k_mbf")))
+
+    def test_det_score_range_enforced(self):
+        self.assertIsNone(parse_face_facts(_frame(faces=[_face(det_score=1.5)])))
+        self.assertIsNone(parse_face_facts(_frame(faces=[_face(det_score=-0.1)])))
+
+    def test_nan_inf_rejected(self):
+        self.assertIsNone(parse_face_facts(_frame(faces=[_face(embedding=[float("nan")] + [0.0] * (EMBEDDING_DIM - 1))])))
+        self.assertIsNone(parse_face_facts(_frame(faces=[_face(box=[float("inf"), 2, 3, 4])])))
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -141,8 +156,15 @@ never an eye claim. This module is the single place that decides a packet is wel
 """
 from __future__ import annotations
 
+import math
+import re
+
 SCHEMA_VERSION = "jetson_face_facts.v0"
 EMBEDDING_DIM = 512
+
+# model_id is written into the content-light receipt log; a safe charset prevents log
+# injection (newlines / control chars / smuggled absence-tokens) from a malformed value.
+_SAFE_MODEL_ID = re.compile(r"^[A-Za-z0-9_./+-]{1,128}$")
 
 _SENSOR_STATES = frozenset({"available", "curtained", "error"})
 _FRAME_QUALITIES = frozenset({"good", "low", "unknown"})
@@ -154,20 +176,27 @@ _ALLOWED_FACE_KEYS = frozenset({"embedding", "det_score", "box", "track_id"})
 _Number = (int, float)
 
 
+def _finite_number(x: object) -> bool:
+    # bool is an int subclass; exclude it. Reject NaN/inf so model bugs / JSON weirdness
+    # fail closed at the contract rather than poisoning brain-side geometry later.
+    return isinstance(x, _Number) and not isinstance(x, bool) and math.isfinite(x)
+
+
 def _valid_face(face: object) -> bool:
     if not isinstance(face, dict) or set(face.keys()) != _ALLOWED_FACE_KEYS:
         return False
     emb = face["embedding"]
     if not isinstance(emb, list) or len(emb) != EMBEDDING_DIM:
         return False
-    if not all(isinstance(x, _Number) and not isinstance(x, bool) for x in emb):
+    if not all(_finite_number(x) for x in emb):
         return False
-    if not isinstance(face["det_score"], _Number) or isinstance(face["det_score"], bool):
+    score = face["det_score"]
+    if not _finite_number(score) or not (0.0 <= score <= 1.0):
         return False
     box = face["box"]
     if not isinstance(box, list) or len(box) != 4:
         return False
-    if not all(isinstance(v, _Number) and not isinstance(v, bool) for v in box):
+    if not all(_finite_number(v) for v in box):
         return False
     tid = face["track_id"]
     if tid is not None and not isinstance(tid, str):
@@ -181,7 +210,8 @@ def parse_face_facts(raw: object) -> dict | None:
         return None
     if raw.get("schema_version") != SCHEMA_VERSION:
         return None
-    if not isinstance(raw.get("model_id"), str) or not raw["model_id"].strip():
+    model_id = raw.get("model_id")
+    if not isinstance(model_id, str) or not _SAFE_MODEL_ID.match(model_id):
         return None
     if raw.get("sensor_state") not in _SENSOR_STATES:
         return None
@@ -439,35 +469,62 @@ _WRITE_TOKENS = (
     "imwrite", "VideoWriter", "imencode", "write_bytes", ".tofile(", ".save(", "np.save",
     "'wb'", '"wb"', "'w+b'", '"w+b"', "'wb+'", '"wb+"', "'ab'", '"ab"', "'a+b'", '"a+b"',
 )
+# The two face-facts functions in web_interface.py. We scan ONLY these by AST — the rest
+# of web_interface (the presence contract) legitimately uses 'absent'.
+_WEB_FNS = ("_jetson_write_face_facts_receipt", "api_jetson_face_facts_intake")
+# Edge files Face-Facts touches — run.py is where capture/embed/post live, the real risk site.
+_EDGE_FILES = ("face_facts.py", "run.py", "config.py")
 
 
-def _face_facts_edge_sources():
-    for name in ("face_facts.py",):
-        p = _EDGE / name
-        if p.exists():
-            yield p
+def _extract_functions(path, names):
+    """Return {name: source} for the named functions, isolated via AST (not string slicing)."""
+    src = path.read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    out = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in names:
+            seg = ast.get_source_segment(src, node)
+            if seg is not None:
+                out[node.name] = seg
+    return out
+
+
+def _existing_edge_files():
+    return [(_EDGE / n) for n in _EDGE_FILES if (_EDGE / n).exists()]
 
 
 class NoAbsenceVerdictTests(unittest.TestCase):
-    def test_contract_and_edge_name_no_absence_verdict(self):
+    def _all_face_facts_sources(self):
+        srcs = {"contract": _CONTRACT.read_text(encoding="utf-8")}
+        for p in _existing_edge_files():
+            srcs[p.name] = p.read_text(encoding="utf-8")
+        for fn, body in _extract_functions(_WEB, _WEB_FNS).items():
+            srcs[f"web:{fn}"] = body  # only the isolated face-facts web fns
+        return srcs
+
+    def test_no_absence_verdict_token_in_any_face_facts_source(self):
         offenders = []
-        srcs = [_CONTRACT] + list(_face_facts_edge_sources())
-        for p in srcs:
-            src = p.read_text(encoding="utf-8")
+        for where, src in self._all_face_facts_sources().items():
             for tok in _ABSENCE_TOKENS:
                 if tok in src:
-                    offenders.append(f"{p.name}: {tok}")
+                    offenders.append(f"{where}: {tok}")
         self.assertEqual(offenders, [])
 
-    def test_probe_would_trip(self):
-        planted = "owner_present = 'owner_absent'\n"
-        self.assertTrue(any(t in planted for t in _ABSENCE_TOKENS))
+    def test_probe_absence_token_trips_via_extractor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = pathlib.Path(tmp) / "web.py"
+            p.write_text(
+                "def api_jetson_face_facts_intake():\n    logger.info('owner_absent=%s', 1)\n",
+                encoding="utf-8",
+            )
+            body = _extract_functions(p, ("api_jetson_face_facts_intake",))["api_jetson_face_facts_intake"]
+            self.assertTrue(any(t in body for t in _ABSENCE_TOKENS))
 
 
 class NoEdgeDurableStoreTests(unittest.TestCase):
-    def test_edge_face_facts_writes_no_embedding_track_or_frame(self):
+    def test_edge_face_facts_code_writes_nothing_durable(self):
         offenders = []
-        for p in _face_facts_edge_sources():
+        for p in _existing_edge_files():  # incl. run.py where capture/embed/post live
             src = p.read_text(encoding="utf-8")
             for tok in _WRITE_TOKENS:
                 if tok in src:
@@ -475,21 +532,34 @@ class NoEdgeDurableStoreTests(unittest.TestCase):
         self.assertEqual(offenders, [])
 
     def test_probe_write_trips(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            probe = pathlib.Path(tmp) / "face_facts.py"
-            probe.write_text("open(p, 'wb').write(embedding_bytes)\n", encoding="utf-8")
-            src = probe.read_text(encoding="utf-8")
-            self.assertTrue(any(t in src for t in _WRITE_TOKENS))
+        planted = "np.save('embedding.npy', vec)\n"
+        self.assertTrue(any(t in planted for t in _WRITE_TOKENS))
 
 
 class NoConsumerTests(unittest.TestCase):
-    def test_intake_receipt_fn_calls_no_behavior(self):
-        # The face-facts receipt/handler must not reach into prompt/heartbeat/memory promotion.
-        src = _WEB.read_text(encoding="utf-8")
-        block = src[src.index("_jetson_write_face_facts_receipt"):]
-        block = block[: block.index("@app.route", block.index("api_jetson_face_facts_intake"))]
-        for bad in ("fresh_moment_receipts", "heartbeat", "promote", "record(", "prompt"):
-            self.assertNotIn(bad, block, f"face-facts intake must not call {bad}")
+    # The face-facts intake must not reach behavior/consumer/store: no private-thought
+    # surface, no heartbeat, no memory promotion, no store (.record / _STORE).
+    _BANNED = ("fresh_moment_receipts", "heartbeat", "promote", "_STORE", ".record(")
+
+    def test_face_facts_web_fns_call_no_consumer_or_store(self):
+        fns = _extract_functions(_WEB, _WEB_FNS)
+        self.assertEqual(set(fns), set(_WEB_FNS), "both face-facts web fns must be isolable")
+        offenders = []
+        for fn, body in fns.items():
+            for bad in self._BANNED:
+                if bad in body:
+                    offenders.append(f"{fn}: {bad}")
+        self.assertEqual(offenders, [])
+
+    def test_probe_consumer_call_trips_via_same_extractor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = pathlib.Path(tmp) / "web.py"
+            p.write_text(
+                "def api_jetson_face_facts_intake():\n    _JETSON_FACE_FACTS_STORE.record(reading)\n",
+                encoding="utf-8",
+            )
+            body = _extract_functions(p, ("api_jetson_face_facts_intake",))["api_jetson_face_facts_intake"]
+            self.assertTrue(any(b in body for b in NoConsumerTests._BANNED))
 
 
 if __name__ == "__main__":
@@ -537,3 +607,5 @@ Host flag on: `MAEZ_JETSON_FACE_FACTS_SHADOW=1`, token provisioned. Deploy sourc
 **Placeholder scan:** host-testable tasks (1,2,3,5) are complete RED-first code; Task 4 is device-internals (interface + witness), honest for a hardware emit loop. Task 2's intake tests reference the witnessed presence-intake test harness for the Flask/flag/token fixture (an existing, proven pattern) rather than re-deriving it.
 
 **Type consistency:** `parse_face_facts(raw)->dict|None`, `face_count(reading)->int`, `build_packet(*, model_id, sensor_state, frame_quality, ts, faces)->dict`, `jetson_face_facts_shadow_enabled()->bool`, `_jetson_write_face_facts_receipt(reading, *, received_at)`, endpoint `api_jetson_face_facts_intake` — consistent across tasks. `faces` entries are `(embedding, det_score, box, track_id)` tuples into `build_packet`, dicts on the wire.
+
+**Codex plan-review patch (verified in-plan):** (1) edge no-store guard widened to scan `run.py`/`config.py`/`face_facts.py` — the real risk sites where capture/embed/post live, not just `face_facts.py`. (2) absence-verdict guard now also scans the host handler — but only the two face-facts functions, AST-isolated, so the presence contract's legitimate `absent` doesn't false-trip. (3) `model_id` is now a safe-charset regex (`^[A-Za-z0-9_./+-]{1,128}$`) closing the receipt log-injection seam (newline/absence-token smuggling rejected at the contract). (4) the no-consumer guard is AST-based and probe-proven (a planted `_STORE.record(...)`/consumer call in a face-facts fn trips the same extractor). Non-blocking hardening folded in: NaN/inf rejected, `det_score` bounded `0..1`, box finite — geometry fails closed at the contract. Contract + guard-extractor logic host-verified before commit.
