@@ -105,7 +105,12 @@ for entry in manifest["models"]:
 for entry in manifest["models"]:
     onnx = os.path.join(mdir, entry["member"])
     engine = os.path.join(mdir, os.path.basename(entry["engine_path"]))
-    cmd = [trtexec, f"--onnx={onnx}", f"--saveEngine={engine}"]
+    cmd = [
+        trtexec,
+        f"--onnx={onnx}",
+        f"--saveEngine={engine}",
+        f"--shapes={man.trtexec_shape_arg(entry)}",
+    ]
     if entry["precision"] == "fp16":
         cmd.append("--fp16")  # explicit; an FP16 parity miss is a real result, not an override
     print("building:", " ".join(cmd))

@@ -47,3 +47,19 @@ def verify_sha256(file_path: str, expected_hex: str) -> bool:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest() == expected_hex.lower()
+
+
+def trtexec_shape_arg(entry: dict, *, input_name: str = "input.1") -> str:
+    """Render the manifest input_shape as the explicit TensorRT dynamic shape.
+
+    Some InsightFace ONNX models expose dynamic dimensions. If trtexec is invoked
+    without a shape, TensorRT may default to an unusable 1x3x1x1 detector engine.
+    """
+    shape = entry.get("input_shape")
+    if (
+        not isinstance(shape, list)
+        or not shape
+        or not all(isinstance(dim, int) and dim > 0 for dim in shape)
+    ):
+        raise ValueError(f"invalid input_shape for {entry.get('name')}")
+    return f"{input_name}:{'x'.join(str(dim) for dim in shape)}"

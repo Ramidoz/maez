@@ -1,9 +1,12 @@
 import hashlib
 import os
+from pathlib import Path
 import tempfile
 import unittest
 import tests._jetson_edge_path  # noqa: F401
 from jetson_presence.b1a import manifest as man
+
+SETUP_SCRIPT = Path(__file__).resolve().parents[1] / "devices" / "jetson_presence" / "setup_models.sh"
 
 
 class ManifestSchemaTests(unittest.TestCase):
@@ -38,6 +41,21 @@ class ManifestSchemaTests(unittest.TestCase):
         # is no trust-on-first-use window.
         self.assertTrue(man.hashes_locked(man.load_manifest()))
 
+    def test_trtexec_shape_args_come_from_manifest_shapes(self):
+        entries = {entry["role"]: entry for entry in man.load_manifest()["models"]}
+
+        self.assertEqual(man.trtexec_shape_arg(entries["detector"]), "input.1:1x3x640x640")
+        self.assertEqual(man.trtexec_shape_arg(entries["embedding"]), "input.1:1x3x112x112")
+        self.assertEqual(
+            man.trtexec_shape_arg(entries["embedding"], input_name="data"),
+            "data:1x3x112x112",
+        )
+
+    def test_setup_build_passes_manifest_shape_to_trtexec(self):
+        setup = SETUP_SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn('f"--shapes={man.trtexec_shape_arg(entry)}"', setup)
+
 
 class HashLockTests(unittest.TestCase):
     def test_pending_manifest_is_not_locked(self):
@@ -62,13 +80,15 @@ class VerifyShaTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             p = os.path.join(td, "f.bin")
             data = b"hello-model"
-            open(p, "wb").write(data)
+            with open(p, "wb") as f:
+                f.write(data)
             self.assertTrue(man.verify_sha256(p, hashlib.sha256(data).hexdigest()))
 
     def test_verify_sha256_false_on_mismatch(self):
         with tempfile.TemporaryDirectory() as td:
             p = os.path.join(td, "f.bin")
-            open(p, "wb").write(b"hello-model")
+            with open(p, "wb") as f:
+                f.write(b"hello-model")
             self.assertFalse(man.verify_sha256(p, "0" * 64))
 
 

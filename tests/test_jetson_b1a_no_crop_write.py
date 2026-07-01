@@ -20,7 +20,8 @@ class NoCropWriteStructuralTests(unittest.TestCase):
         for name in os.listdir(_B1A):
             if not name.endswith(".py"):
                 continue
-            src = open(os.path.join(_B1A, name), encoding="utf-8").read()
+            with open(os.path.join(_B1A, name), encoding="utf-8") as f:
+                src = f.read()
             for tok in _FORBIDDEN_WRITE:
                 if tok in src:
                     offenders.append(f"{name}: {tok}")

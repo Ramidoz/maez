@@ -44,7 +44,8 @@ class NoPostStructuralTests(unittest.TestCase):
         for name in os.listdir(_B1A):
             if not name.endswith(".py"):
                 continue
-            src = open(os.path.join(_B1A, name), encoding="utf-8").read()
+            with open(os.path.join(_B1A, name), encoding="utf-8") as f:
+                src = f.read()
             imported = _imported_names(ast.parse(src, filename=name))
             for bad in _FORBIDDEN_IMPORTS & imported:
                 offenders.append(f"{name}: imports {bad}")
@@ -55,7 +56,8 @@ class NoPostStructuralTests(unittest.TestCase):
         for name in os.listdir(_B1A):
             if not name.endswith(".py"):
                 continue
-            src = open(os.path.join(_B1A, name), encoding="utf-8").read()
+            with open(os.path.join(_B1A, name), encoding="utf-8") as f:
+                src = f.read()
             for lit in _FORBIDDEN_LITERALS:
                 if lit in src:
                     offenders.append(f"{name}: {lit}")
