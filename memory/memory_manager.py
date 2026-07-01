@@ -712,17 +712,25 @@ def _promotion_adjusted_distance(
     promotion: float | None,
     effective_distance: float,
 ) -> float:
+    if isinstance(effective_distance, bool):
+        return math.inf
+    if not isinstance(effective_distance, (int, float)):
+        return math.inf
+    effective = float(effective_distance)
+    if not math.isfinite(effective) or effective <= 0.0:
+        return math.inf
+
     if isinstance(promotion, bool):
-        return effective_distance
+        return effective
     if not isinstance(promotion, (int, float)):
-        return effective_distance
+        return effective
     p = float(promotion)
     if not math.isfinite(p):
-        return effective_distance
+        return effective
 
     p = min(max(p, 0.0), 1.0)
     weighted = p * _recall_candidate_type_weight(mem)
-    return effective_distance / (1.0 + _RECALL_PROMOTION_RERANK_STRENGTH * weighted)
+    return effective / (1.0 + _RECALL_PROMOTION_RERANK_STRENGTH * weighted)
 
 
 def _passes_recall_floor(mem: dict, *, floor: float) -> bool:
@@ -2579,6 +2587,7 @@ class MemoryManager:
         if recall_promotion_shadow_enabled() or recall_promotion_enabled():
             raw_shadow = sorted(raw, key=_promotion_rank_key)
             daily_shadow = sorted(daily, key=_promotion_rank_key)
+            promotion_applied = recall_promotion_enabled()
             logger.info(
                 "recall_promotion_shadow raw_before=%s raw_after=%s "
                 "daily_before=%s daily_after=%s applied=%s",
@@ -2586,8 +2595,11 @@ class MemoryManager:
                 _ids_joined(raw_shadow, limit=5),
                 _ids_joined(daily, limit=3),
                 _ids_joined(daily_shadow, limit=3),
-                False,
+                promotion_applied,
             )
+            if promotion_applied:
+                raw = raw_shadow
+                daily = daily_shadow
 
         cutoff_h = max(0.0, float(evidence_recency_days)) * 24.0
 
