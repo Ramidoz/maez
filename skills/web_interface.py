@@ -10622,6 +10622,11 @@ def api_debug_stats():
 
 
 # --- Jetson presence shadow intake (Slice A) ---
+from core.body.jetson_face_facts import (
+    face_count,
+    jetson_face_facts_shadow_enabled,
+    parse_face_facts,
+)
 from core.body.jetson_presence import jetson_presence_shadow_enabled, parse_label
 from core.body.jetson_presence_store import JetsonPresenceStore
 import hashlib
@@ -10662,6 +10667,42 @@ def api_jetson_presence_intake():
     _JETSON_PRESENCE_STORE.record(reading, received_at=received_at)
     _jetson_write_presence_receipt(reading, received_at=received_at)
     return jsonify({"ok": True, "received_at": received_at})
+
+
+def _jetson_write_face_facts_receipt(reading, *, received_at: float) -> None:
+    """Content-light receipt for face detections; never logs embeddings."""
+    n = face_count(reading)
+    summary = (
+        f"{reading['model_id']}|{reading['sensor_state']}|"
+        f"{reading['frame_quality']}|{n}|{reading['ts']}"
+    ).encode()
+    logger.info(
+        "jetson_face_facts_intake schema=%s model_id=%s sensor_state=%s "
+        "frame_quality=%s face_count=%d content_sha=%s received_at=%.3f",
+        "jetson_face_facts.v0",
+        reading["model_id"],
+        reading["sensor_state"],
+        reading["frame_quality"],
+        n,
+        hashlib.sha256(summary).hexdigest()[:16],
+        received_at,
+    )
+
+
+@app.route("/api/v1/perception/jetson/face_facts", methods=["POST"])
+def api_jetson_face_facts_intake():
+    # Behaviorally unavailable when off: the endpoint behaves as if it does not exist.
+    if not jetson_face_facts_shadow_enabled():
+        return jsonify({"ok": False, "error": "not found"}), 404
+    if not _jetson_device_auth_ok():
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    reading = parse_face_facts(body)
+    if reading is None:
+        return jsonify({"ok": False, "error": "invalid face_facts"}), 400
+    received_at = time.time()
+    _jetson_write_face_facts_receipt(reading, received_at=received_at)
+    return jsonify({"ok": True, "received_at": received_at, "face_count": face_count(reading)})
 
 
 if __name__ == "__main__":
