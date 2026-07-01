@@ -13,7 +13,7 @@ class TypeFloorParserTests(unittest.TestCase):
     def test_parse_type_floor_candidate(self):
         line = (
             "recall_type_floor_candidate tier=daily id=daily-2026 kind=self_digest "
-            "distance=0.7400 applied_floor=0.7200 would_drop=True "
+            "distance=0.7400 applied_floor=0.7200 base_floor=0.7800 would_drop=True "
             "query_memory_ask=False retained=False"
         )
 
@@ -23,6 +23,7 @@ class TypeFloorParserTests(unittest.TestCase):
         self.assertEqual(row["kind"], "self_digest")
         self.assertEqual(row["distance"], 0.74)
         self.assertEqual(row["applied_floor"], 0.72)
+        self.assertEqual(row["base_floor"], 0.78)
         self.assertTrue(row["would_drop"])
         self.assertFalse(row["query_memory_ask"])
         self.assertFalse(row["retained"])
@@ -56,6 +57,16 @@ class TypeFloorSummaryTests(unittest.TestCase):
                 "query_memory_ask": True,
                 "would_drop": False,
                 "retained": True,
+                "applied_floor": 0.78,
+                "base_floor": 0.78,
+            },
+            {
+                "kind": "self_digest",
+                "query_memory_ask": True,
+                "would_drop": True,
+                "retained": False,
+                "applied_floor": 0.78,
+                "base_floor": 0.78,
             },
             {
                 "kind": "telegram_exchange",
@@ -69,7 +80,8 @@ class TypeFloorSummaryTests(unittest.TestCase):
 
         self.assertEqual(summary["casual_self_digest_drop_count"], 1)
         self.assertEqual(summary["casual_self_digest_resurrected_count"], 0)
-        self.assertEqual(summary["memory_ask_self_digest_drop_count"], 0)
+        self.assertEqual(summary["memory_ask_self_digest_drop_count"], 1)
+        self.assertEqual(summary["memory_ask_self_digest_tightened_count"], 0)
         self.assertEqual(summary["memory_ask_self_digest_kept_count"], 1)
         self.assertEqual(summary["review_status"], "review_required")
 

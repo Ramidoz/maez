@@ -42,6 +42,7 @@ _TYPE_FLOOR_CANDIDATE_RE = re.compile(
     r"id=(?P<id>\S+) kind=(?P<kind>\S+) "
     r"distance=(?P<distance>[0-9.inf]+) "
     r"applied_floor=(?P<applied_floor>[0-9.]+) "
+    r"(?:base_floor=(?P<base_floor>[0-9.]+) )?"
     r"would_drop=(?P<would_drop>True|False|true|false) "
     r"query_memory_ask=(?P<query_memory_ask>True|False|true|false) "
     r"retained=(?P<retained>True|False|true|false)"
@@ -94,6 +95,11 @@ def parse_type_floor_candidate(line: str) -> dict | None:
         "kind": match.group("kind"),
         "distance": float(match.group("distance")),
         "applied_floor": float(match.group("applied_floor")),
+        "base_floor": (
+            None
+            if match.group("base_floor") is None
+            else float(match.group("base_floor"))
+        ),
         "would_drop": _bool_text(match.group("would_drop")),
         "query_memory_ask": _bool_text(match.group("query_memory_ask")),
         "retained": _bool_text(match.group("retained")),
@@ -132,6 +138,12 @@ def summarize_type_floor_rows(rows: list[dict]) -> dict:
         row for row in casual_drops if row.get("retained")
     ]
     memory_drops = [row for row in memory_self_digest if row.get("would_drop")]
+    memory_tightened = [
+        row
+        for row in memory_self_digest
+        if row.get("base_floor") is not None
+        and row.get("applied_floor", 0.0) < row["base_floor"]
+    ]
     memory_kept = [row for row in memory_self_digest if row.get("retained")]
     return {
         "candidate_count": len(rows),
@@ -139,10 +151,12 @@ def summarize_type_floor_rows(rows: list[dict]) -> dict:
         "casual_self_digest_drop_count": len(casual_drops),
         "casual_self_digest_resurrected_count": len(casual_resurrected),
         "memory_ask_self_digest_drop_count": len(memory_drops),
+        "memory_ask_self_digest_tightened_count": len(memory_tightened),
         "memory_ask_self_digest_kept_count": len(memory_kept),
         "review_status": "review_required" if rows else "no_type_floor_rows",
         "sample_casual_drops": casual_drops[:20],
         "sample_memory_ask_drops": memory_drops[:20],
+        "sample_memory_ask_tightened": memory_tightened[:20],
     }
 
 
@@ -389,7 +403,7 @@ def write_markdown(
         "- HOLD if floor_would_empty_count suggests likely answer starvation.",
         "- PASS v0.1 only if casual_self_digest_drop_count > 0.",
         "- PASS v0.1 only if casual_self_digest_resurrected_count == 0.",
-        "- PASS v0.1 only if memory_ask_self_digest_drop_count == 0.",
+        "- PASS v0.1 only if memory_ask_self_digest_tightened_count == 0.",
         "- PASS v0.1 only if memory_ask_self_digest_kept_count > 0.",
     ]
     path.write_text("\n".join(lines) + "\n")

@@ -2774,13 +2774,14 @@ class MemoryManager:
                     distance = _LIVING_RECALL_INVALID_DISTANCE_RANK
                 logger.info(
                     "recall_type_floor_candidate tier=%s id=%s kind=%s "
-                    "distance=%.4f applied_floor=%.4f would_drop=%s "
+                    "distance=%.4f applied_floor=%.4f base_floor=%.4f would_drop=%s "
                     "query_memory_ask=%s retained=%s",
                     decision["tier"],
                     decision["id"][:12],
                     decision["kind"],
                     distance,
                     decision["applied_floor"],
+                    floor,
                     decision["would_drop"],
                     query_is_memory_ask,
                     decision["id"] in retained_ids,

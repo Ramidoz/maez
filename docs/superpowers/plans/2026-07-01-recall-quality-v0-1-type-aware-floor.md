@@ -825,13 +825,14 @@ In `memory/memory_manager.py`, replace the current `raw = _apply_recall_floor_wi
             for decision in type_summary["decisions"]:
                 logger.info(
                     "recall_type_floor_candidate tier=%s id=%s kind=%s "
-                    "distance=%.4f applied_floor=%.4f would_drop=%s "
+                    "distance=%.4f applied_floor=%.4f base_floor=%.4f would_drop=%s "
                     "query_memory_ask=%s retained=%s",
                     decision["tier"],
                     decision["id"][:12],
                     decision["kind"],
                     decision["distance"],
                     decision["applied_floor"],
+                    floor,
                     decision["would_drop"],
                     query_is_memory_ask,
                     any(
@@ -924,7 +925,7 @@ class TypeFloorParserTests(unittest.TestCase):
     def test_parse_type_floor_candidate(self):
         line = (
             "recall_type_floor_candidate tier=daily id=daily-2026 kind=self_digest "
-            "distance=0.7400 applied_floor=0.7200 would_drop=True "
+            "distance=0.7400 applied_floor=0.7200 base_floor=0.7800 would_drop=True "
             "query_memory_ask=False retained=False"
         )
 
@@ -934,6 +935,7 @@ class TypeFloorParserTests(unittest.TestCase):
         self.assertEqual(row["kind"], "self_digest")
         self.assertEqual(row["distance"], 0.74)
         self.assertEqual(row["applied_floor"], 0.72)
+        self.assertEqual(row["base_floor"], 0.78)
         self.assertTrue(row["would_drop"])
         self.assertFalse(row["query_memory_ask"])
         self.assertFalse(row["retained"])
@@ -967,6 +969,16 @@ class TypeFloorSummaryTests(unittest.TestCase):
                 "query_memory_ask": True,
                 "would_drop": False,
                 "retained": True,
+                "applied_floor": 0.78,
+                "base_floor": 0.78,
+            },
+            {
+                "kind": "self_digest",
+                "query_memory_ask": True,
+                "would_drop": True,
+                "retained": False,
+                "applied_floor": 0.78,
+                "base_floor": 0.78,
             },
             {
                 "kind": "telegram_exchange",
@@ -980,7 +992,8 @@ class TypeFloorSummaryTests(unittest.TestCase):
 
         self.assertEqual(summary["casual_self_digest_drop_count"], 1)
         self.assertEqual(summary["casual_self_digest_resurrected_count"], 0)
-        self.assertEqual(summary["memory_ask_self_digest_drop_count"], 0)
+        self.assertEqual(summary["memory_ask_self_digest_drop_count"], 1)
+        self.assertEqual(summary["memory_ask_self_digest_tightened_count"], 0)
         self.assertEqual(summary["memory_ask_self_digest_kept_count"], 1)
         self.assertEqual(summary["review_status"], "review_required")
 
@@ -1081,6 +1094,12 @@ def summarize_type_floor_rows(rows: list[dict]) -> dict:
         row for row in casual_drops if row.get("retained")
     ]
     memory_drops = [row for row in memory_self_digest if row.get("would_drop")]
+    memory_tightened = [
+        row
+        for row in memory_self_digest
+        if row.get("base_floor") is not None
+        and row.get("applied_floor", 0.0) < row["base_floor"]
+    ]
     memory_kept = [row for row in memory_self_digest if row.get("retained")]
     return {
         "candidate_count": len(rows),
@@ -1088,10 +1107,12 @@ def summarize_type_floor_rows(rows: list[dict]) -> dict:
         "casual_self_digest_drop_count": len(casual_drops),
         "casual_self_digest_resurrected_count": len(casual_resurrected),
         "memory_ask_self_digest_drop_count": len(memory_drops),
+        "memory_ask_self_digest_tightened_count": len(memory_tightened),
         "memory_ask_self_digest_kept_count": len(memory_kept),
         "review_status": "review_required" if rows else "no_type_floor_rows",
         "sample_casual_drops": casual_drops[:20],
         "sample_memory_ask_drops": memory_drops[:20],
+        "sample_memory_ask_tightened": memory_tightened[:20],
     }
 ```
 
@@ -1299,11 +1320,11 @@ The artifact is reviewable only if all of these are true:
 ```text
 casual_self_digest_drop_count > 0
 casual_self_digest_resurrected_count == 0
-memory_ask_self_digest_drop_count == 0
+memory_ask_self_digest_tightened_count == 0
 memory_ask_self_digest_kept_count > 0
 ```
 
-If `memory_ask_self_digest_drop_count > 0`, stop and fix the context gate. If `casual_self_digest_resurrected_count > 0`, stop and fix fallback. If there are no self-digest rows, stop and fix the probe/classifier before any enforce decision.
+If `memory_ask_self_digest_tightened_count > 0`, stop and fix the context gate. Memory-ask self-digests may still drop under the normal v0 floor; that is not a v0.1 muzzle. If `casual_self_digest_resurrected_count > 0`, stop and fix fallback. If there are no self-digest rows, stop and fix the probe/classifier before any enforce decision.
 
 - [ ] **Step 3: Run the full focused suite again**
 
