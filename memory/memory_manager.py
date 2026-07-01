@@ -710,6 +710,31 @@ def _apply_recall_floor(mems: list[dict], *, floor: float) -> list[dict]:
     return [mem for mem in mems if _passes_recall_floor(mem, floor=floor)]
 
 
+def _distance_sort_key(mem: dict) -> float:
+    dist = mem.get("distance")
+    if isinstance(dist, (int, float)):
+        return float(dist)
+    return 1.0
+
+
+def _apply_recall_floor_with_fallback(
+    mems: list[dict],
+    *,
+    floor: float,
+    min_keep: int = 0,
+) -> list[dict]:
+    """Apply recall floor without starving a section.
+
+    Missing distance still passes via ``_passes_recall_floor``. If every
+    candidate is below floor and the caller requires a section floor, keep
+    the best ``min_keep`` by base distance.
+    """
+    kept = _apply_recall_floor(mems, floor=floor)
+    if kept or not recall_floor_enabled() or min_keep <= 0:
+        return kept
+    return sorted(mems, key=_distance_sort_key)[:min_keep]
+
+
 def _recall_floor_teacher_signal(
     *,
     diary_heavy: bool,
@@ -2481,8 +2506,8 @@ class MemoryManager:
                 recall_floor_enabled(),
             )
 
-        raw = _apply_recall_floor(raw, floor=floor)
-        daily = _apply_recall_floor(daily, floor=floor)
+        raw = _apply_recall_floor_with_fallback(raw, floor=floor, min_keep=1)
+        daily = _apply_recall_floor_with_fallback(daily, floor=floor, min_keep=1)
 
         cutoff_h = max(0.0, float(evidence_recency_days)) * 24.0
 

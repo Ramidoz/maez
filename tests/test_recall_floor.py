@@ -53,6 +53,38 @@ class TestApplyFloor(unittest.TestCase):
             self.assertEqual(_apply_recall_floor(flood, floor=0.75), [])
 
 
+class TestApplyFloorWithFallback(unittest.TestCase):
+    def test_fallback_keeps_best_n_when_floor_would_empty(self):
+        from memory.memory_manager import _apply_recall_floor_with_fallback
+
+        rows = [
+            {"id": "weak-best", "distance": 0.81},
+            {"id": "weak-worse", "distance": 0.95},
+        ]
+        with mock.patch.dict("os.environ", {"MAEZ_RECALL_FLOOR_ENABLED": "1"}):
+            kept = _apply_recall_floor_with_fallback(rows, floor=0.78, min_keep=1)
+        self.assertEqual([row["id"] for row in kept], ["weak-best"])
+
+    def test_no_fallback_when_some_candidates_pass(self):
+        from memory.memory_manager import _apply_recall_floor_with_fallback
+
+        rows = [
+            {"id": "good", "distance": 0.40},
+            {"id": "weak", "distance": 0.90},
+        ]
+        with mock.patch.dict("os.environ", {"MAEZ_RECALL_FLOOR_ENABLED": "1"}):
+            kept = _apply_recall_floor_with_fallback(rows, floor=0.78, min_keep=1)
+        self.assertEqual([row["id"] for row in kept], ["good"])
+
+    def test_missing_distance_still_keeps_candidate(self):
+        from memory.memory_manager import _apply_recall_floor_with_fallback
+
+        rows = [{"id": "unknown-distance"}]
+        with mock.patch.dict("os.environ", {"MAEZ_RECALL_FLOOR_ENABLED": "1"}):
+            kept = _apply_recall_floor_with_fallback(rows, floor=0.78, min_keep=1)
+        self.assertEqual([row["id"] for row in kept], ["unknown-distance"])
+
+
 class TestTeacherSignal(unittest.TestCase):
     def test_tighten_only_when_diary_heavy_lowground_and_no_memory_ask(self):
         signal = _recall_floor_teacher_signal(
