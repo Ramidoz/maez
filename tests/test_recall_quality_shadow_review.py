@@ -122,7 +122,13 @@ class RecallQualityShadowReviewTests(unittest.TestCase):
         )
 
         rows = [
-            {"id": "r1", "distance": 0.90, "kind": "reflection", "would_drop": True},
+            {
+                "id": "r1",
+                "distance": 0.90,
+                "kind": "reflection",
+                "would_drop": True,
+                "preview": "self-reflection candidate preview",
+            },
             {
                 "id": "r2",
                 "distance": 0.30,
@@ -146,6 +152,7 @@ class RecallQualityShadowReviewTests(unittest.TestCase):
         self.assertIn("unknown_share", text)
         self.assertIn("reflection_drop_share", text)
         self.assertIn("review_status", text)
+        self.assertIn("self-reflection candidate preview", text)
         self.assertLess(
             text.index("## Live Probe Summary"),
             text.index('"unknown_share": 0.3333333333333333'),
@@ -162,6 +169,7 @@ class RecallQualityShadowReviewTests(unittest.TestCase):
                     "daily": [],
                     "raw": [{
                         "id": "reflection-row",
+                        "content": "  Reflection content\nwith extra   spacing  ",
                         "distance": 0.90,
                         "metadata": {"source_kind": "reflection"},
                     }],
@@ -177,4 +185,5 @@ class RecallQualityShadowReviewTests(unittest.TestCase):
         self.assertEqual(rows[0]["tier"], "raw")
         self.assertEqual(rows[0]["id"], "reflection-row")
         self.assertEqual(rows[0]["kind"], "reflection")
+        self.assertEqual(rows[0]["preview"], "Reflection content with extra spacing")
         self.assertTrue(rows[0]["would_drop"])

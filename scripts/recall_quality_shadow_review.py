@@ -99,6 +99,13 @@ def summarize_logs(path: Path) -> dict:
     }
 
 
+def _content_preview(value: object, *, limit: int = 160) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)].rstrip() + "..."
+
+
 def probe_live_candidate_kinds(queries: list[str], *, manager=None) -> list[dict]:
     if not queries:
         return []
@@ -132,6 +139,7 @@ def probe_live_candidate_kinds(queries: list[str], *, manager=None) -> list[dict
                         "partition": partition_name,
                         "tier": tier,
                         "id": str(mem.get("id", ""))[:16],
+                        "preview": _content_preview(mem.get("content", "")),
                         "distance": (
                             float(dist) if isinstance(dist, (int, float)) else None
                         ),

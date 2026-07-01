@@ -615,6 +615,7 @@ EVIDENCE_RECENCY_DAYS = 14.0
 _LIVING_RECALL_DISTANCE_FLOOR = 1e-3
 _RECALL_RELEVANCE_FLOOR_DEFAULT = 0.7800
 _RECALL_PROMOTION_RERANK_STRENGTH = 0.20
+_LIVING_RECALL_INVALID_DISTANCE_RANK = 1_000_000.0
 _RECALL_TYPE_WEIGHTS = {
     "reflection": 0.25,
     "maez_self": 0.25,
@@ -701,7 +702,7 @@ def _finite_distance(mem: dict) -> float | None:
     if not isinstance(dist, (int, float)):
         return None
     value = float(dist)
-    if not math.isfinite(value):
+    if not math.isfinite(value) or value < 0.0:
         return None
     return value
 
@@ -2523,8 +2524,12 @@ class MemoryManager:
         daily = [mem for mem in daily if _keep_not_echo(mem)]
 
         def _effective_distance(mem: dict) -> float:
-            finite = _finite_distance(mem)
-            base = finite if finite is not None else 1.0
+            ranked = _distance_sort_key(mem)
+            base = (
+                ranked
+                if math.isfinite(ranked)
+                else _LIVING_RECALL_INVALID_DISTANCE_RANK
+            )
             meta = mem.get("metadata") or {}
             age_h = _age_hours_from_iso(meta.get("timestamp", ""), now_s)
             rf = recency_factor(age_h, half_life_days)

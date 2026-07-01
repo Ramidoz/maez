@@ -174,6 +174,69 @@ class LivingRecallRankingTests(unittest.TestCase):
         order = _partition_ids(evidence, "raw") + _partition_ids(context, "raw")
         self.assertEqual(order[:2], ["finite-distance", "bool-distance"])
 
+    def test_invalid_distances_sort_after_weak_finite_living_recall(self):
+        nan_distance = _row(
+            "nan-distance",
+            content="malformed nan distance row",
+            days_ago=1,
+            distance=0.0,
+        )
+        nan_distance["distance"] = math.nan
+        missing_distance = _row(
+            "missing-distance",
+            content="missing distance row",
+            days_ago=1,
+            distance=0.0,
+        )
+        del missing_distance["distance"]
+        bool_distance = _row(
+            "bool-distance",
+            content="malformed boolean distance row",
+            days_ago=1,
+            distance=0.0,
+        )
+        bool_distance["distance"] = True
+        negative_distance = _row(
+            "negative-distance",
+            content="malformed negative distance row",
+            days_ago=1,
+            distance=-0.20,
+        )
+        weak_finite = _row(
+            "weak-finite",
+            content="weak but finite distance row",
+            days_ago=1,
+            distance=1.20,
+        )
+        mm = _manager(
+            raw_rows=[
+                nan_distance,
+                missing_distance,
+                bool_distance,
+                negative_distance,
+                weak_finite,
+            ]
+        )
+
+        with (
+            mock.patch(
+                "memory.memory_manager._now_seconds",
+                return_value=datetime(
+                    2026, 5, 29, 12, 0, tzinfo=timezone.utc
+                ).timestamp(),
+            ),
+            mock.patch(
+                "core.memory_scoring.record_recall",
+                side_effect=lambda *a, **k: None,
+            ),
+        ):
+            evidence, context = mm.recall_for_telegram_living(
+                "distance normalization"
+            )
+
+        order = _partition_ids(evidence, "raw") + _partition_ids(context, "raw")
+        self.assertEqual(order[0], "weak-finite")
+
     def test_overfetch_surfaces_fresh_outside_age_blind_top20(self):
         stale_rows = [
             _row(
