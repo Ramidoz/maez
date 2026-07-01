@@ -1,5 +1,7 @@
 # Recall Quality v0.1 — Type-Aware Floor for Self-Digests Design
 
+> **SUPERSEDED (2026-07-01, same day, never enforced):** the type-aware treatment was recognized — by the owner asking "doesn't this sound like hardcoding?" — as a **category opinion over Maez's own memory types** ("your diary counts for less"), the conclusion-not-organ shape ([[feedback_hardcode_organs_not_opinions]], fourth catch). All treatment flags darkened (enforce AND shadow); code merged @30d1070 remains but its decision paths are scheduled for removal. **Replacement: Recall Quality v0.2 — content-blind context floor** (`2026-07-01-recall-quality-v0-2-content-blind-context-floor-design.md`), which judges fit-to-turn, never memory-worth. Do not build on this spec.
+
 **Date:** 2026-07-01. **Lane:** Claude drafts + covenant-review; Codex cross-lane / builds; owner runs the shadow review + the enforce decision. **Status:** DESIGN for review. **Scope:** a floor-side follow-up to Recall Quality v0 (floor live @75b2fb5). Teach the live relevance floor the difference between *a memory about us* and *Maez's own system diary*, so it can be stricter with the diary on casual turns **without** starving real memory or muzzling self-perception. **Promotion authority stays parked** — this slice needs none of it.
 
 ## The one-line intent
