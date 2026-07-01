@@ -103,6 +103,18 @@ def detector_blob(frame, *, input_shape=DEFAULT_INPUT_SHAPE):
     ).astype(np.float32)
 
 
+def crop_face(frame, box):
+    height, width = frame.shape[:2]
+    x1, y1, x2, y2 = box
+    left = max(0, min(width, int(round(x1))))
+    top = max(0, min(height, int(round(y1))))
+    right = max(0, min(width, int(round(x2))))
+    bottom = max(0, min(height, int(round(y2))))
+    if right <= left or bottom <= top:
+        return frame[0:0, 0:0]
+    return frame[top:bottom, left:right]
+
+
 class _TrtEngine:
     def __init__(self, engine_path):
         import tensorrt as trt
