@@ -113,6 +113,18 @@ class TestApplyFloorWithFallback(unittest.TestCase):
             kept = _apply_recall_floor_with_fallback(rows, floor=0.78, min_keep=1)
         self.assertEqual([row["id"] for row in kept], ["finite-best"])
 
+    def test_non_finite_distance_sorts_after_finite_distance_above_one(self):
+        from memory.memory_manager import _apply_recall_floor_with_fallback
+
+        rows = [
+            {"id": "nan-first", "distance": float("nan")},
+            {"id": "inf-first", "distance": float("inf")},
+            {"id": "finite-above-one", "distance": 1.2},
+        ]
+        with mock.patch.dict("os.environ", {"MAEZ_RECALL_FLOOR_ENABLED": "1"}):
+            kept = _apply_recall_floor_with_fallback(rows, floor=0.78, min_keep=1)
+        self.assertEqual([row["id"] for row in kept], ["finite-above-one"])
+
 
 class TestTeacherSignal(unittest.TestCase):
     def test_tighten_only_when_diary_heavy_lowground_and_no_memory_ask(self):

@@ -723,7 +723,7 @@ def _apply_recall_floor(mems: list[dict], *, floor: float) -> list[dict]:
 def _distance_sort_key(mem: dict) -> float:
     dist = _finite_distance(mem)
     if dist is None:
-        return 1.0
+        return math.inf
     return dist
 
 
