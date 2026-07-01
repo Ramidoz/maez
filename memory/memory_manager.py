@@ -2557,8 +2557,16 @@ class MemoryManager:
         raw = _apply_recall_floor_with_fallback(raw, floor=floor, min_keep=1)
         daily = _apply_recall_floor_with_fallback(daily, floor=floor, min_keep=1)
 
-        def _ids_joined(mems: list[dict]) -> str:
-            return ",".join(str(mem.get("id", "")) for mem in mems)
+        def _ids_joined(
+            mems: list[dict],
+            *,
+            limit: int,
+            id_prefix_len: int = 12,
+        ) -> str:
+            return ",".join(
+                str(mem.get("id", ""))[:id_prefix_len]
+                for mem in mems[:limit]
+            )
 
         def _promotion_rank_key(mem: dict) -> float:
             mem_id = str(mem.get("id", ""))
@@ -2574,10 +2582,10 @@ class MemoryManager:
             logger.info(
                 "recall_promotion_shadow raw_before=%s raw_after=%s "
                 "daily_before=%s daily_after=%s applied=%s",
-                _ids_joined(raw),
-                _ids_joined(raw_shadow),
-                _ids_joined(daily),
-                _ids_joined(daily_shadow),
+                _ids_joined(raw, limit=5),
+                _ids_joined(raw_shadow, limit=5),
+                _ids_joined(daily, limit=3),
+                _ids_joined(daily_shadow, limit=3),
                 False,
             )
 

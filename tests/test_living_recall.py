@@ -511,7 +511,58 @@ class PromotionShadowCompareTests(unittest.TestCase):
         self.assertEqual(served_order, ["reflection", "relational"])
         log_text = "\n".join(logs.output)
         self.assertIn("recall_promotion_shadow", log_text)
+        self.assertIn("raw_before=reflection,relational", log_text)
+        self.assertIn("raw_after=relational,reflection", log_text)
         self.assertIn("applied=False", log_text)
+
+    def test_shadow_compare_log_compacts_raw_candidate_ids(self):
+        rows = [
+            _row(
+                f"raw-cand-{i:03d}-extra",
+                content=f"candidate {i}",
+                days_ago=1,
+                distance=0.20 + (i * 0.01),
+            )
+            for i in range(1, 7)
+        ]
+        mm = _manager(raw_rows=rows)
+
+        def fake_get_stats(memory_id):
+            from core.memory_scoring import RecallStats
+
+            return RecallStats(memory_id=memory_id)
+
+        with (
+            mock.patch.dict(
+                os.environ,
+                {
+                    "MAEZ_RECALL_PROMOTION_SHADOW": "1",
+                    "MAEZ_RECALL_PROMOTION_ENABLED": "0",
+                    "MAEZ_RECALL_FLOOR_SHADOW": "0",
+                    "MAEZ_RECALL_FLOOR_ENABLED": "0",
+                },
+            ),
+            mock.patch(
+                "memory.memory_manager._now_seconds",
+                return_value=datetime(2026, 5, 29, 12, 0, tzinfo=timezone.utc).timestamp(),
+            ),
+            mock.patch("core.memory_scoring.record_recall", side_effect=lambda *a, **k: None),
+            mock.patch("core.memory_scoring.get_stats", side_effect=fake_get_stats),
+            mock.patch("core.memory_scoring.promotion_score", return_value=0.0),
+            self.assertLogs("maez", level="INFO") as logs,
+        ):
+            mm.recall_for_telegram_living("candidate")
+
+        shadow_log = next(
+            line for line in logs.output
+            if "recall_promotion_shadow" in line
+        )
+        self.assertIn(
+            "raw_before=raw-cand-001,raw-cand-002,raw-cand-003,"
+            "raw-cand-004,raw-cand-005",
+            shadow_log,
+        )
+        self.assertNotIn("raw-cand-006", shadow_log)
 
 
 class PromotionRerankHelperTests(unittest.TestCase):
