@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
+import os
 import re
 import sys
 from pathlib import Path
@@ -35,6 +37,35 @@ _FLOOR_RE = re.compile(
     r"actuated=(?P<actuated>True|False|true|false)"
 )
 
+_TYPE_FLOOR_CANDIDATE_RE = re.compile(
+    r"recall_type_floor_candidate tier=(?P<tier>\S+) "
+    r"id=(?P<id>\S+) kind=(?P<kind>\S+) "
+    r"distance=(?P<distance>[0-9.inf]+) "
+    r"applied_floor=(?P<applied_floor>[0-9.]+) "
+    r"would_drop=(?P<would_drop>True|False|true|false) "
+    r"query_memory_ask=(?P<query_memory_ask>True|False|true|false) "
+    r"retained=(?P<retained>True|False|true|false)"
+)
+
+_TYPE_FLOOR_SHADOW_RE = re.compile(
+    r"recall_type_floor_shadow base_floor=(?P<base_floor>[0-9.]+) "
+    r"self_digest_floor=(?P<self_digest_floor>[0-9.]+) "
+    r"query_memory_ask=(?P<query_memory_ask>True|False|true|false) "
+    r"candidate_count=(?P<candidate_count>\d+) "
+    r"would_drop=(?P<would_drop>\d+) "
+    r"dropped_self_digest=(?P<dropped_self_digest>\d+) "
+    r"fallback_rescue_kind=(?P<fallback_rescue_kind>\S+) "
+    r"actuated=(?P<actuated>True|False|true|false)"
+)
+
+
+def _bool_text(value: str) -> bool:
+    return value.lower() == "true"
+
+
+def _none_text(value: str) -> str | None:
+    return None if value == "None" else value
+
 
 def parse_living_candidate(line: str) -> dict | None:
     match = _CANDIDATE_RE.search(line)
@@ -50,6 +81,68 @@ def parse_living_candidate(line: str) -> dict | None:
         "shadow_promotion": None if promotion == "None" else float(promotion),
         "kind": match.group("kind"),
         "type_weight": None if type_weight is None else float(type_weight),
+    }
+
+
+def parse_type_floor_candidate(line: str) -> dict | None:
+    match = _TYPE_FLOOR_CANDIDATE_RE.search(line)
+    if match is None:
+        return None
+    return {
+        "tier": match.group("tier"),
+        "id": match.group("id"),
+        "kind": match.group("kind"),
+        "distance": float(match.group("distance")),
+        "applied_floor": float(match.group("applied_floor")),
+        "would_drop": _bool_text(match.group("would_drop")),
+        "query_memory_ask": _bool_text(match.group("query_memory_ask")),
+        "retained": _bool_text(match.group("retained")),
+    }
+
+
+def parse_type_floor_shadow(line: str) -> dict | None:
+    match = _TYPE_FLOOR_SHADOW_RE.search(line)
+    if match is None:
+        return None
+    return {
+        "base_floor": float(match.group("base_floor")),
+        "self_digest_floor": float(match.group("self_digest_floor")),
+        "query_memory_ask": _bool_text(match.group("query_memory_ask")),
+        "candidate_count": int(match.group("candidate_count")),
+        "would_drop": int(match.group("would_drop")),
+        "dropped_self_digest": int(match.group("dropped_self_digest")),
+        "fallback_rescue_kind": _none_text(match.group("fallback_rescue_kind")),
+        "actuated": _bool_text(match.group("actuated")),
+    }
+
+
+def summarize_type_floor_rows(rows: list[dict]) -> dict:
+    casual_self_digest = [
+        row
+        for row in rows
+        if row.get("kind") == "self_digest" and not row.get("query_memory_ask")
+    ]
+    memory_self_digest = [
+        row
+        for row in rows
+        if row.get("kind") == "self_digest" and row.get("query_memory_ask")
+    ]
+    casual_drops = [row for row in casual_self_digest if row.get("would_drop")]
+    casual_resurrected = [
+        row for row in casual_drops if row.get("retained")
+    ]
+    memory_drops = [row for row in memory_self_digest if row.get("would_drop")]
+    memory_kept = [row for row in memory_self_digest if row.get("retained")]
+    return {
+        "candidate_count": len(rows),
+        "self_digest_candidate_count": len(casual_self_digest) + len(memory_self_digest),
+        "casual_self_digest_drop_count": len(casual_drops),
+        "casual_self_digest_resurrected_count": len(casual_resurrected),
+        "memory_ask_self_digest_drop_count": len(memory_drops),
+        "memory_ask_self_digest_kept_count": len(memory_kept),
+        "review_status": "review_required" if rows else "no_type_floor_rows",
+        "sample_casual_drops": casual_drops[:20],
+        "sample_memory_ask_drops": memory_drops[:20],
     }
 
 
@@ -71,6 +164,8 @@ def parse_floor_shadow(line: str) -> dict | None:
 def summarize_logs(path: Path) -> dict:
     candidates: list[dict] = []
     floors: list[dict] = []
+    type_floor_candidates: list[dict] = []
+    type_floor_shadows: list[dict] = []
     if path.exists():
         for line in path.read_text(errors="replace").splitlines():
             candidate = parse_living_candidate(line)
@@ -79,6 +174,12 @@ def summarize_logs(path: Path) -> dict:
             floor = parse_floor_shadow(line)
             if floor is not None:
                 floors.append(floor)
+            type_candidate = parse_type_floor_candidate(line)
+            if type_candidate is not None:
+                type_floor_candidates.append(type_candidate)
+            type_shadow = parse_type_floor_shadow(line)
+            if type_shadow is not None:
+                type_floor_shadows.append(type_shadow)
 
     distances = [row["base_distance"] for row in candidates]
     kinded = [row for row in candidates if row.get("kind") is not None]
@@ -96,6 +197,9 @@ def summarize_logs(path: Path) -> dict:
         "floor_would_empty_count": sum(1 for row in floors if row["would_empty"]),
         "unknown_share": (len(unknown) / len(kinded)) if kinded else None,
         "reflection_share": (len(reflections) / len(kinded)) if kinded else None,
+        "type_floor_candidate_count": len(type_floor_candidates),
+        "type_floor_shadow_count": len(type_floor_shadows),
+        "type_floor_summary": summarize_type_floor_rows(type_floor_candidates),
     }
 
 
@@ -152,6 +256,65 @@ def probe_live_candidate_kinds(queries: list[str], *, manager=None) -> list[dict
     return rows
 
 
+class _CaptureHandler(logging.Handler):
+    def __init__(self):
+        super().__init__(level=logging.INFO)
+        self.lines: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.lines.append(record.getMessage())
+
+
+def probe_live_type_floor_rows(queries: list[str], *, manager=None) -> list[dict]:
+    if not queries:
+        return []
+
+    from memory.memory_manager import MemoryManager
+
+    if manager is None:
+        manager = MemoryManager()
+
+    old_env = {
+        name: os.environ.get(name)
+        for name in (
+            "MAEZ_RECALL_FLOOR_SHADOW",
+            "MAEZ_RECALL_FLOOR_ENABLED",
+            "MAEZ_RECALL_TYPE_FLOOR_SHADOW",
+            "MAEZ_RECALL_TYPE_FLOOR_ENABLED",
+        )
+    }
+    os.environ["MAEZ_RECALL_FLOOR_SHADOW"] = "1"
+    os.environ["MAEZ_RECALL_FLOOR_ENABLED"] = "1"
+    os.environ["MAEZ_RECALL_TYPE_FLOOR_SHADOW"] = "1"
+    os.environ["MAEZ_RECALL_TYPE_FLOOR_ENABLED"] = "0"
+
+    logger = logging.getLogger("maez")
+    old_level = logger.level
+    logger.setLevel(logging.INFO)
+    handler = _CaptureHandler()
+    logger.addHandler(handler)
+    try:
+        rows: list[dict] = []
+        for query in queries:
+            start = len(handler.lines)
+            manager.recall_for_telegram_living(query, record_recalls=False)
+            for line in handler.lines[start:]:
+                row = parse_type_floor_candidate(line)
+                if row is not None:
+                    row["source"] = "live_type_floor_probe"
+                    row["query"] = query
+                    rows.append(row)
+        return rows
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(old_level)
+        for name, value in old_env.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
 def summarize_replay_rows(rows: list[dict]) -> dict:
     total = len(rows)
     drops = [row for row in rows if row.get("would_drop")]
@@ -187,6 +350,7 @@ def write_markdown(
     path: Path,
     log_summary: dict,
     live_probe_summary: dict,
+    type_floor_summary: dict,
     replay_jsonl_summary: dict,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -205,6 +369,12 @@ def write_markdown(
         json.dumps(live_probe_summary, indent=2, sort_keys=True),
         "```",
         "",
+        "## Type-Aware Floor Summary",
+        "",
+        "```json",
+        json.dumps(type_floor_summary, indent=2, sort_keys=True),
+        "```",
+        "",
         "## Replay JSONL Summary",
         "",
         "```json",
@@ -217,6 +387,10 @@ def write_markdown(
         "- PASS only if unknown_share shows type damping is not a silent no-op.",
         "- HOLD if on-point relational context appears in the dropped sample.",
         "- HOLD if floor_would_empty_count suggests likely answer starvation.",
+        "- PASS v0.1 only if casual_self_digest_drop_count > 0.",
+        "- PASS v0.1 only if casual_self_digest_resurrected_count == 0.",
+        "- PASS v0.1 only if memory_ask_self_digest_drop_count == 0.",
+        "- PASS v0.1 only if memory_ask_self_digest_kept_count > 0.",
     ]
     path.write_text("\n".join(lines) + "\n")
 
@@ -250,11 +424,15 @@ def main(argv: list[str] | None = None) -> int:
     live_probe_rows = probe_live_candidate_kinds(
         _probe_queries_from_args(args.probe_query)
     )
+    live_type_floor_rows = probe_live_type_floor_rows(
+        _probe_queries_from_args(args.probe_query)
+    )
 
     write_markdown(
         Path(args.out),
         summarize_logs(Path(args.log)),
         summarize_replay_rows(live_probe_rows),
+        summarize_type_floor_rows(live_type_floor_rows),
         summarize_replay_rows(replay_rows),
     )
     return 0
