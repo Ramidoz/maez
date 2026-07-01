@@ -121,6 +121,7 @@ def probe_live_candidate_kinds(queries: list[str], *, manager=None) -> list[dict
                 for mem in partition.get(tier, []) or []:
                     dist = mem.get("distance")
                     rows.append({
+                        "source": "live_probe",
                         "query": query,
                         "partition": partition_name,
                         "tier": tier,
@@ -162,7 +163,12 @@ def summarize_replay_rows(rows: list[dict]) -> dict:
     }
 
 
-def write_markdown(path: Path, log_summary: dict, replay_summary: dict) -> None:
+def write_markdown(
+    path: Path,
+    log_summary: dict,
+    live_probe_summary: dict,
+    replay_jsonl_summary: dict,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
         "# Recall Quality Shadow Review",
@@ -173,10 +179,16 @@ def write_markdown(path: Path, log_summary: dict, replay_summary: dict) -> None:
         json.dumps(log_summary, indent=2, sort_keys=True),
         "```",
         "",
-        "## Replay Summary",
+        "## Live Probe Summary",
         "",
         "```json",
-        json.dumps(replay_summary, indent=2, sort_keys=True),
+        json.dumps(live_probe_summary, indent=2, sort_keys=True),
+        "```",
+        "",
+        "## Replay JSONL Summary",
+        "",
+        "```json",
+        json.dumps(replay_jsonl_summary, indent=2, sort_keys=True),
         "```",
         "",
         "## Owner Review Gate",
@@ -195,7 +207,9 @@ def _read_replay_jsonl(path: Path) -> list[dict]:
         return rows
     for line in path.read_text(errors="replace").splitlines():
         if line.strip():
-            rows.append(json.loads(line))
+            row = json.loads(line)
+            row["source"] = "replay_jsonl"
+            rows.append(row)
     return rows
 
 
@@ -213,11 +227,12 @@ def main(argv: list[str] | None = None) -> int:
     replay_rows: list[dict] = []
     if args.replay_jsonl:
         replay_rows.extend(_read_replay_jsonl(Path(args.replay_jsonl)))
-    replay_rows.extend(probe_live_candidate_kinds(args.probe_query))
+    live_probe_rows = probe_live_candidate_kinds(args.probe_query)
 
     write_markdown(
         Path(args.out),
         summarize_logs(Path(args.log)),
+        summarize_replay_rows(live_probe_rows),
         summarize_replay_rows(replay_rows),
     )
     return 0

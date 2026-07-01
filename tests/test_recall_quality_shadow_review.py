@@ -62,7 +62,7 @@ class RecallQualityShadowReviewTests(unittest.TestCase):
         self.assertAlmostEqual(summary["reflection_share"], 0.5)
         self.assertEqual(summary["floor_receipt_count"], 1)
 
-    def test_write_markdown_includes_review_fields(self):
+    def test_write_markdown_includes_live_probe_summary(self):
         from scripts.recall_quality_shadow_review import (
             summarize_replay_rows,
             write_markdown,
@@ -81,11 +81,22 @@ class RecallQualityShadowReviewTests(unittest.TestCase):
         summary = summarize_replay_rows(rows)
         with tempfile.TemporaryDirectory() as td:
             out = Path(td) / "review.md"
-            write_markdown(out, log_summary={"candidate_count": 2}, replay_summary=summary)
+            write_markdown(
+                out,
+                log_summary={"candidate_count": 2},
+                live_probe_summary=summary,
+                replay_jsonl_summary=summarize_replay_rows([]),
+            )
             text = out.read_text()
+        self.assertIn("## Live Probe Summary", text)
+        self.assertIn("## Replay JSONL Summary", text)
         self.assertIn("unknown_share", text)
         self.assertIn("reflection_drop_share", text)
         self.assertIn("review_status", text)
+        self.assertLess(
+            text.index("## Live Probe Summary"),
+            text.index('"unknown_share": 0.3333333333333333'),
+        )
 
     def test_probe_live_candidate_kinds_accepts_injected_manager(self):
         from scripts.recall_quality_shadow_review import probe_live_candidate_kinds
@@ -107,6 +118,7 @@ class RecallQualityShadowReviewTests(unittest.TestCase):
         manager = FakeManager()
         rows = probe_live_candidate_kinds(["how are you"], manager=manager)
         self.assertFalse(manager.record_recalls)
+        self.assertEqual(rows[0]["source"], "live_probe")
         self.assertEqual(rows[0]["query"], "how are you")
         self.assertEqual(rows[0]["partition"], "context")
         self.assertEqual(rows[0]["tier"], "raw")

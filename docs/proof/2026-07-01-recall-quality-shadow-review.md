@@ -16,7 +16,7 @@
 }
 ```
 
-## Replay Summary
+## Live Probe Summary
 
 ```json
 {
@@ -32,6 +32,7 @@
       "kind": "unknown",
       "partition": "evidence",
       "query": "what did you do",
+      "source": "live_probe",
       "tier": "daily",
       "would_drop": true
     },
@@ -41,11 +42,26 @@
       "kind": "unknown",
       "partition": "evidence",
       "query": "what patterns do you notice",
+      "source": "live_probe",
       "tier": "daily",
       "would_drop": true
     }
   ],
   "unknown_share": 0.23076923076923078
+}
+```
+
+## Replay JSONL Summary
+
+```json
+{
+  "candidate_count": 0,
+  "drop_count": 0,
+  "reflection_drop_share": 0.0,
+  "relational_kept_count": 0,
+  "review_status": "no_replay_rows",
+  "sample_dropped": [],
+  "unknown_share": 0.0
 }
 ```
 
