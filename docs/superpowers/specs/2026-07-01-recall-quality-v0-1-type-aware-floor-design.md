@@ -43,7 +43,7 @@ If the review shows self-content dropping on memory-ask turns, HOLD and fix the 
 ## Constants (to pin from shadow data in the plan)
 
 - The self-digest tighter floor value (below 0.78; pinned from the shadow distance distribution of `daily_consolidation` candidates — not a guess).
-- The self-digest type set (`daily_consolidation` + any siblings from Task 0.5).
+- The self-digest type set: `daily_consolidation` + **`nightly_journal`** (Codex re-review confirmed core-tier `nightly_journal` rows also classify `unknown` — a real sibling) + any further siblings from **Task 0.5, which must sample beyond `daily` (core/raw tiers too)** before the set is pinned.
 - The memory-ask/meta-query signal (reuse META_QUERY keywords vs wire the teacher-signal — the plan decides after checking coverage).
 
 ## Out of scope
@@ -62,7 +62,7 @@ If the review shows self-content dropping on memory-ask turns, HOLD and fix the 
 **Host/unit:**
 - `_recall_candidate_kind` maps `daily_consolidation` → `self_digest` (not `unknown`); a test proves it fires on a real daily-row metadata shape.
 - The type-aware floor applies the tighter floor to `self_digest` on non-memory-ask turns and the normal floor on memory-ask turns (both directions tested).
-- **Whole-recall + kind-aware fallback (the Codex-HOLD fix), tested in three cases:**
+- **Whole-recall + kind-aware fallback (the Codex-HOLD fix)** — the tests must exercise the **real partition structure (`raw` / `daily` / `core`), not a flat-list helper** (the resurrection bug was tier behavior; a flat list would hide it). Tested in three cases:
   - casual turn, `daily` all self-digests dropped, **relational/core material present** → `daily` empties, **no diary rescued** (the filter holds).
   - casual turn, self-digests dropped, **a weak non-self-digest candidate exists** → the fallback rescues the non-self-digest, not a self-digest.
   - casual turn, **entire recall would be blank** (only self-digests anywhere) → keep the single best self-digest (last resort) — Maez isn't left with nothing.
