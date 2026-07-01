@@ -12,6 +12,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+DEFAULT_PROBE_QUERIES = (
+    "how are you",
+    "what did you do",
+    "what patterns do you notice",
+)
+
 _CANDIDATE_RE = re.compile(
     r"living_recall_candidate id=(?P<id>\S+) "
     r"base_distance=(?P<base>[0-9.]+) "
@@ -163,6 +169,12 @@ def summarize_replay_rows(rows: list[dict]) -> dict:
     }
 
 
+def _probe_queries_from_args(args_probe_query: list[str] | None) -> list[str]:
+    if args_probe_query:
+        return list(args_probe_query)
+    return list(DEFAULT_PROBE_QUERIES)
+
+
 def write_markdown(
     path: Path,
     log_summary: dict,
@@ -227,7 +239,9 @@ def main(argv: list[str] | None = None) -> int:
     replay_rows: list[dict] = []
     if args.replay_jsonl:
         replay_rows.extend(_read_replay_jsonl(Path(args.replay_jsonl)))
-    live_probe_rows = probe_live_candidate_kinds(args.probe_query)
+    live_probe_rows = probe_live_candidate_kinds(
+        _probe_queries_from_args(args.probe_query)
+    )
 
     write_markdown(
         Path(args.out),

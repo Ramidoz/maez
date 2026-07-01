@@ -62,6 +62,15 @@ class RecallQualityShadowReviewTests(unittest.TestCase):
         self.assertAlmostEqual(summary["reflection_share"], 0.5)
         self.assertEqual(summary["floor_receipt_count"], 1)
 
+    def test_probe_query_defaults_are_used_only_when_args_empty(self):
+        from scripts.recall_quality_shadow_review import (
+            DEFAULT_PROBE_QUERIES,
+            _probe_queries_from_args,
+        )
+
+        self.assertEqual(_probe_queries_from_args([]), list(DEFAULT_PROBE_QUERIES))
+        self.assertEqual(_probe_queries_from_args(["custom"]), ["custom"])
+
     def test_write_markdown_includes_live_probe_summary(self):
         from scripts.recall_quality_shadow_review import (
             summarize_replay_rows,
