@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 class RecallQualityShadowReviewTests(unittest.TestCase):
@@ -70,6 +71,49 @@ class RecallQualityShadowReviewTests(unittest.TestCase):
 
         self.assertEqual(_probe_queries_from_args([]), list(DEFAULT_PROBE_QUERIES))
         self.assertEqual(_probe_queries_from_args(["custom"]), ["custom"])
+
+    def test_main_uses_default_probe_queries_without_opening_memory_manager(self):
+        from scripts import recall_quality_shadow_review as review
+
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "review.md"
+            with mock.patch.object(
+                review,
+                "probe_live_candidate_kinds",
+                return_value=[],
+            ) as probe:
+                rc = review.main([
+                    "--log",
+                    str(Path(td) / "missing.log"),
+                    "--out",
+                    str(out),
+                ])
+
+            self.assertEqual(rc, 0)
+            probe.assert_called_once_with(list(review.DEFAULT_PROBE_QUERIES))
+            self.assertIn("## Live Probe Summary", out.read_text())
+
+    def test_main_uses_custom_probe_queries_without_opening_memory_manager(self):
+        from scripts import recall_quality_shadow_review as review
+
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "review.md"
+            with mock.patch.object(
+                review,
+                "probe_live_candidate_kinds",
+                return_value=[],
+            ) as probe:
+                rc = review.main([
+                    "--log",
+                    str(Path(td) / "missing.log"),
+                    "--probe-query",
+                    "custom",
+                    "--out",
+                    str(out),
+                ])
+
+            self.assertEqual(rc, 0)
+            probe.assert_called_once_with(["custom"])
 
     def test_write_markdown_includes_live_probe_summary(self):
         from scripts.recall_quality_shadow_review import (
