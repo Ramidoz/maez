@@ -525,7 +525,7 @@ class TestContextWholeRecallFallback(unittest.TestCase):
         self.assertEqual(summary["fallback_rescue_kind"], "best_by_distance")
         self.assertEqual(summary["fallback_rescue_id"], "raw-best")
 
-    def test_memory_ask_matches_v0_shape(self):
+    def test_memory_ask_matches_v0_shape_with_per_tier_fallback(self):
         from memory.memory_manager import _apply_context_floor_to_partitions
 
         partitions = {
@@ -542,7 +542,7 @@ class TestContextWholeRecallFallback(unittest.TestCase):
             enforce=True,
         )
 
-        self.assertEqual(self._ids(filtered, "raw"), [])
+        self.assertEqual(self._ids(filtered, "raw"), ["raw-dropped-by-v0"])
         self.assertEqual(self._ids(filtered, "daily"), ["daily-kept-by-v0"])
         self.assertEqual(self._ids(filtered, "core"), ["core-pass-through"])
         self.assertEqual(summary["fallback_rescue_kind"], None)
@@ -633,14 +633,32 @@ def _apply_context_floor_to_partitions(
                 "casual_floor": casual_floor,
                 "would_drop": not passes,
                 "distance": _distance_sort_key(mem),
+                "preview": _recall_context_preview(mem),
                 "mem": mem,
             })
             if passes or not enforce:
                 filtered[tier].append(mem)
 
+    if enforce and query_is_memory_ask:
+        for tier in ("raw", "daily"):
+            if filtered[tier] or not original[tier]:
+                continue
+            rescued = sorted(
+                [
+                    row for row in decisions
+                    if row["tier"] == tier and row["would_drop"]
+                ],
+                key=lambda row: row["distance"],
+            )[0]
+            filtered[tier].append(rescued["mem"])
+
     fallback_rescue_kind = None
     fallback_rescue_id = None
-    if enforce and not any(filtered[tier] for tier in ("raw", "daily", "core")):
+    if (
+        enforce
+        and not query_is_memory_ask
+        and not any(filtered[tier] for tier in ("raw", "daily", "core"))
+    ):
         failed = [row for row in decisions if row["would_drop"]]
         if failed:
             rescued = sorted(failed, key=lambda row: row["distance"])[0]
@@ -666,6 +684,18 @@ def _apply_context_floor_to_partitions(
 ```
 
 This helper computes `kind` for telemetry only. It must not branch on `kind`.
+
+Add this helper near the context-floor helpers:
+
+```python
+def _recall_context_preview(mem: dict, *, limit: int = 140) -> str:
+    text = " ".join(str(mem.get("content", "")).split())
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip()
+```
+
+The `preview` is for shadow-review artifacts only; it must not participate in floor or fallback decisions.
 
 - [ ] **Step 5: Run tests and verify GREEN**
 
@@ -806,7 +836,7 @@ class LivingRecallContextFloorTests(unittest.TestCase):
                 "what have you noticed about yourself"
             )
 
-        self.assertEqual(_partition_ids(evidence, "raw"), [])
+        self.assertEqual(_partition_ids(evidence, "raw"), ["raw-v0-drops"])
         self.assertEqual(_partition_ids(evidence, "daily"), ["daily-v0-keeps"])
         self.assertEqual(_partition_ids(context, "core"), ["core-v0-pass-through"])
 ```
@@ -859,7 +889,7 @@ if context_floor_shadow or context_floor_applied:
         logger.info(
             "recall_context_floor_candidate tier=%s id=%s kind=%s "
             "distance=%.4f applied_floor=%s base_floor=%.4f casual_floor=%.4f "
-            "would_drop=%s query_memory_ask=%s retained=%s",
+            "would_drop=%s query_memory_ask=%s retained=%s preview=%s",
             decision["tier"],
             decision["id"][:12],
             decision["kind"],
@@ -870,6 +900,7 @@ if context_floor_shadow or context_floor_applied:
             decision["would_drop"],
             query_is_memory_ask,
             decision["id"] in retained_ids,
+            decision["preview"],
         )
     logger.info(
         "recall_context_floor_shadow base_floor=%.4f casual_floor=%.4f "
@@ -970,7 +1001,7 @@ class ContextFloorParserTests(unittest.TestCase):
         line = (
             "recall_context_floor_candidate tier=daily id=daily-2026 kind=self_digest "
             "distance=0.7400 applied_floor=0.7200 base_floor=0.7800 casual_floor=0.7200 "
-            "would_drop=True query_memory_ask=False retained=False"
+            "would_drop=True query_memory_ask=False retained=False preview=Daily system state"
         )
 
         row = parse_context_floor_candidate(line)
@@ -984,12 +1015,13 @@ class ContextFloorParserTests(unittest.TestCase):
         self.assertTrue(row["would_drop"])
         self.assertFalse(row["query_memory_ask"])
         self.assertFalse(row["retained"])
+        self.assertEqual(row["preview"], "Daily system state")
 
     def test_parse_context_floor_candidate_pass_through_floor(self):
         line = (
             "recall_context_floor_candidate tier=core id=core-high kind=unknown "
             "distance=0.9500 applied_floor=pass base_floor=0.7800 casual_floor=0.7200 "
-            "would_drop=False query_memory_ask=True retained=True"
+            "would_drop=False query_memory_ask=True retained=True preview=Core pass-through row"
         )
 
         row = parse_context_floor_candidate(line)
@@ -997,6 +1029,7 @@ class ContextFloorParserTests(unittest.TestCase):
         self.assertIsNone(row["applied_floor"])
         self.assertTrue(row["query_memory_ask"])
         self.assertTrue(row["retained"])
+        self.assertEqual(row["preview"], "Core pass-through row")
 
     def test_parse_context_floor_shadow(self):
         line = (
@@ -1021,6 +1054,7 @@ class ContextFloorSummaryTests(unittest.TestCase):
             {
                 "kind": "telegram_exchange",
                 "tier": "daily",
+                "preview": "relational raw/daily sample",
                 "query_memory_ask": False,
                 "would_drop": True,
                 "retained": False,
@@ -1030,6 +1064,7 @@ class ContextFloorSummaryTests(unittest.TestCase):
             {
                 "kind": "telegram_exchange",
                 "tier": "core",
+                "preview": "relational core sample",
                 "query_memory_ask": False,
                 "would_drop": True,
                 "retained": False,
@@ -1039,6 +1074,7 @@ class ContextFloorSummaryTests(unittest.TestCase):
             {
                 "kind": "self_digest",
                 "tier": "core",
+                "preview": "core journal sample",
                 "query_memory_ask": False,
                 "would_drop": True,
                 "retained": False,
@@ -1048,6 +1084,7 @@ class ContextFloorSummaryTests(unittest.TestCase):
             {
                 "kind": "self_digest",
                 "tier": "daily",
+                "preview": "memory ask sample",
                 "query_memory_ask": True,
                 "would_drop": False,
                 "retained": True,
@@ -1064,6 +1101,10 @@ class ContextFloorSummaryTests(unittest.TestCase):
         self.assertEqual(summary["core_newly_gated_on_casual_count"], 2)
         self.assertEqual(summary["core_newly_gated_by_kind"]["telegram_exchange"], 1)
         self.assertEqual(summary["core_relational_tightened_count"], 1)
+        self.assertEqual(
+            summary["sample_core_newly_gated"][0]["preview"],
+            "relational core sample",
+        )
         self.assertEqual(summary["memory_ask_tightened_count"], 0)
         self.assertEqual(summary["memory_ask_kept_count"], 1)
 ```
@@ -1090,7 +1131,8 @@ _CONTEXT_FLOOR_CANDIDATE_RE = re.compile(
     r"casual_floor=(?P<casual_floor>[0-9.]+) "
     r"would_drop=(?P<would_drop>True|False|true|false) "
     r"query_memory_ask=(?P<query_memory_ask>True|False|true|false) "
-    r"retained=(?P<retained>True|False|true|false)"
+    r"retained=(?P<retained>True|False|true|false) "
+    r"preview=(?P<preview>.*)"
 )
 
 _CONTEXT_FLOOR_SHADOW_RE = re.compile(
@@ -1130,6 +1172,7 @@ def parse_context_floor_candidate(line: str) -> dict | None:
         "would_drop": _bool_text(match.group("would_drop")),
         "query_memory_ask": _bool_text(match.group("query_memory_ask")),
         "retained": _bool_text(match.group("retained")),
+        "preview": match.group("preview"),
     }
 
 
@@ -1254,7 +1297,81 @@ def summarize_logs(path: Path) -> dict:
     }
 ```
 
-Do not make `write_markdown` or the live probe emit old v0.1 rows for new v0.2 evidence; Task 7 rewires the live probe and markdown artifact to the context-floor names.
+Replace `write_markdown`'s type-floor argument with a context-floor argument:
+
+```python
+def write_markdown(
+    path: Path,
+    log_summary: dict,
+    live_probe_summary: dict,
+    context_floor_summary: dict,
+    replay_jsonl_summary: dict,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "# Recall Quality Shadow Review",
+        "",
+        "## Log Summary",
+        "",
+        "```json",
+        json.dumps(log_summary, indent=2, sort_keys=True),
+        "```",
+        "",
+        "## Live Probe Summary",
+        "",
+        "```json",
+        json.dumps(live_probe_summary, indent=2, sort_keys=True),
+        "```",
+        "",
+        "## Context Floor Summary",
+        "",
+        "```json",
+        json.dumps(context_floor_summary, indent=2, sort_keys=True),
+        "```",
+        "",
+        "## Replay JSONL Summary",
+        "",
+        "```json",
+        json.dumps(replay_jsonl_summary, indent=2, sort_keys=True),
+        "```",
+        "",
+        "## Owner Review Gate",
+        "",
+        "- PASS only if dropped candidates are visibly low-relevance noise.",
+        "- PASS only if unknown_share shows telemetry classification is not a silent no-op.",
+        "- HOLD if on-point relational context appears in the dropped sample.",
+        "- HOLD if floor_would_empty_count suggests likely answer starvation.",
+        "- PASS v0.2 only if casual_drop_count > 0.",
+        "- PASS v0.2 only if casual_relational_tightened_count == 0, or every relational sample is owner-reviewed as off-point.",
+        "- PASS v0.2 only if core_relational_tightened_count == 0, and every sample_core_newly_gated row is owner-reviewed as not an on-point relational/bond anchor.",
+        "- PASS v0.2 only if memory_ask_tightened_count == 0.",
+        "- PASS v0.2 only if memory_ask_kept_count > 0.",
+        "- HOLD if fallback rescue is not best_by_distance.",
+        "- HOLD if reflection_bonus_shadow telemetry is absent on meta-query probes.",
+    ]
+    path.write_text("\n".join(lines) + "\n")
+```
+
+Update `main()` so the new live probe result is passed into the context-floor slot:
+
+```python
+live_probe_rows = probe_live_candidate_kinds(
+    _probe_queries_from_args(args.probe_query)
+)
+live_context_floor_rows = probe_live_context_floor_rows(
+    _probe_queries_from_args(args.probe_query)
+)
+
+write_markdown(
+    Path(args.out),
+    summarize_logs(Path(args.log)),
+    summarize_replay_rows(live_probe_rows),
+    summarize_context_floor_rows(live_context_floor_rows),
+    summarize_replay_rows(replay_rows),
+)
+```
+
+Update `tests/test_recall_quality_shadow_review.py::test_write_markdown_includes_live_probe_summary` to pass `context_floor_summary=summarize_context_floor_rows([])` and assert `## Context Floor Summary`; remove the stale `## Type-Aware Floor Summary` assertion. Do not make `write_markdown` or the live probe emit old v0.1 rows for new v0.2 evidence.
 
 - [ ] **Step 4: Run parser tests and verify GREEN**
 
@@ -1449,7 +1566,7 @@ No runtime behavior changes. The structural guard permits kind telemetry and par
 - Modify: `core/memory/lived_recall.py`
 - Modify: `tests/test_lived_recall.py`
 
-**Goal:** Measure the existing same-shape debt without changing ranking. The log should fire only when the existing reflection meta-query bonus changes the selected top item compared with a no-bonus score.
+**Goal:** Measure the existing same-shape debt without changing ranking. On meta-query turns with scored episodes, log a read-only comparison between current ranking and a no-reflection-bonus ranking; the `changed_ranking` field records whether the bonus changed the selected top item.
 
 - [ ] **Step 1: Write failing telemetry test**
 
@@ -1457,7 +1574,7 @@ In `tests/test_lived_recall.py`, add:
 
 ```python
 class ReflectionBonusTelemetryTests(unittest.TestCase):
-    def test_meta_query_bonus_logs_when_it_changes_selected_episode(self):
+    def test_meta_query_bonus_logs_comparison_when_it_changes_selected_episode(self):
         from core.memory.lived_recall import build_lived_recall_brief
 
         store, graph, cleanup = _stores()
@@ -1493,6 +1610,35 @@ class ReflectionBonusTelemetryTests(unittest.TestCase):
             self.assertIn("changed_ranking=True", joined)
         finally:
             cleanup()
+
+    def test_meta_query_bonus_logs_comparison_when_ranking_does_not_change(self):
+        from core.memory.lived_recall import build_lived_recall_brief
+
+        store, graph, cleanup = _stores()
+        try:
+            direct = "patterns patterns ordinary operational note"
+            store.add(
+                title=direct,
+                summary=direct,
+                participants=["Maez"],
+                source_memory_ids=["ordinary-source"],
+                source_kind="raw_observation",
+            )
+
+            with self.assertLogs("core.memory.lived_recall", level="INFO") as logs:
+                brief = build_lived_recall_brief(
+                    "what patterns do you notice",
+                    episode_store=store,
+                    graph=graph,
+                    max_items=1,
+                )
+
+            self.assertIn("ordinary operational note", brief)
+            joined = "\n".join(logs.output)
+            self.assertIn("reflection_bonus_shadow", joined)
+            self.assertIn("changed_ranking=False", joined)
+        finally:
+            cleanup()
 ```
 
 If the logger name in `lived_recall.py` is not `core.memory.lived_recall`, use the module's existing logger name. Do not create a new logging channel if the file already has one.
@@ -1503,7 +1649,7 @@ If the logger name in `lived_recall.py` is not `core.memory.lived_recall`, use t
 .venv/bin/python -m unittest tests.test_lived_recall.ReflectionBonusTelemetryTests
 ```
 
-Expected: failure because no telemetry log exists.
+Expected: failures because no telemetry log exists.
 
 - [ ] **Step 3: Implement telemetry without changing ranking**
 
@@ -1550,7 +1696,7 @@ After `scored_episodes.sort(key=lambda x: x.score, reverse=True)`, add:
             if no_bonus_scored
             else ""
         )
-        changed = bool(without_bonus_top and with_bonus_top != without_bonus_top)
+        changed = with_bonus_top != without_bonus_top
         logger.info(
             "reflection_bonus_shadow query_meta=True changed_ranking=%s "
             "with_bonus_top=%s without_bonus_top=%s candidate_count=%d",
