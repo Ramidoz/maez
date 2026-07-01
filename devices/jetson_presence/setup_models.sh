@@ -4,7 +4,7 @@
 # (gitignored). Models ship inside an InsightFace release zip pack; the manifest pins
 # the pack sha256 AND each extracted member sha256, so `build` needs no trust-on-first-use.
 # Usage:
-#   setup_models.sh deps         # install onnx/onnxruntime/pycuda/numpy
+#   setup_models.sh deps         # install onnxruntime/cuda-python/numpy; requires python3-pip
 #   setup_models.sh build        # verify pack+member shas (refuse on any mismatch) then trtexec-compile
 #   setup_models.sh lock-hashes  # re-lock: download pack, recompute all shas, rewrite manifest, EXIT (no build)
 set -euo pipefail
@@ -17,9 +17,16 @@ export MODELS_DIR="$MODELS"
 export TRTEXEC="${TRTEXEC:-/usr/src/tensorrt/bin/trtexec}"
 
 cmd_deps() {
-  echo "== ensure pip + inference deps =="
-  "$PY" -m ensurepip --upgrade 2>/dev/null || true
-  "$PY" -m pip install --user --upgrade onnx onnxruntime pycuda numpy 2>&1 | tail -2
+  echo "== check pip + install inference deps =="
+  if ! "$PY" -m pip --version >/dev/null 2>&1; then
+    echo "Missing pip for $PY." >&2
+    echo "Install it on the Jetson first:" >&2
+    echo "  sudo apt install python3-pip" >&2
+    echo "Then verify:" >&2
+    echo "  python3 -m pip --version" >&2
+    exit 2
+  fi
+  "$PY" -m pip install --user --upgrade onnxruntime cuda-python numpy
 }
 
 # Re-lock helper (only needed when swapping the pack/models): download, recompute every
