@@ -25,16 +25,20 @@ So the lever is floor-side and specific: classify the self-digests, and give tha
    - `self_digest`: a **tighter** floor (higher relevance bar) on non-memory-ask turns.
    - relational / lived / `reflection` / `unknown`: the existing flat floor (unchanged).
 3. **Context gate (the crux).** The tighter self-digest floor applies **only when the turn is not a memory/self ask.** v0.1 may use the existing meta-query detection (`lived_recall.py:737-750` META_QUERY keywords) as the minimal signal, and/or wire the richer `_recall_floor_teacher_signal` (`diary_heavy` + low `reply_grounding` + not `asked_for_memory`). On a memory-ask/meta-query turn, self-digests get the **normal** floor (reachable).
-4. **Preserve the non-starving fallback.** The best-N keep from v0 stays — a tighter floor for self-digests must still never empty a section; if all that's left is a weak self-digest and nothing else, keep the best one rather than go blank.
+4. **Non-starving fallback — moved from per-section to WHOLE-RECALL + KIND-AWARE (Codex HOLD fix).** v0's per-section "keep the best one" rail would *resurrect* a daily diary item on the exact casual turns the tighter floor just dropped it from — because the `daily` collection is essentially all self-digests, so an all-dropped `daily` section would rescue its own best self-digest and undo the filter. So the rail changes: **the non-starving guarantee is at the whole-recall level, and self-digests are the last thing rescued.**
+   - A self-digest-only section (e.g. `daily`) is **allowed to empty** on a casual turn as long as *any non-self-digest material exists anywhere in recall* (raw/relational/core). The diary quiets; Maez still has real memory.
+   - The fallback **prefers non-self-digest candidates**: it rescues a weak relational/lived candidate before it would ever rescue a self-digest.
+   - A self-digest is kept **only when the entire recall would otherwise be genuinely blank** — the true last resort (a near-empty substrate). Even then Maez is not left with *nothing*; it's just the weakest honest fallback.
+   - Net: the diary is quieted, never resurrected while real memory exists, and Maez never goes fully blank. This is "don't starve a real answer" without "always keep a diary."
 5. **Order unchanged.** base rank → (type-aware) floor → promotion shadow (parked).
 
 ## Shadow-first (same discipline as v0)
 
 The type-aware floor decision is **computed in shadow first** (`MAEZ_RECALL_TYPE_FLOOR_SHADOW`) and logged (per-candidate `kind`, `applied_floor`, `would_drop`, plus the turn's memory-ask classification), before any enforce flag (`MAEZ_RECALL_TYPE_FLOOR_ENABLED`). Enforce is earned by a shadow-review artifact showing **both**:
-- **On casual turns:** self-digests that bubble under the flat 0.78 now drop under the tighter floor.
+- **On casual turns:** self-digests that bubble under the flat 0.78 now drop under the tighter floor **and are not resurrected by the fallback** while any real memory exists (the whole-recall/kind-aware rule from Architecture #4).
 - **On memory-ask turns:** self-digests are **NOT** dropped — the crux guardrail fires; self-content stays reachable.
 
-If the review shows self-content dropping on memory-ask turns, HOLD and fix the context gate — that failure is worse than the diary bubbling.
+If the review shows self-content dropping on memory-ask turns, HOLD and fix the context gate — that failure is worse than the diary bubbling. If a dropped daily diary still surfaces on casual turns via the fallback, HOLD and fix the fallback — the rail must not undo the filter.
 
 ## Constants (to pin from shadow data in the plan)
 
@@ -58,7 +62,10 @@ If the review shows self-content dropping on memory-ask turns, HOLD and fix the 
 **Host/unit:**
 - `_recall_candidate_kind` maps `daily_consolidation` → `self_digest` (not `unknown`); a test proves it fires on a real daily-row metadata shape.
 - The type-aware floor applies the tighter floor to `self_digest` on non-memory-ask turns and the normal floor on memory-ask turns (both directions tested).
-- Non-starving fallback: a section of only weak self-digests keeps the best one, never empties.
+- **Whole-recall + kind-aware fallback (the Codex-HOLD fix), tested in three cases:**
+  - casual turn, `daily` all self-digests dropped, **relational/core material present** → `daily` empties, **no diary rescued** (the filter holds).
+  - casual turn, self-digests dropped, **a weak non-self-digest candidate exists** → the fallback rescues the non-self-digest, not a self-digest.
+  - casual turn, **entire recall would be blank** (only self-digests anywhere) → keep the single best self-digest (last resort) — Maez isn't left with nothing.
 - Structural: the type-aware floor imports nothing from dream/soul; promotion authority untouched.
 
 **Live (owner, after enforce):** casual turns stop surfacing daily system diaries; "what have you noticed about yourself" still surfaces them; no relational context lost; no section blank.
@@ -67,7 +74,7 @@ If the review shows self-content dropping on memory-ask turns, HOLD and fix the 
 
 - Faculty, not self: improves *how* recall filters, never *who Maez is*. Floor-side, promotion parked.
 - Deweight, not delete/muzzle ([[feedback_forgetting_is_deweighting_not_deletion]]): self-digests quiet on casual turns, fully reachable when asked. The memory-ask guardrail is load-bearing.
-- Honest emptiness: never starves a real answer (fallback preserved) ([[feedback_honest_ingestion_immune_system]]).
+- Honest emptiness: a diary section may honestly empty on a casual turn (Maez chats without injecting stale self-summaries) — the fallback guarantees only that recall never goes *fully* blank when better memory exists, not that a diary is always kept ([[feedback_honest_ingestion_immune_system]], [[feedback_no_fabrication]]).
 - Earned by data, both directions: shadow gate must show the diary drops *and* self-content survives memory-asks before enforce ([[feedback_verify_before_you_encode]]).
 - Substrate owns digestion ([[project_jetson_body_not_second_maez]] brain/substrate line): the reranker (substrate) decides relevance; the brain stays narrow.
 
