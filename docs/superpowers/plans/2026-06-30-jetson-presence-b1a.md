@@ -6,7 +6,7 @@
 
 **Architecture:** A `b1a/` subpackage isolated from B0's live path. Pure logic (matcher, parity *metrics*, manifest verify) is host-TDD'd RED-first; the TensorRT *inference* (detector/embedding wrappers, `run_parity`, `spike`) is **device-only**, written build-time against the real model shapes and proven by owner-run device witnesses.
 
-**Tech Stack:** Python 3.10; host tests `/home/rohit/maez/.venv/bin/python -B -m unittest` (NOT pytest); device adds `onnxruntime` (CPU ONNX reference), `cuda-python` (TRT buffer binding), `numpy`, `cv2` (V4L2), TensorRT 10.3 + `trtexec`. Reference ONNX detect/decode via the InsightFace SCRFD/ArcFace models.
+**Tech Stack:** Python 3.10; host tests `/home/rohit/maez/.venv/bin/python -B -m unittest` (NOT pytest); device adds `onnxruntime` (CPU ONNX reference), `cuda-python` (TRT buffer binding), `numpy<2` (keeps apt OpenCV on the NumPy 1.x ABI), `cv2` (V4L2), TensorRT 10.3 + `trtexec`. Reference ONNX detect/decode via the InsightFace SCRFD/ArcFace models.
 
 **Spec:** `docs/superpowers/specs/2026-06-30-jetson-presence-b1a-spike-design.md` (@f466f03). B1a only; B1b (enrollment + decision rule + live emit) is its own slice.
 
@@ -563,7 +563,7 @@ echo "Deployed setup_models.sh + models/manifest.json (artifacts excluded by all
 #!/usr/bin/env bash
 # Two-phase, manifest-pinned model setup. Runs ON THE JETSON. Artifacts stay
 # device-local (gitignored). Usage:
-#   setup_models.sh deps         # install onnxruntime/cuda-python/numpy; requires python3-pip
+#   setup_models.sh deps         # install onnxruntime/cuda-python/numpy<2; requires python3-pip
 #   setup_models.sh lock-hashes  # download ONNX, compute sha256, write manifest, EXIT (no build)
 #   setup_models.sh build        # REFUSE unless locked; verify each sha; THEN trtexec-compile
 set -euo pipefail
@@ -585,7 +585,7 @@ cmd_deps() {
     echo "  python3 -m pip --version" >&2
     exit 2
   fi
-  "$PY" -m pip install --user --upgrade onnxruntime cuda-python numpy
+  "$PY" -m pip install --user --upgrade onnxruntime cuda-python 'numpy<2'
 }
 
 # Phase 1: download each manifest model, compute its sha256, write it back. NO build.
@@ -734,7 +734,7 @@ Expected: all PASS (matcher, parity metrics, manifest, both structural guards).
 > **Model source (repinned after Codex cross-lane, @a87cc3c):** models ship inside the real, verified **`buffalo_s.zip`** InsightFace release pack (my original standalone-`.onnx` URLs 404'd). Members: `det_500m.onnx` (SCRFD-500M detector = the spec's `scrfd_500m`) + `w600k_mbf.onnx` (ArcFace MobileFace embedding). The manifest pins **real** sha256 for the pack AND each member (measured from the official immutable release, independently recomputable), so there is **no trust-on-first-use** — the pinned hashes are the anchor, not whatever the first download happens to serve. Model license is stated truthfully: **non-commercial research use only** (InsightFace *code* is MIT; the *models* are not). `buffalo_l/w600k_r50` is the accuracy-upgrade path if the spike shows latency headroom.
 
 1. **Deploy:** `bash devices/jetson_presence/deploy.sh` → confirm `setup_models.sh` **and** `models/manifest.json` arrive on the Jetson, and **no** `.onnx/.engine/.zip` artifact does (allowlist holds).
-2. **Deps:** one-time owner step if needed: `sudo apt install python3-pip`, then `bash devices/jetson_presence/setup_models.sh deps` → installs `onnxruntime`, `cuda-python`, and `numpy`. (No `lock-hashes` needed — the manifest already ships real pinned hashes; `lock-hashes` is only for swapping the pack later.)
+2. **Deps:** one-time owner step if needed: `sudo apt install python3-pip`, then `bash devices/jetson_presence/setup_models.sh deps` → installs `onnxruntime`, `cuda-python`, and `numpy<2` (so apt OpenCV still imports). (No `lock-hashes` needed — the manifest already ships real pinned hashes; `lock-hashes` is only for swapping the pack later.)
 3. **Build (gated):** `bash devices/jetson_presence/setup_models.sh build` → proves `hashes_locked`, downloads `buffalo_s.zip`, **verifies the pack sha256**, extracts `det_500m.onnx`/`w600k_mbf.onnx`, **verifies each member sha256** (refuses on any mismatch), then `trtexec`-compiles **FP32** engines. Confirm a tampered pack/manifest is *refused* (negative witness — already proven on host against the real zip @a87cc3c; re-confirm on device).
 4. **Parity (R4):** run `run_parity` on a blank frame (→ no detection) and an owner frame (→ detection) → **box IoU > 0.99 & |score| < 0.01, embedding cosine > 0.999**. A miss on an FP16 engine is a real result, not an override.
 5. **Spike:** `python3 -m jetson_presence.b1a.spike --frames 30`:

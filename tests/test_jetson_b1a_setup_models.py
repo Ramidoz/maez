@@ -10,6 +10,15 @@ SETUP_SCRIPT = Path(__file__).resolve().parents[1] / "devices" / "jetson_presenc
 
 
 class SetupModelsDepsTests(unittest.TestCase):
+    def test_deps_pins_numpy_below_two_for_apt_opencv_compatibility(self):
+        setup = SETUP_SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("cuda-python", setup)
+        self.assertIn("onnxruntime", setup)
+        self.assertIn("'numpy<2'", setup)
+        self.assertNotIn(" pycuda ", setup)
+        self.assertNotIn(" numpy\n", setup)
+
     def test_deps_fails_loudly_when_system_python_has_no_pip(self):
         with tempfile.TemporaryDirectory() as td:
             fake_python = Path(td) / "python3"
