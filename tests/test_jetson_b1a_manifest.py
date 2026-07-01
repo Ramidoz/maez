@@ -7,13 +7,23 @@ from jetson_presence.b1a import manifest as man
 
 
 class ManifestSchemaTests(unittest.TestCase):
+    def test_source_pack_has_required_fields_and_truthful_license(self):
+        pack = man.load_manifest()["source_pack"]
+        self.assertTrue({"name", "url", "sha256", "license"} <= set(pack))
+        self.assertTrue(pack["url"].endswith(".zip"))  # models ship as a zip pack
+        # the MODEL license must be stated truthfully, not inherited from the MIT code:
+        self.assertIn("non-commercial", pack["license"].lower())
+
     def test_real_manifest_has_required_fields_per_model(self):
         m = man.load_manifest()  # default path = devices/jetson_presence/models/manifest.json
         self.assertIn("models", m)
         self.assertGreaterEqual(len(m["models"]), 2)  # detector + embedding
-        required = {"name", "source_url", "sha256", "license", "input_shape", "precision", "engine_path"}
+        required = {"name", "role", "member", "sha256", "input_shape", "precision", "engine_path"}
         for entry in m["models"]:
             self.assertTrue(required <= set(entry), f"missing fields in {entry.get('name')}")
+            self.assertTrue(entry["member"].endswith(".onnx"))  # extracted from the pack
+        roles = {e["role"] for e in m["models"]}
+        self.assertEqual(roles, {"detector", "embedding"})
         names = {e["name"] for e in m["models"]}
         self.assertTrue(any("scrfd" in n.lower() for n in names))
         self.assertTrue(any("arcface" in n.lower() or "w600k" in n.lower() for n in names))
@@ -21,6 +31,12 @@ class ManifestSchemaTests(unittest.TestCase):
     def test_precision_is_explicit_fp32_or_fp16(self):
         for entry in man.load_manifest()["models"]:
             self.assertIn(entry["precision"], ("fp32", "fp16"))
+
+    def test_shipped_manifest_is_locked_with_real_digests(self):
+        # We ship REAL pinned hashes measured from the official immutable release,
+        # not PENDING sentinels — the device build verifies against these, so there
+        # is no trust-on-first-use window.
+        self.assertTrue(man.hashes_locked(man.load_manifest()))
 
 
 class HashLockTests(unittest.TestCase):

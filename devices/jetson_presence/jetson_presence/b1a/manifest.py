@@ -20,14 +20,25 @@ def load_manifest(path: str = _DEFAULT) -> dict:
         return json.load(f)
 
 
+def _lockable_shas(manifest: dict) -> list:
+    """Every sha256 that must be pinned before a build: the source pack (if the
+    manifest sources models from a zip) plus every model member."""
+    shas = []
+    pack = manifest.get("source_pack")
+    if isinstance(pack, dict):
+        shas.append(pack.get("sha256"))
+    shas.extend(m.get("sha256") for m in manifest.get("models", []))
+    return shas
+
+
 def hashes_locked(manifest: dict) -> bool:
-    """True only when every model carries a real-looking pinned digest: a 64-char
-    lowercase hex sha256 (not empty, not the PENDING sentinel, not a malformed value).
-    The two-phase setup refuses to build any engine while this is False."""
-    models = manifest.get("models", [])
-    if not models:
+    """True only when every pinned digest (source pack + each model) is a real-looking
+    64-char lowercase hex sha256 — not empty, not the PENDING sentinel, not malformed.
+    The setup refuses to build any engine while this is False."""
+    shas = _lockable_shas(manifest)
+    if not shas:
         return False
-    return all(_SHA256_HEX.match((m.get("sha256") or "").lower()) for m in models)
+    return all(_SHA256_HEX.match((s or "").lower()) for s in shas)
 
 
 def verify_sha256(file_path: str, expected_hex: str) -> bool:
