@@ -118,6 +118,7 @@ class RecallQualityShadowReviewTests(unittest.TestCase):
     def test_write_markdown_includes_live_probe_summary(self):
         from scripts.recall_quality_shadow_review import (
             summarize_replay_rows,
+            summarize_type_floor_rows,
             write_markdown,
         )
 
@@ -144,10 +145,12 @@ class RecallQualityShadowReviewTests(unittest.TestCase):
                 out,
                 log_summary={"candidate_count": 2},
                 live_probe_summary=summary,
+                type_floor_summary=summarize_type_floor_rows([]),
                 replay_jsonl_summary=summarize_replay_rows([]),
             )
             text = out.read_text()
         self.assertIn("## Live Probe Summary", text)
+        self.assertIn("## Type-Aware Floor Summary", text)
         self.assertIn("## Replay JSONL Summary", text)
         self.assertIn("unknown_share", text)
         self.assertIn("reflection_drop_share", text)
