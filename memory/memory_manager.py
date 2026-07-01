@@ -687,6 +687,8 @@ def recall_floor_enabled(*, env=None) -> bool:
 
 def _finite_distance(mem: dict) -> float | None:
     dist = mem.get("distance")
+    if isinstance(dist, bool):
+        return None
     if not isinstance(dist, (int, float)):
         return None
     value = float(dist)
@@ -741,14 +743,6 @@ def _apply_recall_floor_with_fallback(
     """
     kept = _apply_recall_floor(mems, floor=floor)
     if kept or not recall_floor_enabled() or min_keep <= 0:
-        if (
-            kept
-            and recall_floor_enabled()
-            and min_keep > 0
-            and not any(_finite_distance(mem) is not None for mem in kept)
-            and any(_finite_distance(mem) is not None for mem in mems)
-        ):
-            return sorted(mems, key=_distance_sort_key)[:min_keep]
         return kept
     return sorted(mems, key=_distance_sort_key)[:min_keep]
 
@@ -2488,8 +2482,8 @@ class MemoryManager:
         daily = [mem for mem in daily if _keep_not_echo(mem)]
 
         def _effective_distance(mem: dict) -> float:
-            dist = mem.get("distance")
-            base = float(dist) if isinstance(dist, (int, float)) else 1.0
+            finite = _finite_distance(mem)
+            base = finite if finite is not None else 1.0
             meta = mem.get("metadata") or {}
             age_h = _age_hours_from_iso(meta.get("timestamp", ""), now_s)
             rf = recency_factor(age_h, half_life_days)

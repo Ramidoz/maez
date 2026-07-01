@@ -149,6 +149,31 @@ class LivingRecallRankingTests(unittest.TestCase):
         self.assertNotIn("older answer from the archive", _partition_text(evidence))
         self.assertIn("older answer from the archive", _partition_text(context))
 
+    def test_boolean_distance_does_not_rank_as_best_in_living_recall(self):
+        bool_distance = _row(
+            "bool-distance",
+            content="malformed boolean distance row",
+            days_ago=1,
+            distance=0.0,
+        )
+        bool_distance["distance"] = False
+        finite = _row(
+            "finite-distance",
+            content="finite distance row",
+            days_ago=1,
+            distance=0.82,
+        )
+        mm = _manager(raw_rows=[bool_distance, finite])
+
+        with (
+            mock.patch("memory.memory_manager._now_seconds", return_value=datetime(2026, 5, 29, 12, 0, tzinfo=timezone.utc).timestamp()),
+            mock.patch("core.memory_scoring.record_recall", side_effect=lambda *a, **k: None),
+        ):
+            evidence, context = mm.recall_for_telegram_living("distance normalization")
+
+        order = _partition_ids(evidence, "raw") + _partition_ids(context, "raw")
+        self.assertEqual(order[:2], ["finite-distance", "bool-distance"])
+
     def test_overfetch_surfaces_fresh_outside_age_blind_top20(self):
         stale_rows = [
             _row(
