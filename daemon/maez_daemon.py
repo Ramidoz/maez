@@ -108,6 +108,10 @@ from core.body.camera_presence_voice import (
     answer_camera_presence_question,
     camera_presence_voice_health,
 )
+from core.body.proprioception import (
+    ProprioceptionStore,
+    default_proprioception_db_path,
+)
 from core.safety.clinical_boundary import (
     PrivateThoughtsCrisisSignalWriter,
     clinical_boundary_health,
@@ -3189,6 +3193,7 @@ class MaezDaemon:
         self._last_valence_reading = None
         self._glance_buffer = GlanceBuffer()
         self._last_cycle_salience_marked = False
+        self._proprioception_store = None
         # Continuous time-sense heartbeat (flag-gated, default OFF): a long-lived
         # SubjectiveDuration handle + the last sparse-anchor timestamp. The handle
         # is constructed lazily on first tick via `_time_sense_handle()`.
@@ -5238,6 +5243,32 @@ class MaezDaemon:
         store = FreshMomentReceipts(fresh_moment_receipts_db_path())
         self._fresh_moment_receipts = store
         return store
+
+    def _proprioception_store_get(self):
+        store = getattr(self, "_proprioception_store", None)
+        if store is not None:
+            return store
+        store = ProprioceptionStore(default_proprioception_db_path())
+        self._proprioception_store = store
+        return store
+
+    def _record_proprioception_sample(
+        self,
+        snap: dict,
+        *,
+        ts: float | None = None,
+    ) -> None:
+        gpu = snap.get("gpu") if isinstance(snap, dict) else None
+        gpu = gpu or {}
+        cpu = snap.get("cpu", {}) if isinstance(snap, dict) else {}
+        ram = snap.get("ram", {}) if isinstance(snap, dict) else {}
+        self._proprioception_store_get().record(
+            ts=time.time() if ts is None else float(ts),
+            cpu_pct=float(cpu.get("percent", -1.0)),
+            ram_pct=float(ram.get("percent", -1.0)),
+            gpu_pct=float(gpu.get("utilization_pct", -1.0)),
+            gpu_temp_c=float(gpu.get("temperature_c", -1.0)),
+        )
 
     def _metabolic_store_cycle_thought(
         self,
@@ -10150,6 +10181,10 @@ class MaezDaemon:
                 snap["gpu"]["utilization_pct"] if snap.get("gpu") else "N/A",
                 snap["gpu"]["temperature_c"] if snap.get("gpu") else "N/A",
             )
+            try:
+                self._record_proprioception_sample(snap, ts=cycle_start)
+            except Exception as e:
+                logger.debug("Proprioception sample skipped: %s", e)
 
             # Screen perception — every N cycles using gemma4 vision
             self._mark_cycle_stage("screen_perception")
