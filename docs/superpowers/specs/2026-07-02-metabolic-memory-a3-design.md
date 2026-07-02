@@ -75,7 +75,7 @@ Existing pollution moves out of the hot indexes, **never deleted**:
 
 ## Witnesses
 
-**Host:** quiet-day simulation → exactly one deterministic stub row, zero LLM calls; triggered events (each trigger class) → durable with `self_observed`; salience-rescue → durable; ring buffer feeds every Task-0-enumerated consumer identically (before/after parity test); flag-off byte-identical; vitals queries answered from the proprioception store.
+**Host:** quiet-day simulation → exactly one deterministic stub row, zero LLM calls; triggered events (each trigger class) → durable with `self_observed`; salience-rescue → durable; **consumers per their Task-0 designation: parity-preserved consumers get a before/after parity test (buffer∪raw sees the same world as today); any intentionally-changed consumer gets an explicit behavior-change witness + artifact naming old vs new behavior** — no consumer changes without one or the other; flag-off byte-identical; vitals queries answered from the proprioception store.
 **Ceremony:** move-list artifact reviewed by owner; per-tier before/after counts (core introspection ~56→~0 hot); one-row restore proven before bulk; nothing deleted (archive counts = moved counts).
 **Live (owner, after flip):** a genuinely quiet day yields one stub; an eventful day yields real consolidation; recall on casual turns no longer surfaces machine diaries even *without* the floors doing the work (the floors stay as defense-in-depth); "how has the GPU been?" answered from proprioception.
 
