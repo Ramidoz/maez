@@ -219,20 +219,32 @@ def _archive_for_tier(manager, tier: str):
     return client.get_or_create_collection(ARCHIVE_COLLECTION)
 
 
-def _rows(collection: object) -> list[tuple[str, str, dict]]:
+def _rows(collection: object, *, batch_size: int = 5000) -> list[tuple[str, str, dict]]:
     total = collection.count()
     if total <= 0:
         return []
-    got = collection.get(limit=total, include=["documents", "metadatas"])
-    return [
-        (row_id, doc, dict(meta or {}))
-        for row_id, doc, meta in zip(
-            got.get("ids") or [],
-            got.get("documents") or [],
-            got.get("metadatas") or [],
-            strict=False,
+    rows: list[tuple[str, str, dict]] = []
+    offset = 0
+    while offset < total:
+        got = collection.get(
+            limit=min(batch_size, total - offset),
+            offset=offset,
+            include=["documents", "metadatas"],
         )
-    ]
+        ids = got.get("ids") or []
+        if not ids:
+            break
+        rows.extend(
+            (row_id, doc, dict(meta or {}))
+            for row_id, doc, meta in zip(
+                ids,
+                got.get("documents") or [],
+                got.get("metadatas") or [],
+                strict=False,
+            )
+        )
+        offset += len(ids)
+    return rows
 
 
 def _preview(text: str, limit: int = 140) -> str:

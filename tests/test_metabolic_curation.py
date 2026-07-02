@@ -11,6 +11,7 @@ from scripts.metabolic_curation import (
     require_raw_rule_samples_reviewed,
     require_review_complete,
     verify_keep_rows_still_hot,
+    _rows,
 )
 
 
@@ -90,11 +91,20 @@ class ReviewArtifactTests(unittest.TestCase):
 
 
 class _FakeCollection:
-    def __init__(self, rows=None):
+    def __init__(self, rows=None, *, max_limit=None):
         self.rows = dict(rows or {})
+        self.max_limit = max_limit
 
-    def get(self, *, ids, include=None):
-        got_ids = [row_id for row_id in ids if row_id in self.rows]
+    def count(self):
+        return len(self.rows)
+
+    def get(self, *, ids=None, include=None, limit=None, offset=0):
+        if limit is not None:
+            if self.max_limit is not None and limit > self.max_limit:
+                raise RuntimeError("too many SQL variables")
+            got_ids = list(self.rows.keys())[offset : offset + limit]
+        else:
+            got_ids = [row_id for row_id in ids if row_id in self.rows]
         docs = [self.rows[row_id][0] for row_id in got_ids]
         metas = [self.rows[row_id][1] for row_id in got_ids]
         return {"ids": got_ids, "documents": docs, "metadatas": metas}
@@ -109,6 +119,15 @@ class _FakeCollection:
 
 
 class CurationApplyVerifyTests(unittest.TestCase):
+    def test_rows_batches_large_collections(self):
+        collection = _FakeCollection(
+            {f"row-{i}": (f"doc {i}", {"idx": i}) for i in range(7)},
+            max_limit=3,
+        )
+        rows = _rows(collection, batch_size=3)
+        self.assertEqual([row_id for row_id, _doc, _meta in rows], [f"row-{i}" for i in range(7)])
+        self.assertEqual(rows[-1], ("row-6", "doc 6", {"idx": 6}))
+
     def test_verify_keep_rows_still_hot_raises_when_keep_missing(self):
         collections = {"core": _FakeCollection({"present": ("doc", {})})}
         verify_keep_rows_still_hot(collections, [RowRef("core", "present")])
