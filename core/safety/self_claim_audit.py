@@ -41,6 +41,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
+from core.safety.action_receipts import ACTION_WEB_SEARCH, has_action_receipt
+
 logger = logging.getLogger("maez.self_claim_audit")
 _cog_logger = logging.getLogger("maez.cognition")
 
@@ -87,6 +89,9 @@ class Flag:
     span: tuple[int, int]
     text: str
     reason: str = ""
+    action_type: Optional[str] = None
+    pattern_id: Optional[str] = None
+    tense_class: Optional[str] = None
 
 
 @dataclass
@@ -302,6 +307,100 @@ def check_completion_claims(text: str, *, grounded_by_tool: bool) -> list[Flag]:
                     span=(match.start(), match.end()),
                     text=match.group(0),
                     reason="claims a completed action with no tool result this turn",
+                )
+            )
+    return flags
+
+
+_ACTION_NARRATION_PATTERNS: tuple[tuple[str, str, re.Pattern], ...] = (
+    (
+        "search_initiating",
+        "present_progressive",
+        re.compile(
+            r"\b(?:initiating|starting|running)\s+(?:a\s+)?(?:live\s+|web\s+)?search\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "search_progressive",
+        "present_progressive",
+        re.compile(
+            r"\b(?:I[' ]?m|I\s+am)\s+(?:searching|checking|looking)\s+"
+            r"(?:the\s+)?(?:live\s+|current\s+)?(?:web|internet|public\s+records|online)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "search_found_context",
+        "present_result",
+        re.compile(
+            r"\bhere(?:'s|\s+is)\s+what\s+I\s+found\b"
+            r"(?=[^.!?\n]{0,140}\b(?:live|web|internet|search|public\s+records|recent|current|latest|online)\b)",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "search_looked_live",
+        "present_result",
+        re.compile(
+            r"\bI\s+(?:just\s+)?looked\s+(?:at|on|through)\s+"
+            r"(?:the\s+)?(?:live\s+|current\s+)?(?:web|internet|public\s+records|online)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "search_check_now",
+        "present_progressive",
+        re.compile(
+            r"\b(?:let\s+me\s+check|checking\s+now|I[' ]?ll\s+check\s+now)\b"
+            r"[^.!?\n]{0,80}\b(?:web|internet|search|public\s+records|online|recent|current|latest)\b",
+            re.IGNORECASE,
+        ),
+    ),
+)
+
+_PAST_ACTION_ANCHOR_RE = re.compile(
+    r"\b(?:last\s+(?:week|month|year|time)|earlier|before|previously|in\s+the\s+past)\b",
+    re.IGNORECASE,
+)
+
+_MEMORY_SCOPED_FIND_RE = re.compile(
+    r"\bhere(?:'s|\s+is)\s+what\s+I\s+found\b[^.!?\n]{0,80}\b(?:memory|our\s+notes|notes|earlier)\b",
+    re.IGNORECASE,
+)
+
+
+def check_action_narration_claims(
+    text: str,
+    *,
+    evidence_envelope: Optional[dict],
+) -> list[Flag]:
+    """Flag present-turn search narration that lacks a search receipt."""
+    if not text or not text.strip():
+        return []
+    if has_action_receipt(evidence_envelope, ACTION_WEB_SEARCH):
+        return []
+
+    flags: list[Flag] = []
+    for pattern_id, tense_class, rx in _ACTION_NARRATION_PATTERNS:
+        for match in rx.finditer(text):
+            span_text = match.group(0)
+            context_start = max(0, match.start() - 80)
+            context_end = min(len(text), match.end() + 140)
+            context = text[context_start:context_end]
+            if _PAST_ACTION_ANCHOR_RE.search(context):
+                continue
+            if _MEMORY_SCOPED_FIND_RE.search(context):
+                continue
+            flags.append(
+                Flag(
+                    kind="action_narration",
+                    span=(match.start(), match.end()),
+                    text=span_text,
+                    reason="claims a this-turn search/action with no type-matched receipt",
+                    action_type=ACTION_WEB_SEARCH,
+                    pattern_id=pattern_id,
+                    tense_class=tense_class,
                 )
             )
     return flags
