@@ -192,30 +192,44 @@ class TestSelfDigestKind(unittest.TestCase):
         self.assertEqual(_recall_candidate_kind(row), "unknown")
 
 
-class TestTypeAwareFloorFlags(unittest.TestCase):
+class TestContextFloorFlags(unittest.TestCase):
     def test_flags_off_by_default(self):
         from memory.memory_manager import (
-            recall_type_floor_enabled,
-            recall_type_floor_shadow_enabled,
+            recall_context_floor_enabled,
+            recall_context_floor_shadow_enabled,
         )
 
-        self.assertFalse(recall_type_floor_shadow_enabled(env={}))
-        self.assertFalse(recall_type_floor_enabled(env={}))
+        self.assertFalse(recall_context_floor_shadow_enabled(env={}))
+        self.assertFalse(recall_context_floor_enabled(env={}))
 
     def test_shadow_and_enabled_flags(self):
         from memory.memory_manager import (
-            recall_type_floor_enabled,
-            recall_type_floor_shadow_enabled,
+            recall_context_floor_enabled,
+            recall_context_floor_shadow_enabled,
         )
 
         self.assertTrue(
-            recall_type_floor_shadow_enabled(
-                env={"MAEZ_RECALL_TYPE_FLOOR_SHADOW": "1"}
+            recall_context_floor_shadow_enabled(
+                env={"MAEZ_RECALL_CONTEXT_FLOOR_SHADOW": "1"}
             )
         )
         self.assertTrue(
-            recall_type_floor_enabled(env={"MAEZ_RECALL_TYPE_FLOOR_ENABLED": "1"})
+            recall_context_floor_enabled(env={"MAEZ_RECALL_CONTEXT_FLOOR_ENABLED": "1"})
         )
+
+    def test_old_type_floor_flags_do_not_wake_context_floor(self):
+        from memory.memory_manager import (
+            recall_context_floor_enabled,
+            recall_context_floor_shadow_enabled,
+        )
+
+        old_env = {
+            "MAEZ_RECALL_TYPE_FLOOR_SHADOW": "1",
+            "MAEZ_RECALL_TYPE_FLOOR_ENABLED": "1",
+        }
+
+        self.assertFalse(recall_context_floor_shadow_enabled(env=old_env))
+        self.assertFalse(recall_context_floor_enabled(env=old_env))
 
 
 class TestMemoryAskGate(unittest.TestCase):

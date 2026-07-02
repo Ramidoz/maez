@@ -614,7 +614,7 @@ RANKING_HALF_LIFE_DAYS = 90.0
 EVIDENCE_RECENCY_DAYS = 14.0
 _LIVING_RECALL_DISTANCE_FLOOR = 1e-3
 _RECALL_RELEVANCE_FLOOR_DEFAULT = 0.7800
-_RECALL_SELF_DIGEST_FLOOR_DEFAULT = 0.7200
+_RECALL_CONTEXT_CASUAL_FLOOR_DEFAULT = 0.7200
 _SELF_DIGEST_METADATA_TYPES = frozenset({"daily_consolidation"})
 _SELF_DIGEST_METADATA_SOURCES = frozenset({"nightly_journal"})
 _RECALL_PROMOTION_RERANK_STRENGTH = 0.20
@@ -695,12 +695,12 @@ def recall_floor_enabled(*, env=None) -> bool:
     return _truthy_env_flag("MAEZ_RECALL_FLOOR_ENABLED", env=env)
 
 
-def recall_type_floor_shadow_enabled(*, env=None) -> bool:
-    return _truthy_env_flag("MAEZ_RECALL_TYPE_FLOOR_SHADOW", env=env)
+def recall_context_floor_shadow_enabled(*, env=None) -> bool:
+    return _truthy_env_flag("MAEZ_RECALL_CONTEXT_FLOOR_SHADOW", env=env)
 
 
-def recall_type_floor_enabled(*, env=None) -> bool:
-    return _truthy_env_flag("MAEZ_RECALL_TYPE_FLOOR_ENABLED", env=env)
+def recall_context_floor_enabled(*, env=None) -> bool:
+    return _truthy_env_flag("MAEZ_RECALL_CONTEXT_FLOOR_ENABLED", env=env)
 
 
 def recall_promotion_shadow_enabled(*, env=None) -> bool:
