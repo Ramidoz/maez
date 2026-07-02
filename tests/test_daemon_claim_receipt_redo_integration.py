@@ -31,6 +31,18 @@ class DaemonClaimReceiptRedoIntegration(unittest.TestCase):
         self.assertNotIn("web_search(", redo_segment)
         self.assertNotIn("search_rss(", redo_segment)
 
+    def test_claim_receipt_and_normal_audit_precede_store_and_return(self):
+        source = _handle_message_source()
+        claim_audit = source.index("_audit_daemon_reply_for_claim_receipts")
+        normal_audit = source.index("reply = audit_assistant_text(")
+        store = source.index("self.memory.store_telegram(")
+        final_return = source.rindex("return reply")
+
+        self.assertLess(claim_audit, store)
+        self.assertLess(normal_audit, store)
+        self.assertLess(claim_audit, final_return)
+        self.assertLess(normal_audit, final_return)
+
 
 if __name__ == "__main__":
     unittest.main()
