@@ -31,11 +31,15 @@
 
 ```python
 # tests/test_metabolic_trust_tier.py
+# (rewritten per Codex plan-review: _TRUST_TIER_ORDER is a TUPLE of strings,
+#  ascending trust ("untrusted","observed","lived","covenant"); the real
+#  untrusted filter is _partition_consolidation_input; _provenance_metadata
+#  takes (provenance_source, trust_tier).)
 import unittest
 
 from memory.memory_manager import (
-    ProvenanceSource,
     TrustTier,
+    _partition_consolidation_input,
     _provenance_metadata,
     _TRUST_TIER_ORDER,
 )
@@ -45,23 +49,29 @@ class SelfObservedTierTests(unittest.TestCase):
     def test_self_observed_is_a_valid_tier(self):
         self.assertEqual(TrustTier("self_observed"), TrustTier.SELF_OBSERVED)
 
-    def test_introspection_maps_to_self_observed(self):
-        meta = _provenance_metadata("introspection")
+    def test_introspection_default_maps_to_self_observed(self):
+        meta = _provenance_metadata("introspection", None)
         self.assertEqual(meta["trust_tier"], "self_observed")
         self.assertEqual(meta["provenance_source"], "introspection")
 
-    def test_order_between_observed_and_untrusted(self):
-        order = _TRUST_TIER_ORDER
-        self.assertLess(order[TrustTier.SELF_OBSERVED], order[TrustTier.OBSERVED])
-        self.assertGreater(order[TrustTier.SELF_OBSERVED], order[TrustTier.UNTRUSTED])
+    def test_order_between_untrusted_and_observed(self):
+        order = list(_TRUST_TIER_ORDER)  # ascending trust
+        self.assertIn("self_observed", order)
+        self.assertGreater(order.index("self_observed"), order.index("untrusted"))
+        self.assertLess(order.index("self_observed"), order.index("observed"))
 
     def test_explicit_self_observed_write_does_not_raise(self):
         meta = _provenance_metadata("introspection", "self_observed")
         self.assertEqual(meta["trust_tier"], "self_observed")
 
-    def test_untrusted_filter_does_not_drop_self_observed(self):
-        from memory.memory_manager import _is_untrusted_meta  # Task-time: use the real filter helper name found at memory_manager.py:~229-243
-        self.assertFalse(_is_untrusted_meta({"trust_tier": "self_observed"}))
+    def test_consolidation_filter_keeps_self_observed_drops_untrusted(self):
+        items = [
+            {"id": "a", "content": "x", "metadata": {"trust_tier": "self_observed"}},
+            {"id": "b", "content": "y", "metadata": {"trust_tier": "untrusted"}},
+        ]
+        kept, kept_ids, filtered_n, _labels = _partition_consolidation_input(items)
+        self.assertEqual(kept_ids, ["a"])
+        self.assertEqual(filtered_n, 1)
 ```
 
 - [ ] **Step 2: RED** — `/home/rohit/maez/.venv/bin/python -B -m unittest tests.test_metabolic_trust_tier -v` → ValueError/AttributeError.
@@ -297,10 +307,18 @@ class StoreSeamTests(unittest.TestCase):
         self.assertEqual(outcome, "durable")
         kwargs = d.memory.store.call_args.kwargs
         self.assertEqual(kwargs["metadata"]["metabolic_durable_reason"], "owner_interaction")
+        # THE CENTRAL TIER CORRECTION (Codex plan-review): the current daemon call
+        # passes trust_tier="lived" EXPLICITLY (daemon:10535), which would override
+        # Task 1's mapping. Flag-on durable writes must NOT pass "lived" — either
+        # omit trust_tier (letting the introspection mapping resolve) or pass
+        # "self_observed" explicitly. Without this assertion A3's most important
+        # field correction silently fails.
+        self.assertNotEqual(kwargs.get("trust_tier"), "lived")
+        self.assertIn(kwargs.get("trust_tier"), (None, "self_observed"))
 ```
 
 - [ ] **Step 2: RED.**
-- [ ] **Step 3: Implement** — extract today's store call (daemon ~10529) into `_metabolic_store_cycle_thought(...)`: flag-off → exactly today's `self.memory.store(...)` call (byte-identical params); flag-on → `evaluate_durability(events)`; durable → store with `metadata={**mem_metadata, "metabolic_durable_reason": reason}` (tier arrives via Task 1's mapping); ephemeral → `self._glance_buffer.append(...)`. **Assemble `CycleEvents` deterministically from state the loop already has**: alert/notification sent this cycle, exception/watchdog flag, owner-interaction timestamp within the cycle window, action proposed/executed, covenant/audit event (self-claim flag or claim-receipt catch this cycle), first-of-kind via an in-process event-signature set, `salience_marked` from lean-heartbeat thought_formed/moved + salience-broker proposal_count>0 this cycle (**wire every live signal — spec first-class requirement**; the exact attribute names are found at implementation from `_maybe_run_lean_idle_heartbeat` / `_maybe_run_salience_broker` return paths). Instantiate `self._glance_buffer = GlanceBuffer()` in `__init__`.
+- [ ] **Step 3: Implement** — extract today's store call (daemon ~10529) into `_metabolic_store_cycle_thought(...)`: flag-off → exactly today's `self.memory.store(...)` call **including the existing explicit `trust_tier="lived"`** (byte-identical params — the flag-off test guards this); flag-on → `evaluate_durability(events)`; durable → store with `metadata={**mem_metadata, "metabolic_durable_reason": reason}` and **`trust_tier` omitted or `"self_observed"` — never the explicit `"lived"` the old call passes** (Codex catch: the explicit arg would override Task 1's mapping and silently defeat A3's central correction); ephemeral → `self._glance_buffer.append(...)`. **Assemble `CycleEvents` deterministically from state the loop already has**: alert/notification sent this cycle, exception/watchdog flag, owner-interaction timestamp within the cycle window, action proposed/executed, covenant/audit event (self-claim flag or claim-receipt catch this cycle), first-of-kind via an in-process event-signature set, `salience_marked` from lean-heartbeat thought_formed/moved + salience-broker proposal_count>0 this cycle (**wire every live signal — spec first-class requirement**; the exact attribute names are found at implementation from `_maybe_run_lean_idle_heartbeat` / `_maybe_run_salience_broker` return paths). Instantiate `self._glance_buffer = GlanceBuffer()` in `__init__`.
 - [ ] **Step 4: GREEN + flag-off regression** (run the daemon-adjacent suites: `tests.test_jetson_edge_run`-style cycle tests if they touch the seam, plus this module).
 - [ ] **Step 5: Commit** `feat(metabolic): flag-gated cycle-store seam — glances ephemeral, events+salience durable`
 
@@ -431,11 +449,12 @@ class CurationPredicateTests(unittest.TestCase):
         self.assertFalse(is_journal_row("core", meta))
 ```
 
-- [ ] **Step 2: RED.** — [ ] **Step 3: Implement `scripts/metabolic_curation.py`** with subcommands, mirroring the two-phase no-TOFU discipline:
-  - `enumerate` → move-list artifact `docs/proof/2026-07-02-a3-curation-move-list.md`: every matching row (id, tier, preview ≤140 chars, metadata signature) + **negative-control section proving zero matches** among covenant/soul_evolution/owner-source rows + counts per tier. **No mutation.**
-  - `restore-proof` → move ONE owner-picked row to the archive collection (`get_or_create_collection("archived_introspection")`), restore it back, verify byte-identical round-trip. **The gate before bulk.**
-  - `apply` → refuses unless the move-list artifact exists AND `--owner-approved` is passed; moves core/daily journal rows to archive (add to archive with original metadata + `archived_from`/`archived_at`, then delete from hot collection — the row LIVES in archive; "archive-not-delete" means the *data* persists and is restorable, hot-index removal is the point); raw bulk rule (`provenance_source="introspection"`, no reason field, older than 7 days, not cited by any episode/scar) applied batch-wise with per-batch counts logged.
-  - `verify` → archive counts == moved counts; hot counts dropped by exactly the moved amounts; spot-restore N random rows.
+- [ ] **Step 2: RED.** — [ ] **Step 3: Implement `scripts/metabolic_curation.py`** with subcommands, mirroring the two-phase no-TOFU discipline. **The review is load-bearing, not decorative (Codex plan-review): the daily predicate matches ALL `daily_consolidation` rows — only Rohit's row-by-row review separates polluted from keep-worthy. `apply` therefore consumes the REVIEWED artifact, never the raw predicate.**
+  - `enumerate` → **reviewable decision artifact** `docs/proof/2026-07-02-a3-curation-move-list.md`: every matching row as a decision line — `- [ ] MOVE <tier>/<id> — <preview ≤140 chars> — <metadata signature>` — plus a **negative-control section proving zero matches** among covenant/soul_evolution/owner-source rows + counts per tier. **No mutation.** Rohit reviews by editing decision lines: `[x] MOVE` (approved) or changing `MOVE` → `KEEP` (flagged to stay). Unedited `[ ] MOVE` lines are **pending**.
+  - `restore-proof` → move ONE owner-picked approved row to the archive collection (`get_or_create_collection("archived_introspection")`), restore it back, verify byte-identical round-trip. **The gate before bulk.**
+  - `apply` → **parses the reviewed artifact**; refuses if the artifact is missing, if any row is still pending (`[ ] MOVE`), or if `--owner-approved` is absent; moves ONLY `[x] MOVE` rows (add to archive with original metadata + `archived_from`/`archived_at`, then remove from the hot collection — the row LIVES in archive; "archive-not-delete" means the *data* persists and is restorable, hot-index removal is the point); `KEEP` rows are recorded in the run log as owner-retained. Raw bulk rule (`provenance_source="introspection"`, no reason field, older than 7 days, not cited by any episode/scar) is a **separate `apply --raw-rule`** step gated on its own reviewed samples section in the artifact.
+  - `verify` → archive counts == approved-move counts; hot counts dropped by exactly that amount; **every `KEEP` row proven still present in its hot collection**; spot-restore N random archived rows.
+  Add to the Step-1 tests: an artifact-parser test (`[x] MOVE` → apply-set, `KEEP` → keep-set, `[ ] MOVE` → pending blocks apply) and a keep-rows-stay-hot assertion in the verify logic.
 - [ ] **Step 4: GREEN** (predicates + a tmp-Chroma round-trip test for restore-proof logic). — [ ] **Step 5: Commit** `feat(metabolic): curation ceremony tooling — enumerate/restore-proof/apply/verify`
 
 ---
