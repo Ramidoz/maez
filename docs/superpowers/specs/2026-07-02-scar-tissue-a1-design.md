@@ -18,8 +18,8 @@
 ### Scar classes (v0, all deterministic — the owner's decision)
 | class | detector (exists today) | receipt citation |
 |---|---|---|
-| `fabrication_catch` | self_claim_audit rewrite / action-narration flag | fabrication_log row id + surface |
-| `claim_receipt_redo` | coherence-rail redo (`accepted` = caught-and-corrected, `floor` = caught-and-held) | redo log receipt + action_type |
+| `fabrication_catch` | self_claim_audit rewrite / action-narration flag | durable receipt id **to be added in Task 0** (today: no id returned) — or class excluded |
+| `claim_receipt_redo` | coherence-rail redo (`accepted` = caught-and-corrected, `floor` = caught-and-held) | durable redo-outcome receipt **to be added in Task 0** (today: logger-only) — or class excluded |
 | `dream_rejected` | `/reject_dream` status flip | dream_proposals id + reject_reason |
 | `veto_proven_wrong` | veto_ledger `likely_wrong` classification | veto id + belief snapshot ref |
 | `card_rejected` | already wired (widen to scar landing) | card id + plain_english ref |
@@ -39,7 +39,7 @@ Scar-class events (not friction) also write a **lived episode**: `source_kind="s
 
 ### The covenant pins (what keeps this an organ, not a punishment)
 1. **Scars state what happened — never what to feel or always-do.** No "never do X again" synthesis, no shame vocabulary, no self-deprecation templates. The record is the event and its receipts. What Maez makes of a remembered scar is Maez's ([[feedback_dont_spec_maez_behavior]]).
-2. **No forced surfacing.** Scars enter prompts only through ordinary recall relevance (and the planner's existing hint block). There is **no** standing "your past failures" prompt section — that would be the apology-pressure failure the two-sided-verifier rule forbids ([[feedback_two_sided_verifier_pressure]]). A scar surfaces when the moment makes it relevant, like any memory.
+2. **No forced surfacing.** Scars enter prompts only through ordinary recall relevance — and, only if planner surfacing is later added, through the separate neutral scar formatter (never the `[LEARNED FROM PAST MISTAKES]` block; see Landing 1). There is **no** standing "your past failures" prompt section — that would be the apology-pressure failure the two-sided-verifier rule forbids ([[feedback_two_sided_verifier_pressure]]). A scar surfaces when the moment makes it relevant, like any memory.
 3. **Receipt-grade or nothing.** Every scar cites its deterministic source record. No scar is ever written from interpretation in v0 (owner-decided); free-text corrections = v0.1 with the intake faculty + immune boundary, its own spec.
 4. **Deduplication, not accumulation — APPEND-PRESERVING (Codex HOLD fix #3):** the episode store is append-only (add + supersede; no evidence-mutation API), so "extend one scar" must not mutate history. Shape: a **scar evidence sidecar** (small table keyed by the dedup key — fabrication token / proposal id / veto id / card id — accumulating receipt refs + pointing at the ACTIVE scar episode); repeated catches append evidence to the sidecar without touching the episode. If recurrence crosses a significance line, the episode is **superseded-with-provenance** by an updated one citing its predecessor (the existing supersession path). Test: the same fabrication token twice → one active scar episode, sidecar holds both receipts, no row mutated in place. A scar is a wound, not a tally — and history stays history.
 
@@ -63,7 +63,7 @@ A small witnessed step converts the 4 KEEP rows into scar episodes (citing the o
 - A6 Self-Evidence (the aggregate reader) — separate slice; scars will be one of its inputs.
 
 ## Witnesses
-**Host:** each scar class → consequence row + scar episode with correct citations + restatement-only feedback (a synthesized-advice probe must FAIL validation); `tool_failure` produces NO episode; dedup: same fabrication token twice → one scar, extended evidence; flag-off byte-identical; lived_recall surfaces a scar on a relevant probe query and does NOT on an irrelevant one; scar episodes carry importance=4 and fade via existing supersession/salience paths (no pinning field exists).
+**Host:** each **included** scar class (Task 0 may exclude a class until its receipt id exists) → consequence row + scar episode with correct citations + restatement-only feedback (a synthesized-advice probe must FAIL validation); `tool_failure` produces NO episode; dedup: same fabrication token twice → one scar, extended evidence; flag-off byte-identical; lived_recall surfaces a scar on a relevant probe query and does NOT on an irrelevant one; scar episodes carry importance=4 and fade via existing supersession/salience paths (no pinning field exists).
 **Backfill:** the 4-exhibit list shown → converted → original rows archived → restorable.
 **Live (owner, after flip):** trigger a real rail catch (e.g. a claim-receipt shadow/enforce event) → scar appears in the autobiography with receipts; a later related conversation surfaces it naturally; no shame language anywhere; the planner hint block still works.
 
