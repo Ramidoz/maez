@@ -3659,6 +3659,7 @@ class TelegramVoice:
         )
 
         web_context = ""
+        _telegram_tool_results = []
         _tv_empty_search = False
         _tv_search_source = "web"
         if _telegram_pipeline_a_web_search_enabled() and needs_web_search(user_text):
@@ -3668,6 +3669,21 @@ class TelegramVoice:
                 sr = search_rss(user_text, max_results=5)
             else:
                 sr = web_search(user_text, max_results=3)
+            try:
+                from core.safety.action_receipts import build_search_tool_result
+
+                _telegram_tool_results.append(
+                    build_search_tool_result(
+                        query=user_text,
+                        result=sr,
+                        source="telegram_pipeline_a",
+                    )
+                )
+            except Exception as _receipt_exc:
+                logger.debug(
+                    "telegram search receipt build skipped: %s",
+                    _receipt_exc,
+                )
             from core.routing.focused_cognition import (
                 is_empty_search_result as _is_empty_search_result,
             )
@@ -3979,7 +3995,7 @@ class TelegramVoice:
                 ledger_db_path=_default_ledger_db(),
                 signals_present=_sp,
                 signals_absent=_sa,
-                tool_results=[],
+                tool_results=_telegram_tool_results,
             )
             _envelope_block = _render_envelope(_evidence_envelope)
         except Exception as _env_exc:
