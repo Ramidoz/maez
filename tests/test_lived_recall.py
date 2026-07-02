@@ -256,6 +256,74 @@ class ReflectionEpisodesPreferredOnMetaQueries(unittest.TestCase):
             cleanup()
 
 
+class ReflectionBonusTelemetryTests(unittest.TestCase):
+    def test_meta_query_bonus_logs_comparison_when_it_changes_selected_episode(self):
+        from core.memory.lived_recall import build_lived_recall_brief
+
+        store, graph, cleanup = _stores()
+        try:
+            reflection = "Maez overclaimed capabilities during infrastructure work."
+            store.add(
+                title=reflection,
+                summary=reflection,
+                participants=["Maez"],
+                source_memory_ids=["reflection-source"],
+                source_kind="reflection",
+            )
+            direct = "patterns patterns ordinary operational note"
+            store.add(
+                title=direct,
+                summary=direct,
+                participants=["Maez"],
+                source_memory_ids=["ordinary-source"],
+                source_kind="raw_observation",
+            )
+
+            with self.assertLogs("core.memory.lived_recall", level="INFO") as logs:
+                brief = build_lived_recall_brief(
+                    "what patterns do you notice",
+                    episode_store=store,
+                    graph=graph,
+                    max_items=1,
+                )
+
+            self.assertIn("overclaimed capabilities", brief)
+            joined = "\n".join(logs.output)
+            self.assertIn("reflection_bonus_shadow", joined)
+            self.assertIn("changed_ranking=True", joined)
+        finally:
+            cleanup()
+
+    def test_meta_query_bonus_logs_comparison_when_ranking_does_not_change(self):
+        from core.memory.lived_recall import build_lived_recall_brief
+
+        store, graph, cleanup = _stores()
+        try:
+            direct = "patterns patterns ordinary operational note"
+            store.add(
+                title=direct,
+                summary=direct,
+                participants=["Maez"],
+                source_memory_ids=["ordinary-source"],
+                source_kind="raw_observation",
+            )
+
+            with self.assertLogs("core.memory.lived_recall", level="INFO") as logs:
+                brief = build_lived_recall_brief(
+                    "what patterns do you notice",
+                    episode_store=store,
+                    graph=graph,
+                    max_items=1,
+                )
+
+            self.assertIn("ordinary operational note", brief)
+            joined = "\n".join(logs.output)
+            self.assertIn("reflection_bonus_shadow", joined)
+            self.assertIn("changed_ranking=False", joined)
+        finally:
+            cleanup()
+
+
 class EveryItemCarriesEvidence(unittest.TestCase):
     def test_every_item_line_has_an_evidence_marker(self):
         from core.memory.lived_recall import build_lived_recall_brief

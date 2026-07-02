@@ -886,6 +886,23 @@ def _score_episode(
     return score
 
 
+def _score_episode_without_reflection_bonus(
+    query_tokens: set[str],
+    ep: dict,
+    *,
+    goals: "GoalHierarchy | None" = None,
+) -> int:
+    haystack_text = ep.get("title", "") + " " + ep.get("summary", "")
+    haystack_tokens = set(_tokenize(haystack_text))
+    score = len(query_tokens & haystack_tokens)
+    score += _goal_alignment_bonus(
+        haystack_text,
+        goals,
+        exclude_evidence_ids=_episode_evidence_ids(ep),
+    )
+    return score
+
+
 def _score_edge(
     query_tokens: set[str],
     edge: dict,
@@ -1111,6 +1128,35 @@ def build_lived_recall_brief(
     # the genuinely-empty case.
     scored_episodes.sort(key=lambda x: x.score, reverse=True)
     scored_edges.sort(key=lambda x: x.score, reverse=True)
+
+    if query_tokens & _META_QUERY_KEYWORDS and scored_episodes:
+        no_bonus_scored = [
+            _ScoredEpisode(
+                score=_score_episode_without_reflection_bonus(
+                    query_tokens,
+                    s.episode,
+                    goals=goals,
+                ),
+                episode=s.episode,
+            )
+            for s in scored_episodes
+        ]
+        no_bonus_scored = [s for s in no_bonus_scored if s.score > 0]
+        no_bonus_scored.sort(key=lambda x: x.score, reverse=True)
+        with_bonus_top = str(scored_episodes[0].episode.get("id", ""))
+        without_bonus_top = (
+            str(no_bonus_scored[0].episode.get("id", ""))
+            if no_bonus_scored
+            else ""
+        )
+        logger.info(
+            "reflection_bonus_shadow query_meta=True changed_ranking=%s "
+            "with_bonus_top=%s without_bonus_top=%s candidate_count=%d",
+            with_bonus_top != without_bonus_top,
+            with_bonus_top[:16],
+            without_bonus_top[:16],
+            len(scored_episodes),
+        )
 
     # ── split scored items into the three section pools ─────────────
     open_loop_pool: list[_ScoredEpisode] = [
