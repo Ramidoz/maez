@@ -55,10 +55,11 @@ def iter_action_receipts(evidence_envelope: dict | None) -> Iterable[dict]:
 def has_action_receipt(evidence_envelope: dict | None, action_type: str) -> bool:
     """True iff the envelope has a type-matched receipt for ``action_type``."""
     for receipt in iter_action_receipts(evidence_envelope):
-        if (
-            receipt.get("action_type") == action_type
-            or receipt.get("tool") == action_type
-            or receipt.get("name") == action_type
-        ):
+        explicit_action_type = receipt.get("action_type")
+        if explicit_action_type is not None:
+            if explicit_action_type == action_type:
+                return True
+            continue
+        if receipt.get("tool") == action_type or receipt.get("name") == action_type:
             return True
     return False

@@ -6515,24 +6515,9 @@ class MaezDaemon:
         ):
             # ≤30 chars: fits the envelope's per-signal cap (§2) untruncated.
             _chat_signals_present.append("owner-sent photo vision")
-        try:
-            _evidence_envelope = _build_envelope(
-                ledger_db_path=str(LEDGER_DB_PATH),
-                signals_present=_chat_signals_present,
-                signals_absent=_chat_signals_absent,
-                tool_results=[],
-                turn_id=_user_msg_turn_id,
-            )
-        except Exception as _env_exc:
-            # Envelope construction is best-effort; a builder bug
-            # MUST NOT block the daemon's reply path. Fall through
-            # to the legacy signals-only audit.
-            logger.warning(
-                "evidence_envelope build failed (continuing without envelope): %s",
-                _env_exc,
-            )
-            _evidence_envelope = None
-        _envelope_block = _render_envelope(_evidence_envelope)
+        _daemon_tool_results = []
+        _evidence_envelope = None
+        _envelope_block = ""
 
         # Web search if needed. If a deterministic tool already answered
         # a volatile fact (e.g. currency conversion), do not add web
@@ -6623,6 +6608,21 @@ class MaezDaemon:
                 sr = search_rss(text, max_results=5)
             else:
                 sr = web_search(text, max_results=3)
+            try:
+                from core.safety.action_receipts import build_search_tool_result
+
+                _daemon_tool_results.append(
+                    build_search_tool_result(
+                        query=text,
+                        result=sr,
+                        source="daemon_web_search",
+                    )
+                )
+            except Exception as _receipt_exc:
+                logger.debug(
+                    "daemon web search receipt build skipped: %s",
+                    _receipt_exc,
+                )
             web_context = web_format(sr, include_quality=True)
             from skills.web_search import _compute_quality
             if web_context:
@@ -6732,6 +6732,21 @@ class MaezDaemon:
                 _routing_obs_started = time.monotonic()
                 _routing_obs_tool = "photo_freshness_web_search"
                 sr = web_search(_photo_freshness_query, max_results=3)
+                try:
+                    from core.safety.action_receipts import build_search_tool_result
+
+                    _daemon_tool_results.append(
+                        build_search_tool_result(
+                            query=_photo_freshness_query,
+                            result=sr,
+                            source="daemon_photo_freshness_web_search",
+                        )
+                    )
+                except Exception as _receipt_exc:
+                    logger.debug(
+                        "daemon photo freshness receipt build skipped: %s",
+                        _receipt_exc,
+                    )
                 web_context = web_format(sr)
                 from skills.web_search import _compute_quality
                 if web_context:
@@ -6789,6 +6804,25 @@ class MaezDaemon:
                         "routing observation photo freshness search skipped: %s",
                         _routing_obs_exc,
                     )
+
+        try:
+            _evidence_envelope = _build_envelope(
+                ledger_db_path=str(LEDGER_DB_PATH),
+                signals_present=_chat_signals_present,
+                signals_absent=_chat_signals_absent,
+                tool_results=_daemon_tool_results,
+                turn_id=_user_msg_turn_id,
+            )
+        except Exception as _env_exc:
+            # Envelope construction is best-effort; a builder bug
+            # MUST NOT block the daemon's reply path. Fall through
+            # to the legacy signals-only audit.
+            logger.warning(
+                "evidence_envelope build failed (continuing without envelope): %s",
+                _env_exc,
+            )
+            _evidence_envelope = None
+        _envelope_block = _render_envelope(_evidence_envelope)
 
         is_voice = source == "voice"
         prompt = f"{system_state}\n\n"

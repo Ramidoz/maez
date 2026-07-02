@@ -551,7 +551,7 @@ class BoundedEnvelopeBuilder:
             if not isinstance(it, dict):
                 continue
             entry: dict = {}
-            for key in ("name", "status", "tool_call_id"):
+            for key in ("name", "tool", "action_type", "status", "tool_call_id"):
                 if key in it:
                     entry[key] = it[key]
             if "summary" in it:

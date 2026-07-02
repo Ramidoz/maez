@@ -88,6 +88,21 @@ class ActionReceipts(unittest.TestCase):
 
         self.assertFalse(has_action_receipt(envelope, ACTION_WEB_SEARCH))
 
+    def test_explicit_mismatched_action_type_does_not_satisfy_search(self):
+        envelope = {
+            "tool_results": [
+                {
+                    "name": "web_search",
+                    "tool": "web_search",
+                    "action_type": "weather",
+                    "status": "ok",
+                    "summary": "weather result shaped like a search label",
+                },
+            ],
+        }
+
+        self.assertFalse(has_action_receipt(envelope, ACTION_WEB_SEARCH))
+
 
 if __name__ == "__main__":
     unittest.main()

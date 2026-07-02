@@ -248,6 +248,32 @@ class PassthroughTests(unittest.TestCase):
         self.assertEqual(env["tool_results"][0]["status"], "ok")
         self.assertEqual(env["tool_results"][1]["name"], "cat")
 
+    def test_action_receipt_fields_survive_tool_result_normalization(self):
+        db = _fresh_db("pt_action_receipts")
+        env = envelope_builder.build_envelope(
+            ledger_db_path=db,
+            signals_present=[],
+            signals_absent=[],
+            tool_results=[
+                {
+                    "name": "web_search",
+                    "tool": "web_search",
+                    "action_type": "web_search",
+                    "status": "ok",
+                    "summary": "web_search ok result_count=2 backend=web",
+                    "query": "private owner wording should not survive",
+                },
+            ],
+        )
+
+        tr = env["tool_results"][0]
+        self.assertEqual(tr["name"], "web_search")
+        self.assertEqual(tr["tool"], "web_search")
+        self.assertEqual(tr["action_type"], "web_search")
+        self.assertEqual(tr["status"], "ok")
+        self.assertEqual(tr["summary"], "web_search ok result_count=2 backend=web")
+        self.assertNotIn("query", tr)
+
     def test_claimable_forbidden_passthrough(self):
         db = _fresh_db("pt_cf")
         env = envelope_builder.build_envelope(
