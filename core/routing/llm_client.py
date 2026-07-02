@@ -114,31 +114,52 @@ def active_backend() -> str:
     return v if v in VALID_BACKENDS else BACKEND_OLLAMA
 
 
-def _llamacpp_props_url() -> str:
-    base = LLAMACPP_BASE_URL.rstrip("/")
+def _props_url_for_base(base_url: str) -> str:
+    base = str(base_url or "").rstrip("/")
     if base.endswith("/v1"):
         base = base[:-3].rstrip("/")
     return f"{base}/props"
 
 
+def _llamacpp_props_url() -> str:
+    return _props_url_for_base(LLAMACPP_BASE_URL)
+
+
+def _props_model_alias(url: str, *, timeout_s: float) -> str | None:
+    with urllib.request.urlopen(url, timeout=timeout_s) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+    alias = payload.get("model_alias")
+    if alias:
+        return str(alias)
+    model_path = payload.get("model_path")
+    if model_path:
+        return str(model_path).rsplit("/", 1)[-1]
+    return None
+
+
 def served_model_alias(*, default: str | None = None, timeout_s: float = 1.0) -> str:
     """Return the actually served model alias for telemetry.
 
-    This is observational only: it does not affect routing. Under llama.cpp,
-    the requested model label may be ignored when one model is loaded, so
-    telemetry reads `/props` to report the server's resident alias.
+    This is observational only: it does not affect routing. OpenAI-compatible
+    llama-server deployments can ignore the requested model label when one
+    model is loaded, so telemetry reads `/props` to report the resident alias
+    when that endpoint is available.
     """
-    if active_backend() != BACKEND_LLAMACPP:
-        return default or LLAMACPP_MODEL
+    fallback = default or LLAMACPP_MODEL
+    primary_props_url = _props_url_for_base(PRIMARY_BASE_URL)
     try:
-        with urllib.request.urlopen(_llamacpp_props_url(), timeout=timeout_s) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-        alias = payload.get("model_alias")
+        alias = _props_model_alias(primary_props_url, timeout_s=timeout_s)
         if alias:
-            return str(alias)
-        model_path = payload.get("model_path")
-        if model_path:
-            return str(model_path).rsplit("/", 1)[-1]
+            return alias
+    except Exception:
+        pass
+
+    if active_backend() != BACKEND_LLAMACPP:
+        return fallback
+    try:
+        alias = _props_model_alias(_llamacpp_props_url(), timeout_s=timeout_s)
+        if alias:
+            return alias
     except Exception:
         return "llamacpp:unknown"
     return "llamacpp:unknown"

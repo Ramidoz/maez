@@ -32,7 +32,7 @@ FINGERPRINT (Track A narrow shape)
 Only three fields are load-bearing in Track A:
 
     {
-        "base_model": <MAEZ_LLAMACPP_MODEL env, else current primary>,
+        "base_model": <served model alias, else configured primary>,
         "lora_hash":  <sha256 of current LoRA file, or None>,
         "soul_hash":  <sha256 of config/soul.md>,
     }
@@ -125,15 +125,8 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
-# 2026-04-23 Commit 6: base_model for new ledger rows now derives from
-# the live primary-model config (via /etc/maez/model.env through
-# core.routing.model_config), not a hardcoded string. A fresh Maez
-# instance's identity ledger must record the ACTUAL base it was
-# instantiated on, not a stale fallback. MAEZ_LLAMACPP_MODEL env
-# remains the top-priority override for anyone wanting to force a
-# specific label (e.g. SFT training scripts pinning the pre-SFT
-# base model for comparison).
 from core.model_config import PRIMARY_MODEL as _PRIMARY_MODEL
+from core.routing.llm_client import served_model_alias
 
 logger = logging.getLogger("maez")
 
@@ -237,10 +230,11 @@ def compute_identity_fingerprint(
     """Compute the Track A identity fingerprint.
 
     Three fields:
-      - base_model: MAEZ_LLAMACPP_MODEL env if set, else the live
-                    primary model from core.model_config (sourced from
-                    /etc/maez/model.env). Previously hardcoded
-                    'gemma-4-26b' as a stale fallback — see Commit 6.
+      - base_model: the model alias actually served by the live brain
+                    when observable, else MAEZ_LLAMACPP_MODEL env if
+                    set, else the configured primary model. Previously
+                    this trusted only the configured/requested label,
+                    which hid real resident-model swaps.
       - lora_hash:  SHA-256 of the file at lora_path, or MAEZ_LORA_PATH
                     env, or None if neither is set / file missing.
       - soul_hash:  SHA-256 of config/soul.md (or provided path),
@@ -248,7 +242,16 @@ def compute_identity_fingerprint(
 
     Returns a dict suitable for JSON serialization. Never raises.
     """
-    base_model = os.environ.get("MAEZ_LLAMACPP_MODEL") or _PRIMARY_MODEL
+    configured_model = os.environ.get("MAEZ_LLAMACPP_MODEL") or _PRIMARY_MODEL
+    try:
+        observed_model = served_model_alias(default=configured_model, timeout_s=0.25)
+    except Exception:
+        observed_model = configured_model
+    base_model = (
+        observed_model
+        if observed_model and observed_model != "llamacpp:unknown"
+        else configured_model
+    )
 
     soul = Path(soul_path) if soul_path else _DEFAULT_SOUL_PATH
     soul_hash = _sha256_file(soul)

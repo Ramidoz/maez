@@ -45,9 +45,12 @@ Out of scope:
 """
 from __future__ import annotations
 
+import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _REPO = Path(__file__).resolve().parent.parent
 if str(_REPO) not in sys.path:
@@ -123,6 +126,102 @@ class GemmaLiteralsNotDefaultsAnymore(unittest.TestCase):
                 "compute_identity_fingerprint body still contains a "
                 f"live 'gemma-4-26b' literal at line {i}: {line!r}"
             )
+
+    def test_identity_ledger_fingerprint_uses_served_model_alias(self):
+        """The identity ledger must fingerprint the brain Maez is
+        actually serving, not a stale configured/requested label."""
+        from core.memory import identity_ledger as il
+
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"MAEZ_LLAMACPP_MODEL": "stale-requested-label"},
+                clear=False,
+            ),
+            mock.patch.object(
+                il,
+                "served_model_alias",
+                return_value="qwen36-27b-mtp",
+                create=True,
+            ) as served,
+        ):
+            fp = il.compute_identity_fingerprint(soul_path=Path("/missing-soul"))
+
+        self.assertEqual(fp["base_model"], "qwen36-27b-mtp")
+        served.assert_called_once_with(
+            default="stale-requested-label",
+            timeout_s=0.25,
+        )
+
+    def test_identity_ledger_falls_back_when_served_model_is_unknown(self):
+        """A transient `/props` failure must not stamp a false
+        `llamacpp:unknown` brain swap into the continuity ledger."""
+        from core.memory import identity_ledger as il
+
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"MAEZ_LLAMACPP_MODEL": "configured-label"},
+                clear=False,
+            ),
+            mock.patch.object(
+                il,
+                "served_model_alias",
+                return_value="llamacpp:unknown",
+                create=True,
+            ) as served,
+        ):
+            fp = il.compute_identity_fingerprint(soul_path=Path("/missing-soul"))
+
+        self.assertEqual(fp["base_model"], "configured-label")
+        served.assert_called_once_with(
+            default="configured-label",
+            timeout_s=0.25,
+        )
+
+    def test_startup_detector_records_served_model_alias_swap(self):
+        """A served brain swap must be ledger-visible even when the
+        configured/requested model label stays unchanged."""
+        from core.memory import identity_ledger as il
+
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / "identity_ledger.db"
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"MAEZ_LLAMACPP_MODEL": "same-requested-label"},
+                    clear=False,
+                ),
+                mock.patch.object(
+                    il,
+                    "served_model_alias",
+                    return_value="old-served",
+                    create=True,
+                ),
+            ):
+                ledger = il.IdentityLedger(db_path=db)
+
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"MAEZ_LLAMACPP_MODEL": "same-requested-label"},
+                    clear=False,
+                ),
+                mock.patch.object(
+                    il,
+                    "served_model_alias",
+                    return_value="new-served",
+                    create=True,
+                ),
+            ):
+                _cid, wrote = il.detect_and_record_startup(ledger)
+
+            latest = ledger.latest()
+
+        self.assertTrue(wrote)
+        self.assertEqual(latest["event_type"], "brain_swap")
+        self.assertEqual(latest["fingerprint"]["base_model"], "new-served")
+        self.assertIn("base_model old-served -> new-served", latest["reason"])
 
     def test_dream_state_model_constant(self):
         """core/evolution/dream_state.py::MODEL must now be sourced

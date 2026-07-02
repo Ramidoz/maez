@@ -98,6 +98,37 @@ class ServedModelReportingTest(unittest.TestCase):
         self.assertEqual(model, "llamacpp:unknown")
         self.assertNotEqual(model, "gemma4:26b")
 
+    def test_served_model_alias_reads_primary_base_props_without_backend_flag(self):
+        from core.routing import llm_client
+
+        class _Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return b'{"model_alias": "qwen36-27b-mtp"}'
+
+        with (
+            mock.patch.dict(
+                "os.environ",
+                {"MAEZ_PRIMARY_MODEL": "qwen36-27b"},
+                clear=True,
+            ),
+            mock.patch.object(
+                llm_client,
+                "PRIMARY_BASE_URL",
+                "http://127.0.0.1:8080",
+            ),
+            mock.patch("urllib.request.urlopen", return_value=_Resp()) as urlopen,
+        ):
+            model = llm_client.served_model_alias(default="qwen36-27b")
+
+        self.assertEqual(model, "qwen36-27b-mtp")
+        self.assertIn("http://127.0.0.1:8080/props", urlopen.call_args.args[0])
+
 
 class OrganTelemetryHookTest(unittest.TestCase):
     def test_daily_consolidation_telemetry_uses_exact_schema(self):
