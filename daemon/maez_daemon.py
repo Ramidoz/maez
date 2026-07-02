@@ -1587,6 +1587,89 @@ def _plain_llm_messages(messages: list[dict]) -> list[dict]:
     return plain
 
 
+@dataclass(frozen=True)
+class _ClaimReceiptAuditOutcome:
+    text: str
+    audit_ran: bool
+    audit_changed: bool
+    action_mismatch: object | None = None
+    needs_redo: bool = False
+
+
+def _claim_receipt_enforce_enabled() -> bool:
+    return os.environ.get("MAEZ_CLAIM_RECEIPT_ENFORCE") == "1"
+
+
+def _claim_receipt_floor_notice(mismatch) -> str:
+    return (
+        "Substrate notice: I held a draft reply because it contained an "
+        f"unreceipted action claim ({getattr(mismatch, 'action_type', 'unknown')}). "
+        "No action result was sent as truth."
+    )
+
+
+def _claim_receipt_redo_messages(
+    messages: list[dict],
+    *,
+    mismatch,
+    owner_text: str,
+) -> list[dict]:
+    facts = (
+        "[CLAIM-RECEIPT MISMATCH - THIS TURN]\n"
+        f"No {getattr(mismatch, 'action_type', 'unknown')} receipt exists for this turn.\n"
+        "Search tools are live, but no matching receipt was present for the draft claim.\n"
+        "Do not claim that a search/action ran unless a receipt exists in the evidence envelope.\n"
+        "If you only have memory or prior context, say that as memory/history.\n"
+        "If a fresh search would help, offer it; do not say you are doing it now.\n"
+        f"Owner message: {owner_text}\n\n"
+        "Answer in your own words, grounded only in what actually happened this turn."
+    )
+    return [*messages, {"role": "system", "content": facts}]
+
+
+def _audit_daemon_reply_for_claim_receipts(
+    text: str,
+    *,
+    surface: str,
+    evidence_envelope: dict | None,
+) -> _ClaimReceiptAuditOutcome:
+    if not text:
+        return _ClaimReceiptAuditOutcome(
+            text=text,
+            audit_ran=False,
+            audit_changed=False,
+        )
+    if not _claim_receipt_enforce_enabled():
+        return _ClaimReceiptAuditOutcome(
+            text=text,
+            audit_ran=False,
+            audit_changed=False,
+        )
+    try:
+        from core.self_claim_audit import audit as _sc_audit
+
+        result = _sc_audit(
+            text,
+            surface=surface,
+            evidence_envelope=evidence_envelope,
+        )
+    except Exception as exc:
+        logger.warning("claim receipt audit failed on %s: %s", surface, exc)
+        return _ClaimReceiptAuditOutcome(
+            text=text,
+            audit_ran=False,
+            audit_changed=False,
+        )
+    mismatch = getattr(result, "action_mismatch", None)
+    return _ClaimReceiptAuditOutcome(
+        text=getattr(result, "text", text) or text,
+        audit_ran=True,
+        audit_changed=bool(getattr(result, "rewritten", False)),
+        action_mismatch=mismatch,
+        needs_redo=bool(mismatch),
+    )
+
+
 def _prompt_capture_excerpt(content: str, *, limit: int = 100) -> str:
     return content[:limit]
 
@@ -8004,6 +8087,76 @@ class MaezDaemon:
         # Trace: snapshot the pre-audit text so audit.changed_output
         # is a literal pre/post hash comparison, not a guess.
         _trace_pre_audit_text = reply
+        _claim_receipt_outcome = _audit_daemon_reply_for_claim_receipts(
+            reply,
+            surface=source,
+            evidence_envelope=_evidence_envelope,
+        )
+        if _claim_receipt_outcome.needs_redo:
+            try:
+                from core import llm_client as _llm_client
+                from core.routing.brain_gateway import with_purpose as _brain_purpose
+
+                _redo_messages = _claim_receipt_redo_messages(
+                    messages,
+                    mismatch=_claim_receipt_outcome.action_mismatch,
+                    owner_text=text,
+                )
+                with _brain_purpose("owner_reply"):
+                    _redo_response = _llm_client.chat(
+                        model=MODEL,
+                        messages=_plain_llm_messages(_redo_messages),
+                        think=False,
+                        options={"temperature": 0.5, "num_predict": 800},
+                    )
+                _redo_reply = (
+                    getattr(getattr(_redo_response, "message", None), "content", "")
+                    or ""
+                ).strip()
+                if _redo_reply:
+                    try:
+                        from core.brain_loop import strip_tool_call_leaks
+
+                        _redo_reply = strip_tool_call_leaks(_redo_reply)
+                    except Exception as _strip_exc:
+                        logger.debug(
+                            "claim receipt redo tool-call strip skipped: %s",
+                            _strip_exc,
+                        )
+                _redo_outcome = _audit_daemon_reply_for_claim_receipts(
+                    _redo_reply or reply,
+                    surface=source,
+                    evidence_envelope=_evidence_envelope,
+                )
+                if not _redo_outcome.audit_ran or _redo_outcome.needs_redo:
+                    reply = _claim_receipt_floor_notice(
+                        _claim_receipt_outcome.action_mismatch
+                    )
+                    logger.info(
+                        "claim_receipt_redo surface=%s outcome=floor action_type=%s",
+                        source,
+                        getattr(
+                            _claim_receipt_outcome.action_mismatch,
+                            "action_type",
+                            "unknown",
+                        ),
+                    )
+                else:
+                    reply = _redo_outcome.text
+                    logger.info(
+                        "claim_receipt_redo surface=%s outcome=accepted action_type=%s",
+                        source,
+                        getattr(
+                            _claim_receipt_outcome.action_mismatch,
+                            "action_type",
+                            "unknown",
+                        ),
+                    )
+            except Exception as _claim_redo_exc:
+                logger.warning("claim receipt redo failed on %s: %s", source, _claim_redo_exc)
+                reply = _claim_receipt_floor_notice(
+                    _claim_receipt_outcome.action_mismatch
+                )
         _grounding_shadow_post_audit_ready = False
         try:
             from core.safety.audited_output import audit_assistant_text
