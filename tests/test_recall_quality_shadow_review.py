@@ -63,6 +63,39 @@ class RecallQualityShadowReviewTests(unittest.TestCase):
         self.assertAlmostEqual(summary["reflection_share"], 0.5)
         self.assertEqual(summary["floor_receipt_count"], 1)
 
+    def test_parse_reflection_bonus_shadow(self):
+        from scripts.recall_quality_shadow_review import (
+            parse_reflection_bonus_shadow,
+        )
+
+        line = (
+            "reflection_bonus_shadow query_meta=True changed_ranking=True "
+            "with_bonus_top=ep-reflection without_bonus_top=ep-direct "
+            "candidate_count=2"
+        )
+
+        parsed = parse_reflection_bonus_shadow(line)
+
+        self.assertTrue(parsed["query_meta"])
+        self.assertTrue(parsed["changed_ranking"])
+        self.assertEqual(parsed["with_bonus_top"], "ep-reflection")
+        self.assertEqual(parsed["without_bonus_top"], "ep-direct")
+        self.assertEqual(parsed["candidate_count"], 2)
+
+    def test_summarize_reflection_bonus_rows(self):
+        from scripts.recall_quality_shadow_review import (
+            summarize_reflection_bonus_rows,
+        )
+
+        summary = summarize_reflection_bonus_rows([
+            {"changed_ranking": True, "with_bonus_top": "a"},
+            {"changed_ranking": False, "with_bonus_top": "b"},
+        ])
+
+        self.assertEqual(summary["telemetry_count"], 2)
+        self.assertEqual(summary["changed_ranking_count"], 1)
+        self.assertEqual(summary["review_status"], "review_required")
+
     def test_probe_query_defaults_are_used_only_when_args_empty(self):
         from scripts.recall_quality_shadow_review import (
             DEFAULT_PROBE_QUERIES,
@@ -87,16 +120,24 @@ class RecallQualityShadowReviewTests(unittest.TestCase):
                     "probe_live_context_floor_rows",
                     return_value=[],
                 ) as context_probe:
-                    rc = review.main([
-                        "--log",
-                        str(Path(td) / "missing.log"),
-                        "--out",
-                        str(out),
-                    ])
+                    with mock.patch.object(
+                        review,
+                        "probe_live_reflection_bonus_rows",
+                        return_value=[],
+                    ) as reflection_probe:
+                        rc = review.main([
+                            "--log",
+                            str(Path(td) / "missing.log"),
+                            "--out",
+                            str(out),
+                        ])
 
             self.assertEqual(rc, 0)
             probe.assert_called_once_with(list(review.DEFAULT_PROBE_QUERIES))
             context_probe.assert_called_once_with(list(review.DEFAULT_PROBE_QUERIES))
+            reflection_probe.assert_called_once_with(
+                list(review.DEFAULT_PROBE_QUERIES)
+            )
             self.assertIn("## Live Probe Summary", out.read_text())
 
     def test_main_uses_custom_probe_queries_without_opening_memory_manager(self):
@@ -114,22 +155,29 @@ class RecallQualityShadowReviewTests(unittest.TestCase):
                     "probe_live_context_floor_rows",
                     return_value=[],
                 ) as context_probe:
-                    rc = review.main([
-                        "--log",
-                        str(Path(td) / "missing.log"),
-                        "--probe-query",
-                        "custom",
-                        "--out",
-                        str(out),
-                    ])
+                    with mock.patch.object(
+                        review,
+                        "probe_live_reflection_bonus_rows",
+                        return_value=[],
+                    ) as reflection_probe:
+                        rc = review.main([
+                            "--log",
+                            str(Path(td) / "missing.log"),
+                            "--probe-query",
+                            "custom",
+                            "--out",
+                            str(out),
+                        ])
 
             self.assertEqual(rc, 0)
             probe.assert_called_once_with(["custom"])
             context_probe.assert_called_once_with(["custom"])
+            reflection_probe.assert_called_once_with(["custom"])
 
     def test_write_markdown_includes_live_probe_summary(self):
         from scripts.recall_quality_shadow_review import (
             summarize_context_floor_rows,
+            summarize_reflection_bonus_rows,
             summarize_replay_rows,
             write_markdown,
         )
@@ -158,11 +206,13 @@ class RecallQualityShadowReviewTests(unittest.TestCase):
                 log_summary={"candidate_count": 2},
                 live_probe_summary=summary,
                 context_floor_summary=summarize_context_floor_rows([]),
+                reflection_bonus_summary=summarize_reflection_bonus_rows([]),
                 replay_jsonl_summary=summarize_replay_rows([]),
             )
             text = out.read_text()
         self.assertIn("## Live Probe Summary", text)
         self.assertIn("## Context Floor Summary", text)
+        self.assertIn("## Reflection Bonus Summary", text)
         self.assertIn("## Replay JSONL Summary", text)
         self.assertIn("unknown_share", text)
         self.assertIn("reflection_drop_share", text)

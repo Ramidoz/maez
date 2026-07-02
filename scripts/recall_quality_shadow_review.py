@@ -86,6 +86,14 @@ _CONTEXT_FLOOR_SHADOW_RE = re.compile(
     r"actuated=(?P<actuated>True|False|true|false)"
 )
 
+_REFLECTION_BONUS_RE = re.compile(
+    r"reflection_bonus_shadow query_meta=(?P<query_meta>True|False|true|false) "
+    r"changed_ranking=(?P<changed_ranking>True|False|true|false) "
+    r"with_bonus_top=(?P<with_bonus_top>\S*) "
+    r"without_bonus_top=(?P<without_bonus_top>\S*) "
+    r"candidate_count=(?P<candidate_count>\d+)"
+)
+
 
 def _bool_text(value: str) -> bool:
     return value.lower() == "true"
@@ -188,6 +196,19 @@ def parse_context_floor_shadow(line: str) -> dict | None:
     }
 
 
+def parse_reflection_bonus_shadow(line: str) -> dict | None:
+    match = _REFLECTION_BONUS_RE.search(line)
+    if match is None:
+        return None
+    return {
+        "query_meta": _bool_text(match.group("query_meta")),
+        "changed_ranking": _bool_text(match.group("changed_ranking")),
+        "with_bonus_top": match.group("with_bonus_top"),
+        "without_bonus_top": match.group("without_bonus_top"),
+        "candidate_count": int(match.group("candidate_count")),
+    }
+
+
 def summarize_type_floor_rows(rows: list[dict]) -> dict:
     casual_self_digest = [
         row
@@ -269,6 +290,19 @@ def summarize_context_floor_rows(rows: list[dict]) -> dict:
     }
 
 
+def summarize_reflection_bonus_rows(rows: list[dict]) -> dict:
+    changed = [row for row in rows if row.get("changed_ranking")]
+    unchanged = [row for row in rows if not row.get("changed_ranking")]
+    return {
+        "telemetry_count": len(rows),
+        "changed_ranking_count": len(changed),
+        "unchanged_ranking_count": len(unchanged),
+        "review_status": "review_required" if rows else "no_reflection_bonus_rows",
+        "sample_changed": changed[:20],
+        "sample_unchanged": unchanged[:20],
+    }
+
+
 def parse_floor_shadow(line: str) -> dict | None:
     match = _FLOOR_RE.search(line)
     if match is None:
@@ -291,6 +325,7 @@ def summarize_logs(path: Path) -> dict:
     type_floor_shadows: list[dict] = []
     context_floor_candidates: list[dict] = []
     context_floor_shadows: list[dict] = []
+    reflection_bonus_rows: list[dict] = []
     if path.exists():
         for line in path.read_text(errors="replace").splitlines():
             candidate = parse_living_candidate(line)
@@ -311,6 +346,9 @@ def summarize_logs(path: Path) -> dict:
             context_shadow = parse_context_floor_shadow(line)
             if context_shadow is not None:
                 context_floor_shadows.append(context_shadow)
+            reflection_bonus = parse_reflection_bonus_shadow(line)
+            if reflection_bonus is not None:
+                reflection_bonus_rows.append(reflection_bonus)
 
     distances = [row["base_distance"] for row in candidates]
     kinded = [row for row in candidates if row.get("kind") is not None]
@@ -335,6 +373,10 @@ def summarize_logs(path: Path) -> dict:
         "context_floor_shadow_count": len(context_floor_shadows),
         "context_floor_summary": summarize_context_floor_rows(
             context_floor_candidates
+        ),
+        "reflection_bonus_count": len(reflection_bonus_rows),
+        "reflection_bonus_summary": summarize_reflection_bonus_rows(
+            reflection_bonus_rows
         ),
     }
 
@@ -501,6 +543,66 @@ def probe_live_context_floor_rows(queries: list[str], *, manager=None) -> list[d
                 os.environ[name] = value
 
 
+def _runtime_memory_root() -> Path:
+    candidates: list[Path] = []
+    env_root = os.environ.get("MAEZ_ROOT")
+    if env_root:
+        candidates.append(Path(env_root))
+    candidates.extend([ROOT, Path("/home/rohit/maez")])
+    for root in candidates:
+        memory_root = root / "memory"
+        if (
+            (memory_root / "lived_episodes.db").exists()
+            and (memory_root / "lived_graph.db").exists()
+        ):
+            return memory_root
+    return ROOT / "memory"
+
+
+def probe_live_reflection_bonus_rows(queries: list[str]) -> list[dict]:
+    if not queries:
+        return []
+
+    memory_root = _runtime_memory_root()
+    episode_db = memory_root / "lived_episodes.db"
+    graph_db = memory_root / "lived_graph.db"
+    if not episode_db.exists() or not graph_db.exists():
+        return []
+
+    from core.memory.episodes import EpisodeStore
+    from core.memory.lived_recall import build_lived_recall_brief
+    from core.memory.relationship_graph import RelationshipGraph
+
+    store = EpisodeStore(str(episode_db))
+    graph = RelationshipGraph(str(graph_db))
+
+    logger = logging.getLogger("core.memory.lived_recall")
+    old_level = logger.level
+    logger.setLevel(logging.INFO)
+    handler = _CaptureHandler()
+    logger.addHandler(handler)
+    try:
+        rows: list[dict] = []
+        for query in queries:
+            start = len(handler.lines)
+            build_lived_recall_brief(
+                query,
+                episode_store=store,
+                graph=graph,
+                max_items=1,
+            )
+            for line in handler.lines[start:]:
+                row = parse_reflection_bonus_shadow(line)
+                if row is not None:
+                    row["source"] = "live_reflection_bonus_probe"
+                    row["query"] = query
+                    rows.append(row)
+        return rows
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(old_level)
+
+
 def summarize_replay_rows(rows: list[dict]) -> dict:
     total = len(rows)
     drops = [row for row in rows if row.get("would_drop")]
@@ -537,6 +639,7 @@ def write_markdown(
     log_summary: dict,
     live_probe_summary: dict,
     context_floor_summary: dict,
+    reflection_bonus_summary: dict,
     replay_jsonl_summary: dict,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -559,6 +662,12 @@ def write_markdown(
         "",
         "```json",
         json.dumps(context_floor_summary, indent=2, sort_keys=True),
+        "```",
+        "",
+        "## Reflection Bonus Summary",
+        "",
+        "```json",
+        json.dumps(reflection_bonus_summary, indent=2, sort_keys=True),
         "```",
         "",
         "## Replay JSONL Summary",
@@ -618,12 +727,16 @@ def main(argv: list[str] | None = None) -> int:
     live_context_floor_rows = probe_live_context_floor_rows(
         _probe_queries_from_args(args.probe_query)
     )
+    live_reflection_bonus_rows = probe_live_reflection_bonus_rows(
+        _probe_queries_from_args(args.probe_query)
+    )
 
     write_markdown(
         Path(args.out),
         summarize_logs(Path(args.log)),
         summarize_replay_rows(live_probe_rows),
         summarize_context_floor_rows(live_context_floor_rows),
+        summarize_reflection_bonus_rows(live_reflection_bonus_rows),
         summarize_replay_rows(replay_rows),
     )
     return 0
