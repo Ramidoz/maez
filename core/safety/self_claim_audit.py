@@ -94,6 +94,16 @@ class Flag:
     tense_class: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class ActionClaimMismatch:
+    action_type: str
+    pattern_id: str
+    claim_text: str
+    receipt_present: bool
+    tense_class: str
+    reason: str
+
+
 @dataclass
 class AuditResult:
     text: str
@@ -101,6 +111,7 @@ class AuditResult:
     mode: str = "noop"  # "noop" | "sentence" | "shortcircuit" | "judge_unavailable"
     flags: list[Flag] = field(default_factory=list)
     skipped_reason: Optional[str] = None
+    action_mismatch: Optional[ActionClaimMismatch] = None
 
 
 # Slice 3.0b (2026-05-07): the post-hoc audit must accept the new
@@ -404,6 +415,34 @@ def check_action_narration_claims(
                 )
             )
     return flags
+
+
+def _claim_receipt_shadow_enabled() -> bool:
+    return os.environ.get("MAEZ_CLAIM_RECEIPT_SHADOW") == "1"
+
+
+def _claim_receipt_enforce_enabled() -> bool:
+    return os.environ.get("MAEZ_CLAIM_RECEIPT_ENFORCE") == "1"
+
+
+def _emit_action_claim_receipt(
+    *,
+    surface: str,
+    mismatch: ActionClaimMismatch,
+    mode: str,
+    redo_outcome: str = "none",
+) -> None:
+    logger.info(
+        "claim_receipt_rail surface=%s action_type=%s pattern_id=%s "
+        "receipt_present=%s tense_class=%s mode=%s redo_outcome=%s",
+        surface,
+        mismatch.action_type,
+        mismatch.pattern_id,
+        mismatch.receipt_present,
+        mismatch.tense_class,
+        mode,
+        redo_outcome,
+    )
 
 
 def _completion_rail_residue_is_empty(text: str) -> bool:
@@ -937,6 +976,35 @@ def audit(
             rewritten=sentinel_cleanup is not None,
             mode="noop",
             skipped_reason="tool_continuation",
+        )
+
+    action_flags = check_action_narration_claims(
+        text,
+        evidence_envelope=evidence_envelope,
+    )
+    if action_flags and (
+        _claim_receipt_shadow_enabled() or _claim_receipt_enforce_enabled()
+    ):
+        first = action_flags[0]
+        mismatch = ActionClaimMismatch(
+            action_type=first.action_type or "unknown",
+            pattern_id=first.pattern_id or "unknown",
+            claim_text=first.text,
+            receipt_present=False,
+            tense_class=first.tense_class or "unknown",
+            reason=first.reason,
+        )
+        _emit_action_claim_receipt(
+            surface=surface,
+            mismatch=mismatch,
+            mode="enforce" if _claim_receipt_enforce_enabled() else "shadow",
+        )
+        return AuditResult(
+            text=text,
+            rewritten=False,
+            mode="action_claim_mismatch",
+            flags=action_flags,
+            action_mismatch=mismatch,
         )
 
     # Explicit opt-out knob. MAEZ_SEMANTIC_AUDIT defaults to enabled in v2;
