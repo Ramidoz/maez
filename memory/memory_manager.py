@@ -2766,59 +2766,59 @@ class MemoryManager:
                 recall_floor_enabled(),
             )
 
-        type_floor_shadow = recall_type_floor_shadow_enabled()
-        type_floor_applied = recall_type_floor_enabled()
+        context_floor_shadow = recall_context_floor_shadow_enabled()
+        context_floor_applied = recall_context_floor_enabled()
         query_is_memory_ask = _is_recall_memory_ask(query)
-        self_digest_floor = _RECALL_SELF_DIGEST_FLOOR_DEFAULT
+        casual_floor = _RECALL_CONTEXT_CASUAL_FLOOR_DEFAULT
 
-        if type_floor_shadow or type_floor_applied:
-            type_partitions, type_summary = _apply_type_aware_floor_to_partitions(
+        if context_floor_shadow or context_floor_applied:
+            context_partitions, context_summary = _apply_context_floor_to_partitions(
                 {"raw": raw, "daily": daily, "core": core},
                 query_is_memory_ask=query_is_memory_ask,
                 base_floor=floor,
-                self_digest_floor=self_digest_floor,
+                casual_floor=casual_floor,
                 enforce=True,
             )
-            retained_ids = {
-                str(mem.get("id", ""))
-                for tier in ("raw", "daily", "core")
-                for mem in type_partitions[tier]
-            }
-            for decision in type_summary["decisions"]:
+            retained_ids = context_summary["retained_ids"]
+            for decision in context_summary["decisions"]:
                 distance = decision["distance"]
                 if not math.isfinite(distance):
                     distance = _LIVING_RECALL_INVALID_DISTANCE_RANK
+                applied = decision["applied_floor"]
+                applied_text = "pass" if applied is None else f"{applied:.4f}"
                 logger.info(
-                    "recall_type_floor_candidate tier=%s id=%s kind=%s "
-                    "distance=%.4f applied_floor=%.4f base_floor=%.4f would_drop=%s "
-                    "query_memory_ask=%s retained=%s",
+                    "recall_context_floor_candidate tier=%s id=%s kind=%s "
+                    "distance=%.4f applied_floor=%s base_floor=%.4f casual_floor=%.4f "
+                    "would_drop=%s query_memory_ask=%s retained=%s preview=%s",
                     decision["tier"],
                     decision["id"][:12],
                     decision["kind"],
                     distance,
-                    decision["applied_floor"],
+                    applied_text,
                     floor,
+                    casual_floor,
                     decision["would_drop"],
                     query_is_memory_ask,
                     decision["id"] in retained_ids,
+                    decision["preview"],
                 )
             logger.info(
-                "recall_type_floor_shadow base_floor=%.4f self_digest_floor=%.4f "
+                "recall_context_floor_shadow base_floor=%.4f casual_floor=%.4f "
                 "query_memory_ask=%s candidate_count=%d would_drop=%d "
-                "dropped_self_digest=%d fallback_rescue_kind=%s actuated=%s",
+                "fallback_rescue_kind=%s fallback_rescue_id=%s actuated=%s",
                 floor,
-                self_digest_floor,
+                casual_floor,
                 query_is_memory_ask,
-                type_summary["candidate_count"],
-                type_summary["would_drop_count"],
-                type_summary["dropped_self_digest_count"],
-                type_summary["fallback_rescue_kind"],
-                type_floor_applied,
+                context_summary["candidate_count"],
+                context_summary["would_drop_count"],
+                context_summary["fallback_rescue_kind"],
+                context_summary["fallback_rescue_id"],
+                context_floor_applied,
             )
-            if type_floor_applied:
-                raw = type_partitions["raw"]
-                daily = type_partitions["daily"]
-                core = type_partitions["core"]
+            if context_floor_applied:
+                raw = context_partitions["raw"]
+                daily = context_partitions["daily"]
+                core = context_partitions["core"]
             else:
                 raw = _apply_recall_floor_with_fallback(raw, floor=floor, min_keep=1)
                 daily = _apply_recall_floor_with_fallback(daily, floor=floor, min_keep=1)

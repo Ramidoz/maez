@@ -2074,7 +2074,7 @@ class ScopeParityTests(unittest.TestCase):
         self.assertEqual(run(None), run("1"))
 
 
-class LivingRecallTypeAwareFloorTests(unittest.TestCase):
+class LivingRecallContextFloorTests(unittest.TestCase):
     def _self_digest(self, row_id: str, *, tier: str, distance: float) -> dict:
         row = _row(
             row_id,
@@ -2102,16 +2102,19 @@ class LivingRecallTypeAwareFloorTests(unittest.TestCase):
         row["metadata"]["type"] = "reasoning"
         return row
 
-    def test_type_floor_drops_daily_and_core_self_digest_when_raw_memory_exists(self):
+    def test_context_floor_drops_weak_raw_daily_memory_on_casual_turn(self):
         mm = _manager(
-            raw_rows=[self._reasoning("raw-real", distance=0.30)],
+            raw_rows=[
+                self._reasoning("raw-real", distance=0.30),
+                self._reasoning("raw-weak", distance=0.74),
+            ],
             daily_rows=[self._self_digest("daily-diary", tier="daily", distance=0.74)],
             core_rows=[self._self_digest("nightly-diary", tier="core", distance=0.75)],
         )
 
         env = {
             "MAEZ_RECALL_FLOOR_ENABLED": "1",
-            "MAEZ_RECALL_TYPE_FLOOR_ENABLED": "1",
+            "MAEZ_RECALL_CONTEXT_FLOOR_ENABLED": "1",
         }
         with (
             mock.patch.dict("os.environ", env, clear=False),
@@ -2125,18 +2128,42 @@ class LivingRecallTypeAwareFloorTests(unittest.TestCase):
 
         self.assertEqual(_partition_ids(evidence, "raw"), ["raw-real"])
         self.assertEqual(_partition_ids(evidence, "daily"), [])
-        self.assertEqual(_partition_ids(context, "core"), [])
+        self.assertEqual(_partition_ids(context, "core"), ["nightly-diary"])
 
-    def test_type_floor_keeps_self_digest_on_memory_ask(self):
+    def test_context_floor_shadow_does_not_change_live_recall(self):
         mm = _manager(
             raw_rows=[],
             daily_rows=[self._self_digest("daily-diary", tier="daily", distance=0.74)],
-            core_rows=[self._self_digest("nightly-diary", tier="core", distance=0.75)],
+            core_rows=[],
         )
 
         env = {
             "MAEZ_RECALL_FLOOR_ENABLED": "1",
-            "MAEZ_RECALL_TYPE_FLOOR_ENABLED": "1",
+            "MAEZ_RECALL_CONTEXT_FLOOR_SHADOW": "1",
+            "MAEZ_RECALL_CONTEXT_FLOOR_ENABLED": "0",
+        }
+        with (
+            mock.patch.dict("os.environ", env, clear=False),
+            mock.patch(
+                "memory.memory_manager._now_seconds",
+                return_value=datetime(2026, 5, 29, 12, 0, tzinfo=timezone.utc).timestamp(),
+            ),
+            mock.patch("core.memory_scoring.record_recall", side_effect=lambda *a, **k: None),
+        ):
+            evidence, _context = mm.recall_for_telegram_living("how are you")
+
+        self.assertEqual(_partition_ids(evidence, "daily"), ["daily-diary"])
+
+    def test_context_floor_memory_ask_is_byte_equivalent_to_v0_shape(self):
+        mm = _manager(
+            raw_rows=[self._reasoning("raw-v0-drops", distance=0.82)],
+            daily_rows=[self._self_digest("daily-v0-keeps", tier="daily", distance=0.74)],
+            core_rows=[self._self_digest("core-v0-pass-through", tier="core", distance=0.95)],
+        )
+
+        env = {
+            "MAEZ_RECALL_FLOOR_ENABLED": "1",
+            "MAEZ_RECALL_CONTEXT_FLOOR_ENABLED": "1",
         }
         with (
             mock.patch.dict("os.environ", env, clear=False),
@@ -2150,32 +2177,9 @@ class LivingRecallTypeAwareFloorTests(unittest.TestCase):
                 "what have you noticed about yourself"
             )
 
-        self.assertEqual(_partition_ids(evidence, "daily"), ["daily-diary"])
-        self.assertEqual(_partition_ids(context, "core"), ["nightly-diary"])
-
-    def test_type_floor_last_resort_keeps_best_self_digest_only_when_blank(self):
-        mm = _manager(
-            raw_rows=[],
-            daily_rows=[self._self_digest("daily-diary", tier="daily", distance=0.74)],
-            core_rows=[self._self_digest("nightly-diary", tier="core", distance=0.75)],
-        )
-
-        env = {
-            "MAEZ_RECALL_FLOOR_ENABLED": "1",
-            "MAEZ_RECALL_TYPE_FLOOR_ENABLED": "1",
-        }
-        with (
-            mock.patch.dict("os.environ", env, clear=False),
-            mock.patch(
-                "memory.memory_manager._now_seconds",
-                return_value=datetime(2026, 5, 29, 12, 0, tzinfo=timezone.utc).timestamp(),
-            ),
-            mock.patch("core.memory_scoring.record_recall", side_effect=lambda *a, **k: None),
-        ):
-            evidence, context = mm.recall_for_telegram_living("how are you")
-
-        self.assertEqual(_partition_ids(evidence, "daily"), ["daily-diary"])
-        self.assertEqual(_partition_ids(context, "core"), [])
+        self.assertEqual(_partition_ids(evidence, "raw"), ["raw-v0-drops"])
+        self.assertEqual(_partition_ids(evidence, "daily"), ["daily-v0-keeps"])
+        self.assertEqual(_partition_ids(context, "core"), ["core-v0-pass-through"])
 
 
 if __name__ == "__main__":
