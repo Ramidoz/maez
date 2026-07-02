@@ -26,6 +26,7 @@ from core.egress.gate import (
     UNTRUSTED_EXTERNAL_OUTPUT,
 )
 from core.egress.provenance import ProvenanceSpan, ProvenancedText
+from core.infra.env_flags import strict_env_flag
 from core.llm_client import sanitize_prompt_text
 from core.routing.temporal_cue import (
     AbsoluteRecallWindow,
@@ -250,6 +251,47 @@ def _partition_consolidation_input(
         kept_ids.append(item["id"])
         tier_labels.append(_ancestor_tier_label(meta))
     return kept, kept_ids, filtered_n, tier_labels
+
+
+def _select_metabolic_consolidation_rows(items: list[dict]) -> list[dict]:
+    """A3 metabolic selection: eligibility comes from reason metadata only.
+
+    ``trust_tier`` describes evidential weight. It must never decide whether a
+    self-observation is eventful enough to feed the daily consolidation LLM.
+    """
+    selected: list[dict] = []
+    for item in items:
+        meta = item.get("metadata") or {}
+        if str(meta.get("metabolic_durable_reason") or "").strip():
+            selected.append(item)
+    return selected
+
+
+def build_quiet_day_stub(
+    *,
+    cycles: int,
+    alerts: int,
+    owner_interactions: int,
+    uptime_h: float,
+    date_label: str,
+) -> dict:
+    text = (
+        f"Quiet day. {int(cycles):,} cycles, {int(alerts)} alerts, "
+        f"{int(owner_interactions)} owner interactions."
+    )
+    metadata = {
+        "date": str(date_label),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "type": "quiet_day_stub",
+        "raw_count": 0,
+        "cycles": int(cycles),
+        "alerts": int(alerts),
+        "owner_interactions": int(owner_interactions),
+        "uptime_h": round(float(uptime_h), 2),
+        "provenance_source": "introspection",
+        "trust_tier": TrustTier.SELF_OBSERVED.value,
+    }
+    return {"text": text, "metadata": metadata}
 
 
 def _provenance_metadata(provenance_source, trust_tier) -> dict:
@@ -1544,8 +1586,37 @@ class MemoryManager:
     def consolidate_daily(self) -> str | None:
         """Distill raw memories since last consolidation into a daily summary."""
         started_mono = time.monotonic()
+        metabolic_enabled = strict_env_flag("MAEZ_METABOLIC_MEMORY")
         last = self._get_last_consolidation()
         cutoff = last.isoformat() if last.tzinfo else last.replace(tzinfo=timezone.utc).isoformat()
+
+        def _write_quiet_stub(*, candidate_count: int) -> str:
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            stub = build_quiet_day_stub(
+                cycles=candidate_count,
+                alerts=0,
+                owner_interactions=0,
+                uptime_h=24.0,
+                date_label=today,
+            )
+            stub_id = f"quiet-{today}-{uuid.uuid4().hex[:8]}"
+            self._assert_embedding_writes_allowed()
+            self.daily.add(
+                ids=[stub_id],
+                documents=[stub["text"]],
+                metadatas=[stub["metadata"]],
+            )
+            logger.info("Quiet-day stub stored: %s", stub_id)
+            _emit_daily_consolidation_telemetry(
+                started_mono=started_mono,
+                inputs_count=0,
+                outputs_count=1,
+                rails_blocked=0,
+                status="success",
+                reason="quiet_day_stub",
+            )
+            self._save_last_consolidation()
+            return str(stub["text"])
 
         # Get recent raw memories. ChromaDB's get(limit=N) returns the
         # OLDEST N records, so we use offset to skip to the end.
@@ -1553,6 +1624,9 @@ class MemoryManager:
         # instead of the most recent — consolidation never found new data.
         total = self.raw.count()
         if total == 0:
+            if metabolic_enabled:
+                logger.info("Daily consolidation: quiet day (no raw rows)")
+                return _write_quiet_stub(candidate_count=0)
             logger.info("Daily consolidation: no raw memories to consolidate")
             _emit_daily_consolidation_telemetry(
                 started_mono=started_mono,
@@ -1604,6 +1678,9 @@ class MemoryManager:
                 logger.info("Daily consolidation: expanded to 48h window, found %d memories", len(candidates))
 
         if not candidates:
+            if metabolic_enabled:
+                logger.info("Daily consolidation: quiet day (no candidates)")
+                return _write_quiet_stub(candidate_count=0)
             logger.info("Daily consolidation: no memories since last consolidation")
             _emit_daily_consolidation_telemetry(
                 started_mono=started_mono,
@@ -1614,6 +1691,16 @@ class MemoryManager:
                 reason="no_candidates",
             )
             return None
+
+        if metabolic_enabled:
+            selected_candidates = _select_metabolic_consolidation_rows(candidates)
+            if not selected_candidates:
+                logger.info(
+                    "Daily consolidation: quiet day (%d raw rows, no durable reasons)",
+                    len(candidates),
+                )
+                return _write_quiet_stub(candidate_count=len(candidates))
+            candidates = selected_candidates
 
         # 5x.E: filter untrusted rows out of the consolidation input
         # BEFORE the LLM sees them. Filter, not fail — see
