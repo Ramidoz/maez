@@ -79,6 +79,7 @@ from core.memory.cycle_recall_context import (
     capture as _crc_capture,
     make_empty as _crc_empty,
 )
+from core.memory.metabolic import CycleEvents, GlanceBuffer, evaluate_durability
 from core.egress.provenance import ProvenancedText
 from core.egress.telegram_egress import owner_multispan_envelope
 from core.perception import snapshot as perception_snapshot, format_snapshot
@@ -3186,6 +3187,8 @@ class MaezDaemon:
         # memory so the face can read REAL state instead of scraping logs.
         self._last_cycle_text = ""
         self._last_valence_reading = None
+        self._glance_buffer = GlanceBuffer()
+        self._last_cycle_salience_marked = False
         # Continuous time-sense heartbeat (flag-gated, default OFF): a long-lived
         # SubjectiveDuration handle + the last sparse-anchor timestamp. The handle
         # is constructed lazily on first tick via `_time_sense_handle()`.
@@ -5236,6 +5239,46 @@ class MaezDaemon:
         self._fresh_moment_receipts = store
         return store
 
+    def _metabolic_store_cycle_thought(
+        self,
+        full_thought: str,
+        snap: dict,
+        mem_metadata: dict,
+        events: CycleEvents,
+    ) -> str:
+        if not strict_env_flag("MAEZ_METABOLIC_MEMORY"):
+            self.memory.store(
+                full_thought,
+                cycle=self.cycle_count,
+                snapshot=snap,
+                metadata=mem_metadata,
+                provenance_source="introspection",
+                trust_tier="lived",
+            )
+            return "durable"
+
+        durable, reason = evaluate_durability(events)
+        if durable:
+            metadata = dict(mem_metadata or {})
+            metadata["metabolic_durable_reason"] = reason
+            self.memory.store(
+                full_thought,
+                cycle=self.cycle_count,
+                snapshot=snap,
+                metadata=metadata,
+                provenance_source="introspection",
+                trust_tier="self_observed",
+            )
+            return "durable"
+
+        self._glance_buffer.append(
+            text=full_thought,
+            cycle=self.cycle_count,
+            ts=time.time(),
+            meta={"snapshot": snap, "metadata": dict(mem_metadata or {})},
+        )
+        return "ephemeral"
+
     def _maybe_record_fresh_moment_receipt(self, result) -> int | None:
         if not _fresh_moment_receipts_shadow_enabled():
             return None
@@ -5377,6 +5420,7 @@ class MaezDaemon:
         snap: dict,
         gate_decision: object,
     ) -> str | None:
+        self._last_cycle_salience_marked = False
         heartbeat_active = _lean_idle_heartbeat_any_enabled()
         broker_active = _salience_broker_shadow_enabled()
         if not heartbeat_active and not broker_active:
@@ -5513,6 +5557,8 @@ class MaezDaemon:
             broker_receipt = self._maybe_run_salience_broker(window)
             if broker_receipt:
                 proposals = list(broker_receipt.get("proposals", []) or [])
+                if proposals or int(broker_receipt.get("proposal_count") or 0) > 0:
+                    self._last_cycle_salience_marked = True
                 strategy = str(broker_receipt.get("strategy") or strategy)
                 cold_start = bool(broker_receipt.get("cold_start", False))
         if not heartbeat_active:
@@ -5591,6 +5637,8 @@ class MaezDaemon:
             "lean_idle_heartbeat receipt=%s",
             json.dumps(result.receipt, sort_keys=True),
         )
+        if bool(getattr(result, "stored", False)):
+            self._last_cycle_salience_marked = True
         self._maybe_record_fresh_moment_receipt(result)
         if broker_active:
             receipt = getattr(result, "receipt", {}) or {}
@@ -10065,6 +10113,7 @@ class MaezDaemon:
             self._mark_cycle_stage("broadcast_cycle_start")
             self._ws_broadcast({"type": "cycle_start", "cycle": self.cycle_count})
             self._s1b_residue_events = []
+            self._last_cycle_salience_marked = False
 
             # Collect system perception
             self._mark_cycle_stage("perception_snapshot")
@@ -10512,6 +10561,9 @@ class MaezDaemon:
 
                 full_thought = result
 
+                _cycle_residue_pending = bool(
+                    getattr(self, "_s1b_residue_events", []) or []
+                )
                 self._s1b_flush_residue_events()
 
                 mem_metadata = {
@@ -10526,13 +10578,29 @@ class MaezDaemon:
                     "next_event": next_event,
                 }
                 self._mark_cycle_stage("memory_store")
-                self.memory.store(
+                try:
+                    _last_owner_ts = float(
+                        getattr(self, "_last_owner_interaction_ts", 0.0) or 0.0
+                    )
+                except (TypeError, ValueError):
+                    _last_owner_ts = 0.0
+                _cycle_metabolic_events = CycleEvents(
+                    error_event=bool(
+                        _cycle_action_failure_count(tier1_results + tier2_results)
+                    ),
+                    owner_interaction=_last_owner_ts >= cycle_start,
+                    action_taken=bool(tier1_results or tier2_results),
+                    first_of_kind=bool(_cycle_signal_availability_delta),
+                    covenant_event=_cycle_residue_pending,
+                    salience_marked=bool(
+                        getattr(self, "_last_cycle_salience_marked", False)
+                    ),
+                )
+                self._metabolic_store_cycle_thought(
                     full_thought,
-                    cycle=self.cycle_count,
-                    snapshot=snap,
-                    metadata=mem_metadata,
-                    provenance_source="introspection",
-                    trust_tier="lived",
+                    snap,
+                    mem_metadata,
+                    _cycle_metabolic_events,
                 )
 
                 # Broadcast cycle end with thought to UI
