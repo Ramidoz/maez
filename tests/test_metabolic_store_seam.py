@@ -84,3 +84,64 @@ class StoreSeamTests(unittest.TestCase):
         with mock.patch("daemon.maez_daemon.MemoryManager"):
             daemon = MaezDaemon()
         self.assertIsInstance(daemon._glance_buffer, GlanceBuffer)
+
+
+class AlertTriggerWiringTests(unittest.TestCase):
+    def _daemon_stub(self):
+        daemon = mock.Mock()
+        daemon.GPU_TEMP_THRESHOLD = 80
+        daemon.RAM_THRESHOLD = 90
+        daemon.CPU_THRESHOLD = 95
+        daemon.CPU_STREAK_REQUIRED = 3
+        daemon.DISK_THRESHOLD = 10
+        daemon.ALERT_COOLDOWN = 1800
+        daemon._high_cpu_streak = 0
+        daemon._last_alert_time = 0.0
+        daemon.cycle_count = 7
+        return daemon
+
+    def test_check_and_alert_returns_true_when_alert_sent(self):
+        from daemon.maez_daemon import MaezDaemon
+
+        daemon = self._daemon_stub()
+        snap = {
+            "gpu": {"temperature_c": 50},
+            "ram": {"percent": 95},
+            "cpu": {"percent": 10},
+            "disk": {"/": {"percent": 50}},
+        }
+        with mock.patch("daemon.maez_daemon.send_dev") as send_dev:
+            sent = MaezDaemon._check_and_alert(daemon, snap)
+        self.assertTrue(sent)
+        send_dev.assert_called_once()
+
+    def test_check_and_alert_returns_false_without_send(self):
+        from daemon.maez_daemon import MaezDaemon
+
+        daemon = self._daemon_stub()
+        snap = {
+            "gpu": {"temperature_c": 50},
+            "ram": {"percent": 10},
+            "cpu": {"percent": 10},
+            "disk": {"/": {"percent": 50}},
+        }
+        with mock.patch("daemon.maez_daemon.send_dev") as send_dev:
+            sent = MaezDaemon._check_and_alert(daemon, snap)
+        self.assertFalse(sent)
+        send_dev.assert_not_called()
+
+    def test_metabolic_cycle_events_include_alert_sent(self):
+        from daemon.maez_daemon import MaezDaemon
+
+        daemon = mock.Mock()
+        daemon._last_owner_interaction_ts = 0.0
+        daemon._last_cycle_salience_marked = False
+        events = MaezDaemon._metabolic_cycle_events(
+            daemon,
+            cycle_start=100.0,
+            tier_results=[],
+            signal_availability_delta=False,
+            residue_pending=False,
+            alert_sent=True,
+        )
+        self.assertTrue(events.alert_sent)

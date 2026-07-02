@@ -5310,6 +5310,31 @@ class MaezDaemon:
         )
         return "ephemeral"
 
+    def _metabolic_cycle_events(
+        self,
+        *,
+        cycle_start: float,
+        tier_results: object,
+        signal_availability_delta: bool,
+        residue_pending: bool,
+        alert_sent: bool,
+    ) -> CycleEvents:
+        try:
+            last_owner_ts = float(
+                getattr(self, "_last_owner_interaction_ts", 0.0) or 0.0
+            )
+        except (TypeError, ValueError):
+            last_owner_ts = 0.0
+        return CycleEvents(
+            alert_sent=bool(alert_sent),
+            error_event=bool(_cycle_action_failure_count(tier_results)),
+            owner_interaction=last_owner_ts >= float(cycle_start),
+            action_taken=bool(tier_results),
+            first_of_kind=bool(signal_availability_delta),
+            covenant_event=bool(residue_pending),
+            salience_marked=bool(getattr(self, "_last_cycle_salience_marked", False)),
+        )
+
     def _maybe_record_fresh_moment_receipt(self, result) -> int | None:
         if not _fresh_moment_receipts_shadow_enabled():
             return None
@@ -9249,7 +9274,7 @@ class MaezDaemon:
             reasons.append(f"CPU sustained {cpu_pct}% for {self._high_cpu_streak} cycles")
 
         if not reasons:
-            return
+            return False
 
         # Enforce 30-minute cooldown
         now = time.time()
@@ -9260,12 +9285,13 @@ class MaezDaemon:
                 int((self.ALERT_COOLDOWN - elapsed) / 60),
                 ", ".join(reasons),
             )
-            return
+            return False
 
         alert_msg = f"[Cycle {self.cycle_count}]\n" + "\n".join(f"⚠ {r}" for r in reasons)
         logger.info("Alert sent: %s", ", ".join(reasons))
         send_dev(alert_msg)
         self._last_alert_time = now
+        return True
 
     # ------------------------------------------------------------------ #
     #  WebSocket broadcast                                                 #
@@ -10186,6 +10212,12 @@ class MaezDaemon:
             except Exception as e:
                 logger.debug("Proprioception sample skipped: %s", e)
 
+            # Check system thresholds for alerts. This runs before the
+            # metabolic memory vote so a real alert can make the same cycle's
+            # thought durable; it still runs even if reasoning later fails.
+            self._mark_cycle_stage("threshold_alerts")
+            _cycle_alert_sent = self._check_and_alert(snap)
+
             # Screen perception — every N cycles using gemma4 vision
             self._mark_cycle_stage("screen_perception")
             self._screen_cycle_counter += 1
@@ -10613,23 +10645,12 @@ class MaezDaemon:
                     "next_event": next_event,
                 }
                 self._mark_cycle_stage("memory_store")
-                try:
-                    _last_owner_ts = float(
-                        getattr(self, "_last_owner_interaction_ts", 0.0) or 0.0
-                    )
-                except (TypeError, ValueError):
-                    _last_owner_ts = 0.0
-                _cycle_metabolic_events = CycleEvents(
-                    error_event=bool(
-                        _cycle_action_failure_count(tier1_results + tier2_results)
-                    ),
-                    owner_interaction=_last_owner_ts >= cycle_start,
-                    action_taken=bool(tier1_results or tier2_results),
-                    first_of_kind=bool(_cycle_signal_availability_delta),
-                    covenant_event=_cycle_residue_pending,
-                    salience_marked=bool(
-                        getattr(self, "_last_cycle_salience_marked", False)
-                    ),
+                _cycle_metabolic_events = self._metabolic_cycle_events(
+                    cycle_start=cycle_start,
+                    tier_results=tier1_results + tier2_results,
+                    signal_availability_delta=bool(_cycle_signal_availability_delta),
+                    residue_pending=_cycle_residue_pending,
+                    alert_sent=bool(_cycle_alert_sent),
                 )
                 self._metabolic_store_cycle_thought(
                     full_thought,
@@ -10752,10 +10773,6 @@ class MaezDaemon:
                             logger.info("Proactive search queued: %s", sq[:60])
                     except Exception as e:
                         logger.debug("Proactive search failed: %s", e)
-
-            # Check system thresholds for alerts (runs even if reasoning failed)
-            self._mark_cycle_stage("threshold_alerts")
-            self._check_and_alert(snap)
 
             # Follow-up delivery — every 5 cycles
             #
