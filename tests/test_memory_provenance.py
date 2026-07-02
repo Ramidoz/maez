@@ -183,7 +183,7 @@ class DefaultTierTests(unittest.TestCase):
 
         self.assertEqual(
             default_tier_for(ProvenanceSource.INTROSPECTION),
-            TrustTier.LIVED,
+            TrustTier.SELF_OBSERVED,
         )
         self.assertEqual(default_tier_for("user_utterance"), TrustTier.LIVED)
         self.assertEqual(default_tier_for("tool_observation"), TrustTier.OBSERVED)

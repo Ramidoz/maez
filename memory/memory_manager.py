@@ -97,11 +97,12 @@ class TrustTier(str, Enum):
     COVENANT = "covenant"
     LIVED = "lived"
     OBSERVED = "observed"
+    SELF_OBSERVED = "self_observed"
     UNTRUSTED = "untrusted"
 
 
 _DEFAULT_TIER_BY_SOURCE: dict[ProvenanceSource, TrustTier] = {
-    ProvenanceSource.INTROSPECTION: TrustTier.LIVED,
+    ProvenanceSource.INTROSPECTION: TrustTier.SELF_OBSERVED,
     ProvenanceSource.USER_UTTERANCE: TrustTier.LIVED,
     ProvenanceSource.TOOL_OBSERVATION: TrustTier.OBSERVED,
     ProvenanceSource.EXTERNAL_WEB: TrustTier.UNTRUSTED,
@@ -164,7 +165,7 @@ def default_tier_for(provenance_source) -> TrustTier:
 #     resulting core entry inherits worst-wins.
 #
 # Worst-of ordering (most → least trustworthy):
-#   covenant > lived > observed > untrusted
+#   covenant > lived > observed > self_observed > untrusted
 #
 # Legacy ancestors (no trust_tier metadata; pre-5x.A material) are
 # rendered as ``"unknown"`` in the ancestor_tiers list and treated as
@@ -187,6 +188,7 @@ class PromotionBlocked(Exception):
 # returns the leftmost tier that appears in any ancestor.
 _TRUST_TIER_ORDER: tuple[str, ...] = (
     "untrusted",
+    "self_observed",
     "observed",
     "lived",
     "covenant",
