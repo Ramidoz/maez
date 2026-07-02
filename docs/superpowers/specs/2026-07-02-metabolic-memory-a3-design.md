@@ -32,7 +32,7 @@ A cycle thought becomes durable when **any** fires:
 - **substrate-salience rescue:** if Maez's own machinery (lean-heartbeat "thought_formed/moved", salience-broker proposal) marks the thought, it earns durability — the substrate's own coherence can always overrule the quiet default. This keeps the gate from ever being a hardcoded opinion about what matters: events + Maez's own signals decide, never us.
 
 ### 3. Honest trust tier for self-observation
-Durable introspection is stamped **`trust_tier="self_observed"`** (recommended name; Task 0 confirms the existing sparse `observed` tier's semantics before finalizing). Verified additive-safe: all current trust-tier readers branch only on `"untrusted"` (filter-not-fail), so a new value passes untouched while telemetry/recall/promotion can *see* it. `provenance_source="introspection"` already exists — the tier finally stops flattening self-observation into `lived`.
+Durable introspection is stamped **`trust_tier="self_observed"`**. **Write-safety (Codex HOLD fix — my "additive-safe" was reader-side only):** `TrustTier` is a closed enum with a ValueError typo-guard, so the build MUST (a) add `TrustTier.SELF_OBSERVED`, (b) pin its `_TRUST_TIER_ORDER` rank — **below `observed`, above `untrusted`** (self-observation is weaker evidence than world-observation, but it is not tainted input), (c) test both the write path (`_provenance_metadata("introspection", "self_observed")` no longer raises) and render/partition behavior downstream. Reader-side remains verified safe (all current readers branch only on `"untrusted"`). Task 0 still confirms the sparse existing `observed` tier's semantics before finalizing. `provenance_source="introspection"` already exists — the tier finally stops flattening self-observation into `lived`.
 
 ### 4. Event-gated daily consolidation + the proprioception store
 - `consolidate_daily()` input becomes **the durable (triggered) thoughts only** — shrinking the largest LLM→durable path's feedstock at the source (Law 2 bonus).
@@ -54,10 +54,16 @@ Existing pollution moves out of the hot indexes, **never deleted**:
 
 ## Task 0 for the plan (verify before code)
 
-1. **Enumerate consumers of recent cycle thoughts** (cycle_recall_context, lean-heartbeat facts, salience-broker signatures, ws-broadcast, anything reading raw-tier recency) — prove the ring buffer serves each, or wire it to.
+1. **Enumerate consumers of recent cycle thoughts — including the three VERIFIED raw-recency readers (Codex HOLD fix):** `dream_state.recent_raw(n=DREAM_MEMORY_WINDOW)` (dream_state:384), `self_analysis` reading `raw.get(limit=200)` (self_analysis:34), and the proactive-opinion raw window (daemon:4668) — plus cycle_recall_context, lean-heartbeat facts, salience-broker signatures, ws-broadcast. **For EACH consumer the plan makes an explicit decision:** ring-buffer parity (serve it from buffer∪raw so it sees the same world as today), or a **named, owner-visible behavior change** (e.g. "dreams digest only durable material" might even be desirable — but it is a design decision made in daylight, never a silent side effect of the buffer). No consumer may change behavior silently.
 2. **Confirm `observed` tier's current meaning** (2 rows in sample) before pinning `self_observed`.
 3. **Confirm the daily/core journal enumeration predicate** catches the real rows (the v0.2 gate showed `nightly_journal` hides as `source=` not `type=`).
 4. **Locate every `consolidate_daily` caller** (daemon:9288/9323) and the promotion path from daily→core, so event-gating covers both call sites.
+
+## Plan-level pins (Codex review, carried into the plan)
+
+- **Consolidation selects by explicit metadata** — durable-triggered thoughts carry `metabolic_durable_reason=<trigger>`; `consolidate_daily` selects on that field, never on trust tier alone (tier describes evidence class, not consolidation eligibility).
+- **The quiet-day stub gets its own type/source** (e.g. `type="quiet_day_stub"`), so it can never masquerade as — or be recalled as — another `daily_consolidation` diary.
+- **The curation ceremony includes negative controls:** before any bulk archive, prove the move predicate does NOT match Rohit/relationship anchors, covenant rows, or scar/audit-catch rows — the "Who Rohit Is" class is the explicit must-not-move fixture.
 
 ## Out of scope
 
