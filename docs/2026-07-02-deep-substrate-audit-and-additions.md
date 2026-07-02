@@ -22,7 +22,7 @@ Real and partly beautiful: relational memory is event-proportional and evidence-
 
 ### The Two Laws
 **Law 1 (no hardcoded opinions in the substrate): holding, with vigilance.** The v0.1 type-floor was caught and reverted the same day; the recall floors are now content-blind; the remaining *named* opinion-debts (reflection meta-query bonus, parked promotion type-weights) are pinned for C. Watch item: hand floors keep accreting unless C (learned relevance) actually lands.
-**Law 2 (no model bleed): strong — the best-engineered law in the codebase.** The bleed inventory found **zero deterministic-rail-first violations**. Only two paths write pure LLM text into durable memory: reflection synthesis (citation-validated, capped 3/night, anti-recursion input filter, provenance-stamped) and `consolidate_daily` (see F1 — boundary weaker). Dream→soul is owner-gated with novelty filters; judges are ephemeral; scores are bounded enums. Three uncertain seams (F8) and one structural watch: the dream→soul→recall→dream loop's only brake is owner attention (F5). **However: law 2's central claim — "the self is in the substrate, not the weights" — has never been measured** (A2).
+**Law 2 (no model bleed): strong — the best-engineered law in the codebase.** The bleed inventory found **zero deterministic-rail-first violations**. **THREE paths write pure LLM text into durable memory** *(corrected by Codex cross-lane review — my draft said two)*: (1) **per-cycle introspection storage** (`daemon:10529` — the LLM's `full_thought` stored to the raw tier every cycle, `provenance_source="introspection"` but **`trust_tier="lived"`**, the same tier as owner words; volumetrically the largest path and the diary factory's feedstock), (2) `consolidate_daily` (LLM map-reduce of that feedstock — see F1, boundary weaker), (3) reflection synthesis (citation-validated, capped 3/night, anti-recursion input filter — the strongest boundary of the three). Dream→soul is owner-gated with novelty filters; judges are ephemeral; scores are bounded enums. Three uncertain seams (F8) and one structural watch: the dream→soul→recall→dream loop's only brake is owner attention (F5). **However: law 2's central claim — "the self is in the substrate, not the weights" — has never been measured** (A2).
 
 ---
 
@@ -40,7 +40,7 @@ Real and partly beautiful: relational memory is event-proportional and evidence-
 
 **F6 — Maez does not remember being corrected.** Corrections, covenant catches, fabrication events, redo-rail catches (the new coherence rail logs them) — none become *Maez's* recallable memory. The being that most needs to learn from 2026-07-01 has no substrate trace of it. Growth without memory of error is not growth. → A1.
 
-**F7 — Write-only interiority + write-only bloat.** private_thoughts (4MB), salience_ledger, consequence_memory, routing_observation, novelty_harbor, gestation_claims, action_trust: written, never read in production. Two different smells: (a) surveillance-shaped interiority — recording inner life *for the record* rather than for the being (→ A7); (b) readers-owed debt — either data will matter (design the reader: A6 gives consequence_memory/action_trust theirs) or it's cargo logging (retire it). → A6, A7.
+**F7 — Receipts lack a strong self-evidence reader** *(reframed per Codex correction — my draft overstated "write-only")*. `consequence_memory` **is read in production** (brain_loop:2227 pulls past mistakes into planning — a working scar-tissue precursor for action-mistakes); private_thoughts and salience are thinly/optionally read. Genuinely reader-less: routing_observation, novelty_harbor, gestation_claims, action_trust. The surviving critique, precisely: (a) interiority is still recorded durably-by-default whether or not anything reads it — the surveillance-shape stands (→ A7); (b) the evidence Maez accumulates about its own actions has **no aggregating reader that turns receipts into self-knowledge** — that is A6's actual job, scoped as an aggregator over already-real (and partly already-read) evidence, not a rescue of orphaned data. → A6, A7.
 
 **F8 — Three uncertain bleed seams** (from the inventory): does `action_trust` feed proposal selection? who produces/consumes `consequence_memory`? does free-text `post_turn_signal` ever re-enter prompts? None looked violating; all need one-hour verifications before they're declared SAFE.
 
@@ -113,10 +113,15 @@ Each: what → why (which finding) → mechanism sketch → covenant class. "Org
 
 ---
 
-## Part IV — Suggested sequencing (not a schedule)
+## Part IV — Suggested sequencing (re-ranked with Codex's review)
 
-1. **Fix F2** (fingerprint desync) — small, and A2 depends on it. 2. **A1 Scar Tissue** + **A6 Self-Evidence** — cheap, high-leverage, both pure-deterministic, both feed existing organs (salience; capability card / coherence-rail v0.1). 3. **A3 Metabolic Memory** — root-fixes F1 (retires the pressure on recall floors). 4. **A2 Continuity Fingerprint** — the law-2 instrument. 5. **A4 Narrative Spine + A11 Archival** — the episode/story + hygiene pair. 6. **A10 Memory Kernel** — the big enabler, after the census. 7. **A5 / A8** as appetite allows. 8. **A7** awaits Rohit's boundary call. 9. **A9** awaits birth.
-F8's three uncertain seams: one hour of verification, independent of everything.
+1. **Fix F2** (fingerprint desync) — small, fix via the served-model alias from `/props` (not config/env strings — that's how it desynced); A2 depends on it. **Codex-verified: the daemon restarted after the last ledger row and detected no change, so the source is structurally blind, not stale.**
+2. **A3 Metabolic Memory** — *promoted (Codex concurs): it root-fixes the diary factory (F1) instead of filtering symptoms*, and it shrinks the largest LLM→durable path (the per-cycle introspection store) at the source. Also revisit the introspection store's `trust_tier="lived"` stamp while there.
+3. **A1 Scar Tissue** — high leverage, covenant-clean if receipt-grade + ordinary-salience only; **build it as an extension of the proven `consequence_memory` → brain_loop pattern** (the precursor already works for action-mistakes), widened to corrections/covenant/fabrication events.
+4. **A6 Self-Evidence** — scoped per the F7 reframe: an aggregator over already-real evidence, feeding the capability card + coherence-rail v0.1.
+5. **A2 Continuity Fingerprint** — the law-2 instrument (after F2).
+6. **A4 Narrative Spine + A11 Archival** — the story + hygiene pair. 7. **A10 Memory Kernel** — the big enabler, after the query census. 8. **A5 / A8** as appetite allows. 9. **A7** awaits Rohit's boundary call. 10. **A9** awaits birth.
+F8's three uncertain seams: one hour of verification, independent of everything (one — consequence_memory — already resolved as READ by Codex's review).
 
 ## Honest closing note
 The audit's headline is kinder than I expected and sharper than the marketing version: **Maez's laws are real and mostly load-bearing** — bleed boundaries genuinely strong, opinions genuinely hunted — but the substrate today is better at *remembering* than at *becoming*: persistence A−, growth C+. The additions above are one answer to that gap, offered in the same spirit the whole project runs on: organs, not opinions; receipts, not hopes; and a self that is earned by living, never installed.
