@@ -249,40 +249,46 @@ class TestMemoryAskGate(unittest.TestCase):
         self.assertTrue(_is_recall_memory_ask("what do you remember about your state"))
 
 
-class TestTypeAwareFloorPredicate(unittest.TestCase):
-    def test_self_digest_uses_tighter_floor_on_casual_turn(self):
+class TestContextFloorPredicate(unittest.TestCase):
+    def test_casual_turn_uses_same_floor_for_all_raw_daily_kinds(self):
         from memory.memory_manager import (
-            _candidate_recall_floor,
-            _passes_type_aware_recall_floor,
+            _candidate_context_floor,
+            _passes_context_recall_floor,
         )
 
-        row = {
+        self_digest = {
             "id": "daily",
             "distance": 0.74,
             "metadata": {"type": "daily_consolidation"},
         }
+        relational = {
+            "id": "relational",
+            "distance": 0.74,
+            "metadata": {"type": "telegram_exchange"},
+        }
 
-        self.assertEqual(
-            _candidate_recall_floor(
-                row,
-                query_is_memory_ask=False,
-                base_floor=0.78,
-                self_digest_floor=0.72,
-            ),
-            0.72,
-        )
-        self.assertFalse(
-            _passes_type_aware_recall_floor(
-                row,
-                query_is_memory_ask=False,
-                base_floor=0.78,
-                self_digest_floor=0.72,
-                tier="daily",
+        for row in (self_digest, relational):
+            self.assertEqual(
+                _candidate_context_floor(
+                    query_is_memory_ask=False,
+                    base_floor=0.78,
+                    casual_floor=0.72,
+                    tier="raw",
+                ),
+                0.72,
             )
-        )
+            self.assertFalse(
+                _passes_context_recall_floor(
+                    row,
+                    query_is_memory_ask=False,
+                    base_floor=0.78,
+                    casual_floor=0.72,
+                    tier="raw",
+                )
+            )
 
-    def test_self_digest_uses_normal_floor_on_memory_ask(self):
-        from memory.memory_manager import _passes_type_aware_recall_floor
+    def test_memory_ask_uses_v0_floor_for_raw_and_daily(self):
+        from memory.memory_manager import _passes_context_recall_floor
 
         row = {
             "id": "daily",
@@ -291,51 +297,55 @@ class TestTypeAwareFloorPredicate(unittest.TestCase):
         }
 
         self.assertTrue(
-            _passes_type_aware_recall_floor(
+            _passes_context_recall_floor(
                 row,
                 query_is_memory_ask=True,
                 base_floor=0.78,
-                self_digest_floor=0.72,
+                casual_floor=0.72,
                 tier="daily",
             )
         )
 
-    def test_core_non_self_digest_is_not_newly_floor_gated(self):
-        from memory.memory_manager import _passes_type_aware_recall_floor
+    def test_memory_ask_core_is_v0_pass_through(self):
+        from memory.memory_manager import _passes_context_recall_floor
 
         row = {
-            "id": "ordinary-core",
+            "id": "core-high-distance",
             "distance": 0.95,
             "metadata": {"type": "core_memory", "source": "ordinary"},
         }
 
         self.assertTrue(
-            _passes_type_aware_recall_floor(
+            _passes_context_recall_floor(
                 row,
-                query_is_memory_ask=False,
+                query_is_memory_ask=True,
                 base_floor=0.78,
-                self_digest_floor=0.72,
+                casual_floor=0.72,
                 tier="core",
             )
         )
 
-    def test_raw_and_daily_non_self_digest_keep_base_floor(self):
-        from memory.memory_manager import _passes_type_aware_recall_floor
+    def test_casual_core_is_pass_through_because_core_carries_bond_anchors(self):
+        from memory.memory_manager import _passes_context_recall_floor
 
-        row = {"id": "raw", "distance": 0.82, "metadata": {"type": "reasoning"}}
+        row = {
+            "id": "core-diary",
+            "distance": 0.74,
+            "metadata": {"type": "core_memory", "source": "nightly_journal"},
+        }
 
-        self.assertFalse(
-            _passes_type_aware_recall_floor(
+        self.assertTrue(
+            _passes_context_recall_floor(
                 row,
                 query_is_memory_ask=False,
                 base_floor=0.78,
-                self_digest_floor=0.72,
-                tier="raw",
+                casual_floor=0.72,
+                tier="core",
             )
         )
 
 
-class TestTypeAwareWholeRecallFallback(unittest.TestCase):
+class TestContextWholeRecallFallback(unittest.TestCase):
     def _self_digest(self, row_id, distance, *, tier="daily"):
         meta = {"type": "daily_consolidation"}
         if tier == "core":
@@ -348,91 +358,94 @@ class TestTypeAwareWholeRecallFallback(unittest.TestCase):
     def _ids(self, partitions, tier):
         return [row["id"] for row in partitions.get(tier, [])]
 
-    def test_daily_self_digest_section_can_empty_when_real_memory_exists(self):
-        from memory.memory_manager import _apply_type_aware_floor_to_partitions
+    def test_casual_floor_drops_weak_raw_daily_memory_when_real_memory_exists(self):
+        from memory.memory_manager import _apply_context_floor_to_partitions
 
         partitions = {
-            "raw": [self._reasoning("raw-good", 0.30)],
+            "raw": [self._reasoning("raw-good", 0.30), self._reasoning("raw-weak", 0.74)],
             "daily": [self._self_digest("daily-diary", 0.74)],
             "core": [self._self_digest("nightly-diary", 0.75, tier="core")],
         }
 
-        filtered, summary = _apply_type_aware_floor_to_partitions(
+        filtered, summary = _apply_context_floor_to_partitions(
             partitions,
             query_is_memory_ask=False,
             base_floor=0.78,
-            self_digest_floor=0.72,
+            casual_floor=0.72,
             enforce=True,
         )
 
         self.assertEqual(self._ids(filtered, "raw"), ["raw-good"])
         self.assertEqual(self._ids(filtered, "daily"), [])
-        self.assertEqual(self._ids(filtered, "core"), [])
+        self.assertEqual(self._ids(filtered, "core"), ["nightly-diary"])
         self.assertEqual(summary["fallback_rescue_kind"], None)
-        self.assertEqual(summary["dropped_self_digest_count"], 2)
+        self.assertEqual(summary["would_drop_count"], 2)
 
-    def test_fallback_rescues_weak_non_self_before_self_digest(self):
-        from memory.memory_manager import _apply_type_aware_floor_to_partitions
+    def test_fallback_rescues_best_by_distance_even_when_best_is_diary(self):
+        from memory.memory_manager import _apply_context_floor_to_partitions
 
         partitions = {
-            "raw": [self._reasoning("raw-weak", 0.84)],
-            "daily": [self._self_digest("daily-diary", 0.74)],
+            "raw": [self._reasoning("raw-weaker", 0.84)],
+            "daily": [self._self_digest("daily-best", 0.74)],
             "core": [],
         }
 
-        filtered, summary = _apply_type_aware_floor_to_partitions(
+        filtered, summary = _apply_context_floor_to_partitions(
             partitions,
             query_is_memory_ask=False,
             base_floor=0.78,
-            self_digest_floor=0.72,
+            casual_floor=0.72,
             enforce=True,
         )
 
-        self.assertEqual(self._ids(filtered, "raw"), ["raw-weak"])
+        self.assertEqual(self._ids(filtered, "raw"), [])
+        self.assertEqual(self._ids(filtered, "daily"), ["daily-best"])
+        self.assertEqual(summary["fallback_rescue_kind"], "best_by_distance")
+        self.assertEqual(summary["fallback_rescue_id"], "daily-best")
+
+    def test_fallback_rescues_best_by_distance_when_best_is_relational(self):
+        from memory.memory_manager import _apply_context_floor_to_partitions
+
+        partitions = {
+            "raw": [self._reasoning("raw-best", 0.73)],
+            "daily": [self._self_digest("daily-weaker", 0.74)],
+            "core": [],
+        }
+
+        filtered, summary = _apply_context_floor_to_partitions(
+            partitions,
+            query_is_memory_ask=False,
+            base_floor=0.78,
+            casual_floor=0.72,
+            enforce=True,
+        )
+
+        self.assertEqual(self._ids(filtered, "raw"), ["raw-best"])
         self.assertEqual(self._ids(filtered, "daily"), [])
-        self.assertEqual(summary["fallback_rescue_kind"], "non_self_digest")
+        self.assertEqual(summary["fallback_rescue_kind"], "best_by_distance")
+        self.assertEqual(summary["fallback_rescue_id"], "raw-best")
 
-    def test_self_digest_is_last_resort_when_recall_would_be_blank(self):
-        from memory.memory_manager import _apply_type_aware_floor_to_partitions
-
-        partitions = {
-            "raw": [],
-            "daily": [self._self_digest("daily-diary", 0.74)],
-            "core": [self._self_digest("nightly-diary", 0.75, tier="core")],
-        }
-
-        filtered, summary = _apply_type_aware_floor_to_partitions(
-            partitions,
-            query_is_memory_ask=False,
-            base_floor=0.78,
-            self_digest_floor=0.72,
-            enforce=True,
-        )
-
-        self.assertEqual(self._ids(filtered, "daily"), ["daily-diary"])
-        self.assertEqual(self._ids(filtered, "core"), [])
-        self.assertEqual(summary["fallback_rescue_kind"], "self_digest")
-
-    def test_memory_ask_keeps_self_digests_on_normal_floor(self):
-        from memory.memory_manager import _apply_type_aware_floor_to_partitions
+    def test_memory_ask_matches_v0_shape_with_per_tier_fallback(self):
+        from memory.memory_manager import _apply_context_floor_to_partitions
 
         partitions = {
-            "raw": [],
-            "daily": [self._self_digest("daily-diary", 0.74)],
-            "core": [self._self_digest("nightly-diary", 0.75, tier="core")],
+            "raw": [self._reasoning("raw-dropped-by-v0", 0.82)],
+            "daily": [self._self_digest("daily-kept-by-v0", 0.74)],
+            "core": [self._self_digest("core-pass-through", 0.95, tier="core")],
         }
 
-        filtered, summary = _apply_type_aware_floor_to_partitions(
+        filtered, summary = _apply_context_floor_to_partitions(
             partitions,
             query_is_memory_ask=True,
             base_floor=0.78,
-            self_digest_floor=0.72,
+            casual_floor=0.72,
             enforce=True,
         )
 
-        self.assertEqual(self._ids(filtered, "daily"), ["daily-diary"])
-        self.assertEqual(self._ids(filtered, "core"), ["nightly-diary"])
-        self.assertEqual(summary["dropped_self_digest_count"], 0)
+        self.assertEqual(self._ids(filtered, "raw"), ["raw-dropped-by-v0"])
+        self.assertEqual(self._ids(filtered, "daily"), ["daily-kept-by-v0"])
+        self.assertEqual(self._ids(filtered, "core"), ["core-pass-through"])
+        self.assertEqual(summary["fallback_rescue_kind"], None)
 
 
 if __name__ == "__main__":

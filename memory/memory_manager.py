@@ -813,35 +813,34 @@ def _is_recall_memory_ask(query: str) -> bool:
     )
 
 
-def _candidate_recall_floor(
+def _candidate_context_floor(
+    *,
+    query_is_memory_ask: bool,
+    base_floor: float,
+    casual_floor: float,
+    tier: str,
+) -> float | None:
+    if tier == "core":
+        return None
+    return base_floor if query_is_memory_ask else casual_floor
+
+
+def _passes_context_recall_floor(
     mem: dict,
     *,
     query_is_memory_ask: bool,
     base_floor: float,
-    self_digest_floor: float,
-) -> float:
-    if _recall_candidate_kind(mem) == "self_digest" and not query_is_memory_ask:
-        return self_digest_floor
-    return base_floor
-
-
-def _passes_type_aware_recall_floor(
-    mem: dict,
-    *,
-    query_is_memory_ask: bool,
-    base_floor: float,
-    self_digest_floor: float,
+    casual_floor: float,
     tier: str,
 ) -> bool:
-    kind = _recall_candidate_kind(mem)
-    if tier == "core" and kind != "self_digest":
-        return True
-    floor = _candidate_recall_floor(
-        mem,
+    floor = _candidate_context_floor(
         query_is_memory_ask=query_is_memory_ask,
         base_floor=base_floor,
-        self_digest_floor=self_digest_floor,
+        casual_floor=casual_floor,
+        tier=tier,
     )
+    if floor is None:
+        return True
     return _passes_recall_floor(mem, floor=floor)
 
 
@@ -872,12 +871,19 @@ def _copy_recall_partitions(partitions: dict[str, list[dict]]) -> dict[str, list
     }
 
 
-def _apply_type_aware_floor_to_partitions(
+def _recall_context_preview(mem: dict, *, limit: int = 140) -> str:
+    text = " ".join(str(mem.get("content", "")).split())
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip()
+
+
+def _apply_context_floor_to_partitions(
     partitions: dict[str, list[dict]],
     *,
     query_is_memory_ask: bool,
     base_floor: float,
-    self_digest_floor: float,
+    casual_floor: float,
     enforce: bool,
 ) -> tuple[dict[str, list[dict]], dict]:
     original = _copy_recall_partitions(partitions)
@@ -886,46 +892,61 @@ def _apply_type_aware_floor_to_partitions(
 
     for tier in ("raw", "daily", "core"):
         for index, mem in enumerate(original[tier]):
-            kind = _recall_candidate_kind(mem)
-            applied_floor = _candidate_recall_floor(
-                mem,
+            applied_floor = _candidate_context_floor(
                 query_is_memory_ask=query_is_memory_ask,
                 base_floor=base_floor,
-                self_digest_floor=self_digest_floor,
+                casual_floor=casual_floor,
+                tier=tier,
             )
-            passes = _passes_type_aware_recall_floor(
+            passes = _passes_context_recall_floor(
                 mem,
                 query_is_memory_ask=query_is_memory_ask,
                 base_floor=base_floor,
-                self_digest_floor=self_digest_floor,
+                casual_floor=casual_floor,
                 tier=tier,
             )
             decisions.append({
                 "tier": tier,
                 "index": index,
                 "id": str(mem.get("id", "")),
-                "kind": kind,
+                "kind": _recall_candidate_kind(mem),
                 "applied_floor": applied_floor,
+                "base_floor": base_floor,
+                "casual_floor": casual_floor,
                 "would_drop": not passes,
                 "distance": _distance_sort_key(mem),
+                "preview": _recall_context_preview(mem),
                 "mem": mem,
             })
             if passes or not enforce:
                 filtered[tier].append(mem)
 
     fallback_rescue_kind = None
-    if enforce and not any(filtered[tier] for tier in ("raw", "daily", "core")):
+    fallback_rescue_id = None
+    if enforce and query_is_memory_ask:
+        for tier in ("raw", "daily"):
+            if filtered[tier] or not original[tier]:
+                continue
+            rescued = sorted(
+                [
+                    row for row in decisions
+                    if row["tier"] == tier and row["would_drop"]
+                ],
+                key=lambda row: row["distance"],
+            )[0]
+            filtered[tier].append(rescued["mem"])
+
+    if (
+        enforce
+        and not query_is_memory_ask
+        and not any(filtered[tier] for tier in ("raw", "daily", "core"))
+    ):
         failed = [row for row in decisions if row["would_drop"]]
-        non_self = [row for row in failed if row["kind"] != "self_digest"]
-        rescue_pool = non_self or failed
-        if rescue_pool:
-            rescued = sorted(rescue_pool, key=lambda row: row["distance"])[0]
+        if failed:
+            rescued = sorted(failed, key=lambda row: row["distance"])[0]
             filtered[rescued["tier"]].append(rescued["mem"])
-            fallback_rescue_kind = (
-                "non_self_digest"
-                if rescued["kind"] != "self_digest"
-                else "self_digest"
-            )
+            fallback_rescue_kind = "best_by_distance"
+            fallback_rescue_id = rescued["id"]
 
     retained_ids = {
         str(mem.get("id", ""))
@@ -936,15 +957,10 @@ def _apply_type_aware_floor_to_partitions(
         "query_is_memory_ask": query_is_memory_ask,
         "candidate_count": len(decisions),
         "would_drop_count": sum(1 for row in decisions if row["would_drop"]),
-        "dropped_self_digest_count": sum(
-            1
-            for row in decisions
-            if row["would_drop"]
-            and row["kind"] == "self_digest"
-            and row["id"] not in retained_ids
-        ),
         "fallback_rescue_kind": fallback_rescue_kind,
+        "fallback_rescue_id": fallback_rescue_id,
         "decisions": decisions,
+        "retained_ids": retained_ids,
     }
     return filtered, summary
 
