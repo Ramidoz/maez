@@ -11448,7 +11448,7 @@ class MaezDaemon:
         self.running = False
         # Write continuity capsule before anything else
         try:
-            continuity_shutdown()
+            continuity_shutdown(memory_manager=self.memory)
         except Exception as e:
             logger.debug("Continuity shutdown write failed: %s", e)
         try:

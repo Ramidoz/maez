@@ -13,6 +13,7 @@ import sys
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -89,6 +90,59 @@ class ShutdownLifecycleTests(unittest.TestCase):
         self.assertIn("logging.shutdown()", block)
         self.assertIn("os._exit(0)", block)
         self.assertLess(block.index("self._remove_pid()"), block.index("os._exit(0)"))
+
+    def test_daemon_stop_reuses_existing_memory_for_continuity_shutdown(self) -> None:
+        src = DAEMON_SRC.read_text()
+        stop_start = src.index("def stop(self, signum=None, frame=None):")
+        stop_end = src.index("def _run_health_server", stop_start)
+        block = src[stop_start:stop_end]
+
+        self.assertIn("continuity_shutdown(memory_manager=self.memory)", block)
+
+    def test_continuity_stance_closes_temporary_memory_manager(self) -> None:
+        from core.memory import continuity
+
+        class _Raw:
+            def get(self, **_kwargs):
+                return {"documents": ["Great pass."], "metadatas": [{}]}
+
+        class _Manager:
+            def __init__(self) -> None:
+                self.raw = _Raw()
+                self.closed = False
+
+            def close(self) -> None:
+                self.closed = True
+
+        manager = _Manager()
+
+        with mock.patch("memory.memory_manager.MemoryManager", return_value=manager):
+            stance = continuity._get_conversation_stance()
+
+        self.assertEqual(stance["tone"], "celebratory")
+        self.assertTrue(manager.closed)
+
+    def test_continuity_stance_does_not_close_injected_memory_manager(self) -> None:
+        from core.memory import continuity
+
+        class _Raw:
+            def get(self, **_kwargs):
+                return {"documents": ["Why did that happen?"], "metadatas": [{}]}
+
+        class _Manager:
+            def __init__(self) -> None:
+                self.raw = _Raw()
+                self.closed = False
+
+            def close(self) -> None:
+                self.closed = True
+
+        manager = _Manager()
+
+        stance = continuity._get_conversation_stance(memory_manager=manager)
+
+        self.assertEqual(stance["tone"], "curious")
+        self.assertFalse(manager.closed)
 
     def test_public_context_closes_temporary_chroma_client(self) -> None:
         src = DAEMON_SRC.read_text()

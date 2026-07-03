@@ -197,11 +197,14 @@ def _derive_tone(text: str) -> str:
     return 'warm'
 
 
-def _get_conversation_stance() -> dict:
+def _get_conversation_stance(memory_manager=None) -> dict:
     """Get most recent exchange with the owner from raw memory (chronological, not semantic)."""
+    owns_memory_manager = memory_manager is None
+    mm = memory_manager
     try:
-        from memory.memory_manager import MemoryManager
-        mm = MemoryManager()
+        if mm is None:
+            from memory.memory_manager import MemoryManager
+            mm = MemoryManager()
         results = mm.raw.get(
             limit=10, include=["documents", "metadatas"],
             where={"type": "telegram_exchange"},
@@ -217,6 +220,11 @@ def _get_conversation_stance() -> dict:
             }
     except Exception:
         pass
+    finally:
+        if owns_memory_manager and mm is not None:
+            close = getattr(mm, "close", None)
+            if callable(close):
+                close()
     return {'last_exchange_topic': None, 'tone': None, 'unresolved_thread': None}
 
 
@@ -287,14 +295,15 @@ def build_capsule(checkpoint_type: str = "periodic",
                   restart_reason: str = None,
                   what_changed: str = None,
                   last_thought: dict = None,
-                  skip_llm: bool = False) -> dict:
+                  skip_llm: bool = False,
+                  memory_manager=None) -> dict:
     """Build a complete continuity capsule dict."""
     mode = _get_current_mode()
     concerns = _get_active_concerns()
     cog_window = _get_cognition_window()
     followups = _get_pending_followups()
     watchdog = _get_watchdog_context()
-    stance = _get_conversation_stance()
+    stance = _get_conversation_stance(memory_manager=memory_manager)
 
     # Get active candidate
     active_cand = None
@@ -435,13 +444,14 @@ def pre_restart_write(candidate_id: int = None, target_file: str = None,
         logger.error("Pre-restart continuity write failed: %s", e)
 
 
-def graceful_shutdown_write():
+def graceful_shutdown_write(memory_manager=None):
     """Write capsule on SIGTERM. Best-effort only."""
     try:
         capsule = build_capsule(
             checkpoint_type="graceful_shutdown",
             restart_reason="graceful shutdown requested",
             skip_llm=True,
+            memory_manager=memory_manager,
         )
         write_capsule(capsule)
         logger.info("Graceful shutdown continuity capsule written")
