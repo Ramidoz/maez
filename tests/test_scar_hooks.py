@@ -265,6 +265,19 @@ class CardScarHookTests(unittest.TestCase):
         self.assertEqual(event.receipt_refs, ["card:card-1"])
         self.assertEqual(event.dedup_key, "card:card-1")
 
+    def test_card_rejected_uses_house_strict_flag_parser(self):
+        scar_hook = mock.Mock()
+        pipeline, card_store = self._pipeline(scar_hook=scar_hook)
+        cls = SimpleNamespace(source="telegram", reasoning="too risky")
+        with (
+            mock.patch.dict(os.environ, {"MAEZ_SCAR_TISSUE": "yes"}, clear=False),
+            mock.patch("core.consequence_memory.record_event", return_value=55),
+            mock.patch("core.inner_residue.record"),
+        ):
+            pipeline._on_deny(card_store.deny.return_value, cls, user_id="rohit")
+
+        scar_hook.assert_called_once()
+
     def test_card_rejected_scar_hook_exception_does_not_break_deny(self):
         pipeline, card_store = self._pipeline(
             scar_hook=mock.Mock(side_effect=RuntimeError("scar unavailable"))

@@ -69,6 +69,7 @@ from core.pending_cards import (
     CardStatus,
     compute_state_hash,
 )
+from core.infra.env_flags import strict_env_flag
 
 
 # ------------------------------------------------------------------ #
@@ -2127,7 +2128,7 @@ class DecisionPipeline:
                 extra={"request_id": card.request_id},
             )
             if (
-                os.environ.get("MAEZ_SCAR_TISSUE") == "1"
+                strict_env_flag("MAEZ_SCAR_TISSUE")
                 and callable(self.scar_hook)
                 and _consequence_id is not None
             ):
