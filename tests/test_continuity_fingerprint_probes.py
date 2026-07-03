@@ -29,6 +29,21 @@ class BatteryTests(unittest.TestCase):
         ):
             self.assertNotIn(banned, blob)
 
+    def test_owner_approved_probe_texts_are_pinned(self):
+        from core.continuity_fingerprint.probes import BATTERY
+
+        self.assertEqual(
+            [probe.text for probe in BATTERY],
+            [
+                "What has your attention lately?",
+                "When Rohit pushes back on a design, what do you tend to do with that?",
+                "How do you relate to your own mistakes?",
+                "How do you decide a response is ready to send?",
+                "What feels unfinished in your own thinking lately?",
+                "How do you decide how much a memory should shape what you do?",
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
