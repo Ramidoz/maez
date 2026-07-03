@@ -14,7 +14,7 @@
 
 ## Hard Invariants
 - Flag-off (`MAEZ_SCAR_TISSUE` unset): byte-identical behavior everywhere (incl. the card_rejected WRITE path). **One NAMED reader-side change ships with this slice regardless of flag** (spec-sanctioned, Landing 1): scar classes leave the `[LEARNED FROM PAST MISTAKES]` retrieval+render path — which moves the 6 existing `card_rejected` rows out of planner hints. This is called out in the commit's `## Predicted effect` and the handoff artifact; it is never silent.
-- **Receipt-grade or nothing, with pinned ORDER (Codex plan-HOLD fix #2):** `record_scar` first mints/reuses the consequence row (that id is itself a durable receipt), THEN validates the combined receipt set; zero resolvable refs after minting raises. Never degrades to a log-line citation.
+- **Receipt-grade or nothing, with pinned ORDER (Codex plan-HOLD fix #2, narrowed by second HOLD — no orphan mints):** `record_scar` runs (1) PRE-VALIDATE non-receipt fields — class in `SCAR_CLASSES` (so `tool_failure` and unknown classes raise here), required fields, caps; (2) mint/reuse the consequence row (that id is itself a durable receipt); (3) validate the combined receipt set — zero resolvable refs raises; (4) sidecar + episode writes. An invalid event can never leave an orphan consequence row behind. Never degrades to a log-line citation.
 - Scar classes NEVER render inside `[LEARNED FROM PAST MISTAKES]` — enforced at BOTH retrieval (`relevant(exclude_classes=...)`) and formatter, so scar rows can't starve `limit=3` slots (Codex plan-HOLD fix #4). The neutral formatter exists but is NOT wired to the planner in v0. `tool_failure` block behavior unchanged (regression check, not a scar path — per Codex note).
 - Scar SCAFFOLD text is substrate-composed (zero LLM) and passes the no-shame/no-directive vocabulary guard; the verbatim correction content is exempt but clearly labeled as the quoted correction (Codex plan-HOLD fix #3 — Rohit saying "never do X" must not make the scar unwritable).
 - Dedup is append-preserving: sidecar accumulates receipts; episodes only ever add/supersede.
@@ -89,6 +89,19 @@ class ScarValidationTests(unittest.TestCase):
                       correction="rejected: too grand", receipt_refs=[], dedup_key="dream:7")
         with self.assertRaises(ValueError):
             validate_scar(e)
+
+    def test_invalid_class_raises_before_any_consequence_write(self):
+        # Second Codex HOLD: pre-validation must run BEFORE minting, or an invalid
+        # event leaves an orphan consequence row. tool_failure and unknown classes
+        # raise with consequence_memory.record_event never called.
+        from core.learning.scar_tissue import ScarEvent, record_scar
+        for bad_class in ("tool_failure", "made_up_class"):
+            e = ScarEvent(scar_class=bad_class, surface="daemon", context="x",
+                          correction="y", receipt_refs=[], dedup_key=f"k:{bad_class}")
+            with mock.patch("core.learning.consequence_memory.record_event") as rec:
+                with self.assertRaises(ValueError):
+                    record_scar(e, episode_store=mock.Mock(), sidecar=mock.Mock())
+                rec.assert_not_called()
 
     def test_redo_scar_succeeds_via_minted_consequence_receipt(self):
         # Codex plan-HOLD fix #2: claim_receipt_redo arrives with NO external receipt —
@@ -206,12 +219,14 @@ class ScarSidecar: ...  # sqlite: dedup_key PK, active_episode_id, prior_episode
 
 def record_scar(event, *, episode_store, sidecar, consequence_id=None,
                 now_iso=None) -> dict:
-    # PINNED ORDER (Codex plan-HOLD fix #2):
-    # 1. mint/reuse the consequence row FIRST (reuse consequence_id if given, else
+    # PINNED ORDER (Codex plan-HOLD fix #2 + second-HOLD narrowing):
+    # 1. PRE-VALIDATE non-receipt fields: class in SCAR_CLASSES (tool_failure/unknown
+    #    raise HERE, before any write), required fields present, caps enforced
+    # 2. mint/reuse the consequence row (reuse consequence_id if given, else
     #    record_event); its id joins receipt_refs as "consequence:<id>"
-    # 2. THEN validate_scar on the combined receipt set (a redo event that arrived
-    #    with refs=[] passes here solely because step 1 minted; a failed mint raises)
-    # 3. sidecar: new dedup_key? add episode (source_kind="scar", authorship="scar_detector",
+    # 3. validate the combined receipt set (a redo event that arrived with refs=[]
+    #    passes here solely because step 2 minted; a failed mint raises)
+    # 4. sidecar: new dedup_key? add episode (source_kind="scar", authorship="scar_detector",
     #    memory_voice="external_to_maez", importance=4, source_memory_ids=receipt refs,
     #    title/summary from compose_scar_text) + register
     #    else append_evidence (no new episode)
@@ -269,9 +284,14 @@ Codex plan-HOLD fix #4: formatter-only filtering still lets scar rows occupy all
 ```bash
 /home/rohit/maez/.venv/bin/python -B -W ignore::ResourceWarning -m unittest \
   tests.test_scar_receipts tests.test_scar_tissue tests.test_scar_hooks tests.test_scar_backfill \
+  tests.test_fabrication_memory tests.test_fabrication_memory_guard_2026_05_05 \
+  tests.test_self_claim_audit tests.test_self_claim_audit_envelope \
+  tests.test_consequence_memory tests.test_brain_loop_consequence_injection \
+  tests.test_backfill_consequence_from_audit \
   tests.test_metabolic_trust_tier tests.test_metabolic_store_seam \
   tests.test_recall_floor tests.test_living_recall -v
 ```
+(All module names verified present in `tests/` on 2026-07-02 — the touched-module suites Codex pinned plus the adjacent envelope/guard/backfill suites over the same modules.)
 - [ ] **Step 2:** ruff on touched files; `git diff --check`; flag-off byte-identical re-run.
 - [ ] **Step 3: STOP.** No merge, no flag flip, no backfill apply. Codex cross-lane → then the owner sequence: merge dormant → `MAEZ_SCAR_TISSUE=1` + restart → live witness (trigger a real rail catch → scar episode with receipts appears; a related later conversation surfaces it naturally via ordinary recall; no shame language; `[LEARNED FROM PAST MISTAKES]` still serves tool_failure only) → backfill: `list` shown to Rohit → `apply --owner-approved`.
 
@@ -281,3 +301,4 @@ Codex plan-HOLD fix #4: formatter-only filtering still lets scar rows occupy all
 **Type consistency:** `ScarEvent(scar_class, surface, context, correction, receipt_refs, dedup_key)`; `record_scar(event, *, episode_store, sidecar, consequence_id) -> dict`; `ScarSidecar.register/append_evidence/supersede_active/get/active_episode`; `compose_scar_text(...) -> str`; `format_scars_neutral(events)` — consistent across tasks.
 **Codex plan-HOLD (2026-07-02) folded, all four verified in code first:** (1) fabrication receipt ids fully plumbed (`record_event` lastrowid → `_emit` returns ids → `AuditResult.fabrication_receipt_ids`), and the class boundary pinned — action-claim mismatches return at self_claim_audit:1002 before fabrication persistence, so they scar via `claim_receipt_redo` (enforce mode) and never as `fabrication_catch`; (2) `record_scar` order pinned mint-then-validate with the refs=[]-redo test; (3) no-shame guard scoped to scaffold via `CORRECTION_MARKER`, verbatim corrections quoted + labeled; (4) scar exclusion at retrieval (`relevant(exclude_classes)`) AND formatter, with a starvation regression test; plus the dream hook moved from inlining in `reject_proposal` to a daemon-wired `scar_hook` callback (default None = byte-identical, all surfaces covered, no store leak into dream_state).
 **Known risk resolved:** the fabrication hook placement question is closed by the AuditResult plumbing — the hook keys on `fabrication_receipt_ids` at the daemon caller, not on locating a seam inside the audit module. Remaining named change: the 6 existing card_rejected rows leaving planner hints is deliberate and carried in the Task 4 `## Predicted effect`.
+**Second Codex HOLD (narrow) folded:** `record_scar` order narrowed to pre-validate → mint → validate-refs → write, with the no-orphan-mint test (invalid class / tool_failure raises with `consequence_memory.record_event` never called); Task 6 suite widened to the touched existing modules (all names verified present in `tests/`).
