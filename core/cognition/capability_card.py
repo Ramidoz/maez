@@ -56,6 +56,13 @@ def voice_boundary_enabled() -> bool:
     )
 
 
+def body_legibility_enabled() -> bool:
+    return (
+        (os.environ.get("MAEZ_BODY_LEGIBILITY", "") or "").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
+
+
 def reset_card_cache() -> None:
     _CARD_CACHE["text"] = None
     _CARD_CACHE["ts"] = 0.0
@@ -130,6 +137,18 @@ def _canonical_status(name: str, raw: str) -> str:
     if low in ("off", "false", "no", "", "0"):
         return "off"
     return low
+
+
+def _affordance(name: str, status: str) -> str | None:
+    if name != "web sense":
+        return None
+    if status == "healthy":
+        return "can retrieve current external information"
+    if status == "degraded":
+        return "retrieval currently degraded"
+    if status == "unknown":
+        return "retrieval currently unknown"
+    return None
 
 
 def _build_capability_envelope(
