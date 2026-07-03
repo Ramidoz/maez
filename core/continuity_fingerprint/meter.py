@@ -6,6 +6,7 @@ baselines yield ``insufficient_data`` rather than a fabricated ratio.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from math import inf
 from statistics import median
 from typing import Any, Iterable
@@ -34,17 +35,53 @@ def _run_drift(run: dict[str, Any]) -> float | None:
     )
 
 
+def _ts_seconds(value: Any) -> float | None:
+    if isinstance(value, int | float):
+        return float(value)
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    try:
+        normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
+def _ts_sort_key(run: dict[str, Any]) -> tuple[int, float | str, str]:
+    raw_ts = run.get("ts")
+    seconds = _ts_seconds(raw_ts)
+    if seconds is not None:
+        return (0, seconds, str(run.get("run_id") or ""))
+    return (1, str(raw_ts or ""), str(run.get("run_id") or ""))
+
+
 def _sorted_runs(runs: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
-    return sorted(runs, key=lambda row: (str(row.get("ts") or ""), str(row.get("run_id") or "")))
+    return sorted(runs, key=_ts_sort_key)
 
 
 def _split_runs(
     runs: Iterable[dict[str, Any]],
-    swap_ts: str,
+    swap_ts: Any,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     ordered = _sorted_runs(runs)
-    before = [run for run in ordered if str(run.get("ts") or "") < str(swap_ts)]
-    after = [run for run in ordered if str(run.get("ts") or "") >= str(swap_ts)]
+    swap_seconds = _ts_seconds(swap_ts)
+
+    def is_before(run: dict[str, Any]) -> bool:
+        run_seconds = _ts_seconds(run.get("ts"))
+        if run_seconds is not None and swap_seconds is not None:
+            return run_seconds < swap_seconds
+        return str(run.get("ts") or "") < str(swap_ts)
+
+    before = [run for run in ordered if is_before(run)]
+    after = [run for run in ordered if not is_before(run)]
     return before, after
 
 
@@ -73,7 +110,7 @@ def _ratio(cross_swap: float, baseline: float) -> float:
     return cross_swap / baseline
 
 
-def verdict_for_swap(runs: Iterable[dict[str, Any]], swap_ts: str) -> dict[str, Any]:
+def verdict_for_swap(runs: Iterable[dict[str, Any]], swap_ts: Any) -> dict[str, Any]:
     before, after = _split_runs(runs, swap_ts)
     before_drifts = _valid_drifts(before)
     after_drifts = _valid_drifts(after)
@@ -113,4 +150,3 @@ def verdict_for_swap(runs: Iterable[dict[str, Any]], swap_ts: str) -> dict[str, 
         "valid_before": len(before_drifts),
         "valid_after": len(after_drifts),
     }
-

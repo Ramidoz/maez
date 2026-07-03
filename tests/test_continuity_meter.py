@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timezone
 
 
 def _run(ts, *, model="model-a", distances=(0.1, 0.1), **overrides):
@@ -56,6 +57,22 @@ class MeterTests(unittest.TestCase):
         ]
 
         verdict = verdict_for_swap(runs, "2026-07-03T10:05:00Z")
+
+        self.assertEqual(verdict["status"], "continuity_survived")
+        self.assertAlmostEqual(verdict["ratio"], 1.0)
+
+    def test_identity_ledger_epoch_swap_compares_against_iso_run_timestamps(self):
+        from core.continuity_fingerprint.meter import verdict_for_swap
+
+        runs = [
+            _run("2026-07-03T10:00:00Z", model="model-a"),
+            _run("2026-07-03T10:01:00Z", model="model-a"),
+            _run("2026-07-03T10:10:00Z", model="model-b"),
+            _run("2026-07-03T10:11:00Z", model="model-b"),
+        ]
+        swap_ts = datetime(2026, 7, 3, 10, 5, tzinfo=timezone.utc).timestamp()
+
+        verdict = verdict_for_swap(runs, swap_ts)
 
         self.assertEqual(verdict["status"], "continuity_survived")
         self.assertAlmostEqual(verdict["ratio"], 1.0)
