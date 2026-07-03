@@ -1,6 +1,7 @@
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 
@@ -99,7 +100,7 @@ class ContinuityStoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "continuity_fingerprint.db"
             ContinuityStore(path)
-            with sqlite3.connect(path) as con:
+            with closing(sqlite3.connect(path)) as con:
                 columns = []
                 for table in ("probe_runs", "probe_answers"):
                     columns.extend(con.execute(f"PRAGMA table_info({table})").fetchall())

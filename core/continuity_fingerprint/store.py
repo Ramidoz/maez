@@ -72,7 +72,7 @@ class ContinuityStore:
     def _connect(self) -> sqlite3.Connection:
         con = sqlite3.connect(self.path)
         con.row_factory = sqlite3.Row
-        return con
+        return con  # sqlite-raw-ok: private factory; every caller wraps in contextlib.closing()
 
     def _initialize(self) -> None:
         with closing(self._connect()) as con, con:
@@ -159,4 +159,3 @@ class ContinuityStore:
         out = dict(row)
         out["self_card_applied"] = bool(out["self_card_applied"])
         return out
-

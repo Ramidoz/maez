@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 import sqlite3
 from pathlib import Path
 from statistics import median
@@ -18,10 +19,10 @@ class ProprioceptionStore:
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self.path)
+        return sqlite3.connect(self.path)  # sqlite-raw-ok: private factory; every caller wraps in closing() and owns commit scope
 
     def _init_db(self) -> None:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS samples (
@@ -46,7 +47,7 @@ class ProprioceptionStore:
         gpu_pct: float,
         gpu_temp_c: float,
     ) -> None:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             conn.execute(
                 """
                 INSERT INTO samples (ts, cpu_pct, ram_pct, gpu_pct, gpu_temp_c)
@@ -62,7 +63,7 @@ class ProprioceptionStore:
             )
 
     def aggregate(self, *, since_ts: float) -> dict:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             rows = conn.execute(
                 """
                 SELECT cpu_pct, ram_pct, gpu_pct, gpu_temp_c

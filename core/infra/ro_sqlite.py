@@ -18,4 +18,4 @@ def _ro_connect(path: str | Path) -> sqlite3.Connection | None:
     uri_path = quote(str(db_path.resolve()), safe="/")
     con = sqlite3.connect(f"file:{uri_path}?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
-    return con
+    return con  # sqlite-raw-ok: Optional read-only handle; callers close via contextlib.closing()

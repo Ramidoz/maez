@@ -149,7 +149,7 @@ class ScarSidecar:
     def _connect(self) -> sqlite3.Connection:
         con = sqlite3.connect(str(self.path))
         con.row_factory = sqlite3.Row
-        return con
+        return con  # sqlite-raw-ok: private factory; every caller wraps in contextlib.closing()
 
     @staticmethod
     def _decode_list(value: str) -> list[str]:
