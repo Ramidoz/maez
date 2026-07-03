@@ -57,7 +57,6 @@ CREATE TABLE IF NOT EXISTS interaction_preferences (
     status TEXT NOT NULL CHECK (status IN ('active', 'retracted', 'superseded')),
     preference_class TEXT NOT NULL CHECK (preference_class IN ('question_cadence')),
     owner_statement TEXT NOT NULL,
-    normalized_fact TEXT,
     source_ref TEXT NOT NULL,
     surface TEXT NOT NULL,
     statement_sha256 TEXT NOT NULL,
@@ -84,13 +83,10 @@ class InteractionPreferencesStore:
 
 **Rules:**
 - `owner_statement` is verbatim bounded testimony and is the only text rendered to Maez in v0.
-- `normalized_fact` may be stored for inspection/search, but the store must reject normalizations that add known forbidden qualifiers from this incident class:
-  - `unnecessary`
-  - `needless`
-  - `only when necessary`
+- v0 does not store `normalized_fact`. The field has no v0 consumer and creates an interpretation surface; a future searchable/restated field needs a separate review.
 - `record_retraction()` supersedes/deweights; it never deletes the old row.
 - Status updates may update `status`, `updated_at`, `superseded_by_preference_id`, and retraction fields. They must never mutate `owner_statement`, `source_ref`, `created_at`, or `statement_sha256`.
-- No boolean modifier columns, numeric policy weights, target-action fields, or command-shaped fields.
+- No boolean modifier columns, numeric policy weights, target-action fields, command-shaped fields, or `normalized_fact` column.
 
 **TDD steps:**
 1. RED: `test_capture_row_is_testimony_not_config`
@@ -101,8 +97,9 @@ class InteractionPreferencesStore:
    - Captures then retracts.
    - Asserts original row still exists with original `owner_statement`.
    - Asserts active list no longer includes it.
-3. RED: `test_normalized_fact_rejects_editorializing`
-   - Passing a normalized fact containing `unnecessary`, `needless`, or `only when necessary` raises before write.
+3. RED: `test_no_normalized_fact_field_in_v0`
+   - Schema inspection asserts there is no `normalized_fact` column.
+   - Store API accepts and returns only verbatim `owner_statement` as renderable testimony.
 4. GREEN: implement store.
 
 ---
@@ -122,7 +119,6 @@ class PreferenceDetection:
     action: Literal["capture", "retract"]
     preference_class: Literal["question_cadence"]
     owner_statement: str
-    normalized_fact: str | None
 
 def detect_interaction_preference(
     text: str,
@@ -154,19 +150,37 @@ def detect_interaction_preference(
 - `ask fewer questions in the test fixture`
 - quoted/non-owner text such as `the transcript says "stop asking me so many questions"`
 
+**Quote / attribution shield:**
+Before matching capture phrases, the detector must classify excluded spans and match only against unquoted, directly-authored text.
+
+- Excluded spans include straight and curly quoted spans (`"..."`, `'...'`, `“...”`, `‘...’`) and inline-code spans. A straight single-quote span is a paired quote span, not an apostrophe inside a word such as `don't`.
+- Attribution/reporting shapes are rejected when the capture phrase appears only inside or after reported text markers such as:
+  - `the transcript says "..."`
+  - `the log reads "..."`
+  - `the test fixture says "..."`
+  - `someone said "..."`
+  - `they told me "..."`
+- Implementation must not be a raw substring search over the original text. It should either remove excluded spans before capture matching or return span positions and require the phrase match to start outside excluded spans.
+- If the owner states a preference directly outside the quote, that unquoted statement may still capture. Example: `The transcript said "stop asking me so many questions", and I mean it: stop asking me so many questions` captures from the second phrase only.
+
 **Rules:**
 - Capture is high precision and under-fires on ambiguity.
 - Retraction is easier only for direct un-saying patterns and only when an active preference exists.
 - The detector never writes. It returns a candidate; daemon/store wiring decides shadow vs durable.
 - The detector returns the verbatim owner statement as its renderable text.
-- `normalized_fact` is optional and non-rendered. If present, it must be meaning-preserving and quote the owner statement rather than soften it.
+- The detector does not produce a normalized fact in v0.
 
 **TDD steps:**
 1. RED: parameterized exact-match tests for all capture phrases.
 2. RED: parameterized near-miss tests for every must-not-match phrase.
-3. RED: retraction patterns return `None` when no active question-cadence preference exists.
-4. RED: retraction patterns return `action="retract"` when active preference exists.
-5. GREEN: implement deterministic matcher.
+3. RED: quote/attribution fixtures prove the shield is real:
+   - `the transcript says "stop asking me so many questions"` returns `None`.
+   - `in the log: "please stop asking so many questions"` returns `None`.
+   - `someone said "ask fewer questions"` returns `None`.
+   - `the transcript said "stop asking me so many questions", and I mean it: stop asking me so many questions` captures only the unquoted second phrase.
+4. RED: retraction patterns return `None` when no active question-cadence preference exists.
+5. RED: retraction patterns return `action="retract"` when active preference exists.
+6. GREEN: implement deterministic matcher.
 
 ---
 
@@ -193,7 +207,7 @@ OWNER-STATED INTERACTION PREFERENCES (relationship facts, not commands)
 ```
 
 **Rules:**
-- Render `owner_statement`, never `normalized_fact`.
+- Render `owner_statement`; v0 has no normalized fact to render.
 - Do not render command language added by the scaffold:
   - `must`
   - `never`
@@ -215,7 +229,7 @@ OWNER-STATED INTERACTION PREFERENCES (relationship facts, not commands)
 - CLI retraction is a safety valve; conversational retraction remains required in daemon wiring.
 
 **TDD steps:**
-1. RED: `test_renderer_uses_verbatim_owner_statement_not_normalized_fact`.
+1. RED: `test_renderer_uses_verbatim_owner_statement`.
 2. RED: `test_renderer_scaffold_contains_no_command_language`.
 3. RED: `test_empty_active_preferences_render_empty`.
 4. RED: `test_script_retract_requires_owner_approved`.
@@ -343,6 +357,8 @@ ruff check core/interaction_preferences scripts/interaction_preferences.py daemo
 
 If `ruff` is not available through the repo environment, use the repo's existing lint command and record the command in the review artifact.
 
+Known ambient failures note: `tests.test_memory_integrity_invariant` has three pre-existing drift failures from earlier arcs (soul-prune web-search prose, adapter self-claim audit import after the NO-GO revert, and the stale retry marker removed by the old cognition-quality-grader cleanup). Do not patch those under this slice. The build agent must record whether this slice introduces any new failures or breaks the new interaction-preference invariant checks.
+
 **Review artifact:**
 Write `docs/proof/2026-07-03-interaction-preferences-v0-review.md` with:
 - chosen prompt seam and why it is prominent-but-not-command;
@@ -384,6 +400,7 @@ Owner-run, after review and merge:
    - Send an ordinary turn.
    - Confirm prompt-shape log includes `interaction_preferences`.
    - Confirm the rendered block uses the verbatim owner statement.
+   - Treat this as a placement witness, not proof that the model weighed the preference.
 4. Retraction:
    - Say `actually, ask away`.
    - Confirm old row is superseded/retracted, no hard delete.
@@ -392,3 +409,5 @@ Owner-run, after review and merge:
 ## Predicted Effect
 
 After the slice is enabled, an explicit owner statement such as `stop asking me so many questions` persists as a relationship fact outside relevance-gated recall. Maez sees the owner's verbatim statement in future turns as context. The effect should be distributional: Maez weighs the stated preference more often, while still being free to ask a question it judges worth asking.
+
+If the transcript wound recurs while prompt-shape logs prove the block rendered, the next lever is prompt placement/weighting, not an output suppressor. "Present in prompt" is a necessary witness for v0, not a complete effectiveness proof.

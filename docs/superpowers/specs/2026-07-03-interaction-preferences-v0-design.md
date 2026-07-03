@@ -60,7 +60,6 @@ Minimum row shape:
 - `status` (`active`, `retracted`, `superseded`)
 - `preference_class` (`question_cadence` in v0)
 - `owner_statement` (verbatim bounded quote)
-- `normalized_fact` (optional bounded factual restatement for inspection/search, e.g. `Rohit explicitly told Maez: "stop asking me so many questions."`)
 - `source_ref` (surface + turn id/hash)
 - `surface`
 - `statement_sha256`
@@ -76,7 +75,7 @@ Forbidden row shapes:
 
 Rows are append-preserving. Retraction and revision supersede/deweight; they never delete the original statement.
 
-`owner_statement` is the authoritative testimony. If `normalized_fact` exists at all, it must be deterministic, owner-inspectable, and strictly meaning-preserving: no added qualifiers, no softened wording, no inferred scope. The prompt renderer does not use `normalized_fact` in v0; it renders the verbatim owner statement.
+`owner_statement` is the authoritative testimony. v0 does not write a `normalized_fact` field. A future search/inspection restatement would need its own review because even a "helpful" paraphrase can soften, narrow, or editorialize what Rohit actually said. The prompt renderer renders only the verbatim owner statement.
 
 ### 2. High-precision explicit detector
 
@@ -99,6 +98,7 @@ Must not match:
 - "I wonder why people ask so many questions"
 - "don't stop asking questions if you need to understand"
 - "ask fewer questions in the test fixture" (unless directly addressed to Maez in the live owner turn)
+- quoted / attributed text such as `the transcript says "stop asking me so many questions"` or `in the log: "ask fewer questions"`
 
 The detector may use the intake faculty for shadow comparison, but the v0 writer must be deterministic or otherwise fail closed. A loose LLM read cannot write a durable preference.
 
@@ -126,7 +126,7 @@ OWNER-STATED INTERACTION PREFERENCES (relationship facts, not commands)
 - Rohit explicitly said: "stop asking me so many questions."
 ```
 
-The renderer must use the verbatim owner statement. It must not render the normalized fact, and it must not add a behavioral command such as "do not ask questions." The owner statement itself is the evidence.
+The renderer must use the verbatim owner statement. There is no normalized fact in v0, and the renderer must not add a behavioral command such as "do not ask questions." The owner statement itself is the evidence.
 
 The block is context. It does not filter Maez's generated text. A working preference should bend the distribution over time; it does not guarantee zero questions. If Maez, holding the fact, decides a question is worth asking, that is not automatically a failure of the organ.
 
