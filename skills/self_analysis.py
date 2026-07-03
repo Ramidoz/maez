@@ -145,8 +145,12 @@ def _write_soul_insight(analysis: dict, action_engine):
         logger.debug("Self-analysis duplicate-check failed: %s", e)
 
     try:
-        action_engine.write_soul_note(note)
-        logger.info("Self-analysis written to soul.md")
+        result = action_engine.write_soul_note(note)
+        if getattr(result, "success", False):
+            logger.info("Self-analysis soul note written")
+        else:
+            reason = getattr(result, "error", "") or getattr(result, "output", "")
+            logger.warning("Self-analysis soul note not written: %s", reason or "unknown failure")
     except Exception as e:
         logger.error("Failed to write soul note: %s", e)
 

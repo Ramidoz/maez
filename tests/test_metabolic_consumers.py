@@ -62,3 +62,30 @@ class DurableOnlyConsumerDietTests(unittest.TestCase):
         self.assertEqual(result["total_memories_analyzed"], 2)
         self.assertEqual(result["topic_distribution"]["gpu"], 1)
         self.assertEqual(result["topic_distribution"]["presence"], 1)
+
+
+class SelfAnalysisSoulWriteReceiptTests(unittest.TestCase):
+    def test_refused_soul_write_does_not_log_success(self):
+        from skills import self_analysis
+
+        class _Result:
+            success = False
+            error = "S7 authorization required before direct write_soul_note invocation"
+
+        action_engine = mock.Mock()
+        action_engine.write_soul_note.return_value = _Result()
+        analysis = {
+            "most_repeated_topic": "disk",
+            "most_repeated_count": 196,
+            "total_memories_analyzed": 200,
+            "unique_insight_rate": 2.0,
+            "repetition_rate": 98.0,
+        }
+
+        with self.assertLogs("maez", level="INFO") as logs:
+            self_analysis._write_soul_insight(analysis, action_engine)
+
+        output = "\n".join(logs.output)
+        self.assertIn("not written", output)
+        self.assertIn("S7 authorization required", output)
+        self.assertNotIn("Self-analysis written to soul.md", output)
