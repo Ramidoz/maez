@@ -163,22 +163,29 @@ def _build_capability_envelope(
     for name, probe in registry:
         source = _ENTRY_SOURCE.get(name, "probe")
         try:
-            entries.append(
-                {
-                    "name": name,
-                    "status": _canonical_status(name, probe()),
-                    "source": source,
-                }
-            )
+            status = _canonical_status(name, probe())
+            entry = {
+                "name": name,
+                "status": status,
+                "source": source,
+            }
+            if body_legibility_enabled():
+                aff = _affordance(name, status)
+                if aff is not None:
+                    entry["affordance"] = aff
+            entries.append(entry)
         except Exception:
-            entries.append(
-                {
-                    "name": name,
-                    "status": "unknown",
-                    "source": source,
-                    "error": "probe_error",
-                }
-            )
+            entry = {
+                "name": name,
+                "status": "unknown",
+                "source": source,
+                "error": "probe_error",
+            }
+            if body_legibility_enabled():
+                aff = _affordance(name, "unknown")
+                if aff is not None:
+                    entry["affordance"] = aff
+            entries.append(entry)
     payload = {
         "kind": "capability_state",
         "freshness": "live_or_cached_30s",
@@ -216,9 +223,22 @@ def capability_prompt_block(
         entries: list[str] = []
         for name, probe in reg:
             try:
-                entries.append(f"{name}: {probe()}")
+                raw = probe()
+                if body_legibility_enabled():
+                    canonical = _canonical_status(name, raw)
+                    aff = _affordance(name, canonical)
+                    if aff is not None:
+                        entries.append(f"{name}: {raw} — {aff}")
+                        continue
+                entries.append(f"{name}: {raw}")
             except Exception:
-                entries.append(f"{name}: unknown (probe error)")
+                raw = "unknown (probe error)"
+                if body_legibility_enabled():
+                    aff = _affordance(name, "unknown")
+                    if aff is not None:
+                        entries.append(f"{name}: {raw} — {aff}")
+                        continue
+                entries.append(f"{name}: {raw}")
 
         text = (
             "YOUR LIVE BODY (live/cached substrate probe):\n "
