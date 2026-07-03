@@ -358,6 +358,54 @@ def relevant(
 
 # ── stats (for cockpit / rollup) ──────────────────────────────────────
 
+def coverage(*, _db_path: str | Path | None = None) -> dict:
+    """Read-only descriptor for scar-grade consequence rows.
+
+    A6 uses this instead of stats() because stats() goes through _connect(),
+    which creates the DB/schema. Reporting no_data must not create data.
+    """
+    path = Path(_db_path) if _db_path is not None else DB_PATH
+    try:
+        from core.infra.ro_sqlite import _ro_connect
+
+        con = _ro_connect(path)
+        if con is None:
+            return {
+                "status": "no_data",
+                "retention": "all_time_verified",
+                "by_class": {},
+            }
+        placeholders = ",".join("?" for _ in SCAR_CLASSES)
+        params = tuple(sorted(SCAR_CLASSES))
+        with contextlib.closing(con):
+            by_class_rows = con.execute(
+                "SELECT class, COUNT(*) FROM events "
+                f"WHERE class IN ({placeholders}) GROUP BY class",
+                params,
+            ).fetchall()
+            ts_row = con.execute(
+                "SELECT MIN(ts), MAX(ts) FROM events "
+                f"WHERE class IN ({placeholders})",
+                params,
+            ).fetchone()
+        by_class = {row[0]: int(row[1]) for row in by_class_rows}
+        return {
+            "status": "ok",
+            "earliest_row_ts": ts_row[0],
+            "latest_row_ts": ts_row[1],
+            "retention": "all_time_verified",
+            "by_class": by_class,
+            "native_id_prefix": "consequence",
+        }
+    except Exception as e:
+        return {
+            "status": "unavailable",
+            "retention": "all_time_verified",
+            "by_class": {},
+            "error": str(e),
+        }
+
+
 def stats(*, window_hours: Optional[int] = None) -> dict:
     """Summary for dashboards. Always returns a dict; empty on error
     so callers can dumbly render."""

@@ -138,6 +138,43 @@ def _trim_old_events(db: sqlite3.Connection) -> None:
         return
 
 
+def _coverage_at(path: str | Path) -> dict:
+    retention = f"{_FAB_RETENTION_DAYS}d_best_effort"
+    try:
+        from core.infra.ro_sqlite import _ro_connect
+
+        db = _ro_connect(path)
+        if db is None:
+            return {"status": "no_data", "retention": retention}
+        with contextlib.closing(db):
+            row = db.execute(
+                "SELECT COUNT(*), MIN(ts), MAX(ts) FROM fabrication_events"
+            ).fetchone()
+        return {
+            "status": "ok",
+            "retained_rows": int(row[0] or 0),
+            "earliest_row_ts": row[1],
+            "latest_row_ts": row[2],
+            "retention": retention,
+            "native_id_prefix": "fabrication",
+        }
+    except Exception as e:
+        return {
+            "status": "unavailable",
+            "retention": retention,
+            "error": str(e),
+        }
+
+
+def coverage() -> dict:
+    """Read-only coverage descriptor for A6 Self-Evidence.
+
+    This deliberately does not call _ensure_db(): asking whether the
+    fabrication log exists must not create an empty one.
+    """
+    return _coverage_at(_DB_PATH)
+
+
 def record(surface: str, flags: list, mode: str) -> None:
     """Persist one row per flag. Called from self_claim_audit._emit()
     after the cognition.log line is written. `flags` is a list of the

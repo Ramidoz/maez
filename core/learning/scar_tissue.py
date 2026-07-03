@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -160,6 +161,71 @@ class ScarSidecar:
             return []
         return [str(item) for item in raw]
 
+    @staticmethod
+    def _row_to_dict(row: sqlite3.Row) -> dict:
+        data = dict(row)
+        data["prior_episode_ids"] = ScarSidecar._decode_list(
+            data.pop("prior_episode_ids_json")
+        )
+        data["receipt_refs"] = ScarSidecar._decode_list(
+            data.pop("receipt_refs_json")
+        )
+        return data
+
+    @staticmethod
+    def list_all_at(path: str | Path) -> list[dict]:
+        """Read sidecar rows without constructing/creating the sidecar DB."""
+        try:
+            from core.infra.ro_sqlite import _ro_connect
+
+            con = _ro_connect(path)
+            if con is None:
+                return []
+            with closing(con):
+                rows = con.execute(
+                    "SELECT * FROM scar_evidence ORDER BY first_ts, dedup_key"
+                ).fetchall()
+            return [ScarSidecar._row_to_dict(row) for row in rows]
+        except Exception:
+            return []
+
+    @staticmethod
+    def coverage_at(path: str | Path) -> dict:
+        try:
+            from core.infra.ro_sqlite import _ro_connect
+
+            con = _ro_connect(path)
+            if con is None:
+                return {
+                    "status": "no_data",
+                    "retention": "append_preserving_all_time",
+                }
+            with closing(con):
+                row = con.execute(
+                    "SELECT COUNT(*), SUM(occurrence_count), "
+                    "MIN(first_ts), MAX(last_ts) FROM scar_evidence"
+                ).fetchone()
+            return {
+                "status": "ok",
+                "active_episodes": int(row[0] or 0),
+                "total_occurrences": int(row[1] or 0),
+                "earliest_row_ts": row[2],
+                "latest_row_ts": row[3],
+                "retention": "append_preserving_all_time",
+            }
+        except Exception as e:
+            return {
+                "status": "unavailable",
+                "retention": "append_preserving_all_time",
+                "error": str(e),
+            }
+
+    def list_all(self) -> list[dict]:
+        return self.list_all_at(self.path)
+
+    def coverage(self) -> dict:
+        return self.coverage_at(self.path)
+
     def get(self, dedup_key: str) -> dict | None:
         with self._connect() as con:
             row = con.execute(
@@ -168,12 +234,7 @@ class ScarSidecar:
             ).fetchone()
         if row is None:
             return None
-        data = dict(row)
-        data["prior_episode_ids"] = self._decode_list(
-            data.pop("prior_episode_ids_json")
-        )
-        data["receipt_refs"] = self._decode_list(data.pop("receipt_refs_json"))
-        return data
+        return self._row_to_dict(row)
 
     def active_episode(self, dedup_key: str) -> str | None:
         row = self.get(dedup_key)

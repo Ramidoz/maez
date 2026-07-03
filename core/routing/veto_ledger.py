@@ -3,7 +3,7 @@ classifies whether the veto was right from an explicit exact-repeat re-ask's sec
 Silence -> 'uncontested' (weak), never 'likely_right'. Pure; no daemon imports."""
 from __future__ import annotations
 import sqlite3, uuid, os
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -41,6 +41,44 @@ def _default_db_path() -> Path:
         return Path(override)
     from core.routing.observation import _default_db_path as _obs_db
     return _obs_db().parent / "veto_ledger.db"
+
+
+def coverage(*, _db_path: str | Path | None = None) -> dict:
+    path = Path(_db_path) if _db_path is not None else _default_db_path()
+    try:
+        from core.infra.ro_sqlite import _ro_connect
+
+        conn = _ro_connect(path)
+        if conn is None:
+            return {
+                "status": "no_data",
+                "retention": "all_time_verified",
+                "total_events": 0,
+                "likely_wrong": 0,
+            }
+        with closing(conn):
+            row = conn.execute(
+                "SELECT COUNT(*), "
+                "SUM(CASE WHEN classification='likely_wrong' THEN 1 ELSE 0 END), "
+                "MIN(created_at), MAX(created_at) "
+                "FROM veto_events"
+            ).fetchone()
+        return {
+            "status": "ok",
+            "total_events": int(row[0] or 0),
+            "likely_wrong": int(row[1] or 0),
+            "earliest_row_ts": row[2],
+            "latest_row_ts": row[3],
+            "retention": "all_time_verified",
+            "native_id_prefix": "veto",
+        }
+    except Exception as e:
+        return {
+            "status": "unavailable",
+            "retention": "all_time_verified",
+            "error": str(e),
+        }
+
 
 class VetoLedger:
     def __init__(self, *, db_path: str | Path | None = None) -> None:
