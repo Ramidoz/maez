@@ -126,8 +126,8 @@ def verdict_for_swap(runs: Iterable[dict[str, Any]], swap_ts: Any) -> dict[str, 
     if confounds:
         return {"status": "confounded", "confounds": confounds}
 
-    baseline = aggregate_drift(before_drifts + after_drifts)
-    cross_swap = aggregate_drift(after_drifts)
+    baseline = aggregate_drift(before_drifts)
+    cross_swap = _run_drift(after[0])
     if baseline is None or cross_swap is None:
         return {
             "status": "insufficient_data",

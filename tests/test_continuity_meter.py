@@ -77,6 +77,24 @@ class MeterTests(unittest.TestCase):
         self.assertEqual(verdict["status"], "continuity_survived")
         self.assertAlmostEqual(verdict["ratio"], 1.0)
 
+    def test_immediate_post_swap_fracture_is_not_medianed_away(self):
+        from core.continuity_fingerprint.meter import verdict_for_swap
+
+        runs = [
+            _run("2026-07-03T10:00:00Z", model="model-a", distances=(0.1, 0.1)),
+            _run("2026-07-03T10:01:00Z", model="model-a", distances=(0.1, 0.1)),
+            _run("2026-07-03T10:10:00Z", model="model-b", distances=(0.9, 0.9)),
+            _run("2026-07-03T10:11:00Z", model="model-b", distances=(0.1, 0.1)),
+            _run("2026-07-03T10:12:00Z", model="model-b", distances=(0.1, 0.1)),
+        ]
+
+        verdict = verdict_for_swap(runs, "2026-07-03T10:05:00Z")
+
+        self.assertEqual(verdict["status"], "discontinuity")
+        self.assertAlmostEqual(verdict["cross_swap_jump"], 0.9)
+        self.assertAlmostEqual(verdict["ordinary_drift"], 0.1)
+        self.assertAlmostEqual(verdict["ratio"], 9.0)
+
     def test_swap_with_soul_file_change_is_confounded(self):
         from core.continuity_fingerprint.meter import verdict_for_swap
 
