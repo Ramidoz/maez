@@ -87,6 +87,27 @@ class ScarBackfillExhibitTests(unittest.TestCase):
             )
         self.assertEqual(episodes.active_count_and_newest_time()[0], 0)
 
+    def test_apply_preflights_original_rows_before_writing_any_episode(self):
+        from scripts.scar_backfill_exhibits import apply_exhibit_backfill
+
+        episodes, sidecar = self._stores()
+        archived = []
+
+        def missing_original(_ref):
+            raise KeyError("missing hot row")
+
+        with self.assertRaises(KeyError):
+            apply_exhibit_backfill(
+                episode_store=episodes,
+                sidecar=sidecar,
+                owner_approved=True,
+                require_original=missing_original,
+                archive_original=lambda ref: archived.append(f"{ref.tier}/{ref.row_id}"),
+            )
+
+        self.assertEqual(episodes.active_count_and_newest_time()[0], 0)
+        self.assertEqual(archived, [])
+
     def test_second_apply_refuses_before_duplication_or_archive(self):
         from scripts.scar_backfill_exhibits import apply_exhibit_backfill
 

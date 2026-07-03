@@ -139,6 +139,7 @@ def apply_exhibit_backfill(
     sidecar: ScarSidecar,
     owner_approved: bool,
     archive_original: Callable[[RowRef], None],
+    require_original: Callable[[RowRef], None] | None = None,
     exhibits: Iterable[Exhibit] = DEFAULT_EXHIBITS,
     now_iso: str | None = None,
 ) -> list[str]:
@@ -151,6 +152,9 @@ def apply_exhibit_backfill(
     if existing:
         sample = ", ".join(existing[:4])
         raise BackfillAlreadyAppliedError(f"scar backfill already applied: {sample}")
+    if require_original is not None:
+        for exhibit in exhibits:
+            require_original(exhibit.as_row_ref())
 
     occurred_at = now_iso or _now_iso()
     episode_ids: list[str] = []
@@ -196,6 +200,17 @@ def _archive_original(ref: RowRef) -> None:
         manager.close()
 
 
+def _require_original(ref: RowRef) -> None:
+    from memory.memory_manager import MemoryManager
+    from scripts.metabolic_curation import _collection_for_tier, _get_one
+
+    manager = MemoryManager()
+    try:
+        _get_one(_collection_for_tier(manager, ref.tier), ref.row_id)
+    finally:
+        manager.close()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -213,6 +228,7 @@ def main(argv: list[str] | None = None) -> int:
             episode_store=_default_episode_store(),
             sidecar=_default_sidecar(),
             owner_approved=args.owner_approved,
+            require_original=_require_original,
             archive_original=_archive_original,
         )
         for episode_id in ids:
