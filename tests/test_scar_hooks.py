@@ -164,7 +164,39 @@ class DaemonScarHelperTests(unittest.TestCase):
         event = daemon._record_scar_event.call_args.args[0]
         self.assertEqual(event.scar_class, "fabrication_catch")
         self.assertIn("fabrication:9", event.receipt_refs)
-        self.assertEqual(event.dedup_key, "fabrication:9")
+        self.assertTrue(event.dedup_key.startswith("fabrication:"))
+
+    def test_fabrication_helper_deduplicates_by_claim_text_not_receipt_id(self):
+        from core.safety.self_claim_audit import AuditResult, Flag
+        from daemon.maez_daemon import MaezDaemon
+
+        daemon = SimpleNamespace(_record_scar_event=mock.Mock(return_value=True))
+        for receipt_id in (9, 10):
+            flagged = AuditResult(
+                text="safe",
+                rewritten=True,
+                mode="sentence",
+                flags=[
+                    Flag(
+                        kind="judge",
+                        span=(0, 10),
+                        text="same unsupported claim",
+                        reason="no receipt",
+                    )
+                ],
+                fabrication_receipt_ids=[receipt_id],
+            )
+            MaezDaemon._record_fabrication_scars_from_audit_result(
+                daemon,
+                flagged,
+                surface="telegram",
+            )
+
+        first = daemon._record_scar_event.call_args_list[0].args[0]
+        second = daemon._record_scar_event.call_args_list[1].args[0]
+        self.assertEqual(first.dedup_key, second.dedup_key)
+        self.assertEqual(first.receipt_refs, ["fabrication:9"])
+        self.assertEqual(second.receipt_refs, ["fabrication:10"])
 
     def test_claim_redo_helper_records_minted_receipt_class(self):
         from core.safety.self_claim_audit import ActionClaimMismatch

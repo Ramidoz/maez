@@ -3190,6 +3190,9 @@ class MaezDaemon:
                 flag = flags[index] if index < len(flags) else None
                 claim_text = getattr(flag, "text", "") or f"fabrication:{receipt_id}"
                 reason = getattr(flag, "reason", "") or "grounding audit rewrote unsupported claim"
+                claim_token = hashlib.sha256(
+                    str(claim_text).strip().lower().encode("utf-8")
+                ).hexdigest()[:16]
                 self._record_scar_event(
                     ScarEvent(
                         scar_class="fabrication_catch",
@@ -3197,7 +3200,7 @@ class MaezDaemon:
                         context=str(claim_text)[:400],
                         correction=str(reason)[:300],
                         receipt_refs=[f"fabrication:{receipt_id}"],
-                        dedup_key=f"fabrication:{receipt_id}",
+                        dedup_key=f"fabrication:{claim_token}",
                     )
                 )
         except Exception as exc:
