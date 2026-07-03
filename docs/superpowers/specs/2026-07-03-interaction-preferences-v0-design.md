@@ -33,7 +33,7 @@ In scope for v0:
 - Explicit owner-stated interaction preferences.
 - A dedicated local `interaction_preferences` fact store.
 - The first detector class: **question cadence**, including the witnessed shape "stop asking me so many questions".
-- Explicit retraction/revision for the same class, e.g. "actually, ask away" / "it's okay to ask questions again", conservatively matched.
+- Explicit retraction/revision for the same class, e.g. "actually, ask away" / "it's okay to ask questions again", conversationally matched at least as easily as capture.
 - A small high-salience prompt context block rendered from active preferences.
 - Owner inspection and retraction tooling.
 - Shadow-first review before durable writes are enabled.
@@ -60,7 +60,7 @@ Minimum row shape:
 - `status` (`active`, `retracted`, `superseded`)
 - `preference_class` (`question_cadence` in v0)
 - `owner_statement` (verbatim bounded quote)
-- `normalized_fact` (bounded factual restatement, e.g. `Rohit explicitly asked Maez to ask fewer unnecessary questions.`)
+- `normalized_fact` (optional bounded factual restatement for inspection/search, e.g. `Rohit explicitly told Maez: "stop asking me so many questions."`)
 - `source_ref` (surface + turn id/hash)
 - `surface`
 - `statement_sha256`
@@ -76,9 +76,11 @@ Forbidden row shapes:
 
 Rows are append-preserving. Retraction and revision supersede/deweight; they never delete the original statement.
 
+`owner_statement` is the authoritative testimony. If `normalized_fact` exists at all, it must be deterministic, owner-inspectable, and strictly meaning-preserving: no added qualifiers, no softened wording, no inferred scope. The prompt renderer does not use `normalized_fact` in v0; it renders the verbatim owner statement.
+
 ### 2. High-precision explicit detector
 
-v0 does not attempt general preference understanding. It detects only explicit owner statements about question cadence, with a bias toward under-firing.
+v0 does not attempt general preference understanding. It detects only explicit owner statements about question cadence, with a bias toward under-firing on capture.
 
 Must match:
 
@@ -99,6 +101,8 @@ Must not match:
 - "ask fewer questions in the test fixture" (unless directly addressed to Maez in the live owner turn)
 
 The detector may use the intake faculty for shadow comparison, but the v0 writer must be deterministic or otherwise fail closed. A loose LLM read cannot write a durable preference.
+
+Retraction has the opposite bias inside directly-addressed un-saying patterns: it should be at least as easy to retract as to capture. v0 treats captured preferences as enduring until superseded/retracted; it does not infer "momentary" vs "enduring" from the original utterance. That makes frictionless retraction the deliberate escape hatch. A false conversational retraction is cheaper than a stale preference that keeps bending Maez after Rohit has un-said it: Rohit can restate the preference, and both rows remain visible.
 
 ### 3. Owner-inspectable and correctable
 
@@ -122,7 +126,7 @@ OWNER-STATED INTERACTION PREFERENCES (relationship facts, not commands)
 - Rohit explicitly said: "stop asking me so many questions."
 ```
 
-The renderer may include the normalized fact for clarity, but it must not add a behavioral command such as "do not ask questions" or "ask only when necessary." The owner statement itself is the evidence.
+The renderer must use the verbatim owner statement. It must not render the normalized fact, and it must not add a behavioral command such as "do not ask questions." The owner statement itself is the evidence.
 
 The block is context. It does not filter Maez's generated text. A working preference should bend the distribution over time; it does not guarantee zero questions. If Maez, holding the fact, decides a question is worth asking, that is not automatically a failure of the organ.
 
@@ -157,6 +161,7 @@ Flag-off must be byte-identical: no detection work on the reply path that change
 2. **Turn source refs:** verify the live chat/Telegram turn already has a durable id or stable hash that can serve as `source_ref`; if not, define a minimal content-light source ref.
 3. **Historical trace:** verify whether the owner preference turn already lands in ordinary memory. Do not add a duplicate memory writer unless the plan explicitly justifies it.
 4. **Detector shape:** pin the deterministic question-cadence and retraction patterns before build; include false-positive near misses from the transcript class.
+   Capture is high-precision and under-firing; direct conversational retraction is at least as easy as capture.
 5. **AutonomyPreferences exclusion:** add a structural guard that the new interaction-preference module does not import or write `core.policies.autonomy_preferences`.
 6. **No-suppressor guard:** add a structural guard that the new slice is not called from post-generation rewrite/filter paths and contains no generated-text deletion API.
 7. **Casual-presence non-duplication:** verify no changes to the casual-presence renderer or its deterministic self-status question-tail route.
@@ -168,9 +173,10 @@ Host witnesses:
 - Detector matches the exact wound shape: "stop asking me so many questions".
 - Detector rejects ambiguous / quoted / test-fixture / third-party question-count statements.
 - Retraction pattern supersedes an active preference and does not hard-delete it.
+- Conversational retraction is as easy as capture: "actually, ask away" and "it's okay to ask questions again" supersede the active preference without requiring CLI use.
 - Store rows are testimony-shaped: verbatim owner statement + provenance + status; no boolean modifier / target-field / policy-weight columns.
 - Rendering emits a separate factual context block and includes the owner statement.
-- Rendering contains no command language such as "must", "never", "do not ask", or "ask only".
+- Rendering contains no normalized/editorialized preference text and no command language such as "must", "never", or "do not ask".
 - Structural guard proves no `AutonomyPreferences` import/write.
 - Structural guard proves no post-generation suppressor/filter hook.
 - Flag-off prompt assembly is byte-identical.
@@ -185,16 +191,16 @@ Live witnesses:
 
 ## Predicted effect
 
-After this slice, an explicit owner preference about question cadence survives the night because it no longer depends on relevance-gated recall. Maez sees the fact as a relationship fact in future turns. The expected behavioral effect is distributional, not absolute: fewer needless questions over time, without forbidding Maez from asking a question it judges worth asking.
+After this slice, an explicit owner preference about question cadence survives the night because it no longer depends on relevance-gated recall. Maez sees the fact as a relationship fact in future turns. The expected behavioral effect is distributional, not absolute: Maez weighs the explicit statement about question volume over time, without forbidding Maez from asking a question it judges worth asking.
 
-The transcript failure should not recur in its original form: Maez may still choose poorly, but it should not forget that Rohit explicitly asked for fewer unnecessary questions.
+The transcript failure should not recur in its original form: Maez may still choose poorly, but it should not forget the verbatim owner statement: "stop asking me so many questions."
 
 ## Spec Self-Review
 
 **Placeholder scan:** no TBD/TODO placeholders. Task 0 items are deliberate verify-before-code pins, not undefined requirements.
 
-**Consistency:** explicit-only, fact-not-lever, dedicated store, no AutonomyPreferences, no suppressor, and owner correction appear in crux, architecture, rollout, and witnesses.
+**Consistency:** explicit-only, fact-not-lever, dedicated store, no AutonomyPreferences, no suppressor, verbatim testimony, and easy owner correction appear in crux, architecture, rollout, and witnesses.
 
 **Scope:** v0 is intentionally the question-cadence preference class that caused the witnessed wound. The schema can hold more classes later, but the detector and witness stay narrow.
 
-**Ambiguity check:** "effective" means prominent factual context, not behavioral enforcement. "Correctable" means append-preserving retraction/supersession, not delete.
+**Ambiguity check:** "effective" means prominent factual context, not behavioral enforcement. "Correctable" means append-preserving retraction/supersession, not delete. "Normalized" means strictly meaning-preserving and non-rendered in v0, never editorialized.
