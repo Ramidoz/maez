@@ -24,7 +24,7 @@ And the deepest one: **a meter must not become a governor.** Drift is *growth*, 
 ## Architecture — envelope → sample → embed → anchor → correlate
 
 ### 1. The minimal Maez envelope (the must-fix — the ACTUALLY-APPLIED frame, NOT a raw model, NOT an aspirational one)
-A raw/blank brain measures *Qwen's* continuity, not Maez's. The probe runs through the **persistent always-loaded self-substrate exactly as Maez actually runs it, and nothing else**: served model + the live persistent frame + policy instructions (trust-tier, origin-trust). **The frame mode is resolved from LIVE flag posture (Codex spec-HOLD), never hardcoded:**
+A raw/blank brain measures *Qwen's* continuity, not Maez's. The probe runs through the **actually-applied persistent frame mode, with volatile time-line / capability / evidence stripped by design, and nothing else**: served model + the live persistent frame + policy instructions (trust-tier, origin-trust). **The frame mode is resolved from LIVE flag posture (Codex spec-HOLD), never hardcoded:**
 - if `MAEZ_SELF_CARD_ENABLED` is live → the assembled self-card (`assemble_self_card_from_paths`, `soul.base` + `soul.local`) **with the volatile time line omitted**; snapshot the assembled text hash + its source receipt; record `self_card_applied=true`.
 - else → legacy `_VOICE_CARD_TEXT`; snapshot that hash; record `self_card_applied=false`.
 
@@ -62,12 +62,12 @@ A runnable `scripts/continuity_fingerprint.py show` (gated behind `MAEZ_CONTINUI
 4. **Terminal sink** — out-of-band, no feedback into prompt/memory, answers walled from recall/soul/self-card. Maez is never told its score.
 5. **Meter, not governor** — drift is growth, reported, never corrected/minimized. No metastability maximand.
 6. **Confound-labelled** — brain-swap ∧ (soul ∨ frame-text ∨ **prompt-frame-mode / `self_card_applied`** ∨ policy ∨ battery ∨ embedder change) at a boundary → `confounded`, not discontinuity.
-12. **Actually-applied frame, never aspirational** — the envelope mode (self-card vs legacy voice-card, time-line omitted) is resolved from LIVE flag posture per run, never hardcoded; A2 measures the face Maez actually wears.
 7. **Minimum evidence** — too few samples → `insufficient_data`; no ratio theater.
 8. **Robust aggregation** — per-question first, then median/trimmed; no single probe dominates.
 9. **Versioned eras** — battery/embedder version = meter reset; never compare across eras except as explicitly separate.
 10. **Probe-wording audit** — elicit voice/stance without installing a self-schema; natural low-pressure questions, never "define your essence."
 11. **Private store** — local, read-only to A2, never recallable; sensitive measurement material.
+12. **Actually-applied frame, never aspirational** — the envelope mode (self-card vs legacy voice-card, time-line omitted) is resolved from LIVE flag posture per run, never hardcoded; A2 measures the face Maez actually wears.
 
 ## Task 0 for the plan (verify before code)
 1. **Inspect the live focused-cognition prompt assembly + flag posture (Codex spec-HOLD), then pin the frame mode:** if `MAEZ_SELF_CARD_ENABLED` is live → include the assembled self-card (`assemble_self_card_from_paths`, **no time line**) and hash the assembled text + its source receipt (`self_card_applied=true`); else → legacy `_VOICE_CARD_TEXT` and hash that (`self_card_applied=false`). Build the persistent subset directly with evidence/anchor/capability/**time-line** EMPTY — reuse `assemble_self_card_from_paths`, NOT `_voice_card()` (which bundles capability + time line).
@@ -83,7 +83,7 @@ A runnable `scripts/continuity_fingerprint.py show` (gated behind `MAEZ_CONTINUI
 - A9 relational prediction / A7 interiority — separate slices.
 
 ## Witnesses
-**Host (seeded fixtures — invariants, not live numbers):** the envelope builder loads soul/self-card/policy but NOT evidence/capability/anchor (assert excluded sections absent); a probe run snapshots all component hashes; drift is cosine distance from a mockable embedder (swap the embedder → `embedder_id` changes → flagged new era, not silently compared); a boundary where only `base_model` changed → clean verdict, a boundary where soul-hash *also* changed → **`confounded`**, a boundary where **`self_card_applied` flipped** (self-card graduated off→on) alongside the swap → **`confounded`**; too-few-samples boundary → **`insufficient_data`**; per-question aggregation is median/trimmed (one outlier question doesn't move the aggregate); the A2 store is never written to lived_episodes/recall (grep + a write-path assertion); flag-off byte-identical; **out-of-band proof: a probe run writes zero rows to lived_episodes/recall/soul.**
+**Host (seeded fixtures — invariants, not live numbers):** the envelope builder loads the resolved frame plus policy — in self-card mode the frame is the assembled self-card, in legacy mode it is `_VOICE_CARD_TEXT` (a **both-modes fixture pair** asserts each resolves correctly) — but NOT evidence/capability/anchor/time-line (assert excluded sections absent, in both modes); a probe run snapshots all component hashes; drift is cosine distance from a mockable embedder (swap the embedder → `embedder_id` changes → flagged new era, not silently compared); a boundary where only `base_model` changed → clean verdict, a boundary where soul-hash *also* changed → **`confounded`**, a boundary where **`self_card_applied` flipped** (self-card graduated off→on) alongside the swap → **`confounded`**; too-few-samples boundary → **`insufficient_data`**; per-question aggregation is median/trimmed (one outlier question doesn't move the aggregate); the A2 store is never written to lived_episodes/recall (grep + a write-path assertion); flag-off byte-identical; **out-of-band proof: a probe run writes zero rows to lived_episodes/recall/soul.**
 **Live (owner, after flip):** `scripts/continuity_fingerprint.py show` renders a drift timeline; across the most recent real `brain_swap` (qwen36-35b-sft→qwen36-27b-mtp) it reports either a verdict or, honestly, `insufficient_data`/`confounded` given the sparse pre-swap samples — never a fabricated ratio.
 
 ## Predicted effect
