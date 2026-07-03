@@ -6,6 +6,7 @@ turn counts into first-person claims.
 
 from __future__ import annotations
 
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -104,6 +105,86 @@ def _scar_sidecar_source(sources: dict[str, Any] | None) -> dict:
     }
 
 
+def _fetch_native_ids(path: Path, query: str, params: tuple = ()) -> set[str]:
+    try:
+        from core.infra.ro_sqlite import _ro_connect
+
+        con = _ro_connect(path)
+        if con is None:
+            return set()
+        with closing(con):
+            rows = con.execute(query, params).fetchall()
+        return {str(row[0]) for row in rows}
+    except Exception:
+        return set()
+
+
+def _fabrication_native_ids(sources: dict[str, Any] | None) -> set[str]:
+    from core.learning import fabrication_memory
+
+    path = _source_path(sources, "fabrication_db", fabrication_memory._DB_PATH)
+    ids = _fetch_native_ids(path, "SELECT id FROM fabrication_events")
+    return {f"fabrication:{row_id}" for row_id in ids}
+
+
+def _veto_native_ids(sources: dict[str, Any] | None) -> set[str]:
+    from core.routing import veto_ledger
+
+    path = _source_path(sources, "veto_db", veto_ledger._default_db_path())
+    ids = _fetch_native_ids(
+        path,
+        "SELECT id FROM veto_events WHERE classification = ?",
+        ("likely_wrong",),
+    )
+    return {f"veto:{row_id}" for row_id in ids}
+
+
+def _consequence_native_ids(sources: dict[str, Any] | None) -> set[str]:
+    from core.learning import consequence_memory
+
+    path = _source_path(sources, "consequence_db", consequence_memory.DB_PATH)
+    classes = tuple(sorted(consequence_memory.SCAR_CLASSES))
+    placeholders = ",".join("?" for _ in classes)
+    ids = _fetch_native_ids(
+        path,
+        f"SELECT id FROM events WHERE class IN ({placeholders})",
+        classes,
+    )
+    return {f"consequence:{row_id}" for row_id in ids}
+
+
+def _sidecar_rows(sources: dict[str, Any] | None) -> list[dict]:
+    from core.learning.scar_tissue import ScarSidecar
+
+    path = _source_path(
+        sources,
+        "scar_sidecar_db",
+        _default_memory_dir() / "scar_tissue.db",
+    )
+    return ScarSidecar.list_all_at(path)
+
+
+def _merged_events(sources: dict[str, Any] | None) -> dict:
+    raw_ids = (
+        _fabrication_native_ids(sources)
+        | _veto_native_ids(sources)
+        | _consequence_native_ids(sources)
+    )
+    sidecar_rows = _sidecar_rows(sources)
+    claimed_refs = {
+        ref
+        for row in sidecar_rows
+        for ref in (row.get("receipt_refs") or [])
+    }
+    claimed_raw_ids = raw_ids & claimed_refs
+    return {
+        "distinct_integrity_events": len(raw_ids - claimed_raw_ids)
+        + len(sidecar_rows),
+        "by_class": {},
+        "overlap_unified": len(claimed_raw_ids),
+    }
+
+
 def self_evidence_digest(
     window: dict | None = None,
     *,
@@ -128,10 +209,6 @@ def self_evidence_digest(
         "generated_at": _now_iso(),
         "window": window,
         "sources": sources,
-        "merged_events": {
-            "distinct_integrity_events": 0,
-            "by_class": {},
-            "overlap_unified": 0,
-        },
+        "merged_events": _merged_events(_sources),
         "coverage_note": "per-source; no single all-time claim",
     }

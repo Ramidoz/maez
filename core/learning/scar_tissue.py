@@ -130,7 +130,7 @@ class ScarSidecar:
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as con:
+        with closing(self._connect()) as con:
             con.execute(
                 """
                 CREATE TABLE IF NOT EXISTS scar_evidence (
@@ -227,7 +227,7 @@ class ScarSidecar:
         return self.coverage_at(self.path)
 
     def get(self, dedup_key: str) -> dict | None:
-        with self._connect() as con:
+        with closing(self._connect()) as con:
             row = con.execute(
                 "SELECT * FROM scar_evidence WHERE dedup_key = ?",
                 (dedup_key,),
@@ -251,7 +251,7 @@ class ScarSidecar:
         occurred_at: str,
     ) -> None:
         refs = _ordered_unique([receipt_ref])
-        with self._connect() as con:
+        with closing(self._connect()) as con:
             con.execute(
                 "INSERT INTO scar_evidence "
                 "(dedup_key, active_episode_id, prior_episode_ids_json, "
@@ -296,7 +296,7 @@ class ScarSidecar:
             raise KeyError(f"unknown scar dedup key: {dedup_key}")
         refs = _ordered_unique([*row["receipt_refs"], *receipt_refs])
         bump = 1 if count_occurrence else 0
-        with self._connect() as con:
+        with closing(self._connect()) as con:
             con.execute(
                 "UPDATE scar_evidence SET receipt_refs_json = ?, "
                 "occurrence_count = occurrence_count + ?, last_ts = ? "
@@ -310,7 +310,7 @@ class ScarSidecar:
         if row is None:
             raise KeyError(f"unknown scar dedup key: {dedup_key}")
         prior = _ordered_unique([*row["prior_episode_ids"], row["active_episode_id"]])
-        with self._connect() as con:
+        with closing(self._connect()) as con:
             con.execute(
                 "UPDATE scar_evidence SET active_episode_id = ?, "
                 "prior_episode_ids_json = ? WHERE dedup_key = ?",
