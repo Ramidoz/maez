@@ -116,5 +116,44 @@ class CardModeTests(unittest.TestCase):
         self.assertNotIn("can retrieve", out)
 
 
+class AmbientHonestyTests(unittest.TestCase):
+    def _fmt(self, ctx):
+        from core.memory import ambient_format
+
+        with mock.patch.dict(os.environ, {"MAEZ_BODY_LEGIBILITY": "1"}):
+            return ambient_format._format(ctx)
+
+    def test_attempted_and_failed_renders_unavailable(self):
+        out = self._fmt({"weather": None, "coords_source": "phone"})
+        self.assertIn("weather sense temporarily down", out.lower())
+        self.assertIn("phone", out)
+        for banned in ("°c", "error", "urlopen", "hostname", "traceback"):
+            self.assertNotIn(banned, out.lower())
+
+    def test_absent_key_stays_silent(self):
+        out = self._fmt({"coords_source": "phone"})
+        self.assertNotIn("weather", out.lower())
+
+    def test_success_unchanged(self):
+        out = self._fmt(
+            {
+                "weather": {
+                    "temp_c": 21,
+                    "conditions": "clear",
+                    "coords": {"source": "phone"},
+                }
+            }
+        )
+        self.assertIn("21", out)
+        self.assertNotIn("unavailable", out.lower())
+
+    def test_flag_off_failed_pull_stays_silent(self):
+        from core.memory import ambient_format
+
+        with mock.patch.dict(os.environ, {"MAEZ_BODY_LEGIBILITY": "0"}):
+            out = ambient_format._format({"weather": None, "coords_source": "phone"})
+        self.assertNotIn("unavailable", out.lower())
+
+
 if __name__ == "__main__":
     unittest.main()

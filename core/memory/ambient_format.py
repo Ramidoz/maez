@@ -142,6 +142,19 @@ def _format(ctx: dict[str, Any]) -> str:
             f"Weather at the owner's location: {w['temp_c']}°C, {w.get('conditions', '?')}"
             f" (coords from {src}; local time {local_time})"
         )
+    elif "weather" in ctx:
+        try:
+            from core.cognition.capability_card import body_legibility_enabled
+
+            if body_legibility_enabled():
+                src = ctx.get("coords_source")
+                src_suffix = f"; coords from {src}" if src else ""
+                lines.append(
+                    "Weather at the owner's location: unavailable "
+                    f"(weather sense temporarily down{src_suffix})"
+                )
+        except Exception:
+            pass
 
     win = ctx.get("active_window") or {}
     if win.get("class"):
