@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 def _tmp_sources(root: str | Path) -> dict:
@@ -192,6 +193,7 @@ class MergedDedupTests(unittest.TestCase):
         merged = digest["merged_events"]
         self.assertEqual(merged["overlap_unified"], 2)
         self.assertEqual(merged["distinct_integrity_events"], 1)
+        self.assertEqual(merged["by_class"][cm.CLASS_FABRICATION_CATCH], 1)
 
     def test_unscarred_raw_fabrication_row_is_counted(self):
         from core.learning import self_evidence
@@ -205,6 +207,33 @@ class MergedDedupTests(unittest.TestCase):
         merged = digest["merged_events"]
         self.assertEqual(merged["overlap_unified"], 0)
         self.assertEqual(merged["distinct_integrity_events"], 1)
+        self.assertEqual(merged["by_class"]["fabrication_catch"], 1)
+
+    def test_unscarred_consequence_row_keeps_its_class(self):
+        from core.learning import consequence_memory as cm
+        from core.learning import self_evidence
+
+        with tempfile.TemporaryDirectory() as td:
+            sources = _tmp_sources(td)
+            _seed_consequence_row(sources["consequence_db"], kind=cm.CLASS_CARD_REJECTED)
+
+            digest = self_evidence.self_evidence_digest(_sources=sources)
+
+        merged = digest["merged_events"]
+        self.assertEqual(merged["distinct_integrity_events"], 1)
+        self.assertEqual(merged["by_class"][cm.CLASS_CARD_REJECTED], 1)
+
+    def test_merged_events_failure_is_reported_not_raised(self):
+        from core.learning import self_evidence
+
+        with tempfile.TemporaryDirectory() as td, mock.patch(
+            "core.learning.self_evidence._merged_events",
+            side_effect=RuntimeError("sidecar unreadable"),
+        ):
+            digest = self_evidence.self_evidence_digest(_sources=_tmp_sources(td))
+
+        self.assertEqual(digest["merged_events"]["status"], "unavailable")
+        self.assertEqual(digest["merged_events"]["distinct_integrity_events"], 0)
 
 
 class ReadOnlyFilesystemProofTests(unittest.TestCase):

@@ -7,6 +7,7 @@ turn counts into first-person claims.
 from __future__ import annotations
 
 from contextlib import closing
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -119,38 +120,63 @@ def _fetch_native_ids(path: Path, query: str, params: tuple = ()) -> set[str]:
         return set()
 
 
-def _fabrication_native_ids(sources: dict[str, Any] | None) -> set[str]:
+def _fetch_native_id_classes(
+    path: Path,
+    query: str,
+    class_for_row,
+    params: tuple = (),
+) -> dict[str, str]:
+    try:
+        from core.infra.ro_sqlite import _ro_connect
+
+        con = _ro_connect(path)
+        if con is None:
+            return {}
+        with closing(con):
+            rows = con.execute(query, params).fetchall()
+        return {str(row[0]): str(class_for_row(row)) for row in rows}
+    except Exception:
+        return {}
+
+
+def _fabrication_native_classes(sources: dict[str, Any] | None) -> dict[str, str]:
     from core.learning import fabrication_memory
 
     path = _source_path(sources, "fabrication_db", fabrication_memory._DB_PATH)
-    ids = _fetch_native_ids(path, "SELECT id FROM fabrication_events")
-    return {f"fabrication:{row_id}" for row_id in ids}
+    rows = _fetch_native_id_classes(
+        path,
+        "SELECT id FROM fabrication_events",
+        lambda _row: "fabrication_catch",
+    )
+    return {f"fabrication:{row_id}": cls for row_id, cls in rows.items()}
 
 
-def _veto_native_ids(sources: dict[str, Any] | None) -> set[str]:
+def _veto_native_classes(sources: dict[str, Any] | None) -> dict[str, str]:
     from core.routing import veto_ledger
 
     path = _source_path(sources, "veto_db", veto_ledger._default_db_path())
-    ids = _fetch_native_ids(
+    rows = _fetch_native_id_classes(
         path,
         "SELECT id FROM veto_events WHERE classification = ?",
+        lambda _row: "veto_proven_wrong",
         ("likely_wrong",),
     )
-    return {f"veto:{row_id}" for row_id in ids}
+    return {f"veto:{row_id}": cls for row_id, cls in rows.items()}
 
 
-def _consequence_native_ids(sources: dict[str, Any] | None) -> set[str]:
+def _consequence_native_classes(sources: dict[str, Any] | None) -> dict[str, str]:
     from core.learning import consequence_memory
 
     path = _source_path(sources, "consequence_db", consequence_memory.DB_PATH)
     classes = tuple(sorted(consequence_memory.SCAR_CLASSES))
     placeholders = ",".join("?" for _ in classes)
-    ids = _fetch_native_ids(
+    rows = _fetch_native_id_classes(
         path,
-        f"SELECT id FROM events WHERE class IN ({placeholders})",
+        f"SELECT id, class FROM events WHERE class IN ({placeholders})",
+        lambda row: row[1],
         classes,
     )
-    return {f"consequence:{row_id}" for row_id in ids}
+    return {f"consequence:{row_id}": cls for row_id, cls in rows.items()}
 
 
 def _sidecar_rows(sources: dict[str, Any] | None) -> list[dict]:
@@ -165,11 +191,11 @@ def _sidecar_rows(sources: dict[str, Any] | None) -> list[dict]:
 
 
 def _merged_events(sources: dict[str, Any] | None) -> dict:
-    raw_ids = (
-        _fabrication_native_ids(sources)
-        | _veto_native_ids(sources)
-        | _consequence_native_ids(sources)
-    )
+    raw_classes = {}
+    raw_classes.update(_fabrication_native_classes(sources))
+    raw_classes.update(_veto_native_classes(sources))
+    raw_classes.update(_consequence_native_classes(sources))
+    raw_ids = set(raw_classes)
     sidecar_rows = _sidecar_rows(sources)
     claimed_refs = {
         ref
@@ -177,12 +203,36 @@ def _merged_events(sources: dict[str, Any] | None) -> dict:
         for ref in (row.get("receipt_refs") or [])
     }
     claimed_raw_ids = raw_ids & claimed_refs
+    by_class = Counter(
+        raw_classes[raw_id] for raw_id in (raw_ids - claimed_raw_ids)
+    )
+    for row in sidecar_rows:
+        refs = list(row.get("receipt_refs") or [])
+        scar_class = next(
+            (raw_classes[ref] for ref in refs if ref in raw_classes),
+            "scar",
+        )
+        by_class[scar_class] += 1
     return {
+        "status": "ok",
         "distinct_integrity_events": len(raw_ids - claimed_raw_ids)
         + len(sidecar_rows),
-        "by_class": {},
+        "by_class": dict(sorted(by_class.items())),
         "overlap_unified": len(claimed_raw_ids),
     }
+
+
+def _safe_merged_events(sources: dict[str, Any] | None) -> dict:
+    try:
+        return _merged_events(sources)
+    except Exception as e:
+        return {
+            "status": "unavailable",
+            "distinct_integrity_events": 0,
+            "by_class": {},
+            "overlap_unified": 0,
+            "error": str(e),
+        }
 
 
 def self_evidence_digest(
@@ -209,6 +259,6 @@ def self_evidence_digest(
         "generated_at": _now_iso(),
         "window": window,
         "sources": sources,
-        "merged_events": _merged_events(_sources),
+        "merged_events": _safe_merged_events(_sources),
         "coverage_note": "per-source; no single all-time claim",
     }
