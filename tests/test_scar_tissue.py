@@ -271,5 +271,120 @@ class ScarSidecarTests(unittest.TestCase):
             self.assertIn("consequence:102", row["receipt_refs"])
 
 
+class ConsequenceScarExclusionTests(unittest.TestCase):
+    def setUp(self):
+        import importlib
+        import os
+
+        self.tmp = tempfile.TemporaryDirectory(prefix="scar_cm_")
+        self.env = mock.patch.dict(
+            os.environ,
+            {"MAEZ_CONSEQUENCE_MEMORY_DB": str(Path(self.tmp.name) / "cm.db")},
+        )
+        self.env.start()
+        from core.learning import consequence_memory
+
+        self.cm = importlib.reload(consequence_memory)
+
+    def tearDown(self):
+        self.env.stop()
+        self.tmp.cleanup()
+
+    def test_prompt_block_omits_scar_rows_but_keeps_tool_failure(self):
+        self.cm.record_event(
+            kind=self.cm.CLASS_TOOL_FAILURE,
+            context="git push failed",
+            outcome="exit 128",
+            feedback="check remote ssh",
+            tags=["shared-token"],
+        )
+        self.cm.record_event(
+            kind="card_rejected",
+            context="shared-token rejected card",
+            outcome="owner said no",
+            feedback="not a planner hint",
+            tags=["shared-token"],
+        )
+
+        block = self.cm.format_for_prompt(self.cm.recent(limit=10))
+
+        self.assertIn("[LEARNED FROM PAST MISTAKES]", block)
+        self.assertIn("tool_failure", block)
+        self.assertIn("check remote ssh", block)
+        self.assertNotIn("card_rejected", block)
+        self.assertNotIn("not a planner hint", block)
+
+    def test_relevant_exclude_classes_prevents_scar_slot_starvation(self):
+        for i in range(5):
+            self.cm.record_event(
+                kind="fabrication_catch",
+                context=f"shared-token scar context {i}",
+                outcome="held",
+                feedback="scar evidence",
+                tags=["shared-token"],
+            )
+        for i in range(2):
+            self.cm.record_event(
+                kind=self.cm.CLASS_TOOL_FAILURE,
+                context=f"shared-token tool failure {i}",
+                outcome="exit 1",
+                feedback="try another package source",
+                tags=["shared-token"],
+            )
+
+        hits = self.cm.relevant(
+            context_snippet="shared-token",
+            limit=3,
+            exclude_classes=self.cm.SCAR_CLASSES,
+        )
+        self.assertEqual([h.kind for h in hits], ["tool_failure", "tool_failure"])
+
+        unfiltered = self.cm.relevant(
+            context_snippet="shared-token",
+            limit=3,
+            exclude_classes=(),
+        )
+        self.assertEqual(len(unfiltered), 3)
+
+    def test_neutral_scar_formatter_exists_but_is_unwired(self):
+        self.cm.record_event(
+            kind="dream_rejected",
+            context="dream proposal 7",
+            outcome="too broad",
+            feedback="owner rejected the dream",
+            tags=["scar"],
+        )
+        scars = self.cm.recent(kind="dream_rejected")
+
+        text = self.cm.format_scars_neutral(scars)
+        scaffold = text.replace("owner rejected the dream", "")
+        for banned in ("mistake", "never ", "should not", "avoid ", "failed to"):
+            self.assertNotIn(banned, scaffold.lower())
+        self.assertIn("dream_rejected", text)
+        self.assertIn("owner rejected the dream", text)
+
+        brain_loop = Path("core/brain/brain_loop.py").read_text()
+        self.assertNotIn("format_scars_neutral", brain_loop)
+
+    def test_brain_loop_passes_scar_exclusion_to_relevant(self):
+        brain_loop = Path("core/brain/brain_loop.py").read_text()
+        self.assertIn("exclude_classes=_cm.SCAR_CLASSES", brain_loop)
+
+    def test_tool_failure_prompt_format_is_unchanged(self):
+        event_id = self.cm.record_event(
+            kind=self.cm.CLASS_TOOL_FAILURE,
+            context="git push",
+            outcome="auth err",
+            feedback="use ssh remote",
+        )
+        event = self.cm.recent()[0]
+        self.assertEqual(event.id, event_id)
+
+        self.assertEqual(
+            self.cm.format_for_prompt([event]),
+            "[LEARNED FROM PAST MISTAKES]\n- tool_failure: use ssh remote",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

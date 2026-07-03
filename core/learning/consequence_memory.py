@@ -93,11 +93,23 @@ CLASS_CARD_REJECTED = "card_rejected"
 CLASS_USER_CORRECTION = "user_correction"
 CLASS_FIXATION_EPISODE = "fixation_episode"
 CLASS_APPROVAL_TIMEOUT = "approval_timeout"
+CLASS_FABRICATION_CATCH = "fabrication_catch"
+CLASS_CLAIM_RECEIPT_REDO = "claim_receipt_redo"
+CLASS_DREAM_REJECTED = "dream_rejected"
+CLASS_VETO_PROVEN_WRONG = "veto_proven_wrong"
+
+SCAR_CLASSES = frozenset({
+    CLASS_FABRICATION_CATCH,
+    CLASS_CLAIM_RECEIPT_REDO,
+    CLASS_DREAM_REJECTED,
+    CLASS_VETO_PROVEN_WRONG,
+    CLASS_CARD_REJECTED,
+})
 
 _KNOWN_CLASSES = frozenset({
     CLASS_TOOL_FAILURE, CLASS_CARD_REJECTED, CLASS_USER_CORRECTION,
     CLASS_FIXATION_EPISODE, CLASS_APPROVAL_TIMEOUT,
-})
+}) | SCAR_CLASSES
 
 
 # ── connection / schema ───────────────────────────────────────────────
@@ -287,6 +299,7 @@ def relevant(
     context_snippet: str,
     limit: int = 5,
     window_hours: int = 168,
+    exclude_classes: tuple[str, ...] | frozenset[str] = (),
 ) -> list[ConsequenceEvent]:
     """Naive retrieval: return recent events whose context, outcome,
     feedback, or tags share any whitespace-token with the query
@@ -324,8 +337,11 @@ def relevant(
             window_hours=window_hours,
             limit=max(limit * 20, 100),
         )
+        excluded = {str(kind) for kind in (exclude_classes or ())}
         scored: list[tuple[int, ConsequenceEvent]] = []
         for e in pool:
+            if e.kind in excluded:
+                continue
             haystack = " ".join([e.context, e.outcome, e.feedback,
                                   " ".join(e.tags)]).lower()
             tokens = {t for t in haystack.split() if len(t) > 2}
@@ -393,11 +409,32 @@ def format_for_prompt(
     """Render events as a compact prompt block for injection into
     the cycle / reasoning prompt. Empty string when no events so the
     caller can cleanly concatenate."""
-    if not events:
+    filtered = [event for event in events if event.kind not in SCAR_CLASSES]
+    if not filtered:
         return ""
     lines = ["[LEARNED FROM PAST MISTAKES]"]
-    for e in events[:max_events]:
+    for e in filtered[:max_events]:
         lines.append(
             f"- {e.kind}: {e.feedback or e.outcome}"
+        )
+    return "\n".join(lines)
+
+
+def format_scars_neutral(
+    events: list[ConsequenceEvent], *, max_events: int = 5,
+) -> str:
+    """Neutral scar renderer reserved for future dedicated surfacing.
+
+    It is intentionally not wired into the planner's past-mistakes block.
+    """
+    scars = [event for event in events if event.kind in SCAR_CLASSES]
+    if not scars:
+        return ""
+    lines = ["[CORRECTION MEMORY]"]
+    for event in scars[:max_events]:
+        correction = event.feedback or event.outcome
+        lines.append(
+            f"- {event.kind}: context={event.context}; correction={correction}; "
+            f"receipts={event.extra.get('receipt_refs', [])}"
         )
     return "\n".join(lines)

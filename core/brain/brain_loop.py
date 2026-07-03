@@ -2239,6 +2239,7 @@ def run_brain_loop(
                 context_snippet=user_text,
                 limit=3,
                 window_hours=168,
+                exclude_classes=_cm.SCAR_CLASSES,
             )
             if _similar:
                 _block = _cm.format_for_prompt(_similar, max_events=3)
