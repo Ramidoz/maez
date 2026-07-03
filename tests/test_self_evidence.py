@@ -205,3 +205,45 @@ class MergedDedupTests(unittest.TestCase):
         merged = digest["merged_events"]
         self.assertEqual(merged["overlap_unified"], 0)
         self.assertEqual(merged["distinct_integrity_events"], 1)
+
+
+class ReadOnlyFilesystemProofTests(unittest.TestCase):
+    def test_missing_sources_leave_directory_empty(self):
+        from core.learning import self_evidence
+
+        with tempfile.TemporaryDirectory() as td:
+            self_evidence.self_evidence_digest(_sources=_tmp_sources(td))
+            self.assertEqual(list(Path(td).iterdir()), [])
+
+    def test_seeded_sources_are_not_modified_by_digest(self):
+        from core.learning import consequence_memory as cm
+        from core.learning import self_evidence
+        from core.learning.scar_tissue import ScarSidecar
+
+        with tempfile.TemporaryDirectory() as td:
+            sources = _tmp_sources(td)
+            _seed_fabrication_row(sources["fabrication_db"])
+            _seed_veto_rows(sources["veto_db"], likely_wrong=1, total=2)
+            consequence_id = _seed_consequence_row(
+                sources["consequence_db"],
+                kind=cm.CLASS_CARD_REJECTED,
+            )
+            sidecar = ScarSidecar(sources["scar_sidecar_db"])
+            sidecar.register(
+                "card:abc",
+                episode_id="ep-card",
+                receipt_ref=f"consequence:{consequence_id}",
+                occurred_at="2026-07-03T00:00:00Z",
+            )
+            before = {
+                key: (path.stat().st_size, path.stat().st_mtime_ns)
+                for key, path in sources.items()
+            }
+
+            self_evidence.self_evidence_digest(_sources=sources)
+
+            after = {
+                key: (path.stat().st_size, path.stat().st_mtime_ns)
+                for key, path in sources.items()
+            }
+        self.assertEqual(after, before)
