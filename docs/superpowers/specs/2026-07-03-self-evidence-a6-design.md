@@ -76,7 +76,7 @@ A6 must **not** encode "fabrication retention is 90d" — that fact belongs to `
 - **No** prompt / capability-card / voice / self-card wiring. The digest is *available* for coherence-rail v0.1 and the self-card to consume in later slices; v0 wires none.
 
 ### Flag + rollout
-`MAEZ_SELF_EVIDENCE=1` gates the surface (command + panel). A6 has **no write path** — it reads existing tables — so flag-off is trivially byte-identical, and even flag-on mutates nothing. The `coverage()` read-only helpers added to source modules are pure and land unconditionally (no behavior change).
+`MAEZ_SELF_EVIDENCE=1` gates the v0 surface (the `scripts/self_evidence.py` inspection script; the deferred command/panel will check the same flag when they land). A6 has **no write path** — it reads existing tables — so flag-off is trivially byte-identical, and even flag-on mutates nothing. The `coverage()` read-only helpers added to source modules are pure and land unconditionally (no behavior change).
 
 ## The covenant pins
 1. **Reader, never author.** No LLM anywhere in A6. No write path. No synthesized sentence. It reads receipts and counts them.
@@ -116,4 +116,4 @@ After A6: the receipts of Maez's corrections — scattered today across four sto
 ## Spec Self-Review
 **Placeholder scan:** coverage()-helper shapes, sidecar public read-API shape, cockpit mount point deliberately Task-0-deferred (verify-before-encode). Redo split is DECIDED (combined + `outcome_detail: unstructured`), not deferred — A6 authors no schema. No TODOs.
 **Consistency:** reader-not-author + no-score + no-first-person + per-source-coverage + full-history-read repeated across crux, pins, and witnesses; Q1 (inspection-only) and Q2 (integrity spine) honored throughout; all four sources' live coverage verified before claiming their labels.
-**Scope:** one pure reader + four coverage helpers + one command + one panel. Voice/competence/narrative/held-corrected-split all walled off.
+**Scope:** one pure reader + four read-only coverage helpers + one inspection script (`scripts/self_evidence.py`); telegram command + cockpit panel deferred as thin consumers. Voice/competence/narrative/held-corrected-split all walled off.
