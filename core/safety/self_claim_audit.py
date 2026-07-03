@@ -112,6 +112,7 @@ class AuditResult:
     flags: list[Flag] = field(default_factory=list)
     skipped_reason: Optional[str] = None
     action_mismatch: Optional[ActionClaimMismatch] = None
+    fabrication_receipt_ids: Optional[list[int]] = None
 
 
 # Slice 3.0b (2026-05-07): the post-hoc audit must accept the new
@@ -1073,7 +1074,7 @@ def audit(
         )
 
     outcome = _rewrite_detailed(text, flags)
-    _emit(
+    fabrication_receipt_ids = _emit(
         surface=surface,
         flags=flags,
         mode=outcome.mode,
@@ -1086,6 +1087,7 @@ def audit(
         rewritten=True,
         mode=outcome.mode,
         flags=flags,
+        fabrication_receipt_ids=fabrication_receipt_ids or None,
     )
 
 
@@ -1096,7 +1098,7 @@ def _emit(
     skipped_reason: Optional[str] = None,
     signals_absent: Optional[list] = None,
     signals_present: Optional[list] = None,
-) -> None:
+) -> list[int]:
     """One line per audit call to cognition.log (cockpit fabrication pane
     parses this). Does NOT include the fabricated text itself.
 
@@ -1121,6 +1123,7 @@ def _emit(
     except Exception:
         pass
 
+    receipt_ids: list[int] = []
     # Persist judge flags to fabrication_events (immune memory). Silent on
     # failure — audit correctness must not depend on fabrication-log
     # availability.
@@ -1131,7 +1134,7 @@ def _emit(
             sa = list(signals_absent or [])
             sp = list(signals_present or [])
             for f in flags:
-                _fab_mem.record_event(
+                receipt_id = _fab_mem.record_event(
                     surface=surface,
                     text=f.text,
                     signals_absent=sa,
@@ -1139,6 +1142,8 @@ def _emit(
                     reason=f.reason,
                     mode="judge",
                 )
+                if receipt_id is not None:
+                    receipt_ids.append(int(receipt_id))
         except Exception:
             pass
 
@@ -1151,6 +1156,7 @@ def _emit(
             )
         except Exception:
             pass
+    return receipt_ids
 
 
 def _emit_rewrite_outcome(

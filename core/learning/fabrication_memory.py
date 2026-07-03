@@ -233,7 +233,7 @@ def record_event(
     reason: str,
     mode: str,
     signals_present: Optional[list[str]] = None,
-) -> None:
+) -> Optional[int]:
     """Persist one per-response fabrication event with its signal context.
     Used to build few-shot examples for the semantic grounding judge.
 
@@ -245,14 +245,14 @@ def record_event(
     will read as `[]`.
     """
     if not text:
-        return
+        return None
     try:
         with _db_lock:
             db = _ensure_db()
             if db is None:
                 return
             with contextlib.closing(db):
-                db.execute(
+                cur = db.execute(
                     "INSERT INTO fabrication_events "
                     "(ts, surface, text, signals_absent, signals_present, "
                     "reason, mode) "
@@ -269,8 +269,10 @@ def record_event(
                 if int(time.time() * 1000) % 100 == 0:
                     _trim_old_events(db)
                 db.commit()
+                return int(cur.lastrowid)
     except Exception:
-        return
+        return None
+    return None
 
 
 def few_shots_for(signals_absent: list[str], k: int = 3) -> list[dict]:
