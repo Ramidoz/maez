@@ -10,9 +10,15 @@ rows through the same archive path used by the A3 ceremony.
 from __future__ import annotations
 
 import argparse
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Callable, Iterable
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from core.infra import paths as _paths
 from core.learning.scar_tissue import ScarSidecar, compose_scar_text

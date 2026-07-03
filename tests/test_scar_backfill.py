@@ -1,5 +1,7 @@
 import tempfile
 import unittest
+import subprocess
+import sys
 from pathlib import Path
 
 from core.learning.scar_tissue import ScarSidecar
@@ -42,6 +44,21 @@ class ScarBackfillExhibitTests(unittest.TestCase):
         self.assertIn("would become scar episode", rendered)
         self.assertEqual(before, episodes.active_count_and_newest_time())
         self.assertIsNone(sidecar.active_episode("exhibit:core/core-1c54344acced"))
+
+    def test_script_list_mode_runs_when_invoked_by_path(self):
+        script = Path(__file__).resolve().parents[1] / "scripts" / "scar_backfill_exhibits.py"
+
+        result = subprocess.run(
+            [sys.executable, "-B", str(script), "list"],
+            cwd=Path(__file__).resolve().parents[1],
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("daily/daily-2026-04-23-683a9a68", result.stdout)
+        self.assertIn("core/core-1c54344acced", result.stdout)
 
     def test_apply_owner_approved_creates_four_scar_episodes_and_archives_originals(self):
         from scripts.scar_backfill_exhibits import DEFAULT_EXHIBITS, apply_exhibit_backfill
