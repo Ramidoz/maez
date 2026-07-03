@@ -134,6 +134,36 @@ class CurationApplyVerifyTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             verify_keep_rows_still_hot(collections, [RowRef("core", "missing")])
 
+    def test_keep_row_that_crossed_scar_bridge_passes(self):
+        # A1 handoff (2026-07-03): a KEEP row may leave the hot tier once it has
+        # been converted to a scar episode AND archived. verify must accept that
+        # exact state and nothing weaker.
+        class _FakeSidecar:
+            def __init__(self, keys):
+                self._keys = set(keys)
+            def active_episode(self, dedup_key):
+                return "ep-x" if dedup_key in self._keys else None
+
+        collections = {"core": _FakeCollection({})}
+        archives = {"core": _FakeCollection({"core/kept": ("doc", {"archived_from": "core"})})}
+        bridged = _FakeSidecar({"exhibit:core/kept"})
+        verify_keep_rows_still_hot(
+            collections, [RowRef("core", "kept")],
+            archives=archives, scar_sidecar=bridged,
+        )
+        # archived but NO scar episode -> not a bridge, still an error
+        with self.assertRaises(AssertionError):
+            verify_keep_rows_still_hot(
+                collections, [RowRef("core", "kept")],
+                archives=archives, scar_sidecar=_FakeSidecar(set()),
+            )
+        # scar episode but NOT archived -> archive-not-delete violated, error
+        with self.assertRaises(AssertionError):
+            verify_keep_rows_still_hot(
+                collections, [RowRef("core", "kept")],
+                archives={"core": _FakeCollection({})}, scar_sidecar=bridged,
+            )
+
     def test_archive_restore_proof_round_trips_byte_identical_row(self):
         hot = _FakeCollection({"row-1": ("original doc", {"source": "nightly_journal"})})
         archive = _FakeCollection()

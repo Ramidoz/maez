@@ -164,12 +164,57 @@ def require_raw_rule_samples_reviewed(text: str) -> None:
         raise PendingReviewError("raw-rule apply requires reviewed RAW-RULE-SAMPLE rows")
 
 
-def verify_keep_rows_still_hot(collections: dict[str, object], keep_rows: list[RowRef]) -> None:
+def verify_keep_rows_still_hot(
+    collections: dict[str, object],
+    keep_rows: list[RowRef],
+    *,
+    archives: dict[str, object] | None = None,
+    scar_sidecar: object | None = None,
+) -> None:
+    """KEEP rows must be hot — or have crossed the A1 scar bridge (2026-07-03):
+    converted to a scar episode (sidecar holds exhibit:<tier>/<row_id>) AND
+    archived under the prefixed id. Anything weaker is still an error."""
     for ref in keep_rows:
         collection = collections[ref.tier]
         got = collection.get(ids=[ref.row_id], include=["metadatas"])
-        if ref.row_id not in set(got.get("ids") or []):
-            raise AssertionError(f"KEEP row missing from hot collection: {ref.tier}/{ref.row_id}")
+        if ref.row_id in set(got.get("ids") or []):
+            continue
+        bridge_key = f"exhibit:{ref.tier}/{ref.row_id}"
+        has_scar = bool(
+            scar_sidecar is not None and scar_sidecar.active_episode(bridge_key)
+        )
+        archive = (archives or {}).get(ref.tier)
+        archived = False
+        if archive is not None:
+            archive_got = archive.get(ids=[f"{ref.tier}/{ref.row_id}"], include=["metadatas"])
+            archived = f"{ref.tier}/{ref.row_id}" in set(archive_got.get("ids") or [])
+        if has_scar and archived:
+            continue
+        raise AssertionError(
+            f"KEEP row missing from hot collection: {ref.tier}/{ref.row_id} "
+            f"(scar_episode={has_scar}, archived={archived} — a KEEP may only "
+            f"leave hot via the A1 scar bridge: both must be true)"
+        )
+
+
+def _scar_bridge_args(manager) -> dict:
+    """Bridge context for KEEP verification: per-tier archives + the A1 scar
+    sidecar when it exists (None before A1 ever wrote — verify then behaves
+    exactly as pre-A1)."""
+    archives = {
+        tier: _archive_for_tier(manager, tier) for tier in ("raw", "daily", "core")
+    }
+    sidecar = None
+    try:
+        from core.paths import memory_dir
+        from core.learning.scar_tissue import ScarSidecar
+
+        sidecar_path = memory_dir() / "scar_tissue.db"
+        if sidecar_path.exists():
+            sidecar = ScarSidecar(sidecar_path)
+    except Exception:
+        sidecar = None
+    return {"archives": archives, "scar_sidecar": sidecar}
 
 
 def _get_one(collection: object, row_id: str) -> tuple[str, dict]:
@@ -366,7 +411,9 @@ def apply_reviewed_moves(path: Path, *, owner_approved: bool, raw_rule: bool = F
             for row_id, _doc, meta in _rows(manager.raw):
                 if is_raw_bulk_candidate(meta):
                     _archive_row(manager, RowRef("raw", row_id))
-        verify_keep_rows_still_hot(collections, parsed.kept_rows)
+        verify_keep_rows_still_hot(
+            collections, parsed.kept_rows, **_scar_bridge_args(manager)
+        )
     finally:
         manager.close()
 
@@ -386,7 +433,9 @@ def verify_reviewed_state(path: Path) -> None:
             "daily": manager.daily,
             "core": manager.core,
         }
-        verify_keep_rows_still_hot(collections, parsed.kept_rows)
+        verify_keep_rows_still_hot(
+            collections, parsed.kept_rows, **_scar_bridge_args(manager)
+        )
         for ref in parsed.approved_moves:
             hot = _collection_for_tier(manager, ref.tier)
             hot_got = hot.get(ids=[ref.row_id], include=["metadatas"])
