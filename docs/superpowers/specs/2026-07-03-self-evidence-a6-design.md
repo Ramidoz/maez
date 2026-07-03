@@ -70,9 +70,10 @@ A6 must **not** encode "fabrication retention is 90d" — that fact belongs to `
 - **Windowing** is a query parameter only. A6 adds **zero** hardcoded temporal windows (the audit already flagged four).
 
 ### The surface (inspection only — owner Q1)
-- `self_evidence_digest()` — the pure aggregator (deterministic, fully unit-testable).
-- `/self-evidence` owner command + a cockpit panel that renders the dict.
-- **No** prompt / capability-card / voice / self-card wiring. The digest is *available* for coherence-rail v0.1 and the self-card to consume in later, separately-witnessed slices; v0 wires none.
+- `self_evidence_digest()` — the pure aggregator (deterministic, fully unit-testable). **This is the covenant-critical deliverable.**
+- **v0 ships ONE owner inspection surface: a runnable `scripts/self_evidence.py`** (gated behind `MAEZ_SELF_EVIDENCE`) — matching how A1 backfill / A3 curation were witnessed, and keeping web/telegram wiring out of the reader-boundary-critical first slice (plan/spec reconciliation, 2026-07-03: Codex + Claude agreed script-only v0).
+- The `/self-evidence` telegram command and the cockpit panel are **deferred thin consumers** of `self_evidence_digest()` — later, separately-witnessed slices (the digest function makes each trivial). v0 wires neither.
+- **No** prompt / capability-card / voice / self-card wiring. The digest is *available* for coherence-rail v0.1 and the self-card to consume in later slices; v0 wires none.
 
 ### Flag + rollout
 `MAEZ_SELF_EVIDENCE=1` gates the surface (command + panel). A6 has **no write path** — it reads existing tables — so flag-off is trivially byte-identical, and even flag-on mutates nothing. The `coverage()` read-only helpers added to source modules are pure and land unconditionally (no behavior change).
@@ -89,7 +90,7 @@ A6 must **not** encode "fabrication retention is 90d" — that fact belongs to `
 1. Confirm each source's public read API and add read-only `coverage()` where missing (fabrication_memory has none; consequence has `stats`; veto has `all_events`; sidecar has `get`). Pin return shape.
 2. Confirm `consequence_memory` scar-class rows carry the native `id` and class needed for `by_class` + `consequence:<id>` refs. (The redo held/corrected split is already DECIDED — combined class, `outcome_detail: "unstructured"`; A6 authors no schema change, so there is nothing to "decide" here beyond confirming the read-side `id`/`class` shape.)
 3. Confirm sidecar `receipt_refs` are stored as the `prefix:id` strings A6 will join on (they are, per A1 — verify format `fabrication:<id>` / `veto:<id>` / `consequence:<id>`).
-4. Confirm the cockpit panel mount point + the `/self-evidence` command surface (which router; owner-gated read).
+4. Confirm the `scripts/self_evidence.py` inspection-surface shape (v0's only surface; the command/panel are deferred consumers — no mount-point work in v0).
 5. Confirm no source-reading path can mutate (open read-only / never call a write API); prove flag-on writes nothing.
 
 ## Plan-level pins (Codex spec review, carried into the plan)
@@ -107,7 +108,7 @@ A6 must **not** encode "fabrication retention is 90d" — that fact belongs to `
 
 ## Witnesses
 **Host (seeded fixtures — invariants, not live numbers):** `self_evidence_digest()` returns correct per-source counts + coverage labels; a missing DB renders `status: no_data` (NOT omitted) **and creates no file** (read-only proof); `veto_proven_wrong` with zero likely_wrong rows renders explicit `count: 0`; a **real seeded sidecar row whose `receipt_refs` cite a seeded raw fabrication row's native id** makes that event count **once** in `merged_events` (dedup proof — not synthetic strings); a raw fabrication row with no scar is counted (full-history proof); no key named `score`/`grade`/`rating` appears anywhere in the output (structural anti-score test); no first-person string in any rendered surface (vocabulary test); flag-off byte-identical AND flag-on writes zero rows to any source (read-only proof).
-**Live (owner, after flip):** `/self-evidence` returns the real index — fabrication coverage says `90d_best_effort` with the true 58d earliest; veto shows `0`; card_rejected shows `6`; sidecar shows the 4 backfill exhibits; the 4 scars are counted once (not also as their cited receipts). The number 11,577 appears as a labeled receipt count, and nowhere as a first-person claim.
+**Live (owner, after flip):** `scripts/self_evidence.py show` returns the real index — fabrication coverage says `90d_best_effort` with the true 58d earliest; veto shows `0`; card_rejected shows `6`; sidecar shows the 4 backfill exhibits; the 4 scars are counted once (not also as their cited receipts). The number 11,577 appears as a labeled receipt count, and nowhere as a first-person claim.
 
 ## Predicted effect
 After A6: the receipts of Maez's corrections — scattered today across four stores with no reader — become one honest, deduplicated integrity index the owner can inspect and later organs can cite. It answers *"what evidence exists?"* with counts, timestamps, and per-source coverage, and structurally refuses to answer *"what does that prove I am?"* — no score to optimize, no first-person claim, no LLM in the loop. It is the substrate on which a truthful self-account can later be built, without itself being a self-esteem machine.

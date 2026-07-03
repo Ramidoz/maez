@@ -4,17 +4,17 @@
 
 **Goal:** A pure, read-only reader that aggregates Maez's integrity receipts (scars, fabrication catches, redo outcomes, veto-proven-wrong, card rejections) from four existing stores into one honest, deduplicated index — counts, timestamps, per-source coverage — with no LLM, no write path, no score, no first-person rendering, and no voice/prompt wiring.
 
-**Architecture:** One pure module `core/learning/self_evidence.py` exposing `self_evidence_digest(window=None) -> dict`. It composes read-only `coverage()` descriptors that each source module reports about *itself* (so A6 hardcodes no source's retention policy), reuses `consequence_memory.stats()` for scar-class counts, and enumerates the scar sidecar via a new public `ScarSidecar.list_all()` to unify overlaps (a raw row a scar already cites is counted once). One owner inspection surface: `scripts/self_evidence.py`, gated behind `MAEZ_SELF_EVIDENCE`.
+**Architecture:** One pure module `core/learning/self_evidence.py` exposing `self_evidence_digest(window=None) -> dict`. It composes read-only `coverage()` descriptors that each source module reports about *itself* (so A6 hardcodes no source's retention policy), reads scar-class counts via a new **read-only** `consequence_memory.coverage()` (NOT `stats()` — `stats()` calls `_connect()` which `mkdir`s + `CREATE TABLE`s, creating the DB), and enumerates the scar sidecar via new **read-only** `ScarSidecar.list_all_at(path)` / `coverage_at(path)` staticmethods that never construct the writer (whose `__init__` also creates). One owner inspection surface: `scripts/self_evidence.py`, gated behind `MAEZ_SELF_EVIDENCE`.
 
 **Tech Stack:** Python 3.12; sqlite3 opened **read-only** (`file:...?mode=ro`, `uri=True`); host tests `/home/rohit/maez/.venv/bin/python -B -m unittest` (NOT pytest).
 
 **Spec:** `docs/superpowers/specs/2026-07-03-self-evidence-a6-design.md` (@e2f8ac1).
 
-**Task 0 (DONE 2026-07-03 — plan written on this ground):** `consequence_memory.stats()` returns `{total, by_class:{class:{count,heeded}}}` (reuse for scar-class counts; filter to `SCAR_CLASSES`). `ScarSidecar` has NO enumeration method → add public `list_all()`. Live sidecar rows cite `exhibit:<tier>/<row_id>` only → **no real raw overlap exists live**, so the dedup witness MUST seed one. Source-native ids confirmed: `fabrication_events.id`, `veto_events.id`, `consequence.id` are autoincrement PKs. Retention verified per-source: fabrication `_FAB_RETENTION_DAYS=90` best-effort; consequence/veto no deletion (veto `_resolve_expired` only relabels); sidecar append-preserving. Sources' DBs: `memory/{fabrication_log.db,veto_ledger.db,consequence_memory.db,scar_tissue.db}`.
+**Task 0 (DONE 2026-07-03 — plan written on this ground):** **Two create-traps verified (Codex plan-HOLD):** `consequence_memory.stats()` calls `_connect()` (`mkdir` + `CREATE TABLE`) and `ScarSidecar.__init__` does the same — so NEITHER may be used on a possibly-missing source. A6 therefore uses NEW read-only surfaces: `consequence_memory.coverage()` (read-only, existence-checked, returns retention/ts AND the scar-class `by_class` counts A6 needs — replacing `stats()` for A6) and `ScarSidecar.list_all_at(path)`/`coverage_at(path)` staticmethods (never construct/create). `stats()`'s existing shape `{total, by_class:{class:{count,heeded}}}` is the reference for what `coverage()` computes read-only, filtered to `SCAR_CLASSES`. Live sidecar rows cite `exhibit:<tier>/<row_id>` only → **no real raw overlap exists live**, so the dedup witness MUST seed one. Source-native ids confirmed: `fabrication_events.id`, `veto_events.id`, `consequence.id` are autoincrement PKs. Retention verified per-source: fabrication `_FAB_RETENTION_DAYS=90` best-effort; consequence/veto no deletion (veto `_resolve_expired` only relabels); sidecar append-preserving. Sources' DBs: `memory/{fabrication_log.db,veto_ledger.db,consequence_memory.db,scar_tissue.db}`.
 
 ## Hard Invariants (from spec + Codex plan-pins)
 - **Reader, never author:** no LLM, no write to any source, no synthesized/first-person sentence. Flag-on writes zero rows anywhere.
-- **Read-only, never create:** every source read opens `mode=ro` and NEVER calls `_ensure_db`/any initializer. A missing DB → `status: "no_data"` AND creates no file.
+- **Read-only, never create:** every source read opens `mode=ro` and NEVER calls `_ensure_db`, `_connect()`, `stats()`, or `ScarSidecar(path)` — all of which `mkdir`+`CREATE`. A missing DB → `status: "no_data"` AND creates no file. (This is the specific trap the two Codex plan-HOLDs caught: `stats()` and the sidecar constructor both create.)
 - **No score:** output contains no key `score`/`grade`/`rating` and no ratio-as-verdict. Structural test enforces this.
 - **Per-source coverage:** each source labels its own retention truth (from its own module's `coverage()`); A6 never merges into one all-time number. Empty/zero renders explicit (`no_data`/`0`), never omitted.
 - **`claim_receipt_redo` is combined** with `outcome_detail: "unstructured"`. A6 authors NO schema; held/corrected split is A1's lane.
@@ -36,7 +36,7 @@ Each `coverage()` opens the DB **read-only, existence-checked first** (never cre
 # missing DB:
 {"status": "no_data", "retention": "90d_best_effort"}
 ```
-`consequence_memory.coverage()` → `{"status","earliest_row_ts","latest_row_ts","retention":"none"}` (counts come from the existing `stats()`). `veto_ledger` → module-level `coverage()` → `{"status","total_events":N,"likely_wrong":M,"earliest_row_ts":..,"retention":"none"}`. `ScarSidecar.list_all()` → `list[dict]` (dedup_key, active_episode_id, receipt_refs, occurrence_count, first_ts, last_ts) reusing its existing `_decode_list`; `ScarSidecar.coverage()` → `{"status","active_episodes":N,"total_occurrences":M,"retention":"append_preserving"}`.
+`consequence_memory.coverage(_db_path=None)` → `{"status","earliest_row_ts","latest_row_ts","retention":"none","by_class":{<scar class>: count}}` — **read-only, computes the scar-class counts itself** (a `mode=ro` `SELECT class, COUNT(*) ... WHERE class IN (SCAR_CLASSES) GROUP BY class`); does NOT call `stats()`/`_connect()`. `veto_ledger` → module-level `coverage()` → `{"status","total_events":N,"likely_wrong":M,"earliest_row_ts":..,"retention":"none"}`. **Sidecar read surface (Codex plan-HOLD #2): staticmethods that never construct/create** — `ScarSidecar.list_all_at(path)` → `list[dict]` (dedup_key, active_episode_id, receipt_refs, occurrence_count, first_ts, last_ts), and `ScarSidecar.coverage_at(path)` → `{"status","active_episodes":N,"total_occurrences":M,"retention":"append_preserving"}`; both existence-check + open `mode=ro`, returning `[]` / `{"status":"no_data"}` on a missing file with **no** `mkdir`/`CREATE`. (An instance `list_all()` may exist for an already-constructed live sidecar, but A6 and every missing-source path use the `_at` staticmethods.)
 
 Shared read-only helper (add to each module, or a tiny `core/infra/ro_sqlite.py`):
 ```python
@@ -79,18 +79,44 @@ class CoverageReadOnlyTests(unittest.TestCase):
                 con.execute("INSERT INTO t VALUES(2)")       # ro rejects writes
 
 
-class SidecarListAllTests(unittest.TestCase):
-    def test_list_all_enumerates_rows(self):
+class ConsequenceCoverageReadOnlyTests(unittest.TestCase):
+    def test_coverage_missing_db_no_data_no_create(self):
+        from core.learning import consequence_memory as cm
+        with tempfile.TemporaryDirectory() as td:
+            missing = Path(td) / "consequence_memory.db"
+            cov = cm.coverage(_db_path=missing)
+            self.assertEqual(cov["status"], "no_data")
+            self.assertFalse(missing.exists())          # coverage() must NOT create (unlike stats())
+
+    def test_coverage_counts_only_scar_classes(self):
+        from core.learning import consequence_memory as cm
+        # seed a real db with tool_failure + card_rejected; coverage.by_class excludes tool_failure
+        cov = cm.coverage(_db_path=_seeded_consequence_db())  # helper writes rows via the real writer
+        self.assertIn("card_rejected", cov["by_class"])
+        self.assertNotIn("tool_failure", cov["by_class"])
+
+
+class SidecarReadSurfaceTests(unittest.TestCase):
+    def test_list_all_at_and_coverage_at_missing_no_create(self):
         from core.learning.scar_tissue import ScarSidecar
         with tempfile.TemporaryDirectory() as td:
-            s = ScarSidecar(Path(td) / "s.db")
+            missing = Path(td) / "scar_tissue.db"
+            self.assertEqual(ScarSidecar.list_all_at(missing), [])
+            self.assertEqual(ScarSidecar.coverage_at(missing)["status"], "no_data")
+            self.assertFalse(missing.exists())          # read surface must NOT construct/create
+
+    def test_list_all_at_enumerates_rows(self):
+        from core.learning.scar_tissue import ScarSidecar
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "s.db"
+            s = ScarSidecar(path)   # constructing (writer) is allowed when you MEAN to write
             s.register("k1", episode_id="ep-1", receipt_ref="fabrication:5", occurred_at="2026-07-03T00:00:00Z")
             s.register("k2", episode_id="ep-2", receipt_ref="veto:9", occurred_at="2026-07-03T00:00:00Z")
-            rows = s.list_all()
+            rows = ScarSidecar.list_all_at(path)   # A6's read path — no construction
             self.assertEqual({r["dedup_key"] for r in rows}, {"k1", "k2"})
             self.assertIn("fabrication:5", sum((r["receipt_refs"] for r in rows), []))
 ```
-- [ ] **Step 2: RED.** — [ ] **Step 3: Implement** the shared `_ro_connect`, each `coverage()`, and `ScarSidecar.list_all()`. Retention strings derive from each module's own constant. — [ ] **Step 4: GREEN + existing suites for all four modules still pass** (`tests.test_fabrication_memory tests.test_consequence_memory tests.test_scar_tissue` + veto's suite). — [ ] **Step 5: Commit** `feat(self-evidence): read-only coverage() per source + ScarSidecar.list_all()`
+- [ ] **Step 2: RED.** — [ ] **Step 3: Implement** the shared `_ro_connect`, each read-only `coverage()` (consequence computes its scar-class counts read-only, NOT via `stats()`), and the sidecar `list_all_at`/`coverage_at` staticmethods. Retention strings derive from each module's own constant. The existing writer paths (`stats()`, `ScarSidecar.__init__`, instance methods) stay byte-identical — the read surfaces are additive. — [ ] **Step 4: GREEN + existing suites for all four modules still pass** (`tests.test_fabrication_memory tests.test_consequence_memory tests.test_scar_tissue` + veto's suite). — [ ] **Step 5: Commit** `feat(self-evidence): read-only coverage()/list_all_at per source (no-create)`
 
 ---
 
@@ -140,8 +166,8 @@ class DigestSourcesTests(unittest.TestCase):
         self.assertIn("per-source", d["coverage_note"])
         self.assertEqual(d["kind"], "self_evidence_integrity_ledger")
 ```
-Implementer adds a single injection seam (e.g. `self_evidence_digest(*, _sources=None)`) so tests point sources at tmp fixtures; production default reads the real modules' `coverage()`/`stats()`.
-- [ ] **Step 2: RED.** — [ ] **Step 3: Implement** — compose `sources` from each `coverage()` + `consequence_memory.stats()` filtered to `consequence_memory.SCAR_CLASSES`; attach `outcome_detail={"claim_receipt_redo":"unstructured"}`; build the fixed `kind`/`generated_at`/`window`/`coverage_note`. Any source raising → `status:"unavailable"` (never omitted, never raises out). — [ ] **Step 4: GREEN.** — [ ] **Step 5: Commit** `feat(self-evidence): digest sources composition (no_data/zero explicit, no score, redo combined)`
+Implementer adds a single injection seam (e.g. `self_evidence_digest(*, _sources=None)`) so tests point sources at tmp fixtures; production default reads the real modules' read-only `coverage()` surfaces (no `stats()`, no sidecar construction).
+- [ ] **Step 2: RED.** — [ ] **Step 3: Implement** — compose `sources` from each read-only `coverage()` (consequence `coverage()` already carries the scar-class `by_class`); attach `outcome_detail={"claim_receipt_redo":"unstructured"}`; build the fixed `kind`/`generated_at`/`window`/`coverage_note`. Any source raising → `status:"unavailable"` (never omitted, never raises out). — [ ] **Step 4: GREEN.** — [ ] **Step 5: Commit** `feat(self-evidence): digest sources composition (no_data/zero explicit, no score, redo combined)`
 
 ---
 
@@ -178,7 +204,7 @@ class MergedDedupTests(unittest.TestCase):
         ...
 ```
 `_seed_fab_row`/`_seed_consequence_scar` write ONE real row into a real sqlite file matching the production schema (the test owns the fixture; not synthetic identity strings).
-- [ ] **Step 2: RED.** — [ ] **Step 3: Implement** `merged_events`: gather claimed refs from `sidecar.list_all()`, enumerate raw native ids from each source (read-only), compute unified/distinct. — [ ] **Step 4: GREEN.** — [ ] **Step 5: Commit** `feat(self-evidence): merged_events dedup via real sidecar receipt overlap`
+- [ ] **Step 2: RED.** — [ ] **Step 3: Implement** `merged_events`: gather claimed refs from `ScarSidecar.list_all_at(path)` (read-only), enumerate raw native ids from each source (read-only), compute unified/distinct. — [ ] **Step 4: GREEN.** — [ ] **Step 5: Commit** `feat(self-evidence): merged_events dedup via real sidecar receipt overlap`
 
 ---
 
@@ -223,7 +249,7 @@ class SurfaceTests(unittest.TestCase):
 - [ ] **Step 4: STOP.** No merge, no flag flip. Codex cross-lane → Claude cross-verify → merge dormant → owner flips `MAEZ_SELF_EVIDENCE=1` → live witness: `scripts/self_evidence.py show` prints the real index (fabrication `90d_best_effort`/58d/11577, veto `0`, card_rejected `6`, sidecar `4`, the 4 scars counted once) into the **witness artifact** — those live numbers appear there, never in a unit test.
 
 ## Self-Review
-**Spec coverage:** reader-only (no LLM/write/first-person) enforced by Tasks 2/4 + Step 3 grep; read-only-no-create (Task 1 + Task 5 filesystem proof); per-source `coverage()` with policy from each module's own constant (Task 1); reuse `stats()` for scar-class counts (Task 2); `list_all()` per the pin, not `get` (Task 1); redo combined + `outcome_detail:"unstructured"` (Task 2); real-overlap dedup with a seeded real sidecar row (Task 3); no-score structural test (Task 2); explicit no_data/zero (Task 2); live counts only in the witness artifact (Task 5). 
+**Spec coverage:** reader-only (no LLM/write/first-person) enforced by Tasks 2/4 + Step 3 grep; read-only-no-create (Task 1 + Task 5 filesystem proof) — **both Codex plan-HOLD create-traps closed:** consequence uses read-only `coverage()` not `stats()`, sidecar uses `list_all_at`/`coverage_at` staticmethods not the constructor, each with a missing-source-creates-no-file test; per-source `coverage()` with policy from each module's own constant (Task 1); `list_all_at()` per the pin, not `get` (Task 1); redo combined + `outcome_detail:"unstructured"` (Task 2); real-overlap dedup with a seeded real sidecar row (Task 3); no-score structural test (Task 2); explicit no_data/zero (Task 2); live counts only in the witness artifact (Task 5). 
 **Deliberate scoping flagged for review:** the spec named a `/self-evidence` command AND a cockpit panel; v0 ships ONE inspection surface — the runnable `scripts/self_evidence.py` — matching how A1 backfill / A3 curation were witnessed (lowest web/telegram-wiring risk in the covenant-critical first slice). The telegram command and cockpit panel become thin later consumers of `self_evidence_digest()` (the function makes them trivial). If Rohit/Codex want the cockpit panel in v0, it's an added task, not a redesign — the digest is already the single source. **This narrowing is called out here, not silent.**
 **Placeholder scan:** `_seed_fab_row`/`_seed_consequence_scar`/`_tmp_sources`/`_coverage_at` are named test fixtures the implementer writes against the real schemas (build-time adaptation, like A1 Task 1's tmp-db pattern) — not TODOs.
-**Type consistency:** `self_evidence_digest(window=None, *, _sources=None) -> dict`; `coverage() -> dict` (all four sources); `ScarSidecar.list_all() -> list[dict]`; `render(argv) -> str`. Consistent across tasks.
+**Type consistency:** `self_evidence_digest(window=None, *, _sources=None) -> dict`; `coverage(_db_path=None) -> dict` (fabrication/consequence/veto); `ScarSidecar.list_all_at(path) -> list[dict]` + `ScarSidecar.coverage_at(path) -> dict` (staticmethods, read-only); `render(argv) -> str`. Consistent across tasks.
