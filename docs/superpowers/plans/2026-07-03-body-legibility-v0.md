@@ -156,10 +156,11 @@ class AmbientHonestyTests(unittest.TestCase):
 - [ ] **Step 1:**
 ```bash
 /home/rohit/maez/.venv/bin/python -B -W ignore::ResourceWarning -m unittest \
-  tests.test_body_legibility tests.test_capability_card tests.test_ambient_format \
-  tests.test_evidence_precedence -v
+  tests.test_body_legibility tests.test_capability_card \
+  tests.test_ambient_format_relative_time tests.test_chat_ambient_injection \
+  tests.test_evidence_precedence_shadow -v
 ```
-(Confirm the adjacent suite names exist first; substitute the real capability-card/ambient test modules.)
+(All module names verified present in `tests/` on 2026-07-03.)
 - [ ] **Step 2: No-routing-change structural proof** — a test asserting the diff of `ambient_format.py` + `capability_card.py` adds no new call to `current_weather`, no search/tool-trigger symbol, no new invocation site (grep/AST over the changed functions). This slice only makes the body legible.
 - [ ] **Step 3:** ruff on touched files; `git diff --check`; flag-off byte-identical re-run of both card modes + `_format`.
 - [ ] **Step 4: STOP.** No merge, no flag flip. Codex cross-lane → Claude cross-verify → merge dormant → owner flips `MAEZ_BODY_LEGIBILITY=1` + restart → live witness: "do you have weather info?" with web sense healthy → Maez describes an honest body (no "I have no tool"); weather pull failing → System State shows "temporarily down," not silence; web sense degraded → card says retrieval degraded and Maez does not claim it can fetch.
