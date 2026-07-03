@@ -223,6 +223,8 @@ class DaemonScarHelperTests(unittest.TestCase):
         self.assertEqual(event.scar_class, "claim_receipt_redo")
         self.assertEqual(event.receipt_refs, [])
         self.assertEqual(event.dedup_key, "redo:web_search:search_initiating")
+        self.assertEqual(event.correction, "no receipt")
+        self.assertNotIn("corrected before send", event.correction)
 
     def test_dream_and_veto_helpers_build_receipt_refs(self):
         from daemon.maez_daemon import MaezDaemon

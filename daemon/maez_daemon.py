@@ -3218,6 +3218,10 @@ class MaezDaemon:
 
             action_type = str(getattr(mismatch, "action_type", "unknown") or "unknown")
             pattern_id = str(getattr(mismatch, "pattern_id", "unknown") or "unknown")
+            reason = str(
+                getattr(mismatch, "reason", "")
+                or "unreceipted action claim lacked a matching receipt"
+            )
             self._record_scar_event(
                 ScarEvent(
                     scar_class="claim_receipt_redo",
@@ -3226,7 +3230,7 @@ class MaezDaemon:
                         f"action_type={action_type} pattern_id={pattern_id} "
                         f"outcome={outcome}"
                     )[:400],
-                    correction="unreceipted action claim was corrected before send",
+                    correction=reason[:300],
                     receipt_refs=[],
                     dedup_key=f"redo:{action_type}:{pattern_id}",
                 )
