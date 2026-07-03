@@ -980,6 +980,7 @@ class TelegramVoice:
             renderer=renderer,
             dream=getattr(self.daemon, "dream", None),
             wants=getattr(self.daemon, "wants", None),
+            scar_hook=getattr(self.daemon, "_record_scar_event", None),
         )
         self._card_store = card_store
         self._audit_log = audit_log

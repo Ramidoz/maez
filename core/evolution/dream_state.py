@@ -202,6 +202,7 @@ class DreamState:
         self.telegram = telegram
         self.action_engine = action_engine
         self.db_path = db_path
+        self.scar_hook = None
         self._last_dream_at: float = 0.0
         self._last_training_eval_at: float = 0.0
         self._lock = threading.RLock()
@@ -1251,6 +1252,12 @@ class DreamState:
             )
             c.commit()
         logger.info("dream: proposal #%d rejected (%s)", prop_id, reason)
+        hook = getattr(self, "scar_hook", None)
+        if callable(hook):
+            try:
+                hook(prop_id=prop_id, reason=reason)
+            except Exception as exc:
+                logger.debug("dream scar hook skipped for proposal #%d: %s", prop_id, exc)
         return True, f"dream #{prop_id} rejected"
 
     def mark_applied(self, prop_id: int, *, source: str = "manual") -> tuple[bool, str]:

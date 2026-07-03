@@ -1599,6 +1599,8 @@ class _ClaimReceiptAuditOutcome:
     audit_changed: bool
     action_mismatch: object | None = None
     needs_redo: bool = False
+    fabrication_receipt_ids: list[int] | None = None
+    flags: list[object] | None = None
 
 
 def _claim_receipt_enforce_enabled() -> bool:
@@ -1672,6 +1674,8 @@ def _audit_daemon_reply_for_claim_receipts(
         audit_changed=bool(getattr(result, "rewritten", False)),
         action_mismatch=mismatch,
         needs_redo=bool(mismatch),
+        fabrication_receipt_ids=getattr(result, "fabrication_receipt_ids", None),
+        flags=getattr(result, "flags", None),
     )
 
 
@@ -3131,6 +3135,136 @@ logger.addHandler(stream_handler)
 class MaezDaemon:
     _CONTINUOUS_TIME_ANCHOR_INTERVAL_S = 300   # sparse checkpoint — NOT per-second/per-cycle
 
+    def _scar_sidecar_handle(self):
+        sidecar = getattr(self, "_scar_sidecar", None)
+        if sidecar is not None:
+            return sidecar
+        try:
+            from core.paths import memory_dir as _mem_dir
+            from core.learning.scar_tissue import ScarSidecar
+
+            sidecar = ScarSidecar(_mem_dir() / "scar_tissue.db")
+            self._scar_sidecar = sidecar
+            return sidecar
+        except Exception as exc:
+            logger.debug("scar sidecar unavailable: %s", exc)
+            return None
+
+    def _record_scar_event(self, event, *, consequence_id: int | None = None) -> bool:
+        if not strict_env_flag("MAEZ_SCAR_TISSUE"):
+            return False
+        try:
+            from core.learning.scar_tissue import record_scar
+
+            sidecar = getattr(self, "_scar_sidecar", None)
+            if sidecar is None:
+                handle = getattr(self, "_scar_sidecar_handle", None)
+                sidecar = handle() if callable(handle) else None
+            if sidecar is None:
+                return False
+            record_scar(
+                event,
+                episode_store=self.lived_episodes,
+                sidecar=sidecar,
+                consequence_id=consequence_id,
+            )
+            return True
+        except Exception as exc:
+            logger.debug("scar record skipped: %s", exc)
+            return False
+
+    def _record_fabrication_scars_from_audit_result(
+        self,
+        audit_result,
+        *,
+        surface: str,
+    ) -> None:
+        receipt_ids = list(getattr(audit_result, "fabrication_receipt_ids", None) or [])
+        if not receipt_ids:
+            return
+        flags = list(getattr(audit_result, "flags", None) or [])
+        try:
+            from core.learning.scar_tissue import ScarEvent
+
+            for index, receipt_id in enumerate(receipt_ids):
+                flag = flags[index] if index < len(flags) else None
+                claim_text = getattr(flag, "text", "") or f"fabrication:{receipt_id}"
+                reason = getattr(flag, "reason", "") or "grounding audit rewrote unsupported claim"
+                self._record_scar_event(
+                    ScarEvent(
+                        scar_class="fabrication_catch",
+                        surface=str(surface or "daemon"),
+                        context=str(claim_text)[:400],
+                        correction=str(reason)[:300],
+                        receipt_refs=[f"fabrication:{receipt_id}"],
+                        dedup_key=f"fabrication:{receipt_id}",
+                    )
+                )
+        except Exception as exc:
+            logger.debug("fabrication scar hook skipped: %s", exc)
+
+    def _record_claim_receipt_redo_scar(
+        self,
+        mismatch,
+        *,
+        surface: str,
+        outcome: str,
+    ) -> None:
+        try:
+            from core.learning.scar_tissue import ScarEvent
+
+            action_type = str(getattr(mismatch, "action_type", "unknown") or "unknown")
+            pattern_id = str(getattr(mismatch, "pattern_id", "unknown") or "unknown")
+            self._record_scar_event(
+                ScarEvent(
+                    scar_class="claim_receipt_redo",
+                    surface=str(surface or "daemon"),
+                    context=(
+                        f"action_type={action_type} pattern_id={pattern_id} "
+                        f"outcome={outcome}"
+                    )[:400],
+                    correction="unreceipted action claim was corrected before send",
+                    receipt_refs=[],
+                    dedup_key=f"redo:{action_type}:{pattern_id}",
+                )
+            )
+        except Exception as exc:
+            logger.debug("claim-receipt scar hook skipped: %s", exc)
+
+    def _record_dream_rejection_scar(self, *, prop_id: int, reason: str = "manual") -> None:
+        try:
+            from core.learning.scar_tissue import ScarEvent
+
+            self._record_scar_event(
+                ScarEvent(
+                    scar_class="dream_rejected",
+                    surface="dream_state",
+                    context=f"dream proposal #{prop_id}",
+                    correction=str(reason or "rejected")[:300],
+                    receipt_refs=[f"dream:{prop_id}"],
+                    dedup_key=f"dream:{prop_id}",
+                )
+            )
+        except Exception as exc:
+            logger.debug("dream rejection scar hook skipped: %s", exc)
+
+    def _record_veto_proven_wrong_scar(self, *, event_id: str) -> None:
+        try:
+            from core.learning.scar_tissue import ScarEvent
+
+            self._record_scar_event(
+                ScarEvent(
+                    scar_class="veto_proven_wrong",
+                    surface="veto_ledger",
+                    context=f"veto event {event_id}",
+                    correction="re-ask outcome classified the original veto as likely_wrong",
+                    receipt_refs=[f"veto:{event_id}"],
+                    dedup_key=f"veto:{event_id}",
+                )
+            )
+        except Exception as exc:
+            logger.debug("veto scar hook skipped: %s", exc)
+
     def _time_sense_handle(self):
         if self._time_sense is None:
             from core.evolution import subjective_duration as _sd
@@ -3289,6 +3423,8 @@ class MaezDaemon:
             telegram=self.telegram,
             action_engine=self.actions,
         )
+        if strict_env_flag("MAEZ_SCAR_TISSUE"):
+            self.dream.scar_hook = self._record_dream_rejection_scar
         # Slice 1.3 (2026-05-07): bound dream-cycle worker threads.
         # Previously each idle-AFK trigger spawned a fresh
         # ``threading.Thread(daemon=True)`` with no join and no
@@ -8196,6 +8332,10 @@ class MaezDaemon:
             surface=source,
             evidence_envelope=_evidence_envelope,
         )
+        self._record_fabrication_scars_from_audit_result(
+            _claim_receipt_outcome,
+            surface=source,
+        )
         if _claim_receipt_outcome.needs_redo:
             try:
                 from core import llm_client as _llm_client
@@ -8245,6 +8385,11 @@ class MaezDaemon:
                             "unknown",
                         ),
                     )
+                    self._record_claim_receipt_redo_scar(
+                        _claim_receipt_outcome.action_mismatch,
+                        surface=source,
+                        outcome="floor",
+                    )
                 else:
                     reply = _redo_outcome.text
                     logger.info(
@@ -8255,6 +8400,11 @@ class MaezDaemon:
                             "action_type",
                             "unknown",
                         ),
+                    )
+                    self._record_claim_receipt_redo_scar(
+                        _claim_receipt_outcome.action_mismatch,
+                        surface=source,
+                        outcome="accepted",
                     )
             except Exception as _claim_redo_exc:
                 logger.warning("claim receipt redo failed on %s: %s", source, _claim_redo_exc)
@@ -8349,9 +8499,11 @@ class MaezDaemon:
            and _routing_turn_outcome_quality is not None:
             try:  # seam 3: classify the lifted veto ONLY from a real outcome
                 _ledger = _veto_ledger_get(_ledger)
-                _ledger.attach_reask_outcome(
+                _veto_classification = _ledger.attach_reask_outcome(
                     _override_event_id, reask_turn_id=_user_msg_turn_id,
                     reask_outcome_quality=_routing_turn_outcome_quality)
+                if _veto_classification == "likely_wrong":
+                    self._record_veto_proven_wrong_scar(event_id=str(_override_event_id))
             except Exception as _ce:
                 logger.debug("veto reask classify skipped: %s", _ce)
         try:

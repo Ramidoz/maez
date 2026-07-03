@@ -363,6 +363,7 @@ class DecisionPipeline:
     get_cards_for: Optional[Callable[[str, str], list[CardRecord]]] = None
     dream: Any = None
     wants: Any = None
+    scar_hook: Optional[Callable[..., Any]] = None
 
     # Which actions are eligible for Lane 0 immediate-run (read-only).
     # The classifier is authoritative — this is just a safety check.
@@ -2114,7 +2115,7 @@ class DecisionPipeline:
             _params = getattr(card, "params", {}) or {}
             _cmd = _params.get("cmd") if isinstance(_params, dict) else ""
             _context = f"action={_action} cmd={_cmd!r}" if _cmd else f"action={_action}"
-            _cm.record_event(
+            _consequence_id = _cm.record_event(
                 kind=_cm.CLASS_CARD_REJECTED,
                 context=_context[:400],
                 outcome=cls.reasoning[:300] if cls.reasoning else "denied",
@@ -2125,6 +2126,34 @@ class DecisionPipeline:
                                     else []),
                 extra={"request_id": card.request_id},
             )
+            if (
+                os.environ.get("MAEZ_SCAR_TISSUE") == "1"
+                and callable(self.scar_hook)
+                and _consequence_id is not None
+            ):
+                try:
+                    from core.learning.scar_tissue import ScarEvent
+
+                    self.scar_hook(
+                        event=ScarEvent(
+                            scar_class="card_rejected",
+                            surface="decision_pipeline",
+                            context=_context[:400],
+                            correction=(
+                                cls.reasoning[:300]
+                                if cls.reasoning else "denied"
+                            ),
+                            receipt_refs=[f"card:{card.request_id}"],
+                            dedup_key=f"card:{card.request_id}",
+                        ),
+                        consequence_id=int(_consequence_id),
+                    )
+                except Exception as _scar_exc:
+                    logger.debug(
+                        "scar hook skipped for card %s: %s",
+                        card.request_id,
+                        _scar_exc,
+                    )
         except Exception as _cm_exc:
             logger.warning(
                 "consequence_memory record_event failed on card %s: %s — "
