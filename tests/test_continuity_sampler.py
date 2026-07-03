@@ -18,6 +18,16 @@ class FakeEncoder:
         return [1.0, 0.0, 0.0]
 
 
+class DirectionalEncoder:
+    model = "directional-minilm"
+    dimension = 2
+
+    def encode(self, text: str) -> list[float]:
+        if "changed" in text:
+            return [0.0, 1.0]
+        return [1.0, 0.0]
+
+
 class SamplerTests(unittest.TestCase):
     def test_flag_off_is_noop(self):
         from core.continuity_fingerprint import sampler
@@ -95,6 +105,41 @@ class SamplerTests(unittest.TestCase):
         episode_add.assert_not_called()
         write_capsule.assert_not_called()
         recall_store.assert_not_called()
+
+    def test_second_run_records_real_anchor_distances_without_storing_vectors(self):
+        from core.continuity_fingerprint import sampler
+        from core.continuity_fingerprint.store import ContinuityStore
+
+        responses = iter(["anchor answer", "changed answer"])
+
+        def chat_fn(**_kwargs):
+            return SimpleNamespace(
+                message=SimpleNamespace(content=next(responses))
+            )
+
+        with tempfile.TemporaryDirectory() as td, mock.patch.dict(
+            os.environ, {"MAEZ_CONTINUITY_FINGERPRINT": "1"}
+        ):
+            store = ContinuityStore(Path(td) / "continuity_fingerprint.db")
+            with mock.patch.object(sampler, "BATTERY", (sampler.BATTERY[0],)):
+                first = sampler.run_probe_battery(
+                    chat_fn=chat_fn,
+                    encoder=DirectionalEncoder(),
+                    store=store,
+                )
+                second = sampler.run_probe_battery(
+                    chat_fn=chat_fn,
+                    encoder=DirectionalEncoder(),
+                    store=store,
+                )
+            first_answer = store.answers_for(first["run_id"])[0]
+            second_answer = store.answers_for(second["run_id"])[0]
+
+        self.assertIsNone(first_answer["dist_short"])
+        self.assertAlmostEqual(second_answer["dist_short"], 1.0)
+        self.assertAlmostEqual(second_answer["dist_mid"], 1.0)
+        self.assertAlmostEqual(second_answer["dist_long"], 1.0)
+        self.assertNotIn("vector", second_answer)
 
 
 if __name__ == "__main__":
