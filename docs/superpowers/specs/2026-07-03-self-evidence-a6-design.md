@@ -57,6 +57,7 @@ A6 must **not** encode "fabrication retention is 90d" — that fact belongs to `
         "earliest_row_ts": .., "coverage": "all_time_verified", "native_id_prefix": "veto"},
     "consequence_scar_classes": {"status": "ok",
         "by_class": {"card_rejected": 6, "claim_receipt_redo": M, "dream_rejected": .., "fabrication_catch": ..},
+        "outcome_detail": {"claim_receipt_redo": "unstructured"},   # held/corrected split NOT parsed from free-text (A1-lane follow-up)
         "coverage": "all_time_verified", "native_id_prefix": "consequence"},
     "scar_sidecar": {"status": "ok", "active_episodes": 4, "total_occurrences": 4,
         "coverage": "append_preserving_all_time"}
@@ -65,7 +66,7 @@ A6 must **not** encode "fabrication retention is 90d" — that fact belongs to `
   "coverage_note": "per-source; no single all-time claim"
 }
 ```
-- **Held-vs-corrected redo split** (floor vs accepted) is only in the redo scar's free-text context today. **v0 does not parse free-text to derive a covenant-facing count** (that would be soft interpretation — the thing A6 exists to avoid). Task 0 decides: report `claim_receipt_redo` as a combined count with a note, OR the plan adds a structured `outcome` tag on the redo write (tiny, A1-adjacent). Lean: combined-with-note in v0; the split is a clean follow-up.
+- **Held-vs-corrected redo split** (floor vs accepted) is only in the redo scar's free-text context today. **v0 does not parse free-text to derive a covenant-facing count** (soft interpretation — the thing A6 exists to avoid). **PINNED (Codex spec-HOLD): A6 does NOT add a structured outcome tag — that would make the reader a writer / an A1 migration slice, violating A6's core covenant.** So v0 reports `claim_receipt_redo` as a **combined class** with `outcome_detail: "unstructured"`. The held-vs-corrected split is deferred to a **separate A1-adjacent receipt-schema follow-up** (A1's lane, not A6's) — never authored from inside A6.
 - **Windowing** is a query parameter only. A6 adds **zero** hardcoded temporal windows (the audit already flagged four).
 
 ### The surface (inspection only — owner Q1)
@@ -86,26 +87,32 @@ A6 must **not** encode "fabrication retention is 90d" — that fact belongs to `
 
 ## Task 0 for the plan (verify before code)
 1. Confirm each source's public read API and add read-only `coverage()` where missing (fabrication_memory has none; consequence has `stats`; veto has `all_events`; sidecar has `get`). Pin return shape.
-2. Confirm `consequence_memory` scar-class rows carry the native `id` and class needed for `by_class` + `consequence:<id>` refs; confirm redo `outcome` is/ isn't structurally distinguishable (decides the held/corrected question above).
+2. Confirm `consequence_memory` scar-class rows carry the native `id` and class needed for `by_class` + `consequence:<id>` refs. (The redo held/corrected split is already DECIDED — combined class, `outcome_detail: "unstructured"`; A6 authors no schema change, so there is nothing to "decide" here beyond confirming the read-side `id`/`class` shape.)
 3. Confirm sidecar `receipt_refs` are stored as the `prefix:id` strings A6 will join on (they are, per A1 — verify format `fabrication:<id>` / `veto:<id>` / `consequence:<id>`).
 4. Confirm the cockpit panel mount point + the `/self-evidence` command surface (which router; owner-gated read).
 5. Confirm no source-reading path can mutate (open read-only / never call a write API); prove flag-on writes nothing.
 
+## Plan-level pins (Codex spec review, carried into the plan)
+- **Read-only, never create:** source readers must open the DBs read-only (e.g. `mode=ro` URI) and must **never** call `_ensure_db`/any initializer that would *create* a missing DB. A missing source → `no_data`, never a freshly-created empty file. (A6 reporting "no_data" must not itself mutate the filesystem.)
+- **`scar_tissue` needs a real read/list surface:** A6 consumes sidecar rows through a **public** `ScarSidecar.list_all()` (or equivalent) read API — not a private-schema reach-in / raw SQL against `scar_evidence`. The plan adds that read method (pure, read-only) to `scar_tissue.py`.
+- **Live counts belong in the witness artifact, not hardcoded tests:** tests assert *structure and invariants* (dedup-counts-once, no_data-not-omitted, explicit-zero, no `score` key, no first-person string) over **seeded fixtures**; the real 11,577/0/6/4 numbers are recorded in the live-witness artifact, never baked into unit tests (they drift).
+- **Overlap proven with a real sidecar row:** the dedup witness must construct an **actual sidecar row whose `receipt_refs` cite a real raw row's native id**, and prove the merged count is one — not merely assert on two synthetic identity strings.
+
 ## Out of scope
 - Any voice/prompt/card/self-card wiring (later slices, each witnessed).
 - Competence/performance receipts (routing quality, task success) — Q2 walled these off; a possible "conduct ledger" is a separate future proposal, not A6.
-- Held/corrected redo split *if* it needs a new structured field (that's an A1-adjacent follow-up, not A6 v0's core).
+- Held/corrected redo split — an A1-adjacent **receipt-schema** follow-up in A1's lane; A6 never authors it (see the redo pin above).
 - Any first-person or narrative rendering (self-card territory).
 - A2/A10 (continuity fingerprint / memory kernel) — separate slices.
 
 ## Witnesses
-**Host:** `self_evidence_digest()` over seeded fixtures returns correct per-source counts + coverage labels; a missing DB renders `status: no_data` (NOT omitted); `veto_proven_wrong` with zero likely_wrong rows renders explicit `count: 0`; a fabrication row that a sidecar row's `receipt_refs` claims is counted **once** in `merged_events` (dedup proof); a raw fabrication row with no scar is counted (full-history proof); no key named `score`/`grade`/`rating` appears anywhere in the output (structural anti-score test); no first-person string in any rendered surface (vocabulary test); flag-off byte-identical AND flag-on writes zero rows to any source (read-only proof).
+**Host (seeded fixtures — invariants, not live numbers):** `self_evidence_digest()` returns correct per-source counts + coverage labels; a missing DB renders `status: no_data` (NOT omitted) **and creates no file** (read-only proof); `veto_proven_wrong` with zero likely_wrong rows renders explicit `count: 0`; a **real seeded sidecar row whose `receipt_refs` cite a seeded raw fabrication row's native id** makes that event count **once** in `merged_events` (dedup proof — not synthetic strings); a raw fabrication row with no scar is counted (full-history proof); no key named `score`/`grade`/`rating` appears anywhere in the output (structural anti-score test); no first-person string in any rendered surface (vocabulary test); flag-off byte-identical AND flag-on writes zero rows to any source (read-only proof).
 **Live (owner, after flip):** `/self-evidence` returns the real index — fabrication coverage says `90d_best_effort` with the true 58d earliest; veto shows `0`; card_rejected shows `6`; sidecar shows the 4 backfill exhibits; the 4 scars are counted once (not also as their cited receipts). The number 11,577 appears as a labeled receipt count, and nowhere as a first-person claim.
 
 ## Predicted effect
 After A6: the receipts of Maez's corrections — scattered today across four stores with no reader — become one honest, deduplicated integrity index the owner can inspect and later organs can cite. It answers *"what evidence exists?"* with counts, timestamps, and per-source coverage, and structurally refuses to answer *"what does that prove I am?"* — no score to optimize, no first-person claim, no LLM in the loop. It is the substrate on which a truthful self-account can later be built, without itself being a self-esteem machine.
 
 ## Spec Self-Review
-**Placeholder scan:** coverage()-helper shapes, redo held/corrected structural check, cockpit mount point deliberately Task-0-deferred (verify-before-encode). No TODOs.
+**Placeholder scan:** coverage()-helper shapes, sidecar public read-API shape, cockpit mount point deliberately Task-0-deferred (verify-before-encode). Redo split is DECIDED (combined + `outcome_detail: unstructured`), not deferred — A6 authors no schema. No TODOs.
 **Consistency:** reader-not-author + no-score + no-first-person + per-source-coverage + full-history-read repeated across crux, pins, and witnesses; Q1 (inspection-only) and Q2 (integrity spine) honored throughout; all four sources' live coverage verified before claiming their labels.
 **Scope:** one pure reader + four coverage helpers + one command + one panel. Voice/competence/narrative/held-corrected-split all walled off.
