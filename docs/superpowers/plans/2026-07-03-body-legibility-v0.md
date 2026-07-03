@@ -20,7 +20,7 @@
 - **Zero routing change:** no new `current_weather`/search-trigger/tool call site (structural test).
 - **Affordance generic + state-aware + no overclaim:** only `healthy` says "can retrieve"; degraded/unknown say so; never an example list.
 - **"Down" only when attempted:** `"weather" in ctx` + no temp_c → unavailable; key absent → silent.
-- **One affordance source:** both modes render from `_affordance()` — no drift.
+- **One affordance source, keyed on CANONICAL status:** both modes call `_affordance(name, _canonical_status(name, raw))` — the prose path must canonicalize the raw probe text (`"searxng healthy"` → `"healthy"`) before the affordance lookup, or the live legacy card keeps the bug while tests false-green (Codex plan-HOLD).
 
 ---
 
@@ -73,38 +73,66 @@ class AffordanceTests(unittest.TestCase):
 
 - [ ] **Step 1: Failing tests**
 ```python
-class CardModeTests(unittest.TestCase):
-    def _healthy_web_registry(self):
-        return [("web sense", lambda: "healthy")]
+import json
 
-    def test_structured_envelope_has_affordance_field_flag_on(self):
-        import json, os
+
+def _extract_payload(envelope_text: str) -> dict:
+    start = envelope_text.index("{")
+    end = envelope_text.rindex("}") + 1
+    return json.loads(envelope_text[start:end])
+
+
+class CardModeTests(unittest.TestCase):
+    # REAL probe shape (Codex plan-HOLD): the web-sense probe returns
+    # "searxng healthy"/"searxng degraded", NOT the canonical "healthy".
+    # A test using lambda: "healthy" would false-green a build that passed
+    # raw text to _affordance and got None back.
+    def _reg(self, raw):
+        return [("web sense", lambda: raw)]
+
+    def test_structured_envelope_affordance_is_a_parsed_field(self):
+        import os
         from unittest import mock
         from core.cognition.capability_card import _build_capability_envelope
         with mock.patch.dict(os.environ, {"MAEZ_BODY_LEGIBILITY": "1"}):
-            text = _build_capability_envelope(self._healthy_web_registry())
-        payload = json.loads(text.split("\n", 1)[1].rsplit("\n", 1)[0]) if False else None
-        # simpler: assert the affordance is a FIELD, not buried in status prose
-        self.assertIn('"affordance"', text)
-        self.assertIn("can retrieve current external information", text)
+            payload = _extract_payload(_build_capability_envelope(self._reg("searxng healthy")))
+        entry = next(e for e in payload["entries"] if e["name"] == "web sense")
+        self.assertEqual(entry["affordance"], "can retrieve current external information")
 
     def test_flag_off_envelope_byte_identical(self):
         import os
         from unittest import mock
         from core.cognition.capability_card import _build_capability_envelope
         with mock.patch.dict(os.environ, {"MAEZ_BODY_LEGIBILITY": "0"}):
-            off = _build_capability_envelope(self._healthy_web_registry())
-        self.assertNotIn("affordance", off)   # additive-only; off == today
+            payload = _extract_payload(_build_capability_envelope(self._reg("searxng healthy")))
+        entry = next(e for e in payload["entries"] if e["name"] == "web sense")
+        self.assertNotIn("affordance", entry)   # additive-only; off == today
 
-    def test_prose_mode_uses_same_affordance_fn(self):
-        # prose suffix must come from _affordance (parity, no drift)
+    def test_prose_mode_canonicalizes_raw_before_affordance(self):
+        # flag on, voice_boundary OFF -> prose path, fed the REAL raw shape
         import os
         from unittest import mock
         from core.cognition.capability_card import capability_prompt_block
-        # flag on, voice_boundary OFF -> prose path; assert suffix present
-        ...  # build-time: drive the prose branch, assert "— can retrieve current external information"
+        with mock.patch.dict(os.environ, {"MAEZ_BODY_LEGIBILITY": "1"}):
+            with mock.patch("core.cognition.capability_card.voice_boundary_enabled", return_value=False):
+                healthy = capability_prompt_block(self._reg("searxng healthy"))
+                degraded = capability_prompt_block(self._reg("searxng degraded"))
+        self.assertIn("searxng healthy", healthy)                       # raw status preserved
+        self.assertIn("— can retrieve current external information", healthy)  # suffix from canonical
+        self.assertNotIn("can retrieve", degraded)                      # degraded never overclaims
+
+    def test_prose_probe_error_unknown_does_not_overclaim(self):
+        import os
+        from unittest import mock
+        from core.cognition.capability_card import capability_prompt_block
+        def _boom():
+            raise RuntimeError("probe down")
+        with mock.patch.dict(os.environ, {"MAEZ_BODY_LEGIBILITY": "1"}):
+            with mock.patch("core.cognition.capability_card.voice_boundary_enabled", return_value=False):
+                out = capability_prompt_block([("web sense", _boom)])
+        self.assertNotIn("can retrieve", out)
 ```
-- [ ] **Step 2: RED.** — [ ] **Step 3: Implement** — in `_build_capability_envelope`, when `body_legibility_enabled()` and `_affordance(name, status)` is not None, add `"affordance": aff` to the entry dict (both the normal and probe-error append sites; probe-error status is `"unknown"` → affordance honest or None). In the prose path, append `f" — {aff}"` when flag on and aff present. Flag-off: neither touched (byte-identical). Both read from `_affordance` — no duplicated text. — [ ] **Step 4: GREEN + existing capability_card tests still pass.** — [ ] **Step 5: Commit** `feat(body-legibility): affordance in structured envelope + prose, flag-gated`
+- [ ] **Step 2: RED.** — [ ] **Step 3: Implement** — structured: `_build_capability_envelope` already computes `status = _canonical_status(name, probe())`, so `_affordance(name, status)` gets canonical; add `"affordance": aff` to the entry dict (normal + probe-error sites) when `body_legibility_enabled()` and `aff` is not None. **Prose (the HOLD fix): compute `canonical = _canonical_status(name, raw)` from the raw `probe()` text, call `_affordance(name, canonical)`, and preserve the raw status in the line** — `f"{name}: {raw} — {aff}"` when flag on and aff present, else `f"{name}: {raw}"`. Probe-error → status `"unknown"` → affordance honest-or-None, never "can retrieve". Flag-off: neither touched (byte-identical). Both modes read affordance from the SAME canonical status → `_affordance`, no drift. — [ ] **Step 4: GREEN + existing capability_card tests still pass.** — [ ] **Step 5: Commit** `feat(body-legibility): affordance in both card modes, prose canonicalizes raw (no false-green)`
 
 ---
 
@@ -166,6 +194,6 @@ class AmbientHonestyTests(unittest.TestCase):
 - [ ] **Step 4: STOP.** No merge, no flag flip. Codex cross-lane → Claude cross-verify → merge dormant → owner flips `MAEZ_BODY_LEGIBILITY=1` + restart → live witness: "do you have weather info?" with web sense healthy → Maez describes an honest body (no "I have no tool"); weather pull failing → System State shows "temporarily down," not silence; web sense degraded → card says retrieval degraded and Maez does not claim it can fetch.
 
 ## Self-Review
-**Spec coverage:** flag helper + generic state-aware affordance (Task 1); both card modes from one `_affordance`, additive/byte-identical-off (Task 2); ambient down-sense visible only when attempted, coords-source when present, no error detail (Task 3, Codex plan-pin); no-routing-change structural test (Task 4); flag-off byte-identical (invariant + tests). All five owner pins covered.
+**Spec coverage:** flag helper + generic state-aware affordance (Task 1); both card modes from one `_affordance`, additive/byte-identical-off (Task 2); **prose canonicalizes raw before affordance — tests use the real `"searxng healthy"` probe shape + parse the envelope JSON for the `affordance` field (Codex plan-HOLD, no false-green)**; ambient down-sense visible only when attempted, coords-source when present, no error detail (Task 3, Codex plan-pin); no-routing-change structural test (Task 4); flag-off byte-identical (invariant + tests). All five owner pins covered.
 **Placeholder scan:** the prose-mode parity test and the Task-4 adjacent suite names are build-time-resolved (drive the prose branch; confirm real test module names) — not TODOs; the affordance text is fixed here.
 **Type consistency:** `_affordance(name, status) -> str | None`; `body_legibility_enabled() -> bool`; render sites consume `_affordance` identically in both modes. Consistent across tasks.
