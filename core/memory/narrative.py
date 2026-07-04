@@ -314,17 +314,35 @@ class NarrativeStore:
                 )
                 return link_id
             evidence = self._decode_evidence(row["evidence_json"])
+            updates: list[str] = []
+            params: list[str] = []
+            if str(row["trust"]) == "derived" and trust == "confirmed":
+                updates.append("trust = ?")
+                params.append("confirmed")
             for entry in evidence:
                 if (
                     entry.get("ids") == evidence_entry["ids"]
                     and entry.get("detector_version") == evidence_entry["detector_version"]
                 ):
+                    if updates:
+                        updates.append("last_evidence_at = ?")
+                        params.append(now)
+                        params.append(key)
+                        con.execute(
+                            f"UPDATE narrative_links SET {', '.join(updates)} "
+                            "WHERE link_key = ?",
+                            params,
+                        )
                     return str(row["link_id"])
             evidence.append({**evidence_entry, "at": now})
+            updates.append("evidence_json = ?")
+            params.append(json.dumps(evidence, sort_keys=True))
+            updates.append("last_evidence_at = ?")
+            params.append(now)
+            params.append(key)
             con.execute(
-                "UPDATE narrative_links SET evidence_json = ?, last_evidence_at = ? "
-                "WHERE link_key = ?",
-                (json.dumps(evidence, sort_keys=True), now, key),
+                f"UPDATE narrative_links SET {', '.join(updates)} WHERE link_key = ?",
+                params,
             )
             return str(row["link_id"])
 
