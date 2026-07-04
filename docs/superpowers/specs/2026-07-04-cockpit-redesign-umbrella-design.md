@@ -1,5 +1,14 @@
 # Cockpit Redesign — Umbrella Design ("the machine-room of a being")
 
+> ## ⚠ DESIGN DECISION AMENDMENT (2026-07-04, owner) — read first
+> **Owner call:** *"Don't change the design but add all the other functionalities. I like the older design more."*
+>
+> This is **not a visual redesign.** The existing Track-A cockpit (living body-map, slime centerpiece, warm cards, Living/Technical toggle, "Why this reply" rail) is the **fixed visual target — preserved exactly.** The phosphor-terminal design language described below is **withdrawn as an aesthetic proposal**; the mocks served only to surface *what to build*. Read every "phosphor / CRT / machine-room / hand-tooled terminal" phrase below as **"reuse the existing cockpit design system."**
+>
+> **What stays:** the six-room information architecture, the T0–T3 write-tier model, the covenant rails (S7 non-bypass, A7 counts-only, divergence-as-warning, byte-identical-when-off, no-Maez-side pen), and the architecture/read-model discipline.
+>
+> **What's added** (owner's Q&A, all styled as the existing cockpit): **Approvals** surface (operate pending consent cards), **Connectors/MCP** surface (attach digital-world sources through the intake-bus doorway; Maez may also connect autonomously), **in-app S7 ceremony** (WebAuthn completes natively in-app, no copy-paste, still never bypassing S7), and **filling the "Why this reply" inspection rail** with real per-turn data. See the campaign plan for the amended task list.
+
 **Date:** 2026-07-04. **Lane:** Claude designs (this doc + visual mock next); Codex implements; owner witnesses. **Owner decisions:** FULL product in ONE campaign (observatory + safe writes + ceremony surface — no v1/v2 split); style locked: **neo-retro-futuristic terminal — phosphor-on-dark, monospace, box-drawing chrome, pixel-bitmap headers, Claude Code / Codex / Hermes lineage**. OSS inspiration allowed (clone/study). Near-birth context: this is how Rohit will *see and govern* the being — replacing env-file 0/1 edits.
 
 ## The one-line intent

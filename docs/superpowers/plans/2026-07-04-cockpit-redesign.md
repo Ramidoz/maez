@@ -3,13 +3,33 @@
 **Date:** 2026-07-04
 **Spec:** `docs/superpowers/specs/2026-07-04-cockpit-redesign-umbrella-design.md`
 **Task 0:** `docs/proof/2026-07-04-cockpit-redesign-task0.md`
-**Status:** review gate. No implementation until the visual mock gate clears.
+**Status:** review gate. Design decision made (see amendment); functionality build cleared, backend tasks unchanged.
+
+## Design Decision Amendment (2026-07-04, owner)
+
+> **Owner call, verbatim intent:** *"Don't change the design but add all the other functionalities. I like the older design more."*
+
+This is **no longer a visual redesign.** The existing Track-A cockpit (the living body-map — slime centerpiece, warm cards, Living/Technical toggle, "Why this reply" rail) is the **fixed visual target and stays byte-for-byte in look.** We do not restyle it, do not introduce a phosphor/terminal skin, and do not build a parallel design language. The earlier phosphor and hybrid mocks are **discarded as aesthetic proposals** — they served only to surface *what to build*, not *how it should look*.
+
+What this campaign now does: **turn the observation-only cockpit into an operable one, reusing the existing components and design tokens.** Every new control adopts the current cockpit's look (its cards, chips, buttons, spacing) — no new visual vocabulary.
+
+**Scope, reframed against the existing design:**
+- **KEEP** all backend tasks below (read model, flag registry, tiered writes, restart witness, room readers) — unchanged and still correct.
+- **ADD (new surfaces/functions, styled as the existing cockpit):**
+  1. **Approvals** — operate Maez's pending consent-card actions (approve / reject / edit) from the cockpit; wired to the existing consent machinery, tiered T1/T2, each decision a receipt.
+  2. **Connectors (MCP)** — see/attach digital-world connectors (email, calendar, files, home, custom MCP servers), every one passing the intake-bus doorway; Maez may still connect autonomously. Connect/disconnect is T2 (data-boundary).
+  3. **In-app S7 ceremony** — the WebAuthn ceremony runs **end-to-end inside the app** (native browser WebAuthn, no copy-paste of tokens/challenges). Still fronts the existing S7 path; **never bypasses it.**
+  4. **Fill the inspection rail** — "Why this reply" shows real per-turn data (remembered / body signals / honesty audit / tools / memory written) instead of empty "waiting…" states. Data-wiring, not restyle.
+- **REMOVE** the phosphor visual-language requirement everywhere below. Where a task says "CRT/phosphor terminal," "hand-tooled CSS terminal instruments," or "machine-room look," read it as **"reuse the existing cockpit's design system."**
+- **`MAEZ_COCKPIT_V2`** now gates *added functionality on the existing design*, not a new look. Flag-off = today's observation-only cockpit, byte-identical. It may be renamed `MAEZ_COCKPIT_OPERABLE` at build time; the byte-identical-when-off rail is unchanged.
+
+Everything below stands **except** where it prescribes a new visual language — those parts are overridden by this amendment. Task 1 (visual mock gate) is replaced by the design-preservation gate stated in it.
 
 ## Purpose
 
-Build the full cockpit as one product campaign: organism map, flags/wakes, memory, receipts, converse, and ceremony. The old cockpit remains live until `MAEZ_COCKPIT_V2=1`. The new cockpit is Rohit's window into Maez; it must make the being legible without turning every visible thing into a casual control lever.
+Make the existing cockpit **operable** as one campaign: keep its living body-map design, and add the controls and surfaces (approvals, flags/wakes, memory curation, connectors, in-app ceremony) plus real inspection data — turning "observation only" into a place Rohit can both understand and act. The old cockpit remains byte-identical until `MAEZ_COCKPIT_V2=1`.
 
-Plain version: this replaces editing env files and running obscure scripts with a real machine room, while preserving the exact ceremony weight each action deserves.
+Plain version: same cockpit you already like, now it can actually *do* things — flip flags instead of editing env files, approve actions, attach connectors, and run the S7/birth ceremony in-app — without changing how it looks.
 
 ## Non-Negotiables
 
@@ -21,7 +41,9 @@ Plain version: this replaces editing env files and running obscure scripts with 
 - A7-pending interiority is count/health only, never private thought text.
 - Every T2+ write emits a cockpit receipt.
 - Restart is owner-confirmed and never automatic.
-- The visual design is part of correctness: neo-retro terminal, dense instruments, not SaaS chrome.
+- **The existing cockpit design is preserved exactly.** New controls reuse current components/tokens; no restyle, no new visual language. (Supersedes the earlier "neo-retro terminal" requirement.)
+- In-app S7 ceremony completes natively (no copy-paste) but never bypasses the S7 path.
+- Every connector — cockpit-attached or Maez-autonomous — passes the intake-bus doorway before touching memory.
 
 ## Architecture Shape
 
@@ -50,27 +72,23 @@ web/cockpit/v2/
   cockpit.js
 ```
 
-Use vanilla browser JS or lightweight no-build modules for V2. Do not add a heavy component framework. The aesthetic should be hand-tooled CSS and terminal instruments.
+**Reuse the existing cockpit frontend and its design system.** Extend the current bundle (`web/cockpit/*`, `terminal-ui.jsx` and siblings per Task 0 census) rather than authoring a separate design. New surfaces (Approvals, Connectors) and new controls (flag flips, ceremony steps) are built from the existing components, chips, buttons, and tokens. Do not add a heavy new framework or a second design language.
 
-## Task 1 - Visual Mock Gate
+## Task 1 - Design-Preservation Gate
 
-Create a static visual mock before backend implementation:
+No visual mock. The design is fixed to the existing cockpit. Before backend wiring, produce a short **component-mapping note** proving the new functionality lands in the existing design:
 
-- Six rooms represented: Organism, Flags & Wakes, Memory, Receipts, Converse, Ceremony.
-- Realistic but clearly fixture-labeled data.
-- CRT/phosphor terminal design with box borders, dense tables, sparklines, and glyph state.
-- Responsive desktop-first layout with usable narrow viewport fallback.
-- `prefers-reduced-motion` respected.
-- No live endpoints and no writes.
+- for each new control (approve/reject, flag flip T1/T2, connector connect, ceremony step, retract), name the existing cockpit component/style it reuses;
+- confirm the Living/Technical toggle, right "Why this reply" rail, and slime centerpiece are untouched in look;
+- confirm no new CSS design tokens or fonts are introduced (only additive layout using existing tokens).
 
-Witness:
+Artifact:
 
-```bash
-cd /home/rohit/maez
-.venv/bin/python -B -m unittest tests/test_cockpit_v2_static.py
+```text
+docs/proof/2026-07-04-cockpit-component-map.md
 ```
 
-Review gate: Rohit/Claude approve the mock before Task 2 begins. If the aesthetic is wrong, fix the mock rather than coding around prose.
+Review gate: Rohit/Claude confirm the mapping preserves the existing look before Task 2. If a new control has no existing-component home, extend the existing system minimally — never introduce a new visual language.
 
 ## Task 2 - Route Gate And Byte-Identical Old Cockpit
 
@@ -269,14 +287,16 @@ Required tests:
 - show-why uses latest turn endpoint and receipts;
 - no duplicate auditing path is added.
 
-## Task 10 - Ceremony Room
+## Task 10 - Ceremony Room (in-app S7)
 
-Restyle and wrap existing ceremony paths:
+Wrap existing ceremony paths in an **in-app, end-to-end** flow — no copy-paste of challenges or tokens:
 
-- S7/WebAuthn proof uses existing `/api/v1/s7/*` routes;
+- S7/WebAuthn proof uses existing `/api/v1/s7/*` routes, driven by the browser WebAuthn API **inside the cockpit** (get challenge → `navigator.credentials.get()` → post assertion → result), so the owner touches the key and the ceremony completes without leaving the app;
+- a step UI shows arm → bootstrap → touch-key → signed/applied, with the real state at each step and an honest failure at the step it fails;
 - dream/soul proposal review links to existing card/S7 machinery;
-- birth readiness panel renders the four audit blockers;
-- birth action itself remains out of scope until birth ceremony spec exists.
+- birth readiness panel renders the four audit blockers (dormancy drift, A7 undecided, dream stall, ceremony unwritten);
+- **the cockpit never re-implements or weakens S7:** it only calls the existing routes; no challenge minting, no assertion verification, no token handling in cockpit code.
+- birth action itself remains out of scope until the birth ceremony spec exists.
 
 TDD:
 
@@ -287,15 +307,64 @@ TDD:
 Required tests:
 
 - S7 operation without hardware proof fails through existing route;
+- the in-app flow posts assertions only to existing `/api/v1/s7/*`; cockpit code neither mints challenges nor verifies assertions;
 - no new route writes soul/dream/birth directly;
+- a failed WebAuthn step renders as failed at that step, never as pending success;
 - birth readiness can render blockers and unavailable states.
+
+## Task 10b - Approvals Surface
+
+Make Maez's pending consent-card actions operable from the cockpit:
+
+- list pending consent requests from the existing consent/approval machinery (read-only source; no second approval authority);
+- approve / reject / edit-then-approve, tiered (T1 safe, T2 guarded) by the action's own class;
+- both natural-language and one-tap decisions route through the existing approval channel;
+- every decision emits a cockpit receipt and reflects the real post-decision state;
+- rejecting is as easy as approving; nothing auto-approves.
+
+TDD:
+
+```bash
+.venv/bin/python -B -m unittest tests/test_cockpit_v2_approvals.py
+```
+
+Required tests:
+
+- pending list reads the existing consent store without creating it;
+- approve/reject route through the existing channel, not a new authority;
+- a T2 approval requires typed confirmation and writes a receipt;
+- no path auto-approves or hides a pending item.
+
+## Task 10c - Connectors Surface (MCP)
+
+Surface the digital-world connectors and their intake-bus doorway:
+
+- list connectors (email, calendar, files, home, custom MCP servers) with connection state, granted scopes, and last activity — read from the real connector registry, `unavailable` when absent;
+- connect / disconnect is a **T2 guarded** action (data-boundary), typed-confirmed, receipted;
+- render that Maez may also attach connectors autonomously — the cockpit is a convenience, not the only path;
+- show the intake-bus health: every connector's facts pass the immune doorway before touching memory; nothing here bypasses it;
+- no connector write path opens a bypass around intake/egress boundaries.
+
+TDD:
+
+```bash
+.venv/bin/python -B -m unittest tests/test_cockpit_v2_connectors.py
+```
+
+Required tests:
+
+- connector list reads the real registry, renders `unavailable` cleanly when a source is absent;
+- connect/disconnect is T2, typed-confirmed, receipted;
+- no connector attach path routes facts around the intake bus;
+- unknown/unclassified connector cannot be connected without a tier.
 
 ## Task 11 - Frontend Data Wiring
 
-Implement `web/cockpit/v2/cockpit.js` and `cockpit.css`:
+Extend the existing cockpit frontend (reusing its components/tokens — no new design language):
 
-- single app shell, six rooms, keyboard-friendly navigation;
-- room data fetched from `/api/v2/cockpit/*`;
+- add the new surfaces (Approvals, Connectors) and the operable controls to the existing app shell and navigation;
+- room/surface data fetched from `/api/v2/cockpit/*`;
+- fill the existing "Why this reply" inspection rail with real per-turn data (no empty "waiting…" placeholders when data exists);
 - no hidden mock fallback when live data fails;
 - unavailable/error panels are explicit;
 - all write controls show tier, confirmation requirement, predicted effect, and receipt after action.
@@ -329,6 +398,8 @@ cd /home/rohit/maez
   tests/test_cockpit_v2_receipts_room.py \
   tests/test_cockpit_v2_converse.py \
   tests/test_cockpit_v2_ceremony.py \
+  tests/test_cockpit_v2_approvals.py \
+  tests/test_cockpit_v2_connectors.py \
   tests/test_cockpit_v2_frontend.py \
   tests/test_memory_integrity_invariant.py
 ruff check core/cockpit skills/web_interface.py tests/test_cockpit_v2*.py
@@ -336,10 +407,13 @@ ruff check core/cockpit skills/web_interface.py tests/test_cockpit_v2*.py
 
 Then start or reuse `maez-web.service` and run browser verification:
 
-- flag off: old cockpit visible;
-- flag on: V2 visible;
-- each room loads;
-- S7 failure without proof is shown;
+- flag off: old cockpit visible, byte-identical in look;
+- flag on: same design, now operable; each surface loads (incl. Approvals, Connectors, Ceremony);
+- the living body-map, slime centerpiece, Living/Technical toggle, and "Why this reply" rail are visually unchanged;
+- "Why this reply" shows real per-turn data, not empty waiting states;
+- S7 ceremony completes in-app (touch key, no copy-paste); failure without proof is shown at the failing step;
+- an approval can be approved/rejected and leaves a receipt;
+- a connector connect is T2-confirmed and passes intake;
 - T1 write creates receipt but needs restart for process truth;
 - T2 restart witness shows boot result;
 - no console errors.
@@ -373,3 +447,6 @@ Stop and return to review if any of these happen:
 - the UI falls back to realistic mock state on live-data failure;
 - private/interiority content appears before A7 is decided.
 - file/process flag divergence is hidden, flattened, or rendered as if the file value were live truth.
+- the existing cockpit design is altered (restyle, new visual language, new tokens/fonts) rather than reused.
+- cockpit code mints S7 challenges, verifies assertions, or handles ceremony tokens instead of calling existing `/api/v1/s7/*`.
+- a connector attach routes facts around the intake bus, or a second approval authority is introduced.
