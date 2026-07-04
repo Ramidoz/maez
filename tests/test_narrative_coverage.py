@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -99,6 +101,27 @@ class NarrativeCoverageTests(unittest.TestCase):
 
         for name in ("archive_covered", "deweight_covered", "cool_covered"):
             self.assertFalse(hasattr(narrative, name), name)
+
+    def test_coverage_script_runs_from_repo_root(self):
+        root = Path(__file__).resolve().parent.parent
+        artifact = self.root / "coverage-cli.json"
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                "scripts/narrative_coverage_shadow.py",
+                "--db",
+                str(self.db),
+                "--out",
+                str(artifact),
+            ],
+            cwd=root,
+            text=True,
+            capture_output=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(artifact.exists())
 
 
 if __name__ == "__main__":

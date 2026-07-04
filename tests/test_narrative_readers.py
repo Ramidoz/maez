@@ -1,4 +1,6 @@
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import closing
@@ -153,6 +155,25 @@ class NarrativeReaderTests(unittest.TestCase):
         self.assertIn("2 linked episodes", block)
         self.assertNotIn("anchor", block)
         self.assertNotIn("neighbor", block)
+
+    def test_spine_script_runs_from_repo_root(self):
+        root = Path(__file__).resolve().parent.parent
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                "scripts/narrative_spine.py",
+                "--db",
+                str(self.db),
+                "threads",
+            ],
+            cwd=root,
+            text=True,
+            capture_output=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("No narrative threads", result.stdout)
 
 
 if __name__ == "__main__":

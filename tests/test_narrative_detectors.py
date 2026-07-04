@@ -124,6 +124,20 @@ class NarrativeDetectorTests(unittest.TestCase):
         self.assertEqual([c.link_type for c in links], ["same_thread"])
         self.assertNotIn("because_of", {c.link_type for c in links})
 
+    def test_scar_shared_receipt_store_id_creates_typed_because_of(self):
+        from core.memory.narrative import detect_links
+
+        links = detect_links(
+            _ep("ep-scar", ["fabrication:1"], source_kind="scar"),
+            [_ep("ep-prior", ["fabrication:1"])],
+            scar_sidecar_rows=[],
+        )
+
+        self.assertEqual([c.link_type for c in links], ["same_thread", "because_of"])
+        because = links[1]
+        self.assertEqual(because.hook_class, "scar:fabrication")
+        self.assertEqual(because.evidence_ids, ["fabrication:1"])
+
 
 if __name__ == "__main__":
     unittest.main()

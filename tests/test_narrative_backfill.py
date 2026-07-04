@@ -1,4 +1,6 @@
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import closing
@@ -67,6 +69,25 @@ class NarrativeBackfillTests(unittest.TestCase):
         self.assertEqual(first["written"], 2)
         self.assertEqual(second["written"], 2)
         self.assertEqual(rows_after_first, rows_after_second)
+
+    def test_backfill_script_runs_from_repo_root(self):
+        root = Path(__file__).resolve().parent.parent
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                "scripts/narrative_backfill.py",
+                "list",
+                "--episode-db",
+                str(self.db),
+            ],
+            cwd=root,
+            text=True,
+            capture_output=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('"same_thread"', result.stdout)
 
 
 if __name__ == "__main__":
