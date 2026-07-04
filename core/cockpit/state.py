@@ -11,6 +11,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
+from core.cockpit.flags import (
+    compare_file_process_flags_by_process,
+    default_registry,
+    discover_observed_flags,
+    display_env_values,
+    parse_env_file,
+    unclassified_observed_flags,
+)
 from core.cockpit.readers import CockpitSourcePaths, source_health
 
 
@@ -19,15 +27,26 @@ class RuntimePaths:
     memory_dir: Path
     logs_dir: Path
     config_dir: Path
+    model_env_file: Path | None = None
+    code_roots: tuple[Path, ...] = ()
 
     @classmethod
     def defaults(cls) -> "RuntimePaths":
         from core.infra import paths
 
+        home = paths.home()
         return cls(
             memory_dir=paths.memory_dir(),
             logs_dir=paths.logs_dir(),
             config_dir=paths.config_dir(),
+            model_env_file=Path.home() / ".config" / "maez" / "model.env",
+            code_roots=(
+                home / "core",
+                home / "skills",
+                home / "scripts",
+                home / "web",
+                home / "daemon",
+            ),
         )
 
 
@@ -80,15 +99,49 @@ def _process_truth(
     service: str,
     command_runner: CommandRunner,
     proc_root: Path,
-) -> dict:
+) -> tuple[dict, dict[str, str]]:
     pid = _main_pid(service, command_runner)
-    env_status, env_flags = _process_env_flags(pid, proc_root)
+    env_status, raw_env_flags = _process_env_flags(pid, proc_root)
     return {
         "service": service,
         "pid": pid,
         "status": "active" if pid > 0 else "unavailable",
         "env_status": env_status,
-        "env_flags": env_flags,
+        "env_flags": display_env_values(raw_env_flags),
+    }, raw_env_flags
+
+
+def _model_env_file(runtime_paths: RuntimePaths) -> Path:
+    return runtime_paths.model_env_file or runtime_paths.config_dir / "model.env"
+
+
+def _flag_registry_state(
+    *,
+    runtime_paths: RuntimePaths,
+    daemon_env_flags: dict[str, str],
+    web_env_flags: dict[str, str],
+) -> dict:
+    model_env_file = _model_env_file(runtime_paths)
+    file_env = parse_env_file(model_env_file)
+    observed = discover_observed_flags(
+        code_roots=runtime_paths.code_roots,
+        env_files=[model_env_file],
+        process_envs=[daemon_env_flags, web_env_flags],
+    )
+    registry = default_registry()
+    return {
+        "registry": {name: entry.to_dict() for name, entry in registry.items()},
+        "observed": observed,
+        "file_env_path": str(model_env_file),
+        "file_process": compare_file_process_flags_by_process(
+            file_env=file_env,
+            process_envs={
+                "daemon": daemon_env_flags,
+                "web": web_env_flags,
+            },
+        ),
+        "unclassified_observed": unclassified_observed_flags(observed),
+        "write_endpoints_enabled": False,
     }
 
 
@@ -169,20 +222,27 @@ def build_state(
         logs_dir=runtime_paths.logs_dir,
     )
     proc = Path(proc_root)
+    daemon_truth, daemon_raw_flags = _process_truth(
+        service="maez.service",
+        command_runner=runner,
+        proc_root=proc,
+    )
+    web_truth, web_raw_flags = _process_truth(
+        service="maez-web.service",
+        command_runner=runner,
+        proc_root=proc,
+    )
     return {
         "kind": "cockpit_v2_state",
         "processes": {
-            "daemon": _process_truth(
-                service="maez.service",
-                command_runner=runner,
-                proc_root=proc,
-            ),
-            "web": _process_truth(
-                service="maez-web.service",
-                command_runner=runner,
-                proc_root=proc,
-            ),
+            "daemon": daemon_truth,
+            "web": web_truth,
         },
+        "flags": _flag_registry_state(
+            runtime_paths=runtime_paths,
+            daemon_env_flags=daemon_raw_flags,
+            web_env_flags=web_raw_flags,
+        ),
         "rooms": _rooms(),
         "sources": source_health(source_paths),
     }
