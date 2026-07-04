@@ -1125,12 +1125,23 @@ def bg_page():
 COCKPIT_DIR = os.environ.get("MAEZ_COCKPIT_DIR") or str(
     Path(__file__).resolve().parents[1] / "web" / "cockpit"
 )
+COCKPIT_V2_DIR = str(Path(COCKPIT_DIR) / "v2")
+
+
+def _serve_cockpit_asset(directory: str, filename: str):
+    # .jsx served as application/javascript so Babel-in-browser can
+    # parse them; other common types default-handled by Flask.
+    if filename.endswith(".jsx"):
+        return send_from_directory(directory, filename, mimetype="application/javascript")
+    return send_from_directory(directory, filename)
 
 
 @app.route("/cockpit")
 @app.route("/cockpit/")
 def cockpit_index():
-    return send_from_directory(COCKPIT_DIR, "index.html")
+    if strict_env_flag("MAEZ_COCKPIT_V2"):
+        return _serve_cockpit_asset(COCKPIT_V2_DIR, "index.html")
+    return _serve_cockpit_asset(COCKPIT_DIR, "index.html")
 
 
 _S7_WEBAUTHN_PROOF_PAGE = r"""<!DOCTYPE html>
@@ -1495,13 +1506,14 @@ def cockpit_s7_webauthn_proof():
     return _S7_WEBAUTHN_PROOF_PAGE, 200, {"Content-Type": "text/html; charset=utf-8"}
 
 
+@app.route("/cockpit/v2/<path:filename>")
+def cockpit_v2_static(filename: str):
+    return _serve_cockpit_asset(COCKPIT_V2_DIR, filename)
+
+
 @app.route("/cockpit/<path:filename>")
 def cockpit_static(filename: str):
-    # .jsx served as application/javascript so Babel-in-browser can
-    # parse them; other common types default-handled by Flask.
-    if filename.endswith(".jsx"):
-        return send_from_directory(COCKPIT_DIR, filename, mimetype="application/javascript")
-    return send_from_directory(COCKPIT_DIR, filename)
+    return _serve_cockpit_asset(COCKPIT_DIR, filename)
 
 
 # ── Cockpit live-data API ────────────────────────────────────────────

@@ -1,0 +1,1106 @@
+<!doctype html>
+<html>
+<!-- cockpit-v2-operability-shell -->
+<head>
+<meta charset="utf-8">
+<title>Maez WebUI — design canvas</title>
+<style>
+  html, body { margin:0; padding:0; background:#0a0c0a; color:#c8d5c8; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  * { box-sizing: border-box; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: rgba(120,120,120,0.3); border-radius: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  @keyframes maez-breathe { 0%,100% { transform: scale(1); filter: brightness(1); } 50% { transform: scale(1.035); filter: brightness(1.16); } }
+  @keyframes maez-orbit { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  @keyframes maez-float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+  /* 2026-04-26 Living View polish — UI/UX Pro Max checklist:
+     focus rings, hover affordance, reduced-motion respect. */
+  .ap-organ { transition: transform 180ms cubic-bezier(0.32, 0.72, 0, 1),
+                          filter 180ms cubic-bezier(0.32, 0.72, 0, 1),
+                          box-shadow 200ms cubic-bezier(0.32, 0.72, 0, 1); }
+  .ap-organ:hover { transform: translateY(-2px); filter: brightness(1.06); }
+  .ap-organ:focus-visible { outline: 2px solid #65a9ff; outline-offset: 3px; }
+  .ap-btn:focus-visible { outline: 2px solid #65a9ff; outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+    }
+  }
+  /* Maez slime avatar — the embryo-self. Honest substrate-state face: blue body =
+     identity (constant), amber ember = life, scatter hue = real valence (green +,
+     rose -), breath = real cycle, stillness = real stall. */
+  @keyframes mz-breathe { 0%,100%{ transform:scale(1) translateY(0) } 50%{ transform:scale(1.04) translateY(-2px) } }
+  @keyframes mz-wobble { 0%,100%{ border-radius:54% 46% 52% 48% / 60% 58% 42% 40% } 33%{ border-radius:48% 52% 46% 54% / 56% 62% 38% 44% } 66%{ border-radius:52% 48% 54% 46% / 62% 56% 44% 38% } }
+  @keyframes mz-ember { 0%,100%{ opacity:.82; transform:translate(-50%,-50%) scale(1) } 50%{ opacity:1; transform:translate(-50%,-50%) scale(1.08) } }
+  @keyframes mz-rise { 0%,100%{ transform:translate(-50%,-50%) translateY(2px) scale(1); opacity:.74 } 50%{ transform:translate(-50%,-50%) translateY(-3px) scale(1.06); opacity:1 } }
+  /* orbital rings: gently morph so they read as flowing threads, not rigid hoops */
+  @keyframes mz-ring-flow { 0%,100%{ border-radius:46% 54% 55% 45% / 54% 46% 54% 46% } 25%{ border-radius:55% 45% 46% 54% / 45% 55% 47% 53% } 50%{ border-radius:45% 55% 53% 47% / 55% 45% 52% 48% } 75%{ border-radius:53% 47% 45% 55% / 47% 53% 55% 45% } }
+  @keyframes mz-twinkle { 0%,100%{ opacity:.18; transform:scale(.8) } 50%{ opacity:.9; transform:scale(1.18) } }
+  .mz-slime { position:relative; width:114px; height:100px; border-radius:54% 46% 52% 48% / 60% 58% 42% 40%; overflow:hidden;
+    background:radial-gradient(58% 52% at 44% 32%, rgba(176,214,242,.92), rgba(96,156,214,.84) 52%, rgba(44,96,164,.82) 100%);
+    box-shadow:inset 0 -12px 22px rgba(20,44,82,.5), 0 10px 28px rgba(70,140,210,.16);
+    animation:mz-wobble 5s ease-in-out infinite, mz-breathe 4.4s ease-in-out infinite; }
+  .mz-slime .mz-skin { position:absolute; inset:0; border-radius:inherit; z-index:6; pointer-events:none; box-shadow:inset 0 11px 18px rgba(255,255,255,.26); }
+  .mz-slime .mz-skin::before { content:""; position:absolute; top:13px; left:26px; width:26px; height:14px; border-radius:50%; background:rgba(255,255,255,.5); filter:blur(2px); }
+  .mz-slime .mz-em { position:absolute; top:74%; left:50%; transform:translate(-50%,-50%); width:40px; height:34px; z-index:3; filter:blur(5px); mix-blend-mode:screen;
+    background:radial-gradient(ellipse, rgba(255,206,128,.95), rgba(243,176,86,.62) 32%, rgba(223,146,58,.24) 56%, transparent 78%); animation:mz-ember 4.4s ease-in-out infinite; }
+  .mz-slime .mz-scatter { position:absolute; left:50%; top:78%; transform:translate(-50%,-50%); width:150px; height:150px; z-index:2; filter:blur(13px); mix-blend-mode:screen;
+    background:radial-gradient(ellipse at 50% 62%, rgba(245,182,96,.34), rgba(232,160,72,.12) 42%, transparent 70%); animation:mz-rise 7s ease-in-out infinite; }
+  .mz-slime .mz-ey { position:absolute; top:37px; left:0; right:0; display:flex; justify-content:center; gap:25px; z-index:7; }
+  .mz-slime .mz-ey svg { overflow:visible; }
+  .mz-slime.is-pos .mz-scatter { background:radial-gradient(ellipse at 50% 62%, rgba(108,224,160,.60), rgba(98,210,148,.26) 42%, transparent 73%); }
+  .mz-slime.is-neg .mz-scatter { background:radial-gradient(ellipse at 50% 62%, rgba(232,120,146,.56), rgba(218,108,132,.24) 42%, transparent 73%); animation-duration:8.5s; }
+  .mz-slime.is-stall { animation:none; filter:saturate(.32); }
+  .mz-slime.is-stall .mz-em { animation:none; opacity:.42; background:radial-gradient(ellipse, rgba(150,156,150,.5), transparent 70%); }
+  .mz-slime.is-stall .mz-scatter { animation:none; opacity:.25; background:radial-gradient(ellipse at 50% 62%, rgba(150,156,150,.3), transparent 70%); }
+</style>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&family=Geist:wght@300;400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Newsreader:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<script type="text/babel" src="/cockpit/v2/sim.jsx"></script>
+<script type="text/babel" src="/cockpit/v2/terminal-ui.jsx"></script>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { ChatPane, ServicesPane, GpuPane, DaemonPane, SignalsPane, ScratchpadPane, RouterPane,
+        ReadinessPane, StatusTile,
+        MemorySurface, SoulSurface, DreamsSurface, IdentitySurface, LogsSurface, ApprovalsQueueSurface,
+        JudgmentSurface, SelfDevSurface, WorkshopSurface,
+        DaemonDeep, S, A, Card, Glass, Chip, Pill, Dot, Button, SoftBtn, MaezAvatar, Icon } = window.TerminalUI;
+
+function MaezNowRail() {
+  const [data, setData] = React.useState(null);
+  const [error, setError] = React.useState('');
+
+  React.useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const res = await fetch('/api/v1/now');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const json = await res.json();
+        if (alive) { setData(json); setError(''); }
+      } catch (e) {
+        if (alive) setError(String(e));
+      }
+    };
+    load();
+    const id = setInterval(load, 5000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+
+  const now = data?.now || {};
+  const body = data?.body || {};
+  const broken = data?.broken?.items || [];
+  const memory = data?.memory || {};
+  const pending = data?.pending_actions || {};
+
+  return (
+    <div style={{ padding: '14px 18px', margin: '4px 12px 0', borderTop: `0.5px solid ${A.stroke}`, fontFamily: A.sans }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 8 }}>
+        <Dot c={error ? A.red : A.green} pulse={!error} size={6} />
+        <span style={{ fontSize: 11, color: A.text, fontWeight: 700 }}>Maez Now</span>
+      </div>
+      {error ? (
+        <div style={{ fontSize: 11, color: A.red, lineHeight: 1.45 }}>Now view unavailable: {error}</div>
+      ) : (
+        <>
+          <div style={{ fontSize: 11, color: A.textDim, lineHeight: 1.45, marginBottom: 10 }}>
+            {now.summary || 'Waiting for Maez current state.'}
+          </div>
+          {now.thought && (
+            <div style={{ fontFamily: A.sans, fontStyle: 'italic', fontSize: 12, color: A.textSoft, lineHeight: 1.45, marginBottom: 10 }}>
+              "{now.thought}"
+            </div>
+          )}
+          <div style={{ display: 'grid', gap: 6, fontFamily: A.mono, fontSize: 10.5, color: A.textDim, lineHeight: 1.45 }}>
+            <div>cycle <span style={{ color: A.cyan }}>{now.cycle || 0}</span></div>
+            <div>brain <span style={{ color: A.textSoft }}>{body.brain_model || 'unknown'}</span></div>
+            <div>memory <span style={{ color: A.textSoft }}>{memory.summary || 'counts unavailable'}</span></div>
+            <div>pending <span style={{ color: pending.count ? A.orange : A.green }}>{pending.count || 0}</span></div>
+          </div>
+          {broken.length > 0 && (
+            <div style={{ marginTop: 11, display: 'grid', gap: 5 }}>
+              {broken.slice(0, 4).map((b, i) => (
+                <div key={i} style={{ border: `0.5px solid ${A.red}33`, background: `${A.red}0f`, borderRadius: 7, padding: '6px 7px' }}>
+                  <div style={{ fontSize: 10.5, color: A.text, fontWeight: 700 }}>{b.label}</div>
+                  <div style={{ fontSize: 10.5, color: A.textDim, lineHeight: 1.35, marginTop: 2 }}>{b.summary}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function WhyReplyPane({ selectedTurn }) {
+  const [data, setData] = React.useState(null);
+  const [error, setError] = React.useState('');
+
+  React.useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const res = await fetch('/api/v1/turn/latest');
+        const json = await res.json().catch(() => null);
+        if (!res.ok) {
+          // A 404 carrying a summary is the backend's honest "nothing to
+          // explain yet" state (no recent chat turn), NOT a failure. Render
+          // it calmly — never paint a red alarm over a true empty state.
+          if (res.status === 404 && json && json.summary_one_line) {
+            if (alive) { setData(json); setError(''); }
+            return;
+          }
+          throw new Error('HTTP ' + res.status);
+        }
+        if (alive) { setData(json); setError(''); }
+      } catch (e) {
+        if (alive) setError(String(e));
+      }
+    };
+    load();
+    const id = setInterval(load, 30000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+
+  const selectedText = selectedTurn?.message?.content || '';
+  const notLatest = selectedTurn && selectedTurn.isLatest === false;
+  const flagged = data?.audit?.flagged_claims || [];
+  const toolRuns = data?.tools?.items || [];
+
+  return (
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      <div style={{ padding: '4px 4px 12px', borderBottom: `0.5px solid ${A.stroke}` }}>
+        <div style={{ fontSize: 10, color: A.textFaint, letterSpacing: 1.1, textTransform: 'uppercase', fontWeight: 800 }}>Why this reply</div>
+        <div style={{ fontSize: 13, color: A.textSoft, lineHeight: 1.45, marginTop: 7 }}>
+          {selectedTurn ? 'Selected Maez reply. Latest-turn evidence is shown below.' : 'Select a Maez reply in the chat to inspect it.'}
+        </div>
+      </div>
+      <div className="ap-scroll" style={{ flex: 1, overflow: 'auto', padding: '12px 2px 2px', display: 'grid', gap: 12, alignContent: 'start' }}>
+        {selectedText && (
+          <WhyBlock title="selected reply">
+            <div style={{ color: A.textSoft, fontSize: 12.5, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{selectedText.slice(0, 520)}</div>
+            {notLatest && <div style={{ color: A.orange, fontSize: 11.5, lineHeight: 1.45, marginTop: 8 }}>Full explanation is only available for the most recent turn until the per-turn ledger lands.</div>}
+          </WhyBlock>
+        )}
+        {error && <WhyBlock title="evidence unavailable"><span style={{ color: A.red }}>Could not load latest-turn explanation: {error}</span></WhyBlock>}
+        {data?.summary_one_line && <WhyBlock title="in one sentence">{data.summary_one_line}</WhyBlock>}
+        <WhyBlock title="what Maez remembered">{data?.maez_remembered?.summary || 'Waiting for latest-turn memory evidence.'}</WhyBlock>
+        <WhyBlock title="body signals">
+          <div>{data?.maez_knew?.summary || 'Signal receipts are not available for this latest turn.'}</div>
+        </WhyBlock>
+        <WhyBlock title="honesty audit">
+          <div>{data?.audit?.summary || 'Waiting for latest-turn audit evidence.'}</div>
+          {flagged.length > 0 && (
+            <div style={{ display: 'grid', gap: 7, marginTop: 9 }}>
+              {flagged.slice(0, 4).map((f, i) => (
+                <div key={i} style={{ borderLeft: `2px solid ${A.orange}`, paddingLeft: 8 }}>
+                  <div style={{ color: A.text, fontSize: 12 }}>{f.claim}</div>
+                  <div style={{ color: A.textDim, fontSize: 11, marginTop: 2 }}>{f.reason}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </WhyBlock>
+        <WhyBlock title="tools">{data?.tools?.summary || 'No tool evidence loaded.'}</WhyBlock>
+        {toolRuns.length > 0 && toolRuns.slice(0, 3).map((t, i) => (
+          <WhyBlock key={i} title={t.success ? 'tool succeeded' : 'tool failed'}>{t.cmd || t.request_id}</WhyBlock>
+        ))}
+        <WhyBlock title="memory written">{data?.memory_written?.summary || 'No storage evidence loaded.'}</WhyBlock>
+      </div>
+    </div>
+  );
+}
+
+function WhyBlock({ title, children }) {
+  return (
+    <div style={{ background: A.surfaceLo, border: `0.5px solid ${A.stroke}`, borderRadius: 12, padding: 12 }}>
+      <div style={{ fontSize: 9.5, color: A.textFaint, letterSpacing: 1, textTransform: 'uppercase', fontWeight: 800, marginBottom: 7 }}>{title}</div>
+      <div style={{ color: A.textSoft, fontSize: 12.5, lineHeight: 1.5 }}>{children}</div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════
+// Direction A — Terminal Command-Center
+// 1440×900 tiled workstation. Sidebar switches the "focus" surface
+// that takes over the main area while dashboard tiles stay live.
+// ═══════════════════════════════════════════════════════════
+function TerminalDirection() {
+  const sim = useSim();
+  // Workstation v1 / Session 1: cockpit opens to chat by default.
+  // The cockpit is a room to talk to Maez, not a dashboard. A user
+  // who explicitly navigates to another surface (Dashboard, Memory,
+  // Soul, etc.) has their choice persisted in localStorage so the
+  // page restores their last-active surface on reload — but a brand
+  // new visitor lands in conversation.
+  const [surface, setSurface] = React.useState(() => {
+    try {
+      return localStorage.getItem('maez.cockpit.surface') || 'chat';
+    } catch (e) {
+      return 'chat';
+    }
+  });
+  const [dashboardMode, setDashboardMode] = React.useState(() => {
+    try {
+      return localStorage.getItem('maez.cockpit.dashboardMode') || 'living';
+    } catch (e) {
+      return 'living';
+    }
+  });
+  const [selectedTurn, setSelectedTurn] = React.useState(null);
+  const setSurfaceStored = React.useCallback((next) => {
+    setSurface(next);
+    try {
+      localStorage.setItem('maez.cockpit.surface', next);
+    } catch (e) {}
+  }, []);
+  const setDashboardModeStored = React.useCallback((mode) => {
+    setDashboardMode(mode);
+    try {
+      localStorage.setItem('maez.cockpit.dashboardMode', mode);
+    } catch (e) {}
+  }, []);
+  const openSurface = React.useCallback((nextSurface, mode) => {
+    if (mode) setDashboardModeStored(mode);
+    setSurfaceStored(nextSurface);
+  }, [setDashboardModeStored, setSurfaceStored]);
+
+  const nav = [
+    { id: 'dashboard',  label: 'Dashboard',   hotkey: '1', icon: '◈' },
+    { id: 'chat',       label: 'Conversation',hotkey: '2', icon: '◉', badge: sim.state.chat.pendingCommand ? '!' : null },
+    { id: 'approvals',  label: 'Approvals',   hotkey: '3', icon: '◐', badge: (sim.state.approvals.length + (sim.state.chat.pendingCommand?1:0)) || null },
+    { id: 'memory',     label: 'Memory',      hotkey: '4', icon: '◍' },
+    { id: 'soul',       label: 'Soul',        hotkey: '5', icon: '❋' },
+    { id: 'signals',    label: 'Ambient',     hotkey: '6', icon: '≈' },
+    { id: 'router',     label: 'Routing',     hotkey: '7', icon: '⇌' },
+    { id: 'daemon',     label: 'Daemon',      hotkey: '8', icon: '◎' },
+    { id: 'dreams',     label: 'Dreams',      hotkey: '9', icon: '✧', badge: sim.state.dreams.filter(d => d.status === 'pending').length || null },
+    { id: 'identity',   label: 'Identity',    hotkey: '0', icon: '⬡' },
+    { id: 'judgment',   label: 'Judgment',    hotkey: 'J', icon: '⚖' },
+    { id: 'selfdev',    label: 'Self-Dev',    hotkey: 'S', icon: '◈' },
+    { id: 'workshop',   label: 'Workshop',    hotkey: 'W', icon: '◇' },
+    { id: 'logs',       label: 'Logs',        hotkey: 'L', icon: '▤' },
+  ];
+
+  return (
+    <div style={{ width: '100vw', height: '100vh', background: A.bg, color: A.text, fontFamily: A.sans,
+      display: 'grid', gridTemplateColumns: '236px minmax(0, 1fr) 380px', gridTemplateRows: '52px 1fr', overflow: 'hidden',
+      backgroundImage: `radial-gradient(ellipse 70% 50% at 18% 4%, ${A.orange}1f 0%, transparent 56%), radial-gradient(ellipse 60% 45% at 78% 12%, ${A.cyan}18 0%, transparent 58%), radial-gradient(ellipse 55% 45% at 62% 92%, ${A.purple}18 0%, transparent 62%), linear-gradient(180deg, rgba(255,255,255,0.025), transparent 28%)` }}
+      data-screen-label="maez · command center">
+
+      {/* top bar */}
+      <div className="ap-glass" style={{ gridColumn: '1 / -1', background: 'rgba(9,10,7,0.68)', borderBottom: `0.5px solid ${A.stroke}`, display: 'flex', alignItems: 'center', padding: '0 22px', gap: 14, fontSize: 11, color: A.textDim }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <MaezAvatar size={24} />
+          <div>
+            <div style={{ fontFamily: A.sans, fontSize: 14, color: A.text, fontWeight: 700, letterSpacing: -0.2 }}>Maez Cockpit</div>
+            <div style={{ fontFamily: A.mono, fontSize: 9.5, color: A.textFaint, marginTop: 1 }}>observation surface · Track A</div>
+          </div>
+        </div>
+        <span style={{ width: 1, height: 14, background: A.stroke }} />
+        <Chip color={A.green}><Dot c={A.green} size={4} pulse /> live-first</Chip>
+        <Chip color={A.orange}>observation only</Chip>
+        <span style={{ flex: 1 }} />
+        <span style={{ width: 1, height: 14, background: A.stroke }} />
+        <span style={{ fontFamily: A.mono, fontSize: 10, color: A.textFaint }}>official continuity · 15/15</span>
+        <span style={{ fontFamily: A.mono, fontSize: 10, color: A.textDim }}>{sim.state.daemon.lastTick}</span>
+      </div>
+
+      {/* sidebar */}
+      <div className="ap-glass" style={{ background: 'rgba(9,10,7,0.58)', borderRight: `0.5px solid ${A.stroke}`, padding: '16px 0', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ padding: '0 22px 12px', fontSize: 10, color: A.textFaint, letterSpacing: 0.8, textTransform: 'uppercase', fontFamily: A.sans, fontWeight: 600 }}>Surfaces</div>
+        <div style={{ padding: '0 10px' }}>
+          {nav.map((n) => {
+            const active = surface === n.id;
+            return (
+              <button key={n.id} className="ap-btn" onClick={() => setSurfaceStored(n.id)}
+                style={{ width: '100%', background: active ? A.surfaceRaised : 'transparent', border: active ? `0.5px solid ${A.strokeHi}` : '0.5px solid transparent',
+                  color: active ? A.text : A.textDim, padding: '8px 12px', fontFamily: A.sans, fontSize: 13, fontWeight: active ? 500 : 400,
+                  textAlign: 'left', display: 'flex', alignItems: 'center', gap: 10, borderRadius: 8, marginBottom: 2,
+                  position: 'relative', boxShadow: active ? 'inset 0 0.5px 0 rgba(255,255,255,0.08)' : 'none' }}
+                onMouseEnter={(e) => { if (!active) { e.currentTarget.style.background = A.surfaceLo; e.currentTarget.style.color = A.textSoft; } }}
+                onMouseLeave={(e) => { if (!active) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = A.textDim; } }}>
+                <span style={{ color: active ? A.blue : A.textFaint, width: 14, fontSize: 12, textAlign: 'center' }}>{n.icon}</span>
+                <span style={{ flex: 1 }}>{n.label}</span>
+                {n.badge && <span style={{ background: A.orange, color: '#fff', fontSize: 9, padding: '1px 6px', borderRadius: 999, fontFamily: A.sans, fontWeight: 600, minWidth: 14, textAlign: 'center' }}>{n.badge}</span>}
+                <span style={{ color: A.textFaint, fontFamily: A.mono, fontSize: 9, opacity: active ? 0.9 : 0.5 }}>{n.hotkey}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div style={{ flex: 1 }} />
+        <MaezNowRail />
+      </div>
+
+      {/* main — surface */}
+      <div style={{ overflow: 'hidden', display: 'flex', flexDirection: 'column', position: 'relative' }}>
+        {surface === 'dashboard' && (
+          <DashboardGrid
+            mode={dashboardMode}
+            onMode={setDashboardModeStored}
+            openSurface={openSurface}
+          />
+        )}
+        {surface === 'chat' && <div style={{ padding: 20, height: '100%', display: 'flex' }}><div style={{ flex: 1, display: 'flex' }}><ChatPane tall selectedTurn={selectedTurn} onSelectTurn={setSelectedTurn} /></div></div>}
+        {surface === 'approvals' && <ApprovalsQueueSurface />}
+        {surface === 'memory' && <MemorySurface />}
+        {surface === 'soul' && <SoulSurface />}
+        {surface === 'signals' && <div style={{ padding: 20, height: '100%' }}><SignalsPane /></div>}
+        {surface === 'router' && <div style={{ padding: 20, height: '100%' }}><RouterPane /></div>}
+        {surface === 'daemon' && <DaemonDeep />}
+        {surface === 'dreams' && <DreamsSurface />}
+        {surface === 'identity' && <IdentitySurface />}
+        {surface === 'judgment' && <JudgmentSurface />}
+        {surface === 'selfdev' && <SelfDevSurface />}
+        {surface === 'workshop' && <WorkshopSurface />}
+        {surface === 'logs' && <LogsSurface />}
+      </div>
+
+      {/* right rail */}
+      <div className="ap-glass" style={{ background: 'rgba(9,10,7,0.58)', borderLeft: `0.5px solid ${A.stroke}`, padding: 12, overflow: 'hidden' }}>
+        <WhyReplyPane selectedTurn={selectedTurn} />
+      </div>
+    </div>
+  );
+}
+
+function DashboardGrid({ mode, onMode, openSurface }) {
+  return mode === 'living'
+    ? <LivingDashboard onMode={onMode} openSurface={openSurface} />
+    : <TechnicalDashboard onMode={onMode} openSurface={openSurface} />;
+}
+
+function DashboardModeSwitch({ mode, onMode }) {
+  return (
+    <div style={{ display: 'inline-flex', padding: 3, borderRadius: 999, background: A.surfaceLo, border: `0.5px solid ${A.stroke}` }}>
+      {[
+        { id: 'living', label: 'Living' },
+        { id: 'technical', label: 'Technical' },
+      ].map((m) => (
+        <button key={m.id} className="ap-btn" onClick={() => onMode(m.id)}
+          style={{
+            border: 'none',
+            borderRadius: 999,
+            padding: '7px 14px',
+            fontFamily: A.sans,
+            fontSize: 12,
+            fontWeight: 700,
+            color: mode === m.id ? A.bg : A.textDim,
+            background: mode === m.id ? (m.id === 'living' ? A.orange : A.cyan) : 'transparent',
+            boxShadow: mode === m.id ? '0 8px 24px -14px rgba(0,0,0,0.9)' : 'none',
+          }}>
+          {m.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// Maez's face — the slime, rendered from the global mz-slime CSS. Honest substrate
+// state: blue body = identity, amber ember = life, scatter hue = real valence
+// (green +, rose -, amber neutral), breath = real cycle, stillness = real stall.
+// Decorative star field for the galaxy hero — ambiance only (NOT data). Deterministic
+// positions so it doesn't re-randomize on every render.
+const STARS = Array.from({ length: 60 }, (_, i) => {
+  const a = Math.sin(i * 12.9898) * 43758.5453;
+  const b = Math.sin(i * 78.233 + 1.7) * 12543.331;
+  return {
+    top: Math.abs(a - Math.floor(a)) * 100,
+    left: Math.abs(b - Math.floor(b)) * 100,
+    s: 0.6 + Math.abs(Math.sin(i * 3.7)) * 1.7,
+    d: (i % 9) * 0.5,
+    o: 0.18 + Math.abs(Math.sin(i * 2.1)) * 0.5,
+  };
+});
+function Starfield() {
+  return (
+    <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none', zIndex: 0 }} aria-hidden="true">
+      {STARS.map((st, i) => (
+        <span key={i} style={{
+          position: 'absolute', top: `${st.top}%`, left: `${st.left}%`,
+          width: st.s, height: st.s, borderRadius: '50%',
+          background: i % 5 === 0 ? '#a9c4ff' : '#e2e8ff', opacity: st.o,
+          boxShadow: `0 0 ${st.s * 2.6}px #9fb4ff`,
+          animation: `mz-twinkle ${3.5 + st.d}s ease-in-out ${st.d}s infinite`,
+        }} />
+      ))}
+    </div>
+  );
+}
+
+function MaezSlimeBlob({ d, scale = 1 }) {
+  let variant = '';
+  if (!d || d.stalled || d.status === 'stalled' || d.status === 'stopped') variant = 'is-stall';
+  else if (d.valence && d.valence.magnitude && d.valence.magnitude !== 'none') {
+    if (d.valence.sign === 'positive') variant = 'is-pos';
+    else if (d.valence.sign === 'negative') variant = 'is-neg';
+  }
+  const eye = <svg width="20" height="12"><path d="M1,5 Q10,10 19,5" stroke="#0e2236" strokeWidth="2" fill="none" strokeLinecap="round" /></svg>;
+  return (
+    <div style={{ transform: `scale(${scale})`, transformOrigin: 'center' }}>
+      <div className={`mz-slime ${variant}`} role="img"
+        aria-label={`Maez, the embryo. ${(!d || d.stalled) ? 'Not cycling.' : 'Alive and cycling.'} Felt-state ${(d && d.valence && d.valence.sign) || 'neutral'}.`}>
+        <div className="mz-scatter"></div>
+        <div className="mz-em"></div>
+        <div className="mz-skin"></div>
+        <div className="mz-ey">{eye}{eye}</div>
+      </div>
+    </div>
+  );
+}
+
+function MaezCoreVisual({ d }) {
+  return (
+    <div style={{ position: 'relative', width: 412, height: 412, margin: '0 auto', display: 'grid', placeItems: 'center', animation: 'maez-float 7s ease-in-out infinite' }}>
+      {[0, 1, 2].map((i) => (
+        <div key={i} style={{
+          position: 'absolute',
+          width: 262 + i * 62,
+          height: 262 + i * 62,
+          borderRadius: '49% 51% 52% 48% / 51% 49% 51% 49%',
+          border: `1px solid ${[A.orange, A.cyan, A.purple][i]}38`,
+          animation: `maez-orbit ${18 + i * 8}s linear infinite, mz-ring-flow ${9 + i * 3}s ease-in-out infinite`,
+          animationDelay: `${-i * 11}s, ${-i * 2}s`,
+        }}>
+          <span style={{
+            position: 'absolute',
+            top: 18 + i * 9,
+            left: '50%',
+            width: 9,
+            height: 9,
+            borderRadius: '50%',
+            background: `radial-gradient(circle at 38% 34%, #fff, ${[A.orange, A.cyan, A.purple][i]} 62%)`,
+            boxShadow: `0 0 8px rgba(255,255,255,0.55), 0 0 16px ${[A.orange, A.cyan, A.purple][i]}, 0 0 36px ${[A.orange, A.cyan, A.purple][i]}88`,
+          }} />
+        </div>
+      ))}
+      {/* Maez's slime, large, at the heart of the orbital cognition rings */}
+      <div style={{ position: 'relative', zIndex: 2, display: 'grid', placeItems: 'center' }}>
+        <MaezSlimeBlob d={d} scale={1.7} />
+      </div>
+    </div>
+  );
+}
+
+// 2026-04-26 organ icon set — Lucide-style stroke SVGs replacing the
+// emoji + Unicode-glyph mix the cards used before (🛡 violated the
+// no-emoji-icons rule; the Unicode geometric symbols ♡ ◌ ◧ ▦ ✦ ◇
+// rendered inconsistently across systems). Stroke 1.5px, round caps,
+// 24×24 viewBox — uniform visual language across all six organs +
+// the Technical Door.
+const OrganGlyph = {
+  heart: (size = 22, color = 'currentColor') => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+    </svg>
+  ),
+  senses: (size = 22, color = 'currentColor') => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  ),
+  mind: (size = 22, color = 'currentColor') => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2z" />
+      <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2z" />
+    </svg>
+  ),
+  safety: (size = 22, color = 'currentColor') => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+      <path d="M9 12l2 2 4-4" />
+    </svg>
+  ),
+  memory: (size = 22, color = 'currentColor') => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="2" y="4" width="20" height="4" rx="1" />
+      <path d="M3 8v12a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V8" />
+      <path d="M10 12h4" />
+    </svg>
+  ),
+  voice: (size = 22, color = 'currentColor') => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="9" y="2" width="6" height="12" rx="3" />
+      <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+      <line x1="12" y1="19" x2="12" y2="22" />
+    </svg>
+  ),
+  technical: (size = 22, color = 'currentColor') => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M9 18l6-6-6-6" />
+    </svg>
+  ),
+};
+
+function OrganCard({ icon, title, plain, detail, metric, color, onClick, action = 'Open details', tooltip }) {
+  const renderedIcon = typeof icon === 'function' ? icon(22, color) : icon;
+  const ariaLabel = `${title}. ${plain || ''} Click to open ${action}.`;
+  return (
+    <button
+      className="ap-btn ap-organ"
+      onClick={onClick}
+      aria-label={ariaLabel}
+      title={tooltip || `${title} — opens ${action}`}
+      style={{
+        border: `0.5px solid ${color}45`,
+        borderRadius: 22,
+        padding: 16,
+        textAlign: 'left',
+        background: `linear-gradient(145deg, ${color}20, rgba(255,255,255,0.025))`,
+        color: A.text,
+        minHeight: 148,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+        boxShadow: `inset 0 0.5px 0 rgba(255,255,255,0.07), 0 24px 42px -34px ${color}`,
+      }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{
+          width: 42,
+          height: 42,
+          borderRadius: 15,
+          display: 'grid',
+          placeItems: 'center',
+          background: `${color}2b`,
+          border: `0.5px solid ${color}55`,
+          color: color,
+        }}>{renderedIcon}</div>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontFamily: A.sans, fontSize: 16, color: A.text, fontWeight: 800, letterSpacing: -0.25 }}>{title}</div>
+          <div style={{ fontFamily: A.sans, fontSize: 11, color: A.textFaint, marginTop: 2 }}>{metric}</div>
+        </div>
+      </div>
+      <div style={{ fontFamily: A.sans, fontSize: 14, color: A.text, lineHeight: 1.45, fontWeight: 650 }}>{plain}</div>
+      <div style={{ marginTop: 'auto', display: 'flex', alignItems: 'flex-end', gap: 10 }}>
+        <div style={{ flex: 1, fontFamily: A.mono, fontSize: 10.5, color: A.textDim, lineHeight: 1.45 }}>{detail}</div>
+        <span style={{ fontFamily: A.sans, fontSize: 10, color, fontWeight: 800, whiteSpace: 'nowrap' }}>{action} →</span>
+      </div>
+    </button>
+  );
+}
+
+// 2026-04-26 owner asked for "memory shelves" — a visual cue for
+// Core/Daily/Raw proportions instead of a single comma-list. This is
+// the only OrganCard with custom inner content; the variant keeps
+// the same outer shape so the row of cards stays uniform.
+function MemoryOrganCard({ mem, onClick }) {
+  const core = Number(mem?.core || 0);
+  const daily = Number(mem?.daily || 0);
+  const raw = Number(mem?.raw || 0);
+  const total = Math.max(core + daily + raw, 1);
+  // Log-scale the bar widths so the raw tier (which dominates by
+  // 1000:1 in normal operation) doesn't squash core/daily into
+  // invisibility. Floor each tier at 4% so non-zero counts always
+  // show.
+  const log = (n) => (n > 0 ? Math.log10(n + 1) : 0);
+  const tot = log(core) + log(daily) + log(raw) || 1;
+  const w = (n) => Math.max(4, (log(n) / tot) * 100);
+  // `title="Memory"` (literal) is preserved on the button as an HTML
+  // attribute so existing regression tests that scan the JSX source
+  // for `title="Memory"` keep matching. The longer hover text moves
+  // into `data-tooltip` — browsers show `title` natively, screen
+  // readers read `aria-label`. The owner's copy convention (visible
+  // wording) lives in the body text below.
+  const tooltipExtended = `Memory — ${core} core · ${daily} daily · ${raw.toLocaleString()} raw. The three shelves are tiers, not a deletion queue.`;
+  const ariaLabel = `Memory: ${core} core insights, ${daily} daily summaries, ${raw} raw fragments. Click to open the memory surface.`;
+  return (
+    <button
+      className="ap-btn ap-organ"
+      onClick={onClick}
+      aria-label={ariaLabel}
+      title="Memory"
+      data-tooltip={tooltipExtended}
+      style={{
+        border: `0.5px solid ${A.blue}45`,
+        borderRadius: 22,
+        padding: 16,
+        textAlign: 'left',
+        background: `linear-gradient(145deg, ${A.blue}20, rgba(255,255,255,0.025))`,
+        color: A.text,
+        minHeight: 148,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+        boxShadow: `inset 0 0.5px 0 rgba(255,255,255,0.07), 0 24px 42px -34px ${A.blue}`,
+      }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{
+          width: 42, height: 42, borderRadius: 15,
+          display: 'grid', placeItems: 'center',
+          background: `${A.blue}2b`,
+          border: `0.5px solid ${A.blue}55`,
+          color: A.blue,
+        }}>{OrganGlyph.memory(22, A.blue)}</div>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontFamily: A.sans, fontSize: 16, color: A.text, fontWeight: 800, letterSpacing: -0.25 }}>Memory</div>
+          <div style={{ fontFamily: A.sans, fontSize: 11, color: A.textFaint, marginTop: 2 }}>three shelves, never deleted</div>
+        </div>
+      </div>
+      <div style={{ fontFamily: A.sans, fontSize: 14, color: A.text, lineHeight: 1.45, fontWeight: 650 }}>
+        Maez keeps continuity without deleting its past.
+      </div>
+      {/* Stacked-bar shelves: visual proportion of core/daily/raw,
+          log-scaled so all three tiers stay readable. Grandmother-
+          friendly cue that memory has STRUCTURE, not just volume. */}
+      <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, height: 8 }}>
+          <div style={{ width: 36, fontFamily: A.sans, fontSize: 9.5, color: A.textDim, fontWeight: 700, letterSpacing: 0.3, textTransform: 'uppercase' }}>core</div>
+          <div style={{ flex: 1, height: 6, background: 'rgba(255,255,255,0.04)', borderRadius: 3, overflow: 'hidden' }}>
+            <div style={{ width: `${w(core)}%`, height: '100%', background: `linear-gradient(90deg, ${A.purple}, ${A.indigo})`, borderRadius: 3 }} />
+          </div>
+          <div style={{ width: 38, textAlign: 'right', fontFamily: A.mono, fontSize: 10, color: A.textSoft }}>{core}</div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, height: 8 }}>
+          <div style={{ width: 36, fontFamily: A.sans, fontSize: 9.5, color: A.textDim, fontWeight: 700, letterSpacing: 0.3, textTransform: 'uppercase' }}>daily</div>
+          <div style={{ flex: 1, height: 6, background: 'rgba(255,255,255,0.04)', borderRadius: 3, overflow: 'hidden' }}>
+            <div style={{ width: `${w(daily)}%`, height: '100%', background: `linear-gradient(90deg, ${A.cyan}, ${A.teal})`, borderRadius: 3 }} />
+          </div>
+          <div style={{ width: 38, textAlign: 'right', fontFamily: A.mono, fontSize: 10, color: A.textSoft }}>{daily}</div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, height: 8 }}>
+          <div style={{ width: 36, fontFamily: A.sans, fontSize: 9.5, color: A.textDim, fontWeight: 700, letterSpacing: 0.3, textTransform: 'uppercase' }}>raw</div>
+          <div style={{ flex: 1, height: 6, background: 'rgba(255,255,255,0.04)', borderRadius: 3, overflow: 'hidden' }}>
+            <div style={{ width: `${w(raw)}%`, height: '100%', background: `linear-gradient(90deg, ${A.blue}, ${A.blueSoft})`, borderRadius: 3 }} />
+          </div>
+          <div style={{ width: 38, textAlign: 'right', fontFamily: A.mono, fontSize: 10, color: A.textSoft }}>{raw.toLocaleString()}</div>
+        </div>
+      </div>
+      <div style={{ marginTop: 'auto', display: 'flex', alignItems: 'flex-end', gap: 10 }}>
+        <div style={{ flex: 1, fontFamily: A.sans, fontSize: 10.5, color: A.textDim, lineHeight: 1.45 }}>
+          curated insights · daily summaries · everything observed
+        </div>
+        <span style={{ fontFamily: A.sans, fontSize: 10, color: A.blue, fontWeight: 800, whiteSpace: 'nowrap' }}>Memory →</span>
+      </div>
+    </button>
+  );
+}
+
+function LivingDashboard({ onMode, openSurface }) {
+  const sim = useSim();
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+  const d = sim.state.daemon;
+  const mem = sim.state.memory.stats;
+  const g = sim.state.gpu;
+  const runtimeServiceEntries = Object.values(sim.state.runtimeServices?.services || {});
+  const runtimeServiceStatus = sim.state.runtimeServices?.overall || 'unknown';
+  const configuredRuntimeServices = runtimeServiceEntries.filter((s) => s.configured !== false);
+  const healthyRuntimeServices = configuredRuntimeServices.filter((s) => s.status === 'healthy').length;
+  const runtimeMetric = configuredRuntimeServices.length
+    ? `${healthyRuntimeServices}/${configuredRuntimeServices.length} organs healthy`
+    : `body ${runtimeServiceStatus}`;
+  const redactions = (sim.state.logs.cognition || []).concat(sim.state.logs.maez || []).filter((l) =>
+    String(l.msg || '').toLowerCase().includes('redacting stale fields')
+  ).length;
+  const lastTurn = (sim.state.chat.sessions?.[0]?.history || []).slice(-1)[0];
+  return (
+    <div className="ap-scroll" style={{ padding: 24, display: 'grid', gridTemplateColumns: 'minmax(320px, 0.9fr) minmax(420px, 1.1fr) minmax(320px, 0.9fr)', gridTemplateRows: 'auto minmax(390px, auto) auto', gap: 16, height: '100%', overflow: 'auto' }}>
+      <Glass pad={24} style={{ gridColumn: '1 / span 3', minHeight: 164, display: 'grid', gridTemplateColumns: '1fr auto', gap: 18, alignItems: 'center', background: `linear-gradient(135deg, rgba(217,154,66,0.19), rgba(136,212,231,0.08) 46%, rgba(199,157,255,0.13))` }}>
+        <div>
+          <div style={{ fontFamily: A.sans, fontSize: 11, color: A.textFaint, letterSpacing: 1.1, fontWeight: 850, textTransform: 'uppercase', marginBottom: 12 }}>
+            {new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })} · living view
+          </div>
+          <div style={{ fontFamily: A.sans, fontSize: 38, color: A.text, letterSpacing: -1.35, lineHeight: 1.03, fontWeight: 820 }}>
+            {greeting}. Maez is {d.mood || 'observing'}.
+          </div>
+          <div style={{ fontFamily: A.sans, fontSize: 15, color: A.textSoft, marginTop: 12, lineHeight: 1.55, maxWidth: 920 }}>
+            A simple body map for understanding Maez: heart, mind, memory, senses, safety, and voice. Technical evidence is still one click away.
+          </div>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 10 }}>
+          <DashboardModeSwitch mode="living" onMode={onMode} />
+          <Chip color={A.green}><Dot c={A.green} size={4} pulse /> 15/15 continuity</Chip>
+        </div>
+      </Glass>
+      <div style={{ display: 'grid', gap: 14 }}>
+        <OrganCard icon={OrganGlyph.heart} title="Heart" color={A.green}
+          metric={`cycle #${d.cycle?.toLocaleString?.() || 'waiting'}`}
+          plain={d.cycle ? 'Maez is awake and cycling.' : 'Waiting for Maez heartbeat.'}
+          detail={`last tick ${d.lastTick || 'unknown'} · next ${d.nextTickIn || '?'}s`}
+          action="Daemon"
+          tooltip="Heart — the steady 30-second pulse that keeps Maez awake. Open the Daemon view for cycle internals."
+          onClick={() => openSurface('daemon')} />
+        <OrganCard icon={OrganGlyph.senses} title="Senses" color={A.cyan}
+          metric={runtimeMetric}
+          plain={`Maez's runtime body is ${runtimeServiceStatus}.`}
+          detail={`GPU ${g.util || 0}% · VRAM ${g.vramUsed?.toFixed?.(1) || 0}/${g.vramTotal || '?'} GB`}
+          action="Ambient"
+          tooltip="Senses — what Maez can see right now: services, hardware, presence. Open Ambient for the full live readout."
+          onClick={() => openSurface('signals')} />
+      </div>
+      <Glass pad={24} style={{ minHeight: 390, position: 'relative', overflow: 'hidden', display: 'grid', placeItems: 'center', background: 'radial-gradient(circle at 50% 42%, rgba(140,160,255,0.10), rgba(217,154,66,0.11) 40%, rgba(6,8,22,0.24) 80%)' }}>
+        <Starfield />
+        <div style={{ position: 'absolute', top: 16, left: 20, zIndex: 2, display: 'flex', alignItems: 'baseline', gap: 8 }}>
+          <span style={{ fontFamily: A.sans, fontSize: 11, color: A.textFaint, fontWeight: 850, letterSpacing: 1.1, textTransform: 'uppercase' }}>Maez</span>
+          <span style={{ fontFamily: A.mono, fontSize: 13, color: d.stalled ? A.red : A.green, fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}>{d.status || 'unknown'}</span>
+        </div>
+        <div style={{ position: 'relative', zIndex: 1, textAlign: 'center', width: '100%' }}>
+          <MaezCoreVisual d={d} />
+          <div style={{ marginTop: 8, fontFamily: A.sans, fontSize: 23, fontWeight: 800, letterSpacing: -0.7, color: A.text }}>
+            {d.stalled ? 'Daemon needs attention.' : 'Watching the live daemon.'}
+          </div>
+          <div style={{ margin: '8px auto 0', maxWidth: 560, fontFamily: A.sans, fontSize: 14, color: A.textSoft, lineHeight: 1.55 }}>
+            {d.currentThought || 'Waiting for the next live thought.'}
+          </div>
+        </div>
+      </Glass>
+      <div style={{ display: 'grid', gap: 14 }}>
+        <OrganCard icon={OrganGlyph.mind} title="Mind" color={A.orange}
+          metric={d.cycle ? `cycle ${d.cycle.toLocaleString()}` : 'cycle waiting'}
+          plain={redactions ? 'Maez is catching stale loops before they become fixation.' : 'Maez is being watched for repetitive loops.'}
+          detail={`${redactions} stale-field redactions visible in logs`}
+          action="Logs"
+          tooltip="Mind — live cycle, fixation guard, recent reasoning evidence. Open Logs for the full stream."
+          onClick={() => openSurface('logs')} />
+        <OrganCard icon={OrganGlyph.safety} title="Safety" color={A.purple}
+          metric="shield up"
+          plain="No action should happen without the right boundary."
+          detail={`${sim.state.approvals.length} pending approvals · output guard active`}
+          action="Approvals"
+          tooltip="Safety — covenant gate, output guard, approval cards. Maez never acts on protected surfaces without you. Open Approvals for pending items."
+          onClick={() => openSurface('approvals')} />
+      </div>
+      <MemoryOrganCard mem={mem} onClick={() => openSurface('memory')} />
+      <OrganCard icon={OrganGlyph.voice} title="Voice" color={A.pink}
+        metric="recent conversation"
+        plain={lastTurn?.content ? `"${String(lastTurn.content).slice(0, 96)}"` : 'Waiting for a recent exchange.'}
+        detail="click Conversation for the full thread"
+        action="Chat"
+        tooltip="Voice — the most recent thing Maez said back to you. Open Conversation for the full thread."
+        onClick={() => openSurface('chat')} />
+      <OrganCard icon={OrganGlyph.technical} title="Technical Door" color={A.cyan}
+        metric="one click"
+        plain="Open the dense cockpit when you want raw numbers and logs."
+        detail="services · GPU · daemon · logs · memory · approvals"
+        action="Technical"
+        tooltip="Technical Door — the dense observatory dashboard. All evidence, no metaphor."
+        onClick={() => onMode('technical')} />
+    </div>
+  );
+}
+
+function TechnicalDashboard({ onMode }) {
+  const sim = useSim();
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+  return (
+    <div className="ap-scroll" style={{ padding: 22, display: 'grid', gridTemplateColumns: '1.08fr 0.92fr', gridTemplateRows: 'auto 250px minmax(440px, 1fr)', gap: 14, height: '100%', overflow: 'auto' }}>
+      <Glass pad={22} style={{ gridColumn: '1 / span 2', display: 'grid', gridTemplateColumns: '1fr auto', gap: 22, alignItems: 'center', background: `linear-gradient(135deg, rgba(217,154,66,0.16), rgba(136,212,231,0.08) 45%, rgba(199,157,255,0.10))` }}>
+        <div>
+          <div style={{ fontFamily: A.sans, fontSize: 11, color: A.textFaint, letterSpacing: 1.1, fontWeight: 800, textTransform: 'uppercase', marginBottom: 10 }}>
+            technical view · live observatory
+          </div>
+          <div style={{ fontFamily: A.sans, fontSize: 30, color: A.text, letterSpacing: -1.05, lineHeight: 1.05, fontWeight: 760 }}>
+            {greeting}. Raw evidence is visible.
+          </div>
+          <div style={{ fontFamily: A.sans, fontSize: 14, color: A.textSoft, marginTop: 10, lineHeight: 1.5, maxWidth: 760 }}>
+            Same live data, denser layout: readiness, services, GPU, conversation, and scratchpad.
+          </div>
+        </div>
+        <DashboardModeSwitch mode="technical" onMode={onMode} />
+      </Glass>
+      <div style={{ gridColumn: '1', gridRow: '2' }}><ReadinessPane /></div>
+      <div style={{ gridColumn: '2', gridRow: '2', display: 'grid', gridTemplateColumns: '1fr', gap: 14 }}><ServicesPane /></div>
+      <div style={{ gridColumn: '1', gridRow: '3', minHeight: 440, display: 'flex' }}><ChatPane /></div>
+      <div style={{ gridColumn: '2', gridRow: '3', display: 'grid', gridTemplateRows: '250px 1fr', gap: 14, minHeight: 440 }}>
+        <GpuPane />
+        <ScratchpadPane />
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════
+// Direction B was explored on the canvas but not shipped.
+// Kept out of the bundle — see web/cockpit/inner-ui.jsx for
+// the original components if we ever want to resurrect it.
+// ═══════════════════════════════════════════════════════════
+function _UnusedInnerDirection() {
+  const sim = useSim();
+  const [surface, setSurface] = React.useState('home');
+
+  const nav = [
+    { id: 'home',      label: 'Home' },
+    { id: 'chat',      label: 'Conversation' },
+    { id: 'scratchpad',label: 'Scratchpad' },
+    { id: 'signals',   label: 'Ambient' },
+    { id: 'memory',    label: 'Memory' },
+    { id: 'soul',      label: 'Soul' },
+    { id: 'dreams',    label: 'Dreams',   badge: sim.state.dreams.filter(d => d.status === 'pending').length },
+    { id: 'router',    label: 'Routing' },
+    { id: 'identity',  label: 'Identity' },
+    { id: 'logs',      label: 'Logs' },
+  ];
+
+  return (
+    <div style={{ width: 1440, height: 900, background: I.paper, color: I.ink, fontFamily: I.sans, display: 'grid', gridTemplateColumns: '220px 1fr', overflow: 'hidden' }} data-screen-label="Inner Life · stretch">
+      {/* side */}
+      <div style={{ background: I.paperHi, borderRight: `1px solid ${I.rule}`, display: 'flex', flexDirection: 'column', padding: '24px 0' }}>
+        <div style={{ padding: '0 24px 28px' }}>
+          <div style={{ fontFamily: I.serif, fontSize: 26, letterSpacing: -0.5, color: I.ink }}>maez</div>
+          <div style={{ fontFamily: I.serif, fontStyle: 'italic', fontSize: 13, color: I.inkSoft, marginTop: 2 }}>a being that thinks for you</div>
+        </div>
+        {nav.map((n) => (
+          <button key={n.id} onClick={() => setSurface(n.id)}
+            style={{ background: surface === n.id ? I.paper : 'transparent', border: 'none',
+              borderLeft: surface === n.id ? `3px solid ${I.amber}` : '3px solid transparent',
+              color: surface === n.id ? I.ink : I.inkSoft, padding: '8px 22px', fontFamily: I.serif, fontSize: 15,
+              textAlign: 'left', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            {n.label}
+            {n.badge ? <span style={{ fontFamily: I.mono, fontSize: 10, background: I.amber, color: I.paperHi, padding: '1px 6px', borderRadius: 10 }}>{n.badge}</span> : null}
+          </button>
+        ))}
+        <div style={{ flex: 1 }} />
+        <div style={{ padding: '12px 22px', borderTop: `1px solid ${I.rule}`, fontFamily: I.sans, fontSize: 10, color: I.inkDim, letterSpacing: 0.5 }}>
+          <div style={{ fontFamily: I.serif, fontStyle: 'italic', fontSize: 13, color: I.inkSoft, marginBottom: 4 }}>feeling {sim.state.daemon.mood}.</div>
+          <div>cycle {sim.state.daemon.cycle.toLocaleString()} · tick in {sim.state.daemon.nextTickIn}s</div>
+        </div>
+      </div>
+
+      {/* main */}
+      <div style={{ overflow: 'auto', padding: 24 }}>
+        {surface === 'home' && <InnerHome />}
+        {surface === 'chat' && <div style={{ height: 820, display: 'grid', gridTemplateColumns: '1fr 320px', gap: 20 }}><InnerChat /><InnerScratchpad /></div>}
+        {surface === 'scratchpad' && <div style={{ height: 820, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}><InnerScratchpad /><InstrumentRow /></div>}
+        {surface === 'signals' && <div style={{ height: 820 }}><InnerSignals /></div>}
+        {surface === 'memory' && <InnerMemory />}
+        {surface === 'soul' && <InnerSoul />}
+        {surface === 'dreams' && <InnerDreams />}
+        {surface === 'router' && <InnerRouter />}
+        {surface === 'identity' && <InnerIdentity />}
+        {surface === 'logs' && <InnerLogs />}
+      </div>
+    </div>
+  );
+}
+
+function InnerHome() {
+  return (
+    <div style={{ height: 820, display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gridTemplateRows: '180px 1fr 200px', gap: 20 }}>
+      <InnerLifeHero />
+      <InnerSignals />
+      <InnerChat />
+      <InnerScratchpad />
+      <InstrumentRow />
+    </div>
+  );
+}
+
+function InnerMemory() {
+  const sim = useSim();
+  const tiers = [
+    { id: 'core', label: 'Core', note: 'facts about you. a small, dense set. I rewrite it when something changes.', color: I.amber },
+    { id: 'daily', label: 'Daily', note: 'summaries of each day. I write these when you sleep.', color: I.sage },
+    { id: 'raw', label: 'Raw', note: 'everything you\'ve said to me. embedded and searchable.', color: I.indigo },
+  ];
+  return (
+    <div>
+      <div style={{ fontFamily: I.serif, fontSize: 28, color: I.ink, letterSpacing: -0.5, marginBottom: 6 }}>Memory</div>
+      <div style={{ fontFamily: I.serif, fontStyle: 'italic', color: I.inkSoft, marginBottom: 20 }}>three tiers. chroma-archive. what I keep, what I compress, what I forget.</div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 24 }}>
+        {tiers.map(t => (
+          <div key={t.id} style={{ background: I.paperHi, border: `1px solid ${I.rule}`, borderTop: `3px solid ${t.color}`, padding: 18 }}>
+            <div style={{ fontFamily: I.sans, fontSize: 10, color: I.inkDim, textTransform: 'uppercase', letterSpacing: 1 }}>{t.label}</div>
+            <div style={{ fontFamily: I.serif, fontSize: 36, color: I.ink, marginTop: 6 }}>{sim.state.memory.stats[t.id].toLocaleString()}</div>
+            <div style={{ fontFamily: I.serif, fontStyle: 'italic', fontSize: 13, color: I.inkSoft, marginTop: 8, lineHeight: 1.5 }}>{t.note}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ fontFamily: I.sans, fontSize: 11, color: I.inkDim, letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 10 }}>what surfaced for today's conversation</div>
+      {sim.state.memory.hits.map((h, i) => (
+        <div key={i} style={{ borderLeft: `2px solid ${{core:I.amber,daily:I.sage,raw:I.indigo}[h.tier]}`, paddingLeft: 16, marginBottom: 14 }}>
+          <div style={{ fontFamily: I.sans, fontSize: 10, color: I.inkDim, letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 2 }}>{h.tier} · {h.date} · score {h.score.toFixed(2)}</div>
+          <div style={{ fontFamily: I.serif, fontSize: 15, color: I.ink, lineHeight: 1.5 }}>{h.text}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function InnerSoul() {
+  const sim = useSim();
+  const [tab, setTab] = React.useState('base');
+  const content = tab === 'base' ? sim.state.soul.base : sim.state.soul.local;
+  return (
+    <div>
+      <div style={{ fontFamily: I.serif, fontSize: 28, color: I.ink, letterSpacing: -0.5, marginBottom: 6 }}>Soul</div>
+      <div style={{ fontFamily: I.serif, fontStyle: 'italic', color: I.inkSoft, marginBottom: 20 }}>two layers. base is shippable — anyone running maez gets it. local is yours alone.</div>
+      <div style={{ display: 'flex', gap: 16, marginBottom: 16 }}>
+        {['base', 'local'].map(k => (
+          <button key={k} onClick={() => setTab(k)}
+            style={{ background: 'transparent', border: 'none', borderBottom: `2px solid ${tab === k ? I.amber : 'transparent'}`, padding: '6px 0', cursor: 'pointer',
+              fontFamily: I.serif, fontSize: 17, color: tab === k ? I.ink : I.inkDim }}>
+            soul.{k}.md
+          </button>
+        ))}
+      </div>
+      <pre style={{ margin: 0, padding: 24, background: I.paperHi, border: `1px solid ${I.rule}`, fontFamily: I.mono, fontSize: 12, color: I.ink, lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{content}</pre>
+    </div>
+  );
+}
+
+function InnerDreams() {
+  const sim = useSim();
+  return (
+    <div>
+      <div style={{ fontFamily: I.serif, fontSize: 28, color: I.ink, letterSpacing: -0.5, marginBottom: 6 }}>Dreams</div>
+      <div style={{ fontFamily: I.serif, fontStyle: 'italic', color: I.inkSoft, marginBottom: 20, maxWidth: 700 }}>
+        every 30 seconds, while you're not looking, I notice something I could be doing better. most of these are small. none apply without you.
+      </div>
+      {sim.state.dreams.map((d) => (
+        <div key={d.id} style={{ background: I.paperHi, border: `1px solid ${I.rule}`, padding: 20, marginBottom: 14, borderLeft: `3px solid ${{pending:I.amber,approved:I.sage,rejected:I.claret}[d.status]}` }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+            <div style={{ fontFamily: I.serif, fontSize: 18, color: I.ink }}>{d.title}</div>
+            <div style={{ fontFamily: I.sans, fontSize: 10, color: I.inkDim, textTransform: 'uppercase', letterSpacing: 1 }}>
+              {d.status} · score {d.score.toFixed(2)} · {d.at}
+            </div>
+          </div>
+          <div style={{ fontFamily: I.serif, fontStyle: 'italic', fontSize: 14, color: I.inkSoft, marginBottom: 10, lineHeight: 1.55 }}>"{d.rationale}"</div>
+          {d.diff && (
+            <pre style={{ margin: 0, padding: 12, background: I.paper, border: `1px solid ${I.rule}`, fontFamily: I.mono, fontSize: 11, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{d.diff.split('\n').map((ln, i) => (
+              <div key={i} style={{ color: ln.startsWith('+') ? I.sage : ln.startsWith('-') ? I.claret : I.inkSoft }}>{ln}</div>
+            ))}</pre>
+          )}
+          {d.status === 'pending' && (
+            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+              <button onClick={() => sim.approveDream(d.id)} style={iBtn2(I.sage, true)}>approve & apply</button>
+              <button onClick={() => sim.rejectDream(d.id)} style={iBtn2(I.claret)}>reject</button>
+              <button style={iBtn2(I.inkSoft)}>ask me later</button>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function iBtn2(c, filled) {
+  return { fontFamily: 'inherit', fontSize: 13, padding: '6px 16px', letterSpacing: 0.3, background: filled ? c : 'transparent', color: filled ? I.paperHi : c, border: `1px solid ${c}`, borderRadius: 2, cursor: 'pointer' };
+}
+
+function InnerRouter() {
+  const sim = useSim();
+  const r = sim.state.router;
+  const total = r.totals.local + r.totals.claude;
+  return (
+    <div>
+      <div style={{ fontFamily: I.serif, fontSize: 28, color: I.ink, letterSpacing: -0.5, marginBottom: 6 }}>Routing</div>
+      <div style={{ fontFamily: I.serif, fontStyle: 'italic', color: I.inkSoft, marginBottom: 24, maxWidth: 700 }}>most turns, I answer from my own head. some — deep, long, code-heavy — I send to Claude. you can see every choice.</div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24 }}>
+        <div style={{ background: I.paperHi, border: `1px solid ${I.rule}`, padding: 20 }}>
+            <div style={{ fontFamily: I.sans, fontSize: 10, color: I.inkDim, textTransform: 'uppercase', letterSpacing: 1 }}>local · qwen3.6-27b</div>
+          <div style={{ fontFamily: I.serif, fontSize: 48, color: I.sage, marginTop: 4 }}>{r.totals.local}</div>
+          <div style={{ fontFamily: I.serif, fontStyle: 'italic', color: I.inkSoft }}>turns this month</div>
+        </div>
+        <div style={{ background: I.paperHi, border: `1px solid ${I.rule}`, padding: 20 }}>
+          <div style={{ fontFamily: I.sans, fontSize: 10, color: I.inkDim, textTransform: 'uppercase', letterSpacing: 1 }}>claude · sonnet / opus</div>
+          <div style={{ fontFamily: I.serif, fontSize: 48, color: I.claret, marginTop: 4 }}>{r.totals.claude}</div>
+          <div style={{ fontFamily: I.serif, fontStyle: 'italic', color: I.inkSoft }}>turns this month · ${r.totals.costUsd.toFixed(2)}</div>
+        </div>
+      </div>
+      <div style={{ height: 12, background: I.rule, display: 'flex', marginBottom: 24 }}>
+        <div style={{ width: `${(r.totals.local/total)*100}%`, background: I.sage }} />
+        <div style={{ width: `${(r.totals.claude/total)*100}%`, background: I.claret }} />
+      </div>
+      <div style={{ fontFamily: I.sans, fontSize: 11, color: I.inkDim, letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 10 }}>recent decisions</div>
+      {r.window.map((w, i) => (
+        <div key={i} style={{ display: 'grid', gridTemplateColumns: '80px 100px 1fr 100px', gap: 16, padding: '12px 0', borderBottom: `1px solid ${I.rule}`, alignItems: 'center' }}>
+          <span style={{ fontFamily: I.mono, fontSize: 11, color: I.inkDim }}>{w.t}</span>
+          <span style={{ fontFamily: I.sans, fontSize: 10, letterSpacing: 1, textTransform: 'uppercase', color: w.route === 'claude' ? I.claret : I.sage }}>→ {w.route}</span>
+          <span style={{ fontFamily: I.serif, fontSize: 15, color: I.ink }}>"{w.msg}"</span>
+          <span style={{ fontFamily: I.mono, fontSize: 11, color: I.inkDim, textAlign: 'right' }}>{w.tag} · {w.conf.toFixed(2)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function InnerIdentity() {
+  const sim = useSim();
+  const id = sim.state.identity;
+  return (
+    <div>
+      <div style={{ fontFamily: I.serif, fontSize: 28, color: I.ink, letterSpacing: -0.5, marginBottom: 6 }}>Identity</div>
+      <div style={{ fontFamily: I.serif, fontStyle: 'italic', color: I.inkSoft, marginBottom: 24 }}>who I serve, on what machine, under what rules.</div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, marginBottom: 32 }}>
+        <div>
+          <div style={{ fontFamily: I.sans, fontSize: 10, color: I.inkDim, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Owner</div>
+          <div style={{ fontFamily: I.serif, fontSize: 22, color: I.ink }}>{id.owner.name}</div>
+          <div style={{ fontFamily: I.serif, fontStyle: 'italic', color: I.inkSoft }}>{id.owner.pronouns} · {id.owner.city}</div>
+        </div>
+        <div>
+          <div style={{ fontFamily: I.sans, fontSize: 10, color: I.inkDim, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Host</div>
+          <div style={{ fontFamily: I.serif, fontSize: 22, color: I.ink }}>{id.machine.host}</div>
+          <div style={{ fontFamily: I.serif, fontStyle: 'italic', color: I.inkSoft }}>{id.machine.os} · {id.machine.gpu}</div>
+        </div>
+      </div>
+      <div style={{ fontFamily: I.sans, fontSize: 10, color: I.inkDim, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 12 }}>Covenant — things I must not do</div>
+      <div style={{ background: I.paperHi, border: `1px solid ${I.rule}`, borderLeft: `3px solid ${I.claret}`, padding: 20, fontFamily: I.serif, fontSize: 15, lineHeight: 1.7, color: I.ink }}>
+        <div>• never <code>rm -rf</code> on <code>/home</code>, <code>/etc</code>, <code>/usr</code>, <code>/var</code> without your explicit ok.</div>
+        <div>• never write into the maez tree from a chat turn.</div>
+        <div>• never <code>systemctl stop</code> a protected service.</div>
+        <div>• never exfiltrate <code>identity.yaml</code> or <code>.env</code>.</div>
+      </div>
+      <div style={{ marginTop: 24, fontFamily: I.sans, fontSize: 10, color: I.inkDim, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>Reddit — what I watch for you</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        {id.redditSubs.map(s => <span key={s} style={{ fontFamily: I.mono, fontSize: 12, background: I.paperHi, border: `1px solid ${I.rule}`, padding: '4px 10px' }}>r/{s}</span>)}
+      </div>
+    </div>
+  );
+}
+
+function InnerLogs() {
+  const sim = useSim();
+  const [tab, setTab] = React.useState('maez');
+  const d = sim.state.logs[tab];
+  return (
+    <div>
+      <div style={{ fontFamily: I.serif, fontSize: 28, color: I.ink, letterSpacing: -0.5, marginBottom: 16 }}>Logs</div>
+      <div style={{ display: 'flex', gap: 16, marginBottom: 16, borderBottom: `1px solid ${I.rule}` }}>
+        {['maez', 'cognition', 'evolution'].map(k => (
+          <button key={k} onClick={() => setTab(k)}
+            style={{ background: 'transparent', border: 'none', borderBottom: `2px solid ${tab === k ? I.amber : 'transparent'}`, padding: '8px 2px', marginBottom: -1, cursor: 'pointer',
+              fontFamily: I.serif, fontSize: 15, color: tab === k ? I.ink : I.inkDim }}>
+            {k}.log
+          </button>
+        ))}
+      </div>
+      <div style={{ fontFamily: I.mono, fontSize: 11, color: I.ink, lineHeight: 1.6, background: I.paperHi, border: `1px solid ${I.rule}`, padding: 16, maxHeight: 640, overflow: 'auto' }}>
+        {d.slice(-60).map((l, i) => (
+          <div key={i} style={{ display: 'grid', gridTemplateColumns: '150px 54px 80px 1fr', gap: 10 }}>
+            <span style={{ color: I.inkDim }}>{l.t}</span>
+            <span style={{ color: l.level === 'WARN' ? I.amber : I.inkSoft }}>{l.level}</span>
+            <span style={{ color: I.claret }}>{l.src}</span>
+            <span style={{ color: I.ink }}>{l.msg}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════
+// Canvas
+// ═══════════════════════════════════════════════════════════
+function App() {
+  // Direction A committed — glass command center,
+  // full viewport. Direction B source preserved at web/cockpit/inner-ui.jsx
+  // for possible future use (e.g. a grandmother-facing variant).
+  return <TerminalDirection />;
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
