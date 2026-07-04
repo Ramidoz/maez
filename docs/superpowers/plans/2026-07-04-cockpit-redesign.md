@@ -104,6 +104,7 @@ Add `core/cockpit/state.py` and `readers.py`:
 - organs grouped by room;
 - source health for A1, A2, A6, narrative, interaction preferences, receipts, logs;
 - missing DB/source renders `no_data` or `unavailable`;
+- A7/interiority sources expose only counters, health, and source availability; no private thought text, summaries, or examples are readable through cockpit V2 until Rohit decides A7;
 - no read path calls `_ensure_db`, writer constructors, or non-read sqlite openers.
 
 TDD:
@@ -117,7 +118,7 @@ Required tests:
 - empty temp runtime tree remains empty after aggregate state;
 - unavailable daemon is explicit;
 - existing read helpers are called through read-only/public read surfaces;
-- A7/interiority source returns counts only.
+- A7/interiority source returns counts/health only, and a fixture containing private thought text never appears in the JSON.
 
 ## Task 4 - Flag Registry And Owner Tier Table
 
@@ -126,7 +127,7 @@ Add `core/cockpit/flags.py` and an owner-reviewed tier artifact:
 - discover observed flags from code inventory, env files, and live process env;
 - classify each as T0 read-only, T1 safe write, T2 guarded write, or T3 ceremony;
 - unknown/unclassified flags are not writable;
-- file env and process env are both shown, with divergence state.
+- file env and process env are both shown, with divergence as a first-class warning state (`file_only`, `process_only`, or `mismatch`) rather than a footnote.
 
 Artifact:
 
@@ -143,7 +144,7 @@ TDD:
 Required tests:
 
 - unknown flag write is refused;
-- process/file divergence is rendered as warning;
+- process/file divergence is rendered as a warning state with both values visible;
 - T3 flag/action has no direct write endpoint;
 - registry entries include witness recipe and revert line.
 
@@ -206,6 +207,7 @@ Wire read-only Memory room data:
 - interaction preferences active/retracted history;
 - A2 continuity latest runs/verdicts;
 - metabolic memory state and curation status.
+- A7-pending interiority panel: counts/health/source availability only; no thought body, excerpts, summaries, or "representative samples."
 
 TDD:
 
@@ -220,6 +222,7 @@ Required tests:
 - self-evidence count is third-person/no-score;
 - preference retraction UI points to T2 receipt path;
 - A2 missing data renders insufficient/no_data, not fake continuity.
+- seeded private/interiority text does not appear in the memory room payload or DOM.
 
 ## Task 8 - Receipts Room
 
@@ -369,3 +372,4 @@ Stop and return to review if any of these happen:
 - a restart can happen automatically after a flag flip;
 - the UI falls back to realistic mock state on live-data failure;
 - private/interiority content appears before A7 is decided.
+- file/process flag divergence is hidden, flattened, or rendered as if the file value were live truth.
