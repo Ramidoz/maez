@@ -72,6 +72,64 @@ class EpisodeStoreNarrativeHookTests(unittest.TestCase):
         self.assertEqual({links[0]["from_episode_id"], links[0]["to_episode_id"]}, {first, second})
         self.assertEqual(links[0]["trust"], "derived")
 
+    def test_flag_gate_uses_house_strict_parser(self):
+        from core.memory.episodes import EpisodeStore
+        from core.memory.narrative import NarrativeStore
+
+        with mock.patch.dict(os.environ, {"MAEZ_NARRATIVE_SPINE": "yes"}, clear=False):
+            store = EpisodeStore(str(self.db))
+            first = store.add(
+                title="old",
+                summary="old",
+                participants=["Maez"],
+                source_memory_ids=[RAW_ID],
+                source_kind="telegram_exchange",
+            )
+            second = store.add(
+                title="new",
+                summary="new",
+                participants=["Maez"],
+                source_memory_ids=[RAW_ID],
+                source_kind="telegram_exchange",
+            )
+
+        links = NarrativeStore(self.db).links_for(second)
+        self.assertEqual(len(links), 1)
+        self.assertEqual({links[0]["from_episode_id"], links[0]["to_episode_id"]}, {first, second})
+
+    def test_hook_links_superseded_existing_episode_for_order_independence(self):
+        from core.memory.episodes import EpisodeStore
+        from core.memory.narrative import NarrativeStore
+
+        with mock.patch.dict(os.environ, {"MAEZ_NARRATIVE_SPINE": "1"}, clear=False):
+            store = EpisodeStore(str(self.db))
+            first = store.add(
+                title="old",
+                summary="old",
+                participants=["Maez"],
+                source_memory_ids=[RAW_ID],
+                source_kind="telegram_exchange",
+            )
+            successor = store.add(
+                title="successor",
+                summary="successor",
+                participants=["Maez"],
+                source_memory_ids=["raw-successor"],
+                source_kind="telegram_exchange",
+            )
+            store.supersede(first, reason="test supersession", superseded_by=successor)
+            second = store.add(
+                title="new",
+                summary="new",
+                participants=["Maez"],
+                source_memory_ids=[RAW_ID],
+                source_kind="telegram_exchange",
+            )
+
+        links = NarrativeStore(self.db).links_for(second)
+        self.assertEqual(len(links), 1)
+        self.assertEqual({links[0]["from_episode_id"], links[0]["to_episode_id"]}, {first, second})
+
     def test_hook_exception_cannot_break_episode_write(self):
         from core.memory.episodes import EpisodeStore
 

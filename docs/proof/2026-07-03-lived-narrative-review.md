@@ -21,15 +21,19 @@ Result:
   "counts": {
     "because_of": 0,
     "same_thread": 0,
-    "strings": 203
+    "strings": 207
   },
-  "total": 203
+  "total": 207
 }
 ```
 
 Read: the spine is honestly sparse at birth. There are zero receipt-proven
 `same_thread` joins and zero causal links. The existing structure is chapter
 stringing only (`strings`), not proof that episodes belong to the same thread.
+The backfill scans all episodes, including superseded rows, and reader surfaces
+filter retired rows. That keeps structural history order-independent: an episode
+superseded before backfill writes the same strings structure it would have kept
+if it had been superseded after linking.
 
 ## Detector Fixtures
 
@@ -79,7 +83,7 @@ Green focused suite excluding known memory-integrity drift:
   tests.test_metabolic_consumers tests.test_no_bare_sqlite_connect
 ```
 
-Result: `96 tests OK`.
+Result: `100 tests OK`.
 
 Known pre-existing `tests.test_memory_integrity_invariant` drift remains exactly
 the triaged set:

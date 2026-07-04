@@ -34,8 +34,8 @@ def _default_sidecar_db(episode_db: Path) -> Path:
     return episode_db.parent / "scar_tissue.db"
 
 
-def _active_episodes(episode_db: Path) -> list[dict]:
-    return EpisodeStore(str(episode_db)).list_active()
+def _all_episodes(episode_db: Path) -> list[dict]:
+    return EpisodeStore(str(episode_db)).list_all()
 
 
 def _sidecar_rows(episode_db: Path, sidecar_db: Path | None = None) -> list[dict]:
@@ -56,7 +56,7 @@ def _planned_candidates(
     *,
     sidecar_db: Path | None = None,
 ) -> list[LinkCandidate]:
-    episodes = _active_episodes(episode_db)
+    episodes = _all_episodes(episode_db)
     sidecar_rows = _sidecar_rows(episode_db, sidecar_db)
     by_key: dict[str, LinkCandidate] = {}
     for episode in episodes:

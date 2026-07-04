@@ -134,6 +134,50 @@ class NarrativeReaderTests(unittest.TestCase):
         self.assertNotIn("score", candidates[0])
         self.assertNotIn("boost", candidates[0])
 
+    def test_recall_seam_skips_superseded_thread_neighbors(self):
+        from core.memory.narrative_readers import thread_neighbor_candidates
+
+        ep_a = self.episodes.add(
+            title="anchor",
+            summary="anchor",
+            participants=("Maez",),
+            source_memory_ids=["raw-anchor"],
+            source_kind="raw_observation",
+        )
+        ep_b = self.episodes.add(
+            title="neighbor",
+            summary="neighbor",
+            participants=("Maez",),
+            source_memory_ids=["raw-neighbor"],
+            source_kind="raw_observation",
+        )
+        successor = self.episodes.add(
+            title="successor",
+            summary="successor",
+            participants=("Maez",),
+            source_memory_ids=["raw-successor"],
+            source_kind="raw_observation",
+        )
+        self.episodes.supersede(ep_b, reason="test supersession", superseded_by=successor)
+        self.narrative.upsert_link(
+            link_type="same_thread",
+            from_episode_id=ep_a,
+            to_episode_id=ep_b,
+            trust="derived",
+            evidence_ids=[RAW_B],
+            detector_version="v0",
+        )
+
+        with mock.patch.dict("os.environ", {"MAEZ_NARRATIVE_RECALL": "1"}):
+            candidates = thread_neighbor_candidates(
+                recalled_episode_ids=[ep_a],
+                existing_candidate_ids={ep_a},
+                episode_store=self.episodes,
+                narrative_store_factory=lambda: self.narrative,
+            )
+
+        self.assertEqual(candidates, [])
+
     def test_presence_seam_renders_content_light_open_threads_only_when_flagged(self):
         from core.memory.narrative_readers import format_open_threads_block
 

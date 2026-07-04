@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import sqlite3
 import uuid
 from collections.abc import Iterator
@@ -30,6 +29,8 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Optional, Sequence
+
+from core.infra.env_flags import strict_env_flag
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS episodes (
@@ -132,7 +133,7 @@ class EpisodeStore:
         self._felt_time_reader = felt_time_reader
         self._rhythm_reader = rhythm_reader
         self._narrative_hook = narrative_hook
-        if self._narrative_hook is None and os.environ.get("MAEZ_NARRATIVE_SPINE") == "1":
+        if self._narrative_hook is None and strict_env_flag("MAEZ_NARRATIVE_SPINE"):
             self._narrative_hook = self._default_narrative_hook()
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as c:
@@ -267,7 +268,7 @@ class EpisodeStore:
             store = NarrativeStore(self._path)
             existing = [
                 ep
-                for ep in (self.list_active() or [])
+                for ep in (self.list_all() or [])
                 if ep.get("id") != episode.get("id")
             ]
             sidecar_rows = ScarSidecar.list_all_at(self._path.parent / "scar_tissue.db")
@@ -336,6 +337,11 @@ class EpisodeStore:
             rows = c.execute(
                 "SELECT * FROM episodes WHERE status = 'active' ORDER BY created_at DESC"
             ).fetchall()
+        return [self._row_to_dict(r) for r in rows]
+
+    def list_all(self) -> list[dict]:
+        with self._connect() as c:
+            rows = c.execute("SELECT * FROM episodes ORDER BY created_at DESC").fetchall()
         return [self._row_to_dict(r) for r in rows]
 
     def active_count_and_newest_time(self) -> tuple[int, Optional[str]]:

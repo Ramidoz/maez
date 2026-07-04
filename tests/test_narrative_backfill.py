@@ -70,6 +70,31 @@ class NarrativeBackfillTests(unittest.TestCase):
         self.assertEqual(second["written"], 2)
         self.assertEqual(rows_after_first, rows_after_second)
 
+    def test_backfill_includes_superseded_episode_strings_for_order_independence(self):
+        from core.memory.episodes import EpisodeStore
+        from scripts.narrative_backfill import list_backfill
+
+        store = EpisodeStore(str(self.db))
+        superseded = store.add(
+            title="superseded source",
+            summary="superseded source",
+            participants=["Maez"],
+            source_memory_ids=["ep-a", "ep-b", "ep-c", "ep-d"],
+            source_kind="reflection",
+        )
+        successor = store.add(
+            title="successor",
+            summary="successor",
+            participants=["Maez"],
+            source_memory_ids=["raw-successor"],
+            source_kind="reflection",
+        )
+        store.supersede(superseded, reason="test supersession", superseded_by=successor)
+
+        report = list_backfill(self.db)
+
+        self.assertEqual(report["counts"]["strings"], 5)
+
     def test_backfill_script_runs_from_repo_root(self):
         root = Path(__file__).resolve().parent.parent
         result = subprocess.run(

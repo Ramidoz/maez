@@ -45,6 +45,8 @@ def thread_neighbor_candidates(
             episode = episode_store.get(other_id)
             if episode is None:
                 continue
+            if str(episode.get("status") or "") != "active":
+                continue
             seen.add(other_id)
             out.append(episode)
     return out
