@@ -48,6 +48,8 @@ from typing import Callable, Sequence
 
 logger = logging.getLogger("maez.lived_memory.reflection")
 
+CHAPTER_MIN_THREAD_MEMBERS = 3
+
 
 @dataclass(frozen=True)
 class Reflection:
@@ -272,4 +274,82 @@ def persist_reflections(
         except Exception as exc:
             logger.debug("reflection persist failed (skipping): %s", exc)
             continue
+    return out
+
+
+def select_threads_for_chapters(
+    *,
+    narrative_store,
+    episode_store,
+    min_members: int = CHAPTER_MIN_THREAD_MEMBERS,
+) -> list[list[str]]:
+    """Return same_thread components that do not already have a chapter.
+
+    At birth this often returns an honest empty list: threads exist only when
+    receipts have tied episodes together, and chapters are a later reflection
+    layer over those already-proven beads.
+    """
+
+    active_chapters = [
+        ep
+        for ep in episode_store.list_active()
+        if str(ep.get("source_kind") or "") == "thread_reflection"
+    ]
+    covered = {
+        tuple(sorted(str(item) for item in (ep.get("source_memory_ids") or [])))
+        for ep in active_chapters
+    }
+    selected: list[list[str]] = []
+    for thread in narrative_store.threads():
+        members = sorted(str(item) for item in thread if str(item))
+        if len(members) < min_members:
+            continue
+        if tuple(members) in covered:
+            continue
+        selected.append(members)
+    return selected
+
+
+def persist_thread_chapters(
+    reflections: Sequence[Reflection],
+    *,
+    thread_member_ids: Sequence[str],
+    episode_store,
+) -> list[str]:
+    """Persist chapter reflections that cite every episode in the thread."""
+
+    required = _ordered_thread_members(thread_member_ids)
+    out: list[str] = []
+    for reflection in reflections:
+        cited = _ordered_thread_members(reflection.source_memory_ids)
+        missing = [member for member in required if member not in cited]
+        if missing:
+            raise ValueError(
+                "thread chapter must cite every thread member; missing "
+                + ", ".join(missing)
+            )
+        short_title = reflection.text[:140].rstrip()
+        ep_id = episode_store.add(
+            title=short_title,
+            summary=reflection.text,
+            participants=("Maez",),
+            source_memory_ids=required,
+            source_kind="thread_reflection",
+            importance=4,
+            authorship="thread_reflection_synthesis",
+            memory_voice="maez_self",
+        )
+        out.append(ep_id)
+    return out
+
+
+def _ordered_thread_members(values: Sequence[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
     return out

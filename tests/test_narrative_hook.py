@@ -98,7 +98,8 @@ class EpisodeStoreNarrativeHookTests(unittest.TestCase):
             [
                 "core/learning/scar_tissue.py:402",
                 "core/memory/m1_lived_episode_promotion.py:752",
-                "core/memory/reflection.py:261",
+                "core/memory/reflection.py:263",
+                "core/memory/reflection.py:332",
                 "daemon/maez_daemon.py:8813",
                 "scripts/memory_reflection/nightly_lived_memory.py:156",
                 "scripts/scar_backfill_exhibits.py:168",
