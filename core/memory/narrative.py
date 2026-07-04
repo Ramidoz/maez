@@ -455,3 +455,45 @@ class NarrativeStore:
         data = dict(row)
         data["evidence"] = cls._decode_evidence(data.pop("evidence_json"))
         return data
+
+
+def narrative_coverage(*, episode_store, narrative_store: NarrativeStore) -> dict[str, dict]:
+    """Return A11 shadow coverage: which episodes are covered by chapters."""
+
+    episodes = list(episode_store.list_active() or [])
+    chapters = {
+        str(ep.get("id"))
+        for ep in episodes
+        if str(ep.get("source_kind") or "") == "thread_reflection"
+    }
+    coverage: dict[str, dict] = {}
+    for episode in episodes:
+        episode_id = str(episode.get("id") or "")
+        if not episode_id or episode_id in chapters:
+            continue
+        coverage[episode_id] = {
+            "covered": False,
+            "covering_chapters": [],
+            "evidence": [],
+        }
+
+    for chapter_id in sorted(chapters):
+        for link in narrative_store.links_for(chapter_id):
+            if link.get("link_type") != "strings":
+                continue
+            if str(link.get("from_episode_id")) != chapter_id:
+                continue
+            target_id = str(link.get("to_episode_id") or "")
+            if target_id not in coverage:
+                continue
+            evidence_ids: list[str] = []
+            for entry in link.get("evidence", []):
+                evidence_ids.extend(str(item) for item in (entry.get("ids") or []))
+            coverage[target_id]["covered"] = True
+            coverage[target_id]["covering_chapters"].append(chapter_id)
+            coverage[target_id]["evidence"].extend(_ordered_unique(evidence_ids))
+
+    for item in coverage.values():
+        item["covering_chapters"] = sorted(item["covering_chapters"])
+        item["evidence"] = _ordered_unique(item["evidence"])
+    return coverage
