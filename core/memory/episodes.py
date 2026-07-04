@@ -21,6 +21,8 @@ land without touching callers.
 from __future__ import annotations
 
 import json
+import logging
+import os
 import sqlite3
 import uuid
 from collections.abc import Iterator
@@ -98,6 +100,9 @@ _MIGRATIONS: tuple[str, ...] = (
 )
 
 
+logger = logging.getLogger("maez.lived_memory.episodes")
+
+
 def _now_iso() -> str:
     # Microsecond precision: two episodes added within the same
     # second must still sort deterministically by created_at, which
@@ -115,11 +120,20 @@ class EpisodeStore:
     covenant is structural here.
     """
 
-    def __init__(self, db_path: str, *, felt_time_reader: "Optional[Callable[[], Optional[dict]]]" = None,
-                 rhythm_reader: "Optional[Callable[[], Optional[dict]]]" = None):
+    def __init__(
+        self,
+        db_path: str,
+        *,
+        felt_time_reader: "Optional[Callable[[], Optional[dict]]]" = None,
+        rhythm_reader: "Optional[Callable[[], Optional[dict]]]" = None,
+        narrative_hook: "Optional[Callable[[dict], None]]" = None,
+    ):
         self._path = Path(db_path)
         self._felt_time_reader = felt_time_reader
         self._rhythm_reader = rhythm_reader
+        self._narrative_hook = narrative_hook
+        if self._narrative_hook is None and os.environ.get("MAEZ_NARRATIVE_SPINE") == "1":
+            self._narrative_hook = self._default_narrative_hook()
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as c:
             with c:
@@ -232,7 +246,47 @@ class EpisodeStore:
                         rhythm_all_time_gap_iqr_s,
                     ),
                 )
+        if self._narrative_hook is not None:
+            try:
+                episode = self.get(episode_id)
+                if episode is not None:
+                    self._narrative_hook(episode)
+            except Exception as exc:
+                logger.debug("narrative episode hook failed for %s: %s", episode_id, exc)
         return episode_id
+
+    def _default_narrative_hook(self) -> Callable[[dict], None]:
+        def _hook(episode: dict) -> None:
+            from core.learning.scar_tissue import ScarSidecar
+            from core.memory.narrative import (
+                DETECTOR_VERSION,
+                NarrativeStore,
+                detect_links,
+            )
+
+            store = NarrativeStore(self._path)
+            existing = [
+                ep
+                for ep in (self.list_active() or [])
+                if ep.get("id") != episode.get("id")
+            ]
+            sidecar_rows = ScarSidecar.list_all_at(self._path.parent / "scar_tissue.db")
+            for candidate in detect_links(
+                episode,
+                existing,
+                scar_sidecar_rows=sidecar_rows,
+            ):
+                store.upsert_link(
+                    link_type=candidate.link_type,
+                    from_episode_id=candidate.from_id,
+                    to_episode_id=candidate.to_id,
+                    trust=candidate.trust,
+                    evidence_ids=candidate.evidence_ids,
+                    detector_version=DETECTOR_VERSION,
+                    hook_class=candidate.hook_class,
+                )
+
+        return _hook
 
     def get(self, episode_id: str) -> Optional[dict]:
         with self._connect() as c:
