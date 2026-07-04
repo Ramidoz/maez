@@ -227,6 +227,13 @@
     },
     {
       "type": "sqlite_db",
+      "path": "memory/interaction_preferences.db",
+      "required": false,
+      "class": "required_welfare",
+      "comment": "Owner-authored interaction preference facts; protected when present, but absent until first explicit preference."
+    },
+    {
+      "type": "sqlite_db",
       "path": "memory/capability_acquisition_queue.db",
       "required": false,
       "class": "required_continuity",

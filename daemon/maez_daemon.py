@@ -6660,6 +6660,31 @@ class MaezDaemon:
             # internally when it actually has something to report.
             _user_msg_turn_id = None
 
+        if (
+            strict_env_flag("MAEZ_INTERACTION_PREFERENCES_SHADOW")
+            or strict_env_flag("MAEZ_INTERACTION_PREFERENCES")
+        ):
+            try:
+                from core.interaction_preferences.runtime import (
+                    process_owner_turn_preference,
+                )
+
+                process_owner_turn_preference(
+                    text=text,
+                    source=source,
+                    created_at_ms=int(_trace_t_start * 1000),
+                    created_at=datetime.now(timezone.utc)
+                    .replace(microsecond=0)
+                    .isoformat()
+                    .replace("+00:00", "Z"),
+                    logger=logger,
+                )
+            except Exception as _interaction_pref_exc:
+                logger.debug(
+                    "interaction preference capture skipped: %s",
+                    _interaction_pref_exc,
+                )
+
         # Inner-residue detection on incoming user text. See
         # core/inner_residue.py — rejection markers become persistent
         # state that shapes the next turn's voice. Silent on failure.
@@ -7345,6 +7370,34 @@ class MaezDaemon:
             logger.debug("temporal anchor recall failed: %s", _temporal_exc)
             _temporal_anchor_result = None
 
+        if strict_env_flag("MAEZ_INTERACTION_PREFERENCES"):
+            try:
+                from core.interaction_preferences.runtime import (
+                    interaction_preferences_prompt_context,
+                )
+
+                _interaction_preferences_context = (
+                    interaction_preferences_prompt_context()
+                )
+                if _interaction_preferences_context:
+                    messages.append(
+                        {
+                            "role": "system",
+                            "content": _interaction_preferences_context,
+                        }
+                    )
+                    system_part_capture.append(
+                        (
+                            "interaction_preferences",
+                            str(_interaction_preferences_context),
+                        )
+                    )
+            except Exception as _interaction_pref_prompt_exc:
+                logger.debug(
+                    "interaction preferences prompt skipped: %s",
+                    _interaction_pref_prompt_exc,
+                )
+
         # Step 5r: inject ambient context (weather, active window,
         # latest iPhone signals) into the chat prompt. The signal
         # pipeline has been ingesting since 2026-04-18 (~80 daily
@@ -7564,7 +7617,11 @@ class MaezDaemon:
             )
         )
         _legacy_call_purpose = _reply_decision.call_purpose
-        if transcript_context or evidence_directive:
+        if (
+            transcript_context
+            or evidence_directive
+            or any(label == "interaction_preferences" for label, _ in system_part_capture)
+        ):
             _log_daemon_system_part_shape(
                 surface=source,
                 call_purpose=_legacy_call_purpose,

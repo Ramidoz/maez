@@ -48,6 +48,18 @@ class ManifestCoverageTest(unittest.TestCase):
             "backup must protect them when present without failing before then",
         )
 
+    def test_interaction_preferences_are_welfare_protected_when_present(self):
+        manifest = self._manifest()
+        by_path = {entry["path"]: entry for entry in manifest["entries"]}
+        path = "memory/interaction_preferences.db"
+        self.assertIn(path, by_path, f"{path} not in manifest")
+        self.assertEqual(by_path[path].get("class"), "required_welfare")
+        self.assertFalse(
+            by_path[path].get("required"),
+            "interaction preferences are absent until first owner statement; "
+            "backup must protect them when present without failing before then",
+        )
+
     def test_skips_have_written_reasons(self):
         manifest = self._manifest()
         skips = manifest.get("intentionally_skipped", [])

@@ -165,6 +165,11 @@ def autonomy_preferences_db() -> Path:
     return memory_dir() / "autonomy_preferences.db"
 
 
+def interaction_preferences_db() -> Path:
+    """Sqlite DB for owner-authored interaction preference facts."""
+    return memory_dir() / "interaction_preferences.db"
+
+
 def maintenance_proposals_db() -> Path:
     """Sqlite DB for owner-ratified self-maintenance proposals."""
     return memory_dir() / "maintenance_proposals.db"
