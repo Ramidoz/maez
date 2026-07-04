@@ -10,10 +10,12 @@ derived from episode timestamps by readers; it is never stored as ``follows``.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import uuid
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
@@ -21,6 +23,13 @@ from typing import Sequence
 _DURABLE_LINK_TYPES = {"same_thread", "strings", "because_of"}
 _LINK_TRUSTS = {"derived", "confirmed"}
 _PROPOSAL_KINDS = {"same_story"}
+_RECEIPT_PREFIXES = ("consequence:", "fabrication:", "dream:", "veto:", "card:")
+_JOINABLE_CLASSES = {"raw_uuid", "receipt_store", "followup", "exhibit"}
+DETECTOR_VERSION = "v0"
+_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS narrative_links (
@@ -95,6 +104,141 @@ def link_key_for(
     if not hook_class:
         raise ValueError("because_of link_key requires hook_class")
     return f"because_of|{from_episode_id}|{to_episode_id}|{hook_class}"
+
+
+@dataclass(frozen=True)
+class LinkCandidate:
+    link_type: str
+    from_id: str
+    to_id: str
+    evidence_ids: list[str]
+    hook_class: str | None = None
+    trust: str = "derived"
+
+
+def classify_citation(source_id: str) -> str:
+    text = str(source_id or "")
+    if text.startswith("ep-"):
+        return "episode"
+    if text.startswith("core"):
+        return "core"
+    if text.startswith("daily"):
+        return "daily"
+    if text.startswith("followup-doc:"):
+        return "followup"
+    if text.startswith("exhibit:"):
+        return "exhibit"
+    if text.startswith(_RECEIPT_PREFIXES):
+        return "receipt_store"
+    if _UUID_RE.match(text):
+        return "raw_uuid"
+    return "unknown"
+
+
+def _episode_id(ep: dict) -> str:
+    return str(ep.get("id") or "")
+
+
+def _source_ids(ep: dict) -> list[str]:
+    return [str(item) for item in (ep.get("source_memory_ids") or []) if str(item)]
+
+
+def _joinable_sources(ep: dict) -> set[str]:
+    return {
+        source_id
+        for source_id in _source_ids(ep)
+        if classify_citation(source_id) in _JOINABLE_CLASSES
+    }
+
+
+def _receipt_class(source_id: str) -> str | None:
+    text = str(source_id)
+    for prefix in _RECEIPT_PREFIXES:
+        if text.startswith(prefix):
+            return prefix[:-1]
+    return None
+
+
+def detect_links(
+    new_episode: dict,
+    existing_index: Sequence[dict],
+    *,
+    scar_sidecar_rows: Sequence[dict],
+) -> list[LinkCandidate]:
+    """Return deterministic narrative links for ``new_episode``.
+
+    The detector is deliberately conservative: citation overlap creates a
+    thread only for joinable receipt classes, ``ep-*`` citations become
+    directed ``strings`` links, and causality is emitted only for typed scar
+    hooks where a scar episode shares a receipt-store id with an existing
+    episode.
+    """
+    new_id = _episode_id(new_episode)
+    if not new_id:
+        return []
+    out: list[LinkCandidate] = []
+
+    for source_id in _source_ids(new_episode):
+        if classify_citation(source_id) == "episode":
+            out.append(
+                LinkCandidate(
+                    link_type="strings",
+                    from_id=new_id,
+                    to_id=source_id,
+                    evidence_ids=[source_id],
+                )
+            )
+
+    new_joinable = _joinable_sources(new_episode)
+    for existing in existing_index:
+        old_id = _episode_id(existing)
+        if not old_id or old_id == new_id:
+            continue
+        shared = sorted(new_joinable & _joinable_sources(existing))
+        if shared:
+            out.append(
+                LinkCandidate(
+                    link_type="same_thread",
+                    from_id=new_id,
+                    to_id=old_id,
+                    evidence_ids=shared,
+                )
+            )
+        if str(new_episode.get("source_kind") or "") == "scar":
+            for source_id in shared:
+                receipt_class = _receipt_class(source_id)
+                if receipt_class is None:
+                    continue
+                out.append(
+                    LinkCandidate(
+                        link_type="because_of",
+                        from_id=new_id,
+                        to_id=old_id,
+                        evidence_ids=[source_id],
+                        hook_class=f"scar:{receipt_class}",
+                    )
+                )
+
+    for row in scar_sidecar_rows:
+        active = str(row.get("active_episode_id") or "")
+        priors = [str(item) for item in (row.get("prior_episode_ids") or []) if str(item)]
+        ids = _ordered_unique([active, *priors])
+        if new_id not in ids or len(ids) < 2:
+            continue
+        token = f"scar-sidecar:{row.get('dedup_key')}"
+        evidence = _ordered_unique([token, *(row.get("receipt_refs") or [])])
+        for other_id in ids:
+            if other_id == new_id:
+                continue
+            out.append(
+                LinkCandidate(
+                    link_type="same_thread",
+                    from_id=new_id,
+                    to_id=other_id,
+                    evidence_ids=evidence,
+                )
+            )
+    return out
 
 
 class NarrativeStore:
