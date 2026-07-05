@@ -73,6 +73,8 @@ const SIM = (() => {
       state: null,
       memoryRoom: null,
       receiptsRoom: null,
+      approvalsRoom: null,
+      connectorsRoom: null,
     },
     dreams: [],
     soul: {
@@ -225,6 +227,38 @@ const SIM = (() => {
       // didn't actually resolve it.
       state.approvals = state.approvals.filter((a) => a.id !== id);
       emit();
+    },
+    confirmApproval: async (id, decision, tier) => {
+      const payload = { decision, confirm_click_token: 'confirm' };
+      if (decision === 'approve' && tier === 'T2') {
+        const typed = window.prompt(`Type APPROVE ${id} to approve this guarded card`);
+        if (!typed) return;
+        payload.typed_confirmation = typed;
+      }
+      try {
+        const r = await fetch(`/api/v2/cockpit/approvals/${encodeURIComponent(id)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!r.ok) { markOffline('cockpitV2ApprovalsWrite', r.status); return; }
+        markLive('cockpitV2ApprovalsWrite');
+        await _pollCockpitV2ApprovalsRoom();
+      } catch (e) { markOffline('cockpitV2ApprovalsWrite', e); }
+    },
+    confirmConnector: async (id, action) => {
+      const typed = window.prompt(`Type ${action.toUpperCase()} ${id} to ${action} this connector`);
+      if (!typed) return;
+      try {
+        const r = await fetch(`/api/v2/cockpit/connectors/${encodeURIComponent(id)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action, confirm_click_token: 'confirm', typed_confirmation: typed }),
+        });
+        if (!r.ok) { markOffline('cockpitV2ConnectorsWrite', r.status); return; }
+        markLive('cockpitV2ConnectorsWrite');
+        await _pollCockpitV2ConnectorsRoom();
+      } catch (e) { markOffline('cockpitV2ConnectorsWrite', e); }
     },
     act: (name) => {
       if (name === 'forceDaemon') { state.daemon.nextTickIn = 1; emit(); }
@@ -397,6 +431,39 @@ const SIM = (() => {
     } catch (e) { markOffline('cockpitV2Receipts', e); }
   };
 
+  const _pollCockpitV2ApprovalsRoom = async () => {
+    try {
+      const r = await fetch('/api/v2/cockpit/approvals');
+      if (!r.ok) { markOffline('cockpitV2Approvals', r.status); return; }
+      const d = await r.json();
+      markLive('cockpitV2Approvals');
+      state.cockpitV2.approvalsRoom = d && typeof d === 'object' ? d : null;
+      if (Array.isArray(d.pending)) {
+        state.approvals = d.pending.map((c) => ({
+          id: c.request_id || c.id,
+          cmd: c.proposed_action_summary || c.plain_english || c.action,
+          reason: c.reason || '',
+          risk: c.decision_tier === 'T2' ? 'guarded' : 'low',
+          decision_tier: c.decision_tier,
+          required_confirmation: c.required_confirmation,
+          ts: new Date((c.created_at || 0) * 1000).toTimeString().slice(0, 8),
+        }));
+      }
+      emit();
+    } catch (e) { markOffline('cockpitV2Approvals', e); }
+  };
+
+  const _pollCockpitV2ConnectorsRoom = async () => {
+    try {
+      const r = await fetch('/api/v2/cockpit/connectors');
+      if (!r.ok) { markOffline('cockpitV2Connectors', r.status); return; }
+      const d = await r.json();
+      markLive('cockpitV2Connectors');
+      state.cockpitV2.connectorsRoom = d && typeof d === 'object' ? d : null;
+      emit();
+    } catch (e) { markOffline('cockpitV2Connectors', e); }
+  };
+
   const _pollLivedMemory = async () => {
     try {
       const r = await fetch('/api/v1/lived-memory');
@@ -486,7 +553,7 @@ const SIM = (() => {
   // cadences by staleness tolerance: daemon/gpu/cards update often,
   // soul/identity/logs rarely, memory/dreams in the middle.
   _pollDaemon(); _pollCards(); _pollGpu(); _pollServices();
-  _pollSignals(); _pollMemory(); _pollLivedMemory(); _pollCockpitV2MemoryRoom(); _pollCockpitV2ReceiptsRoom(); _pollDreams(); _pollSoul();
+  _pollSignals(); _pollMemory(); _pollLivedMemory(); _pollCockpitV2MemoryRoom(); _pollCockpitV2ReceiptsRoom(); _pollCockpitV2ApprovalsRoom(); _pollCockpitV2ConnectorsRoom(); _pollDreams(); _pollSoul();
   _pollIdentity(); _pollRouter(); _pollLogs(); _pollChatSessions();
   setInterval(_pollDaemon, 5000);
   setInterval(_pollCards, 10000);
@@ -497,6 +564,8 @@ const SIM = (() => {
   setInterval(_pollLivedMemory, 60000);
   setInterval(_pollCockpitV2MemoryRoom, 15000);
   setInterval(_pollCockpitV2ReceiptsRoom, 15000);
+  setInterval(_pollCockpitV2ApprovalsRoom, 10000);
+  setInterval(_pollCockpitV2ConnectorsRoom, 30000);
   setInterval(_pollDreams, 20000);
   setInterval(_pollSoul, 120000);
   setInterval(_pollIdentity, 300000);

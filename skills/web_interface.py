@@ -1162,6 +1162,52 @@ def _cockpit_restart_runner():
     return default_runner
 
 
+def _cockpit_approval_paths():
+    from core.cockpit.approvals import CockpitApprovalPaths
+
+    return CockpitApprovalPaths.defaults()
+
+
+def _cockpit_connector_paths():
+    from core.cockpit.connectors import CockpitConnectorPaths
+
+    return CockpitConnectorPaths.defaults()
+
+
+def _cockpit_existing_approve_channel(request_id: str, payload: dict | None = None) -> dict:
+    """Route cockpit approval through the existing daemon approval authority."""
+
+    import json as _json
+    import urllib.error as _urlerr
+    import urllib.request as _urlreq
+    from urllib.parse import quote as _q
+
+    body = _json.dumps(payload or {}).encode("utf-8")
+    req = _urlreq.Request(
+        f"{_DAEMON_BASE}/internal/approve_card/{_q(request_id, safe='')}",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with _urlreq.urlopen(req, timeout=_COCKPIT_APPROVE_TIMEOUT_S) as resp:
+            raw = resp.read()
+            status = resp.status
+    except _urlerr.HTTPError as e:
+        try:
+            raw = e.read()
+        except Exception:
+            raw = str(e).encode("utf-8")
+        status = e.code
+    try:
+        parsed = _json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else str(raw))
+    except Exception:
+        parsed = {"raw": raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)}
+    if isinstance(parsed, dict):
+        return {"http_status": status, **parsed}
+    return {"http_status": status, "payload": parsed}
+
+
 @app.route("/api/v2/cockpit/state")
 def api_cockpit_v2_state():
     if not strict_env_flag("MAEZ_COCKPIT_V2"):
@@ -1276,6 +1322,105 @@ def api_cockpit_v2_restart():
         return jsonify(result)
     if result.get("status") == "failed":
         return jsonify(result), 500
+    return jsonify(result), 400
+
+
+@app.route("/api/v2/cockpit/approvals")
+def api_cockpit_v2_approvals_room():
+    if not strict_env_flag("MAEZ_COCKPIT_V2"):
+        return jsonify(
+            {
+                "ok": False,
+                "status": "refused",
+                "reason": "cockpit_v2_off",
+            }
+        ), 404
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
+
+    from core.cockpit.approvals import build_approvals_room
+
+    return jsonify(build_approvals_room(_cockpit_approval_paths()))
+
+
+@app.route("/api/v2/cockpit/approvals/<request_id>", methods=["POST"])
+def api_cockpit_v2_approval_decision(request_id: str):
+    if not strict_env_flag("MAEZ_COCKPIT_V2"):
+        return jsonify(
+            {
+                "ok": False,
+                "status": "refused",
+                "request_id": request_id,
+                "reason": "cockpit_v2_off",
+            }
+        ), 404
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
+
+    from core.cockpit.approvals import apply_approval_decision
+
+    payload = request.get_json(silent=True) or {}
+    result = apply_approval_decision(
+        request_id,
+        str(payload.get("decision", "")),
+        paths=_cockpit_approval_paths(),
+        owner_authenticated=_owner_private_auth_ok(),
+        confirm_click_token=payload.get("confirm_click_token"),
+        typed_confirmation=payload.get("typed_confirmation"),
+        edited_params=payload.get("edited_params"),
+        existing_approve_channel=_cockpit_existing_approve_channel,
+    )
+    if result.get("status") == "applied":
+        return jsonify(result)
+    return jsonify(result), 400
+
+
+@app.route("/api/v2/cockpit/connectors")
+def api_cockpit_v2_connectors_room():
+    if not strict_env_flag("MAEZ_COCKPIT_V2"):
+        return jsonify(
+            {
+                "ok": False,
+                "status": "refused",
+                "reason": "cockpit_v2_off",
+            }
+        ), 404
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
+
+    from core.cockpit.connectors import build_connectors_room
+
+    return jsonify(build_connectors_room(_cockpit_connector_paths()))
+
+
+@app.route("/api/v2/cockpit/connectors/<connector_id>", methods=["POST"])
+def api_cockpit_v2_connector_action(connector_id: str):
+    if not strict_env_flag("MAEZ_COCKPIT_V2"):
+        return jsonify(
+            {
+                "ok": False,
+                "status": "refused",
+                "connector_id": connector_id,
+                "reason": "cockpit_v2_off",
+            }
+        ), 404
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
+
+    from core.cockpit.connectors import apply_connector_action
+
+    payload = request.get_json(silent=True) or {}
+    result = apply_connector_action(
+        connector_id,
+        str(payload.get("action", "")),
+        paths=_cockpit_connector_paths(),
+        owner_authenticated=_owner_private_auth_ok(),
+        confirm_click_token=payload.get("confirm_click_token"),
+        typed_confirmation=payload.get("typed_confirmation"),
+        cockpit_v2_enabled=strict_env_flag("MAEZ_COCKPIT_V2"),
+    )
+    if result.get("status") == "applied":
+        return jsonify(result)
     return jsonify(result), 400
 
 

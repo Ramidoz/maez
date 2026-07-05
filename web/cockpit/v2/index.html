@@ -71,7 +71,7 @@
 <script type="text/babel" data-presets="react">
 const { ChatPane, ServicesPane, GpuPane, DaemonPane, SignalsPane, ScratchpadPane, RouterPane,
         ReadinessPane, StatusTile,
-        MemorySurface, ReceiptsSurface, CeremonySurface, SoulSurface, DreamsSurface, IdentitySurface, LogsSurface, ApprovalsQueueSurface,
+        MemorySurface, ReceiptsSurface, CeremonySurface, SoulSurface, DreamsSurface, IdentitySurface, LogsSurface, ApprovalsQueueSurface, ConnectorsSurface,
         JudgmentSurface, SelfDevSurface, WorkshopSurface,
         DaemonDeep, S, A, Card, Glass, Chip, Pill, Dot, Button, SoftBtn, MaezAvatar, Icon } = window.TerminalUI;
 
@@ -316,6 +316,7 @@ function TerminalDirection() {
     { id: 'identity',   label: 'Identity',    hotkey: '0', icon: '⬡' },
     { id: 'judgment',   label: 'Judgment',    hotkey: 'J', icon: '⚖' },
     { id: 'receipts',   label: 'Receipts',    hotkey: 'R', icon: '◌' },
+    { id: 'connectors', label: 'Connectors',  hotkey: 'K', icon: '⟡' },
     { id: 'ceremony',   label: 'Ceremony',    hotkey: 'C', icon: '◈' },
     { id: 'selfdev',    label: 'Self-Dev',    hotkey: 'S', icon: '◈' },
     { id: 'workshop',   label: 'Workshop',    hotkey: 'W', icon: '◇' },
@@ -392,6 +393,7 @@ function TerminalDirection() {
         {surface === 'identity' && <IdentitySurface />}
         {surface === 'judgment' && <JudgmentSurface />}
         {surface === 'receipts' && <ReceiptsSurface />}
+        {surface === 'connectors' && <ConnectorsSurface />}
         {surface === 'ceremony' && <CeremonySurface />}
         {surface === 'selfdev' && <SelfDevSurface />}
         {surface === 'workshop' && <WorkshopSurface />}

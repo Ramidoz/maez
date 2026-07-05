@@ -2124,35 +2124,106 @@ function LogsSurface() {
 
 function ApprovalsQueueSurface() {
   const sim = useSim();
+  const room = sim.state.cockpitV2?.approvalsRoom || null;
+  const pending = Array.isArray(room?.pending) ? room.pending : sim.state.approvals;
   return (
     <div className="ap-scroll" style={{ height: '100%', overflow: 'auto', padding: 28 }}>
-      <SurfaceHeader title="Approvals" subtitle="Commands waiting for your nod" icon="◐" color={A.orange} />
+      <SurfaceHeader
+        title="Approvals"
+        subtitle="Existing pending-card queue · approve/reject through the original authority"
+        icon="◐"
+        color={A.orange}
+        right={<Chip color={room?.status === 'ok' ? A.green : A.yellow}>{room?.status || 'loading'}</Chip>}
+      />
       {sim.state.chat.pendingCommand && <div style={{ marginBottom: 14 }}><PendingCommand p={sim.state.chat.pendingCommand} /></div>}
-      {sim.state.approvals.map((a) => (
-        <Glass key={a.id} className="ap-rise" pad={18} style={{
+      {pending.map((a) => {
+        const id = a.request_id || a.id;
+        const summary = a.proposed_action_summary || a.cmd || a.action || id;
+        const tier = a.decision_tier || 'T1';
+        const reason = a.reason || a.plain_english || '';
+        const created = a.created_at ? new Date((a.created_at || 0) * 1000).toTimeString().slice(0, 8) : a.ts;
+        return (
+        <Glass key={id} className="ap-rise" pad={18} style={{
           marginBottom: 12,
           background: `linear-gradient(135deg, ${A.orange}14, ${A.orange}04)`,
           border: `0.5px solid ${A.orange}44`,
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
             <Dot c={A.orange} pulse />
-            <span style={{ fontFamily: A.sans, fontSize: 11, color: A.orange, letterSpacing: 0.3, textTransform: 'uppercase', fontWeight: 600 }}>Pending · {a.risk}-risk</span>
+            <span style={{ fontFamily: A.sans, fontSize: 11, color: A.orange, letterSpacing: 0.3, textTransform: 'uppercase', fontWeight: 600 }}>Pending · decision_tier {tier}</span>
             <span style={{ flex: 1 }} />
-            <span style={{ fontFamily: A.mono, fontSize: 10, color: A.textFaint }}>{a.ts}</span>
+            <span style={{ fontFamily: A.mono, fontSize: 10, color: A.textFaint }}>{created}</span>
           </div>
           <div style={{ background: A.bgElev, borderRadius: 10, padding: '9px 12px', marginBottom: 10, fontFamily: A.mono, fontSize: 12.5, color: A.text }}>
-            <span style={{ color: A.orange }}>$</span> {a.cmd}
+            <span style={{ color: A.orange }}>$</span> {summary}
           </div>
-          <div style={{ fontFamily: A.sans, fontSize: 13, color: A.textSoft, marginBottom: 12 }}>{a.reason}</div>
+          <div style={{ fontFamily: A.sans, fontSize: 13, color: A.textSoft, marginBottom: 12 }}>{reason}</div>
           <div style={{ display: 'flex', gap: 8 }}>
-            <Button variant="primary" color={A.green} onClick={() => sim.approveQueued(a.id, true)} icon={Icon.check(13)}>Approve</Button>
-            <Button variant="danger" onClick={() => sim.approveQueued(a.id, false)} icon={Icon.x(13)}>Deny</Button>
+            <Button variant="primary" color={A.green} onClick={() => sim.confirmApproval ? sim.confirmApproval(id, 'approve', tier) : sim.approveQueued(id, true)} icon={Icon.check(13)}>Approve</Button>
+            <Button variant="danger" onClick={() => sim.confirmApproval ? sim.confirmApproval(id, 'reject', tier) : sim.approveQueued(id, false)} icon={Icon.x(13)}>Deny</Button>
+          </div>
+        </Glass>
+      );})}
+      {!pending.length && !sim.state.chat.pendingCommand && (
+        <div style={{ textAlign: 'center', padding: '60px 0', color: A.textFaint, fontFamily: A.sans, fontSize: 14 }}>
+          Queue is empty. Maez is well-behaved.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ConnectorsSurface() {
+  const sim = useSim();
+  const room = sim.state.cockpitV2?.connectorsRoom || null;
+  const connectors = Array.isArray(room?.connectors) ? room.connectors : [];
+  const intake = room?.intake_bus || {};
+  return (
+    <div className="ap-scroll" style={{ height: '100%', overflow: 'auto', padding: 28 }}>
+      <SurfaceHeader
+        title="Connectors"
+        subtitle="Email, calendar, files, home, and MCP doors through the intake bus"
+        icon="⟡"
+        color={A.cyan}
+        right={<Chip color={room?.status === 'ok' ? A.green : A.yellow}>{room?.status || 'loading'}</Chip>}
+      />
+      <Glass pad={16} style={{ marginBottom: 14, border: `0.5px solid ${A.cyan}33` }}>
+        <div style={{ fontFamily: A.sans, fontSize: 12, color: A.textSoft, lineHeight: 1.6 }}>
+          Connector facts pass the immune doorway before memory: <span style={{ color: A.cyan, fontFamily: A.mono }}>{intake.doorway || 'core.intake_bus.admit'}</span>.
+          Bypass allowed: <span style={{ color: A.orange }}>{String(intake.bypass_allowed === true)}</span>.
+        </div>
+        <div style={{ fontFamily: A.sans, fontSize: 12, color: A.textDim, marginTop: 6 }}>
+          {intake.description || 'Every connector fact passes the immune doorway before memory.'}
+        </div>
+      </Glass>
+      {room?.status === 'unavailable' && (
+        <Glass pad={18} style={{ marginBottom: 14, border: `0.5px solid ${A.yellow}44`, background: `${A.yellow}0d` }}>
+          <div style={{ fontFamily: A.sans, fontSize: 13, color: A.yellow, fontWeight: 700, marginBottom: 6 }}>Registry unavailable</div>
+          <div style={{ fontFamily: A.mono, fontSize: 12, color: A.textSoft }}>{room.reason || 'connector_registry_absent'}</div>
+        </Glass>
+      )}
+      {connectors.map((c) => (
+        <Glass key={c.id} pad={18} style={{ marginBottom: 12, border: `0.5px solid ${A.cyan}33` }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+            <Dot c={c.connection_state === 'connected' ? A.green : A.yellow} />
+            <div style={{ fontFamily: A.sans, fontSize: 15, color: A.text, fontWeight: 700 }}>{c.label || c.id}</div>
+            <Chip color={A.cyan}>{c.tier}</Chip>
+            <Chip color={c.connection_state === 'connected' ? A.green : A.yellow}>{c.connection_state}</Chip>
+            <span style={{ flex: 1 }} />
+            <span style={{ fontFamily: A.mono, fontSize: 10, color: A.textFaint }}>{c.last_activity}</span>
+          </div>
+          <div style={{ fontFamily: A.mono, fontSize: 11, color: A.textDim, marginBottom: 10 }}>
+            scopes: {(c.granted_scopes || []).join(', ') || 'none'} · intake: {c.intake_bus || 'core.intake_bus.admit'}
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Button color={A.green} onClick={() => sim.confirmConnector && sim.confirmConnector(c.id, 'connect')}>Connect</Button>
+            <Button color={A.orange} onClick={() => sim.confirmConnector && sim.confirmConnector(c.id, 'disconnect')}>Disconnect</Button>
           </div>
         </Glass>
       ))}
-      {!sim.state.approvals.length && !sim.state.chat.pendingCommand && (
+      {room?.status === 'ok' && !connectors.length && (
         <div style={{ textAlign: 'center', padding: '60px 0', color: A.textFaint, fontFamily: A.sans, fontSize: 14 }}>
-          Queue is empty. Maez is well-behaved.
+          No connectors registered.
         </div>
       )}
     </div>
@@ -3214,7 +3285,7 @@ window.TerminalUI = {
   S, A, Card, Glass, Chip, Dot, Button, MaezAvatar, Icon, SegmentedControl, StatusTile,
   ChatPane, ServicesPane, GpuPane, DaemonPane, SignalsPane, ScratchpadPane, RouterPane,
   ReadinessPane,
-  MemorySurface, ReceiptsSurface, CeremonySurface, SoulSurface, DreamsSurface, IdentitySurface, LogsSurface, ApprovalsQueueSurface,
+  MemorySurface, ReceiptsSurface, CeremonySurface, SoulSurface, DreamsSurface, IdentitySurface, LogsSurface, ApprovalsQueueSurface, ConnectorsSurface,
   JudgmentSurface, SelfDevSurface, WorkshopSurface, DaemonDeep,
   // back-compat aliases (in case shell uses these)
   SoftBtn: Button, Pill: Chip,
