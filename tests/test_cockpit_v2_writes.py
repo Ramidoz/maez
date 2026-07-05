@@ -228,6 +228,20 @@ class CockpitV2WriteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(body["reason"], "cockpit_v2_off")
 
+    def test_route_passes_real_gate_values_into_write_helper(self):
+        os.environ.setdefault("MAEZ_IPHONE_INGEST_TOKEN", "dummy-test")
+        os.environ.setdefault("MAEZ_SECRETS_DISABLE_NEW_LOADER", "1")
+        import inspect
+        import skills.web_interface as wi
+
+        source = inspect.getsource(wi.api_cockpit_v2_flag_write)
+
+        self.assertIn("owner_authenticated=_owner_private_auth_ok()", source)
+        self.assertIn(
+            'cockpit_v2_enabled=strict_env_flag("MAEZ_COCKPIT_V2")',
+            source,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

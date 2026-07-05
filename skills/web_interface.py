@@ -1150,6 +1150,18 @@ def _cockpit_write_paths():
     return CockpitWritePaths.defaults()
 
 
+def _cockpit_restart_paths():
+    from core.cockpit.restart import CockpitRestartPaths
+
+    return CockpitRestartPaths.defaults()
+
+
+def _cockpit_restart_runner():
+    from core.cockpit.restart import default_runner
+
+    return default_runner
+
+
 @app.route("/api/v2/cockpit/flags/<name>", methods=["POST"])
 def api_cockpit_v2_flag_write(name: str):
     if not strict_env_flag("MAEZ_COCKPIT_V2"):
@@ -1171,15 +1183,46 @@ def api_cockpit_v2_flag_write(name: str):
         name,
         str(payload.get("value", "1")),
         paths=_cockpit_write_paths(),
-        owner_authenticated=True,
+        owner_authenticated=_owner_private_auth_ok(),
         confirm_click_token=payload.get("confirm_click_token"),
         typed_confirmation=payload.get("typed_confirmation"),
-        cockpit_v2_enabled=True,
+        cockpit_v2_enabled=strict_env_flag("MAEZ_COCKPIT_V2"),
     )
     if result.get("status") == "applied":
         return jsonify(result)
     status = 403 if result.get("reason") in {"ceremony_only", "read_only"} else 400
     return jsonify(result), status
+
+
+@app.route("/api/v2/cockpit/restart", methods=["POST"])
+def api_cockpit_v2_restart():
+    if not strict_env_flag("MAEZ_COCKPIT_V2"):
+        return jsonify(
+            {
+                "ok": False,
+                "status": "refused",
+                "reason": "cockpit_v2_off",
+            }
+        ), 404
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
+
+    from core.cockpit.restart import restart_service
+
+    payload = request.get_json(silent=True) or {}
+    result = restart_service(
+        str(payload.get("service", "maez.service")),
+        paths=_cockpit_restart_paths(),
+        owner_authenticated=_owner_private_auth_ok(),
+        cockpit_v2_enabled=strict_env_flag("MAEZ_COCKPIT_V2"),
+        typed_confirmation=payload.get("typed_confirmation"),
+        runner=_cockpit_restart_runner(),
+    )
+    if result.get("status") == "restarted":
+        return jsonify(result)
+    if result.get("status") == "failed":
+        return jsonify(result), 500
+    return jsonify(result), 400
 
 
 _S7_WEBAUTHN_PROOF_PAGE = r"""<!DOCTYPE html>
