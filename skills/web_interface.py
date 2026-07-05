@@ -1162,6 +1162,42 @@ def _cockpit_restart_runner():
     return default_runner
 
 
+@app.route("/api/v2/cockpit/state")
+def api_cockpit_v2_state():
+    if not strict_env_flag("MAEZ_COCKPIT_V2"):
+        return jsonify(
+            {
+                "ok": False,
+                "status": "refused",
+                "reason": "cockpit_v2_off",
+            }
+        ), 404
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
+
+    from core.cockpit.state import build_state
+
+    return jsonify(build_state())
+
+
+@app.route("/api/v2/cockpit/memory-room")
+def api_cockpit_v2_memory_room():
+    if not strict_env_flag("MAEZ_COCKPIT_V2"):
+        return jsonify(
+            {
+                "ok": False,
+                "status": "refused",
+                "reason": "cockpit_v2_off",
+            }
+        ), 404
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
+
+    from core.cockpit.memory_room import build_memory_room
+
+    return jsonify(build_memory_room())
+
+
 @app.route("/api/v2/cockpit/flags/<name>", methods=["POST"])
 def api_cockpit_v2_flag_write(name: str):
     if not strict_env_flag("MAEZ_COCKPIT_V2"):

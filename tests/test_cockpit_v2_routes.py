@@ -72,6 +72,54 @@ class CockpitV2RouteGateTests(unittest.TestCase):
         self.assertIn("navigator.credentials.create", body)
         self.assertNotIn("cockpit-v2-operability-shell", body)
 
+    def test_v2_state_route_is_flagged_owner_private_and_serves_memory_room(self):
+        wi, client = self._client()
+        payload = {
+            "kind": "cockpit_v2_state",
+            "memory_room": {
+                "kind": "cockpit_v2_memory_room",
+                "a7_interiority": {"content_policy": "sealed"},
+            },
+        }
+
+        with mock.patch.dict(os.environ, {"MAEZ_COCKPIT_V2": "0"}, clear=False):
+            off = client.get("/api/v2/cockpit/state")
+        self.assertEqual(off.status_code, 404)
+        off.close()
+
+        with mock.patch.dict(os.environ, {"MAEZ_COCKPIT_V2": "1"}, clear=False), \
+            mock.patch.object(wi, "_owner_private_auth_ok", return_value=False):
+            unauth = client.get("/api/v2/cockpit/state")
+        self.assertEqual(unauth.status_code, 401)
+        unauth.close()
+
+        with mock.patch.dict(os.environ, {"MAEZ_COCKPIT_V2": "1"}, clear=False), \
+            mock.patch.object(wi, "_owner_private_auth_ok", return_value=True), \
+            mock.patch("core.cockpit.state.build_state", return_value=payload):
+            ok = client.get("/api/v2/cockpit/state")
+
+        self.assertEqual(ok.status_code, 200)
+        self.assertEqual(ok.get_json()["memory_room"]["a7_interiority"]["content_policy"], "sealed")
+        ok.close()
+
+    def test_v2_memory_room_route_uses_narrow_memory_payload(self):
+        wi, client = self._client()
+        payload = {
+            "kind": "cockpit_v2_memory_room",
+            "a7_interiority": {"content_policy": "sealed"},
+        }
+
+        with mock.patch.dict(os.environ, {"MAEZ_COCKPIT_V2": "1"}, clear=False), \
+            mock.patch.object(wi, "_owner_private_auth_ok", return_value=True), \
+            mock.patch("core.cockpit.memory_room.build_memory_room", return_value=payload) as build:
+            ok = client.get("/api/v2/cockpit/memory-room")
+
+        self.assertEqual(ok.status_code, 200)
+        self.assertEqual(ok.get_json()["kind"], "cockpit_v2_memory_room")
+        self.assertEqual(ok.get_json()["a7_interiority"]["content_policy"], "sealed")
+        build.assert_called_once_with()
+        ok.close()
+
 
 if __name__ == "__main__":
     unittest.main()

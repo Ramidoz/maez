@@ -69,6 +69,10 @@ const SIM = (() => {
       stats: { raw: 0, daily: 0, core: 0 },
       hits: [],
     },
+    cockpitV2: {
+      state: null,
+      memoryRoom: null,
+    },
     dreams: [],
     soul: {
       base: '',
@@ -370,6 +374,17 @@ const SIM = (() => {
     } catch (e) { markOffline('memory', e); }
   };
 
+  const _pollCockpitV2State = async () => {
+    try {
+      const r = await fetch('/api/v2/cockpit/memory-room');
+      if (!r.ok) { markOffline('cockpitV2', r.status); return; }
+      const d = await r.json();
+      markLive('cockpitV2');
+      state.cockpitV2.memoryRoom = d && typeof d === 'object' ? d : null;
+      emit();
+    } catch (e) { markOffline('cockpitV2', e); }
+  };
+
   const _pollLivedMemory = async () => {
     try {
       const r = await fetch('/api/v1/lived-memory');
@@ -459,7 +474,7 @@ const SIM = (() => {
   // cadences by staleness tolerance: daemon/gpu/cards update often,
   // soul/identity/logs rarely, memory/dreams in the middle.
   _pollDaemon(); _pollCards(); _pollGpu(); _pollServices();
-  _pollSignals(); _pollMemory(); _pollLivedMemory(); _pollDreams(); _pollSoul();
+  _pollSignals(); _pollMemory(); _pollLivedMemory(); _pollCockpitV2State(); _pollDreams(); _pollSoul();
   _pollIdentity(); _pollRouter(); _pollLogs(); _pollChatSessions();
   setInterval(_pollDaemon, 5000);
   setInterval(_pollCards, 10000);
@@ -468,6 +483,7 @@ const SIM = (() => {
   setInterval(_pollSignals, 10000);
   setInterval(_pollMemory, 30000);
   setInterval(_pollLivedMemory, 60000);
+  setInterval(_pollCockpitV2State, 15000);
   setInterval(_pollDreams, 20000);
   setInterval(_pollSoul, 120000);
   setInterval(_pollIdentity, 300000);

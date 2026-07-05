@@ -1361,9 +1361,11 @@ function MemorySurface() {
     raw: 'Exact fragments: chats, observations, tool transcripts, and remembered events.',
   };
   const lived = sim.state.livedMemory || { episodes: [], edges: [], counts: { episodes: 0, edges: 0 } };
+  const room = sim.state.cockpitV2?.memoryRoom || null;
   return (
     <div className="ap-scroll" style={{ height: '100%', overflow: 'auto', padding: 28 }}>
       <SurfaceHeader title="Memory" subtitle="Core truths, daily summaries, and raw fragments" icon="◍" color={A.orange} />
+      <MemoryRoomOperabilitySection room={room} />
       <LivingMemorySection lived={lived} />
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 20 }}>
         {['core', 'daily', 'raw'].map((k) => (
@@ -1407,6 +1409,88 @@ function MemorySurface() {
         </Glass>
       ))}
     </div>
+  );
+}
+
+function MemoryRoomOperabilitySection({ room }) {
+  if (!room) {
+    return (
+      <Glass pad={16} style={{ marginBottom: 20, borderLeft: `3px solid ${A.blue}` }}>
+        <div style={{ fontSize: 11, color: A.textFaint, textTransform: 'uppercase', letterSpacing: 1, fontFamily: A.sans, fontWeight: 600 }}>
+          Memory organs · cockpit v2
+        </div>
+        <div style={{ fontSize: 12.5, color: A.textDim, marginTop: 8, lineHeight: 1.5 }}>
+          Waiting for /api/v2/cockpit/memory-room.
+        </div>
+      </Glass>
+    );
+  }
+  const narrative = room.narrative || {};
+  const links = narrative.links || {};
+  const scars = room.scars || {};
+  const recentScars = Array.isArray(scars.recent) ? scars.recent : [];
+  const selfEvidence = room.self_evidence || {};
+  const merged = selfEvidence.merged_events || {};
+  const prefs = room.interaction_preferences || {};
+  const continuity = room.continuity || {};
+  const a7 = room.a7_interiority || {};
+  const Stat = ({ label, value, tone = A.text }) => (
+    <div style={{ minWidth: 110 }}>
+      <div style={{ fontSize: 10, color: A.textFaint, textTransform: 'uppercase', letterSpacing: 1, fontFamily: A.sans, fontWeight: 600 }}>{label}</div>
+      <div style={{ fontFamily: A.mono, fontSize: 18, color: tone, marginTop: 4 }}>{value}</div>
+    </div>
+  );
+  return (
+    <Glass pad={16} style={{ marginBottom: 20, borderLeft: `3px solid ${A.orange}` }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
+        <div>
+          <div style={{ fontSize: 11, color: A.textFaint, textTransform: 'uppercase', letterSpacing: 1, fontFamily: A.sans, fontWeight: 600 }}>
+            Memory organs · cockpit v2
+          </div>
+          <div style={{ fontSize: 12, color: A.textDim, marginTop: 4, lineHeight: 1.45 }}>
+            Receipt counts, scars, continuity, and sealed interiority. Counts are evidence, not confession or grade.
+          </div>
+        </div>
+        <Chip color={A.green}>read-only</Chip>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 14 }}>
+        <Stat label="strings" value={Number(links.strings || 0).toLocaleString()} tone={A.violet || A.blue} />
+        <Stat label="same_thread" value={Number(links.same_thread || 0).toLocaleString()} tone={Number(links.same_thread || 0) ? A.green : A.textDim} />
+        <Stat label="because_of" value={Number(links.because_of || 0).toLocaleString()} tone={Number(links.because_of || 0) ? A.green : A.textDim} />
+        <Stat label="integrity receipts" value={Number(merged.distinct_integrity_events || 0).toLocaleString()} tone={A.blue} />
+        <Stat label="A7 private thoughts" value={Number(a7.private_thought_count || 0).toLocaleString()} tone={A.textDim} />
+      </div>
+      {Number(links.same_thread || 0) === 0 && (
+        <div style={{ fontSize: 12, color: A.textDim, lineHeight: 1.45, marginBottom: 12 }}>
+          same_thread 0 is honest sparse birth, not an error.
+        </div>
+      )}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10 }}>
+        <div style={{ fontSize: 12, color: A.textDim, lineHeight: 1.45 }}>
+          <strong style={{ color: A.text }}>A2 Continuity:</strong> {continuity.latest_verdict || 'insufficient_data'} · {Number(continuity.probe_runs || 0)} probe runs
+        </div>
+        <div style={{ fontSize: 12, color: A.textDim, lineHeight: 1.45 }}>
+          <strong style={{ color: A.text }}>Interaction Preferences:</strong> {Number(prefs.active || 0)} active · {Number(prefs.retracted || 0)} retracted · T2 receipts
+        </div>
+        <div style={{ fontSize: 12, color: A.textDim, lineHeight: 1.45 }}>
+          <strong style={{ color: A.text }}>A7 Interiority:</strong> content sealed · counts only
+        </div>
+      </div>
+      {recentScars.length > 0 && (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontSize: 10, color: A.textFaint, textTransform: 'uppercase', letterSpacing: 1, fontFamily: A.sans, fontWeight: 600, marginBottom: 8 }}>
+            Recent scars
+          </div>
+          {recentScars.slice(0, 3).map((scar) => (
+            <div key={`${scar.episode_id}-${scar.scar_class}`} style={{ fontSize: 12, color: A.textDim, lineHeight: 1.5, marginBottom: 6 }}>
+              <Chip color={A.orange}>{scar.scar_class || 'scar'}</Chip>{' '}
+              <span style={{ color: A.text }}>The correction: "{scar.correction_quote || ''}"</span>
+              <span style={{ fontFamily: A.mono, color: A.textFaint }}> · {(scar.receipt_refs || []).join(', ')}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Glass>
   );
 }
 

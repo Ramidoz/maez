@@ -19,6 +19,7 @@ from core.cockpit.flags import (
     parse_env_file,
     unclassified_observed_flags,
 )
+from core.cockpit.memory_room import build_memory_room
 from core.infra.env_flags import TRUTHY
 from core.cockpit.readers import CockpitSourcePaths, source_health
 
@@ -250,4 +251,5 @@ def build_state(
         ),
         "rooms": _rooms(),
         "sources": source_health(source_paths),
+        "memory_room": build_memory_room(source_paths),
     }
