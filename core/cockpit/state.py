@@ -19,6 +19,7 @@ from core.cockpit.flags import (
     parse_env_file,
     unclassified_observed_flags,
 )
+from core.infra.env_flags import TRUTHY
 from core.cockpit.readers import CockpitSourcePaths, source_health
 
 
@@ -115,6 +116,10 @@ def _model_env_file(runtime_paths: RuntimePaths) -> Path:
     return runtime_paths.model_env_file or runtime_paths.config_dir / "model.env"
 
 
+def _raw_flag_truthy(env: dict[str, str], name: str) -> bool:
+    return (env.get(name, "") or "").strip().lower() in TRUTHY
+
+
 def _flag_registry_state(
     *,
     runtime_paths: RuntimePaths,
@@ -141,7 +146,7 @@ def _flag_registry_state(
             },
         ),
         "unclassified_observed": unclassified_observed_flags(observed),
-        "write_endpoints_enabled": False,
+        "write_endpoints_enabled": _raw_flag_truthy(web_env_flags, "MAEZ_COCKPIT_V2"),
     }
 
 

@@ -1144,6 +1144,44 @@ def cockpit_index():
     return _serve_cockpit_asset(COCKPIT_DIR, "index.html")
 
 
+def _cockpit_write_paths():
+    from core.cockpit.writes import CockpitWritePaths
+
+    return CockpitWritePaths.defaults()
+
+
+@app.route("/api/v2/cockpit/flags/<name>", methods=["POST"])
+def api_cockpit_v2_flag_write(name: str):
+    if not strict_env_flag("MAEZ_COCKPIT_V2"):
+        return jsonify(
+            {
+                "ok": False,
+                "status": "refused",
+                "flag": name,
+                "reason": "cockpit_v2_off",
+            }
+        ), 404
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
+
+    from core.cockpit.writes import apply_flag_write
+
+    payload = request.get_json(silent=True) or {}
+    result = apply_flag_write(
+        name,
+        str(payload.get("value", "1")),
+        paths=_cockpit_write_paths(),
+        owner_authenticated=True,
+        confirm_click_token=payload.get("confirm_click_token"),
+        typed_confirmation=payload.get("typed_confirmation"),
+        cockpit_v2_enabled=True,
+    )
+    if result.get("status") == "applied":
+        return jsonify(result)
+    status = 403 if result.get("reason") in {"ceremony_only", "read_only"} else 400
+    return jsonify(result), status
+
+
 _S7_WEBAUTHN_PROOF_PAGE = r"""<!DOCTYPE html>
 <html lang="en">
 <head>

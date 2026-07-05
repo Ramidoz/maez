@@ -241,6 +241,39 @@ class CockpitV2StateTests(unittest.TestCase):
         self.assertEqual(row["process_value"], "mixed")
         self.assertEqual(row["process_values"], {"daemon": "1", "web": "0"})
 
+    def test_write_endpoint_state_follows_web_cockpit_v2_flag_strictly(self):
+        from core.cockpit.state import RuntimePaths, build_state
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            proc_root = root / "proc"
+            (proc_root / "111" / "environ").parent.mkdir(parents=True)
+            (proc_root / "222" / "environ").parent.mkdir(parents=True)
+            (proc_root / "111" / "environ").write_bytes(b"MAEZ_COCKPIT_V2=1\0")
+            (proc_root / "222" / "environ").write_bytes(b"MAEZ_COCKPIT_V2=0\0")
+
+            def runner(cmd):
+                if cmd[-1] == "maez.service":
+                    return "111\n"
+                if cmd[-1] == "maez-web.service":
+                    return "222\n"
+                raise AssertionError(cmd)
+
+            off_state = build_state(
+                runtime=RuntimePaths(root / "memory", root / "logs", root / "config"),
+                command_runner=runner,
+                proc_root=proc_root,
+            )
+            (proc_root / "222" / "environ").write_bytes(b"MAEZ_COCKPIT_V2=yes\0")
+            on_state = build_state(
+                runtime=RuntimePaths(root / "memory", root / "logs", root / "config"),
+                command_runner=runner,
+                proc_root=proc_root,
+            )
+
+        self.assertFalse(off_state["flags"]["write_endpoints_enabled"])
+        self.assertTrue(on_state["flags"]["write_endpoints_enabled"])
+
     def test_organs_are_grouped_by_room(self):
         from core.cockpit.state import RuntimePaths, build_state
 
