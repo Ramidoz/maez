@@ -6,15 +6,6 @@
 // inline approval, tool-call cards, and live waiting state.
 (function() {
 
-// inject fonts + css
-if (typeof document !== 'undefined' && !document.getElementById('apple-fonts')) {
-  const l = document.createElement('link');
-  l.id = 'apple-fonts';
-  l.rel = 'stylesheet';
-  l.href = 'https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap';
-  document.head.appendChild(l);
-}
-
 const A = {
   // Apple-style palette (dark)
   bg:          '#090a07',
@@ -1413,14 +1404,14 @@ function MemorySurface() {
 }
 
 function MemoryRoomOperabilitySection({ room }) {
-  if (!room) {
+  if (!room || room.status === 'unavailable') {
     return (
       <Glass pad={16} style={{ marginBottom: 20, borderLeft: `3px solid ${A.blue}` }}>
         <div style={{ fontSize: 11, color: A.textFaint, textTransform: 'uppercase', letterSpacing: 1, fontFamily: A.sans, fontWeight: 600 }}>
           Memory organs · cockpit v2
         </div>
         <div style={{ fontSize: 12.5, color: A.textDim, marginTop: 8, lineHeight: 1.5 }}>
-          Waiting for /api/v2/cockpit/memory-room.
+          Memory room unavailable{room?.reason ? ` · ${room.reason}` : ''}.
         </div>
       </Glass>
     );
@@ -1448,7 +1439,7 @@ function MemoryRoomOperabilitySection({ room }) {
             Memory organs · cockpit v2
           </div>
           <div style={{ fontSize: 12, color: A.textDim, marginTop: 4, lineHeight: 1.45 }}>
-            Receipt counts, scars, continuity, and sealed interiority. Counts are evidence, not self-claims or grades.
+            Receipt counts, scars, continuity, and sealed interiority. Counts are evidence, not self-claims or grades. Source /api/v2/cockpit/memory-room.
           </div>
         </div>
         <Chip color={A.green}>read-only</Chip>
@@ -1521,13 +1512,13 @@ function ReceiptsSurface() {
     </Glass>
   );
 
-  if (!room) {
+  if (!room || room.status === 'unavailable') {
     return (
       <div className="ap-scroll" style={{ height: '100%', overflow: 'auto', padding: 28 }}>
         <SurfaceHeader title="Receipts" subtitle="Prompt shape, grounding, and action receipts" icon="◌" color={A.blue} />
         <Glass pad={16} style={{ borderLeft: `3px solid ${A.blue}` }}>
           <div style={{ fontSize: 12.5, color: A.textDim, lineHeight: 1.5 }}>
-            Waiting for /api/v2/cockpit/receipts-room.
+            Receipts room unavailable{room?.reason ? ` · ${room.reason}` : ''}.
           </div>
         </Glass>
       </div>
@@ -2122,10 +2113,28 @@ function LogsSurface() {
   );
 }
 
+function WriteReceiptPanel({ receipt, surface }) {
+  if (!receipt || receipt.surface !== surface) return null;
+  return (
+    <Glass pad={12} style={{ marginBottom: 14, border: `0.5px solid ${A.green}44`, background: `${A.green}0b` }}>
+      <div style={{ fontSize: 10, color: A.textFaint, textTransform: 'uppercase', letterSpacing: 1, fontFamily: A.sans, fontWeight: 700, marginBottom: 6 }}>
+        receipt after action
+      </div>
+      <div style={{ display: 'grid', gap: 4, fontFamily: A.mono, fontSize: 11.5, color: A.textSoft }}>
+        <div>receipt_id · {receipt.receipt_id || 'none'}</div>
+        <div>status · {receipt.status || 'unknown'}</div>
+        <div>tier · {receipt.tier || 'unknown'} · required_confirmation · {receipt.required_confirmation || 'unknown'}</div>
+        {receipt.reason && <div>reason · {receipt.reason}</div>}
+      </div>
+    </Glass>
+  );
+}
+
 function ApprovalsQueueSurface() {
   const sim = useSim();
   const room = sim.state.cockpitV2?.approvalsRoom || null;
-  const pending = Array.isArray(room?.pending) ? room.pending : sim.state.approvals;
+  const pending = Array.isArray(room?.pending) ? room.pending : [];
+  const unavailable = !room || room.status === 'unavailable';
   return (
     <div className="ap-scroll" style={{ height: '100%', overflow: 'auto', padding: 28 }}>
       <SurfaceHeader
@@ -2135,11 +2144,19 @@ function ApprovalsQueueSurface() {
         color={A.orange}
         right={<Chip color={room?.status === 'ok' ? A.green : A.yellow}>{room?.status || 'loading'}</Chip>}
       />
+      {unavailable && (
+        <Glass pad={18} style={{ marginBottom: 14, border: `0.5px solid ${A.yellow}44`, background: `${A.yellow}0d` }}>
+          <div style={{ fontFamily: A.sans, fontSize: 13, color: A.yellow, fontWeight: 700, marginBottom: 6 }}>Approvals data unavailable</div>
+          <div style={{ fontFamily: A.mono, fontSize: 12, color: A.textSoft }}>{room?.reason || 'approvals_source_unavailable'}</div>
+        </Glass>
+      )}
+      <WriteReceiptPanel receipt={sim.state.cockpitV2?.lastWriteReceipt} surface="approvals" />
       {sim.state.chat.pendingCommand && <div style={{ marginBottom: 14 }}><PendingCommand p={sim.state.chat.pendingCommand} /></div>}
       {pending.map((a) => {
         const id = a.request_id || a.id;
         const summary = a.proposed_action_summary || a.cmd || a.action || id;
         const tier = a.decision_tier || 'T1';
+        const required = a.required_confirmation || (tier === 'T2' ? 'typed confirmation' : 'confirm click');
         const reason = a.reason || a.plain_english || '';
         const created = a.created_at ? new Date((a.created_at || 0) * 1000).toTimeString().slice(0, 8) : a.ts;
         return (
@@ -2158,15 +2175,19 @@ function ApprovalsQueueSurface() {
             <span style={{ color: A.orange }}>$</span> {summary}
           </div>
           <div style={{ fontFamily: A.sans, fontSize: 13, color: A.textSoft, marginBottom: 12 }}>{reason}</div>
+          <div style={{ fontFamily: A.sans, fontSize: 11.5, color: A.textDim, lineHeight: 1.5, marginBottom: 12 }}>
+            required_confirmation · {required}{tier === 'T2' ? ' · typed confirmation' : ''}<br />
+            Predicted effect · routes this explicit card decision through the existing approval authority, then shows the receipt after action.
+          </div>
           <div style={{ display: 'flex', gap: 8 }}>
-            <Button variant="primary" color={A.green} onClick={() => sim.confirmApproval ? sim.confirmApproval(id, 'approve', tier) : sim.approveQueued(id, true)} icon={Icon.check(13)}>Approve</Button>
-            <Button variant="danger" onClick={() => sim.confirmApproval ? sim.confirmApproval(id, 'reject', tier) : sim.approveQueued(id, false)} icon={Icon.x(13)}>Deny</Button>
+            <Button variant="primary" color={A.green} onClick={() => sim.confirmApproval && sim.confirmApproval(id, 'approve', tier)} icon={Icon.check(13)}>Approve</Button>
+            <Button variant="danger" onClick={() => sim.confirmApproval && sim.confirmApproval(id, 'reject', tier)} icon={Icon.x(13)}>Deny</Button>
           </div>
         </Glass>
       );})}
-      {!pending.length && !sim.state.chat.pendingCommand && (
+      {!unavailable && !pending.length && !sim.state.chat.pendingCommand && (
         <div style={{ textAlign: 'center', padding: '60px 0', color: A.textFaint, fontFamily: A.sans, fontSize: 14 }}>
-          Queue is empty. Maez is well-behaved.
+          No pending approval cards.
         </div>
       )}
     </div>
@@ -2178,6 +2199,7 @@ function ConnectorsSurface() {
   const room = sim.state.cockpitV2?.connectorsRoom || null;
   const connectors = Array.isArray(room?.connectors) ? room.connectors : [];
   const intake = room?.intake_bus || {};
+  const unavailable = !room || room.status === 'unavailable';
   return (
     <div className="ap-scroll" style={{ height: '100%', overflow: 'auto', padding: 28 }}>
       <SurfaceHeader
@@ -2196,12 +2218,13 @@ function ConnectorsSurface() {
           {intake.description || 'Every connector fact passes the immune doorway before memory.'}
         </div>
       </Glass>
-      {room?.status === 'unavailable' && (
+      {unavailable && (
         <Glass pad={18} style={{ marginBottom: 14, border: `0.5px solid ${A.yellow}44`, background: `${A.yellow}0d` }}>
-          <div style={{ fontFamily: A.sans, fontSize: 13, color: A.yellow, fontWeight: 700, marginBottom: 6 }}>Registry unavailable</div>
-          <div style={{ fontFamily: A.mono, fontSize: 12, color: A.textSoft }}>{room.reason || 'connector_registry_absent'}</div>
+          <div style={{ fontFamily: A.sans, fontSize: 13, color: A.yellow, fontWeight: 700, marginBottom: 6 }}>Connectors data unavailable</div>
+          <div style={{ fontFamily: A.mono, fontSize: 12, color: A.textSoft }}>Registry unavailable · {room?.reason || 'connector_registry_absent'}</div>
         </Glass>
       )}
+      <WriteReceiptPanel receipt={sim.state.cockpitV2?.lastWriteReceipt} surface="connectors" />
       {connectors.map((c) => (
         <Glass key={c.id} pad={18} style={{ marginBottom: 12, border: `0.5px solid ${A.cyan}33` }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
@@ -2214,6 +2237,10 @@ function ConnectorsSurface() {
           </div>
           <div style={{ fontFamily: A.mono, fontSize: 11, color: A.textDim, marginBottom: 10 }}>
             scopes: {(c.granted_scopes || []).join(', ') || 'none'} · intake: {c.intake_bus || 'core.intake_bus.admit'}
+          </div>
+          <div style={{ fontFamily: A.sans, fontSize: 11.5, color: A.textDim, lineHeight: 1.5, marginBottom: 12 }}>
+            required_confirmation · typed confirmation<br />
+            Predicted effect · changes only connector connection state; facts still enter through the intake bus, with receipt after action.
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <Button color={A.green} onClick={() => sim.confirmConnector && sim.confirmConnector(c.id, 'connect')}>Connect</Button>

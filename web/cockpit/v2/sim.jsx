@@ -75,6 +75,7 @@ const SIM = (() => {
       receiptsRoom: null,
       approvalsRoom: null,
       connectorsRoom: null,
+      lastWriteReceipt: null,
     },
     dreams: [],
     soul: {
@@ -209,25 +210,6 @@ const SIM = (() => {
       state.chat.pendingCommand = null;
       emit();
     },
-    approveQueued: (id, approve) => {
-      // approve=true → maez-web's /api/v1/cards/<id>/approve proxy
-      //   forwards to the daemon's /internal/approve_card/<id>, which
-      //   runs the full pipeline approve path (covenant → will-I →
-      //   execute → mark_done). Equivalent to typing 'yes' in Telegram;
-      //   the actual execution lives in the daemon process where
-      //   ActionEngine is. (Workstation v1 / Session 1: no more
-      //   browser-direct daemon calls.)
-      // approve=false → maez-web's safe deny (state transition only).
-      const path = approve === true ? 'approve' : 'deny';
-      fetch(`/api/v1/cards/${encodeURIComponent(id)}/${path}`, {
-        method: 'POST',
-      }).catch(() => {});
-      // Optimistic removal — the next _pollCards tick will re-verify
-      // against the DB and restore the card if the server-side call
-      // didn't actually resolve it.
-      state.approvals = state.approvals.filter((a) => a.id !== id);
-      emit();
-    },
     confirmApproval: async (id, decision, tier) => {
       const payload = { decision, confirm_click_token: 'confirm' };
       if (decision === 'approve' && tier === 'T2') {
@@ -241,6 +223,18 @@ const SIM = (() => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
         });
+        const result = await r.json().catch(() => ({}));
+        state.cockpitV2.lastWriteReceipt = {
+          surface: 'approvals',
+          action: decision,
+          request_id: id,
+          status: result.status || (r.ok ? 'applied' : 'failed'),
+          reason: result.reason || result.error || '',
+          tier: result.tier || tier,
+          receipt_id: result.receipt_id || null,
+          required_confirmation: result.required_confirmation || (tier === 'T2' ? 'typed confirmation' : 'confirm click'),
+        };
+        emit();
         if (!r.ok) { markOffline('cockpitV2ApprovalsWrite', r.status); return; }
         markLive('cockpitV2ApprovalsWrite');
         await _pollCockpitV2ApprovalsRoom();
@@ -255,6 +249,18 @@ const SIM = (() => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action, confirm_click_token: 'confirm', typed_confirmation: typed }),
         });
+        const result = await r.json().catch(() => ({}));
+        state.cockpitV2.lastWriteReceipt = {
+          surface: 'connectors',
+          action,
+          connector_id: id,
+          status: result.status || (r.ok ? 'applied' : 'failed'),
+          reason: result.reason || result.error || '',
+          tier: result.tier || 'T2',
+          receipt_id: result.receipt_id || null,
+          required_confirmation: result.required_confirmation || 'typed confirmation',
+        };
+        emit();
         if (!r.ok) { markOffline('cockpitV2ConnectorsWrite', r.status); return; }
         markLive('cockpitV2ConnectorsWrite');
         await _pollCockpitV2ConnectorsRoom();
@@ -312,28 +318,6 @@ const SIM = (() => {
       state.daemon.stalled = !!(_rl && _rl.cycle_stalled) || d.status === 'stalled' || d.status === 'stopped';
       emit();
     } catch (e) { markOffline('daemon', e); }
-  };
-
-  const _pollCards = async () => {
-    try {
-      const r = await fetch('/api/v1/cards');
-      if (!r.ok) { markOffline('cards', r.status); return; }
-      const d = await r.json();
-      if (!Array.isArray(d.cards)) return;
-      markLive('cards');
-      // Only surface still-open cards as "approvals" (the red-badged
-      // queue). Resolved cards stay in the API response for an
-      // eventual "recent activity" view but don't clutter the badge.
-      const open = d.cards.filter((c) => c.status === 'open' || c.status === 'deferred');
-      state.approvals = open.map((c) => ({
-        id: c.id,
-        cmd: c.cmd || c.action,
-        reason: c.reason || '',
-        risk: (c.cmd && (c.cmd.includes('rm ') || c.cmd.includes('checkout') || c.cmd.includes('sudo'))) ? 'high' : 'low',
-        ts: new Date((c.created_at || 0) * 1000).toTimeString().slice(0, 8),
-      }));
-      emit();
-    } catch (e) { markOffline('cards', e); }
   };
 
   const _pollServices = async () => {
@@ -409,32 +393,83 @@ const SIM = (() => {
     } catch (e) { markOffline('memory', e); }
   };
 
+  const _unavailableRoom = (reason) => ({
+    status: 'unavailable',
+    reason: String(reason || 'unavailable').slice(0, 160),
+  });
+
+  const _pollCockpitV2State = async () => {
+    try {
+      const r = await fetch('/api/v2/cockpit/state');
+      if (!r.ok) {
+        markOffline('cockpitV2State', r.status);
+        state.cockpitV2.state = _unavailableRoom(r.status);
+        emit();
+        return;
+      }
+      const d = await r.json();
+      markLive('cockpitV2State');
+      state.cockpitV2.state = d && typeof d === 'object' ? d : null;
+      if (d?.memory_room) state.cockpitV2.memoryRoom = d.memory_room;
+      if (d?.receipts_room) state.cockpitV2.receiptsRoom = d.receipts_room;
+      emit();
+    } catch (e) {
+      markOffline('cockpitV2State', e);
+      state.cockpitV2.state = _unavailableRoom(e);
+      emit();
+    }
+  };
+
   const _pollCockpitV2MemoryRoom = async () => {
     try {
       const r = await fetch('/api/v2/cockpit/memory-room');
-      if (!r.ok) { markOffline('cockpitV2Memory', r.status); return; }
+      if (!r.ok) {
+        markOffline('cockpitV2Memory', r.status);
+        state.cockpitV2.memoryRoom = _unavailableRoom(r.status);
+        emit();
+        return;
+      }
       const d = await r.json();
       markLive('cockpitV2Memory');
       state.cockpitV2.memoryRoom = d && typeof d === 'object' ? d : null;
       emit();
-    } catch (e) { markOffline('cockpitV2Memory', e); }
+    } catch (e) {
+      markOffline('cockpitV2Memory', e);
+      state.cockpitV2.memoryRoom = _unavailableRoom(e);
+      emit();
+    }
   };
 
   const _pollCockpitV2ReceiptsRoom = async () => {
     try {
       const r = await fetch('/api/v2/cockpit/receipts-room');
-      if (!r.ok) { markOffline('cockpitV2Receipts', r.status); return; }
+      if (!r.ok) {
+        markOffline('cockpitV2Receipts', r.status);
+        state.cockpitV2.receiptsRoom = _unavailableRoom(r.status);
+        emit();
+        return;
+      }
       const d = await r.json();
       markLive('cockpitV2Receipts');
       state.cockpitV2.receiptsRoom = d && typeof d === 'object' ? d : null;
       emit();
-    } catch (e) { markOffline('cockpitV2Receipts', e); }
+    } catch (e) {
+      markOffline('cockpitV2Receipts', e);
+      state.cockpitV2.receiptsRoom = _unavailableRoom(e);
+      emit();
+    }
   };
 
   const _pollCockpitV2ApprovalsRoom = async () => {
     try {
       const r = await fetch('/api/v2/cockpit/approvals');
-      if (!r.ok) { markOffline('cockpitV2Approvals', r.status); return; }
+      if (!r.ok) {
+        markOffline('cockpitV2Approvals', r.status);
+        state.cockpitV2.approvalsRoom = {..._unavailableRoom(r.status), pending: []};
+        state.approvals = [];
+        emit();
+        return;
+      }
       const d = await r.json();
       markLive('cockpitV2Approvals');
       state.cockpitV2.approvalsRoom = d && typeof d === 'object' ? d : null;
@@ -450,18 +485,32 @@ const SIM = (() => {
         }));
       }
       emit();
-    } catch (e) { markOffline('cockpitV2Approvals', e); }
+    } catch (e) {
+      markOffline('cockpitV2Approvals', e);
+      state.cockpitV2.approvalsRoom = {..._unavailableRoom(e), pending: []};
+      state.approvals = [];
+      emit();
+    }
   };
 
   const _pollCockpitV2ConnectorsRoom = async () => {
     try {
       const r = await fetch('/api/v2/cockpit/connectors');
-      if (!r.ok) { markOffline('cockpitV2Connectors', r.status); return; }
+      if (!r.ok) {
+        markOffline('cockpitV2Connectors', r.status);
+        state.cockpitV2.connectorsRoom = {..._unavailableRoom(r.status), connectors: []};
+        emit();
+        return;
+      }
       const d = await r.json();
       markLive('cockpitV2Connectors');
       state.cockpitV2.connectorsRoom = d && typeof d === 'object' ? d : null;
       emit();
-    } catch (e) { markOffline('cockpitV2Connectors', e); }
+    } catch (e) {
+      markOffline('cockpitV2Connectors', e);
+      state.cockpitV2.connectorsRoom = {..._unavailableRoom(e), connectors: []};
+      emit();
+    }
   };
 
   const _pollLivedMemory = async () => {
@@ -550,18 +599,18 @@ const SIM = (() => {
   };
 
   // Kick off immediately, then poll each on its own cadence. Chose
-  // cadences by staleness tolerance: daemon/gpu/cards update often,
+  // cadences by staleness tolerance: daemon/gpu update often,
   // soul/identity/logs rarely, memory/dreams in the middle.
-  _pollDaemon(); _pollCards(); _pollGpu(); _pollServices();
-  _pollSignals(); _pollMemory(); _pollLivedMemory(); _pollCockpitV2MemoryRoom(); _pollCockpitV2ReceiptsRoom(); _pollCockpitV2ApprovalsRoom(); _pollCockpitV2ConnectorsRoom(); _pollDreams(); _pollSoul();
+  _pollDaemon(); _pollGpu(); _pollServices();
+  _pollSignals(); _pollMemory(); _pollLivedMemory(); _pollCockpitV2State(); _pollCockpitV2MemoryRoom(); _pollCockpitV2ReceiptsRoom(); _pollCockpitV2ApprovalsRoom(); _pollCockpitV2ConnectorsRoom(); _pollDreams(); _pollSoul();
   _pollIdentity(); _pollRouter(); _pollLogs(); _pollChatSessions();
   setInterval(_pollDaemon, 5000);
-  setInterval(_pollCards, 10000);
   setInterval(_pollGpu, 5000);
   setInterval(_pollServices, 15000);
   setInterval(_pollSignals, 10000);
   setInterval(_pollMemory, 30000);
   setInterval(_pollLivedMemory, 60000);
+  setInterval(_pollCockpitV2State, 30000);
   setInterval(_pollCockpitV2MemoryRoom, 15000);
   setInterval(_pollCockpitV2ReceiptsRoom, 15000);
   setInterval(_pollCockpitV2ApprovalsRoom, 10000);
