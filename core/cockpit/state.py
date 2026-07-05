@@ -20,6 +20,7 @@ from core.cockpit.flags import (
     unclassified_observed_flags,
 )
 from core.cockpit.memory_room import build_memory_room
+from core.cockpit.receipts_room import build_receipts_room
 from core.infra.env_flags import TRUTHY
 from core.cockpit.readers import CockpitSourcePaths, source_health
 
@@ -252,4 +253,5 @@ def build_state(
         "rooms": _rooms(),
         "sources": source_health(source_paths),
         "memory_room": build_memory_room(source_paths),
+        "receipts_room": build_receipts_room(source_paths),
     }

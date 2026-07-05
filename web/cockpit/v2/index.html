@@ -71,7 +71,7 @@
 <script type="text/babel" data-presets="react">
 const { ChatPane, ServicesPane, GpuPane, DaemonPane, SignalsPane, ScratchpadPane, RouterPane,
         ReadinessPane, StatusTile,
-        MemorySurface, SoulSurface, DreamsSurface, IdentitySurface, LogsSurface, ApprovalsQueueSurface,
+        MemorySurface, ReceiptsSurface, SoulSurface, DreamsSurface, IdentitySurface, LogsSurface, ApprovalsQueueSurface,
         JudgmentSurface, SelfDevSurface, WorkshopSurface,
         DaemonDeep, S, A, Card, Glass, Chip, Pill, Dot, Button, SoftBtn, MaezAvatar, Icon } = window.TerminalUI;
 
@@ -287,6 +287,7 @@ function TerminalDirection() {
     { id: 'dreams',     label: 'Dreams',      hotkey: '9', icon: '✧', badge: sim.state.dreams.filter(d => d.status === 'pending').length || null },
     { id: 'identity',   label: 'Identity',    hotkey: '0', icon: '⬡' },
     { id: 'judgment',   label: 'Judgment',    hotkey: 'J', icon: '⚖' },
+    { id: 'receipts',   label: 'Receipts',    hotkey: 'R', icon: '◌' },
     { id: 'selfdev',    label: 'Self-Dev',    hotkey: 'S', icon: '◈' },
     { id: 'workshop',   label: 'Workshop',    hotkey: 'W', icon: '◇' },
     { id: 'logs',       label: 'Logs',        hotkey: 'L', icon: '▤' },
@@ -361,6 +362,7 @@ function TerminalDirection() {
         {surface === 'dreams' && <DreamsSurface />}
         {surface === 'identity' && <IdentitySurface />}
         {surface === 'judgment' && <JudgmentSurface />}
+        {surface === 'receipts' && <ReceiptsSurface />}
         {surface === 'selfdev' && <SelfDevSurface />}
         {surface === 'workshop' && <WorkshopSurface />}
         {surface === 'logs' && <LogsSurface />}

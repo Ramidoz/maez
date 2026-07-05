@@ -72,6 +72,7 @@ const SIM = (() => {
     cockpitV2: {
       state: null,
       memoryRoom: null,
+      receiptsRoom: null,
     },
     dreams: [],
     soul: {
@@ -374,15 +375,26 @@ const SIM = (() => {
     } catch (e) { markOffline('memory', e); }
   };
 
-  const _pollCockpitV2State = async () => {
+  const _pollCockpitV2MemoryRoom = async () => {
     try {
       const r = await fetch('/api/v2/cockpit/memory-room');
-      if (!r.ok) { markOffline('cockpitV2', r.status); return; }
+      if (!r.ok) { markOffline('cockpitV2Memory', r.status); return; }
       const d = await r.json();
-      markLive('cockpitV2');
+      markLive('cockpitV2Memory');
       state.cockpitV2.memoryRoom = d && typeof d === 'object' ? d : null;
       emit();
-    } catch (e) { markOffline('cockpitV2', e); }
+    } catch (e) { markOffline('cockpitV2Memory', e); }
+  };
+
+  const _pollCockpitV2ReceiptsRoom = async () => {
+    try {
+      const r = await fetch('/api/v2/cockpit/receipts-room');
+      if (!r.ok) { markOffline('cockpitV2Receipts', r.status); return; }
+      const d = await r.json();
+      markLive('cockpitV2Receipts');
+      state.cockpitV2.receiptsRoom = d && typeof d === 'object' ? d : null;
+      emit();
+    } catch (e) { markOffline('cockpitV2Receipts', e); }
   };
 
   const _pollLivedMemory = async () => {
@@ -474,7 +486,7 @@ const SIM = (() => {
   // cadences by staleness tolerance: daemon/gpu/cards update often,
   // soul/identity/logs rarely, memory/dreams in the middle.
   _pollDaemon(); _pollCards(); _pollGpu(); _pollServices();
-  _pollSignals(); _pollMemory(); _pollLivedMemory(); _pollCockpitV2State(); _pollDreams(); _pollSoul();
+  _pollSignals(); _pollMemory(); _pollLivedMemory(); _pollCockpitV2MemoryRoom(); _pollCockpitV2ReceiptsRoom(); _pollDreams(); _pollSoul();
   _pollIdentity(); _pollRouter(); _pollLogs(); _pollChatSessions();
   setInterval(_pollDaemon, 5000);
   setInterval(_pollCards, 10000);
@@ -483,7 +495,8 @@ const SIM = (() => {
   setInterval(_pollSignals, 10000);
   setInterval(_pollMemory, 30000);
   setInterval(_pollLivedMemory, 60000);
-  setInterval(_pollCockpitV2State, 15000);
+  setInterval(_pollCockpitV2MemoryRoom, 15000);
+  setInterval(_pollCockpitV2ReceiptsRoom, 15000);
   setInterval(_pollDreams, 20000);
   setInterval(_pollSoul, 120000);
   setInterval(_pollIdentity, 300000);

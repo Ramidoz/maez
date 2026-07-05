@@ -1448,7 +1448,7 @@ function MemoryRoomOperabilitySection({ room }) {
             Memory organs · cockpit v2
           </div>
           <div style={{ fontSize: 12, color: A.textDim, marginTop: 4, lineHeight: 1.45 }}>
-            Receipt counts, scars, continuity, and sealed interiority. Counts are evidence, not confession or grade.
+            Receipt counts, scars, continuity, and sealed interiority. Counts are evidence, not self-claims or grades.
           </div>
         </div>
         <Chip color={A.green}>read-only</Chip>
@@ -1491,6 +1491,147 @@ function MemoryRoomOperabilitySection({ room }) {
         </div>
       )}
     </Glass>
+  );
+}
+
+function ReceiptsSurface() {
+  const sim = useSim();
+  const room = sim.state.cockpitV2?.receiptsRoom || null;
+  const show = (value, fallback = 'no_data') => (
+    value === null || value === undefined || value === '' ? fallback : value
+  );
+  const num = (value) => Number(value || 0).toLocaleString();
+  const healthTone = (status) => (
+    status === 'ok' ? A.green
+      : status === 'no_data' ? A.textDim
+      : A.orange
+  );
+  const HealthChip = ({ status }) => (
+    <Chip color={healthTone(status)}>{status || 'unknown'}</Chip>
+  );
+  const Section = ({ title, status, children }) => (
+    <Glass pad={16} style={{ borderLeft: `3px solid ${healthTone(status)}` }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 10 }}>
+        <div style={{ fontSize: 11, color: A.textFaint, textTransform: 'uppercase', letterSpacing: 1, fontFamily: A.sans, fontWeight: 600 }}>
+          {title}
+        </div>
+        <HealthChip status={status} />
+      </div>
+      {children}
+    </Glass>
+  );
+
+  if (!room) {
+    return (
+      <div className="ap-scroll" style={{ height: '100%', overflow: 'auto', padding: 28 }}>
+        <SurfaceHeader title="Receipts" subtitle="Prompt shape, grounding, and action receipts" icon="◌" color={A.blue} />
+        <Glass pad={16} style={{ borderLeft: `3px solid ${A.blue}` }}>
+          <div style={{ fontSize: 12.5, color: A.textDim, lineHeight: 1.5 }}>
+            Waiting for /api/v2/cockpit/receipts-room.
+          </div>
+        </Glass>
+      </div>
+    );
+  }
+
+  const fabrication = room.fabrication_events || {};
+  const redo = room.claim_receipt_redo || {};
+  const redoOutcomes = redo.outcomes || {};
+  const veto = room.routing_veto || {};
+  const prompt = room.prompt_shape || {};
+  const promptLatest = prompt.latest || {};
+  const focusedPrompt = room.focused_prompt_shape || {};
+  const focusedLatest = focusedPrompt.latest || {};
+  const grounding = room.grounding_meter || {};
+  const groundingLatest = grounding.latest || {};
+  const logs = room.logs || {};
+  const logItems = Object.entries(logs).filter(([, value]) => value && typeof value === 'object');
+
+  return (
+    <div className="ap-scroll" style={{ height: '100%', overflow: 'auto', padding: 28 }}>
+      <SurfaceHeader title="Receipts" subtitle="Prompt shape, grounding, routing, and claim records" icon="◌" color={A.blue} />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12, marginBottom: 16 }}>
+        <Section title="fabrication event receipts" status={fabrication.status}>
+          <div style={{ fontFamily: A.mono, fontSize: 30, color: A.blue, lineHeight: 1 }}>
+            {num(fabrication.receipt_count)}
+          </div>
+          <div style={{ fontSize: 12, color: A.textDim, lineHeight: 1.45, marginTop: 8 }}>
+            {fabrication.perspective || 'third-person receipt labels'} · {fabrication.empty_state || 'no_data'}
+          </div>
+          <div style={{ fontSize: 11, color: A.textFaint, lineHeight: 1.45, marginTop: 6 }}>
+            coverage {show(fabrication.coverage)}
+          </div>
+        </Section>
+
+        <Section title="claim-receipt redo" status={redo.status}>
+          <div style={{ display: 'grid', gap: 7, fontSize: 12, color: A.textDim, lineHeight: 1.4 }}>
+            <div><strong style={{ color: A.text }}>corrected_before_send</strong> · {num(redoOutcomes.accepted)}</div>
+            <div><strong style={{ color: A.text }}>held_with_floor_notice</strong> · {num(redoOutcomes.floor)}</div>
+            <div><strong style={{ color: A.text }}>other</strong> · {num(redoOutcomes.other)}</div>
+          </div>
+          <div style={{ fontSize: 11, color: A.textFaint, lineHeight: 1.45, marginTop: 8 }}>
+            {redo.empty_state || 'no_data'}
+          </div>
+        </Section>
+
+        <Section title="routing and veto receipts" status={veto.status}>
+          <div style={{ display: 'grid', gap: 7, fontSize: 12, color: A.textDim, lineHeight: 1.4 }}>
+            <div><strong style={{ color: A.text }}>proven-wrong vetoes</strong> · {num(veto.likely_wrong_count)}</div>
+            <div><strong style={{ color: A.text }}>veto events</strong> · {num(veto.total_veto_events)}</div>
+            <div>empty state · {veto.empty_state || 'no_data'}</div>
+          </div>
+        </Section>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 12, marginBottom: 16 }}>
+        <Section title="prompt shape" status={prompt.status}>
+          <div style={{ fontSize: 12, color: A.textDim, lineHeight: 1.55 }}>
+            system labels · <span style={{ color: A.text }}>{show(promptLatest.system_part_labels)}</span>
+          </div>
+          <div style={{ fontSize: 11, color: A.textFaint, lineHeight: 1.45, marginTop: 6 }}>
+            parts {show(promptLatest.system_part_count)} · lengths {show(promptLatest.system_part_lengths)}
+          </div>
+        </Section>
+
+        <Section title="focused prompt shape" status={focusedPrompt.status}>
+          <div style={{ fontSize: 12, color: A.textDim, lineHeight: 1.55 }}>
+            sources · <span style={{ color: A.text }}>{show(focusedLatest.source_types)}</span>
+          </div>
+          <div style={{ fontSize: 11, color: A.textFaint, lineHeight: 1.45, marginTop: 6 }}>
+            evidence {show(focusedLatest.evidence_item_count)} · tokens {show(focusedLatest.working_set_tokens_est)}
+          </div>
+        </Section>
+
+        <Section title="grounding meter" status={grounding.status}>
+          <div style={{ display: 'grid', gap: 7, fontSize: 12, color: A.textDim, lineHeight: 1.4 }}>
+            <div><strong style={{ color: A.text }}>reply_grounding</strong> · {show(groundingLatest.reply_grounding)}</div>
+            <div><strong style={{ color: A.text }}>citation_coverage</strong> · {show(groundingLatest.citation_coverage)}</div>
+            <div><strong style={{ color: A.text }}>receipt</strong> · {show(groundingLatest.receipt_or_na)}</div>
+          </div>
+        </Section>
+      </div>
+
+      <Glass pad={16}>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
+          <div style={{ fontSize: 11, color: A.textFaint, textTransform: 'uppercase', letterSpacing: 1, fontFamily: A.sans, fontWeight: 600 }}>
+            source health
+          </div>
+          <Chip color={A.textDim}>read-only</Chip>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 10 }}>
+          {logItems.length ? logItems.map(([name, item]) => (
+            <div key={name} style={{ border: `0.5px solid ${A.stroke}`, borderRadius: 8, padding: '10px 12px', background: A.surfaceLo }}>
+              <div style={{ fontSize: 12, color: A.text, fontWeight: 700 }}>{name}</div>
+              <div style={{ fontSize: 11, color: A.textDim, marginTop: 5, lineHeight: 1.45 }}>
+                {item.status || 'unknown'} · {item.path || 'no path'}
+              </div>
+            </div>
+          )) : (
+            <div style={{ fontSize: 12, color: A.textDim }}>no_data</div>
+          )}
+        </div>
+      </Glass>
+    </div>
   );
 }
 
@@ -2743,7 +2884,7 @@ window.TerminalUI = {
   S, A, Card, Glass, Chip, Dot, Button, MaezAvatar, Icon, SegmentedControl, StatusTile,
   ChatPane, ServicesPane, GpuPane, DaemonPane, SignalsPane, ScratchpadPane, RouterPane,
   ReadinessPane,
-  MemorySurface, SoulSurface, DreamsSurface, IdentitySurface, LogsSurface, ApprovalsQueueSurface,
+  MemorySurface, ReceiptsSurface, SoulSurface, DreamsSurface, IdentitySurface, LogsSurface, ApprovalsQueueSurface,
   JudgmentSurface, SelfDevSurface, WorkshopSurface, DaemonDeep,
   // back-compat aliases (in case shell uses these)
   SoftBtn: Button, Pill: Chip,

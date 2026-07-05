@@ -1198,6 +1198,24 @@ def api_cockpit_v2_memory_room():
     return jsonify(build_memory_room())
 
 
+@app.route("/api/v2/cockpit/receipts-room")
+def api_cockpit_v2_receipts_room():
+    if not strict_env_flag("MAEZ_COCKPIT_V2"):
+        return jsonify(
+            {
+                "ok": False,
+                "status": "refused",
+                "reason": "cockpit_v2_off",
+            }
+        ), 404
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
+
+    from core.cockpit.receipts_room import build_receipts_room
+
+    return jsonify(build_receipts_room())
+
+
 @app.route("/api/v2/cockpit/flags/<name>", methods=["POST"])
 def api_cockpit_v2_flag_write(name: str):
     if not strict_env_flag("MAEZ_COCKPIT_V2"):

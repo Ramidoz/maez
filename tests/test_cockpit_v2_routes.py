@@ -120,6 +120,38 @@ class CockpitV2RouteGateTests(unittest.TestCase):
         build.assert_called_once_with()
         ok.close()
 
+    def test_v2_receipts_room_route_uses_narrow_receipts_payload(self):
+        wi, client = self._client()
+        payload = {
+            "kind": "cockpit_v2_receipts_room",
+            "fabrication_events": {
+                "label": "fabrication event receipts",
+                "receipt_count": 0,
+            },
+        }
+
+        with mock.patch.dict(os.environ, {"MAEZ_COCKPIT_V2": "0"}, clear=False):
+            off = client.get("/api/v2/cockpit/receipts-room")
+        self.assertEqual(off.status_code, 404)
+        off.close()
+
+        with mock.patch.dict(os.environ, {"MAEZ_COCKPIT_V2": "1"}, clear=False), \
+            mock.patch.object(wi, "_owner_private_auth_ok", return_value=False):
+            unauth = client.get("/api/v2/cockpit/receipts-room")
+        self.assertEqual(unauth.status_code, 401)
+        unauth.close()
+
+        with mock.patch.dict(os.environ, {"MAEZ_COCKPIT_V2": "1"}, clear=False), \
+            mock.patch.object(wi, "_owner_private_auth_ok", return_value=True), \
+            mock.patch("core.cockpit.receipts_room.build_receipts_room", return_value=payload) as build:
+            ok = client.get("/api/v2/cockpit/receipts-room")
+
+        self.assertEqual(ok.status_code, 200)
+        self.assertEqual(ok.get_json()["kind"], "cockpit_v2_receipts_room")
+        self.assertEqual(ok.get_json()["fabrication_events"]["label"], "fabrication event receipts")
+        build.assert_called_once_with()
+        ok.close()
+
 
 if __name__ == "__main__":
     unittest.main()
