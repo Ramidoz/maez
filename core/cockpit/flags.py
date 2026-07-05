@@ -70,6 +70,7 @@ def _entry(
     description: str,
     witness: str,
     revert: str | None = None,
+    owner_review_status: str = "owner_reviewed",
 ) -> FlagRegistryEntry:
     return FlagRegistryEntry(
         name=name,
@@ -78,14 +79,15 @@ def _entry(
         description=description,
         witness_recipe=witness,
         revert_line=revert or f"Set {name}=0 or remove it, then restart if daemon-read.",
+        owner_review_status=owner_review_status,
     )
 
 
 def default_registry() -> dict[str, FlagRegistryEntry]:
-    """Return the draft owner-review registry.
+    """Return the owner-reviewed registry.
 
-    Entries are classified, but remain pending owner review. Unknown and
-    pending entries are not directly writable by Task 4.
+    Unknown entries are not writable. T0 and T3 entries remain non-writable by
+    tier even after owner review.
     """
 
     entries = [
@@ -234,6 +236,22 @@ def default_registry() -> dict[str, FlagRegistryEntry]:
             witness="Read-only display only; verify timezone source if surfaced.",
             revert="Configuration fact changes stay outside cockpit flag writes.",
         ),
+        _entry(
+            "MAEZ_LEDGER_WRITES",
+            label="Birth ledger write switch",
+            tier="T3",
+            description="Birth-gated autobiography switch; reachable only through the birth ceremony.",
+            witness="Run the reviewed BIRTH_CEREMONY path; never flip MAEZ_LEDGER_WRITES directly from cockpit.",
+            revert="No direct env revert; follow the birth ceremony rollback/runbook.",
+        ),
+        _entry(
+            "S7_LIVE_WEBAUTHN_CEREMONY",
+            label="S7 live WebAuthn ceremony gate",
+            tier="T3",
+            description="Soul-authority ceremony gate; reachable only through the existing S7 ceremony flow.",
+            witness="Complete S7_CEREMONY through the existing WebAuthn challenge/assertion route.",
+            revert="No direct env revert; follow S7 ceremony rollback/runbook.",
+        ),
         FlagRegistryEntry(
             name="S7_CEREMONY",
             label="S7 ceremony",
@@ -241,6 +259,7 @@ def default_registry() -> dict[str, FlagRegistryEntry]:
             description="Human-gated self-shaping ceremony; cockpit may launch the existing S7 flow only.",
             witness_recipe="Complete the existing /api/v1/s7 challenge/assertion flow with hardware-key touch.",
             revert_line="No direct env revert; follow S7 ceremony rollback/runbook.",
+            owner_review_status="owner_reviewed",
         ),
         FlagRegistryEntry(
             name="BIRTH_CEREMONY",
@@ -249,6 +268,7 @@ def default_registry() -> dict[str, FlagRegistryEntry]:
             description="Birth gate ceremony; no direct flag write is allowed.",
             witness_recipe="Run the reviewed birth ceremony after all blockers clear and hardware key is present.",
             revert_line="No direct env revert; follow the birth ceremony runbook.",
+            owner_review_status="owner_reviewed",
         ),
     ]
     return {entry.name: entry for entry in entries}

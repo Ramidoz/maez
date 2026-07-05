@@ -78,12 +78,36 @@ class CockpitV2FlagRegistryTests(unittest.TestCase):
         self.assertEqual(policy["tier"], "T3")
         self.assertIsNone(policy["direct_write_endpoint"])
 
+    def test_owner_pinned_birth_and_s7_switches_are_ceremony_only(self):
+        from core.cockpit.flags import write_policy_for_flag
+
+        for name in ("MAEZ_LEDGER_WRITES", "S7_LIVE_WEBAUTHN_CEREMONY"):
+            with self.subTest(name=name):
+                policy = write_policy_for_flag(name, "1")
+                self.assertFalse(policy["direct_write_allowed"])
+                self.assertEqual(policy["reason"], "ceremony_only")
+                self.assertEqual(policy["tier"], "T3")
+                self.assertIsNone(policy["direct_write_endpoint"])
+
+    def test_owner_review_unlocks_safe_t1_policy(self):
+        from core.cockpit.flags import write_policy_for_flag
+
+        policy = write_policy_for_flag("MAEZ_BODY_LEGIBILITY", "1")
+
+        self.assertTrue(policy["direct_write_allowed"])
+        self.assertEqual(policy["reason"], "ok")
+        self.assertEqual(policy["tier"], "T1")
+        self.assertEqual(
+            policy["direct_write_endpoint"],
+            "/api/v2/cockpit/flags/MAEZ_BODY_LEGIBILITY",
+        )
+
     def test_registry_entries_include_witness_recipe_and_revert_line(self):
         from core.cockpit.flags import default_registry
 
         entry = default_registry()["MAEZ_COCKPIT_V2"]
 
-        self.assertEqual(entry.owner_review_status, "pending_owner_review")
+        self.assertEqual(entry.owner_review_status, "owner_reviewed")
         self.assertIn("MAEZ_COCKPIT_V2", entry.witness_recipe)
         self.assertIn("MAEZ_COCKPIT_V2", entry.revert_line)
         self.assertIn("restart", entry.witness_recipe.lower())
@@ -130,8 +154,11 @@ class CockpitV2FlagRegistryTests(unittest.TestCase):
 
         text = artifact.read_text(encoding="utf-8")
 
-        self.assertIn("Owner review required before Task 5", text)
+        self.assertIn("Owner-reviewed tier table", text)
+        self.assertIn("Task 5 may use this table", text)
         self.assertIn("Unknown/unclassified flags are not writable", text)
+        self.assertIn("MAEZ_LEDGER_WRITES", text)
+        self.assertIn("S7_LIVE_WEBAUTHN_CEREMONY", text)
         self.assertIn("T3", text)
 
 

@@ -135,7 +135,7 @@ class CockpitV2StateTests(unittest.TestCase):
         self.assertIn("MAEZ_COCKPIT_V2", state["flags"]["registry"])
         self.assertEqual(
             state["flags"]["registry"]["MAEZ_COCKPIT_V2"]["owner_review_status"],
-            "pending_owner_review",
+            "owner_reviewed",
         )
 
     def test_flag_registry_uses_explicit_model_env_path_not_repo_config_by_default(self):
