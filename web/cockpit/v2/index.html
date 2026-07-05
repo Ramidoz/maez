@@ -143,6 +143,7 @@ function MaezNowRail() {
 }
 
 function WhyReplyPane({ selectedTurn }) {
+  const sim = useSim();
   const [data, setData] = React.useState(null);
   const [error, setError] = React.useState('');
 
@@ -176,6 +177,13 @@ function WhyReplyPane({ selectedTurn }) {
   const notLatest = selectedTurn && selectedTurn.isLatest === false;
   const flagged = data?.audit?.flagged_claims || [];
   const toolRuns = data?.tools?.items || [];
+  const receiptsRoom = sim.state.cockpitV2?.receiptsRoom || null;
+  const fabrication = receiptsRoom?.fabrication_events || {};
+  const redo = receiptsRoom?.claim_receipt_redo || {};
+  const redoOutcomes = redo.outcomes || {};
+  const routingVeto = receiptsRoom?.routing_veto || {};
+  const fmtCount = (value) => Number(value || 0).toLocaleString();
+  const receiptContextReady = Boolean(receiptsRoom);
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
@@ -209,6 +217,26 @@ function WhyReplyPane({ selectedTurn }) {
                 </div>
               ))}
             </div>
+          )}
+        </WhyBlock>
+        <WhyBlock title="receipt context">
+          {receiptContextReady ? (
+            <div style={{ display: 'grid', gap: 6 }}>
+              <div>
+                fabrication event receipts · {fmtCount(fabrication.receipt_count)}
+                {' '}· {fabrication.empty_state || 'no_data'}
+              </div>
+              <div>
+                corrected_before_send · {fmtCount(redoOutcomes.accepted)}
+                {' '}· held_with_floor_notice · {fmtCount(redoOutcomes.floor)}
+              </div>
+              <div>
+                routing veto receipts · likely_wrong {fmtCount(routingVeto.likely_wrong_count)}
+                {' '}of {fmtCount(routingVeto.total_veto_events)}
+              </div>
+            </div>
+          ) : (
+            <div>Receipt room data is not loaded yet.</div>
           )}
         </WhyBlock>
         <WhyBlock title="tools">{data?.tools?.summary || 'No tool evidence loaded.'}</WhyBlock>
