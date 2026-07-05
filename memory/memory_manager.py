@@ -3064,20 +3064,20 @@ class MemoryManager:
 
         Returns a dict shaped like a Chroma get() response:
           {'documents': [...], 'metadatas': [...], 'ids': [...]}
-        Chroma's .get() returns newest-first by default; we reverse into
-        chronological order for readability in prompts.
+        Chroma's .get(limit=N) returns the oldest N rows, so seek to the
+        tail with offset and keep that newest tail in chronological order.
         """
         try:
-            if self.raw.count() == 0:
+            total = self.raw.count()
+            if total == 0 or n <= 0:
                 return {"documents": [], "metadatas": [], "ids": []}
-            results = self.raw.get(limit=n, include=["documents", "metadatas"])
-            if results.get("documents"):
-                results["documents"] = list(reversed(results["documents"]))
-                if results.get("metadatas"):
-                    results["metadatas"] = list(reversed(results["metadatas"]))
-                if results.get("ids"):
-                    results["ids"] = list(reversed(results["ids"]))
-            return results
+            limit = min(n, total)
+            offset = max(total - limit, 0)
+            return self.raw.get(
+                limit=limit,
+                offset=offset,
+                include=["documents", "metadatas"],
+            )
         except Exception as e:
             logger.error("memory.recent_raw failed: %s", e)
             return {"documents": [], "metadatas": [], "ids": []}

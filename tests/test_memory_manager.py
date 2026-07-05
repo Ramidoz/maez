@@ -88,6 +88,71 @@ def _temp_memory_manager():
     return mm
 
 
+class RecentRawTests(unittest.TestCase):
+    class _OldestFirstRaw:
+        """Fake the Chroma shape that caused the dream-input stall.
+
+        Chroma's get(limit=N) returns the oldest N rows unless callers use
+        offset to seek to the tail.
+        """
+
+        def __init__(self, rows):
+            self._rows = list(rows)
+            self.get_calls = []
+
+        def count(self):
+            return len(self._rows)
+
+        def get(self, *, limit=None, offset=None, include=None):
+            self.get_calls.append({
+                "limit": limit,
+                "offset": offset,
+                "include": include,
+            })
+            rows = self._rows
+            if offset is not None:
+                rows = rows[offset:]
+            if limit is not None:
+                rows = rows[:limit]
+            return {
+                "ids": [row["id"] for row in rows],
+                "documents": [row["document"] for row in rows],
+                "metadatas": [dict(row["metadata"]) for row in rows],
+            }
+
+    def test_recent_raw_returns_newest_tail_in_chronological_order(self):
+        mm = _mm()
+        rows = [
+            {
+                "id": f"raw-{idx}",
+                "document": f"raw document {idx}",
+                "metadata": {"timestamp": f"2026-07-05T00:0{idx}:00+00:00"},
+            }
+            for idx in range(6)
+        ]
+        mm.raw = self._OldestFirstRaw(rows)
+
+        recent = mm.recent_raw(n=3)
+
+        self.assertEqual(recent["ids"], ["raw-3", "raw-4", "raw-5"])
+        self.assertEqual(
+            recent["documents"],
+            ["raw document 3", "raw document 4", "raw document 5"],
+        )
+        self.assertEqual(
+            [meta["timestamp"] for meta in recent["metadatas"]],
+            [
+                "2026-07-05T00:03:00+00:00",
+                "2026-07-05T00:04:00+00:00",
+                "2026-07-05T00:05:00+00:00",
+            ],
+        )
+        self.assertEqual(
+            mm.raw.get_calls[-1],
+            {"limit": 3, "offset": 3, "include": ["documents", "metadatas"]},
+        )
+
+
 class FormatForPromptAgeFramingTests(unittest.TestCase):
     def test_format_for_prompt_prefixes_age_relative(self):
         mm = _mm()
