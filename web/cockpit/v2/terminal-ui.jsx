@@ -1635,6 +1635,336 @@ function ReceiptsSurface() {
   );
 }
 
+function ceremonyB64urlToBuffer(value) {
+  const pad = "=".repeat((4 - value.length % 4) % 4);
+  const b64 = (value + pad).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(b64);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out.buffer;
+}
+
+function ceremonyBufferToB64url(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let raw = "";
+  for (const byte of bytes) raw += String.fromCharCode(byte);
+  return btoa(raw).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function ceremonyEncodeCredentialResponse(credential) {
+  const response = credential.response || {};
+  const body = {
+    id: credential.id,
+    rawId: ceremonyBufferToB64url(credential.rawId),
+    type: credential.type,
+    response: {},
+  };
+  for (const key of ["clientDataJSON", "attestationObject", "authenticatorData", "signature", "userHandle"]) {
+    if (response[key]) body.response[key] = ceremonyBufferToB64url(response[key]);
+  }
+  return body;
+}
+
+function ceremonyNormalizeCreationOptions(options) {
+  const publicKey = {...options};
+  publicKey.challenge = ceremonyB64urlToBuffer(publicKey.challenge);
+  publicKey.user = {...publicKey.user, id: ceremonyB64urlToBuffer(publicKey.user.id)};
+  publicKey.excludeCredentials = (publicKey.excludeCredentials || []).map((cred) => ({
+    ...cred,
+    id: ceremonyB64urlToBuffer(cred.id),
+  }));
+  return {publicKey};
+}
+
+function ceremonyNormalizeRequestOptions(options) {
+  const publicKey = {...options};
+  publicKey.challenge = ceremonyB64urlToBuffer(publicKey.challenge);
+  publicKey.allowCredentials = (publicKey.allowCredentials || []).map((cred) => ({
+    ...cred,
+    id: ceremonyB64urlToBuffer(cred.id),
+  }));
+  return {publicKey};
+}
+
+async function ceremonyJsonFetch(url, body) {
+  const response = await fetch(url, {
+    method: body === undefined ? "GET" : "POST",
+    headers: body === undefined ? {} : {"Content-Type": "application/json"},
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload.ok === false) {
+    const err = new Error(payload.error || `HTTP ${response.status}`);
+    err.payload = payload;
+    err.status = response.status;
+    throw err;
+  }
+  return payload;
+}
+
+function renderCeremonyStepDomText(step) {
+  const status = step.status || "pending";
+  const failedLabel = step.id === "touch-key" ? "touch-key failed" : `${step.id} failed`;
+  const suffix = status === "failed" ? ` ${failedLabel}` : "";
+  return `${step.label || step.id}: ${status}${suffix}${step.error ? ` - ${step.error}` : ""}`;
+}
+
+const CEREMONY_STEPS = [
+  { id: "arm", label: "arm" },
+  { id: "bootstrap", label: "bootstrap" },
+  { id: "touch-key", label: "touch-key" },
+  { id: "signed/applied", label: "signed/applied" },
+];
+
+const BIRTH_READINESS_BLOCKERS = [
+  { label: "dormancy drift", state: "blocked", detail: "classification review still open" },
+  { label: "A7 undecided", state: "blocked", detail: "private interiority boundary remains owner-held" },
+  { label: "dream stalled", state: "blocked", detail: "first dream scar witness has not landed" },
+  { label: "ceremony unwritten", state: "blocked", detail: "birth action remains out of scope" },
+];
+
+function CeremonySurface() {
+  const [status, setStatus] = React.useState(null);
+  const [log, setLog] = React.useState([]);
+  const [sessionBinding, setSessionBinding] = React.useState(() => `cockpit-${Date.now()}`);
+  const [bootstrapIntentId, setBootstrapIntentId] = React.useState("");
+  const [bootstrapToken, setBootstrapToken] = React.useState("");
+  const [credentialRef, setCredentialRef] = React.useState("");
+  const [requestId, setRequestId] = React.useState("");
+  const [artifactId, setArtifactId] = React.useState("");
+  const [steps, setSteps] = React.useState(() => CEREMONY_STEPS.map((step) => ({...step, status: "pending"})));
+
+  const append = React.useCallback((label, payload) => {
+    setLog((items) => [
+      { at: new Date().toLocaleTimeString(), label, payload },
+      ...items,
+    ].slice(0, 12));
+  }, []);
+
+  const markStep = React.useCallback((id, patch) => {
+    setSteps((items) => items.map((step) => step.id === id ? {...step, ...patch} : step));
+  }, []);
+
+  const failStep = React.useCallback((id, err) => {
+    const message = err?.payload?.error || err?.message || String(err);
+    markStep(id, {status: 'failed', error: message});
+    append(`${id} failed`, err?.payload || {error: message});
+  }, [append, markStep]);
+
+  const loadStatus = React.useCallback(async () => {
+    try {
+      const payload = await ceremonyJsonFetch("/api/v1/s7/webauthn/status");
+      setStatus(payload);
+      markStep("arm", {status: "ok", error: ""});
+      append("status", payload);
+    } catch (err) {
+      setStatus(err.payload || {ok: false, error: String(err)});
+      failStep("arm", err);
+    }
+  }, [append, failStep, markStep]);
+
+  React.useEffect(() => { loadStatus(); }, [loadStatus]);
+
+  const registerPrimary = async () => {
+    try {
+      markStep("bootstrap", {status: "running", error: ""});
+      const begin = await ceremonyJsonFetch("/api/v1/s7/webauthn/register/begin", {
+        registration_class: "primary",
+        session_binding: sessionBinding,
+        bootstrap_intent_id: bootstrapIntentId,
+        bootstrap_token: bootstrapToken,
+      });
+      append("primary register begin", begin);
+      markStep("touch-key", {status: "running", error: ""});
+      const credential = await navigator.credentials.create(ceremonyNormalizeCreationOptions(begin.public_key_options));
+      markStep("signed/applied", {status: "running", error: ""});
+      const finish = await ceremonyJsonFetch("/api/v1/s7/webauthn/register/finish", {
+        registration_class: "primary",
+        challenge_id: begin.challenge_id,
+        session_binding: sessionBinding,
+        bootstrap_intent_id: bootstrapIntentId,
+        bootstrap_token: bootstrapToken,
+        registration_response: ceremonyEncodeCredentialResponse(credential),
+      });
+      setCredentialRef(finish.credential_ref || credentialRef);
+      markStep("signed/applied", {status: "ok", error: ""});
+      append("primary register finish", finish);
+      await loadStatus();
+    } catch (err) {
+      failStep("touch-key", err);
+    }
+  };
+
+  const authorizeCard = async () => {
+    try {
+      if (!requestId.trim()) throw new Error("request_id_required");
+      markStep("bootstrap", {status: "running", error: ""});
+      const encodedRequestId = encodeURIComponent(requestId.trim());
+      const begin = await ceremonyJsonFetch(`/api/v1/s7/cards/${encodedRequestId}/webauthn/begin`, {
+        session_binding: sessionBinding,
+        credential_ref: credentialRef,
+      });
+      append("authorize begin", begin);
+      markStep("touch-key", {status: "running", error: ""});
+      const selectedCredentialRef = credentialRef || (begin.allow_credentials || [])[0] || "";
+      const credential = await navigator.credentials.get(ceremonyNormalizeRequestOptions(begin.public_key_options));
+      markStep("signed/applied", {status: "running", error: ""});
+      const finish = await ceremonyJsonFetch(`/api/v1/s7/cards/${encodedRequestId}/webauthn/finish`, {
+        session_binding: sessionBinding,
+        challenge_id: begin.challenge_id,
+        credential_ref: selectedCredentialRef || credential.id,
+        maez_voice_raw_response_hash: begin.maez_voice_raw_response_hash,
+        authentication_response: ceremonyEncodeCredentialResponse(credential),
+      });
+      setArtifactId(finish.artifact_id || "");
+      setCredentialRef(selectedCredentialRef || credential.id || credentialRef);
+      markStep("signed/applied", {status: "ok", error: ""});
+      append("authorize finish", finish);
+    } catch (err) {
+      failStep("touch-key", err);
+    }
+  };
+
+  const executeCard = async () => {
+    try {
+      if (!requestId.trim()) throw new Error("request_id_required");
+      if (!artifactId.trim()) throw new Error("artifact_id_required");
+      const encodedRequestId = encodeURIComponent(requestId.trim());
+      const result = await ceremonyJsonFetch(`/api/v1/s7/cards/${encodedRequestId}/execute`, {
+        session_binding: sessionBinding,
+        s7_authorization_artifact_id: artifactId,
+        text: "yes",
+      });
+      append("execute guarded card", result);
+      markStep("signed/applied", {status: "ok", error: ""});
+    } catch (err) {
+      failStep("signed/applied", err);
+    }
+  };
+
+  return (
+    <div className="ap-scroll" style={{ height: '100%', overflow: 'auto', padding: 28 }}>
+      <SurfaceHeader
+        title="Ceremony"
+        subtitle="S7 ceremony wrapper around existing WebAuthn routes"
+        icon="◈"
+        color={A.purple}
+        right={<Chip color={A.orange}>birth action remains out of scope</Chip>}
+      />
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(320px, 1.15fr) minmax(300px, 0.85fr)', gap: 14, marginBottom: 16 }}>
+        <Glass pad={16}>
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginBottom: 14 }}>
+            <div>
+              <div style={{ fontSize: 11, color: A.textFaint, textTransform: 'uppercase', letterSpacing: 1, fontFamily: A.sans, fontWeight: 700 }}>S7 WebAuthn flow</div>
+              <div style={{ fontSize: 12, color: A.textDim, lineHeight: 1.45, marginTop: 5 }}>
+                Browser asks the existing S7 routes for challenge and result; cockpit mints no challenge and verifies no assertion.
+              </div>
+            </div>
+            <Button size="sm" onClick={loadStatus}>refresh</Button>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginBottom: 16 }}>
+            {steps.map((step) => {
+              const color = step.status === 'ok' ? A.green : step.status === 'failed' ? A.red : step.status === 'running' ? A.orange : A.textDim;
+              return (
+                <div key={step.id} style={{ border: `0.5px solid ${color}55`, borderRadius: 10, padding: '10px 12px', background: `${color}10` }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: A.text, fontWeight: 700 }}>
+                    <Dot c={color} size={5} pulse={step.status === 'running'} /> {step.label}
+                  </div>
+                  <div style={{ fontSize: 10.5, color: A.textDim, marginTop: 5, lineHeight: 1.35 }}>
+                    {renderCeremonyStepDomText(step)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 10 }}>
+            <label style={{ display: 'grid', gap: 5, fontSize: 11, color: A.textDim }}>
+              session binding
+              <input value={sessionBinding} onChange={(e) => setSessionBinding(e.target.value)} style={{ background: A.surfaceLo, border: `0.5px solid ${A.stroke}`, borderRadius: 8, color: A.text, fontFamily: A.mono, fontSize: 11, padding: '7px 9px' }} />
+            </label>
+            <label style={{ display: 'grid', gap: 5, fontSize: 11, color: A.textDim }}>
+              bootstrap intent
+              <input value={bootstrapIntentId} onChange={(e) => setBootstrapIntentId(e.target.value)} style={{ background: A.surfaceLo, border: `0.5px solid ${A.stroke}`, borderRadius: 8, color: A.text, fontFamily: A.mono, fontSize: 11, padding: '7px 9px' }} />
+            </label>
+            <label style={{ display: 'grid', gap: 5, fontSize: 11, color: A.textDim }}>
+              bootstrap token
+              <input value={bootstrapToken} onChange={(e) => setBootstrapToken(e.target.value)} style={{ background: A.surfaceLo, border: `0.5px solid ${A.stroke}`, borderRadius: 8, color: A.text, fontFamily: A.mono, fontSize: 11, padding: '7px 9px' }} />
+            </label>
+            <label style={{ display: 'grid', gap: 5, fontSize: 11, color: A.textDim }}>
+              credential ref
+              <input value={credentialRef} onChange={(e) => setCredentialRef(e.target.value)} style={{ background: A.surfaceLo, border: `0.5px solid ${A.stroke}`, borderRadius: 8, color: A.text, fontFamily: A.mono, fontSize: 11, padding: '7px 9px' }} />
+            </label>
+            <label style={{ display: 'grid', gap: 5, fontSize: 11, color: A.textDim }}>
+              card request id
+              <input value={requestId} onChange={(e) => setRequestId(e.target.value)} style={{ background: A.surfaceLo, border: `0.5px solid ${A.stroke}`, borderRadius: 8, color: A.text, fontFamily: A.mono, fontSize: 11, padding: '7px 9px' }} />
+            </label>
+            <label style={{ display: 'grid', gap: 5, fontSize: 11, color: A.textDim }}>
+              authorization artifact
+              <input value={artifactId} onChange={(e) => setArtifactId(e.target.value)} style={{ background: A.surfaceLo, border: `0.5px solid ${A.stroke}`, borderRadius: 8, color: A.text, fontFamily: A.mono, fontSize: 11, padding: '7px 9px' }} />
+            </label>
+          </div>
+
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 14 }}>
+            <Button onClick={registerPrimary} color={A.purple}>register primary key</Button>
+            <Button onClick={authorizeCard} variant="outline" color={A.purple}>touch key for card</Button>
+            <Button onClick={executeCard} variant="outline" color={A.orange}>apply guarded card</Button>
+          </div>
+        </Glass>
+
+        <Glass pad={16}>
+          <div style={{ fontSize: 11, color: A.textFaint, textTransform: 'uppercase', letterSpacing: 1, fontFamily: A.sans, fontWeight: 700, marginBottom: 10 }}>birth readiness</div>
+          <div style={{ display: 'grid', gap: 9 }}>
+            {BIRTH_READINESS_BLOCKERS.map((blocker) => (
+              <div key={blocker.label} style={{ border: `0.5px solid ${A.orange}55`, borderRadius: 10, padding: '10px 12px', background: `${A.orange}10` }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                  <Dot c={A.orange} size={5} />
+                  <span style={{ fontSize: 12, color: A.text, fontWeight: 700 }}>{blocker.label}</span>
+                  <span style={{ flex: 1 }} />
+                  <Chip color={A.orange}>{blocker.state}</Chip>
+                </div>
+                <div style={{ fontSize: 11, color: A.textDim, lineHeight: 1.45, marginTop: 6 }}>{blocker.detail}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize: 11, color: A.textFaint, lineHeight: 1.45, marginTop: 12 }}>
+            Dream and soul proposal review remains routed through existing card/S7 machinery; this surface shows the ceremony path, not a direct write door.
+          </div>
+        </Glass>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 0.75fr) minmax(320px, 1.25fr)', gap: 14 }}>
+        <Glass pad={16}>
+          <div style={{ fontSize: 11, color: A.textFaint, textTransform: 'uppercase', letterSpacing: 1, fontFamily: A.sans, fontWeight: 700, marginBottom: 10 }}>S7 status</div>
+          <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: A.mono, fontSize: 11, color: A.textDim, lineHeight: 1.45 }}>
+            {JSON.stringify(status || {status: 'unavailable'}, null, 2)}
+          </pre>
+        </Glass>
+        <Glass pad={16}>
+          <div style={{ fontSize: 11, color: A.textFaint, textTransform: 'uppercase', letterSpacing: 1, fontFamily: A.sans, fontWeight: 700, marginBottom: 10 }}>ceremony receipts</div>
+          <div style={{ display: 'grid', gap: 8 }}>
+            {log.length ? log.map((entry, idx) => (
+              <div key={`${entry.at}-${idx}`} style={{ borderBottom: `0.5px solid ${A.stroke}`, paddingBottom: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                  <span style={{ fontSize: 12, color: A.text, fontWeight: 700 }}>{entry.label}</span>
+                  <span style={{ fontFamily: A.mono, fontSize: 10, color: A.textFaint }}>{entry.at}</span>
+                </div>
+                <pre style={{ margin: '5px 0 0', whiteSpace: 'pre-wrap', fontFamily: A.mono, fontSize: 10.5, color: A.textDim, lineHeight: 1.4 }}>
+                  {JSON.stringify(entry.payload, null, 2)}
+                </pre>
+              </div>
+            )) : (
+              <div style={{ fontSize: 12, color: A.textDim }}>waiting for owner action</div>
+            )}
+          </div>
+        </Glass>
+      </div>
+    </div>
+  );
+}
+
 function SegmentedControl({ options, value, onChange }) {
   return (
     <div style={{ display: 'inline-flex', background: A.bgElev, borderRadius: 8, padding: 2, border: `0.5px solid ${A.stroke}` }}>
@@ -2884,7 +3214,7 @@ window.TerminalUI = {
   S, A, Card, Glass, Chip, Dot, Button, MaezAvatar, Icon, SegmentedControl, StatusTile,
   ChatPane, ServicesPane, GpuPane, DaemonPane, SignalsPane, ScratchpadPane, RouterPane,
   ReadinessPane,
-  MemorySurface, ReceiptsSurface, SoulSurface, DreamsSurface, IdentitySurface, LogsSurface, ApprovalsQueueSurface,
+  MemorySurface, ReceiptsSurface, CeremonySurface, SoulSurface, DreamsSurface, IdentitySurface, LogsSurface, ApprovalsQueueSurface,
   JudgmentSurface, SelfDevSurface, WorkshopSurface, DaemonDeep,
   // back-compat aliases (in case shell uses these)
   SoftBtn: Button, Pill: Chip,
