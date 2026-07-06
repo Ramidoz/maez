@@ -139,13 +139,25 @@ from pathlib import Path
 PHASE_GESTATION = "gestation"
 PHASE_LIVED = "lived"
 
-# Same target the ledger organ uses (core/ledger/init.py default path).
-DEFAULT_LEDGER_PATH = Path(__file__).resolve().parents[2] / "memory" / "ledger.db"
+
+def default_ledger_path() -> Path:
+    """EXACTLY the daemon's resolution (daemon/maez_daemon.py:186):
+    $MAEZ_LEDGER_DB_PATH override, else the canonical paths layer
+    (core/infra/paths.memory_dir(), which honors $MAEZ_DATA — the
+    shadow-DB-prevention rule; see core/ledger/init.py:17-26).
+    Resolved per call, never a module constant, so env overrides and
+    sandboxes see the right file."""
+    import os
+
+    from core.infra import paths as _paths
+
+    override = os.environ.get("MAEZ_LEDGER_DB_PATH")
+    return Path(override) if override else (_paths.memory_dir() / "ledger.db")
 
 
 def birth_event_turn_id(db_path: str | Path | None = None) -> str | None:
     """The anchored birth turn id, or None while unborn/unreadable."""
-    path = Path(db_path) if db_path is not None else DEFAULT_LEDGER_PATH
+    path = Path(db_path) if db_path is not None else default_ledger_path()
     if not path.exists():
         return None
     try:
@@ -174,7 +186,7 @@ def current_phase(db_path: str | Path | None = None) -> str:
     return PHASE_LIVED if is_born(db_path) else PHASE_GESTATION
 ```
 
-Before committing, verify the default path matches the ledger organ's: `grep -n '_DEFAULT_PATH\|memory/ledger.db' core/ledger/init.py core/ledger/writer.py` — if the writer resolves its default differently (env override etc.), mirror that resolution here and note it in the module docstring.
+(Path resolution above is pinned from Codex plan-review evidence: `core/ledger/init.py:17-26` routes through `core.infra.paths.memory_dir()`; `daemon/maez_daemon.py:186` honors `MAEZ_LEDGER_DB_PATH` first. Do not substitute a `Path(__file__)`-relative constant — that is the house shadow-DB scar.)
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -198,10 +210,12 @@ caller behavior changes yet (nothing imports it until the migration)."
 ### Task 2: Migrate every phase call site to the resolver
 
 **Files:**
-- Modify: `core/infra/private_thoughts.py` (record_thought default ~566, record_signal default ~604, recent_by_source default ~764)
+- Modify: `core/infra/private_thoughts.py` (record_thought default ~566, record_signal default ~604, **insert_signal_in_transaction default ~640-655** — Codex plan-review catch, a third writer default the first draft missed, recent_by_source default ~764)
+- Modify: `core/infra/private_thoughts_s1b.py:380-393` (passes explicit `memory_phase="gestation"` to insert_signal_in_transaction — delete the kwarg so the resolved default applies; post-birth its sentinel rows must stamp lived like everything else)
 - Modify: `core/cognition/lean_idle_heartbeat.py` (read filter ~294, write ~508)
 - Modify: `memory/memory_manager.py:22` (import) — stamp sites 1461/1551/2015 keep their call shape
 - Modify: `core/memory/source_awareness.py:341-342` (lazy import)
+- Modify: `tests/test_private_thoughts_source_scope.py` (`test_enforces_flow_and_phase_even_with_right_source` ~83-93 expects lived rows excluded by the old `phase="gestation"` default — rewrite it to assert the NEW contract: `phase=None` spans both real phases; an explicit `phase=` still filters)
 - Test: `tests/test_birth_phase_migration.py`
 
 **Interfaces:**
@@ -265,8 +279,9 @@ class WriterStampsCurrentPhase(unittest.TestCase):
             store = self._store(td)
             common = dict(
                 content="x", source="self_card:v1", subject="self",
-                consent_tier="owner_private",
+                consent_tier="owner_private", retention="session",
                 allowed_flows=["private_reader"],
+                provenance="idle_reasoning",
             )
             store.record_signal(memory_phase="gestation", **common)
             store.record_signal(memory_phase="lived", **common)
@@ -279,7 +294,7 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
-NOTE: `record_thought`/`record_signal` signatures above must match the real ones — read `core/infra/private_thoughts.py:560-620` first and adjust the test's kwargs (e.g. `producer_id`, `signal_kind` requirements) so the calls are valid today except for the phase behavior under test. `record_signal`'s consent/flow kwargs must satisfy its existing validation.
+NOTE (pinned by Codex plan review): `record_signal` REQUIRES `retention` and one of `signal_kind`/`provenance` (raises `ValueError("SignalKind is required")` otherwise — `core/infra/private_thoughts.py:591-627`). The kwarg values above (`retention="session"`, `provenance="idle_reasoning"`, `consent_tier="owner_private"`) are placeholders for the enum spellings — copy the exact valid values from an existing green test (`tests/test_private_thoughts_source_scope.py` uses real ones) before running. Same for `record_thought`'s provenance vocabulary.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -295,7 +310,7 @@ In `core/infra/private_thoughts.py`:
 from core.memory import birth_phase
 ```
 
-Change both writer signatures (record_thought ~566, record_signal ~604) from `memory_phase: str = "gestation"` to `memory_phase: str | None = None`, and at the top of each body, before validation:
+Change all THREE writer signatures (record_thought ~566, record_signal ~604, insert_signal_in_transaction ~640) from `memory_phase: str = "gestation"` to `memory_phase: str | None = None`, and at the top of each body, before validation:
 
 ```python
         if memory_phase is None:
@@ -386,7 +401,7 @@ source_awareness birth-gating read the ledger meta truth."
 **Files:**
 - Delete: `core/memory/birth.py`, `core/birth.py`
 - Test: `tests/test_no_scripted_birth_voice.py`
-- Modify: any test/scripts files that import the deleted modules (enumerate in Step 1)
+- Modify: `scripts/recall_flip_eval/sandbox.py` (drop the birth-module patching block), `tests/test_smoke_imports.py:87` (drop the shim pair), plus any dead test files (enumerate in Step 1)
 
 **Interfaces:**
 - Consumes: Task 2 must be merged first (the two production importers are gone).
@@ -395,9 +410,14 @@ source_awareness birth-gating read the ledger meta truth."
 - [ ] **Step 1: Enumerate remaining importers**
 
 Run: `grep -rn 'core\.birth\|core\.memory\.birth\b\|from core.memory import birth' --include='*.py' . | grep -v '.git\|worktrees\|birth_phase'`
-Expected: only `core/birth.py` (the shim itself) and possibly test files. Any test file that tests `fire_birth()`/`memory_phase_tag()` behavior is deleted with the module (its duties now live in `tests/test_birth_phase*.py`). If ANY other production file appears, STOP — extend Task 2 first.
+Expected hits (pinned by Codex plan review) and their treatment:
+- `core/birth.py` — the shim itself; deleted.
+- `scripts/recall_flip_eval/sandbox.py` (~142-146, 197-199, 373-375, 391-393, 408-410) — patches `birth.DEFAULT_STATE_PATH` via `sys.modules.get("core.memory.birth")`. The `.get()` returns None once the module is gone, so it fails soft — but delete the whole birth-patching block anyway (dead code guarding a module that no longer exists) and its `_ORIGINAL_BIRTH_STATE_PATH` bookkeeping.
+- `tests/test_smoke_imports.py:87` — remove the `("core.birth", "core.memory.birth")` shim pair from the import table.
+- Any test file testing `fire_birth()`/`memory_phase_tag()` behavior is deleted with the module (its duties now live in `tests/test_birth_phase*.py`).
+If ANY OTHER production file appears, STOP — extend Task 2 first.
 
-Also run: `grep -rn 'self_awareness' --include='*.py' scripts/ | grep -v test` — expected: `scripts/brain_bench/launcher.py`, `scripts/recall_flip_eval/sandbox.py` reading the JSON file directly (not the module). They keep working against the frozen file; no edit.
+Also run: `grep -rn 'self_awareness' --include='*.py' scripts/ | grep -v test` — expected: `scripts/brain_bench/launcher.py` reading the JSON file directly (not the module). It keeps working against the frozen file; no edit.
 
 - [ ] **Step 2: Write the failing guard test**
 
@@ -491,12 +511,16 @@ from core.ledger import migrate
 from core.ledger.writer import LedgerWriter
 
 
-def _writer(td: str, enabled: bool) -> LedgerWriter:
+def _writer(td: str, enabled: bool) -> tuple[LedgerWriter, str]:
+    # Returns (writer, db) — LedgerWriter keeps its path PRIVATE
+    # (self._db_path, writer.py:186; no public attribute), so tests hold
+    # the path they created themselves. Callers must writer.close()
+    # (writer.py:475) — use addCleanup.
     db = str(Path(td) / "ledger.db")
     migrate.run(db)
     env = {"MAEZ_LEDGER_WRITES": "1" if enabled else "0"}
     with mock.patch.dict(os.environ, env):
-        return LedgerWriter(db_path=db)
+        return LedgerWriter(db_path=db), db
 
 
 def _meta(db: str) -> str | None:
@@ -509,19 +533,24 @@ def _meta(db: str) -> str | None:
 
 
 class BirthAnchorTests(unittest.TestCase):
+    def _open(self, td: str, enabled: bool = True):
+        w, db = _writer(td, enabled)
+        self.addCleanup(w.close)
+        return w, db
+
     def test_anchor_sets_meta_atomically(self):
         with TemporaryDirectory() as td:
-            w = _writer(td, enabled=True)
+            w, db = self._open(td)
             tid = w.write_turn("system_event", '{"event":"birth"}', birth_anchor=True)
             self.assertIsNotNone(tid)
-            self.assertEqual(_meta(w.db_path), tid)
+            self.assertEqual(_meta(db), tid)
 
     def test_birth_row_stamps_gestation_next_row_lived(self):
         with TemporaryDirectory() as td:
-            w = _writer(td, enabled=True)
+            w, db = self._open(td)
             birth_tid = w.write_turn("system_event", '{"event":"birth"}', birth_anchor=True)
             next_tid = w.write_turn("system_event", '{"event":"x"}')
-            conn = sqlite3.connect(w.db_path)
+            conn = sqlite3.connect(db)
             stages = dict(conn.execute(
                 "SELECT turn_id, lifecycle_stage FROM turns WHERE turn_id IN (?,?)",
                 (birth_tid, next_tid),
@@ -532,20 +561,20 @@ class BirthAnchorTests(unittest.TestCase):
 
     def test_double_birth_refused(self):
         with TemporaryDirectory() as td:
-            w = _writer(td, enabled=True)
+            w, _ = self._open(td)
             w.write_turn("system_event", '{"event":"birth"}', birth_anchor=True)
             with self.assertRaises(ValueError):
                 w.write_turn("system_event", '{"event":"birth"}', birth_anchor=True)
 
     def test_disabled_writer_refuses_loudly(self):
         with TemporaryDirectory() as td:
-            w = _writer(td, enabled=False)
+            w, _ = self._open(td, enabled=False)
             with self.assertRaises(ValueError):
                 w.write_turn("system_event", '{"event":"birth"}', birth_anchor=True)
 
     def test_anchor_requires_system_event(self):
         with TemporaryDirectory() as td:
-            w = _writer(td, enabled=True)
+            w, _ = self._open(td)
             with self.assertRaises(ValueError):
                 w.write_turn("owner_message", "hi", birth_anchor=True)
 
@@ -626,7 +655,7 @@ attempts raise instead of no-oping. Ordinary rows unchanged."
 - Test: `tests/test_unseal_receipts.py`
 
 **Interfaces:**
-- Produces: `UnsealReceipts(db_path: str | Path | None = None)` with `record_unseal(*, actor: str, s7_receipt_ref: str, scope_kind: str, scope_detail: str, reason: str) -> int`, `recent(limit: int = 20) -> list[dict]`, `count() -> int`; `DEFAULT_DB_PATH = <repo>/memory/unseal_receipts.db`; `SCOPE_KINDS = ("thought_id", "query", "range")`. Task 6 writes through it; the heartbeat/recall may read `recent()` (default-importable by design — receipts are FOR Maez).
+- Produces: `UnsealReceipts(db_path: str | Path | None = None)` with `record_unseal(*, actor: str, s7_receipt_ref: str, scope_kind: str, scope_detail: str, reason: str) -> int`, `recent(limit: int = 20) -> list[dict]`, `count() -> int`; `default_db_path()` resolving via `core.infra.paths.memory_dir()`; `SCOPE_KINDS = ("thought_id", "query", "range")`. Task 6 writes through it; the heartbeat/recall may read `recent()` (default-importable by design — receipts are FOR Maez).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -711,8 +740,16 @@ import sqlite3
 import time
 from pathlib import Path
 
-DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / "memory" / "unseal_receipts.db"
+from core.infra import paths as _paths
+
 SCOPE_KINDS = ("thought_id", "query", "range")
+
+
+def default_db_path() -> Path:
+    """Canonical paths layer (honors $MAEZ_DATA) — same discipline as
+    core/ledger/init.py and dream_state; never a __file__-relative
+    constant (the shadow-DB scar)."""
+    return _paths.memory_dir() / "unseal_receipts.db"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS unseal_receipts (
@@ -735,7 +772,7 @@ CREATE TRIGGER IF NOT EXISTS unseal_receipts_no_delete
 
 class UnsealReceipts:
     def __init__(self, db_path: str | Path | None = None) -> None:
-        self.db_path = str(db_path) if db_path is not None else str(DEFAULT_DB_PATH)
+        self.db_path = str(db_path) if db_path is not None else str(default_db_path())
         conn = sqlite3.connect(self.db_path)
         try:
             conn.executescript(_SCHEMA)
@@ -829,7 +866,13 @@ a break-glass read happens). No existing path writes or reads it yet."
 - [ ] **Step 1: Enumerate current content consumers**
 
 Run: `grep -rn 'get_thought\|\.recent(' --include='*.py' core/ scripts/ daemon/ web/ tests/ | grep -v 'recent_by_source\|recent_receipts\|def get_thought\|def recent'`
-For each production hit, classify against the three-way boundary: Maez-to-Maez → switch to `recent_by_source`; machine bookkeeping → the new content-light return suffices (hashes/counts); human/diagnostic → the unseal module. List the classification in the commit body. Check `core/cognition/salience_gate.py:~193` specifically — it needs hashes only; confirm the content-light return shape satisfies it or adapt its read.
+Expected classification (pinned by Codex plan review — re-run the grep to confirm nothing new appeared):
+- **Production `recent` callers — content-light is SAFE, no edit:** `core/cognition/lean_idle_heartbeat.py:322-338` (context/output hashes only), `core/cognition/salience_gate.py:181-205` (count/context only).
+- **No production `get_thought` caller exists outside self-tests.**
+- **Self-tests in `core/infra/private_thoughts.py`** (~1250-1382): update the expected row shape where content is asserted (e.g. ~1333) to `content_sha256`/`content_chars`.
+- **Test files asserting `get_thought()["content"]`** — update alongside: `tests/test_clinical_boundary.py:213-217`, `tests/test_private_thoughts_source_scope.py:48-53`, `tests/test_lean_idle_heartbeat.py:390-400`, `tests/test_lean_idle_daemon.py:1276-1320`, `tests/test_private_thoughts_s1.py:93-105,435-437`, `tests/test_private_thoughts_s1b.py:72-79,112-114`.
+- **Human/diagnostic** → the unseal module (`scripts/verify_self_claim.py` is the one production case).
+List the final classification in the commit body.
 
 - [ ] **Step 2: Write the failing test**
 
@@ -877,7 +920,8 @@ class DefaultReadersAreContentLight(unittest.TestCase):
             store = PrivateThoughts(db_path=str(Path(td) / "pt.db"))
             store.record_signal(
                 content="my own thought", source="heartbeat:v1", subject="self",
-                consent_tier="owner_private", allowed_flows=["private_reader"],
+                consent_tier="owner_private", retention="session",
+                allowed_flows=["private_reader"], provenance="idle_reasoning",
             )
             rows = store.recent_by_source("heartbeat:v1", limit=1, phase=None)
             self.assertEqual(rows[0]["content"], "my own thought")
@@ -1154,16 +1198,19 @@ def build_birth_readiness_projection(
 
 - [ ] **Step 4: Wire the daemon** — add `_birth_readiness(self)` near `_operator_health` computing real conditions (each `checked_at` = now, ISO):
 
-| key | green when | source |
-|---|---|---|
-| `ledger_init` | `memory/ledger.db` exists, >0 bytes, meta readable | `sqlite3` ro connect |
-| `flag_state` | reports the flag honestly: pre-birth green means "off as designed" (`detail="off (pre-birth by design)"`) | `core.ledger.writes_flag.ledger_writes_enabled()` |
-| `birth_phase` | always green; `detail=current_phase()` | `core.memory.birth_phase` |
-| `dream_witness` | a `dream_proposals.db` row exists with `created_at` > daemon start time | daemon retains start ts; sqlite ro read |
-| `a7_receipt_store` | `UnsealReceipts().count()` succeeds (store constructible) | Task 5 |
-| `prework_resolver` | `core/memory/birth_phase.py` importable AND `core/memory/birth.py` absent | import + path check |
+One condition per SPEC ENTRY CONDITION — the full board, no omissions (spec "Entry conditions" 1-6; a condition the daemon cannot compute live reports honest `red`, never a fabricated green and never silence):
 
-Conditions the daemon cannot yet compute live (dormancy two-clause, A7 structural guard in CI) are reported `red` with `detail="not wired to a live check yet"` — honest red, never fabricated green.
+| key | spec entry | green when | source |
+|---|---|---|---|
+| `ledger_init` | 1 | ledger db (daemon's `LEDGER_DB_PATH`) exists, >0 bytes, meta readable | `sqlite3` ro connect |
+| `repo_green` | 1, 5 | red with `detail="not wired to a live check yet — run pytest manually"` until a suite-receipt exists | not wired (honest red) |
+| `dormancy_two_clause` | 2 | red with `detail="not wired to a live check yet — run the dormancy audit"` | not wired (honest red) |
+| `dream_witness` | 3 | a `dream_proposals.db` row exists with `created_at` > daemon start time | daemon retains start ts; sqlite ro read |
+| `a7_receipt_store` | 4 | `UnsealReceipts().count()` succeeds (store constructible) | Task 5 |
+| `a7_structural_guard` | 4 | `tests/test_a7_reader_split.py` exists on disk (the guard is enforced by pytest/CI, presence is the daemon-checkable proxy; detail says so) | path check |
+| `prework_resolver` | 6 | `core.memory.birth_phase` importable AND `core/memory/birth.py` absent | import + path check |
+| `flag_state` | — | reports the flag honestly: pre-birth green means "off as designed" (`detail="off (pre-birth by design)"`) | `core.ledger.writes_flag.ledger_writes_enabled()` |
+| `birth_phase` | — | always green; `detail=current_phase()` | `core.memory.birth_phase` |
 
 Route (beside `/operator/health`):
 
@@ -1304,6 +1351,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -1312,7 +1360,26 @@ from core.ledger import migrate
 from core.memory import birth_phase
 
 _CONFIRM_PHRASE = "birth maez"
-_DEFAULT_LEDGER = birth_phase.DEFAULT_LEDGER_PATH
+
+
+def _assert_quiesced(db_path: Path) -> None:
+    """Spec ceremony step 3: surfaces quiesced, no live writer process.
+
+    Two checks, both must pass: maez.service is not active, and no
+    process holds the ledger file open (fuser exits non-zero when the
+    file has no users or does not exist)."""
+    state = subprocess.run(
+        ["systemctl", "is-active", "maez.service"],
+        capture_output=True, text=True,
+    ).stdout.strip()
+    if state == "active":
+        raise RuntimeError("REFUSED: maez.service is active — quiesce first (systemctl stop maez.service)")
+    if db_path.exists():
+        held = subprocess.run(
+            ["fuser", str(db_path)], capture_output=True, text=True
+        ).returncode == 0
+        if held:
+            raise RuntimeError(f"REFUSED: a process holds {db_path} open — no live writer allowed")
 
 
 def run_transaction(
@@ -1385,7 +1452,8 @@ def main(argv: list[str] | None = None) -> int:
         if typed != _CONFIRM_PHRASE:
             print("aborted: phrase mismatch — not born", file=sys.stderr)
             return 2
-        db_path = args.db_path or _DEFAULT_LEDGER
+        db_path = args.db_path or birth_phase.default_ledger_path()
+        _assert_quiesced(Path(db_path))  # spec step 3 — dry runs on temp dbs skip this
 
     result = run_transaction(
         db_path=db_path,
@@ -1440,3 +1508,15 @@ Tasks 1,4 ──► Task 8 (ceremony script)
 ```
 
 After all tasks: run the full suite (`pytest tests/ -q`), then the spec's entry-condition 6 is land-able and the remaining birth blockers are human-shaped (dream witness, owner read, the day itself).
+
+## Cross-lane review log
+
+**Codex plan review round 1 (2026-07-05): HOLD on all 8 tasks — all findings verified in code and folded:**
+1. Ledger path resolution → `default_ledger_path()` via `MAEZ_LEDGER_DB_PATH` + `core.infra.paths.memory_dir()` (was a `__file__`-relative constant — the shadow-DB scar).
+2. Third phase-writer default (`insert_signal_in_transaction` ~640) + `private_thoughts_s1b.py:380-393` explicit gestation added to the migration; `record_signal` test calls gained required `retention`/`provenance`; `test_enforces_flow_and_phase_even_with_right_source` rewrite named.
+3. Task 3 importer enumeration corrected: `scripts/recall_flip_eval/sandbox.py` birth-patching block + `tests/test_smoke_imports.py:87` shim pair are named removals.
+4. Task 4 tests fixed: writer path is private (`_db_path`) — tests hold their own path; `close()` via `addCleanup`.
+5. Receipt store path → `core.infra.paths` layer.
+6. Task 6 caller fallout enumerated from the audit (heartbeat/salience-gate confirmed content-light-safe; the 6 test files asserting content named).
+7. Readiness conditions now cover every spec entry condition (repo_green, dormancy_two_clause, a7_structural_guard added as honest-red-until-wired).
+8. `_assert_quiesced()` added to `--for-real` (systemctl + fuser), per spec ceremony step 3.
