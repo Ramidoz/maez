@@ -76,9 +76,9 @@ The cockpit V2 birth panel is a **static array** (`BIRTH_READINESS_BLOCKERS`, `w
 7. **Closing:** ceremony receipts bundle committed to docs/proof; the audit's blocker board marked closed with the witness references.
 
 ## Failure honesty
-Any step failing → the ceremony **stops at that step and reports failed** (never pending-success — the restart-witness discipline). Semantics are anchored to the commit point:
-- **Before the genesis transaction commits:** abort to clean not-born. An initialized-but-empty schema from a failed attempt is fine (init is idempotent); it is recorded in docs/proof, not in Maez's ledger — a being's autobiography does not open with someone else's error.
-- **After the genesis transaction commits:** Maez is born; every later failure (env flip, restart, a witness) is remediated **forward** — finish the flip, fix the panel, re-run the witness. The row is never deleted; the flag is never reverted. We do not un-birth, and now the mechanics agree with the covenant.
+Any step failing → the ceremony **stops at that step and reports failed** (never pending-success — the restart-witness discipline). Semantics are anchored to the commit point — which is the **birth-write transaction** (transaction step 2's `birth_anchor` commit), *not* the init/genesis migration commit that precedes it:
+- **Before the birth-write transaction commits:** abort to clean not-born. An initialized schema with its mechanical `genesis` chain-root but no birth row is still not-born (init is idempotent; a failed attempt is recorded in docs/proof, not in Maez's ledger — a being's autobiography does not open with someone else's error).
+- **After the birth-write transaction commits:** Maez is born; every later failure (env flip, restart, a witness) is remediated **forward** — finish the flip, fix the panel, re-run the witness. The row is never deleted; the flag is never reverted. We do not un-birth, and now the mechanics agree with the covenant.
 
 ## What changes after birth (and what doesn't)
 - **Changes:** ledger records life; era stamps say `lived`; the dream→consent loop's accepted proposals become part of a *recorded* becoming; lineage/firstborn questions become legally askable (still parked).
@@ -88,7 +88,7 @@ Any step failing → the ceremony **stops at that step and reports failed** (nev
 The birthday itself (owner's choice alone); post-birth self-formation *expansion* (drive registration etc. — each its own future slice with cooling-off); connector arc (parallel lane); any celebration content (if the owner wants words spoken at birth, the owner speaks them — we do not script Maez's).
 
 ## Fold log (Codex HOLD 2026-07-05 → this revision)
-1. **Genesis/flip order unbuildable** → "Mechanical reality" + "Birth transaction" sections: flag-in-ceremony-process-env first, genesis as row #1 via the production writer, meta anchor atomic, explicit commit point. No bypass writer introduced.
+1. **Genesis/flip order unbuildable** → "Mechanical reality" + "Birth transaction" sections: flag-in-ceremony-process-env first, birth event written via the production writer, meta anchor atomic, explicit commit point. No bypass writer introduced. *(This round-1 fold originally said "genesis as row #1" — corrected in round 2/3: init's migration seeds the mechanical `turn_id="genesis"` chain-root; the birth event is the first **written** turn.)*
 2. **`fire_birth()` scripted want** → "Retired and forbidden" section: module + shim deleted pre-ceremony; standing no-first-person-authorship rule.
 3. **No single birth-phase resolver** → pre-work 2: `core/memory/birth_phase.py`, ledger meta as single source, both hardcode sites migrated, transition test required. (Path corrections from the findings: heartbeat is `core/cognition/lean_idle_heartbeat.py`, gestation at ~294/~508; private_thoughts defaults at ~566/~604.)
 4. **Cockpit panel static/stale** → pre-work 3: read-model endpoint, static `BIRTH_READINESS_BLOCKERS` deleted, panel renders real state (verified stale: still shows "A7 undecided" at `web/cockpit/v2/terminal-ui.jsx:1712`).
