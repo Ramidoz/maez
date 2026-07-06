@@ -35,6 +35,7 @@ the invariant is structural (timeout default, error_class shape).
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -320,6 +321,46 @@ class R1_DegradedCapabilityVisibility(unittest.TestCase):
             any("judge" in m.lower() for m in warning_lines),
             "WARNING line must mention the judge",
         )
+
+    def test_first_unavailable_records_capability_degraded_consequence(self):
+        """The warning is not enough: Maez must leave a durable
+        consequence_memory row so its own future prompt can notice the
+        grounding judge was degraded."""
+        import importlib
+        import os
+
+        from core.safety import self_claim_audit as sca
+        from core.cognition import grounding_judge as gj
+
+        # Reset cooldown state so test starts clean.
+        if hasattr(sca, "_judge_unavailable_last_warning_ts"):
+            sca._judge_unavailable_last_warning_ts = 0.0
+        if hasattr(sca, "_judge_unavailable_recent_count"):
+            sca._judge_unavailable_recent_count = 0
+
+        with tempfile.TemporaryDirectory() as td:
+            db_path = str(Path(td) / "consequence_memory.db")
+            with mock.patch.dict(os.environ, {"MAEZ_CONSEQUENCE_MEMORY_DB": db_path}):
+                from core import consequence_memory as cm
+
+                cm = importlib.reload(cm)
+
+                def _boom(*_, **__):
+                    raise gj.JudgeUnavailable("simulated", error_class="refused")
+
+                with mock.patch.object(gj, "judge", side_effect=_boom):
+                    sca.audit(
+                        text="I have run a deep system scan and I can see "
+                             "your active windows right now.",
+                        surface="r1_consequence_test",
+                    )
+
+                rows = cm.recent(kind="capability_degraded")
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].surface, "self_claim_audit")
+        self.assertIn("grounding_judge", rows[0].context)
+        self.assertIn("fail-open", rows[0].outcome)
 
     def test_cooldown_suppresses_subsequent_warnings(self):
         """Within the cooldown window, the SECOND

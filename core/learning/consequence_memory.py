@@ -36,6 +36,11 @@ enforced only by convention):
                     outcome = "no response", feedback = observational
                     — was the card important or ignorable?
 
+  capability_degraded
+                    A supporting capability Maez depends on was
+                    unavailable or degraded. Context = the capability
+                    and request, outcome = what degraded.
+
 Not in this module:
 
   - Retrieval-quality scoring (that's core.memory_scoring).
@@ -93,6 +98,7 @@ CLASS_CARD_REJECTED = "card_rejected"
 CLASS_USER_CORRECTION = "user_correction"
 CLASS_FIXATION_EPISODE = "fixation_episode"
 CLASS_APPROVAL_TIMEOUT = "approval_timeout"
+CLASS_CAPABILITY_DEGRADED = "capability_degraded"
 CLASS_FABRICATION_CATCH = "fabrication_catch"
 CLASS_CLAIM_RECEIPT_REDO = "claim_receipt_redo"
 CLASS_DREAM_REJECTED = "dream_rejected"
@@ -109,6 +115,7 @@ SCAR_CLASSES = frozenset({
 _KNOWN_CLASSES = frozenset({
     CLASS_TOOL_FAILURE, CLASS_CARD_REJECTED, CLASS_USER_CORRECTION,
     CLASS_FIXATION_EPISODE, CLASS_APPROVAL_TIMEOUT,
+    CLASS_CAPABILITY_DEGRADED,
 }) | SCAR_CLASSES
 
 
@@ -226,6 +233,47 @@ def record_event(
             return cur.lastrowid
     except Exception as e:
         logger.warning("consequence_memory: write failed: %s", e)
+        return None
+
+
+def note_tool_failure(
+    *,
+    request_id: str,
+    tool: str,
+    surface: str,
+    outcome: str,
+    class_label: str = CLASS_TOOL_FAILURE,
+    feedback: str = "",
+    extra: Optional[dict] = None,
+) -> Optional[int]:
+    """Compatibility writer for callers that report tool/capability
+    failures by request id.
+
+    Older R3/R1 call sites documented this surface before the module
+    exposed it. Keep it as a narrow wrapper over ``record_event`` so
+    those producers land in the same consequence store.
+    """
+    try:
+        request = str(request_id or "")
+        tool_name = str(tool or "unknown_tool")
+        context = f"tool={tool_name} request_id={request}" if request else f"tool={tool_name}"
+        tags = [tool_name]
+        if request:
+            tags.append(request)
+        merged_extra = dict(extra or {})
+        merged_extra.setdefault("request_id", request)
+        merged_extra.setdefault("tool", tool_name)
+        return record_event(
+            kind=str(class_label or CLASS_TOOL_FAILURE),
+            context=context[:400],
+            outcome=str(outcome or "")[:400],
+            feedback=str(feedback or "")[:400],
+            surface=surface or "unknown",
+            tags=tags,
+            extra=merged_extra,
+        )
+    except Exception as e:
+        logger.warning("consequence_memory: note_tool_failure failed: %s", e)
         return None
 
 
