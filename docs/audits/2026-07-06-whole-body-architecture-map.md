@@ -1,6 +1,8 @@
 # Maez — Whole-Body Architecture Map
 
-**Date:** 2026-07-06. **Method:** 12 parallel organ mappers → 4 cross-cutting analyzers (store atlas, built-vs-planned reconciliation, duplication/drift, covenant-boundary map), then hand synthesis. 16 agents, 0 failures. Every cross-cutter re-derived mapper claims against live code, live `pytest`, `sqlite3` queries, and `/proc/<pid>/environ` on the running daemon (pid 275963). **Evidence tiers below:** **VERIFIED** = independently re-derived by a cross-cutter this pass; **NEEDS RECHECK** = single-mapper claim not re-traced. Repo state ≈ `284ad27`. No files modified during the audit.
+**Date:** 2026-07-06 (v2, two-lane consolidation). **Method:** 12 parallel organ mappers → 4 cross-cutting analyzers (store atlas, built-vs-planned reconciliation, duplication/drift, covenant-boundary map), then hand synthesis. 16 agents, 0 failures. Every cross-cutter re-derived mapper claims against live code, live `pytest`, `sqlite3` queries, and `/proc/<pid>/environ` on the running daemon (pid 275963). **Evidence tiers below:** **VERIFIED** = independently re-derived by a cross-cutter this pass; **NEEDS RECHECK** = single-mapper claim not re-traced. Repo state ≈ `284ad27`. No files modified during the audit.
+
+**v2 consolidation note.** A second independent audit lane produced an overlapping map (`2026-07-06-maez-whole-body-map.md`). Its non-overlapping content — a perception/sensory-body organ breakdown (§8 below), a per-organ KEEP/HARDEN verdict layer (§9), and refreshed metrics (§10) — is folded here; that file is superseded by this one. Its critical findings independently reproduced this map's §2 list (dead `note_tool_failure`, egress bypass, `would_block`, soul dual-write, BAD Decision 37 stale, curiosity producers orphaned), which raises confidence in §2 but adds no new items. **One metric correction carried in:** the second lane reported daily/core memory rows as 4/90 from a module-import side-effect; direct query of the live tiered stores gives **daily 56 / core 164** (`memory/db/{daily,core}/chroma.sqlite3`, VERIFIED 2026-07-06). Do not propagate 4/90.
 
 ---
 
@@ -120,6 +122,36 @@ Two guard tests are red for non-covenant reasons and should be green regardless:
 **Synthesis.** The vision is further along in code than most such visions ever get: the rails are real, they fire under real failure, and the separations the covenant demands are structurally enforced, not merely documented. Where the architecture is weaker than the vision is not the grand parts — it is the seams. Lineage dies crossing between organs; a broken telemetry call hides behind a bare except; an egress door has a second latch nobody wired to the lock. None of these are hard to fix, and none require new capability. They require finishing the connective tissue before feeding the organs that depend on it — which is exactly the order Phases A→D encode.
 
 ---
+
+## 8. Perception / sensory body (folded from second lane — coverage gap in the 12-mapper sweep)
+
+The original sweep had a dedicated boundary-organs mapper (intake/egress) but no dedicated perception/sensory mapper; the second lane covered it. Content below is second-lane-sourced; **VERIFIED** items were confirmed against the repo this pass, **NEEDS RECHECK** were not re-traced.
+
+- **Contract (VERIFIED against doctrine):** the edge/sensor layer captures, detects, embeds, and posts structured facts; it runs no LLM, makes no decisions, emits no narration or identity verdicts; the host derives meaning. Body events are provenance, not biography. This matches BAD Decision 24 (body topology: sensor/effector/witness classes, cardinality-of-one, timeboxed presence limbs, "presence ≠ recognition").
+- **Design specs (VERIFIED to exist, `docs/superpowers/specs/`):** `2026-06-29-real-presence-jetson-v1-design.md`, `2026-06-30-real-presence-jetson-slice-b-design.md`, `2026-06-30-jetson-presence-b1a-spike-design.md`, `2026-06-30-jetson-presence-b1b-design.md`, `2026-06-30-casual-presence-renderer-v0-design.md`, `2026-07-01-jetson-face-facts-v1-design.md`.
+- **Implemented surface (NEEDS RECHECK — second-lane reads, not re-traced here):** `core/body/jetson_presence.py` + `devices/jetson_presence/` (B0 presence labels: owner_present/confidence/sensor_state/ts/schema; non-available → unknown only); `core/body/jetson_face_facts.py` (B1a: detections + 512-d embeddings + det_score + box, raw frames dropped at edge, content-light sha receipts); `core/body/proprioception.py` (cpu/ram/gpu/temp as min/median/max aggregates); desktop/camera presence as structured enums with voice guards (reject "I saw you"/names/durations/posture) and timeboxed `enabled_until`.
+- **Assessment (second lane):** KEEP the contract. Geometry/embeddings/vitals as structured facts (host derives state) is a cleaner boundary than narrated inference at the edge. The leverage item is that these signals currently terminate at health panels + partial shadows, **not yet digested as provenance-grade input to lived recall / salience / attention** — the "sockets without plugs" pattern again. Any such wiring is a Phase-B slice behind a hard shadow gate with content-light, provenance-not-biography discipline, not a rush.
+
+## 9. Per-organ KEEP / HARDEN verdicts (folded from second lane)
+
+Neutral synthesis layer. KEEP = design is sound, leave the shape; HARDEN = sound but finish seams/wiring. No organ was judged MISSING or REMOVE.
+
+| Organ | Verdict | Basis |
+|---|---|---|
+| Perception / body organs (Jetson, proprioception, desktop/camera) | KEEP | dumb-facts contract + host-derived state + voice guards + timebox (§8) |
+| Brain separation (frozen reasoner + purpose gateway + substrate self) | KEEP | portable reasoner over external state; `brain_gateway.BrainPurpose` scoping |
+| Memory / recall / consolidation | HARDEN | strong tiers + gated dream; thin digestion + provenance-seam gaps (§3) |
+| Intake / immune / egress / contextual | HARDEN | judge/audit fire every turn; egress bypass + dead telemetry + `would_block` (§2) |
+| Self-formation (wants/wonderings/curiosity/dream/soul) | HARDEN | wants lifecycle strong; curiosity orphaned; soul dual-write (§2, §4); wire only behind provenance wall |
+| Time / temporal + cognition / attention | HARDEN | rhythm/subjective real; integrate body signals as provenance behind shadow gate |
+| Ledger / birth | KEEP (activate later) | machinery correct; activation gated on §7 Phases A–B |
+
+## 10. Refreshed metrics + external landscape (folded, corrected)
+
+- **Memory tiers (VERIFIED 2026-07-06):** raw 43,738 / daily 56 / core 164 embeddings. Heavy raw archive, thin digested tiers — consistent with the built-vs-fed thesis. (Corrects the second lane's 4/90 import artifact.)
+- **Lint (VERIFIED partial):** `ruff check core/ledger/writer.py core/ledger/reconcile.py` → F401 unused-import errors (`os` at `writer.py:48`), `--fix`-able. Second lane reported ~6 project-wide, all F401; **NEEDS RECHECK** for the full-project count under project config.
+- **Test floor (NEEDS RECHECK):** second lane reported 8,337 collected cases via `unittest discover().countTestCases()`; not re-run here. Directionally consistent with substantial coverage growth; treat the exact number as unverified.
+- **External landscape (reference only, borrow-shapes-not-constraints):** edge-model families (e.g. Liquid LFM) and face-embedding stacks (ArcFace/InsightFace shape) are candidate *organ* upgrades that do not touch the frozen brain or the substrate. Managed-memory frameworks (Mem0, Letta/MemGPT, Hermes-style bounded MEMORY.md + offline consolidation) offer a **bounded-consolidation shape worth borrowing**, but their core mechanism — auto-self-editing memory agents — is explicitly out of scope: it conflicts with the owner-gated, cited-and-non-self-rewriting memory discipline (the A12 direction). Borrow the digestion *shape*, not the self-editing *authority*.
 
 ## Appendix: confidence
 
