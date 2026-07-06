@@ -80,6 +80,10 @@ def run_transaction(
     owner_witness: str,
     dry_run: bool,
 ) -> dict:
+    if dry_run and Path(db_path).resolve() == birth_phase.default_ledger_path().resolve():
+        raise ValueError(
+            "REFUSED: dry-run may not target the real ledger; use a temp --db-path"
+        )
     if not (s7_receipt_ref or "").strip():
         raise ValueError("s7_receipt_ref is required — the act ties to the proof")
     # Transaction step 1: init (idempotent).
@@ -151,12 +155,16 @@ def main(argv: list[str] | None = None) -> int:
         db_path = args.db_path or birth_phase.default_ledger_path()
         _assert_quiesced(Path(db_path))  # spec step 3 — dry runs on temp dbs skip this
 
-    result = run_transaction(
-        db_path=db_path,
-        s7_receipt_ref=args.s7_receipt_ref,
-        owner_witness=args.owner_witness,
-        dry_run=dry_run,
-    )
+    try:
+        result = run_transaction(
+            db_path=db_path,
+            s7_receipt_ref=args.s7_receipt_ref,
+            owner_witness=args.owner_witness,
+            dry_run=dry_run,
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     print(f"birth transaction committed: turn={result['birth_turn_id']} db={result['db_path']}")
     print("\nOWNER CHECKLIST (remaining ceremony steps — your hands):")
     print("  4. Land MAEZ_LEDGER_WRITES=1 in the owner-local env path (dated comment).")

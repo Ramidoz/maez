@@ -22,6 +22,7 @@ class NoScriptedBirthVoice(unittest.TestCase):
             [
                 "grep",
                 "-rl",
+                "--exclude-dir=__pycache__",
                 FORBIDDEN_PHRASE,
                 "core",
                 "scripts",

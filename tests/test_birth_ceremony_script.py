@@ -81,6 +81,43 @@ class BirthTransactionDryRun(unittest.TestCase):
             "--dry-run requires --db-path (a temp path, never the real ledger)"
         )
 
+    def test_dry_run_refuses_default_ledger_path(self):
+        with TemporaryDirectory() as td:
+            default_db = Path(td) / "ledger.db"
+            with mock.patch(
+                "scripts.birth_ceremony.birth_phase.default_ledger_path",
+                return_value=default_db,
+            ):
+                with self.assertRaisesRegex(ValueError, "REFUSED.*real ledger"):
+                    run_transaction(
+                        db_path=default_db,
+                        s7_receipt_ref="s7:t",
+                        owner_witness="rohit",
+                        dry_run=True,
+                    )
+            self.assertFalse(default_db.exists())
+
+    def test_dry_run_real_ledger_cli_exits_2(self):
+        with TemporaryDirectory() as td:
+            default_db = Path(td) / "ledger.db"
+            with mock.patch(
+                "scripts.birth_ceremony.birth_phase.default_ledger_path",
+                return_value=default_db,
+            ), mock.patch("sys.stderr") as stderr:
+                self.assertEqual(
+                    main(
+                        [
+                            "--s7-receipt-ref",
+                            "s7:t",
+                            "--db-path",
+                            str(default_db),
+                        ]
+                    ),
+                    2,
+                )
+            self.assertFalse(default_db.exists())
+        self.assertIn("REFUSED", "".join(c.args[0] for c in stderr.write.call_args_list))
+
     def test_for_real_refuses_without_interactive_tty(self):
         with mock.patch("sys.stdin.isatty", return_value=False), mock.patch(
             "sys.stderr"
