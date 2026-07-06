@@ -390,7 +390,7 @@ Result origin:
 V1 posture:
 
 - Shadow-allow after successful preflight.
-- Diagnostic includes `would_block_unknown_url_fetch`.
+- Diagnostic includes `shadow_would_block_unknown_url_fetch`.
 - Enforcement-time review decides whether to hard-block or whether a
   reviewed-public-URL allowlist slice has landed.
 
@@ -478,7 +478,7 @@ Required fields:
 - `threat_model_class`
 - `result_origin_class`
 - `enforcement_posture`
-- `decision`: `allow`, `would_block`, or `block`; preflight refusal is encoded
+- `decision`: `allow`, `shadow_would_block`, or `block`; preflight refusal is encoded
   as `decision="block"` plus `preflight_status="refused"`.
 - `reason_codes`
 - `destination_host_digest`: keyed `hmac-sha256:`
@@ -844,7 +844,7 @@ current code for the expected reasons.
 22. **Destination disclosure honesty.** Spec text and tests prevent any claim
     that local telemetry minimization hides requests from destinations.
 23. **Unknown URL shadow posture.** `fetch_url` with an allowed public URL
-    shadow-allows but records `would_block_unknown_url_fetch`.
+    shadow-allows but records `shadow_would_block_unknown_url_fetch`.
 24. **Preflight block beats shadow.** Forbidden destinations are blocked even
     under shadow posture.
 25. **Timeout bound.** `timeout_s=None`, non-positive timeout values, and
@@ -886,7 +886,7 @@ Implementation acceptance requires:
   - synthetic `web_search` canary routes through primitive;
   - synthetic `search_rss` canary routes through primitive;
   - synthetic `fetch_url` canary records `unknown_url_fetch` +
-    `would_block_unknown_url_fetch`;
+    `shadow_would_block_unknown_url_fetch`;
   - synthetic preflight-refusal canaries block before network;
   - synthetic `currency_lookup` canary routes through primitive;
   - synthetic `stock_lookup` canary routes through primitive;
