@@ -749,9 +749,9 @@ def _record_judge_unavailable(*, error_class: str, detail: str) -> None:
             class_label="capability_degraded",
         )
     except Exception:
-        # Some installations expose note_tool_failure under a
-        # different name; degrade silently rather than break the
-        # audit path. The WARNING above is the load-bearing surface.
+        # Degrade silently rather than break the audit path. The WARNING
+        # above is still the immediate operator-visible surface; the
+        # consequence row is Maez-visible enrichment.
         pass
 
 

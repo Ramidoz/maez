@@ -1153,10 +1153,13 @@ class DreamState:
         except Exception as e:
             return False, f"write_soul_note failed: {e!r}"
 
-        # The ActionEngine returns an ActionResult-ish object; treat
-        # any non-falsy result that didn't raise as success. The existing
-        # _do_write_soul_note returns a string on success, raises on
-        # forbidden content.
+        # The ActionEngine returns an ActionResult-ish object. A refusal is a
+        # truthy object with success=False, so check that contract before the
+        # legacy string-return fallback.
+        if getattr(result, "success", None) is False:
+            msg = (getattr(result, "error", "") or getattr(result, "output", "") or "").strip()
+            suffix = f": {msg}" if msg else ""
+            return False, f"soul write rejected for #{prop_id}{suffix}"
         ok = result is not False and result is not None
 
         if ok:

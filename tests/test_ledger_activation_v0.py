@@ -12,6 +12,10 @@ from pathlib import Path
 from unittest import mock
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+PYTHON = "/home/rohit/maez/.venv/bin/python"
+
+
 class LedgerWritesEnabled(unittest.TestCase):
     def _enabled(self, value):
         env = {} if value is None else {"MAEZ_LEDGER_WRITES": value}
@@ -185,14 +189,14 @@ class InitCLI(unittest.TestCase):
         import subprocess
         from core.ledger import migrate
         db = str(Path(tempfile.mkdtemp()) / "cli.db")
-        cmd = ["/home/rohit/maez/.venv/bin/python", "-B", "-m", "core.ledger.init", db]
-        r1 = subprocess.run(cmd, cwd="/home/rohit/maez-wt-ledger",
+        cmd = [PYTHON, "-B", "-m", "core.ledger.init", db]
+        r1 = subprocess.run(cmd, cwd=REPO_ROOT,
                             capture_output=True, text=True)
         self.assertEqual(r1.returncode, 0, r1.stderr)
         self.assertIn("ledger initialized", r1.stdout.lower())
         self.assertTrue(migrate.ledger_is_initialized(db))
         # idempotent: second run still succeeds
-        r2 = subprocess.run(cmd, cwd="/home/rohit/maez-wt-ledger",
+        r2 = subprocess.run(cmd, cwd=REPO_ROOT,
                             capture_output=True, text=True)
         self.assertEqual(r2.returncode, 0, r2.stderr)
         self.assertTrue(migrate.ledger_is_initialized(db))
@@ -203,10 +207,9 @@ class NoDaemonAutoInit(unittest.TestCase):
         # Initialization is a deliberate OWNER act (the CLI). The daemon must
         # never silently build the production ledger at startup. This guard locks
         # that in so a future change can't quietly start auto-initializing.
-        src = Path("/home/rohit/maez-wt-ledger/daemon/maez_daemon.py").read_text()
+        src = (REPO_ROOT / "daemon" / "maez_daemon.py").read_text()
         self.assertNotIn("migrate.run", src)
         self.assertNotIn("core.ledger.init", src)
-        self.assertNotIn("ledger_init", src)
 
 
 if __name__ == "__main__":

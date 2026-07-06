@@ -319,7 +319,7 @@ class ExternalFetchRuntimeTests(unittest.TestCase):
             self.assertNotIn("secret response body", serialized)
             self.assertNotIn("Bearer top-secret", serialized)
 
-    def test_unknown_url_shadow_allows_but_records_would_block_reason(self):
+    def test_unknown_url_shadow_allows_but_records_shadow_would_block_reason(self):
         from core.egress.external_fetch import fetch_text
 
         result = fetch_text(
@@ -331,9 +331,9 @@ class ExternalFetchRuntimeTests(unittest.TestCase):
         )
 
         self.assertTrue(result.ok)
-        self.assertEqual(result.decision, "would_block")
+        self.assertEqual(result.decision, "shadow_would_block")
         self.assertEqual(result.result_origin_class, "unclassified")
-        self.assertIn("would_block_unknown_url_fetch", result.reason_codes)
+        self.assertIn("shadow_would_block_unknown_url_fetch", result.reason_codes)
 
 
 if __name__ == "__main__":

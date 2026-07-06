@@ -5,16 +5,17 @@ r"""
 private_thoughts.py — A-core #9, Track A.
 
 The private thoughts seed. A durable, append-only record of internal
-processing that is not surfaced to the bonded user. Structurally
-separate from the user-facing raw/daily/core memory ecology and from
-the immune memory in audit_log.db.
+processing whose content is not surfaced to the bonded user. Content is
+structurally separate from the user-facing raw/daily/core memory ecology
+and from the immune memory in audit_log.db; read models may expose
+content-free counts/health.
 
     raw/daily/core   user-facing experience record
     audit_log        immune memory — policy decisions
     identity_ledger  "am I still me" continuity record
     temperament      general reactive tendencies
     wants            first-person directions
-    private_thoughts internal processing not surfaced to the user
+    private_thoughts internal processing, content sealed from the user
 
 The notebook landed empty in Track A: schema and API existed, zero
 producers, zero readers in the reasoning loop. S1 adds an explicit

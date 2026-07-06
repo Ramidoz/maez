@@ -31,8 +31,8 @@ The brief contract:
 
 This module is read-only against the stores. It does not write,
 does not call an LLM, and does not depend on any surface (chat /
-daemon / cockpit). It is the offline foundation Phase 6 will wire
-into the live response paths once Phase 8 probes prove a lift.
+daemon / cockpit). It is live-wired into daemon/web recall paths
+while remaining a pure read-side planner.
 """
 
 from __future__ import annotations

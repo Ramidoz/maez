@@ -21,9 +21,9 @@ Together they address self-history fabrications (Maez claiming "I told
 you X earlier" when no such turn exists). The slot's *population* — i.e.
 the bounded ledger lookback that turns prior ``model_reply`` /
 ``daemon_cycle`` / ``peer_message_out`` rows into ``SelfHistoryRef``
-entries — is the responsibility of the envelope BUILDER (slice 3
-proper, not yet built). This module only declares the vocabulary and
-guards malformed payloads.
+entries — is the responsibility of the envelope builder
+(``core.cognition.envelope_builder``, Slice 3 proper, built 2026-05-07).
+This module only declares the vocabulary and guards malformed payloads.
 """
 from __future__ import annotations
 

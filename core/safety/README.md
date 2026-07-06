@@ -1,16 +1,25 @@
 # core/safety
 
-The guards. Five modules that sit between any proposed action and
-its execution, deciding whether it's safe-as-written or needs owner
-approval (or refusal).
+The guards. These modules sit between text, proposed action, cloud
+egress, and memory writes, deciding whether something is safe-as-written,
+needs owner approval, or must be refused/degraded.
 
 | Module | Role |
 |---|---|
-| [`context_safety.py`](context_safety.py) | Scans loaded SOUL / context for prompt-injection attempts. Fail-closed. |
-| [`self_claim_audit.py`](self_claim_audit.py) | Structural fabrication detector. Rewrites Maez replies that claim invented names / paths / schedules not grounded in actual system state. |
-| [`owner_trust.py`](owner_trust.py) | Per-command risk classifier. `is_risky_cmd()` decides whether a shell command at the owner's trust level can inline-execute or must queue an approval card. |
-| [`injection_patterns.py`](injection_patterns.py) | Regex / heuristic patterns used by the audit LLM's Pass 2 judge. Six buckets (imperative, obfuscation, encoding, delegation, exfiltration, escalation). |
+| [`action_receipts.py`](action_receipts.py) | Receipt helpers for action outcomes. |
+| [`audit_flag_buffer.py`](audit_flag_buffer.py) | Buffered flag/audit telemetry helpers. |
+| [`audit_signal_manifest.py`](audit_signal_manifest.py) | Closed manifest of audit signal names. |
+| [`audited_output.py`](audited_output.py) | Audit-before-store invariant helpers for model output. |
+| [`canaries.py`](canaries.py) | Canary/marker utilities for prompt and recall safety tests. |
+| [`clinical_boundary.py`](clinical_boundary.py) | Clinical/crisis boundary guard and private-thought crisis signal writer. |
 | [`cloud_redactor.py`](cloud_redactor.py) | Strips owner-identifying tokens from payload previews and egress-gate minimization paths. The old fast-backend router cloud path is retired; new cloud consults route through the provenance-aware egress gate. |
+| [`context_safety.py`](context_safety.py) | Scans loaded SOUL / context for prompt-injection attempts. Fail-closed. |
+| [`injection_patterns.py`](injection_patterns.py) | Regex / heuristic patterns used by the audit LLM's Pass 2 judge. Six buckets (imperative, obfuscation, encoding, delegation, exfiltration, escalation). |
+| [`output_command_guard.py`](output_command_guard.py) | Detects command-shaped text in generated output. |
+| [`owner_trust.py`](owner_trust.py) | Per-command risk classifier. `is_risky_cmd()` decides whether a shell command at the owner's trust level can inline-execute or must queue an approval card. |
+| [`premise_audit.py`](premise_audit.py) | Premise/grounding audit helpers. |
+| [`self_claim_audit.py`](self_claim_audit.py) | Structural fabrication detector. Rewrites Maez replies that claim invented names / paths / schedules not grounded in actual system state. |
+| [`temporal_fragment_guard.py`](temporal_fragment_guard.py) | Detects temporal-fragment misuse in responses. |
 
 ## Invariants
 
@@ -31,6 +40,8 @@ approval (or refusal).
 - `owner_trust.should_run_inline(cmd, owner_policy) -> bool`
 - `injection_patterns.scan(text) -> list[InjectionMatch]`
 - `cloud_redactor.redact_for_cloud(payload) -> (payload, telemetry)`
+- `clinical_boundary.guard_owner_text(text, ...) -> ClinicalBoundaryResult`
+- `audited_output.*` audit-before-store helpers
 
 ## Legacy import paths
 

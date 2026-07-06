@@ -71,7 +71,7 @@ substrate arc. The following items are now witnessed substrate or canon:
 | Surface | Status | Anchor |
 |---|---|---|
 | Slice 1 subjective-duration meaningful-salience seam | `[ ✓ canonical · implemented · live-witnessed ]` | Decision 36 / ADR 0041 · `a23fa4b` → `211ace6` |
-| Slice 2 drive-driven curiosity felt-organ | `[ ✓ canonical · implemented · second-live-crossed ]` | Decision 37 / ADR 0042 · `f0d14e3` → `eb611e9` |
+| Slice 2 drive-driven curiosity felt-organ | `[ ✓ canonical · implemented · runtime-unwired ]` | Decision 37 / ADR 0042 · `f0d14e3` → `eb611e9`; 2026-07-06 audit withdrew stale live-witness wording |
 | Canary-neutral-baseline discipline | `[ ✓ canonical · witnessed in live canaries ]` | Decision 38 / ADR 0043 · `67705d3` → `fbe78e1` |
 | Canon-governs-canon law | `[ ✓ canonical · memory-repair witnessed ]` | Decision 39 / ADR 0044 |
 | Reddit source-shaped recall fix | `[ ✓ implemented · observation-window correction ]` | `5c6be72` |
@@ -86,13 +86,16 @@ substrate arc. The following items are now witnessed substrate or canon:
   kwargs, malformed provenance, `_LEGACY`, and canary/test identity paths are
   refused or quarantined by the seam.
 - **Drive-driven curiosity felt-organ** — canonicalized as Decision 37 / ADR
-  0042. Slice 2's spec landed at `f0d14e3`, implementation ran from
-  `ba4a545` through `eb611e9`, and the second live crossing verified the full
-  chain. The organ is a producer layer over `wonderings`, not a parallel
-  curiosity database. It includes the v1 producer trilogy, third-party subject
-  boundary, autonomy policy/preferences, signal gate, reflection audit,
-  extraction gate, saturation register, unified diagnostics, and the
-  recursion-gated subjective-duration producer.
+  0042. Slice 2's spec landed at `f0d14e3` and implementation ran from
+  `ba4a545` through `eb611e9`. The 2026-07-06 whole-body audit withdrew the
+  stale "second live crossing verified the full chain" claim: the organ is
+  implemented but `register_default_encounter_producers()` has no production
+  caller, so it is runtime-unwired until a birth/provenance-wall decision wires
+  it deliberately. The implemented organ is a producer layer over
+  `wonderings`, not a parallel curiosity database. It includes the v1 producer
+  trilogy, third-party subject boundary, autonomy policy/preferences, signal
+  gate, reflection audit, extraction gate, saturation register, unified
+  diagnostics, and the recursion-gated subjective-duration producer.
 - **Canary-neutral-baseline discipline** — canonicalized as Decision 38 / ADR
   0043 after safety commits `67705d3` and `fbe78e1`. A live crossing canary
   must protect every substrate the ceremony touches, not only the headline

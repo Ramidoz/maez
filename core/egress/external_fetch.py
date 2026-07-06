@@ -546,8 +546,8 @@ def fetch_text(
             break
     text = body.decode("utf-8", errors="replace")
     if entry.threat_model_class == UNKNOWN_URL_FETCH:
-        decision = "would_block"
-        reasons = ("would_block_unknown_url_fetch",)
+        decision = "shadow_would_block"
+        reasons = ("shadow_would_block_unknown_url_fetch",)
     else:
         decision = "allow"
         reasons = ("public_lookup_allowed",)
