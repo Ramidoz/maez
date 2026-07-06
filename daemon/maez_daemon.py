@@ -4154,19 +4154,27 @@ class MaezDaemon:
             }
 
         def _ledger_init() -> dict:
-            if not LEDGER_DB_PATH.exists():
+            try:
+                if not LEDGER_DB_PATH.exists():
+                    return _condition(
+                        "ledger_init",
+                        "ledger initialized",
+                        "red",
+                        f"ledger db missing at {LEDGER_DB_PATH}",
+                    )
+                if LEDGER_DB_PATH.stat().st_size <= 0:
+                    return _condition(
+                        "ledger_init",
+                        "ledger initialized",
+                        "red",
+                        f"ledger db is zero bytes at {LEDGER_DB_PATH}",
+                    )
+            except Exception as exc:
                 return _condition(
                     "ledger_init",
                     "ledger initialized",
                     "red",
-                    f"ledger db missing at {LEDGER_DB_PATH}",
-                )
-            if LEDGER_DB_PATH.stat().st_size <= 0:
-                return _condition(
-                    "ledger_init",
-                    "ledger initialized",
-                    "red",
-                    f"ledger db is zero bytes at {LEDGER_DB_PATH}",
+                    f"ledger db unreadable: {exc.__class__.__name__}",
                 )
             try:
                 conn = sqlite3.connect(f"file:{LEDGER_DB_PATH}?mode=ro", uri=True)
@@ -4322,6 +4330,23 @@ class MaezDaemon:
                 )
             return _condition("birth_phase", "birth phase", "green", phase)
 
+        def _a7_structural_guard() -> dict:
+            try:
+                guard_exists = (BASE_DIR / "tests" / "test_a7_reader_split.py").exists()
+            except Exception as exc:
+                return _condition(
+                    "a7_structural_guard",
+                    "A7 structural guard",
+                    "red",
+                    f"A7 structural guard unreadable: {exc.__class__.__name__}",
+                )
+            return _condition(
+                "a7_structural_guard",
+                "A7 structural guard",
+                "green" if guard_exists else "red",
+                "tests/test_a7_reader_split.py presence is the daemon-checkable guard proxy",
+            )
+
         conditions = [
             _ledger_init(),
             _condition(
@@ -4338,14 +4363,7 @@ class MaezDaemon:
             ),
             _dream_witness(),
             _a7_receipt_store(),
-            _condition(
-                "a7_structural_guard",
-                "A7 structural guard",
-                "green"
-                if (BASE_DIR / "tests" / "test_a7_reader_split.py").exists()
-                else "red",
-                "tests/test_a7_reader_split.py presence is the daemon-checkable guard proxy",
-            ),
+            _a7_structural_guard(),
             _prework_resolver(),
             _flag_state(),
             _birth_phase(),
