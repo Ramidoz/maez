@@ -2753,7 +2753,11 @@ class TelegramAdapter(BasePlatformAdapter):
             from core.routing.attribution_render import receipts_reply
 
             chat_id = str(update.effective_chat.id) if update.effective_chat else ""
-            await update.message.reply_text(receipts_reply(chat_id))
+            payload = ProvenancedText.system_bounded_query(
+                receipts_reply(chat_id),
+                source_ref="telegram_adapter:receipts_reply",
+            )
+            await self.send(chat_id, payload)
             return
 
         event = self._build_message_event(update.message, MessageType.COMMAND, update_id=update.update_id)
