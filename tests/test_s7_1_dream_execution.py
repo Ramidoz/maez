@@ -33,6 +33,16 @@ class _RecordingActionEngine:
         return SimpleNamespace(success=True, output="edited", error="")
 
 
+class _RefusingActionEngine(_RecordingActionEngine):
+    def write_soul_note(self, note: str, *, s7_execution_grant: object | None = None):
+        self.calls.append((note, s7_execution_grant))
+        return SimpleNamespace(
+            success=False,
+            output="",
+            error="S7 authorization required before direct write_soul_note invocation",
+        )
+
+
 class _LiveAuthorizationVerifier:
     def dependency_state(self):
         return {"ok": True, "library_name": "webauthn", "library_version": "2.7.1"}
@@ -385,6 +395,40 @@ class S71DreamExecutionTests(unittest.TestCase):
         self.assertIsNotNone(prop)
         assert prop is not None
         self.assertEqual(prop["status"], "applied")
+
+    def test_apply_dream_does_not_mark_applied_when_action_result_failed(self):
+        from core.evolution.dream_state import DreamState
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            action_engine = _RefusingActionEngine()
+            dream = DreamState(
+                memory=None,
+                telegram=None,
+                action_engine=action_engine,
+                db_path=str(tmp_path / "dream_proposals.db"),
+            )
+            prop_id = dream._store_proposal("Maez noticed a durable pattern.")
+            authorization = self._authorization_for_dream(
+                dream,
+                prop_id,
+                tmp_path / "s7_authorization.db",
+            )
+
+            ok, message = dream.apply_proposal(
+                prop_id,
+                s7_execution_authorization=authorization,
+            )
+            prop = dream.get_proposal(prop_id)
+
+        self.assertFalse(ok)
+        self.assertIn("soul write rejected", message)
+        self.assertEqual(len(action_engine.calls), 1)
+        self.assertIsNotNone(action_engine.calls[0][1])
+        self.assertIsNotNone(prop)
+        assert prop is not None
+        self.assertEqual(prop["status"], "pending")
+        self.assertIsNone(prop["applied_at"])
 
     def test_apply_dream_accepts_artifact_minted_by_s7_1_authorize_finish(self):
         from core.evolution.dream_state import DreamState
