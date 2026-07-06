@@ -250,6 +250,7 @@ class LedgerWriter:
         audit_trace_metadata_shape: int | None = None,
         audit_trace_lineage: dict | None = None,
         lifecycle_stage: str | None = None,
+        birth_anchor: bool = False,
     ) -> str | None:
         if self._rehearsal_mode and lifecycle_stage != "rehearsal":
             raise ValueError("rehearsal ledger writer requires lifecycle_stage='rehearsal'")
@@ -257,6 +258,15 @@ class LedgerWriter:
             raise ValueError("production ledger writer refuses rehearsal lifecycle_stage rows")
         if lifecycle_stage is not None and lifecycle_stage != "rehearsal":
             raise ValueError(f"unknown explicit lifecycle_stage {lifecycle_stage!r}")
+        if birth_anchor:
+            if turn_kind != "system_event":
+                raise ValueError("birth_anchor requires turn_kind='system_event'")
+            if self._rehearsal_mode:
+                raise ValueError("rehearsal writer refuses birth_anchor")
+            if not self._enabled:
+                raise ValueError(
+                    "birth_anchor requires an enabled writer (MAEZ_LEDGER_WRITES)"
+                )
 
         # Disabled writer is a silent no-op — no validation, no SQL.
         if not self._enabled:
@@ -457,6 +467,18 @@ class LedgerWriter:
                     "UPDATE meta SET value = ? WHERE key = 'last_chain_hash'",
                     (new_chain_hash,),
                 )
+                if birth_anchor:
+                    already = conn.execute(
+                        "SELECT value FROM meta WHERE key = 'birth_event_turn_id'"
+                    ).fetchone()
+                    if already is not None and (already[0] or "").strip():
+                        raise ValueError(
+                            "birth_event_turn_id already set — we do not re-birth"
+                        )
+                    conn.execute(
+                        "INSERT INTO meta(key, value) VALUES ('birth_event_turn_id', ?)",
+                        (turn_id,),
+                    )
                 # Explicit COMMIT — with isolation_level=None,
                 # conn.commit() is a no-op; transaction control is
                 # via SQL statements.
