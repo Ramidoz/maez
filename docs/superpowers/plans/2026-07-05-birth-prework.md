@@ -27,7 +27,7 @@
 - Test: `tests/test_birth_phase.py`
 
 **Interfaces:**
-- Produces: `current_phase(db_path: str | Path | None = None) -> str` returning `"gestation"` or `"lived"`; `is_born(db_path=None) -> bool`; `birth_event_turn_id(db_path=None) -> str | None`; constants `PHASE_GESTATION = "gestation"`, `PHASE_LIVED = "lived"`, `DEFAULT_LEDGER_PATH`. All later tasks import from here.
+- Produces: `current_phase(db_path: str | Path | None = None) -> str` returning `"gestation"` or `"lived"`; `is_born(db_path=None) -> bool`; `birth_event_turn_id(db_path=None) -> str | None`; `default_ledger_path() -> Path`; constants `PHASE_GESTATION = "gestation"`, `PHASE_LIVED = "lived"`. All later tasks import from here.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -247,7 +247,7 @@ class WriterStampsCurrentPhase(unittest.TestCase):
             store = self._store(td)
             with mock.patch.object(birth_phase, "is_born", return_value=False):
                 tid = store.record_thought(
-                    content="x", provenance="idle_reasoning"
+                    content="x", provenance="explicit_api"
                 )
             row = store.get_thought(tid)
             self.assertEqual(row["memory_phase"], "gestation")
@@ -257,7 +257,7 @@ class WriterStampsCurrentPhase(unittest.TestCase):
             store = self._store(td)
             with mock.patch.object(birth_phase, "is_born", return_value=True):
                 tid = store.record_thought(
-                    content="x", provenance="idle_reasoning"
+                    content="x", provenance="explicit_api"
                 )
             row = store.get_thought(tid)
             self.assertEqual(row["memory_phase"], "lived")
@@ -267,7 +267,7 @@ class WriterStampsCurrentPhase(unittest.TestCase):
             store = self._store(td)
             with mock.patch.object(birth_phase, "is_born", return_value=True):
                 tid = store.record_thought(
-                    content="x", provenance="idle_reasoning",
+                    content="x", provenance="explicit_api",
                     memory_phase="gestation",
                 )
             self.assertEqual(store.get_thought(tid)["memory_phase"], "gestation")
@@ -278,10 +278,14 @@ class WriterStampsCurrentPhase(unittest.TestCase):
         with TemporaryDirectory() as td:
             store = self._store(td)
             common = dict(
-                content="x", source="self_card:v1", subject="self",
-                consent_tier="owner_private", retention="session",
-                allowed_flows=["private_reader"],
-                provenance="idle_reasoning",
+                content="x", source="self_card:v1",
+                subject="maez_internal_state",
+                signal_kind=SignalKind.SELF_WONDERING,
+                producer_id=ProducerId.SELF_WONDERING,
+                consent_tier=ConsentTier.OWNER_PRIVATE,
+                retention=RetentionRule.UNTIL_REVIEWED,
+                allowed_flows=(AllowedFlow.PRIVATE_READER,),
+                context_extra={},
             )
             store.record_signal(memory_phase="gestation", **common)
             store.record_signal(memory_phase="lived", **common)
@@ -294,7 +298,7 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
-NOTE (pinned by Codex plan review): `record_signal` REQUIRES `retention` and one of `signal_kind`/`provenance` (raises `ValueError("SignalKind is required")` otherwise — `core/infra/private_thoughts.py:591-627`). The kwarg values above (`retention="session"`, `provenance="idle_reasoning"`, `consent_tier="owner_private"`) are placeholders for the enum spellings — copy the exact valid values from an existing green test (`tests/test_private_thoughts_source_scope.py` uses real ones) before running. Same for `record_thought`'s provenance vocabulary.
+NOTE (pinned by Codex plan review, round 2): the values above are REAL enum members, not placeholders — add the imports `from core.infra.private_thoughts import AllowedFlow, ConsentTier, ProducerId, RetentionRule, SignalKind` to the test file (exact shape copied from the green `tests/test_private_thoughts_source_scope.py:30-46`). `record_thought` must use `provenance="explicit_api"` — producer provenances are rejected there and forced through `record_signal` (`core/infra/private_thoughts.py:575-583`); `record_signal` REQUIRES `retention` and one of `signal_kind`/`provenance` (`private_thoughts.py:591-627`).
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -890,7 +894,7 @@ from core.infra.unseal_receipts import UnsealReceipts
 
 def _store_with_one_thought(td: str):
     store = PrivateThoughts(db_path=str(Path(td) / "pt.db"))
-    tid = store.record_thought(content="the secret garden", provenance="idle_reasoning")
+    tid = store.record_thought(content="the secret garden", provenance="explicit_api")
     return store, tid
 
 
@@ -919,9 +923,14 @@ class DefaultReadersAreContentLight(unittest.TestCase):
         with TemporaryDirectory() as td:
             store = PrivateThoughts(db_path=str(Path(td) / "pt.db"))
             store.record_signal(
-                content="my own thought", source="heartbeat:v1", subject="self",
-                consent_tier="owner_private", retention="session",
-                allowed_flows=["private_reader"], provenance="idle_reasoning",
+                content="my own thought", source="heartbeat:v1",
+                subject="maez_internal_state",
+                signal_kind=SignalKind.SELF_WONDERING,
+                producer_id=ProducerId.SELF_WONDERING,
+                consent_tier=ConsentTier.OWNER_PRIVATE,
+                retention=RetentionRule.UNTIL_REVIEWED,
+                allowed_flows=(AllowedFlow.PRIVATE_READER,),
+                context_extra={},
             )
             rows = store.recent_by_source("heartbeat:v1", limit=1, phase=None)
             self.assertEqual(rows[0]["content"], "my own thought")
@@ -1520,3 +1529,5 @@ After all tasks: run the full suite (`pytest tests/ -q`), then the spec's entry-
 6. Task 6 caller fallout enumerated from the audit (heartbeat/salience-gate confirmed content-light-safe; the 6 test files asserting content named).
 7. Readiness conditions now cover every spec entry condition (repo_green, dormancy_two_clause, a7_structural_guard added as honest-red-until-wired).
 8. `_assert_quiesced()` added to `--for-real` (systemctl + fuser), per spec ceremony step 3.
+
+**Codex plan review round 2 (2026-07-05): all 8 round-1 findings PASS; 2 residue HOLDs, both folded:** stale `DEFAULT_LEDGER_PATH` in Task 1's interface block → `default_ledger_path()`; invalid placeholder enum values in test snippets → real members (`explicit_api`, `SignalKind.SELF_WONDERING`, `RetentionRule.UNTIL_REVIEWED`, `ConsentTier.OWNER_PRIVATE`, `AllowedFlow.PRIVATE_READER`) copied from the green `tests/test_private_thoughts_source_scope.py:30-46`, with the import line named.
