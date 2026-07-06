@@ -84,7 +84,6 @@ _MAP: list[tuple[str, str]] = [
     ("core.identity",            "core.memory.identity"),
     ("core.identity_ledger",     "core.memory.identity_ledger"),
     ("core.source_awareness",    "core.memory.source_awareness"),
-    ("core.birth",               "core.memory.birth"),
 
     # --- routing ---
     ("core.model_config",        "core.routing.model_config"),
