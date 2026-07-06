@@ -25,6 +25,18 @@ _REPO = Path(__file__).resolve().parent.parent
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
+_UNSEAL_ARGS = {
+    "actor": "test-operator",
+    "s7_receipt_ref": "s7:test",
+    "reason": "unit test diagnostic",
+}
+
+_VERIFY_UNSEAL_ARGS = {
+    "private_unseal_actor": "test-operator",
+    "private_unseal_s7_receipt_ref": "s7:test",
+    "private_unseal_reason": "unit test diagnostic",
+}
+
 
 def _seed_private_thoughts(td: Path):
     db = td / "memory" / "private_thoughts.db"
@@ -177,6 +189,7 @@ class TestPrivateThoughtsSearch(unittest.TestCase):
                 phrase="hemorrhage",
                 repo_root=tdp,
                 top_n=10,
+                **_UNSEAL_ARGS,
             )
             self.assertEqual(len(hits), 1)
             self.assertEqual(hits[0].store, "private_thoughts")
@@ -192,9 +205,24 @@ class TestPrivateThoughtsSearch(unittest.TestCase):
                 phrase="hemorrhage",
                 repo_root=tdp,
                 top_n=10,
+                **_UNSEAL_ARGS,
             )
 
             self.assertEqual(len(hits), 1)
+            receipt_db = tdp / "memory" / "unseal_receipts.db"
+            receipt_con = sqlite3.connect(receipt_db)
+            try:
+                receipt_row = receipt_con.execute(
+                    "SELECT actor, s7_receipt_ref, scope_kind, scope_detail, reason "
+                    "FROM unseal_receipts"
+                ).fetchone()
+            finally:
+                receipt_con.close()
+            self.assertEqual(receipt_row[0], "test-operator")
+            self.assertEqual(receipt_row[1], "s7:test")
+            self.assertEqual(receipt_row[2], "query")
+            self.assertEqual(receipt_row[3], "like:hemorrhage")
+            self.assertEqual(receipt_row[4], "unit test diagnostic")
             audit_db = tdp / "memory" / "audit_log.db"
             con = sqlite3.connect(audit_db)
             try:
@@ -220,6 +248,7 @@ class TestPrivateThoughtsSearch(unittest.TestCase):
                 phrase="anything",
                 repo_root=Path(td),
                 top_n=10,
+                **_UNSEAL_ARGS,
             )
             self.assertEqual(hits, [])
 
@@ -309,6 +338,7 @@ class TestVerifyPhraseAggregator(unittest.TestCase):
                     "wonderings",
                 ],
                 top_n=10,
+                **_VERIFY_UNSEAL_ARGS,
             )
             stores = sorted({h.store for h in hits})
             self.assertEqual(
@@ -382,6 +412,12 @@ class TestCli(unittest.TestCase):
                         "private_thoughts",
                         "--store",
                         "fast_conversation",
+                        "--actor",
+                        "test-operator",
+                        "--s7-receipt-ref",
+                        "s7:test",
+                        "--reason",
+                        "unit test diagnostic",
                     ]
                 )
             self.assertEqual(rc, 0)

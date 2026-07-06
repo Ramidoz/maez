@@ -10,6 +10,7 @@ the behavior reader can only affect a local optional presentation copy.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -70,7 +71,12 @@ class PrivateThoughtsS1bTest(unittest.TestCase):
 
         self.assertIsInstance(thought_id, int)
         row = PrivateThoughts(db_path=self.db_path).get_thought(thought_id)
-        self.assertEqual(row["content"], "s1b_reasoning_residue_event")
+        self.assertNotIn("content", row)
+        self.assertEqual(
+            row["content_sha256"],
+            hashlib.sha256(b"s1b_reasoning_residue_event").hexdigest(),
+        )
+        self.assertEqual(row["content_chars"], len("s1b_reasoning_residue_event"))
         self.assertEqual(row["provenance"], "reasoning_residue")
         self.assertEqual(row["producer_id"], "reasoning_residue")
         self.assertEqual(row["signal_kind"], "reasoning_residue")

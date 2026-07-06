@@ -164,41 +164,44 @@ def _search_private_thoughts(
     phrase: str,
     repo_root: Path,
     top_n: int,
+    actor: str,
+    s7_receipt_ref: str,
+    reason: str,
 ) -> list[ClaimHit]:
     db = repo_root / "memory" / "private_thoughts.db"
     if not db.exists():
         return []
     hits: list[ClaimHit] = []
-    con: sqlite3.Connection | None = None
     try:
-        con = sqlite3.connect(str(db))
-        con.row_factory = sqlite3.Row
-        rows = con.execute(
-            "SELECT thought_id, ts, content, provenance, memory_phase "
-            "FROM private_thoughts "
-            "WHERE LOWER(content) LIKE ? "
-            "ORDER BY ts DESC LIMIT ?",
-            (f"%{phrase.lower()}%", int(top_n)),
-        ).fetchall()
-    except sqlite3.Error as e:
+        from core.infra.private_thoughts import PrivateThoughts
+        from core.infra import private_thoughts_unseal
+        from core.infra.unseal_receipts import UnsealReceipts
+
+        rows = private_thoughts_unseal.read_content(
+            PrivateThoughts(db_path=db),
+            query=phrase,
+            actor=actor,
+            s7_receipt_ref=s7_receipt_ref,
+            reason=reason,
+            receipts=UnsealReceipts(repo_root / "memory" / "unseal_receipts.db"),
+            limit=top_n,
+        )
+    except Exception as e:
         print(
-            f"warning: private_thoughts query failed: {e}",
+            f"warning: private_thoughts unseal failed: {e}",
             file=sys.stderr,
         )
         return []
-    finally:
-        if con is not None:
-            con.close()
     for r in rows:
         hits.append(
             ClaimHit(
                 store="private_thoughts",
-                timestamp=str(r["ts"]),
-                snippet=_excerpt(r["content"] or "", phrase),
+                timestamp=str(r.get("ts", "?")),
+                snippet=_excerpt(r.get("content") or "", phrase),
                 extra={
-                    "thought_id": r["thought_id"],
-                    "provenance": r["provenance"],
-                    "phase": r["memory_phase"],
+                    "thought_id": r.get("thought_id"),
+                    "provenance": r.get("provenance"),
+                    "phase": r.get("memory_phase"),
                 },
             )
         )
@@ -421,6 +424,9 @@ def verify_phrase(
     repo_root: Path | None = None,
     stores: list[str] | None = None,
     top_n: int = 10,
+    private_unseal_actor: str | None = None,
+    private_unseal_s7_receipt_ref: str | None = None,
+    private_unseal_reason: str | None = None,
 ) -> list[ClaimHit]:
     """Search every Maez-voice store for prior usage of ``phrase``.
     Returns an aggregated list of hits across all stores. The
@@ -430,6 +436,21 @@ def verify_phrase(
         return []
     root = repo_root if repo_root is not None else _REPO
     selected = stores or list(_SEARCHERS.keys())
+    if "private_thoughts" in selected:
+        missing = [
+            name
+            for name, value in (
+                ("private_unseal_actor", private_unseal_actor),
+                ("private_unseal_s7_receipt_ref", private_unseal_s7_receipt_ref),
+                ("private_unseal_reason", private_unseal_reason),
+            )
+            if not (value or "").strip()
+        ]
+        if missing:
+            raise ValueError(
+                "private_thoughts search requires break-glass metadata: "
+                + ", ".join(missing)
+            )
     results: list[ClaimHit] = []
     for name in selected:
         fn = _SEARCHERS.get(name)
@@ -442,6 +463,17 @@ def verify_phrase(
                 # chroma to a fixture root for that reason — they
                 # exclude this searcher and exercise it separately.
                 results.extend(fn(phrase=phrase, top_n=top_n))
+            elif name == "private_thoughts":
+                results.extend(
+                    fn(
+                        phrase=phrase,
+                        repo_root=root,
+                        top_n=top_n,
+                        actor=private_unseal_actor or "",
+                        s7_receipt_ref=private_unseal_s7_receipt_ref or "",
+                        reason=private_unseal_reason or "",
+                    ),
+                )
             else:
                 results.extend(
                     fn(phrase=phrase, repo_root=root, top_n=top_n),
@@ -508,7 +540,29 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Emit JSON to stdout (default: human-readable).",
     )
+    p.add_argument(
+        "--actor",
+        help="Break-glass actor for private_thoughts content access.",
+    )
+    p.add_argument(
+        "--s7-receipt-ref",
+        help="S7 receipt/reference authorizing private_thoughts content access.",
+    )
+    p.add_argument(
+        "--reason",
+        help="Break-glass reason for private_thoughts content access.",
+    )
     args = p.parse_args(argv)
+    selected = args.store or list(_SEARCHERS.keys())
+    if "private_thoughts" in selected and not (
+        (args.actor or "").strip()
+        and (args.s7_receipt_ref or "").strip()
+        and (args.reason or "").strip()
+    ):
+        p.error(
+            "--actor, --s7-receipt-ref, and --reason are required when "
+            "searching private_thoughts"
+        )
 
     print(f"NOTE: {_DISCLAIMER}", file=sys.stderr)
 
@@ -516,6 +570,9 @@ def main(argv: list[str] | None = None) -> int:
         args.phrase,
         stores=args.store,
         top_n=args.top_n,
+        private_unseal_actor=args.actor,
+        private_unseal_s7_receipt_ref=args.s7_receipt_ref,
+        private_unseal_reason=args.reason,
     )
 
     if args.json:

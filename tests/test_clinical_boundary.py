@@ -10,6 +10,7 @@ enter the live daemon conversation path before S4 is wired and reviewed.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import inspect
 import json
 import tempfile
@@ -213,7 +214,12 @@ class ClinicalBoundaryPureTests(unittest.TestCase):
             row = store.get_thought(1)
             self.assertIsNotNone(row)
             assert row is not None
-            self.assertEqual(row["content"], "[content-free crisis candidate held by S4]")
+            self.assertNotIn("content", row)
+            self.assertEqual(
+                row["content_sha256"],
+                hashlib.sha256(b"[content-free crisis candidate held by S4]").hexdigest(),
+            )
+            self.assertEqual(row["content_chars"], len("[content-free crisis candidate held by S4]"))
             self.assertEqual(row["provenance"], "crisis_signal_held")
             self.assertEqual(row["signal_kind"], "crisis_signal_held")
             self.assertEqual(row["producer_id"], "crisis_detector")

@@ -109,6 +109,7 @@ COMPOSITION
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -144,6 +145,14 @@ def _default_private_thoughts_path() -> Path:
 
 
 DEFAULT_DB_PATH = _default_private_thoughts_path()
+
+
+def _content_light(row: dict) -> dict:
+    """A7 seal: default readers expose hash+size, never bodies."""
+    body = row.pop("content", None) or ""
+    row["content_sha256"] = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    row["content_chars"] = len(body)
+    return row
 
 
 class _ClosedStrEnum(str, Enum):
@@ -745,7 +754,7 @@ class PrivateThoughts:
             ).fetchone()
         finally:
             conn.close()
-        return self._row_to_dict(row) if row else None
+        return _content_light(self._row_to_dict(row)) if row else None
 
     def recent(self, limit: int = 20) -> list[dict]:
         """Recent thoughts, newest first. No content filter, no
@@ -759,7 +768,7 @@ class PrivateThoughts:
             ).fetchall()
         finally:
             conn.close()
-        return [self._row_to_dict(r) for r in rows]
+        return [_content_light(self._row_to_dict(r)) for r in rows]
 
     def recent_by_source(
         self,
@@ -1268,7 +1277,15 @@ if __name__ == "__main__":
 
         got = P.get_thought(tid1)
         _assert(got is not None, "get_thought returns the new row")
-        _assert(got["content"].startswith("Something about"), "content preserved")
+        _assert("content" not in got, "get_thought omits raw content")
+        _assert(
+            got["content_sha256"]
+            == hashlib.sha256(
+                "Something about the owner's grandmother story "
+                "landed differently than I expected.".encode("utf-8")
+            ).hexdigest(),
+            "get_thought preserves content hash",
+        )
         _assert(got["provenance"] == "explicit_api", "provenance defaults to 'explicit_api'")
         _assert(got["memory_phase"] == "gestation", "memory_phase defaults to 'gestation'")
         _assert(
@@ -1336,9 +1353,11 @@ if __name__ == "__main__":
         # -- content at cap accepted
         at_cap = "a" * MAX_CONTENT_LEN
         tid_cap = P.record_thought(content=at_cap)
+        cap_row = P.get_thought(tid_cap)
         _assert(
-            len(P.get_thought(tid_cap)["content"]) == MAX_CONTENT_LEN,
-            "content at exactly MAX_CONTENT_LEN is accepted",
+            cap_row["content_chars"] == MAX_CONTENT_LEN
+            and cap_row["content_sha256"] == hashlib.sha256(at_cap.encode("utf-8")).hexdigest(),
+            "content at exactly MAX_CONTENT_LEN is accepted and content-light",
         )
 
         # -- content over cap raises
