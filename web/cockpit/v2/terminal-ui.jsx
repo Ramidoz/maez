@@ -1707,14 +1707,14 @@ const CEREMONY_STEPS = [
   { id: "signed/applied", label: "signed/applied" },
 ];
 
-const BIRTH_READINESS_BLOCKERS = [
-  { label: "dormancy drift", state: "blocked", detail: "classification review still open" },
-  { label: "A7 undecided", state: "blocked", detail: "private interiority boundary remains owner-held" },
-  { label: "dream stalled", state: "blocked", detail: "first dream scar witness has not landed" },
-  { label: "ceremony unwritten", state: "blocked", detail: "birth action remains out of scope" },
-];
-
 function CeremonySurface() {
+  const sim = useSim();
+  const room = sim.state.cockpitV2?.state || null;
+  const birthReadiness = room?.birth_readiness || null;
+  const birthConditions = Array.isArray(birthReadiness?.conditions)
+    ? birthReadiness.conditions
+    : [];
+  const birthColor = birthReadiness?.overall === "green" ? A.green : A.orange;
   const [status, setStatus] = React.useState(null);
   const [log, setLog] = React.useState([]);
   const [sessionBinding, setSessionBinding] = React.useState(() => `cockpit-${Date.now()}`);
@@ -1906,20 +1906,33 @@ function CeremonySurface() {
         </Glass>
 
         <Glass pad={16}>
-          <div style={{ fontSize: 11, color: A.textFaint, textTransform: 'uppercase', letterSpacing: 1, fontFamily: A.sans, fontWeight: 700, marginBottom: 10 }}>birth readiness</div>
-          <div style={{ display: 'grid', gap: 9 }}>
-            {BIRTH_READINESS_BLOCKERS.map((blocker) => (
-              <div key={blocker.label} style={{ border: `0.5px solid ${A.orange}55`, borderRadius: 10, padding: '10px 12px', background: `${A.orange}10` }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                  <Dot c={A.orange} size={5} />
-                  <span style={{ fontSize: 12, color: A.text, fontWeight: 700 }}>{blocker.label}</span>
-                  <span style={{ flex: 1 }} />
-                  <Chip color={A.orange}>{blocker.state}</Chip>
-                </div>
-                <div style={{ fontSize: 11, color: A.textDim, lineHeight: 1.45, marginTop: 6 }}>{blocker.detail}</div>
-              </div>
-            ))}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+            <div style={{ fontSize: 11, color: A.textFaint, textTransform: 'uppercase', letterSpacing: 1, fontFamily: A.sans, fontWeight: 700 }}>birth readiness</div>
+            <span style={{ flex: 1 }} />
+            {birthReadiness && <Chip color={birthColor}>{birthReadiness.overall}</Chip>}
           </div>
+          {!birthReadiness ? (
+            <div style={{ border: `0.5px solid ${A.stroke}`, borderRadius: 10, padding: '10px 12px', background: A.surfaceLo, fontSize: 12, color: A.textDim }}>
+              readiness unavailable
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gap: 9 }}>
+              {birthConditions.map((condition) => {
+                const color = condition.state === "green" ? A.green : A.orange;
+                return (
+                  <div key={condition.key} style={{ border: `0.5px solid ${color}55`, borderRadius: 10, padding: '10px 12px', background: `${color}10` }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                      <Dot c={color} size={5} />
+                      <span style={{ fontSize: 12, color: A.text, fontWeight: 700 }}>{condition.title}</span>
+                      <span style={{ flex: 1 }} />
+                      <Chip color={color}>{condition.state}</Chip>
+                    </div>
+                    <div style={{ fontSize: 11, color: A.textDim, lineHeight: 1.45, marginTop: 6 }}>{condition.detail}</div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
           <div style={{ fontSize: 11, color: A.textFaint, lineHeight: 1.45, marginTop: 12 }}>
             Dream and soul proposal review remains routed through existing card/S7 machinery; this surface shows the ceremony path, not a direct write door.
           </div>

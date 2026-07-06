@@ -82,14 +82,9 @@ class CockpitV2CeremonyTests(unittest.TestCase):
         ui = (V2 / "terminal-ui.jsx").read_text(encoding="utf-8")
         index = (V2 / "index.html").read_text(encoding="utf-8")
 
-        for blocker in (
-            "dormancy drift",
-            "A7 undecided",
-            "dream stalled",
-            "ceremony unwritten",
-        ):
-            self.assertIn(blocker, ui)
-        self.assertIn("birth action remains out of scope", ui)
+        self.assertNotIn("BIRTH_READINESS_BLOCKERS", ui)
+        self.assertNotIn("A7 undecided", ui)
+        self.assertIn("birth_readiness", ui)
         self.assertNotIn("begin birth", ui.lower())
         self.assertIn("CeremonySurface", index)
 

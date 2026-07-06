@@ -16,6 +16,7 @@ import re
 import os
 import signal
 import socket
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -130,6 +131,7 @@ from core.governance.successor_governance import successor_governance_health
 from core.governance.operator_user_boundary import (
     GUARDED_SELF_MODIFICATION_PAUSED_MODE,
     VOICE_SEAT_WORK_CLASSES,
+    build_birth_readiness_projection,
     build_operator_health_projection,
     live_webauthn_ceremony_enabled,
     s7_ceremony_deferred_response,
@@ -2612,6 +2614,7 @@ def _build_cockpit_state(daemon) -> dict:
         "voice_continuity": _safe(
             lambda: daemon._voice_continuity_health(), default=None
         ),
+        "birth_readiness": _safe(lambda: daemon._birth_readiness(), default=None),
         "flags": _cockpit_flags_snapshot(),
         "sampled_at": time.time(),
     }
@@ -4136,6 +4139,218 @@ class MaezDaemon:
             track_b_confidentiality_mode="track_b_confidentiality_not_ready",
             data_freshness_class=data_freshness_class,
         )
+
+    def _birth_readiness(self) -> dict:
+        """Closed birth-readiness projection; condition states only."""
+        now = datetime.now(timezone.utc).isoformat()
+
+        def _condition(key: str, title: str, state: str, detail: str) -> dict:
+            return {
+                "key": key,
+                "title": title,
+                "state": state,
+                "detail": detail,
+                "checked_at": now,
+            }
+
+        def _ledger_init() -> dict:
+            if not LEDGER_DB_PATH.exists():
+                return _condition(
+                    "ledger_init",
+                    "ledger initialized",
+                    "red",
+                    f"ledger db missing at {LEDGER_DB_PATH}",
+                )
+            if LEDGER_DB_PATH.stat().st_size <= 0:
+                return _condition(
+                    "ledger_init",
+                    "ledger initialized",
+                    "red",
+                    f"ledger db is zero bytes at {LEDGER_DB_PATH}",
+                )
+            try:
+                conn = sqlite3.connect(f"file:{LEDGER_DB_PATH}?mode=ro", uri=True)
+                try:
+                    conn.execute("SELECT COUNT(*) FROM meta").fetchone()
+                finally:
+                    conn.close()
+            except Exception as exc:
+                return _condition(
+                    "ledger_init",
+                    "ledger initialized",
+                    "red",
+                    f"ledger meta unreadable: {exc.__class__.__name__}",
+                )
+            return _condition(
+                "ledger_init",
+                "ledger initialized",
+                "green",
+                "ledger db exists and meta is readable",
+            )
+
+        def _dream_witness() -> dict:
+            boot_time = getattr(self, "boot_time", None)
+            try:
+                start_ts = datetime.fromisoformat(str(boot_time)).timestamp()
+            except Exception:
+                return _condition(
+                    "dream_witness",
+                    "dream witness",
+                    "red",
+                    "daemon start timestamp unavailable",
+                )
+            db_path = MEMORY_DIR / "dream_proposals.db"
+            if not db_path.exists():
+                return _condition(
+                    "dream_witness",
+                    "dream witness",
+                    "red",
+                    f"dream proposals db missing at {db_path}",
+                )
+            try:
+                conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+                try:
+                    row = conn.execute(
+                        "SELECT COUNT(*) FROM dream_proposals WHERE created_at > ?",
+                        (float(start_ts),),
+                    ).fetchone()
+                finally:
+                    conn.close()
+            except Exception as exc:
+                return _condition(
+                    "dream_witness",
+                    "dream witness",
+                    "red",
+                    f"dream witness unreadable: {exc.__class__.__name__}",
+                )
+            count = int(row[0]) if row else 0
+            return _condition(
+                "dream_witness",
+                "dream witness",
+                "green" if count > 0 else "red",
+                f"{count} dream proposal(s) since daemon start",
+            )
+
+        def _a7_receipt_store() -> dict:
+            try:
+                from core.infra.unseal_receipts import UnsealReceipts
+
+                count = UnsealReceipts().count()
+            except Exception as exc:
+                return _condition(
+                    "a7_receipt_store",
+                    "A7 receipt store",
+                    "red",
+                    f"receipt store unavailable: {exc.__class__.__name__}",
+                )
+            return _condition(
+                "a7_receipt_store",
+                "A7 receipt store",
+                "green",
+                f"receipt store constructible; {count} receipt(s)",
+            )
+
+        def _prework_resolver() -> dict:
+            try:
+                from core.memory import birth_phase as _birth_phase
+
+                has_current_phase = callable(getattr(_birth_phase, "current_phase", None))
+            except Exception as exc:
+                return _condition(
+                    "prework_resolver",
+                    "prework resolver",
+                    "red",
+                    f"birth_phase import failed: {exc.__class__.__name__}",
+                )
+            legacy_birth_path = BASE_DIR / "core" / "memory" / "birth.py"
+            if legacy_birth_path.exists():
+                return _condition(
+                    "prework_resolver",
+                    "prework resolver",
+                    "red",
+                    "legacy core/memory/birth.py still exists",
+                )
+            return _condition(
+                "prework_resolver",
+                "prework resolver",
+                "green" if has_current_phase else "red",
+                "birth_phase importable and legacy birth.py absent",
+            )
+
+        def _flag_state() -> dict:
+            try:
+                from core.ledger.writes_flag import ledger_writes_enabled
+                from core.memory import birth_phase
+
+                enabled = ledger_writes_enabled()
+                born = birth_phase.is_born(LEDGER_DB_PATH)
+            except Exception as exc:
+                return _condition(
+                    "flag_state",
+                    "ledger writes flag",
+                    "red",
+                    f"flag unreadable: {exc.__class__.__name__}",
+                )
+            if not born and not enabled:
+                return _condition(
+                    "flag_state",
+                    "ledger writes flag",
+                    "green",
+                    "off (pre-birth by design)",
+                )
+            if born and enabled:
+                return _condition(
+                    "flag_state",
+                    "ledger writes flag",
+                    "green",
+                    "on (post-birth)",
+                )
+            detail = "on before birth" if enabled else "off after birth"
+            return _condition("flag_state", "ledger writes flag", "red", detail)
+
+        def _birth_phase() -> dict:
+            try:
+                from core.memory import birth_phase
+
+                phase = birth_phase.current_phase(LEDGER_DB_PATH)
+            except Exception as exc:
+                return _condition(
+                    "birth_phase",
+                    "birth phase",
+                    "red",
+                    f"phase unreadable: {exc.__class__.__name__}",
+                )
+            return _condition("birth_phase", "birth phase", "green", phase)
+
+        conditions = [
+            _ledger_init(),
+            _condition(
+                "repo_green",
+                "repo green",
+                "red",
+                "not wired to a live check yet - run pytest manually",
+            ),
+            _condition(
+                "dormancy_two_clause",
+                "dormancy two-clause",
+                "red",
+                "not wired to a live check yet - run the dormancy audit",
+            ),
+            _dream_witness(),
+            _a7_receipt_store(),
+            _condition(
+                "a7_structural_guard",
+                "A7 structural guard",
+                "green"
+                if (BASE_DIR / "tests" / "test_a7_reader_split.py").exists()
+                else "red",
+                "tests/test_a7_reader_split.py presence is the daemon-checkable guard proxy",
+            ),
+            _prework_resolver(),
+            _flag_state(),
+            _birth_phase(),
+        ]
+        return build_birth_readiness_projection(generated_at=now, conditions=conditions)
 
     def _backup_freshness_class(self) -> str:
         """Read the backup rail without letting backup inspection break health."""
@@ -11733,6 +11948,10 @@ class MaezDaemon:
             payload = dict(self._operator_health())
             payload["metacognitive_watchdog"] = self._watchdog_health(operator=True)
             return jsonify(payload)
+
+        @app.route("/operator/birth_readiness")
+        def operator_birth_readiness():
+            return jsonify(self._birth_readiness())
 
         @app.route("/internal/s7/webauthn/status", methods=["GET"])
         def s7_webauthn_status():

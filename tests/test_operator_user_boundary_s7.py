@@ -4467,6 +4467,51 @@ class S7OperatorHealthProjectionTests(unittest.TestCase):
         ):
             self.assertIn(blocker, operator_health)
 
+    def test_101aa_daemon_birth_readiness_projection_has_full_condition_board(self):
+        from unittest.mock import patch
+        from daemon.maez_daemon import MaezDaemon
+
+        class ReceiptStore:
+            def count(self):
+                return 0
+
+        daemon = MaezDaemon.__new__(MaezDaemon)
+        daemon.boot_time = "9999-01-01T00:00:00+00:00"
+
+        with patch("core.infra.unseal_receipts.UnsealReceipts", return_value=ReceiptStore()):
+            projection = daemon._birth_readiness()
+
+        self.assertEqual(projection["route"], "/operator/birth_readiness")
+        self.assertEqual(
+            [condition["key"] for condition in projection["conditions"]],
+            [
+                "ledger_init",
+                "repo_green",
+                "dormancy_two_clause",
+                "dream_witness",
+                "a7_receipt_store",
+                "a7_structural_guard",
+                "prework_resolver",
+                "flag_state",
+                "birth_phase",
+            ],
+        )
+        by_key = {condition["key"]: condition for condition in projection["conditions"]}
+        self.assertEqual(by_key["repo_green"]["state"], "red")
+        self.assertIn("not wired to a live check yet", by_key["repo_green"]["detail"])
+        self.assertEqual(by_key["dormancy_two_clause"]["state"], "red")
+        self.assertIn(
+            "not wired to a live check yet",
+            by_key["dormancy_two_clause"]["detail"],
+        )
+
+    def test_101ab_daemon_registers_birth_readiness_route(self):
+        source = Path("daemon/maez_daemon.py").read_text(encoding="utf-8")
+
+        self.assertIn('@app.route("/operator/birth_readiness")', source)
+        self.assertIn("def operator_birth_readiness", source)
+        self.assertIn('"birth_readiness": _safe(lambda: daemon._birth_readiness()', source)
+
     def test_101a_daemon_webauthn_routes_short_circuit_before_arming_surfaces(self):
         source = Path("daemon/maez_daemon.py").read_text(encoding="utf-8")
 

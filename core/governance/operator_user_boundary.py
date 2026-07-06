@@ -1649,6 +1649,33 @@ def build_operator_health_projection(
     }
 
 
+_BIRTH_CONDITION_KEYS = ("key", "title", "state", "detail", "checked_at")
+_BIRTH_STATES = ("green", "red")
+
+
+def build_birth_readiness_projection(
+    *,
+    generated_at: str,
+    conditions: list[dict],
+) -> dict[str, object]:
+    """Closed, content-free birth-readiness projection."""
+    safe: list[dict] = []
+    for cond in conditions:
+        if set(cond.keys()) != set(_BIRTH_CONDITION_KEYS):
+            raise ValueError(f"birth condition must have exactly {_BIRTH_CONDITION_KEYS}")
+        if cond["state"] not in _BIRTH_STATES:
+            raise ValueError(f"birth condition state must be one of {_BIRTH_STATES}")
+        safe.append({k: str(cond[k]) for k in _BIRTH_CONDITION_KEYS})
+    overall = "green" if safe and all(c["state"] == "green" for c in safe) else "red"
+    return {
+        "schema_version": 1,
+        "route": "/operator/birth_readiness",
+        "generated_at": str(generated_at),
+        "overall": overall,
+        "conditions": safe,
+    }
+
+
 def build_operator_unavailable_recovery_projection(
     *,
     deployment_track: str,
