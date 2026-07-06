@@ -51,9 +51,8 @@ DESIGN DECISIONS LOCKED BY A-CORE #9 ANCHORING PASS
    The `provenance` column is the audit hook that lets any row be
    traced back to what generated it.
 
-5. **memory_phase defaults to 'gestation'.** Aligns with the
-   gestation memory protocol. Future producers override explicitly
-   when the phase transitions.
+5. **memory_phase defaults to the current birth phase.** Aligns with the
+   gestation memory protocol before birth and lived memory after birth.
 
 6. **Hardcoded MAX_CONTENT_LEN = 16384 chars.** Generous bound for
    a single thought. Anything longer is probably an essay or a
@@ -117,6 +116,8 @@ import sqlite3
 import time
 from enum import Enum
 from pathlib import Path
+
+from core.memory import birth_phase
 
 logger = logging.getLogger("maez")
 
@@ -563,7 +564,7 @@ class PrivateThoughts:
         content: str,
         provenance: str = "explicit_api",
         context: dict | None = None,
-        memory_phase: str = "gestation",
+        memory_phase: str | None = None,
     ) -> int:
         """Append a private thought. Returns the new thought_id.
 
@@ -572,6 +573,8 @@ class PrivateThoughts:
           - unknown memory_phase
           - content empty or over MAX_CONTENT_LEN
         """
+        if memory_phase is None:
+            memory_phase = birth_phase.current_phase()
         if provenance not in ALLOWED_PROVENANCES:
             raise ValueError(
                 f"unknown provenance {provenance!r} (allowed: {sorted(ALLOWED_PROVENANCES)})"
@@ -601,7 +604,7 @@ class PrivateThoughts:
         retention: str,
         allowed_flows: tuple[str, ...] | list[str],
         context_extra: dict | None = None,
-        memory_phase: str = "gestation",
+        memory_phase: str | None = None,
     ) -> int:
         """Append a producer-originated private thought.
 
@@ -610,6 +613,8 @@ class PrivateThoughts:
         writes must carry the minimal contextual-integrity envelope
         that later readers and audits can reason over.
         """
+        if memory_phase is None:
+            memory_phase = birth_phase.current_phase()
         if signal_kind is None:
             signal_kind = provenance
         if signal_kind is None:
@@ -652,9 +657,11 @@ class PrivateThoughts:
         retention: str,
         allowed_flows: tuple[str, ...] | list[str],
         context_extra: dict | None = None,
-        memory_phase: str = "gestation",
+        memory_phase: str | None = None,
     ) -> int:
         """Append a producer signal using an existing caller-owned transaction."""
+        if memory_phase is None:
+            memory_phase = birth_phase.current_phase()
         if signal_kind is None:
             signal_kind = provenance
         if signal_kind is None:
@@ -761,22 +768,28 @@ class PrivateThoughts:
         limit: int = 2,
         required_flow: str = AllowedFlow.PRIVATE_READER.value,
         consent: str = ConsentTier.OWNER_PRIVATE.value,
-        phase: str = "gestation",
+        phase: str | None = None,
     ) -> list[dict]:
         """Recent rows for exactly one context.source, newest first.
 
         The source identity lives in context_json, not in provenance: provenance is
-        the generic signal kind. Consent, flow, and phase are enforced in SQL so
-        unrelated producers cannot be exposed or bury this source before LIMIT.
+        the generic signal kind. Consent and flow are enforced in SQL so unrelated
+        producers cannot be exposed or bury this source before LIMIT. Passing a
+        phase enforces that phase; None spans all real phases.
         """
+        phase_clause = "AND memory_phase = ?" if phase is not None else ""
+        params: list[object] = [str(source)]
+        if phase is not None:
+            params.append(str(phase))
+        params += [str(consent), str(required_flow), int(limit)]
         conn = sqlite3.connect(self.db_path)
         try:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                """
+                f"""
                 SELECT * FROM private_thoughts
                 WHERE json_extract(context_json, '$.source') = ?
-                  AND memory_phase = ?
+                  {phase_clause}
                   AND json_extract(context_json, '$.consent_tier') = ?
                   AND EXISTS (
                         SELECT 1 FROM json_each(context_json, '$.allowed_flows')
@@ -785,13 +798,7 @@ class PrivateThoughts:
                 ORDER BY thought_id DESC
                 LIMIT ?
                 """,
-                (
-                    str(source),
-                    str(phase),
-                    str(consent),
-                    str(required_flow),
-                    int(limit),
-                ),
+                params,
             ).fetchall()
         finally:
             conn.close()

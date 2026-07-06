@@ -80,9 +80,10 @@ class RecentBySourceTest(unittest.TestCase):
 
         self.assertEqual([row["content"] for row in rows], ["old heartbeat note"])
 
-    def test_enforces_flow_and_phase_even_with_right_source(self) -> None:
+    def test_default_spans_phase_and_explicit_phase_still_filters(self) -> None:
         store = self._store()
-        self._add(store, source=HEARTBEAT_VERSION, content="wrong phase", phase="lived")
+        self._add(store, source=HEARTBEAT_VERSION, content="gestation note", phase="gestation")
+        self._add(store, source=HEARTBEAT_VERSION, content="lived note", phase="lived")
         self._add(
             store,
             source=HEARTBEAT_VERSION,
@@ -90,7 +91,11 @@ class RecentBySourceTest(unittest.TestCase):
             flows=(AllowedFlow.AUDIT_TRACE,),
         )
 
-        self.assertEqual(store.recent_by_source(HEARTBEAT_VERSION, limit=5), [])
+        rows = store.recent_by_source(HEARTBEAT_VERSION, limit=5)
+        self.assertEqual([row["content"] for row in rows], ["lived note", "gestation note"])
+
+        rows = store.recent_by_source(HEARTBEAT_VERSION, limit=5, phase="gestation")
+        self.assertEqual([row["content"] for row in rows], ["gestation note"])
 
     def test_rejects_wrong_consent_even_with_right_source(self) -> None:
         store = self._store()

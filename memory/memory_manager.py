@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 
-from core.birth import memory_phase_tag as _memory_phase_tag
+from core.memory.birth_phase import current_phase as _memory_phase_tag
 from core.egress.gate import (
     KNOWN_ORIGINS,
     MINIMIZABLE_PRIVATE_CONTEXT,

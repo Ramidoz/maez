@@ -316,7 +316,7 @@ class LeanIdleHeartbeatTest(unittest.TestCase):
             self._pt_row(source="some_other_producer"),
             self._pt_row(consent="owner_shareable"),
             self._pt_row(flows=("audit_trace",)),
-            self._pt_row(phase="lived"),
+            self._pt_row(phase="unknown"),
             self._pt_row(content="   "),
         ]
         for row in bad_rows:

@@ -152,11 +152,13 @@ class RefreshWorkerDispatches(unittest.TestCase):
         from core.memory import source_awareness as sa
         with sa._refresh_lock:
             sa._refresh_running = False
+        sa._last_refresh_complete_monotonic = 0.0
 
     def tearDown(self):
         from core.memory import source_awareness as sa
         with sa._refresh_lock:
             sa._refresh_running = False
+        sa._last_refresh_complete_monotonic = 0.0
 
     def test_full_strategy_calls_build_map(self):
         from core.memory import source_awareness as sa

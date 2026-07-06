@@ -338,7 +338,7 @@ def _should_skip_dir(dirpath: Path) -> bool:
     for gated_path in _BIRTH_GATED_PATHS:
         try:
             dirpath.relative_to(gated_path)
-            from core.birth import is_born as _is_born
+            from core.memory.birth_phase import is_born as _is_born
             if not _is_born():
                 return True
             break

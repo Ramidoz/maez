@@ -19,6 +19,7 @@ from core.infra.private_thoughts import (
     RetentionRule,
     SignalKind,
 )
+from core.memory import birth_phase
 
 
 HEARTBEAT_VERSION = "lean_idle_heartbeat.v0"
@@ -291,7 +292,10 @@ def select_private_reader_thoughts(
         flows = context.get("allowed_flows") or []
         if AllowedFlow.PRIVATE_READER.value not in flows:
             continue
-        if (row.get("memory_phase") or context.get("memory_phase")) != "gestation":
+        if (row.get("memory_phase") or context.get("memory_phase")) not in (
+            birth_phase.PHASE_GESTATION,
+            birth_phase.PHASE_LIVED,
+        ):
             continue
         text = _compact(row.get("content"))
         if not text:
@@ -505,7 +509,6 @@ def run_lean_idle_heartbeat(
             "shadow": bool(shadow),
             "enabled": bool(enabled),
         },
-        memory_phase="gestation",
     )
     receipt = _base_receipt(
         prompt=prompt,

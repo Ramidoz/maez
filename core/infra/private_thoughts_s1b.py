@@ -389,7 +389,6 @@ class PrivateThoughtsS1bProducer:
                 retention=context["retention"],
                 allowed_flows=context["allowed_flows"],
                 context_extra=context_extra,
-                memory_phase="gestation",
             )
             conn.commit()
             return int(thought_id)
