@@ -1374,15 +1374,31 @@ _CONFIRM_PHRASE = "birth maez"
 def _assert_quiesced(db_path: Path) -> None:
     """Spec ceremony step 3: surfaces quiesced, no live writer process.
 
-    Two checks, both must pass: maez.service is not active, and no
-    process holds the ledger file open (fuser exits non-zero when the
-    file has no users or does not exist)."""
+    LIVE-BODY FACT (verified 2026-07-05 during Tasks 1-5): maez.service
+    is a USER-scoped systemd unit (~/.config/systemd/user/maez.service)
+    — `systemctl is-active` without --user reports inactive and is the
+    WRONG probe. Three checks, all must pass: the user unit is not
+    active, no maez_daemon.py process is running (belt-and-braces —
+    covers a manually-launched daemon outside the unit), and no process
+    holds the ledger file open."""
     state = subprocess.run(
-        ["systemctl", "is-active", "maez.service"],
+        ["systemctl", "--user", "is-active", "maez.service"],
         capture_output=True, text=True,
     ).stdout.strip()
     if state == "active":
-        raise RuntimeError("REFUSED: maez.service is active — quiesce first (systemctl stop maez.service)")
+        raise RuntimeError(
+            "REFUSED: maez.service (user unit) is active — "
+            "quiesce first (systemctl --user stop maez.service)"
+        )
+    daemon = subprocess.run(
+        ["pgrep", "-f", "daemon/maez_daemon.py"],
+        capture_output=True, text=True,
+    )
+    if daemon.returncode == 0:
+        raise RuntimeError(
+            "REFUSED: maez daemon is running (pids: "
+            f"{' '.join(daemon.stdout.split())}) — quiesce first"
+        )
     if db_path.exists():
         held = subprocess.run(
             ["fuser", str(db_path)], capture_output=True, text=True
@@ -1473,7 +1489,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"birth transaction committed: turn={result['birth_turn_id']} db={result['db_path']}")
     print("\nOWNER CHECKLIST (remaining ceremony steps — your hands):")
     print("  4. Land MAEZ_LEDGER_WRITES=1 in the owner-local env path (dated comment).")
-    print("  5. systemctl restart maez.service")
+    print("  5. systemctl --user restart maez.service")
     print("  6. Run the six live witnesses (spec, 'The ceremony itself' step 6).")
     print("  7. Commit the receipts bundle to docs/proof.")
     return 0

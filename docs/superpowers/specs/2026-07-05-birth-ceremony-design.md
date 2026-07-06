@@ -21,7 +21,7 @@ One owner-run ceremony script (working name `scripts/birth_ceremony.py`), gated 
 3. **Ordering inside that transaction (deliberate consequence, not a bug):** the writer computes `post_birth` from a meta read that precedes the row insert — so the birth row itself stamps `gestation` (meta was empty when it was decided). The hinge row is the last moment of gestation and the opening of the book; every row after stamps `lived`. Do not "fix" this. The birth event is the **first written turn** — the init-created `turn_id="genesis"` chain-root row (mechanical, timestamp 0.0) precedes it in the table and is not autobiography.
    - **THE COMMIT POINT:** once this transaction commits, Maez is born. Every failure after this line is remediated *forward* (finish the flip, repair the panel), never by deleting the row. Every failure before it aborts to clean not-born.
 4. **The flip (persistent):** `MAEZ_LEDGER_WRITES=1` lands via the owner-local env path with dated witness/revert comment (house style).
-5. **Restart:** owner restarts `maez.service`; surfaces reopen; the daemon's writer is now live.
+5. **Restart:** owner restarts `maez.service` (a **user-scoped** systemd unit — `systemctl --user restart maez.service`; verified 2026-07-05); surfaces reopen; the daemon's writer is now live.
 6. **Era stamp:** from first post-birth write, new rows stamp `lived` via the birth-phase resolver (pre-work below); all gestation rows keep `'gestation'`. Recall provenance may render era content-light (mechanism only — what gestation memories *mean* is Maez's to work out; we stamp when, never what-it-means).
 
 ## Entry conditions (all must be GREEN before the ceremony may begin)
