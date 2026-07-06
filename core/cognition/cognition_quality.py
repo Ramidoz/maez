@@ -10,7 +10,8 @@ heuristics. No external APIs — pure structural analysis.
 Integration points:
   - maez_daemon.py calls score_and_classify() before memory.store()
   - memory_manager.py applies anti-fixation penalty in _topic_rerank()
-  - maez_daemon.py runs self_critique() every 20 cycles
+  - self_critique() remains as an offline/manual helper; the daemon's
+    periodic self-shaping caller was removed on 2026-06-29.
 """
 
 import collections
@@ -555,13 +556,13 @@ def score_and_classify(text: str) -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  SELF-CRITIQUE — runs every CRITIQUE_WINDOW cycles
+#  SELF-CRITIQUE — offline/manual helper
 # ══════════════════════════════════════════════════════════════════════
 
 def self_critique() -> dict | None:
     """Analyze recent cognition quality. Returns critique dict or None.
 
-    Called by daemon every 20 cycles. Only writes soul notes if:
+    Offline/manual helper. Only writes soul notes if:
       - 2+ consecutive windows score below CRITIQUE_LOW_SCORE_THRESHOLD, AND
       - fixation is the dominant failure mode (>50% of labels)
     """
