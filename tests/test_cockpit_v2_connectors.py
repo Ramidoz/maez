@@ -77,6 +77,25 @@ class CockpitV2ConnectorsTests(unittest.TestCase):
         self.assertFalse(room["intake_bus"]["bypass_allowed"])
         self.assertIn("immune doorway", room["intake_bus"]["description"])
 
+    def test_checked_in_iphone_connector_registry_renders_available(self):
+        from core.cockpit.connectors import CockpitConnectorPaths, build_connectors_room
+
+        repo = Path(__file__).resolve().parents[1]
+        paths = CockpitConnectorPaths(
+            registry_file=repo / "config" / "connector_registry.json",
+            receipt_log=repo / "logs" / "cockpit_connector_receipts.jsonl",
+        )
+
+        room = build_connectors_room(paths)
+
+        iphone = next((item for item in room["connectors"] if item["id"] == "iphone"), None)
+        self.assertEqual(room["status"], "ok")
+        self.assertIsNotNone(iphone)
+        self.assertEqual(iphone["connection_state"], "connected")
+        self.assertEqual(iphone["tier"], "T2")
+        self.assertEqual(iphone["intake_bus"], "core.intake_bus.admit")
+        self.assertTrue((repo / "config" / "connectors" / "iphone.yaml").exists())
+
     def test_connect_disconnect_is_t2_typed_confirmed_and_receipted(self):
         from core.cockpit.connectors import apply_connector_action
 

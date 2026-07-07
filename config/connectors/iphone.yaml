@@ -1,0 +1,17 @@
+id: iphone
+label: iPhone Shortcuts
+adapter: shortcuts-ingress
+kind: sense
+scopes:
+  - location
+  - health
+  - music
+  - highlights
+auth:
+  type: token
+  env: MAEZ_IPHONE_INGEST_TOKEN
+egress_allowlist: []
+admission:
+  policy: delta_digest
+  lane: connector
+pinned_ref: null

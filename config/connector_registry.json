@@ -1,0 +1,39 @@
+{
+  "connectors": [
+    {
+      "id": "iphone",
+      "label": "iPhone Shortcuts",
+      "adapter": "shortcuts-ingress",
+      "kind": "sense",
+      "state": "connected",
+      "status": "connected",
+      "tier": "T2",
+      "scopes": [
+        "location",
+        "health",
+        "music",
+        "highlights"
+      ],
+      "granted_scopes": [
+        "location",
+        "health",
+        "music",
+        "highlights"
+      ],
+      "auth": {
+        "type": "token",
+        "env": "MAEZ_IPHONE_INGEST_TOKEN"
+      },
+      "egress_allowlist": [],
+      "admission": {
+        "policy": "delta_digest",
+        "lane": "connector"
+      },
+      "intake_bus": "core.intake_bus.admit",
+      "manifest": "config/connectors/iphone.yaml",
+      "pinned_ref": null,
+      "attached_at": "2026-07-08T00:00:00Z",
+      "last_activity": "signals jsonl"
+    }
+  ]
+}

@@ -24,6 +24,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from core.infra.env_flags import strict_env_flag
+
 logger = logging.getLogger("maez.iphone")
 
 try:
@@ -69,6 +71,51 @@ VALID_KINDS = frozenset(
         "custom",  # {name, ...}
     }
 )
+
+
+def _connector_lane_shadow_enabled() -> bool:
+    return strict_env_flag("MAEZ_CONNECTOR_LANE_SHADOW")
+
+
+def _connector_lane_enabled() -> bool:
+    return strict_env_flag("MAEZ_CONNECTOR_LANE")
+
+
+def _memory_for_connector_lane():
+    from memory.memory_manager import MemoryManager
+
+    return MemoryManager()
+
+
+def _route_connector_lane(entry: dict[str, Any]) -> None:
+    shadow = _connector_lane_shadow_enabled()
+    enforce = _connector_lane_enabled()
+    if not shadow and not enforce:
+        return
+
+    try:
+        from core.intake_bus.connector_lane import admit_connector_fact
+
+        if shadow:
+            decision = admit_connector_fact(entry, memory=None, shadow=True)
+            logger.info(
+                "connector lane shadow: status=%s reason=%s kind=%s",
+                decision.status,
+                decision.reason,
+                entry.get("kind"),
+            )
+            if not enforce:
+                return
+
+        decision = admit_connector_fact(entry, memory=_memory_for_connector_lane())
+        logger.info(
+            "connector lane: status=%s reason=%s kind=%s",
+            decision.status,
+            decision.reason,
+            entry.get("kind"),
+        )
+    except Exception as exc:
+        logger.warning("connector lane dropped: %s", exc)
 
 
 def _token_ok(provided: str | None) -> bool:
@@ -126,5 +173,7 @@ def ingest(payload: dict[str, Any], provided_token: str | None) -> tuple[dict, i
     except Exception as e:
         logger.error("signal write failed: %s", e)
         return {"error": "storage failed"}, 500
+
+    _route_connector_lane(entry)
 
     return {"ok": True, "kind": kind}, 200
