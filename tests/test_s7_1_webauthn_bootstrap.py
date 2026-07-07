@@ -77,10 +77,13 @@ class S71WebAuthnBootstrapTests(unittest.TestCase):
         from core.governance import s7_webauthn_bootstrap as bootstrap
 
         class Store:
+            last_kwargs = None
+
             def __init__(self, root):
                 self.root = root
 
-            def create_bootstrap_intent(self, **_kwargs):
+            def create_bootstrap_intent(self, **kwargs):
+                Store.last_kwargs = kwargs
                 return SimpleNamespace(
                     intent_id="s7_bootstrap_test",
                     raw_token="raw-token-for-browser",
@@ -95,8 +98,6 @@ class S71WebAuthnBootstrapTests(unittest.TestCase):
                         "create",
                         "--purpose",
                         "register_primary",
-                        "--ttl-minutes",
-                        "10",
                         "--store-root",
                         str(self.root),
                     ]
@@ -107,6 +108,7 @@ class S71WebAuthnBootstrapTests(unittest.TestCase):
         self.assertIn("Intent id: s7_bootstrap_test", text)
         self.assertIn("Token: raw-token-for-browser", text)
         self.assertIn("Expires at: " + FUTURE, text)
+        self.assertEqual(Store.last_kwargs["ttl_minutes"], 5)
 
     def test_003_expired_bootstrap_token_is_rejected(self):
         store = self._store()
@@ -237,6 +239,15 @@ class S71WebAuthnBootstrapTests(unittest.TestCase):
 
     def test_009_bootstrap_ttl_cannot_exceed_ten_minutes(self):
         store = self._store()
+
+        store.create_bootstrap_intent(
+            purpose="register_primary",
+            ttl_minutes=10,
+            now=NOW,
+            effective_uid=os.getuid(),
+            is_interactive=True,
+            tty_path="/dev/pts/test",
+        )
 
         with self.assertRaisesRegex(ValueError, "s7_bootstrap_ttl_too_long"):
             store.create_bootstrap_intent(
