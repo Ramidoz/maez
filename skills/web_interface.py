@@ -1174,6 +1174,16 @@ def _cockpit_connector_paths():
     return CockpitConnectorPaths.defaults()
 
 
+def _s7_bootstrap_store_root():
+    from core.governance.s7_webauthn_bootstrap import DEFAULT_STORE_ROOT
+
+    return DEFAULT_STORE_ROOT
+
+
+def _s7_bootstrap_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 def _cockpit_existing_approve_channel(request_id: str, payload: dict | None = None) -> dict:
     """Route cockpit approval through the existing daemon approval authority."""
 
@@ -1422,6 +1432,56 @@ def api_cockpit_v2_connector_action(connector_id: str):
     if result.get("status") == "applied":
         return jsonify(result)
     return jsonify(result), 400
+
+
+@app.route("/api/v2/cockpit/s7/bootstrap-intent", methods=["POST"])
+def api_cockpit_v2_s7_bootstrap_intent():
+    if not strict_env_flag("MAEZ_COCKPIT_V2"):
+        return jsonify(
+            {
+                "ok": False,
+                "status": "refused",
+                "reason": "cockpit_v2_off",
+            }
+        ), 404
+    if not _owner_private_auth_ok():
+        return _owner_private_auth_required_response()
+
+    from core.governance.s7_webauthn_bootstrap import DEFAULT_BOOTSTRAP_TTL_MINUTES
+    from core.governance.s7_webauthn_bootstrap import MAX_BOOTSTRAP_TTL_MINUTES
+    from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
+
+    payload = request.get_json(silent=True) or {}
+    requested = payload.get("expires_min", DEFAULT_BOOTSTRAP_TTL_MINUTES)
+    try:
+        ttl_minutes = int(requested)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "s7_bootstrap_ttl_invalid"}), 400
+    if ttl_minutes <= 0:
+        return jsonify({"ok": False, "error": "s7_bootstrap_ttl_invalid"}), 400
+    if ttl_minutes > MAX_BOOTSTRAP_TTL_MINUTES:
+        ttl_minutes = MAX_BOOTSTRAP_TTL_MINUTES
+
+    store = S7WebAuthnBootstrapStore(_s7_bootstrap_store_root())
+    try:
+        intent = store.create_bootstrap_intent(
+            purpose="register_primary",
+            ttl_minutes=ttl_minutes,
+            now=_s7_bootstrap_now_iso(),
+            is_interactive=True,
+            tty_path="cockpit-owner-private-auth",
+        )
+    except (RuntimeError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    return jsonify(
+        {
+            "ok": True,
+            "intent_id": intent.intent_id,
+            "bootstrap_token": intent.raw_token,
+            "expires_at": intent.expires_at,
+            "purpose": intent.purpose,
+        }
+    )
 
 
 _S7_WEBAUTHN_PROOF_PAGE = r"""<!DOCTYPE html>
@@ -1788,6 +1848,8 @@ def cockpit_s7_webauthn_proof():
 
 @app.route("/cockpit/v2/<path:filename>")
 def cockpit_v2_static(filename: str):
+    if not strict_env_flag("MAEZ_COCKPIT_V2"):
+        return "not found", 404
     return _serve_cockpit_asset(COCKPIT_V2_DIR, filename)
 
 

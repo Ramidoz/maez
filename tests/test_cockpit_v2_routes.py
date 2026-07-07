@@ -59,6 +59,17 @@ class CockpitV2RouteGateTests(unittest.TestCase):
         self.assertIn("window.TerminalUI", body)
         self.assertIn("application/javascript", response.headers.get("Content-Type", ""))
 
+    def test_v2_assets_404_when_v2_flag_is_off(self):
+        _wi, client = self._client()
+
+        with mock.patch.dict(os.environ, {"MAEZ_COCKPIT_V2": "0"}, clear=False):
+            response = client.get("/cockpit/v2/terminal-ui.jsx")
+
+        body = response.get_data(as_text=True)
+        response.close()
+        self.assertEqual(response.status_code, 404)
+        self.assertNotIn("window.TerminalUI", body)
+
     def test_existing_s7_manual_proof_page_is_untouched_when_v2_flag_on(self):
         _wi, client = self._client()
 

@@ -39,6 +39,7 @@ DEFAULT_STORE_ROOT = _paths.memory_dir() / "s7_1_webauthn"
 # A founder-key enrollment intent is the most sensitive time-box in S7:
 # mint it, move to the cockpit, and touch the key within minutes. It must
 # not become a day-long open door.
+DEFAULT_BOOTSTRAP_TTL_MINUTES = 5
 MAX_BOOTSTRAP_TTL_MINUTES = 10
 MIN_BOOTSTRAP_TOKEN_BYTES = 16
 

@@ -1756,14 +1756,16 @@ function CeremonySurface() {
 
   React.useEffect(() => { loadStatus(); }, [loadStatus]);
 
-  const registerPrimary = async () => {
+  const registerPrimaryWithBootstrap = async (bootstrap) => {
     try {
       markStep("bootstrap", {status: "running", error: ""});
+      const intentId = bootstrap.intent_id;
+      const token = bootstrap.bootstrap_token;
       const begin = await ceremonyJsonFetch("/api/v1/s7/webauthn/register/begin", {
         registration_class: "primary",
         session_binding: sessionBinding,
-        bootstrap_intent_id: bootstrapIntentId,
-        bootstrap_token: bootstrapToken,
+        bootstrap_intent_id: intentId,
+        bootstrap_token: token,
       });
       append("primary register begin", begin);
       markStep("touch-key", {status: "running", error: ""});
@@ -1773,8 +1775,8 @@ function CeremonySurface() {
         registration_class: "primary",
         challenge_id: begin.challenge_id,
         session_binding: sessionBinding,
-        bootstrap_intent_id: bootstrapIntentId,
-        bootstrap_token: bootstrapToken,
+        bootstrap_intent_id: intentId,
+        bootstrap_token: token,
         registration_response: ceremonyEncodeCredentialResponse(credential),
       });
       setCredentialRef(finish.credential_ref || credentialRef);
@@ -1784,6 +1786,33 @@ function CeremonySurface() {
     } catch (err) {
       failStep("touch-key", err);
     }
+  };
+
+  const registerPrimaryWithCockpitMint = async () => {
+    try {
+      markStep("bootstrap", {status: "running", error: ""});
+      const minted = await ceremonyJsonFetch("/api/v2/cockpit/s7/bootstrap-intent", {});
+      setBootstrapIntentId(minted.intent_id || "");
+      setBootstrapToken(minted.bootstrap_token || "");
+      append("bootstrap intent minted", {
+        intent_id: minted.intent_id,
+        expires_at: minted.expires_at,
+        purpose: minted.purpose,
+      });
+      await registerPrimaryWithBootstrap({
+        intent_id: minted.intent_id,
+        bootstrap_token: minted.bootstrap_token,
+      });
+    } catch (err) {
+      failStep("bootstrap", err);
+    }
+  };
+
+  const registerPrimaryWithManualBootstrap = async () => {
+    await registerPrimaryWithBootstrap({
+      intent_id: bootstrapIntentId,
+      bootstrap_token: bootstrapToken,
+    });
   };
 
   const authorizeCard = async () => {
@@ -1877,11 +1906,11 @@ function CeremonySurface() {
               <input value={sessionBinding} onChange={(e) => setSessionBinding(e.target.value)} style={{ background: A.surfaceLo, border: `0.5px solid ${A.stroke}`, borderRadius: 8, color: A.text, fontFamily: A.mono, fontSize: 11, padding: '7px 9px' }} />
             </label>
             <label style={{ display: 'grid', gap: 5, fontSize: 11, color: A.textDim }}>
-              bootstrap intent
+              bootstrap intent · advanced manual fallback
               <input value={bootstrapIntentId} onChange={(e) => setBootstrapIntentId(e.target.value)} style={{ background: A.surfaceLo, border: `0.5px solid ${A.stroke}`, borderRadius: 8, color: A.text, fontFamily: A.mono, fontSize: 11, padding: '7px 9px' }} />
             </label>
             <label style={{ display: 'grid', gap: 5, fontSize: 11, color: A.textDim }}>
-              bootstrap token
+              bootstrap token · advanced manual fallback
               <input value={bootstrapToken} onChange={(e) => setBootstrapToken(e.target.value)} style={{ background: A.surfaceLo, border: `0.5px solid ${A.stroke}`, borderRadius: 8, color: A.text, fontFamily: A.mono, fontSize: 11, padding: '7px 9px' }} />
             </label>
             <label style={{ display: 'grid', gap: 5, fontSize: 11, color: A.textDim }}>
@@ -1899,7 +1928,8 @@ function CeremonySurface() {
           </div>
 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 14 }}>
-            <Button onClick={registerPrimary} color={A.purple}>register primary key</Button>
+            <Button onClick={registerPrimaryWithCockpitMint} color={A.purple}>Register founder key</Button>
+            <Button onClick={registerPrimaryWithManualBootstrap} variant="outline" color={A.purple}>register primary key manually</Button>
             <Button onClick={authorizeCard} variant="outline" color={A.purple}>touch key for card</Button>
             <Button onClick={executeCard} variant="outline" color={A.orange}>apply guarded card</Button>
           </div>

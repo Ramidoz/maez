@@ -56,7 +56,7 @@ class CockpitV2CeremonyTests(unittest.TestCase):
         self.assertIn("id: 'ceremony'", index)
         self.assertIn("surface === 'ceremony'", index)
 
-        self.assertNotIn("/api/v2/cockpit/s7", combined)
+        self.assertIn("/api/v2/cockpit/s7/bootstrap-intent", combined)
         self.assertNotIn("/api/v2/cockpit/ceremony", combined)
         self.assertNotIn("/api/v2/cockpit/birth", combined)
         for forbidden in (

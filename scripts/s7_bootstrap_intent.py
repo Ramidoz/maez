@@ -16,13 +16,14 @@ import os
 from pathlib import Path
 import sys
 
+from core.governance.s7_webauthn_bootstrap import DEFAULT_BOOTSTRAP_TTL_MINUTES
 from core.governance.s7_webauthn_bootstrap import DEFAULT_STORE_ROOT
 from core.governance.s7_webauthn_bootstrap import MAX_BOOTSTRAP_TTL_MINUTES
 from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 
 
 CONFIRM_PHRASE = "mint s7 primary key"
-DEFAULT_EXPIRES_MINUTES = 5
+DEFAULT_EXPIRES_MINUTES = DEFAULT_BOOTSTRAP_TTL_MINUTES
 
 
 def _build_parser() -> argparse.ArgumentParser:
