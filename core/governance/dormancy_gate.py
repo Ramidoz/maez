@@ -8,6 +8,7 @@ green because they contain no authored rows; unknown provenance classes are red.
 
 from __future__ import annotations
 
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
@@ -60,7 +61,11 @@ def _counts_for_store(db_path: Path, *, table: str, column: str) -> dict[str, in
     if not db_path.exists():
         return {}
     uri = f"file:{db_path}?mode=ro"
-    with sqlite3.connect(uri, uri=True) as conn:
+    # contextlib.closing: a bare `with sqlite3.connect(...)` manages the
+    # transaction but does NOT close the connection — it leaked one fd per
+    # store per call, exhausting the daemon's fd limit under cockpit
+    # readiness polling (2026-07-07). closing() actually releases the fd.
+    with closing(sqlite3.connect(uri, uri=True)) as conn:
         try:
             rows = conn.execute(
                 f"SELECT COALESCE({column}, ''), COUNT(*) FROM {table} GROUP BY {column}"
