@@ -136,6 +136,7 @@ from core.governance.operator_user_boundary import (
     live_webauthn_ceremony_enabled,
     s7_ceremony_deferred_response,
 )
+from core.governance.dormancy_gate import two_clause as _run_dormancy_two_clause
 from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
 from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
 from core.governance.s7_webauthn_verifier import S7ProductionWebAuthnVerifier
@@ -186,12 +187,55 @@ MEMORY_DIR = BASE_DIR / "memory"
 PID_FILE = BASE_DIR / "daemon" / "maez.pid"
 SHUTDOWN_FILE = BASE_DIR / "daemon" / "last_shutdown"
 LEDGER_DB_PATH = Path(os.environ.get("MAEZ_LEDGER_DB_PATH") or (MEMORY_DIR / "ledger.db"))
+REPO_GREEN_RECEIPT_PATH = MEMORY_DIR / "repo_green_receipt.json"
+REPO_GREEN_FAILURE_FLOOR = 3
 M1_ALLOWED_PROMOTION_SOURCES = frozenset({"telegram_surface", "telegram_text"})
 
 StoreSpec = collections.namedtuple(
     "StoreSpec",
     ["content", "provenance_source", "trust_tier", "turn_link_id", "is_owner_record"],
 )
+
+
+def _current_git_head() -> str:
+    return subprocess.check_output(
+        ["git", "rev-parse", "HEAD"],
+        cwd=str(BASE_DIR),
+        text=True,
+    ).strip()
+
+
+def _read_repo_green_receipt() -> tuple[bool, str]:
+    stale_message = "receipt stale/missing — run scripts/repo_green_receipt.py"
+    try:
+        receipt = json.loads(REPO_GREEN_RECEIPT_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return False, stale_message
+    try:
+        current_head = _current_git_head()
+        finished_at = datetime.fromisoformat(str(receipt["finished_at"]).replace("Z", "+00:00"))
+        if finished_at.tzinfo is None:
+            return False, stale_message
+        age = datetime.now(timezone.utc) - finished_at.astimezone(timezone.utc)
+        failures = int(receipt.get("failures", 0))
+        errors = int(receipt.get("errors", 0))
+        worktree_clean = bool(receipt.get("worktree_clean", False))
+        if (
+            str(receipt.get("commit", "")) != current_head
+            or age >= timedelta(hours=24)
+            or failures > REPO_GREEN_FAILURE_FLOOR
+            or errors > 0
+            or not worktree_clean
+        ):
+            return False, stale_message
+    except Exception:
+        return False, stale_message
+    floor_note = str(receipt.get("floor_note") or "floor_note missing")
+    return (
+        True,
+        f"receipt fresh for HEAD; ran={int(receipt.get('ran', 0))}; "
+        f"failures={failures}; errors={errors}; worktree_clean={worktree_clean}; {floor_note}",
+    )
 
 
 def decide_turn_storage(*, source, text, reply, web_grounded, hygiene_enabled):
@@ -4347,20 +4391,36 @@ class MaezDaemon:
                 "tests/test_a7_reader_split.py presence is the daemon-checkable guard proxy",
             )
 
-        conditions = [
-            _ledger_init(),
-            _condition(
+        def _repo_green() -> dict:
+            ok, detail = _read_repo_green_receipt()
+            return _condition(
                 "repo_green",
                 "repo green",
-                "red",
-                "not wired to a live check yet - run pytest manually",
-            ),
-            _condition(
+                "green" if ok else "red",
+                detail,
+            )
+
+        def _dormancy_two_clause() -> dict:
+            try:
+                result = _run_dormancy_two_clause(memory_dir=MEMORY_DIR)
+            except Exception as exc:
+                return _condition(
+                    "dormancy_two_clause",
+                    "dormancy two-clause",
+                    "red",
+                    f"dormancy audit unreadable: {exc.__class__.__name__}",
+                )
+            return _condition(
                 "dormancy_two_clause",
                 "dormancy two-clause",
-                "red",
-                "not wired to a live check yet - run the dormancy audit",
-            ),
+                "green" if result.ok else "red",
+                result.detail,
+            )
+
+        conditions = [
+            _ledger_init(),
+            _repo_green(),
+            _dormancy_two_clause(),
             _dream_witness(),
             _a7_receipt_store(),
             _a7_structural_guard(),

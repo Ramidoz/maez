@@ -1,0 +1,10 @@
+{
+  "commit": "44dbed51452154d463fca9ec6b6ffd388bc0e130",
+  "errors": 15,
+  "failures": 27,
+  "finished_at": "2026-07-07T05:49:30.873806+00:00",
+  "floor_note": "floor=3 known pre-existing tests.test_memory_integrity_invariant drifts: web-search prose inventory drift; adapter self-claim audit import drift; stale retry-marker cognition-quality-grader cleanup drift",
+  "ran": 8349,
+  "started_at": "2026-07-07T05:46:24.786282+00:00",
+  "worktree_clean": false
+}

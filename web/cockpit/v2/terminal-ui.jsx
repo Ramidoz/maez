@@ -1840,7 +1840,7 @@ function CeremonySurface() {
         subtitle="S7 ceremony wrapper around existing WebAuthn routes"
         icon="◈"
         color={A.purple}
-        right={<Chip color={A.orange}>birth action remains out of scope</Chip>}
+        right={<Chip color={A.orange}>birth = owner ceremony (terminal + key) · read-only readiness</Chip>}
       />
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(320px, 1.15fr) minmax(300px, 0.85fr)', gap: 14, marginBottom: 16 }}>
