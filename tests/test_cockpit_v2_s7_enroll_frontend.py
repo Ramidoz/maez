@@ -32,6 +32,24 @@ class CockpitV2S7EnrollFrontendTests(unittest.TestCase):
         self.assertIn("advanced manual fallback", ui)
         self.assertIn("registerPrimaryWithManualBootstrap", ui)
 
+    def test_backup_button_authorizes_with_primary_before_register_begin(self):
+        ui = UI.read_text(encoding="utf-8")
+        backup_flow = ui[
+            ui.index("const registerBackupWithPrimaryAuthorization")
+            : ui.index("const executeCard")
+        ]
+
+        self.assertIn("Register backup key", ui)
+        self.assertIn('"/api/v1/s7/webauthn/register/backup-card"', backup_flow)
+        self.assertIn("await authorizeS7Request", backup_flow)
+        self.assertIn('registration_class: "backup"', backup_flow)
+        self.assertIn("s7_authorization_artifact_id: authorization.finish.artifact_id", backup_flow)
+        self.assertIn("backup_authorization_request_id: card.request_id", backup_flow)
+        self.assertLess(
+            backup_flow.index("await authorizeS7Request"),
+            backup_flow.index('"/api/v1/s7/webauthn/register/begin"'),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

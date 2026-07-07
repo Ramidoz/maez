@@ -1815,31 +1815,88 @@ function CeremonySurface() {
     });
   };
 
+  const authorizeS7Request = async ({targetRequestId, authSessionBinding, requestedCredentialRef = ""}) => {
+    if (!targetRequestId.trim()) throw new Error("request_id_required");
+    const encodedRequestId = encodeURIComponent(targetRequestId.trim());
+    const begin = await ceremonyJsonFetch(`/api/v1/s7/cards/${encodedRequestId}/webauthn/begin`, {
+      session_binding: authSessionBinding,
+      credential_ref: requestedCredentialRef,
+    });
+    append("authorize begin", begin);
+    markStep("touch-key", {status: "running", error: ""});
+    const selectedCredentialRef = requestedCredentialRef || (begin.allow_credentials || [])[0] || "";
+    const credential = await navigator.credentials.get(ceremonyNormalizeRequestOptions(begin.public_key_options));
+    const finish = await ceremonyJsonFetch(`/api/v1/s7/cards/${encodedRequestId}/webauthn/finish`, {
+      session_binding: authSessionBinding,
+      challenge_id: begin.challenge_id,
+      credential_ref: selectedCredentialRef || credential.id,
+      maez_voice_raw_response_hash: begin.maez_voice_raw_response_hash,
+      authentication_response: ceremonyEncodeCredentialResponse(credential),
+    });
+    append("authorize finish", finish);
+    return {
+      begin,
+      finish,
+      credential_ref: selectedCredentialRef || credential.id || "",
+    };
+  };
+
   const authorizeCard = async () => {
     try {
-      if (!requestId.trim()) throw new Error("request_id_required");
       markStep("bootstrap", {status: "running", error: ""});
-      const encodedRequestId = encodeURIComponent(requestId.trim());
-      const begin = await ceremonyJsonFetch(`/api/v1/s7/cards/${encodedRequestId}/webauthn/begin`, {
-        session_binding: sessionBinding,
-        credential_ref: credentialRef,
+      const authorization = await authorizeS7Request({
+        targetRequestId: requestId,
+        authSessionBinding: sessionBinding,
+        requestedCredentialRef: credentialRef,
       });
-      append("authorize begin", begin);
-      markStep("touch-key", {status: "running", error: ""});
-      const selectedCredentialRef = credentialRef || (begin.allow_credentials || [])[0] || "";
-      const credential = await navigator.credentials.get(ceremonyNormalizeRequestOptions(begin.public_key_options));
-      markStep("signed/applied", {status: "running", error: ""});
-      const finish = await ceremonyJsonFetch(`/api/v1/s7/cards/${encodedRequestId}/webauthn/finish`, {
-        session_binding: sessionBinding,
-        challenge_id: begin.challenge_id,
-        credential_ref: selectedCredentialRef || credential.id,
-        maez_voice_raw_response_hash: begin.maez_voice_raw_response_hash,
-        authentication_response: ceremonyEncodeCredentialResponse(credential),
-      });
-      setArtifactId(finish.artifact_id || "");
-      setCredentialRef(selectedCredentialRef || credential.id || credentialRef);
+      setArtifactId(authorization.finish.artifact_id || "");
+      setCredentialRef(authorization.credential_ref || credentialRef);
       markStep("signed/applied", {status: "ok", error: ""});
-      append("authorize finish", finish);
+    } catch (err) {
+      failStep("touch-key", err);
+    }
+  };
+
+  const registerBackupWithPrimaryAuthorization = async () => {
+    try {
+      markStep("bootstrap", {status: "running", error: ""});
+      const card = await ceremonyJsonFetch("/api/v1/s7/webauthn/register/backup-card", {
+        session_binding: sessionBinding,
+      });
+      setRequestId(card.request_id || "");
+      append("backup registration card", card);
+
+      const authorizationSessionBinding = `${sessionBinding}:backup-primary-authorization`;
+      const authorization = await authorizeS7Request({
+        targetRequestId: card.request_id || "",
+        authSessionBinding: authorizationSessionBinding,
+        requestedCredentialRef: "",
+      });
+      setArtifactId(authorization.finish.artifact_id || "");
+      setCredentialRef(authorization.credential_ref || credentialRef);
+
+      const begin = await ceremonyJsonFetch("/api/v1/s7/webauthn/register/begin", {
+        registration_class: "backup",
+        session_binding: sessionBinding,
+        backup_authorization_request_id: card.request_id,
+        s7_authorization_artifact_id: authorization.finish.artifact_id,
+        authorization_challenge_id: authorization.begin.challenge_id,
+        authorization_session_binding: authorizationSessionBinding,
+        authorization_credential_ref: authorization.credential_ref,
+      });
+      append("backup register begin", begin);
+      markStep("touch-key", {status: "running", error: ""});
+      const credential = await navigator.credentials.create(ceremonyNormalizeCreationOptions(begin.public_key_options));
+      markStep("signed/applied", {status: "running", error: ""});
+      const finish = await ceremonyJsonFetch("/api/v1/s7/webauthn/register/finish", {
+        registration_class: "backup",
+        challenge_id: begin.challenge_id,
+        session_binding: sessionBinding,
+        registration_response: ceremonyEncodeCredentialResponse(credential),
+      });
+      markStep("signed/applied", {status: "ok", error: ""});
+      append("backup register finish", finish);
+      await loadStatus();
     } catch (err) {
       failStep("touch-key", err);
     }
@@ -1929,6 +1986,7 @@ function CeremonySurface() {
 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 14 }}>
             <Button onClick={registerPrimaryWithCockpitMint} color={A.purple}>Register founder key</Button>
+            <Button onClick={registerBackupWithPrimaryAuthorization} variant="outline" color={A.teal}>Register backup key</Button>
             <Button onClick={registerPrimaryWithManualBootstrap} variant="outline" color={A.purple}>register primary key manually</Button>
             <Button onClick={authorizeCard} variant="outline" color={A.purple}>touch key for card</Button>
             <Button onClick={executeCard} variant="outline" color={A.orange}>apply guarded card</Button>

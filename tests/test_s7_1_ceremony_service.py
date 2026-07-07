@@ -464,7 +464,9 @@ class S71CeremonyServiceTests(unittest.TestCase):
         self.assertEqual(options["user"]["name"], "founder")
         self.assertRegex(options["user"]["id"], r"^[A-Za-z0-9_-]+$")
         self.assertIn({"type": "public-key", "alg": -7}, options["pubKeyCredParams"])
+        self.assertEqual(options["authenticatorSelection"]["residentKey"], "discouraged")
         self.assertEqual(options["authenticatorSelection"]["userVerification"], "required")
+        self.assertNotIn("authenticatorAttachment", options["authenticatorSelection"])
 
     def test_056_expired_registration_challenge_blocks_finish(self):
         from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
@@ -738,6 +740,10 @@ class S71CeremonyServiceTests(unittest.TestCase):
         self.assertEqual(result.status_code, 200)
         self.assertEqual(result.body["challenge_kind"], "register_backup")
         self.assertEqual(tuple(result.body["exclude_credentials"]), ("cred-primary",))
+        selection = result.body["public_key_options"]["authenticatorSelection"]
+        self.assertEqual(selection["residentKey"], "preferred")
+        self.assertEqual(selection["userVerification"], "required")
+        self.assertNotIn("authenticatorAttachment", selection)
         self.assertIsNotNone(consumed_at)
 
     def test_backup_registration_finish_stores_backup_credential(self):
@@ -791,6 +797,7 @@ class S71CeremonyServiceTests(unittest.TestCase):
                 },
             )
             backup = store.get_credential("cred-backup")
+            state = store.credential_recovery_state()
 
         self.assertEqual(result.status_code, 200)
         self.assertEqual(result.body["registration_class"], "backup")
@@ -799,6 +806,7 @@ class S71CeremonyServiceTests(unittest.TestCase):
         self.assertEqual(backup.credential_kind, "backup")
         self.assertTrue(backup.backup_credential)
         self.assertEqual(backup.distinct_device_confidence, "confirmed_distinct")
+        self.assertEqual(state["backup_credential_state"], "enabled")
 
     def test_backup_registration_without_distinctness_signals_stays_unknown(self):
         from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService

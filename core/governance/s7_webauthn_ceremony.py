@@ -200,7 +200,7 @@ class S7LocalWebAuthnCeremonyService:
                             for credential_ref in exclude_credentials
                         ],
                         "authenticatorSelection": {
-                            "residentKey": "discouraged",
+                            "residentKey": "preferred",
                             "userVerification": "required",
                         },
                     },
