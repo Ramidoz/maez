@@ -36,6 +36,9 @@ from core.infra import paths as _paths
 # directory is created — the store is still only materialized inside
 # S7WebAuthnBootstrapStore on a deliberate ceremony, exactly as before.
 DEFAULT_STORE_ROOT = _paths.memory_dir() / "s7_1_webauthn"
+# A founder-key enrollment intent is the most sensitive time-box in S7:
+# mint it, move to the cockpit, and touch the key within minutes. It must
+# not become a day-long open door.
 MAX_BOOTSTRAP_TTL_MINUTES = 10
 MIN_BOOTSTRAP_TOKEN_BYTES = 16
 
@@ -1645,7 +1648,7 @@ def _build_argparser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     create = sub.add_parser("create")
     create.add_argument("--purpose", required=True, choices=("register_primary",))
-    create.add_argument("--ttl-minutes", type=int, default=10)
+    create.add_argument("--ttl-minutes", type=int, default=5)
     create.add_argument("--store-root", default=str(DEFAULT_STORE_ROOT))
     return parser
 
