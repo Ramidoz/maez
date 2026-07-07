@@ -4497,11 +4497,18 @@ class S7OperatorHealthProjectionTests(unittest.TestCase):
             ],
         )
         by_key = {condition["key"]: condition for condition in projection["conditions"]}
-        self.assertEqual(by_key["repo_green"]["state"], "red")
-        self.assertIn("not wired to a live check yet", by_key["repo_green"]["detail"])
-        self.assertEqual(by_key["dormancy_two_clause"]["state"], "red")
+        self.assertIn(by_key["repo_green"]["state"], {"green", "red"})
+        self.assertRegex(
+            by_key["repo_green"]["detail"],
+            r"receipt (fresh|stale/missing)",
+        )
         self.assertIn(
-            "not wired to a live check yet",
+            by_key["dormancy_two_clause"]["state"],
+            {"green", "red"},
+        )
+        self.assertIn("clause_a", by_key["dormancy_two_clause"]["detail"])
+        self.assertIn(
+            "clause_b",
             by_key["dormancy_two_clause"]["detail"],
         )
 

@@ -188,7 +188,6 @@ PID_FILE = BASE_DIR / "daemon" / "maez.pid"
 SHUTDOWN_FILE = BASE_DIR / "daemon" / "last_shutdown"
 LEDGER_DB_PATH = Path(os.environ.get("MAEZ_LEDGER_DB_PATH") or (MEMORY_DIR / "ledger.db"))
 REPO_GREEN_RECEIPT_PATH = MEMORY_DIR / "repo_green_receipt.json"
-REPO_GREEN_FAILURE_FLOOR = 3
 M1_ALLOWED_PROMOTION_SOURCES = frozenset({"telegram_surface", "telegram_text"})
 
 StoreSpec = collections.namedtuple(
@@ -219,12 +218,18 @@ def _read_repo_green_receipt() -> tuple[bool, str]:
         age = datetime.now(timezone.utc) - finished_at.astimezone(timezone.utc)
         failures = int(receipt.get("failures", 0))
         errors = int(receipt.get("errors", 0))
+        unexpected_failures = receipt.get("unexpected_failures")
+        unexpected_errors = receipt.get("unexpected_errors")
+        known_floor_count = int(receipt.get("known_floor_count", -1))
         worktree_clean = bool(receipt.get("worktree_clean", False))
         if (
             str(receipt.get("commit", "")) != current_head
             or age >= timedelta(hours=24)
-            or failures > REPO_GREEN_FAILURE_FLOOR
-            or errors > 0
+            or unexpected_failures is None
+            or unexpected_errors is None
+            or int(unexpected_failures) > 0
+            or int(unexpected_errors) > 0
+            or known_floor_count != failures + errors
             or not worktree_clean
         ):
             return False, stale_message
@@ -234,7 +239,10 @@ def _read_repo_green_receipt() -> tuple[bool, str]:
     return (
         True,
         f"receipt fresh for HEAD; ran={int(receipt.get('ran', 0))}; "
-        f"failures={failures}; errors={errors}; worktree_clean={worktree_clean}; {floor_note}",
+        f"failures={failures}; errors={errors}; "
+        f"unexpected_failures={int(unexpected_failures)}; "
+        f"unexpected_errors={int(unexpected_errors)}; "
+        f"worktree_clean={worktree_clean}; {floor_note}",
     )
 
 
