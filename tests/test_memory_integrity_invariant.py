@@ -819,6 +819,89 @@ class DaemonHandleMessageContract(unittest.TestCase):
         self.assertNotIn("I don't have a record", reply)
         self.assertNotIn("May 3rd", reply)
 
+    def test_temporal_anchor_enforce_marks_stale_recall_and_thread_as_past(self):
+        from daemon import maez_daemon
+
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+
+        with self._handle_message_mock_stack(
+            maez_daemon,
+            captured,
+            reply="Morning.",
+        ), mock.patch.dict(
+            os.environ,
+            {
+                "MAEZ_RECALL_TRIAD_ENABLED": "0",
+                "MAEZ_TEMPORAL_ANCHOR_SHADOW": "0",
+                "MAEZ_TEMPORAL_ANCHOR_ENFORCE": "1",
+            },
+            clear=False,
+        ), mock.patch(
+            "core.cognition.temporal_anchor.completed_owner_gap_seconds",
+            return_value=(9 * 3600) + 90,
+        ):
+            maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                "Morning!",
+                source="telegram_surface",
+                chat_history=[
+                    {
+                        "content": (
+                            "Rohit: What about yesterday's meeting?\n"
+                            "Maez: Yesterday's meeting still looked pending."
+                        )
+                    }
+                ],
+            )
+
+        prompt_text = "\n".join(str(m.get("content") or "") for m in captured["messages"])
+        self.assertIn("[previous conversation, 9 hours ago - not current]", prompt_text)
+        self.assertIn("MEMORY BLOCK", prompt_text)
+        self.assertIn("Yesterday's meeting still looked pending.", prompt_text)
+
+    def test_temporal_anchor_flags_off_preserves_daemon_prompt_and_skips_gap_read(self):
+        from daemon import maez_daemon
+
+        captured = {}
+        daemon = self._build_daemon_for_handle_message()
+
+        with self._handle_message_mock_stack(
+            maez_daemon,
+            captured,
+            reply="Morning.",
+        ), mock.patch.dict(
+            os.environ,
+            {
+                "MAEZ_RECALL_TRIAD_ENABLED": "0",
+                "MAEZ_TEMPORAL_ANCHOR_SHADOW": "0",
+                "MAEZ_TEMPORAL_ANCHOR_ENFORCE": "0",
+            },
+            clear=False,
+        ), mock.patch(
+            "core.cognition.temporal_anchor.completed_owner_gap_seconds",
+            side_effect=AssertionError("flag-off path must not read elapsed time"),
+        ):
+            maez_daemon.MaezDaemon.handle_message(
+                daemon,
+                "Morning!",
+                source="telegram_surface",
+                chat_history=[
+                    {
+                        "content": (
+                            "Rohit: What about yesterday's meeting?\n"
+                            "Maez: Yesterday's meeting still looked pending."
+                        )
+                    }
+                ],
+            )
+
+        prompt_text = "\n".join(str(m.get("content") or "") for m in captured["messages"])
+        self.assertNotIn("[previous conversation,", prompt_text)
+        self.assertIn("MEMORY BLOCK", prompt_text)
+        self.assertIn("What about yesterday's meeting?", prompt_text)
+        self.assertIn("Yesterday's meeting still looked pending.", prompt_text)
+
     def test_continuity_with_recall_items_does_not_use_truly_empty_guard(self):
         from core.dispatcher.layer1 import RecallItem
         from daemon import maez_daemon

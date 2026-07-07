@@ -7152,6 +7152,12 @@ class MaezDaemon:
             recalled,
             max_chars=_resolve_recall_cap(),
         )
+        try:
+            from core.cognition.temporal_anchor import anchor_prompt_context
+
+            memory_block = anchor_prompt_context(memory_block)
+        except Exception as _temporal_anchor_exc:
+            logger.debug("temporal anchor memory framing skipped: %s", _temporal_anchor_exc)
 
         # Slice 3 wiring: build the evidence envelope so the LLM sees
         # what it MAY claim and what's forbidden BEFORE generation,
@@ -7557,8 +7563,15 @@ class MaezDaemon:
         system_part_capture: list[tuple[str, str]] = [("sys_prompt", sys_prompt)]
         try:
             from core.brain.conversation_history import history_to_messages
+            from core.cognition.temporal_anchor import anchor_prompt_context
 
-            messages.extend(history_to_messages(chat_history))
+            for _history_message in history_to_messages(chat_history):
+                if isinstance(_history_message.get("content"), str):
+                    _history_message = {
+                        **_history_message,
+                        "content": anchor_prompt_context(_history_message["content"]),
+                    }
+                messages.append(_history_message)
         except Exception as _hist_exc:
             logger.debug("chat_history threading skipped: %s", _hist_exc)
         # Tool transcripts are synthesis context, not owner text. Earlier

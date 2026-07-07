@@ -57,6 +57,48 @@ from typing import Any, Optional
 
 logger = logging.getLogger("maez.dream")
 
+_DREAM_HEDGING_OPENERS = (
+    "i'm not sure",
+    "im not sure",
+    "i am not sure",
+    "i can't",
+    "i cannot",
+    "i don't know",
+    "i do not know",
+    "as an ai",
+    "as a language model",
+    "i'm unable",
+    "i am unable",
+)
+
+_DREAM_REFERENT_STOPWORDS = {
+    "about",
+    "abstract",
+    "again",
+    "because",
+    "being",
+    "could",
+    "feels",
+    "filler",
+    "important",
+    "maybe",
+    "might",
+    "notice",
+    "noticed",
+    "pattern",
+    "perhaps",
+    "really",
+    "right",
+    "seems",
+    "something",
+    "sure",
+    "that",
+    "there",
+    "thing",
+    "this",
+    "would",
+}
+
 
 # 2026-04-23 Commit 6: was a hardcoded "gemma4:26b" string despite the
 # comment claiming it reused the daemon's model. Now actually reads the
@@ -175,6 +217,28 @@ def _emit_dream_consolidation_telemetry(
         )
     except Exception as exc:
         logger.debug("dream consolidation telemetry skipped: %s", exc)
+
+
+def _dream_sentence_count(text: str) -> int:
+    return len(re.findall(r"[^.!?]+[.!?]+", text.strip()))
+
+
+def _dream_has_concrete_referent(text: str) -> bool:
+    if re.search(r"(`[^`]+`|/[A-Za-z0-9_.\-/]+|[A-Z][A-Za-z0-9_]{2,}|\d)", text):
+        return True
+    words = re.findall(r"[a-zA-Z][a-zA-Z0-9_-]{3,}", text.lower())
+    concrete = [word for word in words if word not in _DREAM_REFERENT_STOPWORDS]
+    return len(concrete) >= 2
+
+
+def _dream_insight_shaped(text: str) -> bool:
+    stripped = text.strip()
+    lowered = stripped.lower()
+    if _dream_sentence_count(stripped) < 2:
+        return False
+    if lowered.startswith(_DREAM_HEDGING_OPENERS):
+        return False
+    return _dream_has_concrete_referent(stripped)
 
 
 TRAINING_EVAL_COOLDOWN_S = 86400.0  # 24 hours between training proposals
@@ -486,6 +550,18 @@ class DreamState:
                 rails_blocked=1,
                 status="skipped",
                 reason="too_short",
+            )
+            return None
+
+        if not _dream_insight_shaped(insight):
+            logger.info("dream: insight not shaped as concrete insight, skipping")
+            _emit_dream_consolidation_telemetry(
+                started_mono=started_mono,
+                inputs_count=len(docs),
+                outputs_count=0,
+                rails_blocked=1,
+                status="skipped",
+                reason="not_insight_shaped",
             )
             return None
 
