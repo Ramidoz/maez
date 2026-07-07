@@ -1,0 +1,24 @@
+# Maez watchdog user unit.
+# Install after this file is present in the live repo:
+#   systemctl --user enable --now /home/rohit/maez/scripts/maez-watchdog.service
+
+[Unit]
+Description=Maez independent watchdog for maez.service
+Documentation=file:///home/rohit/maez/skills/maez_watchdog.py
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/rohit/maez
+Environment=PYTHONUNBUFFERED=1
+Environment=MAEZ_HOME=/home/rohit/maez
+ExecStart=/home/rohit/maez/.venv/bin/python3 /home/rohit/maez/skills/maez_watchdog.py
+Restart=always
+RestartSec=30
+TimeoutStartSec=30
+StandardOutput=append:/home/rohit/maez/logs/maez_watchdog.log
+StandardError=append:/home/rohit/maez/logs/maez_watchdog.log
+
+[Install]
+WantedBy=default.target

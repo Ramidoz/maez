@@ -9,12 +9,12 @@ Works completely independently of Maez.
 
 import logging
 import subprocess
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
 
 import requests
-import sys
 
 _MAEZ_HOME_PATH = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_MAEZ_HOME_PATH))
@@ -26,6 +26,8 @@ LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 POLL_INTERVAL = 60  # seconds
 SSH_HOST = "rohit@maez.live"
+OPERATOR_HEALTH_URL = "http://127.0.0.1:11435/operator/health"
+FULL_HEALTH_URL = "http://127.0.0.1:11435/health"
 
 # --- Logging ---
 logger = logging.getLogger("maez_watchdog")
@@ -41,13 +43,17 @@ logger.addHandler(stream)
 
 
 def is_maez_active() -> bool:
-    """Check if maez.service is active."""
+    """Check if maez.service is active and its HTTP health endpoint is alive."""
     try:
         result = subprocess.run(
             ["systemctl", "is-active", "maez.service"],
             capture_output=True, text=True, timeout=5,
         )
-        return result.stdout.strip() == "active"
+        if result.stdout.strip() != "active":
+            return False
+        resp = requests.get(OPERATOR_HEALTH_URL, timeout=3)
+        data = resp.json()
+        return data.get("route") == "/operator/health" and data.get("service_mode") == "running"
     except Exception:
         return False
 
@@ -55,7 +61,7 @@ def is_maez_active() -> bool:
 def get_cycle_count() -> str:
     """Try to get Maez's cycle count from health endpoint."""
     try:
-        resp = requests.get("http://localhost:11435/health", timeout=3)
+        resp = requests.get(FULL_HEALTH_URL, timeout=3)
         data = resp.json()
         return str(data.get("cycle_count", "?"))
     except Exception:

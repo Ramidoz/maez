@@ -19,11 +19,14 @@ Coverage targets from the v1 spec:
 from __future__ import annotations
 
 import json
+import errno
+import os
 import sqlite3
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _REPO = Path(__file__).resolve().parent.parent
 if str(_REPO) not in sys.path:
@@ -352,6 +355,53 @@ class TestAtomicCompletion(unittest.TestCase):
         # Final snapshot path must not exist.
         final = dst_root / "2026-04-30T13-00-00"
         self.assertFalse(final.exists())
+
+    def test_empty_manifest_refuses_successful_empty_backup(self):
+        from scripts.backup.backup import run_backup
+        from scripts.backup.inventory import BackupInventoryError
+
+        with tempfile.TemporaryDirectory() as td:
+            src_root = Path(td) / "src"
+            dst_root = Path(td) / "backups"
+            src_root.mkdir()
+
+            with self.assertRaises(BackupInventoryError):
+                run_backup(
+                    source_root=src_root,
+                    backup_root=dst_root,
+                    manifest={"version": 1, "entries": []},
+                    include_secrets=False,
+                    timestamp="2026-04-30T13-30-00",
+                )
+
+            self.assertFalse((dst_root / "2026-04-30T13-30-00").exists())
+
+    def test_cross_device_finalize_error_fails_instead_of_non_atomic_move(self):
+        from scripts.backup.backup import run_backup
+
+        with tempfile.TemporaryDirectory() as td:
+            src_root = Path(td) / "src"
+            dst_root = Path(td) / "backups"
+            _make_synthetic_state(src_root)
+
+            def raise_exdev(self, target):
+                raise OSError(errno.EXDEV, os.strerror(errno.EXDEV))
+
+            with (
+                mock.patch.object(Path, "rename", raise_exdev),
+                mock.patch("scripts.backup.backup.shutil.move") as move,
+                self.assertRaises(OSError),
+            ):
+                run_backup(
+                    source_root=src_root,
+                    backup_root=dst_root,
+                    manifest=_synthetic_manifest(),
+                    include_secrets=False,
+                    timestamp="2026-04-30T13-45-00",
+                )
+
+            move.assert_not_called()
+            self.assertFalse((dst_root / "2026-04-30T13-45-00").exists())
 
 
 # ── manifest sha256 ────────────────────────────────────────────────

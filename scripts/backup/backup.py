@@ -209,6 +209,10 @@ def run_backup(
         resolved = resolve_inventory(
             manifest, src_root, include_secrets=include_secrets,
         )
+        if not resolved:
+            raise BackupInventoryError(
+                "backup inventory resolved zero paths; refusing successful empty backup"
+            )
 
         staging.mkdir(parents=True, exist_ok=True)
 
@@ -260,21 +264,11 @@ def run_backup(
             encoding="utf-8",
         )
 
-        # Atomic rename to the final destination. If staging and
-        # final live on different filesystems (operator points
-        # MAEZ_BACKUP_ROOT at a NAS / external drive), Path.rename
-        # raises OSError(EXDEV) because rename is per-FS atomic only.
-        # Fall back to shutil.move which handles cross-device, then
-        # remove the staging dir. Atomicity is weaker on cross-device
-        # but better than failing every backup.
+        # Atomic rename to the final destination. If this ever becomes
+        # cross-device, fail loudly instead of publishing a non-atomic
+        # finalized snapshot that could masquerade as covenant-safe.
         final.parent.mkdir(parents=True, exist_ok=True)
-        import errno
-        try:
-            staging.rename(final)
-        except OSError as e:
-            if e.errno != errno.EXDEV:
-                raise
-            shutil.move(str(staging), str(final))
+        staging.rename(final)
         log_status = "success"
     except Exception as e:
         log_error = f"{type(e).__name__}: {e}"
