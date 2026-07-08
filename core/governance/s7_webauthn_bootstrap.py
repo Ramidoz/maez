@@ -1343,10 +1343,19 @@ class S7WebAuthnBootstrapStore:
             )
         return record_id
 
-    def refusal_history_for_envelope(self, envelope: Any) -> tuple[Any, ...]:
+    def refusal_history_for_envelope(
+        self,
+        envelope: Any,
+        *,
+        now: str | None = None,
+        window_seconds: int = 900,
+    ) -> tuple[Any, ...]:
         from core.governance import operator_user_boundary as s7
 
         group = getattr(envelope, "derived_aggregation_group", "")
+        cutoff = None
+        if now is not None:
+            cutoff = _parse_time(now) - timedelta(seconds=window_seconds)
         with closing(self._conn()) as conn:
             rows = conn.execute(
                 """
@@ -1359,6 +1368,12 @@ class S7WebAuthnBootstrapStore:
                 """,
                 (group,),
             ).fetchall()
+        if cutoff is not None:
+            rows = [
+                row
+                for row in rows
+                if _parse_time(row["created_at"]) > cutoff
+            ]
         return tuple(
             s7.S7RequestHistoryRecord(
                 request_id=row["request_id"],

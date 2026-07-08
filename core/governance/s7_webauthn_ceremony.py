@@ -586,7 +586,7 @@ class S7LocalWebAuthnCeremonyService:
             return voice
         aggregation = authorization_aggregation_recheck(
             envelope=envelope,
-            history=store.refusal_history_for_envelope(envelope),
+            history=store.refusal_history_for_envelope(envelope, now=now),
         )
         if aggregation.status_code != 200:
             return aggregation

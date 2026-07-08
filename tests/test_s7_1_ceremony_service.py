@@ -1082,6 +1082,39 @@ class S71CeremonyServiceTests(unittest.TestCase):
         self.assertIn("repeated_reask_after_refusal", assessment.signals)
         self.assertIn(assessment.decision, {"escalate", "block"})
 
+    def test_refusal_history_for_envelope_filters_by_time_window_when_now_provided(self):
+        from dataclasses import replace
+        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = S7WebAuthnBootstrapStore(Path(tmp) / "s7_1_webauthn")
+            envelope = self._self_mod_envelope()
+            aged = replace(envelope, request_id="req-s7-1-aged-auth")
+            fresh = replace(envelope, request_id="req-s7-1-fresh-auth")
+            now = "2026-05-18T11:00:00+00:00"
+
+            store.record_authorization_history(
+                envelope=aged,
+                rendered_text_hash="c" * 64,
+                requester_ref="founder-local-browser",
+                created_at="2026-05-18T10:44:59+00:00",
+            )
+            store.record_authorization_history(
+                envelope=fresh,
+                rendered_text_hash="d" * 64,
+                requester_ref="founder-local-browser",
+                created_at="2026-05-18T10:45:01+00:00",
+            )
+
+            filtered = store.refusal_history_for_envelope(envelope, now=now)
+            full = store.refusal_history_for_envelope(envelope)
+
+        self.assertEqual([record.request_id for record in filtered], ["req-s7-1-fresh-auth"])
+        self.assertEqual(
+            [record.request_id for record in full],
+            ["req-s7-1-aged-auth", "req-s7-1-fresh-auth"],
+        )
+
     def test_authorization_voice_recheck_blocks_maez_objection(self):
         from core.governance.s7_webauthn_ceremony import authorization_voice_seat_recheck
 
