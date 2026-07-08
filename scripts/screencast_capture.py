@@ -89,6 +89,22 @@ def _safe_unlink(path: str | None) -> None:
         pass
 
 
+def _debug_enabled() -> bool:
+    return os.environ.get("MAEZ_SCREENCAST_DEBUG", "").strip().lower() not in (
+        "",
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+
+
+def _debug(message: str) -> None:
+    if _debug_enabled():
+        sys.stderr.write(f"{message}\n")
+        sys.stderr.flush()
+
+
 def revoke() -> dict:
     """Hard revoke: withdraw the eye by deleting the token and drawing curtain."""
     try:
@@ -112,16 +128,30 @@ def _capture_live() -> dict:
     t0 = time.time()
     tmp = tempfile.mktemp(prefix=TEMP_PREFIX, suffix=".png")
     try:
-        node_id, fd, new_token = _portal_screencast_session(_load_token())
-        if new_token:
-            _save_token(new_token)
+        restore_token = _load_token()
+        node_id, fd, new_token = _portal_screencast_session(restore_token)
         if node_id is None or fd is None:
             _safe_unlink(tmp)
             return _result(
                 status="needs_grant",
                 duration_ms=int((time.time() - t0) * 1000),
             )
-        _grab_one_frame_pipewire(fd, node_id, tmp)
+        try:
+            _grab_one_frame_pipewire(fd, node_id, tmp)
+        except _StageError as exc:
+            if exc.stage != "gst" or not restore_token:
+                raise
+            _debug("restore-token capture failed in gst; retrying without restore token")
+            _safe_unlink(TOKEN_PATH)
+            _safe_unlink(tmp)
+            node_id, fd, new_token = _portal_screencast_session(None)
+            if node_id is None or fd is None:
+                _safe_unlink(tmp)
+                return _result(
+                    status="needs_grant",
+                    duration_ms=int((time.time() - t0) * 1000),
+                )
+            _grab_one_frame_pipewire(fd, node_id, tmp)
         size = os.path.getsize(tmp) if os.path.exists(tmp) else 0
         if size <= 0:
             _safe_unlink(tmp)
@@ -130,6 +160,8 @@ def _capture_live() -> dict:
                 error_class="gst",
                 duration_ms=int((time.time() - t0) * 1000),
             )
+        if new_token:
+            _save_token(new_token)
         return _result(
             status="ok",
             temp_path=tmp,
@@ -147,7 +179,7 @@ def _capture_live() -> dict:
         _safe_unlink(tmp)
         return _result(
             status="capture_failed",
-            error_class="gst",
+            error_class="portal",
             duration_ms=int((time.time() - t0) * 1000),
         )
 
@@ -356,13 +388,18 @@ def _grab_one_frame_pipewire(fd: int, node_id: int, tmp: str) -> None:
     Gst.init(None)
     pipeline = None
     try:
-        pipeline = Gst.parse_launch(
+        pipeline_string = (
             "pipewiresrc fd={fd} path={node} num-buffers=1 "
-            "! videoconvert ! pngenc ! filesink location={tmp}".format(
-                fd=int(fd),
-                node=int(node_id),
-                tmp=tmp,
-            )
+            "! videoconvert ! pngenc ! filesink location={tmp}"
+        ).format(
+            fd=int(fd),
+            node=int(node_id),
+            tmp=tmp,
+        )
+        _debug(f"pipewire node_id={int(node_id)} fd={int(fd)}")
+        _debug(f"gst pipeline={pipeline_string}")
+        pipeline = Gst.parse_launch(
+            pipeline_string
         )
         bus = pipeline.get_bus()
         pipeline.set_state(Gst.State.PLAYING)
@@ -373,6 +410,12 @@ def _grab_one_frame_pipewire(fd: int, node_id: int, tmp: str) -> None:
         if message is None:
             raise _StageError("timeout")
         if message.type == Gst.MessageType.ERROR:
+            if _debug_enabled():
+                err, debug = message.parse_error()
+                src = message.src.get_name() if message.src else ""
+                _debug(f"gst error element={src} message={err.message}")
+                if debug:
+                    _debug(f"gst debug={debug}")
             raise _StageError("gst")
     except _StageError:
         raise

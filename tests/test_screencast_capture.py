@@ -118,6 +118,58 @@ class NoLeakTests(unittest.TestCase):
         self.assertNotIn(secret, json.dumps(out))
 
 
+class LiveFailureRecoveryTests(unittest.TestCase):
+    def test_restore_token_gst_failure_retries_once_without_token(self):
+        d = tempfile.mkdtemp()
+        token_path = os.path.join(d, "tok")
+        tmp_path = os.path.join(d, "frame.png")
+        session_calls = []
+        grab_calls = []
+
+        def fake_session(token):
+            session_calls.append(token)
+            if len(session_calls) == 1:
+                return 41, 8, None
+            return 42, 9, "fresh-token"
+
+        def fake_grab(fd, node_id, tmp):
+            grab_calls.append((fd, node_id))
+            if len(grab_calls) == 1:
+                raise sc._StageError("gst")
+            with open(tmp, "wb") as f:
+                f.write(b"PNGDATA")
+
+        with mock.patch.object(sc, "TOKEN_PATH", token_path), mock.patch.object(
+            sc,
+            "_curtain_drawn",
+            return_value=False,
+        ), mock.patch.object(sc.tempfile, "mktemp", return_value=tmp_path), mock.patch.object(
+            sc,
+            "_portal_screencast_session",
+            side_effect=fake_session,
+        ), mock.patch.object(sc, "_grab_one_frame_pipewire", side_effect=fake_grab):
+            sc._save_token("stale-token")
+            out = sc.capture()
+
+        self.assertEqual(out["status"], "ok")
+        self.assertEqual(out["bytes"], 7)
+        self.assertEqual(session_calls, ["stale-token", None])
+        self.assertEqual(grab_calls, [(8, 41), (9, 42)])
+        with open(token_path, encoding="utf-8") as f:
+            self.assertEqual(f.read().strip(), "fresh-token")
+
+    def test_portal_setup_exception_classifies_as_portal_not_gst(self):
+        with mock.patch.object(sc, "_curtain_drawn", return_value=False), mock.patch.object(
+            sc,
+            "_portal_screencast_session",
+            side_effect=RuntimeError("Could not connect: Operation not permitted"),
+        ):
+            out = sc.capture()
+
+        self.assertEqual(out["status"], "capture_failed")
+        self.assertEqual(out["error_class"], "portal")
+
+
 class PortalWaitTests(unittest.TestCase):
     def test_portal_request_subscribes_before_calling_fast_method(self):
         events = []
