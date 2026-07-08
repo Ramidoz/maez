@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 
 from core.tool_loop import (
@@ -132,6 +133,147 @@ class WonderingsRoundTrip(unittest.TestCase):
         picked = self.store.pick_next()
         self.assertEqual(picked["id"], wid)
         self.assertEqual(picked["status"], "open")
+
+    def test_add_with_citations_rolls_back_when_sidecar_insert_fails(self):
+        real_conn = self.store._conn
+
+        class SidecarFailingConnection:
+            def __init__(self, inner):
+                self._inner = inner
+
+            def execute(self, sql, *args, **kwargs):
+                if "INSERT INTO wondering_citations" in " ".join(sql.split()):
+                    raise RuntimeError("forced sidecar insert failure")
+                return self._inner.execute(sql, *args, **kwargs)
+
+            def __getattr__(self, name):
+                return getattr(self._inner, name)
+
+        @contextmanager
+        def failing_conn():
+            with real_conn() as c:
+                yield SidecarFailingConnection(c)
+
+        self.store._conn = failing_conn
+        try:
+            with self.assertRaisesRegex(RuntimeError, "forced sidecar"):
+                self.store.add_with_citations(
+                    "what did the day leave unresolved?",
+                    source="digestion",
+                    row_citations=[
+                        {"turn_id": "turn-1", "chain_position": 1},
+                    ],
+                    taint_labels=["self_generated"],
+                    receipt_id="receipt-1",
+                    bond_id="bond-a",
+                )
+        finally:
+            self.store._conn = real_conn
+
+        self.assertEqual(self.store.list_all(), [])
+        with real_conn() as c:
+            count = c.execute(
+                "SELECT COUNT(*) FROM wondering_citations"
+            ).fetchone()[0]
+        self.assertEqual(count, 0)
+
+    def test_add_with_citations_round_trips_sidecar_exactly(self):
+        row_citations = [
+            {"turn_id": "turn-1", "chain_position": 7},
+            {"turn_id": "turn-2", "chain_position": 8},
+        ]
+        taint_labels = ["self_generated", "tool_output"]
+
+        wid = self.store.add_with_citations(
+            "what pattern should Maez keep sitting with?",
+            source="digestion",
+            row_citations=row_citations,
+            taint_labels=taint_labels,
+            receipt_id="receipt-42",
+            bond_id="bond-a",
+        )
+
+        got = self.store.get(wid)
+        self.assertEqual(got["source"], "digestion")
+        self.assertEqual(got["bond_id"], "bond-a")
+        citations = self.store.citations_for(wid)
+        self.assertEqual(citations["wondering_id"], wid)
+        self.assertEqual(citations["row_citations"], row_citations)
+        self.assertEqual(citations["taint_labels"], taint_labels)
+        self.assertEqual(citations["receipt_id"], "receipt-42")
+
+    def test_digestion_wondering_without_sidecar_is_invalid(self):
+        wid = self.store.add("uncited digestion question", source="digestion")
+
+        with self.assertRaises(ValueError) as caught:
+            self.store.assert_citation_integrity()
+
+        self.assertEqual(getattr(caught.exception, "wondering_ids", None), [wid])
+
+    def test_existing_add_callers_do_not_need_sidecar(self):
+        wid = self.store.add("manual question", source="manual")
+
+        self.assertIsNone(self.store.citations_for(wid))
+        self.store.assert_citation_integrity()
+        self.assertEqual(self.store.get(wid)["question"], "manual question")
+
+    def test_add_with_citations_rejects_unknown_taint_label(self):
+        with self.assertRaisesRegex(ValueError, "unknown taint labels"):
+            self.store.add_with_citations(
+                "bad taint",
+                source="digestion",
+                row_citations=[{"turn_id": "turn-1"}],
+                taint_labels=["not_from_s1"],
+                receipt_id="receipt-bad",
+            )
+
+    def test_add_with_citations_rejects_capped_citation_summaries(self):
+        capped_payloads = [
+            ["turn-1", ",+3"],
+            ["turn-1,turn-2,+3"],
+            [{"turn_id": "turn-1", "summary": "+3 more"}],
+        ]
+        for row_citations in capped_payloads:
+            with self.subTest(row_citations=row_citations):
+                with self.assertRaisesRegex(ValueError, "complete"):
+                    self.store.add_with_citations(
+                        "capped citations",
+                        source="digestion",
+                        row_citations=row_citations,
+                        taint_labels=["self_generated"],
+                        receipt_id="receipt-capped",
+                    )
+
+    def test_add_with_citations_requires_non_empty_row_citation_list(self):
+        invalid_payloads = [None, [], {}, "turn-1"]
+        for row_citations in invalid_payloads:
+            with self.subTest(row_citations=row_citations):
+                with self.assertRaisesRegex(ValueError, "non-empty list"):
+                    self.store.add_with_citations(
+                        "bad citations",
+                        source="digestion",
+                        row_citations=row_citations,
+                        taint_labels=["self_generated"],
+                        receipt_id="receipt-empty",
+                    )
+
+    def test_add_with_citations_requires_each_citation_to_name_turn_id(self):
+        invalid_payloads = [
+            [""],
+            [{}],
+            [{"chain_position": 1}],
+            [{"turn_id": ""}],
+        ]
+        for row_citations in invalid_payloads:
+            with self.subTest(row_citations=row_citations):
+                with self.assertRaisesRegex(ValueError, "turn_id"):
+                    self.store.add_with_citations(
+                        "unnamed citations",
+                        source="digestion",
+                        row_citations=row_citations,
+                        taint_labels=["self_generated"],
+                        receipt_id="receipt-unnamed",
+                    )
 
     def test_record_probe_flips_open_to_active(self):
         wid = self.store.add("q", source="test")

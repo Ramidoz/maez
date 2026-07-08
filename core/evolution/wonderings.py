@@ -19,6 +19,7 @@ from core.paths.wonderings_db().
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 import sqlite3
@@ -26,9 +27,10 @@ import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 from core import paths
+from core.ledger.taint_stamping import ALLOWED_TAINT_LABELS, TAINT_LABEL_ORDER
 
 logger = logging.getLogger("maez.wonderings")
 
@@ -89,6 +91,17 @@ LEARNING_SYNTH_TIMEOUT = "(synthesis skipped — no time left this cycle)"
 DEFERRAL_BLOCK_THRESHOLD = 2
 
 
+class WonderingCitationIntegrityError(ValueError):
+    """Raised when digestion-sourced wonderings are missing citation sidecars."""
+
+    def __init__(self, wondering_ids: list[int]):
+        self.wondering_ids = wondering_ids
+        super().__init__(
+            "digestion wonderings missing citation sidecars: "
+            f"{wondering_ids!r}"
+        )
+
+
 # ── helpers: evidence validation + excerpt ────────────────────────────
 def stdout_excerpt(stdout: str, limit: int = 200) -> str:
     """Verbatim first N chars of stdout. Never reformatted, stored for
@@ -105,6 +118,66 @@ def _tokens(text: str) -> set[str]:
         return set()
     raw = re.findall(r"[a-zA-Z0-9_]{2,}", text.lower())
     return {t for t in raw if t not in _STOP_WORDS}
+
+
+def _canonical_taint_labels(labels: Iterable[str]) -> tuple[str, ...]:
+    """Validate S1 taint labels and return them in S1 canonical order."""
+    if labels is None:
+        raise ValueError("taint_labels is required")
+    if isinstance(labels, (str, bytes)):
+        raise ValueError("taint_labels must be a sequence of labels")
+    raw = list(labels)
+    if any(not isinstance(label, str) for label in raw):
+        raise ValueError("all taint labels must be strings")
+    label_set = set(raw)
+    if len(label_set) != len(raw):
+        raise ValueError("taint_labels must not contain duplicates")
+    unknown = sorted(label_set - ALLOWED_TAINT_LABELS)
+    if unknown:
+        raise ValueError(f"unknown taint labels {unknown!r}")
+    return tuple(label for label in TAINT_LABEL_ORDER if label in label_set)
+
+
+def _encode_citation_json(value) -> str:
+    try:
+        return json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+    except TypeError as exc:
+        raise ValueError("row_citations must be JSON-serializable") from exc
+
+
+def _contains_capped_citation_summary(value) -> bool:
+    if isinstance(value, str):
+        stripped = value.strip()
+        return bool(re.search(r"(?:^|[,\s])\+(\d+|n)\b", stripped, re.IGNORECASE))
+    if isinstance(value, dict):
+        return any(_contains_capped_citation_summary(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_contains_capped_citation_summary(v) for v in value)
+    return False
+
+
+def _validate_row_citations(row_citations) -> None:
+    if not isinstance(row_citations, list) or not row_citations:
+        raise ValueError("row_citations must be a non-empty list")
+    if _contains_capped_citation_summary(row_citations):
+        raise ValueError(
+            "row_citations must be complete; capped +N summaries are forbidden"
+        )
+    for citation in row_citations:
+        if isinstance(citation, str):
+            if not citation.strip():
+                raise ValueError("each row citation must name a turn_id")
+            continue
+        if isinstance(citation, dict):
+            turn_id = citation.get("turn_id")
+            if isinstance(turn_id, str) and turn_id.strip():
+                continue
+        raise ValueError("each row citation must name a turn_id")
 
 
 def validate_learning(
@@ -295,6 +368,17 @@ class Wonderings:
                 """
             )
             c.execute(
+                """
+                CREATE TABLE IF NOT EXISTS wondering_citations (
+                    wondering_id            INTEGER PRIMARY KEY
+                                                REFERENCES wonderings(id),
+                    row_citations_json      TEXT NOT NULL,
+                    taint_labels_json       TEXT NOT NULL,
+                    receipt_id              TEXT NOT NULL
+                )
+                """
+            )
+            c.execute(
                 "CREATE INDEX IF NOT EXISTS ix_wonderings_status "
                 "ON wonderings (status, last_advanced)"
             )
@@ -329,6 +413,52 @@ class Wonderings:
                         wid, source, question[:80])
             return wid
 
+    def add_with_citations(
+        self,
+        question: str,
+        *,
+        source: str,
+        row_citations,
+        taint_labels: Iterable[str],
+        receipt_id: str,
+        bond_id: str = "_LEGACY",
+    ) -> int:
+        """Add a wondering and its citation sidecar in one transaction."""
+        question = (question or "").strip()
+        if not question:
+            raise ValueError("question cannot be empty")
+        if not isinstance(bond_id, str) or not bond_id:
+            raise ValueError("bond_id must be a non-empty string")
+        if not isinstance(source, str) or not source:
+            raise ValueError("source must be a non-empty string")
+        if not isinstance(receipt_id, str) or not receipt_id:
+            raise ValueError("receipt_id must be a non-empty string")
+        _validate_row_citations(row_citations)
+        row_citations_json = _encode_citation_json(row_citations)
+        ordered_taint_labels = _canonical_taint_labels(taint_labels)
+        taint_labels_json = json.dumps(
+            list(ordered_taint_labels),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+        with self._lock, self._conn() as c:
+            cur = c.execute(
+                "INSERT INTO wonderings (created_at, question, source, bond_id) "
+                "VALUES (?, ?, ?, ?)",
+                (time.time(), question, source, bond_id),
+            )
+            wid = cur.lastrowid
+            c.execute(
+                "INSERT INTO wondering_citations "
+                "(wondering_id, row_citations_json, taint_labels_json, receipt_id) "
+                "VALUES (?, ?, ?, ?)",
+                (wid, row_citations_json, taint_labels_json, receipt_id),
+            )
+            logger.info("wondering added #%d (source=%s): %s",
+                        wid, source, question[:80])
+            return wid
+
     def get(self, wondering_id: int) -> Optional[dict]:
         with self._lock, self._conn() as c:
             row = c.execute(
@@ -349,6 +479,40 @@ class Wonderings:
                 (limit,),
             ).fetchall()
             return [dict(r) for r in rows]
+
+    def citations_for(self, wondering_id: int) -> Optional[dict]:
+        """Return decoded citation sidecar for a wondering, if present."""
+        with self._lock, self._conn() as c:
+            row = c.execute(
+                "SELECT * FROM wondering_citations WHERE wondering_id = ?",
+                (wondering_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "wondering_id": row["wondering_id"],
+            "row_citations": json.loads(row["row_citations_json"]),
+            "taint_labels": json.loads(row["taint_labels_json"]),
+            "receipt_id": row["receipt_id"],
+        }
+
+    def assert_citation_integrity(self) -> None:
+        """Fail if any digestion-sourced wondering lacks a sidecar row."""
+        with self._lock, self._conn() as c:
+            rows = c.execute(
+                """
+                SELECT w.id
+                  FROM wonderings AS w
+             LEFT JOIN wondering_citations AS wc
+                    ON wc.wondering_id = w.id
+                 WHERE w.source = 'digestion'
+                   AND wc.wondering_id IS NULL
+                 ORDER BY w.id ASC
+                """
+            ).fetchall()
+        missing = [int(row["id"]) for row in rows]
+        if missing:
+            raise WonderingCitationIntegrityError(missing)
 
     def list_by_source(self, source: str) -> list[dict]:
         """All wonderings with an exact source, oldest first."""
