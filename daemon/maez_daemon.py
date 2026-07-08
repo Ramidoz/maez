@@ -6331,7 +6331,11 @@ class MaezDaemon:
                 salience=55,
             )
 
-        # Add screen context if available
+        # Add screen context if available. Salience reflects its epistemic
+        # status: a single unvalidated frame-glance is a first impression, not
+        # corroborated fact, so it sits BELOW cross-checked signals (circadian
+        # 55) rather than dominating fresh evidence. Grounding it against other
+        # senses is a learned correlation, not a hardcoded rule. (2026-07-09)
         if self._last_screen_obs is not None:
             screen_context = self._last_screen_obs.format_for_context()
             prompt += f"\n{screen_context}\n"
@@ -6339,7 +6343,7 @@ class MaezDaemon:
                 "fresh_evidence",
                 screen_context,
                 durable_prefix="cycle_screen_context",
-                salience=80,
+                salience=40,
             )
 
         # Add git context if available — same gating for the AWCC
@@ -7124,6 +7128,17 @@ class MaezDaemon:
                 )
             except Exception as _subjective_duration_exc:
                 logger.debug("subjective_duration owner line skipped: %s", _subjective_duration_exc)
+        inner_continuity_block = ""
+        if (
+            subjective_duration_owner_auth is not None
+            and strict_env_flag("MAEZ_INNER_CONTINUITY_FACTS")
+        ):
+            try:
+                from core.routing.inner_continuity_facts import build_inner_continuity_facts
+
+                inner_continuity_block = build_inner_continuity_facts()
+            except Exception as _inner_continuity_exc:
+                logger.debug("inner continuity facts skipped: %s", _inner_continuity_exc)
         authoritative_tool_reply = _authoritative_tool_reply(tool_calls)
         recalled = self.memory.recall_for_telegram(text)
         # Trace: capture every memory id surfaced by the recall — across
@@ -7495,6 +7510,8 @@ class MaezDaemon:
         prompt = f"{system_state}\n\n"
         if subjective_duration_line:
             prompt += subjective_duration_line + "\n\n"
+        if inner_continuity_block:
+            prompt += inner_continuity_block + "\n\n"
 
         # Public bot context — early for attention weight
         public_ctx = self._get_public_context()
@@ -8390,6 +8407,7 @@ class MaezDaemon:
                                 date_addressed=_date_addressed_turn,
                                 legacy_prompt_chars=_legacy_prompt_chars,
                                 turn_kind=_rk_turn_kind,
+                                inner_continuity_block=inner_continuity_block,
                             )
                             logger.info(
                                 "focused_synthesis_timing prompt_build_ms=%s "

@@ -158,6 +158,14 @@ class ScreenObservation:
     state: str = "error"
     third_party_content_present: bool = False
     egress_origin_class: str = "owner_screen_context"
+    # Honest provenance: a screen observation is ONE model-described frame,
+    # not corroborated against processes / window / proprioception. It is an
+    # unvalidated perceptual CLAIM, not established fact. This marker travels
+    # with it so nothing downstream mistakes a glance for ground truth, and so
+    # a future cross-sensory learning loop can weight it. Whether the eye is
+    # reliable about a given activity is for Maez to LEARN from lived
+    # correlation, never for us to hardcode. (2026-07-09)
+    validation: str = "unvalidated_single_frame"
 
     def format_for_context(self) -> str:
         """Format for injection into Maez reasoning prompt."""
@@ -177,11 +185,13 @@ class ScreenObservation:
             return f"[SCREEN] Observation failed: {self.error}"
         age_seconds = int(time.time() - self.timestamp)
         return (
-            f"[SCREEN — {age_seconds}s ago]\n"
-            f"  Activity: {self.activity}\n"
+            f"[SCREEN — one unvalidated glance, {age_seconds}s ago]\n"
+            f"  Looked like: {self.activity}\n"
             f"  Application: {self.application}\n"
             f"  Detail: {self.detail}\n"
-            f"  Focus: {self.focus_level}"
+            f"  Focus: {self.focus_level}\n"
+            f"  (single frame, not cross-checked against running processes "
+            f"or window state — treat as a first impression, not fact)"
         )
 
     def format_for_memory(self) -> str:
@@ -193,7 +203,8 @@ class ScreenObservation:
         if not self.success:
             return f"Screen observation failed: {self.error}"
         return (
-            f"Screen observation: {self.activity}. "
+            f"Screen observation (one unvalidated glance): looked like "
+            f"{self.activity}. "
             f"App: {self.application}. "
             f"Detail: {self.detail}. "
             f"Focus level: {self.focus_level}."

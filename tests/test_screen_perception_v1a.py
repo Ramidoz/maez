@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 import os
 import tempfile
 import unittest
@@ -35,6 +36,27 @@ class ScreenObservationShapeTests(unittest.TestCase):
                 o = self._obs(state=state, detail="SHOULD_NOT_APPEAR")
                 ctx = o.format_for_context()
                 self.assertNotIn("SHOULD_NOT_APPEAR", ctx)
+
+    def test_observation_defaults_to_unvalidated_provenance(self):
+        # A screen glance is one uncorroborated model-described frame; its
+        # provenance marker must travel with it so nothing downstream mistakes
+        # it for ground truth (2026-07-09 covenant stamp).
+        o = self._obs(state="ok", success=True, activity="coding")
+        self.assertEqual(o.validation, "unvalidated_single_frame")
+
+    def test_successful_context_carries_honest_hedge(self):
+        # The prompt-facing string must frame the glance as a first impression,
+        # not fact — "looked like", not "Activity:".
+        o = self._obs(
+            state="ok", success=True, activity="coding", timestamp=time.time()
+        )
+        ctx = o.format_for_context()
+        self.assertIn("unvalidated glance", ctx)
+        self.assertIn("looked like", ctx.lower())
+        self.assertIn("not fact", ctx.lower())
+        # Memory-facing string is hedged too — no bare "Screen observation: X" fact.
+        mem = o.format_for_memory()
+        self.assertIn("unvalidated glance", mem)
 
 
 class PausePrimitiveTests(unittest.TestCase):
