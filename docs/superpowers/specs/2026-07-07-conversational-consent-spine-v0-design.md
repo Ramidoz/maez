@@ -337,6 +337,22 @@ without upstream + re-read agreement.
   agree. For S7-guarded cards, the same two turns end in an honest
   `s7_ceremony_required` hand-off to the cockpit key ceremony.
 
+## Amendment A1 (2026-07-08, owner-directed "proceed") — raw-metadata descriptor seam
+
+The v0 constraint "no maez_adapter.py changes" collided with "raw platform
+identity only": the builder correctly refused to launder normalized
+identity, leaving live Telegram consent structurally blocked. Amendment:
+ONE narrow addition to `_build_inbound_descriptor()`
+(skills/surface/maez_adapter.py:617) — pass
+`raw_platform_metadata=event.raw_message` (field exists,
+platform_base.py:748) into `run_inbound_turn`. No other adapter change; the
+dormant inline body stays untouched; the no-consent-imports-in-adapter test
+relaxes to exactly this one field pass-through (still no core.consent
+imports in the adapter). Flag-off behavior byte-identical (the kwarg is
+inert when the consent gate is off). This closes the last structural
+blocker; live activation still requires binding enrollment + cooling-off +
+owner-witnessed flag ceremony.
+
 ## Cross-review log
 
 - Round 1 (Codex, gpt-5.5 xhigh): 5 attack scenarios, 4 open questions

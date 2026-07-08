@@ -752,6 +752,7 @@ class MaezMessageHandler:
         return dict(
             daemon=self.daemon,
             text=event.text or "",
+            raw_platform_metadata=getattr(event, "raw_message", None),
             chat_id=chat_id,
             resolved_user_id=resolved_user_id,
             reply_to_message_id=getattr(event, "reply_to_message_id", None),

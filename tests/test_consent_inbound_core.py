@@ -375,11 +375,50 @@ class ConsentBrainLoopResultTests(unittest.TestCase):
 
 class ConsentAdapterBoundaryTests(unittest.TestCase):
     def test_maez_adapter_has_no_consent_imports(self):
+        # Amendment A1 permits exactly ONE consent-adjacent element in the
+        # adapter: the raw_platform_metadata pass-through in the descriptor.
+        # The adapter must still never import consent machinery.
         text = Path("/home/rohit/maez/skills/surface/maez_adapter.py").read_text(
             encoding="utf-8"
         )
         self.assertNotIn("core.consent", text)
         self.assertNotIn("ConsentIntent", text)
+
+    def test_descriptor_passes_raw_platform_metadata(self):
+        """Amendment A1: the live-path descriptor carries event.raw_message
+        verbatim as raw_platform_metadata so raw-identity extraction can run
+        server-side. Flag-off inertness is inbound_core's (already tested);
+        this pins the adapter seam itself."""
+        import asyncio
+        from types import SimpleNamespace
+
+        from skills.surface.maez_adapter import MaezMessageHandler
+
+        daemon = SimpleNamespace(memory=None, actions=None, telegram=None)
+        handler = MaezMessageHandler(daemon)
+        raw = SimpleNamespace(
+            from_user=SimpleNamespace(id=111),
+            chat=SimpleNamespace(id=222),
+            forward_origin=None,
+        )
+        event = SimpleNamespace(
+            text="approve it",
+            source=SimpleNamespace(chat_id="222", user_id="111"),
+            message_type=None,
+            channel_prompt=None,
+            photo_analysis_text=None,
+            reply_to_message_id=None,
+            raw_message=raw,
+        )
+        loop = asyncio.new_event_loop()
+        try:
+            asyncio.set_event_loop(loop)
+            descriptor = handler._build_inbound_descriptor(event)
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
+        self.assertIn("raw_platform_metadata", descriptor)
+        self.assertIs(descriptor["raw_platform_metadata"], raw)
 
 
 if __name__ == "__main__":
