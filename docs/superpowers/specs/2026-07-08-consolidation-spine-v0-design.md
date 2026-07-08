@@ -278,13 +278,27 @@ pick_next/pursuit even after the switchover ceremony, until the
 self-formation loop is deliberately wired in its own witnessed slice
 (structural filter + test, not policy prose).
 
-**G3 (EMERGENT-RISK, accepted) — selector implicit maximand.** Mechanical
-ranking by size/tool-density/errors is a fixed volume-ops maximand: over
-1000 nights the autobiography skews sysadmin-diary, quiet owner-heavy days
-become shallow residue. AMENDMENT: still-mechanical quota — when the span
-contains low-tool-density episodes, at least one deep slot is reserved for
-the largest of them; deep budget becomes span-proportional (not fixed K)
-with per-night row caps and multi-night backlog chunking in the planner.
+**G3 — REVISED BY OWNER (2026-07-08, supersedes Grok's quota fix).** Grok
+correctly found the selector's ranking is an implicit maximand; its proposed
+fix (reserve a deep slot for owner-heavy episodes) was a COUNTER-OPINION —
+love hardcoded, our value about which days matter written into memory
+formation. Owner's rule, now constitutional for the whole selection path:
+**the domain-swap test** — any innate selection rule must behave identically
+under swapping what the content is about. Capacity budgets, coverage
+fairness, and self-referenced statistics pass; any content-flavored ranking
+(tool-density, error-presence, owner-presence) fails, including
+well-intentioned ones. AMENDMENT: v0 selection = coverage fairness ONLY —
+depth budget allocated proportionally across episodes, rotation so no
+episode CLASS is systematically starved night-over-night, span-proportional
+budget + per-night row caps + multi-night backlog chunking; the B1
+selector's content-flavored ranking signals are REMOVED (fix lands with the
+B2 review delta). The shadow dashboard keeps measuring composition skew so
+residual mechanical bias is visible, never denied. The salience ladder:
+(rung 2, future, still innate-machinery/learned-content) self-referenced
+rarity — unusual relative to Maez's OWN lived distribution, never
+interesting-to-us; (rung 3, the specced future slice) coherence-learned
+salience once the organ gains row attachment. Personality emerges from
+lived statistics through neutral machinery, or it isn't Maez's.
 
 **G4 (accepted) — refusal progress policy.** Per-episode outcomes are
 explicit: `committed` | `deferred_same_span` (brain unavailable/parse
