@@ -101,6 +101,46 @@ def _refusal(
     return out
 
 
+def _http_status(upstream: Mapping[str, object]) -> int | None:
+    raw = upstream.get("http_status")
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw
+    try:
+        return int(str(raw))
+    except Exception:
+        return None
+
+
+def _upstream_reason(upstream: Mapping[str, object], fallback: str) -> str:
+    for key in ("error", "reason", "message", "status"):
+        raw = upstream.get(key)
+        if isinstance(raw, str) and raw:
+            return raw
+    return fallback
+
+
+def _approval_outcome(
+    upstream: Mapping[str, object],
+    final_card_status: str | None,
+) -> tuple[str, str | None]:
+    http_status = _http_status(upstream)
+    http_ok = http_status is not None and 200 <= http_status < 300
+    upstream_ok = upstream.get("ok") is True
+    resolved = final_card_status is not None and final_card_status not in _AWAITING_STATUSES
+
+    if http_ok and upstream_ok and resolved:
+        return "resolved", None
+    if not http_ok or not upstream_ok:
+        if http_status is not None and 400 <= http_status < 500:
+            return "refused", _upstream_reason(upstream, "upstream_refused")
+        if str(upstream.get("status") or "") in {"blocked", "refused", "denied"}:
+            return "refused", _upstream_reason(upstream, "upstream_refused")
+        return "failed", _upstream_reason(upstream, "upstream_failed")
+    return "unconfirmed", "upstream_unconfirmed"
+
+
 def _row_to_card(row: sqlite3.Row) -> dict[str, object]:
     params = _loads_dict(row["params_json"])
     action = str(row["action"] or "")
@@ -225,17 +265,29 @@ def apply_approval_decision(
         upstream = dict(existing_approve_channel(request_id, {"edited_params": edited_params}))
         channel = "existing_approval_channel"
     else:
-        from core.pending_cards import PendingCardStore
+        from core.pending_cards import CardStoreError, PendingCardStore
 
         store = PendingCardStore(paths.cards_db)
-        resolved = store.deny(
-            request_id,
-            user_id="rohit",
-            via="cockpit_v2",
-            notes="denied from cockpit v2",
-        )
-        upstream = {"ok": True, "status": resolved.status}
+        try:
+            resolved = store.deny(
+                request_id,
+                user_id="rohit",
+                via="cockpit_v2",
+                notes="denied from cockpit v2",
+            )
+            upstream = {"ok": True, "http_status": 200, "status": resolved.status}
+        except CardStoreError as e:
+            upstream = {
+                "ok": False,
+                "http_status": 409,
+                "status": "conflict",
+                "error": str(e),
+            }
         channel = "existing_pending_cards"
+
+    final_card = _read_card(paths, request_id)
+    final_card_status = str(final_card["status"]) if final_card is not None else None
+    outcome, outcome_reason = _approval_outcome(upstream, final_card_status)
 
     receipt = {
         "receipt_id": receipt_id,
@@ -247,15 +299,22 @@ def apply_approval_decision(
         "at": at.isoformat(),
         "confirmation_kind": "typed" if decision == "approve" and tier == "T2" else "click",
         "upstream": upstream,
+        "outcome": outcome,
+        "final_card_status": final_card_status,
     }
     _append_receipt(paths.receipt_log, receipt)
-    return {
-        "ok": True,
-        "status": "applied",
+    result = {
+        "ok": outcome == "resolved",
+        "status": outcome,
+        "outcome": outcome,
         "request_id": request_id,
         "decision": decision,
         "tier": tier,
         "channel": channel,
         "receipt_id": receipt_id,
         "upstream": upstream,
+        "final_card_status": final_card_status,
     }
+    if outcome_reason:
+        result["reason"] = outcome_reason
+    return result

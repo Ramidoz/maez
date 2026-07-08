@@ -2237,16 +2237,23 @@ function LogsSurface() {
 
 function WriteReceiptPanel({ receipt, surface }) {
   if (!receipt || receipt.surface !== surface) return null;
+  const outcome = receipt.outcome || receipt.status || 'unknown';
+  const tone = outcome === 'resolved'
+    ? A.green
+    : (outcome === 'refused' ? A.red : A.orange);
   return (
-    <Glass pad={12} style={{ marginBottom: 14, border: `0.5px solid ${A.green}44`, background: `${A.green}0b` }}>
+    <Glass pad={12} style={{ marginBottom: 14, border: `0.5px solid ${tone}44`, background: `${tone}0b` }}>
       <div style={{ fontSize: 10, color: A.textFaint, textTransform: 'uppercase', letterSpacing: 1, fontFamily: A.sans, fontWeight: 700, marginBottom: 6 }}>
         receipt after action
       </div>
       <div style={{ display: 'grid', gap: 4, fontFamily: A.mono, fontSize: 11.5, color: A.textSoft }}>
         <div>receipt_id · {receipt.receipt_id || 'none'}</div>
         <div>status · {receipt.status || 'unknown'}</div>
+        <div>outcome · {outcome}</div>
+        <div>final_card_status · {receipt.final_card_status || 'unknown'}</div>
         <div>tier · {receipt.tier || 'unknown'} · required_confirmation · {receipt.required_confirmation || 'unknown'}</div>
         {receipt.reason && <div>reason · {receipt.reason}</div>}
+        {receipt.http_status && <div>http_status · {receipt.http_status}</div>}
       </div>
     </Glass>
   );

@@ -153,7 +153,12 @@ class CockpitV2ApprovalsTests(unittest.TestCase):
 
         def existing_channel(request_id, payload):
             calls.append((request_id, payload))
-            return {"ok": True, "status": "executed"}
+            with closing(sqlite3.connect(paths.cards_db)) as con, con:
+                con.execute(
+                    "UPDATE pending_cards SET status = ?, updated_at = ? WHERE request_id = ?",
+                    ("approved", 1001.0, request_id),
+                )
+            return {"ok": True, "http_status": 200, "status": "executed"}
 
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -172,11 +177,51 @@ class CockpitV2ApprovalsTests(unittest.TestCase):
             receipt = json.loads(paths.receipt_log.read_text(encoding="utf-8"))
 
         self.assertEqual(calls, [("card-t2", {"edited_params": None})])
-        self.assertEqual(result["status"], "applied")
+        self.assertEqual(result["status"], "resolved")
+        self.assertEqual(result["outcome"], "resolved")
+        self.assertEqual(result["final_card_status"], "approved")
         self.assertEqual(result["decision"], "approve")
         self.assertEqual(receipt["request_id"], "card-t2")
         self.assertEqual(receipt["decision"], "approve")
         self.assertEqual(receipt["channel"], "existing_approval_channel")
+        self.assertEqual(receipt["outcome"], "resolved")
+        self.assertEqual(receipt["final_card_status"], "approved")
+
+    def test_approve_refuses_when_upstream_denies_s7_guarded_card(self):
+        from core.cockpit.approvals import apply_approval_decision
+
+        incident_upstream = {
+            "ok": False,
+            "http_status": 403,
+            "error": "s7_authorization_required",
+            "status": "blocked",
+        }
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            paths = _paths(root)
+            _seed_card(paths.cards_db, request_id="card-t2", action="run_shell")
+
+            result = apply_approval_decision(
+                "card-t2",
+                "approve",
+                paths=paths,
+                owner_authenticated=True,
+                confirm_click_token="confirm",
+                typed_confirmation="APPROVE card-t2",
+                existing_approve_channel=lambda _request_id, _payload: incident_upstream,
+            )
+            receipt = json.loads(paths.receipt_log.read_text(encoding="utf-8"))
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], "refused")
+        self.assertEqual(result["outcome"], "refused")
+        self.assertEqual(result["reason"], "s7_authorization_required")
+        self.assertEqual(result["final_card_status"], "open")
+        self.assertEqual(result["upstream"], incident_upstream)
+        self.assertEqual(receipt["outcome"], "refused")
+        self.assertEqual(receipt["final_card_status"], "open")
+        self.assertEqual(receipt["upstream"], incident_upstream)
 
     def test_reject_uses_existing_pending_card_channel_and_writes_receipt(self):
         from core.cockpit.approvals import apply_approval_decision
@@ -200,11 +245,53 @@ class CockpitV2ApprovalsTests(unittest.TestCase):
                 ).fetchone()[0]
             receipt = json.loads(paths.receipt_log.read_text(encoding="utf-8"))
 
-        self.assertEqual(result["status"], "applied")
+        self.assertEqual(result["status"], "resolved")
+        self.assertEqual(result["outcome"], "resolved")
         self.assertEqual(result["decision"], "reject")
         self.assertEqual(status, "denied")
         self.assertEqual(receipt["decision"], "reject")
         self.assertEqual(receipt["channel"], "existing_pending_cards")
+        self.assertEqual(receipt["outcome"], "resolved")
+        self.assertEqual(receipt["final_card_status"], "denied")
+
+    def test_reject_race_returns_honest_refusal_receipt(self):
+        from core.cockpit.approvals import apply_approval_decision
+        from core.pending_cards import CardStoreError
+
+        class RacingStore:
+            def __init__(self, db_path):
+                self.db_path = db_path
+
+            def deny(self, request_id, *, user_id, via, notes=None):
+                with closing(sqlite3.connect(self.db_path)) as con, con:
+                    con.execute(
+                        "UPDATE pending_cards SET status = ?, updated_at = ? WHERE request_id = ?",
+                        ("denied", 1002.0, request_id),
+                    )
+                raise CardStoreError(f"cannot transition {request_id} from denied to denied")
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            paths = _paths(root)
+            _seed_card(paths.cards_db, request_id="card-t2", action="run_shell")
+
+            with mock.patch("core.pending_cards.PendingCardStore", RacingStore):
+                result = apply_approval_decision(
+                    "card-t2",
+                    "reject",
+                    paths=paths,
+                    owner_authenticated=True,
+                    confirm_click_token="confirm",
+                )
+            receipt = json.loads(paths.receipt_log.read_text(encoding="utf-8"))
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], "refused")
+        self.assertEqual(result["outcome"], "refused")
+        self.assertEqual(result["final_card_status"], "denied")
+        self.assertIn("cannot transition card-t2", result["reason"])
+        self.assertEqual(receipt["outcome"], "refused")
+        self.assertEqual(receipt["final_card_status"], "denied")
 
     def test_v2_route_uses_existing_approve_proxy_and_no_auto_approval(self):
         os.environ.setdefault("MAEZ_IPHONE_INGEST_TOKEN", "dummy-test")
@@ -217,7 +304,12 @@ class CockpitV2ApprovalsTests(unittest.TestCase):
         def fake_existing_channel(request_id, payload):
             captured["request_id"] = request_id
             captured["payload"] = payload
-            return {"ok": True, "status": "executed"}
+            with closing(sqlite3.connect(paths.cards_db)) as con, con:
+                con.execute(
+                    "UPDATE pending_cards SET status = ?, updated_at = ? WHERE request_id = ?",
+                    ("approved", 1001.0, request_id),
+                )
+            return {"ok": True, "http_status": 200, "status": "executed"}
 
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -246,6 +338,75 @@ class CockpitV2ApprovalsTests(unittest.TestCase):
         self.assertEqual(ok.status_code, 200)
         self.assertEqual(captured["request_id"], "card-t2")
         self.assertEqual(captured["payload"], {"edited_params": None})
+
+    def test_v2_route_returns_refusal_status_when_existing_channel_refuses(self):
+        os.environ.setdefault("MAEZ_IPHONE_INGEST_TOKEN", "dummy-test")
+        os.environ.setdefault("MAEZ_SECRETS_DISABLE_NEW_LOADER", "1")
+        import skills.web_interface as wi
+
+        wi.app.config["TESTING"] = True
+        incident_upstream = {
+            "ok": False,
+            "http_status": 403,
+            "error": "s7_authorization_required",
+            "status": "blocked",
+        }
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            paths = _paths(root)
+            _seed_card(paths.cards_db, request_id="card-t2", action="run_shell")
+            with mock.patch.dict(os.environ, {"MAEZ_COCKPIT_V2": "1"}, clear=False), (
+                mock.patch.object(wi, "_owner_private_auth_ok", return_value=True)
+            ), mock.patch.object(wi, "_cockpit_approval_paths", return_value=paths), (
+                mock.patch.object(wi, "_cockpit_existing_approve_channel", return_value=incident_upstream)
+            ):
+                refused = wi.app.test_client().post(
+                    "/api/v2/cockpit/approvals/card-t2",
+                    json={
+                        "decision": "approve",
+                        "confirm_click_token": "confirm",
+                        "typed_confirmation": "APPROVE card-t2",
+                    },
+                )
+
+        body = refused.get_json()
+        self.assertEqual(refused.status_code, 403)
+        self.assertFalse(body["ok"])
+        self.assertEqual(body["status"], "refused")
+        self.assertEqual(body["outcome"], "refused")
+        self.assertEqual(body["final_card_status"], "open")
+
+    def test_existing_approve_proxy_preserves_transport_http_status(self):
+        os.environ.setdefault("MAEZ_IPHONE_INGEST_TOKEN", "dummy-test")
+        os.environ.setdefault("MAEZ_SECRETS_DISABLE_NEW_LOADER", "1")
+        import skills.web_interface as wi
+
+        class FakeResponse:
+            status = 403
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return json.dumps(
+                    {
+                        "ok": False,
+                        "http_status": 200,
+                        "error": "s7_authorization_required",
+                        "status": "blocked",
+                    }
+                ).encode("utf-8")
+
+        with mock.patch("urllib.request.urlopen", return_value=FakeResponse()):
+            result = wi._cockpit_existing_approve_channel("card-t2", {})
+
+        self.assertEqual(result["http_status"], 403)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "s7_authorization_required")
 
     def test_v2_ui_uses_approvals_room_endpoint(self):
         sim = Path("web/cockpit/v2/sim.jsx").read_text(encoding="utf-8")

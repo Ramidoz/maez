@@ -228,14 +228,21 @@ const SIM = (() => {
           surface: 'approvals',
           action: decision,
           request_id: id,
-          status: result.status || (r.ok ? 'applied' : 'failed'),
-          reason: result.reason || result.error || '',
+          status: result.status || result.outcome || (r.ok ? 'resolved' : 'failed'),
+          outcome: result.outcome || result.status || (r.ok ? 'resolved' : 'failed'),
+          reason: result.reason || result.error || result.upstream?.error || result.upstream?.message || '',
           tier: result.tier || tier,
           receipt_id: result.receipt_id || null,
+          final_card_status: result.final_card_status || null,
+          http_status: result.upstream?.http_status || r.status,
           required_confirmation: result.required_confirmation || (tier === 'T2' ? 'typed confirmation' : 'confirm click'),
         };
         emit();
-        if (!r.ok) { markOffline('cockpitV2ApprovalsWrite', r.status); return; }
+        if (!r.ok) {
+          if (result.outcome || result.receipt_id) markLive('cockpitV2ApprovalsWrite');
+          else markOffline('cockpitV2ApprovalsWrite', r.status);
+          return;
+        }
         markLive('cockpitV2ApprovalsWrite');
         await _pollCockpitV2ApprovalsRoom();
       } catch (e) { markOffline('cockpitV2ApprovalsWrite', e); }

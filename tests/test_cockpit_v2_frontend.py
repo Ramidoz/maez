@@ -73,6 +73,8 @@ class CockpitV2FrontendWiringTests(unittest.TestCase):
             "receipt after action",
             "lastWriteReceipt",
             "receipt_id",
+            "outcome",
+            "final_card_status",
         ):
             self.assertIn(text, combined)
 

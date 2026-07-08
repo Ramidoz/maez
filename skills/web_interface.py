@@ -1214,8 +1214,35 @@ def _cockpit_existing_approve_channel(request_id: str, payload: dict | None = No
     except Exception:
         parsed = {"raw": raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)}
     if isinstance(parsed, dict):
-        return {"http_status": status, **parsed}
+        return {**parsed, "http_status": status}
     return {"http_status": status, "payload": parsed}
+
+
+def _cockpit_approval_response_status(result: dict) -> int:
+    if result.get("ok") is True and result.get("status") == "resolved":
+        return 200
+    upstream = result.get("upstream")
+    upstream_status = None
+    if isinstance(upstream, dict):
+        raw = upstream.get("http_status")
+        if isinstance(raw, int) and not isinstance(raw, bool):
+            upstream_status = raw
+        else:
+            try:
+                upstream_status = int(str(raw))
+            except Exception:
+                upstream_status = None
+    if upstream_status is not None and 400 <= upstream_status < 600:
+        return upstream_status
+    status = result.get("status")
+    reason = result.get("reason")
+    if status == "failed":
+        return 502
+    if status == "unconfirmed":
+        return 409
+    if reason == "approval_channel_unavailable":
+        return 503
+    return 400
 
 
 @app.route("/api/v2/cockpit/state")
@@ -1380,9 +1407,10 @@ def api_cockpit_v2_approval_decision(request_id: str):
         edited_params=payload.get("edited_params"),
         existing_approve_channel=_cockpit_existing_approve_channel,
     )
-    if result.get("status") == "applied":
+    response_status = _cockpit_approval_response_status(result)
+    if response_status == 200:
         return jsonify(result)
-    return jsonify(result), 400
+    return jsonify(result), response_status
 
 
 @app.route("/api/v2/cockpit/connectors")
