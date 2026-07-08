@@ -76,6 +76,7 @@ class BrainLoopResult:
     transcript: str = ""
     tool_calls: list[dict] = field(default_factory=list)
     recall_items: tuple[Any, ...] = ()
+    consent_intent: Any = None
 
 
 def _emit_search_progress(send_intermediate, external_sources, *, stage: str, count):
@@ -1376,6 +1377,41 @@ def _parse_tool_call(text: str) -> dict | None:
     return None
 
 
+def _parse_consent_intent(text: str):
+    if not text:
+        return None
+    m = _re.search(r'CONSENT_INTENT\s*[:=]\s*(\{.*?\})', text, _re.DOTALL)
+    if not m:
+        return None
+    blob = _extract_balanced_json(m.group(1))
+    if not blob:
+        return None
+    try:
+        obj = _json.loads(blob)
+    except Exception:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    kind = str(obj.get("kind") or "none").strip()
+    if kind not in {"approve", "deny", "standing_pre_consent", "none"}:
+        return None
+    hint = obj.get("card_hint")
+    try:
+        confidence = float(obj.get("confidence", 0.0) or 0.0)
+    except Exception:
+        confidence = 0.0
+    try:
+        from core.consent.spine import ConsentIntent
+
+        return ConsentIntent(
+            kind=kind,
+            card_hint=str(hint).strip() if hint is not None and str(hint).strip() else None,
+            confidence=confidence,
+        )
+    except Exception:
+        return None
+
+
 def _extract_balanced_json(s: str) -> str | None:
     """Return the substring of s starting at the first '{' that contains a
     balanced JSON object. None if no balance found."""
@@ -1971,6 +2007,7 @@ def run_brain_loop(
                 return BrainLoopResult(
                     transcript=dispatcher_result.transcript,
                     recall_items=dispatcher_result.recall_items,
+                    consent_intent=None,
                 )
             return dispatcher_result.transcript
         if not dispatcher_result.should_run_jarvis:
@@ -2325,6 +2362,7 @@ def run_brain_loop(
 
     transcript = _TracingTranscript()
     transcript._current_step = [0]  # mutable holder, updated per iter
+    consent_intent = None
     # Dedup guard — when the model re-proposes the same (action, cmd)
     # within a single brain-loop pass, don't re-execute. Each identical
     # re-proposal gets an "ALREADY_RAN" injection into history so the
@@ -2349,12 +2387,26 @@ def run_brain_loop(
         except Exception:
             pass
 
+    # Conversational-consent flag gate: the planner prompt and CONSENT_INTENT
+    # parsing exist ONLY when the spine flag is on — flag-off cognition must
+    # be byte-identical to the pre-spine prompt.
+    from core.infra.env_flags import strict_env_flag as _consent_flag
+
+    _consent_enabled = _consent_flag("MAEZ_CONVERSATIONAL_CONSENT_ENABLED")
+    _planner_system = "You are Maez planning tool use. Emit ONE TOOL_CALL line per turn or write DONE."
+    if _consent_enabled:
+        _planner_system = (
+            "You are Maez planning tool use. Emit ONE TOOL_CALL line per turn "
+            "or write DONE. If the owner expresses pending-card consent, also "
+            "emit one CONSENT_INTENT JSON line with kind approve, deny, "
+            "standing_pre_consent, or none; card_hint; and confidence."
+        )
+
     for step in range(max_iters):
         transcript._current_step[0] = step
         convo = "\n\n".join(history)
         _planner_messages = [
-            {"role": "system",
-             "content": "You are Maez planning tool use. Emit ONE TOOL_CALL line per turn or write DONE."},
+            {"role": "system", "content": _planner_system},
             {"role": "user", "content": convo},
         ]
         try:
@@ -2387,6 +2439,11 @@ def run_brain_loop(
             )
         except Exception:
             pass
+
+        if _consent_enabled:
+            parsed_consent_intent = _parse_consent_intent(text)
+            if parsed_consent_intent is not None:
+                consent_intent = parsed_consent_intent
 
         # Recovery-pass terminal-state detection. The recovery seed
         # prompt forces the LoRA to emit either a concrete TOOL_CALL
@@ -2626,6 +2683,8 @@ def run_brain_loop(
                 surface="brain_loop/action",
             )
 
+    if not transcript and consent_intent is not None and return_structured:
+        return BrainLoopResult(consent_intent=consent_intent)
     if not transcript:
         return _empty()
 
@@ -2673,5 +2732,6 @@ def run_brain_loop(
             tool_calls=[
                 _transcript_to_tool_call_dict(item) for item in transcript
             ],
+            consent_intent=consent_intent,
         )
     return transcript_str

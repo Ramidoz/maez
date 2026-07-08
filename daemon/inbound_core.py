@@ -38,6 +38,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Awaitable, Callable, Optional
 
 from core.health.shared_executor import get_shared_executor
@@ -64,6 +66,142 @@ def inbound_core_v2_enabled() -> bool:
     ``no``, ``off``, empty, unset, or any other value -> False. DEFAULT OFF.
     """
     return strict_env_flag("MAEZ_INBOUND_CORE_V2")
+
+
+def conversational_consent_enabled() -> bool:
+    """Strict DEFAULT-OFF flag for the conversational consent spine."""
+
+    return strict_env_flag("MAEZ_CONVERSATIONAL_CONSENT_ENABLED")
+
+
+@dataclass(frozen=True)
+class OwnerUtteranceExtraction:
+    utterance: Any | None
+    refusal_code: str | None = None
+    binding: Any | None = None
+
+
+def _surface_kind_for_label(surface_label: str) -> str:
+    label = (surface_label or "").strip().lower()
+    if label.startswith("telegram"):
+        return "telegram"
+    return label or "unknown"
+
+
+def _raw_value(obj: Any, key: str) -> Any:
+    if isinstance(obj, dict):
+        return obj.get(key)
+    return getattr(obj, key, None)
+
+
+def _raw_id(obj: Any) -> str | None:
+    raw = _raw_value(obj, "id")
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    return text or None
+
+
+def _truthy_raw(obj: Any, key: str) -> bool:
+    return bool(_raw_value(obj, key))
+
+
+def extract_owner_utterance_from_raw_metadata(
+    *,
+    surface_label: str,
+    text: str,
+    reply_to_message_id: str | None,
+    raw_platform_metadata: Any,
+    binding_registry: Any | None,
+) -> OwnerUtteranceExtraction:
+    """Construct an OwnerUtterance only from raw platform sender metadata.
+
+    Normalized adapter ``source`` fields are deliberately not accepted here,
+    because Telegram can synthesize ``source.user_id`` from chat id when
+    ``from_user`` is absent.
+    """
+
+    del binding_registry
+    surface_kind = _surface_kind_for_label(surface_label)
+    if surface_kind != "telegram":
+        return OwnerUtteranceExtraction(
+            utterance=None,
+            refusal_code="surface_identity_unverifiable",
+        )
+    raw = raw_platform_metadata
+    if raw is None:
+        return OwnerUtteranceExtraction(
+            utterance=None,
+            refusal_code="surface_identity_unverifiable",
+        )
+    raw_message = _raw_value(raw, "message") or raw
+    from_user = _raw_value(raw_message, "from_user")
+    chat = _raw_value(raw_message, "chat")
+    user_id = _raw_id(from_user)
+    chat_id = _raw_id(chat)
+    if user_id is None or chat_id is None:
+        return OwnerUtteranceExtraction(
+            utterance=None,
+            refusal_code="surface_identity_unverifiable",
+        )
+
+    fresh = not any(
+        (
+            _truthy_raw(raw_message, "forward_origin"),
+            _truthy_raw(raw_message, "forward_from"),
+            _truthy_raw(raw_message, "forward_date"),
+            _truthy_raw(raw_message, "via_bot"),
+            _truthy_raw(raw_message, "edit_date"),
+            _truthy_raw(raw, "edited_message"),
+        )
+    )
+    try:
+        from core.consent.bindings import telegram_surface_identity
+        from core.consent.spine import OwnerUtterance
+    except Exception:
+        return OwnerUtteranceExtraction(
+            utterance=None,
+            refusal_code="surface_identity_unverifiable",
+        )
+
+    return OwnerUtteranceExtraction(
+        utterance=OwnerUtterance(
+            surface_kind="telegram",
+            surface_identity=telegram_surface_identity(user_id, chat_id),
+            text=text,
+            fresh=fresh,
+            reply_to_ref=reply_to_message_id,
+            at=datetime.now(UTC).isoformat(),
+        )
+    )
+
+
+def _trace_consent(daemon: Any, event: tuple) -> None:
+    trace = getattr(daemon, "_trace", None)
+    if isinstance(trace, list):
+        trace.append(event)
+
+
+def _content_light_open_cards_fact(open_cards: list[Any]) -> str | None:
+    facts = []
+    now = datetime.now(UTC).timestamp()
+    for card in open_cards[:5]:
+        created_at = getattr(card, "created_at", None)
+        try:
+            age_s = max(0, int(now - float(created_at)))
+        except Exception:
+            age_s = None
+        fact = {
+            "action": str(getattr(card, "action", "") or ""),
+            "age_s": age_s,
+        }
+        token = getattr(card, "echo_token", None)
+        if token:
+            fact["echo_token"] = str(token)
+        facts.append(fact)
+    if not facts:
+        return None
+    return f"CONVERSATIONAL CONSENT BODY FACT: {{'open_cards': {facts!r}}}"
 
 
 async def run_inbound_turn(
@@ -104,6 +242,11 @@ async def run_inbound_turn(
     #     True to SKIP D20 when pipe is None (no orphaned card to a default store).
     mark_s4_promotion_policy: bool = True,
     gate_d20_on_pipe: bool = False,
+    raw_platform_metadata: Any = None,
+    consent_binding_registry: Any = None,
+    consent_spine_store: Any = None,
+    consent_resolution_paths: Any = None,
+    consent_approve_channel: Any = None,
     # Injected pipeline / action handles (adapter resolves daemon-level handles;
     # a future cockpit caller passes its own without going through daemon.telegram):
     action_engine: Any,
@@ -193,6 +336,77 @@ async def run_inbound_turn(
             pipe = None
     has_local_photo_context = bool(is_photo_turn)
 
+    consent_owner_utterance = None
+    consent_binding = None
+    consent_open_cards_snapshot = None
+    consent_flow_state = "IDLE"
+    consent_legacy_suppressed = False
+    if conversational_consent_enabled():
+        try:
+            extraction = extract_owner_utterance_from_raw_metadata(
+                surface_label=owner_surface_label,
+                text=text,
+                reply_to_message_id=reply_to_msg_id,
+                raw_platform_metadata=raw_platform_metadata,
+                binding_registry=consent_binding_registry,
+            )
+            consent_owner_utterance = extraction.utterance
+            if consent_owner_utterance is None:
+                _trace_consent(
+                    daemon,
+                    ("consent.identity_refusal", extraction.refusal_code),
+                )
+            else:
+                from core.consent.bindings import BindingRegistry, ConsentBindingPaths
+                from core.consent.spine import ConsentSpineStore
+
+                if consent_binding_registry is not None:
+                    registry = consent_binding_registry
+                else:
+                    binding_paths = ConsentBindingPaths.defaults()
+                    registry = (
+                        BindingRegistry(binding_paths)
+                        if binding_paths.db_path.exists()
+                        else None
+                    )
+                consent_binding = (
+                    registry.active_binding_for(
+                        consent_owner_utterance.surface_kind,
+                        consent_owner_utterance.surface_identity,
+                    )
+                    if registry is not None
+                    else None
+                )
+                if consent_binding is not None:
+                    consent_spine_store = consent_spine_store or ConsentSpineStore()
+                    if pipe is not None:
+                        try:
+                            consent_open_cards_snapshot = pipe.card_store.get_open_for_channel(
+                                channel,
+                                chat_id=chat_id,
+                            )
+                        except Exception:
+                            consent_open_cards_snapshot = []
+                    else:
+                        consent_open_cards_snapshot = []
+                    consent_flow_state = consent_spine_store.active_flow_state(
+                        consent_binding.binding_id
+                    )
+                    _trace_consent(
+                        daemon,
+                        (
+                            "consent.snapshot",
+                            consent_flow_state,
+                            len(consent_open_cards_snapshot or []),
+                        ),
+                    )
+        except Exception:
+            logger.debug("conversational consent snapshot skipped", exc_info=True)
+            consent_owner_utterance = None
+            consent_binding = None
+            consent_open_cards_snapshot = None
+            consent_flow_state = "IDLE"
+
     # Surface Parity Restoration v0: D20 capability-gap detection.
     # Placement law: after auth, before every early-return interceptor.
     # The helper creates cards through pending_card_store; this path
@@ -245,14 +459,19 @@ async def run_inbound_turn(
     # pipeline sends the resolution notice directly, so we return
     # any mid-dialog continuation text (or None if fully handled).
     if pipe is not None:
-        try:
-            open_cards = pipe.card_store.get_open_for_channel(
-                channel,
-                chat_id=chat_id,
-            )
-        except Exception:
-            open_cards = []
-        if open_cards:
+        consent_scoped = consent_binding is not None and consent_open_cards_snapshot is not None
+        if consent_scoped:
+            open_cards = list(consent_open_cards_snapshot or [])
+            consent_legacy_suppressed = consent_flow_state != "IDLE" or bool(open_cards)
+        else:
+            try:
+                open_cards = pipe.card_store.get_open_for_channel(
+                    channel,
+                    chat_id=chat_id,
+                )
+            except Exception:
+                open_cards = []
+        if open_cards and not consent_legacy_suppressed:
             try:
                 result = await loop.run_in_executor(
                     get_shared_executor(),
@@ -360,6 +579,11 @@ async def run_inbound_turn(
         logger.debug("chat_history fetch failed on %s: %s", owner_surface_label, e)
         chat_history = None
 
+    if consent_binding is not None and consent_open_cards_snapshot:
+        fact = _content_light_open_cards_fact(list(consent_open_cards_snapshot or []))
+        if fact:
+            context_note = f"{context_note}\n\n{fact}" if context_note else fact
+
     # Observability: wrap the whole turn in a Langfuse trace so every LLM call
     # + tool dispatch lands in the UI. No-op when LANGFUSE_PUBLIC_KEY isn't set.
     from core.observability import observe_turn
@@ -374,6 +598,8 @@ async def run_inbound_turn(
         jarvis_transcript = ""
         jarvis_tool_calls: list[dict] = []
         jarvis_recall_items = ()
+        consent_intent = None
+        brain_failed = False
         try:
             from core import brain_loop as _brain_loop
 
@@ -408,6 +634,7 @@ async def run_inbound_turn(
                     jarvis_transcript = _result.transcript or ""
                     jarvis_tool_calls = list(getattr(_result, "tool_calls", []) or [])
                     jarvis_recall_items = tuple(getattr(_result, "recall_items", ()) or ())
+                    consent_intent = getattr(_result, "consent_intent", None)
                 else:  # legacy str fallback
                     jarvis_transcript = _result or ""
         except Exception as e:
@@ -415,6 +642,90 @@ async def run_inbound_turn(
             jarvis_transcript = ""
             jarvis_tool_calls = []
             jarvis_recall_items = ()
+            brain_failed = True
+
+        if brain_failed and consent_legacy_suppressed:
+            try:
+                if consent_binding is not None and consent_spine_store is not None:
+                    consent_spine_store.record_refusal(
+                        consent_binding.binding_id,
+                        "intent_unavailable",
+                    )
+            except Exception:
+                logger.debug("consent intent_unavailable record failed", exc_info=True)
+            try:
+                turn.update(output="intent_unavailable")
+            except Exception:
+                pass
+            return "intent_unavailable"
+
+        if (
+            consent_binding is not None
+            and consent_owner_utterance is not None
+            and consent_spine_store is not None
+            and consent_intent is not None
+        ):
+            try:
+                spine_result = consent_spine_store.handle_turn(
+                    binding_id=consent_binding.binding_id,
+                    utterance=consent_owner_utterance,
+                    intent=consent_intent,
+                    open_cards=list(consent_open_cards_snapshot or []),
+                )
+                _trace_consent(
+                    daemon,
+                    (
+                        "consent.spine",
+                        spine_result.state,
+                        spine_result.card_id,
+                        spine_result.refusal_code,
+                    ),
+                )
+                if spine_result.state == "RESOLVING" and spine_result.card_id:
+                    from core.consent.resolution import (
+                        ConsentResolutionRequest,
+                        resolve_consent_decision,
+                    )
+
+                    request = ConsentResolutionRequest(
+                        utterance=consent_owner_utterance,
+                        intent=consent_intent,
+                        binding_id=consent_binding.binding_id,
+                        card_id=spine_result.card_id,
+                        decision=spine_result.decision or consent_intent.kind,
+                    )
+                    resolve_kwargs = {}
+                    if consent_approve_channel is not None:
+                        resolve_kwargs["approve_channel"] = consent_approve_channel
+                    receipt = resolve_consent_decision(
+                        request,
+                        card_store=pipe.card_store,
+                        binding_registry=registry,
+                        paths=consent_resolution_paths,
+                        flag_enabled=True,
+                        **resolve_kwargs,
+                    )
+                    if receipt.get("outcome") == "resolved":
+                        consent_spine_store.mark_resolved(consent_binding.binding_id)
+                    else:
+                        consent_spine_store.record_refusal(
+                            consent_binding.binding_id,
+                            str(
+                                receipt.get("reason")
+                                or receipt.get("outcome")
+                                or "refused"
+                            ),
+                        )
+                    _trace_consent(
+                        daemon,
+                        (
+                            "consent.receipt",
+                            receipt.get("outcome"),
+                            receipt.get("reason"),
+                        ),
+                    )
+            except Exception:
+                logger.debug("conversational consent tap skipped", exc_info=True)
 
         # Synthesis stage — daemon.handle_message does the final text reply and
         # OWNS the pipeline: strip tool-call leaks, self-claim audit,

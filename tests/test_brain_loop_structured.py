@@ -22,9 +22,12 @@ Pins:
 """
 from __future__ import annotations
 
+import os
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parent.parent
 if str(_REPO) not in sys.path:
@@ -279,6 +282,63 @@ class StructuredResultIsBuiltFromTranscript(unittest.TestCase):
                 "output_summary", "error_summary",
             ):
                 self.assertIn(key, d, f"missing {key}")
+
+
+class ConsentIntentProducer(unittest.TestCase):
+    _CONSENT_RESPONSE = SimpleNamespace(
+        message=SimpleNamespace(
+            content=(
+                'CONSENT_INTENT: {"kind":"approve","card_hint":"ABCD","confidence":0.91}\n'
+                "DONE"
+            )
+        )
+    )
+
+    def _run(self):
+        from core.brain.brain_loop import run_brain_loop
+
+        with patch(
+            "core.brain.brain_loop._llm_client.chat",
+            return_value=self._CONSENT_RESPONSE,
+        ) as chat:
+            result = run_brain_loop(
+                "approve ABCD",
+                action_engine=object(),
+                get_pipeline=lambda: object(),
+                return_structured=True,
+                max_iters=1,
+            )
+        return result, chat
+
+    def test_structured_result_parses_consent_intent_when_flag_on(self):
+        from core.brain.brain_loop import BrainLoopResult
+
+        with patch.dict(
+            os.environ, {"MAEZ_CONVERSATIONAL_CONSENT_ENABLED": "1"}
+        ):
+            result, chat = self._run()
+
+        self.assertIsInstance(result, BrainLoopResult)
+        self.assertIsNotNone(result.consent_intent)
+        self.assertEqual(result.consent_intent.kind, "approve")
+        self.assertEqual(result.consent_intent.card_hint, "ABCD")
+        self.assertGreater(result.consent_intent.confidence, 0.9)
+        system_text = chat.call_args_list[0].kwargs["messages"][0]["content"]
+        self.assertIn("CONSENT_INTENT", system_text)
+
+    def test_flag_off_parses_nothing_and_prompt_is_pre_spine(self):
+        with patch.dict(
+            os.environ, {"MAEZ_CONVERSATIONAL_CONSENT_ENABLED": "0"}
+        ):
+            result, chat = self._run()
+
+        consent = getattr(result, "consent_intent", None)
+        self.assertIsNone(consent)
+        system_text = chat.call_args_list[0].kwargs["messages"][0]["content"]
+        self.assertEqual(
+            system_text,
+            "You are Maez planning tool use. Emit ONE TOOL_CALL line per turn or write DONE.",
+        )
 
 
 class ToolTranscriptPromptHonesty(unittest.TestCase):
