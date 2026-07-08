@@ -6,6 +6,52 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 
+def _legacy_dream_camera_idle_state(camera_state: object | None, *, now: float) -> str:
+    if camera_state is None:
+        return "unknown"
+    try:
+        now_dt = datetime.fromtimestamp(float(now), tz=timezone.utc)
+        with_freshness = getattr(camera_state, "with_freshness", None)
+        if callable(with_freshness):
+            camera_state = with_freshness(now=now_dt)
+    except Exception:
+        pass
+    sensor_state = str(getattr(camera_state, "sensor_state", "unknown") or "unknown").lower()
+    presence_state = str(getattr(camera_state, "presence_state", "unknown") or "unknown").lower()
+    if presence_state == "present" and sensor_state == "available":
+        return "present_fresh"
+    if presence_state == "absent":
+        return "absent"
+    if sensor_state in {"disabled", "stale", "unavailable"}:
+        return "unavailable"
+    return "unknown"
+
+
+def _legacy_dream_idle_inputs(daemon: object, *, now: float) -> dict[str, object]:
+    current = float(now)
+    last_interaction = getattr(daemon, "_last_owner_interaction_ts", None)
+    try:
+        no_interaction_secs = max(0.0, current - float(last_interaction))
+        activity_known = True
+    except (TypeError, ValueError):
+        no_interaction_secs = 0.0
+        activity_known = False
+    try:
+        active_until_future = float(getattr(daemon, "_rohit_active_until", 0.0) or 0.0) > current
+    except (TypeError, ValueError):
+        active_until_future = False
+    camera_state = (
+        getattr(daemon, "_last_presence_snap", None)
+        or getattr(daemon, "_camera_presence_state", None)
+    )
+    return {
+        "no_interaction_secs": no_interaction_secs,
+        "camera": _legacy_dream_camera_idle_state(camera_state, now=current),
+        "active_until_future": active_until_future,
+        "activity_known": activity_known,
+    }
+
+
 class DreamIdleGateTest(unittest.TestCase):
     def test_idle_proven_camera_unavailable_fires(self):
         from core.evolution.dream_state import dream_may_run
@@ -81,6 +127,75 @@ class DreamIdleGateTest(unittest.TestCase):
 
 
 class DreamDaemonInputTest(unittest.TestCase):
+    def test_shared_idle_window_provider_matches_legacy_daemon_inputs(self):
+        from core.body.camera_presence_state import CameraPresenceState
+        from core.sensing.idle_window import idle_window_inputs
+
+        now_dt = datetime(2026, 6, 2, 12, 0, tzinfo=timezone.utc)
+        now = now_dt.timestamp()
+
+        class FresheningCamera:
+            def with_freshness(self, *, now):
+                self.now_seen = now
+                return SimpleNamespace(
+                    sensor_state="available",
+                    presence_state="present",
+                )
+
+        fixture_factories = [
+            lambda: SimpleNamespace(
+                _last_owner_interaction_ts=None,
+                _rohit_active_until=0.0,
+                _last_presence_snap=None,
+                _camera_presence_state=None,
+            ),
+            lambda: SimpleNamespace(
+                _last_owner_interaction_ts=now - 2400,
+                _rohit_active_until=now + 60,
+                _last_presence_snap=CameraPresenceState(
+                    mode="observe",
+                    enabled_until="2026-06-03T00:00:00+00:00",
+                    enabled_until_at=now_dt + timedelta(hours=12),
+                    sensor_state="available",
+                    presence_state="present",
+                    confidence_bucket="high",
+                    last_observed_at=now_dt - timedelta(seconds=10),
+                    received_at=now_dt - timedelta(seconds=10),
+                ),
+                _camera_presence_state=None,
+            ),
+            lambda: SimpleNamespace(
+                _last_owner_interaction_ts=now - 10,
+                _rohit_active_until="not-a-timestamp",
+                _last_presence_snap=None,
+                _camera_presence_state=SimpleNamespace(
+                    sensor_state="stale",
+                    presence_state="present",
+                ),
+            ),
+            lambda: SimpleNamespace(
+                _last_owner_interaction_ts=now - 5000,
+                _rohit_active_until=0.0,
+                _last_presence_snap=None,
+                _camera_presence_state=FresheningCamera(),
+            ),
+        ]
+
+        for build_daemon in fixture_factories:
+            with self.subTest(build_daemon=build_daemon):
+                self.assertEqual(
+                    idle_window_inputs(build_daemon(), now=now),
+                    _legacy_dream_idle_inputs(build_daemon(), now=now),
+                )
+
+    def test_dream_idle_gate_uses_shared_idle_window_provider(self):
+        from daemon.maez_daemon import _dream_idle_gate_open
+
+        source = inspect.getsource(_dream_idle_gate_open)
+
+        self.assertIn("idle_window_inputs", source)
+        self.assertNotIn("_dream_idle_inputs(", source)
+
     def test_owner_interaction_tracker_makes_activity_known(self):
         from daemon.maez_daemon import (
             _dream_idle_inputs,
