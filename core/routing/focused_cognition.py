@@ -758,7 +758,7 @@ def _full_focused_system_prompt(
         f"{_voice_card(surface, voice_card_text=voice_card_text)}\n\n"
         f"{_citation_instruction(
             working_set.citation_render_version,
-            thin_evidence=working_set.thin_evidence,
+            thin_evidence=getattr(working_set, "thin_evidence", False),
         )}\n\n"
         f"{_TRUST_TIER_INSTRUCTION}\n\n"
         f"{_ORIGIN_TRUST_INSTRUCTION}\n\n"
@@ -1380,6 +1380,7 @@ def focused_synthesize(
     date_addressed: bool = False,
     legacy_prompt_chars: int | None = None,
     turn_kind: str | None = None,
+    inner_continuity_block: str | None = None,
 ) -> FocusedResult:
     import time as _time
 
@@ -1444,6 +1445,9 @@ def focused_synthesize(
                 )
             if self_card_enabled:
                 voice_card_text = card.text
+    inner_continuity_text = (inner_continuity_block or "").strip()
+    if inner_continuity_text:
+        voice_card_text = f"{voice_card_text}\n\n{inner_continuity_text}"
     if shadow_enabled or lean_enabled:
         lean_system = _lean_system_prompt(
             working_set,

@@ -109,6 +109,7 @@ class SubjectiveDurationPromptBehaviorTests(unittest.TestCase):
             _get_public_context=lambda: "",
             _trf_apply_fragment_guard=lambda **kwargs: kwargs["reply"],
             _ws_broadcast=lambda payload: None,
+            _record_fabrication_scars_from_audit_result=lambda *args, **kwargs: None,
         )
 
         with contextlib.ExitStack() as stack:
@@ -312,7 +313,12 @@ class SubjectiveDurationPromptSourceTests(unittest.TestCase):
             self.fail("web /chat owner bridge must add subjective_duration_prompt_line")
         if "web_private_owner_bridge" not in chat:
             self.fail("web owner auth proof must be web_private_owner_bridge")
-        owner_bridge_assignment = chat.index("owner_bridge = _is_private_owner_bridge(user_full)")
+        owner_bridge_assignment_text = (
+            "owner_bridge = _is_private_owner_bridge(user_full)"
+            if "owner_bridge = _is_private_owner_bridge(user_full)" in chat
+            else "owner_bridge = _is_owner(user_full)"
+        )
+        owner_bridge_assignment = chat.index(owner_bridge_assignment_text)
         first_owner_branch = chat.index("if owner_bridge:", owner_bridge_assignment)
         public_branch = chat.index("else:", first_owner_branch)
         typed_auth_idx = chat.index("SubjectiveDurationOwnerAuth")
