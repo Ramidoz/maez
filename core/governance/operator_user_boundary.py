@@ -1321,7 +1321,23 @@ def assess_aggregation_risk(
     elif current_envelope.derived_work_class == "routine_custody":
         decision = "warn"
     elif current_envelope.derived_work_class in D23_ESCALATION_WORK_CLASSES:
-        decision = "block" if len(repeated_refusals) >= 2 or protection_lowering_count >= 3 else "escalate"
+        # A LONE single prior same-target request is not aggregation-risky for a
+        # high-risk action: an owner who authorized once and legitimately re-runs
+        # the ceremony must not be permanently locked out (the history has no time
+        # window, so one success would otherwise poison every future attempt —
+        # 2026-07-07 live lockout). Escalate only on GENUINE aggregation: 2+ prior
+        # same-target requests, any re-ask after a refusal, or cumulative
+        # protection-lowering. The signal still fires (routine custody still warns).
+        if len(repeated_refusals) >= 2 or protection_lowering_count >= 3:
+            decision = "block"
+        elif (
+            len(same_group) >= 2
+            or repeated_refusals
+            or (_is_protection_lowering_envelope(current_envelope) and prior_protection_lowering)
+        ):
+            decision = "escalate"
+        else:
+            decision = "allow"
     else:
         decision = "block"
 

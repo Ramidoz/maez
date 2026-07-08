@@ -4007,6 +4007,25 @@ class S7AggregationHabitTests(unittest.TestCase):
         self.assertEqual(assessment.signals, ())
         self.assertEqual(assessment.same_group_request_count, 1)
 
+    def test_168_single_prior_authorization_does_not_lock_out_reauthorize(self):
+        # 2026-07-07 live lockout: an owner who authorized ONCE was permanently
+        # blocked from re-running the ceremony (history has no time window, so
+        # one success poisoned every retry). A lone single prior same-target
+        # authorization on a high-risk action must NOT escalate.
+        from core.governance import operator_user_boundary as s7
+
+        prior = self._soul_envelope("req-soul-lockout-1")
+        current = self._soul_envelope("req-soul-lockout-2")
+        history = (
+            s7.build_request_history_record(
+                envelope=prior, outcome="authorized", created_at=PAST,
+            ),
+        )
+        assessment = s7.assess_aggregation_risk(
+            current_envelope=current, history=history,
+        )
+        self.assertEqual(assessment.decision, "allow")
+
     def test_164_repeated_completed_authorization_still_escalates(self):
         from core.governance import operator_user_boundary as s7
 
