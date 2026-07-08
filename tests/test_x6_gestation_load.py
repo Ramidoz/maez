@@ -88,6 +88,8 @@ class RehearsalLedgerIsolationTests(unittest.TestCase):
                         "user_message",
                         "synthetic rehearsal row",
                         lifecycle_stage="rehearsal",
+                        taint_labels=["self_generated"],
+                        privacy_access="public",
                     )
             finally:
                 w.close()
@@ -111,7 +113,12 @@ class RehearsalLedgerIsolationTests(unittest.TestCase):
             )
             try:
                 with self.assertRaisesRegex(ValueError, "requires lifecycle_stage"):
-                    w.write_turn("user_message", "missing stage")
+                    w.write_turn(
+                        "user_message",
+                        "missing stage",
+                        taint_labels=["self_generated"],
+                        privacy_access="public",
+                    )
             finally:
                 w.close()
 
@@ -284,7 +291,15 @@ class X6ReadabilityAndInvariantTests(unittest.TestCase):
             w = writer.LedgerWriter(str(db))
             try:
                 for index in range(6):
-                    turn_ids.append(w.write_turn("user_message", f"turn-{index}") or "")
+                    turn_ids.append(
+                        w.write_turn(
+                            "user_message",
+                            f"turn-{index}",
+                            surface="x6_rehearsal",
+                            taint_labels=["self_generated"],
+                            privacy_access="public",
+                        ) or ""
+                    )
             finally:
                 w.close()
 

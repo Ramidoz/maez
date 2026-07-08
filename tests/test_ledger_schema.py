@@ -191,6 +191,9 @@ class TurnsTableTests(unittest.TestCase):
         ("fabrication_event_id", "INTEGER", False, None),
         ("self_mod_dialog_id", "INTEGER", False, None),
         ("pending_card_id", "INTEGER", False, None),
+        ("taint_labels_json", "TEXT", True, "[]"),
+        ("privacy_access", "TEXT", True, "public"),
+        ("chain_position", "INTEGER", True, "0"),
         ("prev_chain_hash", "TEXT", False, None),
         ("chain_hash", "TEXT", True, None),
         # Gestation Boundary slice (2026-05-08, migration 0003):
@@ -252,8 +255,9 @@ class TurnsTableTests(unittest.TestCase):
             positive_conn.execute(
                 "INSERT INTO turns "
                 "(turn_id, timestamp, schema_version, turn_kind, "
-                " surface, raw_text, prev_chain_hash, chain_hash) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                " surface, raw_text, taint_labels_json, privacy_access, "
+                " chain_position, prev_chain_hash, chain_hash) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     "positive-control",
                     1.0,
@@ -261,6 +265,9 @@ class TurnsTableTests(unittest.TestCase):
                     "system_event",
                     "system",
                     "x",
+                    '["self_generated"]',
+                    "public",
+                    1,
                     "f" * 64,
                     valid_chain_hash,
                 ),
@@ -276,8 +283,9 @@ class TurnsTableTests(unittest.TestCase):
                 negative_conn.execute(
                     "INSERT INTO turns "
                     "(turn_id, timestamp, schema_version, turn_kind, "
-                    " surface, raw_text, prev_chain_hash, chain_hash) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    " surface, raw_text, taint_labels_json, privacy_access, "
+                    " chain_position, prev_chain_hash, chain_hash) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         "negative-bogus",
                         2.0,
@@ -285,6 +293,9 @@ class TurnsTableTests(unittest.TestCase):
                         "definitely_not_a_real_kind",
                         "system",
                         "x",
+                        '["self_generated"]',
+                        "public",
+                        2,
                         "f" * 64,
                         "b" * 64,
                     ),
@@ -488,6 +499,7 @@ class IndexesTests(unittest.TestCase):
         ("idx_turns_kind_ts", "turns", ["tenant_id", "turn_kind", "timestamp"], None),
         ("idx_turns_parent", "turns", ["parent_turn_id"], "parent_turn_id IS NOT NULL"),
         ("idx_turns_model", "turns", ["model_id", "timestamp"], "model_id IS NOT NULL"),
+        ("idx_turns_chain_position", "turns", ["chain_position"], None),
         (
             "idx_turns_audit_trace",
             "turns",
@@ -575,9 +587,22 @@ class ConstraintEnforcementTests(unittest.TestCase):
                 conn.execute(
                     "INSERT INTO turns ("
                     "turn_id, tenant_id, timestamp, schema_version, "
-                    "turn_kind, surface, raw_text, prev_chain_hash, "
-                    "chain_hash) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?)",
-                    ("null-tenant-test", 1.0, 1, "system_event", "system", "x", "f" * 64, "a" * 64),
+                    "turn_kind, surface, raw_text, taint_labels_json, "
+                    "privacy_access, chain_position, prev_chain_hash, "
+                    "chain_hash) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        "null-tenant-test",
+                        1.0,
+                        1,
+                        "system_event",
+                        "system",
+                        "x",
+                        '["self_generated"]',
+                        "public",
+                        1,
+                        "f" * 64,
+                        "a" * 64,
+                    ),
                 )
                 conn.commit()
         finally:

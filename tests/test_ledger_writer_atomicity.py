@@ -57,6 +57,9 @@ def _all_turns(db_path: str) -> list[dict]:
         conn.close()
 
 
+_USER_STAMP = {"taint_labels": ["owner_utterance"], "privacy_access": "public"}
+
+
 class ConcurrencyTests(unittest.TestCase):
     """Single-instance lock serialization preserves chain integrity."""
 
@@ -85,7 +88,7 @@ class ConcurrencyTests(unittest.TestCase):
             try:
                 barrier.wait(timeout=5.0)
                 for i in range(writes_per_thread):
-                    self.w.write_turn("user_message", f"t{tid}-i{i}")
+                    self.w.write_turn("user_message", f"t{tid}-i{i}", **_USER_STAMP)
                     if post_write_sleep:
                         time.sleep(post_write_sleep)
             except Exception as e:
@@ -138,20 +141,20 @@ class CleanupTests(unittest.TestCase):
 
     def test_close_makes_subsequent_writes_raise(self):
         w = writer.LedgerWriter(self.db_path)
-        w.write_turn("user_message", "pre-close")
+        w.write_turn("user_message", "pre-close", **_USER_STAMP)
         w.close()
         with self.assertRaises(
             (sqlite3.ProgrammingError, sqlite3.Error, RuntimeError, ValueError)
         ):
-            w.write_turn("user_message", "post-close")
+            w.write_turn("user_message", "post-close", **_USER_STAMP)
 
     def test_close_releases_for_new_instance(self):
         w1 = writer.LedgerWriter(self.db_path)
-        w1.write_turn("user_message", "first")
+        w1.write_turn("user_message", "first", **_USER_STAMP)
         w1.close()
         w2 = writer.LedgerWriter(self.db_path)
         try:
-            tid = w2.write_turn("user_message", "second")
+            tid = w2.write_turn("user_message", "second", **_USER_STAMP)
             self.assertIsNotNone(tid)
         finally:
             w2.close()

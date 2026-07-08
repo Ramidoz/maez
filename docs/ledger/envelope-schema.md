@@ -204,6 +204,11 @@ CREATE TABLE turns (
     self_mod_dialog_id    INTEGER,            -- → self_mod_dialogs.db::self_mod_dialogs.id (nullable; dialog_id text also stored in raw/evidence payload)
     pending_card_id       INTEGER,            -- → pending_cards.db::pending_cards.id (nullable; request_id text also stored in raw/evidence payload)
 
+    -- S1 row provenance / privacy / ordering substrate
+    taint_labels_json TEXT NOT NULL DEFAULT '[]', -- JSON list from owner_utterance, self_generated, tool_output, internet_derived, third_party
+    privacy_access    TEXT NOT NULL DEFAULT 'public' CHECK (privacy_access IN ('public', 'sealed_adjacent')),
+    chain_position    INTEGER NOT NULL DEFAULT 0, -- monotonic writer-assigned ordinal; genesis=0
+
     -- Tamper-evidence
     prev_chain_hash  TEXT,                    -- hash of previous row's chain_hash, NULL only for genesis
     chain_hash       TEXT NOT NULL            -- sha256(prev_chain_hash || canonical_row_bytes)
@@ -215,6 +220,7 @@ CREATE INDEX idx_turns_raw_surface_ts ON turns (tenant_id, raw_surface, timestam
 CREATE INDEX idx_turns_kind_ts ON turns (tenant_id, turn_kind, timestamp DESC);
 CREATE INDEX idx_turns_parent ON turns (parent_turn_id) WHERE parent_turn_id IS NOT NULL;
 CREATE INDEX idx_turns_model ON turns (model_id, timestamp DESC) WHERE model_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_turns_chain_position ON turns (chain_position);
 ```
 
 **`surface` enum (canonical groups):**
@@ -385,7 +391,9 @@ The `turns` table carries the primary chain. Dependent tables (`claims`, `claim_
 
 **Primary chain (`turns`):**
 - Each row's `chain_hash` is `sha256(prev_chain_hash || canonical_row_bytes)`.
-- `canonical_row_bytes` = JSON-serialized row with keys sorted, omitting `chain_hash` and `prev_chain_hash` themselves.
+- `canonical_row_bytes` = JSON-serialized row with keys sorted, omitting chain links and derived/readout metadata: `chain_hash`, `prev_chain_hash`, `chain_position`, `lifecycle_stage`, `audit_trace_label`, `audit_trace_value_schema`, and `audit_trace_metadata_shape`.
+- `taint_labels_json` and `privacy_access` are hash-included; tampering with provenance or privacy labels must break verification.
+- `chain_position` is not hash-included. It is derived from the `prev_chain_hash` walk and the verifier checks `chain_position == walk index` so the column and chain walk agree.
 - Genesis row: `prev_chain_hash` is NULL, `chain_hash = sha256("genesis" || canonical_row_bytes)`, also written to `meta.genesis_hash`.
 
 **Witness binding (`claims`, `claim_judgements`):**

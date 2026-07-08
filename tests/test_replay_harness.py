@@ -213,8 +213,18 @@ class ConcurrencyProbeTests(unittest.TestCase):
                        side_effect=[200.0, 100.0]):
                 w = writer.LedgerWriter(db)
                 try:
-                    w.write_turn("user_message", "first append")
-                    w.write_turn("user_message", "second append")
+                    w.write_turn(
+                        "user_message",
+                        "first append",
+                        taint_labels=["owner_utterance"],
+                        privacy_access="public",
+                    )
+                    w.write_turn(
+                        "user_message",
+                        "second append",
+                        taint_labels=["owner_utterance"],
+                        privacy_access="public",
+                    )
                 finally:
                     w.close()
 

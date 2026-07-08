@@ -806,6 +806,8 @@ class ChatSession:
                     "user_message",
                     user_text,
                     surface=_cli_surface,
+                    taint_labels=["owner_utterance"],
+                    privacy_access="public",
                 )
         except Exception:
             _cli_ledger_db_path = None

@@ -141,6 +141,15 @@ class GenesisRowTests(unittest.TestCase):
         ).fetchone()
         self.assertEqual(row[0], "system_event")
 
+    def test_genesis_row_s1_substrate_fields(self):
+        row = self.conn.execute(
+            "SELECT taint_labels_json, privacy_access, chain_position "
+            "FROM turns WHERE prev_chain_hash IS NULL"
+        ).fetchone()
+        self.assertEqual(row[0], "[]")
+        self.assertEqual(row[1], "public")
+        self.assertEqual(row[2], 0)
+
     def test_genesis_chain_hash_is_64_char_hex(self):
         row = self.conn.execute(
             "SELECT chain_hash FROM turns WHERE prev_chain_hash IS NULL"

@@ -71,6 +71,24 @@ from core.ledger import writer as _writer  # noqa: E402
 # ── data ──────────────────────────────────────────────────────────────
 
 
+def _stamp_for_synthetic_kind(kind: str, *, models_owner_text: bool = False) -> dict:
+    if kind == "user_message":
+        labels = ["owner_utterance"] if models_owner_text else ["self_generated"]
+    elif kind in ("model_reply", "daemon_cycle", "system_event"):
+        labels = ["self_generated"]
+    elif kind == "tool_result":
+        labels = ["tool_output"]
+    elif kind == "tool_call":
+        labels = ["self_generated"]
+    elif kind == "peer_message_in":
+        labels = ["third_party"]
+    elif kind == "peer_message_out":
+        labels = ["self_generated"]
+    else:
+        labels = ["self_generated"]
+    return {"taint_labels": labels, "privacy_access": "public"}
+
+
 class ProbeCorpusError(ValueError):
     """Raised when a probe corpus file is malformed."""
 
@@ -272,13 +290,18 @@ def _run_continuity_probe(
                 if kind == "model_reply":
                     w.write_turn(
                         kind, turn["content"],
+                        **_stamp_for_synthetic_kind(kind, models_owner_text=kind == "user_message"),
                         model_id="qwen36-27b",
                         prompt_hash="p" * 64, soul_hash="s" * 64,
                         evidence_envelope={"claimable": [], "forbidden": []},
                         audit_verdict={"verdict": "grounded"},
                     )
                 else:
-                    w.write_turn(kind, turn["content"])
+                    w.write_turn(
+                        kind,
+                        turn["content"],
+                        **_stamp_for_synthetic_kind(kind, models_owner_text=True),
+                    )
         finally:
             w.close()
 
@@ -322,6 +345,7 @@ def _run_interleaving_probe(
                 w.write_turn(
                     "user_message", entry["text"],
                     surface=entry["surface"],
+                    **_stamp_for_synthetic_kind("user_message", models_owner_text=True),
                 )
         finally:
             w.close()
@@ -481,6 +505,7 @@ def _run_concurrency_probe(
             barrier.wait()  # all start at once
             results[i] = shared_writer.write_turn(
                 kind, template.format(i=i),
+                **_stamp_for_synthetic_kind(kind, models_owner_text=kind == "user_message"),
             )
 
         try:
@@ -553,6 +578,7 @@ def _run_multi_turn_self_history_probe(
                 w.write_turn(
                     "model_reply", entry["text"],
                     surface=entry.get("surface", "UI"),
+                    **_stamp_for_synthetic_kind("model_reply"),
                     model_id="qwen36-27b",
                     prompt_hash="p" * 64, soul_hash="s" * 64,
                     evidence_envelope={"claimable": [], "forbidden": []},
@@ -576,6 +602,7 @@ def _run_multi_turn_self_history_probe(
                 w.write_turn(
                     "model_reply", entry["text"],
                     surface=entry.get("surface", "UI"),
+                    **_stamp_for_synthetic_kind("model_reply"),
                     model_id="qwen36-27b",
                     prompt_hash="p" * 64, soul_hash="s" * 64,
                     evidence_envelope={"claimable": [], "forbidden": []},

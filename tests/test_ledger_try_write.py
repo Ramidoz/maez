@@ -21,6 +21,9 @@ _TEST_DB_DIR = tempfile.mkdtemp(prefix="maez_test_try_write_")
 
 from core.ledger import migrate, writer  # noqa: E402
 
+_OWNER_STAMP = {"taint_labels": ["owner_utterance"], "privacy_access": "public"}
+_MODEL_STAMP = {"taint_labels": ["self_generated"], "privacy_access": "public"}
+
 
 def tearDownModule():
     import shutil
@@ -39,7 +42,7 @@ class TryWriteTurnTests(unittest.TestCase):
     def test_writes_when_enabled(self):
         db = _fresh_db("enabled")
         with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
-            tid = writer.try_write_turn(db, "user_message", "hello")
+            tid = writer.try_write_turn(db, "user_message", "hello", **_OWNER_STAMP)
         self.assertIsNotNone(tid)
         self.assertIsInstance(tid, str)
 
@@ -48,7 +51,7 @@ class TryWriteTurnTests(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if k != "MAEZ_LEDGER_WRITES"}
         env["MAEZ_LEDGER_WRITES"] = "0"
         with patch.dict(os.environ, env, clear=True):
-            tid = writer.try_write_turn(db, "user_message", "hello")
+            tid = writer.try_write_turn(db, "user_message", "hello", **_OWNER_STAMP)
         self.assertIsNone(tid)
 
     def test_disabled_shadow_write_does_not_create_db(self):
@@ -58,7 +61,7 @@ class TryWriteTurnTests(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if k != "MAEZ_LEDGER_WRITES"}
         env["MAEZ_LEDGER_WRITES"] = "0"
         with patch.dict(os.environ, env, clear=True):
-            tid = writer.try_write_turn(str(db), "user_message", "hello")
+            tid = writer.try_write_turn(str(db), "user_message", "hello", **_OWNER_STAMP)
         self.assertIsNone(tid)
         self.assertFalse(
             db.exists(),
@@ -73,7 +76,7 @@ class TryWriteTurnTests(unittest.TestCase):
             # De-fork: the unrecognized-flag warning now comes from the shared
             # core.ledger.writes_flag helper, not the writer logger.
             with self.assertLogs("core.ledger.writes_flag", level="WARNING") as cm:
-                tid = writer.try_write_turn(str(db), "user_message", "hello")
+                tid = writer.try_write_turn(str(db), "user_message", "hello", **_OWNER_STAMP)
         self.assertIsNone(tid)
         self.assertFalse(db.exists())
         self.assertTrue(any("MAEZ_LEDGER_WRITES" in line for line in cm.output))
@@ -89,7 +92,7 @@ class TryWriteTurnTests(unittest.TestCase):
                 # model_id triggers ValueError inside write_turn,
                 # which try_write_turn must swallow.
                 tid = writer.try_write_turn(
-                    db, "model_reply", "missing required fields",
+                    db, "model_reply", "missing required fields", **_MODEL_STAMP
                 )
         self.assertIsNone(tid)
         self.assertTrue(any("shadow ledger write failed" in line
@@ -104,7 +107,7 @@ class TryWriteTurnTests(unittest.TestCase):
         # First let writer create the file via sqlite3.connect (it
         # will), but reads of meta will fail because no migrate ran.
         with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
-            tid = writer.try_write_turn(nonexistent, "user_message", "x")
+            tid = writer.try_write_turn(nonexistent, "user_message", "x", **_OWNER_STAMP)
         # Either init failed or write_turn failed when reading meta —
         # either way, return None and DON'T raise.
         self.assertIsNone(tid)
@@ -113,7 +116,7 @@ class TryWriteTurnTests(unittest.TestCase):
         """An unwritable parent dir for the DB triggers init failure."""
         bad_path = "/nonexistent_dir_that_should_never_exist_xyz/ledger.db"
         with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
-            tid = writer.try_write_turn(bad_path, "user_message", "x")
+            tid = writer.try_write_turn(bad_path, "user_message", "x", **_OWNER_STAMP)
         self.assertIsNone(tid)
 
     def test_kwargs_passed_through(self):
@@ -124,6 +127,7 @@ class TryWriteTurnTests(unittest.TestCase):
                 db, "user_message", "with surface",
                 surface="telegram",
                 raw_surface="telegram_text",
+                **_OWNER_STAMP,
             )
         self.assertIsNotNone(tid)
         # Verify surface landed.
@@ -141,10 +145,10 @@ class TryWriteTurnTests(unittest.TestCase):
         """Helper must close the writer even on success."""
         db = _fresh_db("close_success")
         with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
-            writer.try_write_turn(db, "user_message", "first")
+            writer.try_write_turn(db, "user_message", "first", **_OWNER_STAMP)
             # If close() didn't run, the SQLite file would still be
             # locked. A fresh writer instance can write a second turn.
-            tid2 = writer.try_write_turn(db, "user_message", "second")
+            tid2 = writer.try_write_turn(db, "user_message", "second", **_OWNER_STAMP)
         self.assertIsNotNone(tid2)
 
 

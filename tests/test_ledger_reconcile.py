@@ -137,7 +137,10 @@ def _existing_writer_with_fk(
     try:
         tid = w.write_turn(
             "system_event", '{"event":"seed"}',
-            surface="system", **kwargs,
+            surface="system",
+            taint_labels=["self_generated"],
+            privacy_access="public",
+            **kwargs,
         )
     finally:
         w.close()
@@ -185,6 +188,8 @@ def _write_model_reply(ledger_path: str, was_rewritten: bool) -> str:
             audit_verdict={"verdict": "grounded"},
             rewritten_text="rewritten" if was_rewritten else None,
             was_rewritten=was_rewritten,
+            taint_labels=["self_generated"],
+            privacy_access="public",
         )
     finally:
         w.close()
@@ -461,7 +466,12 @@ class ChainIntegrityAcrossReconciliationTests(unittest.TestCase):
             w = writer.LedgerWriter(ledger)
             try:
                 for i in range(5):
-                    w.write_turn("user_message", f"pre-{i}")
+                    w.write_turn(
+                        "user_message",
+                        f"pre-{i}",
+                        taint_labels=["owner_utterance"],
+                        privacy_access="public",
+                    )
             finally:
                 w.close()
         before_rows = _all_turns(ledger)

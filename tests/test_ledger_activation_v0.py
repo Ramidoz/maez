@@ -88,7 +88,9 @@ class LedgerIsInitialized(unittest.TestCase):
         migrate.run(p)
         with mock.patch.dict(_os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
             self.assertTrue(try_write_turn(p, "user_message", "hello",
-                                           surface="telegram_surface", parent_turn_id=None))
+                                           surface="telegram_surface", parent_turn_id=None,
+                                           taint_labels=["owner_utterance"],
+                                           privacy_access="public"))
         self.assertTrue(migrate.ledger_is_initialized(p))          # still a real ledger
 
     def test_false_on_last_chain_hash_dangling(self):

@@ -121,6 +121,8 @@ def run_transaction(
             "system_event",
             json.dumps(payload, sort_keys=True),
             birth_anchor=True,
+            taint_labels=["self_generated"],
+            privacy_access="public",
         )
     finally:
         writer.close()

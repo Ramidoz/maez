@@ -105,6 +105,8 @@ def _ensure_persistence_marker(db_path: str) -> None:
             _marker_payload(),
             surface="ledger",
             raw_surface="model_reply_persistence",
+            taint_labels=["self_generated"],
+            privacy_access="public",
         )
         if marker_id:
             _record_marker_turn_id(db_path, marker_id)
@@ -193,6 +195,8 @@ def persist_model_reply(
             audit_trace_value_schema=audit_trace_value_schema,
             audit_trace_metadata_shape=audit_trace_metadata_shape,
             audit_trace_lineage=audit_trace_lineage,
+            taint_labels=["self_generated"],
+            privacy_access="public",
         )
         if turn_id is None:
             _warn_once(
@@ -223,4 +227,6 @@ def write_user_message_for_test(
         "user_message",
         raw_text,
         surface=surface,
+        taint_labels=["owner_utterance"],
+        privacy_access="public",
     )

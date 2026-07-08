@@ -43,9 +43,9 @@ Concurrency:
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
-import os
 import sqlite3
 import threading
 import time
@@ -55,6 +55,7 @@ from pathlib import Path
 from core.cognition import audit_policy as _audit_policy
 from core.ledger import chain
 from core.ledger import envelope_schema as _envelope_schema
+from core.ledger import taint_stamping
 
 __all__ = ["LedgerWriter"]
 
@@ -142,6 +143,8 @@ _TURN_COLUMNS: tuple[str, ...] = (
     "fabrication_event_id",
     "self_mod_dialog_id",
     "pending_card_id",
+    "taint_labels_json",
+    "privacy_access",
 )
 
 
@@ -163,6 +166,24 @@ def _canonical_json(obj) -> str:
         separators=(",", ":"),
         ensure_ascii=True,
     )
+
+
+def _require_stamp_kwargs(fn):
+    """Refuse omitted S1 stamp kwargs without adding semantic defaults."""
+
+    @functools.wraps(fn)
+    def wrapper(self, turn_kind: str, raw_text: str | None, *args, **kwargs):
+        if not args:
+            for field in ("taint_labels", "privacy_access"):
+                if field not in kwargs:
+                    raise taint_stamping.TaintStampingRefusal(
+                        f"{turn_kind}: {field} is required; no default is allowed",
+                        turn_kind=turn_kind,
+                        reason=f"{field}_missing",
+                    )
+        return fn(self, turn_kind, raw_text, *args, **kwargs)
+
+    return wrapper
 
 
 class LedgerWriter:
@@ -217,6 +238,7 @@ class LedgerWriter:
 
     # ------------------------------------------------------------------ write
 
+    @_require_stamp_kwargs
     def write_turn(
         self,
         turn_kind: str,
@@ -251,6 +273,8 @@ class LedgerWriter:
         audit_trace_lineage: dict | None = None,
         lifecycle_stage: str | None = None,
         birth_anchor: bool = False,
+        taint_labels: list[str] | tuple[str, ...] | set[str],
+        privacy_access: str,
     ) -> str | None:
         if self._rehearsal_mode and lifecycle_stage != "rehearsal":
             raise ValueError("rehearsal ledger writer requires lifecycle_stage='rehearsal'")
@@ -268,7 +292,15 @@ class LedgerWriter:
                     "birth_anchor requires an enabled writer (MAEZ_LEDGER_WRITES)"
                 )
 
-        # Disabled writer is a silent no-op — no validation, no SQL.
+        stamp = taint_stamping.validate_turn_stamp(
+            turn_kind=turn_kind,
+            taint_labels=taint_labels,
+            privacy_access=privacy_access,
+            caller=raw_surface or surface,
+        )
+
+        # Disabled writer is a silent SQL no-op, but S1 stamp validation still
+        # runs so bad caller provenance is refused at the writer door.
         if not self._enabled:
             return None
 
@@ -356,6 +388,8 @@ class LedgerWriter:
             "fabrication_event_id": fabrication_event_id,
             "self_mod_dialog_id": self_mod_dialog_id,
             "pending_card_id": pending_card_id,
+            "taint_labels_json": stamp.taint_labels_json,
+            "privacy_access": stamp.privacy_access,
         }
 
         with self._lock:
@@ -379,6 +413,10 @@ class LedgerWriter:
                 if head is None:
                     raise RuntimeError("ledger meta.last_chain_hash missing — DB not migrated?")
                 prev_chain_hash = head[0]
+                position_row = conn.execute(
+                    "SELECT COALESCE(MAX(chain_position), -1) + 1 FROM turns"
+                ).fetchone()
+                chain_position = int(position_row[0])
 
                 # Era init: on the first non-genesis write, set
                 # meta.ledger_era_starts_at to the current timestamp
@@ -413,8 +451,13 @@ class LedgerWriter:
                 ).fetchone()
                 post_birth = birth_row is not None and (birth_row[0] or "").strip() != ""
 
-                cols = list(_TURN_COLUMNS) + ["prev_chain_hash", "chain_hash"]
+                cols = list(_TURN_COLUMNS) + [
+                    "chain_position",
+                    "prev_chain_hash",
+                    "chain_hash",
+                ]
                 values = [row[c] for c in _TURN_COLUMNS] + [
+                    chain_position,
                     prev_chain_hash,
                     new_chain_hash,
                 ]

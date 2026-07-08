@@ -56,7 +56,10 @@ _MR_KW = dict(
     soul_hash="s" * 64,
     evidence_envelope={"claimable": [], "forbidden": []},
     audit_verdict={"verdict": "grounded"},
+    taint_labels=["self_generated"],
+    privacy_access="public",
 )
+_USER_STAMP = {"taint_labels": ["owner_utterance"], "privacy_access": "public"}
 
 
 class SchemaMigrationTests(unittest.TestCase):
@@ -72,7 +75,7 @@ class SchemaMigrationTests(unittest.TestCase):
         with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
             w = writer.LedgerWriter(db)
             try:
-                tid = w.write_turn("user_message", "hi")
+                tid = w.write_turn("user_message", "hi", **_USER_STAMP)
             finally:
                 w.close()
         with sqlite3.connect(db) as conn:
@@ -162,7 +165,7 @@ class ChainHashInvariantTests(unittest.TestCase):
             w = writer.LedgerWriter(db)
             try:
                 for i in range(5):
-                    w.write_turn("user_message", f"msg-{i}")
+                    w.write_turn("user_message", f"msg-{i}", **_USER_STAMP)
             finally:
                 w.close()
         # Re-run migration (no-op).
@@ -203,7 +206,7 @@ class WriterBirthEventTests(unittest.TestCase):
         with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
             w = writer.LedgerWriter(db)
             try:
-                tid = w.write_turn("user_message", "pre-birth")
+                tid = w.write_turn("user_message", "pre-birth", **_USER_STAMP)
             finally:
                 w.close()
         with sqlite3.connect(db) as conn:
@@ -220,7 +223,7 @@ class WriterBirthEventTests(unittest.TestCase):
         with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
             w = writer.LedgerWriter(db)
             try:
-                tid = w.write_turn("user_message", "post-birth")
+                tid = w.write_turn("user_message", "post-birth", **_USER_STAMP)
             finally:
                 w.close()
         with sqlite3.connect(db) as conn:
@@ -238,7 +241,7 @@ class WriterBirthEventTests(unittest.TestCase):
         with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
             w = writer.LedgerWriter(db)
             try:
-                tid_pre = w.write_turn("user_message", "X")
+                tid_pre = w.write_turn("user_message", "X", **_USER_STAMP)
             finally:
                 w.close()
         # Mark birth, then write another row with the SAME payload.
@@ -246,7 +249,7 @@ class WriterBirthEventTests(unittest.TestCase):
         with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
             w = writer.LedgerWriter(db)
             try:
-                tid_post = w.write_turn("user_message", "X")
+                tid_post = w.write_turn("user_message", "X", **_USER_STAMP)
             finally:
                 w.close()
         with sqlite3.connect(db) as conn:
@@ -274,7 +277,8 @@ class RecentTurnsRecallGestationTests(unittest.TestCase):
         with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
             w = writer.LedgerWriter(db)
             try:
-                tid = w.write_turn(kind, text, **(_MR_KW if kind == "model_reply" else {}))
+                kwargs = _MR_KW if kind == "model_reply" else _USER_STAMP
+                tid = w.write_turn(kind, text, **kwargs)
             finally:
                 w.close()
         return tid

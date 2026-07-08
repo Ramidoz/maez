@@ -99,6 +99,22 @@ def _count_turns(db_path: str) -> int:
     return n
 
 
+def _stamp_for_kind(kind: str) -> dict:
+    labels_by_kind = {
+        "user_message": ["owner_utterance"],
+        "model_reply": ["self_generated"],
+        "tool_call": ["self_generated"],
+        "tool_result": ["tool_output"],
+        "daemon_cycle": ["self_generated"],
+        "approval_decision": ["owner_utterance"],
+        "self_mod_dialog_step": ["owner_utterance", "self_generated"],
+        "peer_message_in": ["third_party"],
+        "peer_message_out": ["self_generated"],
+        "system_event": ["self_generated"],
+    }
+    return {"taint_labels": labels_by_kind[kind], "privacy_access": "public"}
+
+
 class EnablementTests(unittest.TestCase):
     def test_disabled_by_default_when_env_unset(self):
         db_path = _fresh_db("enable_default")
@@ -108,7 +124,7 @@ class EnablementTests(unittest.TestCase):
             try:
                 self.assertFalse(w.is_enabled(),
                     "MAEZ_LEDGER_WRITES unset → writer must be disabled by default")
-                result = w.write_turn("user_message", "hello")
+                result = w.write_turn("user_message", "hello", **_stamp_for_kind("user_message"))
                 self.assertIsNone(result,
                     "Disabled writer.write_turn must return None")
             finally:
@@ -124,7 +140,7 @@ class EnablementTests(unittest.TestCase):
                     w = writer.LedgerWriter(db_path)
                     try:
                         self.assertTrue(w.is_enabled())
-                        turn_id = w.write_turn("user_message", "hello")
+                        turn_id = w.write_turn("user_message", "hello", **_stamp_for_kind("user_message"))
                         self.assertIsNotNone(turn_id)
                         self.assertIsInstance(turn_id, str)
                         self.assertIsNotNone(_read_turn(db_path, turn_id))
@@ -144,6 +160,7 @@ class WriteUserMessageTests(unittest.TestCase):
                 turn_id = w.write_turn(
                     "user_message", "hello world",
                     surface="telegram", raw_surface="telegram_text",
+                    **_stamp_for_kind("user_message"),
                 )
             finally:
                 w.close()
@@ -170,7 +187,7 @@ class ChainIntegrityTests(unittest.TestCase):
             try:
                 ids = []
                 for i in range(50):
-                    tid = w.write_turn("user_message", f"message {i}")
+                    tid = w.write_turn("user_message", f"message {i}", **_stamp_for_kind("user_message"))
                     self.assertIsNotNone(tid)
                     ids.append(tid)
             finally:
@@ -190,7 +207,7 @@ class ChainIntegrityTests(unittest.TestCase):
             try:
                 last_id = None
                 for i in range(50):
-                    last_id = w.write_turn("user_message", f"msg {i}")
+                    last_id = w.write_turn("user_message", f"msg {i}", **_stamp_for_kind("user_message"))
             finally:
                 w.close()
         tail = _read_turn(db_path, last_id)
@@ -214,7 +231,7 @@ class PerKindWriteTests(unittest.TestCase):
         with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
             w = writer.LedgerWriter(db_path)
             try:
-                tid = w.write_turn(kind, raw_text, **kwargs)
+                tid = w.write_turn(kind, raw_text, **_stamp_for_kind(kind), **kwargs)
             finally:
                 w.close()
         self.assertIsNotNone(tid, f"{kind!r} minimal payload must succeed")
@@ -251,6 +268,7 @@ class PerKindWriteTests(unittest.TestCase):
                 parent = w.write_turn(
                     "tool_call", "run_shell ls",
                     action_proposal={"tool": "run_shell", "args": {}},
+                    **_stamp_for_kind("tool_call"),
                 )
             finally:
                 w.close()
@@ -289,7 +307,7 @@ class PerKindWriteTests(unittest.TestCase):
         with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
             w = writer.LedgerWriter(db)
             try:
-                parent = w.write_turn("system_event", '{"event":"x"}')
+                parent = w.write_turn("system_event", '{"event":"x"}', **_stamp_for_kind("system_event"))
             finally:
                 w.close()
         self._write_minimal(
@@ -340,7 +358,7 @@ class EraInitTests(unittest.TestCase):
         with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
             w = writer.LedgerWriter(db_path)
             try:
-                w.write_turn("user_message", "first ever")
+                w.write_turn("user_message", "first ever", **_stamp_for_kind("user_message"))
             finally:
                 w.close()
         era_str = self._read_era(db_path)
@@ -354,13 +372,13 @@ class EraInitTests(unittest.TestCase):
         with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
             w = writer.LedgerWriter(db_path)
             try:
-                w.write_turn("user_message", "first")
+                w.write_turn("user_message", "first", **_stamp_for_kind("user_message"))
                 era_after_first = self._read_era(db_path)
                 # Sleep imperceptibly to ensure if era WERE updated, the
                 # value would differ.
                 import time as _time
                 _time.sleep(0.01)
-                w.write_turn("user_message", "second")
+                w.write_turn("user_message", "second", **_stamp_for_kind("user_message"))
                 era_after_second = self._read_era(db_path)
             finally:
                 w.close()
@@ -379,7 +397,7 @@ class EraInitTests(unittest.TestCase):
         with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
             w = writer.LedgerWriter(db_path)
             try:
-                tid = w.write_turn("user_message", "atomic check")
+                tid = w.write_turn("user_message", "atomic check", **_stamp_for_kind("user_message"))
             finally:
                 w.close()
         row = _read_turn(db_path, tid)
@@ -397,14 +415,14 @@ class LifecycleTests(unittest.TestCase):
         db_path = _fresh_db("lifecycle_close")
         with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
             w = writer.LedgerWriter(db_path)
-            tid = w.write_turn("user_message", "before close")
+            tid = w.write_turn("user_message", "before close", **_stamp_for_kind("user_message"))
             self.assertIsNotNone(tid)
             w.close()
             with self.assertRaises(
                 (sqlite3.ProgrammingError, sqlite3.Error,
                  ValueError, RuntimeError)
             ):
-                w.write_turn("user_message", "after close")
+                w.write_turn("user_message", "after close", **_stamp_for_kind("user_message"))
 
 
 if __name__ == "__main__":

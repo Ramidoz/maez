@@ -15,6 +15,9 @@ os.environ["MAEZ_TEST_MODE"] = "1"
 from core.ledger import migrate  # noqa: E402
 from core.ledger.writer import LedgerWriter  # noqa: E402
 
+_SYSTEM_STAMP = {"taint_labels": ["self_generated"], "privacy_access": "public"}
+_OWNER_STAMP = {"taint_labels": ["owner_utterance"], "privacy_access": "public"}
+
 
 def _writer(td: str, enabled: bool) -> tuple[LedgerWriter, str]:
     db = str(Path(td) / "ledger.db")
@@ -54,7 +57,9 @@ class BirthAnchorTests(unittest.TestCase):
     def test_anchor_sets_meta_atomically(self):
         with TemporaryDirectory() as td:
             w, db = self._open(td)
-            tid = w.write_turn("system_event", '{"event":"birth"}', birth_anchor=True)
+            tid = w.write_turn(
+                "system_event", '{"event":"birth"}', birth_anchor=True, **_SYSTEM_STAMP
+            )
             self.assertIsNotNone(tid)
             self.assertEqual(_meta(db), tid)
 
@@ -62,9 +67,9 @@ class BirthAnchorTests(unittest.TestCase):
         with TemporaryDirectory() as td:
             w, db = self._open(td)
             birth_tid = w.write_turn(
-                "system_event", '{"event":"birth"}', birth_anchor=True
+                "system_event", '{"event":"birth"}', birth_anchor=True, **_SYSTEM_STAMP
             )
-            next_tid = w.write_turn("system_event", '{"event":"x"}')
+            next_tid = w.write_turn("system_event", '{"event":"x"}', **_SYSTEM_STAMP)
             conn = sqlite3.connect(db)
             try:
                 stages = dict(
@@ -81,22 +86,28 @@ class BirthAnchorTests(unittest.TestCase):
     def test_double_birth_refused(self):
         with TemporaryDirectory() as td:
             w, db = self._open(td)
-            w.write_turn("system_event", '{"event":"birth"}', birth_anchor=True)
+            w.write_turn(
+                "system_event", '{"event":"birth"}', birth_anchor=True, **_SYSTEM_STAMP
+            )
             with self.assertRaises(ValueError):
-                w.write_turn("system_event", '{"event":"birth"}', birth_anchor=True)
+                w.write_turn(
+                    "system_event", '{"event":"birth"}', birth_anchor=True, **_SYSTEM_STAMP
+                )
             self.assertEqual(_raw_text_count(db, '{"event":"birth"}'), 1)
 
     def test_disabled_writer_refuses_loudly(self):
         with TemporaryDirectory() as td:
             w, _ = self._open(td, enabled=False)
             with self.assertRaises(ValueError):
-                w.write_turn("system_event", '{"event":"birth"}', birth_anchor=True)
+                w.write_turn(
+                    "system_event", '{"event":"birth"}', birth_anchor=True, **_SYSTEM_STAMP
+                )
 
     def test_anchor_requires_system_event(self):
         with TemporaryDirectory() as td:
             w, _ = self._open(td)
             with self.assertRaises(ValueError):
-                w.write_turn("user_message", "hi", birth_anchor=True)
+                w.write_turn("user_message", "hi", birth_anchor=True, **_OWNER_STAMP)
 
 
 if __name__ == "__main__":

@@ -28,14 +28,16 @@ row, no duplicate meta rows, no duplicate ``schema_migrations`` rows.
 """
 from __future__ import annotations
 
-import hashlib
-import json
 import os
 import sqlite3
 import time
 from pathlib import Path
 
-__all__ = ["run"]
+__all__ = ["LedgerMigrationRefusal", "run"]
+
+
+class LedgerMigrationRefusal(RuntimeError):
+    """Typed fail-closed refusal for unsafe ledger migrations."""
 
 
 # Canonical genesis row content. These EXACT values feed the §6.1
@@ -70,20 +72,17 @@ GENESIS_ROW: dict = {
     "fabrication_event_id": None,
     "self_mod_dialog_id": None,
     "pending_card_id": None,
+    "taint_labels_json": "[]",
+    "privacy_access": "public",
+    "chain_position": 0,
 }
 
 
 def _canonical_genesis_chain_hash() -> str:
     """Compute sha256("genesis" + canonical_json(GENESIS_ROW))."""
-    canonical = json.dumps(
-        GENESIS_ROW,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-    )
-    return hashlib.sha256(
-        ("genesis" + canonical).encode("utf-8")
-    ).hexdigest()
+    from core.ledger import chain
+
+    return chain.compute_chain_hash(GENESIS_ROW, None)
 
 
 def _migrations_dir() -> Path:
@@ -120,6 +119,8 @@ def _apply_pending_migrations(conn: sqlite3.Connection) -> None:
         )
 
     already = _applied_migrations(conn)
+    if "0005_add_taint_privacy_chain_position" not in already:
+        _refuse_s1_migration_if_turns_populated(conn)
     for path in sql_files:
         name = path.stem
         if name in already:
@@ -131,6 +132,20 @@ def _apply_pending_migrations(conn: sqlite3.Connection) -> None:
             (name, time.time()),
         )
         conn.commit()
+
+
+def _refuse_s1_migration_if_turns_populated(conn: sqlite3.Connection) -> None:
+    table = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='turns'"
+    ).fetchone()
+    if table is None:
+        return
+    count = conn.execute("SELECT COUNT(*) FROM turns").fetchone()[0]
+    if count:
+        raise LedgerMigrationRefusal(
+            "refusing S1 ledger migration: turns already contains "
+            f"{count} row(s); populated ledgers must not be rehashed"
+        )
 
 
 def _seed_meta_schema_version(conn: sqlite3.Connection) -> None:
@@ -247,10 +262,19 @@ def ledger_is_initialized(db_path: str) -> bool:
         }
         if not {"meta", "turns"} <= names:
             return False
+        cols = {
+            r[1]
+            for r in conn.execute("PRAGMA table_info(turns)").fetchall()
+        }
+        if not {"taint_labels_json", "privacy_access", "chain_position"} <= cols:
+            return False
         gen = conn.execute(
-            "SELECT chain_hash FROM turns WHERE turn_id = 'genesis'"
+            "SELECT chain_hash, taint_labels_json, privacy_access, chain_position "
+            "FROM turns WHERE turn_id = 'genesis'"
         ).fetchone()
         if not gen or not gen[0]:
+            return False
+        if gen[1] != "[]" or gen[2] != "public" or gen[3] != 0:
             return False
         genesis_chain_hash = gen[0]
         meta = {

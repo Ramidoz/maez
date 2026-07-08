@@ -6744,6 +6744,8 @@ def chat():
                     "user_message",
                     message,
                     surface="web_owner",
+                    taint_labels=["owner_utterance"],
+                    privacy_access="public",
                 )
         except Exception:
             _owner_ledger_db_path = None

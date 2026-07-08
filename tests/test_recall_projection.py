@@ -59,6 +59,8 @@ _MR_KW = dict(
     soul_hash="s" * 64,
     evidence_envelope={"claimable": [], "forbidden": []},
     audit_verdict={"verdict": "grounded"},
+    taint_labels=["self_generated"],
+    privacy_access="public",
 )
 
 

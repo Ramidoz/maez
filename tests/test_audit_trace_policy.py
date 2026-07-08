@@ -44,7 +44,8 @@ def _write(db: str, kind: str, text: str, **kwargs) -> str:
     with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
         w = writer.LedgerWriter(db)
         try:
-            tid = w.write_turn(kind, text, **kwargs)
+            call_kwargs = {**_stamp_for_kind(kind), **kwargs}
+            tid = w.write_turn(kind, text, **call_kwargs)
         finally:
             w.close()
     assert tid is not None, f"write_turn({kind!r}) returned None"
@@ -57,7 +58,18 @@ _MR_KW = dict(
     soul_hash="s" * 64,
     evidence_envelope={"claimable": [], "forbidden": []},
     audit_verdict={"verdict": "grounded"},
+    taint_labels=["self_generated"],
+    privacy_access="public",
 )
+
+
+def _stamp_for_kind(kind: str) -> dict:
+    labels = {
+        "user_message": ["owner_utterance"],
+        "model_reply": ["self_generated"],
+        "daemon_cycle": ["self_generated"],
+    }.get(kind, ["self_generated"])
+    return {"taint_labels": labels, "privacy_access": "public"}
 
 
 def _trace_lineage(rule_id: str = "repetition_with_continuity") -> dict:

@@ -537,6 +537,8 @@ def run_synthetic_load(
                     f"x6 synthetic rehearsal turn {index}",
                     surface="x6_rehearsal",
                     lifecycle_stage="rehearsal",
+                    taint_labels=["self_generated"],
+                    privacy_access="public",
                 )
                 if turn_id is None:
                     raise RuntimeError("rehearsal writer unexpectedly disabled")

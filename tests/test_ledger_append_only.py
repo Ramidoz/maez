@@ -88,6 +88,9 @@ _TURNS_COLUMNS = (
     "fabrication_event_id",
     "self_mod_dialog_id",
     "pending_card_id",
+    "taint_labels_json",
+    "privacy_access",
+    "chain_position",
     "prev_chain_hash",
     "chain_hash",
 )
@@ -165,6 +168,7 @@ def _seeded_db() -> sqlite3.Connection:
             memory_read_ids, memory_written_ids,
             audit_log_id, fabrication_event_id,
             self_mod_dialog_id, pending_card_id,
+            taint_labels_json, privacy_access, chain_position,
             prev_chain_hash, chain_hash
         ) VALUES (
             ?, 'owner', ?, 1, 'system_event',
@@ -177,6 +181,7 @@ def _seeded_db() -> sqlite3.Connection:
             '[]', '[]',
             NULL, NULL,
             NULL, NULL,
+            '["self_generated"]', 'public', 1,
             NULL, ?
         )
         """,
@@ -341,9 +346,11 @@ class TurnsAppendOnlyTests(unittest.TestCase, _AppendOnlyMixin):
                 turn_id, tenant_id, timestamp, schema_version,
                 turn_kind, surface, raw_text, was_rewritten,
                 signals_present, signals_absent,
-                memory_read_ids, memory_written_ids, chain_hash
+                memory_read_ids, memory_written_ids,
+                taint_labels_json, privacy_access, chain_position, chain_hash
             ) VALUES (?, 'owner', ?, 1, 'system_event', 'system',
-                      'second valid turn', 0, '[]', '[]', '[]', '[]', ?)
+                      'second valid turn', 0, '[]', '[]', '[]', '[]',
+                      '["self_generated"]', 'public', 2, ?)
             """,
             (turn_id, time.time(), "chain_hash_" + turn_id),
         )

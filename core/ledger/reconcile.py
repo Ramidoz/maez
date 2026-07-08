@@ -14,7 +14,6 @@ never auto-repaired in this slice — claim extraction is slice 4.
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 from pathlib import Path
 
@@ -242,6 +241,8 @@ def reconcile(
                         raw_text,
                         surface="system",
                         raw_surface="ledger_reconciliation",
+                        taint_labels=["self_generated"],
+                        privacy_access="public",
                         **kwargs,
                     )
                     if tid is not None:

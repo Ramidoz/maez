@@ -255,9 +255,11 @@ class StateCTests(_Tmp):
                 "INSERT INTO turns ("
                 "turn_id, tenant_id, timestamp, schema_version, turn_kind, "
                 "surface, raw_text, rewritten_text, was_rewritten, "
+                "taint_labels_json, privacy_access, chain_position, "
                 "prev_chain_hash, chain_hash) VALUES (?, 'owner', ?, 1, "
-                "'model_reply', 'chat', ?, ?, 1, ?, ?)",
+                "'model_reply', 'chat', ?, ?, 1, ?, 'public', 1, ?, ?)",
                 ("turn_state_c", ERA_TS + 100.0, "raw", "rewritten",
+                 '["self_generated"]',
                  head, "b" * 64),
             )
             conn.execute(

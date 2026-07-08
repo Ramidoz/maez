@@ -67,8 +67,24 @@ def _scrub_env() -> dict:
 
 
 # Per-kind valid kwargs (the structured-types canonical API).
+def _stamp_for_kind(kind: str) -> dict:
+    labels_by_kind = {
+        "user_message": ["owner_utterance"],
+        "model_reply": ["self_generated"],
+        "tool_call": ["self_generated"],
+        "tool_result": ["tool_output"],
+        "daemon_cycle": ["self_generated"],
+        "approval_decision": ["owner_utterance"],
+        "self_mod_dialog_step": ["owner_utterance", "self_generated"],
+        "peer_message_in": ["third_party"],
+        "peer_message_out": ["self_generated"],
+        "system_event": ["self_generated"],
+    }
+    return {"taint_labels": labels_by_kind[kind], "privacy_access": "public"}
+
+
 def _valid_kwargs(kind: str) -> dict:
-    common = {"surface": "test"}
+    common = {"surface": "test", **_stamp_for_kind(kind)}
     if kind == "user_message":
         return {**common, "raw_text": "hi"}
     if kind == "model_reply":

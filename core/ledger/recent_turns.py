@@ -40,9 +40,9 @@ def recent_turns_by_kind(
     is in ``kinds``, newest-first, scoped to ``tenant_id``.
 
     Each returned dict carries ``turn_id``, ``timestamp``,
-    ``turn_kind``, ``raw_text``, ``lifecycle_stage`` — the columns
-    required to build a ``SelfHistoryRef`` plus the gestation-aware
-    label hook.
+    ``turn_kind``, ``raw_text``, ``lifecycle_stage``, S1 taint/privacy
+    labels, and ``chain_position`` — the columns required to build a
+    ``SelfHistoryRef`` plus the gestation-aware label hook.
 
     ``recall_gestation`` (Gestation Boundary slice, 2026-05-08, per
     docs/slices/legacy/gestation-boundary.md §4):
@@ -86,6 +86,7 @@ def recent_turns_by_kind(
 
     select_cols = (
         "turn_id, timestamp, turn_kind, raw_text, lifecycle_stage, "
+        "taint_labels_json, privacy_access, chain_position, "
         "audit_trace_label, audit_trace_value_schema, "
         "audit_trace_metadata_shape"
     )

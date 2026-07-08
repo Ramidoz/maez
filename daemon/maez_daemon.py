@@ -6989,6 +6989,8 @@ class MaezDaemon:
                 "user_message",
                 text,
                 surface=source,
+                taint_labels=["owner_utterance"],
+                privacy_access="public",
             )
         except Exception:
             # Belt-and-suspenders: try_write_turn is already exception-

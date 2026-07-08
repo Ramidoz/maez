@@ -67,6 +67,8 @@ def _model_reply_kwargs(envelope: dict | None) -> dict:
         "soul_hash": "s" * 64,
         "evidence_envelope": envelope,
         "audit_verdict": {"verdict": "grounded"},
+        "taint_labels": ["self_generated"],
+        "privacy_access": "public",
     }
 
 

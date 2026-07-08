@@ -51,7 +51,7 @@ def _canonical_bytes_expected(row: dict) -> bytes:
     """
     stripped = {
         k: v for k, v in row.items()
-        if k not in ("chain_hash", "prev_chain_hash")
+        if k not in ("chain_hash", "prev_chain_hash", "chain_position")
     }
     return json.dumps(
         stripped,
@@ -121,6 +121,9 @@ def _build_synthetic_chain(n: int) -> list[dict]:
             "fabrication_event_id": None,
             "self_mod_dialog_id": None,
             "pending_card_id": None,
+            "taint_labels_json": '["owner_utterance"]',
+            "privacy_access": "public",
+            "chain_position": i,
             "prev_chain_hash": prev["chain_hash"],
         }
         row["chain_hash"] = _expected_chain_hash(row, prev["chain_hash"])

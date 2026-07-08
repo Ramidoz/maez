@@ -50,11 +50,21 @@ _MR_KW = dict(
 )
 
 
+def _stamp_for_kind(kind: str) -> dict:
+    labels = {
+        "user_message": ["owner_utterance"],
+        "model_reply": ["self_generated"],
+        "daemon_cycle": ["self_generated"],
+        "tool_result": ["tool_output"],
+    }.get(kind, ["self_generated"])
+    return {"taint_labels": labels, "privacy_access": "public"}
+
+
 def _write(db: str, kind: str, text: str, **kwargs) -> str:
     with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
         w = writer.LedgerWriter(db)
         try:
-            tid = w.write_turn(kind, text, **kwargs)
+            tid = w.write_turn(kind, text, **_stamp_for_kind(kind), **kwargs)
         finally:
             w.close()
     return tid

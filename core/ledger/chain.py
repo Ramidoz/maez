@@ -73,6 +73,7 @@ _CHAIN_HASH_EXCLUDE = (
     "audit_trace_label",
     "audit_trace_value_schema",
     "audit_trace_metadata_shape",
+    "chain_position",
 )
 
 
@@ -116,10 +117,46 @@ def verify_chain(rows: list[dict]) -> list[dict]:
     if not rows:
         return violations
 
+    seen_positions: set[int] = set()
+
     for i, row in enumerate(rows):
         turn_id = row.get("turn_id", "")
         stored_hash = row.get("chain_hash", "")
         stored_prev = row.get("prev_chain_hash")
+        if "chain_position" in row:
+            position = row.get("chain_position")
+            if not isinstance(position, int):
+                violations.append(
+                    {
+                        "row_index": i,
+                        "turn_id": turn_id,
+                        "reason": "chain-position-not-integer",
+                        "expected": str(i),
+                        "actual": repr(position),
+                    }
+                )
+            else:
+                if position != i:
+                    violations.append(
+                        {
+                            "row_index": i,
+                            "turn_id": turn_id,
+                            "reason": "chain-position-mismatch",
+                            "expected": str(i),
+                            "actual": str(position),
+                        }
+                    )
+                if position in seen_positions:
+                    violations.append(
+                        {
+                            "row_index": i,
+                            "turn_id": turn_id,
+                            "reason": "chain-position-duplicate",
+                            "expected": f"unique position {position}",
+                            "actual": str(position),
+                        }
+                    )
+                seen_positions.add(position)
 
         recomputed = compute_chain_hash(row, stored_prev)
         if recomputed != stored_hash:

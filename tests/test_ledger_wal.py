@@ -115,10 +115,11 @@ class WALConcurrencyTests(unittest.TestCase):
         conn.execute(
             "INSERT INTO turns ("
             " turn_id, tenant_id, timestamp, schema_version, turn_kind,"
-            " surface, raw_text, prev_chain_hash, chain_hash"
+            " surface, raw_text, taint_labels_json, privacy_access,"
+            " chain_position, prev_chain_hash, chain_hash"
             ") VALUES (?, 'owner', 0.0, 1, 'system_event',"
-            " 'system', ?, ?, ?)",
-            (turn_id, f"test-{turn_id}", self._genesis_hash(),
+            " 'system', ?, ?, 'public', 1, ?, ?)",
+            (turn_id, f"test-{turn_id}", '["self_generated"]', self._genesis_hash(),
              "0" * 64),
         )
 
