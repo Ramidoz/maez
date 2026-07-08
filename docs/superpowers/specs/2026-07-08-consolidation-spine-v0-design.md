@@ -253,6 +253,65 @@ and diary factory byte-untouched. Falsifiable core: no shadow artifact
 exists whose cited rows fail chain verification or whose taint is not a
 superset of its citations'.
 
+## Third-lane review (Grok 4.5 high, 2026-07-08) — post-agreement findings
+
+Owner requested a third lane on what two-lane convergence itself hides.
+Findings verified by Claude against source before acceptance; these AMEND
+the agreed design (constitution-adjacent, per Grok's own framing):
+
+**G1 (COVENANT, accepted) — paraphrase laundering.** Model replies stamp
+`self_generated` (S1 caller table), so Maez retelling internet content in
+its own words sheds `internet_derived` before digestion ever looks.
+Cited-row taint-superset cannot see it. AMENDMENT: the digester stamps every
+artifact with the taint union of ALL rows in the episode working set (a
+strict superset of cited-row union — deterministic, no semantics needed);
+the session-context-taint gap (cross-episode ancestry) is a named shadow
+metric. Full causal taint propagation through conversation is future
+substrate work.
+
+**G2 (COVENANT, accepted) — wondering quarantine.** VERIFIED:
+`Wonderings.pick_next()` (wonderings.py:561) has no source filter — any
+live-written digestion wondering enters pursuit immediately, a covert
+self-formation channel. v0 shadow mode already prevents this; AMENDMENT
+(constitutional): digestion-sourced wonderings remain QUARANTINED from
+pick_next/pursuit even after the switchover ceremony, until the
+self-formation loop is deliberately wired in its own witnessed slice
+(structural filter + test, not policy prose).
+
+**G3 (EMERGENT-RISK, accepted) — selector implicit maximand.** Mechanical
+ranking by size/tool-density/errors is a fixed volume-ops maximand: over
+1000 nights the autobiography skews sysadmin-diary, quiet owner-heavy days
+become shallow residue. AMENDMENT: still-mechanical quota — when the span
+contains low-tool-density episodes, at least one deep slot is reserved for
+the largest of them; deep budget becomes span-proportional (not fixed K)
+with per-night row caps and multi-night backlog chunking in the planner.
+
+**G4 (accepted) — refusal progress policy.** Per-episode outcomes are
+explicit: `committed` | `deferred_same_span` (brain unavailable/parse
+failure — retried next window) | `dead_letter_skeleton_only` (lock-refused
+twice — a shallow skeleton-facts digest is committed so the night is never
+a silent hole, and the refusal receipt names it). A stuck episode can never
+freeze digestion forever; a refusal can never silently vanish a day.
+
+**G5 (accepted) — shadow honesty dashboard.** Shadow-green requires
+measuring, per span: deep-episode composition (tool-heavy vs owner-heavy
+fraction), citation coverage (cited/episode rows), episode-taint vs
+cited-taint gap, refusal rate by code + span-advance fate, digestion
+wonderings entering pick_next (must be 0), backlog depth, and an
+owner-sampled support judgment (digest claims vs cited text:
+supported/partial/false). Citations resolving is necessary, never
+sufficient.
+
+**G6 (accepted) — wondering write door.** The live path (post-switchover)
+runs `citation_lock.validate` inside the digester before
+`add_with_citations`; `assert_citation_integrity` alone (sidecar presence)
+is not the law.
+
+Rejected honestly: entailment model inside the hot lock (non-deterministic
+— breaks law-as-code; the owner-sampled support protocol covers semantic
+honesty in shadow); salience ranking (already correctly deferred);
+chain-verify optimization (post-birth, measure first — already noted).
+
 ## Cross-review log
 
 - Round 3 (same reviewer): NOT-YET, 3 consistency blockers, all accepted in
