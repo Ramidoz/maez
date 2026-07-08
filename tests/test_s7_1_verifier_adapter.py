@@ -191,6 +191,40 @@ class S71VerifierAdapterTests(unittest.TestCase):
         self.assertEqual(result["library_version"], "2.7.1")
         self.assertEqual(result["uv_capable"], True)
 
+    def test_registration_verifier_preserves_browser_reported_transports(self):
+        from core.governance.s7_webauthn_verifier import S7ProductionWebAuthnVerifier
+
+        class Verified:
+            credential_id = b"credential-id"
+            credential_public_key = b"public-key"
+            sign_count = 7
+            aaguid = None
+            fmt = "none"
+            credential_device_type = "single_device"
+            credential_backed_up = False
+            user_verified = True
+
+        class WebAuthnModule:
+            @staticmethod
+            def verify_registration_response(**_kwargs):
+                return Verified()
+
+        with patch.object(importlib.metadata, "version", return_value="2.7.1"):
+            verifier = S7ProductionWebAuthnVerifier(import_module=lambda _name: WebAuthnModule)
+            result = verifier.verify_registration_response(
+                registration_response={
+                    "clientDataJSON": "valid",
+                    "transports": ["usb", "nfc"],
+                },
+                challenge={"challenge_b64": "Y2hhbGxlbmdl"},
+                expected_origin="http://localhost:11437",
+                expected_rp_id="localhost",
+                require_user_verification=True,
+            )
+
+        self.assertEqual(result["ok"], True)
+        self.assertEqual(result["transports"], ("usb", "nfc"))
+
     def test_072_production_authentication_verifier_fails_closed_on_invalid_assertion(self):
         from core.governance.s7_webauthn_verifier import S7ProductionWebAuthnVerifier
 

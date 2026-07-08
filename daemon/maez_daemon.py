@@ -907,9 +907,28 @@ def _s7_create_backup_registration_card(daemon):
     if card_store is None:
         return _s7_route_error("s7_pending_card_store_unavailable", 503)
 
+    params = backup_registration_action_params()
+    existing = _s7_open_backup_registration_card(card_store, params=params)
+    if existing is not None:
+        return SimpleNamespace(
+            ok=True,
+            status_code=200,
+            body={
+                "ok": True,
+                "request_id": existing.request_id,
+                "action": "register_backup_webauthn_credential",
+                "status": getattr(
+                    getattr(existing, "status", None),
+                    "value",
+                    getattr(existing, "status", ""),
+                ),
+                "reused_open_card": True,
+            },
+        )
+
     card = card_store.create_card(
         action="register_backup_webauthn_credential",
-        params=backup_registration_action_params(),
+        params=params,
         reason="S7.1 backup WebAuthn credential enrollment requires founder authorization.",
         plain_english="Authorize S7.1 backup WebAuthn credential enrollment.",
         channel="cockpit_s7_1_manual_proof",
@@ -926,6 +945,23 @@ def _s7_create_backup_registration_card(daemon):
             "status": getattr(getattr(card, "status", None), "value", getattr(card, "status", "")),
         },
     )
+
+
+def _s7_open_backup_registration_card(card_store, *, params):
+    list_open = getattr(card_store, "list_open_by_action", None)
+    if list_open is None:
+        return None
+    for card in list_open("register_backup_webauthn_credential"):
+        if dict(getattr(card, "params", None) or {}) != params:
+            continue
+        if getattr(card, "channel", "cockpit_s7_1_manual_proof") != "cockpit_s7_1_manual_proof":
+            continue
+        if getattr(card, "chat_id", "s7.1-manual-proof") != "s7.1-manual-proof":
+            continue
+        if getattr(card, "user_id", "rohit") != "rohit":
+            continue
+        return card
+    return None
 
 
 def _s7_create_disable_credential_card(daemon, req, *, now: str):

@@ -96,7 +96,7 @@ class S7ProductionWebAuthnVerifier:
             "authenticator_attachment": None,
             "backup_eligible": _enum_value(verified.credential_device_type) == "multi_device",
             "backed_up": bool(verified.credential_backed_up),
-            "transports": (),
+            "transports": _registration_transports(registration_response),
             "library_name": self.package_name,
             "library_version": self.dependency_state().get("library_version"),
             "sign_count_mode": "constant_zero" if int(verified.sign_count) == 0 else "advancing",
@@ -194,3 +194,15 @@ def _b64url_encode(value: bytes) -> str:
 def _enum_value(value: Any) -> str:
     enum_value = getattr(value, "value", value)
     return str(enum_value)
+
+
+def _registration_transports(registration_response: dict[str, Any]) -> tuple[str, ...]:
+    raw = registration_response.get("transports", ())
+    if not isinstance(raw, list):
+        return ()
+    transports: list[str] = []
+    for value in raw:
+        transport = str(value)
+        if transport and transport not in transports:
+            transports.append(transport)
+    return tuple(transports)

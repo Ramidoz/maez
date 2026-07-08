@@ -337,7 +337,13 @@ class S71CeremonyServiceTests(unittest.TestCase):
         )
         return envelope, rendered
 
-    def _credential_record(self, credential_ref: str, *, kind: str):
+    def _credential_record(
+        self,
+        credential_ref: str,
+        *,
+        kind: str,
+        transports: tuple[str, ...] = ("usb",),
+    ):
         from core.governance.s7_webauthn_bootstrap import FounderWebAuthnCredentialRecord
 
         return FounderWebAuthnCredentialRecord.build(
@@ -359,7 +365,7 @@ class S71CeremonyServiceTests(unittest.TestCase):
             authenticator_attachment="cross-platform",
             backup_eligible=False,
             backed_up=False,
-            transports=("usb",),
+            transports=transports,
             library_name="webauthn",
             library_version="2.7.1",
             sign_count_mode="advancing",
@@ -740,11 +746,56 @@ class S71CeremonyServiceTests(unittest.TestCase):
         self.assertEqual(result.status_code, 200)
         self.assertEqual(result.body["challenge_kind"], "register_backup")
         self.assertEqual(tuple(result.body["exclude_credentials"]), ("cred-primary",))
+        self.assertEqual(
+            result.body["public_key_options"]["excludeCredentials"],
+            [{"id": "cred-primary", "type": "public-key", "transports": ["usb"]}],
+        )
         selection = result.body["public_key_options"]["authenticatorSelection"]
         self.assertEqual(selection["residentKey"], "preferred")
         self.assertEqual(selection["userVerification"], "required")
         self.assertNotIn("authenticatorAttachment", selection)
         self.assertIsNotNone(consumed_at)
+
+    def test_backup_registration_begin_requires_authorization_before_transport_replay(self):
+        from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store, _intent = self._store_with_bootstrap(tmp)
+            store.store_credential(
+                self._credential_record(
+                    "cred-primary",
+                    kind="primary",
+                    transports=("usb", "nfc"),
+                )
+            )
+            service = S7LocalWebAuthnCeremonyService(
+                verifier=_ValidRegistrationVerifier(),
+                store_factory=lambda: store,
+            )
+
+            denied = service.register_begin(
+                now=NOW,
+                request_json={
+                    "registration_class": "backup",
+                    "session_binding": "session-b",
+                },
+            )
+            authorized = service.register_begin(
+                now=NOW,
+                request_json={
+                    "registration_class": "backup",
+                    "session_binding": "session-b",
+                },
+                s7_execution_authorization=self._backup_registration_authorization(store.db_path),
+            )
+
+        self.assertEqual(denied.status_code, 403)
+        self.assertEqual(denied.body["error"], "s7_authorization_required")
+        self.assertNotIn("public_key_options", denied.body)
+        self.assertEqual(
+            authorized.body["public_key_options"]["excludeCredentials"],
+            [{"id": "cred-primary", "type": "public-key", "transports": ["usb", "nfc"]}],
+        )
 
     def test_backup_registration_finish_stores_backup_credential(self):
         from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
@@ -1123,7 +1174,13 @@ class S71CeremonyServiceTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             store, _intent = self._store_with_bootstrap(tmp)
-            store.store_credential(self._credential_record("cred-primary", kind="primary"))
+            store.store_credential(
+                self._credential_record(
+                    "cred-primary",
+                    kind="primary",
+                    transports=("usb", "nfc"),
+                )
+            )
             service = S7LocalWebAuthnCeremonyService(
                 verifier=_ValidRegistrationVerifier(),
                 store_factory=lambda: store,
@@ -1142,6 +1199,38 @@ class S71CeremonyServiceTests(unittest.TestCase):
         self.assertEqual(result.status_code, 200)
         self.assertEqual(result.body["challenge_kind"], "authorize_guarded_request")
         self.assertEqual(tuple(result.body["allow_credentials"]), ("cred-primary",))
+        self.assertEqual(
+            result.body["public_key_options"]["allowCredentials"],
+            [{"id": "cred-primary", "type": "public-key", "transports": ["usb", "nfc"]}],
+        )
+
+    def test_authorize_begin_defaults_empty_founder_transports_for_allow_credentials(self):
+        from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store, _intent = self._store_with_bootstrap(tmp)
+            store.store_credential(
+                self._credential_record("cred-primary", kind="primary", transports=())
+            )
+            service = S7LocalWebAuthnCeremonyService(
+                verifier=_ValidRegistrationVerifier(),
+                store_factory=lambda: store,
+            )
+
+            result = service.authorize_begin(
+                now=NOW,
+                rendered_statement=self._rendered_statement(),
+                precondition_hash="a" * 64,
+                session_binding="session-auth",
+                internal_channel_binding="daemon-channel",
+                allow_degraded_primary_only=True,
+            )
+
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(
+            result.body["public_key_options"]["allowCredentials"],
+            [{"id": "cred-primary", "type": "public-key", "transports": ["usb", "nfc"]}],
+        )
 
     def test_authorize_begin_allows_recovery_proof_with_backup_only(self):
         from dataclasses import replace

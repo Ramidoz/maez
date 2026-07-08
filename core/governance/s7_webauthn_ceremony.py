@@ -196,7 +196,7 @@ class S7LocalWebAuthnCeremonyService:
                         "timeout": 600000,
                         "attestation": "direct",
                         "excludeCredentials": [
-                            {"id": credential_ref, "type": "public-key"}
+                            _credential_descriptor(store, credential_ref)
                             for credential_ref in exclude_credentials
                         ],
                         "authenticatorSelection": {
@@ -481,7 +481,7 @@ class S7LocalWebAuthnCeremonyService:
                     "timeout": 300000,
                     "userVerification": "required",
                     "allowCredentials": [
-                        {"id": credential_ref, "type": "public-key"}
+                        _credential_descriptor(store, credential_ref)
                         for credential_ref in allow_credentials
                     ],
                 },
@@ -1031,6 +1031,16 @@ def _optional_bool(value: Any) -> bool | None:
     if value is None:
         return None
     return bool(value)
+
+
+def _credential_descriptor(store: Any, credential_ref: str) -> dict[str, Any]:
+    credential = store.get_credential(credential_ref)
+    transports = tuple(getattr(credential, "transports", ()) or ())
+    return {
+        "id": credential_ref,
+        "type": "public-key",
+        "transports": list(transports or ("usb", "nfc")),
+    }
 
 
 def _public_key_credential_params() -> tuple[dict[str, int | str], ...]:

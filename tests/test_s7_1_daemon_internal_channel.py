@@ -2326,6 +2326,65 @@ class S71DaemonInternalChannelTests(_DaemonAppClientMixin, unittest.TestCase):
         self.assertEqual(created["channel"], "cockpit_s7_1_manual_proof")
         self.assertEqual(created["user_id"], "rohit")
 
+    def test_daemon_backup_registration_card_route_reuses_open_request_for_retry(self):
+        created = []
+
+        class Card:
+            def __init__(self, request_id, params):
+                self.request_id = request_id
+                self.status = "open"
+                self.action = "register_backup_webauthn_credential"
+                self.params = params
+
+        class Store:
+            def __init__(self):
+                self.card = None
+
+            def create_card(self, **kwargs):
+                created.append(kwargs)
+                self.card = Card("req-backup-register", kwargs["params"])
+                return self.card
+
+            def list_open_by_action(self, action):
+                if action != "register_backup_webauthn_credential" or self.card is None:
+                    return []
+                return [self.card]
+
+        store = Store()
+
+        class Pipe:
+            card_store = store
+
+        class Telegram:
+            def _get_pipeline(self):
+                return Pipe()
+
+        def configure(daemon):
+            daemon.telegram = Telegram()
+
+        env = {
+            "S7_LIVE_WEBAUTHN_CEREMONY": "1",
+            "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            client = self._client(configure_daemon=configure)
+            first = client.post(
+                "/internal/s7/webauthn/register/backup-card",
+                json={"session_binding": "session-backup-card"},
+                headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+            )
+            second = client.post(
+                "/internal/s7/webauthn/register/backup-card",
+                json={"session_binding": "session-backup-card"},
+                headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+            )
+
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(first.get_json()["request_id"], "req-backup-register")
+        self.assertEqual(second.get_json()["request_id"], "req-backup-register")
+        self.assertEqual(len(created), 1)
+
     def test_proof_only_disable_routes_are_disabled_without_proof_flag(self):
         class Store:
             def create_card(self, **_kwargs):

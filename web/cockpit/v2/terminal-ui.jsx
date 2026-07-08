@@ -1653,6 +1653,10 @@ function ceremonyEncodeCredentialResponse(credential) {
   for (const key of ["clientDataJSON", "attestationObject", "authenticatorData", "signature", "userHandle"]) {
     if (response[key]) body.response[key] = ceremonyBufferToB64url(response[key]);
   }
+  if (typeof response.getTransports === "function") {
+    const transports = response.getTransports();
+    if (Array.isArray(transports)) body.transports = transports;
+  }
   return body;
 }
 
@@ -1691,6 +1695,12 @@ async function ceremonyJsonFetch(url, body) {
     throw err;
   }
   return payload;
+}
+
+function describeCeremonyError(err) {
+  const name = err?.name || err?.payload?.detail || "";
+  const message = err?.message || err?.payload?.error || String(err);
+  return name && message && !message.startsWith(`${name}:`) ? `${name}: ${message}` : message;
 }
 
 function renderCeremonyStepDomText(step) {
@@ -1737,9 +1747,13 @@ function CeremonySurface() {
   }, []);
 
   const failStep = React.useCallback((id, err) => {
-    const message = err?.payload?.error || err?.message || String(err);
+    const message = describeCeremonyError(err);
     markStep(id, {status: 'failed', error: message});
-    append(`${id} failed`, err?.payload || {error: message});
+    append(`${id} failed`, err?.payload || {
+      error: message,
+      error_name: err?.name || "",
+      error_message: err?.message || "",
+    });
   }, [append, markStep]);
 
   const loadStatus = React.useCallback(async () => {
@@ -1815,7 +1829,12 @@ function CeremonySurface() {
     });
   };
 
-  const authorizeS7Request = async ({targetRequestId, authSessionBinding, requestedCredentialRef = ""}) => {
+  const authorizeS7Request = async ({
+    targetRequestId,
+    authSessionBinding,
+    requestedCredentialRef = "",
+    touchLabel = "touch-key",
+  }) => {
     if (!targetRequestId.trim()) throw new Error("request_id_required");
     const encodedRequestId = encodeURIComponent(targetRequestId.trim());
     const begin = await ceremonyJsonFetch(`/api/v1/s7/cards/${encodedRequestId}/webauthn/begin`, {
@@ -1823,7 +1842,7 @@ function CeremonySurface() {
       credential_ref: requestedCredentialRef,
     });
     append("authorize begin", begin);
-    markStep("touch-key", {status: "running", error: ""});
+    markStep("touch-key", {status: "running", error: "", label: touchLabel});
     const selectedCredentialRef = requestedCredentialRef || (begin.allow_credentials || [])[0] || "";
     const credential = await navigator.credentials.get(ceremonyNormalizeRequestOptions(begin.public_key_options));
     const finish = await ceremonyJsonFetch(`/api/v1/s7/cards/${encodedRequestId}/webauthn/finish`, {
@@ -1848,6 +1867,7 @@ function CeremonySurface() {
         targetRequestId: requestId,
         authSessionBinding: sessionBinding,
         requestedCredentialRef: credentialRef,
+        touchLabel: "touch-key",
       });
       setArtifactId(authorization.finish.artifact_id || "");
       setCredentialRef(authorization.credential_ref || credentialRef);
@@ -1871,6 +1891,7 @@ function CeremonySurface() {
         targetRequestId: card.request_id || "",
         authSessionBinding: authorizationSessionBinding,
         requestedCredentialRef: "",
+        touchLabel: "Touch your PRIMARY founder key (+PIN)",
       });
       setArtifactId(authorization.finish.artifact_id || "");
       setCredentialRef(authorization.credential_ref || credentialRef);
@@ -1885,7 +1906,7 @@ function CeremonySurface() {
         authorization_credential_ref: authorization.credential_ref,
       });
       append("backup register begin", begin);
-      markStep("touch-key", {status: "running", error: ""});
+      markStep("touch-key", {status: "running", error: "", label: "Now register your backup (phone/Face ID)"});
       const credential = await navigator.credentials.create(ceremonyNormalizeCreationOptions(begin.public_key_options));
       markStep("signed/applied", {status: "running", error: ""});
       const finish = await ceremonyJsonFetch("/api/v1/s7/webauthn/register/finish", {

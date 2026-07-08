@@ -50,6 +50,30 @@ class CockpitV2S7EnrollFrontendTests(unittest.TestCase):
             backup_flow.index('"/api/v1/s7/webauthn/register/begin"'),
         )
 
+    def test_webauthn_registration_payload_includes_reported_transports(self):
+        ui = UI.read_text(encoding="utf-8")
+        encoder = ui[
+            ui.index("function ceremonyEncodeCredentialResponse")
+            : ui.index("function ceremonyNormalizeCreationOptions")
+        ]
+
+        self.assertIn("getTransports", encoder)
+        self.assertIn("body.transports", encoder)
+        self.assertIn("Array.isArray", encoder)
+
+    def test_backup_authorize_errors_surface_browser_error_details_and_labels(self):
+        ui = UI.read_text(encoding="utf-8")
+        backup_flow = ui[
+            ui.index("const registerBackupWithPrimaryAuthorization")
+            : ui.index("const executeCard")
+        ]
+
+        self.assertIn("describeCeremonyError", ui)
+        self.assertIn("err?.name", ui)
+        self.assertIn("err?.message", ui)
+        self.assertIn("Touch your PRIMARY founder key (+PIN)", backup_flow)
+        self.assertIn("Now register your backup (phone/Face ID)", backup_flow)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -150,3 +150,5 @@ tmpx_*/
 /maez_emergence.py
 /maez_architecture_explained.py
 /maez_architecture_ascii.py
+.worktrees/
+memory/s7_1_webauthn/
