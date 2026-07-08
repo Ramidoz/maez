@@ -119,7 +119,11 @@ class NoLeakTests(unittest.TestCase):
 
 
 class LiveFailureRecoveryTests(unittest.TestCase):
-    def test_restore_token_gst_failure_retries_once_without_token(self):
+    def test_token_gst_failure_drops_token_and_never_reprompts(self):
+        # COVENANT: a background capture must not re-open an interactive
+        # portal session on failure. A token-backed gst failure drops the
+        # (poisoned) token and returns capture_failed — exactly ONE session
+        # call, no silent re-grant. A future OWNER-initiated grant re-issues.
         d = tempfile.mkdtemp()
         token_path = os.path.join(d, "tok")
         tmp_path = os.path.join(d, "frame.png")
@@ -128,16 +132,11 @@ class LiveFailureRecoveryTests(unittest.TestCase):
 
         def fake_session(token):
             session_calls.append(token)
-            if len(session_calls) == 1:
-                return 41, 8, None
-            return 42, 9, "fresh-token"
+            return sc._PortalSession(object(), 41, 8, None)
 
         def fake_grab(fd, node_id, tmp):
             grab_calls.append((fd, node_id))
-            if len(grab_calls) == 1:
-                raise sc._StageError("gst")
-            with open(tmp, "wb") as f:
-                f.write(b"PNGDATA")
+            raise sc._StageError("gst")
 
         with mock.patch.object(sc, "TOKEN_PATH", token_path), mock.patch.object(
             sc,
@@ -151,10 +150,41 @@ class LiveFailureRecoveryTests(unittest.TestCase):
             sc._save_token("stale-token")
             out = sc.capture()
 
+        self.assertEqual(out["status"], "capture_failed")
+        self.assertEqual(out["error_class"], "gst")
+        # Exactly one session — no interactive re-prompt in the background.
+        self.assertEqual(session_calls, ["stale-token"])
+        self.assertEqual(grab_calls, [(8, 41)])
+        # Poisoned token dropped so the next OWNER grant starts clean.
+        self.assertFalse(os.path.exists(token_path))
+
+    def test_happy_path_keeps_session_alive_through_grab(self):
+        d = tempfile.mkdtemp()
+        token_path = os.path.join(d, "tok")
+        tmp_path = os.path.join(d, "frame.png")
+        closed_before_grab = []
+
+        session_obj = sc._PortalSession(object(), 41, 8, "fresh-token")
+
+        def fake_session(token):
+            return session_obj
+
+        def fake_grab(fd, node_id, tmp):
+            # The session must still hold its proxy while the frame is grabbed.
+            closed_before_grab.append(session_obj._proxy is None)
+            with open(tmp, "wb") as f:
+                f.write(b"PNGDATA")
+
+        with mock.patch.object(sc, "TOKEN_PATH", token_path), mock.patch.object(
+            sc, "_curtain_drawn", return_value=False
+        ), mock.patch.object(sc.tempfile, "mktemp", return_value=tmp_path), mock.patch.object(
+            sc, "_portal_screencast_session", side_effect=fake_session
+        ), mock.patch.object(sc, "_grab_one_frame_pipewire", side_effect=fake_grab):
+            out = sc.capture()
+
         self.assertEqual(out["status"], "ok")
-        self.assertEqual(out["bytes"], 7)
-        self.assertEqual(session_calls, ["stale-token", None])
-        self.assertEqual(grab_calls, [(8, 41), (9, 42)])
+        self.assertEqual(closed_before_grab, [False])  # proxy alive during grab
+        self.assertIsNone(session_obj._proxy)  # closed after
         with open(token_path, encoding="utf-8") as f:
             self.assertEqual(f.read().strip(), "fresh-token")
 

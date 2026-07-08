@@ -129,7 +129,12 @@ def _capture_live() -> dict:
     tmp = tempfile.mktemp(prefix=TEMP_PREFIX, suffix=".png")
     try:
         restore_token = _load_token()
-        node_id, fd, new_token = _portal_screencast_session(restore_token)
+        # The portal binds the ScreenCast session's lifetime to the D-Bus
+        # client that created it. `session` MUST stay referenced until AFTER
+        # the frame is grabbed — otherwise GNOME tears the session down and
+        # the pipewire node disappears mid-pipeline ("target not found").
+        session = _portal_screencast_session(restore_token)
+        node_id, fd, new_token = session.node_id, session.fd, session.new_token
         if node_id is None or fd is None:
             _safe_unlink(tmp)
             return _result(
@@ -139,19 +144,18 @@ def _capture_live() -> dict:
         try:
             _grab_one_frame_pipewire(fd, node_id, tmp)
         except _StageError as exc:
-            if exc.stage != "gst" or not restore_token:
-                raise
-            _debug("restore-token capture failed in gst; retrying without restore token")
-            _safe_unlink(TOKEN_PATH)
-            _safe_unlink(tmp)
-            node_id, fd, new_token = _portal_screencast_session(None)
-            if node_id is None or fd is None:
-                _safe_unlink(tmp)
-                return _result(
-                    status="needs_grant",
-                    duration_ms=int((time.time() - t0) * 1000),
-                )
-            _grab_one_frame_pipewire(fd, node_id, tmp)
+            # COVENANT: a background capture must NEVER re-open an interactive
+            # consent dialog. On a token-backed failure we drop the (possibly
+            # poisoned) token so a future OWNER-INITIATED grant starts clean,
+            # but we do NOT silently re-prompt — the eye degrades and waits
+            # for a deliberate re-grant. Perception consent is a ceremony the
+            # owner initiates, not a demand Maez makes on an idle timer.
+            if exc.stage == "gst" and restore_token:
+                _debug("restore-token capture failed; dropping token, NOT re-prompting")
+                _safe_unlink(TOKEN_PATH)
+            raise
+        finally:
+            session.close()
         size = os.path.getsize(tmp) if os.path.exists(tmp) else 0
         if size <= 0:
             _safe_unlink(tmp)
@@ -310,8 +314,28 @@ def _portal_request(
     return _wait_request_response(connection, request_path, _call)
 
 
-def _portal_screencast_session(restore_token: str | None):
-    """Return (node_id, pipewire_fd, refreshed_restore_token)."""
+class _PortalSession:
+    """Holds the live portal proxy so the ScreenCast session (and its
+    pipewire node) survives until the caller closes it AFTER capture."""
+
+    def __init__(self, proxy, node_id, fd, new_token):
+        self._proxy = proxy
+        self.node_id = node_id
+        self.fd = fd
+        self.new_token = new_token
+
+    def close(self) -> None:
+        # Releasing the proxy lets GNOME close the portal session; only safe
+        # once the frame is grabbed and the pipewire fd is done with.
+        self._proxy = None
+
+
+def _portal_screencast_session(restore_token: str | None) -> "_PortalSession":
+    """Open a portal ScreenCast session and return it LIVE (proxy retained).
+
+    The returned _PortalSession keeps the D-Bus proxy referenced; the caller
+    MUST call .close() only after the frame grab completes.
+    """
     from gi.repository import GLib
 
     proxy = _portal_proxy()
@@ -359,7 +383,7 @@ def _portal_screencast_session(restore_token: str | None):
     streams = _unwrap_variant(start_results.get("streams")) or []
     new_token = _unwrap_variant(start_results.get("restore_token"))
     if not streams:
-        return None, None, new_token
+        return _PortalSession(proxy, None, None, new_token)
     first_stream = streams[0]
     node_id = _unwrap_variant(first_stream[0])
 
@@ -376,7 +400,7 @@ def _portal_screencast_session(restore_token: str | None):
         fd = fd_list.get(fd_handle)
     except Exception:
         raise _StageError("pipewire") from None
-    return node_id, fd, new_token
+    return _PortalSession(proxy, node_id, fd, new_token)
 
 
 def _grab_one_frame_pipewire(fd: int, node_id: int, tmp: str) -> None:
