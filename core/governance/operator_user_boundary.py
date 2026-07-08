@@ -1255,6 +1255,10 @@ def _is_protection_lowering_record(record: S7RequestHistoryRecord) -> bool:
     )
 
 
+def _is_completed_request_history_record(record: S7RequestHistoryRecord) -> bool:
+    return record.outcome in {"authorized", "blocked", "refused", "executed"}
+
+
 def _is_protection_lowering_envelope(envelope: WorkRequestEnvelope) -> bool:
     return (
         envelope.derived_work_class == "autonomy_lowering_or_protection_reducing"
@@ -1275,15 +1279,20 @@ def assess_aggregation_risk(
             raise ValueError("S7 aggregation history must use S7RequestHistoryRecord")
 
     group = current_envelope.derived_aggregation_group
-    same_group = tuple(
+    completed_history = tuple(
         record
         for record in history
+        if _is_completed_request_history_record(record)
+    )
+    same_group = tuple(
+        record
+        for record in completed_history
         if group and record.derived_aggregation_group == group
     )
     repeated_refusals = tuple(record for record in same_group if record.outcome == "refused")
     repeated_authorizations = tuple(record for record in same_group if record.outcome == "authorized")
     prior_protection_lowering = tuple(
-        record for record in history if _is_protection_lowering_record(record)
+        record for record in completed_history if _is_protection_lowering_record(record)
     )
     protection_lowering_count = len(prior_protection_lowering)
     if _is_protection_lowering_envelope(current_envelope):

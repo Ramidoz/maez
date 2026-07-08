@@ -3979,6 +3979,150 @@ class S7AggregationHabitTests(unittest.TestCase):
         self.assertIn(assessment.decision, {"escalate", "block"})
         self.assertFalse(assessment.dashboard_counter_sufficient)
 
+    def test_163_failed_attempt_retries_are_allowed(self):
+        from core.governance import operator_user_boundary as s7
+
+        prior_1 = self._soul_envelope("req-soul-1")
+        prior_2 = self._soul_envelope("req-soul-2")
+        current = self._soul_envelope("req-soul-3")
+        history = (
+            s7.build_request_history_record(
+                envelope=prior_1,
+                outcome="opened",
+                created_at=PAST,
+            ),
+            s7.build_request_history_record(
+                envelope=prior_2,
+                outcome="opened",
+                created_at=PAST,
+            ),
+        )
+
+        assessment = s7.assess_aggregation_risk(
+            current_envelope=current,
+            history=history,
+        )
+
+        self.assertEqual(assessment.decision, "allow")
+        self.assertEqual(assessment.signals, ())
+        self.assertEqual(assessment.same_group_request_count, 1)
+
+    def test_164_repeated_completed_authorization_still_escalates(self):
+        from core.governance import operator_user_boundary as s7
+
+        prior_1 = self._soul_envelope("req-soul-1")
+        prior_2 = self._soul_envelope("req-soul-2")
+        current = self._soul_envelope("req-soul-3")
+        history = (
+            s7.build_request_history_record(
+                envelope=prior_1,
+                outcome="authorized",
+                created_at=PAST,
+            ),
+            s7.build_request_history_record(
+                envelope=prior_2,
+                outcome="authorized",
+                created_at=PAST,
+            ),
+        )
+
+        assessment = s7.assess_aggregation_risk(
+            current_envelope=current,
+            history=history,
+        )
+
+        self.assertIn("repeated_same_target_request", assessment.signals)
+        self.assertIn("small_requests_aggregating", assessment.signals)
+        self.assertIn("key_touch_autopilot_risk", assessment.signals)
+        self.assertIn(assessment.decision, {"escalate", "block"})
+
+    def test_165_repeated_refusal_still_escalates(self):
+        from core.governance import operator_user_boundary as s7
+
+        prior_1 = self._soul_envelope("req-soul-1")
+        prior_2 = self._soul_envelope("req-soul-2")
+        current = self._soul_envelope("req-soul-3")
+        history = (
+            s7.build_request_history_record(
+                envelope=prior_1,
+                outcome="refused",
+                created_at=PAST,
+            ),
+            s7.build_request_history_record(
+                envelope=prior_2,
+                outcome="refused",
+                created_at=PAST,
+            ),
+        )
+
+        assessment = s7.assess_aggregation_risk(
+            current_envelope=current,
+            history=history,
+        )
+
+        self.assertIn("repeated_same_target_request", assessment.signals)
+        self.assertIn("repeated_reask_after_refusal", assessment.signals)
+        self.assertEqual(assessment.decision, "block")
+
+    def test_166_live_scenario_two_failed_touches_then_retry_allowed(self):
+        from dataclasses import replace
+        from core.governance import operator_user_boundary as s7
+        from core.governance.s7_webauthn_ceremony import authorization_aggregation_recheck
+
+        first_failed = self._soul_envelope("req-s7-live-failed-1")
+        second_failed = replace(first_failed, request_id="req-s7-live-failed-2")
+        retry = replace(first_failed, request_id="req-s7-live-retry")
+        history = (
+            s7.build_request_history_record(
+                envelope=first_failed,
+                outcome="opened",
+                created_at=PAST,
+            ),
+            s7.build_request_history_record(
+                envelope=second_failed,
+                outcome="opened",
+                created_at=PAST,
+            ),
+        )
+
+        result = authorization_aggregation_recheck(
+            envelope=retry,
+            history=history,
+        )
+
+        self.assertEqual(result.status_code, 200)
+        self.assertTrue(result.body["ok"])
+        self.assertEqual(result.body["decision"], "allow")
+        self.assertNotIn("repeated_same_target_request", result.body["signals"])
+
+    def test_167_repeated_blocked_same_target_still_escalates(self):
+        from core.governance import operator_user_boundary as s7
+
+        prior_1 = self._soul_envelope("req-soul-blocked-1")
+        prior_2 = self._soul_envelope("req-soul-blocked-2")
+        current = self._soul_envelope("req-soul-blocked-3")
+        history = (
+            s7.build_request_history_record(
+                envelope=prior_1,
+                outcome="blocked",
+                created_at=PAST,
+            ),
+            s7.build_request_history_record(
+                envelope=prior_2,
+                outcome="blocked",
+                created_at=PAST,
+            ),
+        )
+
+        assessment = s7.assess_aggregation_risk(
+            current_envelope=current,
+            history=history,
+        )
+
+        self.assertIn("repeated_same_target_request", assessment.signals)
+        self.assertIn("small_requests_aggregating", assessment.signals)
+        self.assertIn(assessment.decision, {"escalate", "block"})
+
 
 class S7SelfModDialogWrappingTests(unittest.TestCase):
     def setUp(self):
