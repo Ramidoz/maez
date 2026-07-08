@@ -8,6 +8,7 @@ import json
 import sys
 from pathlib import Path
 
+from core.consolidation.shadow_dashboard import build_shadow_metrics
 from core.consolidation.span_planner import ConsolidationPaths, default_paths
 from core.consolidation.span_planner import run_consolidation_pass
 
@@ -82,7 +83,9 @@ def main(argv: list[str] | None = None) -> int:
         },
         min_idle_seconds=float(args.min_idle_seconds),
     )
-    print(json.dumps(result.__dict__, sort_keys=True, separators=(",", ":")))
+    payload = dict(result.__dict__)
+    payload["shadow_metrics"] = build_shadow_metrics(paths)
+    print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
     return 0 if result.status in {"completed", "empty", "disabled", "not_idle"} else 2
 
 

@@ -134,6 +134,33 @@ class WonderingsRoundTrip(unittest.TestCase):
         self.assertEqual(picked["id"], wid)
         self.assertEqual(picked["status"], "open")
 
+    def test_pick_next_quarantines_digestion_even_in_cooldown_fallback(self):
+        with self.store._conn() as c:
+            cur = c.execute(
+                "INSERT INTO wonderings (created_at, question, source) "
+                "VALUES (?, ?, ?)",
+                (0.0, "digestion shadow question", "digestion"),
+            )
+            digestion_id = cur.lastrowid
+
+        visible_id = self.store.add("manual question still flows", source="manual")
+        self.store.record_pursuit(visible_id, decision="surface", score=0.5)
+
+        picked = self.store.pick_next()
+
+        self.assertIsNotNone(picked)
+        self.assertEqual(picked["id"], visible_id)
+        self.assertNotEqual(picked["id"], digestion_id)
+
+    def test_list_open_quarantines_digestion_wonderings_from_pursuit_feed(self):
+        digestion_id = self.store.add("digestion question", source="digestion")
+        visible_id = self.store.add("manual question", source="manual")
+
+        listed_ids = {row["id"] for row in self.store.list_open(limit=10)}
+
+        self.assertIn(visible_id, listed_ids)
+        self.assertNotIn(digestion_id, listed_ids)
+
     def test_add_with_citations_rolls_back_when_sidecar_insert_fails(self):
         real_conn = self.store._conn
 

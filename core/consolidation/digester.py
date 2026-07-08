@@ -325,7 +325,7 @@ def digest_episode(
             refusal_code="direct_chat_forbidden",
         )
     model_name = model or model_config.PRIMARY_MODEL
-    workset_taints = _taints_for_rows(prompt_rows)
+    workset_taints = _taints_for_rows(all_rows)
     digests: list[str] = []
     all_citations: list[dict[str, Any]] = []
     candidates: list[WonderingCandidateDigest] = []
@@ -361,7 +361,7 @@ def digest_episode(
         except Exception as exc:
             return _reject(
                 episode_key=episode_key,
-                status="refused",
+                status="deferred",
                 refusal_code="digestion_parse_failure",
                 refusal_detail=str(exc),
                 call_count=call_count,

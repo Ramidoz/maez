@@ -89,6 +89,14 @@ LEARNING_SYNTH_TIMEOUT = "(synthesis skipped — no time left this cycle)"
 
 # Deferrals-to-block threshold
 DEFERRAL_BLOCK_THRESHOLD = 2
+DIGESTION_WONDERING_SOURCE = "digestion"
+
+# Constitutional quarantine from the consolidation-spine G2 amendment
+# (docs/superpowers/specs/2026-07-08-consolidation-spine-v0-design.md):
+# digestion-sourced wonderings cannot enter pick_next/pursuit until a
+# witnessed self-formation slice deliberately lifts this.
+_QUARANTINED_SOURCES = frozenset((DIGESTION_WONDERING_SOURCE,))
+_QUARANTINED_SOURCE = next(iter(_QUARANTINED_SOURCES))
 
 
 class WonderingCitationIntegrityError(ValueError):
@@ -474,9 +482,10 @@ class Wonderings:
             rows = c.execute(
                 "SELECT * FROM wonderings "
                 "WHERE status IN ('open', 'active') "
+                "  AND COALESCE(source, '') NOT IN (?) "
                 "ORDER BY COALESCE(last_advanced, created_at) ASC "
                 "LIMIT ?",
-                (limit,),
+                (_QUARANTINED_SOURCE, limit),
             ).fetchall()
             return [dict(r) for r in rows]
 
@@ -577,8 +586,9 @@ class Wonderings:
                 "SELECT * FROM wonderings "
                 "WHERE status IN ('open', 'active') "
                 "  AND (last_pursuit_at IS NULL OR last_pursuit_at < ?) "
+                "  AND COALESCE(source, '') NOT IN (?) "
                 "ORDER BY COALESCE(last_advanced, created_at) ASC LIMIT 1",
-                (cooldown_threshold,),
+                (cooldown_threshold, _QUARANTINED_SOURCE),
             ).fetchall()
             if rows:
                 return dict(rows[0])
@@ -588,7 +598,9 @@ class Wonderings:
             rows = c.execute(
                 "SELECT * FROM wonderings "
                 "WHERE status IN ('open', 'active') "
+                "  AND COALESCE(source, '') NOT IN (?) "
                 "ORDER BY COALESCE(last_pursuit_at, created_at) ASC LIMIT 1",
+                (_QUARANTINED_SOURCE,),
             ).fetchall()
             return dict(rows[0]) if rows else None
 

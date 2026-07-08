@@ -16,10 +16,11 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 from uuid import uuid4
 
-from core.consolidation import digester, selector
+from core.consolidation import citation_lock, digester, selector
 from core.infra import paths as maez_paths
 from core.infra.env_flags import strict_env_flag
 from core.ledger import span_reader
+from core.ledger.taint_stamping import TAINT_LABEL_ORDER
 from core.ledger.writes_flag import ledger_writes_enabled
 
 RECEIPTS_FILENAME = "consolidation_receipts.jsonl"
@@ -27,6 +28,10 @@ SPINE_DB_RELATIVE_PATH = Path("memory") / "consolidation" / "spine.sqlite3"
 EPISODE_DIGESTS_DB_RELATIVE_PATH = (
     Path("memory") / "consolidation" / "episode_digests.sqlite3"
 )
+OUTCOME_COMMITTED = "committed"
+OUTCOME_DEFERRED_SAME_SPAN = "deferred_same_span"
+OUTCOME_DEAD_LETTER_SKELETON_ONLY = "dead_letter_skeleton_only"
+_LOCK_REFUSAL_CODES = frozenset(citation_lock.REFUSAL_CODES)
 
 
 @dataclass(frozen=True)
@@ -58,7 +63,7 @@ class ConsolidationPassResult:
     high_water: int = -1
     row_count: int = 0
     artifacts_committed: int = 0
-    refusals: tuple[dict[str, str], ...] = ()
+    refusals: tuple[dict[str, Any], ...] = ()
 
 
 def default_paths() -> ConsolidationPaths:
@@ -179,6 +184,20 @@ def _init_spine_db(path: Path) -> sqlite3.Connection:
             wondering_candidate_count INTEGER NOT NULL,
             completed_at REAL NOT NULL,
             UNIQUE(span_id, episode_key)
+        );
+        CREATE TABLE IF NOT EXISTS episode_outcomes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            span_id TEXT NOT NULL,
+            episode_key TEXT NOT NULL,
+            start_chain_position INTEGER NOT NULL,
+            end_chain_position INTEGER NOT NULL,
+            outcome TEXT NOT NULL,
+            refusal_code TEXT NOT NULL DEFAULT '',
+            refusal_detail TEXT NOT NULL DEFAULT '',
+            attempt_count INTEGER NOT NULL,
+            selection_depth TEXT NOT NULL,
+            row_count INTEGER NOT NULL,
+            created_at REAL NOT NULL
         );
         """
     )
@@ -337,9 +356,17 @@ def _refusal_receipt(
     event: str,
     refusal_code: str,
     episode_key: str = "",
+    outcome: str = OUTCOME_DEFERRED_SAME_SPAN,
+    attempt_count: int = 0,
+    dead_letter: bool = False,
 ) -> dict[str, Any]:
     receipt = _span_receipt(span_row, event=event, status="refused")
     receipt["refusal_code"] = refusal_code
+    receipt["outcome"] = outcome
+    if attempt_count:
+        receipt["attempt_count"] = int(attempt_count)
+    if dead_letter:
+        receipt["dead_letter"] = True
     if episode_key:
         receipt["episode_key"] = episode_key
     return receipt
@@ -356,6 +383,169 @@ def _rows_for_episode(
         for row in rows
         if start_chain_position <= int(row.get("chain_position", -1)) <= end_chain_position
     ]
+
+
+def _ordered_taints_for_rows(rows: Iterable[Mapping[str, Any]]) -> tuple[str, ...]:
+    labels: set[str] = set()
+    for row in rows:
+        raw = row.get("taint_labels_json", "[]")
+        try:
+            parsed = json.loads(raw if isinstance(raw, str) else "[]")
+        except json.JSONDecodeError:
+            parsed = []
+        labels.update(label for label in parsed if isinstance(label, str))
+    return tuple(label for label in TAINT_LABEL_ORDER if label in labels)
+
+
+def _public_lived_rows(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    anchor_chain_position: int,
+) -> list[dict[str, Any]]:
+    return [
+        dict(row)
+        for row in rows
+        if row.get("privacy_access") != "sealed_adjacent"
+        and int(row.get("chain_position", -1)) >= anchor_chain_position
+    ]
+
+
+def _attempt_count_for_episode(
+    conn: sqlite3.Connection,
+    *,
+    span_id: str,
+    episode_key: str,
+) -> int:
+    row = conn.execute(
+        "SELECT MAX(attempt_count) AS n FROM episode_outcomes "
+        "WHERE span_id = ? AND episode_key = ?",
+        (span_id, episode_key),
+    ).fetchone()
+    if row is None or row["n"] is None:
+        return 0
+    return int(row["n"])
+
+
+def _attempt_counts_by_refusal_code(
+    conn: sqlite3.Connection,
+    *,
+    span_id: str,
+) -> dict[str, int]:
+    rows = conn.execute(
+        "SELECT refusal_code, MAX(attempt_count) AS n FROM episode_outcomes "
+        "WHERE span_id = ? AND refusal_code != '' GROUP BY refusal_code",
+        (span_id,),
+    ).fetchall()
+    return {
+        str(row["refusal_code"]): int(row["n"])
+        for row in rows
+        if row["n"] is not None
+    }
+
+
+def _record_episode_outcome(
+    conn: sqlite3.Connection,
+    *,
+    span_id: str,
+    episode: Any,
+    outcome: str,
+    attempt_count: int,
+    refusal_code: str = "",
+    refusal_detail: str = "",
+) -> dict[str, Any]:
+    conn.execute(
+        """
+        INSERT INTO episode_outcomes (
+            span_id, episode_key, start_chain_position, end_chain_position,
+            outcome, refusal_code, refusal_detail, attempt_count,
+            selection_depth, row_count, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            span_id,
+            episode.episode_key,
+            int(episode.start_chain_position),
+            int(episode.end_chain_position),
+            outcome,
+            refusal_code,
+            refusal_detail,
+            int(attempt_count),
+            str(episode.selection_depth),
+            int(episode.row_count),
+            time.time(),
+        ),
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT * FROM episode_outcomes WHERE id = last_insert_rowid()"
+    ).fetchone()
+    if row is None:
+        raise RuntimeError("episode outcome re-read failed after commit")
+    return dict(row)
+
+
+def _dead_letter_skeleton(
+    *,
+    episode: Any,
+    rows: list[dict[str, Any]],
+    span: Mapping[str, Any],
+    ledger_db_path: Path,
+    refusal_code: str,
+    call_count: int,
+) -> tuple[Any, digester.DigestionResult]:
+    citable_rows = _public_lived_rows(
+        rows,
+        anchor_chain_position=int(span["anchor_chain_position"]),
+    )
+    citations = tuple(
+        {
+            "turn_id": str(row.get("turn_id", "")),
+            "chain_position": int(row.get("chain_position", -1)),
+        }
+        for row in citable_rows
+        if str(row.get("turn_id", "")).strip()
+    )
+    shallow_episode = selector.EpisodeSelection(
+        episode_key=episode.episode_key,
+        start_chain_position=int(episode.start_chain_position),
+        end_chain_position=int(episode.end_chain_position),
+        turn_ids=tuple(str(row.get("turn_id", "")) for row in citable_rows),
+        row_count=len(citations),
+        selection_depth="shallow",
+    )
+    result = digester.DigestionResult(
+        status="ok",
+        episode_key=episode.episode_key,
+        episode_digest=(
+            "dead-letter skeleton: "
+            f"episode={episode.episode_key}; "
+            f"chain_positions={episode.start_chain_position}-{episode.end_chain_position}; "
+            f"citable_rows={len(citations)}; "
+            f"refusal_code={refusal_code}"
+        ),
+        row_citations=citations,
+        taint_labels=_ordered_taints_for_rows(rows),
+        wondering_candidates=(),
+        call_count=call_count,
+    )
+    verdict = citation_lock.validate(
+        {
+            "episode_digest": result.episode_digest,
+            "row_citations": list(result.row_citations),
+            "taint_labels": list(result.taint_labels),
+        },
+        span,
+        ledger_db_path,
+    )
+    if verdict.ok:
+        return shallow_episode, result
+    return shallow_episode, digester.DigestionResult(
+        status="deferred",
+        episode_key=episode.episode_key,
+        refusal_code=verdict.refusal_code or "dead_letter_lock_refusal",
+        refusal_detail=",".join(verdict.detail_codes),
+        call_count=call_count,
+    )
 
 
 def _receipt_id_for_episode(span_id: str, episode_key: str) -> str:
@@ -511,6 +701,16 @@ def _artifact_receipt(committed: CommittedArtifact) -> dict[str, Any]:
     }
 
 
+def _shadow_metrics_for_span(paths: ConsolidationPaths, span_id: str) -> dict[str, Any]:
+    from core.consolidation.shadow_dashboard import build_shadow_metrics
+
+    metrics = build_shadow_metrics(paths)
+    for span_metrics in metrics.get("spans", []):
+        if span_metrics.get("span_id") == span_id:
+            return dict(span_metrics)
+    return {}
+
+
 def _receipt_already_emitted(path: Path, receipt_id: str) -> bool:
     if not path.exists():
         return False
@@ -607,6 +807,8 @@ def _result(
             {
                 "episode_key": str(item.get("episode_key", "")),
                 "refusal_code": str(item.get("refusal_code", "")),
+                "outcome": str(item.get("outcome", "")),
+                "attempt_count": int(item.get("attempt_count", 0) or 0),
             }
             for item in refusals
         ),
@@ -685,6 +887,7 @@ def run_consolidation_pass(
             )
             receipt = _span_receipt(span_row, event="span_empty", status="empty")
             receipt["artifact_count"] = 0
+            receipt["shadow_metrics"] = _shadow_metrics_for_span(run_paths, span_id)
             _append_receipt(run_paths.receipts_path, receipt)
             return _result(
                 "empty",
@@ -694,7 +897,11 @@ def run_consolidation_pass(
             )
 
         artifacts = 0
-        refusals: list[dict[str, str]] = []
+        refusals: list[dict[str, Any]] = []
+        prior_attempts_by_refusal_code = _attempt_counts_by_refusal_code(
+            spine_conn,
+            span_id=span_id,
+        )
         span_view = {
             "after_chain_position": span.after_chain_position,
             "high_water": span.high_water,
@@ -715,7 +922,17 @@ def run_consolidation_pass(
                 )
                 _append_receipt(
                     run_paths.receipts_path,
-                    _span_receipt(span_row, event="span_deferred", status="deferred"),
+                    {
+                        **_span_receipt(
+                            span_row,
+                            event="span_deferred",
+                            status="deferred",
+                        ),
+                        "shadow_metrics": _shadow_metrics_for_span(
+                            run_paths,
+                            span_id,
+                        ),
+                    },
                 )
                 return _result(
                     "deferred",
@@ -726,88 +943,164 @@ def run_consolidation_pass(
                     artifacts_committed=artifacts,
                 )
 
+            episode_rows = _rows_for_episode(
+                span.rows,
+                start_chain_position=episode.start_chain_position,
+                end_chain_position=episode.end_chain_position,
+            )
             result = digester.digest_episode(
                 episode,
-                rows=_rows_for_episode(
-                    span.rows,
-                    start_chain_position=episode.start_chain_position,
-                    end_chain_position=episode.end_chain_position,
-                ),
+                rows=episode_rows,
                 span=span_view,
                 ledger_db_path=run_paths.ledger_db_path,
                 llm_callable=llm_callable,
                 endpoint_guard=endpoint_guard,
             )
-            if result.status == "deferred":
-                refusals.append(
-                    {
-                        "episode_key": episode.episode_key,
-                        "refusal_code": result.refusal_code or "span_deferred",
-                    }
-                )
-                span_row = _record_span(
-                    spine_conn,
-                    span_id=span_id,
-                    after_chain_position=span.after_chain_position,
-                    high_water=span.high_water,
-                    anchor_chain_position=anchor,
-                    row_count=len(span.rows),
-                    selection_mode=selection.selection_mode,
-                    status="deferred",
-                )
-                _append_receipt(
-                    run_paths.receipts_path,
-                    _refusal_receipt(
-                        span_row,
-                        event="span_deferred",
-                        refusal_code=result.refusal_code or "span_deferred",
-                        episode_key=episode.episode_key,
-                    ),
-                )
-                return _result(
-                    "deferred",
-                    span_id=span_id,
-                    after_chain_position=span.after_chain_position,
-                    high_water=span.high_water,
-                    row_count=len(span.rows),
-                    artifacts_committed=artifacts,
-                    refusals=refusals,
-                )
             if result.status != "ok":
-                refusals.append(
-                    {
-                        "episode_key": episode.episode_key,
-                        "refusal_code": result.refusal_code or "digestion_refused",
-                    }
-                )
-                span_row = _record_span(
+                refusal_code = result.refusal_code or "digestion_refused"
+                previous_episode_attempts = _attempt_count_for_episode(
                     spine_conn,
                     span_id=span_id,
-                    after_chain_position=span.after_chain_position,
-                    high_water=span.high_water,
-                    anchor_chain_position=anchor,
-                    row_count=len(span.rows),
-                    selection_mode=selection.selection_mode,
-                    status="refused",
+                    episode_key=episode.episode_key,
                 )
-                _append_receipt(
-                    run_paths.receipts_path,
-                    _refusal_receipt(
+                if refusal_code in _LOCK_REFUSAL_CODES and previous_episode_attempts == 0:
+                    attempt_count = (
+                        prior_attempts_by_refusal_code.get(refusal_code, 0) + 1
+                    )
+                else:
+                    attempt_count = previous_episode_attempts + 1
+                if refusal_code in _LOCK_REFUSAL_CODES and attempt_count >= 2:
+                    dead_episode, dead_result = _dead_letter_skeleton(
+                        episode=episode,
+                        rows=episode_rows,
+                        span=span_view,
+                        ledger_db_path=run_paths.ledger_db_path,
+                        refusal_code=refusal_code,
+                        call_count=result.call_count,
+                    )
+                    if dead_result.status == "ok":
+                        committed = _commit_artifact(
+                            paths=run_paths,
+                            spine_conn=spine_conn,
+                            span_id=span_id,
+                            episode=dead_episode,
+                            result=dead_result,
+                        )
+                        if not _receipt_already_emitted(
+                            run_paths.receipts_path,
+                            committed.receipt_id,
+                        ):
+                            _append_receipt(
+                                run_paths.receipts_path,
+                                _artifact_receipt(committed),
+                            )
+                        committed = _mark_artifact_complete(spine_conn, committed)
+                        _record_episode_outcome(
+                            spine_conn,
+                            span_id=span_id,
+                            episode=dead_episode,
+                            outcome=OUTCOME_DEAD_LETTER_SKELETON_ONLY,
+                            refusal_code=refusal_code,
+                            refusal_detail=result.refusal_detail,
+                            attempt_count=attempt_count,
+                        )
+                        span_row = _record_span(
+                            spine_conn,
+                            span_id=span_id,
+                            after_chain_position=span.after_chain_position,
+                            high_water=span.high_water,
+                            anchor_chain_position=anchor,
+                            row_count=len(span.rows),
+                            selection_mode=selection.selection_mode,
+                            status="planned",
+                        )
+                        _append_receipt(
+                            run_paths.receipts_path,
+                            _refusal_receipt(
+                                span_row,
+                                event="episode_refused",
+                                refusal_code=refusal_code,
+                                episode_key=episode.episode_key,
+                                outcome=OUTCOME_DEAD_LETTER_SKELETON_ONLY,
+                                attempt_count=attempt_count,
+                                dead_letter=True,
+                            ),
+                        )
+                        if after_artifact_re_read is not None:
+                            after_artifact_re_read(committed)
+                        _set_state_value(
+                            spine_conn,
+                            "last_digested_chain_position",
+                            committed.end_chain_position,
+                        )
+                        artifacts += 1
+                        result = dead_result
+                    else:
+                        refusal_code = dead_result.refusal_code or refusal_code
+
+                if result.status != "ok":
+                    outcome = OUTCOME_DEFERRED_SAME_SPAN
+                    _record_episode_outcome(
+                        spine_conn,
+                        span_id=span_id,
+                        episode=episode,
+                        outcome=outcome,
+                        refusal_code=refusal_code,
+                        refusal_detail=result.refusal_detail,
+                        attempt_count=attempt_count,
+                    )
+                    refusals.append(
+                        {
+                            "episode_key": episode.episode_key,
+                            "refusal_code": refusal_code,
+                            "outcome": outcome,
+                            "attempt_count": attempt_count,
+                        }
+                    )
+                    span_row = _record_span(
+                        spine_conn,
+                        span_id=span_id,
+                        after_chain_position=span.after_chain_position,
+                        high_water=span.high_water,
+                        anchor_chain_position=anchor,
+                        row_count=len(span.rows),
+                        selection_mode=selection.selection_mode,
+                        status="deferred",
+                    )
+                    receipt = _refusal_receipt(
                         span_row,
                         event="episode_refused",
-                        refusal_code=result.refusal_code or "digestion_refused",
+                        refusal_code=refusal_code,
                         episode_key=episode.episode_key,
-                    ),
-                )
-                return _result(
-                    "refused",
-                    span_id=span_id,
-                    after_chain_position=span.after_chain_position,
-                    high_water=span.high_water,
-                    row_count=len(span.rows),
-                    artifacts_committed=artifacts,
-                    refusals=refusals,
-                )
+                        outcome=outcome,
+                        attempt_count=attempt_count,
+                    )
+                    receipt["shadow_metrics"] = _shadow_metrics_for_span(
+                        run_paths,
+                        span_id,
+                    )
+                    _append_receipt(run_paths.receipts_path, receipt)
+                    if artifacts > 0:
+                        return _result(
+                            "deferred",
+                            span_id=span_id,
+                            after_chain_position=span.after_chain_position,
+                            high_water=span.high_water,
+                            row_count=len(span.rows),
+                            artifacts_committed=artifacts,
+                            refusals=refusals,
+                        )
+                    return _result(
+                        "deferred",
+                        span_id=span_id,
+                        after_chain_position=span.after_chain_position,
+                        high_water=span.high_water,
+                        row_count=len(span.rows),
+                        artifacts_committed=artifacts,
+                        refusals=refusals,
+                    )
+                else:
+                    continue
 
             committed = _commit_artifact(
                 paths=run_paths,
@@ -821,6 +1114,18 @@ def run_consolidation_pass(
             committed = _mark_artifact_complete(spine_conn, committed)
             if after_artifact_re_read is not None:
                 after_artifact_re_read(committed)
+            attempt_count = _attempt_count_for_episode(
+                spine_conn,
+                span_id=span_id,
+                episode_key=episode.episode_key,
+            ) + 1
+            _record_episode_outcome(
+                spine_conn,
+                span_id=span_id,
+                episode=episode,
+                outcome=OUTCOME_COMMITTED,
+                attempt_count=attempt_count,
+            )
             _set_state_value(
                 spine_conn,
                 "last_digested_chain_position",
@@ -841,7 +1146,17 @@ def run_consolidation_pass(
                 )
                 _append_receipt(
                     run_paths.receipts_path,
-                    _span_receipt(span_row, event="span_deferred", status="deferred"),
+                    {
+                        **_span_receipt(
+                            span_row,
+                            event="span_deferred",
+                            status="deferred",
+                        ),
+                        "shadow_metrics": _shadow_metrics_for_span(
+                            run_paths,
+                            span_id,
+                        ),
+                    },
                 )
                 return _result(
                     "deferred",
@@ -864,6 +1179,7 @@ def run_consolidation_pass(
         )
         receipt = _span_receipt(span_row, event="span_completed", status="completed")
         receipt["artifact_count"] = artifacts
+        receipt["shadow_metrics"] = _shadow_metrics_for_span(run_paths, span_id)
         _append_receipt(run_paths.receipts_path, receipt)
         return _result(
             "completed",

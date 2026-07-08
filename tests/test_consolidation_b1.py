@@ -562,7 +562,14 @@ class SkeletonTests(unittest.TestCase):
 
 
 class SelectorTests(unittest.TestCase):
-    def test_selector_is_deterministic_and_respects_deep_budget(self):
+    @staticmethod
+    def _depth_allocation(result: selector.SelectionResult) -> tuple[tuple[str, str], ...]:
+        return tuple(
+            (episode.episode_key, episode.selection_depth)
+            for episode in result.episodes
+        )
+
+    def test_selector_is_deterministic_and_respects_coverage_row_cap(self):
         rows = [
             _row(1, 1000.0),
             _row(2, 1060.0),
@@ -575,20 +582,98 @@ class SelectorTests(unittest.TestCase):
             _row(9, 8120.0),
         ]
 
-        first = selector.select(rows, deep_budget=2)
-        second = selector.select(rows, deep_budget=2)
+        first = selector.select(rows, deep_row_cap=6)
+        second = selector.select(rows, deep_row_cap=6)
 
         self.assertEqual(first, second)
         self.assertEqual(first.selection_mode, "mechanical_v0")
         self.assertEqual(len(first.episodes), 3)
-        self.assertEqual(first.ranked_episode_keys, ("cp3-cp6", "cp7-cp9", "cp1-cp2"))
-        modes = {episode.episode_key: episode.selection_depth for episode in first.episodes}
-        self.assertEqual(modes["cp3-cp6"], "deep")
-        self.assertEqual(modes["cp7-cp9"], "deep")
-        self.assertEqual(modes["cp1-cp2"], "shallow")
+        self.assertEqual(first.coverage_order_episode_keys, ("cp1-cp2", "cp3-cp6", "cp7-cp9"))
+        self.assertEqual(first.deep_row_budget, 6)
+        self.assertEqual(
+            self._depth_allocation(first),
+            (
+                ("cp1-cp2", "deep"),
+                ("cp3-cp6", "deep"),
+                ("cp7-cp9", "shallow"),
+            ),
+        )
+
+    def test_selector_domain_swap_keeps_identical_depth_allocation(self):
+        base = 1_700_000_000.0
+        rows_tool_second = [
+            _row(1, base),
+            _row(2, base + 60),
+            _row(3, base + 4000, turn_kind="tool_result", audit_verdict={"outcome": "error"}),
+            _row(4, base + 4060, turn_kind="tool_result", audit_verdict={"outcome": "ok"}),
+            _row(5, base + 8000),
+            _row(6, base + 8060),
+            _row(7, base + 12000),
+            _row(8, base + 12060),
+        ]
+        rows_tool_fourth = [
+            _row(1, base),
+            _row(2, base + 60),
+            _row(3, base + 4000),
+            _row(4, base + 4060),
+            _row(5, base + 8000),
+            _row(6, base + 8060),
+            _row(7, base + 12000, turn_kind="tool_result", audit_verdict={"outcome": "error"}),
+            _row(8, base + 12060, turn_kind="tool_result", audit_verdict={"outcome": "ok"}),
+        ]
+
+        second_tool = selector.select(rows_tool_second)
+        fourth_tool = selector.select(rows_tool_fourth)
+
+        self.assertEqual(
+            self._depth_allocation(second_tool),
+            self._depth_allocation(fourth_tool),
+        )
+
+    def test_selector_rotation_changes_coverage_start_without_content_signals(self):
+        base = 1_700_000_000.0
+        rows = [
+            _row(1, base),
+            _row(2, base + 60),
+            _row(3, base + 4000),
+            _row(4, base + 4060),
+            _row(5, base + 8000),
+            _row(6, base + 8060),
+            _row(7, base + 12000),
+            _row(8, base + 12060),
+        ]
+
+        first_window = selector.select(rows, deep_row_cap=4, rotation_offset=0)
+        second_window = selector.select(rows, deep_row_cap=4, rotation_offset=2)
+
+        self.assertEqual(
+            self._depth_allocation(first_window),
+            (
+                ("cp1-cp2", "deep"),
+                ("cp3-cp4", "deep"),
+                ("cp5-cp6", "shallow"),
+                ("cp7-cp8", "shallow"),
+            ),
+        )
+        self.assertEqual(
+            self._depth_allocation(second_window),
+            (
+                ("cp1-cp2", "shallow"),
+                ("cp3-cp4", "shallow"),
+                ("cp5-cp6", "deep"),
+                ("cp7-cp8", "deep"),
+            ),
+        )
+
+    def test_selector_source_has_no_content_ranking_signals(self):
+        source = Path(selector.__file__).read_text(encoding="utf-8")
+
+        self.assertNotIn("_rank_key", source)
+        self.assertNotIn("tool_outcome_density", source)
+        self.assertNotIn("error_cluster_present", source)
 
     def test_selector_handles_single_row_span(self):
-        got = selector.select([_row(1, 1000.0)], deep_budget=1)
+        got = selector.select([_row(1, 1000.0)], deep_row_cap=1)
 
         self.assertEqual(got.selection_mode, "mechanical_v0")
         self.assertEqual(len(got.episodes), 1)
@@ -598,12 +683,12 @@ class SelectorTests(unittest.TestCase):
     def test_selector_handles_ten_thousand_row_span_as_one_episode(self):
         rows = [_row(i, 1000.0 + i) for i in range(1, 10_001)]
 
-        got = selector.select(rows, deep_budget=1)
+        got = selector.select(rows, deep_row_cap=1)
 
         self.assertEqual(len(got.episodes), 1)
         self.assertEqual(got.episodes[0].row_count, 10_000)
         self.assertEqual(got.episodes[0].selection_depth, "deep")
-        self.assertEqual(got.ranked_episode_keys, ("cp1-cp10000",))
+        self.assertEqual(got.coverage_order_episode_keys, ("cp1-cp10000",))
 
 
 if __name__ == "__main__":

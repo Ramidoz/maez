@@ -313,6 +313,46 @@ class PromptAwareFakeLLM:
         return rows
 
 
+def _bad_citation_llm(**kwargs):
+    del kwargs
+    return json.dumps(
+        {
+            "episode_digest": "invalid citation witness",
+            "row_citations": [
+                {
+                    "turn_id": "not-in-ledger",
+                    "chain_position": 999999,
+                }
+            ],
+            "wondering_candidates": [],
+        }
+    )
+
+
+def _sparse_citation_llm(**kwargs):
+    content = "\n".join(
+        str(message.get("content", ""))
+        for message in kwargs.get("messages", [])
+        if isinstance(message, dict)
+    )
+    rows = PromptAwareFakeLLM._prompt_rows(content)
+    first = rows[0]
+    return json.dumps(
+        {
+            "episode_digest": (
+                f"observed sparse chain position {first['chain_position']}"
+            ),
+            "row_citations": [
+                {
+                    "turn_id": first["turn_id"],
+                    "chain_position": first["chain_position"],
+                }
+            ],
+            "wondering_candidates": [],
+        }
+    )
+
+
 class ConsolidationB2GateTests(unittest.TestCase):
     def test_double_gate_off_is_fully_inert_and_creates_no_dirs_or_receipts(self):
         from core.consolidation import span_planner
@@ -608,6 +648,217 @@ class ConsolidationB2GateTests(unittest.TestCase):
             first_digest_count,
         )
 
+    def test_citation_lock_refusal_once_defers_and_retries_same_span(self):
+        from core.consolidation.span_planner import run_consolidation_pass
+
+        root = _root("refuse_once")
+        ledger = _fresh_ledger(root)
+        _write_synthetic_three_day_ledger(ledger)
+        paths = _paths(root, ledger)
+
+        with patch.dict(os.environ, _enabled_env(), clear=False):
+            first = run_consolidation_pass(
+                paths=paths,
+                idle_inputs=_allowing_idle(),
+                llm_callable=_bad_citation_llm,
+            )
+
+        self.assertEqual(first.status, "deferred")
+        self.assertEqual(first.refusals[0]["refusal_code"], "citation_missing_row")
+        self.assertEqual(first.refusals[0]["outcome"], "deferred_same_span")
+        self.assertEqual(_table_names(paths.episode_digests_db_path), set())
+        attempts = _rows(
+            paths.spine_db_path,
+            "SELECT * FROM episode_outcomes ORDER BY id ASC",
+        )
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual(attempts[0]["outcome"], "deferred_same_span")
+        self.assertEqual(attempts[0]["attempt_count"], 1)
+        state = {
+            row["key"]: row["value"]
+            for row in _rows(paths.spine_db_path, "SELECT key, value FROM state")
+        }
+        self.assertLess(int(state["last_digested_chain_position"]), first.high_water)
+
+    def test_citation_lock_refusal_twice_commits_dead_letter_skeleton_and_advances(self):
+        from core.consolidation.span_planner import run_consolidation_pass
+
+        root = _root("refuse_twice")
+        ledger = _fresh_ledger(root)
+        _write_synthetic_three_day_ledger(ledger)
+        paths = _paths(root, ledger)
+
+        with patch.dict(os.environ, _enabled_env(), clear=False):
+            first = run_consolidation_pass(
+                paths=paths,
+                idle_inputs=_allowing_idle(),
+                llm_callable=_bad_citation_llm,
+            )
+            second = run_consolidation_pass(
+                paths=paths,
+                idle_inputs=_allowing_idle(),
+                llm_callable=_bad_citation_llm,
+            )
+
+        self.assertEqual(first.status, "deferred")
+        self.assertEqual(second.status, "completed")
+        self.assertGreater(second.artifacts_committed, 0)
+        digests = _rows(
+            paths.episode_digests_db_path,
+            "SELECT * FROM episode_digest_shadow ORDER BY id ASC",
+        )
+        self.assertGreater(len(digests), 0)
+        self.assertEqual(digests[0]["selection_depth"], "shallow")
+        self.assertIn("dead-letter skeleton", digests[0]["digest_text"])
+        self.assertEqual(len(json.loads(digests[0]["row_citations_json"])), digests[0]["row_count"])
+        outcomes = _rows(
+            paths.spine_db_path,
+            "SELECT * FROM episode_outcomes ORDER BY id ASC",
+        )
+        self.assertEqual(outcomes[-1]["outcome"], "dead_letter_skeleton_only")
+        self.assertEqual(outcomes[-1]["attempt_count"], 2)
+        state = {
+            row["key"]: row["value"]
+            for row in _rows(paths.spine_db_path, "SELECT key, value FROM state")
+        }
+        self.assertEqual(int(state["last_digested_chain_position"]), second.high_water)
+        receipts = _jsonl(paths.receipts_path)
+        self.assertTrue(
+            any(
+                row.get("event") == "episode_refused"
+                and row.get("outcome") == "dead_letter_skeleton_only"
+                and row.get("dead_letter") is True
+                for row in receipts
+            )
+        )
+
+    def test_shadow_dashboard_metrics_reconcile_with_synthetic_fixture(self):
+        from core.consolidation.span_planner import run_consolidation_pass
+        from core.evolution.wonderings import Wonderings
+        from scripts import run_consolidation_shadow
+        from scripts.run_consolidation_shadow import build_shadow_metrics
+
+        root = _root("shadow_metrics")
+        ledger = _fresh_ledger(root)
+        _write_synthetic_three_day_ledger(ledger)
+        paths = _paths(root, ledger)
+        live = Wonderings(paths.live_wonderings_db_path)
+        live.add("quarantined digestion candidate", source="digestion")
+        live.add("manual candidate still visible", source="manual")
+
+        with patch.dict(os.environ, _enabled_env(), clear=False):
+            result = run_consolidation_pass(
+                paths=paths,
+                idle_inputs=_allowing_idle(),
+                llm_callable=_sparse_citation_llm,
+            )
+
+        self.assertEqual(result.status, "completed")
+        metrics = build_shadow_metrics(paths)
+        self.assertEqual(len(metrics["spans"]), 1)
+        span_metrics = metrics["spans"][0]
+
+        ledger_rows = _rows(ledger, "SELECT * FROM turns ORDER BY chain_position ASC")
+        digests = _rows(
+            paths.episode_digests_db_path,
+            "SELECT * FROM episode_digest_shadow ORDER BY id ASC",
+        )
+        outcomes = _rows(
+            paths.spine_db_path,
+            "SELECT * FROM episode_outcomes ORDER BY id ASC",
+        )
+        receipts = _jsonl(paths.receipts_path)
+        completed_receipt = [
+            row for row in receipts if row["event"] == "span_completed"
+        ][-1]
+
+        deep = [row for row in digests if row["selection_depth"] == "deep"]
+        tool_heavy = 0
+        dialogue_heavy = 0
+        coverage = {}
+        taint_gap_count = 0
+        for digest in deep:
+            episode_rows = [
+                row for row in ledger_rows
+                if digest["start_chain_position"]
+                <= row["chain_position"]
+                <= digest["end_chain_position"]
+            ]
+            tool_rows = [
+                row for row in episode_rows
+                if row["turn_kind"] in {"tool_call", "tool_result"}
+            ]
+            dialogue_rows = [
+                row for row in episode_rows
+                if row["turn_kind"]
+                in {"user_message", "model_reply", "peer_message_in", "peer_message_out"}
+            ]
+            if len(tool_rows) > len(dialogue_rows):
+                tool_heavy += 1
+            else:
+                dialogue_heavy += 1
+            citations = json.loads(digest["row_citations_json"])
+            coverage[digest["episode_key"]] = {
+                "cited_rows": len(citations),
+                "episode_rows": digest["row_count"],
+            }
+            cited_ids = {citation["turn_id"] for citation in citations}
+            cited_taint = {
+                label
+                for row in episode_rows
+                if row["turn_id"] in cited_ids
+                for label in json.loads(row["taint_labels_json"])
+            }
+            artifact_taint = set(json.loads(digest["taint_labels_json"]))
+            if artifact_taint != cited_taint:
+                taint_gap_count += 1
+
+        expected_denominator = len(deep) or 1
+        self.assertEqual(
+            span_metrics["deep_episode_composition"],
+            {
+                "deep_episode_count": len(deep),
+                "tool_heavy_fraction": tool_heavy / expected_denominator,
+                "dialogue_heavy_fraction": dialogue_heavy / expected_denominator,
+            },
+        )
+        self.assertEqual(span_metrics["citation_coverage"], coverage)
+        self.assertEqual(
+            span_metrics["artifact_taint_cited_taint_gap_count"],
+            taint_gap_count,
+        )
+        self.assertEqual(
+            span_metrics["refusals_by_code_and_outcome"],
+            {
+                row["refusal_code"]: {
+                    row["outcome"]: sum(
+                        1
+                        for candidate in outcomes
+                        if candidate["refusal_code"] == row["refusal_code"]
+                        and candidate["outcome"] == row["outcome"]
+                    )
+                }
+                for row in outcomes
+                if row["refusal_code"]
+            },
+        )
+        self.assertEqual(span_metrics["digestion_wonderings_in_pursuit_count"], 0)
+        self.assertEqual(span_metrics["backlog_depth"], 0)
+        self.assertEqual(completed_receipt["shadow_metrics"], span_metrics)
+
+        stdout = StringIO()
+        with patch.object(
+            run_consolidation_shadow,
+            "run_consolidation_pass",
+            return_value=result,
+        ), redirect_stdout(stdout):
+            rc = run_consolidation_shadow.main(
+                ["--ledger-db", str(ledger), "--output-root", str(root)]
+            )
+        self.assertEqual(rc, 0)
+        emitted = json.loads(stdout.getvalue())
+        self.assertEqual(emitted["shadow_metrics"], metrics)
+
 
 class DigesterB2Tests(unittest.TestCase):
     def test_non_local_endpoint_defers_without_llm_call(self):
@@ -624,9 +875,6 @@ class DigesterB2Tests(unittest.TestCase):
             end_chain_position=2,
             turn_ids=tuple(row["turn_id"] for row in rows),
             row_count=len(rows),
-            tool_outcome_count=0,
-            tool_outcome_density=0.0,
-            error_cluster_present=False,
             selection_depth="deep",
         )
 
@@ -668,9 +916,15 @@ class DigesterB2Tests(unittest.TestCase):
                 llm_callable=lambda **_: "this is not json",
             )
 
-        self.assertEqual(result.status, "refused")
+        self.assertEqual(result.status, "deferred")
         self.assertEqual(result.refusals[0]["refusal_code"], "digestion_parse_failure")
+        self.assertEqual(result.refusals[0]["outcome"], "deferred_same_span")
         self.assertEqual(_table_names(paths.episode_digests_db_path), set())
+        attempts = _rows(
+            paths.spine_db_path,
+            "SELECT * FROM episode_outcomes ORDER BY id ASC",
+        )
+        self.assertEqual(attempts[0]["outcome"], "deferred_same_span")
         state = {
             row["key"]: row["value"]
             for row in _rows(paths.spine_db_path, "SELECT key, value FROM state")
@@ -692,9 +946,6 @@ class DigesterB2Tests(unittest.TestCase):
             end_chain_position=3,
             turn_ids=tuple(row["turn_id"] for row in rows),
             row_count=len(rows),
-            tool_outcome_count=0,
-            tool_outcome_density=0.0,
-            error_cluster_present=False,
             selection_depth="deep",
         )
 
@@ -731,9 +982,6 @@ class DigesterB2Tests(unittest.TestCase):
             end_chain_position=int(rows[-1]["chain_position"]),
             turn_ids=tuple(row["turn_id"] for row in rows),
             row_count=len(rows),
-            tool_outcome_count=0,
-            tool_outcome_density=0.0,
-            error_cluster_present=False,
             selection_depth="deep",
         )
         guard_calls = {"count": 0}
@@ -782,9 +1030,6 @@ class DigesterB2Tests(unittest.TestCase):
             end_chain_position=7,
             turn_ids=tuple(row["turn_id"] for row in rows),
             row_count=len(rows),
-            tool_outcome_count=2,
-            tool_outcome_density=2 / len(rows),
-            error_cluster_present=True,
             selection_depth="deep",
         )
         first = rows[0]
