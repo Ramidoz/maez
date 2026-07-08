@@ -45,8 +45,44 @@ from __future__ import annotations
 import json
 import logging
 import os
+from urllib.parse import urlparse
 
 logger = logging.getLogger("maez.model_config")
+
+BACKEND_OLLAMA = "ollama"
+BACKEND_LLAMACPP = "llamacpp"
+VALID_BACKENDS = frozenset({BACKEND_OLLAMA, BACKEND_LLAMACPP})
+
+
+def active_backend() -> str:
+    """Return the active LLM backend, reading env at call time."""
+    value = (os.environ.get("MAEZ_LLM_BACKEND") or BACKEND_OLLAMA).strip().lower()
+    return value if value in VALID_BACKENDS else BACKEND_OLLAMA
+
+
+def primary_base_url_from_env() -> str:
+    return os.environ.get(
+        "MAEZ_PRIMARY_BASE_URL",
+        "http://127.0.0.1:8080",
+    ).rstrip("/")
+
+
+def openai_v1_base_url(base_url: str) -> str:
+    base = str(base_url or "").rstrip("/")
+    if not base:
+        base = "http://127.0.0.1:8080"
+    if urlparse(base).scheme in {"unix", "http+unix", "https+unix"}:
+        return base
+    if not base.endswith("/v1"):
+        base = f"{base}/v1"
+    return base
+
+
+def llamacpp_base_url_from_env() -> str:
+    raw = (os.environ.get("MAEZ_LLAMACPP_URL") or "").strip()
+    if raw:
+        return openai_v1_base_url(raw)
+    return openai_v1_base_url(primary_base_url_from_env())
 
 
 def _parse_kwargs_env(name: str, default: str = "{}") -> dict:

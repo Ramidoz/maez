@@ -50,12 +50,11 @@ from dataclasses import dataclass
 from typing import Any, Optional
 from urllib.parse import urlparse
 
+from core.model_config import BACKEND_LLAMACPP, BACKEND_OLLAMA
 
 # ── backend selection ────────────────────────────────────────────────
-BACKEND_OLLAMA = 'ollama'
-BACKEND_LLAMACPP = 'llamacpp'
-VALID_BACKENDS = frozenset({BACKEND_OLLAMA, BACKEND_LLAMACPP})
-
+# Legacy export. Runtime call paths use _llamacpp_base_url() so endpoint
+# changes are resolved per call.
 LLAMACPP_BASE_URL = os.environ.get('MAEZ_LLAMACPP_URL', 'http://127.0.0.1:8080/v1')
 # Session 11p: bumped from qwen2.5-3b to gemma-4-26b after the source-built
 # CUDA llama-server proved gemma-4-26B-A4B runs at ~133 tok/s on RTX 4090
@@ -110,8 +109,9 @@ def active_backend() -> str:
     Reads MAEZ_LLM_BACKEND at call time (not import time) so a flag flip
     picks up on the next request without requiring a process restart.
     """
-    v = (os.environ.get('MAEZ_LLM_BACKEND') or BACKEND_OLLAMA).strip().lower()
-    return v if v in VALID_BACKENDS else BACKEND_OLLAMA
+    from core.model_config import active_backend as _active_backend
+
+    return _active_backend()
 
 
 def _props_url_for_base(base_url: str) -> str:
@@ -122,7 +122,13 @@ def _props_url_for_base(base_url: str) -> str:
 
 
 def _llamacpp_props_url() -> str:
-    return _props_url_for_base(LLAMACPP_BASE_URL)
+    return _props_url_for_base(_llamacpp_base_url())
+
+
+def _llamacpp_base_url() -> str:
+    from core.model_config import llamacpp_base_url_from_env
+
+    return llamacpp_base_url_from_env()
 
 
 def _props_model_alias(url: str, *, timeout_s: float) -> str | None:
@@ -537,7 +543,7 @@ def _get_openai_client_for_base(base_url: str):
 
 
 def _get_openai_client():
-    return _get_openai_client_for_base(LLAMACPP_BASE_URL)
+    return _get_openai_client_for_base(_llamacpp_base_url())
 
 
 def _thinking_suppressed(
@@ -625,7 +631,7 @@ def _chat_llamacpp(
     """
     if not stream:
         return _chat_openai_compat(
-            base_url=LLAMACPP_BASE_URL,
+            base_url=_llamacpp_base_url(),
             backend_label=BACKEND_LLAMACPP,
             model=LLAMACPP_MODEL,
             messages=messages,
@@ -695,7 +701,7 @@ def _start_llamacpp_stream(
         payload.update(extra_body)
     body = json.dumps(payload).encode("utf-8")
     sock = _connect_llamacpp_socket(
-        LLAMACPP_BASE_URL,
+        _llamacpp_base_url(),
         body,
         timeout_s=timeout_s if timeout_s is not None else 90,
     )

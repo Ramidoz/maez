@@ -21,6 +21,18 @@ class BrainPurposeTest(unittest.TestCase):
         )
         self.assertEqual(priority_of(BrainPurpose.NEUTRAL), 0)
 
+    def test_digestion_is_background_below_all_foreground_purposes(self):
+        digestion_priority = priority_of(BrainPurpose.DIGESTION)
+
+        self.assertGreater(digestion_priority, priority_of(BrainPurpose.NEUTRAL))
+        for foreground in (
+            BrainPurpose.OWNER_REPLY,
+            BrainPurpose.OWNER_RECALL,
+            BrainPurpose.VOICE_REPLY,
+        ):
+            with self.subTest(foreground=foreground):
+                self.assertLess(digestion_priority, priority_of(foreground))
+
     def test_unknown_purpose_defaults_neutral_never_high(self):
         self.assertEqual(priority_of("not_a_real_purpose"), 0)
 

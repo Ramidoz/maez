@@ -28,6 +28,7 @@ class BrainPurpose(str, Enum):
     DAEMON_CYCLE_AUDIT_JUDGE = "daemon_cycle_audit_judge"
     DAEMON_CYCLE_REWRITE = "daemon_cycle_rewrite"
     DAEMON_CYCLE_RETRY = "daemon_cycle_retry"
+    DIGESTION = "digestion"
     NEUTRAL = "neutral"
 
 
@@ -44,6 +45,7 @@ _BACKGROUND_PURPOSES = frozenset(
         BrainPurpose.DAEMON_CYCLE_AUDIT_JUDGE,
         BrainPurpose.DAEMON_CYCLE_REWRITE,
         BrainPurpose.DAEMON_CYCLE_RETRY,
+        BrainPurpose.DIGESTION,
     }
 )
 _CURRENT_PURPOSE: contextvars.ContextVar[BrainPurpose] = contextvars.ContextVar(

@@ -93,14 +93,14 @@ def is_available() -> bool:
     backend: Optional[str] = None
     llamacpp_probe_url: Optional[str] = None
     try:
-        from core.llm_client import (
-            active_backend as _lc_active_backend,
+        from core.model_config import (
             BACKEND_LLAMACPP,
-            LLAMACPP_BASE_URL,
+            active_backend as _active_backend,
+            llamacpp_base_url_from_env,
         )
-        backend = _lc_active_backend()
+        backend = _active_backend()
         if backend == BACKEND_LLAMACPP:
-            llamacpp_probe_url = LLAMACPP_BASE_URL.rstrip('/') + '/models'
+            llamacpp_probe_url = llamacpp_base_url_from_env().rstrip('/') + '/models'
     except Exception:
         # llm_client unavailable — treat as bootstrap / Ollama-default.
         backend = None
