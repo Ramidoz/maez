@@ -78,7 +78,13 @@ VISION_MAX_DIM = _positive_int_or_default(
     _env_or_default("MAEZ_VISION_MAX_DIM", str(_DEFAULT_VISION_MAX_DIM)),
     _DEFAULT_VISION_MAX_DIM,
 )
-SCREENSHOT_TIMEOUT = 10  # seconds for screenshot capture
+# Screenshot capture budget. The portal helper (scripts/screencast_capture.py)
+# waits up to PORTAL_TIMEOUT_MS=120s on a COLD call (first run shows a consent
+# dialog); once the restore token is saved, capture is fast. 10s starved the
+# cold path and killed the helper mid-handshake (2026-07-08 witness sprint).
+# 20s covers a warm restore-token capture with headroom without hanging the
+# idle cycle on a genuinely dead display.
+SCREENSHOT_TIMEOUT = 20  # seconds for screenshot capture
 VISION_TIMEOUT = 45  # seconds for vision call
 
 _ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
