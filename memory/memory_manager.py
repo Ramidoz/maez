@@ -28,6 +28,7 @@ from core.egress.gate import (
 from core.egress.provenance import ProvenanceSpan, ProvenancedText
 from core.infra.env_flags import strict_env_flag
 from core.llm_client import sanitize_prompt_text
+from core.routing.recent_activity_status import is_casual_presence_status_query
 from core.routing.temporal_cue import (
     AbsoluteRecallWindow,
     _absolute_date_window,
@@ -661,6 +662,7 @@ _RECALL_RELEVANCE_FLOOR_DEFAULT = 0.7800
 _RECALL_CONTEXT_CASUAL_FLOOR_DEFAULT = 0.7200
 _SELF_DIGEST_METADATA_TYPES = frozenset({"daily_consolidation"})
 _SELF_DIGEST_METADATA_SOURCES = frozenset({"nightly_journal"})
+_DEVELOPMENTAL_HEARTBEAT_SOURCE_PREFIX = "developmental_heartbeat_"
 _RECALL_PROMOTION_RERANK_STRENGTH = 0.20
 _LIVING_RECALL_INVALID_DISTANCE_RANK = 1_000_000.0
 _RECALL_TYPE_WEIGHTS = {
@@ -688,6 +690,8 @@ def _recall_candidate_kind(mem: dict) -> str:
         return "self_digest"
     if source in _SELF_DIGEST_METADATA_SOURCES:
         return "self_digest"
+    if source.startswith(_DEVELOPMENTAL_HEARTBEAT_SOURCE_PREFIX):
+        return "developmental_heartbeat"
     if source_kind == "reflection" or authorship == "reflection_synthesis":
         return "reflection"
     if memory_voice == "maez_self":
@@ -840,11 +844,52 @@ def _query_tokens(text: str) -> set[str]:
     return set(re.findall(r"[a-z0-9']+", str(text or "").lower()))
 
 
+def _has_memory_ask_shape(query: str) -> bool:
+    normalized = " ".join(str(query or "").lower().split())
+    if not normalized:
+        return False
+    if "?" in str(query or ""):
+        return True
+    return bool(
+        re.match(
+            r"^(?:"
+            r"what|when|where|who|which|why|how|"
+            r"do|did|does|can|could|would|will|"
+            r"remind\s+me|tell\s+me|summarize|summary\s+of"
+            r")\b",
+            normalized,
+        )
+    )
+
+
+_OWNER_PAST_UTTERANCE_RE = re.compile(
+    r"\bwhat\s+did\s+i\s+(?:tell|say|mention|ask)\s+you\s+about\b",
+    re.IGNORECASE,
+)
+
+_DIRECT_MEMORY_REQUEST_RE = re.compile(
+    r"^(?:"
+    r"(?:remember|recall|remind\s+me)\s+what\s+(?:i|you|we)\s+"
+    r"(?:said|told|mentioned|asked|discussed|talked)\b|"
+    r"show\s+me\s+memor(?:y|ies)\s+about\b"
+    r")",
+    re.IGNORECASE,
+)
+
+
 def _is_recall_memory_ask(query: str) -> bool:
+    if is_casual_presence_status_query(query):
+        return False
+    normalized = " ".join(str(query or "").lower().split())
+    if _DIRECT_MEMORY_REQUEST_RE.search(normalized):
+        return True
+    if not _has_memory_ask_shape(query):
+        return False
+    if _OWNER_PAST_UTTERANCE_RE.search(normalized):
+        return True
     tokens = _query_tokens(query)
     if tokens & _RECALL_MEMORY_ASK_KEYWORDS:
         return True
-    normalized = " ".join(str(query or "").lower().split())
     return any(
         phrase in normalized
         for phrase in (

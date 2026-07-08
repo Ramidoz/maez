@@ -191,6 +191,29 @@ class TestSelfDigestKind(unittest.TestCase):
 
         self.assertEqual(_recall_candidate_kind(row), "unknown")
 
+    def test_developmental_heartbeat_source_classifies_as_developmental_heartbeat(self):
+        from memory.memory_manager import _recall_candidate_kind
+
+        row = {
+            "content": "neutral structured continuity row",
+            "metadata": {
+                "type": "core_memory",
+                "source": "developmental_heartbeat_2026-07-06",
+            }
+        }
+
+        self.assertEqual(_recall_candidate_kind(row), "developmental_heartbeat")
+
+    def test_developmental_heartbeat_kind_does_not_sniff_content(self):
+        from memory.memory_manager import _recall_candidate_kind
+
+        row = {
+            "content": "[DEVELOPMENTAL HEARTBEAT - 2026-07-06] What I noticed: quiet.",
+            "metadata": {"type": "core_memory", "source": "ordinary_core"},
+        }
+
+        self.assertEqual(_recall_candidate_kind(row), "unknown")
+
 
 class TestContextFloorFlags(unittest.TestCase):
     def test_flags_off_by_default(self):
@@ -238,6 +261,17 @@ class TestMemoryAskGate(unittest.TestCase):
 
         self.assertFalse(_is_recall_memory_ask("how are you"))
         self.assertFalse(_is_recall_memory_ask("what did you do"))
+        self.assertFalse(_is_recall_memory_ask("What's going on with you?"))
+
+    def test_declarative_self_status_text_is_not_memory_ask(self):
+        from memory.memory_manager import _is_recall_memory_ask
+
+        self.assertFalse(
+            _is_recall_memory_ask(
+                "I don't believe you are ready yet to start refining yourself. "
+                "Claude and Codex are working on you."
+            )
+        )
 
     def test_self_and_pattern_queries_are_memory_asks(self):
         from memory.memory_manager import _is_recall_memory_ask
@@ -247,6 +281,10 @@ class TestMemoryAskGate(unittest.TestCase):
             _is_recall_memory_ask("what patterns have you seen in your own reasoning")
         )
         self.assertTrue(_is_recall_memory_ask("what do you remember about your state"))
+        self.assertTrue(_is_recall_memory_ask("what did I tell you about X last week"))
+        self.assertTrue(_is_recall_memory_ask("remember what I said about X last week"))
+        self.assertTrue(_is_recall_memory_ask("recall what I said about X last week"))
+        self.assertTrue(_is_recall_memory_ask("show me memories about X"))
 
 
 class TestContextFloorPredicate(unittest.TestCase):
@@ -446,6 +484,89 @@ class TestContextWholeRecallFallback(unittest.TestCase):
         self.assertEqual(self._ids(filtered, "daily"), ["daily-kept-by-v0"])
         self.assertEqual(self._ids(filtered, "core"), ["core-pass-through"])
         self.assertEqual(summary["fallback_rescue_kind"], None)
+
+
+class TestContextFloorReceiptFixture(unittest.TestCase):
+    def _heartbeat(self, row_id: str, distance: float) -> dict:
+        return {
+            "id": row_id,
+            "distance": distance,
+            "content": (
+                "[DEVELOPMENTAL HEARTBEAT - 2026-07-06 (Monday)] "
+                "What I noticed: the system stayed mostly quiet."
+            ),
+            "metadata": {
+                "type": "core_memory",
+                "source": "developmental_heartbeat_2026-07-06",
+            },
+        }
+
+    def test_casual_self_status_heartbeat_receipt_projects_majority_drop(self):
+        from memory.memory_manager import (
+            _apply_context_floor_to_partitions,
+            _is_recall_memory_ask,
+        )
+
+        query_is_memory_ask = _is_recall_memory_ask("What's going on with you?")
+        partitions = {
+            "raw": [
+                self._heartbeat(f"raw-heartbeat-{i}", 0.731 + (i * 0.001))
+                for i in range(10)
+            ],
+            "daily": [
+                self._heartbeat(f"daily-heartbeat-{i}", 0.745 + (i * 0.001))
+                for i in range(3)
+            ],
+            "core": [
+                self._heartbeat(f"core-heartbeat-{i}", 0.620 + (i * 0.001))
+                for i in range(3)
+            ],
+        }
+
+        _filtered, summary = _apply_context_floor_to_partitions(
+            partitions,
+            query_is_memory_ask=query_is_memory_ask,
+            base_floor=0.78,
+            casual_floor=0.72,
+            enforce=True,
+        )
+
+        self.assertFalse(query_is_memory_ask)
+        self.assertEqual(summary["candidate_count"], 16)
+        self.assertEqual(
+            {row["kind"] for row in summary["decisions"]},
+            {"developmental_heartbeat"},
+        )
+        self.assertGreater(summary["would_drop_count"], 8)
+
+    def test_genuine_memory_ask_keeps_relevant_heartbeat_rows_reachable(self):
+        from memory.memory_manager import (
+            _apply_context_floor_to_partitions,
+            _is_recall_memory_ask,
+        )
+
+        query_is_memory_ask = _is_recall_memory_ask(
+            "what did I tell you about X last week"
+        )
+        partitions = {
+            "raw": [self._heartbeat("raw-relevant", 0.74)],
+            "daily": [self._heartbeat("daily-relevant", 0.75)],
+            "core": [self._heartbeat("core-relevant", 0.90)],
+        }
+
+        filtered, summary = _apply_context_floor_to_partitions(
+            partitions,
+            query_is_memory_ask=query_is_memory_ask,
+            base_floor=0.78,
+            casual_floor=0.72,
+            enforce=True,
+        )
+
+        self.assertTrue(query_is_memory_ask)
+        self.assertEqual([row["id"] for row in filtered["raw"]], ["raw-relevant"])
+        self.assertEqual([row["id"] for row in filtered["daily"]], ["daily-relevant"])
+        self.assertEqual([row["id"] for row in filtered["core"]], ["core-relevant"])
+        self.assertEqual(summary["would_drop_count"], 0)
 
 
 if __name__ == "__main__":
