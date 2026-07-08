@@ -20,6 +20,7 @@ import inspect
 import os
 import sqlite3
 import tempfile
+import threading
 import textwrap
 import unittest
 from pathlib import Path
@@ -88,6 +89,82 @@ class PendingCardsSupersessionRaceGuard(unittest.TestCase):
                 len(open_rows), 1,
                 f"expected one active card after same-chat race, got {rows!r}",
             )
+
+
+class PendingCardsTransitionCasRaceGuard(unittest.TestCase):
+    def test_two_concurrent_terminal_transitions_leave_one_winner(self):
+        from core.decision import pending_cards as cards_mod
+        from core.decision.pending_cards import CardStatus, CardStoreError, PendingCardStore
+        from tests._helpers.concurrent import run_two_threads
+
+        original_connect = cards_mod.sqlite3.connect
+        update_barrier = threading.Barrier(2)
+
+        class BarrierConnection:
+            def __init__(self, inner):
+                self._inner = inner
+
+            @property
+            def row_factory(self):
+                return self._inner.row_factory
+
+            @row_factory.setter
+            def row_factory(self, value):
+                self._inner.row_factory = value
+
+            def __enter__(self):
+                self._inner.__enter__()
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return self._inner.__exit__(exc_type, exc, tb)
+
+            def close(self):
+                return self._inner.close()
+
+            def execute(self, sql, parameters=()):
+                normalized = " ".join(str(sql).split()).upper()
+                if normalized.startswith("UPDATE PENDING_CARDS SET"):
+                    update_barrier.wait(timeout=5.0)
+                return self._inner.execute(sql, parameters)
+
+            def __getattr__(self, name):
+                return getattr(self._inner, name)
+
+        def connect_with_update_barrier(*args, **kwargs):
+            return BarrierConnection(original_connect(*args, **kwargs))
+
+        with tempfile.TemporaryDirectory() as td:
+            store = PendingCardStore(Path(td) / "cards.db")
+            card = store.create_card(
+                action="quote_stock",
+                params={"ticker": "MAEZ"},
+                reason="race guard",
+                proposed_action_summary="Look up the MAEZ quote.",
+            )
+
+            with mock.patch.object(cards_mod.sqlite3, "connect", side_effect=connect_with_update_barrier):
+                deny_result, expire_result = run_two_threads(
+                    lambda: store.deny(card.request_id, user_id="owner", via="cockpit"),
+                    lambda: store.expire(card.request_id, "abandoned"),
+                    timeout=5.0,
+                )
+
+            results = (deny_result, expire_result)
+            successes = [r.return_value for r in results if r.ok]
+            failures = [r.exception for r in results if not r.ok]
+            final = store.get(card.request_id)
+
+        self.assertEqual(
+            len(successes),
+            1,
+            f"exactly one transition should win; got successes={successes!r} failures={failures!r}",
+        )
+        self.assertEqual(len(failures), 1, failures)
+        self.assertIsInstance(failures[0], CardStoreError)
+        self.assertIsNotNone(final)
+        self.assertEqual(final.status, successes[0].status)
+        self.assertIn(final.status, {CardStatus.DENIED.value, CardStatus.EXPIRED.value})
 
 
 class SubscriptionProxyBudgetRaceGuard(unittest.TestCase):

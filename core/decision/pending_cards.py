@@ -687,26 +687,33 @@ class PendingCardStore:
         extras = extras or {}
         now = time.time()
         with self._conn() as conn:
-            row = conn.execute(
-                "SELECT * FROM pending_cards WHERE request_id = ?",
-                (request_id,),
-            ).fetchone()
-            if row is None:
-                raise CardStoreError(f"no such card: {request_id}")
-            if row["status"] not in allow_from:
-                raise CardStoreError(
-                    f"cannot transition {request_id} from {row['status']} to {new_status}"
-                )
             set_clauses = ["status = ?", "updated_at = ?"]
             args: list[Any] = [new_status, now]
             for k, v in extras.items():
                 set_clauses.append(f"{k} = ?")
                 args.append(v)
             args.append(request_id)
-            conn.execute(
-                f"UPDATE pending_cards SET {', '.join(set_clauses)} WHERE request_id = ?",
+            allowed_statuses = tuple(sorted(allow_from))
+            placeholders = ", ".join("?" for _ in allowed_statuses)
+            args.extend(allowed_statuses)
+            cursor = conn.execute(
+                f"""
+                UPDATE pending_cards
+                SET {', '.join(set_clauses)}
+                WHERE request_id = ? AND status IN ({placeholders})
+                """,
                 args,
             )
+            if cursor.rowcount != 1:
+                row = conn.execute(
+                    "SELECT status FROM pending_cards WHERE request_id = ?",
+                    (request_id,),
+                ).fetchone()
+                if row is None:
+                    raise CardStoreError(f"no such card: {request_id}")
+                raise CardStoreError(
+                    f"cannot transition {request_id} from {row['status']} to {new_status}"
+                )
         card = self.get(request_id)
         if card is None:
             raise CardStoreError(f"card disappeared mid-transition: {request_id}")
