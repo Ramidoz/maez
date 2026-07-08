@@ -352,7 +352,10 @@ def runtime_services_snapshot(
     add_service(
         "vision_body",
         required_by=_required_by("MAEZ_SCREEN_PERCEPTION"),
-        unit_name="maez-vision.service",
+        # Real unit name (2026-07-08 witness-sprint audit): the vision body
+        # runs as llama-vision.service; "maez-vision.service" never existed,
+        # so the services map reported a phantom unit for the eye.
+        unit_name="llama-vision.service",
         port=("127.0.0.1", 8082),
     )
     add_service(
