@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import os
 import sys
+import time
 import types
 import unittest
 from datetime import UTC, datetime
@@ -41,6 +42,31 @@ class _FreshCameraState:
         return self
 
 
+class _FakeScreenObservation:
+    state = "ok"
+    success = True
+    validation = "unvalidated_single_frame"
+
+    def __init__(self, *, age_s: int, activity: str = "Browsing") -> None:
+        self.activity = activity
+        self.application = "Firefox"
+        self.detail = "Local docs"
+        self.focus_level = "browsing"
+        self.timestamp = time.time() - age_s
+
+    def format_for_context(self) -> str:
+        age_seconds = int(time.time() - self.timestamp)
+        return (
+            f"[SCREEN - one unvalidated glance, {age_seconds}s ago]\n"
+            f"  Looked like: {self.activity}\n"
+            "  Application: Firefox\n"
+            "  Detail: Local docs\n"
+            "  Focus: browsing\n"
+            "  (single frame, not cross-checked against running processes "
+            "or window state - treat as a first impression, not fact)"
+        )
+
+
 class _Writer:
     def write(self, trace) -> None:
         return None
@@ -57,10 +83,10 @@ class _FakeSubjectiveDuration:
 
 
 class InnerContinuityPromptIntegrationTests(unittest.TestCase):
-    def _daemon(self):
+    def _daemon(self, *, screen_obs=None):
         daemon = types.SimpleNamespace(
             _camera_presence_state=_FreshCameraState(),
-            _last_screen_obs=None,
+            _last_screen_obs=screen_obs,
             _last_calendar_snap=None,
             memory=_FakeMemory(),
             system_prompt="SOUL",
@@ -79,7 +105,13 @@ class InnerContinuityPromptIntegrationTests(unittest.TestCase):
         setattr(daemon, "private" + "_" + "thoughts", None)
         return daemon
 
-    def _run_handle_message(self, *, env: dict[str, str]):
+    def _run_handle_message(
+        self,
+        *,
+        env: dict[str, str],
+        screen_obs=None,
+        owner_auth: bool = True,
+    ):
         import daemon.maez_daemon as maez_daemon
         import core.evolution as evolution_pkg
         from core.evolution.subjective_duration import SubjectiveDurationOwnerAuth
@@ -99,6 +131,10 @@ class InnerContinuityPromptIntegrationTests(unittest.TestCase):
             ),
         )
 
+        def _build_envelope(**kwargs):
+            captured["build_envelope_kwargs"] = kwargs
+            return None
+
         clean_env = {
             "MAEZ_LIVED_RECALL": "0",
             "MAEZ_AMBIENT_BRIEF": "0",
@@ -107,8 +143,17 @@ class InnerContinuityPromptIntegrationTests(unittest.TestCase):
             "MAEZ_EVIDENCE_PRECEDENCE_ENABLED": "0",
             "MAEZ_ROUTING_PRIORS_ENABLED": "0",
             "MAEZ_ROUTING_PRIORS_SHADOW": "0",
+            "MAEZ_SCREEN_PERCEPTION": "0",
         }
         clean_env.update(env)
+        auth = (
+            SubjectiveDurationOwnerAuth(
+                surface="telegram_owner",
+                proof="telegram_authorized_user",
+            )
+            if owner_auth
+            else None
+        )
         with contextlib.ExitStack() as stack:
             stack.enter_context(mock.patch.dict(os.environ, clean_env, clear=False))
             stack.enter_context(
@@ -162,7 +207,7 @@ class InnerContinuityPromptIntegrationTests(unittest.TestCase):
                     create=True,
                 )
             )
-            stack.enter_context(mock.patch("core.cognition.envelope_builder.build_envelope", return_value=None))
+            stack.enter_context(mock.patch("core.cognition.envelope_builder.build_envelope", side_effect=_build_envelope))
             stack.enter_context(
                 mock.patch("core.cognition.envelope_builder.render_envelope_for_prompt", return_value="")
             )
@@ -185,13 +230,10 @@ class InnerContinuityPromptIntegrationTests(unittest.TestCase):
                 mock.patch("core.ledger.model_reply_persistence.persist_model_reply", return_value=None)
             )
             reply = maez_daemon.MaezDaemon.handle_message(
-                self._daemon(),
+                self._daemon(screen_obs=screen_obs),
                 "hey",
                 source="telegram_surface",
-                subjective_duration_owner_auth=SubjectiveDurationOwnerAuth(
-                    surface="telegram_owner",
-                    proof="telegram_authorized_user",
-                ),
+                subjective_duration_owner_auth=auth,
             )
 
         self.assertEqual("legacy reply", reply)
@@ -218,6 +260,98 @@ class InnerContinuityPromptIntegrationTests(unittest.TestCase):
         owner_idx = content.index("the owner sent via telegram_surface")
         self.assertLess(felt_idx, inner_idx)
         self.assertLess(inner_idx, owner_idx)
+
+    def test_screen_perception_on_inserts_fresh_unvalidated_glance_after_felt_time(self):
+        captured = self._run_handle_message(
+            env={"MAEZ_SCREEN_PERCEPTION": "1"},
+            screen_obs=_FakeScreenObservation(age_s=20),
+        )
+
+        content = captured["messages"][-1]["content"]
+        felt_idx = content.index("Felt time: compact present-tense time.")
+        screen_idx = content.index("[SCREEN - one unvalidated glance")
+        owner_idx = content.index("the owner sent via telegram_surface")
+        self.assertLess(felt_idx, screen_idx)
+        self.assertLess(screen_idx, owner_idx)
+        self.assertIn("Looked like: Browsing", content)
+        self.assertIn("single frame, not cross-checked", content)
+        self.assertNotIn("no fresh glance", content)
+        claimable = captured["build_envelope_kwargs"].get("claimable") or []
+        self.assertEqual(claimable[0]["kind"], "screen_observation")
+        self.assertEqual(claimable[0]["state"], "ok")
+        self.assertLessEqual(claimable[0]["age_s"], 180)
+
+    def test_screen_perception_on_without_obs_inserts_honest_empty_block(self):
+        captured = self._run_handle_message(env={"MAEZ_SCREEN_PERCEPTION": "1"})
+
+        content = captured["messages"][-1]["content"]
+        self.assertIn("SENSE-PRESENCE: no fresh screen glance (none this session)", content)
+        self.assertIn("glances are coarse activity labels ~every 60s", content)
+        self.assertIn("not on-demand vision", content)
+        sense_lines = [
+            line for line in content.splitlines() if line.startswith("SENSE-PRESENCE:")
+        ]
+        self.assertEqual(1, len(sense_lines))
+        self.assertEqual([], captured["build_envelope_kwargs"].get("claimable") or [])
+
+    def test_screen_perception_on_with_stale_obs_inserts_honest_empty_age(self):
+        captured = self._run_handle_message(
+            env={"MAEZ_SCREEN_PERCEPTION": "1"},
+            screen_obs=_FakeScreenObservation(age_s=240),
+        )
+
+        content = captured["messages"][-1]["content"]
+        self.assertIn("SENSE-PRESENCE: no fresh screen glance (last observation ", content)
+        self.assertIn("s ago)", content)
+        self.assertNotIn("Looked like: Browsing", content)
+        self.assertEqual([], captured["build_envelope_kwargs"].get("claimable") or [])
+        self.assertNotIn(
+            "screen observation",
+            captured["build_envelope_kwargs"].get("signals_present") or [],
+        )
+        self.assertIn(
+            "screen observation",
+            captured["build_envelope_kwargs"].get("signals_absent") or [],
+        )
+
+    def test_screen_perception_off_keeps_legacy_user_prompt_byte_identical(self):
+        captured = self._run_handle_message(
+            env={"MAEZ_SCREEN_PERCEPTION": "0"},
+            screen_obs=_FakeScreenObservation(age_s=20),
+        )
+
+        self.assertEqual(EXPECTED_FLAG_OFF_USER_PROMPT, captured["messages"][-1]["content"])
+        self.assertNotIn("[SCREEN]", captured["messages"][-1]["content"])
+        self.assertNotIn("SENSE-PRESENCE", captured["messages"][-1]["content"])
+
+    def test_screen_perception_unset_keeps_legacy_user_prompt_byte_identical(self):
+        captured = self._run_handle_message(
+            env={"MAEZ_SCREEN_PERCEPTION": ""},
+            screen_obs=_FakeScreenObservation(age_s=20),
+        )
+
+        self.assertEqual(EXPECTED_FLAG_OFF_USER_PROMPT, captured["messages"][-1]["content"])
+        self.assertNotIn("[SCREEN]", captured["messages"][-1]["content"])
+        self.assertNotIn("SENSE-PRESENCE", captured["messages"][-1]["content"])
+
+    def test_screen_perception_message_turn_does_not_capture_on_demand(self):
+        with mock.patch("daemon.maez_daemon.screen_observe") as observe:
+            captured = self._run_handle_message(
+                env={"MAEZ_SCREEN_PERCEPTION": "1"},
+                screen_obs=None,
+            )
+
+        observe.assert_not_called()
+        self.assertIn("SENSE-PRESENCE: no fresh screen glance", captured["messages"][-1]["content"])
+
+    def test_screen_perception_does_not_bypass_owner_auth_gate(self):
+        captured = self._run_handle_message(
+            env={"MAEZ_SCREEN_PERCEPTION": "1"},
+            screen_obs=_FakeScreenObservation(age_s=20),
+            owner_auth=False,
+        )
+
+        self.assertNotIn("[SCREEN]", captured["messages"][-1]["content"])
 
     def test_focused_prompt_includes_inner_continuity_block_when_flag_on(self):
         from core.routing.focused_cognition import WorkingSet, focused_synthesize
@@ -247,6 +381,59 @@ class InnerContinuityPromptIntegrationTests(unittest.TestCase):
 
         self.assertIn("INNER CONTINUITY FACTS", captured["system"])
         self.assertIn("open wonderings: 1", captured["system"])
+
+    def test_focused_prompt_includes_screen_perception_block_when_passed(self):
+        from core.routing.focused_cognition import WorkingSet, focused_synthesize
+
+        captured = {}
+
+        def _chat(**kwargs):
+            captured["system"] = kwargs["messages"][0]["content"]
+            return types.SimpleNamespace(message=types.SimpleNamespace(content="ok [E1]"))
+
+        ws = WorkingSet(
+            items=[],
+            ordered_evidence_text="[E1] recent dialogue anchor.",
+            owner_question="What do you see?",
+            working_set_chars=28,
+            working_set_tokens_est=7,
+            citation_render_version="v2",
+        )
+
+        focused_synthesize(
+            ws,
+            surface="telegram_surface",
+            chat_fn=_chat,
+            model="m",
+            screen_perception_block="SENSE-PRESENCE: no fresh screen glance (none this session); glances are coarse activity labels ~every 60s, not on-demand vision",
+        )
+
+        self.assertIn("SENSE-PRESENCE: no fresh screen glance", captured["system"])
+        self.assertIn("not on-demand vision", captured["system"])
+
+    def test_focused_path_does_not_read_screen_perception_flag_directly(self):
+        from core.routing.focused_cognition import WorkingSet, focused_synthesize
+
+        captured = {}
+
+        def _chat(**kwargs):
+            captured["system"] = kwargs["messages"][0]["content"]
+            return types.SimpleNamespace(message=types.SimpleNamespace(content="ok [E1]"))
+
+        ws = WorkingSet(
+            items=[],
+            ordered_evidence_text="[E1] recent dialogue anchor.",
+            owner_question="What do you see?",
+            working_set_chars=28,
+            working_set_tokens_est=7,
+            citation_render_version="v2",
+        )
+
+        with mock.patch.dict(os.environ, {"MAEZ_SCREEN_PERCEPTION": "1"}):
+            focused_synthesize(ws, surface="telegram_surface", chat_fn=_chat, model="m")
+
+        self.assertNotIn("[SCREEN]", captured["system"])
+        self.assertNotIn("SENSE-PRESENCE", captured["system"])
 
     def test_focused_path_does_not_read_inner_continuity_flag_directly(self):
         from core.routing.focused_cognition import WorkingSet, focused_synthesize

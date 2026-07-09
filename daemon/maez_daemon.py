@@ -2013,6 +2013,70 @@ def _env_flag(name: str, *, environ: object | None = None) -> bool:
     return (env.get(name, "") or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+_SCREEN_PERCEPTION_FRESH_S = 180
+
+
+def _screen_perception_enabled(*, environ: object | None = None) -> bool:
+    env = os.environ if environ is None else environ
+    value = str(env.get("MAEZ_SCREEN_PERCEPTION", "") or "").strip().lower()
+    return value not in ("", "0", "false", "no", "off")
+
+
+def _screen_obs_age_s(screen_obs: object | None, *, now: float | None = None) -> float | None:
+    if screen_obs is None:
+        return None
+    try:
+        timestamp = float(getattr(screen_obs, "timestamp"))
+    except (TypeError, ValueError):
+        return None
+    if now is None:
+        now = time.time()
+    return max(0.0, float(now) - timestamp)
+
+
+def _screen_perception_owner_fact(
+    screen_obs: object | None,
+    *,
+    now: float | None = None,
+) -> tuple[str, dict | None]:
+    """Return the authenticated owner-turn screen fact block and receipt."""
+    if not _screen_perception_enabled():
+        return "", None
+    age_s = _screen_obs_age_s(screen_obs, now=now)
+    if (
+        screen_obs is not None
+        and getattr(screen_obs, "state", None) == "ok"
+        and bool(getattr(screen_obs, "success", False))
+        and age_s is not None
+        and age_s <= _SCREEN_PERCEPTION_FRESH_S
+    ):
+        try:
+            block = str(screen_obs.format_for_context()).strip()
+        except Exception:
+            logger.debug("screen perception fact formatting failed", exc_info=True)
+            block = ""
+        if block:
+            observed_at = getattr(screen_obs, "timestamp", None)
+            return block, {
+                "kind": "screen_observation",
+                "state": "ok",
+                "observed_at": observed_at,
+                "age_s": int(age_s),
+                "text": block,
+            }
+
+    if screen_obs is None or age_s is None:
+        freshness = "none this session"
+    else:
+        freshness = f"last observation {int(age_s)}s ago"
+    return (
+        "SENSE-PRESENCE: no fresh screen glance "
+        f"({freshness}); glances are coarse activity labels ~every 60s, "
+        "not on-demand vision",
+        None,
+    )
+
+
 def _lean_idle_heartbeat_shadow_enabled(environ: object | None = None) -> bool:
     return _env_flag("MAEZ_LEAN_IDLE_HEARTBEAT_SHADOW", environ=environ)
 
@@ -7094,7 +7158,13 @@ class MaezDaemon:
                 if self._last_screen_obs is not None
                 else None
             )
-            if _screen_state == "ok" and getattr(self._last_screen_obs, "success", False):
+            _screen_age_s = _screen_obs_age_s(self._last_screen_obs)
+            if (
+                _screen_state == "ok"
+                and getattr(self._last_screen_obs, "success", False)
+                and _screen_age_s is not None
+                and _screen_age_s <= _SCREEN_PERCEPTION_FRESH_S
+            ):
                 _mark_signal_present("screen observation", "screen observation")
             elif _screen_state == "disabled":
                 _mark_signal_absent(
@@ -7128,6 +7198,12 @@ class MaezDaemon:
                 )
             except Exception as _subjective_duration_exc:
                 logger.debug("subjective_duration owner line skipped: %s", _subjective_duration_exc)
+        screen_perception_block = ""
+        _screen_perception_claimable = None
+        if subjective_duration_owner_auth is not None:
+            screen_perception_block, _screen_perception_claimable = (
+                _screen_perception_owner_fact(self._last_screen_obs)
+            )
         inner_continuity_block = ""
         if (
             subjective_duration_owner_auth is not None
@@ -7198,6 +7274,9 @@ class MaezDaemon:
             # ≤30 chars: fits the envelope's per-signal cap (§2) untruncated.
             _chat_signals_present.append("owner-sent photo vision")
         _daemon_tool_results = []
+        _daemon_claimable = []
+        if _screen_perception_claimable is not None:
+            _daemon_claimable.append(_screen_perception_claimable)
         _evidence_envelope = None
         _envelope_block = ""
 
@@ -7493,6 +7572,7 @@ class MaezDaemon:
                 signals_present=_chat_signals_present,
                 signals_absent=_chat_signals_absent,
                 tool_results=_daemon_tool_results,
+                claimable=_daemon_claimable,
                 turn_id=_user_msg_turn_id,
             )
         except Exception as _env_exc:
@@ -7510,6 +7590,8 @@ class MaezDaemon:
         prompt = f"{system_state}\n\n"
         if subjective_duration_line:
             prompt += subjective_duration_line + "\n\n"
+        if screen_perception_block:
+            prompt += screen_perception_block + "\n\n"
         if inner_continuity_block:
             prompt += inner_continuity_block + "\n\n"
 
@@ -8408,6 +8490,7 @@ class MaezDaemon:
                                 legacy_prompt_chars=_legacy_prompt_chars,
                                 turn_kind=_rk_turn_kind,
                                 inner_continuity_block=inner_continuity_block,
+                                screen_perception_block=screen_perception_block,
                             )
                             logger.info(
                                 "focused_synthesis_timing prompt_build_ms=%s "

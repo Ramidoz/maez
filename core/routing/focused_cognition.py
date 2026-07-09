@@ -1381,6 +1381,7 @@ def focused_synthesize(
     legacy_prompt_chars: int | None = None,
     turn_kind: str | None = None,
     inner_continuity_block: str | None = None,
+    screen_perception_block: str | None = None,
 ) -> FocusedResult:
     import time as _time
 
@@ -1445,6 +1446,9 @@ def focused_synthesize(
                 )
             if self_card_enabled:
                 voice_card_text = card.text
+    screen_perception_text = (screen_perception_block or "").strip()
+    if screen_perception_text:
+        voice_card_text = f"{voice_card_text}\n\n{screen_perception_text}"
     inner_continuity_text = (inner_continuity_block or "").strip()
     if inner_continuity_text:
         voice_card_text = f"{voice_card_text}\n\n{inner_continuity_text}"

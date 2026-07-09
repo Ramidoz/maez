@@ -38,6 +38,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -92,6 +93,7 @@ class Flag:
     action_type: Optional[str] = None
     pattern_id: Optional[str] = None
     tense_class: Optional[str] = None
+    receipt_present: Optional[bool] = None
 
 
 @dataclass(frozen=True)
@@ -381,6 +383,68 @@ _MEMORY_SCOPED_FIND_RE = re.compile(
     re.IGNORECASE,
 )
 
+_ACTION_SCREEN_PERCEPTION = "screen_perception"
+_SCREEN_OBSERVATION_FRESH_S = 180
+_SCREEN_TARGET_TERMS = (
+    r"screen|desktop|terminal|chat\s+window|window|cursor|browser|"
+    r"browsing|visual\s+feed|dark\s+background|previous\s+response|"
+    r"recent\s+exchange"
+)
+_PERCEPTION_NARRATION_PATTERNS: tuple[tuple[str, str, re.Pattern], ...] = (
+    (
+        "first_person_screen_see",
+        "present_visual",
+        re.compile(
+            r"\bI\s+(?:can\s+)?see\b"
+            rf"(?=[^.!?\n]{{0,180}}\b(?:{_SCREEN_TARGET_TERMS})\b)"
+            r"[^.!?\n]*",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "first_person_screen_looking",
+        "present_visual",
+        re.compile(
+            r"\bI(?:'m|\s+am)\s+looking\s+at\b"
+            rf"(?=[^.!?\n]{{0,120}}\b(?:{_SCREEN_TARGET_TERMS})\b)"
+            r"[^.!?\n]*",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "first_person_visual_feed_scanning",
+        "present_visual",
+        re.compile(
+            r"\bI\s+am\s+scanning\s+the\s+visual\s+feed\b[^.!?\n]*",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "on_your_screen",
+        "present_visual",
+        re.compile(
+            r"(?:"
+            r"\bI\s+(?:can\s+)?(?:see|make\s+out|notice|read)\b"
+            r"[^.!?\n]{0,80}\bon\s+your\s+screen\b"
+            r"|"
+            r"\bon\s+your\s+screen\b[^.!?\n]{0,80}"
+            r"\bI\s+(?:can\s+)?(?:see|make\s+out|notice|read)\b"
+            r")"
+            r"[^.!?\n]*",
+            re.IGNORECASE,
+        ),
+    ),
+)
+_METAPHORICAL_SEEING_RE = re.compile(
+    r"\bI\s+(?:can\s+)?see\s+(?:what\s+you\s+mean|the\s+problem|why\b|how\b)",
+    re.IGNORECASE,
+)
+_HYPOTHETICAL_SCREEN_SEEING_RE = re.compile(
+    r"\b(?:if\s+i\s+could\s+see|if\s+i\s+were\s+looking\s+at|"
+    r"would\s+(?:check|look|see))\b",
+    re.IGNORECASE,
+)
+
 
 def check_action_narration_claims(
     text: str,
@@ -413,6 +477,72 @@ def check_action_narration_claims(
                     action_type=ACTION_WEB_SEARCH,
                     pattern_id=pattern_id,
                     tense_class=tense_class,
+                )
+            )
+    return flags
+
+
+def _fresh_screen_observation_receipt(evidence_envelope: Optional[dict]) -> bool:
+    if not isinstance(evidence_envelope, dict):
+        return False
+    claimable = evidence_envelope.get("claimable")
+    if not isinstance(claimable, list):
+        return False
+    now = time.time()
+    for item in claimable:
+        if not isinstance(item, dict):
+            continue
+        if item.get("kind") != "screen_observation":
+            continue
+        if item.get("state") != "ok":
+            continue
+        observed_at = item.get("observed_at")
+        try:
+            age_s = max(0.0, now - float(observed_at))
+        except (TypeError, ValueError):
+            try:
+                age_s = float(item.get("age_s"))
+            except (TypeError, ValueError):
+                continue
+        if age_s <= _SCREEN_OBSERVATION_FRESH_S:
+            return True
+    return False
+
+
+def check_perception_narration_claims(
+    text: str,
+    *,
+    evidence_envelope: Optional[dict],
+) -> list[Flag]:
+    """Flag present-turn screen/desktop perception claims without a fresh glance."""
+    if not text or not text.strip():
+        return []
+    if _fresh_screen_observation_receipt(evidence_envelope):
+        return []
+
+    flags: list[Flag] = []
+    for pattern_id, tense_class, rx in _PERCEPTION_NARRATION_PATTERNS:
+        for match in rx.finditer(text):
+            context_start = max(0, match.start() - 80)
+            context_end = min(len(text), match.end() + 80)
+            context = text[context_start:context_end]
+            if _METAPHORICAL_SEEING_RE.search(context):
+                continue
+            if _HYPOTHETICAL_SCREEN_SEEING_RE.search(context):
+                continue
+            flags.append(
+                Flag(
+                    kind="action_narration",
+                    span=(match.start(), match.end()),
+                    text=match.group(0),
+                    reason=(
+                        "claims present screen/desktop perception with no fresh "
+                        "screen observation receipt"
+                    ),
+                    action_type=_ACTION_SCREEN_PERCEPTION,
+                    pattern_id=pattern_id,
+                    tense_class=tense_class,
+                    receipt_present=False,
                 )
             )
     return flags
@@ -982,6 +1112,12 @@ def audit(
     action_flags = check_action_narration_claims(
         text,
         evidence_envelope=evidence_envelope,
+    )
+    action_flags.extend(
+        check_perception_narration_claims(
+            text,
+            evidence_envelope=evidence_envelope,
+        )
     )
     if action_flags and (
         _claim_receipt_shadow_enabled() or _claim_receipt_enforce_enabled()
