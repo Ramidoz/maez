@@ -135,6 +135,10 @@ docs/eval/runs/*.json
 
 # Brain benchmark raw answer/evidence dumps are quarantined local artifacts.
 logs/brain_bench_debug/
+
+# Owner-approved frozen screen frames, human labels, raw transcripts, and
+# bake-off diagnostics/receipts are private local bench artifacts (Vision S3).
+/local/vision_bench/
 .claude/
 
 # Tooling / agent-harness / IDE dirs — not part of Maez's body, never committed
