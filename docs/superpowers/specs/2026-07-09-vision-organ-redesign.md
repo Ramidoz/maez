@@ -1,7 +1,7 @@
 # Vision Organ Redesign — accessibility nerve, OCR retina, on-demand cortex
 
 Date: 2026-07-09
-Status: THREE-LANE AGREED; EXECUTING. Lanes: Claude covenant/build, Codex (manual, owner-relayed) engineering verification, Grok research pressure. (Claude plan → Grok web research → Codex gpt-5.6-Sol
+Status: THREE-LANE AGREED; EXECUTING. Lanes (owner-swapped 2026-07-09): Codex (manual, owner-relayed) BUILDS, Claude covenant GATE + verifier, Grok research pressure. (Claude plan → Grok web research → Codex gpt-5.6-Sol
 ULTRA arbitration, owner-run; Claude verified Sol's factual claims in source).
 Owner decisions settled: LFM2.5-VL retired; 27B brain + MTP untouchable.
 
