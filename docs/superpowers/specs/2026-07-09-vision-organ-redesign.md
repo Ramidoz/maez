@@ -1,7 +1,7 @@
 # Vision Organ Redesign — accessibility nerve, OCR retina, on-demand cortex
 
 Date: 2026-07-09
-Status: THREE-LANE AGREED (Claude plan → Grok web research → Codex gpt-5.6-Sol
+Status: THREE-LANE AGREED; EXECUTING. Lanes: Claude covenant/build, Codex (manual, owner-relayed) engineering verification, Grok research pressure. (Claude plan → Grok web research → Codex gpt-5.6-Sol
 ULTRA arbitration, owner-run; Claude verified Sol's factual claims in source).
 Owner decisions settled: LFM2.5-VL retired; 27B brain + MTP untouchable.
 
@@ -59,7 +59,7 @@ eye violates it.
 
 ## Slice order (Sol's, adopted; sizes S/M)
 
-1. S — LFM containment (out of production cognition; baseline only)
+1. S — LFM containment — ✅ COMPLETE 2026-07-09 (amended per Codex: flag 0 AND service disabled — photo path at vision_tools.py:91 bypasses the flag; witnessed: flag in /proc, service inactive+disabled, photo wire refuses in 0.00s; model files retained as bake-off baseline)
 2. S — Truth contract: screen transcribe/abstain schema, temp 0,
    field-level provenance, hard reject of unsupported specificity
    (lands as the EVALUATION CONTRACT, not an LFM cure)
