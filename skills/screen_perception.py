@@ -28,6 +28,9 @@ from urllib.parse import urlparse
 
 import requests
 
+from core.infra.env_flags import strict_env_flag
+from core.vision_contract.truth_contract import Field
+
 logger = logging.getLogger("maez")
 
 _DEFAULT_VISION_URL = "http://127.0.0.1:8082/v1/chat/completions"
@@ -154,6 +157,8 @@ class ScreenObservation:
     #   "paused"       — owner pause file present; no capture attempted
     #   "excluded"     — sensitive active window; no capture attempted
     #   "unavailable"  — vision endpoint probe failed, backing off
+    #   "empty"        — contract-valid response reported no visible text
+    #   "rejected"     — response failed the vision truth contract
     #   "error"        — screenshot or vision call failed at runtime
     state: str = "error"
     third_party_content_present: bool = False
@@ -167,16 +172,25 @@ class ScreenObservation:
     # reliable about a given activity is for Maez to LEARN from lived
     # correlation, never for us to hardcode. (2026-07-09)
     validation: str = "unvalidated_single_frame"
+    transcript_fields: tuple[Field, ...] = ()
+    contract_support: str | None = None
+    contract_schema_version: str | None = None
+    failure_reason_code: str | None = None
 
     @staticmethod
     def _unknownish(value: object) -> bool:
         raw = str(value or "").strip().lower()
         return raw in {"", "unknown", "unclear", "not visible", "not discernible", "n/a"}
 
+    def _is_schema_only(self) -> bool:
+        support = self.contract_support or self.validation or ""
+        return str(support).strip() == "schema_only"
+
     def field_scope(self) -> dict:
         """Return prompt/receipt field scope with explicit unknowns."""
         fields: dict[str, str] = {}
         unknown: list[str] = []
+        schema_only = self._is_schema_only()
 
         def scoped(name: str, value: object, *, unknown_value: str = "unknown") -> None:
             if self._unknownish(value):
@@ -185,20 +199,39 @@ class ScreenObservation:
                 return
             fields[name] = str(value).strip()
 
-        scoped("activity", self.activity)
-        scoped("application", self.application)
-        if self._unknownish(self.detail):
+        scoped("activity", "unknown" if schema_only else self.activity)
+        scoped("application", "unknown" if schema_only else self.application)
+        third_party_state = str(self.third_party_content_state or "").strip().lower()
+        if third_party_state == "not_indicated" and self.third_party_content_present:
+            third_party_state = "present"
+        transcript_withheld = schema_only or (
+            bool(self.transcript_fields)
+            and third_party_state in {
+                "present",
+                "possible",
+                "unknown",
+            }
+        )
+        if schema_only:
+            fields["specific_window_content"] = "withheld pending sensor admission"
+            unknown.append("specific_window_content")
+        elif transcript_withheld:
+            fields["specific_window_content"] = (
+                "withheld pending deterministic privacy classification"
+            )
+            unknown.append("specific_window_content")
+        elif self._unknownish(self.detail):
             fields["specific_window_content"] = "not discernible at this resolution"
             unknown.append("specific_window_content")
         elif str(self.detail).strip().lower() == "none":
             fields["specific_window_content"] = "none notable"
         else:
             fields["specific_window_content"] = str(self.detail).strip()
-        scoped("focus", self.focus_level)
-        third_party_state = str(self.third_party_content_state or "").strip().lower()
-        if third_party_state == "not_indicated" and self.third_party_content_present:
-            third_party_state = "present"
-        if third_party_state == "present":
+        scoped("focus", "unknown" if schema_only else self.focus_level)
+        if schema_only:
+            fields["third_party_content"] = "unknown; private details minimized"
+            unknown.append("third_party_content")
+        elif third_party_state == "present":
             fields["third_party_content"] = "present; private details minimized"
         elif third_party_state == "possible":
             fields["third_party_content"] = "possible; private details minimized"
@@ -227,6 +260,8 @@ class ScreenObservation:
             return "[SCREEN] excluded — sensitive app in focus (not captured)"
         if self.state == "unavailable":
             return "[SCREEN] unavailable — vision endpoint not reachable"
+        if self.state == "empty":
+            return "[SCREEN] no visible text reported (schema-only; not pixel-corroborated)"
         if not self.success:
             return f"[SCREEN] Observation failed: {self.error}"
         age_seconds = int(time.time() - self.timestamp)
@@ -250,8 +285,17 @@ class ScreenObservation:
             return "Screen observation: disabled by policy."
         if self.state == "unavailable":
             return "Screen observation: vision endpoint unavailable."
+        if self.state == "empty":
+            return "Screen observation: no visible text reported (schema-only)."
         if not self.success:
             return f"Screen observation failed: {self.error}"
+        if self._is_schema_only():
+            return "Screen transcript withheld pending sensor admission."
+        if self.transcript_fields and (
+            self.third_party_content_present
+            or self.third_party_content_state in {"present", "possible", "unknown"}
+        ):
+            return "Screen transcript withheld pending deterministic privacy classification."
         return (
             f"Screen observation (one unvalidated glance): looked like "
             f"{self.activity}. "
@@ -264,11 +308,9 @@ class ScreenObservation:
 def _is_enabled() -> bool:
     """Return True iff the owner has explicitly enabled screen perception.
 
-    Default OFF. The only way to turn it on is set MAEZ_SCREEN_PERCEPTION=1
-    (or any non-"0", non-empty value) in the environment. Matches ADR 0009
-    and the current config/model_state.json (vision_model=null)."""
-    val = os.environ.get("MAEZ_SCREEN_PERCEPTION", "").strip().lower()
-    return val not in ("", "0", "false", "no", "off")
+    Default OFF. Only an explicit 1/true/yes/on value turns it on. Matches
+    ADR 0009 and the current config/model_state.json (vision_model=null)."""
+    return strict_env_flag("MAEZ_SCREEN_PERCEPTION")
 
 
 def _pause_file() -> str:
@@ -772,27 +814,18 @@ def observe() -> ScreenObservation:
     # must match /v1/models on that endpoint; stale aliases are caught by the
     # model refresh witness before live activation.
     try:
+        # Slice 2 truth contract (@df797f9): the PRODUCTION caller uses the
+        # transcribe-or-abstain contract at temperature 0. The legacy
+        # narrative VISION_PROMPT remains above only as the retired-LFM
+        # bake-off baseline; it must never be sent on this path again.
+        from core.vision_contract.truth_contract import (
+            build_transcribe_request,
+            parse_and_validate,
+        )
+
         resp = requests.post(
             VISION_URL,
-            json={
-                "model": VISION_MODEL,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": VISION_PROMPT},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/png;base64,{img_b64}",
-                                },
-                            },
-                        ],
-                    }
-                ],
-                "temperature": 0.1,
-                "max_tokens": 500,
-            },
+            json=build_transcribe_request(image_b64=img_b64, model=VISION_MODEL),
             timeout=VISION_TIMEOUT,
         )
 
@@ -810,8 +843,44 @@ def observe() -> ScreenObservation:
             )
 
         raw = resp.json()["choices"][0]["message"]["content"]
-        parsed = _parse_vision_response(raw)
-        return _apply_screen_governance(parsed, timestamp=timestamp, raw=raw)
+        verdict = parse_and_validate(raw)
+        if verdict.verdict != "ok":
+            return ScreenObservation(
+                activity="",
+                application="",
+                detail="",
+                focus_level="",
+                raw_response="",
+                timestamp=timestamp,
+                success=False,
+                state="rejected" if verdict.verdict == "rejected" else "empty",
+                error=verdict.reason or verdict.verdict,
+                validation=verdict.support,
+                contract_support=verdict.support,
+                contract_schema_version=verdict.schema_version,
+                failure_reason_code=verdict.reason or verdict.verdict,
+            )
+        detail = "\n".join(
+            f"{field.region} [{field.provenance}]: {field.text}"
+            for field in verdict.fields
+        )
+        return ScreenObservation(
+            activity="unknown",
+            application="unknown",
+            detail=detail,
+            focus_level="unknown",
+            raw_response=raw,
+            timestamp=timestamp,
+            success=True,
+            state="ok",
+            third_party_content_present=True,
+            third_party_content_state="unknown",
+            egress_origin_class="third_party_private_context",
+            validation=verdict.support,
+            transcript_fields=verdict.fields,
+            contract_support=verdict.support,
+            contract_schema_version=verdict.schema_version,
+        )
 
     except requests.Timeout:
         return ScreenObservation(

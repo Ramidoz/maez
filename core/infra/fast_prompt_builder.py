@@ -143,6 +143,13 @@ def _format_screen(src: EnvelopeSource) -> Optional[str]:
     if not src.is_usable:
         return None
     v = src.value
+    support = str(
+        getattr(v, "contract_support", "")
+        or getattr(v, "validation", "")
+        or ""
+    ).strip()
+    if support == "schema_only":
+        return None
     # Tolerate either a ScreenObservation dataclass or a stub with the same fields
     activity = getattr(v, "activity", "") or ""
     application = getattr(v, "application", "") or ""

@@ -2017,9 +2017,7 @@ _SCREEN_PERCEPTION_FRESH_S = 180
 
 
 def _screen_perception_enabled(*, environ: object | None = None) -> bool:
-    env = os.environ if environ is None else environ
-    value = str(env.get("MAEZ_SCREEN_PERCEPTION", "") or "").strip().lower()
-    return value not in ("", "0", "false", "no", "off")
+    return _env_flag("MAEZ_SCREEN_PERCEPTION", environ=environ)
 
 
 def _screen_obs_age_s(screen_obs: object | None, *, now: float | None = None) -> float | None:
@@ -2034,6 +2032,26 @@ def _screen_obs_age_s(screen_obs: object | None, *, now: float | None = None) ->
     return max(0.0, float(now) - timestamp)
 
 
+def _screen_observation_is_admitted(screen_obs: object | None) -> bool:
+    """Whether a raw screen observation may influence cognition/evidence.
+
+    Slice 2 produces schema-valid transcripts for evaluation, not admitted
+    perceptual facts. Slice 9 owns the future admission policy at this single
+    boundary; raw observation success remains available for diagnostics.
+    """
+    support = str(
+        getattr(screen_obs, "contract_support", "")
+        or getattr(screen_obs, "validation", "")
+        or ""
+    ).strip()
+    return bool(
+        screen_obs is not None
+        and getattr(screen_obs, "state", None) == "ok"
+        and getattr(screen_obs, "success", False)
+        and support != "schema_only"
+    )
+
+
 def _screen_perception_owner_fact(
     screen_obs: object | None,
     *,
@@ -2044,9 +2062,7 @@ def _screen_perception_owner_fact(
         return "", None
     age_s = _screen_obs_age_s(screen_obs, now=now)
     if (
-        screen_obs is not None
-        and getattr(screen_obs, "state", None) == "ok"
-        and bool(getattr(screen_obs, "success", False))
+        _screen_observation_is_admitted(screen_obs)
         and age_s is not None
         and age_s <= _SCREEN_PERCEPTION_FRESH_S
     ):
@@ -2077,7 +2093,14 @@ def _screen_perception_owner_fact(
                 "available_fields": list(field_scope.get("available_fields") or ()),
             }
 
-    if screen_obs is None or age_s is None:
+    if (
+        screen_obs is None
+        or age_s is None
+        or (
+            getattr(screen_obs, "success", False)
+            and not _screen_observation_is_admitted(screen_obs)
+        )
+    ):
         freshness = "none this session"
     else:
         freshness = f"last observation {int(age_s)}s ago"
@@ -2456,7 +2479,7 @@ def _cycle_action_failure_count(results: object) -> int:
 
 
 def _cycle_signal_availability_key(*, screen_obs: object, camera_state: object) -> str:
-    screen_available = bool(getattr(screen_obs, "success", False))
+    screen_available = _screen_observation_is_admitted(screen_obs)
     sensor_state = str(getattr(camera_state, "sensor_state", "unknown") or "unknown").lower()
     camera_available = sensor_state not in {
         "off",
@@ -2486,7 +2509,11 @@ def _cycle_salient_perception_state(
     screen_obs: object,
     signal_availability_key: str,
 ) -> dict[str, object]:
-    screen_success = bool(getattr(screen_obs, "success", False))
+    screen_success = _screen_observation_is_admitted(screen_obs)
+    if not screen_success and bool(getattr(screen_obs, "success", False)):
+        # Schema-only evaluator output must be indistinguishable from no
+        # admitted observation at the doorman boundary.
+        screen_obs = None
     return {
         "screen_state": str(getattr(screen_obs, "state", "unknown") or "unknown"),
         "screen_success": screen_success,
@@ -6316,11 +6343,16 @@ class MaezDaemon:
             system_state = redact_stale_perception_block(system_state, _stale)
         day_of_week = snap["day_of_week"]
         time_of_day = snap["time_of_day"]
+        admitted_screen_obs = (
+            self._last_screen_obs
+            if _screen_observation_is_admitted(self._last_screen_obs)
+            else None
+        )
 
         # Build context query from real content for topic-aware retrieval
         # Use last screen observation or perception summary — not timestamp labels
-        if self._last_screen_obs and self._last_screen_obs.success:
-            context_query = self._last_screen_obs.activity
+        if admitted_screen_obs is not None:
+            context_query = admitted_screen_obs.activity
         else:
             context_query = system_state[:200]
         recalled = self.memory.recall_for_cycle(context_query)
@@ -6412,8 +6444,8 @@ class MaezDaemon:
         # corroborated fact, so it sits BELOW cross-checked signals (circadian
         # 55) rather than dominating fresh evidence. Grounding it against other
         # senses is a learned correlation, not a hardcoded rule. (2026-07-09)
-        if self._last_screen_obs is not None:
-            screen_context = self._last_screen_obs.format_for_context()
+        if admitted_screen_obs is not None:
+            screen_context = admitted_screen_obs.format_for_context()
             prompt += f"\n{screen_context}\n"
             _extend_cycle_candidates(
                 "fresh_evidence",
@@ -6573,9 +6605,7 @@ class MaezDaemon:
         # now." Observed 2026-04-21: screen_perception has been
         # silently failing for weeks, and every cycle response was
         # inventing activity. Closes the confabulation-at-source gap.
-        screen_present = self._last_screen_obs is not None and getattr(
-            self._last_screen_obs, "success", False
-        )
+        screen_present = admitted_screen_obs is not None
         signals_present = []
         signals_absent = []
         if True:
@@ -7172,8 +7202,7 @@ class MaezDaemon:
             )
             _screen_age_s = _screen_obs_age_s(self._last_screen_obs)
             if (
-                _screen_state == "ok"
-                and getattr(self._last_screen_obs, "success", False)
+                _screen_observation_is_admitted(self._last_screen_obs)
                 and _screen_age_s is not None
                 and _screen_age_s <= _SCREEN_PERCEPTION_FRESH_S
             ):
@@ -11201,11 +11230,7 @@ class MaezDaemon:
                         if self._last_screen_obs is not None
                         else None
                     )
-                    if _screen_state == "ok" and getattr(
-                        self._last_screen_obs,
-                        "success",
-                        False,
-                    ):
+                    if _screen_observation_is_admitted(self._last_screen_obs):
                         _audit_transcript_parts.append("✓ screen_observation: present")
                         _cycle_signals_present.append("screen observation")
                     elif _screen_state == "disabled":
