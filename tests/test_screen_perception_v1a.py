@@ -58,6 +58,51 @@ class ScreenObservationShapeTests(unittest.TestCase):
         mem = o.format_for_memory()
         self.assertIn("unvalidated glance", mem)
 
+    def test_context_marks_missing_observation_fields_unknown(self):
+        o = self._obs(
+            state="ok",
+            success=True,
+            activity="Browsing",
+            application="",
+            detail="",
+            focus_level="",
+            timestamp=time.time(),
+        )
+
+        ctx = o.format_for_context()
+
+        self.assertIn("activity: Browsing", ctx)
+        self.assertIn("application: unknown", ctx)
+        self.assertIn(
+            "specific window/content: not discernible at this resolution",
+            ctx,
+        )
+        self.assertIn("focus: unknown", ctx)
+        self.assertIn("third-party content: not indicated", ctx)
+
+    def test_owner_fact_receipt_carries_field_scope(self):
+        from daemon.maez_daemon import _screen_perception_owner_fact
+
+        o = self._obs(
+            state="ok",
+            success=True,
+            activity="Browsing",
+            application="",
+            detail="",
+            focus_level="",
+            timestamp=time.time(),
+        )
+
+        with mock.patch.dict(os.environ, {"MAEZ_SCREEN_PERCEPTION": "1"}, clear=False):
+            block, receipt = _screen_perception_owner_fact(o, now=time.time())
+
+        self.assertIn("application: unknown", block)
+        self.assertIsNotNone(receipt)
+        self.assertEqual(receipt["fields"]["activity"], "Browsing")
+        self.assertIn("application", receipt["unknown_fields"])
+        self.assertIn("specific_window_content", receipt["unknown_fields"])
+        self.assertEqual(receipt["evidence"], block)
+
 
 class PausePrimitiveTests(unittest.TestCase):
     def test_paused_skips_capture_probe_vision(self):
@@ -159,6 +204,28 @@ class ThirdPartyMinimizationTests(unittest.TestCase):
         self.assertTrue(sp._looks_third_party({**parsed, "third_party": "unsure"}))
         self.assertTrue(
             sp._looks_third_party({**parsed, "application": "Signal", "third_party": "no"})
+        )
+
+    def test_missing_third_party_field_is_marked_unknown_not_seen(self):
+        parsed = {
+            "activity": "reading",
+            "application": "unknown",
+            "detail": "not readable",
+            "focus_level": "browsing",
+            "third_party": "",
+        }
+        obs = sp._apply_screen_governance(parsed, timestamp=time.time(), raw="r")
+
+        self.assertTrue(obs.third_party_content_present)
+        self.assertIn("third_party_content", obs.field_scope()["unknown_fields"])
+        self.assertNotIn("third_party_content", obs.field_scope()["available_fields"])
+        self.assertIn(
+            "third-party content: unknown; private details minimized",
+            obs.format_for_context(),
+        )
+        self.assertNotIn(
+            "third-party content: present",
+            obs.format_for_context(),
         )
 
     def test_owner_only_keeps_detail(self):

@@ -35,6 +35,7 @@ Telemetry:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
@@ -482,12 +483,12 @@ def check_action_narration_claims(
     return flags
 
 
-def _fresh_screen_observation_receipt(evidence_envelope: Optional[dict]) -> bool:
+def _fresh_screen_observation_item(evidence_envelope: Optional[dict]) -> dict | None:
     if not isinstance(evidence_envelope, dict):
-        return False
+        return None
     claimable = evidence_envelope.get("claimable")
     if not isinstance(claimable, list):
-        return False
+        return None
     now = time.time()
     for item in claimable:
         if not isinstance(item, dict):
@@ -505,19 +506,21 @@ def _fresh_screen_observation_receipt(evidence_envelope: Optional[dict]) -> bool
             except (TypeError, ValueError):
                 continue
         if age_s <= _SCREEN_OBSERVATION_FRESH_S:
-            return True
-    return False
+            return item
+    return None
 
 
-def check_perception_narration_claims(
+def _fresh_screen_observation_receipt(evidence_envelope: Optional[dict]) -> bool:
+    return _fresh_screen_observation_item(evidence_envelope) is not None
+
+
+def _perception_narration_candidates(
     text: str,
     *,
-    evidence_envelope: Optional[dict],
+    receipt_present: bool,
+    reason: str,
 ) -> list[Flag]:
-    """Flag present-turn screen/desktop perception claims without a fresh glance."""
     if not text or not text.strip():
-        return []
-    if _fresh_screen_observation_receipt(evidence_envelope):
         return []
 
     flags: list[Flag] = []
@@ -535,17 +538,32 @@ def check_perception_narration_claims(
                     kind="action_narration",
                     span=(match.start(), match.end()),
                     text=match.group(0),
-                    reason=(
-                        "claims present screen/desktop perception with no fresh "
-                        "screen observation receipt"
-                    ),
+                    reason=reason,
                     action_type=_ACTION_SCREEN_PERCEPTION,
                     pattern_id=pattern_id,
                     tense_class=tense_class,
-                    receipt_present=False,
+                    receipt_present=receipt_present,
                 )
             )
     return flags
+
+
+def check_perception_narration_claims(
+    text: str,
+    *,
+    evidence_envelope: Optional[dict],
+) -> list[Flag]:
+    """Flag present-turn screen/desktop perception claims without a fresh glance."""
+    if _fresh_screen_observation_receipt(evidence_envelope):
+        return []
+    return _perception_narration_candidates(
+        text,
+        receipt_present=False,
+        reason=(
+            "claims present screen/desktop perception with no fresh "
+            "screen observation receipt"
+        ),
+    )
 
 
 def _claim_receipt_shadow_enabled() -> bool:
@@ -574,6 +592,94 @@ def _emit_action_claim_receipt(
         mode,
         redo_outcome,
     )
+
+
+def _content_hash(text: str) -> str:
+    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:16]
+
+
+def _safe_field_names(values: object) -> list[str]:
+    if not isinstance(values, (list, tuple, set)):
+        return []
+    out: list[str] = []
+    for value in values:
+        name = re.sub(r"[^a-z0-9_]+", "_", str(value or "").strip().lower()).strip("_")
+        if name:
+            out.append(name)
+    return out
+
+
+def _screen_claimable_evidence(item: dict) -> str:
+    return str(item.get("evidence") or item.get("text") or item.get("fact") or "").strip()
+
+
+def _screen_claimable_field_names(item: dict) -> tuple[list[str], list[str]]:
+    fields = item.get("fields")
+    unknown = _safe_field_names(item.get("unknown_fields"))
+    available = _safe_field_names(item.get("available_fields"))
+    if not available and isinstance(fields, dict):
+        available = [
+            name
+            for name in _safe_field_names(list(fields.keys()))
+            if name not in set(unknown)
+        ]
+    return available, unknown
+
+
+def _observe_perception_claim_support(
+    text: str,
+    *,
+    surface: str,
+    evidence_envelope: Optional[dict],
+) -> None:
+    """Shadow-check fresh screen-perception claims against the screen fact block."""
+    if not (_claim_receipt_shadow_enabled() or _claim_receipt_enforce_enabled()):
+        return
+    item = _fresh_screen_observation_item(evidence_envelope)
+    if item is None:
+        return
+    evidence = _screen_claimable_evidence(item)
+    if not evidence:
+        return
+    candidates = _perception_narration_candidates(
+        text,
+        receipt_present=True,
+        reason="claims present screen/desktop perception with fresh screen observation receipt",
+    )
+    if not candidates:
+        return
+    try:
+        from core.cognition import support_verifier as _support_verifier
+
+        verifier = _support_verifier.HttpSupportVerifier()
+        verifier_name = getattr(verifier, "name", None) or verifier.__class__.__name__
+    except Exception:
+        verifier = None
+        verifier_name = "HttpSupportVerifier"
+    available, unknown = _screen_claimable_field_names(item)
+    for claim in candidates:
+        if verifier is None:
+            label, score, latency = "UNAVAILABLE", None, 0.0
+        else:
+            try:
+                label, score, latency = verifier.support(evidence, claim.text, 0.25)
+            except Exception:
+                label, score, latency = "UNAVAILABLE", None, 0.0
+        logger.info(
+            "perception_claim_support surface=%s action_type=%s pattern_id=%s "
+            "claim_hash=%s support_verdict=%s verifier=%s score=%s latency_ms=%.1f "
+            "available_fields=%s unknown_fields=%s mode=shadow",
+            surface,
+            _ACTION_SCREEN_PERCEPTION,
+            claim.pattern_id or "unknown",
+            _content_hash(claim.text),
+            label,
+            verifier_name,
+            score,
+            (latency or 0.0) * 1000,
+            ",".join(available) if available else "-",
+            ",".join(unknown) if unknown else "-",
+        )
 
 
 def _completion_rail_residue_is_empty(text: str) -> bool:
@@ -1143,6 +1249,11 @@ def audit(
             flags=action_flags,
             action_mismatch=mismatch,
         )
+    _observe_perception_claim_support(
+        text,
+        surface=surface,
+        evidence_envelope=evidence_envelope,
+    )
 
     # Explicit opt-out knob. MAEZ_SEMANTIC_AUDIT defaults to enabled in v2;
     # set to "0" to skip the judge entirely (e.g. in unit tests or when

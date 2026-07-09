@@ -2057,12 +2057,24 @@ def _screen_perception_owner_fact(
             block = ""
         if block:
             observed_at = getattr(screen_obs, "timestamp", None)
+            try:
+                field_scope = screen_obs.field_scope()
+            except Exception:
+                field_scope = {
+                    "fields": {},
+                    "unknown_fields": (),
+                    "available_fields": (),
+                }
             return block, {
                 "kind": "screen_observation",
                 "state": "ok",
                 "observed_at": observed_at,
                 "age_s": int(age_s),
                 "text": block,
+                "evidence": block,
+                "fields": dict(field_scope.get("fields") or {}),
+                "unknown_fields": list(field_scope.get("unknown_fields") or ()),
+                "available_fields": list(field_scope.get("available_fields") or ()),
             }
 
     if screen_obs is None or age_s is None:

@@ -157,6 +157,7 @@ class ScreenObservation:
     #   "error"        — screenshot or vision call failed at runtime
     state: str = "error"
     third_party_content_present: bool = False
+    third_party_content_state: str = "not_indicated"
     egress_origin_class: str = "owner_screen_context"
     # Honest provenance: a screen observation is ONE model-described frame,
     # not corroborated against processes / window / proprioception. It is an
@@ -166,6 +167,51 @@ class ScreenObservation:
     # reliable about a given activity is for Maez to LEARN from lived
     # correlation, never for us to hardcode. (2026-07-09)
     validation: str = "unvalidated_single_frame"
+
+    @staticmethod
+    def _unknownish(value: object) -> bool:
+        raw = str(value or "").strip().lower()
+        return raw in {"", "unknown", "unclear", "not visible", "not discernible", "n/a"}
+
+    def field_scope(self) -> dict:
+        """Return prompt/receipt field scope with explicit unknowns."""
+        fields: dict[str, str] = {}
+        unknown: list[str] = []
+
+        def scoped(name: str, value: object, *, unknown_value: str = "unknown") -> None:
+            if self._unknownish(value):
+                fields[name] = unknown_value
+                unknown.append(name)
+                return
+            fields[name] = str(value).strip()
+
+        scoped("activity", self.activity)
+        scoped("application", self.application)
+        if self._unknownish(self.detail):
+            fields["specific_window_content"] = "not discernible at this resolution"
+            unknown.append("specific_window_content")
+        elif str(self.detail).strip().lower() == "none":
+            fields["specific_window_content"] = "none notable"
+        else:
+            fields["specific_window_content"] = str(self.detail).strip()
+        scoped("focus", self.focus_level)
+        third_party_state = str(self.third_party_content_state or "").strip().lower()
+        if third_party_state == "not_indicated" and self.third_party_content_present:
+            third_party_state = "present"
+        if third_party_state == "present":
+            fields["third_party_content"] = "present; private details minimized"
+        elif third_party_state == "possible":
+            fields["third_party_content"] = "possible; private details minimized"
+        elif third_party_state == "unknown":
+            fields["third_party_content"] = "unknown; private details minimized"
+            unknown.append("third_party_content")
+        else:
+            fields["third_party_content"] = "not indicated"
+        return {
+            "fields": fields,
+            "unknown_fields": tuple(unknown),
+            "available_fields": tuple(name for name in fields if name not in unknown),
+        }
 
     def format_for_context(self) -> str:
         """Format for injection into Maez reasoning prompt."""
@@ -184,14 +230,18 @@ class ScreenObservation:
         if not self.success:
             return f"[SCREEN] Observation failed: {self.error}"
         age_seconds = int(time.time() - self.timestamp)
+        scope = self.field_scope()
+        fields = scope["fields"]
         return (
-            f"[SCREEN — one unvalidated glance, {age_seconds}s ago]\n"
-            f"  Looked like: {self.activity}\n"
-            f"  Application: {self.application}\n"
-            f"  Detail: {self.detail}\n"
-            f"  Focus: {self.focus_level}\n"
-            f"  (single frame, not cross-checked against running processes "
-            f"or window state — treat as a first impression, not fact)"
+            f"[SCREEN - one unvalidated glance, {age_seconds}s ago]\n"
+            f"  activity: {fields['activity']}\n"
+            f"  application: {fields['application']}\n"
+            f"  specific window/content: {fields['specific_window_content']}\n"
+            f"  focus: {fields['focus']}\n"
+            f"  third-party content: {fields['third_party_content']}\n"
+            f"  (looked like one single frame, not cross-checked against "
+            f"running processes or window state - treat as a first impression, "
+            f"not fact)"
         )
 
     def format_for_memory(self) -> str:
@@ -577,15 +627,22 @@ _THIRD_PARTY_APP_HINTS = (
 )
 
 
-def _looks_third_party(parsed: dict) -> bool:
+def _third_party_state(parsed: dict) -> str:
     flag = (parsed.get("third_party") or "").strip().lower()
     app = (parsed.get("application") or "").strip().lower()
     if any(hint in app for hint in _THIRD_PARTY_APP_HINTS):
-        return True
+        return "present" if flag in ("yes", "true") else "possible"
+    if flag in ("yes", "true"):
+        return "present"
     if flag in ("no", "false"):
-        return False
-    # Fail-safe: missing, uncertain, or unrecognized means minimize.
-    return True
+        return "not_indicated"
+    # Fail-safe: missing, uncertain, or unrecognized means minimize,
+    # but do not claim that third-party content was visibly present.
+    return "unknown"
+
+
+def _looks_third_party(parsed: dict) -> bool:
+    return _third_party_state(parsed) != "not_indicated"
 
 
 def _apply_screen_governance(
@@ -594,11 +651,17 @@ def _apply_screen_governance(
     timestamp: float,
     raw: str,
 ) -> ScreenObservation:
-    third_party = _looks_third_party(parsed)
+    third_party_state = _third_party_state(parsed)
+    third_party = third_party_state != "not_indicated"
     detail = parsed.get("detail") or "none"
     origin = "owner_screen_context"
     if third_party:
-        detail = "[minimized: third-party content present]"
+        if third_party_state == "present":
+            detail = "[minimized: third-party content present]"
+        elif third_party_state == "possible":
+            detail = "[minimized: possible third-party content]"
+        else:
+            detail = "[minimized: third-party content unknown]"
         origin = "third_party_private_context"
     return ScreenObservation(
         activity=parsed.get("activity") or "unknown",
@@ -610,6 +673,7 @@ def _apply_screen_governance(
         success=True,
         state="ok",
         third_party_content_present=third_party,
+        third_party_content_state=third_party_state,
         egress_origin_class=origin,
     )
 
