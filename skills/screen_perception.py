@@ -22,6 +22,7 @@ import os
 import subprocess
 import tempfile
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import urlparse
@@ -29,6 +30,7 @@ from urllib.parse import urlparse
 import requests
 
 from core.infra.env_flags import strict_env_flag
+from core.vision_contract.screen_privacy import screen_privacy_state
 from core.vision_contract.truth_contract import Field
 
 logger = logging.getLogger("maez")
@@ -322,8 +324,9 @@ def _pause_file() -> str:
 
 def _is_paused() -> bool:
     # Deterministic, no-restart control: touch the file to close the eye,
-    # remove it to reopen.
-    return os.path.exists(_pause_file())
+    # remove it to reopen. The privacy curtain is the same fail-closed gate;
+    # the ScreenCast helper retains its own check as defense in depth.
+    return screen_privacy_state() is not None
 
 
 _GNOME_DESKTOPS = ("gnome", "ubuntu:gnome")
@@ -391,19 +394,47 @@ def _exclusion_terms() -> tuple[str, ...]:
     return _DEFAULT_EXCLUDE + extra_terms
 
 
-def _is_excluded_active_window() -> bool:
-    """Return True when the active window is sensitive or undetermined.
+_WINDOW_UNSET = object()
+_MAX_WINDOW_CLASS_CHARS = 256
+_MAX_WINDOW_TITLE_CHARS = 1024
+
+
+def active_window_preflight_reason(
+    window: Mapping[str, object] | None | object = _WINDOW_UNSET,
+) -> str | None:
+    """Apply the single Decision-9 exclusion authority to one exact snapshot.
 
     Lens v0 fail-safe: if the focused window cannot be read, do not capture.
     The never-looked guarantee must hold even when the window is unknown.
     """
-    from core.memory.ambient import active_window_for_preflight
+    if window is _WINDOW_UNSET:
+        from core.memory.ambient import active_window_for_preflight
 
-    win = active_window_for_preflight()
-    if not win:
-        return True
-    haystack = f"{win.get('class', '')} {win.get('title', '')}".lower()
-    return any(term in haystack for term in _exclusion_terms())
+        window = active_window_for_preflight()
+    if not isinstance(window, Mapping):
+        return "window_unavailable"
+    app_class = window.get("class")
+    if (
+        not isinstance(app_class, str)
+        or not app_class.strip()
+        or len(app_class) > _MAX_WINDOW_CLASS_CHARS
+    ):
+        return "class_unavailable"
+    title = window.get("title")
+    if title is not None and not isinstance(title, str):
+        return "window_schema_invalid"
+    title_text = title or ""
+    if len(title_text) > _MAX_WINDOW_TITLE_CHARS:
+        return "window_schema_invalid"
+    haystack = f"{app_class} {title_text}".lower()
+    if any(term in haystack for term in _exclusion_terms()):
+        return "sensitive_window"
+    return None
+
+
+def _is_excluded_active_window() -> bool:
+    """Backward-compatible boolean wrapper around the typed authority."""
+    return active_window_preflight_reason() is not None
 
 
 def _vision_endpoint_probe() -> bool:
@@ -592,11 +623,28 @@ def _capture_screenshot() -> Optional[str]:
     frames need ~1.9 GB of VRAM to encode; 1024-max-dim needs ~500 MB.
     Activity/application detection doesn't need full resolution.
     """
+    # Containment seam: check before constructing or invoking ANY candidate.
+    # A ScreenCast-level curtain refusal must never fall through to D-Bus,
+    # portal, or X11 capture methods.
+    if screen_privacy_state() is not None:
+        return None
+
     tmp = tempfile.mktemp(suffix=".png")
 
     try:
         for candidate in _capture_candidates():
+            # Re-check between candidates as well as before the loop. If the
+            # curtain is drawn while ScreenCast is running, its honest False
+            # must not become permission to try the next capture mechanism.
+            if screen_privacy_state() is not None:
+                return None
             if candidate["fn"](tmp):
+                # A privacy transition during a successful long-running
+                # candidate invalidates the bytes before they are opened or
+                # encoded. The capture already in flight cannot be undone,
+                # but it must never escape the governed loop.
+                if screen_privacy_state() is not None:
+                    return None
                 # Downscale via PIL before base64-encoding
                 try:
                     from PIL import Image
@@ -612,12 +660,16 @@ def _capture_screenshot() -> Optional[str]:
                         img.size[0],
                         img.size[1],
                     )
+                    if screen_privacy_state() is not None:
+                        return None
                     return data
                 except Exception as e:
                     # PIL unavailable or resize failed — fall back to raw bytes
                     logger.debug("PIL downscale failed (%s) — sending full-res", e)
                     with open(tmp, "rb") as f:
                         data = base64.b64encode(f.read()).decode()
+                    if screen_privacy_state() is not None:
+                        return None
                     return data
 
         return None

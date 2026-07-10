@@ -21,6 +21,7 @@ from typing import Literal
 
 from PIL import Image
 
+from core.vision_contract.geometry import CropBox
 from core.vision_contract.truth_contract import (
     Field,
     MAX_REGION_CHARS,
@@ -94,14 +95,6 @@ class ScoringRefusal(ValueError):
     def __init__(self, reason: ScoringReason) -> None:
         self.reason = reason
         super().__init__(reason)
-
-
-@dataclass(frozen=True)
-class CropBox:
-    left: int
-    top: int
-    right: int
-    bottom: int
 
 
 @dataclass(frozen=True)
