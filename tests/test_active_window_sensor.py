@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import ast
+import inspect
 import json
 import sys
 import types
@@ -26,6 +27,7 @@ from core.vision_contract.frozen_frame import CropBox as HarnessCropBox
 from core.vision_contract.geometry import CropBox
 from scripts.active_window_geometry_probe import _call_timeout_ms, normalize_display_state
 import scripts.active_window_geometry_probe as probe_module
+import core.body.active_window_sensor as sensor_module
 
 
 class SharedCropBoxContractTests(unittest.TestCase):
@@ -82,6 +84,76 @@ def _sample(payload: dict[str, object], *, privacy_state: str | None = None):
 
 
 class GeometryPublicationTests(unittest.TestCase):
+    def test_v2_declares_process_memory_focus_binding(self):
+        self.assertTrue(hasattr(sensor_module, "FocusBinding"))
+
+    def test_v2_reading_has_additive_binding_field(self):
+        self.assertIn("binding", {item.name for item in fields(ActiveWindowReading)})
+
+    def test_focus_binding_is_validated_and_redacted_from_repr(self):
+        binding_type = sensor_module.FocusBinding
+        for pid, window_id in ((0, "actor"), (-1, "actor"), (True, "actor"), (7, "")):
+            with self.subTest(pid=pid, window_id=window_id), self.assertRaises(ValueError):
+                binding_type(pid=pid, window_id=window_id)
+
+        binding = binding_type(pid=4242, window_id="private-actor-9")
+        self.assertNotIn("private-actor-9", repr(binding))
+
+    def test_focus_binding_window_id_is_bounded_and_control_free(self):
+        binding_type = sensor_module.FocusBinding
+        for window_id in ("x" * 257, "actor\n9", "actor\x009"):
+            with self.subTest(window_id=repr(window_id)), self.assertRaises(ValueError):
+                binding_type(pid=4242, window_id=window_id)
+
+    def test_binding_is_optional_and_never_projected(self):
+        geometry = _sample(_payload()).geometry
+        binding = sensor_module.FocusBinding(pid=4242, window_id="private-actor-9")
+        reading = ActiveWindowReading(
+            state="available",
+            timestamp=_NOW,
+            app_class="Code",
+            geometry=geometry,
+            binding=binding,
+        )
+
+        serialized = json.dumps(reading.to_receipt(), sort_keys=True)
+        self.assertNotIn("private-actor-9", repr(reading))
+        self.assertNotIn("private-actor-9", serialized)
+        self.assertNotIn("4242", serialized)
+        self.assertNotIn("binding", serialized)
+
+    def test_exact_probe_snapshot_constructs_process_memory_binding(self):
+        payload = _payload()
+        payload["window"] = {
+            **payload["window"],
+            "pid": 4242,
+            "id": "private-actor-9",
+        }
+
+        reading = _sample(payload)
+
+        self.assertIsNotNone(reading.binding)
+        self.assertEqual(reading.binding.pid, 4242)
+        self.assertEqual(reading.binding.window_id, "private-actor-9")
+
+    def test_binding_shape_is_closed_by_reading_state(self):
+        binding = sensor_module.FocusBinding(pid=4242, window_id="private-actor-9")
+        with self.assertRaises(ValueError):
+            ActiveWindowReading(
+                state="available",
+                timestamp=_NOW,
+                app_class="Code",
+                geometry=_sample(_payload()).geometry,
+                binding="not-a-binding",
+            )
+        with self.assertRaises(ValueError):
+            ActiveWindowReading(
+                state="refused",
+                timestamp=_NOW,
+                reason="compositor_unreachable",
+                binding=binding,
+            )
+
     def test_negative_global_origin_becomes_display_local_native_pixels(self):
         reading = _sample(_payload())
 
@@ -130,10 +202,25 @@ class GeometryPublicationTests(unittest.TestCase):
         self.assertEqual((geometry.x, geometry.y, geometry.width, geometry.height), (1, 1, 3, 3))
         self.assertEqual((geometry.scale_numerator, geometry.scale_denominator), (5, 4))
 
+    def test_slice5_can_retain_private_fractional_origin_calibration(self):
+        from scripts.atspi_window_probe import WindowCalibration, native_region
+
+        calibrated_geometry = sensor_module.WindowGeometry(
+            x=1, y=1, width=6, height=11, display_id="eDP-1",
+            display_width=100, display_height=100, scale_numerator=5,
+            scale_denominator=4, display_config_serial=41,
+            coordinate_space=COORDINATE_SPACE,
+        )
+        calibration = WindowCalibration(logical_x=1, logical_y=1)
+        self.assertEqual(
+            native_region((0, 0, 4, 8), calibrated_geometry, calibration),
+            CropBox(1, 1, 7, 12),
+        )
+
     def test_schema_is_versioned_and_values_are_frozen(self):
         reading = _sample(_payload())
 
-        self.assertEqual(SCHEMA_VERSION, "active_window_geometry.v1")
+        self.assertEqual(SCHEMA_VERSION, "active_window_geometry.v2")
         self.assertEqual(reading.schema_version, SCHEMA_VERSION)
         with self.assertRaises(FrozenInstanceError):
             reading.state = "refused"
@@ -429,7 +516,7 @@ class ReceiptAndBoundaryTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, source)
 
-    def test_no_production_caller_imports_the_dormant_sensor(self):
+    def test_only_dormant_atspi_helper_imports_the_dormant_sensor(self):
         root = Path(__file__).resolve().parents[1]
         callers = []
         for top in ("core", "daemon", "skills", "scripts"):
@@ -459,7 +546,7 @@ class ReceiptAndBoundaryTests(unittest.TestCase):
                     if imported:
                         callers.append(str(path.relative_to(root)))
                         break
-        self.assertEqual(callers, [])
+        self.assertEqual(callers, ["scripts/atspi_window_probe.py"])
 
     def test_sensor_and_probe_import_allowlists_exclude_admission_surfaces(self):
         root = Path(__file__).resolve().parents[1]
@@ -470,6 +557,7 @@ class ReceiptAndBoundaryTests(unittest.TestCase):
                 "math",
                 "os",
                 "subprocess",
+                "unicodedata",
                 "collections.abc",
                 "dataclasses",
                 "decimal",
@@ -808,6 +896,28 @@ class MutterProbeEntrypointTests(unittest.TestCase):
             self.assertEqual(args[-3], "no-auto-start")
             self.assertEqual(args[-2], 225)
             self.assertIsNone(args[-1])
+
+    def test_probe_has_explicit_in_process_binding_mode(self):
+        self.assertIn("include_binding", inspect.signature(probe_module.probe).parameters)
+
+    def test_binding_identity_stays_in_explicit_in_process_packet_only(self):
+        window = {**self._window(), "pid": 4242, "id": "private-actor-9"}
+        modules, _calls, _sessions = self._fake_gio(
+            [self._display_state(9), self._display_state(9)], window
+        )
+        with mock.patch.dict(sys.modules, modules):
+            ordinary = probe_module.probe(900)
+
+        modules, _calls, _sessions = self._fake_gio(
+            [self._display_state(9), self._display_state(9)], window
+        )
+        with mock.patch.dict(sys.modules, modules):
+            in_process = probe_module.probe(900, include_binding=True)
+
+        self.assertNotIn("pid", ordinary["window"])
+        self.assertNotIn("id", ordinary["window"])
+        self.assertEqual(in_process["window"].get("pid"), 4242)
+        self.assertEqual(in_process["window"].get("id"), "private-actor-9")
 
     def test_display_reconfiguration_around_window_read_refuses(self):
         modules, _calls, _sessions = self._fake_gio(

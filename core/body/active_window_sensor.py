@@ -21,8 +21,9 @@ import json
 import math
 import os
 import subprocess
+import unicodedata
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_FLOOR
 from datetime import datetime, timezone
 from fractions import Fraction
@@ -32,7 +33,7 @@ from typing import Literal
 from core.vision_contract.geometry import WindowGeometry
 from core.vision_contract.screen_privacy import screen_privacy_state
 
-SCHEMA_VERSION = "active_window_geometry.v1"
+SCHEMA_VERSION = "active_window_geometry.v2"
 COORDINATE_SPACE = "display_local_native_device_pixels"
 _SYSTEM_PYTHON = "/usr/bin/python3"
 _PROBE_HELPER = Path(__file__).resolve().parents[2] / "scripts" / "active_window_geometry_probe.py"
@@ -48,6 +49,7 @@ _PROBE_STATUSES = frozenset(
 )
 _MAX_DISPLAYS = 16
 _MAX_TIMEOUT_SECONDS = 10.0
+MAX_WINDOW_ID_CHARS = 256
 RefusalReason = Literal[
     "paused",
     "curtain_drawn",
@@ -70,12 +72,30 @@ _REFUSAL_REASONS = frozenset(RefusalReason.__args__)
 
 
 @dataclass(frozen=True)
+class FocusBinding:
+    pid: int
+    window_id: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        if type(self.pid) is not int or self.pid <= 0:
+            raise ValueError("binding pid must be a positive integer")
+        if (
+            not isinstance(self.window_id, str)
+            or not self.window_id.strip()
+            or len(self.window_id) > MAX_WINDOW_ID_CHARS
+            or any(unicodedata.category(character).startswith("C") for character in self.window_id)
+        ):
+            raise ValueError("binding window id is required")
+
+
+@dataclass(frozen=True)
 class ActiveWindowReading:
     state: str
     timestamp: datetime
     reason: RefusalReason | Literal[""] = ""
     app_class: str | None = None
     geometry: WindowGeometry | None = None
+    binding: FocusBinding | None = field(default=None, repr=False)
     schema_version: str = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -83,11 +103,18 @@ class ActiveWindowReading:
             raise ValueError("unsupported active-window schema")
         if self.timestamp.tzinfo is None:
             raise ValueError("timestamp must include timezone")
+        if self.binding is not None and not isinstance(self.binding, FocusBinding):
+            raise ValueError("invalid focus binding")
         if self.state == "available":
             if not self.app_class or self.geometry is None or self.reason:
                 raise ValueError("available reading requires class and geometry")
         elif self.state in {"excluded", "refused"}:
-            if self.app_class is not None or self.geometry is not None or not self.reason:
+            if (
+                self.app_class is not None
+                or self.geometry is not None
+                or self.binding is not None
+                or not self.reason
+            ):
                 raise ValueError("refusal must be content-blind and typed")
             if self.reason not in _REFUSAL_REASONS:
                 raise ValueError("unknown active-window refusal reason")
@@ -147,6 +174,7 @@ def _reading(
     reason: RefusalReason | Literal[""] = "",
     app_class: str | None = None,
     geometry: WindowGeometry | None = None,
+    binding: FocusBinding | None = None,
 ) -> ActiveWindowReading:
     return ActiveWindowReading(
         state=state,
@@ -154,6 +182,7 @@ def _reading(
         reason=reason,
         app_class=app_class,
         geometry=geometry,
+        binding=binding,
     )
 
 
@@ -330,9 +359,18 @@ def sample_active_window(
     privacy = privacy_check()
     if privacy in {"paused", "curtain_drawn"}:
         return _refusal(timestamp, privacy)
+    binding = None
+    raw_pid = window.get("pid")
+    raw_window_id = window.get("id")
+    if type(raw_pid) is int and isinstance(raw_window_id, str):
+        try:
+            binding = FocusBinding(pid=raw_pid, window_id=raw_window_id)
+        except ValueError:
+            binding = None
     return _reading(
         state="available",
         timestamp=timestamp,
         app_class=app_class.strip(),
         geometry=geometry,
+        binding=binding,
     )
