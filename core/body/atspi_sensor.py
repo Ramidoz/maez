@@ -27,6 +27,7 @@ from core.vision_contract.geometry import CropBox, WindowGeometry
 from core.vision_contract.screen_privacy import screen_privacy_state
 
 SCHEMA_VERSION = "atspi_accessibility.v1"
+AT_SPI_PROJECTION_SCHEMA_VERSION = "atspi_projection.v1"
 FIELD_KINDS = frozenset({"name", "text", "value", "document_uri"})
 SOURCE = "atspi"
 TRUST = "untrusted_quoted_evidence"
@@ -71,6 +72,9 @@ EXCLUSION_COUNT_REASONS = frozenset(
 _EXCLUDED_REASONS = frozenset(
     {"excluded_path", "sensitive_window", "class_unavailable", "window_unavailable", "window_schema_invalid"}
 )
+OWN_REFUSAL_REASONS = _OWN_REASONS
+SLICE4_REFUSAL_REASONS = _SLICE4_REASONS
+EXCLUDED_REASONS = _EXCLUDED_REASONS
 
 
 def _sha256(data: bytes) -> str:
@@ -267,6 +271,34 @@ class AccessibilityReading:
             }
         )
         return base
+
+
+def accessibility_projection_sha256(reading: AccessibilityReading) -> str:
+    """Return the canonical content projection for one available reading."""
+    if not isinstance(reading, AccessibilityReading) or reading.state != "available":
+        raise ValueError("available accessibility reading required")
+    facts = sorted(
+        (
+            fact.kind,
+            len(fact.value),
+            _sha256(fact.value.encode("utf-8")),
+            fact.region.left,
+            fact.region.top,
+            fact.region.right,
+            fact.region.bottom,
+        )
+        for fact in reading.facts
+    )
+    payload = {
+        "projection_schema_version": AT_SPI_PROJECTION_SCHEMA_VERSION,
+        "sensor_schema_version": reading.schema_version,
+        "support": SUPPORT,
+        "occlusion_checked": False,
+        "included_nodes": reading.included_nodes,
+        "excluded_nodes": sorted(reading.excluded_nodes),
+        "facts": facts,
+    }
+    return _sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8"))
 
 
 def _timestamp(now: datetime | None) -> datetime:
