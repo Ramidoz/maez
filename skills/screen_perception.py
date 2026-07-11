@@ -347,60 +347,19 @@ def _session_type() -> str:
     return "unknown"
 
 
-_DEFAULT_EXCLUDE = (
-    "keepassxc",
-    "bitwarden",
-    "1password",
-    "gnome-keyring",
-    "signal",
-    "whatsapp",
-    "telegram",
-    "slack",
-    "gmail",
-    "email",
-    "mail",
-    "inbox",
-    "zoom",
-    "meet.google",
-    "google meet",
-    "teams",
-    "webex",
-    "bank",
-    "banking",
-    "chase",
-    "capital one",
-    "citi",
-    "amex",
-    "american express",
-    "wellsfargo",
-    "wells fargo",
-    "fidelity",
-    "vanguard",
-    "schwab",
-    "mychart",
-    "medical",
-    "health",
-    "patient",
-    "portal",
-    "password",
-    "credential",
-    "vault",
-)
-
-
 def _exclusion_terms() -> tuple[str, ...]:
-    extra = os.environ.get("MAEZ_SCREEN_EXCLUDE", "")
-    extra_terms = tuple(term.strip().lower() for term in extra.split(",") if term.strip())
-    return _DEFAULT_EXCLUDE + extra_terms
+    from core.vision_contract.screen_exclusion import exclusion_terms
+
+    return exclusion_terms()
 
 
 _WINDOW_UNSET = object()
-_MAX_WINDOW_CLASS_CHARS = 256
-_MAX_WINDOW_TITLE_CHARS = 1024
 
 
 def active_window_preflight_reason(
     window: Mapping[str, object] | None | object = _WINDOW_UNSET,
+    *,
+    document_refs: tuple[str, ...] = (),
 ) -> str | None:
     """Apply the single Decision-9 exclusion authority to one exact snapshot.
 
@@ -411,25 +370,13 @@ def active_window_preflight_reason(
         from core.memory.ambient import active_window_for_preflight
 
         window = active_window_for_preflight()
-    if not isinstance(window, Mapping):
-        return "window_unavailable"
-    app_class = window.get("class")
-    if (
-        not isinstance(app_class, str)
-        or not app_class.strip()
-        or len(app_class) > _MAX_WINDOW_CLASS_CHARS
-    ):
-        return "class_unavailable"
-    title = window.get("title")
-    if title is not None and not isinstance(title, str):
-        return "window_schema_invalid"
-    title_text = title or ""
-    if len(title_text) > _MAX_WINDOW_TITLE_CHARS:
-        return "window_schema_invalid"
-    haystack = f"{app_class} {title_text}".lower()
-    if any(term in haystack for term in _exclusion_terms()):
-        return "sensitive_window"
-    return None
+    from core.vision_contract.screen_exclusion import active_window_preflight_reason as decide
+
+    return decide(
+        window if isinstance(window, Mapping) else None,
+        document_refs=document_refs,
+        terms=_exclusion_terms(),
+    )
 
 
 def _is_excluded_active_window() -> bool:

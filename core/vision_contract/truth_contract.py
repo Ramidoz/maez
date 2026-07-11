@@ -49,6 +49,7 @@ RejectionReason = Literal[
     "raw_limit_exceeded",
 ]
 VerdictReason = RejectionReason | EmptyReason
+SpecificityKind = Literal["filename", "shell_command", "shell_prompt"]
 
 # The sensor speaks as an instrument, not as Maez (ADR 0029; the
 # "You are Maez" impersonation in the retired prompt gave a low-grade
@@ -76,13 +77,22 @@ _ABSTAIN_LIKE_RE = re.compile(r"\[\s*UNREADABLE\s*\]|\bUNREADABLE\b", re.IGNOREC
 # Structural (content-blind) detectors of high-specificity CLASSES a
 # sensor must never assert outside the quoted schema: filename shapes and
 # shell-command shapes. These detect a SHAPE of claim, not a topic.
-_SPECIFICITY_RES = (
-    re.compile(
-        r"\b[\w.-]+\.(?:py|md|txt|js|ts|rs|go|json|yaml|toml|sh)\b",
-        re.IGNORECASE,
+_SPECIFICITY_PATTERNS: tuple[tuple[SpecificityKind, re.Pattern[str]], ...] = (
+    (
+        "filename",
+        re.compile(
+            r"\b[\w.-]+\.(?:py|md|txt|js|ts|rs|go|json|yaml|toml|sh)\b",
+            re.IGNORECASE,
+        ),
     ),
-    re.compile(r"\bgit\s+(?:push|pull|commit|clone|checkout)\b", re.IGNORECASE),
-    re.compile(r"(?:^|\s)[$#]\s+\w+", re.IGNORECASE),
+    (
+        "shell_command",
+        re.compile(r"\bgit\s+(?:push|pull|commit|clone|checkout)\b", re.IGNORECASE),
+    ),
+    (
+        "shell_prompt",
+        re.compile(r"(?<!\S)[$#]\s+\w+", re.IGNORECASE),
+    ),
 )
 
 
@@ -100,6 +110,37 @@ class Verdict:
     schema_version: str = SCHEMA_VERSION
     fields: tuple[Field, ...] = ()
     reason: VerdictReason | None = None
+
+
+@dataclass(frozen=True)
+class SpecificityClaim:
+    kind: SpecificityKind
+    value: str
+
+
+def find_specificity_claims(text: str) -> tuple[SpecificityClaim, ...]:
+    """Return high-specificity string shapes shared by contract and harness."""
+    if not isinstance(text, str):
+        return ()
+    matches: list[tuple[int, int, SpecificityClaim]] = []
+    for pattern_index, (kind, pattern) in enumerate(_SPECIFICITY_PATTERNS):
+        for match in pattern.finditer(text):
+            matches.append(
+                (
+                    match.start(),
+                    pattern_index,
+                    SpecificityClaim(kind=kind, value=match.group(0).strip()),
+                )
+            )
+    matches.sort(key=lambda item: (item[0], item[1]))
+    seen: set[tuple[SpecificityKind, str]] = set()
+    claims: list[SpecificityClaim] = []
+    for _, _, claim in matches:
+        key = (claim.kind, claim.value)
+        if key not in seen:
+            seen.add(key)
+            claims.append(claim)
+    return tuple(claims)
 
 
 def build_transcribe_request(*, image_b64: str, model: str) -> dict:
@@ -157,7 +198,7 @@ def parse_and_validate(raw: object) -> Verdict:
                 # REGION with no TEXT before the next REGION.
                 return _reject("malformed_schema")
             candidate = m.group("region").strip()
-            if any(pattern.search(candidate) for pattern in _SPECIFICITY_RES):
+            if find_specificity_claims(candidate):
                 return _reject("unstructured_specificity")
             if len(candidate) > MAX_REGION_CHARS:
                 return _reject("region_too_long")
@@ -196,9 +237,8 @@ def parse_and_validate(raw: object) -> Verdict:
             continue
         # A non-schema line: free prose. If it asserts high-specificity
         # strings, that is the confabulation signature — reject wholesale.
-        for pattern in _SPECIFICITY_RES:
-            if pattern.search(line):
-                return _reject("unstructured_specificity")
+        if find_specificity_claims(line):
+            return _reject("unstructured_specificity")
         return _reject("malformed_schema")
 
     if region is not None or not saw_schema_line:

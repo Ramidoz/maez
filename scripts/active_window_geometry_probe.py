@@ -122,7 +122,7 @@ def normalize_display_state(resources) -> tuple[int, list[dict[str, object]]]:
     return serial, displays
 
 
-def probe(timeout_ms: int) -> dict[str, object]:
+def probe(timeout_ms: int, *, include_binding: bool = False) -> dict[str, object]:
     if os.environ.get("XDG_SESSION_TYPE", "").strip().lower() != "wayland" and not os.environ.get(
         "WAYLAND_DISPLAY"
     ):
@@ -192,6 +192,9 @@ def probe(timeout_ms: int) -> dict[str, object]:
         "height": window.get("height"),
         "monitor": window.get("monitor"),
     }
+    if include_binding:
+        bounded_window["pid"] = window.get("pid")
+        bounded_window["id"] = window.get("id")
     return {
         "status": "ok",
         "display_config_serial": serial_after,
