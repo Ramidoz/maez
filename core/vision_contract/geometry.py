@@ -10,6 +10,8 @@ coordinate-space change requires a new schema rather than reinterpretation.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 
 
@@ -78,3 +80,28 @@ class WindowGeometry:
             "display_config_serial": self.display_config_serial,
             "coordinate_space": self.coordinate_space,
         }
+
+
+def geometry_sha256(geometry: WindowGeometry) -> str:
+    """Return the canonical content-light identity of validated geometry."""
+    if not isinstance(geometry, WindowGeometry):
+        raise ValueError("validated window geometry is required")
+    payload = json.dumps(geometry.to_receipt(), sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    return hashlib.sha256(payload).hexdigest()
+
+
+def crop_box_key(box: CropBox) -> str:
+    """Return a sensor-neutral identity for one positive-area crop box."""
+    if (
+        not isinstance(box, CropBox)
+        or any(type(value) is not int for value in (box.left, box.top, box.right, box.bottom))
+        or box.left < 0
+        or box.top < 0
+        or box.right <= box.left
+        or box.bottom <= box.top
+    ):
+        raise ValueError("validated crop box is required")
+    raw = f"{box.left}:{box.top}:{box.right}:{box.bottom}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]

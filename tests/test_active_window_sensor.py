@@ -546,7 +546,10 @@ class ReceiptAndBoundaryTests(unittest.TestCase):
                     if imported:
                         callers.append(str(path.relative_to(root)))
                         break
-        self.assertEqual(callers, ["scripts/atspi_window_probe.py"])
+        self.assertEqual(
+            callers,
+            ["core/body/ocr_sensor.py", "scripts/atspi_window_probe.py"],
+        )
 
     def test_sensor_and_probe_import_allowlists_exclude_admission_surfaces(self):
         root = Path(__file__).resolve().parents[1]
