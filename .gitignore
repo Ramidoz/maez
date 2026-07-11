@@ -139,6 +139,9 @@ logs/brain_bench_debug/
 # Owner-approved frozen screen frames, human labels, raw transcripts, and
 # bake-off diagnostics/receipts are private local bench artifacts (Vision S3).
 /local/vision_bench/
+
+# CUDA migration prompts, responses, diagnostics, and local receipts are private.
+/local/cuda_migration_bench/
 .claude/
 
 # Tooling / agent-harness / IDE dirs — not part of Maez's body, never committed

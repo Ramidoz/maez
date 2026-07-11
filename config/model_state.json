@@ -1,15 +1,13 @@
 {
   "base": "Qwen3.6-27B",
   "quant": "UD-Q4_K_XL",
-  "runtime": "llama.cpp (CUDA)",
-  "vram_used_gb": 19.0,
+  "runtime": "llama.cpp (Vulkan)",
   "vram_total_gb": 24.0,
-  "vram_free_gb": 5.0,
-  "disk_gb": 17,
+  "disk_gb": 17.9,
   "vision_model": null,
   "vision_port": null,
-  "judge_model": null,
-  "judge_port": null,
-  "_updated": "2026-04-23",
-  "_note": "Hand-maintained at session end. Judge retired 2026-04-23 after observing 92% silence discipline from the base model made it redundant. Vision pipeline retired earlier (port 8081 had been reassigned to the judge before judge retirement). Verify live state via: curl http://127.0.0.1:8080/v1/models and systemctl list-units --type=service | grep -E 'maez|llama'."
+  "judge_model": "Qwen3.5-4B-Q4_K_M",
+  "judge_port": 8081,
+  "_updated": "2026-07-10",
+  "_note": "Hand-maintained snapshot only. The primary is configured as b9596 Vulkan-MTP; CUDA has not been promoted. The judge is configured as Qwen3.5-4B-Q4_K_M, alias maez-judge, on port 8081. No vision model or port is configured. The live unit/model endpoint is authoritative. Volatile VRAM used/free values are intentionally omitted."
 }
