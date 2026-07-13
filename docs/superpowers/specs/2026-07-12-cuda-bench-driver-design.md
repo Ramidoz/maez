@@ -189,8 +189,12 @@ values are excluded because ambient consumers legitimately fluctuate; an
 ambient process appearing, vanishing, or respawning under a new PID is
 exactly the drift the hash must catch. It is
 measured at all four stages of every cycle and must be invariant across
-stages, cycles, and phases; any drift makes the phase unscored. Frozen
-statistics over the 21 measured turns per phase:
+stages, cycles, and phases; any drift makes the phase unscored.
+
+Sample semantics: SEVEN distinct prompt identities (`sample_n = 7`),
+21 completed measured turn artifacts per phase (7 prompts × 3 cycles,
+`measured_sample_count = 21`); quality evaluation covers all 21 measured
+turns. Frozen statistics over the 21 measured turns per phase:
 
 - p95 e2e = nearest-rank (ceil(0.95 × n)) order statistic of wall-clock e2e;
 - medians = `statistics.median` over the 21 samples;
@@ -200,8 +204,13 @@ statistics over the 21 measured turns per phase:
   events never count;
 - e2e = request-write-complete → final chunk received;
 - warmup turns are excluded from every statistic;
-- MTP drafted/accepted/rejected are per-cycle deltas snapshotted after the
-  warmup, so warmup traffic is subtracted by construction.
+- MTP counters are PER-REQUEST on the wire: b9596 resets them each request
+  and reports them in that request's terminal response — there is no
+  cumulative server counter to snapshot or delta. Aggregation is therefore:
+  discard the warmup response's counters; validate each of the seven
+  measured terminal-response pairs individually (integer, nonnegative,
+  `accepted ≤ drafted`); sum the seven into the cycle totals; sum the three
+  cycle totals into the phase totals.
 
 Server-reported `timings` are authoritative for prefill/decode tps and token
 counts (streaming chunks are never counted as tokens); driver wall-clock is
@@ -246,11 +255,14 @@ the packet with the surviving inventory (content-light). Leader-gone/
 group-remains is a RED-listed test scenario.
 
 The proven path is: kernel-before cursor (captured at CONTAINMENT_BEFORE) →
-owned-group SIGTERM → bounded wait (`SIGTERM_GRACE_S`) → SIGKILL → bounded
-post-SIGKILL wait (`KILL_WAIT_S`) for group absence → bounded listener
-absence wait (`LISTENER_WAIT_S`) → bounded unload-proof wait
-(`UNLOAD_WAIT_S`) → kernel-after journal cursor → CONTAINMENT_AFTER →
-failed-packet write. Kernel windows use journal cursors plus timestamps.
+pidfd-targeted leader SIGTERM → bounded wait (`SIGTERM_GRACE_S`) →
+pidfd-targeted leader SIGKILL → bounded post-SIGKILL wait (`KILL_WAIT_S`)
+for group absence → bounded listener absence wait (`LISTENER_WAIT_S`) →
+bounded unload-proof wait (`UNLOAD_WAIT_S`) → kernel-after journal cursor →
+CONTAINMENT_AFTER → failed-packet write. All signals go through the
+leader's pidfd; PGID enumeration is OBSERVATIONAL ONLY — it proves group
+absence or reports `cleanup_incomplete`, and is never itself a signalling
+target. Kernel windows use journal cursors plus timestamps.
 Distinct failure classes: `http_timeout` (request exceeded bound, server
 alive), `crash` (child exited uncommanded), `hang` (unresponsive; required
 forced SIGKILL), `spawn_failure` (child never reached readiness polling),

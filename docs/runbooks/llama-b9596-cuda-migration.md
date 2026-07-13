@@ -8,7 +8,8 @@ This procedure changes only the backend beneath the same b9596 model packet.
 It keeps tag `b9596`, commit
 `18ef86ecec723361362a332a79b4d913fd724d40`, model bytes, alias
 `qwen36-27b-mtp`, context, cache, flash-attention, and MTP flags fixed. The
-default decision is `keep_vulkan`.
+default OPERATIONAL POSTURE is Vulkan; the typed `keep_vulkan` decision is
+minted only by the scorer over a complete evidence bundle.
 
 ## Fixed assets and privacy boundary
 
@@ -242,7 +243,8 @@ them by hand bypasses authorization consumption, packet production, and the
 turn-artifact manifest, and therefore cannot produce scoreable evidence.
 
 Terminology: a refusal in these phases means the operator OPERATIONALLY
-remains on Vulkan (restore the exact incumbent and stop). Only the scorer's
+remains on Vulkan — the production pointer was never mutated during a bench
+phase, so there is nothing to restore; simply stop. Only the scorer's
 `evaluate_promotion_bundle` mints the typed `keep_vulkan` decision as a
 `PromotionVerdict`; the driver and assembler record refusals and receipts,
 never verdicts.
@@ -326,8 +328,12 @@ and the containment-after artifact before scoring.
 The hermetic witness uses copied/frozen fixtures only and writes nothing to
 live conversation, memory, cognition, or audit stores. It requires:
 
-- the exact corpus and order hashes above and exactly seven completed samples;
-- every seven-turn latency below 12,000 ms;
+- the exact corpus and order hashes above; SEVEN distinct prompt identities
+  (`sample_n = 7`) and exactly 21 completed measured turn artifacts per
+  phase (7 prompts × 3 cycles, `measured_sample_count = 21`) — quality
+  evaluation covers ALL 21 measured turns, not one turn per prompt;
+- every measured turn's latency below 12,000 ms (the `seven_turn_max_ms`
+  bound applies to each of the 21 turns);
 - candidate p95 end-to-end latency no worse than fresh Vulkan p95;
 - candidate median server-reported decode throughput at least 97% of Vulkan;
 - separate prefill and MTP counters, MTP initialized, and accepted tokens > 0;
@@ -389,8 +395,11 @@ with `keep_vulkan`.
 
 The state machine is closed, typed, chronological, and SHA-256 parented:
 
-1. `keep_vulkan` is the default for missing evidence or any failed/unscored
-   gate. It makes or restores the exact Vulkan pointer.
+1. The operational default is Vulkan. Missing, partial, or unscored
+   evidence produces refusal/unscorable receipts — never a verdict. The
+   typed `keep_vulkan` decision requires a complete bundle reaching
+   `evaluate_promotion_bundle`; when it follows a live pointer mutation, it
+   directs the recovery procedure to the exact Vulkan pointer.
 2. `bench_passed` requires a complete passing A/B plus passing rollback drill.
    It changes no live state.
 3. `provisional_cuda_boot` requires a new explicit boot-authorization artifact
@@ -400,8 +409,11 @@ The state machine is closed, typed, chronological, and SHA-256 parented:
    live-witness authorization parented to it, then a passing chronological
    provisional-live artifact. No earlier state implies this result.
 
-Missing or failed boot/live evidence immediately yields `keep_vulkan` and the
-Exact Vulkan rollback drill.
+Missing or failed boot/live evidence arises only after a live pointer
+mutation: invoke the RECOVERY procedure (restore the exact incumbent
+identity), record the failure receipt, and the scorer's verdict over the
+assembled bundle is `keep_vulkan`. The deliberate rollback drill is an
+evidence-producing phase, never a failure handler.
 
 ## Proposed cutover
 
