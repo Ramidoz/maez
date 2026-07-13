@@ -46,9 +46,12 @@ restarts production after success or failure.
    `keep_vulkan` or any operational verdict — that conversion belongs to the
    scorer alone.
 3. **`scripts/cuda_bench_stub.py`** — the pinned rehearsal stub: a minimal
-   loopback HTTP server imitating llama-server's `/health` + `/completion`
-   surface with closed personas {healthy, readiness_timeout, midturn_hang,
-   crash, malformed_response, wrong_identity}. The rehearsal launcher can
+   loopback HTTP server imitating llama-server's `/health`, `/v1/models`,
+   and `/completion` surface with closed personas {healthy,
+   readiness_timeout, midturn_hang, crash, malformed_response,
+   wrong_identity}. Readiness is witnessed from `/health`, the exact-alias
+   witness from `/v1/models`, inference from `/completion`; persona tests
+   cover wrong, missing, and multiple aliases. The rehearsal launcher can
    execute only this pinned module (path + content hash enforced), never an
    arbitrary binary or model path. It binds `127.0.0.1:0`; port 18080 is
    structurally forbidden in rehearsal.
@@ -67,12 +70,16 @@ The current contract drops driver provenance, so the scorer side gains:
 - **`BenchEvidenceBundle`** (versioned, in `cuda_migration.py`): wraps the
   control and candidate `BenchSummary` pair and binds window ID, boot ID
   (`/proc/sys/kernel/random/boot_id`), bench-driver package hash, per-phase
-  packet hashes, per-turn transcript hashes, quality-evidence provenance
-  (evaluator version + exact transcript hash), argv/runtime binding, and the
-  `RollbackEvidenceBundle`. A new entrypoint
-  `evaluate_promotion_bundle(bundle, ...)` validates every binding, then
-  applies the existing closed v1.1 gate internally. The assembler imports
-  only this entrypoint.
+  packet hashes, each phase's turn-artifact manifest hash, quality-evidence
+  provenance (evaluator version + manifest hash), argv/runtime binding, and
+  the `RollbackEvidenceBundle`. A new entrypoint
+  `evaluate_promotion_bundle(bundle: BenchEvidenceBundle) -> PromotionVerdict`
+  validates every binding, then applies the existing closed v1.1 gate
+  internally. The signature is exactly one argument: the bundle itself
+  contains every maps, containment, authorization, runtime-identity,
+  rollback, quality, owner-voice, and phase-packet input. No side inputs
+  exist, so validated evidence cannot be swapped at an ellipsis boundary.
+  The assembler imports only this entrypoint.
 - **Three cycle-indexed backend witnesses per phase.** The bundle requires
   exactly three `RuntimeBackendWitness` records per phase, cycle-indexed,
   each timestamp-bracketed inside its own load/unload interval, each
@@ -107,6 +114,24 @@ prompts/responses exist only in bounded private per-turn artifacts.
   precede candidate inside one bounded offline window (same window ID, same
   boot ID).
 
+**Authorization artifacts (enforceable single-use).** Two owner-authored
+schemas, both mode `0600` inside the private bench:
+
+- `cuda_bench_driver.window_authorization.v1`: window ID (owner-chosen
+  string), authorized phases, boot ID it was issued under, 32-byte hex
+  nonce, `issued_at`/`expires_at` timestamps with TTL exactly
+  `WINDOW_TTL_S` (Appendix), and owner identity. The driver refuses on
+  expiry, boot-ID mismatch, or nonce reuse.
+- `cuda_bench_driver.continuation.v1`: same fields plus
+  `parent_vulkan_packet_sha256`; TTL exactly `CONTINUATION_TTL_S`; valid
+  only within the same window ID and boot ID as its parent packet.
+
+Single-use is a property, not an assertion: before spawning any server, the
+driver atomically creates (`O_EXCL`) a consumption marker named by the
+artifact's nonce; a marker that already exists is the typed refusal
+`authorization_consumed`. Marker creation precedes spawn so a crashed run
+cannot re-arm its own authorization.
+
 **Topology and statistics (amendment 6).** The raw GPU process inventory
 necessarily includes the owned bench child, so the topology hash is defined
 over the **canonical ambient projection**: the deterministic serialization of
@@ -121,7 +146,10 @@ statistics over the 21 measured turns per phase:
 
 - p95 e2e = nearest-rank (ceil(0.95 × n)) order statistic of wall-clock e2e;
 - medians = `statistics.median` over the 21 samples;
-- TTFT = request-write-complete → first non-empty streamed data chunk;
+- TTFT = request-write-complete → first **generated-content event**: the
+  first streamed SSE `data:` event whose JSON payload contains a non-empty
+  generated-text field (`content`). Metadata, keep-alive, or empty-content
+  events never count;
 - e2e = request-write-complete → final chunk received;
 - warmup turns are excluded from every statistic;
 - MTP drafted/accepted/rejected are per-cycle deltas snapshotted after the
@@ -134,10 +162,17 @@ a typed `mtp_unproven` refusal, never inferred.
 
 ## Error handling (amendment 7)
 
-Closed refusal vocabulary. Cleanup is an **unconditional finalizer**: any
-post-spawn exit path runs owned-group SIGTERM → bounded wait → SIGKILL →
-proof the process group is gone and no listener remains → kernel-after
-journal cursor → CONTAINMENT_AFTER → failed-packet write. Kernel windows use
+Closed refusal vocabulary (Appendix). Cleanup is an **unconditional
+finalizer** — every post-spawn exit path reaches it — but signalling within
+it is ownership-proven, never unconditional: at spawn the driver records
+PID, PGID, `/proc/<pid>/stat` start time, and the executable's content
+hash; before EVERY signal it re-proves that identity quadruple still
+matches. If the group is already gone, it sends nothing. A quadruple
+mismatch is the typed refusal `pid_reuse_detected` (a RED-listed test
+scenario) and no signal is sent. The proven path is owned-group SIGTERM →
+bounded wait (`SIGTERM_GRACE_S`) → SIGKILL → proof the process group is
+gone and no listener remains → kernel-after journal cursor →
+CONTAINMENT_AFTER → failed-packet write. Kernel windows use
 journal cursors plus timestamps. Distinct failure classes: `http_timeout`
 (request exceeded bound, server alive), `crash` (child exited uncommanded),
 `hang` (unresponsive; required forced SIGKILL). A refusal in preflight
@@ -150,11 +185,21 @@ yields `assembly_refused`/`unscorable`.
 
 Phase packets are immutable, phase-specific, and cryptographically bound to:
 window ID, boot ID, ambient-topology hash, model/corpus/order hashes, exact
-effective argv hash, driver package hash, and all per-turn transcript hashes.
-Assembly performs no measurement and accepts no raw CLI-entered counts.
-Quality evidence must reference the exact transcript hash plus evaluator
-version. Owner-voice and rollback artifacts identify their producer and bind
-the same phase/window identities.
+effective argv hash, driver package hash, and the phase's turn-artifact
+manifest hash. The **turn-artifact manifest**
+(`cuda_bench_driver.turn_manifest.v1`) is one canonical ordered document per
+phase: for every turn it records cycle number, ordinal within the cycle,
+warmup flag, and the private turn-artifact's SHA-256. Public receipts carry
+only the manifest hash; quality evidence and owner-voice evidence bind the
+manifest hash plus evaluator version — never an ambiguous singular
+"transcript hash." Assembly performs no measurement and accepts no raw
+CLI-entered counts. Owner-voice and rollback artifacts identify their
+producer and bind the same phase/window identities.
+
+`maez.service` state is recorded **informationally** in containment
+snapshots: if running, its environ containment is checked; if stopped, the
+stopped state is recorded and a missing PID is NOT a phase refusal (the
+owner may reasonably stop it for the window).
 
 ## Rehearsal mode
 
@@ -173,9 +218,13 @@ providers only, never the workflow. Additional pins:
 ## Private-file discipline
 
 State journals are content-light. All bench files: exclusive creation
-(`O_EXCL`), `0700` directories / `0600` files, `O_NOFOLLOW` symlink/hardlink
-refusal, bounded response-size caps on every read, and loopback HTTP clients
-with redirects and proxy/environment trust disabled.
+(`O_EXCL`), `0700` directories / `0600` files, and loopback HTTP clients
+with redirects and proxy/environment trust disabled, with bounded
+response-size caps on every read. Pre-existing files the driver reads
+(corpus, authorization artifacts) must prove: regular file (no symlink —
+`O_NOFOLLOW` covers only the final component, so the full parent chain must
+be owner-owned `0700` directories), owner UID, and `st_nlink == 1`
+(hardlink refusal, which `O_NOFOLLOW` does NOT provide).
 
 ## Standing owner precondition (corpus durability)
 
@@ -202,3 +251,51 @@ narrowed, not closed.
 No promotion decision (scorer-only), no rollback drill execution, no
 cold-boot or provisional-live witnesses, no unit-file writes, no service
 mutation, no corpus authoring, no vision-flag changes.
+
+## Appendix — frozen constants
+
+**Schema names.** `cuda_bench_driver.static_preflight.v1`,
+`cuda_bench_driver.phase_packet.v1`, `cuda_bench_driver.refusal.v1`,
+`cuda_bench_driver.window_authorization.v1`,
+`cuda_bench_driver.continuation.v1`, `cuda_bench_driver.turn_manifest.v1`,
+`cuda_bench_rehearsal.packet.v1` (deliberately incompatible),
+`cuda_migration.bench_evidence_bundle.v1`,
+`cuda_migration.rollback_evidence_bundle.v1`.
+
+**Closed refusal vocabulary.** `preflight_service_active`,
+`preflight_port_open`, `preflight_gpu_occupied`, `preflight_bench_port_busy`,
+`identity_mismatch`, `corpus_unavailable`, `authorization_missing`,
+`authorization_expired`, `authorization_boot_mismatch`,
+`authorization_consumed`, `continuation_missing`, `continuation_parent_mismatch`,
+`containment_violation`, `readiness_timeout`, `alias_mismatch`,
+`backend_unproven`, `http_timeout`, `crash`, `hang`, `malformed_response`,
+`response_too_large`, `mtp_unproven`, `topology_drift`, `kernel_unmatched`,
+`unload_incomplete`, `filesystem_hazard`, `pid_reuse_detected`,
+`rehearsal_artifact_rejected`.
+
+**Timeouts and caps.**
+
+- `READINESS_TIMEOUT_S = 300` (18 GB load headroom; stub personas exercise
+  the boundary);
+- `REQUEST_TIMEOUT_MS = 30_000` per turn (hard cap above the 12,000 ms
+  quality bound so slow-but-completing turns are measured, not truncated);
+- `SIGTERM_GRACE_S = 10` before SIGKILL;
+- `RESPONSE_BYTE_CAP = 4 MiB` per HTTP response; `TURN_ARTIFACT_BYTE_CAP =
+  8 MiB` per private turn artifact; breach = `response_too_large`;
+- `WINDOW_TTL_S = 14_400` (4 h) for window authorization;
+  `CONTINUATION_TTL_S = 3_600` (1 h) for the CUDA continuation;
+- nonce: 32 random bytes, hex-encoded.
+
+**GPU queries.** Topology:
+`nvidia-smi --query-compute-apps=pid,process_name --format=csv,noheader`;
+process-name normalization = basename of the reported path (nvidia-smi may
+truncate long paths); entries sorted by `(pid, basename)`; owned child
+excluded by PID-within-owned-group. Memory/BAR1:
+`nvidia-smi -q -d MEMORY` FB and BAR1 sections;
+`bar1_percent = bar1_used_mib / bar1_total_mib × 100`, computed in float,
+rounded half-even to 2 decimal places at record time; VRAM recorded in
+integer MiB as reported.
+
+**TTFT.** As frozen in the statistics section: first streamed SSE `data:`
+event with a non-empty `content` field; metadata and empty events never
+count.
