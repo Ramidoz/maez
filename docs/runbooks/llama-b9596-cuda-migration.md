@@ -409,11 +409,19 @@ The state machine is closed, typed, chronological, and SHA-256 parented:
    live-witness authorization parented to it, then a passing chronological
    provisional-live artifact. No earlier state implies this result.
 
-Missing or failed boot/live evidence arises only after a live pointer
-mutation: invoke the RECOVERY procedure (restore the exact incumbent
-identity), record the failure receipt, and the scorer's verdict over the
-assembled bundle is `keep_vulkan`. The deliberate rollback drill is an
-evidence-producing phase, never a failure handler.
+Boot/live evidence problems arise only after a live pointer mutation, and
+they split in two — recovery is identical, receipt semantics are not:
+
+- **Missing or incomplete evidence** (the instrument failed to record the
+  result): invoke the RECOVERY procedure (restore the exact incumbent
+  identity) and record a refusal/unscorable receipt. NO verdict is minted —
+  the scorer cannot pretend it received a complete failed test.
+- **Complete but failing evidence** (every field present, a bound failed):
+  invoke the RECOVERY procedure and the scorer's verdict over the complete
+  assembled bundle is `keep_vulkan`.
+
+The deliberate rollback drill is an evidence-producing phase, never a
+failure handler.
 
 ## Proposed cutover
 
@@ -440,8 +448,11 @@ must be after and parented to the boot authorization. It records the complete
 production topology: primary and staggered judge load intervals must not
 overlap; primary backend maps must prove CUDA only; full-topology BAR1 must
 pass; closed kernel deltas and unmatched NVRM errors must both be zero; restart
-count must be zero; and vision containment must pass before/after. Any missing
-field or failed bound invokes rollback and `keep_vulkan`.
+count must be zero; and vision containment must pass before/after. Either
+problem invokes the recovery procedure, but the receipts differ: a MISSING
+field yields a refusal/unscorable receipt with no verdict; a complete
+witness with a FAILED bound reaches the scorer, whose verdict is
+`keep_vulkan`.
 
 ## Provisional-live witness
 
