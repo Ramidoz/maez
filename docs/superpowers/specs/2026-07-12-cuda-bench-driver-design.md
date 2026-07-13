@@ -88,7 +88,16 @@ The current contract drops driver provenance, so the scorer side gains:
   (`_evaluate_promotion_gate`), reachable only from
   `evaluate_promotion_bundle`; `build_receipt` accepts only a bundle-derived
   verdict. `PromotionVerdict.evidence_sha256` — and therefore the later
-  boot-authorization parent — becomes `BenchEvidenceBundle.binding_sha256`.
+  boot-authorization parent — becomes the bundle's STAGE-NORMALIZED
+  `bench_binding_sha256` (computed excluding the boot/live authorizations,
+  later maps witnesses, and the current-stage runtime identity, with
+  summaries and containment normalized to their bench-stage projections —
+  mirroring the scorer's existing `_bench_evidence_sha256` normalization).
+  A hash that covered the authorization itself would be self-referential
+  and unsatisfiable as its own parent. The full-bundle `binding_sha256`
+  remains as the receipt fingerprint of the complete evaluated document
+  set. (Amended 2026-07-13 with the implementation-plan gate; supersedes
+  the earlier single-hash wording.)
   Existing tests that mint `bench_passed` through the bare evaluator are
   migrated to bundle construction; the internal gate keeps its own unit
   tests but no public caller. A structural test asserts the public module
