@@ -9,17 +9,39 @@ RED/GREEN → Codex spec review → Codex quality review → feature-branch
 commit → Claude clean-checkout gate. Main stays untouched until final merge.
 
 - ALL work happens on branch `feature/cuda-bench-driver` inside an isolated
-  git worktree — never the dirty main checkout. Create once:
-  `git worktree add /home/rohit/maez-wt-bench feature/cuda-bench-driver`
-  (branch created from `HEAD` of main at start).
+  git worktree — never the dirty main checkout. The branch does not exist
+  yet, so creation uses `-b`:
+  `git worktree add -b feature/cuda-bench-driver /home/rohit/maez-wt-bench main`
+  (branch created from main's current commit at Task 0 time).
 - EVERY test command in this plan uses the pinned interpreter:
   `/home/rohit/maez/.venv/bin/python -B -m pytest` — never bare `python3`
-  (PATH-dependent resolution is a borrowed-green hazard).
+  (PATH-dependent resolution is a borrowed-green hazard). Lint uses the
+  venv's `/home/rohit/maez/.venv/bin/ruff` (0.15.12, verified present).
+- Per-task commit gate (runs in the feature worktree BEFORE each commit):
+  affected suite green (`tests/test_cuda_migration.py` always, plus every
+  test file the task touched) AND
+  `/home/rohit/maez/.venv/bin/ruff check <changed .py files>` clean.
 - Commits land on the feature branch only. The Claude gate per task:
   fresh detached worktree of the branch head, full-suite run with the
   pinned interpreter, exit status captured UNMASKED (see B10 for the exact
   shape). A failed gate reopens the task; no commit ever lands after its
   gate ran.
+
+### Task 0: Explore pass + repo baseline (before any code)
+
+- [ ] Explore (read-only, in the feature worktree once created): the
+  implementer's mandated pre-code pass over `scripts/cuda_migration.py`
+  (constants, `_packet_hash`, validators, `_bench_packet`, the gate),
+  `tests/test_cuda_migration.py` (fixture helpers to reuse: `SHA_A/SHA_B`,
+  summary/containment/authorization builders), the approved spec, and the
+  runbook's reference argv. No writes.
+- [ ] Create the branch + worktree (command above).
+- [ ] Record the REPO BASELINE in the worktree: run
+  `/home/rohit/maez/.venv/bin/python -B -m pytest tests/ -q` and save the
+  full tail (pass/fail/error counts, and the names of any pre-existing
+  failures unrelated to this work) to the task log. This baseline is what
+  B10's final reconciliation compares against — "no NEW failures", not
+  "zero failures in a repo we didn't start green".
 
 **Goal:** Build the inert, owner-gated bench driver + scorer extension that executes the offline Vulkan-vs-CUDA A/B per spec `docs/superpowers/specs/2026-07-12-cuda-bench-driver-design.md` (5 gate rounds passed).
 
@@ -171,6 +193,8 @@ full cuda_migration suite stays green."
   - `QualityEvidence(evaluator_version: str, control_manifest_sha256: str, candidate_manifest_sha256: str, false_absence_count: int, wrong_answered_ungrounded_count: int, type_regression_count: int, recall_posture: str, quality_failure_count: int, covered_turn_count: int, timestamp: str)` — schema `cuda_migration.quality_evidence.v1`; `covered_turn_count` must equal 21; `binding_sha256`.
   - `OwnerVoiceReview(producer: str, status: EvidenceStatus, control_manifest_sha256: str, candidate_manifest_sha256: str, artifact_sha256: str, timestamp: str)` — schema `cuda_migration.owner_voice_review.v1`; `binding_sha256`.
   - `ConsumptionReceipt(nonce: str, phase: str, boot_id: str, timestamp: str)` — schema `cuda_bench_driver.consumption_receipt.v1` (scorer-side reader type); `binding_sha256`. Nonce = exactly 64 lowercase hex.
+  - `WindowAuthorizationDoc(window_id: str, phases: tuple[str, ...], boot_id: str, nonce: str, issued_at: str, expires_at: str, owner: str)` — the scorer-side TYPED PREIMAGE of `cuda_bench_driver.window_authorization.v1` (not a hash reference). Validates window-id regex, nonce syntax, UTC-Z timestamps, `expires_at − issued_at == 14_400` s. `preimage_sha256` property = sha256 of the canonical compact sort-keys JSON of all fields + schema — this is the hash the driver's packet binds, so the scorer can RECOMPUTE it.
+  - `ContinuationDoc(...)` — same fields plus `parent_vulkan_packet_sha256: str`; TTL exactly `3_600` s; same `preimage_sha256` property.
 
 - [ ] **Step 1: Write failing tests**
 
@@ -411,7 +435,7 @@ cuda_migration; no existing validator or public entrypoint changes yet."
 **Interfaces:**
 - Produces (exact):
   - `TurnManifest(phase: str, entries: tuple[TurnManifestEntry, ...])`; `TurnManifestEntry(cycle: int, ordinal: int, warmup: bool, artifact_sha256: str)`; schema `cuda_bench_driver.turn_manifest.v1`; exactly 24 entries per phase (3 warmup + 21 measured), ordered `(cycle, ordinal)`, ordinal 0 = warmup with `warmup=True`, ordinals 1–7 measured; property `binding_sha256`.
-  - `PhasePacket(...)` — schema `cuda_bench_driver.phase_packet.v1`; fields exactly: `phase: str`, `outcome: str` (must be `"completed"` to be bundle-eligible), `window_id: str`, `boot_id: str`, `gpu_uuid: str`, `topology_sha256: str`, `model_sha256: str`, `corpus_sha256: str`, `order_sha256: str`, `effective_args_sha256: str`, `driver_package_sha256: str`, `authorization_preimage_sha256: str`, `consumption_receipt_sha256: str`, `static_preflight_sha256: str`, `runtime_identity_sha256: str`, `turn_manifest: TurnManifest`, `cycle_witnesses: tuple[CycleBackendWitness, CycleBackendWitness, CycleBackendWitness]`, `containment_before_sha256: str`, `containment_after_sha256: str`, `kernel_cursor_before: str`, `kernel_cursor_after: str`, `kernel_counters: KernelCounters`, `summary_projection: Mapping[str, object]`, `timestamp: str`. Property `binding_sha256`. Validation: phase closed to `{vulkan_baseline, cuda_candidate}`; window_id matches `^[A-Za-z0-9._-]{1,64}$`; cycle witnesses cover cycles (1,2,3) exactly with matching phase; manifest phase equals packet phase.
+  - `PhasePacket(...)` — schema `cuda_bench_driver.phase_packet.v1`; fields exactly: `phase: str`, `outcome: str` (must be `"completed"` to be bundle-eligible), `window_id: str`, `boot_id: str`, `gpu_uuid: str`, `topology_sha256: str`, `model_sha256: str`, `corpus_sha256: str`, `order_sha256: str`, `effective_args_sha256: str`, `driver_package_sha256: str`, `authorization_preimage_sha256: str`, `consumption_receipt_sha256: str`, `static_preflight_sha256: str`, `runtime_identity_sha256: str`, `turn_manifest: TurnManifest`, `cycle_witnesses: tuple[CycleBackendWitness, CycleBackendWitness, CycleBackendWitness]`, `containment_before_sha256: str`, `containment_after_sha256: str`, `kernel_cursor_before: str`, `kernel_cursor_after: str`, `kernel_counters: KernelCounters`, `summary_projection_json: str` (canonical compact sort-keys JSON — an immutable string, never a live Mapping), `timestamp: str`. Property `binding_sha256`. Validation: phase closed to `{vulkan_baseline, cuda_candidate}`; window_id matches `^[A-Za-z0-9._-]{1,64}$`; cycle witnesses cover cycles (1,2,3) exactly with matching phase; manifest phase equals packet phase.
   - Module function `phase_summary_projection(summary: BenchSummary) -> dict[str, object]` — the canonical PHASE-PRODUCED projection the scorer compares against `PhasePacket.summary_projection`. It is NOT `_bench_packet(summary)` (that embeds owner-voice, rollback, quality, and recall fields produced AFTER the phase — a packet written at phase end cannot know them). It contains exactly the driver-producible aggregates: `phase, alias, model_sha256, corpus_sha256, order_sha256, sample_n, warmup_count, measured_sample_count, load_cycles, seven_turn_max_ms, p95_e2e_ms, median_decode_tps, median_prefill_tps, cycles (via _cycle_packet), mtp_drafted_tokens, mtp_accepted_tokens, mtp_rejected_tokens, mtp_initialized, crash_count, restart_count, hang_count, timeout_count, unload_leak_mib, kernel_counters (via .packet())`. Quality counts, `recall_posture`, owner-voice, rollback, cold-boot, and provisional fields are EXCLUDED — their cross-checks happen at bundle level (Task A5).
 
 - [ ] **Step 1: Write failing tests**
@@ -546,8 +570,8 @@ class BenchEvidenceBundle:
     runtime_identity: RuntimeIdentity
     quality: QualityEvidence
     owner_voice: OwnerVoiceReview
-    window_authorization_sha256: str
-    continuation_sha256: str
+    window_authorization: WindowAuthorizationDoc
+    continuation: ContinuationDoc
     window_consumption: ConsumptionReceipt
     continuation_consumption: ConsumptionReceipt
     rollback: RollbackEvidenceBundle
@@ -560,13 +584,13 @@ class BenchEvidenceBundle:
 
   1. Phases: `control_packet.phase == control_summary.phase == "vulkan_baseline"`; `candidate_packet.phase == candidate_summary.phase == "cuda_candidate"`; both packet `outcome == "completed"`.
   2. Identity scalars: both packets' `window_id/boot_id/gpu_uuid` equal the bundle's; `rollback.window_id == window_id`.
-  3. Authorization joins: `control_packet.authorization_preimage_sha256 == window_authorization_sha256`; `candidate_packet.authorization_preimage_sha256 == continuation_sha256`; `window_consumption.binding_sha256 == control_packet.consumption_receipt_sha256`; `continuation_consumption.binding_sha256 == candidate_packet.consumption_receipt_sha256`; `window_consumption.phase == "vulkan_baseline"`; `continuation_consumption.phase == "cuda_candidate"`; both consumption `boot_id == boot_id`.
+  3. Authorization joins (against TYPED preimages, recomputed): `window_authorization.preimage_sha256 == control_packet.authorization_preimage_sha256`; `continuation.preimage_sha256 == candidate_packet.authorization_preimage_sha256`; `window_consumption.binding_sha256 == control_packet.consumption_receipt_sha256`; `continuation_consumption.binding_sha256 == candidate_packet.consumption_receipt_sha256`; nonce joins: `window_consumption.nonce == window_authorization.nonce` and `continuation_consumption.nonce == continuation.nonce`; parent join: `continuation.parent_vulkan_packet_sha256 == control_packet.binding_sha256`; scope joins: both authorization docs' `window_id == window_id` and `boot_id == boot_id`, `"vulkan_baseline" in window_authorization.phases`, `"cuda_candidate" in continuation.phases`, both docs' `owner` fields equal; temporal join: `continuation_consumption.timestamp < window_authorization.expires_at` (a continuation cannot outlive its window); `window_consumption.phase == "vulkan_baseline"`; `continuation_consumption.phase == "cuda_candidate"`; both consumption `boot_id == boot_id`.
   4. Containment joins: `containment` holds all six snapshots; the `vulkan_baseline` before/after snapshot `binding_sha256`s equal `control_packet.containment_before_sha256/containment_after_sha256`; same for `cuda_candidate` vs the candidate packet; the `vulkan_rollback` pair's binding hashes equal `rollback.containment_before.binding_sha256`/`rollback.containment_after.binding_sha256`.
   5. Runtime/driver joins: `runtime_identity.binding_sha256 == control_packet.runtime_identity_sha256 == candidate_packet.runtime_identity_sha256`; `driver_package_sha256 == control_packet.driver_package_sha256 == candidate_packet.driver_package_sha256`; both packets' `static_preflight_sha256` equal each other.
-  6. Summary projections: `phase_summary_projection(control_summary) == control_packet.summary_projection` (JSON sort-keys equality); same for candidate.
+  6. Summary projections and scalar joins: `PhasePacket.summary_projection` is stored as `summary_projection_json: str` — the canonical compact sort-keys JSON string (an immutable field; a live `Mapping` on a frozen dataclass would be silently mutable after constructor-time validation) — and the join is exact string equality with `json.dumps(phase_summary_projection(summary), sort_keys=True, separators=(",", ":"))`. Additionally the packet's OWN scalars must join both the projection and the summary: `packet.model_sha256 == summary.model_sha256`, `packet.corpus_sha256 == summary.corpus_sha256`, `packet.order_sha256 == summary.order_sha256`, `packet.topology_sha256 ==` every `cycle.topology_sha256` in the summary, and `packet.kernel_counters.packet() ==` the projection's `kernel_counters`.
   7. Quality joins: `quality.control_manifest_sha256 == control_packet.turn_manifest.binding_sha256`; `quality.candidate_manifest_sha256 == candidate_packet.turn_manifest.binding_sha256`; AND the summaries' quality fields equal QualityEvidence's: `false_absence_count`, `wrong_answered_ungrounded_count`, `type_regression_count`, `recall_posture`, `quality_failure_count` each equal on BOTH summaries.
-  8. Owner-voice joins: `owner_voice.control_manifest_sha256/candidate_manifest_sha256` equal the two manifests' binding hashes; `owner_voice.artifact_sha256 == control_summary.owner_voice_evidence.artifact_sha256 == candidate_summary.owner_voice_evidence.artifact_sha256`.
-  9. Rollback joins: `control_packet.binding_sha256 == rollback.parent_control_packet_sha256`; `candidate_packet.binding_sha256 == rollback.parent_candidate_packet_sha256`; `rollback.witness.binding_sha256 == control_summary.rollback_witness.binding_sha256 == candidate_summary.rollback_witness.binding_sha256`.
+  8. Owner-voice joins: `owner_voice.control_manifest_sha256/candidate_manifest_sha256` equal the two manifests' binding hashes; `owner_voice.artifact_sha256 == control_summary.owner_voice_evidence.artifact_sha256 == candidate_summary.owner_voice_evidence.artifact_sha256`; `owner_voice.status == control_summary.owner_voice_evidence.status == candidate_summary.owner_voice_evidence.status`.
+  9. Rollback joins: `control_packet.binding_sha256 == rollback.parent_control_packet_sha256`; `candidate_packet.binding_sha256 == rollback.parent_candidate_packet_sha256`; `rollback.witness.binding_sha256 == control_summary.rollback_witness.binding_sha256 == candidate_summary.rollback_witness.binding_sha256`; bracketing: `rollback.containment_before.timestamp < rollback.maps_witness.timestamp < rollback.containment_after.timestamp`, and both kernel cursors nonempty and distinct.
 
 - [ ] **Step 1: Failing tests** — a bundle-builder helper `make_bundle(**overrides)` assembling a fully consistent bundle from A2–A4 helpers plus the existing test file's `make_summary`/containment/authorization helpers; tests: valid bundle binds; then ONE tamper test PER join family (1–9 above): swapped packets; wrong window scalar; authorization preimage hash swap; consumption receipt hash swap; containment snapshot hash mismatch; runtime-identity hash mismatch; projection tamper (`summary_projection={**good, "p95_e2e_ms": 1.0}`); quality manifest hash mismatch + quality count divergence; owner-voice artifact divergence; rollback parent swap — each → `bundle_binding`.
 - [ ] **Step 2: Run to verify failure.**
@@ -582,8 +606,8 @@ class BenchEvidenceBundle:
 
 **Interfaces:**
 - Produces (exact):
-  - `evaluate_promotion_bundle(bundle: BenchEvidenceBundle) -> PromotionVerdict` — validates bundle (constructor already did), then calls `_evaluate_promotion_gate(...)` with components extracted FROM the bundle (control/candidate summaries, cycle-1 witnesses' inner `RuntimeBackendWitness` for the legacy two-maps parameters after verifying all six wrappers, containment, authorizations, runtime identity, cold-boot/provisional maps). Returns a `PromotionVerdict` whose `bench_evidence_sha256 == bundle.binding_sha256`.
-  - `_evaluate_promotion_gate` — the existing function body, renamed, signature unchanged.
+  - `evaluate_promotion_bundle(bundle: BenchEvidenceBundle) -> PromotionVerdict` — validates bundle (constructor already did), then calls `_evaluate_promotion_gate(..., expected_evidence_sha256=bundle.binding_sha256)` with components extracted FROM the bundle (control/candidate summaries, cycle-1 witnesses' inner `RuntimeBackendWitness` for the legacy two-maps parameters after verifying all six wrappers, containment, authorizations, runtime identity, cold-boot/provisional maps). Returns the gate's verdict unmodified — no post-hoc hash replacement.
+  - `_evaluate_promotion_gate` — the existing function body, renamed, with ONE signature addition: keyword-only `expected_evidence_sha256: str`. The gate currently computes a component-level evidence hash and checks the boot/live authorization `parent_sha256` against it; with bundle-parented authorizations that check would ALWAYS fail. The gate now uses `expected_evidence_sha256` as the authority for BOTH the authorization-parent comparison AND the `bench_evidence_sha256` it stamps into the verdict — one hash, defined once, no replace-after-the-fact.
   - `build_receipt(identity, bundle: BenchEvidenceBundle, verdict: PromotionVerdict, *, timestamp: str) -> dict[str, object]` — recomputes `expected = evaluate_promotion_bundle(bundle)`; `expected != verdict` → `ValueError("verdict_binding_mismatch")`; receipt gains `"bundle_binding_sha256": bundle.binding_sha256` and keeps all existing content-light fields (sourced from bundle components).
 - Consumes: everything from A2–A5.
 
@@ -615,7 +639,7 @@ class BundleGateTests(unittest.TestCase):
 ```
 
 - [ ] **Step 2: Run to verify failure.**
-- [ ] **Step 3: Implement.** Rename; add wrapper; rework `build_receipt` to take `(identity, bundle, verdict, *, timestamp)` and source every existing receipt field from bundle components. Inside `evaluate_promotion_bundle`, after the inner verdict returns, rebuild it via `dataclasses.replace(inner, bench_evidence_sha256=bundle.binding_sha256)` so `evidence_sha256` is the bundle binding (the inner gate computed a component hash; the bundle hash supersedes it as spec requires).
+- [ ] **Step 3: Implement.** Rename; add the keyword-only `expected_evidence_sha256: str` parameter to `_evaluate_promotion_gate` and use it for the boot/live authorization `parent_sha256` comparisons AND as the `bench_evidence_sha256` stamped into the verdict (delete the internal component-hash computation for those two uses — one hash, defined once by the caller; NO `dataclasses.replace` afterwards). Add the wrapper passing `bundle.binding_sha256`. Rework `build_receipt` to take `(identity, bundle, verdict, *, timestamp)` and source every existing receipt field from bundle components.
 - [ ] **Step 4: Migrate existing tests.** Every test calling `cm.evaluate_promotion(` or the old `build_receipt` signature: `grep -n "evaluate_promotion\|build_receipt" tests/test_cuda_migration.py`. The `evaluate()` helper used by `GateStateTests` switches to calling `cm._evaluate_promotion_gate(...)` (internal-gate unit tests, explicitly named `InternalGateTests`) and NEW bundle-level tests via `make_bundle`. Boot/live authorization tests parent to `bundle.binding_sha256` now.
 - [ ] **Step 5: Run full suite** — `/home/rohit/maez/.venv/bin/python -B -m pytest tests/test_cuda_migration.py -q` → all pass (count will change; zero failures).
 - [ ] **Step 6: Commit**
@@ -642,7 +666,7 @@ gate logic itself is unchanged (same reasons, same thresholds)."
 - Test: `tests/test_cuda_bench_stub.py`
 
 **Interfaces:**
-- Produces: CLI `python3 -m scripts.cuda_bench_stub --persona healthy --alias qwen36-27b-mtp` → binds `127.0.0.1:0`, prints exactly one line `STUB_LISTENING port=<N>` to stdout, then serves. Personas closed set: `{"healthy","readiness_timeout","midturn_hang","crash","malformed_response","wrong_identity"}`. Endpoints: `/health` (200 `{"status":"ok"}`; readiness_timeout persona: 503 forever), `/v1/models` (healthy: `{"data":[{"id":"<alias>"}]}`; wrong_identity: wrong id; extra persona flags `--models-empty` / `--models-multi` for missing/multiple alias tests), `/completion` (healthy: streams 3 SSE `data:` events — one metadata event WITHOUT `content`, one content event, then terminal event with `{"timings": {"prompt_per_second": 100.0, "predicted_per_second": 50.0, "predicted_n": 16, "prompt_n": 32, "draft_n": 12, "draft_n_accepted": 9}, "content": ""}` — exactly the b9596 keys; midturn_hang: first event then sleep forever; crash: `os._exit(1)` after first event; malformed_response: non-JSON data event). Constant `STUB_SHA256_PATH_ENV = "CUDA_BENCH_STUB_PATH"` unused by stub itself (driver-side pin). Structural rule: module refuses `--port` other than 0 (`raise SystemExit("port_forbidden")`).
+- Produces: CLI `/home/rohit/maez/.venv/bin/python -B -m scripts.cuda_bench_stub --persona healthy --alias qwen36-27b-mtp` → binds `127.0.0.1:0`, prints exactly one line `STUB_LISTENING port=<N>` to stdout, then serves. `/completion` honors the wire flag like the real server: a request body WITH `"stream": true` gets the SSE event stream; a body WITHOUT it gets one aggregate non-SSE JSON body — so the driver's mandatory `"stream": true` is actually TESTABLE (a client that forgets the flag receives a non-streamed body and fails TTFT measurement). Personas closed set: `{"healthy","readiness_timeout","midturn_hang","crash","malformed_response","wrong_identity"}`. Endpoints: `/health` (200 `{"status":"ok"}`; readiness_timeout persona: 503 forever), `/v1/models` (healthy: `{"data":[{"id":"<alias>"}]}`; wrong_identity: wrong id; extra persona flags `--models-empty` / `--models-multi` for missing/multiple alias tests), `/completion` (healthy: streams 3 SSE `data:` events — one metadata event WITHOUT `content`, one content event, then terminal event with `{"timings": {"prompt_per_second": 100.0, "predicted_per_second": 50.0, "predicted_n": 16, "prompt_n": 32, "draft_n": 12, "draft_n_accepted": 9}, "content": ""}` — exactly the b9596 keys; midturn_hang: first event then sleep forever; crash: `os._exit(1)` after first event; malformed_response: non-JSON data event). Constant `STUB_SHA256_PATH_ENV = "CUDA_BENCH_STUB_PATH"` unused by stub itself (driver-side pin). Structural rule: module refuses `--port` other than 0 (`raise SystemExit("port_forbidden")`).
 
 - [ ] **Step 1: Write failing test** (`tests/test_cuda_bench_stub.py`):
 
@@ -696,7 +720,7 @@ class StubTests(unittest.TestCase):
 
 - [ ] **Step 2: Run to verify failure** — `/home/rohit/maez/.venv/bin/python -B -m pytest tests/test_cuda_bench_stub.py -q` → FAIL (module missing).
 - [ ] **Step 3: Implement** `scripts/cuda_bench_stub.py` with `http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)`, persona dispatch per the Interfaces block, argparse with `--persona` (closed choices), `--alias`, `--models-empty`, `--models-multi`, and `--port` defaulting 0 where any nonzero value exits nonzero with `port_forbidden`.
-- [ ] **Step 4: Run** — tests pass. Add persona tests (readiness_timeout 503, crash exits, wrong_identity wrong id, models-empty/multi) in the same file, run again.
+- [ ] **Step 4: Run** — tests pass. Add persona tests (readiness_timeout 503, crash exits, wrong_identity wrong id, models-empty/multi) plus the wire-flag test: POST `/completion` WITHOUT `"stream": true` → single aggregate JSON body, no `data: ` lines (proving the stub distinguishes, so a client that forgets the flag is caught). Run again.
 - [ ] **Step 5: Commit** (`feat(bench): pinned rehearsal stub with six personas`, Predicted effect: new standalone stub; binds only ephemeral loopback; nothing imports it yet).
 
 ### Task B2: driver core — constants, vocabulary, private-file discipline, journal/artifact writers
@@ -711,10 +735,10 @@ class StubTests(unittest.TestCase):
   - `class BenchRefusal(Exception)` with `.code` validated against `REFUSAL_VOCABULARY`.
   - `open_bench_file(relative: str, *, root: Path = BENCH_ROOT) -> bytes` — trusted-anchor descriptor walk (anchor `O_DIRECTORY|O_NOFOLLOW`, `0700`, owner uid; each component `openat(..., O_NOFOLLOW)`; final: regular, owner uid, `st_nlink == 1`, mode `0600`, size ≤ `TURN_ARTIFACT_BYTE_CAP`); any violation → `BenchRefusal("filesystem_hazard")`.
   - `write_private_file(relative: str, data: bytes, *, root: Path = BENCH_ROOT) -> Path` — `O_WRONLY|O_CREAT|O_EXCL`, `0600`, fsync.
-  - `class PhaseJournal` — created ONCE per phase with `O_EXCL|O_CREAT|O_WRONLY` mode `0600`, then the fd is RETAINED and every subsequent line is written through it with `O_APPEND` semantics + flush/fsync (repeated appends are incompatible with per-write `O_EXCL` — exclusive creation applies only to the journal's birth). Lines are content-light JSON (`{"ts", "transition", "detail"}`) in `runs/<phase>-journal.jsonl`; any write failure → `BenchRefusal("journal_failure")`. A content-marker guard reuses `cuda_migration._CONTENT_MARKERS`-style scanning: journal lines containing any marker raise `ValueError("content_light_violation")`.
+  - `class PhaseJournal` — created ONCE per run with `O_EXCL|O_CREAT|O_WRONLY` mode `0600`, then the fd is RETAINED and every subsequent line is written through it with `O_APPEND` semantics + flush/fsync (repeated appends are incompatible with per-write `O_EXCL` — exclusive creation applies only to the journal's birth). The filename is UNIQUE PER RUN: `runs/<phase>-<utc-ts>-<pid>-journal.jsonl` (ts from the injected Clock, colon-free; pid disambiguates same-second runs) — a fixed `runs/<phase>-journal.jsonl` would `O_EXCL`-collide on every rehearsal repeat or phase re-run. Lines are content-light JSON (`{"ts", "transition", "detail"}`); any write failure → `BenchRefusal("journal_failure")`. A content-marker guard reuses `cuda_migration._CONTENT_MARKERS`-style scanning: journal lines containing any marker raise `ValueError("content_light_violation")`.
 - Consumes: nothing from other tasks (root of Part B).
 
-- [ ] **Step 1: Failing tests** — vocabulary has exactly 39 entries and matches the spec list verbatim (embed the 39 literals in the test); `BenchRefusal("not_a_code")` raises `ValueError`; `open_bench_file` on: a symlinked component (create tmp bench root `0700`, symlink inside) → `filesystem_hazard`; hardlinked file (`os.link`) → `filesystem_hazard`; `0644` file → `filesystem_hazard`; good file roundtrips. `write_private_file` twice → second raises (O_EXCL). `PhaseJournal` rejects a line containing `"prompt"`. Use `tmp_path` fixtures with `root=` override; `os.chmod(tmp_root, 0o700)` first.
+- [ ] **Step 1: Failing tests** — vocabulary has exactly 39 entries and matches the spec list verbatim (embed the 39 literals in the test); `BenchRefusal("not_a_code")` raises `ValueError`; `open_bench_file` on: a symlinked component (create tmp bench root `0700`, symlink inside) → `filesystem_hazard`; hardlinked file (`os.link`) → `filesystem_hazard`; `0644` file → `filesystem_hazard`; good file roundtrips. `write_private_file` twice → second raises (O_EXCL). `PhaseJournal`: rejects a line containing `"prompt"`; accepts MANY appended lines through the retained fd (write 3, read back 3); TWO journals for the same phase in the same root coexist (unique per-run names — no collision on rerun). Use `tmp_path` fixtures with `root=` override; `os.chmod(tmp_root, 0o700)` first.
 - [ ] **Step 2: Run to verify failure.**
 - [ ] **Step 3: Implement** exactly per Interfaces (descriptor walk with `os.open`/`os.fstat` on fds, never path-based stat after open).
 - [ ] **Step 4: Run** — pass.
@@ -730,30 +754,29 @@ class StubTests(unittest.TestCase):
 - Produces (exact):
   - `def systemctl_command(subcommand: str, unit: str) -> list[str]` — whitelist `{"show", "is-active"}` only; anything else raises `ValueError("mutating_systemctl_forbidden")`. This is the ONLY place a systemctl argv is built.
   - `@dataclass class ProviderWitness: synthetic: bool; real_calls: int` — every synthetic provider increments nothing and asserts `real_calls == 0` at teardown.
-  - Protocols (`typing.Protocol`): `ServiceStateProvider.is_active(unit: str) -> str`; `PortProbe.is_free(port: int) -> bool`; `GpuProvider.enumerate_uuids() -> list[str]`, `GpuProvider.inventory(uuid: str) -> list[tuple[int, str]]` (union of compute-apps + PIDS sections, `(pid, basename)` deduped sorted; empty result when a source failed → raise `BenchRefusal("provider_uncertain")`), `GpuProvider.memory(uuid: str) -> tuple[float, int]` (`bar1_percent` half-even 2dp, `vram_mib` int); `KernelLogProvider.cursor() -> str`, `KernelLogProvider.count_signatures(start_cursor: str, end_cursor: str) -> dict[str, int]` (keys exactly `reusemappingdbMap,pMapCb,mmuWalkMap,NV_ERR_NO_MEMORY,Xid,unmatched_nvrm`); `BackendMapProvider.read_maps(pid: int) -> str`; `ServerLauncher.spawn(argv: list[str]) -> OwnedChild` (defined in B5 — the launcher IS a seam: the real implementation pins the llama-server binary and uses `BENCH_PORT`; the rehearsal implementation pins the stub module, captures the `STUB_LISTENING port=<N>` line, and fills `OwnedChild.port` with the ephemeral port); `ServerClient.stream(port: int, prompt: str) -> TurnMeasurement` (defined in B6; real and rehearsal share `stream_completion`, differing only in opener construction); `Clock.now_utc() -> str` (RFC3339 Z) and `Clock.monotonic() -> float`.
+  - Protocols (`typing.Protocol`): `ServiceStateProvider.is_active(unit: str) -> str`; `PortProbe.is_free(port: int) -> bool`; `GpuProvider.enumerate_uuids() -> list[str]`, `GpuProvider.inventory(uuid: str) -> list[tuple[int, str]]` (union of compute-apps + PIDS sections, `(pid, basename)` deduped sorted; empty result when a source failed → raise `BenchRefusal("provider_uncertain")`), `GpuProvider.memory(uuid: str) -> tuple[float, int]` (`bar1_percent` half-even 2dp, `vram_mib` int); `KernelLogProvider.cursor() -> str`, `KernelLogProvider.count_signatures(start_cursor: str, end_cursor: str) -> dict[str, int]` (keys exactly `reusemappingdbMap,pMapCb,mmuWalkMap,NV_ERR_NO_MEMORY,Xid,unmatched_nvrm`); `BackendMapProvider.read_maps(pid: int) -> str`; `ServerLauncher.spawn(argv: list[str]) -> OwnedChild` (defined in B5 — the launcher IS a seam: the real implementation pins the llama-server binary and uses `BENCH_PORT`; the rehearsal implementation pins the stub module, captures the `STUB_LISTENING port=<N>` line, and fills `OwnedChild.port` with the ephemeral port); `ServerClient.health(port: int) -> bool`, `ServerClient.models(port: int) -> list[str]`, `ServerClient.stream(port: int, prompt: str) -> TurnMeasurement` (defined in B6; ALL HTTP the state machine performs — readiness, alias witness, inference — goes through this one seam; real and rehearsal share the same urllib implementation, differing only in opener construction); `Clock.now_utc() -> str` (RFC3339 Z) and `Clock.monotonic() -> float`.
   - Real implementations `RealServiceStateProvider` (uses `systemctl_command`), `RealPortProbe` (bind test), `RealGpuProvider` (nvidia-smi argv per spec appendix with `-i <uuid>`), `RealKernelLogProvider` (`journalctl --show-cursor` / cursor-bounded grep of the closed signatures), `RealBackendMapProvider` (`/proc/<pid>/maps` read), `SystemClock`.
   - Synthetic implementations `SyntheticServiceState(states: dict[str,str])`, `SyntheticPortProbe(free: set[int])`, `SyntheticGpu(uuids, inventory_by_stage, memory_by_stage)`, `SyntheticKernelLog(counts)`, `SyntheticBackendMap(maps_text_by_pid)`, `FrozenClock(start_ts)` — each with `witness: ProviderWitness(synthetic=True, real_calls=0)`.
   - `def ambient_topology_hash(inventory: list[tuple[int, str]], owned_pids: set[int]) -> str` — exclude owned pids, serialize sorted `(pid, basename)` compact JSON, sha256.
 - Consumes: `BenchRefusal`, constants from B2.
 
-- [ ] **Step 1: Failing tests** — `systemctl_command("stop", "x")` raises; `systemctl_command("show", "llama-server.service") == ["systemctl", "--user", "show", "llama-server.service"]`; structural test via AST (a raw substring count cannot pass — the function NAME `systemctl_command` also contains the substring):
+- [ ] **Step 1: Failing tests** — `systemctl_command("stop", "x")` raises; `systemctl_command("show", "llama-server.service") == ["systemctl", "--user", "show", "llama-server.service"]`; structural test via AST. Two separate assertions — a substring match cannot work (the function name `systemctl_command` AND the refusal code `"mutating_systemctl_forbidden"` both contain the substring), so match the exact executable literal only, and test command construction separately:
 
 ```python
-def test_systemctl_string_literal_appears_exactly_once(self) -> None:
+def test_exact_systemctl_literal_appears_exactly_once(self) -> None:
     import ast
     source = Path("scripts/cuda_bench_driver.py").read_text()
-    literals = [
+    exact = [
         node.value
         for node in ast.walk(ast.parse(source))
-        if isinstance(node, ast.Constant) and isinstance(node.value, str)
-        and "systemctl" in node.value
+        if isinstance(node, ast.Constant) and node.value == "systemctl"
     ]
-    self.assertEqual(["systemctl"], literals)   # exactly one, exactly the argv literal
+    self.assertEqual(1, len(exact))   # the argv executable literal, once, in the builder
 
-def test_no_mutating_verb_in_whitelist(self) -> None:
+def test_no_mutating_verb_constructible(self) -> None:
     import scripts.cuda_bench_driver as d
     self.assertEqual(frozenset({"show", "is-active"}), d.SYSTEMCTL_WHITELIST)
-    for verb in ("stop", "start", "restart", "enable", "disable"):
+    for verb in ("stop", "start", "restart", "enable", "disable", "kill", "mask"):
         with self.assertRaisesRegex(ValueError, "mutating_systemctl_forbidden"):
             d.systemctl_command(verb, "x.service")
 ```
@@ -793,7 +816,7 @@ def test_no_mutating_verb_in_whitelist(self) -> None:
 - Produces (exact):
   - `@dataclass class OwnedChild: pid: int; pgid: int; pidfd: int; start_time_ticks: int; pinned_sha256: str; port: int | None; popen: subprocess.Popen` — `port` is filled by the launcher (real: `BENCH_PORT` from the pinned argv; rehearsal: parsed from the stub's `STUB_LISTENING port=<N>` stdout line) so the ephemeral port reaches the state machine without side channels.
   - `spawn_pinned(argv: list[str], *, pin: SpawnPin) -> OwnedChild` where `SpawnPin` is a dataclass with `kind: Literal["binary", "python_module"]`, `pinned_path: Path`, `pinned_sha256: str`, `required_argv_prefix: tuple[str, ...]`. Pin semantics: `kind="binary"` (real llama-server) requires `argv[0] == str(pinned_path)` AND content hash of THAT binary matches; `kind="python_module"` (rehearsal stub) requires `argv[:3] == (sys.executable, "-m", "scripts.cuda_bench_stub")` AND the hash of `scripts/cuda_bench_stub.py` (the MODULE FILE, not the Python interpreter) matches `pinned_sha256`. Any mismatch → `BenchRefusal("spawn_failure")`. Spawns with `start_new_session=True`, `os.pidfd_open` immediately, records `/proc/<pid>/stat` field 22 (starttime).
-  - `finalize(child: OwnedChild, *, clock: Clock, port: int | None) -> str` — returns outcome ∈ `{"clean", "cleanup_incomplete"}`; sequence: if pidfd says leader alive → `signal.pidfd_send_signal(child.pidfd, SIGTERM)` → wait ≤ `SIGTERM_GRACE_S` → if alive `pidfd_send_signal(SIGKILL)` → wait ≤ `KILL_WAIT_S` for PGID absence (observational `/proc` scan: any `/proc/*/stat` with pgid == child.pgid) → if port given, wait ≤ `LISTENER_WAIT_S` for port free. Unexpected PGID members (pid != leader) are NEVER signalled → immediate `"cleanup_incomplete"` with inventory recorded on the returned journal entries. Leader-vanished-before-signal sends nothing.
+  - `finalize(child: OwnedChild, *, clock: Clock, port_probe: PortProbe, port: int | None) -> str` — the listener-absence check goes through the injected `PortProbe` seam (never a hard-wired `RealPortProbe`); returns outcome ∈ `{"clean", "cleanup_incomplete"}`; sequence: if pidfd says leader alive → `signal.pidfd_send_signal(child.pidfd, SIGTERM)` → wait ≤ `SIGTERM_GRACE_S` → if alive `pidfd_send_signal(SIGKILL)` → wait ≤ `KILL_WAIT_S` for PGID absence (observational `/proc` scan: any `/proc/*/stat` with pgid == child.pgid) → if port given, wait ≤ `LISTENER_WAIT_S` for port free. Unexpected PGID members (pid != leader) are NEVER signalled → immediate `"cleanup_incomplete"` with inventory recorded on the returned journal entries. Leader-vanished-before-signal sends nothing.
 - Consumes: B2 `BenchRefusal`, B3 `Clock`/`RealPortProbe`.
 
 - [ ] **Step 1: Failing tests (rehearsal-tier, real processes but only the pinned stub and `sleep`-free Python one-liners):**
@@ -835,11 +858,11 @@ def test_no_mutating_verb_in_whitelist(self) -> None:
 **Interfaces:**
 - Produces (exact):
   - `@dataclass class PhaseConfig: phase: str; argv: list[str]; pin: SpawnPin; alias: str; prompts: tuple[str, ...]; window: ConsumedAuthority; identity_hashes: dict[str, str]; gpu_uuid: str; boot_id: str; window_id: str; expected_port: int | None` — `expected_port=BENCH_PORT` for real phases (asserted equal to `OwnedChild.port`); `None` for rehearsal, where the launcher-captured ephemeral port is used and asserted `!= 18080`.
-  - `run_phase(config: PhaseConfig, providers: Providers, *, root: Path) -> Path` (returns packet path). `Providers` = dataclass holding ALL NINE seam instances (service state, port probe, GPU, kernel log, backend maps, server launcher, server client, clock — plus the journal factory). All turn requests flow through `providers.server_client.stream(child.port, prompt)`. Implements exactly the spec state machine: CONTAINMENT_BEFORE (containment snapshot incl. informational maez.service state + kernel cursor-before) → 3 × [topology snapshot (4 stages) → spawn via `spawn_pinned` → poll `/health` ≤ `READINESS_TIMEOUT_S` (`readiness_timeout`) → GET `/v1/models` exact alias (`alias_mismatch`) → `BackendMapProvider.read_maps(pid)` + classify backend pure CUDA/Vulkan (`backend_unproven`) building a `CycleBackendWitness` wrapper dict → 1 warmup turn (counters discarded) → 7 measured turns via `stream_completion` writing each private turn artifact + manifest entry → memory snapshot → `finalize` + unload proof (memory back ≤ before + port free ≤ `UNLOAD_WAIT_S`, else `unload_incomplete`)] → kernel cursor-after + `count_signatures` → CONTAINMENT_AFTER → packet JSON (schema `cuda_bench_driver.phase_packet.v1`, all bindings from the spec's packet list, outcome `completed`) via `write_private_file`. ANY `BenchRefusal`/exception path runs the finalizer then writes an outcome-typed FAILED packet or, pre-spawn, a refusal artifact (schema `cuda_bench_driver.refusal.v1`); SIGINT → outcome `interrupted`. FAILED packets are REDUCED JSON DOCUMENTS (same schema name, `outcome != "completed"`, only the fields actually observed — no manifest/witness placeholders, no zero-fill); they are NOT instances of the typed `cm.PhasePacket` class, which by design parses only completed packets — the assembler's typed-parse failure on a failed packet is what yields `unscorable`.
+  - `run_phase(config: PhaseConfig, providers: Providers, *, root: Path) -> Path` (returns packet path). `Providers` = dataclass holding ALL NINE seam instances (service state, port probe, GPU, kernel log, backend maps, server launcher, server client, clock — plus the journal factory). STRUCTURAL RULES: `run_phase` performs the six-gate phase preflight ITSELF as its first transition, through the seams (`providers.service_state`, `providers.port_probe`, `providers.gpu`) — the CLI `preflight` command reports, but the phase does not TRUST a prior report; a stale gate re-checks fresh inside the phase in BOTH tiers. Spawning goes through `providers.server_launcher.spawn(config.argv)` (never a direct `spawn_pinned` call — the launcher seam owns pinning), every HTTP through `providers.server_client` (health, models, stream), and `finalize` receives `providers.port_probe`. Implements exactly the spec state machine: PHASE_PREFLIGHT (six gates, fresh, through seams) → CONTAINMENT_BEFORE (containment snapshot incl. informational maez.service state + kernel cursor-before) → 3 × [capture BOTH topology hash AND memory `(bar1_percent, vram_mib)` at each of the FOUR stages — before, after-load, after-inference, after-unload — the four memory pairs ARE the cycle's `CycleMetrics` fields and the four topology hashes feed the invariance check → spawn via `providers.server_launcher.spawn` → `providers.server_client.health(port)` polls ≤ `READINESS_TIMEOUT_S` (`readiness_timeout`) → `providers.server_client.models(port)` exact alias (`alias_mismatch`) → `providers.backend_maps.read_maps(pid)` + classify backend pure CUDA/Vulkan (`backend_unproven`) building a `CycleBackendWitness` wrapper dict → 1 warmup turn (counters discarded) → 7 measured turns via `providers.server_client.stream` writing each private turn artifact + manifest entry → `finalize(child, clock=..., port_probe=providers.port_probe, port=child.port)` + unload proof (memory back ≤ before + port free ≤ `UNLOAD_WAIT_S`, else `unload_incomplete`)] → kernel cursor-after + `count_signatures` → CONTAINMENT_AFTER → packet JSON (schema `cuda_bench_driver.phase_packet.v1`, all bindings from the spec's packet list, outcome `completed`) via `write_private_file`. ANY `BenchRefusal`/exception path runs the finalizer then writes an outcome-typed FAILED packet or, pre-spawn, a refusal artifact (schema `cuda_bench_driver.refusal.v1`); SIGINT → outcome `interrupted`. FAILED packets are REDUCED JSON DOCUMENTS (same schema name, `outcome != "completed"`, only the fields actually observed — no manifest/witness placeholders, no zero-fill); they are NOT instances of the typed `cm.PhasePacket` class, which by design parses only completed packets — the assembler's typed-parse failure on a failed packet is what yields `unscorable`.
   - Topology invariance: all 4-stage hashes equal within a cycle and across cycles, else `topology_drift`.
 - Consumes: everything B2–B6.
 
-- [ ] **Step 1: Failing tests (unit tier, all-synthetic providers + a fake in-process server object):** healthy path over synthetic providers with the stub spawned as the "server" (pinned) → packet file exists, parses, has 24 manifest entries, 3 cycle witnesses, outcome `completed`, topology hash constant; `topology_drift` when `SyntheticGpu` returns a changed inventory at cycle 2; `alias_mismatch` with `--models-multi` stub; `readiness_timeout` with readiness_timeout persona (inject `readiness_timeout_s=3` optional param for test speed); crash persona → outcome `crash` failed packet with finalizer having run (no listener, no pgid members); pre-spawn refusal (port busy synthetic) → refusal artifact, NO packet.
+- [ ] **Step 1: Failing tests (unit tier, all-synthetic providers + the pinned stub as the spawned server):** healthy path → packet file exists, parses, has 24 manifest entries, 3 cycle witnesses, outcome `completed`, topology hash constant, and each cycle's four memory pairs populate `CycleMetrics`-shaped fields; `topology_drift` when `SyntheticGpu` returns a changed inventory at cycle 2; six-gate re-check INSIDE the phase: a `SyntheticServiceState` reporting the brain unit `active` → `preflight_service_active` refusal artifact even though no CLI preflight ran; then EVERY failure persona traverses `run_phase` itself — {readiness_timeout (inject `readiness_timeout_s=3` for speed), midturn_hang (shrunk request timeout), crash, malformed_response, wrong_identity via `--models-multi` → `alias_mismatch`} — each yielding its typed FAILED packet AND a residue proof (port probe reports free; `/proc` scan shows zero pgid members); pre-spawn refusal (port busy synthetic) → refusal artifact, NO packet.
 - [ ] **Step 2: Run to verify failure.**
 - [ ] **Step 3: Implement** per Interfaces. Keep `run_phase` a thin sequencer over already-tested helpers; journal every transition.
 - [ ] **Step 4: Run** — pass. Also re-run the FULL driver test file.
@@ -895,32 +918,47 @@ exist by then.)
 Run: `/home/rohit/maez/.venv/bin/python -B -m pytest tests/test_cuda_migration.py tests/test_cuda_bench_driver.py tests/test_cuda_bench_stub.py tests/test_cuda_bench_assemble.py -q`
 Expected: all pass, zero failures.
 
-- [ ] **Step 2: Clean-worktree gate (UNMASKED exit status; Claude runs this)**
+- [ ] **Step 2: Clean-worktree gate — suite + structural sweep + repo reconciliation, ALL inside the worktree, ALL inside the captured status (Claude runs this)**
 
 ```bash
 WT=$(mktemp -d)/wt
 git worktree add --detach "$WT" feature/cuda-bench-driver -q
-(cd "$WT" && /home/rohit/maez/.venv/bin/python -B -m pytest \
-  tests/test_cuda_migration.py tests/test_cuda_bench_driver.py \
-  tests/test_cuda_bench_stub.py tests/test_cuda_bench_assemble.py -q)
+(
+  cd "$WT" &&
+  /home/rohit/maez/.venv/bin/python -B -m pytest \
+    tests/test_cuda_migration.py tests/test_cuda_bench_driver.py \
+    tests/test_cuda_bench_stub.py tests/test_cuda_bench_assemble.py -q &&
+  /home/rohit/maez/.venv/bin/python -B -m pytest \
+    tests/test_cuda_bench_driver.py -q \
+    -k "exact_systemctl_literal or no_mutating_verb" &&
+  /home/rohit/maez/.venv/bin/ruff check \
+    scripts/cuda_bench_driver.py scripts/cuda_bench_stub.py \
+    scripts/cuda_bench_assemble.py scripts/cuda_migration.py &&
+  test "$(grep -c 'evaluate_promotion\b' scripts/cuda_bench_assemble.py)" = "0" &&
+  /home/rohit/maez/.venv/bin/python -B -m pytest tests/ -q \
+    > /tmp/bench-final-repo-run.txt 2>&1
+)
 GATE_STATUS=$?
+tail -3 /tmp/bench-final-repo-run.txt
 git worktree remove "$WT" --force
 echo "GATE_STATUS=$GATE_STATUS"
 test "$GATE_STATUS" -eq 0
 ```
-Expected: `GATE_STATUS=0`. The pytest status is captured BEFORE worktree
-removal and asserted LAST, so cleanup can never mask a failure. Any nonzero
-status FAILS the gate (driver tests must not depend on owner-local assets —
-every real-path test uses injected tmp roots; a worktree-only failure is a
-borrowed-green dependency and must be fixed, not skipped).
+Expected: `GATE_STATUS=0`. Every check — the four-file suite, the AST
+structural tests, ruff over all four touched modules, the assembler
+legacy-evaluator grep, and the FULL `tests/` repo run — executes inside the
+worktree and inside the single captured status, which is asserted LAST,
+after cleanup. Nothing runs after the room is deleted, and cleanup can
+never mask a failure.
 
-- [ ] **Step 3: Structural sweep** (in the same worktree, before removal)
+- [ ] **Step 3: Repo-baseline reconciliation.** Compare
+  `/tmp/bench-final-repo-run.txt` against the Task 0 baseline: the full
+  repo run must show NO NEW failures or errors (pre-existing baseline
+  failures, if any, are listed by name and must be the same set or
+  smaller). A new failure anywhere in `tests/` — even outside the four
+  bench files — fails the gate.
 
-Run: `/home/rohit/maez/.venv/bin/python -B -m pytest tests/test_cuda_bench_driver.py -q -k "systemctl_string_literal or no_mutating_verb"` → PASS (the AST structural tests are the authority; a raw `grep -c systemctl` cannot distinguish identifiers from literals).
-Run: `grep -n "evaluate_promotion\b" scripts/cuda_bench_assemble.py` → 0 matches (only `evaluate_promotion_bundle`).
-Run: `grep -rn "18080" scripts/cuda_bench_stub.py` → only inside the port-forbidden guard.
-
-- [ ] **Step 4: Report — NO commits after the gate.** A failed gate or sweep reopens the offending task: fix → commit on the feature branch → RE-RUN this entire gate. Only after a fully green gate does the owner decide the merge to main. Rehearsal (`rehearse`) and `static-preflight` may then run immediately with Maez online. Phase commands stay inert until the owner authors window/continuation artifacts inside the bench root. NO service is stopped, started, or restarted by anything in this plan.
+- [ ] **Step 4: Report — NO commits after the gate.** A failed gate or reconciliation reopens the offending task: fix → commit on the feature branch → RE-RUN this entire gate. Only after a fully green gate does the owner decide the merge to main. Rehearsal (`rehearse`) and `static-preflight` may then run immediately with Maez online. Phase commands stay inert until the owner authors window/continuation artifacts inside the bench root. NO service is stopped, started, or restarted by anything in this plan.
 
 ---
 
