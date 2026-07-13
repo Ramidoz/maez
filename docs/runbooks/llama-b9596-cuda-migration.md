@@ -66,8 +66,9 @@ authoring transcript are still two copies on one medium):
   mode `0600` in the `0700` gitignored private bench; 285 bytes; SHA-256
   `ba126352982e734ff1e2742aaef329cfcc496371fd53c59d0cf21f4c4a487104`.
 
-Corpus preflight (run before the Offline Vulkan baseline; a mismatch yields
-`keep_vulkan` with a typed refusal — do not re-author or re-freeze):
+Corpus preflight (run before the Offline Vulkan baseline; a mismatch emits a
+typed refusal receipt and stops — path 1 of "Remaining on Vulkan" — do not
+re-author or re-freeze):
 
 ```bash
 test "$(stat -c '%a' /home/rohit/maez/local/cuda_migration_bench/corpus.json)" = "600"
@@ -82,8 +83,9 @@ the frozen gate identity.
 
 ## Static preflight
 
-These checks do not load a model or query a service. A mismatch yields
-`keep_vulkan` with a typed refusal; do not substitute a worktree asset.
+These checks do not load a model or query a service. A mismatch emits a
+typed refusal receipt and stops (path 1 of "Remaining on Vulkan"); do not
+substitute a worktree asset.
 
 ```bash
 sha256sum /home/rohit/.config/systemd/user/llama-server.service
@@ -273,8 +275,9 @@ Before and after every reached phase, record a distinct containment artifact:
   captured in Static preflight alongside the incumbent identity hashes.
 
 Read-only collection is permitted only inside the scheduled window. Any
-missing, changed, or ambiguous field yields `keep_vulkan` and restores the
-exact Vulkan control. Do not load the vision GGUF or edit its unit.
+missing, changed, or ambiguous field makes the phase unscored with a typed
+refusal receipt (path 1 of "Remaining on Vulkan"; the production pointer
+was never mutated during a bench phase, so nothing is restored). Do not load the vision GGUF or edit its unit.
 
 The kernel counter is also phase-bounded. Count exact occurrences of the
 closed signatures `reusemappingdbMap`, `pMapCb`, `mmuWalkMap`,
@@ -314,7 +317,8 @@ env -i HOME=/home/rohit PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/
 
 While it is running, hash `/proc/<candidate-pid>/maps` privately and require a
 CUDA mapping with no Vulkan mapping. A mixed, absent, or ambiguous backend is
-typed `backend_unproven` and yields `keep_vulkan`. Complete all three unloads
+typed `backend_unproven` refusal and the phase is unscored (path 1 —
+no pointer mutation to restore). Complete all three unloads
 and the containment-after artifact before scoring.
 
 ## Quality and MTP witness
@@ -437,12 +441,29 @@ the private literal artifact, and must reproduce the quality, MTP, latency,
 kernel, restart, BAR1, backend-map, and containment gates. It never writes
 test content into durable Maez memory or audit stores.
 
-## Keep Vulkan
+## Remaining on Vulkan — four distinct paths
 
-At any refusal, unscored phase, failed gate, missing authorization, or owner
-choice: run the Exact Vulkan rollback drill, verify all incumbent hashes and
-health, record typed decision `keep_vulkan`, and stop. Preserve all private
-artifacts under mode 0700 for review.
+These were previously one instruction ("any refusal → run the rollback
+drill → record `keep_vulkan`"), which was both impossible (only the scorer
+mints the typed decision) and dangerous (the drill INSTALLS the CUDA
+pointer and restarts the live server — a pre-live refusal must never touch
+the pointer). The paths are now split:
+
+1. **Pre-live refusal or missing/unscored evidence** (corpus preflight
+   mismatch, failed gate, missing authorization, aborted phase): emit the
+   typed refusal or unscorable receipt, terminate only driver-owned bench
+   children, and STOP. The production pointer was never mutated, so nothing
+   is restored and the rollback drill is NOT run. Preserve all private
+   artifacts under mode 0700 for review.
+2. **Typed `keep_vulkan` decision**: minted only by
+   `evaluate_promotion_bundle` from a complete evidence bundle. It is a
+   scorer verdict, not an operator action.
+3. **Recovery**: the restore procedure runs only after a LIVE pointer
+   mutation (a cutover or drill actually changed the installed service
+   pointer) and restores the exact incumbent identity hashes.
+4. **The deliberate rollback drill** remains its own owner-authorized,
+   evidence-producing phase within the offline window — it is never a
+   refusal handler.
 
 Only a complete hash-parented chain
 `bench_passed` -> `provisional_cuda_boot` -> passing Cold-boot witness ->

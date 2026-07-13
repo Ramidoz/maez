@@ -59,9 +59,14 @@ restarts production after success or failure.
    `ServiceStateProvider` (read-only systemctl), `PortProbe`, `GpuProvider`
    (nvidia-smi queries), `KernelLogProvider` (journalctl cursor reads),
    `ServerLauncher` (env -i spawn per runbook argv, own process group),
-   `ServerClient` (loopback HTTP), `Clock`. Real and synthetic
+   `ServerClient` (loopback HTTP), `BackendMapProvider`
+   (`/proc/<pid>/maps` reads for the backend witness — real implementation
+   reads the live proc file; the rehearsal synthetic serves frozen
+   synthetic map fixtures, since the Python stub cannot naturally map the
+   frozen CUDA/Vulkan libraries), `Clock`. Real and synthetic
    implementations; synthetic providers carry witnesses proving zero real
-   query/contact occurred.
+   query/contact occurred. Without the maps seam a healthy rehearsal could
+   never complete the declared-identical state machine.
 
 ## Scorer extension (amendments 1–3)
 
@@ -151,11 +156,16 @@ schemas, both mode `0600` inside the private bench:
   RFC 3339 with `Z` suffix; currentness means
   `issued_at ≤ now < expires_at` evaluated at consumption time. The driver
   refuses on malformed fields (`authorization_malformed`), a not-yet-valid
-  `issued_at` (`authorization_not_yet_valid`), expiry, boot-ID mismatch,
-  owner/phase/window mismatch, or nonce reuse.
+  `issued_at` (`authorization_not_yet_valid`), expiry
+  (`authorization_expired`), boot-ID mismatch
+  (`authorization_boot_mismatch`), owner/phase/window mismatch
+  (`authorization_scope_mismatch`), or nonce reuse
+  (`authorization_consumed`).
 - `cuda_bench_driver.continuation.v1`: same fields plus
   `parent_vulkan_packet_sha256`; TTL exactly `CONTINUATION_TTL_S`; valid
-  only within the same window ID and boot ID as its parent packet.
+  only within the same window ID and boot ID as its parent packet, and it
+  must be CONSUMED before the parent window authorization's `expires_at` —
+  a continuation cannot outlive the window that authorized its baseline.
 
 **Consumption semantics across the six spawns.** Authorization is consumed
 once per PHASE, not once per spawn: the window authorization is consumed
@@ -195,8 +205,18 @@ statistics over the 21 measured turns per phase:
 
 Server-reported `timings` are authoritative for prefill/decode tps and token
 counts (streaming chunks are never counted as tokens); driver wall-clock is
-authoritative for TTFT, e2e, and the 12,000 ms bound. Absent MTP counters are
-a typed `mtp_unproven` refusal, never inferred.
+authoritative for TTFT, e2e, and the 12,000 ms bound.
+
+**MTP wire contract (frozen against b9596 source).** The b9596 server emits
+exactly two speculative counters in the terminal SSE `timings` object —
+`draft_n` and `draft_n_accepted` — and only when `draft_n > 0`
+(`server-context.cpp` populates them; `server-task.cpp` serializes them).
+No rejected counter exists on the wire, so it is DERIVED, never read:
+`rejected = draft_n − draft_n_accepted`. Validation: both integers,
+nonnegative, `draft_n_accepted ≤ draft_n`; violation is
+`malformed_response`. Absence of the keys on a measured turn is the typed
+`mtp_unproven` refusal, never inferred as zero. The rehearsal stub's
+healthy persona reproduces these exact terminal-SSE keys.
 
 ## Error handling (amendment 7)
 
@@ -205,19 +225,25 @@ finalizer** — every post-spawn exit path reaches it — but signalling within
 it is ownership-proven, never unconditional: at spawn the driver records
 PID, PGID, `/proc/<pid>/stat` start time, and the executable's content
 hash; before EVERY signal it re-proves that identity quadruple still
-matches. If the group is already gone, it sends nothing. A quadruple
-mismatch is the typed refusal `pid_reuse_detected` (a RED-listed test
-scenario) and no signal is sent.
+matches. A quadruple mismatch is the typed refusal `pid_reuse_detected`
+(a RED-listed test scenario) and no signal is sent.
 
-Leader identity alone does not cover descendants, so the launcher
-**enforces a single-process child**: before any group signal, the finalizer
-enumerates `/proc` for PGID members; the expected set is exactly {leader}.
-If the leader is gone but group members remain — or any unexpected member
-appears — no group signal is sent on leader-proof alone; each surviving
-member must independently pass the ownership proof (start time after spawn,
-PGID match) before being signalled, and failure to fully clear the group
-within `KILL_WAIT_S` is the terminal outcome `cleanup_incomplete`, recorded
-in the packet. Leader-gone/group-remains is a RED-listed test scenario.
+Check-then-signal is itself a reuse race, so the leader is signalled only
+through a **pidfd retained from spawn** (`os.pidfd_open` immediately after
+fork, signals via `signal.pidfd_send_signal`): a pidfd names the process
+instance, not the PID, so a recycled PID can never be signalled. The
+identity quadruple remains as corroborating evidence in the packet; the
+pidfd is the signalling authority. If the pidfd reports the leader gone,
+nothing is sent to it.
+
+Descendants are governed by the **single-process-child contract**: the
+launcher expects the group to be exactly {leader}. The finalizer enumerates
+`/proc` for PGID members; any unexpected member is NEVER signalled — group
+membership plus a plausible start time does not prove the driver owns that
+process. Unexpected survivors, or a group that will not clear within
+`KILL_WAIT_S`, are the terminal outcome `cleanup_incomplete`, recorded in
+the packet with the surviving inventory (content-light). Leader-gone/
+group-remains is a RED-listed test scenario.
 
 The proven path is: kernel-before cursor (captured at CONTAINMENT_BEFORE) →
 owned-group SIGTERM → bounded wait (`SIGTERM_GRACE_S`) → SIGKILL → bounded
@@ -228,7 +254,10 @@ failed-packet write. Kernel windows use journal cursors plus timestamps.
 Distinct failure classes: `http_timeout` (request exceeded bound, server
 alive), `crash` (child exited uncommanded), `hang` (unresponsive; required
 forced SIGKILL), `spawn_failure` (child never reached readiness polling),
-`journal_failure` (phase journal unwritable). A refusal in preflight
+`journal_failure` (phase journal unwritable), `interrupted` (owner abort or
+SIGINT/SIGTERM to the driver itself — the finalizer still runs and the
+packet records the interruption as its outcome, distinct from any child
+failure). A refusal in preflight
 produces a refusal artifact, not a counterfeit failed phase packet. Failed
 or partial packets record only what occurred — missing values are never
 zero-filled — and cannot mint a valid `BenchSummary` pair; assembly over
@@ -240,8 +269,14 @@ them yields a typed `cuda_bench_assemble.receipt.v1` with outcome
 Phase packets are immutable, phase-specific, and cryptographically bound to:
 window ID, boot ID, GPU UUID, ambient-topology hash, model/corpus/order
 hashes, exact effective argv hash, driver package hash, the authorization
-preimage hash and consumption-receipt hash for the phase, and the phase's
-turn-artifact manifest hash. The **turn-artifact manifest**
+preimage hash and consumption-receipt hash for the phase, the phase's
+turn-artifact manifest hash, the phase's THREE cycle-indexed backend
+witnesses (typed preimages), its containment before/after snapshot pair,
+its kernel window (before/after cursors + closed-signature counts), and the
+static-preflight and runtime-identity receipt hashes it ran under. A packet
+missing any of these cannot enter a bundle; the scorer recomputes each
+carried preimage's hash, so evidence from different runs, windows, or boots
+cannot be mixed into one packet without detection. The **turn-artifact manifest**
 (`cuda_bench_driver.turn_manifest.v1`) is one canonical ordered document per
 phase: for every turn it records cycle number, ordinal within the cycle,
 warmup flag, and the private turn-artifact's SHA-256. Public receipts carry
@@ -332,18 +367,22 @@ mutation, no corpus authoring, no vision-flag changes.
 `cuda_migration.owner_voice_review.v1`,
 `cuda_migration.rollback_evidence_bundle.v1`.
 
-**Closed refusal vocabulary.** `preflight_service_active`,
+**Closed refusal/outcome vocabulary (39 entries).**
+`preflight_service_active`,
 `preflight_port_open`, `preflight_gpu_occupied`, `preflight_bench_port_busy`,
-`identity_mismatch`, `corpus_unavailable`, `authorization_missing`,
+`identity_mismatch`, `corpus_unavailable`, `gpu_scope_violation`,
+`authorization_missing`,
 `authorization_malformed`, `authorization_not_yet_valid`,
 `authorization_expired`, `authorization_boot_mismatch`,
+`authorization_scope_mismatch`,
 `authorization_consumed`, `continuation_missing`, `continuation_parent_mismatch`,
 `containment_violation`, `readiness_timeout`, `alias_mismatch`,
 `backend_unproven`, `http_timeout`, `crash`, `hang`, `malformed_response`,
 `response_too_large`, `mtp_unproven`, `topology_drift`, `kernel_unmatched`,
 `unload_incomplete`, `filesystem_hazard`, `pid_reuse_detected`,
 `rehearsal_artifact_rejected`, `provider_uncertain`, `spawn_failure`,
-`journal_failure`, `cleanup_incomplete`, `assembly_refused`, `unscorable`.
+`journal_failure`, `interrupted`, `cleanup_incomplete`, `assembly_refused`,
+`unscorable`.
 
 **Timeouts and caps.**
 
@@ -361,22 +400,32 @@ mutation, no corpus authoring, no vision-flag changes.
   unload-proof bound — exceeding any of these is `cleanup_incomplete`;
 - nonce: 32 random bytes, encoded as exactly 64 lowercase hex chars.
 
-**GPU queries.** All measurements bind the GPU UUID from
-`nvidia-smi --query-gpu=uuid --format=csv,noheader`. The ambient inventory
+**GPU queries.** Static preflight enumerates GPUs via
+`nvidia-smi --query-gpu=uuid --format=csv,noheader` and REQUIRES exactly
+one GPU; more or fewer is the typed refusal `gpu_scope_violation`. The
+single UUID is bound into every packet, and **every subsequent nvidia-smi
+invocation carries `-i <UUID>`** — unscoped queries on a multi-GPU host
+could attribute topology or BAR1 to the wrong device. The ambient inventory
 is the UNION of two sources — compute contexts via
-`nvidia-smi --query-compute-apps=pid,process_name --format=csv,noheader`
+`nvidia-smi -i <UUID> --query-compute-apps=pid,process_name --format=csv,noheader`
 AND the full process population (graphics/compositor consumers included)
-via the Processes section of `nvidia-smi -q -d PIDS` — because the compute
-query alone does not observe display consumers, which the migration design
-requires held constant. Process-name normalization = basename of the
+via the Processes section of `nvidia-smi -i <UUID> -q -d PIDS` — because
+the compute query alone does not observe display consumers, which the
+migration design requires held constant. Process-name normalization = basename of the
 reported path (nvidia-smi may truncate long paths); entries deduplicated
 and sorted by `(pid, basename)`; owned child excluded by
 PID-within-owned-group. A provider that cannot produce either source is
 the typed refusal `provider_uncertain`, never an empty inventory.
-Memory/BAR1: `nvidia-smi -q -d MEMORY` FB and BAR1 sections;
+Memory/BAR1: `nvidia-smi -i <UUID> -q -d MEMORY` FB and BAR1 sections;
 `bar1_percent = bar1_used_mib / bar1_total_mib × 100`, computed in float,
 rounded half-even to 2 decimal places at record time; VRAM recorded in
 integer MiB as reported.
+
+**CycleMetrics contract update (scorer side).** The current validator
+rejects legitimate zero measurements (`_validate_positive_number` on all
+eight fields) and types VRAM as float. The scorer is updated: BAR1 percents
+are nonnegative floats `≤ 100`; VRAM values are nonnegative integers (MiB).
+A truly idle GPU stage may honestly read zero.
 
 **TTFT.** As frozen in the statistics section: first streamed SSE `data:`
 event with a non-empty `content` field; metadata and empty events never
