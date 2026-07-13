@@ -58,7 +58,10 @@ restarts production after success or failure.
 4. **Provider seams** — the ONLY swap point between tiers:
    `ServiceStateProvider` (read-only systemctl), `PortProbe`, `GpuProvider`
    (nvidia-smi queries), `KernelLogProvider` (journalctl cursor reads),
-   `ServerLauncher` (env -i spawn per runbook argv, own process group),
+   `ServerLauncher` (spawns the pinned server binary with an explicit
+   sanitized `env=` mapping — the runbook's `env -i` lines are the manual
+   reference form of the same hermetic environment; `env`/`-i` never
+   appear in the driver's argv — own process group),
    `ServerClient` (loopback HTTP), `BackendMapProvider`
    (`/proc/<pid>/maps` reads for the backend witness — real implementation
    reads the live proc file; the rehearsal synthetic serves frozen
@@ -96,8 +99,15 @@ The current contract drops driver provenance, so the scorer side gains:
   A hash that covered the authorization itself would be self-referential
   and unsatisfiable as its own parent. The full-bundle `binding_sha256`
   remains as the receipt fingerprint of the complete evaluated document
-  set. (Amended 2026-07-13 with the implementation-plan gate; supersedes
-  the earlier single-hash wording.)
+  set. The bundle carries TWO runtime identities with an exact
+  relationship: `bench_runtime_identity` (mode `bench`, cited by the
+  immutable phase packets, inside the bench hash) and the current-stage
+  `runtime_identity` (handed to the gate, outside the bench hash); they
+  may differ ONLY in `mode` and the mode-specific `effective_args` —
+  every other identity field must be exactly equal, so the brain later
+  promoted is provably the brain actually benched. (Amended 2026-07-13
+  with the implementation-plan gate; supersedes the earlier single-hash
+  wording.)
   Existing tests that mint `bench_passed` through the bare evaluator are
   migrated to bundle construction; the internal gate keeps its own unit
   tests but no public caller. A structural test asserts the public module

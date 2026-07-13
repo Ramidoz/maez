@@ -28,11 +28,15 @@ commit → Claude clean-checkout gate. Main stays untouched until final merge.
   shrunken collection count fail the commit.
 - Commits land on the feature branch only. The Claude gate per task:
   fresh detached worktree of the branch head, run of ALL TEST FILES THAT
-  EXIST AT THAT BRANCH HEAD among the four bench/scorer files (early Part A
-  tasks have only `tests/test_cuda_migration.py`; the set grows as tasks
-  land — a gate must never point at files that don't exist yet), pinned
-  interpreter, exit status captured UNMASKED (see B10 for the exact shape).
-  A failed gate reopens the task; no commit ever lands after its gate ran.
+  EXIST AT THAT BRANCH HEAD among the five bench/scorer/baseline files
+  (early Part A tasks have only `tests/test_cuda_migration.py` +
+  `tests/test_bench_baseline.py`; the set grows as tasks land — a gate
+  must never point at files that don't exist yet), PLUS
+  `scripts/dev/bench_baseline.py reconcile` in that same detached worktree
+  (the clean-checkout no-new-red witness — reconciliation is not left to
+  the dirty precommit worktree alone), pinned interpreter, exit status
+  captured UNMASKED (see B10 for the exact shape). A failed gate reopens
+  the task; no commit ever lands after its gate ran.
 
 ### Task 0: worktree, Explore agent, repo baseline (before any code)
 
@@ -58,16 +62,29 @@ commit → Claude clean-checkout gate. Main stays untouched until final merge.
 ```python
 """record: run pytest, write the single JSON authority O_EXCL/0600.
 reconcile: rerun, compare, exit nonzero on any new red or count shrink."""
-import json, os, re, subprocess, sys
+import hashlib, json, os, re, stat, subprocess, sys
 
 PY = "/home/rohit/maez/.venv/bin/python"
+SUITE_CMD = ["-B", "-m", "pytest", "tests/", "-q"]
 BASELINE = "/home/rohit/maez/local/cuda_migration_bench/repo-baseline.v1.json"
+SCHEMA = "bench_repo_baseline.v1"
+_REQUIRED_KEYS = {
+    "schema", "pytest_status", "failures", "collected",
+    "base_commit", "helper_sha256", "interpreter", "suite_cmd",
+}
+
+def _self_sha256() -> str:
+    with open(__file__, "rb") as handle:
+        return hashlib.sha256(handle.read()).hexdigest()
+
+def _head_commit() -> str:
+    proc = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise SystemExit("git_head_unavailable")
+    return proc.stdout.strip()
 
 def _run_suite() -> tuple[int, str]:
-    proc = subprocess.run(
-        [PY, "-B", "-m", "pytest", "tests/", "-q"],
-        capture_output=True, text=True,
-    )
+    proc = subprocess.run([PY, *SUITE_CMD], capture_output=True, text=True)
     if proc.returncode not in (0, 1):          # 2-5 = usage/internal error:
         raise SystemExit(f"suite_run_errored status={proc.returncode}")
     return proc.returncode, proc.stdout + proc.stderr
@@ -84,19 +101,48 @@ def _collect_count() -> int:
         raise SystemExit("collect_count_unparseable_or_zero")
     return int(match.group(1))
 
-def _failures(output: str) -> list[str]:
-    return sorted(
+def _failures(status: int, output: str) -> list[str]:
+    found = sorted(
         line.split()[1] for line in output.splitlines()
         if line.startswith(("FAILED", "ERROR"))
     )
+    if status == 1 and not found:
+        raise SystemExit("failures_unparsed")   # red suite, empty parse = parser broke
+    if status == 0 and found:
+        raise SystemExit("failures_phantom")
+    return found
+
+def _open_authority() -> dict:
+    fd = os.open(BASELINE, os.O_RDONLY | os.O_NOFOLLOW)   # no symlink at final component
+    info = os.fstat(fd)
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+            or info.st_nlink != 1 or stat.S_IMODE(info.st_mode) != 0o600):
+        os.close(fd)
+        raise SystemExit("baseline_filesystem_hazard")
+    with os.fdopen(fd) as handle:
+        base = json.load(handle)
+    if set(base) != _REQUIRED_KEYS or base["schema"] != SCHEMA:
+        raise SystemExit("baseline_schema_mismatch")
+    if base["interpreter"] != PY or base["suite_cmd"] != SUITE_CMD:
+        raise SystemExit("baseline_command_mismatch")
+    ancestry = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", base["base_commit"], "HEAD"],
+    )
+    if ancestry.returncode != 0:
+        raise SystemExit("baseline_not_ancestor")
+    return base
 
 def record() -> None:
     status, output = _run_suite()
     doc = {
-        "schema": "bench_repo_baseline.v1",
+        "schema": SCHEMA,
         "pytest_status": status,
-        "failures": _failures(output),
+        "failures": _failures(status, output),
         "collected": _collect_count(),
+        "base_commit": _head_commit(),
+        "helper_sha256": _self_sha256(),
+        "interpreter": PY,
+        "suite_cmd": SUITE_CMD,
     }
     fd = os.open(BASELINE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w") as handle:
@@ -104,14 +150,11 @@ def record() -> None:
     print(f"baseline_recorded failures={len(doc['failures'])} collected={doc['collected']}")
 
 def reconcile() -> None:
-    with open(BASELINE) as handle:            # ABSENT baseline = exception = fail
-        base = json.load(handle)
-    if base.get("schema") != "bench_repo_baseline.v1":
-        raise SystemExit("baseline_schema_mismatch")
-    _, output = _run_suite()
-    new = set(_failures(output)) - set(base["failures"])
+    base = _open_authority()                   # ABSENT/hazardous/foreign = exception
+    status, output = _run_suite()
+    new = set(_failures(status, output)) - set(base["failures"])
     collected = _collect_count()
-    print(f"new_failures={len(new)} collected={collected} floor={base['collected']}")
+    print(f"status={status} new_failures={len(new)} collected={collected} floor={base['collected']}")
     if new:
         raise SystemExit(f"new_red: {sorted(new)[:5]}")
     if collected < base["collected"]:
@@ -120,6 +163,33 @@ def reconcile() -> None:
 if __name__ == "__main__":
     {"record": record, "reconcile": reconcile}[sys.argv[1]]()
 ```
+
+  The authority binds its base commit (reconcile verifies ancestry), the
+  helper's own hash, the exact interpreter, and the exact suite command;
+  the current pytest status is validated against the parse (`status==1`
+  with zero parsed failures = broken parser = refusal, never a pass);
+  reopening goes through `O_NOFOLLOW` + fstat (regular, owner,
+  `st_nlink==1`, `0600`) — the trusted-anchor discipline, not a bare
+  `open()`.
+
+### Task 0b: TDD the baseline tool (`tests/test_bench_baseline.py`)
+
+The gate's own key gets RED-first coverage BEFORE any Part A/B task trusts
+it. Tests (each written failing first, monkeypatching `BASELINE`/`PY`
+module globals to tmp paths and stubbing `subprocess.run`): pytest statuses
+2–5 → `suite_run_errored`, never a written authority; status 1 with
+unparseable failure lines → `failures_unparsed`; status 0 with phantom
+parsed failures → `failures_phantom`; malformed authority (missing key,
+wrong schema, extra key) → `baseline_schema_mismatch`; second `record` →
+`FileExistsError` (O_EXCL); symlinked authority / hardlinked authority /
+`0644` mode / foreign-uid simulation → `baseline_filesystem_hazard`;
+non-ancestor `base_commit` → `baseline_not_ancestor`; command/interpreter
+drift → `baseline_command_mismatch`; new-red detection fires and names the
+test id; collection shrink → `collection_count_dropped`; unchanged-red
+baseline reconciles green. Commit with its own gate:
+`/home/rohit/maez/.venv/bin/python -B -m pytest tests/test_bench_baseline.py -q`
+green + `ruff check scripts/dev/bench_baseline.py tests/test_bench_baseline.py`
+clean.
 
   Then record the baseline:
   `/home/rohit/maez/.venv/bin/python -B scripts/dev/bench_baseline.py record`
@@ -368,6 +438,17 @@ class AuthorizationDocTests(unittest.TestCase):
     def test_window_ttl_must_be_exactly_14400(self) -> None:
         with self.assertRaisesRegex(ValueError, "authorization_ttl"):
             self._window(expires_at="2026-07-13T15:59:59Z")
+
+    def test_phases_must_be_a_tuple_not_a_list(self) -> None:
+        with self.assertRaisesRegex(ValueError, "immutable_sequence_required"):
+            self._window(phases=["vulkan_baseline"])   # list = silently mutable
+        with self.assertRaisesRegex(ValueError, "immutable_sequence_required"):
+            cm.ContinuationDoc(
+                window_id="window-1", phases=["cuda_candidate"], boot_id="boot-1",
+                nonce=NONCE_B, issued_at="2026-07-13T13:00:00Z",
+                expires_at="2026-07-13T14:00:00Z", owner="rohit",
+                parent_vulkan_packet_sha256=SHA_A,
+            )
 
     def test_continuation_requires_parent_and_3600_ttl(self) -> None:
         good = cm.ContinuationDoc(
@@ -660,7 +741,7 @@ preimages); no existing validator or public entrypoint changes yet."
   - `TurnRecord(cycle: int, ordinal: int, warmup: bool, artifact_sha256: str, outcome: str, e2e_ms: float, ttft_ms: float, prompt_per_second: float, predicted_per_second: float, draft_n: int | None, draft_n_accepted: int | None)` — the typed PER-TURN measurement row ("preimages, not promises": without these the scorer could only prove "summary claim equals packet claim", never recompute). `outcome` is closed to `{"completed", "http_timeout", "crash", "hang", "malformed_response"}`; a bundle-eligible packet requires every row `"completed"`, and the failure COUNTS become recomputable: `timeout_count` = rows with `http_timeout`, `crash_count` = rows with `crash`, `hang_count` = rows with `hang` (all zero on a completed packet). `restart_count` is pinned `== 0` on any completed packet — the launcher spawns exactly once per cycle, so a respawn is definitionally a failed phase, never a counted-and-continued event. Warmup rows carry `draft_n=None` (counters discarded); measured rows require both MTP ints with `0 ≤ accepted ≤ drafted`. Property `binding_sha256`.
   - Module function `recompute_phase_statistics(records: tuple[TurnRecord, ...]) -> dict` — applies the FROZEN formulas to the 21 measured rows: nearest-rank ceil(0.95×21)=20th order statistic of `e2e_ms` for p95; `statistics.median` of `prompt_per_second`/`predicted_per_second` for the medians; `max(e2e_ms)` for `seven_turn_max_ms`; per-cycle MTP sums (7 rows each) then 3-cycle totals with `rejected = drafted − accepted`. This is the scorer's independent recomputation authority.
   - `PhasePacket(...)` — schema `cuda_bench_driver.phase_packet.v1`; fields exactly: `phase: str`, `outcome: str` (must be `"completed"` to be bundle-eligible), `window_id: str`, `boot_id: str`, `gpu_uuid: str`, `topology_sha256: str`, `model_sha256: str`, `corpus_sha256: str`, `order_sha256: str`, `effective_args_sha256: str`, `driver_package_sha256: str`, `authorization_preimage_sha256: str`, `consumption_receipt_sha256: str`, `static_preflight_sha256: str`, `runtime_identity_sha256: str`, `turn_manifest: TurnManifest`, `turn_records: tuple[TurnRecord, ...]` (exactly 24, joined 1:1 to manifest entries on `(cycle, ordinal, warmup, artifact_sha256)`), `cycle_metrics: tuple[CycleMetrics, CycleMetrics, CycleMetrics]` (the TYPED four-stage BAR1/VRAM rows the driver measured — the recomputation source for the summary's cycles: the scorer requires `summary.cycles == packet.cycle_metrics` element-wise, and `unload_leak_mib` recomputed by the frozen formula `sum(max(0, c.vram_after_unload_mib − c.vram_before_mib) for c in cycle_metrics)`), `cycle_witnesses: tuple[CycleBackendWitness, CycleBackendWitness, CycleBackendWitness]`, `containment_before_sha256: str`, `containment_after_sha256: str`, `kernel_cursor_before: str`, `kernel_cursor_after: str`, `kernel_counters: KernelCounters`, `summary_projection_json: str` (canonical compact sort-keys JSON — an immutable string, never a live Mapping), `timestamp: str`. Property `binding_sha256`. Validation: phase closed to `{vulkan_baseline, cuda_candidate}`; window_id matches `^[A-Za-z0-9._-]{1,64}$`; cycle witnesses cover cycles (1,2,3) exactly with matching phase; manifest phase equals packet phase.
-  - Module function `phase_summary_projection(summary: BenchSummary) -> dict[str, object]` — the canonical PHASE-PRODUCED projection the scorer compares against `PhasePacket.summary_projection`. It is NOT `_bench_packet(summary)` (that embeds owner-voice, rollback, quality, and recall fields produced AFTER the phase — a packet written at phase end cannot know them). It contains exactly the driver-producible aggregates: `phase, alias, model_sha256, corpus_sha256, order_sha256, sample_n, warmup_count, measured_sample_count, load_cycles, seven_turn_max_ms, p95_e2e_ms, median_decode_tps, median_prefill_tps, cycles (via _cycle_packet), mtp_drafted_tokens, mtp_accepted_tokens, mtp_rejected_tokens, mtp_initialized, crash_count, restart_count, hang_count, timeout_count, unload_leak_mib, kernel_counters (via .packet())`. Quality counts, `recall_posture`, owner-voice, rollback, cold-boot, and provisional fields are EXCLUDED — their cross-checks happen at bundle level (Task A5).
+  - Module function `phase_summary_projection(summary: BenchSummary) -> dict[str, object]` — the canonical PHASE-PRODUCED projection the scorer compares against `PhasePacket.summary_projection_json`. It is NOT `_bench_packet(summary)` (that embeds owner-voice, rollback, quality, and recall fields produced AFTER the phase — a packet written at phase end cannot know them). It contains exactly the driver-producible aggregates: `phase, alias, model_sha256, corpus_sha256, order_sha256, sample_n, warmup_count, measured_sample_count, load_cycles, seven_turn_max_ms, p95_e2e_ms, median_decode_tps, median_prefill_tps, cycles (via _cycle_packet), mtp_drafted_tokens, mtp_accepted_tokens, mtp_rejected_tokens, mtp_initialized, crash_count, restart_count, hang_count, timeout_count, unload_leak_mib, kernel_counters (via .packet())`. Quality counts, `recall_posture`, owner-voice, rollback, cold-boot, and provisional fields are EXCLUDED — their cross-checks happen at bundle level (Task A5).
 
 - [ ] **Step 1: Write failing tests**
 
@@ -696,7 +777,7 @@ Then a `PhasePacketTests` class: construct a valid packet (helper building three
 
 - [ ] **Step 2: Run to verify failure** — `/home/rohit/maez/.venv/bin/python -B -m pytest tests/test_cuda_migration.py -q -k "TurnManifest or PhasePacket"` → FAIL.
 
-- [ ] **Step 3: Implement.** `TurnManifestEntry`/`TurnManifest` validate shape: 24 entries, sorted exactly as generated `(cycle, ordinal)` with cycles (1,2,3) and ordinals 0–7, `warmup == (ordinal == 0)`, `_validate_sha256` per artifact. `binding_sha256` = `_packet_hash` over `{"schema", "phase", "entries": [[cycle, ordinal, warmup, artifact_sha256], ...]}`. `TurnRecord` validates measured-row MTP ints and nonnegative finite floats. `PhasePacket.__post_init__` validates every field per the Interfaces block above (window-id regex, sha validators, timestamp validator, tuple-of-3 witnesses with `{w.cycle} == {1,2,3}` and `w.witness.phase == self.phase`; `cycle_metrics` must be a tuple of exactly three `CycleMetrics` instances with `.cycle == (1, 2, 3)` in order else `ValueError("cycle_metrics_shape")`; `self.turn_manifest.phase == self.phase`; the 24 `turn_records` joined 1:1 to manifest entries on `(cycle, ordinal, warmup, artifact_sha256)` else `ValueError("turn_record_join")`; a packet with outcome `"completed"` requires EVERY `turn_records[i].outcome == "completed"` else `ValueError("turn_outcome_incomplete")`; outcome in the closed 39-entry vocabulary or `"completed"`) AND verifies `recompute_phase_statistics(turn_records)` equals the corresponding fields inside `summary_projection_json`, AND the projection's `cycles`, `unload_leak_mib`, and crash/hang/timeout counts equal what `cycle_metrics` + row outcomes recompute (parse, compare — anything the preimages cannot reproduce is `ValueError("projection_not_recomputable")`). `binding_sha256` = `_packet_hash` over all scalar fields + `turn_manifest.binding_sha256` + each record's and witness's `binding_sha256` + `_cycle_packet(m)` for EVERY cycle metric + `kernel_counters.packet()` + `summary_projection_json`. Add `phase_summary_projection(summary)` building exactly the field list in the Interfaces block above (do NOT call `_bench_packet`) and `recompute_phase_statistics(records)` per its Interfaces entry. RED tests (each must fail first): tamper one row's `e2e_ms` → `projection_not_recomputable`; tamper one cycle metric's `vram_after_unload_mib` → `projection_not_recomputable` AND its `binding_sha256` changes; cycle metrics out of order / wrong type / only two → `cycle_metrics_shape`; one row per NON-completed outcome value {`http_timeout`, `crash`, `hang`, `malformed_response`} inside a `"completed"` packet → `turn_outcome_incomplete`; projection with tampered `unload_leak_mib` or a nonzero `crash_count` → `projection_not_recomputable`.
+- [ ] **Step 3: Implement.** `TurnManifestEntry`/`TurnManifest` validate shape: 24 entries, sorted exactly as generated `(cycle, ordinal)` with cycles (1,2,3) and ordinals 0–7, `warmup == (ordinal == 0)`, `_validate_sha256` per artifact. `binding_sha256` = `_packet_hash` over `{"schema", "phase", "entries": [[cycle, ordinal, warmup, artifact_sha256], ...]}`. `TurnRecord` validates measured-row MTP ints and nonnegative finite floats. `PhasePacket.__post_init__` validates every field per the Interfaces block above (window-id regex, sha validators, timestamp validator, tuple-of-3 witnesses with `{w.cycle} == {1,2,3}` and `w.witness.phase == self.phase`; `cycle_metrics` must be a tuple of exactly three `CycleMetrics` instances with `.cycle == (1, 2, 3)` in order else `ValueError("cycle_metrics_shape")`; `self.turn_manifest.phase == self.phase`; the 24 `turn_records` joined 1:1 to manifest entries on `(cycle, ordinal, warmup, artifact_sha256)` else `ValueError("turn_record_join")`; a packet with outcome `"completed"` requires EVERY `turn_records[i].outcome == "completed"` else `ValueError("turn_outcome_incomplete")`; outcome in the closed 39-entry vocabulary or `"completed"`) AND verifies `recompute_phase_statistics(turn_records)` equals the corresponding fields inside `summary_projection_json`, AND the projection's `cycles`, `unload_leak_mib`, and crash/hang/timeout counts equal what `cycle_metrics` + row outcomes recompute (parse, compare — anything the preimages cannot reproduce is `ValueError("projection_not_recomputable")`). `binding_sha256` = `_packet_hash` over all scalar fields + `turn_manifest.binding_sha256` + each record's and witness's `binding_sha256` + `_cycle_packet(m)` for EVERY cycle metric + `kernel_counters.packet()` + `summary_projection_json`. Add `phase_summary_projection(summary)` building exactly the field list in the Interfaces block above (do NOT call `_bench_packet`) and `recompute_phase_statistics(records)` per its Interfaces entry. Additionally: `TurnRecord.outcome` outside the closed set (e.g. `"weird_outcome"`) → `ValueError("turn_outcome_closed")` — testing only the known non-completed values does not prove the vocabulary is closed; packet `kernel_cursor_before`/`kernel_cursor_after` must be nonempty AND distinct (same rule rollback already has) else `ValueError("kernel_window_invalid")` — an empty or equal pair would be a fake kernel interval. RED tests (each must fail first): tamper one row's `e2e_ms` → `projection_not_recomputable`; TWO SEPARATE cycle-metric REDs — (a) tamper one metric so it disagrees with the projection → constructor refusal `projection_not_recomputable`; (b) rebuild a CONSISTENT packet (metric changed AND projection re-derived to match) → constructs fine but `binding_sha256` differs from the original (the hash covers the metrics); cycle metrics out of order / wrong type / only two → `cycle_metrics_shape`; one row per NON-completed outcome value {`http_timeout`, `crash`, `hang`, `malformed_response`} inside a `"completed"` packet → `turn_outcome_incomplete`; unknown outcome → `turn_outcome_closed`; empty or equal kernel cursors → `kernel_window_invalid`; projection with tampered `unload_leak_mib` or a nonzero `crash_count` → `projection_not_recomputable`.
 
 - [ ] **Step 4: Run full suite** — all pass.
 
@@ -807,9 +888,9 @@ class BenchEvidenceBundle:
 
   TWO distinct identity properties — one hash cannot be both parent and child (an authorization parented to a hash that covers the authorization itself is self-referential and can never verify):
 
-  - `bench_binding_sha256` — the PRIOR-STAGE evidence identity, STAGE-NORMALIZED the same way the existing scorer's `_bench_evidence_sha256` already is (that helper is the model — mirror it): computed over the window/boot/gpu/driver scalars, both packets' `binding_sha256`, both summaries' `_bench_packet` projections WITH `cold_boot_witness_sha256`/`provisional_live_witness_sha256` forced to `None`, the containment `phase_hashes` RESTRICTED to the six base-phase snapshots (`vulkan_baseline`/`cuda_candidate`/`vulkan_rollback` pairs only), quality, owner-voice, both authorization preimage hashes, both consumption receipts, and the rollback bundle. It EXCLUDES `boot_authorization`, `live_authorization`, `cold_boot_maps`, `provisional_live_maps`, AND `runtime_identity` (its mode legally flips `bench → production` after authorization; the existing gate's mode logic keeps owning that check). This identity is what `bench_passed` certifies, what `PromotionVerdict.bench_evidence_sha256` carries, and what the LATER owner boot-authorization cites as `parent_sha256` — and it is provably invariant across the later stages.
+  - `bench_binding_sha256` — the PRIOR-STAGE evidence identity, STAGE-NORMALIZED the same way the existing scorer's `_bench_evidence_sha256` already is (that helper is the model — mirror it): computed over the window/boot/gpu/driver scalars, `bench_runtime_identity.binding_sha256` (the bench-mode identity IS stage-stable and IS part of what the owner authorizes), both packets' `binding_sha256`, both summaries' `_bench_packet` projections WITH `cold_boot_witness_sha256`/`provisional_live_witness_sha256` forced to `None`, the containment `phase_hashes` RESTRICTED to the six base-phase snapshots (`vulkan_baseline`/`cuda_candidate`/`vulkan_rollback` pairs only), quality, owner-voice, both authorization preimage hashes, both consumption receipts, and the rollback bundle. It EXCLUDES `boot_authorization`, `live_authorization`, `cold_boot_maps`, `provisional_live_maps`, AND the CURRENT-STAGE `runtime_identity` (its mode legally flips `bench → production` after authorization; the existing gate's mode logic keeps owning that check). This identity is what `bench_passed` certifies, what `PromotionVerdict.bench_evidence_sha256` carries, and what the LATER owner boot-authorization cites as `parent_sha256` — and it is provably invariant across the later stages.
   - `binding_sha256` — the full-bundle identity over ALL components (runtime identity and authorizations included), used by receipts to fingerprint the complete document set actually evaluated.
-  - Chain-stability RED (mandatory): build the bench-stage bundle and record both hashes; then rebuild the bundle as the boot/live stage would see it — boot authorization `pass` parented to the recorded bench hash, `cold_boot_maps`/`provisional_live_maps` present, summaries carrying cold-boot/provisional witnesses, runtime identity in `production` mode, containment extended with cold-boot/provisional snapshots — and assert `bench_binding_sha256` is UNCHANGED while `binding_sha256` CHANGED. Without this invariance the owner would be asked to authorize an identity that its own authorization then destroys.
+  - Chain-stability RED (mandatory, EVERY scorer-reachable stage): build the bundle at each of the five states — (1) bench complete, authorizations `not_attempted` → `bench_passed`; (2) boot authorization `pass` parented to the recorded bench hash, cold-boot evidence pending → `provisional_cuda_boot` (or its pending reason); (3) cold-boot maps + witness present, live authorization pending → the gate's cold-boot-passed/live-pending state; (4) live authorization `pass` parented to the cold-boot witness, provisional-live witness pending → `provisional_live_witness_pending` reason; (5) everything present and passing → `promote_cuda`. At EVERY stage assert `bench_binding_sha256` byte-identical to stage 1's, `binding_sha256` DIFFERENT from the previous stage's, and the verdict/reasons exactly as the existing gate defines. Without this invariance the owner would be asked to authorize an identity that its own authorization then destroys.
 
   Live authorization does NOT parent either bundle hash: per the runbook chain it parents the passing COLD-BOOT WITNESS artifact, and the gate's existing chronology checks keep owning that link.
 
@@ -819,7 +900,7 @@ class BenchEvidenceBundle:
   2. Identity scalars: both packets' `window_id/boot_id/gpu_uuid` equal the bundle's; `rollback.window_id == window_id`.
   3. Authorization joins (against TYPED preimages, recomputed): `window_authorization.preimage_sha256 == control_packet.authorization_preimage_sha256`; `continuation.preimage_sha256 == candidate_packet.authorization_preimage_sha256`; `window_consumption.binding_sha256 == control_packet.consumption_receipt_sha256`; `continuation_consumption.binding_sha256 == candidate_packet.consumption_receipt_sha256`; nonce joins: `window_consumption.nonce == window_authorization.nonce` and `continuation_consumption.nonce == continuation.nonce`; parent join: `continuation.parent_vulkan_packet_sha256 == control_packet.binding_sha256`; scope joins: both authorization docs' `window_id == window_id` and `boot_id == boot_id`, `"vulkan_baseline" in window_authorization.phases`, `"cuda_candidate" in continuation.phases`, both docs' `owner` fields equal; temporal joins: `window_authorization.issued_at ≤ window_consumption.timestamp < window_authorization.expires_at` AND `continuation.issued_at ≤ continuation_consumption.timestamp < continuation.expires_at` (each consumption inside its own validity window) AND `continuation_consumption.timestamp < window_authorization.expires_at` (a continuation cannot outlive its window); `window_consumption.phase == "vulkan_baseline"`; `continuation_consumption.phase == "cuda_candidate"`; both consumption `boot_id == boot_id`.
   4. Containment joins: `containment` holds all six snapshots; the `vulkan_baseline` before/after snapshot `binding_sha256`s equal `control_packet.containment_before_sha256/containment_after_sha256`; same for `cuda_candidate` vs the candidate packet; the `vulkan_rollback` pair's binding hashes equal `rollback.containment_before.binding_sha256`/`rollback.containment_after.binding_sha256`.
-  5. Runtime/driver joins — TWO identities, one per stage: `bench_runtime_identity.mode == "bench"` and `bench_runtime_identity.binding_sha256 == control_packet.runtime_identity_sha256 == candidate_packet.runtime_identity_sha256` (the packets are immutable bench-time artifacts and can only ever cite the bench-mode identity); `runtime_identity` is the CURRENT-STAGE identity handed to the gate (bench mode before authorization, production after — the gate's existing mode logic keeps owning that check), with all frozen non-mode fields (alias, model, release roots, driver version) equal between the two identities; `driver_package_sha256 == control_packet.driver_package_sha256 == candidate_packet.driver_package_sha256`; both packets' `static_preflight_sha256` equal each other. `bench_runtime_identity` is INSIDE `bench_binding_sha256`; the current-stage `runtime_identity` is EXCLUDED from it (and inside the full `binding_sha256`). The chain-stability RED must drive ALL stage transitions (bench → boot-authorized → provisional-live) and assert the bench hash byte-identical at every stage.
+  5. Runtime/driver joins — TWO identities, one per stage: `bench_runtime_identity.mode == "bench"` and `bench_runtime_identity.binding_sha256 == control_packet.runtime_identity_sha256 == candidate_packet.runtime_identity_sha256` (the packets are immutable bench-time artifacts and can only ever cite the bench-mode identity); `runtime_identity` is the CURRENT-STAGE identity handed to the gate (bench mode before authorization, production after — the gate's existing mode logic keeps owning that check). The allowed differences between the two identities are EXACTLY two fields: `mode`, and `effective_args` (each of which the existing `_validate_effective_args` already pins to its own mode's frozen argv). EVERY other `RuntimeIdentity` field — `tag, commit, version, alias, model_sha256, model_bytes, runtime_sha256, library_hashes, production_override_sha256, backend_environment, runtime_manifest_sha256, rollback_manifest_sha256, cuda_toolkit, cuda_compiler, cmake_version, driver_version, gpu_identifier, compute_capability, backend` — must be exactly equal, else `bundle_binding`. Two separate REDs: (a) packet↔bench mismatch (packet cites a different identity hash); (b) bench↔current drift (current-stage identity with a changed `library_hashes` entry → `bundle_binding`). `driver_package_sha256 == control_packet.driver_package_sha256 == candidate_packet.driver_package_sha256`; both packets' `static_preflight_sha256` equal each other. `bench_runtime_identity` is INSIDE `bench_binding_sha256`; the current-stage `runtime_identity` is EXCLUDED from it (and inside the full `binding_sha256`).
   6. Summary projections and scalar joins: the join is exact string equality between `packet.summary_projection_json` and `json.dumps(phase_summary_projection(summary), sort_keys=True, separators=(",", ":"))`. Additionally the packet's OWN preimages must recompute the summary: `summary.cycles == packet.cycle_metrics` element-wise; `summary.unload_leak_mib ==` the frozen cycle-metrics formula; `summary.crash_count/hang_count/timeout_count ==` the TurnRecord outcome counts (all zero for bundle-eligible packets) and `summary.restart_count == 0`; `packet.model_sha256 == summary.model_sha256`, `packet.corpus_sha256 == summary.corpus_sha256`, `packet.order_sha256 == summary.order_sha256`, `packet.topology_sha256 ==` every `cycle.topology_sha256` in the summary, and `packet.kernel_counters.packet() ==` the projection's `kernel_counters`.
   7. Quality joins: `quality.control_manifest_sha256 == control_packet.turn_manifest.binding_sha256`; `quality.candidate_manifest_sha256 == candidate_packet.turn_manifest.binding_sha256`; AND the summaries' quality fields equal QualityEvidence's: `false_absence_count`, `wrong_answered_ungrounded_count`, `type_regression_count`, `recall_posture`, `quality_failure_count` each equal on BOTH summaries.
   8. Owner-voice joins: `owner_voice.control_manifest_sha256/candidate_manifest_sha256` equal the two manifests' binding hashes; `owner_voice.artifact_sha256 == control_summary.owner_voice_evidence.artifact_sha256 == candidate_summary.owner_voice_evidence.artifact_sha256`; `owner_voice.status == control_summary.owner_voice_evidence.status == candidate_summary.owner_voice_evidence.status`.
@@ -842,7 +923,7 @@ class BenchEvidenceBundle:
 - Produces (exact):
   - `evaluate_promotion_bundle(bundle: BenchEvidenceBundle) -> PromotionVerdict` — validates bundle (constructor already did), then calls `_evaluate_promotion_gate(..., expected_bench_evidence_sha256=bundle.bench_binding_sha256)` with components extracted FROM the bundle (control/candidate summaries, cycle-1 witnesses' inner `RuntimeBackendWitness` for the legacy two-maps parameters after verifying all six wrappers, containment, authorizations, runtime identity, cold-boot/provisional maps). Returns the gate's verdict unmodified — no post-hoc hash replacement.
   - `_evaluate_promotion_gate` — the existing function body, renamed, with ONE signature addition: keyword-only `expected_bench_evidence_sha256: str`. The gate uses it for the BOOT-authorization `parent_sha256` comparison and as the `bench_evidence_sha256` stamped into the verdict — the prior-stage identity, excluded from itself, so parenting is non-circular. The LIVE-authorization parent check is NOT touched: it continues to chain to the cold-boot witness artifact exactly as the existing gate and runbook state machine define.
-  - `build_receipt(identity, bundle: BenchEvidenceBundle, verdict: PromotionVerdict, *, timestamp: str) -> dict[str, object]` — recomputes `expected = evaluate_promotion_bundle(bundle)`; `expected != verdict` → `ValueError("verdict_binding_mismatch")`; receipt gains `"bundle_binding_sha256": bundle.binding_sha256` and keeps all existing content-light fields (sourced from bundle components).
+  - `build_receipt(bundle: BenchEvidenceBundle, verdict: PromotionVerdict, *, timestamp: str) -> dict[str, object]` — NO free identity parameter: the identity lives in the bundle (`bundle.runtime_identity`), so a caller cannot present one identity to the gate and a different one to the receipt. Recomputes `expected = evaluate_promotion_bundle(bundle)`; `expected != verdict` → `ValueError("verdict_binding_mismatch")`; receipt gains `"bundle_binding_sha256": bundle.binding_sha256` and `"bench_binding_sha256": bundle.bench_binding_sha256` and keeps all existing content-light fields (sourced from bundle components).
 - Consumes: everything from A2–A5.
 
 - [ ] **Step 1: Write failing tests.**
@@ -868,12 +949,12 @@ class BundleGateTests(unittest.TestCase):
         verdict = cm.evaluate_promotion_bundle(bundle)
         tampered = replace(verdict, decision="keep_vulkan", reasons=("p95_regression",))
         with self.assertRaisesRegex(ValueError, "verdict_binding_mismatch"):
-            cm.build_receipt(bundle.runtime_identity, bundle, tampered,
+            cm.build_receipt(bundle, tampered,
                              timestamp="2026-07-13T14:00:00Z")
 ```
 
 - [ ] **Step 2: Run to verify failure.**
-- [ ] **Step 3: Implement.** Rename; add the keyword-only `expected_bench_evidence_sha256: str` parameter to `_evaluate_promotion_gate`, used for the BOOT-authorization `parent_sha256` comparison and as the `bench_evidence_sha256` stamped into the verdict (delete the internal component-hash computation for those two uses; the LIVE-authorization → cold-boot-witness chain stays untouched; NO `dataclasses.replace` afterwards). Add the wrapper passing `bundle.bench_binding_sha256`. Add a chain test: an owner boot authorization with `parent_sha256 = bundle.bench_binding_sha256` evaluates to `provisional_cuda_boot` when the bench passes — proving the parent link is actually satisfiable (the round-3 circularity RED). Rework `build_receipt` to take `(identity, bundle, verdict, *, timestamp)`, source every existing receipt field from bundle components, and record BOTH identities (`bench_binding_sha256`, full `binding_sha256`) plus both evaluator versions.
+- [ ] **Step 3: Implement.** Rename; add the keyword-only `expected_bench_evidence_sha256: str` parameter to `_evaluate_promotion_gate`, used for the BOOT-authorization `parent_sha256` comparison and as the `bench_evidence_sha256` stamped into the verdict (delete the internal component-hash computation for those two uses; the LIVE-authorization → cold-boot-witness chain stays untouched; NO `dataclasses.replace` afterwards). Add the wrapper passing `bundle.bench_binding_sha256`. Add a chain test: an owner boot authorization with `parent_sha256 = bundle.bench_binding_sha256` evaluates to `provisional_cuda_boot` when the bench passes — proving the parent link is actually satisfiable (the round-3 circularity RED). Rework `build_receipt` to take `(bundle, verdict, *, timestamp)` — no free identity parameter; identity comes from `bundle.runtime_identity` — source every existing receipt field from bundle components, and record BOTH identities (`bench_binding_sha256`, full `binding_sha256`) plus both evaluator versions.
 - [ ] **Step 4: Migrate existing tests.** Every test calling `cm.evaluate_promotion(` or the old `build_receipt` signature: `grep -n "evaluate_promotion\|build_receipt" tests/test_cuda_migration.py`. The `evaluate()` helper used by `GateStateTests` switches to calling `cm._evaluate_promotion_gate(...)` (internal-gate unit tests, explicitly named `InternalGateTests`) and NEW bundle-level tests via `make_bundle`. Boot authorization tests parent to `bundle.bench_binding_sha256` (the stage-stable identity — NEVER the full `binding_sha256`, which changes when the authorization itself is added); live authorization tests keep parenting the cold-boot witness artifact.
 - [ ] **Step 5: Run full suite** — `/home/rohit/maez/.venv/bin/python -B -m pytest tests/test_cuda_migration.py -q` → all pass (count will change; zero failures).
 - [ ] **Step 6: Commit**
@@ -994,7 +1075,7 @@ class StubTests(unittest.TestCase):
   - Real implementations `RealServiceStateProvider` (uses `systemctl_command`), `RealPortProbe` (bind test), `RealGpuProvider` (nvidia-smi argv per spec appendix with `-i <uuid>`), `RealKernelLogProvider` (`journalctl --show-cursor` / cursor-bounded grep of the closed signatures), `RealBackendMapProvider` (`/proc/<pid>/maps` read), `SystemClock`.
   - Synthetic implementations `SyntheticServiceState(states: dict[str,str])`, `SyntheticPortProbe(free: set[int])`, `SyntheticGpu(uuids, inventory_by_stage, memory_by_stage)`, `SyntheticKernelLog(counts)`, `SyntheticBackendMap(maps_text_by_pid)`, `FrozenClock(start_ts)` — each with `witness: ProviderWitness(synthetic=True, real_calls=0)`.
   - `def ambient_topology_hash(inventory: list[tuple[int, str]], owned_pids: set[int]) -> str` — exclude owned pids, serialize sorted `(pid, basename)` compact JSON, sha256.
-- Consumes: `BenchRefusal`, constants from B2.
+- Consumes: `BenchRefusal`, constants from B2. Forward references: `OwnedChild` (B5), `ConsumedAuthority` (B4), and `TurnMeasurement` (B6) do not exist yet when B3's protocols are written — the module keeps `from __future__ import annotations` (already repo style in `cuda_migration.py`), so protocol method signatures reference them as postponed string annotations and nothing is evaluated until those tasks land in the same module.
 
 - [ ] **Step 1: Failing tests** — `systemctl_command("stop", "x")` raises; `systemctl_command("show", "llama-server.service") == ["systemctl", "--user", "show", "llama-server.service"]`; structural test via AST. Two separate assertions — a substring match cannot work (the function name `systemctl_command` AND the refusal code `"mutating_systemctl_forbidden"` both contain the substring), so match the exact executable literal only, and test command construction separately:
 
@@ -1052,7 +1133,7 @@ def test_no_mutating_verb_constructible(self) -> None:
 **Interfaces:**
 - Produces (exact):
   - `@dataclass class OwnedChild: pid: int; pgid: int; pidfd: int; start_time_ticks: int; pinned_sha256: str; exe_sha256: str; port: int | None; popen: subprocess.Popen` — `pinned_sha256` is the PIN hash (binary content, or stub MODULE file for `python_module` spawns) while `exe_sha256` is the hash of the actually-running executable image (`/proc/<pid>/exe` target, captured at spawn) — two separate fields because for a Python spawn the pinned module and the running interpreter are different files. `port` is filled by the launcher (real: `BENCH_PORT` from the pinned argv; rehearsal: parsed from the stub's `STUB_LISTENING port=<N>` stdout line) so the ephemeral port reaches the state machine without side channels.
-  - Concrete `ServerLauncher` adapters (BOTH defined and tested HERE): `RealServerLauncher(pin, env)` — binary pin, fills `port=BENCH_PORT`; `RehearsalServerLauncher(pin)` — stub-module pin, captures `STUB_LISTENING`, fills the ephemeral port. Each is a thin wrapper over `spawn_pinned`.
+  - Concrete `ServerLauncher` adapters (BOTH defined and tested HERE): `RealServerLauncher(pin)` — binary pin, fills `port=BENCH_PORT`; `RehearsalServerLauncher(pin)` — stub-module pin, captures `STUB_LISTENING`, fills the ephemeral port. Each is a thin wrapper over `spawn_pinned`; NEITHER stores an environment — `PhaseConfig.env` flowing through `spawn(argv, env)` is the ONE authoritative mapping (a launcher-held second env would be a divergence point).
   - `spawn_pinned(argv: list[str], *, pin: SpawnPin, env: dict[str, str]) -> OwnedChild` where `SpawnPin` is a dataclass with `kind: Literal["binary", "python_module"]`, `pinned_path: Path`, `pinned_sha256: str`, `required_argv_prefix: tuple[str, ...]`. Pin semantics: `kind="binary"` (real llama-server) requires `argv[0] == str(pinned_path)` AND content hash of THAT binary matches; `kind="python_module"` (rehearsal stub) requires `argv[:3] == (sys.executable, "-m", "scripts.cuda_bench_stub")` AND the hash of `scripts/cuda_bench_stub.py` (the MODULE FILE, not the Python interpreter) matches `pinned_sha256`. Any mismatch → `BenchRefusal("spawn_failure")`. Hermeticity: the runbook's manual commands use `env -i VAR=... binary args…` — the DRIVER achieves the identical sanitized environment by passing the explicit `env=` mapping to `subprocess.Popen` (the exact `HOME/PATH/LD_LIBRARY_PATH/…` variables from the runbook's reference line for that backend) with `argv[0]` as the pinned server binary itself; `env` and `-i` never appear in argv, so the pin on `argv[0]` holds. Spawns with `start_new_session=True`, `os.pidfd_open` immediately, records `/proc/<pid>/stat` field 22 (starttime).
   - `finalize(child: OwnedChild, *, clock: Clock, port_probe: PortProbe, port: int | None) -> str` — the listener-absence check goes through the injected `PortProbe` seam (never a hard-wired `RealPortProbe`); returns outcome ∈ `{"clean", "cleanup_incomplete", "pid_reuse_detected"}`; sequence: BEFORE EACH signal, re-prove the FULL identity quadruple (re-read `/proc/<pid>/stat`: pid present, pgid matches, starttime field 22 matches the spawn-recorded value, AND re-hash `/proc/<pid>/exe`'s target to match the spawn-recorded `exe_sha256` — all four legs, executable included; the pidfd is the signalling authority, the quadruple is the spec-mandated corroboration); a quadruple mismatch on a still-alive pidfd → send NOTHING, return `"pid_reuse_detected"`. Otherwise: pidfd alive → `signal.pidfd_send_signal(child.pidfd, SIGTERM)` → wait ≤ `SIGTERM_GRACE_S` → re-prove quadruple again → if alive `pidfd_send_signal(SIGKILL)` → wait ≤ `KILL_WAIT_S` for PGID absence (observational `/proc` scan) → if port given, wait ≤ `LISTENER_WAIT_S` for port free. Unexpected PGID members (pid != leader) are NEVER signalled → immediate `"cleanup_incomplete"` with inventory recorded on the returned journal entries. Leader-vanished-before-signal sends nothing.
 - Consumes: B2 `BenchRefusal`, B3 `Clock`/`RealPortProbe`.
@@ -1062,7 +1143,7 @@ def test_no_mutating_verb_constructible(self) -> None:
   - Spawn the pinned stub (module-file hash computed in-test), assert `OwnedChild.port` equals the port in the STUB_LISTENING line, `finalize` → `"clean"`, port free, no `/proc` pgid members remain.
   - RED pid-reuse (leader-gone path): construct `OwnedChild` with a pidfd from a short-lived child that already exited, assert `finalize` sends nothing and returns `"clean"`.
   - RED pid-reuse (quadruple mismatch on live process, BOTH mutable legs): spawn a live stub, then (a) construct an `OwnedChild` copy with `start_time_ticks` tampered (+1) and (b) separately a copy with `exe_sha256` tampered (one hex digit flipped); assert `finalize` sends NOTHING in each case (stub still alive afterwards — verify via its /health) and returns `"pid_reuse_detected"`; test teardown kills the stub via its own handle.
-  - RED signal handling (both signals): run a rehearsal phase in a subprocess and deliver SIGINT to it in one test, SIGTERM in another; assert each produces an `interrupted`-outcome packet and the finalizer's residue proofs hold (no listener, no pgid members).
+  (The SIGINT/SIGTERM interruption REDs live in Task B7 — they require `run_phase`, which does not exist at B5 time; B5 stays scoped to launcher/finalizer behavior.)
   - RED leader-gone/group-remains: spawn a tiny python child that itself spawns a grandchild in the same session then exits (`subprocess.Popen([sys.executable, "-c", "import subprocess,sys,time; subprocess.Popen([sys.executable,'-c','import time;time.sleep(30)']); "])` wrapped via `start_new_session`), then `finalize` → `"cleanup_incomplete"` and assert the grandchild was NOT signalled (it still runs; kill it via its own pgid in test teardown — the TEST owns it, not the driver).
 - [ ] **Step 2: Run to verify failure.**
 - [ ] **Step 3: Implement** per Interfaces (proc-scan helper `_pgid_members(pgid) -> list[int]` reading `/proc/*/stat`).
@@ -1099,11 +1180,11 @@ def test_no_mutating_verb_constructible(self) -> None:
 **Interfaces:**
 - Produces (exact):
   - `@dataclass class PhaseConfig: phase: str; argv: list[str]; env: dict[str, str]; pin: SpawnPin; alias: str; prompts: tuple[str, ...]; authorization: WindowAuthorization | Continuation; parent_window: WindowAuthorization | None; identity_hashes: dict[str, str]; gpu_uuid: str; boot_id: str; window_id: str; expected_port: int | None` — the config carries the RAW parsed authorization, NOT a consumed one: the irreversible nonce marker must not be burned before the phase's own fresh gates pass. `expected_port=BENCH_PORT` for real phases (asserted equal to `OwnedChild.port`); `None` for rehearsal, where the launcher-captured ephemeral port is used and asserted `!= 18080`.
-  - `run_phase(config: PhaseConfig, providers: Providers, *, root: Path) -> Path` (returns packet path). `Providers` = dataclass holding ALL TEN seam instances (service state, port probe, GPU, kernel log, backend maps, server launcher, server client, authorization gate, clock — plus the journal factory). STRUCTURAL RULES: `run_phase` performs the six-gate phase preflight ITSELF as its first transition, through the seams (`providers.service_state`, `providers.port_probe`, `providers.gpu`) — the CLI `preflight` command reports, but the phase does not TRUST a prior report; a stale gate re-checks fresh inside the phase in BOTH tiers. Spawning goes through `providers.server_launcher.spawn(config.argv, config.env)` (never a direct `spawn_pinned` call — the launcher seam owns pinning), authorization consumption through `providers.authorization_gate.consume(...)` (real gate burns the production marker; rehearsal gate mints only rehearsal-schema receipts), every HTTP through `providers.server_client` (health, models, stream), and `finalize` receives `providers.port_probe`. The driver installs handlers for BOTH `SIGINT` and `SIGTERM`: either signal routes through the unconditional finalizer and yields the `interrupted` packet outcome. Implements exactly the spec state machine: PHASE_PREFLIGHT (six gates, fresh, through seams — the raw authorization is only VALIDATED here, not consumed) → CONSUME_AUTHORIZATION (`providers.authorization_gate.consume(config.authorization, ...)` — the SEAM, never a direct `consume_authorization` call, so rehearsal swaps in the receipt-only synthetic — burns the nonce marker + writes the receipt ONLY after all six gates passed, immediately before the phase's first spawn; a refused gate leaves the owner's single-use artifact intact) → CONTAINMENT_BEFORE (containment snapshot incl. informational maez.service state + kernel cursor-before) → 3 × [capture BOTH topology hash AND memory `(bar1_percent, vram_mib)` at each of the FOUR stages — before, after-load, after-inference, after-unload — the four memory pairs ARE the cycle's `CycleMetrics` fields and the four topology hashes feed the invariance check → spawn via `providers.server_launcher.spawn` → `providers.server_client.health(port)` polls ≤ `READINESS_TIMEOUT_S` (`readiness_timeout`) → `providers.server_client.models(port)` exact alias (`alias_mismatch`) → `providers.backend_maps.read_maps(pid)` + classify backend pure CUDA/Vulkan (`backend_unproven`) building a `CycleBackendWitness` wrapper dict → 1 warmup turn (counters discarded) → 7 measured turns via `providers.server_client.stream` writing each private turn artifact + manifest entry → `finalize(child, clock=..., port_probe=providers.port_probe, port=child.port)` + unload proof (memory back ≤ before + port free ≤ `UNLOAD_WAIT_S`, else `unload_incomplete`)] → kernel cursor-after + `count_signatures` → CONTAINMENT_AFTER → packet JSON (schema `cuda_bench_driver.phase_packet.v1`, all bindings from the spec's packet list, outcome `completed`) via `write_private_file`. ANY `BenchRefusal`/exception path runs the finalizer then writes an outcome-typed FAILED packet or, pre-spawn, a refusal artifact (schema `cuda_bench_driver.refusal.v1`); SIGINT → outcome `interrupted`. FAILED packets are REDUCED JSON DOCUMENTS (same schema name, `outcome != "completed"`, only the fields actually observed — no manifest/witness placeholders, no zero-fill); they are NOT instances of the typed `cm.PhasePacket` class, which by design parses only completed packets — the assembler's typed-parse failure on a failed packet is what yields `unscorable`.
+  - `run_phase(config: PhaseConfig, providers: Providers, *, root: Path) -> Path` (returns packet path). `Providers` = dataclass holding ALL TEN seam instances (service state, port probe, GPU, kernel log, backend maps, server launcher, server client, authorization gate, clock — plus the journal factory). STRUCTURAL RULES: `run_phase` performs the six-gate phase preflight ITSELF as its first transition, through the seams (`providers.service_state`, `providers.port_probe`, `providers.gpu`) — the CLI `preflight` command reports, but the phase does not TRUST a prior report; a stale gate re-checks fresh inside the phase in BOTH tiers. Spawning goes through `providers.server_launcher.spawn(config.argv, config.env)` (never a direct `spawn_pinned` call — the launcher seam owns pinning), authorization consumption through `providers.authorization_gate.consume(...)` (real gate burns the production marker; rehearsal gate mints only rehearsal-schema receipts), every HTTP through `providers.server_client` (health, models, stream), and `finalize` receives `providers.port_probe`. The driver installs handlers for BOTH `SIGINT` and `SIGTERM`: either signal routes through the unconditional finalizer and yields the `interrupted` packet outcome. Implements exactly the spec state machine: PHASE_PREFLIGHT (six gates, fresh, through seams — the raw authorization is only VALIDATED here, not consumed) → CONTAINMENT_BEFORE (containment snapshot incl. informational maez.service state + kernel cursor-before) → CONSUME_AUTHORIZATION (`providers.authorization_gate.consume(config.authorization, ...)` — the SEAM, never a direct `consume_authorization` call, so rehearsal swaps in the receipt-only synthetic — burns the nonce marker + writes the receipt ONLY after the six gates AND the containment-before snapshot both passed, DIRECTLY before cycle-one's spawn; a refused gate OR a failed containment snapshot leaves the owner's single-use artifact intact) → 3 × [capture BOTH topology hash AND memory `(bar1_percent, vram_mib)` at each of the FOUR stages — before, after-load, after-inference, after-unload — the four memory pairs ARE the cycle's `CycleMetrics` fields and the four topology hashes feed the invariance check → spawn via `providers.server_launcher.spawn` → `providers.server_client.health(port)` polls ≤ `READINESS_TIMEOUT_S` (`readiness_timeout`) → `providers.server_client.models(port)` exact alias (`alias_mismatch`) → `providers.backend_maps.read_maps(pid)` + classify backend pure CUDA/Vulkan (`backend_unproven`) building a `CycleBackendWitness` wrapper dict → 1 warmup turn (counters discarded) → 7 measured turns via `providers.server_client.stream` writing each private turn artifact + manifest entry → `finalize(child, clock=..., port_probe=providers.port_probe, port=child.port)` + unload proof (memory back ≤ before + port free ≤ `UNLOAD_WAIT_S`, else `unload_incomplete`)] → kernel cursor-after + `count_signatures` → CONTAINMENT_AFTER → packet JSON (schema `cuda_bench_driver.phase_packet.v1`, all bindings from the spec's packet list, outcome `completed`) via `write_private_file`. ANY `BenchRefusal`/exception path runs the finalizer then writes an outcome-typed FAILED packet or, pre-spawn, a refusal artifact (schema `cuda_bench_driver.refusal.v1`); SIGINT or SIGTERM → outcome `interrupted` (both handlers, per the structural rule above). FAILED packets are REDUCED JSON DOCUMENTS (same schema name, `outcome != "completed"`, only the fields actually observed — no manifest/witness placeholders, no zero-fill); they are NOT instances of the typed `cm.PhasePacket` class, which by design parses only completed packets — the assembler's typed-parse failure on a failed packet is what yields `unscorable`.
   - Topology invariance: all 4-stage hashes equal within a cycle and across cycles, else `topology_drift`.
 - Consumes: everything B2–B6.
 
-- [ ] **Step 1: Failing tests (unit tier, all-synthetic providers + the pinned stub as the spawned server):** healthy path → packet file exists, parses, has 24 manifest entries, 3 cycle witnesses, outcome `completed`, topology hash constant, and each cycle's four memory pairs populate `CycleMetrics`-shaped fields; `topology_drift` when `SyntheticGpu` returns a changed inventory at cycle 2; six-gate re-check INSIDE the phase: a `SyntheticServiceState` reporting the brain unit `active` → `preflight_service_active` refusal artifact even though no CLI preflight ran; then EVERY failure persona traverses `run_phase` itself — {readiness_timeout (inject `readiness_timeout_s=3` for speed), midturn_hang (shrunk request timeout), crash, malformed_response, wrong_identity via `--models-multi` → `alias_mismatch`} — each yielding its typed FAILED packet AND a REAL residue proof: the port check uses `RealPortProbe` against the stub's actual ephemeral port (a real socket bind test — synthetic probes prove nothing about listeners) and a real `/proc` scan shows zero pgid members; only GPU/kernel/service providers stay synthetic. Ordering proof: a refused gate (SyntheticServiceState active) leaves the authorization marker ABSENT (nonce not burned — re-running after fixing the gate succeeds); a completed run leaves the marker present and a second run refuses `authorization_consumed`. Pre-spawn refusal (port busy synthetic) → refusal artifact, NO packet.
+- [ ] **Step 1: Failing tests (unit tier, all-synthetic providers + the pinned stub as the spawned server):** healthy path → packet file exists, parses, has 24 manifest entries, 3 cycle witnesses, outcome `completed`, topology hash constant, and each cycle's four memory pairs populate `CycleMetrics`-shaped fields; `topology_drift` when `SyntheticGpu` returns a changed inventory at cycle 2; six-gate re-check INSIDE the phase: a `SyntheticServiceState` reporting the brain unit `active` → `preflight_service_active` refusal artifact even though no CLI preflight ran; then EVERY failure persona traverses `run_phase` itself — {readiness_timeout (inject `readiness_timeout_s=3` for speed), midturn_hang (shrunk request timeout), crash, malformed_response, wrong_identity via `--models-multi` → `alias_mismatch`} — each yielding its typed FAILED packet AND a REAL residue proof: the port check uses `RealPortProbe` against the stub's actual ephemeral port (a real socket bind test — synthetic probes prove nothing about listeners) and a real `/proc` scan shows zero pgid members; only GPU/kernel/service providers stay synthetic. Ordering proofs: a refused gate (SyntheticServiceState active) leaves the authorization marker ABSENT (nonce not burned — re-running after fixing the gate succeeds); a FAILED CONTAINMENT-BEFORE snapshot likewise leaves the nonce unburned (consumption sits after containment); a completed run leaves the marker present and a second run refuses `authorization_consumed`. RED signal handling (both signals, HERE because they need `run_phase`): run a rehearsal phase in a subprocess and deliver SIGINT in one test, SIGTERM in another; assert each produces an `interrupted`-outcome packet and the finalizer's residue proofs hold (no listener, no pgid members). Pre-spawn refusal (port busy synthetic) → refusal artifact, NO packet.
 - [ ] **Step 2: Run to verify failure.**
 - [ ] **Step 3: Implement** per Interfaces. Keep `run_phase` a thin sequencer over already-tested helpers; journal every transition.
 - [ ] **Step 4: Run** — pass. Also re-run the FULL driver test file.
@@ -1168,15 +1249,18 @@ git worktree add --detach "$WT" feature/cuda-bench-driver -q
   cd "$WT" &&
   /home/rohit/maez/.venv/bin/python -B -m pytest \
     tests/test_cuda_migration.py tests/test_cuda_bench_driver.py \
-    tests/test_cuda_bench_stub.py tests/test_cuda_bench_assemble.py -q &&
+    tests/test_cuda_bench_stub.py tests/test_cuda_bench_assemble.py \
+    tests/test_bench_baseline.py -q &&
   /home/rohit/maez/.venv/bin/python -B -m pytest \
     tests/test_cuda_bench_driver.py -q \
     -k "exact_systemctl_literal or no_mutating_verb" &&
   /home/rohit/maez/.venv/bin/ruff check \
     scripts/cuda_bench_driver.py scripts/cuda_bench_stub.py \
     scripts/cuda_bench_assemble.py scripts/cuda_migration.py \
+    scripts/dev/bench_baseline.py \
     tests/test_cuda_bench_driver.py tests/test_cuda_bench_stub.py \
-    tests/test_cuda_bench_assemble.py tests/test_cuda_migration.py &&
+    tests/test_cuda_bench_assemble.py tests/test_cuda_migration.py \
+    tests/test_bench_baseline.py &&
   test "$(grep -c 'evaluate_promotion\b' scripts/cuda_bench_assemble.py)" = "0" &&
   /home/rohit/maez/.venv/bin/python -B scripts/dev/bench_baseline.py reconcile
 )
