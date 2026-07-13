@@ -67,7 +67,7 @@ authoring transcript are still two copies on one medium):
   `ba126352982e734ff1e2742aaef329cfcc496371fd53c59d0cf21f4c4a487104`.
 
 Corpus preflight (run before the Offline Vulkan baseline; a mismatch emits a
-typed refusal receipt and stops — path 1 of "Remaining on Vulkan" — do not
+typed refusal receipt and stops — path 1 of "Keep Vulkan" — do not
 re-author or re-freeze):
 
 ```bash
@@ -84,7 +84,7 @@ the frozen gate identity.
 ## Static preflight
 
 These checks do not load a model or query a service. A mismatch emits a
-typed refusal receipt and stops (path 1 of "Remaining on Vulkan"); do not
+typed refusal receipt and stops (path 1 of "Keep Vulkan"); do not
 substitute a worktree asset.
 
 ```bash
@@ -276,7 +276,7 @@ Before and after every reached phase, record a distinct containment artifact:
 
 Read-only collection is permitted only inside the scheduled window. Any
 missing, changed, or ambiguous field makes the phase unscored with a typed
-refusal receipt (path 1 of "Remaining on Vulkan"; the production pointer
+refusal receipt (path 1 of "Keep Vulkan"; the production pointer
 was never mutated during a bench phase, so nothing is restored). Do not load the vision GGUF or edit its unit.
 
 The kernel counter is also phase-bounded. Count exact occurrences of the
@@ -441,7 +441,7 @@ the private literal artifact, and must reproduce the quality, MTP, latency,
 kernel, restart, BAR1, backend-map, and containment gates. It never writes
 test content into durable Maez memory or audit stores.
 
-## Remaining on Vulkan — four distinct paths
+## Keep Vulkan — four distinct paths
 
 These were previously one instruction ("any refusal → run the rollback
 drill → record `keep_vulkan`"), which was both impossible (only the scorer
