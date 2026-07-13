@@ -69,27 +69,50 @@ The current contract drops driver provenance, so the scorer side gains:
 
 - **`BenchEvidenceBundle`** (versioned, in `cuda_migration.py`): wraps the
   control and candidate `BenchSummary` pair and binds window ID, boot ID
-  (`/proc/sys/kernel/random/boot_id`), bench-driver package hash, per-phase
-  packet hashes, each phase's turn-artifact manifest hash, quality-evidence
-  provenance (evaluator version + manifest hash), argv/runtime binding, and
-  the `RollbackEvidenceBundle`. A new entrypoint
+  (`/proc/sys/kernel/random/boot_id`), GPU UUID, bench-driver package hash,
+  argv/runtime binding, quality and owner-voice evidence documents, the
+  authorization preimages and consumption receipts, and the
+  `RollbackEvidenceBundle`. A new entrypoint
   `evaluate_promotion_bundle(bundle: BenchEvidenceBundle) -> PromotionVerdict`
-  validates every binding, then applies the existing closed v1.1 gate
-  internally. The signature is exactly one argument: the bundle itself
-  contains every maps, containment, authorization, runtime-identity,
-  rollback, quality, owner-voice, and phase-packet input. No side inputs
-  exist, so validated evidence cannot be swapped at an ellipsis boundary.
-  The assembler imports only this entrypoint.
-- **Three cycle-indexed backend witnesses per phase.** The bundle requires
-  exactly three `RuntimeBackendWitness` records per phase, cycle-indexed,
-  each timestamp-bracketed inside its own load/unload interval, each
-  backend-pure (CUDA-only or Vulkan-only). One representative witness is
-  insufficient: it would leave two loads unauthenticated.
+  validates every binding, then applies the closed v1.1 gate internally.
+  The signature is exactly one argument: the bundle itself contains every
+  maps, containment, authorization, runtime-identity, rollback, quality,
+  owner-voice, and phase-packet input. No side inputs exist, so validated
+  evidence cannot be swapped at an ellipsis boundary.
+- **The legacy route closes.** `evaluate_promotion(...)` becomes internal
+  (`_evaluate_promotion_gate`), reachable only from
+  `evaluate_promotion_bundle`; `build_receipt` accepts only a bundle-derived
+  verdict. `PromotionVerdict.evidence_sha256` — and therefore the later
+  boot-authorization parent — becomes `BenchEvidenceBundle.binding_sha256`.
+  Existing tests that mint `bench_passed` through the bare evaluator are
+  migrated to bundle construction; the internal gate keeps its own unit
+  tests but no public caller. A structural test asserts the public module
+  surface exposes no bundle-free path to a verdict or receipt.
+- **Preimages, not promises.** The bundle carries the typed phase-packet
+  and turn-manifest documents themselves — not merely their hashes. The
+  scorer recomputes every hash from the carried preimage and verifies each
+  packet's canonical `BenchSummary` projection: the summary's aggregate
+  claims (timings, MTP counters, cycle metrics, crash/hang/timeout counts)
+  must be recomputable from, and equal to, the packet contents. Quality
+  evidence (`cuda_migration.quality_evidence.v1`) and owner-voice review
+  (`cuda_migration.owner_voice_review.v1`) are typed documents binding
+  their actual counts/status to BOTH phase manifest hashes plus evaluator
+  version — a summary that cites hashes without carried preimages is
+  `unscorable`.
+- **Six cycle-indexed backend witnesses.** A typed wrapper
+  (`cuda_migration.cycle_backend_witness.v1`) pairs each
+  `RuntimeBackendWitness` with its cycle number and load interval
+  `(load_started, unload_proven)`; the bundle requires exactly three per
+  phase with phase×cycle uniqueness, each witness timestamp strictly inside
+  its own interval, each backend-pure. One representative witness would
+  leave two loads unauthenticated.
 - **`RollbackEvidenceBundle`** — produced by the manual rollback drill
-  (outside the driver): rollback containment before/after snapshots
-  (satisfying `ContainmentWitness`'s six required pairs), the rollback-phase
-  kernel window, re-verified runtime identity hashes, producer identity, and
-  timestamps bound to the same window ID.
+  (outside the driver): the existing complete `RollbackWitness` (all its
+  frozen identity fields), PLUS a rollback-phase Vulkan backend-map
+  witness, the rollback kernel window, rollback containment before/after
+  snapshots (completing `ContainmentWitness`'s six required snapshots —
+  three before/after pairs), producer identity, window-ID binding, and a
+  parent binding to both A/B phase-packet hashes.
 
 ## Phase state machine (identical in rehearsal and real)
 
@@ -103,9 +126,12 @@ prompts/responses exist only in bounded private per-turn artifacts.
 
 **Two-gate preflight (amendment 5).**
 - `static-preflight` — safe while Maez is online: corpus file
-  (mode/size/hash per the runbook's corpus preflight), binary and library
-  hashes, driver package hash, directory modes, stub pin, rehearsal
-  readiness. Produces a static receipt.
+  (mode/size/hash per the runbook's corpus preflight), incumbent identity
+  hashes, the BUILT CUDA candidate verified against its
+  `runtime-manifest.sha256` (superseding the runbook's authoring-time
+  candidate-absent check), flag-source and vision-unit hashes, driver
+  package hash, directory modes, stub pin, rehearsal readiness. Produces a
+  static receipt.
 - Phase preflight — only inside the owner window, after the owner stops
   production: the six refusal gates above plus boot-bound authorization and
   topology capture.
@@ -117,20 +143,32 @@ prompts/responses exist only in bounded private per-turn artifacts.
 **Authorization artifacts (enforceable single-use).** Two owner-authored
 schemas, both mode `0600` inside the private bench:
 
-- `cuda_bench_driver.window_authorization.v1`: window ID (owner-chosen
-  string), authorized phases, boot ID it was issued under, 32-byte hex
-  nonce, `issued_at`/`expires_at` timestamps with TTL exactly
-  `WINDOW_TTL_S` (Appendix), and owner identity. The driver refuses on
-  expiry, boot-ID mismatch, or nonce reuse.
+- `cuda_bench_driver.window_authorization.v1`: window ID (opaque owner
+  string, 1–64 chars of `[A-Za-z0-9._-]`), authorized phases, boot ID it
+  was issued under, nonce (exactly 64 lowercase hex chars = 32 random
+  bytes), `issued_at`/`expires_at` timestamps with TTL exactly
+  `WINDOW_TTL_S` (Appendix), and owner identity. Timestamps are UTC
+  RFC 3339 with `Z` suffix; currentness means
+  `issued_at ≤ now < expires_at` evaluated at consumption time. The driver
+  refuses on malformed fields (`authorization_malformed`), a not-yet-valid
+  `issued_at` (`authorization_not_yet_valid`), expiry, boot-ID mismatch,
+  owner/phase/window mismatch, or nonce reuse.
 - `cuda_bench_driver.continuation.v1`: same fields plus
   `parent_vulkan_packet_sha256`; TTL exactly `CONTINUATION_TTL_S`; valid
   only within the same window ID and boot ID as its parent packet.
 
-Single-use is a property, not an assertion: before spawning any server, the
-driver atomically creates (`O_EXCL`) a consumption marker named by the
-artifact's nonce; a marker that already exists is the typed refusal
-`authorization_consumed`. Marker creation precedes spawn so a crashed run
-cannot re-arm its own authorization.
+**Consumption semantics across the six spawns.** Authorization is consumed
+once per PHASE, not once per spawn: the window authorization is consumed
+atomically before Vulkan cycle 1's spawn; the continuation is consumed
+atomically before CUDA cycle 1's spawn; cycles 2–3 of each phase proceed
+under the same in-memory consumed authority. Consumption creates (`O_EXCL`)
+a marker named by the artifact's nonce and a typed consumption receipt
+(`cuda_bench_driver.consumption_receipt.v1`: nonce, phase, boot ID,
+consumption timestamp). A pre-existing marker is the typed refusal
+`authorization_consumed`. Marker creation precedes the phase's first spawn
+so a crashed run cannot re-arm its own authorization. Each phase packet
+binds BOTH the authorization preimage hash and its consumption-receipt
+hash.
 
 **Topology and statistics (amendment 6).** The raw GPU process inventory
 necessarily includes the owned bench child, so the topology hash is defined
@@ -169,24 +207,41 @@ PID, PGID, `/proc/<pid>/stat` start time, and the executable's content
 hash; before EVERY signal it re-proves that identity quadruple still
 matches. If the group is already gone, it sends nothing. A quadruple
 mismatch is the typed refusal `pid_reuse_detected` (a RED-listed test
-scenario) and no signal is sent. The proven path is owned-group SIGTERM →
-bounded wait (`SIGTERM_GRACE_S`) → SIGKILL → proof the process group is
-gone and no listener remains → kernel-after journal cursor →
-CONTAINMENT_AFTER → failed-packet write. Kernel windows use
-journal cursors plus timestamps. Distinct failure classes: `http_timeout`
-(request exceeded bound, server alive), `crash` (child exited uncommanded),
-`hang` (unresponsive; required forced SIGKILL). A refusal in preflight
-produces a refusal artifact, not a counterfeit failed phase packet. Failed or
-partial packets record only what occurred — missing values are never
-zero-filled — and cannot mint a valid `BenchSummary` pair; assembly over them
-yields `assembly_refused`/`unscorable`.
+scenario) and no signal is sent.
+
+Leader identity alone does not cover descendants, so the launcher
+**enforces a single-process child**: before any group signal, the finalizer
+enumerates `/proc` for PGID members; the expected set is exactly {leader}.
+If the leader is gone but group members remain — or any unexpected member
+appears — no group signal is sent on leader-proof alone; each surviving
+member must independently pass the ownership proof (start time after spawn,
+PGID match) before being signalled, and failure to fully clear the group
+within `KILL_WAIT_S` is the terminal outcome `cleanup_incomplete`, recorded
+in the packet. Leader-gone/group-remains is a RED-listed test scenario.
+
+The proven path is: kernel-before cursor (captured at CONTAINMENT_BEFORE) →
+owned-group SIGTERM → bounded wait (`SIGTERM_GRACE_S`) → SIGKILL → bounded
+post-SIGKILL wait (`KILL_WAIT_S`) for group absence → bounded listener
+absence wait (`LISTENER_WAIT_S`) → bounded unload-proof wait
+(`UNLOAD_WAIT_S`) → kernel-after journal cursor → CONTAINMENT_AFTER →
+failed-packet write. Kernel windows use journal cursors plus timestamps.
+Distinct failure classes: `http_timeout` (request exceeded bound, server
+alive), `crash` (child exited uncommanded), `hang` (unresponsive; required
+forced SIGKILL), `spawn_failure` (child never reached readiness polling),
+`journal_failure` (phase journal unwritable). A refusal in preflight
+produces a refusal artifact, not a counterfeit failed phase packet. Failed
+or partial packets record only what occurred — missing values are never
+zero-filled — and cannot mint a valid `BenchSummary` pair; assembly over
+them yields a typed `cuda_bench_assemble.receipt.v1` with outcome
+`assembly_refused`/`unscorable`.
 
 ## Phase packets and assembly invariants
 
 Phase packets are immutable, phase-specific, and cryptographically bound to:
-window ID, boot ID, ambient-topology hash, model/corpus/order hashes, exact
-effective argv hash, driver package hash, and the phase's turn-artifact
-manifest hash. The **turn-artifact manifest**
+window ID, boot ID, GPU UUID, ambient-topology hash, model/corpus/order
+hashes, exact effective argv hash, driver package hash, the authorization
+preimage hash and consumption-receipt hash for the phase, and the phase's
+turn-artifact manifest hash. The **turn-artifact manifest**
 (`cuda_bench_driver.turn_manifest.v1`) is one canonical ordered document per
 phase: for every turn it records cycle number, ordinal within the cycle,
 warmup flag, and the private turn-artifact's SHA-256. Public receipts carry
@@ -199,7 +254,9 @@ producer and bind the same phase/window identities.
 `maez.service` state is recorded **informationally** in containment
 snapshots: if running, its environ containment is checked; if stopped, the
 stopped state is recorded and a missing PID is NOT a phase refusal (the
-owner may reasonably stop it for the window).
+owner may reasonably stop it for the window). The runbook's phase-invariant
+section is amended to match this ruling, and to define the flag-source and
+vision-unit hash sources it references (see the runbook's Static preflight).
 
 ## Rehearsal mode
 
@@ -220,11 +277,18 @@ providers only, never the workflow. Additional pins:
 State journals are content-light. All bench files: exclusive creation
 (`O_EXCL`), `0700` directories / `0600` files, and loopback HTTP clients
 with redirects and proxy/environment trust disabled, with bounded
-response-size caps on every read. Pre-existing files the driver reads
-(corpus, authorization artifacts) must prove: regular file (no symlink —
-`O_NOFOLLOW` covers only the final component, so the full parent chain must
-be owner-owned `0700` directories), owner UID, and `st_nlink == 1`
-(hardlink refusal, which `O_NOFOLLOW` does NOT provide).
+response-size caps on every read.
+
+Pre-existing files the driver reads (corpus, authorization artifacts) are
+opened via a **trusted-anchor descriptor walk**, not a whole-path mode
+demand (the literal "full parent chain 0700" is unexecutable: the canonical
+path's ancestors are `0750`/`0775` by observation). The trusted anchor is
+the bench root `local/cuda_migration_bench` itself, which must be a
+`0700` owner-owned directory; from its descriptor, every component below is
+opened with `openat(..., O_NOFOLLOW)` step by step (no symlink at any
+component), and the final file must prove: regular file, owner UID,
+`st_nlink == 1` (hardlink refusal — `O_NOFOLLOW` does NOT provide this),
+mode `0600`. Any violation is the typed refusal `filesystem_hazard`.
 
 ## Standing owner precondition (corpus durability)
 
@@ -257,21 +321,29 @@ mutation, no corpus authoring, no vision-flag changes.
 **Schema names.** `cuda_bench_driver.static_preflight.v1`,
 `cuda_bench_driver.phase_packet.v1`, `cuda_bench_driver.refusal.v1`,
 `cuda_bench_driver.window_authorization.v1`,
-`cuda_bench_driver.continuation.v1`, `cuda_bench_driver.turn_manifest.v1`,
+`cuda_bench_driver.continuation.v1`,
+`cuda_bench_driver.consumption_receipt.v1`,
+`cuda_bench_driver.turn_manifest.v1`,
+`cuda_bench_assemble.receipt.v1`,
 `cuda_bench_rehearsal.packet.v1` (deliberately incompatible),
 `cuda_migration.bench_evidence_bundle.v1`,
+`cuda_migration.cycle_backend_witness.v1`,
+`cuda_migration.quality_evidence.v1`,
+`cuda_migration.owner_voice_review.v1`,
 `cuda_migration.rollback_evidence_bundle.v1`.
 
 **Closed refusal vocabulary.** `preflight_service_active`,
 `preflight_port_open`, `preflight_gpu_occupied`, `preflight_bench_port_busy`,
 `identity_mismatch`, `corpus_unavailable`, `authorization_missing`,
+`authorization_malformed`, `authorization_not_yet_valid`,
 `authorization_expired`, `authorization_boot_mismatch`,
 `authorization_consumed`, `continuation_missing`, `continuation_parent_mismatch`,
 `containment_violation`, `readiness_timeout`, `alias_mismatch`,
 `backend_unproven`, `http_timeout`, `crash`, `hang`, `malformed_response`,
 `response_too_large`, `mtp_unproven`, `topology_drift`, `kernel_unmatched`,
 `unload_incomplete`, `filesystem_hazard`, `pid_reuse_detected`,
-`rehearsal_artifact_rejected`.
+`rehearsal_artifact_rejected`, `provider_uncertain`, `spawn_failure`,
+`journal_failure`, `cleanup_incomplete`, `assembly_refused`, `unscorable`.
 
 **Timeouts and caps.**
 
@@ -284,14 +356,24 @@ mutation, no corpus authoring, no vision-flag changes.
   8 MiB` per private turn artifact; breach = `response_too_large`;
 - `WINDOW_TTL_S = 14_400` (4 h) for window authorization;
   `CONTINUATION_TTL_S = 3_600` (1 h) for the CUDA continuation;
-- nonce: 32 random bytes, hex-encoded.
+- `KILL_WAIT_S = 15` post-SIGKILL group-absence bound;
+  `LISTENER_WAIT_S = 10` listener-absence bound; `UNLOAD_WAIT_S = 60`
+  unload-proof bound — exceeding any of these is `cleanup_incomplete`;
+- nonce: 32 random bytes, encoded as exactly 64 lowercase hex chars.
 
-**GPU queries.** Topology:
-`nvidia-smi --query-compute-apps=pid,process_name --format=csv,noheader`;
-process-name normalization = basename of the reported path (nvidia-smi may
-truncate long paths); entries sorted by `(pid, basename)`; owned child
-excluded by PID-within-owned-group. Memory/BAR1:
-`nvidia-smi -q -d MEMORY` FB and BAR1 sections;
+**GPU queries.** All measurements bind the GPU UUID from
+`nvidia-smi --query-gpu=uuid --format=csv,noheader`. The ambient inventory
+is the UNION of two sources — compute contexts via
+`nvidia-smi --query-compute-apps=pid,process_name --format=csv,noheader`
+AND the full process population (graphics/compositor consumers included)
+via the Processes section of `nvidia-smi -q -d PIDS` — because the compute
+query alone does not observe display consumers, which the migration design
+requires held constant. Process-name normalization = basename of the
+reported path (nvidia-smi may truncate long paths); entries deduplicated
+and sorted by `(pid, basename)`; owned child excluded by
+PID-within-owned-group. A provider that cannot produce either source is
+the typed refusal `provider_uncertain`, never an empty inventory.
+Memory/BAR1: `nvidia-smi -q -d MEMORY` FB and BAR1 sections;
 `bar1_percent = bar1_used_mib / bar1_total_mib × 100`, computed in float,
 rounded half-even to 2 decimal places at record time; VRAM recorded in
 integer MiB as reported.

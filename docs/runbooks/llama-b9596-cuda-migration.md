@@ -90,8 +90,18 @@ sha256sum /home/rohit/.config/systemd/user/llama-server.service
 sha256sum /home/rohit/.config/systemd/user/llama-server.service.d/mtp.conf
 sha256sum /home/rohit/llama.cpp-release/llama-b9596/llama-b9596/llama-server
 sha256sum /home/rohit/maez/models/llamacpp/mtp/Qwen3.6-27B-UD-Q4_K_XL.gguf
-test ! -e /home/rohit/llama.cpp-release/llama-b9596-cuda13.2-sm89/
+sha256sum /home/rohit/.config/maez/model.env
+sha256sum /home/rohit/.config/systemd/user/llama-vision.service
 ```
+
+Historical note (2026-07-13): this section originally also required
+`test ! -e /home/rohit/llama.cpp-release/llama-b9596-cuda13.2-sm89/` — an
+authoring-time guard that the candidate output path was unclaimed before the
+sibling build. The candidate was built 2026-07-10, so that check is
+superseded: the bench driver's `static-preflight` now validates the BUILT
+candidate against its `runtime-manifest.sha256` instead of requiring its
+absence. The flag-source and vision-unit hashes recorded here are the values
+the Phase invariant's containment artifacts compare against.
 
 The incumbent values must be exactly:
 
@@ -222,6 +232,19 @@ timestamped authorization artifact in
 `/home/rohit/maez/local/cuda_migration_bench/`. Authorization for one phase
 does not authorize a later boot or live witness.
 
+Once the bench driver (spec:
+`docs/superpowers/specs/2026-07-12-cuda-bench-driver-design.md`) lands, the
+raw `env -i` commands in the phases below become REFERENCE ARGV ONLY — they
+document the exact frozen argument vector the driver must spawn. Running
+them by hand bypasses authorization consumption, packet production, and the
+turn-artifact manifest, and therefore cannot produce scoreable evidence.
+
+Terminology: a refusal in these phases means the operator OPERATIONALLY
+remains on Vulkan (restore the exact incumbent and stop). Only the scorer's
+`evaluate_promotion_bundle` mints the typed `keep_vulkan` decision as a
+`PromotionVerdict`; the driver and assembler record refusals and receipts,
+never verdicts.
+
 Use these ports exactly:
 
 ```bash
@@ -237,12 +260,17 @@ pointer after its separate authorization.
 
 Before and after every reached phase, record a distinct containment artifact:
 
-- `/proc/<maez-pid>/environ` contains exactly
-  `MAEZ_SCREEN_PERCEPTION=0`;
+- `maez.service` state is recorded informationally: if it is running,
+  `/proc/<maez-pid>/environ` must contain exactly
+  `MAEZ_SCREEN_PERCEPTION=0`; if the owner has stopped it for the window,
+  the stopped state is recorded and the missing PID is NOT a phase refusal;
 - `llama-vision.service` is inactive/dead and disabled;
 - the vision endpoint is closed;
 - the flag-source and vision-unit hashes equal the Static preflight values and
-  remain identical across the chain.
+  remain identical across the chain. The flag source is
+  `/home/rohit/.config/maez/model.env` and the vision unit is
+  `/home/rohit/.config/systemd/user/llama-vision.service`; both hashes are
+  captured in Static preflight alongside the incumbent identity hashes.
 
 Read-only collection is permitted only inside the scheduled window. Any
 missing, changed, or ambiguous field yields `keep_vulkan` and restores the
