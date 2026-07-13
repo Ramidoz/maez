@@ -44,6 +44,42 @@ The frozen content bindings are:
 - compact order `[1,2,3,4,5,6,7]`:
   `cc9cd81c3110bc37d6c9bfd30bce0267b6cbfc3ffef7fb9abdc8615e42d10575`.
 
+## Corpus durable path and preflight
+
+Root cause (2026-07-11): the migration froze the corpus hash but never
+established a durable canonical path for its pre-image. The original private
+bench directory was absent, and the 285-byte pre-image survived only inside
+the authoring Codex transcript
+(`.../rollout-2026-07-09T14-50-58-019f486e-...jsonl`, physical line 5679; line
+5685 an identical second source), as a `prompts` literal nested at
+`$.payload.input` → decode the JavaScript `cmd:` JSON string → Python program.
+It was recovered content-blind and re-serialized with
+`json.dumps(prompts, ensure_ascii=False, sort_keys=False, separators=(",", ":"))`
+(no trailing newline) to reproduce exactly 285 bytes and the frozen hash.
+
+Partial remediation — the pre-image now has ONE canonical local home
+(durability remains incomplete until an owner-approved private backup or
+encrypted recovery copy exists beyond this disk; the gitignored file plus the
+authoring transcript are still two copies on one medium):
+
+- corpus pre-image: `/home/rohit/maez/local/cuda_migration_bench/corpus.json`,
+  mode `0600` in the `0700` gitignored private bench; 285 bytes; SHA-256
+  `ba126352982e734ff1e2742aaef329cfcc496371fd53c59d0cf21f4c4a487104`.
+
+Corpus preflight (run before the Offline Vulkan baseline; a mismatch yields
+`keep_vulkan` with a typed refusal — do not re-author or re-freeze):
+
+```bash
+test "$(stat -c '%a' /home/rohit/maez/local/cuda_migration_bench/corpus.json)" = "600"
+test "$(wc -c < /home/rohit/maez/local/cuda_migration_bench/corpus.json)" -eq 285
+test "$(sha256sum /home/rohit/maez/local/cuda_migration_bench/corpus.json | cut -d' ' -f1)" = "ba126352982e734ff1e2742aaef329cfcc496371fd53c59d0cf21f4c4a487104"
+```
+
+The pre-image is private and gitignored; only its hash appears in committed
+docs. If the file is absent, recover it from the authoring transcript by the
+content-blind recipe above — never by re-authoring prompts, which would break
+the frozen gate identity.
+
 ## Static preflight
 
 These checks do not load a model or query a service. A mismatch yields
