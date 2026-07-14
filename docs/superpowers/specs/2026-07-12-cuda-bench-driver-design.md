@@ -66,10 +66,20 @@ restarts production after success or failure.
    (`/proc/<pid>/maps` reads for the backend witness — real implementation
    reads the live proc file; the rehearsal synthetic serves frozen
    synthetic map fixtures, since the Python stub cannot naturally map the
-   frozen CUDA/Vulkan libraries), `Clock`. Real and synthetic
-   implementations; synthetic providers carry witnesses proving zero real
-   query/contact occurred. Without the maps seam a healthy rehearsal could
-   never complete the declared-identical state machine.
+   frozen CUDA/Vulkan libraries), `AuthorizationGate` (consumption as a
+   seam: the real gate burns the marker and writes the production-schema
+   receipt; the rehearsal gate mints only rehearsal-schema receipts and
+   never touches a real nonce), `ArtifactPolicy` (the artifact ENCODER
+   seam: one wrapper canon for every non-journal artifact, with the
+   rehearsal policy producing a deliberately incompatible top-level shape
+   under `rehearsal/`), the journal factory, and `Clock`. Provider sets
+   are constructed only by sealed `production_tier(...)` /
+   `rehearsal_tier(...)` factories; a mixed set refuses `tier_mismatch`
+   before any marker or spawn. Real and synthetic implementations;
+   synthetic providers carry witnesses proving zero real query/contact
+   occurred. Without the maps seam a healthy rehearsal could never
+   complete the declared-identical state machine. (Seam list amended
+   2026-07-13 with the implementation-plan gate.)
 
 ## Scorer extension (amendments 1–3)
 
