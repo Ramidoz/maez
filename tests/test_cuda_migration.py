@@ -131,10 +131,10 @@ def cycles(*, peak: float, topology: str = SHA_A) -> tuple[cm.CycleMetrics, ...]
             bar1_after_load_percent=40.0 + index,
             bar1_after_inference_percent=peak - 3 + index,
             bar1_after_unload_percent=2.0 + index,
-            vram_before_mib=500.0 + index,
-            vram_after_load_mib=22_000.0 + index,
-            vram_after_inference_mib=22_500.0 + index,
-            vram_after_unload_mib=500.0 + index,
+            vram_before_mib=500 + index,
+            vram_after_load_mib=22_000 + index,
+            vram_after_inference_mib=22_500 + index,
+            vram_after_unload_mib=500 + index,
         )
         for index in (1, 2, 3)
     )
@@ -450,7 +450,7 @@ class EvidenceAndMeasurementTests(unittest.TestCase):
                 verdict = evaluate(make_summary(**changes))
                 self.assertEqual("keep_vulkan", verdict.decision)
 
-    def test_positive_measurements_reject_zero_as_missing(self) -> None:
+    def test_positive_summary_measurements_reject_zero_as_missing(self) -> None:
         for field in (
             "seven_turn_max_ms",
             "p95_e2e_ms",
@@ -460,8 +460,85 @@ class EvidenceAndMeasurementTests(unittest.TestCase):
             with self.subTest(field=field):
                 with self.assertRaisesRegex(ValueError, "positive_measurement"):
                     make_summary(**{field: 0.0})
+
+    def test_cycle_metrics_accepts_honest_zero_measurements(self) -> None:
+        cycle = cm.CycleMetrics(
+            cycle=1,
+            topology_sha256=SHA_A,
+            bar1_before_percent=0.0,
+            bar1_after_load_percent=50.0,
+            bar1_after_inference_percent=50.0,
+            bar1_after_unload_percent=0.0,
+            vram_before_mib=0,
+            vram_after_load_mib=18_000,
+            vram_after_inference_mib=18_100,
+            vram_after_unload_mib=0,
+        )
+        self.assertTrue(cycle.unload_complete)
+
+    def test_cycle_metrics_rejects_float_vram(self) -> None:
+        with self.assertRaisesRegex(ValueError, "vram_integer_mib"):
+            cm.CycleMetrics(
+                cycle=1,
+                topology_sha256=SHA_A,
+                bar1_before_percent=10.0,
+                bar1_after_load_percent=50.0,
+                bar1_after_inference_percent=50.0,
+                bar1_after_unload_percent=10.0,
+                vram_before_mib=1.5,
+                vram_after_load_mib=18_000,
+                vram_after_inference_mib=18_100,
+                vram_after_unload_mib=1_000,
+            )
+
+    def test_cycle_metrics_rejects_negative_and_over_100_bar1(self) -> None:
+        for field_value in (-0.1, 100.1):
+            with self.subTest(value=field_value):
+                with self.assertRaisesRegex(ValueError, "positive_measurement"):
+                    cm.CycleMetrics(
+                        cycle=1,
+                        topology_sha256=SHA_A,
+                        bar1_before_percent=field_value,
+                        bar1_after_load_percent=50.0,
+                        bar1_after_inference_percent=50.0,
+                        bar1_after_unload_percent=10.0,
+                        vram_before_mib=100,
+                        vram_after_load_mib=18_000,
+                        vram_after_inference_mib=18_100,
+                        vram_after_unload_mib=1_000,
+                    )
+
+    def test_cycle_metrics_rejects_bool_and_float_cycle_numbers(self) -> None:
+        for cycle_number in (True, 1.0):
+            with self.subTest(cycle=cycle_number):
+                with self.assertRaisesRegex(ValueError, "bench_identity_mismatch"):
+                    cm.CycleMetrics(
+                        cycle=cycle_number,
+                        topology_sha256=SHA_A,
+                        bar1_before_percent=10.0,
+                        bar1_after_load_percent=50.0,
+                        bar1_after_inference_percent=50.0,
+                        bar1_after_unload_percent=10.0,
+                        vram_before_mib=100,
+                        vram_after_load_mib=18_000,
+                        vram_after_inference_mib=18_100,
+                        vram_after_unload_mib=1_000,
+                    )
+
+    def test_cycle_metrics_rejects_huge_integer_bar1_with_typed_error(self) -> None:
         with self.assertRaisesRegex(ValueError, "positive_measurement"):
-            replace(cycles(peak=80.0)[0], vram_after_inference_mib=0.0)
+            cm.CycleMetrics(
+                cycle=1,
+                topology_sha256=SHA_A,
+                bar1_before_percent=10**1000,
+                bar1_after_load_percent=50.0,
+                bar1_after_inference_percent=50.0,
+                bar1_after_unload_percent=10.0,
+                vram_before_mib=100,
+                vram_after_load_mib=18_000,
+                vram_after_inference_mib=18_100,
+                vram_after_unload_mib=1_000,
+            )
 
     def test_cycles_bind_topology_worst_bar1_and_complete_unload(self) -> None:
         summary = make_summary()
@@ -474,7 +551,7 @@ class EvidenceAndMeasurementTests(unittest.TestCase):
             make_summary(cycles=tuple(mixed))
 
         leaked = list(cycles(peak=80.0))
-        leaked[-1] = replace(leaked[-1], vram_after_unload_mib=999.0)
+        leaked[-1] = replace(leaked[-1], vram_after_unload_mib=999)
         verdict = evaluate(make_summary(cycles=tuple(leaked)))
         self.assertEqual("keep_vulkan", verdict.decision)
         self.assertIn("unload_incomplete", verdict.reasons)

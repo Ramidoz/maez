@@ -998,14 +998,18 @@ class CycleMetrics:
     bar1_after_load_percent: float
     bar1_after_inference_percent: float
     bar1_after_unload_percent: float
-    vram_before_mib: float
-    vram_after_load_mib: float
-    vram_after_inference_mib: float
-    vram_after_unload_mib: float
+    vram_before_mib: int
+    vram_after_load_mib: int
+    vram_after_inference_mib: int
+    vram_after_unload_mib: int
     schema_version: str = field(default=SCHEMA_VERSION, init=False)
 
     def __post_init__(self) -> None:
-        if self.cycle not in {1, 2, 3}:
+        if (
+            isinstance(self.cycle, bool)
+            or not isinstance(self.cycle, int)
+            or self.cycle not in {1, 2, 3}
+        ):
             raise ValueError("bench_identity_mismatch")
         _validate_sha256(self.topology_sha256)
         for name in (
@@ -1013,20 +1017,21 @@ class CycleMetrics:
             "bar1_after_load_percent",
             "bar1_after_inference_percent",
             "bar1_after_unload_percent",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (float, int)):
+                raise ValueError("positive_measurement")
+            if value < 0 or value > 100 or not math.isfinite(value):
+                raise ValueError("positive_measurement")
+        for name in (
             "vram_before_mib",
             "vram_after_load_mib",
             "vram_after_inference_mib",
             "vram_after_unload_mib",
         ):
-            _validate_positive_number(getattr(self, name))
-        for name in (
-            "bar1_before_percent",
-            "bar1_after_load_percent",
-            "bar1_after_inference_percent",
-            "bar1_after_unload_percent",
-        ):
-            if getattr(self, name) > 100:
-                raise ValueError("positive_measurement")
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError("vram_integer_mib")
 
     @property
     def unload_complete(self) -> bool:
