@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 import shlex
 import subprocess
 import tempfile
@@ -298,12 +299,17 @@ def evaluate(
     boot = authorization or cm.AuthorizationWitness(
         "boot_authorization", "not_attempted", None, None, None
     )
-    return cm.evaluate_promotion(
-        control or make_summary("vulkan_baseline"),
-        candidate or make_summary(),
-        control_maps or backend("vulkan_baseline"),
-        candidate_maps or backend("cuda_candidate"),
-        containment or clean_containment(),
+    selected_control = control or make_summary("vulkan_baseline")
+    selected_candidate = candidate or make_summary()
+    selected_control_maps = control_maps or backend("vulkan_baseline")
+    selected_candidate_maps = candidate_maps or backend("cuda_candidate")
+    selected_containment = containment or clean_containment()
+    return cm._evaluate_promotion_gate(
+        selected_control,
+        selected_candidate,
+        selected_control_maps,
+        selected_candidate_maps,
+        selected_containment,
         boot,
         live_authorization
         or cm.AuthorizationWitness("live_witness_authorization", "not_attempted", None, None, None),
@@ -311,6 +317,13 @@ def evaluate(
         or make_identity(
             mode=("bench" if boot.status == "not_attempted" else "production"),
             effective_args=argv("18080" if boot.status == "not_attempted" else "8080"),
+        ),
+        expected_bench_evidence_sha256=cm._bench_evidence_sha256(
+            selected_control,
+            selected_candidate,
+            selected_control_maps,
+            selected_candidate_maps,
+            selected_containment,
         ),
     )
 
@@ -416,15 +429,8 @@ class EvidenceAndMeasurementTests(unittest.TestCase):
             )
 
     def test_authorization_cannot_be_supplied_as_a_bool(self) -> None:
-        with self.assertRaises(TypeError):
-            cm.evaluate_promotion(
-                make_summary("vulkan_baseline"),
-                make_summary(),
-                backend("vulkan_baseline"),
-                backend("cuda_candidate"),
-                clean_containment(),
-                owner_authorized=True,
-            )
+        with self.assertRaisesRegex(ValueError, "bundle_binding"):
+            _make_bundle(boot_authorization=True)
 
     def test_exact_counts_and_frozen_manifest_identity_are_required(self) -> None:
         cases = (
@@ -595,7 +601,7 @@ class EvidenceAndMeasurementTests(unittest.TestCase):
             clean_containment(timestamp="2026-07-10T12:00:00")
 
 
-class GateStateTests(unittest.TestCase):
+class InternalGateTests(unittest.TestCase):
     def test_complete_bench_without_authorization_is_bench_passed(self) -> None:
         verdict = evaluate()
         self.assertEqual("bench_passed", verdict.decision)
@@ -671,79 +677,47 @@ class GateStateTests(unittest.TestCase):
 class ReceiptTests(unittest.TestCase):
     def build(
         self,
-        candidate: cm.BenchSummary,
+        bundle: cm.BenchEvidenceBundle,
         verdict: cm.PromotionVerdict,
     ) -> dict[str, object]:
-        control = make_summary("vulkan_baseline")
-        control_maps = backend("vulkan_baseline")
-        candidate_maps = backend("cuda_candidate")
-        containment = clean_containment()
-        authorization = cm.AuthorizationWitness(
-            "boot_authorization", "not_attempted", None, None, None
-        )
-        live_authorization = cm.AuthorizationWitness(
-            "live_witness_authorization", "not_attempted", None, None, None
-        )
-        return cm.build_receipt(
-            make_identity(),
-            control,
-            candidate,
-            control_maps,
-            candidate_maps,
-            containment,
-            authorization,
-            live_authorization,
-            verdict,
-            timestamp=TS,
-        )
+        return cm.build_receipt(bundle, verdict, timestamp=TS)
 
     def test_receipt_reruns_gate_and_rejects_mismatched_verdict(self) -> None:
-        original = make_summary()
-        verdict = evaluate(original)
-        altered = make_summary(p95_e2e_ms=1_000.001)
+        bundle = _make_bundle()
+        verdict = replace(
+            cm.evaluate_promotion_bundle(bundle),
+            decision="keep_vulkan",
+            reasons=("p95_regression",),
+        )
         with self.assertRaisesRegex(ValueError, "verdict_binding_mismatch"):
-            self.build(altered, verdict)
+            self.build(bundle, verdict)
 
     def test_receipt_includes_backend_and_phase_artifact_hashes(self) -> None:
-        candidate = make_summary()
-        receipt = self.build(candidate, evaluate(candidate))
+        bundle = _make_bundle()
+        receipt = self.build(bundle, cm.evaluate_promotion_bundle(bundle))
         self.assertEqual("producer_evidence_not_verdict", receipt["artifact_role"])
         self.assertEqual(
-            backend("vulkan_baseline").maps_sha256,
+            bundle.control_packet.cycle_witnesses[0].witness.maps_sha256,
             receipt["backend_witnesses"]["control_maps_sha256"],
         )
         self.assertEqual(
-            backend("cuda_candidate").maps_sha256,
+            bundle.candidate_packet.cycle_witnesses[0].witness.maps_sha256,
             receipt["backend_witnesses"]["candidate_maps_sha256"],
         )
         self.assertEqual(6, len(receipt["containment"]["phase_hashes"]))
 
     def test_receipt_refuses_content_markers_and_identity_mixing(self) -> None:
-        candidate = make_summary()
-        verdict = evaluate(candidate)
-        with self.assertRaisesRegex(ValueError, "(?:runtime_identity_mismatch|content_marker)"):
-            cm.build_receipt(
-                replace(make_identity(), gpu_identifier="prompt: secret"),
-                make_summary("vulkan_baseline"),
-                candidate,
-                backend("vulkan_baseline"),
-                backend("cuda_candidate"),
-                clean_containment(),
-                cm.AuthorizationWitness("boot_authorization", "not_attempted", None, None, None),
-                cm.AuthorizationWitness(
-                    "live_witness_authorization",
-                    "not_attempted",
-                    None,
-                    None,
-                    None,
-                ),
-                verdict,
-                timestamp=TS,
-            )
+        bundle = _make_bundle()
+        verdict = cm.evaluate_promotion_bundle(bundle)
+        object.__setattr__(bundle.runtime_identity, "gpu_identifier", "prompt: secret")
+        with self.assertRaisesRegex(ValueError, "bundle_binding"):
+            self.build(bundle, verdict)
 
     def test_receipt_is_content_light(self) -> None:
-        candidate = make_summary()
-        serialized = json.dumps(self.build(candidate, evaluate(candidate))).lower()
+        bundle = _make_bundle()
+        serialized = json.dumps(
+            self.build(bundle, cm.evaluate_promotion_bundle(bundle))
+        ).lower()
         for marker in (
             "prompt",
             "response",
@@ -1008,15 +982,25 @@ class SecondReviewContractTests(unittest.TestCase):
             parent_sha256=None,
             timestamp=None,
         )
-        bench = cm.evaluate_promotion(
+        control_maps = backend("vulkan_baseline")
+        candidate_maps = backend("cuda_candidate")
+        expected_hash = cm._bench_evidence_sha256(
             control,
             candidate,
-            backend("vulkan_baseline"),
-            backend("cuda_candidate"),
+            control_maps,
+            candidate_maps,
+            containment,
+        )
+        bench = cm._evaluate_promotion_gate(
+            control,
+            candidate,
+            control_maps,
+            candidate_maps,
             containment,
             no_boot,
             no_live_auth,
             make_identity(),
+            expected_bench_evidence_sha256=expected_hash,
         )
         self.assertEqual("bench_passed", bench.decision)
 
@@ -1086,30 +1070,32 @@ class SecondReviewContractTests(unittest.TestCase):
             cold_boot_witness=cold,
             provisional_live_witness=live,
         )
-        verdict = cm.evaluate_promotion(
+        verdict = cm._evaluate_promotion_gate(
             control,
             candidate,
-            backend("vulkan_baseline"),
-            backend("cuda_candidate"),
+            control_maps,
+            candidate_maps,
             containment,
             boot,
             live_auth,
             make_identity(mode="production", effective_args=argv("8080")),
+            expected_bench_evidence_sha256=expected_hash,
             cold_boot_maps=backend("cold_boot"),
             provisional_live_maps=backend("provisional_live"),
         )
         self.assertEqual("promote_cuda", verdict.decision)
 
         broken = replace(live_auth, parent_sha256=boot.binding_sha256)
-        refused = cm.evaluate_promotion(
+        refused = cm._evaluate_promotion_gate(
             control,
             candidate,
-            backend("vulkan_baseline"),
-            backend("cuda_candidate"),
+            control_maps,
+            candidate_maps,
             containment,
             boot,
             broken,
             make_identity(mode="production", effective_args=argv("8080")),
+            expected_bench_evidence_sha256=expected_hash,
             cold_boot_maps=backend("cold_boot"),
             provisional_live_maps=backend("provisional_live"),
         )
@@ -4008,6 +3994,25 @@ def _bundle_cycle_witnesses(
     )
 
 
+def _bundle_cycle_metrics(phase: str) -> tuple[cm.CycleMetrics, ...]:
+    peak = 82.0 if phase == "vulkan_baseline" else 80.0
+    return tuple(
+        cm.CycleMetrics(
+            cycle=cycle,
+            topology_sha256=SHA_C,
+            bar1_before_percent=10.0,
+            bar1_after_load_percent=peak - 6.0 + cycle,
+            bar1_after_inference_percent=peak - 3.0 + cycle,
+            bar1_after_unload_percent=10.0,
+            vram_before_mib=100,
+            vram_after_load_mib=20_000 + cycle,
+            vram_after_inference_mib=21_000 + cycle,
+            vram_after_unload_mib=100,
+        )
+        for cycle in (1, 2, 3)
+    )
+
+
 def _bundle_packet(
     phase: str,
     *,
@@ -4020,7 +4025,7 @@ def _bundle_packet(
     containment_after_sha256: str,
 ) -> cm.PhasePacket:
     records = _turn_records()
-    metrics = _phase_cycle_metrics()
+    metrics = _bundle_cycle_metrics(phase)
     return cm.PhasePacket(
         phase=phase,
         outcome="completed",
@@ -5650,6 +5655,372 @@ class BenchEvidenceBundleTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(ValueError, "bundle_binding"):
             _make_bundle(containment_docs=poisoned)
+
+
+class BundleGateTests(unittest.TestCase):
+    def test_bundle_evaluation_reaches_bench_passed_with_stage_identity(self) -> None:
+        bundle = _make_bundle()
+        verdict = cm.evaluate_promotion_bundle(bundle)
+        self.assertEqual("bench_passed", verdict.decision)
+        self.assertEqual(bundle.bench_binding_sha256, verdict.evidence_sha256)
+
+    def test_public_surface_has_no_bundle_free_verdict_or_receipt_path(self) -> None:
+        public = {name for name in dir(cm) if not name.startswith("_")}
+        self.assertNotIn("evaluate_promotion", public)
+        self.assertIn("evaluate_promotion_bundle", public)
+        self.assertIn("PromotionVerdict", public)
+        self.assertEqual(
+            ("bundle",),
+            tuple(inspect.signature(cm.evaluate_promotion_bundle).parameters),
+        )
+        self.assertEqual(
+            ("bundle", "verdict", "timestamp"),
+            tuple(inspect.signature(cm.build_receipt).parameters),
+        )
+        self.assertEqual(
+            inspect.Parameter.KEYWORD_ONLY,
+            inspect.signature(cm.build_receipt).parameters["timestamp"].kind,
+        )
+
+    def test_all_five_prefixes_and_four_terminal_failures_are_exact(self) -> None:
+        expected = (
+            ("bench_passed", ()),
+            ("provisional_cuda_boot", ("cold_boot_witness_pending",)),
+            ("provisional_cuda_boot", ("provisional_live_witness_pending",)),
+            ("provisional_cuda_boot", ("provisional_live_witness_pending",)),
+            ("promote_cuda", ()),
+        )
+        bundles = tuple(_make_bundle(stage) for stage in range(1, 6))
+        for stage, (bundle, outcome) in enumerate(
+            zip(bundles, expected, strict=True), 1
+        ):
+            with self.subTest(stage=stage):
+                verdict = cm.evaluate_promotion_bundle(bundle)
+                self.assertEqual(outcome, (verdict.decision, verdict.reasons))
+                self.assertEqual(bundle.bench_binding_sha256, verdict.evidence_sha256)
+                self.assertEqual(
+                    bundle.control_summary.binding_sha256,
+                    verdict.control_summary_sha256,
+                )
+                self.assertEqual(
+                    bundle.candidate_summary.binding_sha256,
+                    verdict.candidate_summary_sha256,
+                )
+                self.assertEqual(
+                    bundle.containment.binding_sha256,
+                    verdict.containment_sha256,
+                )
+                self.assertEqual(
+                    bundle.boot_authorization.binding_sha256,
+                    verdict.boot_authorization_sha256,
+                )
+                self.assertEqual(
+                    bundle.live_authorization.binding_sha256,
+                    verdict.live_authorization_sha256,
+                )
+                self.assertEqual(
+                    bundle.runtime_identity.binding_sha256,
+                    verdict.runtime_identity_sha256,
+                )
+        self.assertEqual(1, len({bundle.bench_binding_sha256 for bundle in bundles}))
+        self.assertEqual(5, len({bundle.binding_sha256 for bundle in bundles}))
+        self.assertEqual(82.0, bundles[0].control_summary.steady_bar1_percent)
+        self.assertEqual(80.0, bundles[0].candidate_summary.steady_bar1_percent)
+
+        terminal = (
+            (2, "terminal_boot_failure", "owner_authorization_failed"),
+            (3, "terminal_cold_failure", "cold_boot_witness_failed"),
+            (4, "terminal_live_failure", "live_authorization_failed"),
+            (5, "terminal_provisional_failure", "provisional_live_witness_failed"),
+        )
+        for stage, flag, reason in terminal:
+            with self.subTest(stage=stage, terminal=flag):
+                bundle = _make_bundle(stage, **{flag: True})
+                verdict = cm.evaluate_promotion_bundle(bundle)
+                self.assertEqual("keep_vulkan", verdict.decision)
+                self.assertEqual((reason,), verdict.reasons)
+                self.assertEqual(bundle.bench_binding_sha256, verdict.evidence_sha256)
+
+    def test_wrapper_extracts_exact_cycle_one_maps_and_later_stage_maps(self) -> None:
+        for stage in range(1, 6):
+            bundle = _make_bundle(stage)
+            verdict = cm.evaluate_promotion_bundle(bundle)
+            self.assertEqual(
+                bundle.control_packet.cycle_witnesses[0].witness.binding_sha256,
+                verdict.control_maps_sha256,
+            )
+            self.assertEqual(
+                bundle.candidate_packet.cycle_witnesses[0].witness.binding_sha256,
+                verdict.candidate_maps_sha256,
+            )
+            expected_cold = (
+                bundle.cold_boot_maps.binding_sha256
+                if bundle.cold_boot_maps is not None
+                else cm._packet_hash({"phase": "cold_boot", "status": "not_reached"})
+            )
+            expected_live = (
+                bundle.provisional_live_maps.binding_sha256
+                if bundle.provisional_live_maps is not None
+                else cm._packet_hash(
+                    {"phase": "provisional_live", "status": "not_reached"}
+                )
+            )
+            self.assertEqual(expected_cold, verdict.cold_boot_maps_sha256)
+            self.assertEqual(expected_live, verdict.provisional_live_maps_sha256)
+
+    def test_wrapper_revalidates_every_cycle_wrapper_and_exact_bundle_type(self) -> None:
+        for packet_name, index in (
+            ("control_packet", 1),
+            ("candidate_packet", 2),
+        ):
+            bundle = _make_bundle()
+            wrapper = getattr(bundle, packet_name).cycle_witnesses[index]
+            object.__setattr__(wrapper, "load_started", "not-a-timestamp")
+            with self.subTest(packet=packet_name, cycle=index + 1):
+                with self.assertRaisesRegex(ValueError, "bundle_binding"):
+                    cm.evaluate_promotion_bundle(bundle)
+
+        class BundleSubclass(cm.BenchEvidenceBundle):
+            pass
+
+        subclass = BundleSubclass(**_bundle_values(_make_bundle()))
+        with self.assertRaisesRegex(ValueError, "bundle_binding"):
+            cm.evaluate_promotion_bundle(subclass)
+
+    def test_wrapper_is_the_only_public_evaluator_and_explicitly_revalidates(self) -> None:
+        wrapper_source = inspect.getsource(cm.evaluate_promotion_bundle)
+        receipt_source = inspect.getsource(cm.build_receipt)
+        gate_params = inspect.signature(cm._evaluate_promotion_gate).parameters
+        expected_hash = gate_params["expected_bench_evidence_sha256"]
+        self.assertEqual(inspect.Parameter.KEYWORD_ONLY, expected_hash.kind)
+        self.assertIs(inspect.Parameter.empty, expected_hash.default)
+        self.assertIn("BenchEvidenceBundle.__post_init__", wrapper_source)
+        self.assertIn("_evaluate_promotion_gate", wrapper_source)
+        self.assertNotIn("_evaluate_promotion_gate", receipt_source)
+        self.assertIn("evaluate_promotion_bundle", receipt_source)
+        self.assertIn("verdict = expected", receipt_source)
+
+    def test_boot_authorization_cannot_parent_the_full_bundle_hash(self) -> None:
+        bundle = _make_bundle(2)
+        wrong = replace(
+            bundle.boot_authorization,
+            parent_sha256=bundle.binding_sha256,
+        )
+        with self.assertRaisesRegex(ValueError, "bundle_binding"):
+            _make_bundle(2, boot_authorization=wrong)
+
+        verdict = cm._evaluate_promotion_gate(
+            bundle.control_summary,
+            bundle.candidate_summary,
+            bundle.control_packet.cycle_witnesses[0].witness,
+            bundle.candidate_packet.cycle_witnesses[0].witness,
+            bundle.containment,
+            wrong,
+            bundle.live_authorization,
+            bundle.runtime_identity,
+            expected_bench_evidence_sha256=bundle.bench_binding_sha256,
+        )
+        self.assertEqual("keep_vulkan", verdict.decision)
+        self.assertEqual(("evidence_chain_invalid",), verdict.reasons)
+
+    def test_gate_chronology_preserves_submicrosecond_order_at_every_link(self) -> None:
+        stage1 = _make_bundle(1)
+        boot = cm.AuthorizationWitness(
+            "boot_authorization",
+            "pass",
+            SHA_A,
+            stage1.bench_binding_sha256,
+            "2026-07-13T12:02:04.0000002Z",
+        )
+        first = cm._evaluate_promotion_gate(
+            stage1.control_summary,
+            stage1.candidate_summary,
+            stage1.control_packet.cycle_witnesses[0].witness,
+            stage1.candidate_packet.cycle_witnesses[0].witness,
+            stage1.containment,
+            boot,
+            stage1.live_authorization,
+            make_identity(mode="production", effective_args=argv("8080")),
+            expected_bench_evidence_sha256=stage1.bench_binding_sha256,
+        )
+        observed = [("boot", "provisional_cuda_boot", first.decision)]
+
+        stage3 = _make_bundle(3)
+        boot = replace(
+            stage3.boot_authorization,
+            timestamp="2026-07-13T12:03:09.0000001Z",
+        )
+        cold = replace(
+            stage3.candidate_summary.cold_boot_witness,
+            parent_sha256=boot.binding_sha256,
+            timestamp="2026-07-13T12:03:09.0000002Z",
+        )
+        candidate = replace(stage3.candidate_summary, cold_boot_witness=cold)
+        second = cm._evaluate_promotion_gate(
+            stage3.control_summary,
+            candidate,
+            stage3.control_packet.cycle_witnesses[0].witness,
+            stage3.candidate_packet.cycle_witnesses[0].witness,
+            stage3.containment,
+            boot,
+            stage3.live_authorization,
+            stage3.runtime_identity,
+            expected_bench_evidence_sha256=stage3.bench_binding_sha256,
+            cold_boot_maps=stage3.cold_boot_maps,
+        )
+        observed.append(("cold", "provisional_cuda_boot", second.decision))
+
+        stage4 = _make_bundle(4)
+        cold = replace(
+            stage4.candidate_summary.cold_boot_witness,
+            timestamp="2026-07-13T12:03:10.0000001Z",
+        )
+        live_authorization = replace(
+            stage4.live_authorization,
+            parent_sha256=cold.binding_sha256,
+            timestamp="2026-07-13T12:03:10.0000002Z",
+        )
+        candidate = replace(stage4.candidate_summary, cold_boot_witness=cold)
+        third = cm._evaluate_promotion_gate(
+            stage4.control_summary,
+            candidate,
+            stage4.control_packet.cycle_witnesses[0].witness,
+            stage4.candidate_packet.cycle_witnesses[0].witness,
+            stage4.containment,
+            stage4.boot_authorization,
+            live_authorization,
+            stage4.runtime_identity,
+            expected_bench_evidence_sha256=stage4.bench_binding_sha256,
+            cold_boot_maps=stage4.cold_boot_maps,
+        )
+        observed.append(("live_authorization", "provisional_cuda_boot", third.decision))
+
+        stage5 = _make_bundle(5)
+        live_authorization = replace(
+            stage5.live_authorization,
+            timestamp="2026-07-13T12:03:16.0000001Z",
+        )
+        live = replace(
+            stage5.candidate_summary.provisional_live_witness,
+            parent_sha256=live_authorization.binding_sha256,
+            timestamp="2026-07-13T12:03:16.0000002Z",
+        )
+        candidate = replace(
+            stage5.candidate_summary,
+            provisional_live_witness=live,
+        )
+        fourth = cm._evaluate_promotion_gate(
+            stage5.control_summary,
+            candidate,
+            stage5.control_packet.cycle_witnesses[0].witness,
+            stage5.candidate_packet.cycle_witnesses[0].witness,
+            stage5.containment,
+            stage5.boot_authorization,
+            live_authorization,
+            stage5.runtime_identity,
+            expected_bench_evidence_sha256=stage5.bench_binding_sha256,
+            cold_boot_maps=stage5.cold_boot_maps,
+            provisional_live_maps=stage5.provisional_live_maps,
+        )
+        observed.append(("provisional_live", "promote_cuda", fourth.decision))
+        for link, expected, actual in observed:
+            with self.subTest(link=link):
+                self.assertEqual(expected, actual)
+
+
+class BundleReceiptTests(unittest.TestCase):
+    @staticmethod
+    def verdict_values(verdict: cm.PromotionVerdict) -> dict[str, object]:
+        return {
+            name: getattr(verdict, name)
+            for name, descriptor in cm.PromotionVerdict.__dataclass_fields__.items()
+            if descriptor.init
+        }
+
+    def test_receipt_is_bundle_only_preserves_fields_and_binds_both_identities(self) -> None:
+        bundle = _make_bundle(5)
+        verdict = cm.evaluate_promotion_bundle(bundle)
+        receipt = cm.build_receipt(bundle, verdict, timestamp=TS)
+        self.assertEqual(
+            {
+                "schema",
+                "timestamp",
+                "phase",
+                "artifact_role",
+                "decision",
+                "reasons",
+                "runtime",
+                "backend_witnesses",
+                "measurements",
+                "phase_evidence",
+                "containment",
+                "gate_bindings",
+                "bench_binding_sha256",
+                "bundle_binding_sha256",
+                "evaluator_versions",
+            },
+            set(receipt),
+        )
+        self.assertEqual(bundle.bench_binding_sha256, receipt["bench_binding_sha256"])
+        self.assertEqual(bundle.binding_sha256, receipt["bundle_binding_sha256"])
+        self.assertEqual(
+            {
+                "quality": bundle.quality.evaluator_version,
+                "owner_voice": bundle.owner_voice.evaluator_version,
+            },
+            receipt["evaluator_versions"],
+        )
+        self.assertEqual(verdict.decision, receipt["decision"])
+        self.assertEqual(
+            bundle.control_packet.cycle_witnesses[0].witness.binding_sha256,
+            receipt["backend_witnesses"]["control_binding_sha256"],
+        )
+
+    def test_receipt_recomputes_bundle_verdict_and_rejects_mismatch(self) -> None:
+        bundle = _make_bundle()
+        verdict = cm.evaluate_promotion_bundle(bundle)
+        tampered = replace(
+            verdict,
+            decision="keep_vulkan",
+            reasons=("p95_regression",),
+        )
+        with self.assertRaisesRegex(ValueError, "verdict_binding_mismatch"):
+            cm.build_receipt(bundle, tampered, timestamp=TS)
+
+    def test_receipt_rejects_equality_proxy_verdict_subclass_and_mutation(self) -> None:
+        class EqualityProxy:
+            def __eq__(self, other: object) -> bool:
+                return True
+
+        bundle = _make_bundle()
+        with self.assertRaisesRegex(ValueError, "verdict_binding_mismatch"):
+            cm.build_receipt(bundle, EqualityProxy(), timestamp=TS)
+
+        class VerdictSubclass(cm.PromotionVerdict):
+            pass
+
+        verdict = cm.evaluate_promotion_bundle(bundle)
+        subclass = VerdictSubclass(**self.verdict_values(verdict))
+        with self.assertRaisesRegex(ValueError, "verdict_binding_mismatch"):
+            cm.build_receipt(bundle, subclass, timestamp=TS)
+
+        mutated = cm.evaluate_promotion_bundle(bundle)
+        object.__setattr__(mutated, "schema_version", "cuda-migration-verdict.evil")
+        with self.assertRaisesRegex(ValueError, "verdict_binding_mismatch"):
+            cm.build_receipt(bundle, mutated, timestamp=TS)
+
+    def test_receipt_rejects_primitive_subclass_even_when_equality_lies(self) -> None:
+        class EqualDecision(str):
+            def __eq__(self, other: object) -> bool:
+                return True
+
+            __hash__ = str.__hash__
+
+        bundle = _make_bundle()
+        verdict = cm.evaluate_promotion_bundle(bundle)
+        object.__setattr__(verdict, "decision", EqualDecision(verdict.decision))
+        with self.assertRaisesRegex(ValueError, "verdict_binding_mismatch"):
+            cm.build_receipt(bundle, verdict, timestamp=TS)
 
 
 if __name__ == "__main__":

@@ -4279,9 +4279,13 @@ class PromotionVerdict:
     schema_version: str = field(default=SCHEMA_VERSION, init=False)
 
     def __post_init__(self) -> None:
-        if self.decision not in _DECISIONS:
+        if type(self.schema_version) is not str or self.schema_version != SCHEMA_VERSION:
+            raise ValueError("verdict_binding")
+        if type(self.decision) is not str or self.decision not in _DECISIONS:
             raise ValueError("closed_decision")
-        if any(reason not in _REASONS for reason in self.reasons):
+        if type(self.reasons) is not tuple or any(
+            type(reason) is not str or reason not in _REASONS for reason in self.reasons
+        ):
             raise ValueError("closed_reason")
         if self.decision == "promote_cuda" and self.reasons:
             raise ValueError("closed_reason")
@@ -4410,6 +4414,7 @@ def _bench_evidence_sha256(
 
 
 def _make_verdict(
+    expected_bench_evidence_sha256: str,
     decision: Decision,
     reasons: tuple[str, ...],
     control: BenchSummary,
@@ -4423,6 +4428,7 @@ def _make_verdict(
     cold_boot_maps: RuntimeBackendWitness | None = None,
     provisional_live_maps: RuntimeBackendWitness | None = None,
 ) -> PromotionVerdict:
+    _validate_sha256(expected_bench_evidence_sha256)
     return PromotionVerdict(
         decision=decision,
         reasons=reasons,
@@ -4433,9 +4439,7 @@ def _make_verdict(
         containment_sha256=containment.binding_sha256,
         boot_authorization_sha256=boot_authorization.binding_sha256,
         live_authorization_sha256=live_authorization.binding_sha256,
-        bench_evidence_sha256=_bench_evidence_sha256(
-            control, candidate, control_maps, candidate_maps, containment
-        ),
+        bench_evidence_sha256=expected_bench_evidence_sha256,
         runtime_identity_sha256=runtime_identity.binding_sha256,
         cold_boot_maps_sha256=(
             cold_boot_maps.binding_sha256
@@ -4450,7 +4454,7 @@ def _make_verdict(
     )
 
 
-def evaluate_promotion(
+def _evaluate_promotion_gate(
     control: BenchSummary,
     candidate: BenchSummary,
     control_maps: RuntimeBackendWitness,
@@ -4460,11 +4464,13 @@ def evaluate_promotion(
     live_authorization: AuthorizationWitness,
     runtime_identity: RuntimeIdentity,
     *,
+    expected_bench_evidence_sha256: str,
     cold_boot_maps: RuntimeBackendWitness | None = None,
     provisional_live_maps: RuntimeBackendWitness | None = None,
 ) -> PromotionVerdict:
     """Apply the closed v1.1 gate without performing or authorizing cutover."""
 
+    _validate_sha256(expected_bench_evidence_sha256)
     if boot_authorization.phase != "boot_authorization":
         raise ValueError("authorization_phase")
     if live_authorization.phase != "live_witness_authorization":
@@ -4548,18 +4554,27 @@ def evaluate_promotion(
         not candidate.rollback_witness.passed
         or candidate.rollback_witness.containment_artifact_sha256
         != containment.phase_binding("vulkan_rollback")
-        or not containment.brackets("vulkan_rollback", candidate.rollback_witness.timestamp)
+        or not _containment_brackets_exact(
+            containment,
+            "vulkan_rollback",
+            candidate.rollback_witness.timestamp,
+        )
     ):
         reasons.append("rollback_drill_failed")
-    if not containment.brackets("vulkan_baseline", control_maps.timestamp):
+    if not _containment_brackets_exact(
+        containment, "vulkan_baseline", control_maps.timestamp
+    ):
         reasons.append("containment_incomplete")
-    if not containment.brackets("cuda_candidate", candidate_maps.timestamp):
+    if not _containment_brackets_exact(
+        containment, "cuda_candidate", candidate_maps.timestamp
+    ):
         reasons.append("containment_incomplete")
     if not containment.clean:
         reasons.append("containment_failed")
 
     if reasons:
         return _make_verdict(
+            expected_bench_evidence_sha256,
             "keep_vulkan",
             tuple(reasons),
             control,
@@ -4573,11 +4588,9 @@ def evaluate_promotion(
             cold_boot_maps,
             provisional_live_maps,
         )
-    bench_evidence_sha = _bench_evidence_sha256(
-        control, candidate, control_maps, candidate_maps, containment
-    )
     if boot_authorization.status == "fail":
         return _make_verdict(
+            expected_bench_evidence_sha256,
             "keep_vulkan",
             ("owner_authorization_failed",),
             control,
@@ -4600,6 +4613,7 @@ def evaluate_promotion(
             or live_authorization.status != "not_attempted"
         ):
             return _make_verdict(
+                expected_bench_evidence_sha256,
                 "keep_vulkan",
                 ("evidence_chain_invalid",),
                 control,
@@ -4614,6 +4628,7 @@ def evaluate_promotion(
                 provisional_live_maps,
             )
         return _make_verdict(
+            expected_bench_evidence_sha256,
             "bench_passed",
             (),
             control,
@@ -4627,20 +4642,26 @@ def evaluate_promotion(
             cold_boot_maps,
             provisional_live_maps,
         )
-    latest_bench_time = max(
-        [_timestamp_value(control_maps.timestamp), _timestamp_value(candidate_maps.timestamp)]
-        + [
-            _timestamp_value(item.timestamp)
+    bench_timestamps = [
+        control_maps.timestamp,
+        candidate_maps.timestamp,
+        *(
+            item.timestamp
             for item in containment.snapshots
             if item.phase in base_phases
-        ]
-        + [_timestamp_value(candidate.rollback_witness.timestamp)]
-    )
+        ),
+        candidate.rollback_witness.timestamp,
+    ]
+    latest_bench_time = bench_timestamps[0]
+    for timestamp in bench_timestamps[1:]:
+        if _compare_utc_z(timestamp, latest_bench_time) > 0:
+            latest_bench_time = timestamp
     if (
-        boot_authorization.parent_sha256 != bench_evidence_sha
-        or _timestamp_value(boot_authorization.timestamp) <= latest_bench_time
+        boot_authorization.parent_sha256 != expected_bench_evidence_sha256
+        or _compare_utc_z(boot_authorization.timestamp, latest_bench_time) <= 0
     ):
         return _make_verdict(
+            expected_bench_evidence_sha256,
             "keep_vulkan",
             ("evidence_chain_invalid",),
             control,
@@ -4657,6 +4678,7 @@ def evaluate_promotion(
     if candidate.cold_boot_witness is None:
         if cold_boot_maps is not None or provisional_live_maps is not None:
             return _make_verdict(
+                expected_bench_evidence_sha256,
                 "keep_vulkan",
                 ("evidence_chain_invalid",),
                 control,
@@ -4671,6 +4693,7 @@ def evaluate_promotion(
                 provisional_live_maps,
             )
         return _make_verdict(
+            expected_bench_evidence_sha256,
             "provisional_cuda_boot",
             ("cold_boot_witness_pending",),
             control,
@@ -4688,11 +4711,13 @@ def evaluate_promotion(
     if (
         cold_boot_maps is None
         or cold.parent_sha256 != boot_authorization.binding_sha256
-        or _timestamp_value(cold.timestamp) <= _timestamp_value(boot_authorization.timestamp)
+        or _compare_utc_z(cold.timestamp, boot_authorization.timestamp) <= 0
         or not containment.complete_for({"provisional_cuda_boot", "cold_boot"})
         or cold.containment_artifact_sha256 != containment.phase_binding("cold_boot")
-        or not containment.brackets("cold_boot", cold.timestamp)
-        or not containment.brackets("cold_boot", cold_boot_maps.timestamp)
+        or not _containment_brackets_exact(containment, "cold_boot", cold.timestamp)
+        or not _containment_brackets_exact(
+            containment, "cold_boot", cold_boot_maps.timestamp
+        )
         or cold.runtime_sha256 != runtime_identity.runtime_sha256
         or cold.runtime_maps_sha256 != cold_boot_maps.binding_sha256
         or cold.backend != cold_boot_maps.backend
@@ -4702,6 +4727,7 @@ def evaluate_promotion(
         or cold.model_bytes != runtime_identity.model_bytes
     ):
         return _make_verdict(
+            expected_bench_evidence_sha256,
             "keep_vulkan",
             ("evidence_chain_invalid",),
             control,
@@ -4717,6 +4743,7 @@ def evaluate_promotion(
         )
     if not cold.passed:
         return _make_verdict(
+            expected_bench_evidence_sha256,
             "keep_vulkan",
             ("cold_boot_witness_failed",),
             control,
@@ -4732,6 +4759,7 @@ def evaluate_promotion(
         )
     if live_authorization.status == "fail":
         return _make_verdict(
+            expected_bench_evidence_sha256,
             "keep_vulkan",
             ("live_authorization_failed",),
             control,
@@ -4747,6 +4775,7 @@ def evaluate_promotion(
         )
     if live_authorization.status == "not_attempted":
         return _make_verdict(
+            expected_bench_evidence_sha256,
             "provisional_cuda_boot",
             ("provisional_live_witness_pending",),
             control,
@@ -4760,10 +4789,11 @@ def evaluate_promotion(
             cold_boot_maps,
             provisional_live_maps,
         )
-    if live_authorization.parent_sha256 != cold.binding_sha256 or _timestamp_value(
-        live_authorization.timestamp
-    ) <= _timestamp_value(cold.timestamp):
+    if live_authorization.parent_sha256 != cold.binding_sha256 or _compare_utc_z(
+        live_authorization.timestamp, cold.timestamp
+    ) <= 0:
         return _make_verdict(
+            expected_bench_evidence_sha256,
             "keep_vulkan",
             ("evidence_chain_invalid",),
             control,
@@ -4781,6 +4811,7 @@ def evaluate_promotion(
     if live is None:
         if provisional_live_maps is not None:
             return _make_verdict(
+                expected_bench_evidence_sha256,
                 "keep_vulkan",
                 ("evidence_chain_invalid",),
                 control,
@@ -4795,6 +4826,7 @@ def evaluate_promotion(
                 provisional_live_maps,
             )
         return _make_verdict(
+            expected_bench_evidence_sha256,
             "provisional_cuda_boot",
             ("provisional_live_witness_pending",),
             control,
@@ -4811,17 +4843,24 @@ def evaluate_promotion(
     if (
         provisional_live_maps is None
         or live.parent_sha256 != live_authorization.binding_sha256
-        or _timestamp_value(live.timestamp) <= _timestamp_value(live_authorization.timestamp)
+        or _compare_utc_z(live.timestamp, live_authorization.timestamp) <= 0
         or not containment.complete_for({"provisional_live"})
         or live.containment_artifact_sha256 != containment.phase_binding("provisional_live")
-        or not containment.brackets("provisional_live", live.timestamp)
-        or not containment.brackets("provisional_live", provisional_live_maps.timestamp)
+        or not _containment_brackets_exact(
+            containment, "provisional_live", live.timestamp
+        )
+        or not _containment_brackets_exact(
+            containment,
+            "provisional_live",
+            provisional_live_maps.timestamp,
+        )
         or live.runtime_sha256 != runtime_identity.runtime_sha256
         or live.runtime_maps_sha256 != provisional_live_maps.binding_sha256
         or live.backend != provisional_live_maps.backend
         or live.configuration_sha256 != runtime_identity.configuration_sha256
     ):
         return _make_verdict(
+            expected_bench_evidence_sha256,
             "keep_vulkan",
             ("evidence_chain_invalid",),
             control,
@@ -4837,6 +4876,7 @@ def evaluate_promotion(
         )
     if not live.passed:
         return _make_verdict(
+            expected_bench_evidence_sha256,
             "keep_vulkan",
             ("provisional_live_witness_failed",),
             control,
@@ -4851,6 +4891,7 @@ def evaluate_promotion(
             provisional_live_maps,
         )
     return _make_verdict(
+        expected_bench_evidence_sha256,
         "promote_cuda",
         (),
         control,
@@ -4863,6 +4904,46 @@ def evaluate_promotion(
         runtime_identity,
         cold_boot_maps,
         provisional_live_maps,
+    )
+
+
+def evaluate_promotion_bundle(bundle: BenchEvidenceBundle) -> PromotionVerdict:
+    """Evaluate one complete, joined evidence bundle through the closed gate."""
+
+    if type(bundle) is not BenchEvidenceBundle:
+        raise ValueError("bundle_binding")
+    try:
+        BenchEvidenceBundle.__post_init__(bundle)
+        selected: list[RuntimeBackendWitness] = []
+        for packet in (bundle.control_packet, bundle.candidate_packet):
+            cycle_one: list[RuntimeBackendWitness] = []
+            for item in packet.cycle_witnesses:
+                if type(item) is not CycleBackendWitness:
+                    raise ValueError("bundle_binding")
+                if type(item.witness) is not RuntimeBackendWitness:
+                    raise ValueError("bundle_binding")
+                RuntimeBackendWitness.__post_init__(item.witness)
+                CycleBackendWitness.__post_init__(item)
+                if type(item.cycle) is int and item.cycle == 1:
+                    cycle_one.append(item.witness)
+            if len(cycle_one) != 1:
+                raise ValueError("bundle_binding")
+            selected.append(cycle_one[0])
+        control_maps, candidate_maps = selected
+    except Exception as exc:
+        raise ValueError("bundle_binding") from exc
+    return _evaluate_promotion_gate(
+        bundle.control_summary,
+        bundle.candidate_summary,
+        control_maps,
+        candidate_maps,
+        bundle.containment,
+        bundle.boot_authorization,
+        bundle.live_authorization,
+        bundle.runtime_identity,
+        expected_bench_evidence_sha256=bundle.bench_binding_sha256,
+        cold_boot_maps=bundle.cold_boot_maps,
+        provisional_live_maps=bundle.provisional_live_maps,
     )
 
 
@@ -4903,45 +4984,73 @@ def receipt_mode_allows(identity: RuntimeIdentity, *, decision: str) -> bool:
     return False
 
 
+def _promotion_verdict_packet(verdict: PromotionVerdict) -> dict[str, object]:
+    return {
+        "schema_version": verdict.schema_version,
+        "decision": verdict.decision,
+        "reasons": list(verdict.reasons),
+        "control_summary_sha256": verdict.control_summary_sha256,
+        "candidate_summary_sha256": verdict.candidate_summary_sha256,
+        "control_maps_sha256": verdict.control_maps_sha256,
+        "candidate_maps_sha256": verdict.candidate_maps_sha256,
+        "containment_sha256": verdict.containment_sha256,
+        "boot_authorization_sha256": verdict.boot_authorization_sha256,
+        "live_authorization_sha256": verdict.live_authorization_sha256,
+        "bench_evidence_sha256": verdict.bench_evidence_sha256,
+        "runtime_identity_sha256": verdict.runtime_identity_sha256,
+        "cold_boot_maps_sha256": verdict.cold_boot_maps_sha256,
+        "provisional_live_maps_sha256": verdict.provisional_live_maps_sha256,
+    }
+
+
 def build_receipt(
-    identity: RuntimeIdentity,
-    control: BenchSummary,
-    candidate: BenchSummary,
-    control_maps: RuntimeBackendWitness,
-    candidate_maps: RuntimeBackendWitness,
-    containment: ContainmentWitness,
-    boot_authorization: AuthorizationWitness,
-    live_authorization: AuthorizationWitness,
+    bundle: BenchEvidenceBundle,
     verdict: PromotionVerdict,
     *,
     timestamp: str,
-    cold_boot_maps: RuntimeBackendWitness | None = None,
-    provisional_live_maps: RuntimeBackendWitness | None = None,
 ) -> dict[str, object]:
     """Serialize content-light producer evidence, never an admission decision."""
 
     _validate_timestamp(timestamp)
+    expected = evaluate_promotion_bundle(bundle)
+    if type(verdict) is not PromotionVerdict:
+        raise ValueError("verdict_binding_mismatch")
+    try:
+        PromotionVerdict.__post_init__(verdict)
+    except Exception as exc:
+        raise ValueError("verdict_binding_mismatch") from exc
+    if _promotion_verdict_packet(expected) != _promotion_verdict_packet(verdict):
+        raise ValueError("verdict_binding_mismatch")
+    verdict = expected
+
+    identity = bundle.runtime_identity
+    candidate = bundle.candidate_summary
+    control_maps = next(
+        item.witness for item in bundle.control_packet.cycle_witnesses if item.cycle == 1
+    )
+    candidate_maps = next(
+        item.witness
+        for item in bundle.candidate_packet.cycle_witnesses
+        if item.cycle == 1
+    )
+    containment = bundle.containment
+    boot_authorization = bundle.boot_authorization
+    live_authorization = bundle.live_authorization
+    cold_boot_maps = bundle.cold_boot_maps
+    provisional_live_maps = bundle.provisional_live_maps
     if candidate.alias != identity.alias or candidate.model_sha256 != identity.model_sha256:
         raise ValueError("receipt_identity_mismatch")
     if not receipt_mode_allows(identity, decision=verdict.decision):
         raise ValueError("receipt_mode_mismatch")
-    expected = evaluate_promotion(
-        control,
-        candidate,
-        control_maps,
-        candidate_maps,
-        containment,
-        boot_authorization,
-        live_authorization,
-        identity,
-        cold_boot_maps=cold_boot_maps,
-        provisional_live_maps=provisional_live_maps,
-    )
-    if expected != verdict:
-        raise ValueError("verdict_binding_mismatch")
     receipt: dict[str, object] = {
         "schema": SCHEMA_VERSION,
         "timestamp": timestamp,
+        "bench_binding_sha256": bundle.bench_binding_sha256,
+        "bundle_binding_sha256": bundle.binding_sha256,
+        "evaluator_versions": {
+            "quality": bundle.quality.evaluator_version,
+            "owner_voice": bundle.owner_voice.evaluator_version,
+        },
         "phase": candidate.phase,
         "artifact_role": "producer_evidence_not_verdict",
         "decision": verdict.decision,
