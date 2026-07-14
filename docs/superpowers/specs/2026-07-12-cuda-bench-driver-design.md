@@ -390,15 +390,25 @@ mutation, no corpus authoring, no vision-flag changes.
 `cuda_bench_driver.continuation.v1`,
 `cuda_bench_driver.consumption_receipt.v1`,
 `cuda_bench_driver.turn_manifest.v1`,
+`cuda_bench_driver.containment_snapshot.v1` (persisted lossless
+preimage: `binding_sha256` + complete constructor fields),
+`cuda_bench_driver.runtime_identity.v1` (same wrapper; complete
+constructor fields, reconstructable — not the lossy `identity_packet`),
 `cuda_bench_assemble.receipt.v1`,
+`cuda_bench_assemble.selection.v1` (typed assembly-selection manifest:
+exact per-attempt input paths + file hashes),
 `cuda_bench_rehearsal.packet.v1` (deliberately incompatible),
 `cuda_migration.bench_evidence_bundle.v1`,
 `cuda_migration.cycle_backend_witness.v1`,
 `cuda_migration.quality_evidence.v1`,
 `cuda_migration.owner_voice_review.v1`,
 `cuda_migration.rollback_evidence_bundle.v1`.
+(17 total; amended 2026-07-13 with the implementation-plan gate.)
 
-**Closed refusal/outcome vocabulary (39 entries).**
+**Closed refusal/outcome vocabulary (40 entries; `tier_mismatch` added
+2026-07-13 — a mixed production/rehearsal provider set refuses before any
+marker creation or spawn).**
+`tier_mismatch`,
 `preflight_service_active`,
 `preflight_port_open`, `preflight_gpu_occupied`, `preflight_bench_port_busy`,
 `identity_mismatch`, `corpus_unavailable`, `gpu_scope_violation`,
@@ -429,7 +439,13 @@ mutation, no corpus authoring, no vision-flag changes.
 - `KILL_WAIT_S = 15` post-SIGKILL group-absence bound;
   `LISTENER_WAIT_S = 10` listener-absence bound; `UNLOAD_WAIT_S = 60`
   unload-proof bound — exceeding any of these is `cleanup_incomplete`;
-- nonce: 32 random bytes, encoded as exactly 64 lowercase hex chars.
+- nonce: 32 random bytes, encoded as exactly 64 lowercase hex chars;
+- `FROZEN_BENCH_ARGS_SHA256 =
+  "7fd627e1132ff30fb7f45df2cbf83d166002b0a0c56bcd07e169eca2180bd413"` —
+  sha256 of the compact-JSON argv-after-executable list shared VERBATIM by
+  both runbook bench reference lines (27 tokens; the backends differ only
+  in executable and environment, so this constant doubles as the
+  flags-identical cross-backend proof).
 
 **GPU queries.** Static preflight enumerates GPUs via
 `nvidia-smi --query-gpu=uuid --format=csv,noheader` and REQUIRES exactly
