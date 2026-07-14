@@ -3300,5 +3300,589 @@ class PhasePacketPersistenceTests(unittest.TestCase):
             cm.PersistedDoc(encoded)
 
 
+class RollbackEvidenceBundleTests(unittest.TestCase):
+    @staticmethod
+    def maps_witness() -> cm.RuntimeBackendWitness:
+        return cm.RuntimeBackendWitness(
+            backend="vulkan",
+            maps_sha256=SHA_A,
+            phase="vulkan_rollback",
+            timestamp="2026-07-13T13:00:00Z",
+            release_root_sha256=cm._packet_hash(str(cm.VULKAN_RELEASE_ROOT)),
+        )
+
+    @staticmethod
+    def kernel_fields(counters: cm.KernelCounters) -> dict[str, object]:
+        return {
+            "reusemappingdb_map": counters.reusemappingdb_map,
+            "pmap_cb": counters.pmap_cb,
+            "mmu_walk_map": counters.mmu_walk_map,
+            "nv_err_no_memory": counters.nv_err_no_memory,
+            "xid": counters.xid,
+            "unmatched_nvrm": counters.unmatched_nvrm,
+        }
+
+    @classmethod
+    def bundle(cls, **overrides: object) -> cm.RollbackEvidenceBundle:
+        values: dict[str, object] = {
+            "witness": make_rollback_witness(),
+            "maps_witness": cls.maps_witness(),
+            "kernel_cursor_before": "cursor-a",
+            "kernel_cursor_after": "cursor-b",
+            "kernel_counters": cm.KernelCounters.zero(),
+            "containment_before": containment_snapshot("vulkan_rollback", "before"),
+            "containment_after": containment_snapshot("vulkan_rollback", "after"),
+            "producer": "owner_human",
+            "window_id": "window-1",
+            "parent_control_packet_sha256": SHA_A,
+            "parent_candidate_packet_sha256": SHA_B,
+            "timestamp": "2026-07-13T13:05:00Z",
+        }
+        values.update(overrides)
+        return cm.RollbackEvidenceBundle(**values)
+
+    @staticmethod
+    def witness_fields(witness: cm.RollbackWitness) -> dict[str, object]:
+        return {
+            "unit_sha256": witness.unit_sha256,
+            "dropin_sha256": witness.dropin_sha256,
+            "runtime_sha256": witness.runtime_sha256,
+            "model_sha256": witness.model_sha256,
+            "alias": witness.alias,
+            "health_state": witness.health_state,
+            "mtp_initialized": witness.mtp_initialized,
+            "mtp_accepted_tokens": witness.mtp_accepted_tokens,
+            "restart_count": witness.restart_count,
+            "kernel_counters": RollbackEvidenceBundleTests.kernel_fields(
+                witness.kernel_counters
+            ),
+            "bar1_percent": witness.bar1_percent,
+            "vram_mib": witness.vram_mib,
+            "shared_library_manifest_sha256": (
+                witness.shared_library_manifest_sha256
+            ),
+            "effective_args_sha256": witness.effective_args_sha256,
+            "containment_artifact_sha256": witness.containment_artifact_sha256,
+            "artifact_sha256": witness.artifact_sha256,
+            "timestamp": witness.timestamp,
+        }
+
+    @staticmethod
+    def witness_values(witness: cm.RollbackWitness) -> dict[str, object]:
+        return {
+            "unit_sha256": witness.unit_sha256,
+            "dropin_sha256": witness.dropin_sha256,
+            "runtime_sha256": witness.runtime_sha256,
+            "model_sha256": witness.model_sha256,
+            "alias": witness.alias,
+            "health_state": witness.health_state,
+            "mtp_initialized": witness.mtp_initialized,
+            "mtp_accepted_tokens": witness.mtp_accepted_tokens,
+            "restart_count": witness.restart_count,
+            "kernel_counters": witness.kernel_counters,
+            "bar1_percent": witness.bar1_percent,
+            "vram_mib": witness.vram_mib,
+            "shared_library_manifest_sha256": (
+                witness.shared_library_manifest_sha256
+            ),
+            "effective_args_sha256": witness.effective_args_sha256,
+            "containment_artifact_sha256": witness.containment_artifact_sha256,
+            "artifact_sha256": witness.artifact_sha256,
+            "timestamp": witness.timestamp,
+        }
+
+    @classmethod
+    def bundle_fields(cls, bundle: cm.RollbackEvidenceBundle) -> dict[str, object]:
+        return {
+            "witness": cls.witness_fields(bundle.witness),
+            "maps_witness": {
+                "backend": bundle.maps_witness.backend,
+                "maps_sha256": bundle.maps_witness.maps_sha256,
+                "phase": bundle.maps_witness.phase,
+                "timestamp": bundle.maps_witness.timestamp,
+                "release_root_sha256": bundle.maps_witness.release_root_sha256,
+            },
+            "kernel_cursor_before": bundle.kernel_cursor_before,
+            "kernel_cursor_after": bundle.kernel_cursor_after,
+            "kernel_counters": cls.kernel_fields(bundle.kernel_counters),
+            "containment_before": PersistedDocTests.containment_fields(
+                bundle.containment_before
+            ),
+            "containment_after": PersistedDocTests.containment_fields(
+                bundle.containment_after
+            ),
+            "producer": bundle.producer,
+            "window_id": bundle.window_id,
+            "parent_control_packet_sha256": bundle.parent_control_packet_sha256,
+            "parent_candidate_packet_sha256": (
+                bundle.parent_candidate_packet_sha256
+            ),
+            "timestamp": bundle.timestamp,
+        }
+
+    def test_vulkan_rollback_phase_is_valid_direct_and_from_proc_maps(self) -> None:
+        direct = self.maps_witness()
+        path = cm.VULKAN_RELEASE_ROOT / "libggml-vulkan.so"
+        parsed = cm.RuntimeBackendWitness.from_proc_maps(
+            str(path),
+            phase="vulkan_rollback",
+            timestamp="2026-07-13T13:00:01Z",
+        )
+        self.assertEqual("vulkan_rollback", direct.phase)
+        self.assertEqual("vulkan", direct.backend)
+        self.assertEqual("vulkan_rollback", parsed.phase)
+        self.assertEqual("vulkan", parsed.backend)
+
+    def test_backend_witness_rejects_untyped_phase_and_maps_inputs(self) -> None:
+        for phase in ([], {}):
+            with self.subTest(surface="direct", phase=phase):
+                with self.assertRaisesRegex(ValueError, "backend_witness_invariant"):
+                    cm.RuntimeBackendWitness(
+                        "vulkan",
+                        SHA_A,
+                        phase,
+                        TS,
+                        cm._packet_hash(str(cm.VULKAN_RELEASE_ROOT)),
+                    )
+            with self.subTest(surface="factory", phase=phase):
+                with self.assertRaisesRegex(ValueError, "backend_witness_phase"):
+                    cm.RuntimeBackendWitness.from_proc_maps(
+                        str(cm.VULKAN_RELEASE_ROOT / "libggml-vulkan.so"),
+                        phase=phase,
+                        timestamp=TS,
+                    )
+        for maps_text in (None, [], {}):
+            with self.subTest(maps_text=maps_text):
+                with self.assertRaisesRegex(ValueError, "backend_unproven"):
+                    cm.RuntimeBackendWitness.from_proc_maps(
+                        maps_text,
+                        phase="vulkan_rollback",
+                        timestamp=TS,
+                    )
+
+    def test_bundle_binding_covers_every_carried_fact(self) -> None:
+        bundle = self.bundle()
+        expected = cm._packet_hash(
+            {
+                "schema": cm.ROLLBACK_EVIDENCE_BUNDLE_SCHEMA,
+                "witness_sha256": bundle.witness.binding_sha256,
+                "maps_witness_sha256": bundle.maps_witness.binding_sha256,
+                "kernel_cursor_before": bundle.kernel_cursor_before,
+                "kernel_cursor_after": bundle.kernel_cursor_after,
+                "kernel_counters": bundle.kernel_counters.packet(),
+                "containment_before_sha256": (
+                    bundle.containment_before.binding_sha256
+                ),
+                "containment_after_sha256": bundle.containment_after.binding_sha256,
+                "producer": bundle.producer,
+                "window_id": bundle.window_id,
+                "parent_control_packet_sha256": (
+                    bundle.parent_control_packet_sha256
+                ),
+                "parent_candidate_packet_sha256": (
+                    bundle.parent_candidate_packet_sha256
+                ),
+                "timestamp": bundle.timestamp,
+            }
+        )
+        self.assertEqual(expected, bundle.binding_sha256)
+
+    def test_component_types_refuse_before_attribute_access(self) -> None:
+        cases = {
+            "witness": object(),
+            "maps_witness": object(),
+            "kernel_counters": object(),
+            "containment_before": object(),
+            "containment_after": object(),
+        }
+        for field_name, value in cases.items():
+            with self.subTest(field_name=field_name):
+                with self.assertRaisesRegex(ValueError, "rollback_evidence_type"):
+                    self.bundle(**{field_name: value})
+
+    def test_component_subclasses_cannot_override_canonical_bindings(self) -> None:
+        class ForgedRollbackWitness(cm.RollbackWitness):
+            @property
+            def binding_sha256(self) -> str:
+                return SHA_E
+
+        class ForgedKernelCounters(cm.KernelCounters):
+            def packet(self) -> dict[str, int]:
+                return {"Xid": 0}
+
+        class ForgedBackendWitness(cm.RuntimeBackendWitness):
+            pass
+
+        class ForgedContainmentSnapshot(cm.ContainmentSnapshot):
+            pass
+
+        base_witness = make_rollback_witness()
+        maps = self.maps_witness()
+        snapshot = containment_snapshot("vulkan_rollback", "before")
+        forged_witness = ForgedRollbackWitness(**self.witness_values(base_witness))
+        forged_maps = ForgedBackendWitness(
+            maps.backend,
+            maps.maps_sha256,
+            maps.phase,
+            maps.timestamp,
+            maps.release_root_sha256,
+        )
+        forged_snapshot = ForgedContainmentSnapshot(
+            **PersistedDocTests.containment_fields(snapshot)
+        )
+        cases = {
+            "witness": forged_witness,
+            "maps_witness": forged_maps,
+            "kernel_counters": ForgedKernelCounters.zero(),
+            "containment_before": forged_snapshot,
+        }
+        for field_name, value in cases.items():
+            with self.subTest(field_name=field_name):
+                with self.assertRaisesRegex(ValueError, "rollback_evidence_type"):
+                    self.bundle(**{field_name: value})
+
+    def test_bundle_scalars_require_exact_plain_strings(self) -> None:
+        class MasqueradingOwner(str):
+            def __eq__(self, other: object) -> bool:
+                return True
+
+            def __ne__(self, other: object) -> bool:
+                return False
+
+        class DishonestCursor(str):
+            def __eq__(self, other: object) -> bool:
+                return False
+
+            def __ne__(self, other: object) -> bool:
+                return True
+
+        cases = (
+            ({"producer": MasqueradingOwner("not-owner")}, "rollback_producer"),
+            (
+                {
+                    "kernel_cursor_before": DishonestCursor("same"),
+                    "kernel_cursor_after": DishonestCursor("same"),
+                },
+                "kernel_window_invalid",
+            ),
+            ({"window_id": str.__new__(MasqueradingOwner, "window-1")}, "window_id_syntax"),
+            ({"parent_control_packet_sha256": MasqueradingOwner(SHA_A)}, "invalid_sha256"),
+            ({"parent_candidate_packet_sha256": MasqueradingOwner(SHA_B)}, "invalid_sha256"),
+            ({"timestamp": MasqueradingOwner(TS)}, "invalid_timestamp"),
+        )
+        for changes, reason in cases:
+            with self.subTest(changes=tuple(changes)):
+                with self.assertRaisesRegex(ValueError, reason):
+                    self.bundle(**changes)
+
+    def test_maps_and_containment_require_exact_rollback_roles(self) -> None:
+        with self.assertRaisesRegex(ValueError, "backend_witness_phase"):
+            self.bundle(maps_witness=backend("vulkan_baseline"))
+
+        cases = (
+            {
+                "containment_before": containment_snapshot(
+                    "vulkan_baseline", "before"
+                )
+            },
+            {
+                "containment_after": containment_snapshot(
+                    "vulkan_baseline", "after"
+                )
+            },
+            {
+                "containment_before": containment_snapshot(
+                    "vulkan_rollback", "after"
+                )
+            },
+            {
+                "containment_after": containment_snapshot(
+                    "vulkan_rollback", "before"
+                )
+            },
+        )
+        for changes in cases:
+            with self.subTest(changes=tuple(changes)):
+                with self.assertRaisesRegex(ValueError, "containment_phase"):
+                    self.bundle(**changes)
+
+    def test_containment_snapshot_requires_plain_typed_state(self) -> None:
+        class TaggedString(str):
+            pass
+
+        cases = (
+            ({"phase": TaggedString("vulkan_rollback")}, "containment_phase"),
+            ({"boundary": TaggedString("before")}, "containment_phase"),
+            ({"timestamp": TaggedString(TS)}, "invalid_timestamp"),
+            ({"screen_flag_value": ["0"]}, "containment_state"),
+            ({"active_state": {"state": "inactive"}}, "containment_state"),
+            ({"substate": ["dead"]}, "containment_state"),
+            ({"enabled_state": {"state": "disabled"}}, "containment_state"),
+        )
+        for changes, reason in cases:
+            with self.subTest(changes=tuple(changes)):
+                values = PersistedDocTests.containment_fields(
+                    containment_snapshot("vulkan_rollback", "before")
+                )
+                values.update(changes)
+                with self.assertRaisesRegex(ValueError, reason):
+                    cm.ContainmentSnapshot(**values)
+
+    def test_bundle_revalidates_bypassed_containment_shape(self) -> None:
+        class TaggedString(str):
+            pass
+
+        malformed_state = containment_snapshot("vulkan_rollback", "before")
+        object.__setattr__(malformed_state, "active_state", {"state": "inactive"})
+        forged_phase = containment_snapshot("vulkan_rollback", "before")
+        object.__setattr__(forged_phase, "phase", TaggedString("vulkan_rollback"))
+        forged_boundary = containment_snapshot("vulkan_rollback", "before")
+        object.__setattr__(forged_boundary, "boundary", TaggedString("before"))
+        for snapshot in (malformed_state, forged_phase, forged_boundary):
+            with self.subTest(snapshot=snapshot):
+                with self.assertRaisesRegex(ValueError, "rollback_evidence_type"):
+                    self.bundle(containment_before=snapshot)
+
+    def test_vulkan_rollback_rejects_cuda_maps(self) -> None:
+        cuda_path = cm.CUDA_RELEASE_ROOT / "libggml-cuda.so"
+        with self.assertRaisesRegex(ValueError, "backend_unproven"):
+            cm.RuntimeBackendWitness.from_proc_maps(
+                str(cuda_path),
+                phase="vulkan_rollback",
+                timestamp="2026-07-13T13:00:01Z",
+            )
+
+    def test_kernel_window_requires_nonempty_distinct_string_cursors(self) -> None:
+        cases = (
+            {"kernel_cursor_before": ""},
+            {"kernel_cursor_after": ""},
+            {"kernel_cursor_before": "cursor-b"},
+            {"kernel_cursor_before": 1},
+            {"kernel_cursor_after": None},
+        )
+        for changes in cases:
+            with self.subTest(changes=changes):
+                with self.assertRaisesRegex(ValueError, "kernel_window_invalid"):
+                    self.bundle(**changes)
+
+    def test_window_parents_timestamp_and_producer_validate_typed(self) -> None:
+        cases = (
+            ({"window_id": ""}, "window_id_syntax"),
+            ({"window_id": "window space"}, "window_id_syntax"),
+            ({"window_id": None}, "window_id_syntax"),
+            ({"parent_control_packet_sha256": "x" * 64}, "invalid_sha256"),
+            ({"parent_candidate_packet_sha256": None}, "invalid_sha256"),
+            ({"timestamp": "not-a-timestamp"}, "invalid_timestamp"),
+            ({"timestamp": None}, "invalid_timestamp"),
+            ({"producer": "assembler"}, "rollback_producer"),
+            ({"producer": None}, "rollback_producer"),
+        )
+        for changes, reason in cases:
+            with self.subTest(changes=changes):
+                with self.assertRaisesRegex(ValueError, reason):
+                    self.bundle(**changes)
+
+    def test_failed_or_unclean_evidence_remains_representable(self) -> None:
+        failed_witness = replace(make_rollback_witness(), restart_count=1)
+        dirty_counters = replace(cm.KernelCounters.zero(), xid=1)
+        dirty_before = containment_snapshot(
+            "vulkan_rollback", "before", screen_flag_value="1"
+        )
+        bundle = self.bundle(
+            witness=failed_witness,
+            kernel_counters=dirty_counters,
+            containment_before=dirty_before,
+        )
+        self.assertFalse(bundle.witness.passed)
+        self.assertFalse(bundle.kernel_counters.clean)
+        self.assertFalse(bundle.containment_before.clean)
+        cm._validate_sha256(bundle.binding_sha256)
+
+    def test_rollback_witness_requires_canonical_nested_types(self) -> None:
+        witness = make_rollback_witness()
+        cases = (
+            {"kernel_counters": object()},
+            {"health_state": ["healthy"]},
+        )
+        for changes in cases:
+            with self.subTest(changes=tuple(changes)):
+                with self.assertRaisesRegex(ValueError, "rollback_evidence_type"):
+                    replace(witness, **changes)
+
+    def test_nested_and_top_level_counters_revalidate_exact_values(self) -> None:
+        for value in ([], {}, -1):
+            nested_witness = make_rollback_witness()
+            object.__setattr__(nested_witness.kernel_counters, "xid", value)
+            with self.subTest(surface="nested", value=value):
+                with self.assertRaisesRegex(ValueError, "rollback_evidence_type"):
+                    self.bundle(witness=nested_witness)
+
+            top_level = cm.KernelCounters.zero()
+            object.__setattr__(top_level, "xid", value)
+            with self.subTest(surface="top_level", value=value):
+                with self.assertRaisesRegex(ValueError, "rollback_evidence_type"):
+                    self.bundle(kernel_counters=top_level)
+
+    def test_rollback_values_reject_builtin_subclass_masquerades(self) -> None:
+        class MasqueradingString(str):
+            def __eq__(self, other: object) -> bool:
+                return True
+
+            def __ne__(self, other: object) -> bool:
+                return False
+
+        class EvilInt(int):
+            pass
+
+        class EvilFloat(float):
+            pass
+
+        witness = make_rollback_witness()
+        cases = (
+            (
+                {"unit_sha256": MasqueradingString(witness.unit_sha256)},
+                "invalid_sha256",
+            ),
+            (
+                {"alias": MasqueradingString(witness.alias)},
+                "rollback_identity_mismatch",
+            ),
+            ({"restart_count": EvilInt(0)}, "invalid_restart_count"),
+            ({"bar1_percent": EvilFloat(20.0)}, "positive_measurement"),
+        )
+        for changes, reason in cases:
+            with self.subTest(changes=tuple(changes)):
+                with self.assertRaisesRegex(ValueError, reason):
+                    replace(witness, **changes)
+
+        with self.assertRaisesRegex(ValueError, "invalid_xid"):
+            replace(cm.KernelCounters.zero(), xid=EvilInt(0))
+
+    def test_bundle_revalidation_rejects_mutated_schema_versions(self) -> None:
+        component_cases = []
+        witness = make_rollback_witness()
+        object.__setattr__(witness, "schema_version", "forged.v1")
+        component_cases.append({"witness": witness})
+        maps = self.maps_witness()
+        object.__setattr__(maps, "schema_version", "forged.v1")
+        component_cases.append({"maps_witness": maps})
+        counters = cm.KernelCounters.zero()
+        object.__setattr__(counters, "schema_version", "forged.v1")
+        component_cases.append({"kernel_counters": counters})
+        containment = containment_snapshot("vulkan_rollback", "before")
+        object.__setattr__(containment, "schema_version", "forged.v1")
+        component_cases.append({"containment_before": containment})
+
+        for changes in component_cases:
+            with self.subTest(changes=tuple(changes)):
+                with self.assertRaisesRegex(ValueError, "rollback_evidence_type"):
+                    self.bundle(**changes)
+
+        bundle = self.bundle()
+        object.__setattr__(bundle, "schema_version", "forged.v1")
+        with self.assertRaisesRegex(ValueError, "rollback_evidence_type"):
+            bundle.__post_init__()
+
+    def test_bundle_forces_component_bindings_during_construction(self) -> None:
+        malformed_witness = make_rollback_witness()
+        object.__setattr__(malformed_witness, "kernel_counters", object())
+        malformed_maps = self.maps_witness()
+        object.__setattr__(malformed_maps, "maps_sha256", object())
+        malformed_counters = cm.KernelCounters.zero()
+        object.__setattr__(malformed_counters, "xid", [])
+        malformed_snapshot = containment_snapshot("vulkan_rollback", "before")
+        object.__setattr__(malformed_snapshot, "artifact_sha256", object())
+        cases = (
+            {"witness": malformed_witness},
+            {"maps_witness": malformed_maps},
+            {"kernel_counters": malformed_counters},
+            {"containment_before": malformed_snapshot},
+        )
+        for changes in cases:
+            with self.subTest(changes=tuple(changes)):
+                with self.assertRaisesRegex(ValueError, "rollback_evidence_type"):
+                    self.bundle(**changes)
+
+    def test_persisted_bundle_round_trip_rebuilds_every_nested_type(self) -> None:
+        bundle = self.bundle()
+        encoded = PersistedDocTests.wrapper(
+            cm.ROLLBACK_EVIDENCE_BUNDLE_SCHEMA,
+            bundle,
+            self.bundle_fields(bundle),
+        )
+        rebuilt = cm.PersistedDoc(encoded).obj
+        self.assertIsInstance(rebuilt, cm.RollbackEvidenceBundle)
+        self.assertIsInstance(rebuilt.witness, cm.RollbackWitness)
+        self.assertIsInstance(rebuilt.maps_witness, cm.RuntimeBackendWitness)
+        self.assertIsInstance(rebuilt.kernel_counters, cm.KernelCounters)
+        self.assertIsInstance(rebuilt.containment_before, cm.ContainmentSnapshot)
+        self.assertEqual(bundle.binding_sha256, rebuilt.binding_sha256)
+
+    def test_persisted_bundle_nested_tamper_refuses_round_trip(self) -> None:
+        bundle = self.bundle()
+        fields = self.bundle_fields(bundle)
+        fields["witness"]["restart_count"] = 9
+        with self.assertRaisesRegex(ValueError, "persisted_roundtrip"):
+            cm.PersistedDoc(
+                PersistedDocTests.wrapper(
+                    cm.ROLLBACK_EVIDENCE_BUNDLE_SCHEMA,
+                    bundle,
+                    fields,
+                )
+            )
+
+    def test_persisted_bundle_refuses_noncanonical_witness_health_type(self) -> None:
+        bundle = self.bundle()
+        malformed_witness = make_rollback_witness()
+        object.__setattr__(malformed_witness, "health_state", ["healthy"])
+        fields = self.bundle_fields(bundle)
+        fields["witness"]["health_state"] = ["healthy"]
+        forged_binding = cm._packet_hash(
+            {
+                "schema": cm.ROLLBACK_EVIDENCE_BUNDLE_SCHEMA,
+                "witness_sha256": malformed_witness.binding_sha256,
+                "maps_witness_sha256": bundle.maps_witness.binding_sha256,
+                "kernel_cursor_before": bundle.kernel_cursor_before,
+                "kernel_cursor_after": bundle.kernel_cursor_after,
+                "kernel_counters": bundle.kernel_counters.packet(),
+                "containment_before_sha256": (
+                    bundle.containment_before.binding_sha256
+                ),
+                "containment_after_sha256": bundle.containment_after.binding_sha256,
+                "producer": bundle.producer,
+                "window_id": bundle.window_id,
+                "parent_control_packet_sha256": (
+                    bundle.parent_control_packet_sha256
+                ),
+                "parent_candidate_packet_sha256": (
+                    bundle.parent_candidate_packet_sha256
+                ),
+                "timestamp": bundle.timestamp,
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "persisted_roundtrip"):
+            cm.PersistedDoc(
+                PersistedDocTests.wrapper(
+                    cm.ROLLBACK_EVIDENCE_BUNDLE_SCHEMA,
+                    bundle,
+                    fields,
+                    binding=forged_binding,
+                )
+            )
+
+    def test_persisted_containment_refuses_json_native_state_values(self) -> None:
+        snapshot = containment_snapshot("vulkan_rollback", "before")
+        object.__setattr__(snapshot, "active_state", ["inactive"])
+        fields = PersistedDocTests.containment_fields(snapshot)
+        encoded = PersistedDocTests.wrapper(
+            cm.CONTAINMENT_SNAPSHOT_SCHEMA,
+            snapshot,
+            fields,
+            binding=snapshot.binding_sha256,
+        )
+        with self.assertRaisesRegex(ValueError, "persisted_roundtrip"):
+            cm.PersistedDoc(encoded)
+
+
 if __name__ == "__main__":
     unittest.main()

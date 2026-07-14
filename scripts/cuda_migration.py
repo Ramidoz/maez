@@ -197,7 +197,7 @@ _REQUIRED_HELP_TOKENS = (
 
 
 def _validate_sha256(value: str) -> str:
-    if not isinstance(value, str) or _SHA256_RE.fullmatch(value) is None:
+    if type(value) is not str or _SHA256_RE.fullmatch(value) is None:
         raise ValueError("invalid_sha256")
     return value
 
@@ -220,8 +220,7 @@ def _finitely_float_representable(value: float | int) -> bool:
 
 def _validate_nonnegative_int(name: str, value: int) -> None:
     if (
-        isinstance(value, bool)
-        or not isinstance(value, int)
+        type(value) is not int
         or value < 0
         or not _json_number_serializable(value)
     ):
@@ -229,7 +228,7 @@ def _validate_nonnegative_int(name: str, value: int) -> None:
 
 
 def _validate_nonnegative_number(name: str, value: float | int) -> None:
-    if isinstance(value, bool) or not isinstance(value, (float, int)):
+    if type(value) not in (float, int):
         raise ValueError(f"invalid_{name}")
     if (
         value < 0
@@ -240,7 +239,7 @@ def _validate_nonnegative_number(name: str, value: float | int) -> None:
 
 
 def _validate_positive_number(value: float | int) -> None:
-    if isinstance(value, bool) or not isinstance(value, (float, int)):
+    if type(value) not in (float, int):
         raise ValueError("positive_measurement")
     if (
         value <= 0
@@ -332,6 +331,17 @@ def validate_exact_features(help_text: str, args: Sequence[str], *, mode: str) -
     _validate_effective_args(args, mode)
 
 
+_BACKEND_PHASES: Mapping[str, tuple[Backend, Path]] = MappingProxyType(
+    {
+        "vulkan_baseline": ("vulkan", VULKAN_RELEASE_ROOT),
+        "cuda_candidate": ("cuda", CUDA_RELEASE_ROOT),
+        "vulkan_rollback": ("vulkan", VULKAN_RELEASE_ROOT),
+        "cold_boot": ("cuda", CUDA_RELEASE_ROOT),
+        "provisional_live": ("cuda", CUDA_RELEASE_ROOT),
+    }
+)
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeBackendWitness:
     """Content-free result of an explicitly supplied future `/proc/maps` read."""
@@ -344,35 +354,31 @@ class RuntimeBackendWitness:
     schema_version: str = field(default=SCHEMA_VERSION, init=False)
 
     def __post_init__(self) -> None:
+        if type(self.schema_version) is not str or self.schema_version != SCHEMA_VERSION:
+            raise ValueError("schema_version_mismatch")
         _validate_sha256(self.maps_sha256)
         _validate_sha256(self.release_root_sha256)
         _validate_timestamp(self.timestamp)
-        expected = {
-            "vulkan_baseline": ("vulkan", VULKAN_RELEASE_ROOT),
-            "cuda_candidate": ("cuda", CUDA_RELEASE_ROOT),
-            "cold_boot": ("cuda", CUDA_RELEASE_ROOT),
-            "provisional_live": ("cuda", CUDA_RELEASE_ROOT),
-        }
-        if self.phase not in expected:
+        if type(self.phase) is not str or self.phase not in _BACKEND_PHASES:
             raise ValueError("backend_witness_invariant")
-        backend, release_root = expected[self.phase]
-        if self.backend != backend or self.release_root_sha256 != _packet_hash(str(release_root)):
+        backend, release_root = _BACKEND_PHASES[self.phase]
+        if (
+            type(self.backend) is not str
+            or self.backend != backend
+            or self.release_root_sha256 != _packet_hash(str(release_root))
+        ):
             raise ValueError("backend_witness_invariant")
 
     @classmethod
     def from_proc_maps(cls, maps_text: str, *, phase: str, timestamp: str) -> RuntimeBackendWitness:
-        expected = {
-            "vulkan_baseline": ("vulkan", VULKAN_RELEASE_ROOT),
-            "cuda_candidate": ("cuda", CUDA_RELEASE_ROOT),
-            "cold_boot": ("cuda", CUDA_RELEASE_ROOT),
-            "provisional_live": ("cuda", CUDA_RELEASE_ROOT),
-        }
-        if phase not in expected:
+        if type(phase) is not str or phase not in _BACKEND_PHASES:
             raise ValueError("backend_witness_phase")
+        if type(maps_text) is not str:
+            raise ValueError("backend_unproven")
         _validate_timestamp(timestamp)
         backend_paths = re.findall(r"/\S*libggml-(?:cuda|vulkan)\.so(?:\.[0-9]+)*", maps_text)
         backend = parse_backend_maps("\n".join(backend_paths))
-        expected_backend, release_root = expected[phase]
+        expected_backend, release_root = _BACKEND_PHASES[phase]
         if backend != expected_backend:
             raise ValueError("backend_unproven")
         for path_text in backend_paths:
@@ -415,6 +421,7 @@ AUTHORIZATION_WITNESS_SCHEMA = "cuda_migration.authorization_witness.v1"
 BACKEND_MAP_WITNESS_SCHEMA = "cuda_migration.backend_map_witness.v1"
 TURN_MANIFEST_SCHEMA = "cuda_bench_driver.turn_manifest.v1"
 PHASE_PACKET_SCHEMA = "cuda_bench_driver.phase_packet.v1"
+ROLLBACK_EVIDENCE_BUNDLE_SCHEMA = "cuda_migration.rollback_evidence_bundle.v1"
 
 _NONCE_RE = re.compile(r"^[0-9a-f]{64}$")
 _WINDOW_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
@@ -1191,6 +1198,8 @@ class KernelCounters:
     schema_version: str = field(default=SCHEMA_VERSION, init=False)
 
     def __post_init__(self) -> None:
+        if type(self.schema_version) is not str or self.schema_version != SCHEMA_VERSION:
+            raise ValueError("schema_version_mismatch")
         for name in (
             "reusemappingdb_map",
             "pmap_cb",
@@ -1291,15 +1300,33 @@ class RollbackWitness:
 
     def __post_init__(self) -> None:
         if (
+            type(self.schema_version) is not str
+            or self.schema_version != SCHEMA_VERSION
+            or type(self.kernel_counters) is not KernelCounters
+            or type(self.health_state) is not str
+        ):
+            raise ValueError("rollback_evidence_type")
+        for digest in (
+            self.unit_sha256,
+            self.dropin_sha256,
+            self.runtime_sha256,
+            self.model_sha256,
+            self.shared_library_manifest_sha256,
+            self.effective_args_sha256,
+        ):
+            _validate_sha256(digest)
+        if (
             self.unit_sha256 != FROZEN_VULKAN_UNIT_SHA256
             or self.dropin_sha256 != FROZEN_VULKAN_DROPIN_SHA256
             or self.runtime_sha256 != FROZEN_VULKAN_RUNTIME_SHA256
             or self.model_sha256 != FROZEN_MODEL_SHA256
+            or type(self.alias) is not str
             or self.alias != FROZEN_ALIAS
             or self.shared_library_manifest_sha256 != FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256
             or self.effective_args_sha256 != FROZEN_VULKAN_EFFECTIVE_ARGS_SHA256
         ):
             raise ValueError("rollback_identity_mismatch")
+        self.kernel_counters.__post_init__()
         for digest in (self.containment_artifact_sha256, self.artifact_sha256):
             _validate_sha256(digest)
         _validate_timestamp(self.timestamp)
@@ -2084,7 +2111,9 @@ class ContainmentSnapshot:
     schema_version: str = field(default=SCHEMA_VERSION, init=False)
 
     def __post_init__(self) -> None:
-        if self.phase not in {
+        if type(self.schema_version) is not str or self.schema_version != SCHEMA_VERSION:
+            raise ValueError("schema_version_mismatch")
+        if type(self.phase) is not str or self.phase not in {
             "vulkan_baseline",
             "cuda_candidate",
             "vulkan_rollback",
@@ -2093,8 +2122,18 @@ class ContainmentSnapshot:
             "provisional_live",
         }:
             raise ValueError("containment_phase")
-        if self.boundary not in {"before", "after"}:
+        if type(self.boundary) is not str or self.boundary not in {"before", "after"}:
             raise ValueError("containment_phase")
+        if any(
+            type(value) is not str
+            for value in (
+                self.screen_flag_value,
+                self.active_state,
+                self.substate,
+                self.enabled_state,
+            )
+        ):
+            raise ValueError("containment_state")
         _validate_timestamp(self.timestamp)
         for digest in (
             self.flag_source_sha256,
@@ -2129,6 +2168,107 @@ class ContainmentSnapshot:
                 "flag_source_sha256": self.flag_source_sha256,
                 "vision_unit_sha256": self.vision_unit_sha256,
                 "artifact_sha256": self.artifact_sha256,
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RollbackEvidenceBundle:
+    witness: RollbackWitness
+    maps_witness: RuntimeBackendWitness
+    kernel_cursor_before: str
+    kernel_cursor_after: str
+    kernel_counters: KernelCounters
+    containment_before: ContainmentSnapshot
+    containment_after: ContainmentSnapshot
+    producer: str
+    window_id: str
+    parent_control_packet_sha256: str
+    parent_candidate_packet_sha256: str
+    timestamp: str
+    schema_version: str = field(default=ROLLBACK_EVIDENCE_BUNDLE_SCHEMA, init=False)
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.schema_version) is not str
+            or self.schema_version != ROLLBACK_EVIDENCE_BUNDLE_SCHEMA
+        ):
+            raise ValueError("rollback_evidence_type")
+        if (
+            type(self.witness) is not RollbackWitness
+            or type(self.maps_witness) is not RuntimeBackendWitness
+            or type(self.kernel_counters) is not KernelCounters
+            or type(self.containment_before) is not ContainmentSnapshot
+            or type(self.containment_after) is not ContainmentSnapshot
+        ):
+            raise ValueError("rollback_evidence_type")
+        if (
+            type(self.kernel_cursor_before) is not str
+            or not self.kernel_cursor_before
+            or type(self.kernel_cursor_after) is not str
+            or not self.kernel_cursor_after
+            or self.kernel_cursor_before == self.kernel_cursor_after
+        ):
+            raise ValueError("kernel_window_invalid")
+        if type(self.producer) is not str or self.producer != "owner_human":
+            raise ValueError("rollback_producer")
+        if (
+            type(self.window_id) is not str
+            or _WINDOW_ID_RE.fullmatch(self.window_id) is None
+        ):
+            raise ValueError("window_id_syntax")
+        _validate_sha256(self.parent_control_packet_sha256)
+        _validate_sha256(self.parent_candidate_packet_sha256)
+        _validate_timestamp(self.timestamp)
+        try:
+            self.witness.__post_init__()
+            self.maps_witness.__post_init__()
+            self.kernel_counters.__post_init__()
+            self.containment_before.__post_init__()
+            self.containment_after.__post_init__()
+            for binding in (
+                self.witness.binding_sha256,
+                self.maps_witness.binding_sha256,
+                self.containment_before.binding_sha256,
+                self.containment_after.binding_sha256,
+            ):
+                _validate_sha256(binding)
+            _packet_hash(self.kernel_counters.packet())
+        except (AttributeError, OverflowError, TypeError, ValueError) as exc:
+            raise ValueError("rollback_evidence_type") from exc
+        if self.maps_witness.phase != "vulkan_rollback":
+            raise ValueError("backend_witness_phase")
+        if (
+            self.containment_before.phase != "vulkan_rollback"
+            or self.containment_before.boundary != "before"
+            or self.containment_after.phase != "vulkan_rollback"
+            or self.containment_after.boundary != "after"
+        ):
+            raise ValueError("containment_phase")
+
+    @property
+    def binding_sha256(self) -> str:
+        return _packet_hash(
+            {
+                "schema": self.schema_version,
+                "witness_sha256": self.witness.binding_sha256,
+                "maps_witness_sha256": self.maps_witness.binding_sha256,
+                "kernel_cursor_before": self.kernel_cursor_before,
+                "kernel_cursor_after": self.kernel_cursor_after,
+                "kernel_counters": self.kernel_counters.packet(),
+                "containment_before_sha256": (
+                    self.containment_before.binding_sha256
+                ),
+                "containment_after_sha256": self.containment_after.binding_sha256,
+                "producer": self.producer,
+                "window_id": self.window_id,
+                "parent_control_packet_sha256": (
+                    self.parent_control_packet_sha256
+                ),
+                "parent_candidate_packet_sha256": (
+                    self.parent_candidate_packet_sha256
+                ),
+                "timestamp": self.timestamp,
             }
         )
 
@@ -2304,6 +2444,63 @@ _KERNEL_COUNTER_FIELDS = (
 
 def _decode_kernel_counters(fields: object) -> KernelCounters:
     return KernelCounters(**_persisted_fields(fields, _KERNEL_COUNTER_FIELDS))
+
+
+_ROLLBACK_WITNESS_FIELDS = (
+    "unit_sha256",
+    "dropin_sha256",
+    "runtime_sha256",
+    "model_sha256",
+    "alias",
+    "health_state",
+    "mtp_initialized",
+    "mtp_accepted_tokens",
+    "restart_count",
+    "kernel_counters",
+    "bar1_percent",
+    "vram_mib",
+    "shared_library_manifest_sha256",
+    "effective_args_sha256",
+    "containment_artifact_sha256",
+    "artifact_sha256",
+    "timestamp",
+)
+
+
+def _decode_rollback_witness(fields: object) -> RollbackWitness:
+    values = _persisted_fields(fields, _ROLLBACK_WITNESS_FIELDS)
+    values["kernel_counters"] = _decode_kernel_counters(values["kernel_counters"])
+    return RollbackWitness(**values)
+
+
+_ROLLBACK_EVIDENCE_BUNDLE_FIELDS = (
+    "witness",
+    "maps_witness",
+    "kernel_cursor_before",
+    "kernel_cursor_after",
+    "kernel_counters",
+    "containment_before",
+    "containment_after",
+    "producer",
+    "window_id",
+    "parent_control_packet_sha256",
+    "parent_candidate_packet_sha256",
+    "timestamp",
+)
+
+
+def _decode_rollback_evidence_bundle(fields: object) -> RollbackEvidenceBundle:
+    values = _persisted_fields(fields, _ROLLBACK_EVIDENCE_BUNDLE_FIELDS)
+    values["witness"] = _decode_rollback_witness(values["witness"])
+    values["maps_witness"] = _decode_backend_map_witness(values["maps_witness"])
+    values["kernel_counters"] = _decode_kernel_counters(values["kernel_counters"])
+    values["containment_before"] = _decode_containment_snapshot(
+        values["containment_before"]
+    )
+    values["containment_after"] = _decode_containment_snapshot(
+        values["containment_after"]
+    )
+    return RollbackEvidenceBundle(**values)
 
 
 def _decode_cold_boot_witness(fields: object) -> ColdBootWitness:
@@ -2516,6 +2713,7 @@ _PERSISTED_REGISTRY: Mapping[str, object] = MappingProxyType(
         PROVISIONAL_LIVE_WITNESS_SCHEMA: _decode_provisional_live_witness,
         AUTHORIZATION_WITNESS_SCHEMA: _decode_authorization_witness,
         BACKEND_MAP_WITNESS_SCHEMA: _decode_backend_map_witness,
+        ROLLBACK_EVIDENCE_BUNDLE_SCHEMA: _decode_rollback_evidence_bundle,
     }
 )
 
@@ -3186,7 +3384,7 @@ def _packet_hash(value: object) -> str:
 
 
 def _timestamp_value(timestamp: str) -> datetime:
-    if not isinstance(timestamp, str):
+    if type(timestamp) is not str:
         raise ValueError("invalid_timestamp")
     try:
         parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
