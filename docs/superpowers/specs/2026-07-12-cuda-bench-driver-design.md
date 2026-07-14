@@ -420,8 +420,11 @@ exact per-attempt input paths + file hashes),
 `cuda_migration.rollback_evidence_bundle.v1`,
 `cuda_migration.cold_boot_witness.v1` (persisted lossless wrapper for the
 later-stage cold-boot witness), `cuda_migration.provisional_live_witness.v1`
-(same, provisional-live).
-(19 total; amended 2026-07-14 with the implementation-plan gate.)
+(same, provisional-live),
+`cuda_migration.authorization_witness.v1` (persisted boot/live
+authorization witness), `cuda_migration.backend_map_witness.v1` (persisted
+cold-boot/provisional backend-map witness).
+(21 total; amended 2026-07-14 with the implementation-plan gate.)
 
 **Closed refusal/outcome vocabulary (40 entries; `tier_mismatch` added
 2026-07-13 — a mixed production/rehearsal provider set refuses before any

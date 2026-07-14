@@ -618,7 +618,7 @@ if __name__ == "__main__":
 - Private files: `O_EXCL` creation, `0700` dirs / `0600` files; reads via trusted-anchor descriptor walk (anchor = bench root, `openat` + `O_NOFOLLOW` per component, regular file, owner UID, `st_nlink == 1`).
 - Frozen constants (Appendix of spec, copy verbatim): `READINESS_TIMEOUT_S=300`, `REQUEST_TIMEOUT_MS=30_000`, `SIGTERM_GRACE_S=10`, `RESPONSE_BYTE_CAP=4*1024*1024`, `TURN_ARTIFACT_BYTE_CAP=8*1024*1024`, `WINDOW_TTL_S=14_400`, `CONTINUATION_TTL_S=3_600`, `KILL_WAIT_S=15`, `LISTENER_WAIT_S=10`, `UNLOAD_WAIT_S=60`.
 - Closed refusal/outcome vocabulary: exactly the 40 entries in the spec appendix (incl. tier_mismatch).
-- Schema names exactly as the spec appendix lists (19 names).
+- Schema names exactly as the spec appendix lists (21 names).
 - MTP wire: only `draft_n`/`draft_n_accepted`, present only when `draft_n > 0`; `rejected` derived; per-request aggregation (discard warmup, validate 7 pairs, sum→cycle, sum 3→phase).
 - Sample semantics: `sample_n=7`, `measured_sample_count=21`, quality over all 21.
 - Existing suite `tests/test_cuda_migration.py` must stay green after every task (68 tests / 242 subtests at start; Part A migrates specified tests deliberately).
@@ -1823,3 +1823,93 @@ cleanup can never mask a failure.
 - Spec coverage: authority boundary (B3 whitelist + B9 gates), scorer amendments 1–3 (A2–A6), two-gate preflight + continuation (B4/B9), topology/statistics/MTP (B3/B6), finalizer + pidfd + single-process contract (B5), packets/manifest/bindings (A3/B7), rehearsal pins (B1/B9), private-file discipline (B2), assembler receipts (B8), structural tests (B3/B8/B9/B10). Standing owner precondition (corpus backup) is an owner action, not a code task — carried in the spec and runbook.
 - Types used in later tasks are defined in earlier tasks' Interfaces blocks; the assembler's one allowed driver import is pinned.
 - No placeholders; every step carries code or exact commands.
+
+---
+
+## BINDING EXECUTION INVARIANTS (final appendix — supersedes body prose)
+
+This appendix is the plan's LAST word, added at the round-13 gate with the
+medium switch: the plan is FROZEN after this section, and remaining
+consistency enforcement moves to where a compiler exists — every invariant
+below is a REQUIRED RED in its named task, verified by the per-task Codex
+reviews and the Claude clean-checkout gates. Where any body prose above
+conflicts with this appendix, THE APPENDIX WINS.
+
+**INV-1 — Witness capture must be able to succeed (Task 0b).**
+The witness script uses explicit per-command status handling, NOT blanket
+`set -e` (which would kill an accepted status-1 suite run before its
+status file is written):
+
+```bash
+umask 077
+W=/home/rohit/maez-wt-bench/local/cuda_migration_bench/bootstrap-witness
+test ! -e "$W" || { echo "stale_witness_present"; exit 1; }
+mkdir -p "$(dirname "$W")" && mkdir "$W" || exit 1
+for run in 1 2; do
+  BENCH_REPORT_PATH="$W/run$run.jsonl" PYTHONPATH=scripts/dev \
+    /home/rohit/maez/.venv/bin/python -B -m pytest tests/ -q --tb=no \
+    -p bench_report_plugin > "$W/run$run.txt" 2>&1
+  rc=$?
+  [ "$rc" -le 1 ] || { echo "suite_run_errored status=$rc"; exit 1; }
+  echo "$rc" > "$W/run$run.status"
+done
+```
+
+(collection + manifest-flaky + witness.json + hashes.txt as in the body,
+with the same `rc=$?; [ $rc -le 1 ] || exit 1` pattern for collection.)
+Sealed file set = EXACTLY the files created:
+`{run1.jsonl, run2.jsonl, run1.txt, run2.txt, run1.status, run2.status,
+collect.txt, collect.status, manifest-flaky.txt, witness.json, hashes.txt}`
+— `_WITNESS_FILES` and the `hashes.txt` line list both name this exact
+set (the `.txt` outputs are created, so they are sealed; a set mismatch in
+either direction refuses). `witness.json.cwd` binds
+`git rev-parse --show-toplevel` AT RECORD TIME (the feature worktree), and
+`_load_witness` compares it against ITS OWN current toplevel — not a
+hardcoded `/home/rohit/maez`. `witness.json.base_commit` is JOINED, not
+shape-checked: at record time it must equal `git rev-parse HEAD`; at load
+time it must be an ancestor of HEAD (`git merge-base --is-ancestor`).
+The report JSONLs are parsed FROM THE ALREADY-ANCHORED BYTES returned by
+`_anchored_read_bytes` — no second raw-path open anywhere in the loader.
+REDs: status-1 run still writes its status file; a stray extra file OR a
+missing `.txt` refuses `witness_file_set_mismatch`; wrong-toplevel load
+refuses; non-ancestor base commit refuses; a monkeypatched raw `open()`
+in the loader's parse path fails the structural test.
+
+**INV-2 — One parent-seam type (B3/B4/B7).**
+The `AuthorizationGate.consume` protocol, BOTH adapters, and the consumer
+declare the identical postponed annotation `"cm.PhasePacket | None"` for
+`parent_packet` — the body's older `dict | None` protocol wording is
+superseded. Annotation-level RED: a test reads
+`typing.get_type_hints`/`__annotations__` on all four call surfaces and
+asserts string-identical annotations.
+
+**INV-3 — Later-stage document families get their own schemas (A2/B8).**
+Two additional lossless wrapper schemas + registry decoders:
+`cuda_migration.authorization_witness.v1` (persisted boot/live
+`AuthorizationWitness`) and `cuda_migration.backend_map_witness.v1`
+(persisted cold-boot/provisional `RuntimeBackendWitness`). A schema-keyed
+decoder can now distinguish every persisted family; the frozen canon count
+is **21** (spec appendix updated in the same commit as this appendix).
+REDs: round-trip both; unknown-schema refusal unchanged.
+
+**INV-4 — Closed later-stage prefix matrix (B8).**
+`later_stage` member sets are valid ONLY as one of these exact prefixes:
+
+- **P1** (stage 1): `later_stage` null.
+- **P2** (+boot authorized): `{boot_authorization, production_identity}`.
+- **P3** (+cold boot): P2 ∪ `{cold_boot_maps, cold_boot_witness,
+  provisional_cuda_boot_containment, cold_boot_containment}`.
+- **P4** (+live authorization): P3 ∪ `{live_authorization}`.
+- **P5** (+provisional live): P4 ∪ `{provisional_live_maps,
+  provisional_live_witness, provisional_live_containment}`.
+
+ANY other combination — partial, superset, or non-prefix — yields the
+typed `unscorable` receipt BEFORE scorer entry (a boot authorization
+without its production identity must never reach the gate and mint a
+verdict). REDs: one missing-member case per stage P2–P5; plus SUCCESSFUL
+stage-3 and stage-4 assembly tests alongside the existing stage-2 and
+stage-5 ones.
+
+**FREEZE.** No further prose amendments to this plan except by owner
+ruling. Implementation proceeds per the execution lane (Task 0 →
+Task 0b → A1…A6 → B1…B10), with these invariants as required REDs.
