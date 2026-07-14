@@ -63,6 +63,10 @@ EvidenceStatus = Literal["not_attempted", "pass", "fail"]
 
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 _LIBRARY_RE = re.compile(r"lib[A-Za-z0-9_.+-]+\.so(?:\.[0-9]+)*\Z")
+_UTC_Z_RE = re.compile(
+    r"(?P<whole>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})"
+    r"(?:\.(?P<fraction>[0-9]+))?Z\Z"
+)
 _ALLOWED_ROOTS = (
     Path("/home/rohit/maez"),
     Path("/home/rohit/llama.cpp-release"),
@@ -221,6 +225,26 @@ def _require_bool(name: str, value: bool) -> None:
         raise ValueError(f"invalid_{name}")
 
 
+def _validate_utc_z_timestamp(timestamp: str) -> None:
+    if not isinstance(timestamp, str) or _UTC_Z_RE.fullmatch(timestamp) is None:
+        raise ValueError("invalid_timestamp")
+    _validate_timestamp(timestamp)
+
+
+def _authorization_ttl_matches(issued_at: str, expires_at: str, ttl_s: int) -> bool:
+    issued_match = _UTC_Z_RE.fullmatch(issued_at)
+    expires_match = _UTC_Z_RE.fullmatch(expires_at)
+    if issued_match is None or expires_match is None:
+        raise ValueError("invalid_timestamp")
+    issued_whole = datetime.fromisoformat(issued_match.group("whole") + "+00:00")
+    expires_whole = datetime.fromisoformat(expires_match.group("whole") + "+00:00")
+    issued_fraction = (issued_match.group("fraction") or "").rstrip("0")
+    expires_fraction = (expires_match.group("fraction") or "").rstrip("0")
+    whole_delta = expires_whole - issued_whole
+    whole_seconds = whole_delta.days * 86_400 + whole_delta.seconds
+    return whole_seconds == ttl_s and issued_fraction == expires_fraction
+
+
 def validate_asset_path(path: Path) -> Path:
     """Validate an absolute, normalized path beneath one frozen owner root."""
 
@@ -342,6 +366,354 @@ class RuntimeBackendWitness:
                 "phase": self.phase,
                 "timestamp": self.timestamp,
                 "release_root_sha256": self.release_root_sha256,
+            }
+        )
+
+
+CYCLE_BACKEND_WITNESS_SCHEMA = "cuda_migration.cycle_backend_witness.v1"
+QUALITY_EVIDENCE_SCHEMA = "cuda_migration.quality_evidence.v1"
+OWNER_VOICE_REVIEW_SCHEMA = "cuda_migration.owner_voice_review.v1"
+CONSUMPTION_RECEIPT_SCHEMA = "cuda_bench_driver.consumption_receipt.v1"
+WINDOW_AUTHORIZATION_SCHEMA = "cuda_bench_driver.window_authorization.v1"
+CONTINUATION_SCHEMA = "cuda_bench_driver.continuation.v1"
+STATIC_PREFLIGHT_SCHEMA = "cuda_bench_driver.static_preflight.v1"
+CONTAINMENT_SNAPSHOT_SCHEMA = "cuda_bench_driver.containment_snapshot.v1"
+RUNTIME_IDENTITY_SCHEMA = "cuda_bench_driver.runtime_identity.v1"
+COLD_BOOT_WITNESS_SCHEMA = "cuda_migration.cold_boot_witness.v1"
+PROVISIONAL_LIVE_WITNESS_SCHEMA = "cuda_migration.provisional_live_witness.v1"
+AUTHORIZATION_WITNESS_SCHEMA = "cuda_migration.authorization_witness.v1"
+BACKEND_MAP_WITNESS_SCHEMA = "cuda_migration.backend_map_witness.v1"
+
+_NONCE_RE = re.compile(r"^[0-9a-f]{64}$")
+_WINDOW_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+_GPU_UUID_RE = re.compile(
+    r"^GPU-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+WINDOW_TTL_S = 14_400
+CONTINUATION_TTL_S = 3_600
+
+
+@dataclass(frozen=True, slots=True)
+class CycleBackendWitness:
+    witness: RuntimeBackendWitness
+    cycle: int
+    load_started: str
+    unload_proven: str
+    schema_version: str = field(default=CYCLE_BACKEND_WITNESS_SCHEMA, init=False)
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.cycle, bool)
+            or not isinstance(self.cycle, int)
+            or self.cycle not in {1, 2, 3}
+        ):
+            raise ValueError("bench_identity_mismatch")
+        if not isinstance(self.witness, RuntimeBackendWitness):
+            raise ValueError("backend_witness_invariant")
+        _validate_utc_z_timestamp(self.load_started)
+        _validate_utc_z_timestamp(self.unload_proven)
+        start = _timestamp_value(self.load_started)
+        end = _timestamp_value(self.unload_proven)
+        if not start < _timestamp_value(self.witness.timestamp) < end:
+            raise ValueError("witness_outside_interval")
+
+    @property
+    def binding_sha256(self) -> str:
+        return _packet_hash(
+            {
+                "schema": self.schema_version,
+                "cycle": self.cycle,
+                "load_started": self.load_started,
+                "unload_proven": self.unload_proven,
+                "witness_binding_sha256": self.witness.binding_sha256,
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class QualityEvidence:
+    evaluator_version: str
+    control_manifest_sha256: str
+    candidate_manifest_sha256: str
+    false_absence_count: int
+    wrong_answered_ungrounded_count: int
+    type_regression_count: int
+    recall_posture: str
+    quality_failure_count: int
+    covered_turn_count: int
+    timestamp: str
+    schema_version: str = field(default=QUALITY_EVIDENCE_SCHEMA, init=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.evaluator_version, str) or not self.evaluator_version:
+            raise ValueError("quality_evaluator_version")
+        _validate_sha256(self.control_manifest_sha256)
+        _validate_sha256(self.candidate_manifest_sha256)
+        for name in (
+            "false_absence_count",
+            "wrong_answered_ungrounded_count",
+            "type_regression_count",
+            "quality_failure_count",
+        ):
+            _validate_nonnegative_int(name, getattr(self, name))
+        if not isinstance(self.recall_posture, str) or self.recall_posture not in {
+            "pass",
+            "fail",
+        }:
+            raise ValueError("bench_identity_mismatch")
+        if (
+            isinstance(self.covered_turn_count, bool)
+            or not isinstance(self.covered_turn_count, int)
+            or self.covered_turn_count != FROZEN_MEASURED_SAMPLE_COUNT
+        ):
+            raise ValueError("quality_coverage")
+        _validate_utc_z_timestamp(self.timestamp)
+
+    @property
+    def binding_sha256(self) -> str:
+        return _packet_hash(
+            {
+                "schema": self.schema_version,
+                "evaluator_version": self.evaluator_version,
+                "control_manifest_sha256": self.control_manifest_sha256,
+                "candidate_manifest_sha256": self.candidate_manifest_sha256,
+                "false_absence_count": self.false_absence_count,
+                "wrong_answered_ungrounded_count": self.wrong_answered_ungrounded_count,
+                "type_regression_count": self.type_regression_count,
+                "recall_posture": self.recall_posture,
+                "quality_failure_count": self.quality_failure_count,
+                "covered_turn_count": self.covered_turn_count,
+                "timestamp": self.timestamp,
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class OwnerVoiceReview:
+    producer: str
+    status: EvidenceStatus
+    evaluator_version: str
+    control_manifest_sha256: str
+    candidate_manifest_sha256: str
+    artifact_sha256: str
+    timestamp: str
+    schema_version: str = field(default=OWNER_VOICE_REVIEW_SCHEMA, init=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.producer, str) or self.producer != "owner_human":
+            raise ValueError("owner_voice_producer")
+        if not isinstance(self.status, str) or self.status not in ("pass", "fail"):
+            raise ValueError("phase_evidence")
+        if not isinstance(self.evaluator_version, str) or not self.evaluator_version:
+            raise ValueError("owner_voice_evaluator_version")
+        _validate_sha256(self.control_manifest_sha256)
+        _validate_sha256(self.candidate_manifest_sha256)
+        _validate_sha256(self.artifact_sha256)
+        _validate_utc_z_timestamp(self.timestamp)
+
+    @property
+    def binding_sha256(self) -> str:
+        return _packet_hash(
+            {
+                "schema": self.schema_version,
+                "producer": self.producer,
+                "status": self.status,
+                "evaluator_version": self.evaluator_version,
+                "control_manifest_sha256": self.control_manifest_sha256,
+                "candidate_manifest_sha256": self.candidate_manifest_sha256,
+                "artifact_sha256": self.artifact_sha256,
+                "timestamp": self.timestamp,
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ConsumptionReceipt:
+    nonce: str
+    phase: str
+    boot_id: str
+    timestamp: str
+    schema_version: str = field(default=CONSUMPTION_RECEIPT_SCHEMA, init=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.nonce, str) or _NONCE_RE.fullmatch(self.nonce) is None:
+            raise ValueError("nonce_syntax")
+        if not isinstance(self.phase, str) or self.phase not in (
+            "vulkan_baseline",
+            "cuda_candidate",
+        ):
+            raise ValueError("closed_phase")
+        if not isinstance(self.boot_id, str) or not self.boot_id:
+            raise ValueError("boot_id_required")
+        _validate_utc_z_timestamp(self.timestamp)
+
+    @property
+    def binding_sha256(self) -> str:
+        return _packet_hash(
+            {
+                "schema": self.schema_version,
+                "nonce": self.nonce,
+                "phase": self.phase,
+                "boot_id": self.boot_id,
+                "timestamp": self.timestamp,
+            }
+        )
+
+
+def _validate_authorization_fields(doc: object, ttl_s: int) -> None:
+    window_id = getattr(doc, "window_id", None)
+    phases = getattr(doc, "phases", None)
+    boot_id = getattr(doc, "boot_id", None)
+    nonce = getattr(doc, "nonce", None)
+    owner = getattr(doc, "owner", None)
+    if not isinstance(window_id, str) or _WINDOW_ID_RE.fullmatch(window_id) is None:
+        raise ValueError("window_id_syntax")
+    if not isinstance(phases, tuple):
+        raise ValueError("immutable_sequence_required")
+    if not phases or any(
+        not isinstance(phase, str)
+        or phase not in ("vulkan_baseline", "cuda_candidate")
+        for phase in phases
+    ):
+        raise ValueError("closed_phase")
+    if not isinstance(boot_id, str) or not boot_id:
+        raise ValueError("boot_id_required")
+    if not isinstance(nonce, str) or _NONCE_RE.fullmatch(nonce) is None:
+        raise ValueError("nonce_syntax")
+    issued_at = getattr(doc, "issued_at", None)
+    expires_at = getattr(doc, "expires_at", None)
+    _validate_utc_z_timestamp(issued_at)
+    _validate_utc_z_timestamp(expires_at)
+    if not _authorization_ttl_matches(issued_at, expires_at, ttl_s):
+        raise ValueError("authorization_ttl")
+    if not isinstance(owner, str) or not owner:
+        raise ValueError("authorization_owner")
+
+
+@dataclass(frozen=True, slots=True)
+class WindowAuthorizationDoc:
+    window_id: str
+    phases: tuple[str, ...]
+    boot_id: str
+    nonce: str
+    issued_at: str
+    expires_at: str
+    owner: str
+    schema_version: str = field(default=WINDOW_AUTHORIZATION_SCHEMA, init=False)
+
+    def __post_init__(self) -> None:
+        _validate_authorization_fields(self, WINDOW_TTL_S)
+
+    @property
+    def preimage_sha256(self) -> str:
+        return _packet_hash(
+            {
+                "schema": self.schema_version,
+                "window_id": self.window_id,
+                "phases": list(self.phases),
+                "boot_id": self.boot_id,
+                "nonce": self.nonce,
+                "issued_at": self.issued_at,
+                "expires_at": self.expires_at,
+                "owner": self.owner,
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ContinuationDoc:
+    window_id: str
+    phases: tuple[str, ...]
+    boot_id: str
+    nonce: str
+    issued_at: str
+    expires_at: str
+    owner: str
+    parent_vulkan_packet_sha256: str
+    schema_version: str = field(default=CONTINUATION_SCHEMA, init=False)
+
+    def __post_init__(self) -> None:
+        _validate_authorization_fields(self, CONTINUATION_TTL_S)
+        _validate_sha256(self.parent_vulkan_packet_sha256)
+
+    @property
+    def preimage_sha256(self) -> str:
+        return _packet_hash(
+            {
+                "schema": self.schema_version,
+                "window_id": self.window_id,
+                "phases": list(self.phases),
+                "boot_id": self.boot_id,
+                "nonce": self.nonce,
+                "issued_at": self.issued_at,
+                "expires_at": self.expires_at,
+                "owner": self.owner,
+                "parent_vulkan_packet_sha256": self.parent_vulkan_packet_sha256,
+            }
+        )
+
+
+_STATIC_CHECK_EXPECTATIONS = MappingProxyType(
+    {
+        "corpus": FROZEN_CORPUS_SHA256,
+        "incumbent_unit": FROZEN_VULKAN_UNIT_SHA256,
+        "incumbent_dropin": FROZEN_VULKAN_DROPIN_SHA256,
+        "incumbent_server": FROZEN_VULKAN_RUNTIME_SHA256,
+        "model": FROZEN_MODEL_SHA256,
+        "library_manifest": FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256,
+        "effective_args": FROZEN_VULKAN_EFFECTIVE_ARGS_SHA256,
+    }
+)
+_STATIC_DYNAMIC_SHA_CHECKS = ("flag_source", "vision_unit", "candidate_manifest")
+_STATIC_CHECK_NAMES = frozenset(_STATIC_CHECK_EXPECTATIONS) | frozenset(
+    (*_STATIC_DYNAMIC_SHA_CHECKS, "bench_root_mode", "stub_pin")
+)
+
+
+@dataclass(frozen=True, slots=True)
+class StaticPreflightDoc:
+    gpu_uuid: str
+    driver_package_sha256: str
+    stub_sha256: str
+    corpus_verified: bool
+    checks: Mapping[str, str]
+    timestamp: str
+    schema_version: str = field(default=STATIC_PREFLIGHT_SCHEMA, init=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.checks, Mapping):
+            raise ValueError("static_preflight_invalid")
+        checks = dict(self.checks)
+        if set(checks) != _STATIC_CHECK_NAMES or self.corpus_verified is not True:
+            raise ValueError("static_preflight_invalid")
+        if any(checks[name] != expected for name, expected in _STATIC_CHECK_EXPECTATIONS.items()):
+            raise ValueError("static_preflight_invalid")
+        if not isinstance(self.gpu_uuid, str) or _GPU_UUID_RE.fullmatch(self.gpu_uuid) is None:
+            raise ValueError("static_preflight_invalid")
+        if checks["bench_root_mode"] != "700" or checks["stub_pin"] != self.stub_sha256:
+            raise ValueError("static_preflight_invalid")
+        try:
+            for name in _STATIC_DYNAMIC_SHA_CHECKS:
+                _validate_sha256(checks[name])
+            _validate_sha256(self.driver_package_sha256)
+            _validate_sha256(self.stub_sha256)
+        except ValueError as exc:
+            raise ValueError("static_preflight_invalid") from exc
+        _validate_utc_z_timestamp(self.timestamp)
+        object.__setattr__(self, "checks", MappingProxyType(checks))
+
+    @property
+    def binding_sha256(self) -> str:
+        return _packet_hash(
+            {
+                "schema": self.schema_version,
+                "gpu_uuid": self.gpu_uuid,
+                "driver_package_sha256": self.driver_package_sha256,
+                "stub_sha256": self.stub_sha256,
+                "corpus_verified": self.corpus_verified,
+                "checks": dict(sorted(self.checks.items())),
+                "timestamp": self.timestamp,
             }
         )
 
@@ -884,7 +1256,11 @@ class LiveTurnWitness:
     artifact_sha256: str
 
     def __post_init__(self) -> None:
-        if self.ordinal not in range(1, 8):
+        if (
+            isinstance(self.ordinal, bool)
+            or not isinstance(self.ordinal, int)
+            or self.ordinal not in range(1, 8)
+        ):
             raise ValueError("live_turn_order")
         _validate_positive_number(self.latency_ms)
         for name in (
@@ -1268,6 +1644,265 @@ class ContainmentWitness:
     @property
     def binding_sha256(self) -> str:
         return _packet_hash(dict(self.phase_hashes))
+
+
+def _canonical_wrapper_bytes(wrapper: Mapping[str, object]) -> bytes:
+    return (
+        json.dumps(
+            wrapper,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+        + b"\n"
+    )
+
+
+def _persisted_fields(fields: object, expected: tuple[str, ...]) -> dict[str, object]:
+    if not isinstance(fields, Mapping) or set(fields) != set(expected):
+        raise ValueError("persisted_roundtrip")
+    return dict(fields)
+
+
+def _decode_containment_snapshot(fields: object) -> ContainmentSnapshot:
+    values = _persisted_fields(
+        fields,
+        (
+            "phase",
+            "boundary",
+            "timestamp",
+            "screen_flag_value",
+            "active_state",
+            "substate",
+            "enabled_state",
+            "port_closed",
+            "flag_source_sha256",
+            "vision_unit_sha256",
+            "artifact_sha256",
+        ),
+    )
+    return ContainmentSnapshot(**values)
+
+
+def _decode_runtime_identity(fields: object) -> RuntimeIdentity:
+    values = _persisted_fields(
+        fields,
+        (
+            "tag",
+            "commit",
+            "version",
+            "alias",
+            "model_sha256",
+            "model_bytes",
+            "runtime_sha256",
+            "library_hashes",
+            "effective_args",
+            "mode",
+            "production_override_sha256",
+            "backend_environment",
+            "runtime_manifest_sha256",
+            "rollback_manifest_sha256",
+            "cuda_toolkit",
+            "cuda_compiler",
+            "cmake_version",
+            "driver_version",
+            "gpu_identifier",
+            "compute_capability",
+            "backend",
+        ),
+    )
+    effective_args = values["effective_args"]
+    if not isinstance(effective_args, list):
+        raise ValueError("persisted_roundtrip")
+    values["effective_args"] = tuple(effective_args)
+    for name in ("library_hashes", "backend_environment"):
+        if not isinstance(values[name], Mapping):
+            raise ValueError("persisted_roundtrip")
+        values[name] = MappingProxyType(dict(values[name]))
+    return RuntimeIdentity(**values)
+
+
+def _decode_static_preflight(fields: object) -> StaticPreflightDoc:
+    values = _persisted_fields(
+        fields,
+        (
+            "gpu_uuid",
+            "driver_package_sha256",
+            "stub_sha256",
+            "corpus_verified",
+            "checks",
+            "timestamp",
+        ),
+    )
+    if not isinstance(values["checks"], Mapping):
+        raise ValueError("persisted_roundtrip")
+    values["checks"] = MappingProxyType(dict(values["checks"]))
+    return StaticPreflightDoc(**values)
+
+
+_KERNEL_COUNTER_FIELDS = (
+    "reusemappingdb_map",
+    "pmap_cb",
+    "mmu_walk_map",
+    "nv_err_no_memory",
+    "xid",
+    "unmatched_nvrm",
+)
+
+
+def _decode_kernel_counters(fields: object) -> KernelCounters:
+    return KernelCounters(**_persisted_fields(fields, _KERNEL_COUNTER_FIELDS))
+
+
+def _decode_cold_boot_witness(fields: object) -> ColdBootWitness:
+    values = _persisted_fields(
+        fields,
+        (
+            "parent_sha256",
+            "artifact_sha256",
+            "timestamp",
+            "topology_sha256",
+            "load_intervals",
+            "steady_bar1_percent",
+            "kernel_counters",
+            "restart_count",
+            "containment_artifact_sha256",
+            "runtime_sha256",
+            "runtime_maps_sha256",
+            "backend",
+            "production_override_sha256",
+            "alias",
+            "model_sha256",
+            "model_bytes",
+            "service_health",
+            "mtp_initialized",
+            "mtp_accepted_tokens",
+        ),
+    )
+    intervals = values["load_intervals"]
+    if not isinstance(intervals, list):
+        raise ValueError("persisted_roundtrip")
+    values["load_intervals"] = tuple(
+        LoadInterval(
+            **_persisted_fields(item, ("component", "started_at", "ended_at"))
+        )
+        for item in intervals
+    )
+    values["kernel_counters"] = _decode_kernel_counters(values["kernel_counters"])
+    return ColdBootWitness(**values)
+
+
+_LIVE_TURN_FIELDS = (
+    "ordinal",
+    "latency_ms",
+    "false_absence_count",
+    "wrong_answered_ungrounded_count",
+    "type_regression_count",
+    "recall_posture",
+    "mtp_initialized",
+    "mtp_accepted_tokens",
+    "output_length",
+    "artifact_sha256",
+)
+
+
+def _decode_provisional_live_witness(fields: object) -> ProvisionalLiveWitness:
+    values = _persisted_fields(
+        fields,
+        (
+            "parent_sha256",
+            "artifact_sha256",
+            "timestamp",
+            "containment_artifact_sha256",
+            "turns",
+            "runtime_sha256",
+            "runtime_maps_sha256",
+            "backend",
+            "configuration_sha256",
+            "corpus_sha256",
+            "order_sha256",
+        ),
+    )
+    turns = values["turns"]
+    if not isinstance(turns, list):
+        raise ValueError("persisted_roundtrip")
+    values["turns"] = tuple(
+        LiveTurnWitness(**_persisted_fields(item, _LIVE_TURN_FIELDS)) for item in turns
+    )
+    return ProvisionalLiveWitness(**values)
+
+
+def _decode_authorization_witness(fields: object) -> AuthorizationWitness:
+    return AuthorizationWitness(
+        **_persisted_fields(
+            fields,
+            ("phase", "status", "artifact_sha256", "parent_sha256", "timestamp"),
+        )
+    )
+
+
+def _decode_backend_map_witness(fields: object) -> RuntimeBackendWitness:
+    return RuntimeBackendWitness(
+        **_persisted_fields(
+            fields,
+            ("backend", "maps_sha256", "phase", "timestamp", "release_root_sha256"),
+        )
+    )
+
+
+_PERSISTED_REGISTRY: Mapping[str, object] = MappingProxyType(
+    {
+        CONTAINMENT_SNAPSHOT_SCHEMA: _decode_containment_snapshot,
+        RUNTIME_IDENTITY_SCHEMA: _decode_runtime_identity,
+        STATIC_PREFLIGHT_SCHEMA: _decode_static_preflight,
+        COLD_BOOT_WITNESS_SCHEMA: _decode_cold_boot_witness,
+        PROVISIONAL_LIVE_WITNESS_SCHEMA: _decode_provisional_live_witness,
+        AUTHORIZATION_WITNESS_SCHEMA: _decode_authorization_witness,
+        BACKEND_MAP_WITNESS_SCHEMA: _decode_backend_map_witness,
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class PersistedDoc:
+    wrapper_bytes: bytes
+    _obj: object = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.wrapper_bytes, bytes):
+            raise ValueError("persisted_wrapper_shape")
+        try:
+            wrapper = json.loads(self.wrapper_bytes)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("persisted_wrapper_shape") from exc
+        if not isinstance(wrapper, Mapping) or set(wrapper) != {
+            "schema",
+            "binding_sha256",
+            "fields",
+        }:
+            raise ValueError("persisted_wrapper_shape")
+        if _canonical_wrapper_bytes(wrapper) != self.wrapper_bytes:
+            raise ValueError("noncanonical_wrapper")
+        schema = wrapper["schema"]
+        if not isinstance(schema, str) or schema not in _PERSISTED_REGISTRY:
+            raise ValueError("persisted_schema_unknown")
+        decoder = _PERSISTED_REGISTRY[schema]
+        try:
+            obj = decoder(wrapper["fields"])
+            _validate_sha256(wrapper["binding_sha256"])
+            if obj.binding_sha256 != wrapper["binding_sha256"]:
+                raise ValueError("persisted_roundtrip")
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            raise ValueError("persisted_roundtrip") from exc
+        object.__setattr__(self, "_obj", obj)
+
+    @property
+    def file_sha256(self) -> str:
+        return hashlib.sha256(self.wrapper_bytes).hexdigest()
+
+    @property
+    def obj(self) -> object:
+        return self._obj
 
 
 @dataclass(frozen=True, slots=True)

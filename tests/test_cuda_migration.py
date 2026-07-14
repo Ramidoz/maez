@@ -1896,5 +1896,694 @@ class Task4TruthAndRunbookContractTests(unittest.TestCase):
         self.assertIn("never invoke `llama-server --version` directly", static_section)
 
 
+class CycleBackendWitnessTests(unittest.TestCase):
+    def _witness(self) -> cm.RuntimeBackendWitness:
+        return cm.RuntimeBackendWitness(
+            "vulkan",
+            SHA_A,
+            "vulkan_baseline",
+            "2026-07-13T12:00:05Z",
+            cm._packet_hash(str(cm.VULKAN_RELEASE_ROOT)),
+        )
+
+    def test_witness_timestamp_must_sit_strictly_inside_interval(self) -> None:
+        wrapped = cm.CycleBackendWitness(
+            witness=self._witness(),
+            cycle=1,
+            load_started="2026-07-13T12:00:00Z",
+            unload_proven="2026-07-13T12:05:00Z",
+        )
+        self.assertEqual(1, wrapped.cycle)
+        cm._validate_sha256(wrapped.binding_sha256)
+
+        for bad_start, bad_end in (
+            ("2026-07-13T12:00:05Z", "2026-07-13T12:05:00Z"),
+            ("2026-07-13T12:00:06Z", "2026-07-13T12:05:00Z"),
+            ("2026-07-13T12:00:00Z", "2026-07-13T12:00:05Z"),
+        ):
+            with self.subTest(start=bad_start, end=bad_end):
+                with self.assertRaisesRegex(ValueError, "witness_outside_interval"):
+                    cm.CycleBackendWitness(
+                        witness=self._witness(),
+                        cycle=1,
+                        load_started=bad_start,
+                        unload_proven=bad_end,
+                    )
+
+    def test_cycle_must_be_non_bool_1_2_or_3(self) -> None:
+        for cycle in (True, 0, 4, 1.0):
+            with self.subTest(cycle=cycle):
+                with self.assertRaisesRegex(ValueError, "bench_identity_mismatch"):
+                    cm.CycleBackendWitness(
+                        witness=self._witness(),
+                        cycle=cycle,
+                        load_started="2026-07-13T12:00:00Z",
+                        unload_proven="2026-07-13T12:05:00Z",
+                    )
+
+
+class UtcTimestampContractTests(unittest.TestCase):
+    def test_utc_z_timestamp_has_one_canonical_rfc3339_lexical_shape(self) -> None:
+        for valid in (
+            "2026-07-13T12:00:00Z",
+            "2026-07-13T12:00:00.123456Z",
+        ):
+            with self.subTest(valid=valid):
+                cm._validate_utc_z_timestamp(valid)
+
+        for invalid in (
+            "2026-07-13 12:00:00Z",
+            "2026-W29-1T12:00:00Z",
+            "20260713T120000Z",
+            "2026-07-13T12:00Z",
+            "2026-07-13T12:00:00,5Z",
+        ):
+            with self.subTest(invalid=invalid):
+                with self.assertRaisesRegex(ValueError, "invalid_timestamp"):
+                    cm._validate_utc_z_timestamp(invalid)
+
+
+class QualityAndOwnerEvidenceTests(unittest.TestCase):
+    def _quality(self, **overrides: object) -> cm.QualityEvidence:
+        values: dict[str, object] = {
+            "evaluator_version": "grounding_judge.v3",
+            "control_manifest_sha256": SHA_A,
+            "candidate_manifest_sha256": SHA_B,
+            "false_absence_count": 0,
+            "wrong_answered_ungrounded_count": 0,
+            "type_regression_count": 0,
+            "recall_posture": "pass",
+            "quality_failure_count": 0,
+            "covered_turn_count": 21,
+            "timestamp": "2026-07-13T12:00:00Z",
+        }
+        values.update(overrides)
+        return cm.QualityEvidence(**values)
+
+    def _owner(self, **overrides: object) -> cm.OwnerVoiceReview:
+        values: dict[str, object] = {
+            "producer": "owner_human",
+            "status": "pass",
+            "evaluator_version": "owner_voice.v1",
+            "control_manifest_sha256": SHA_A,
+            "candidate_manifest_sha256": SHA_B,
+            "artifact_sha256": SHA_C,
+            "timestamp": "2026-07-13T12:00:00Z",
+        }
+        values.update(overrides)
+        return cm.OwnerVoiceReview(**values)
+
+    def test_quality_covered_turn_count_must_be_non_bool_21(self) -> None:
+        for count in (20, True, 21.0):
+            with self.subTest(count=count):
+                with self.assertRaisesRegex(ValueError, "quality_coverage"):
+                    self._quality(covered_turn_count=count)
+
+    def test_quality_counts_reject_booleans(self) -> None:
+        with self.assertRaisesRegex(ValueError, "invalid_false_absence_count"):
+            self._quality(false_absence_count=True)
+
+    def test_quality_and_owner_documents_bind_every_field(self) -> None:
+        quality = self._quality()
+        owner = self._owner()
+        cm._validate_sha256(quality.binding_sha256)
+        cm._validate_sha256(owner.binding_sha256)
+        self.assertNotEqual(
+            quality.binding_sha256,
+            replace(quality, evaluator_version="grounding_judge.v4").binding_sha256,
+        )
+        self.assertNotEqual(
+            owner.binding_sha256,
+            replace(owner, evaluator_version="owner_voice.v2").binding_sha256,
+        )
+
+    def test_owner_document_has_closed_producer_status_and_evaluator(self) -> None:
+        cases = (
+            ({"producer": "model"}, "owner_voice_producer"),
+            ({"status": ["pass"]}, "phase_evidence"),
+            ({"evaluator_version": ""}, "owner_voice_evaluator_version"),
+        )
+        for changes, reason in cases:
+            with self.subTest(changes=changes):
+                with self.assertRaisesRegex(ValueError, reason):
+                    self._owner(**changes)
+
+
+class ConsumptionAndAuthorizationDocTests(unittest.TestCase):
+    def _window(self, **overrides: object) -> cm.WindowAuthorizationDoc:
+        values: dict[str, object] = {
+            "window_id": "window-1",
+            "phases": ("vulkan_baseline", "cuda_candidate"),
+            "boot_id": "boot-1",
+            "nonce": "a" * 64,
+            "issued_at": "2026-07-13T12:00:00Z",
+            "expires_at": "2026-07-13T16:00:00Z",
+            "owner": "rohit",
+        }
+        values.update(overrides)
+        return cm.WindowAuthorizationDoc(**values)
+
+    def _continuation(self, **overrides: object) -> cm.ContinuationDoc:
+        values: dict[str, object] = {
+            "window_id": "window-1",
+            "phases": ("cuda_candidate",),
+            "boot_id": "boot-1",
+            "nonce": "b" * 64,
+            "issued_at": "2026-07-13T13:00:00Z",
+            "expires_at": "2026-07-13T14:00:00Z",
+            "owner": "rohit",
+            "parent_vulkan_packet_sha256": SHA_A,
+        }
+        values.update(overrides)
+        return cm.ContinuationDoc(**values)
+
+    def test_consumption_receipt_validates_and_binds(self) -> None:
+        receipt = cm.ConsumptionReceipt(
+            "a" * 64,
+            "vulkan_baseline",
+            "boot-1",
+            "2026-07-13T12:00:00Z",
+        )
+        cm._validate_sha256(receipt.binding_sha256)
+        for changes, reason in (
+            ({"nonce": "ABC"}, "nonce_syntax"),
+            ({"nonce": ["a" * 64]}, "nonce_syntax"),
+            ({"phase": ["vulkan_baseline"]}, "closed_phase"),
+            ({"boot_id": ""}, "boot_id_required"),
+            ({"timestamp": "2026-07-13T12:00:00+00:00"}, "invalid_timestamp"),
+        ):
+            values: dict[str, object] = {
+                "nonce": "a" * 64,
+                "phase": "vulkan_baseline",
+                "boot_id": "boot-1",
+                "timestamp": "2026-07-13T12:00:00Z",
+            }
+            values.update(changes)
+            with self.subTest(changes=changes):
+                with self.assertRaisesRegex(ValueError, reason):
+                    cm.ConsumptionReceipt(**values)
+
+    def test_window_and_continuation_bind_recomputable_preimages(self) -> None:
+        window = self._window()
+        continuation = self._continuation()
+        cm._validate_sha256(window.preimage_sha256)
+        cm._validate_sha256(continuation.preimage_sha256)
+        self.assertNotEqual(window.preimage_sha256, continuation.preimage_sha256)
+
+    def test_authorization_ttls_are_exact(self) -> None:
+        with self.assertRaisesRegex(ValueError, "authorization_ttl"):
+            self._window(expires_at="2026-07-13T15:59:59Z")
+        with self.assertRaisesRegex(ValueError, "authorization_ttl"):
+            self._continuation(expires_at="2026-07-13T15:00:00Z")
+
+    def test_authorization_ttl_preserves_arbitrary_rfc3339_fraction_precision(self) -> None:
+        exact = self._window(
+            issued_at="2026-07-13T12:00:00.0000001Z",
+            expires_at="2026-07-13T16:00:00.0000001Z",
+        )
+        cm._validate_sha256(exact.preimage_sha256)
+
+        with self.assertRaisesRegex(ValueError, "authorization_ttl"):
+            self._window(
+                issued_at="2026-07-13T12:00:00.0000001Z",
+                expires_at="2026-07-13T16:00:00.0000002Z",
+            )
+
+    def test_authorization_phases_must_be_immutable_and_closed(self) -> None:
+        for make, phases, reason in (
+            (self._window, ["vulkan_baseline"], "immutable_sequence_required"),
+            (self._continuation, ["cuda_candidate"], "immutable_sequence_required"),
+            (self._window, (["vulkan_baseline"],), "closed_phase"),
+            (self._window, ("unknown",), "closed_phase"),
+        ):
+            with self.subTest(phases=phases):
+                with self.assertRaisesRegex(ValueError, reason):
+                    make(phases=phases)
+
+    def test_authorization_regex_fields_are_type_checked_first(self) -> None:
+        for changes, reason in (
+            ({"window_id": ["window-1"]}, "window_id_syntax"),
+            ({"nonce": ["a" * 64]}, "nonce_syntax"),
+            ({"boot_id": []}, "boot_id_required"),
+            ({"owner": []}, "authorization_owner"),
+            ({"issued_at": "2026-07-13T12:00:00+00:00"}, "invalid_timestamp"),
+        ):
+            with self.subTest(changes=changes):
+                with self.assertRaisesRegex(ValueError, reason):
+                    self._window(**changes)
+
+
+class StaticPreflightDocTests(unittest.TestCase):
+    @staticmethod
+    def checks() -> dict[str, str]:
+        return {
+            "corpus": cm.FROZEN_CORPUS_SHA256,
+            "incumbent_unit": cm.FROZEN_VULKAN_UNIT_SHA256,
+            "incumbent_dropin": cm.FROZEN_VULKAN_DROPIN_SHA256,
+            "incumbent_server": cm.FROZEN_VULKAN_RUNTIME_SHA256,
+            "model": cm.FROZEN_MODEL_SHA256,
+            "library_manifest": cm.FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256,
+            "effective_args": cm.FROZEN_VULKAN_EFFECTIVE_ARGS_SHA256,
+            "flag_source": SHA_A,
+            "vision_unit": SHA_B,
+            "candidate_manifest": SHA_C,
+            "bench_root_mode": "700",
+            "stub_pin": SHA_D,
+        }
+
+    def make_doc(self, **overrides: object) -> cm.StaticPreflightDoc:
+        values: dict[str, object] = {
+            "gpu_uuid": "GPU-12345678-1234-1234-1234-123456789abc",
+            "driver_package_sha256": SHA_E,
+            "stub_sha256": SHA_D,
+            "corpus_verified": True,
+            "checks": self.checks(),
+            "timestamp": "2026-07-13T12:00:00Z",
+        }
+        values.update(overrides)
+        return cm.StaticPreflightDoc(**values)
+
+    def test_valid_document_binds_and_freezes_checks(self) -> None:
+        source = self.checks()
+        doc = self.make_doc(checks=source)
+        cm._validate_sha256(doc.binding_sha256)
+        source["flag_source"] = SHA_E
+        self.assertEqual(SHA_A, doc.checks["flag_source"])
+        with self.assertRaises(TypeError):
+            doc.checks["flag_source"] = SHA_E
+
+    def test_all_seven_frozen_checks_require_exact_values(self) -> None:
+        for name in (
+            "corpus",
+            "incumbent_unit",
+            "incumbent_dropin",
+            "incumbent_server",
+            "model",
+            "library_manifest",
+            "effective_args",
+        ):
+            checks = self.checks()
+            checks[name] = SHA_E
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(ValueError, "static_preflight_invalid"):
+                    self.make_doc(checks=checks)
+
+    def test_shape_clearance_and_dynamic_hashes_fail_closed(self) -> None:
+        missing = self.checks()
+        del missing["vision_unit"]
+        cases = (
+            ({"checks": missing}, "missing key"),
+            ({"corpus_verified": False}, "corpus false"),
+            ({"gpu_uuid": "GPU-" + "a" * 36}, "bad gpu shape"),
+            ({"timestamp": "2026-07-13T12:00:00+00:00"}, "non-Z timestamp"),
+        )
+        for changes, label in cases:
+            with self.subTest(label=label):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "(?:static_preflight_invalid|invalid_timestamp)",
+                ):
+                    self.make_doc(**changes)
+
+        for name in ("flag_source", "vision_unit", "candidate_manifest"):
+            checks = self.checks()
+            checks[name] = ""
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(ValueError, "static_preflight_invalid"):
+                    self.make_doc(checks=checks)
+
+
+class PersistedDocTests(unittest.TestCase):
+    @staticmethod
+    def wrapper(
+        schema: str,
+        obj: object,
+        fields: dict[str, object],
+        *,
+        binding: str | None = None,
+    ) -> bytes:
+        document = {
+            "schema": schema,
+            "binding_sha256": binding or obj.binding_sha256,
+            "fields": fields,
+        }
+        return (
+            json.dumps(
+                document,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+            + b"\n"
+        )
+
+    @staticmethod
+    def identity_fields(identity: cm.RuntimeIdentity) -> dict[str, object]:
+        return {
+            "tag": identity.tag,
+            "commit": identity.commit,
+            "version": identity.version,
+            "alias": identity.alias,
+            "model_sha256": identity.model_sha256,
+            "model_bytes": identity.model_bytes,
+            "runtime_sha256": identity.runtime_sha256,
+            "library_hashes": dict(identity.library_hashes),
+            "effective_args": list(identity.effective_args),
+            "mode": identity.mode,
+            "production_override_sha256": identity.production_override_sha256,
+            "backend_environment": dict(identity.backend_environment),
+            "runtime_manifest_sha256": identity.runtime_manifest_sha256,
+            "rollback_manifest_sha256": identity.rollback_manifest_sha256,
+            "cuda_toolkit": identity.cuda_toolkit,
+            "cuda_compiler": identity.cuda_compiler,
+            "cmake_version": identity.cmake_version,
+            "driver_version": identity.driver_version,
+            "gpu_identifier": identity.gpu_identifier,
+            "compute_capability": identity.compute_capability,
+            "backend": identity.backend,
+        }
+
+    @staticmethod
+    def containment_fields(snapshot: cm.ContainmentSnapshot) -> dict[str, object]:
+        return {
+            "phase": snapshot.phase,
+            "boundary": snapshot.boundary,
+            "timestamp": snapshot.timestamp,
+            "screen_flag_value": snapshot.screen_flag_value,
+            "active_state": snapshot.active_state,
+            "substate": snapshot.substate,
+            "enabled_state": snapshot.enabled_state,
+            "port_closed": snapshot.port_closed,
+            "flag_source_sha256": snapshot.flag_source_sha256,
+            "vision_unit_sha256": snapshot.vision_unit_sha256,
+            "artifact_sha256": snapshot.artifact_sha256,
+        }
+
+    @staticmethod
+    def cold_witness() -> cm.ColdBootWitness:
+        return cm.ColdBootWitness(
+            parent_sha256=SHA_A,
+            artifact_sha256=SHA_B,
+            timestamp="2026-07-10T12:02:00Z",
+            topology_sha256=SHA_C,
+            load_intervals=(
+                cm.LoadInterval(
+                    "primary",
+                    "2026-07-10T12:01:10Z",
+                    "2026-07-10T12:01:20Z",
+                ),
+                cm.LoadInterval(
+                    "judge",
+                    "2026-07-10T12:01:21Z",
+                    "2026-07-10T12:01:30Z",
+                ),
+            ),
+            steady_bar1_percent=80.0,
+            kernel_counters=cm.KernelCounters.zero(),
+            restart_count=0,
+            containment_artifact_sha256=SHA_D,
+            runtime_sha256=SHA_A,
+            runtime_maps_sha256=SHA_B,
+            backend="cuda",
+            production_override_sha256=SHA_C,
+            alias=cm.FROZEN_ALIAS,
+            model_sha256=cm.FROZEN_MODEL_SHA256,
+            model_bytes=cm.FROZEN_MODEL_BYTES,
+            service_health="healthy",
+            mtp_initialized=True,
+            mtp_accepted_tokens=7,
+        )
+
+    @staticmethod
+    def cold_fields(witness: cm.ColdBootWitness) -> dict[str, object]:
+        return {
+            "parent_sha256": witness.parent_sha256,
+            "artifact_sha256": witness.artifact_sha256,
+            "timestamp": witness.timestamp,
+            "topology_sha256": witness.topology_sha256,
+            "load_intervals": [
+                {
+                    "component": item.component,
+                    "started_at": item.started_at,
+                    "ended_at": item.ended_at,
+                }
+                for item in witness.load_intervals
+            ],
+            "steady_bar1_percent": witness.steady_bar1_percent,
+            "kernel_counters": {
+                "reusemappingdb_map": witness.kernel_counters.reusemappingdb_map,
+                "pmap_cb": witness.kernel_counters.pmap_cb,
+                "mmu_walk_map": witness.kernel_counters.mmu_walk_map,
+                "nv_err_no_memory": witness.kernel_counters.nv_err_no_memory,
+                "xid": witness.kernel_counters.xid,
+                "unmatched_nvrm": witness.kernel_counters.unmatched_nvrm,
+            },
+            "restart_count": witness.restart_count,
+            "containment_artifact_sha256": witness.containment_artifact_sha256,
+            "runtime_sha256": witness.runtime_sha256,
+            "runtime_maps_sha256": witness.runtime_maps_sha256,
+            "backend": witness.backend,
+            "production_override_sha256": witness.production_override_sha256,
+            "alias": witness.alias,
+            "model_sha256": witness.model_sha256,
+            "model_bytes": witness.model_bytes,
+            "service_health": witness.service_health,
+            "mtp_initialized": witness.mtp_initialized,
+            "mtp_accepted_tokens": witness.mtp_accepted_tokens,
+        }
+
+    @staticmethod
+    def live_fields(witness: cm.ProvisionalLiveWitness) -> dict[str, object]:
+        return {
+            "parent_sha256": witness.parent_sha256,
+            "artifact_sha256": witness.artifact_sha256,
+            "timestamp": witness.timestamp,
+            "containment_artifact_sha256": witness.containment_artifact_sha256,
+            "turns": [turn.packet() for turn in witness.turns],
+            "runtime_sha256": witness.runtime_sha256,
+            "runtime_maps_sha256": witness.runtime_maps_sha256,
+            "backend": witness.backend,
+            "configuration_sha256": witness.configuration_sha256,
+            "corpus_sha256": witness.corpus_sha256,
+            "order_sha256": witness.order_sha256,
+        }
+
+    def test_runtime_identity_round_trip_restores_tuple_and_frozen_mappings(self) -> None:
+        identity = make_identity()
+        persisted = cm.PersistedDoc(
+            self.wrapper(
+                cm.RUNTIME_IDENTITY_SCHEMA,
+                identity,
+                self.identity_fields(identity),
+            )
+        )
+        self.assertIsInstance(persisted.obj, cm.RuntimeIdentity)
+        self.assertIsInstance(persisted.obj.effective_args, tuple)
+        self.assertEqual(identity.binding_sha256, persisted.obj.binding_sha256)
+        cm._validate_sha256(persisted.file_sha256)
+        with self.assertRaises(TypeError):
+            persisted.obj.library_hashes["libggml-cuda.so"] = SHA_A
+
+    def test_containment_static_cold_and_live_families_round_trip(self) -> None:
+        snapshot = containment_snapshot("cuda_candidate", "before")
+        static = StaticPreflightDocTests().make_doc()
+        cold = self.cold_witness()
+        live = cm.ProvisionalLiveWitness(
+            parent_sha256=SHA_A,
+            artifact_sha256=SHA_B,
+            timestamp="2026-07-10T12:04:00Z",
+            containment_artifact_sha256=SHA_C,
+            turns=live_turns(),
+            runtime_sha256=SHA_D,
+            runtime_maps_sha256=SHA_E,
+            backend="cuda",
+            configuration_sha256=SHA_A,
+            corpus_sha256=CORPUS_SHA,
+            order_sha256=ORDER_SHA,
+        )
+        static_fields = {
+            "gpu_uuid": static.gpu_uuid,
+            "driver_package_sha256": static.driver_package_sha256,
+            "stub_sha256": static.stub_sha256,
+            "corpus_verified": static.corpus_verified,
+            "checks": dict(static.checks),
+            "timestamp": static.timestamp,
+        }
+        cases = (
+            (
+                cm.CONTAINMENT_SNAPSHOT_SCHEMA,
+                snapshot,
+                self.containment_fields(snapshot),
+                cm.ContainmentSnapshot,
+            ),
+            (cm.STATIC_PREFLIGHT_SCHEMA, static, static_fields, cm.StaticPreflightDoc),
+            (cm.COLD_BOOT_WITNESS_SCHEMA, cold, self.cold_fields(cold), cm.ColdBootWitness),
+            (
+                cm.PROVISIONAL_LIVE_WITNESS_SCHEMA,
+                live,
+                self.live_fields(live),
+                cm.ProvisionalLiveWitness,
+            ),
+        )
+        for schema, obj, fields, expected_type in cases:
+            with self.subTest(schema=schema):
+                rebuilt = cm.PersistedDoc(self.wrapper(schema, obj, fields)).obj
+                self.assertIsInstance(rebuilt, expected_type)
+                self.assertEqual(obj.binding_sha256, rebuilt.binding_sha256)
+
+    def test_inv3_authorization_and_backend_map_wrappers_round_trip(self) -> None:
+        authorization = cm.AuthorizationWitness(
+            "boot_authorization",
+            "pass",
+            SHA_A,
+            SHA_B,
+            "2026-07-13T12:00:00Z",
+        )
+        maps = backend("cold_boot")
+        authorization_fields = {
+            "phase": authorization.phase,
+            "status": authorization.status,
+            "artifact_sha256": authorization.artifact_sha256,
+            "parent_sha256": authorization.parent_sha256,
+            "timestamp": authorization.timestamp,
+        }
+        maps_fields = {
+            "backend": maps.backend,
+            "maps_sha256": maps.maps_sha256,
+            "phase": maps.phase,
+            "timestamp": maps.timestamp,
+            "release_root_sha256": maps.release_root_sha256,
+        }
+        cases = (
+            (
+                cm.AUTHORIZATION_WITNESS_SCHEMA,
+                authorization,
+                authorization_fields,
+                cm.AuthorizationWitness,
+            ),
+            (
+                cm.BACKEND_MAP_WITNESS_SCHEMA,
+                maps,
+                maps_fields,
+                cm.RuntimeBackendWitness,
+            ),
+        )
+        for schema, obj, fields, expected_type in cases:
+            with self.subTest(schema=schema):
+                rebuilt = cm.PersistedDoc(self.wrapper(schema, obj, fields)).obj
+                self.assertIsInstance(rebuilt, expected_type)
+                self.assertEqual(obj.binding_sha256, rebuilt.binding_sha256)
+
+    def test_live_turn_ordinal_rejects_bool_and_float_impostors(self) -> None:
+        turn = live_turns()[0]
+        for ordinal in (True, 1.0):
+            values = turn.packet()
+            values["ordinal"] = ordinal
+            with self.subTest(ordinal=ordinal):
+                with self.assertRaisesRegex(ValueError, "live_turn_order"):
+                    cm.LiveTurnWitness(**values)
+
+    def test_persisted_live_ordinal_impostors_refuse_round_trip(self) -> None:
+        live = cm.ProvisionalLiveWitness(
+            parent_sha256=SHA_A,
+            artifact_sha256=SHA_B,
+            timestamp="2026-07-10T12:04:00Z",
+            containment_artifact_sha256=SHA_C,
+            turns=live_turns(),
+            runtime_sha256=SHA_D,
+            runtime_maps_sha256=SHA_E,
+            backend="cuda",
+            configuration_sha256=SHA_A,
+            corpus_sha256=CORPUS_SHA,
+            order_sha256=ORDER_SHA,
+        )
+        for ordinal in (True, 1.0):
+            fields = self.live_fields(live)
+            fields["turns"][0]["ordinal"] = ordinal
+            forged_binding = cm._packet_hash(fields)
+            with self.subTest(ordinal=ordinal):
+                with self.assertRaisesRegex(ValueError, "persisted_roundtrip"):
+                    cm.PersistedDoc(
+                        self.wrapper(
+                            cm.PROVISIONAL_LIVE_WITNESS_SCHEMA,
+                            live,
+                            fields,
+                            binding=forged_binding,
+                        )
+                    )
+
+    def test_persisted_registry_is_immutable(self) -> None:
+        with self.assertRaises(TypeError):
+            cm._PERSISTED_REGISTRY["forged.v1"] = lambda fields: fields
+
+    def test_tampered_fields_and_embedded_binding_fail_round_trip(self) -> None:
+        snapshot = containment_snapshot("cuda_candidate", "before")
+        fields = self.containment_fields(snapshot)
+        fields["artifact_sha256"] = SHA_B
+        with self.assertRaisesRegex(ValueError, "persisted_roundtrip"):
+            cm.PersistedDoc(
+                self.wrapper(cm.CONTAINMENT_SNAPSHOT_SCHEMA, snapshot, fields)
+            )
+        with self.assertRaisesRegex(ValueError, "persisted_roundtrip"):
+            cm.PersistedDoc(
+                self.wrapper(
+                    cm.CONTAINMENT_SNAPSHOT_SCHEMA,
+                    snapshot,
+                    self.containment_fields(snapshot),
+                    binding=SHA_E,
+                )
+            )
+
+    def test_noncanonical_and_unknown_wrappers_refuse_typed(self) -> None:
+        snapshot = containment_snapshot("cuda_candidate", "before")
+        canonical = self.wrapper(
+            cm.CONTAINMENT_SNAPSHOT_SCHEMA,
+            snapshot,
+            self.containment_fields(snapshot),
+        )
+        with self.assertRaisesRegex(ValueError, "noncanonical_wrapper"):
+            cm.PersistedDoc(canonical[:-1] + b" \n")
+
+        unknown = self.wrapper(
+            "unknown.v1",
+            snapshot,
+            self.containment_fields(snapshot),
+        )
+        with self.assertRaisesRegex(ValueError, "persisted_schema_unknown"):
+            cm.PersistedDoc(unknown)
+
+    def test_wrapper_bytes_pin_newline_and_utf8_canon(self) -> None:
+        snapshot = containment_snapshot("cuda_candidate", "before")
+        canonical = self.wrapper(
+            cm.CONTAINMENT_SNAPSHOT_SCHEMA,
+            snapshot,
+            self.containment_fields(snapshot),
+        )
+        for malformed in (
+            canonical[:-1],
+            canonical + b"\n",
+            canonical[:-1] + b"\r\n",
+        ):
+            with self.subTest(malformed=malformed[-2:]):
+                with self.assertRaisesRegex(ValueError, "noncanonical_wrapper"):
+                    cm.PersistedDoc(malformed)
+
+        unicode_snapshot = containment_snapshot(
+            "cuda_candidate",
+            "before",
+            active_state="inactivé",
+        )
+        encoded = self.wrapper(
+            cm.CONTAINMENT_SNAPSHOT_SCHEMA,
+            unicode_snapshot,
+            self.containment_fields(unicode_snapshot),
+        )
+        persisted = cm.PersistedDoc(encoded)
+        self.assertEqual("inactivé", persisted.obj.active_state)
+        self.assertIn("inactivé".encode(), encoded)
+        self.assertNotIn(b"inactiv\\u00e9", encoded)
+        self.assertTrue(encoded.endswith(b"\n"))
+
+
 if __name__ == "__main__":
     unittest.main()
