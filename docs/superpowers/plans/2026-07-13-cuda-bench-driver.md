@@ -77,10 +77,18 @@ parameterized cases, AND a teardown-failure case — the plugin records
 failed reports from ALL phases (setup, call, teardown), deduped by nodeid,
 so a teardown-only failure cannot vanish.)
 
-- [ ] **Step 0a: Report plugin FIRST (the lossless-ID primitive).** Exact
-  pytest node IDs are NOT recoverable from junit XML (`classname` is a
-  dotted, collision-prone conversion) or prose lines. Write
-  `scripts/dev/bench_report_plugin.py`:
+- [ ] **Step 0a: Report plugin, RED-first (the lossless-ID primitive).**
+  Exact pytest node IDs are NOT recoverable from junit XML (`classname` is
+  a dotted, collision-prone conversion) or prose lines. ORDER: (1) write
+  the plugin's failing tests into `tests/test_bench_baseline.py` (exact
+  parameterized ids incl. `[a - b]`; a teardown-only failure appears; call
+  passes recorded; dedup by nodeid), (2) run them to witness the RED
+  (plugin module missing), (3) only then write
+  `scripts/dev/bench_report_plugin.py`, (4) GREEN. The witness in Step 0b
+  then runs the full suite WITH these green plugin tests included — which
+  is exactly why no self-test exemption is needed anywhere: green tests
+  never enter a failure set, and a FAILING plugin/helper test must block.
+  The plugin:
 
 ```python
 """pytest plugin: append exact node ids + outcomes as JSON lines."""
@@ -110,9 +118,10 @@ def pytest_runtest_logreport(report):
   would classify a newly introduced intermittent as flaky:
 
 ```bash
+set -euo pipefail                   # every line below is fail-closed
 W=/home/rohit/maez/local/cuda_migration_bench/bootstrap-witness
 umask 077
-test ! -e "$W"                      # FRESH or fail — never reuse stale data
+test ! -e "$W" || { echo "stale_witness_present"; exit 1; }
 mkdir "$W"
 for run in 1 2; do
   BENCH_REPORT_PATH="$W/run$run.jsonl" PYTHONPATH=scripts/dev \
@@ -124,7 +133,7 @@ done
   > "$W/collect.txt" 2>&1
 echo "$?" > "$W/collect.status"
 # manifest-flaky.txt is authored here (see below) BEFORE sealing.
-python3 - > "$W/witness.json" <<'EOF'
+/home/rohit/maez/.venv/bin/python -B - > "$W/witness.json" <<'EOF'
 import hashlib, json, os, subprocess
 print(json.dumps({
     "command": "pytest tests/ -q --tb=no -p bench_report_plugin",
@@ -305,12 +314,39 @@ def _validate_shapes(base: dict) -> None:
     if not ok:
         raise SystemExit("baseline_schema_mismatch")
 
-def _anchored_read_bytes(rel_or_abs: str) -> bytes:
-    """Every pre-existing file the helper reads (authority, witness files,
-    rotation grants) goes through the same anchored O_NOFOLLOW walk used
-    for the authority itself — never a bare path open()."""
-    # implementation shares _open_authority's descriptor walk
-    ...
+BENCH_ROOT = "/home/rohit/maez/local/cuda_migration_bench"
+
+def _anchored_read_bytes(abs_path: str) -> bytes:
+    """Every pre-existing file the helper reads (authority, witness files)
+    goes through an anchored O_NOFOLLOW component walk from BENCH_ROOT —
+    never a bare path open()."""
+    rel = os.path.relpath(abs_path, BENCH_ROOT)
+    if rel.startswith(".."):
+        raise SystemExit("baseline_filesystem_hazard")
+    dfd = os.open(BENCH_ROOT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        dinfo = os.fstat(dfd)
+        if dinfo.st_uid != os.geteuid() or stat.S_IMODE(dinfo.st_mode) != 0o700:
+            raise SystemExit("baseline_filesystem_hazard")
+        parts = rel.split(os.sep)
+        for part in parts[:-1]:
+            ndfd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                           dir_fd=dfd)
+            os.close(dfd)
+            dfd = ndfd
+        try:
+            fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dfd)
+        except OSError:
+            raise SystemExit("baseline_filesystem_hazard")
+    finally:
+        os.close(dfd)
+    info = os.fstat(fd)
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+            or info.st_nlink != 1):
+        os.close(fd)
+        raise SystemExit("baseline_filesystem_hazard")
+    with os.fdopen(fd, "rb") as handle:
+        return handle.read()
 
 def _open_authority(*, skip_helper_check: bool = False) -> dict:
     # Trusted-anchor walk: anchor at the 0700 owner-owned bench root, then
@@ -358,18 +394,31 @@ def _open_authority(*, skip_helper_check: bool = False) -> dict:
 
 WITNESS_DIR = "/home/rohit/maez/local/cuda_migration_bench/bootstrap-witness"
 
+_WITNESS_FILES = {"run1.jsonl", "run2.jsonl", "run1.status", "run2.status",
+                  "collect.txt", "collect.status", "manifest-flaky.txt",
+                  "witness.json", "hashes.txt"}
+
 def _load_witness() -> dict:
-    """Load + verify the protected pre-code witness directory: artifact
-    hashes, BOTH suite statuses, collection status/count, exact node ids
-    from the plugin JSONLs, and the manifest-flaky list."""
+    """Load + verify the protected pre-code witness directory: exact file
+    set, anchored reads only, artifact hashes, witness.json claims, BOTH
+    suite statuses, collection status/count, exact node ids, flaky list."""
+    if set(os.listdir(WITNESS_DIR)) != _WITNESS_FILES:
+        raise SystemExit("witness_file_set_mismatch")      # no extras, none missing
     def _read(name):
-        with open(os.path.join(WITNESS_DIR, name)) as handle:
-            return handle.read()
-    for line in _read("hashes.txt").splitlines():          # integrity first
-        digest, _, rel = line.partition("  ")
-        with open(rel, "rb") as handle:
-            if hashlib.sha256(handle.read()).hexdigest() != digest:
-                raise SystemExit("witness_hash_mismatch")
+        return _anchored_read_bytes(os.path.join(WITNESS_DIR, name)).decode()
+    for line in _read("hashes.txt").splitlines():          # integrity next
+        digest, _, name = line.partition("  ")
+        data = _anchored_read_bytes(os.path.join(WITNESS_DIR, name.strip()))
+        if hashlib.sha256(data).hexdigest() != digest:
+            raise SystemExit("witness_hash_mismatch")
+    meta = json.loads(_read("witness.json"))               # claims validated
+    if (meta.get("command") != "pytest tests/ -q --tb=no -p bench_report_plugin"
+            or meta.get("cwd") != "/home/rohit/maez"
+            or not re.fullmatch(r"[0-9a-f]{40}", meta.get("base_commit", ""))):
+        raise SystemExit("witness_meta_invalid")
+    with open(PLUGIN_PATH, "rb") as handle:
+        if meta.get("plugin_sha256") != hashlib.sha256(handle.read()).hexdigest():
+            raise SystemExit("baseline_helper_drift")      # witness ran a different parser
     statuses = [int(_read(f"run{n}.status").strip()) for n in (1, 2)]
     collect_status = int(_read("collect.status").strip())
     if any(s not in (0, 1) for s in statuses) or collect_status not in (0, 1):
@@ -394,8 +443,9 @@ def record() -> None:
     # as flaky. One verification run confirms the floor still holds.
     witness = _load_witness()
     status, failures = _run_suite()
-    unexplained = set(failures) - witness["stable"] - witness["flaky"] - {
-        f for f in failures if f.startswith("tests/test_bench_baseline.py::")}
+    # NO self-test exemption (green tests never enter failure sets; a
+    # failing helper/plugin test MUST block recording):
+    unexplained = set(failures) - witness["stable"] - witness["flaky"]
     if unexplained:
         raise SystemExit(f"record_unstable: {sorted(unexplained)[:5]}")
     doc = {
@@ -451,15 +501,24 @@ def rotate(authorization_path: str) -> None:
     authority is read through the trusted reader (helper-hash leg
     explicitly skipped — that mismatch is WHY we are rotating), and the
     authorization must cite exactly the hashes found."""
-    grant = json.loads(_anchored_read_bytes(authorization_path))
-    # PRE-EDIT issuance is GIT-PROVABLE, not asserted: the grant file must
-    # already be committed, and the commit that introduced it must contain
-    # the OLD helper (proving the grant predates the edit).
+    # Grants live in the REPO (committed, e.g.
+    # docs/proof/bench-baseline-rotations/<date>-grant.json), NOT under the
+    # gitignored bench root — git history is what makes pre-edit issuance
+    # provable. The AUTHORITATIVE bytes are the committed blob of the
+    # introducing commit; the HEAD blob must equal it (no post-hoc edit).
+    rel = os.path.relpath(authorization_path, "/home/rohit/maez")
     intro = subprocess.run(
-        ["git", "rev-list", "--reverse", "HEAD", "--", authorization_path],
+        ["git", "rev-list", "--reverse", "HEAD", "--", rel],
         capture_output=True, text=True).stdout.split()
     if not intro:
         raise SystemExit("rotation_unauthorized")
+    blob_intro = subprocess.run(["git", "show", f"{intro[0]}:{rel}"],
+                                capture_output=True).stdout
+    blob_head = subprocess.run(["git", "show", f"HEAD:{rel}"],
+                               capture_output=True).stdout
+    if not blob_intro or blob_intro != blob_head:
+        raise SystemExit("rotation_unauthorized")
+    grant = json.loads(blob_intro)
     old_helper = subprocess.run(
         ["git", "show", f"{intro[0]}:scripts/dev/bench_baseline.py"],
         capture_output=True).stdout
@@ -482,6 +541,8 @@ def rotate(authorization_path: str) -> None:
         "schema": SCHEMA, "pytest_status": status, "failures": sorted(failures),
         "known_flaky": old["known_flaky"], "collected": collected,
         "base_commit": _head_commit(), "helper_sha256": _self_sha256(),
+        "plugin_sha256": hashlib.sha256(
+            open(PLUGIN_PATH, "rb").read()).hexdigest(),
         "interpreter": PY, "suite_cmd": SUITE_CMD,
         "rotated_from": grant["old_authority_sha256"],
     }
@@ -557,7 +618,7 @@ if __name__ == "__main__":
 - Private files: `O_EXCL` creation, `0700` dirs / `0600` files; reads via trusted-anchor descriptor walk (anchor = bench root, `openat` + `O_NOFOLLOW` per component, regular file, owner UID, `st_nlink == 1`).
 - Frozen constants (Appendix of spec, copy verbatim): `READINESS_TIMEOUT_S=300`, `REQUEST_TIMEOUT_MS=30_000`, `SIGTERM_GRACE_S=10`, `RESPONSE_BYTE_CAP=4*1024*1024`, `TURN_ARTIFACT_BYTE_CAP=8*1024*1024`, `WINDOW_TTL_S=14_400`, `CONTINUATION_TTL_S=3_600`, `KILL_WAIT_S=15`, `LISTENER_WAIT_S=10`, `UNLOAD_WAIT_S=60`.
 - Closed refusal/outcome vocabulary: exactly the 40 entries in the spec appendix (incl. tier_mismatch).
-- Schema names exactly as the spec appendix lists (17 names).
+- Schema names exactly as the spec appendix lists (19 names).
 - MTP wire: only `draft_n`/`draft_n_accepted`, present only when `draft_n > 0`; `rejected` derived; per-request aggregation (discard warmup, validate 7 pairs, sum→cycle, sum 3→phase).
 - Sample semantics: `sample_n=7`, `measured_sample_count=21`, quality over all 21.
 - Existing suite `tests/test_cuda_migration.py` must stay green after every task (68 tests / 242 subtests at start; Part A migrates specified tests deliberately).
@@ -816,7 +877,7 @@ class AuthorizationDocTests(unittest.TestCase):
 
 (Use the test file's existing `SHA_A`/`SHA_B` constants.)
 
-- [ ] **Step 2: Run to verify failure** — `/home/rohit/maez/.venv/bin/python -B -m pytest tests/test_cuda_migration.py -q -k "CycleBackendWitness or QualityEvidence or ConsumptionReceipt or AuthorizationDoc"` → FAIL (`AttributeError`).
+- [ ] **Step 2: Run to verify failure** — `/home/rohit/maez/.venv/bin/python -B -m pytest tests/test_cuda_migration.py -q -k "CycleBackendWitness or QualityEvidence or ConsumptionReceipt or AuthorizationDoc or PersistedDoc or StaticPreflight"` → FAIL (`AttributeError`). Step 1 MUST include the PersistedDoc REDs (tampered fields → `persisted_roundtrip`; tampered embedded binding → `persisted_roundtrip`; extra whitespace → `noncanonical_wrapper`; unknown schema → `persisted_schema_unknown`; a RuntimeIdentity wrapper round-trips with `effective_args` back as a TUPLE) and the StaticPreflightDoc REDs (frozen-value divergence on any of the seven pinned checks, missing check key, `corpus_verified=False`, bad gpu_uuid → `static_preflight_invalid`).
 
 - [ ] **Step 3: Implement** — add after `RuntimeBackendWitness`:
 
@@ -1063,7 +1124,25 @@ CANONICAL_WRAPPER = lambda wrapper: (json.dumps(
     wrapper, sort_keys=True, separators=(",", ":"), ensure_ascii=False
 ).encode("utf-8") + b"\n")
 
-_PERSISTED_REGISTRY: dict[str, type] = {}   # schema -> constructor; filled at class defs
+# schema -> DECODER FUNCTION (not a raw constructor: JSON cannot carry
+# tuples, Mappings, or nested typed objects; each decoder recursively
+# rebuilds its exact type):
+#   "cuda_bench_driver.containment_snapshot.v1": _decode_containment
+#       (scalar fields -> ContainmentSnapshot(**fields))
+#   "cuda_bench_driver.runtime_identity.v1": _decode_runtime_identity
+#       (tuple(fields["effective_args"]), MappingProxyType(library_hashes),
+#        MappingProxyType(backend_environment), rest scalar -> RuntimeIdentity)
+#   "cuda_bench_driver.static_preflight.v1": _decode_static_preflight
+#   "cuda_bench_driver.phase_packet.v1": _decode_phase_packet
+#       (recursively: TurnManifest(tuple(TurnManifestEntry(*e))...),
+#        tuple(TurnRecord(**r)), tuple(CycleMetrics(**m)),
+#        tuple(CycleBackendWitness(RuntimeBackendWitness(**w), ...)),
+#        KernelCounters(**k), then PhasePacket(**assembled))
+#   "cuda_migration.cold_boot_witness.v1": _decode_cold_boot_witness
+#   "cuda_migration.provisional_live_witness.v1": _decode_provisional_live_witness
+# `decode_persisted_packet(data: bytes) -> PhasePacket` IS
+# `PersistedDoc(data)` + an asserted packet schema — one decoder, reused.
+_PERSISTED_REGISTRY: dict[str, object] = {}   # populated right after each decoder def
 
 
 @dataclass(frozen=True, slots=True)
@@ -1076,10 +1155,10 @@ class PersistedDoc:
             raise ValueError("persisted_wrapper_shape")
         if CANONICAL_WRAPPER(wrapper) != self.wrapper_bytes:
             raise ValueError("noncanonical_wrapper")
-        ctor = _PERSISTED_REGISTRY.get(wrapper["schema"])
-        if ctor is None:
+        decode = _PERSISTED_REGISTRY.get(wrapper["schema"])
+        if decode is None:
             raise ValueError("persisted_schema_unknown")
-        obj = ctor(**wrapper["fields"])
+        obj = decode(wrapper["fields"])
         if obj.binding_sha256 != wrapper["binding_sha256"]:
             raise ValueError("persisted_roundtrip")
 
@@ -1090,7 +1169,7 @@ class PersistedDoc:
     @property
     def obj(self):
         wrapper = json.loads(self.wrapper_bytes)
-        return _PERSISTED_REGISTRY[wrapper["schema"]](**wrapper["fields"])
+        return _PERSISTED_REGISTRY[wrapper["schema"]](wrapper["fields"])
 
 
 STATIC_PREFLIGHT_SCHEMA = "cuda_bench_driver.static_preflight.v1"
@@ -1127,10 +1206,14 @@ class StaticPreflightDoc:
             # is not verification.
             if self.checks[name] != expected:
                 raise ValueError("static_preflight_invalid")
-        for name in ("flag_source", "vision_unit", "candidate_manifest",
-                     "bench_root_mode", "stub_pin"):
-            if not self.checks[name]:
-                raise ValueError("static_preflight_invalid")
+        if not re.fullmatch(r"GPU-[0-9a-fA-F-]{36}", self.gpu_uuid):
+            raise ValueError("static_preflight_invalid")
+        if self.checks["bench_root_mode"] != "700":
+            raise ValueError("static_preflight_invalid")
+        if self.checks["stub_pin"] != self.stub_sha256:
+            raise ValueError("static_preflight_invalid")
+        for name in ("flag_source", "vision_unit", "candidate_manifest"):
+            _validate_sha256(self.checks[name])
         _validate_sha256(self.driver_package_sha256)
         _validate_sha256(self.stub_sha256)
         _validate_timestamp(self.timestamp)
@@ -1343,7 +1426,7 @@ class BenchEvidenceBundle:
   2. Identity scalars: both packets' `window_id/boot_id/gpu_uuid` equal the bundle's; `rollback.window_id == window_id`.
   3. Authorization joins (against TYPED preimages, recomputed): `window_authorization.preimage_sha256 == control_packet.authorization_preimage_sha256`; `continuation.preimage_sha256 == candidate_packet.authorization_preimage_sha256`; `window_consumption.binding_sha256 == control_packet.consumption_receipt_sha256`; `continuation_consumption.binding_sha256 == candidate_packet.consumption_receipt_sha256`; nonce joins: `window_consumption.nonce == window_authorization.nonce` and `continuation_consumption.nonce == continuation.nonce`; parent join: `continuation.parent_vulkan_packet_sha256 == control_packet.binding_sha256`; scope joins: both authorization docs' `window_id == window_id` and `boot_id == boot_id`, `"vulkan_baseline" in window_authorization.phases`, `"cuda_candidate" in continuation.phases`, both docs' `owner` fields equal; temporal joins: `window_authorization.issued_at ≤ window_consumption.timestamp < window_authorization.expires_at` AND `continuation.issued_at ≤ continuation_consumption.timestamp < continuation.expires_at` (each consumption inside its own validity window) AND `continuation_consumption.timestamp < window_authorization.expires_at` (a continuation cannot outlive its window); `window_consumption.phase == "vulkan_baseline"`; `continuation_consumption.phase == "cuda_candidate"`; both consumption `boot_id == boot_id`.
   4. Containment joins — TWO hash planes, never conflated (a schema-bearing wrapper file cannot hash to the hash of its embedded object): for every PERSISTED-document citation the bundle carries a typed pair — `PersistedDoc(file_sha256: str, object)` — and validation proves BOTH legs: `packet citation == file_sha256` (file plane) AND `object.binding_sha256 == the wrapper's embedded binding` (object plane, the round trip). So: bundle field `containment_docs: Mapping[str, PersistedDoc]` keyed `"<phase>:<boundary>"` for the four A/B snapshots, with `control_packet.containment_before_sha256 == containment_docs["vulkan_baseline:before"].file_sha256` etc.; the OBJECT-plane equality joins remain among objects only — `containment` (the six-snapshot witness) must contain snapshots whose `binding_sha256`s equal the four wrapped objects' bindings plus `rollback.containment_before/containment_after.binding_sha256` for the rollback pair.
-  5. Runtime/driver joins — TWO identities, one per stage: `bench_runtime_identity.mode == "bench"`, and the identity citations live on the FILE plane: bundle fields `bench_identity_doc: PersistedDoc` / `runtime_identity_doc: PersistedDoc` with `control_packet.runtime_identity_sha256 == candidate_packet.runtime_identity_sha256 == bench_identity_doc.file_sha256`, `bench_identity_doc`'s wrapped object == `bench_runtime_identity` (round-trip), and `runtime_identity_doc`'s wrapped object == `runtime_identity` (the packets are immutable bench-time artifacts and can only ever cite the bench-mode identity FILE); `runtime_identity` is the CURRENT-STAGE identity handed to the gate (bench mode before authorization, production after — the gate's existing mode logic keeps owning that check). The allowed differences between the two identities are EXACTLY two fields: `mode`, and `effective_args` (each of which the existing `_validate_effective_args` already pins to its own mode's frozen argv). EVERY other `RuntimeIdentity` field — `tag, commit, version, alias, model_sha256, model_bytes, runtime_sha256, library_hashes, production_override_sha256, backend_environment, runtime_manifest_sha256, rollback_manifest_sha256, cuda_toolkit, cuda_compiler, cmake_version, driver_version, gpu_identifier, compute_capability, backend` — must be exactly equal, else `bundle_binding`. Two separate REDs: (a) packet↔bench mismatch (packet cites a different identity hash); (b) bench↔current drift (current-stage identity with a changed `library_hashes` entry → `bundle_binding`). `driver_package_sha256 == control_packet.driver_package_sha256 == candidate_packet.driver_package_sha256`; static-preflight join — a TYPED persisted pair, not two packets repeating the same invented hash: bundle field `static_preflight: PersistedDoc` wrapping a `StaticPreflightDoc` (fully specified in Task A2), with `static_preflight.file_sha256 == control_packet.static_preflight_sha256 == candidate_packet.static_preflight_sha256` AND the wrapped object round-tripping its embedded binding; identity joins on the wrapped `StaticPreflightDoc`: `.gpu_uuid == bundle.gpu_uuid`, `.driver_package_sha256 == bundle.driver_package_sha256`, `.checks["corpus"] == both packets' corpus_sha256`, `.checks["model"] == both packets' model_sha256`, and `.checks["flag_source"]/.checks["vision_unit"]` equal to every containment snapshot's `flag_source_sha256`/`vision_unit_sha256` — a valid receipt for DIFFERENT assets cannot enter this bundle (protecting the public `evaluate_promotion_bundle` route; B8's local file check is defense in depth, not the authority); effective-args join: `control_packet.effective_args_sha256 == candidate_packet.effective_args_sha256 == FROZEN_BENCH_ARGS_SHA256` — ONE literal constant, independently derived and verified from the runbook's two reference lines (both phases share an identical 27-token argv tail; the backend difference lives entirely in executable and environment, so this join doubly proves flags-identical across backends): `FROZEN_BENCH_ARGS_SHA256 = "7fd627e1132ff30fb7f45df2cbf83d166002b0a0c56bcd07e169eca2180bd413"` (sha256 of the compact-JSON argv-after-executable list; derivation script kept in the test), with a tamper RED (one flag changed in the derivation list → `bundle_binding`); consumption chronology: each packet gains `cycle_one_before_snapshot_at: str`, and the scorer requires `cycle_one_before_snapshot_at < consumption.timestamp < <cycle-1 witness>.load_started` for its phase, where the cycle-1 witness is selected by `w.cycle == 1` AND `cycle_witnesses` is validated as EXACTLY ordered `(1, 2, 3)` (a `(2, 1, 3)` tuple currently satisfies a set check and would authenticate against the wrong load — RED with that exact permutation) (proving from ASSEMBLED EVIDENCE — not driver tests — that the nonce burned after the last no-spawn snapshot and before cycle-one's spawn), with a chronology RED (consumption timestamp moved before the snapshot → `bundle_binding`). `bench_runtime_identity` is INSIDE `bench_binding_sha256`; the current-stage `runtime_identity` is EXCLUDED from it (and inside the full `binding_sha256`).
+  5. Runtime/driver joins — TWO identities, one per stage: `bench_runtime_identity.mode == "bench"`, and the identity citations live on the FILE plane: bundle fields `bench_identity_doc: PersistedDoc` / `runtime_identity_doc: PersistedDoc` with `control_packet.runtime_identity_sha256 == candidate_packet.runtime_identity_sha256 == bench_identity_doc.file_sha256`, `bench_identity_doc`'s wrapped object == `bench_runtime_identity` (round-trip), and `runtime_identity_doc`'s wrapped object == `runtime_identity` (the packets are immutable bench-time artifacts and can only ever cite the bench-mode identity FILE); `runtime_identity` is the CURRENT-STAGE identity handed to the gate (bench mode before authorization, production after — the gate's existing mode logic keeps owning that check). The allowed differences between the two identities are EXACTLY two fields: `mode`, and `effective_args` (each of which the existing `_validate_effective_args` already pins to its own mode's frozen argv). EVERY other `RuntimeIdentity` field — `tag, commit, version, alias, model_sha256, model_bytes, runtime_sha256, library_hashes, production_override_sha256, backend_environment, runtime_manifest_sha256, rollback_manifest_sha256, cuda_toolkit, cuda_compiler, cmake_version, driver_version, gpu_identifier, compute_capability, backend` — must be exactly equal, else `bundle_binding`. Two separate REDs: (a) packet↔bench mismatch (packet cites a different identity hash); (b) bench↔current drift (current-stage identity with a changed `library_hashes` entry → `bundle_binding`). `driver_package_sha256 == control_packet.driver_package_sha256 == candidate_packet.driver_package_sha256`; static-preflight join — a TYPED persisted pair, not two packets repeating the same invented hash: bundle field `static_preflight: PersistedDoc` wrapping a `StaticPreflightDoc` (fully specified in Task A2), with `static_preflight.file_sha256 == control_packet.static_preflight_sha256 == candidate_packet.static_preflight_sha256` AND the wrapped object round-tripping its embedded binding; identity joins on the wrapped `StaticPreflightDoc`: `.gpu_uuid == bundle.gpu_uuid`, `.driver_package_sha256 == bundle.driver_package_sha256`, `.checks["corpus"] == both packets' corpus_sha256`, `.checks["model"] == both packets' model_sha256`, `.checks["flag_source"]/.checks["vision_unit"]` equal to every containment snapshot's `flag_source_sha256`/`vision_unit_sha256`, AND `.checks["candidate_manifest"] == bench_runtime_identity.runtime_manifest_sha256` (the built candidate the preflight verified IS the identity being benched) — a valid receipt for DIFFERENT assets cannot enter this bundle (protecting the public `evaluate_promotion_bundle` route; B8's local file check is defense in depth, not the authority); effective-args join: `control_packet.effective_args_sha256 == candidate_packet.effective_args_sha256 == FROZEN_BENCH_ARGS_SHA256` — ONE literal constant, independently derived and verified from the runbook's two reference lines (both phases share an identical 27-token argv tail; the backend difference lives entirely in executable and environment, so this join doubly proves flags-identical across backends): `FROZEN_BENCH_ARGS_SHA256 = "7fd627e1132ff30fb7f45df2cbf83d166002b0a0c56bcd07e169eca2180bd413"` (sha256 of the compact-JSON argv-after-executable list; derivation script kept in the test), with a tamper RED (one flag changed in the derivation list → `bundle_binding`); consumption chronology: each packet gains `cycle_one_before_snapshot_at: str`, and the scorer requires `cycle_one_before_snapshot_at < consumption.timestamp < <cycle-1 witness>.load_started` for its phase, where the cycle-1 witness is selected by `w.cycle == 1` AND `cycle_witnesses` is validated as EXACTLY ordered `(1, 2, 3)` (a `(2, 1, 3)` tuple currently satisfies a set check and would authenticate against the wrong load — RED with that exact permutation) (proving from ASSEMBLED EVIDENCE — not driver tests — that the nonce burned after the last no-spawn snapshot and before cycle-one's spawn), with a chronology RED (consumption timestamp moved before the snapshot → `bundle_binding`). `bench_runtime_identity` is INSIDE `bench_binding_sha256`; the current-stage `runtime_identity` is EXCLUDED from it (and inside the full `binding_sha256`).
   6. Summary projections and scalar joins: the join is exact string equality between `packet.summary_projection_json` and `json.dumps(phase_summary_projection(summary), sort_keys=True, separators=(",", ":"))`. Additionally the packet's OWN preimages must recompute the summary: `summary.cycles == packet.cycle_metrics` element-wise; `summary.unload_leak_mib ==` the frozen cycle-metrics formula; `summary.crash_count/hang_count/timeout_count ==` the TurnRecord outcome counts (all zero for bundle-eligible packets) and `summary.restart_count == 0`; `packet.model_sha256 == summary.model_sha256`, `packet.corpus_sha256 == summary.corpus_sha256`, `packet.order_sha256 == summary.order_sha256`, `packet.topology_sha256 ==` every `cycle.topology_sha256` in the summary, and `packet.kernel_counters.packet() ==` the projection's `kernel_counters`.
   7. Quality joins: `quality.control_manifest_sha256 == control_packet.turn_manifest.binding_sha256`; `quality.candidate_manifest_sha256 == candidate_packet.turn_manifest.binding_sha256`; AND the summaries' quality fields equal QualityEvidence's: `false_absence_count`, `wrong_answered_ungrounded_count`, `type_regression_count`, `recall_posture`, `quality_failure_count` each equal on BOTH summaries.
   8. Owner-voice joins: `owner_voice.control_manifest_sha256/candidate_manifest_sha256` equal the two manifests' binding hashes; `owner_voice.artifact_sha256 == control_summary.owner_voice_evidence.artifact_sha256 == candidate_summary.owner_voice_evidence.artifact_sha256`; `owner_voice.status == control_summary.owner_voice_evidence.status == candidate_summary.owner_voice_evidence.status`.
@@ -1514,7 +1597,7 @@ class StubTests(unittest.TestCase):
 - Produces (exact):
   - `def systemctl_command(subcommand: str, unit: str) -> list[str]` — whitelist `{"show", "is-active"}` only; anything else raises `ValueError("mutating_systemctl_forbidden")`. This is the ONLY place a systemctl argv is built.
   - `@dataclass class ProviderWitness: synthetic: bool; real_calls: int` — every synthetic provider increments nothing and asserts `real_calls == 0` at teardown.
-  - Protocols (`typing.Protocol`): `ServiceStateProvider.is_active(unit: str) -> str`; `PortProbe.is_free(port: int) -> bool`; `GpuProvider.enumerate_uuids() -> list[str]`, `GpuProvider.inventory(uuid: str) -> list[tuple[int, str]]` (union of compute-apps + PIDS sections, `(pid, basename)` deduped sorted; empty result when a source failed → raise `BenchRefusal("provider_uncertain")`), `GpuProvider.memory(uuid: str) -> tuple[float, int]` (`bar1_percent` half-even 2dp, `vram_mib` int); `KernelLogProvider.cursor() -> str`, `KernelLogProvider.count_signatures(start_cursor: str, end_cursor: str) -> dict[str, int]` (keys exactly `reusemappingdbMap,pMapCb,mmuWalkMap,NV_ERR_NO_MEMORY,Xid,unmatched_nvrm`); `BackendMapProvider.read_maps(pid: int) -> str`; `ServerLauncher.spawn(argv: list[str], env: dict[str, str]) -> OwnedChild` (defined in B5 — the launcher IS a seam and its signature matches `spawn_pinned`'s: the real implementation pins the llama-server binary, passes the sanitized `env` mapping through, and uses `BENCH_PORT`; the rehearsal implementation pins the stub module, captures the `STUB_LISTENING port=<N>` line, and fills `OwnedChild.port` with the ephemeral port); `AuthorizationGate.consume(authorization, *, phase, boot_id, parent_window, parent_packet: dict | None, root: Path, clock: Clock) -> ConsumedAuthority` (the seam signature carries `parent_packet` so the continuation's Vulkan-parent verification travels THROUGH the seam — B7 loads it from `PhaseConfig.parent_packet_path` and passes it here) (a SEAM like the rest, and its signature carries the SAME `root` and `clock` the phase runs under — `run_phase` passes its own `root=` and `providers.clock` explicitly, so the marker and receipt can never be written under a different root or timestamped by a different clock than the packet; the real implementation is B4's `consume_authorization` — real marker, PRODUCTION-schema consumption receipt; the rehearsal synthetic mints a `cuda_bench_rehearsal.packet.v1`-namespaced receipt under `rehearsal/` inside that same root and touches NO real marker — rehearsal must never mint a production-schema receipt or burn a real nonce. BOTH adapters get direct tests: same-root/same-clock assertions on the artifacts they write); `ServerClient.health(port: int) -> bool`, `ServerClient.models(port: int) -> list[str]`, `ServerClient.stream(port: int, prompt: str) -> TurnMeasurement` (defined in B6; ALL HTTP the state machine performs — readiness, alias witness, inference — goes through this one seam; real and rehearsal share the same urllib implementation, differing only in opener construction); `ArtifactPolicy` — the artifact-shape seam, an ENCODER not a name supplier: `encode(kind: str, document: dict) -> bytes` and `artifact_dir(kind: str) -> str`, covering EVERY artifact kind — packet, refusal, receipt, consumption receipt, containment snapshot, identity document, turn artifact, journal (the journal's directory comes from the policy too, never a hardcoded `runs/`). ONE encoding canon: `ProductionArtifactPolicy.encode(kind, obj)` wraps EVERY non-journal artifact as `{"schema": "<cuda_bench_driver.*>", "binding_sha256": <obj binding or null>, "fields": {...}}` — exactly the persisted-preimage wrapper B7 consumes, one shape everywhere; `RehearsalArtifactPolicy.encode` wraps as `{"rehearsal_schema": "cuda_bench_rehearsal.packet.v1", "tier": "rehearsal", "payload": <that same triple>}` — DIFFERENT top-level keys, so a production parser structurally cannot accept a rehearsal artifact — and prefixes every dir with `rehearsal/`. Journals are the ONE exception: line-streams of content-light JSON (not wrapped documents); the policy governs their directory. The real authorization gate takes the policy at construction (`RealAuthorizationGate(policy)`) and writes its consumption receipts through `encode` like everything else. Tier sealing: the two provider sets are constructed ONLY by `production_tier(...)` / `rehearsal_tier(...)` factory functions; every tier-sensitive component (launcher, authorization gate, artifact policy, client opener) carries a `tier: str` field, and `run_phase` verifies all tiers equal as its FIRST act — a mixed set is the typed refusal `tier_mismatch` BEFORE any marker creation or spawn. Authorization-gate receipts are written through the policy encoder like everything else. The rehearsal isolation invariant is ZERO NEW FILES outside `rehearsal/` (tree snapshot before vs after — the canonical bench root legitimately contains the corpus and baseline); `Clock.now_utc() -> str` (RFC3339 Z) and `Clock.monotonic() -> float`.
+  - Protocols (`typing.Protocol`): `ServiceStateProvider.is_active(unit: str) -> str`; `PortProbe.is_free(port: int) -> bool`; `GpuProvider.enumerate_uuids() -> list[str]`, `GpuProvider.inventory(uuid: str) -> list[tuple[int, str]]` (union of compute-apps + PIDS sections, `(pid, basename)` deduped sorted; empty result when a source failed → raise `BenchRefusal("provider_uncertain")`), `GpuProvider.memory(uuid: str) -> tuple[float, int]` (`bar1_percent` half-even 2dp, `vram_mib` int); `KernelLogProvider.cursor() -> str`, `KernelLogProvider.count_signatures(start_cursor: str, end_cursor: str) -> dict[str, int]` (keys exactly `reusemappingdbMap,pMapCb,mmuWalkMap,NV_ERR_NO_MEMORY,Xid,unmatched_nvrm`); `BackendMapProvider.read_maps(pid: int) -> str`; `ServerLauncher.spawn(argv: list[str], env: dict[str, str]) -> OwnedChild` (defined in B5 — the launcher IS a seam and its signature matches `spawn_pinned`'s: the real implementation pins the llama-server binary, passes the sanitized `env` mapping through, and uses `BENCH_PORT`; the rehearsal implementation pins the stub module, captures the `STUB_LISTENING port=<N>` line, and fills `OwnedChild.port` with the ephemeral port); `AuthorizationGate.consume(authorization, *, phase, boot_id, parent_window, parent_packet: dict | None, root: Path, clock: Clock) -> ConsumedAuthority` (the seam signature carries `parent_packet: "cm.PhasePacket | None"` — the TYPED, already-decoded object, same type at every layer: B7 decodes via `decode_persisted_packet` and passes the typed packet through this seam to B4's consumer) (a SEAM like the rest, and its signature carries the SAME `root` and `clock` the phase runs under — `run_phase` passes its own `root=` and `providers.clock` explicitly, so the marker and receipt can never be written under a different root or timestamped by a different clock than the packet; the real implementation is B4's `consume_authorization` — real marker, PRODUCTION-schema consumption receipt; the rehearsal synthetic mints a `cuda_bench_rehearsal.packet.v1`-namespaced receipt under `rehearsal/` inside that same root and touches NO real marker — rehearsal must never mint a production-schema receipt or burn a real nonce. BOTH adapters get direct tests: same-root/same-clock assertions on the artifacts they write); `ServerClient.health(port: int) -> bool`, `ServerClient.models(port: int) -> list[str]`, `ServerClient.stream(port: int, prompt: str) -> TurnMeasurement` (defined in B6; ALL HTTP the state machine performs — readiness, alias witness, inference — goes through this one seam; real and rehearsal share the same urllib implementation, differing only in opener construction); `ArtifactPolicy` — the artifact-shape seam, an ENCODER not a name supplier: `encode(kind: str, document: dict) -> bytes` and `artifact_dir(kind: str) -> str`, covering EVERY artifact kind — packet, refusal, receipt, consumption receipt, containment snapshot, identity document, turn artifact, journal (the journal's directory comes from the policy too, never a hardcoded `runs/`). ONE encoding canon: `ProductionArtifactPolicy.encode(kind, obj)` wraps EVERY non-journal artifact as `{"schema": "<cuda_bench_driver.*>", "binding_sha256": <obj binding or null>, "fields": {...}}` — exactly the persisted-preimage wrapper B7 consumes, one shape everywhere; `RehearsalArtifactPolicy.encode` wraps as `{"rehearsal_schema": "cuda_bench_rehearsal.packet.v1", "tier": "rehearsal", "payload": <that same triple>}` — DIFFERENT top-level keys, so a production parser structurally cannot accept a rehearsal artifact — and prefixes every dir with `rehearsal/`. Journals are the ONE exception: line-streams of content-light JSON (not wrapped documents); the policy governs their directory. The real authorization gate takes the policy at construction (`RealAuthorizationGate(policy)`) and writes its consumption receipts through `encode` like everything else. Tier sealing: the two provider sets are constructed ONLY by `production_tier(...)` / `rehearsal_tier(...)` factory functions; every tier-sensitive component (launcher, authorization gate, artifact policy, client opener) carries a `tier: str` field, and `run_phase` verifies all tiers equal as its FIRST act — a mixed set is the typed refusal `tier_mismatch` BEFORE any marker creation or spawn. Authorization-gate receipts are written through the policy encoder like everything else. The rehearsal isolation invariant is ZERO NEW FILES outside `rehearsal/` (tree snapshot before vs after — the canonical bench root legitimately contains the corpus and baseline); `Clock.now_utc() -> str` (RFC3339 Z) and `Clock.monotonic() -> float`.
   - Real implementations `RealServiceStateProvider` (uses `systemctl_command`), `RealPortProbe` (bind test), `RealGpuProvider` (nvidia-smi argv per spec appendix with `-i <uuid>`), `RealKernelLogProvider` (`journalctl --show-cursor` / cursor-bounded grep of the closed signatures), `RealBackendMapProvider` (`/proc/<pid>/maps` read), `SystemClock`.
   - Synthetic implementations `SyntheticServiceState(states: dict[str,str])`, `SyntheticPortProbe(free: set[int])`, `SyntheticGpu(uuids, inventory_by_stage, memory_by_stage)`, `SyntheticKernelLog(counts)`, `SyntheticBackendMap(maps_text_by_pid)`, `FrozenClock(start_ts)` — each with `witness: ProviderWitness(synthetic=True, real_calls=0)`.
   - `def ambient_topology_hash(inventory: list[tuple[int, str]], owned_pids: set[int]) -> str` — exclude owned pids, serialize sorted `(pid, basename)` compact JSON, sha256.
@@ -1561,7 +1644,7 @@ def test_no_mutating_verb_constructible(self) -> None:
   - `consume_authorization(auth, *, phase: str, boot_id: str, clock: Clock, root: Path, policy: ArtifactPolicy, parent_window: WindowAuthorization | None = None, parent_packet: "cm.PhasePacket | None" = None) -> ConsumedAuthority` — the consumption receipt is written through `policy.encode` (B3's one canon; `RealAuthorizationGate(policy)` passes its policy through — no direct `write_private_file` of a hand-shaped receipt), and `parent_packet` is the VERIFIED TYPED object, decoded upstream by the single decoder below — BEFORE any marker is created, the following must ALL hold (each failure leaves the nonce unburned and spawns nothing): the authorization TYPE matches the phase (`vulkan_baseline` → `WindowAuthorization`, `cuda_candidate` → `Continuation`, else `authorization_scope_mismatch`); for a continuation, `parent_packet` is REQUIRED — the typed, completed Vulkan phase packet document loaded from `PhaseConfig.parent_packet_path` — with `outcome == "completed"`, its recomputed binding hash EXACTLY equal to `Continuation.parent_vulkan_packet_sha256` (`continuation_parent_mismatch` otherwise), and the same `window_id` and `boot_id` as the continuation; missing parent packet → `continuation_missing`. REDs: absent parent file, tampered parent (hash mismatch), window/boot divergence — each proves the marker directory unchanged. where `ConsumedAuthority` carries `preimage_sha256`, `consumption_receipt_sha256`, `receipt: dict`. Checks in order: scope (phase in auth.phases, window/owner fields) → `authorization_scope_mismatch`; boot → `authorization_boot_mismatch`; `now < issued_at` → `authorization_not_yet_valid`; `now >= expires_at` → `authorization_expired`; continuation with `parent_window` given: `now >= parent_window.expires_at` → `authorization_expired`; marker `markers/<nonce>` pre-exists → `authorization_consumed`; else O_EXCL-create marker + write consumption receipt (schema `cuda_bench_driver.consumption_receipt.v1`) via `write_private_file`.
 - Consumes: B2 file discipline, B3 `Clock`.
 
-- [ ] **Step 1: Failing tests** — happy-path window auth parses + consumes (tmp root, `FrozenClock`); every refusal branch asserted by code (`authorization_malformed` on bad nonce; `authorization_scope_mismatch` wrong phase; `authorization_boot_mismatch`; `authorization_not_yet_valid`; `authorization_expired`; second consume → `authorization_consumed`; continuation past parent expiry → `authorization_expired`; TTL not exactly `WINDOW_TTL_S` → `authorization_malformed`).
+- [ ] **Step 1: Failing tests** — happy-path window auth parses + consumes (tmp root, `FrozenClock`); every refusal branch asserted by code (`authorization_malformed` on bad nonce; `authorization_scope_mismatch` wrong phase; `authorization_boot_mismatch`; `authorization_not_yet_valid`; `authorization_expired`; second consume → `authorization_consumed`; continuation past parent expiry → `authorization_expired`; TTL not exactly `WINDOW_TTL_S` → `authorization_malformed`; continuation-parent REDs: missing parent packet → `continuation_missing`, tampered parent (binding hash ≠ `parent_vulkan_packet_sha256`) → `continuation_parent_mismatch`, window or boot divergence → `authorization_scope_mismatch` — each asserting the marker directory unchanged).
 - [ ] **Step 2: Run to verify failure.**
 - [ ] **Step 3: Implement** per Interfaces.
 - [ ] **Step 4: Run** — pass.
@@ -1627,7 +1710,7 @@ def test_no_mutating_verb_constructible(self) -> None:
   - Topology invariance: all 4-stage hashes equal within a cycle and across cycles, else `topology_drift`.
 - Consumes: everything B2–B6.
 
-- [ ] **Step 1: Failing tests (unit tier, all-synthetic providers + the pinned stub as the spawned server):** healthy path → packet file exists, parses, has 24 manifest entries, 3 cycle witnesses, outcome `completed`, topology hash constant, and each cycle's four memory pairs populate `CycleMetrics`-shaped fields; `topology_drift` when `SyntheticGpu` returns a changed inventory at cycle 2; six-gate re-check INSIDE the phase: a `SyntheticServiceState` reporting the brain unit `active` → `preflight_service_active` refusal artifact even though no CLI preflight ran; then EVERY failure persona traverses `run_phase` itself — {readiness_timeout (inject `readiness_timeout_s=3` for speed), midturn_hang (shrunk request timeout), crash, malformed_response, wrong_identity via `--models-multi` → `alias_mismatch`} — each yielding its typed FAILED packet AND a REAL residue proof: the port check uses `RealPortProbe` against the stub's actual ephemeral port (a real socket bind test — synthetic probes prove nothing about listeners) and a real `/proc` scan shows zero pgid members; only GPU/kernel/service providers stay synthetic. Ordering proofs: a refused gate (SyntheticServiceState active) leaves the authorization marker ABSENT (nonce not burned — re-running after fixing the gate succeeds); a FAILED CONTAINMENT-BEFORE snapshot likewise leaves the nonce unburned; a CYCLE-ONE BEFORE-SNAPSHOT refusal (SyntheticGpu raising `provider_uncertain` on the first read) ALSO leaves the nonce unburned — the last no-spawn failure point sits before consumption; a completed run leaves the marker present and a second run refuses `authorization_consumed`. RED signal handling (both signals, HERE because they need `run_phase`): run a rehearsal phase in a subprocess and deliver SIGINT in one test, SIGTERM in another; assert each produces an `interrupted`-outcome packet and the finalizer's residue proofs hold (no listener, no pgid members). Pre-spawn refusal (port busy synthetic) → refusal artifact, NO packet. Attempt-allocator REDs (this task): pre-create `attempt-000` in the tmp window dir → the run claims `attempt-001` (disk allocation survives CLI restarts); two concurrent allocations cannot claim the same dir (exclusive `mkdirat` — simulate with a pre-created target and assert the retry). Parent-validation REDs: tampered parent-packet wrapper bytes → decode refusal, nonce unburned.
+- [ ] **Step 1: Failing tests (unit tier, all-synthetic providers + the pinned stub as the spawned server):** healthy path → packet file exists, parses, has 24 manifest entries, 3 cycle witnesses, outcome `completed`, topology hash constant, and each cycle's four memory pairs populate `CycleMetrics`-shaped fields; `topology_drift` when `SyntheticGpu` returns a changed inventory at cycle 2; six-gate re-check INSIDE the phase: a `SyntheticServiceState` reporting the brain unit `active` → `preflight_service_active` refusal artifact even though no CLI preflight ran; then EVERY failure persona traverses `run_phase` itself — {readiness_timeout (inject `readiness_timeout_s=3` for speed), midturn_hang (shrunk request timeout), crash, malformed_response, wrong_identity via `--models-multi` → `alias_mismatch`} — each yielding its typed FAILED packet AND a REAL residue proof: the port check uses `RealPortProbe` against the stub's actual ephemeral port (a real socket bind test — synthetic probes prove nothing about listeners) and a real `/proc` scan shows zero pgid members; only GPU/kernel/service providers stay synthetic. Ordering proofs: a refused gate (SyntheticServiceState active) leaves the authorization marker ABSENT (nonce not burned — re-running after fixing the gate succeeds); a FAILED CONTAINMENT-BEFORE snapshot likewise leaves the nonce unburned; a CYCLE-ONE BEFORE-SNAPSHOT refusal (SyntheticGpu raising `provider_uncertain` on the first read) ALSO leaves the nonce unburned — the last no-spawn failure point sits before consumption; a completed run leaves the marker present and a second run refuses `authorization_consumed`. RED signal handling (both signals, HERE because they need `run_phase`): run a rehearsal phase in a subprocess and deliver SIGINT in one test, SIGTERM in another; assert each produces an `interrupted`-outcome packet and the finalizer's residue proofs hold (no listener, no pgid members). Pre-spawn refusal (port busy synthetic) → refusal artifact, NO packet. Attempt-allocator REDs (this task): pre-create `attempt-000` in the tmp window dir → the run claims `attempt-001` (disk allocation survives CLI restarts); RACE RED — monkeypatch the mkdir call so the FIRST claim attempt after the scan raises `FileExistsError` (a concurrent claimant won between scan and claim) and assert the allocator retries and lands on the NEXT number, never reuses, never overwrites (this exercises the scan→mkdirat(EEXIST)→retry path itself, not just a pre-existing directory). Parent-validation REDs: tampered parent-packet wrapper bytes → decode refusal, nonce unburned.
 - [ ] **Step 2: Run to verify failure.**
 - [ ] **Step 3: Implement** per Interfaces. Keep `run_phase` a thin sequencer over already-tested helpers; journal every transition.
 - [ ] **Step 4: Run** — pass. Also re-run the FULL driver test file.
@@ -1644,7 +1727,7 @@ exist by then.)
 - Test: `tests/test_cuda_bench_assemble.py`
 
 **Interfaces:**
-- Produces: `assemble(root: Path) -> dict` + CLI `/home/rohit/maez/.venv/bin/python -B -m scripts.cuda_bench_assemble` (NO public `--root` — the CLI hard-codes the canonical bench root; an alternate-evidence-root flag would be a side door. Tests inject `root=` by calling `assemble()` directly, below argparse): reads the two completed phase packets, quality evidence, owner-voice, rollback bundle, authorization preimages + consumption receipts (all via the driver's `open_bench_file` — imported as the ONE allowed driver import: `from scripts.cuda_bench_driver import open_bench_file, BenchRefusal` — no provider imports), reads a typed ASSEMBLY-SELECTION MANIFEST — a VERSIONED IMMUTABLE CHAIN, because stage 1 must mint a selection and later stages need different contents while bench files are exclusive-create-only: files are `assembly-selection-NNN.json` at the bench root, each written once via `O_EXCL`, each carrying `previous_selection_sha256` (null for `-001`, otherwise the file hash of its predecessor); the ACTIVE selection is the highest `NNN`, the chain must verify end-to-end, and any gap, duplicate, chain-hash break, or alternate filename is `assembly_refused`. Authoring goes through the assembler's own safe subcommand `select-append <draft.json>` (validates the draft, computes the predecessor hash, writes the next `NNN` exclusively — no hand-placed files). Authored by the operator (the Claude gate, after the owner names which attempt counts), schema `cuda_bench_assemble.selection.v1` with EXACT field shape: `{"schema", "window_id", "control": ENTRY, "candidate": ENTRY, "identity": {"bench": FILEREF, "current": FILEREF}, "static_preflight": FILEREF, "quality": FILEREF, "owner_voice": FILEREF, "rollback": FILEREF, "window_authorization": FILEREF, "continuation": FILEREF, "window_consumption": FILEREF, "continuation_consumption": FILEREF, "later_stage": LATER-or-null}` where `FILEREF = {"path", "sha256"}` and `ENTRY = {"attempt_dir", "packet": FILEREF, "containment_before": FILEREF, "containment_after": FILEREF}`; `LATER` (optional, enabling scorer stages 2–5) = `{"boot_authorization": FILEREF, "live_authorization": FILEREF-or-null, "cold_boot_maps": FILEREF-or-null, "provisional_live_maps": FILEREF-or-null, "cold_boot_witness": FILEREF-or-null, "provisional_live_witness": FILEREF-or-null, "provisional_cuda_boot_containment": [FILEREF, FILEREF]-or-null, "cold_boot_containment": [FILEREF, FILEREF]-or-null, "provisional_live_containment": [FILEREF, FILEREF]-or-null, "production_identity": FILEREF-or-null}` — the typed `ColdBootWitness` and `ProvisionalLiveWitness` documents are REQUIRED for stages 4–5 (the summaries embed them), and the scorer demands BOTH the `provisional_cuda_boot` AND `cold_boot` containment pairs before accepting the cold witness, plus the `provisional_live` pair for stage 5` — the DRIVER never produces those later witnesses (out of scope), but the assembler MUST be able to consume them once externally produced, or closing the legacy evaluator would strand every stage after `bench_passed`: absent `later_stage`, authorizations enter the bundle `not_attempted` and maps as None (stage 1); with multiple attempts on disk, an absent or ambiguous selection is `assembly_refused`, never a guess), then reconstructs typed objects FROM PERSISTED PREIMAGES — the FOUR A/B containment snapshots from the selected attempt dirs plus the rollback pair which lives INSIDE `RollbackEvidenceBundle` (the driver never writes rollback containment; six standalone files would demand documents no producer creates), both runtime identities, the static-preflight receipt — recomputing each document's FILE hash against both the selection manifest and the packet citations, and each object's round-trip `binding_sha256` (`assembly_refused` on any mismatch or missing document; mutually-agreeing hashes without their documents are NOT evidence), builds `cm.BenchEvidenceBundle`, calls `cm.evaluate_promotion_bundle(bundle)`, writes `receipts/assemble-<ts>.json` (schema `cuda_bench_assemble.receipt.v1`) containing the verdict AND the bundle binding hash. On ANY missing/invalid/rehearsal-schema input: receipt with outcome `assembly_refused` (structurally bad) or `unscorable` (well-formed but incomplete evidence), NO verdict minted.
+- Produces: `assemble(root: Path) -> dict` + CLI `/home/rohit/maez/.venv/bin/python -B -m scripts.cuda_bench_assemble` (NO public `--root` — the CLI hard-codes the canonical bench root; an alternate-evidence-root flag would be a side door. Tests inject `root=` by calling `assemble()` directly, below argparse): reads the two completed phase packets, quality evidence, owner-voice, rollback bundle, authorization preimages + consumption receipts (all via the driver's `open_bench_file` — imported as the ONE allowed driver import: `from scripts.cuda_bench_driver import open_bench_file, BenchRefusal` — no provider imports), reads a typed ASSEMBLY-SELECTION MANIFEST — a VERSIONED IMMUTABLE CHAIN, because stage 1 must mint a selection and later stages need different contents while bench files are exclusive-create-only: files are `assembly-selection-NNN.json` at the bench root, each written once via `O_EXCL`, each carrying `previous_selection_sha256` (null for `-001`, otherwise the file hash of its predecessor); the ACTIVE selection is the highest `NNN`, the chain must verify end-to-end, and any gap, duplicate, chain-hash break, or alternate filename is `assembly_refused`. Authoring goes through the assembler's own safe subcommand `select-append` which reads its draft ONLY from the anchored path `drafts/selection-draft.json` under the bench root (no caller-supplied path — an unanchored input would be a side door), validates it, computes the predecessor hash, writes the next `NNN` exclusively, and deletes the draft — no hand-placed files. (`select-append` is the assembler's ONLY writing subcommand besides its receipts; the spec's assembler boundary is amended to say so.) Authored by the operator (the Claude gate, after the owner names which attempt counts), schema `cuda_bench_assemble.selection.v1` with EXACT field shape: `{"schema", "window_id", "control": ENTRY, "candidate": ENTRY, "identity": {"bench": FILEREF, "current": FILEREF}, "static_preflight": FILEREF, "quality": FILEREF, "owner_voice": FILEREF, "rollback": FILEREF, "window_authorization": FILEREF, "continuation": FILEREF, "window_consumption": FILEREF, "continuation_consumption": FILEREF, "previous_selection_sha256": null-or-sha256 (the chain link every file after `-001` must carry), "later_stage": LATER-or-null}` where `FILEREF = {"path", "sha256"}` and `ENTRY = {"attempt_dir", "packet": FILEREF, "containment_before": FILEREF, "containment_after": FILEREF}`; `LATER` (optional, enabling scorer stages 2–5) = `{"boot_authorization": FILEREF, "live_authorization": FILEREF-or-null, "cold_boot_maps": FILEREF-or-null, "provisional_live_maps": FILEREF-or-null, "cold_boot_witness": FILEREF-or-null, "provisional_live_witness": FILEREF-or-null, "provisional_cuda_boot_containment": [FILEREF, FILEREF]-or-null, "cold_boot_containment": [FILEREF, FILEREF]-or-null, "provisional_live_containment": [FILEREF, FILEREF]-or-null, "production_identity": FILEREF-or-null}` — the typed `ColdBootWitness` and `ProvisionalLiveWitness` documents are REQUIRED for stages 4–5 (the summaries embed them), and the scorer demands BOTH the `provisional_cuda_boot` AND `cold_boot` containment pairs before accepting the cold witness, plus the `provisional_live` pair for stage 5` — the DRIVER never produces those later witnesses (out of scope), but the assembler MUST be able to consume them once externally produced, or closing the legacy evaluator would strand every stage after `bench_passed`: absent `later_stage`, authorizations enter the bundle `not_attempted` and maps as None (stage 1); PRECEDENCE RULE: when `later_stage.production_identity` is present it is the CURRENT-stage identity and `identity.current` MUST equal it by file hash (`assembly_refused` on divergence — no competing authorities); with multiple attempts on disk, an absent or ambiguous selection is `assembly_refused`, never a guess), then reconstructs typed objects FROM PERSISTED PREIMAGES — the FOUR A/B containment snapshots from the selected attempt dirs plus the rollback pair which lives INSIDE `RollbackEvidenceBundle` (the driver never writes rollback containment; six standalone files would demand documents no producer creates), both runtime identities, the static-preflight receipt — and, when `later_stage` is present, the SAME PersistedDoc discipline for the later evidence: boot/live authorization witness documents, cold-boot/provisional maps witnesses, the typed `ColdBootWitness`/`ProvisionalLiveWitness` documents (decoded via the A2 registry), all three later containment pairs, and the production identity — rebuilding stage-4/5 summaries by the FROZEN rule `dataclasses.replace(bench_summary, cold_boot_witness=..., provisional_live_witness=...)` (the bench summaries stay byte-identical otherwise, which is exactly what keeps `bench_binding_sha256` invariant) — recomputing each document's FILE hash against both the selection manifest and the packet citations, and each object's round-trip `binding_sha256` (`assembly_refused` on any mismatch or missing document; mutually-agreeing hashes without their documents are NOT evidence), builds `cm.BenchEvidenceBundle`, calls `cm.evaluate_promotion_bundle(bundle)`, writes `receipts/assemble-<ts>.json` (schema `cuda_bench_assemble.receipt.v1`) containing the verdict AND the bundle binding hash. On ANY missing/invalid/rehearsal-schema input: receipt with outcome `assembly_refused` (structurally bad) or `unscorable` (well-formed but incomplete evidence), NO verdict minted.
 - Consumes: A5/A6 types + entrypoint; B2 `open_bench_file`.
 
 - [ ] **Step 1: Failing tests** — structural: module source contains neither `_evaluate_promotion_gate` nor `import subprocess` nor any provider name (`RealGpuProvider` etc.); parse-level rejection: `main(["--root", "/tmp/x"])` exits 2 with argparse's unrecognized-argument error (no alternate-evidence-root side door); happy path with a fully synthetic bench root built from A5's `make_bundle` components serialized to disk → receipt with `decision: bench_passed`; missing candidate packet → `unscorable` receipt, no `decision` key; rehearsal-schema packet (hand-write a JSON document with schema `cuda_bench_rehearsal.packet.v1` into the tmp root — the `rehearse` CLI does not exist until B9) → `assembly_refused` mentioning `rehearsal_artifact_rejected`; a failed reduced packet (outcome `crash`, observed fields only) → `unscorable` (typed `cm.PhasePacket` parse fails by design); LATER-STAGE tests: a `later_stage` section with boot authorization parented to the recorded bench hash → the receipt shows `provisional_cuda_boot`; full stage-5 fixtures → `promote_cuda`; SELECTION-CHAIN tests: `select-append` produces `-002` referencing `-001`'s hash; a broken chain hash, a gap (`-001` + `-003`), and a file named `assembly-selection.json` (the old unversioned name) each → `assembly_refused`.
@@ -1700,7 +1783,7 @@ git worktree add --detach "$WT" feature/cuda-bench-driver -q
   /home/rohit/maez/.venv/bin/ruff check \
     scripts/cuda_bench_driver.py scripts/cuda_bench_stub.py \
     scripts/cuda_bench_assemble.py scripts/cuda_migration.py \
-    scripts/dev/bench_baseline.py \
+    scripts/dev/bench_baseline.py scripts/dev/bench_report_plugin.py \
     tests/test_cuda_bench_driver.py tests/test_cuda_bench_stub.py \
     tests/test_cuda_bench_assemble.py tests/test_cuda_migration.py \
     tests/test_bench_baseline.py &&
@@ -1722,8 +1805,8 @@ the offending test ids, and a collection count below the recorded floor
 raises (`collection_count_dropped`). No `touch`, no tolerated partial
 authority, nothing outside the captured status.
 Expected: `GATE_STATUS=0`. Every check — the five-file suite, the AST
-structural tests, ruff over all TEN touched Python files (five scripts
-including `bench_baseline.py`, five tests),
+structural tests, ruff over all ELEVEN touched Python files (six scripts
+including `bench_baseline.py` and `bench_report_plugin.py`, five tests),
 the assembler legacy-evaluator grep, and the baseline RECONCILIATION of the
 full `tests/` run (new-failure count computed inside the block, so an
 unchanged-red baseline passes while any NEW failure fails) — executes

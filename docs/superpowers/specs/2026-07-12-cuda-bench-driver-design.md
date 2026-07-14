@@ -44,7 +44,12 @@ restarts production after success or failure.
    evidence into a `BenchEvidenceBundle` for the new scorer entrypoint, or
    emits a typed `assembly_refused` / `unscorable` receipt. It never mints
    `keep_vulkan` or any operational verdict — that conversion belongs to the
-   scorer alone.
+   scorer alone. Its writing surface is exactly two things: its own
+   receipts, and the versioned assembly-selection chain via the
+   `select-append` subcommand (draft read only from the anchored
+   `drafts/selection-draft.json`; each selection file written once,
+   `O_EXCL`, hash-chained to its predecessor). (Amended 2026-07-14 with
+   the implementation-plan gate.)
 3. **`scripts/cuda_bench_stub.py`** — the pinned rehearsal stub: a minimal
    loopback HTTP server imitating llama-server's `/health`, `/v1/models`,
    and `/completion` surface with closed personas {healthy,
@@ -412,8 +417,11 @@ exact per-attempt input paths + file hashes),
 `cuda_migration.cycle_backend_witness.v1`,
 `cuda_migration.quality_evidence.v1`,
 `cuda_migration.owner_voice_review.v1`,
-`cuda_migration.rollback_evidence_bundle.v1`.
-(17 total; amended 2026-07-13 with the implementation-plan gate.)
+`cuda_migration.rollback_evidence_bundle.v1`,
+`cuda_migration.cold_boot_witness.v1` (persisted lossless wrapper for the
+later-stage cold-boot witness), `cuda_migration.provisional_live_witness.v1`
+(same, provisional-live).
+(19 total; amended 2026-07-14 with the implementation-plan gate.)
 
 **Closed refusal/outcome vocabulary (40 entries; `tier_mismatch` added
 2026-07-13 — a mixed production/rehearsal provider set refuses before any
