@@ -13,6 +13,7 @@ import json
 import math
 import os
 import re
+import statistics
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -201,22 +202,51 @@ def _validate_sha256(value: str) -> str:
     return value
 
 
+def _json_number_serializable(value: float | int) -> bool:
+    try:
+        json.dumps(value, allow_nan=False)
+    except (OverflowError, TypeError, ValueError):
+        return False
+    return True
+
+
+def _finitely_float_representable(value: float | int) -> bool:
+    try:
+        converted = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return False
+    return math.isfinite(converted)
+
+
 def _validate_nonnegative_int(name: str, value: int) -> None:
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < 0
+        or not _json_number_serializable(value)
+    ):
         raise ValueError(f"invalid_{name}")
 
 
 def _validate_nonnegative_number(name: str, value: float | int) -> None:
     if isinstance(value, bool) or not isinstance(value, (float, int)):
         raise ValueError(f"invalid_{name}")
-    if not math.isfinite(value) or value < 0:
+    if (
+        value < 0
+        or not _json_number_serializable(value)
+        or not _finitely_float_representable(value)
+    ):
         raise ValueError(f"invalid_{name}")
 
 
 def _validate_positive_number(value: float | int) -> None:
     if isinstance(value, bool) or not isinstance(value, (float, int)):
         raise ValueError("positive_measurement")
-    if not math.isfinite(value) or value <= 0:
+    if (
+        value <= 0
+        or not _json_number_serializable(value)
+        or not _finitely_float_representable(value)
+    ):
         raise ValueError("positive_measurement")
 
 
@@ -383,6 +413,8 @@ COLD_BOOT_WITNESS_SCHEMA = "cuda_migration.cold_boot_witness.v1"
 PROVISIONAL_LIVE_WITNESS_SCHEMA = "cuda_migration.provisional_live_witness.v1"
 AUTHORIZATION_WITNESS_SCHEMA = "cuda_migration.authorization_witness.v1"
 BACKEND_MAP_WITNESS_SCHEMA = "cuda_migration.backend_map_witness.v1"
+TURN_MANIFEST_SCHEMA = "cuda_bench_driver.turn_manifest.v1"
+PHASE_PACKET_SCHEMA = "cuda_bench_driver.phase_packet.v1"
 
 _NONCE_RE = re.compile(r"^[0-9a-f]{64}$")
 _WINDOW_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
@@ -392,6 +424,194 @@ _GPU_UUID_RE = re.compile(
 )
 WINDOW_TTL_S = 14_400
 CONTINUATION_TTL_S = 3_600
+
+_TURN_OUTCOMES = frozenset(
+    {"completed", "http_timeout", "crash", "hang", "malformed_response"}
+)
+_PHASE_PACKET_OUTCOMES = frozenset(
+    {
+        "completed",
+        "tier_mismatch",
+        "preflight_service_active",
+        "preflight_port_open",
+        "preflight_gpu_occupied",
+        "preflight_bench_port_busy",
+        "identity_mismatch",
+        "corpus_unavailable",
+        "gpu_scope_violation",
+        "authorization_missing",
+        "authorization_malformed",
+        "authorization_not_yet_valid",
+        "authorization_expired",
+        "authorization_boot_mismatch",
+        "authorization_scope_mismatch",
+        "authorization_consumed",
+        "continuation_missing",
+        "continuation_parent_mismatch",
+        "containment_violation",
+        "readiness_timeout",
+        "alias_mismatch",
+        "backend_unproven",
+        "http_timeout",
+        "crash",
+        "hang",
+        "malformed_response",
+        "response_too_large",
+        "mtp_unproven",
+        "topology_drift",
+        "kernel_unmatched",
+        "unload_incomplete",
+        "filesystem_hazard",
+        "pid_reuse_detected",
+        "rehearsal_artifact_rejected",
+        "provider_uncertain",
+        "spawn_failure",
+        "journal_failure",
+        "interrupted",
+        "cleanup_incomplete",
+        "assembly_refused",
+        "unscorable",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class TurnManifestEntry:
+    cycle: int
+    ordinal: int
+    warmup: bool
+    artifact_sha256: str
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.cycle, bool)
+            or not isinstance(self.cycle, int)
+            or self.cycle not in {1, 2, 3}
+            or isinstance(self.ordinal, bool)
+            or not isinstance(self.ordinal, int)
+            or self.ordinal not in range(8)
+            or not isinstance(self.warmup, bool)
+        ):
+            raise ValueError("manifest_shape")
+        _validate_sha256(self.artifact_sha256)
+
+
+@dataclass(frozen=True, slots=True)
+class TurnManifest:
+    phase: str
+    entries: tuple[TurnManifestEntry, ...]
+    schema_version: str = field(default=TURN_MANIFEST_SCHEMA, init=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.phase, str) or self.phase not in {
+            "vulkan_baseline",
+            "cuda_candidate",
+        }:
+            raise ValueError("closed_phase")
+        if not isinstance(self.entries, tuple) or len(self.entries) != 24:
+            raise ValueError("manifest_shape")
+        expected = tuple(
+            (cycle, ordinal, ordinal == 0)
+            for cycle in (1, 2, 3)
+            for ordinal in range(8)
+        )
+        if any(not isinstance(entry, TurnManifestEntry) for entry in self.entries):
+            raise ValueError("manifest_shape")
+        observed = tuple(
+            (entry.cycle, entry.ordinal, entry.warmup) for entry in self.entries
+        )
+        if observed != expected:
+            raise ValueError("manifest_shape")
+
+    @property
+    def binding_sha256(self) -> str:
+        return _packet_hash(
+            {
+                "schema": self.schema_version,
+                "phase": self.phase,
+                "entries": [
+                    [
+                        entry.cycle,
+                        entry.ordinal,
+                        entry.warmup,
+                        entry.artifact_sha256,
+                    ]
+                    for entry in self.entries
+                ],
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class TurnRecord:
+    cycle: int
+    ordinal: int
+    warmup: bool
+    artifact_sha256: str
+    outcome: str
+    e2e_ms: float
+    ttft_ms: float
+    prompt_per_second: float
+    predicted_per_second: float
+    draft_n: int | None
+    draft_n_accepted: int | None
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.cycle, bool)
+            or not isinstance(self.cycle, int)
+            or self.cycle not in {1, 2, 3}
+            or isinstance(self.ordinal, bool)
+            or not isinstance(self.ordinal, int)
+            or self.ordinal not in range(8)
+            or not isinstance(self.warmup, bool)
+            or self.warmup != (self.ordinal == 0)
+        ):
+            raise ValueError("turn_record_shape")
+        _validate_sha256(self.artifact_sha256)
+        if not isinstance(self.outcome, str) or self.outcome not in _TURN_OUTCOMES:
+            raise ValueError("turn_outcome_closed")
+        for value in (
+            self.e2e_ms,
+            self.ttft_ms,
+            self.prompt_per_second,
+            self.predicted_per_second,
+        ):
+            if not isinstance(value, float) or not math.isfinite(value) or value < 0:
+                raise ValueError("turn_measurement")
+        if self.warmup:
+            if self.draft_n is not None or self.draft_n_accepted is not None:
+                raise ValueError("mtp_unproven")
+        elif (
+            isinstance(self.draft_n, bool)
+            or not isinstance(self.draft_n, int)
+            or isinstance(self.draft_n_accepted, bool)
+            or not isinstance(self.draft_n_accepted, int)
+            or self.draft_n < 0
+            or self.draft_n_accepted < 0
+            or self.draft_n_accepted > self.draft_n
+            or not _json_number_serializable(self.draft_n)
+            or not _json_number_serializable(self.draft_n_accepted)
+        ):
+            raise ValueError("mtp_unproven")
+
+    @property
+    def binding_sha256(self) -> str:
+        return _packet_hash(
+            {
+                "cycle": self.cycle,
+                "ordinal": self.ordinal,
+                "warmup": self.warmup,
+                "artifact_sha256": self.artifact_sha256,
+                "outcome": self.outcome,
+                "e2e_ms": self.e2e_ms,
+                "ttft_ms": self.ttft_ms,
+                "prompt_per_second": self.prompt_per_second,
+                "predicted_per_second": self.predicted_per_second,
+                "draft_n": self.draft_n,
+                "draft_n_accepted": self.draft_n_accepted,
+            }
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1406,7 +1626,12 @@ class CycleMetrics:
             "vram_after_unload_mib",
         ):
             value = getattr(self, name)
-            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or value < 0
+                or not _json_number_serializable(value)
+            ):
                 raise ValueError("vram_integer_mib")
 
     @property
@@ -1515,6 +1740,332 @@ class BenchSummary:
     @property
     def binding_sha256(self) -> str:
         return _packet_hash(_bench_packet(self))
+
+
+def recompute_phase_statistics(records: tuple[TurnRecord, ...]) -> dict[str, object]:
+    """Recompute every turn-derived phase aggregate from its typed rows."""
+
+    expected_order = tuple(
+        (cycle, ordinal, ordinal == 0)
+        for cycle in (1, 2, 3)
+        for ordinal in range(8)
+    )
+    if (
+        not isinstance(records, tuple)
+        or len(records) != 24
+        or any(not isinstance(record, TurnRecord) for record in records)
+        or tuple((record.cycle, record.ordinal, record.warmup) for record in records)
+        != expected_order
+    ):
+        raise ValueError("turn_record_join")
+    measured = tuple(record for record in records if not record.warmup)
+    if len(measured) != FROZEN_MEASURED_SAMPLE_COUNT:
+        raise ValueError("turn_record_join")
+    for cycle in (1, 2, 3):
+        if len(tuple(record for record in measured if record.cycle == cycle)) != 7:
+            raise ValueError("turn_record_join")
+
+    e2e = sorted(record.e2e_ms for record in measured)
+    p95_index = math.ceil(0.95 * len(e2e)) - 1
+    cycle_mtp = tuple(
+        (
+            sum(
+                record.draft_n
+                for record in measured
+                if record.cycle == cycle and record.draft_n is not None
+            ),
+            sum(
+                record.draft_n_accepted
+                for record in measured
+                if record.cycle == cycle and record.draft_n_accepted is not None
+            ),
+        )
+        for cycle in (1, 2, 3)
+    )
+    drafted = sum(item[0] for item in cycle_mtp)
+    accepted = sum(item[1] for item in cycle_mtp)
+    return {
+        "seven_turn_max_ms": max(e2e),
+        "p95_e2e_ms": e2e[p95_index],
+        "median_decode_tps": statistics.median(
+            record.predicted_per_second for record in measured
+        ),
+        "median_prefill_tps": statistics.median(
+            record.prompt_per_second for record in measured
+        ),
+        "mtp_drafted_tokens": drafted,
+        "mtp_accepted_tokens": accepted,
+        "mtp_rejected_tokens": drafted - accepted,
+        "mtp_initialized": drafted > 0,
+        "crash_count": sum(record.outcome == "crash" for record in records),
+        "restart_count": 0,
+        "hang_count": sum(record.outcome == "hang" for record in records),
+        "timeout_count": sum(record.outcome == "http_timeout" for record in records),
+    }
+
+
+def phase_summary_projection(summary: BenchSummary) -> dict[str, object]:
+    """Return only the aggregates a completed phase can itself produce."""
+
+    if not isinstance(summary, BenchSummary):
+        raise ValueError("projection_not_recomputable")
+    return {
+        "phase": summary.phase,
+        "alias": summary.alias,
+        "model_sha256": summary.model_sha256,
+        "corpus_sha256": summary.corpus_sha256,
+        "order_sha256": summary.order_sha256,
+        "sample_n": summary.sample_n,
+        "warmup_count": summary.warmup_count,
+        "measured_sample_count": summary.measured_sample_count,
+        "load_cycles": summary.load_cycles,
+        "seven_turn_max_ms": summary.seven_turn_max_ms,
+        "p95_e2e_ms": summary.p95_e2e_ms,
+        "median_decode_tps": summary.median_decode_tps,
+        "median_prefill_tps": summary.median_prefill_tps,
+        "cycles": [_cycle_packet(cycle) for cycle in summary.cycles],
+        "mtp_drafted_tokens": summary.mtp_drafted_tokens,
+        "mtp_accepted_tokens": summary.mtp_accepted_tokens,
+        "mtp_rejected_tokens": summary.mtp_rejected_tokens,
+        "mtp_initialized": summary.mtp_initialized,
+        "crash_count": summary.crash_count,
+        "restart_count": summary.restart_count,
+        "hang_count": summary.hang_count,
+        "timeout_count": summary.timeout_count,
+        "unload_leak_mib": float(summary.unload_leak_mib),
+        "kernel_counters": summary.kernel_counters.packet(),
+    }
+
+
+def _canonical_projection_json(value: object) -> str:
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class PhasePacket:
+    phase: str
+    outcome: str
+    window_id: str
+    boot_id: str
+    gpu_uuid: str
+    topology_sha256: str
+    model_sha256: str
+    corpus_sha256: str
+    order_sha256: str
+    effective_args_sha256: str
+    driver_package_sha256: str
+    authorization_preimage_sha256: str
+    consumption_receipt_sha256: str
+    static_preflight_sha256: str
+    runtime_identity_sha256: str
+    turn_manifest: TurnManifest
+    turn_records: tuple[TurnRecord, ...]
+    cycle_metrics: tuple[CycleMetrics, CycleMetrics, CycleMetrics]
+    cycle_witnesses: tuple[
+        CycleBackendWitness,
+        CycleBackendWitness,
+        CycleBackendWitness,
+    ]
+    containment_before_sha256: str
+    containment_after_sha256: str
+    kernel_cursor_before: str
+    kernel_cursor_after: str
+    kernel_counters: KernelCounters
+    summary_projection_json: str
+    cycle_one_before_snapshot_at: str
+    timestamp: str
+    schema_version: str = field(default=PHASE_PACKET_SCHEMA, init=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.phase, str) or self.phase not in {
+            "vulkan_baseline",
+            "cuda_candidate",
+        }:
+            raise ValueError("closed_phase")
+        if (
+            not isinstance(self.outcome, str)
+            or self.outcome not in _PHASE_PACKET_OUTCOMES
+        ):
+            raise ValueError("turn_outcome_closed")
+        if not isinstance(self.window_id, str) or _WINDOW_ID_RE.fullmatch(self.window_id) is None:
+            raise ValueError("window_id_syntax")
+        if not isinstance(self.boot_id, str) or not self.boot_id:
+            raise ValueError("boot_id_required")
+        if not isinstance(self.gpu_uuid, str) or _GPU_UUID_RE.fullmatch(self.gpu_uuid) is None:
+            raise ValueError("gpu_scope_violation")
+        for digest in (
+            self.topology_sha256,
+            self.model_sha256,
+            self.corpus_sha256,
+            self.order_sha256,
+            self.effective_args_sha256,
+            self.driver_package_sha256,
+            self.authorization_preimage_sha256,
+            self.consumption_receipt_sha256,
+            self.static_preflight_sha256,
+            self.runtime_identity_sha256,
+            self.containment_before_sha256,
+            self.containment_after_sha256,
+        ):
+            _validate_sha256(digest)
+        _validate_utc_z_timestamp(self.cycle_one_before_snapshot_at)
+        _validate_utc_z_timestamp(self.timestamp)
+
+        if not isinstance(self.turn_manifest, TurnManifest) or self.turn_manifest.phase != self.phase:
+            raise ValueError("manifest_shape")
+        if not isinstance(self.turn_records, tuple) or len(self.turn_records) != 24:
+            raise ValueError("turn_record_join")
+        manifest_join = tuple(
+            (entry.cycle, entry.ordinal, entry.warmup, entry.artifact_sha256)
+            for entry in self.turn_manifest.entries
+        )
+        if any(not isinstance(record, TurnRecord) for record in self.turn_records):
+            raise ValueError("turn_record_join")
+        record_join = tuple(
+            (record.cycle, record.ordinal, record.warmup, record.artifact_sha256)
+            for record in self.turn_records
+        )
+        if record_join != manifest_join:
+            raise ValueError("turn_record_join")
+        if self.outcome == "completed" and any(
+            record.outcome != "completed" for record in self.turn_records
+        ):
+            raise ValueError("turn_outcome_incomplete")
+        if self.outcome in {"crash", "hang", "http_timeout", "malformed_response"} and not any(
+            record.outcome == self.outcome for record in self.turn_records
+        ):
+            raise ValueError("turn_outcome_incomplete")
+
+        if (
+            not isinstance(self.cycle_metrics, tuple)
+            or len(self.cycle_metrics) != 3
+            or any(not isinstance(metric, CycleMetrics) for metric in self.cycle_metrics)
+            or tuple(metric.cycle for metric in self.cycle_metrics) != (1, 2, 3)
+        ):
+            raise ValueError("cycle_metrics_shape")
+        if any(metric.topology_sha256 != self.topology_sha256 for metric in self.cycle_metrics):
+            raise ValueError("projection_not_recomputable")
+        if (
+            not isinstance(self.cycle_witnesses, tuple)
+            or len(self.cycle_witnesses) != 3
+            or any(
+                not isinstance(witness, CycleBackendWitness)
+                for witness in self.cycle_witnesses
+            )
+            or tuple(witness.cycle for witness in self.cycle_witnesses) != (1, 2, 3)
+        ):
+            raise ValueError("bench_identity_mismatch")
+        if any(witness.witness.phase != self.phase for witness in self.cycle_witnesses):
+            raise ValueError("backend_witness_phase")
+        if _timestamp_value(self.cycle_one_before_snapshot_at) >= _timestamp_value(
+            self.cycle_witnesses[0].load_started
+        ):
+            raise ValueError("bench_identity_mismatch")
+
+        if (
+            not isinstance(self.kernel_cursor_before, str)
+            or not self.kernel_cursor_before
+            or not isinstance(self.kernel_cursor_after, str)
+            or not self.kernel_cursor_after
+            or self.kernel_cursor_before == self.kernel_cursor_after
+        ):
+            raise ValueError("kernel_window_invalid")
+        if not isinstance(self.kernel_counters, KernelCounters):
+            raise ValueError("projection_not_recomputable")
+        self._validate_projection()
+
+    def _validate_projection(self) -> None:
+        if not isinstance(self.summary_projection_json, str):
+            raise ValueError("projection_not_recomputable")
+        try:
+            projection = json.loads(self.summary_projection_json)
+        except (OverflowError, TypeError, ValueError) as exc:
+            raise ValueError("projection_not_recomputable") from exc
+        if not isinstance(projection, Mapping):
+            raise ValueError("projection_not_recomputable")
+        try:
+            projection_is_canonical = (
+                _canonical_projection_json(projection) == self.summary_projection_json
+            )
+        except (OverflowError, TypeError, ValueError) as exc:
+            raise ValueError("projection_not_recomputable") from exc
+        if not projection_is_canonical:
+            raise ValueError("projection_not_recomputable")
+
+        try:
+            statistics_packet = recompute_phase_statistics(self.turn_records)
+            unload_leak = sum(
+                max(0, metric.vram_after_unload_mib - metric.vram_before_mib)
+                for metric in self.cycle_metrics
+            )
+            expected = {
+                "phase": self.phase,
+                "alias": FROZEN_ALIAS,
+                "model_sha256": self.model_sha256,
+                "corpus_sha256": self.corpus_sha256,
+                "order_sha256": self.order_sha256,
+                "sample_n": FROZEN_SAMPLE_N,
+                "warmup_count": FROZEN_WARMUP_COUNT,
+                "measured_sample_count": FROZEN_MEASURED_SAMPLE_COUNT,
+                "load_cycles": FROZEN_LOAD_CYCLES,
+                "cycles": [_cycle_packet(metric) for metric in self.cycle_metrics],
+                "unload_leak_mib": float(unload_leak),
+                "kernel_counters": self.kernel_counters.packet(),
+                **statistics_packet,
+            }
+            matches = (
+                _canonical_projection_json(expected) == self.summary_projection_json
+            )
+        except (OverflowError, TypeError, ValueError) as exc:
+            raise ValueError("projection_not_recomputable") from exc
+        if not matches:
+            raise ValueError("projection_not_recomputable")
+
+    @property
+    def binding_sha256(self) -> str:
+        return _packet_hash(
+            {
+                "schema": self.schema_version,
+                "phase": self.phase,
+                "outcome": self.outcome,
+                "window_id": self.window_id,
+                "boot_id": self.boot_id,
+                "gpu_uuid": self.gpu_uuid,
+                "topology_sha256": self.topology_sha256,
+                "model_sha256": self.model_sha256,
+                "corpus_sha256": self.corpus_sha256,
+                "order_sha256": self.order_sha256,
+                "effective_args_sha256": self.effective_args_sha256,
+                "driver_package_sha256": self.driver_package_sha256,
+                "authorization_preimage_sha256": self.authorization_preimage_sha256,
+                "consumption_receipt_sha256": self.consumption_receipt_sha256,
+                "static_preflight_sha256": self.static_preflight_sha256,
+                "runtime_identity_sha256": self.runtime_identity_sha256,
+                "turn_manifest_sha256": self.turn_manifest.binding_sha256,
+                "turn_record_sha256s": [
+                    record.binding_sha256 for record in self.turn_records
+                ],
+                "cycle_metrics": [
+                    _cycle_packet(metric) for metric in self.cycle_metrics
+                ],
+                "cycle_witness_sha256s": [
+                    witness.binding_sha256 for witness in self.cycle_witnesses
+                ],
+                "containment_before_sha256": self.containment_before_sha256,
+                "containment_after_sha256": self.containment_after_sha256,
+                "kernel_cursor_before": self.kernel_cursor_before,
+                "kernel_cursor_after": self.kernel_cursor_after,
+                "kernel_counters": self.kernel_counters.packet(),
+                "summary_projection_json": self.summary_projection_json,
+                "cycle_one_before_snapshot_at": self.cycle_one_before_snapshot_at,
+                "timestamp": self.timestamp,
+            }
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1653,6 +2204,7 @@ def _canonical_wrapper_bytes(wrapper: Mapping[str, object]) -> bytes:
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
+            allow_nan=False,
         ).encode("utf-8")
         + b"\n"
     )
@@ -1850,11 +2402,116 @@ def _decode_backend_map_witness(fields: object) -> RuntimeBackendWitness:
     )
 
 
+_TURN_RECORD_FIELDS = (
+    "cycle",
+    "ordinal",
+    "warmup",
+    "artifact_sha256",
+    "outcome",
+    "e2e_ms",
+    "ttft_ms",
+    "prompt_per_second",
+    "predicted_per_second",
+    "draft_n",
+    "draft_n_accepted",
+)
+_CYCLE_METRIC_FIELDS = (
+    "cycle",
+    "topology_sha256",
+    "bar1_before_percent",
+    "bar1_after_load_percent",
+    "bar1_after_inference_percent",
+    "bar1_after_unload_percent",
+    "vram_before_mib",
+    "vram_after_load_mib",
+    "vram_after_inference_mib",
+    "vram_after_unload_mib",
+)
+_PHASE_PACKET_FIELDS = (
+    "phase",
+    "outcome",
+    "window_id",
+    "boot_id",
+    "gpu_uuid",
+    "topology_sha256",
+    "model_sha256",
+    "corpus_sha256",
+    "order_sha256",
+    "effective_args_sha256",
+    "driver_package_sha256",
+    "authorization_preimage_sha256",
+    "consumption_receipt_sha256",
+    "static_preflight_sha256",
+    "runtime_identity_sha256",
+    "turn_manifest",
+    "turn_records",
+    "cycle_metrics",
+    "cycle_witnesses",
+    "containment_before_sha256",
+    "containment_after_sha256",
+    "kernel_cursor_before",
+    "kernel_cursor_after",
+    "kernel_counters",
+    "summary_projection_json",
+    "cycle_one_before_snapshot_at",
+    "timestamp",
+)
+
+
+def _decode_turn_manifest(fields: object) -> TurnManifest:
+    values = _persisted_fields(fields, ("phase", "entries"))
+    entries = values["entries"]
+    if not isinstance(entries, list):
+        raise ValueError("persisted_roundtrip")
+    rebuilt = []
+    for entry in entries:
+        if not isinstance(entry, list) or len(entry) != 4:
+            raise ValueError("persisted_roundtrip")
+        rebuilt.append(TurnManifestEntry(*entry))
+    return TurnManifest(phase=values["phase"], entries=tuple(rebuilt))
+
+
+def _decode_cycle_backend_witness(fields: object) -> CycleBackendWitness:
+    values = _persisted_fields(
+        fields,
+        ("witness", "cycle", "load_started", "unload_proven"),
+    )
+    values["witness"] = _decode_backend_map_witness(values["witness"])
+    return CycleBackendWitness(**values)
+
+
+def _decode_phase_packet(fields: object) -> PhasePacket:
+    values = _persisted_fields(fields, _PHASE_PACKET_FIELDS)
+    values["turn_manifest"] = _decode_turn_manifest(values["turn_manifest"])
+    turn_records = values["turn_records"]
+    cycle_metrics = values["cycle_metrics"]
+    cycle_witnesses = values["cycle_witnesses"]
+    if not all(
+        isinstance(items, list)
+        for items in (turn_records, cycle_metrics, cycle_witnesses)
+    ):
+        raise ValueError("persisted_roundtrip")
+    values["turn_records"] = tuple(
+        TurnRecord(**_persisted_fields(record, _TURN_RECORD_FIELDS))
+        for record in turn_records
+    )
+    values["cycle_metrics"] = tuple(
+        CycleMetrics(**_persisted_fields(metric, _CYCLE_METRIC_FIELDS))
+        for metric in cycle_metrics
+    )
+    values["cycle_witnesses"] = tuple(
+        _decode_cycle_backend_witness(witness) for witness in cycle_witnesses
+    )
+    values["kernel_counters"] = _decode_kernel_counters(values["kernel_counters"])
+    return PhasePacket(**values)
+
+
 _PERSISTED_REGISTRY: Mapping[str, object] = MappingProxyType(
     {
         CONTAINMENT_SNAPSHOT_SCHEMA: _decode_containment_snapshot,
         RUNTIME_IDENTITY_SCHEMA: _decode_runtime_identity,
         STATIC_PREFLIGHT_SCHEMA: _decode_static_preflight,
+        PHASE_PACKET_SCHEMA: _decode_phase_packet,
         COLD_BOOT_WITNESS_SCHEMA: _decode_cold_boot_witness,
         PROVISIONAL_LIVE_WITNESS_SCHEMA: _decode_provisional_live_witness,
         AUTHORIZATION_WITNESS_SCHEMA: _decode_authorization_witness,
@@ -1873,7 +2530,7 @@ class PersistedDoc:
             raise ValueError("persisted_wrapper_shape")
         try:
             wrapper = json.loads(self.wrapper_bytes)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        except (OverflowError, UnicodeDecodeError, ValueError) as exc:
             raise ValueError("persisted_wrapper_shape") from exc
         if not isinstance(wrapper, Mapping) or set(wrapper) != {
             "schema",
@@ -1881,7 +2538,13 @@ class PersistedDoc:
             "fields",
         }:
             raise ValueError("persisted_wrapper_shape")
-        if _canonical_wrapper_bytes(wrapper) != self.wrapper_bytes:
+        try:
+            wrapper_is_canonical = (
+                _canonical_wrapper_bytes(wrapper) == self.wrapper_bytes
+            )
+        except (OverflowError, TypeError, ValueError) as exc:
+            raise ValueError("persisted_wrapper_shape") from exc
+        if not wrapper_is_canonical:
             raise ValueError("noncanonical_wrapper")
         schema = wrapper["schema"]
         if not isinstance(schema, str) or schema not in _PERSISTED_REGISTRY:
@@ -1892,7 +2555,7 @@ class PersistedDoc:
             _validate_sha256(wrapper["binding_sha256"])
             if obj.binding_sha256 != wrapper["binding_sha256"]:
                 raise ValueError("persisted_roundtrip")
-        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        except (AttributeError, KeyError, OverflowError, TypeError, ValueError) as exc:
             raise ValueError("persisted_roundtrip") from exc
         object.__setattr__(self, "_obj", obj)
 
@@ -1903,6 +2566,13 @@ class PersistedDoc:
     @property
     def obj(self) -> object:
         return self._obj
+
+
+def decode_persisted_packet(data: bytes) -> PhasePacket:
+    persisted = PersistedDoc(data)
+    if not isinstance(persisted.obj, PhasePacket):
+        raise ValueError("persisted_packet_schema")
+    return persisted.obj
 
 
 @dataclass(frozen=True, slots=True)

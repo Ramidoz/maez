@@ -2585,5 +2585,720 @@ class PersistedDocTests(unittest.TestCase):
         self.assertTrue(encoded.endswith(b"\n"))
 
 
+def _turn_manifest(phase: str = "vulkan_baseline") -> cm.TurnManifest:
+    entries = []
+    for cycle in (1, 2, 3):
+        entries.append(cm.TurnManifestEntry(cycle, 0, True, SHA_A))
+        for ordinal in range(1, 8):
+            entries.append(cm.TurnManifestEntry(cycle, ordinal, False, SHA_B))
+    return cm.TurnManifest(phase=phase, entries=tuple(entries))
+
+
+def _turn_records() -> tuple[cm.TurnRecord, ...]:
+    records = []
+    for cycle in (1, 2, 3):
+        records.append(
+            cm.TurnRecord(
+                cycle=cycle,
+                ordinal=0,
+                warmup=True,
+                artifact_sha256=SHA_A,
+                outcome="completed",
+                e2e_ms=99_999.0,
+                ttft_ms=99_999.0,
+                prompt_per_second=1.0,
+                predicted_per_second=1.0,
+                draft_n=None,
+                draft_n_accepted=None,
+            )
+        )
+        for ordinal in range(1, 8):
+            sample = (cycle - 1) * 7 + ordinal
+            records.append(
+                cm.TurnRecord(
+                    cycle=cycle,
+                    ordinal=ordinal,
+                    warmup=False,
+                    artifact_sha256=SHA_B,
+                    outcome="completed",
+                    e2e_ms=float(sample),
+                    ttft_ms=100.0 + sample,
+                    prompt_per_second=200.0 + sample,
+                    predicted_per_second=100.0 + sample,
+                    draft_n=10,
+                    draft_n_accepted=7,
+                )
+            )
+    return tuple(records)
+
+
+def _phase_cycle_metrics() -> tuple[cm.CycleMetrics, ...]:
+    return tuple(
+        cm.CycleMetrics(
+            cycle=cycle,
+            topology_sha256=SHA_C,
+            bar1_before_percent=10.0,
+            bar1_after_load_percent=70.0 + cycle,
+            bar1_after_inference_percent=75.0 + cycle,
+            bar1_after_unload_percent=10.0,
+            vram_before_mib=100,
+            vram_after_load_mib=20_000 + cycle,
+            vram_after_inference_mib=21_000 + cycle,
+            vram_after_unload_mib=100,
+        )
+        for cycle in (1, 2, 3)
+    )
+
+
+def _cycle_backend_witnesses(
+    phase: str = "vulkan_baseline",
+) -> tuple[cm.CycleBackendWitness, ...]:
+    backend_name = "vulkan" if phase == "vulkan_baseline" else "cuda"
+    release_root = cm.VULKAN_RELEASE_ROOT if backend_name == "vulkan" else cm.CUDA_RELEASE_ROOT
+    return tuple(
+        cm.CycleBackendWitness(
+            witness=cm.RuntimeBackendWitness(
+                backend=backend_name,
+                maps_sha256=f"{cycle}" * 64,
+                phase=phase,
+                timestamp=f"2026-07-13T12:0{cycle}:10Z",
+                release_root_sha256=cm._packet_hash(str(release_root)),
+            ),
+            cycle=cycle,
+            load_started=f"2026-07-13T12:0{cycle}:00Z",
+            unload_proven=f"2026-07-13T12:0{cycle}:20Z",
+        )
+        for cycle in (1, 2, 3)
+    )
+
+
+def _projection_json(
+    phase: str,
+    records: tuple[cm.TurnRecord, ...],
+    metrics: tuple[cm.CycleMetrics, ...],
+) -> str:
+    statistics = cm.recompute_phase_statistics(records)
+    unload_leak = sum(
+        max(0, cycle.vram_after_unload_mib - cycle.vram_before_mib)
+        for cycle in metrics
+    )
+    summary = make_summary(
+        phase,
+        cycles=metrics,
+        seven_turn_max_ms=statistics["seven_turn_max_ms"],
+        p95_e2e_ms=statistics["p95_e2e_ms"],
+        median_decode_tps=statistics["median_decode_tps"],
+        median_prefill_tps=statistics["median_prefill_tps"],
+        mtp_drafted_tokens=statistics["mtp_drafted_tokens"],
+        mtp_accepted_tokens=statistics["mtp_accepted_tokens"],
+        mtp_rejected_tokens=statistics["mtp_rejected_tokens"],
+        mtp_initialized=statistics["mtp_initialized"],
+        crash_count=statistics["crash_count"],
+        restart_count=statistics["restart_count"],
+        hang_count=statistics["hang_count"],
+        timeout_count=statistics["timeout_count"],
+        unload_leak_mib=float(unload_leak),
+        kernel_counters=cm.KernelCounters.zero(),
+    )
+    return json.dumps(
+        cm.phase_summary_projection(summary),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _phase_packet(phase: str = "vulkan_baseline") -> cm.PhasePacket:
+    records = _turn_records()
+    metrics = _phase_cycle_metrics()
+    return cm.PhasePacket(
+        phase=phase,
+        outcome="completed",
+        window_id="window-1",
+        boot_id="boot-1",
+        gpu_uuid="GPU-12345678-1234-1234-1234-123456789abc",
+        topology_sha256=SHA_C,
+        model_sha256=MODEL_SHA,
+        corpus_sha256=CORPUS_SHA,
+        order_sha256=ORDER_SHA,
+        effective_args_sha256=SHA_D,
+        driver_package_sha256=SHA_E,
+        authorization_preimage_sha256=SHA_A,
+        consumption_receipt_sha256=SHA_B,
+        static_preflight_sha256=SHA_C,
+        runtime_identity_sha256=SHA_D,
+        turn_manifest=_turn_manifest(phase),
+        turn_records=records,
+        cycle_metrics=metrics,
+        cycle_witnesses=_cycle_backend_witnesses(phase),
+        containment_before_sha256=SHA_A,
+        containment_after_sha256=SHA_B,
+        kernel_cursor_before="cursor-a",
+        kernel_cursor_after="cursor-b",
+        kernel_counters=cm.KernelCounters.zero(),
+        summary_projection_json=_projection_json(phase, records, metrics),
+        cycle_one_before_snapshot_at="2026-07-13T12:00:00Z",
+        timestamp="2026-07-13T12:10:00Z",
+    )
+
+
+def _phase_packet_fields(packet: cm.PhasePacket) -> dict[str, object]:
+    return {
+        "phase": packet.phase,
+        "outcome": packet.outcome,
+        "window_id": packet.window_id,
+        "boot_id": packet.boot_id,
+        "gpu_uuid": packet.gpu_uuid,
+        "topology_sha256": packet.topology_sha256,
+        "model_sha256": packet.model_sha256,
+        "corpus_sha256": packet.corpus_sha256,
+        "order_sha256": packet.order_sha256,
+        "effective_args_sha256": packet.effective_args_sha256,
+        "driver_package_sha256": packet.driver_package_sha256,
+        "authorization_preimage_sha256": packet.authorization_preimage_sha256,
+        "consumption_receipt_sha256": packet.consumption_receipt_sha256,
+        "static_preflight_sha256": packet.static_preflight_sha256,
+        "runtime_identity_sha256": packet.runtime_identity_sha256,
+        "turn_manifest": {
+            "phase": packet.turn_manifest.phase,
+            "entries": [
+                [entry.cycle, entry.ordinal, entry.warmup, entry.artifact_sha256]
+                for entry in packet.turn_manifest.entries
+            ],
+        },
+        "turn_records": [
+            {
+                "cycle": record.cycle,
+                "ordinal": record.ordinal,
+                "warmup": record.warmup,
+                "artifact_sha256": record.artifact_sha256,
+                "outcome": record.outcome,
+                "e2e_ms": record.e2e_ms,
+                "ttft_ms": record.ttft_ms,
+                "prompt_per_second": record.prompt_per_second,
+                "predicted_per_second": record.predicted_per_second,
+                "draft_n": record.draft_n,
+                "draft_n_accepted": record.draft_n_accepted,
+            }
+            for record in packet.turn_records
+        ],
+        "cycle_metrics": [cm._cycle_packet(metric) for metric in packet.cycle_metrics],
+        "cycle_witnesses": [
+            {
+                "witness": {
+                    "backend": item.witness.backend,
+                    "maps_sha256": item.witness.maps_sha256,
+                    "phase": item.witness.phase,
+                    "timestamp": item.witness.timestamp,
+                    "release_root_sha256": item.witness.release_root_sha256,
+                },
+                "cycle": item.cycle,
+                "load_started": item.load_started,
+                "unload_proven": item.unload_proven,
+            }
+            for item in packet.cycle_witnesses
+        ],
+        "containment_before_sha256": packet.containment_before_sha256,
+        "containment_after_sha256": packet.containment_after_sha256,
+        "kernel_cursor_before": packet.kernel_cursor_before,
+        "kernel_cursor_after": packet.kernel_cursor_after,
+        "kernel_counters": {
+            "reusemappingdb_map": packet.kernel_counters.reusemappingdb_map,
+            "pmap_cb": packet.kernel_counters.pmap_cb,
+            "mmu_walk_map": packet.kernel_counters.mmu_walk_map,
+            "nv_err_no_memory": packet.kernel_counters.nv_err_no_memory,
+            "xid": packet.kernel_counters.xid,
+            "unmatched_nvrm": packet.kernel_counters.unmatched_nvrm,
+        },
+        "summary_projection_json": packet.summary_projection_json,
+        "cycle_one_before_snapshot_at": packet.cycle_one_before_snapshot_at,
+        "timestamp": packet.timestamp,
+    }
+
+
+class TurnManifestTests(unittest.TestCase):
+    def test_valid_manifest_has_24_entries_and_binds(self) -> None:
+        manifest = _turn_manifest()
+        self.assertEqual(24, len(manifest.entries))
+        cm._validate_sha256(manifest.binding_sha256)
+
+    def test_missing_measured_turn_is_rejected(self) -> None:
+        entries = list(_turn_manifest().entries)[:-1]
+        with self.assertRaisesRegex(ValueError, "manifest_shape"):
+            cm.TurnManifest(phase="vulkan_baseline", entries=tuple(entries))
+
+    def test_warmup_flag_must_match_ordinal_zero(self) -> None:
+        entries = list(_turn_manifest().entries)
+        entries[0] = cm.TurnManifestEntry(1, 0, False, SHA_A)
+        with self.assertRaisesRegex(ValueError, "manifest_shape"):
+            cm.TurnManifest(phase="vulkan_baseline", entries=tuple(entries))
+
+    def test_manifest_requires_tuple_exact_order_and_typed_entries(self) -> None:
+        manifest = _turn_manifest()
+        for entries in (
+            list(manifest.entries),
+            (manifest.entries[1], manifest.entries[0], *manifest.entries[2:]),
+            ("not-an-entry", *manifest.entries[1:]),
+        ):
+            with self.subTest(kind=type(entries).__name__):
+                with self.assertRaisesRegex(ValueError, "manifest_shape"):
+                    cm.TurnManifest(phase="vulkan_baseline", entries=entries)
+
+    def test_entry_cycle_ordinal_and_warmup_types_are_exact(self) -> None:
+        for values in (
+            (True, 0, True),
+            (1.0, 0, True),
+            (1, True, True),
+            (1, 0.0, True),
+            (1, 0, 1),
+        ):
+            with self.subTest(values=values):
+                with self.assertRaisesRegex(ValueError, "manifest_shape"):
+                    cm.TurnManifestEntry(*values, SHA_A)
+
+    def test_manifest_phase_refuses_non_string_without_type_error(self) -> None:
+        with self.assertRaisesRegex(ValueError, "closed_phase"):
+            cm.TurnManifest(phase=["vulkan_baseline"], entries=_turn_manifest().entries)
+
+
+class TurnRecordTests(unittest.TestCase):
+    def test_unknown_outcome_is_rejected_by_closed_vocabulary(self) -> None:
+        for outcome in ("weird_outcome", ["completed"]):
+            with self.subTest(outcome=outcome):
+                with self.assertRaisesRegex(ValueError, "turn_outcome_closed"):
+                    replace(_turn_records()[1], outcome=outcome)
+
+    def test_warmup_discards_mtp_and_measured_requires_typed_counters(self) -> None:
+        with self.assertRaisesRegex(ValueError, "mtp_unproven"):
+            replace(_turn_records()[0], draft_n=1, draft_n_accepted=1)
+        for drafted, accepted in (
+            (None, None),
+            (1, None),
+            (None, 1),
+            (True, 1),
+            (1, 2),
+            (1.0, 1),
+        ):
+            with self.subTest(drafted=drafted, accepted=accepted):
+                with self.assertRaisesRegex(ValueError, "mtp_unproven"):
+                    replace(
+                        _turn_records()[1],
+                        draft_n=drafted,
+                        draft_n_accepted=accepted,
+                    )
+
+    def test_measurements_are_nonnegative_finite_floats(self) -> None:
+        for field, value in (
+            ("e2e_ms", -1.0),
+            ("ttft_ms", float("nan")),
+            ("prompt_per_second", True),
+            ("predicted_per_second", 1),
+        ):
+            with self.subTest(field=field, value=value):
+                with self.assertRaisesRegex(ValueError, "turn_measurement"):
+                    replace(_turn_records()[1], **{field: value})
+
+    def test_record_shape_ties_warmup_to_ordinal(self) -> None:
+        for changes in (
+            {"cycle": True},
+            {"ordinal": 1.0},
+            {"warmup": 1},
+            {"warmup": True},
+        ):
+            with self.subTest(changes=changes):
+                with self.assertRaisesRegex(ValueError, "turn_record_shape"):
+                    replace(_turn_records()[1], **changes)
+
+    def test_ttft_is_hash_bound_even_though_not_an_aggregate(self) -> None:
+        record = _turn_records()[1]
+        changed = replace(record, ttft_ms=record.ttft_ms + 1.0)
+        self.assertNotEqual(record.binding_sha256, changed.binding_sha256)
+
+    def test_mtp_integer_must_be_json_serializable(self) -> None:
+        with self.assertRaisesRegex(ValueError, "mtp_unproven"):
+            replace(
+                _turn_records()[1],
+                draft_n=10**5_000,
+                draft_n_accepted=1,
+            )
+
+
+class PhaseStatisticsTests(unittest.TestCase):
+    def test_frozen_statistics_use_only_the_21_measured_rows(self) -> None:
+        statistics = cm.recompute_phase_statistics(_turn_records())
+        self.assertEqual(20.0, statistics["p95_e2e_ms"])
+        self.assertEqual(21.0, statistics["seven_turn_max_ms"])
+        self.assertEqual(211.0, statistics["median_prefill_tps"])
+        self.assertEqual(111.0, statistics["median_decode_tps"])
+        self.assertEqual(210, statistics["mtp_drafted_tokens"])
+        self.assertEqual(147, statistics["mtp_accepted_tokens"])
+        self.assertEqual(63, statistics["mtp_rejected_tokens"])
+        self.assertTrue(statistics["mtp_initialized"])
+        self.assertEqual(0, statistics["restart_count"])
+
+    def test_mtp_totals_are_seven_per_cycle_then_three_cycle_sums(self) -> None:
+        records = _turn_records()
+        for cycle in (1, 2, 3):
+            measured = [
+                record for record in records if record.cycle == cycle and not record.warmup
+            ]
+            self.assertEqual(7, len(measured))
+            self.assertEqual(70, sum(record.draft_n for record in measured))
+            self.assertEqual(49, sum(record.draft_n_accepted for record in measured))
+        statistics = cm.recompute_phase_statistics(records)
+        self.assertEqual(
+            statistics["mtp_drafted_tokens"] - statistics["mtp_accepted_tokens"],
+            statistics["mtp_rejected_tokens"],
+        )
+
+    def test_phase_projection_has_exact_phase_produced_fields(self) -> None:
+        packet = _phase_packet()
+        projection = json.loads(packet.summary_projection_json)
+        self.assertEqual(
+            {
+                "phase",
+                "alias",
+                "model_sha256",
+                "corpus_sha256",
+                "order_sha256",
+                "sample_n",
+                "warmup_count",
+                "measured_sample_count",
+                "load_cycles",
+                "seven_turn_max_ms",
+                "p95_e2e_ms",
+                "median_decode_tps",
+                "median_prefill_tps",
+                "cycles",
+                "mtp_drafted_tokens",
+                "mtp_accepted_tokens",
+                "mtp_rejected_tokens",
+                "mtp_initialized",
+                "crash_count",
+                "restart_count",
+                "hang_count",
+                "timeout_count",
+                "unload_leak_mib",
+                "kernel_counters",
+            },
+            set(projection),
+        )
+        for forbidden in (
+            "quality_failure_count",
+            "recall_posture",
+            "owner_voice_evidence_sha256",
+            "rollback_witness_sha256",
+            "cold_boot_witness_sha256",
+            "provisional_live_witness_sha256",
+        ):
+            self.assertNotIn(forbidden, projection)
+
+
+class PhasePacketTests(unittest.TestCase):
+    def test_valid_packet_binds_all_preimages(self) -> None:
+        packet = _phase_packet()
+        cm._validate_sha256(packet.binding_sha256)
+        self.assertEqual((1, 2, 3), tuple(item.cycle for item in packet.cycle_metrics))
+
+    def test_cross_phase_witness_is_rejected(self) -> None:
+        packet = _phase_packet()
+        with self.assertRaisesRegex(ValueError, "backend_witness_phase"):
+            replace(packet, cycle_witnesses=_cycle_backend_witnesses("cuda_candidate"))
+
+    def test_duplicate_witness_cycle_is_rejected(self) -> None:
+        packet = _phase_packet()
+        witnesses = list(packet.cycle_witnesses)
+        witnesses[1] = replace(witnesses[1], cycle=1)
+        with self.assertRaisesRegex(ValueError, "bench_identity_mismatch"):
+            replace(packet, cycle_witnesses=tuple(witnesses))
+
+    def test_bad_window_id_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "window_id_syntax"):
+            replace(_phase_packet(), window_id="a b")
+
+    def test_manifest_and_record_join_is_exact(self) -> None:
+        packet = _phase_packet()
+        records = list(packet.turn_records)
+        records[1] = replace(records[1], artifact_sha256=SHA_E)
+        with self.assertRaisesRegex(ValueError, "turn_record_join"):
+            replace(packet, turn_records=tuple(records))
+
+    def test_tampered_turn_measurement_cannot_preserve_projection(self) -> None:
+        packet = _phase_packet()
+        records = list(packet.turn_records)
+        records[1] = replace(records[1], e2e_ms=9_999.0)
+        with self.assertRaisesRegex(ValueError, "projection_not_recomputable"):
+            replace(packet, turn_records=tuple(records))
+
+    def test_inconsistent_cycle_metric_is_rejected(self) -> None:
+        packet = _phase_packet()
+        metrics = list(packet.cycle_metrics)
+        metrics[0] = replace(metrics[0], vram_after_unload_mib=101)
+        with self.assertRaisesRegex(ValueError, "projection_not_recomputable"):
+            replace(packet, cycle_metrics=tuple(metrics))
+
+    def test_consistently_rebuilt_cycle_metric_changes_binding(self) -> None:
+        packet = _phase_packet()
+        metrics = list(packet.cycle_metrics)
+        metrics[0] = replace(metrics[0], vram_after_unload_mib=101)
+        metrics_tuple = tuple(metrics)
+        rebuilt = replace(
+            packet,
+            cycle_metrics=metrics_tuple,
+            summary_projection_json=_projection_json(
+                packet.phase,
+                packet.turn_records,
+                metrics_tuple,
+            ),
+        )
+        self.assertNotEqual(packet.binding_sha256, rebuilt.binding_sha256)
+
+    def test_cycle_metrics_require_exact_tuple_shape_order_and_type(self) -> None:
+        packet = _phase_packet()
+        for metrics in (
+            packet.cycle_metrics[:2],
+            tuple(reversed(packet.cycle_metrics)),
+            (packet.cycle_metrics[0], "wrong", packet.cycle_metrics[2]),
+            list(packet.cycle_metrics),
+        ):
+            with self.subTest(metrics=metrics):
+                with self.assertRaisesRegex(ValueError, "cycle_metrics_shape"):
+                    replace(packet, cycle_metrics=metrics)
+
+    def test_records_and_witnesses_are_tuple_only_and_witness_ordered(self) -> None:
+        packet = _phase_packet()
+        cases = (
+            ({"turn_records": list(packet.turn_records)}, "turn_record_join"),
+            ({"cycle_witnesses": list(packet.cycle_witnesses)}, "bench_identity_mismatch"),
+            (
+                {"cycle_witnesses": tuple(reversed(packet.cycle_witnesses))},
+                "bench_identity_mismatch",
+            ),
+        )
+        for changes, reason in cases:
+            with self.subTest(changes=tuple(changes)):
+                with self.assertRaisesRegex(ValueError, reason):
+                    replace(packet, **changes)
+
+    def test_completed_packet_rejects_every_noncompleted_turn_outcome(self) -> None:
+        packet = _phase_packet()
+        for outcome in ("http_timeout", "crash", "hang", "malformed_response"):
+            records = list(packet.turn_records)
+            records[1] = replace(records[1], outcome=outcome)
+            with self.subTest(outcome=outcome):
+                with self.assertRaisesRegex(ValueError, "turn_outcome_incomplete"):
+                    replace(packet, turn_records=tuple(records))
+
+    def test_packet_outcome_vocabulary_is_closed(self) -> None:
+        for outcome in ("weird_outcome", ["completed"]):
+            with self.subTest(outcome=outcome):
+                with self.assertRaisesRegex(ValueError, "turn_outcome_closed"):
+                    replace(_phase_packet(), outcome=outcome)
+
+    def test_packet_phase_refuses_non_string_without_type_error(self) -> None:
+        with self.assertRaisesRegex(ValueError, "closed_phase"):
+            replace(_phase_packet(), phase=["vulkan_baseline"])
+
+    def test_kernel_window_must_be_nonempty_and_distinct(self) -> None:
+        packet = _phase_packet()
+        for before, after in (("", "cursor-b"), ("cursor-a", ""), ("same", "same")):
+            with self.subTest(before=before, after=after):
+                with self.assertRaisesRegex(ValueError, "kernel_window_invalid"):
+                    replace(
+                        packet,
+                        kernel_cursor_before=before,
+                        kernel_cursor_after=after,
+                    )
+
+    def test_projection_unload_leak_and_failure_counts_are_recomputed(self) -> None:
+        packet = _phase_packet()
+        for field, value in (
+            ("unload_leak_mib", 1.0),
+            ("crash_count", 1),
+            ("restart_count", 1),
+            ("mtp_drafted_tokens", 211),
+            ("mtp_accepted_tokens", 148),
+            ("mtp_rejected_tokens", 64),
+            ("mtp_initialized", False),
+        ):
+            projection = json.loads(packet.summary_projection_json)
+            projection[field] = value
+            forged = json.dumps(projection, sort_keys=True, separators=(",", ":"))
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(ValueError, "projection_not_recomputable"):
+                    replace(packet, summary_projection_json=forged)
+
+        projection = json.loads(packet.summary_projection_json)
+        projection["kernel_counters"]["Xid"] = 1
+        with self.assertRaisesRegex(ValueError, "projection_not_recomputable"):
+            replace(
+                packet,
+                summary_projection_json=json.dumps(
+                    projection,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            )
+
+    def test_projection_must_be_canonical_json(self) -> None:
+        packet = _phase_packet()
+        projection = json.loads(packet.summary_projection_json)
+        variants = []
+        variants.append(packet.summary_projection_json + " ")
+        variants.append(json.dumps(dict(reversed(tuple(projection.items())))))
+        extra = dict(projection)
+        extra["extra"] = 1
+        variants.append(json.dumps(extra, sort_keys=True, separators=(",", ":")))
+        missing = dict(projection)
+        del missing["sample_n"]
+        variants.append(json.dumps(missing, sort_keys=True, separators=(",", ":")))
+        for field, value in (
+            ("p95_e2e_ms", float("nan")),
+            ("p95_e2e_ms", 20),
+            ("sample_n", 7.0),
+            ("warmup_count", True),
+            ("unload_leak_mib", 0),
+        ):
+            typed = dict(projection)
+            typed[field] = value
+            variants.append(json.dumps(typed, sort_keys=True, separators=(",", ":")))
+        for variant in variants:
+            with self.subTest(variant=variant[-20:]):
+                with self.assertRaisesRegex(ValueError, "projection_not_recomputable"):
+                    replace(packet, summary_projection_json=variant)
+
+    def test_nonzero_float_unload_leak_is_recomputable(self) -> None:
+        packet = _phase_packet()
+        metrics = list(packet.cycle_metrics)
+        metrics[0] = replace(metrics[0], vram_after_unload_mib=105)
+        metrics_tuple = tuple(metrics)
+        rebuilt = replace(
+            packet,
+            cycle_metrics=metrics_tuple,
+            summary_projection_json=_projection_json(
+                packet.phase,
+                packet.turn_records,
+                metrics_tuple,
+            ),
+        )
+        self.assertEqual(5.0, json.loads(rebuilt.summary_projection_json)["unload_leak_mib"])
+
+    def test_fully_populated_noncompleted_packet_can_bind_honest_counts(self) -> None:
+        packet = _phase_packet()
+        records = list(packet.turn_records)
+        records[1] = replace(records[1], outcome="crash")
+        record_tuple = tuple(records)
+        failed = replace(
+            packet,
+            outcome="crash",
+            turn_records=record_tuple,
+            summary_projection_json=_projection_json(
+                packet.phase,
+                record_tuple,
+                packet.cycle_metrics,
+            ),
+        )
+        self.assertEqual(1, json.loads(failed.summary_projection_json)["crash_count"])
+        cm._validate_sha256(failed.binding_sha256)
+
+    def test_row_derived_packet_outcomes_require_a_matching_row(self) -> None:
+        packet = _phase_packet()
+        for outcome in ("crash", "hang", "http_timeout", "malformed_response"):
+            with self.subTest(outcome=outcome):
+                with self.assertRaisesRegex(ValueError, "turn_outcome_incomplete"):
+                    replace(packet, outcome=outcome)
+
+    def test_huge_but_json_serializable_vram_refuses_at_projection_boundary(self) -> None:
+        packet = _phase_packet()
+        metric = replace(packet.cycle_metrics[0], vram_after_unload_mib=10**400)
+        with self.assertRaisesRegex(ValueError, "projection_not_recomputable"):
+            replace(packet, cycle_metrics=(metric, *packet.cycle_metrics[1:]))
+
+    def test_numeric_contract_rejects_non_json_serializable_integers(self) -> None:
+        huge = 10**5_000
+        with self.assertRaisesRegex(ValueError, "vram_integer_mib"):
+            replace(_phase_cycle_metrics()[0], vram_after_unload_mib=huge)
+        with self.assertRaisesRegex(ValueError, "invalid_xid"):
+            replace(cm.KernelCounters.zero(), xid=huge)
+        with self.assertRaisesRegex(ValueError, "invalid_unload_leak_mib"):
+            replace(make_summary(), unload_leak_mib=huge)
+
+    def test_summary_numbers_must_be_finitely_float_representable(self) -> None:
+        large = 10**400
+        with self.assertRaisesRegex(ValueError, "invalid_unload_leak_mib"):
+            replace(make_summary(), unload_leak_mib=large)
+        with self.assertRaisesRegex(ValueError, "positive_measurement"):
+            replace(make_summary(), median_decode_tps=large)
+
+    def test_huge_integer_in_projection_is_a_typed_refusal(self) -> None:
+        packet = _phase_packet()
+        huge_json = '{"sample_n":' + ("9" * 5_000) + "}"
+        with self.assertRaisesRegex(ValueError, "projection_not_recomputable"):
+            replace(packet, summary_projection_json=huge_json)
+
+
+class PhasePacketPersistenceTests(unittest.TestCase):
+    def test_phase_packet_round_trips_through_the_single_decoder(self) -> None:
+        packet = _phase_packet()
+        encoded = PersistedDocTests.wrapper(
+            cm.PHASE_PACKET_SCHEMA,
+            packet,
+            _phase_packet_fields(packet),
+        )
+        persisted = cm.PersistedDoc(encoded)
+        self.assertIsInstance(persisted.obj, cm.PhasePacket)
+        self.assertIsInstance(persisted.obj.turn_manifest.entries, tuple)
+        self.assertIsInstance(persisted.obj.turn_records, tuple)
+        self.assertIsInstance(persisted.obj.cycle_metrics, tuple)
+        self.assertIsInstance(persisted.obj.cycle_metrics[0], cm.CycleMetrics)
+        self.assertIsInstance(persisted.obj.cycle_witnesses[0], cm.CycleBackendWitness)
+        self.assertIsInstance(
+            persisted.obj.cycle_witnesses[0].witness,
+            cm.RuntimeBackendWitness,
+        )
+        self.assertEqual(packet.binding_sha256, persisted.obj.binding_sha256)
+        self.assertEqual(packet.binding_sha256, cm.decode_persisted_packet(encoded).binding_sha256)
+
+    def test_nested_packet_tamper_refuses_round_trip(self) -> None:
+        packet = _phase_packet()
+        fields = _phase_packet_fields(packet)
+        fields["turn_records"][1]["e2e_ms"] = 9_999.0
+        with self.assertRaisesRegex(ValueError, "persisted_roundtrip"):
+            cm.PersistedDoc(
+                PersistedDocTests.wrapper(cm.PHASE_PACKET_SCHEMA, packet, fields)
+            )
+
+    def test_packet_decoder_rejects_other_persisted_schema(self) -> None:
+        snapshot = containment_snapshot("cuda_candidate", "before")
+        encoded = PersistedDocTests.wrapper(
+            cm.CONTAINMENT_SNAPSHOT_SCHEMA,
+            snapshot,
+            PersistedDocTests.containment_fields(snapshot),
+        )
+        with self.assertRaisesRegex(ValueError, "persisted_packet_schema"):
+            cm.decode_persisted_packet(encoded)
+
+    def test_reduced_failed_document_is_not_a_typed_phase_packet(self) -> None:
+        packet = _phase_packet()
+        fields = _phase_packet_fields(packet)
+        fields["outcome"] = "crash"
+        del fields["turn_manifest"]
+        reduced = PersistedDocTests.wrapper(cm.PHASE_PACKET_SCHEMA, packet, fields)
+        with self.assertRaisesRegex(ValueError, "persisted_roundtrip"):
+            cm.decode_persisted_packet(reduced)
+
+    def test_huge_metric_in_persisted_packet_is_a_typed_roundtrip_refusal(self) -> None:
+        packet = _phase_packet()
+        fields = _phase_packet_fields(packet)
+        fields["cycle_metrics"][0]["vram_after_unload_mib"] = 10**400
+        encoded = PersistedDocTests.wrapper(cm.PHASE_PACKET_SCHEMA, packet, fields)
+        with self.assertRaisesRegex(ValueError, "persisted_roundtrip"):
+            cm.decode_persisted_packet(encoded)
+
+    def test_huge_integer_json_parser_failure_is_typed(self) -> None:
+        encoded = b"[" + (b"9" * 5_000) + b"]"
+        with self.assertRaisesRegex(ValueError, "persisted_wrapper_shape"):
+            cm.PersistedDoc(encoded)
+
+
 if __name__ == "__main__":
     unittest.main()
