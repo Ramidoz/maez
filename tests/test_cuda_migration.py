@@ -1962,6 +1962,91 @@ class UtcTimestampContractTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "invalid_timestamp"):
                     cm._validate_utc_z_timestamp(invalid)
 
+    def test_arbitrary_fraction_precision_orders_all_a5_evidence_constructors(self) -> None:
+        inner = cm.RuntimeBackendWitness(
+            backend="vulkan",
+            maps_sha256=SHA_A,
+            phase="vulkan_baseline",
+            timestamp="2026-07-13T12:00:02.0000002Z",
+            release_root_sha256=cm._packet_hash(str(cm.VULKAN_RELEASE_ROOT)),
+        )
+        wrapped = cm.CycleBackendWitness(
+            witness=inner,
+            cycle=1,
+            load_started="2026-07-13T12:00:02.0000001Z",
+            unload_proven="2026-07-13T12:00:02.0000003Z",
+        )
+        self.assertEqual(1, wrapped.cycle)
+        interval = cm.LoadInterval(
+            "primary",
+            "2026-07-13T12:00:02.0000001Z",
+            "2026-07-13T12:00:02.0000002Z",
+        )
+        self.assertEqual("primary", interval.component)
+
+        stage_three = _make_bundle(3)
+        cold = stage_three.candidate_summary.cold_boot_witness
+        fractional_cold = replace(
+            cold,
+            load_intervals=(
+                cm.LoadInterval(
+                    "primary",
+                    "2026-07-13T12:03:05.0000001Z",
+                    "2026-07-13T12:03:05.0000002Z",
+                ),
+                cm.LoadInterval(
+                    "judge",
+                    "2026-07-13T12:03:05.0000003Z",
+                    "2026-07-13T12:03:05.0000004Z",
+                ),
+            ),
+            timestamp="2026-07-13T12:03:05.0000005Z",
+        )
+        self.assertTrue(fractional_cold.passed)
+
+        base = _make_bundle()
+        witnesses = list(base.control_packet.cycle_witnesses)
+        witnesses[0] = wrapped
+        fractional_packet = replace(
+            base.control_packet,
+            cycle_witnesses=tuple(witnesses),
+            cycle_one_before_snapshot_at="2026-07-13T12:00:02.0000000Z",
+        )
+        self.assertEqual("vulkan_baseline", fractional_packet.phase)
+
+        exact_containment = cm.ContainmentWitness(
+            (
+                replace(
+                    base.containment.snapshots[0],
+                    timestamp="2026-07-13T12:00:00.0000001Z",
+                ),
+                replace(
+                    base.containment.snapshots[1],
+                    timestamp="2026-07-13T12:00:00.0000003Z",
+                ),
+                *base.containment.snapshots[2:],
+            )
+        )
+        self.assertTrue(
+            cm._containment_brackets_exact(
+                exact_containment,
+                "vulkan_baseline",
+                "2026-07-13T12:00:00.0000002Z",
+            )
+        )
+
+        with self.assertRaisesRegex(ValueError, "witness_outside_interval"):
+            replace(wrapped, load_started="2026-07-13T12:00:02.0000002Z")
+        with self.assertRaisesRegex(ValueError, "overlapping_load_intervals"):
+            replace(interval, started_at="2026-07-13T12:00:02.0000002Z")
+        with self.assertRaisesRegex(ValueError, "evidence_timestamp_order"):
+            replace(fractional_cold, timestamp="2026-07-13T12:03:05.0000004Z")
+        with self.assertRaisesRegex(ValueError, "bench_identity_mismatch"):
+            replace(
+                fractional_packet,
+                cycle_one_before_snapshot_at="2026-07-13T12:00:02.0000001Z",
+            )
+
 
 class QualityAndOwnerEvidenceTests(unittest.TestCase):
     def _quality(self, **overrides: object) -> cm.QualityEvidence:
@@ -3882,6 +3967,1689 @@ class RollbackEvidenceBundleTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "persisted_roundtrip"):
             cm.PersistedDoc(encoded)
+
+
+def _persisted_doc(schema: str, obj: object, fields: dict[str, object]) -> cm.PersistedDoc:
+    return cm.PersistedDoc(PersistedDocTests.wrapper(schema, obj, fields))
+
+
+def _static_fields(doc: cm.StaticPreflightDoc) -> dict[str, object]:
+    return {
+        "gpu_uuid": doc.gpu_uuid,
+        "driver_package_sha256": doc.driver_package_sha256,
+        "stub_sha256": doc.stub_sha256,
+        "corpus_verified": doc.corpus_verified,
+        "checks": dict(doc.checks),
+        "timestamp": doc.timestamp,
+    }
+
+
+def _bundle_cycle_witnesses(
+    phase: str,
+    *,
+    minute: int,
+) -> tuple[cm.CycleBackendWitness, ...]:
+    backend_name = "vulkan" if phase == "vulkan_baseline" else "cuda"
+    release_root = cm.VULKAN_RELEASE_ROOT if backend_name == "vulkan" else cm.CUDA_RELEASE_ROOT
+    return tuple(
+        cm.CycleBackendWitness(
+            witness=cm.RuntimeBackendWitness(
+                backend=backend_name,
+                maps_sha256=f"{cycle}" * 64,
+                phase=phase,
+                timestamp=f"2026-07-13T12:{minute:02d}:{cycle * 3 + 1:02d}Z",
+                release_root_sha256=cm._packet_hash(str(release_root)),
+            ),
+            cycle=cycle,
+            load_started=f"2026-07-13T12:{minute:02d}:{cycle * 3:02d}Z",
+            unload_proven=f"2026-07-13T12:{minute:02d}:{cycle * 3 + 2:02d}Z",
+        )
+        for cycle in (1, 2, 3)
+    )
+
+
+def _bundle_packet(
+    phase: str,
+    *,
+    minute: int,
+    authorization_preimage_sha256: str,
+    consumption_receipt_sha256: str,
+    static_preflight_sha256: str,
+    runtime_identity_sha256: str,
+    containment_before_sha256: str,
+    containment_after_sha256: str,
+) -> cm.PhasePacket:
+    records = _turn_records()
+    metrics = _phase_cycle_metrics()
+    return cm.PhasePacket(
+        phase=phase,
+        outcome="completed",
+        window_id="window-1",
+        boot_id="boot-1",
+        gpu_uuid="GPU-12345678-1234-1234-1234-123456789abc",
+        topology_sha256=SHA_C,
+        model_sha256=MODEL_SHA,
+        corpus_sha256=CORPUS_SHA,
+        order_sha256=ORDER_SHA,
+        effective_args_sha256=cm.FROZEN_BENCH_ARGS_SHA256,
+        driver_package_sha256=SHA_E,
+        authorization_preimage_sha256=authorization_preimage_sha256,
+        consumption_receipt_sha256=consumption_receipt_sha256,
+        static_preflight_sha256=static_preflight_sha256,
+        runtime_identity_sha256=runtime_identity_sha256,
+        turn_manifest=_turn_manifest(phase),
+        turn_records=records,
+        cycle_metrics=metrics,
+        cycle_witnesses=_bundle_cycle_witnesses(phase, minute=minute),
+        containment_before_sha256=containment_before_sha256,
+        containment_after_sha256=containment_after_sha256,
+        kernel_cursor_before=f"{phase}-cursor-before",
+        kernel_cursor_after=f"{phase}-cursor-after",
+        kernel_counters=cm.KernelCounters.zero(),
+        summary_projection_json=_projection_json(phase, records, metrics),
+        cycle_one_before_snapshot_at=f"2026-07-13T12:{minute:02d}:01Z",
+        timestamp=f"2026-07-13T12:{minute:02d}:12Z",
+    )
+
+
+def _summary_for_bundle_packet(
+    packet: cm.PhasePacket,
+    *,
+    quality: cm.QualityEvidence,
+    owner: cm.OwnerVoiceReview,
+    rollback_witness: cm.RollbackWitness,
+    cold_boot_witness: cm.ColdBootWitness | None = None,
+    provisional_live_witness: cm.ProvisionalLiveWitness | None = None,
+) -> cm.BenchSummary:
+    projection = json.loads(packet.summary_projection_json)
+    return make_summary(
+        packet.phase,
+        cycles=packet.cycle_metrics,
+        seven_turn_max_ms=projection["seven_turn_max_ms"],
+        p95_e2e_ms=projection["p95_e2e_ms"],
+        median_decode_tps=projection["median_decode_tps"],
+        median_prefill_tps=projection["median_prefill_tps"],
+        mtp_drafted_tokens=projection["mtp_drafted_tokens"],
+        mtp_accepted_tokens=projection["mtp_accepted_tokens"],
+        mtp_rejected_tokens=projection["mtp_rejected_tokens"],
+        mtp_initialized=projection["mtp_initialized"],
+        false_absence_count=quality.false_absence_count,
+        wrong_answered_ungrounded_count=quality.wrong_answered_ungrounded_count,
+        type_regression_count=quality.type_regression_count,
+        recall_posture=quality.recall_posture,
+        quality_failure_count=quality.quality_failure_count,
+        owner_voice_evidence=cm.PhaseEvidence(
+            "owner_voice_review",
+            owner.status,
+            owner.artifact_sha256,
+            owner.timestamp,
+        ),
+        kernel_counters=packet.kernel_counters,
+        crash_count=projection["crash_count"],
+        restart_count=projection["restart_count"],
+        hang_count=projection["hang_count"],
+        timeout_count=projection["timeout_count"],
+        unload_leak_mib=projection["unload_leak_mib"],
+        rollback_witness=rollback_witness,
+        cold_boot_witness=cold_boot_witness,
+        provisional_live_witness=provisional_live_witness,
+    )
+
+
+def _bundle_snapshot(phase: str, boundary: str, timestamp: str) -> cm.ContainmentSnapshot:
+    return containment_snapshot(phase, boundary, timestamp=timestamp)
+
+
+def _bundle_containment(stage: int) -> cm.ContainmentWitness:
+    snapshots = [
+        _bundle_snapshot("vulkan_baseline", "before", "2026-07-13T12:00:00Z"),
+        _bundle_snapshot("vulkan_baseline", "after", "2026-07-13T12:00:12Z"),
+        _bundle_snapshot("cuda_candidate", "before", "2026-07-13T12:01:00Z"),
+        _bundle_snapshot("cuda_candidate", "after", "2026-07-13T12:01:12Z"),
+        _bundle_snapshot("vulkan_rollback", "before", "2026-07-13T12:02:00Z"),
+        _bundle_snapshot("vulkan_rollback", "after", "2026-07-13T12:02:04Z"),
+    ]
+    if stage >= 3:
+        snapshots.extend(
+            (
+                _bundle_snapshot(
+                    "provisional_cuda_boot", "before", "2026-07-13T12:03:01Z"
+                ),
+                _bundle_snapshot(
+                    "provisional_cuda_boot", "after", "2026-07-13T12:03:03Z"
+                ),
+                _bundle_snapshot("cold_boot", "before", "2026-07-13T12:03:04Z"),
+                _bundle_snapshot("cold_boot", "after", "2026-07-13T12:03:12Z"),
+            )
+        )
+    if stage >= 5:
+        snapshots.extend(
+            (
+                _bundle_snapshot(
+                    "provisional_live", "before", "2026-07-13T12:03:14Z"
+                ),
+                _bundle_snapshot(
+                    "provisional_live", "after", "2026-07-13T12:03:18Z"
+                ),
+            )
+        )
+    return cm.ContainmentWitness(tuple(snapshots))
+
+
+def _make_bundle(stage: int = 1, **overrides: object) -> cm.BenchEvidenceBundle:
+    if stage not in range(1, 6):
+        raise ValueError("test stage")
+    fractional_control_chronology = bool(
+        overrides.pop("fractional_control_chronology", False)
+    )
+    shared_nonce = bool(overrides.pop("shared_nonce", False))
+    parent_expires_before_continuation = bool(
+        overrides.pop("parent_expires_before_continuation", False)
+    )
+    authorization_consumed_at_issue = bool(
+        overrides.pop("authorization_consumed_at_issue", False)
+    )
+    continuation_consumed_at_issue = bool(
+        overrides.pop("continuation_consumed_at_issue", False)
+    )
+    continuation_outlives_parent = bool(
+        overrides.pop("continuation_outlives_parent", False)
+    )
+    window = cm.WindowAuthorizationDoc(
+        window_id="window-1",
+        phases=("vulkan_baseline", "cuda_candidate"),
+        boot_id="boot-1",
+        nonce="a" * 64,
+        issued_at=(
+            "2026-07-13T11:59:00.0000001Z"
+            if fractional_control_chronology
+            else (
+                "2026-07-13T12:00:02Z"
+                if authorization_consumed_at_issue
+                else (
+                    "2026-07-13T08:02:00Z"
+                    if continuation_outlives_parent
+                    else (
+                        "2026-07-13T08:00:03Z"
+                        if parent_expires_before_continuation
+                        else "2026-07-13T11:59:00Z"
+                    )
+                )
+            )
+        ),
+        expires_at=(
+            "2026-07-13T15:59:00.0000001Z"
+            if fractional_control_chronology
+            else (
+                "2026-07-13T16:00:02Z"
+                if authorization_consumed_at_issue
+                else (
+                    "2026-07-13T12:02:00Z"
+                    if continuation_outlives_parent
+                    else (
+                        "2026-07-13T12:00:03Z"
+                        if parent_expires_before_continuation
+                        else "2026-07-13T15:59:00Z"
+                    )
+                )
+            )
+        ),
+        owner="rohit",
+    )
+    window_receipt = cm.ConsumptionReceipt(
+        "a" * 64,
+        "vulkan_baseline",
+        "boot-1",
+        (
+            "2026-07-13T12:00:02.0000002Z"
+            if fractional_control_chronology
+            else "2026-07-13T12:00:02Z"
+        ),
+    )
+    bench_identity = make_identity()
+    bench_identity_doc = _persisted_doc(
+        cm.RUNTIME_IDENTITY_SCHEMA,
+        bench_identity,
+        PersistedDocTests.identity_fields(bench_identity),
+    )
+    static_doc = cm.StaticPreflightDoc(
+        gpu_uuid="GPU-12345678-1234-1234-1234-123456789abc",
+        driver_package_sha256=SHA_E,
+        stub_sha256=SHA_A,
+        corpus_verified=True,
+        checks={
+            **StaticPreflightDocTests.checks(),
+            "flag_source": SHA_D,
+            "vision_unit": SHA_E,
+            "candidate_manifest": bench_identity.runtime_manifest_sha256,
+            "stub_pin": SHA_A,
+        },
+        timestamp="2026-07-13T11:58:00Z",
+    )
+    static_preflight = _persisted_doc(
+        cm.STATIC_PREFLIGHT_SCHEMA,
+        static_doc,
+        _static_fields(static_doc),
+    )
+    containment = _bundle_containment(stage)
+    snapshots = {f"{item.phase}:{item.boundary}": item for item in containment.snapshots}
+    containment_docs = {
+        key: _persisted_doc(
+            cm.CONTAINMENT_SNAPSHOT_SCHEMA,
+            snapshots[key],
+            PersistedDocTests.containment_fields(snapshots[key]),
+        )
+        for key in (
+            "vulkan_baseline:before",
+            "vulkan_baseline:after",
+            "cuda_candidate:before",
+            "cuda_candidate:after",
+        )
+    }
+    continuation_placeholder = cm.ContinuationDoc(
+        window_id="window-1",
+        phases=("cuda_candidate",),
+        boot_id="boot-1",
+        nonce=("a" * 64 if shared_nonce else "b" * 64),
+        issued_at=(
+            "2026-07-13T12:01:02Z"
+            if continuation_consumed_at_issue
+            else "2026-07-13T12:00:14Z"
+        ),
+        expires_at=(
+            "2026-07-13T13:01:02Z"
+            if continuation_consumed_at_issue
+            else "2026-07-13T13:00:14Z"
+        ),
+        owner="rohit",
+        parent_vulkan_packet_sha256=SHA_A,
+    )
+    continuation_receipt = cm.ConsumptionReceipt(
+        ("a" * 64 if shared_nonce else "b" * 64),
+        "cuda_candidate",
+        "boot-1",
+        "2026-07-13T12:01:02Z",
+    )
+    control_packet = _bundle_packet(
+        "vulkan_baseline",
+        minute=0,
+        authorization_preimage_sha256=window.preimage_sha256,
+        consumption_receipt_sha256=window_receipt.binding_sha256,
+        static_preflight_sha256=static_preflight.file_sha256,
+        runtime_identity_sha256=bench_identity_doc.file_sha256,
+        containment_before_sha256=containment_docs[
+            "vulkan_baseline:before"
+        ].file_sha256,
+        containment_after_sha256=containment_docs[
+            "vulkan_baseline:after"
+        ].file_sha256,
+    )
+    continuation = replace(
+        continuation_placeholder,
+        parent_vulkan_packet_sha256=control_packet.binding_sha256,
+    )
+    candidate_packet = _bundle_packet(
+        "cuda_candidate",
+        minute=1,
+        authorization_preimage_sha256=continuation.preimage_sha256,
+        consumption_receipt_sha256=continuation_receipt.binding_sha256,
+        static_preflight_sha256=static_preflight.file_sha256,
+        runtime_identity_sha256=bench_identity_doc.file_sha256,
+        containment_before_sha256=containment_docs[
+            "cuda_candidate:before"
+        ].file_sha256,
+        containment_after_sha256=containment_docs[
+            "cuda_candidate:after"
+        ].file_sha256,
+    )
+    quality = cm.QualityEvidence(
+        evaluator_version="quality-v1",
+        control_manifest_sha256=control_packet.turn_manifest.binding_sha256,
+        candidate_manifest_sha256=candidate_packet.turn_manifest.binding_sha256,
+        false_absence_count=0,
+        wrong_answered_ungrounded_count=0,
+        type_regression_count=0,
+        recall_posture="pass",
+        quality_failure_count=0,
+        covered_turn_count=21,
+        timestamp="2026-07-13T12:02:06Z",
+    )
+    owner = cm.OwnerVoiceReview(
+        producer="owner_human",
+        status="pass",
+        evaluator_version="voice-v1",
+        control_manifest_sha256=control_packet.turn_manifest.binding_sha256,
+        candidate_manifest_sha256=candidate_packet.turn_manifest.binding_sha256,
+        artifact_sha256=SHA_C,
+        timestamp="2026-07-13T12:02:07Z",
+    )
+    rollback_witness = cm.RollbackWitness(
+        **{
+            **RollbackEvidenceBundleTests.witness_values(make_rollback_witness()),
+            "containment_artifact_sha256": containment.phase_binding(
+                "vulkan_rollback"
+            ),
+            "timestamp": "2026-07-13T12:02:03Z",
+        }
+    )
+    rollback = cm.RollbackEvidenceBundle(
+        witness=rollback_witness,
+        maps_witness=cm.RuntimeBackendWitness(
+            backend="vulkan",
+            maps_sha256=SHA_A,
+            phase="vulkan_rollback",
+            timestamp="2026-07-13T12:02:02Z",
+            release_root_sha256=cm._packet_hash(str(cm.VULKAN_RELEASE_ROOT)),
+        ),
+        kernel_cursor_before="rollback-cursor-before",
+        kernel_cursor_after="rollback-cursor-after",
+        kernel_counters=rollback_witness.kernel_counters,
+        containment_before=snapshots["vulkan_rollback:before"],
+        containment_after=snapshots["vulkan_rollback:after"],
+        producer="owner_human",
+        window_id="window-1",
+        parent_control_packet_sha256=control_packet.binding_sha256,
+        parent_candidate_packet_sha256=candidate_packet.binding_sha256,
+        timestamp="2026-07-13T12:02:05Z",
+    )
+
+    boot = cm.AuthorizationWitness(
+        "boot_authorization", "not_attempted", None, None, None
+    )
+    live = cm.AuthorizationWitness(
+        "live_witness_authorization", "not_attempted", None, None, None
+    )
+    runtime_identity = bench_identity
+    cold_maps = None
+    provisional_maps = None
+    cold = None
+    provisional = None
+    if stage >= 2:
+        seed_quality = quality
+        seed_owner = owner
+        seed_control = _summary_for_bundle_packet(
+            control_packet,
+            quality=seed_quality,
+            owner=seed_owner,
+            rollback_witness=rollback_witness,
+        )
+        seed_candidate = _summary_for_bundle_packet(
+            candidate_packet,
+            quality=seed_quality,
+            owner=seed_owner,
+            rollback_witness=rollback_witness,
+        )
+        seed = cm.BenchEvidenceBundle(
+            window_id="window-1",
+            boot_id="boot-1",
+            gpu_uuid="GPU-12345678-1234-1234-1234-123456789abc",
+            driver_package_sha256=SHA_E,
+            control_summary=seed_control,
+            candidate_summary=seed_candidate,
+            control_packet=control_packet,
+            candidate_packet=candidate_packet,
+            containment=_bundle_containment(1),
+            boot_authorization=boot,
+            live_authorization=live,
+            bench_runtime_identity=bench_identity,
+            runtime_identity=bench_identity,
+            quality=quality,
+            owner_voice=owner,
+            window_authorization=window,
+            continuation=continuation,
+            window_consumption=window_receipt,
+            continuation_consumption=continuation_receipt,
+            containment_docs=containment_docs,
+            bench_identity_doc=bench_identity_doc,
+            runtime_identity_doc=bench_identity_doc,
+            static_preflight=static_preflight,
+            rollback=rollback,
+            cold_boot_maps=None,
+            provisional_live_maps=None,
+            timestamp="2026-07-13T12:02:10Z",
+        )
+        boot_status = "fail" if overrides.pop("terminal_boot_failure", False) else "pass"
+        boot = cm.AuthorizationWitness(
+            "boot_authorization",
+            boot_status,
+            SHA_A,
+            seed.bench_binding_sha256,
+            "2026-07-13T12:03:00Z",
+        )
+        runtime_identity = make_identity(mode="production", effective_args=argv("8080"))
+    if stage >= 3:
+        cold_maps = cm.RuntimeBackendWitness(
+            backend="cuda",
+            maps_sha256=SHA_B,
+            phase="cold_boot",
+            timestamp="2026-07-13T12:03:09Z",
+            release_root_sha256=cm._packet_hash(str(cm.CUDA_RELEASE_ROOT)),
+        )
+        cold = cm.ColdBootWitness(
+            parent_sha256=boot.binding_sha256,
+            artifact_sha256=SHA_C,
+            timestamp="2026-07-13T12:03:10Z",
+            topology_sha256=SHA_C,
+            load_intervals=(
+                cm.LoadInterval(
+                    "primary",
+                    "2026-07-13T12:03:05Z",
+                    "2026-07-13T12:03:06Z",
+                ),
+                cm.LoadInterval(
+                    "judge",
+                    "2026-07-13T12:03:07Z",
+                    "2026-07-13T12:03:08Z",
+                ),
+            ),
+            steady_bar1_percent=80.0,
+            kernel_counters=cm.KernelCounters.zero(),
+            restart_count=0,
+            containment_artifact_sha256=containment.phase_binding("cold_boot"),
+            runtime_sha256=runtime_identity.runtime_sha256,
+            runtime_maps_sha256=cold_maps.binding_sha256,
+            backend="cuda",
+            production_override_sha256=runtime_identity.production_override_sha256,
+            alias=runtime_identity.alias,
+            model_sha256=runtime_identity.model_sha256,
+            model_bytes=runtime_identity.model_bytes,
+            service_health=(
+                "failed" if overrides.pop("terminal_cold_failure", False) else "healthy"
+            ),
+            mtp_initialized=True,
+            mtp_accepted_tokens=1,
+        )
+    if stage >= 4:
+        live_status = "fail" if overrides.pop("terminal_live_failure", False) else "pass"
+        live = cm.AuthorizationWitness(
+            "live_witness_authorization",
+            live_status,
+            SHA_B,
+            cold.binding_sha256,
+            "2026-07-13T12:03:13Z",
+        )
+    if stage >= 5:
+        provisional_maps = cm.RuntimeBackendWitness(
+            backend="cuda",
+            maps_sha256=SHA_D,
+            phase="provisional_live",
+            timestamp="2026-07-13T12:03:16Z",
+            release_root_sha256=cm._packet_hash(str(cm.CUDA_RELEASE_ROOT)),
+        )
+        turns = list(live_turns())
+        if overrides.pop("terminal_provisional_failure", False):
+            turns[0] = replace(turns[0], latency_ms=12_001.0)
+        provisional = cm.ProvisionalLiveWitness(
+            parent_sha256=live.binding_sha256,
+            artifact_sha256=SHA_E,
+            timestamp="2026-07-13T12:03:17Z",
+            containment_artifact_sha256=containment.phase_binding(
+                "provisional_live"
+            ),
+            turns=tuple(turns),
+            runtime_sha256=runtime_identity.runtime_sha256,
+            runtime_maps_sha256=provisional_maps.binding_sha256,
+            backend="cuda",
+            configuration_sha256=runtime_identity.configuration_sha256,
+            corpus_sha256=CORPUS_SHA,
+            order_sha256=ORDER_SHA,
+        )
+    control_summary = _summary_for_bundle_packet(
+        control_packet,
+        quality=quality,
+        owner=owner,
+        rollback_witness=rollback_witness,
+    )
+    candidate_summary = _summary_for_bundle_packet(
+        candidate_packet,
+        quality=quality,
+        owner=owner,
+        rollback_witness=rollback_witness,
+        cold_boot_witness=cold,
+        provisional_live_witness=provisional,
+    )
+    runtime_identity_doc = _persisted_doc(
+        cm.RUNTIME_IDENTITY_SCHEMA,
+        runtime_identity,
+        PersistedDocTests.identity_fields(runtime_identity),
+    )
+    values: dict[str, object] = {
+        "window_id": "window-1",
+        "boot_id": "boot-1",
+        "gpu_uuid": "GPU-12345678-1234-1234-1234-123456789abc",
+        "driver_package_sha256": SHA_E,
+        "control_summary": control_summary,
+        "candidate_summary": candidate_summary,
+        "control_packet": control_packet,
+        "candidate_packet": candidate_packet,
+        "containment": containment,
+        "boot_authorization": boot,
+        "live_authorization": live,
+        "bench_runtime_identity": bench_identity,
+        "runtime_identity": runtime_identity,
+        "quality": quality,
+        "owner_voice": owner,
+        "window_authorization": window,
+        "continuation": continuation,
+        "window_consumption": window_receipt,
+        "continuation_consumption": continuation_receipt,
+        "containment_docs": containment_docs,
+        "bench_identity_doc": bench_identity_doc,
+        "runtime_identity_doc": runtime_identity_doc,
+        "static_preflight": static_preflight,
+        "rollback": rollback,
+        "cold_boot_maps": cold_maps,
+        "provisional_live_maps": provisional_maps,
+        "timestamp": (
+            "2026-07-13T12:03:20Z" if stage >= 5 else "2026-07-13T12:03:14Z"
+        ),
+    }
+    values.update(overrides)
+    return cm.BenchEvidenceBundle(**values)
+
+
+def _bundle_values(bundle: cm.BenchEvidenceBundle) -> dict[str, object]:
+    return {
+        name: getattr(bundle, name)
+        for name, descriptor in cm.BenchEvidenceBundle.__dataclass_fields__.items()
+        if descriptor.init
+    }
+
+
+def _rechain_base_bundle(
+    bundle: cm.BenchEvidenceBundle,
+    *,
+    control_packet: cm.PhasePacket | None = None,
+    candidate_packet: cm.PhasePacket | None = None,
+    continuation: cm.ContinuationDoc | None = None,
+    containment: cm.ContainmentWitness | None = None,
+    containment_docs: dict[str, cm.PersistedDoc] | None = None,
+    static_preflight: cm.PersistedDoc | None = None,
+    window_consumption: cm.ConsumptionReceipt | None = None,
+) -> cm.BenchEvidenceBundle:
+    control = control_packet or bundle.control_packet
+    next_continuation = continuation or replace(
+        bundle.continuation,
+        parent_vulkan_packet_sha256=control.binding_sha256,
+    )
+    candidate = candidate_packet or bundle.candidate_packet
+    candidate = replace(
+        candidate,
+        authorization_preimage_sha256=next_continuation.preimage_sha256,
+    )
+    rollback = replace(
+        bundle.rollback,
+        parent_control_packet_sha256=control.binding_sha256,
+        parent_candidate_packet_sha256=candidate.binding_sha256,
+    )
+    control_summary = _summary_for_bundle_packet(
+        control,
+        quality=bundle.quality,
+        owner=bundle.owner_voice,
+        rollback_witness=rollback.witness,
+    )
+    candidate_summary = _summary_for_bundle_packet(
+        candidate,
+        quality=bundle.quality,
+        owner=bundle.owner_voice,
+        rollback_witness=rollback.witness,
+    )
+    values = _bundle_values(bundle)
+    values.update(
+        {
+            "control_packet": control,
+            "candidate_packet": candidate,
+            "continuation": next_continuation,
+            "rollback": rollback,
+            "control_summary": control_summary,
+            "candidate_summary": candidate_summary,
+        }
+    )
+    if containment is not None:
+        values["containment"] = containment
+    if containment_docs is not None:
+        values["containment_docs"] = containment_docs
+    if static_preflight is not None:
+        values["static_preflight"] = static_preflight
+    if window_consumption is not None:
+        values["window_consumption"] = window_consumption
+    return cm.BenchEvidenceBundle(**values)
+
+
+class BenchEvidenceBundleTests(unittest.TestCase):
+    def test_valid_bundle_binds_and_copies_containment_mapping(self) -> None:
+        source = dict(_make_bundle().containment_docs)
+        bundle = _make_bundle(containment_docs=source)
+        self.assertEqual(cm.BENCH_EVIDENCE_BUNDLE_SCHEMA, bundle.schema_version)
+        cm._validate_sha256(bundle.bench_binding_sha256)
+        cm._validate_sha256(bundle.binding_sha256)
+        source.clear()
+        self.assertEqual(4, len(bundle.containment_docs))
+        with self.assertRaises(TypeError):
+            bundle.containment_docs["x"] = bundle.containment_docs[
+                "vulkan_baseline:before"
+            ]
+
+    def test_frozen_bench_args_are_independently_derived(self) -> None:
+        derived = cm._packet_hash(list(argv("18080")))
+        self.assertEqual(
+            "7fd627e1132ff30fb7f45df2cbf83d166002b0a0c56bcd07e169eca2180bd413",
+            derived,
+        )
+        self.assertEqual(derived, cm.FROZEN_BENCH_ARGS_SHA256)
+        self.assertNotEqual(derived, cm._packet_hash([*argv("18080")[:-1], "on"]))
+
+    def test_phase_outcome_and_scalar_joins_refuse(self) -> None:
+        bundle = _make_bundle()
+        failed_packet = replace(
+            bundle.control_packet,
+            outcome="crash",
+            turn_records=(
+                replace(bundle.control_packet.turn_records[0], outcome="crash"),
+                *bundle.control_packet.turn_records[1:],
+            ),
+            summary_projection_json=_projection_json(
+                bundle.control_packet.phase,
+                (
+                    replace(bundle.control_packet.turn_records[0], outcome="crash"),
+                    *bundle.control_packet.turn_records[1:],
+                ),
+                bundle.control_packet.cycle_metrics,
+            ),
+        )
+        cases = (
+            {"control_packet": bundle.candidate_packet},
+            {"control_summary": bundle.candidate_summary},
+            {"control_packet": failed_packet},
+            {"window_id": "window-2"},
+            {"boot_id": "boot-2"},
+            {"gpu_uuid": "GPU-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"},
+            {"rollback": replace(bundle.rollback, window_id="window-2")},
+        )
+        for changes in cases:
+            with self.subTest(changes=tuple(changes)):
+                with self.assertRaisesRegex(ValueError, "bundle_binding"):
+                    _make_bundle(**changes)
+
+    def test_authorization_join_matrix_and_exact_fraction_chronology(self) -> None:
+        bundle = _make_bundle()
+        self.assertIsInstance(
+            _make_bundle(fractional_control_chronology=True),
+            cm.BenchEvidenceBundle,
+        )
+        self.assertIsInstance(
+            _make_bundle(authorization_consumed_at_issue=True),
+            cm.BenchEvidenceBundle,
+        )
+        self.assertIsInstance(
+            _make_bundle(continuation_consumed_at_issue=True),
+            cm.BenchEvidenceBundle,
+        )
+        self.assertIsInstance(
+            _make_bundle(continuation_outlives_parent=True),
+            cm.BenchEvidenceBundle,
+        )
+        self.assertLess(
+            cm._compare_utc_z(
+                "2026-07-13T12:00:00.0000001Z",
+                "2026-07-13T12:00:00.0000002Z",
+            ),
+            0,
+        )
+        exact_containment = cm.ContainmentWitness(
+            (
+                containment_snapshot(
+                    "vulkan_baseline",
+                    "before",
+                    timestamp="2026-07-13T12:00:00.0000001Z",
+                ),
+                containment_snapshot(
+                    "vulkan_baseline",
+                    "after",
+                    timestamp="2026-07-13T12:00:00.0000004Z",
+                ),
+                *tuple(
+                    item
+                    for item in clean_containment().snapshots
+                    if item.phase != "vulkan_baseline"
+                ),
+            )
+        )
+        self.assertTrue(
+            cm._containment_brackets_exact(
+                exact_containment,
+                "vulkan_baseline",
+                "2026-07-13T12:00:00.0000002Z",
+            )
+        )
+        self.assertFalse(
+            cm._containment_brackets_exact(
+                exact_containment,
+                "vulkan_baseline",
+                "2026-07-13T12:00:00.0000001Z",
+            )
+        )
+        cases = (
+            {"window_authorization": replace(bundle.window_authorization, nonce="c" * 64)},
+            {"continuation": replace(bundle.continuation, nonce="c" * 64)},
+            {"window_consumption": replace(bundle.window_consumption, nonce="c" * 64)},
+            {
+                "continuation_consumption": replace(
+                    bundle.continuation_consumption, nonce="c" * 64
+                )
+            },
+            {"continuation": replace(bundle.continuation, owner="someone-else")},
+            {
+                "window_consumption": replace(
+                    bundle.window_consumption,
+                    timestamp=bundle.window_authorization.expires_at,
+                )
+            },
+            {
+                "continuation_consumption": replace(
+                    bundle.continuation_consumption,
+                    timestamp=bundle.continuation.expires_at,
+                )
+            },
+        )
+        for changes in cases:
+            with self.subTest(changes=tuple(changes)):
+                with self.assertRaisesRegex(ValueError, "bundle_binding"):
+                    _make_bundle(**changes)
+
+    def test_authorization_consistent_attacks_and_every_scope_join_refuse(self) -> None:
+        with self.assertRaisesRegex(ValueError, "bundle_binding"):
+            _make_bundle(shared_nonce=True)
+        with self.assertRaisesRegex(ValueError, "bundle_binding"):
+            _make_bundle(parent_expires_before_continuation=True)
+        bundle = _make_bundle()
+        cases = (
+            {
+                "window_authorization": replace(
+                    bundle.window_authorization, window_id="window-other"
+                )
+            },
+            {
+                "continuation": replace(
+                    bundle.continuation, window_id="window-other"
+                )
+            },
+            {
+                "window_authorization": replace(
+                    bundle.window_authorization, boot_id="boot-other"
+                )
+            },
+            {"continuation": replace(bundle.continuation, boot_id="boot-other")},
+            {
+                "window_authorization": replace(
+                    bundle.window_authorization, phases=("cuda_candidate",)
+                )
+            },
+            {
+                "continuation": replace(
+                    bundle.continuation, phases=("vulkan_baseline",)
+                )
+            },
+            {
+                "continuation": replace(
+                    bundle.continuation,
+                    parent_vulkan_packet_sha256=SHA_A,
+                )
+            },
+            {
+                "window_consumption": replace(
+                    bundle.window_consumption, phase="cuda_candidate"
+                )
+            },
+            {
+                "continuation_consumption": replace(
+                    bundle.continuation_consumption, phase="vulkan_baseline"
+                )
+            },
+            {
+                "window_consumption": replace(
+                    bundle.window_consumption, boot_id="boot-other"
+                )
+            },
+            {
+                "continuation_consumption": replace(
+                    bundle.continuation_consumption, boot_id="boot-other"
+                )
+            },
+            {
+                "control_packet": replace(
+                    bundle.control_packet,
+                    authorization_preimage_sha256=SHA_A,
+                )
+            },
+            {
+                "candidate_packet": replace(
+                    bundle.candidate_packet,
+                    authorization_preimage_sha256=SHA_A,
+                )
+            },
+            {
+                "control_packet": replace(
+                    bundle.control_packet,
+                    consumption_receipt_sha256=SHA_A,
+                )
+            },
+            {
+                "candidate_packet": replace(
+                    bundle.candidate_packet,
+                    consumption_receipt_sha256=SHA_A,
+                )
+            },
+        )
+        for changes in cases:
+            with self.subTest(changes=tuple(changes)):
+                with self.assertRaisesRegex(ValueError, "bundle_binding"):
+                    _make_bundle(**changes)
+
+        late_continuation = replace(
+            bundle.continuation,
+            issued_at="2026-07-13T15:00:00Z",
+            expires_at="2026-07-13T16:00:00Z",
+        )
+        with self.assertRaisesRegex(ValueError, "bundle_binding"):
+            _make_bundle(continuation=late_continuation)
+
+    def test_containment_file_and_object_planes_are_closed(self) -> None:
+        bundle = _make_bundle()
+        docs = dict(bundle.containment_docs)
+        wrong = containment_snapshot(
+            "vulkan_baseline",
+            "before",
+            timestamp="2026-07-13T12:00:00.5Z",
+        )
+        docs["vulkan_baseline:before"] = _persisted_doc(
+            cm.CONTAINMENT_SNAPSHOT_SCHEMA,
+            wrong,
+            PersistedDocTests.containment_fields(wrong),
+        )
+        cited = replace(
+            bundle.control_packet,
+            containment_before_sha256=docs["vulkan_baseline:before"].file_sha256,
+        )
+        cases = (
+            {"containment_docs": {**bundle.containment_docs, "extra": next(iter(docs.values()))}},
+            {"containment_docs": docs},
+            {"containment_docs": docs, "control_packet": cited},
+            {
+                "bench_identity_doc": bundle.static_preflight,
+            },
+        )
+        for changes in cases:
+            with self.subTest(changes=tuple(changes)):
+                with self.assertRaisesRegex(ValueError, "bundle_binding"):
+                    _make_bundle(**changes)
+
+    def test_semantically_swapped_containment_documents_refuse_even_when_recited(self) -> None:
+        bundle = _make_bundle()
+        docs = dict(bundle.containment_docs)
+        docs["vulkan_baseline:before"], docs["cuda_candidate:before"] = (
+            docs["cuda_candidate:before"],
+            docs["vulkan_baseline:before"],
+        )
+        control = replace(
+            bundle.control_packet,
+            containment_before_sha256=docs["vulkan_baseline:before"].file_sha256,
+        )
+        candidate = replace(
+            bundle.candidate_packet,
+            containment_before_sha256=docs["cuda_candidate:before"].file_sha256,
+        )
+        with self.assertRaisesRegex(ValueError, "bundle_binding"):
+            _rechain_base_bundle(
+                bundle,
+                control_packet=control,
+                candidate_packet=candidate,
+                containment_docs=docs,
+            )
+
+    def test_phase_chronology_rejects_cycle_two_escape_overlap_and_candidate_rewind(self) -> None:
+        bundle = _make_bundle()
+        witnesses = list(bundle.control_packet.cycle_witnesses)
+        escaped_inner = replace(
+            witnesses[1].witness,
+            timestamp="2026-07-13T12:00:14Z",
+        )
+        witnesses[1] = replace(
+            witnesses[1],
+            witness=escaped_inner,
+            load_started="2026-07-13T12:00:13Z",
+            unload_proven="2026-07-13T12:00:15Z",
+        )
+        escaped = replace(
+            bundle.control_packet,
+            cycle_witnesses=tuple(witnesses),
+        )
+        with self.assertRaisesRegex(ValueError, "bundle_binding"):
+            _rechain_base_bundle(bundle, control_packet=escaped)
+
+        witnesses = list(bundle.control_packet.cycle_witnesses)
+        overlapping_inner = replace(
+            witnesses[1].witness,
+            timestamp="2026-07-13T12:00:05.5Z",
+        )
+        witnesses[1] = replace(
+            witnesses[1],
+            witness=overlapping_inner,
+            load_started="2026-07-13T12:00:04.5Z",
+            unload_proven="2026-07-13T12:00:07Z",
+        )
+        overlapping = replace(
+            bundle.control_packet,
+            cycle_witnesses=tuple(witnesses),
+        )
+        with self.assertRaisesRegex(ValueError, "bundle_binding"):
+            _rechain_base_bundle(bundle, control_packet=overlapping)
+
+        old_before = containment_snapshot(
+            "cuda_candidate",
+            "before",
+            timestamp="2026-07-13T12:00:11Z",
+        )
+        docs = dict(bundle.containment_docs)
+        docs["cuda_candidate:before"] = _persisted_doc(
+            cm.CONTAINMENT_SNAPSHOT_SCHEMA,
+            old_before,
+            PersistedDocTests.containment_fields(old_before),
+        )
+        candidate = replace(
+            bundle.candidate_packet,
+            containment_before_sha256=docs["cuda_candidate:before"].file_sha256,
+        )
+        snapshots = tuple(
+            old_before
+            if item.phase == "cuda_candidate" and item.boundary == "before"
+            else item
+            for item in bundle.containment.snapshots
+        )
+        with self.assertRaisesRegex(ValueError, "bundle_binding"):
+            _rechain_base_bundle(
+                bundle,
+                candidate_packet=candidate,
+                containment=cm.ContainmentWitness(snapshots),
+                containment_docs=docs,
+            )
+
+    def test_runtime_static_projection_and_packet_summary_joins_refuse(self) -> None:
+        bundle = _make_bundle()
+        changed_summary = replace(bundle.control_summary, p95_e2e_ms=19.0)
+        drift = make_identity(library_hashes={"libggml-cuda.so": SHA_D})
+        drift_doc = _persisted_doc(
+            cm.RUNTIME_IDENTITY_SCHEMA,
+            drift,
+            PersistedDocTests.identity_fields(drift),
+        )
+        cases = (
+            {"control_summary": changed_summary},
+            {"runtime_identity": drift, "runtime_identity_doc": drift_doc},
+            {"bench_identity_doc": bundle.runtime_identity_doc, "control_packet": replace(bundle.control_packet, runtime_identity_sha256=SHA_A)},
+            {"driver_package_sha256": SHA_A},
+            {"control_packet": replace(bundle.control_packet, effective_args_sha256=SHA_A)},
+        )
+        for changes in cases:
+            with self.subTest(changes=tuple(changes)):
+                with self.assertRaisesRegex(ValueError, "bundle_binding"):
+                    _make_bundle(**changes)
+
+    def test_static_preflight_dynamic_fields_join_the_actual_bundle(self) -> None:
+        bundle = _make_bundle()
+        original = bundle.static_preflight.obj
+        for field, value in (
+            ("gpu_uuid", "GPU-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            ("driver_package_sha256", SHA_A),
+            ("candidate_manifest", SHA_A),
+            ("flag_source", SHA_A),
+            ("vision_unit", SHA_A),
+        ):
+            checks = dict(original.checks)
+            values = {
+                "gpu_uuid": original.gpu_uuid,
+                "driver_package_sha256": original.driver_package_sha256,
+                "stub_sha256": original.stub_sha256,
+                "corpus_verified": original.corpus_verified,
+                "checks": checks,
+                "timestamp": original.timestamp,
+            }
+            if field in {"gpu_uuid", "driver_package_sha256"}:
+                values[field] = value
+            else:
+                checks[field] = value
+            changed_doc = cm.StaticPreflightDoc(**values)
+            persisted = _persisted_doc(
+                cm.STATIC_PREFLIGHT_SCHEMA,
+                changed_doc,
+                _static_fields(changed_doc),
+            )
+            control = replace(
+                bundle.control_packet,
+                static_preflight_sha256=persisted.file_sha256,
+            )
+            candidate = replace(
+                bundle.candidate_packet,
+                static_preflight_sha256=persisted.file_sha256,
+            )
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(ValueError, "bundle_binding"):
+                    _rechain_base_bundle(
+                        bundle,
+                        control_packet=control,
+                        candidate_packet=candidate,
+                        static_preflight=persisted,
+                    )
+
+    def test_every_quality_field_joins_both_summaries(self) -> None:
+        bundle = _make_bundle()
+        fields = (
+            ("false_absence_count", 1),
+            ("wrong_answered_ungrounded_count", 1),
+            ("type_regression_count", 1),
+            ("recall_posture", "fail"),
+            ("quality_failure_count", 1),
+        )
+        for summary_name in ("control_summary", "candidate_summary"):
+            for field, value in fields:
+                changed = replace(getattr(bundle, summary_name), **{field: value})
+                with self.subTest(summary=summary_name, field=field):
+                    with self.assertRaisesRegex(ValueError, "bundle_binding"):
+                        _make_bundle(**{summary_name: changed})
+
+    def test_quality_and_voice_joins_preserve_consistent_failures(self) -> None:
+        bundle = _make_bundle()
+        failing_quality = replace(
+            bundle.quality,
+            false_absence_count=1,
+            quality_failure_count=1,
+            recall_posture="fail",
+        )
+        failing_owner = replace(bundle.owner_voice, status="fail")
+        control = replace(
+            bundle.control_summary,
+            false_absence_count=1,
+            quality_failure_count=1,
+            recall_posture="fail",
+            owner_voice_evidence=cm.PhaseEvidence(
+                "owner_voice_review",
+                "fail",
+                failing_owner.artifact_sha256,
+                failing_owner.timestamp,
+            ),
+        )
+        candidate = replace(
+            bundle.candidate_summary,
+            false_absence_count=1,
+            quality_failure_count=1,
+            recall_posture="fail",
+            owner_voice_evidence=control.owner_voice_evidence,
+        )
+        self.assertIsInstance(
+            _make_bundle(
+                quality=failing_quality,
+                owner_voice=failing_owner,
+                control_summary=control,
+                candidate_summary=candidate,
+            ),
+            cm.BenchEvidenceBundle,
+        )
+        for changes in (
+            {"quality": replace(bundle.quality, control_manifest_sha256=SHA_A)},
+            {"control_summary": replace(bundle.control_summary, quality_failure_count=1)},
+            {"owner_voice": replace(bundle.owner_voice, artifact_sha256=SHA_A)},
+            {
+                "candidate_summary": replace(
+                    bundle.candidate_summary,
+                    owner_voice_evidence=evidence("owner_voice_review", digest=SHA_A),
+                )
+            },
+            {
+                "candidate_summary": replace(
+                    bundle.candidate_summary,
+                    owner_voice_evidence=replace(
+                        bundle.candidate_summary.owner_voice_evidence,
+                        timestamp="2026-07-13T12:02:08Z",
+                    ),
+                )
+            },
+        ):
+            with self.subTest(changes=tuple(changes)):
+                with self.assertRaisesRegex(ValueError, "bundle_binding"):
+                    _make_bundle(**changes)
+
+    def test_rollback_joins_preserve_coherent_dirty_evidence(self) -> None:
+        bundle = _make_bundle()
+        dirty = replace(cm.KernelCounters.zero(), xid=1)
+        witness = replace(bundle.rollback.witness, kernel_counters=dirty)
+        rollback = replace(bundle.rollback, witness=witness, kernel_counters=dirty)
+        control = replace(bundle.control_summary, rollback_witness=witness)
+        candidate = replace(bundle.candidate_summary, rollback_witness=witness)
+        self.assertIsInstance(
+            _make_bundle(
+                rollback=rollback,
+                control_summary=control,
+                candidate_summary=candidate,
+            ),
+            cm.BenchEvidenceBundle,
+        )
+        for changes in (
+            {"rollback": replace(bundle.rollback, parent_control_packet_sha256=SHA_A)},
+            {"rollback": replace(bundle.rollback, parent_candidate_packet_sha256=SHA_A)},
+            {"control_summary": replace(bundle.control_summary, rollback_witness=make_rollback_witness())},
+            {"candidate_summary": replace(bundle.candidate_summary, rollback_witness=make_rollback_witness())},
+            {"rollback": replace(bundle.rollback, kernel_counters=replace(cm.KernelCounters.zero(), xid=1))},
+            {"rollback": replace(bundle.rollback, maps_witness=replace(bundle.rollback.maps_witness, timestamp=bundle.rollback.containment_before.timestamp))},
+            {"rollback": replace(bundle.rollback, maps_witness=replace(bundle.rollback.maps_witness, timestamp=bundle.rollback.containment_after.timestamp))},
+            {
+                "rollback": replace(
+                    bundle.rollback,
+                    witness=replace(
+                        bundle.rollback.witness,
+                        containment_artifact_sha256=SHA_A,
+                    ),
+                )
+            },
+            {
+                "rollback": replace(
+                    bundle.rollback,
+                    witness=replace(
+                        bundle.rollback.witness,
+                        timestamp=bundle.rollback.containment_after.timestamp,
+                    ),
+                )
+            },
+        ):
+            with self.subTest(changes=tuple(changes)):
+                with self.assertRaisesRegex(ValueError, "bundle_binding"):
+                    _make_bundle(**changes)
+
+    def test_stage_prefixes_and_terminal_failures_are_representable(self) -> None:
+        stages = [_make_bundle(stage) for stage in range(1, 6)]
+        self.assertEqual(
+            1,
+            len({bundle.bench_binding_sha256 for bundle in stages}),
+        )
+        self.assertEqual(5, len({bundle.binding_sha256 for bundle in stages}))
+        for stage, terminal in (
+            (2, {"terminal_boot_failure": True}),
+            (3, {"terminal_cold_failure": True}),
+            (4, {"terminal_live_failure": True}),
+            (5, {"terminal_provisional_failure": True}),
+        ):
+            with self.subTest(stage=stage):
+                self.assertIsInstance(
+                    _make_bundle(stage, **terminal), cm.BenchEvidenceBundle
+                )
+
+    def test_invalid_stage_prefixes_refuse_before_evaluation(self) -> None:
+        p1 = _make_bundle(1)
+        p3 = _make_bundle(3)
+        p4 = _make_bundle(4)
+        invalid = (
+            {"candidate_summary": replace(p1.candidate_summary, cold_boot_witness=p3.candidate_summary.cold_boot_witness)},
+            {"cold_boot_maps": p3.cold_boot_maps},
+            {"containment": p3.containment},
+            {"runtime_identity": make_identity(mode="production", effective_args=argv("8080")), "runtime_identity_doc": p3.runtime_identity_doc},
+            {"live_authorization": p4.live_authorization},
+        )
+        for changes in invalid:
+            with self.subTest(changes=tuple(changes)):
+                with self.assertRaisesRegex(ValueError, "bundle_binding"):
+                    _make_bundle(1, **changes)
+        with self.assertRaisesRegex(ValueError, "bundle_binding"):
+            _make_bundle(4, terminal_cold_failure=True)
+        with self.assertRaisesRegex(ValueError, "bundle_binding"):
+            _make_bundle(5, terminal_live_failure=True)
+
+    def test_every_stage_prefix_rejects_missing_extra_and_wrong_authority(self) -> None:
+        p1 = _make_bundle(1)
+        p2 = _make_bundle(2)
+        p3 = _make_bundle(3)
+        p4 = _make_bundle(4)
+        p5 = _make_bundle(5)
+        cases = (
+            (1, {"control_summary": replace(p1.control_summary, cold_boot_witness=p3.candidate_summary.cold_boot_witness)}),
+            (2, {"boot_authorization": replace(p2.boot_authorization, parent_sha256=SHA_A)}),
+            (2, {"cold_boot_maps": p3.cold_boot_maps}),
+            (3, {"candidate_summary": replace(p3.candidate_summary, cold_boot_witness=None)}),
+            (3, {"provisional_live_maps": p5.provisional_live_maps}),
+            (3, {"containment": p1.containment}),
+            (4, {"candidate_summary": replace(p4.candidate_summary, cold_boot_witness=None)}),
+            (4, {"candidate_summary": replace(p4.candidate_summary, provisional_live_witness=p5.candidate_summary.provisional_live_witness)}),
+            (5, {"provisional_live_maps": None}),
+            (5, {"containment": p3.containment}),
+        )
+        for stage, changes in cases:
+            with self.subTest(stage=stage, changes=tuple(changes)):
+                with self.assertRaisesRegex(ValueError, "bundle_binding"):
+                    _make_bundle(stage, **changes)
+
+        for stage, wrong_identity, wrong_doc in (
+            (1, p2.runtime_identity, p2.runtime_identity_doc),
+            (2, p1.runtime_identity, p1.runtime_identity_doc),
+            (3, p1.runtime_identity, p1.runtime_identity_doc),
+            (4, p1.runtime_identity, p1.runtime_identity_doc),
+            (5, p1.runtime_identity, p1.runtime_identity_doc),
+        ):
+            with self.subTest(stage=stage, identity_mode=wrong_identity.mode):
+                with self.assertRaisesRegex(ValueError, "bundle_binding"):
+                    _make_bundle(
+                        stage,
+                        runtime_identity=wrong_identity,
+                        runtime_identity_doc=wrong_doc,
+                    )
+
+    def test_authorization_and_phase_chronology_edges_are_strict(self) -> None:
+        bundle = _make_bundle()
+        for changes in (
+            {
+                "window_consumption": replace(
+                    bundle.window_consumption,
+                    timestamp=bundle.control_packet.cycle_one_before_snapshot_at,
+                )
+            },
+            {
+                "window_consumption": replace(
+                    bundle.window_consumption,
+                    timestamp=bundle.control_packet.cycle_witnesses[0].load_started,
+                )
+            },
+            {
+                "containment": cm.ContainmentWitness(
+                    tuple(
+                        replace(item, timestamp="2026-07-13T12:00:02Z")
+                        if item.phase == "vulkan_baseline" and item.boundary == "before"
+                        else item
+                        for item in bundle.containment.snapshots
+                    )
+                )
+            },
+        ):
+            with self.subTest(changes=tuple(changes)):
+                with self.assertRaisesRegex(ValueError, "bundle_binding"):
+                    _make_bundle(**changes)
+
+        early_receipt = replace(
+            bundle.window_consumption,
+            timestamp="2026-07-13T12:00:01.0000001Z",
+        )
+        later_snapshot_packet = replace(
+            bundle.control_packet,
+            cycle_one_before_snapshot_at="2026-07-13T12:00:01.0000002Z",
+            consumption_receipt_sha256=early_receipt.binding_sha256,
+        )
+        with self.assertRaisesRegex(ValueError, "bundle_binding"):
+            _rechain_base_bundle(
+                bundle,
+                control_packet=later_snapshot_packet,
+                window_consumption=early_receipt,
+            )
+
+    def test_evaluator_versions_and_every_carried_component_affect_hashes(self) -> None:
+        bundle = _make_bundle()
+        for changes in (
+            {"quality": replace(bundle.quality, evaluator_version="quality-v2")},
+            {"owner_voice": replace(bundle.owner_voice, evaluator_version="voice-v2")},
+        ):
+            changed = changes[next(iter(changes))]
+            if "quality" in changes:
+                control = replace(
+                    bundle.control_summary,
+                    false_absence_count=changed.false_absence_count,
+                )
+                candidate = replace(
+                    bundle.candidate_summary,
+                    false_absence_count=changed.false_absence_count,
+                )
+                rebuilt = _make_bundle(
+                    **changes,
+                    control_summary=control,
+                    candidate_summary=candidate,
+                )
+            else:
+                rebuilt = _make_bundle(**changes)
+            self.assertNotEqual(bundle.bench_binding_sha256, rebuilt.bench_binding_sha256)
+            self.assertNotEqual(bundle.binding_sha256, rebuilt.binding_sha256)
+
+    def test_hash_boundary_is_stage_stable_and_mapping_order_deterministic(self) -> None:
+        base = _make_bundle(1)
+        reordered = _make_bundle(
+            1,
+            containment_docs=dict(reversed(tuple(base.containment_docs.items()))),
+        )
+        self.assertEqual(base.bench_binding_sha256, reordered.bench_binding_sha256)
+        self.assertEqual(base.binding_sha256, reordered.binding_sha256)
+
+        later = [_make_bundle(stage) for stage in range(2, 6)]
+        for bundle in later:
+            self.assertEqual(base.bench_binding_sha256, bundle.bench_binding_sha256)
+            self.assertNotEqual(base.binding_sha256, bundle.binding_sha256)
+
+        retimestamped = replace(base, timestamp="2026-07-13T12:02:11Z")
+        self.assertEqual(base.bench_binding_sha256, retimestamped.bench_binding_sha256)
+        self.assertNotEqual(base.binding_sha256, retimestamped.binding_sha256)
+
+        for name, changed in (
+            ("quality", replace(base.quality, evaluator_version="quality-v2")),
+            ("owner_voice", replace(base.owner_voice, evaluator_version="voice-v2")),
+            (
+                "rollback",
+                replace(base.rollback, timestamp="2026-07-13T12:02:05.5Z"),
+            ),
+        ):
+            mutated = _make_bundle(1, **{name: changed})
+            self.assertNotEqual(base.bench_binding_sha256, mutated.bench_binding_sha256)
+            self.assertNotEqual(base.binding_sha256, mutated.binding_sha256)
+
+    def test_exact_types_and_constructor_bypass_are_refused(self) -> None:
+        bundle = _make_bundle()
+        poisoned = replace(bundle.control_packet)
+        object.__setattr__(poisoned, "window_id", "wrong-window")
+        with self.assertRaisesRegex(ValueError, "bundle_binding"):
+            _make_bundle(control_packet=poisoned)
+        object.__setattr__(bundle.quality, "covered_turn_count", 20)
+        with self.assertRaisesRegex(ValueError, "bundle_binding"):
+            cm.BenchEvidenceBundle(**{
+                field: getattr(bundle, field)
+                for field in cm.BenchEvidenceBundle.__dataclass_fields__
+                if field != "schema_version"
+            })
+
+    def test_builtin_subclass_masquerades_are_refused_at_bundle_boundary(self) -> None:
+        class StringMasquerade(str):
+            pass
+
+        class IntegerMasquerade(int):
+            pass
+
+        class FloatMasquerade(float):
+            pass
+
+        def quality_case(bundle: cm.BenchEvidenceBundle) -> None:
+            object.__setattr__(
+                bundle.quality,
+                "evaluator_version",
+                StringMasquerade(bundle.quality.evaluator_version),
+            )
+
+        def owner_case(bundle: cm.BenchEvidenceBundle) -> None:
+            object.__setattr__(
+                bundle.owner_voice,
+                "status",
+                StringMasquerade(bundle.owner_voice.status),
+            )
+
+        def authorization_case(bundle: cm.BenchEvidenceBundle) -> None:
+            object.__setattr__(
+                bundle.boot_authorization,
+                "phase",
+                StringMasquerade(bundle.boot_authorization.phase),
+            )
+
+        def identity_case(bundle: cm.BenchEvidenceBundle) -> None:
+            object.__setattr__(
+                bundle.runtime_identity,
+                "mode",
+                StringMasquerade(bundle.runtime_identity.mode),
+            )
+
+        def metric_case(bundle: cm.BenchEvidenceBundle) -> None:
+            metric = bundle.control_packet.cycle_metrics[0]
+            object.__setattr__(
+                metric,
+                "bar1_after_inference_percent",
+                FloatMasquerade(metric.bar1_after_inference_percent),
+            )
+
+        def cycle_witness_case(bundle: cm.BenchEvidenceBundle) -> None:
+            witness = bundle.control_packet.cycle_witnesses[0]
+            object.__setattr__(witness, "cycle", IntegerMasquerade(witness.cycle))
+
+        def window_case(bundle: cm.BenchEvidenceBundle) -> None:
+            object.__setattr__(
+                bundle.window_authorization,
+                "owner",
+                StringMasquerade(bundle.window_authorization.owner),
+            )
+
+        def cold_case(bundle: cm.BenchEvidenceBundle) -> None:
+            cold = bundle.candidate_summary.cold_boot_witness
+            object.__setattr__(
+                cold,
+                "service_health",
+                StringMasquerade(cold.service_health),
+            )
+
+        def live_case(bundle: cm.BenchEvidenceBundle) -> None:
+            live = bundle.candidate_summary.provisional_live_witness
+            object.__setattr__(live, "backend", StringMasquerade(live.backend))
+
+        for stage, poison in (
+            (1, quality_case),
+            (1, owner_case),
+            (1, authorization_case),
+            (1, identity_case),
+            (1, metric_case),
+            (1, cycle_witness_case),
+            (1, window_case),
+            (3, cold_case),
+            (5, live_case),
+        ):
+            bundle = _make_bundle(stage)
+            poison(bundle)
+            with self.subTest(stage=stage, poison=poison.__name__):
+                with self.assertRaisesRegex(ValueError, "bundle_binding"):
+                    cm.BenchEvidenceBundle(**_bundle_values(bundle))
+
+    def test_summary_phase_evidence_cannot_masquerade_failure_as_pass(self) -> None:
+        class FailLooksPass(str):
+            __hash__ = str.__hash__
+
+            def __eq__(self, other: object) -> bool:
+                return other == "pass" or super().__eq__(other)
+
+            def __ne__(self, other: object) -> bool:
+                return not self.__eq__(other)
+
+        bundle = _make_bundle()
+        for summary in (bundle.control_summary, bundle.candidate_summary):
+            object.__setattr__(
+                summary.owner_voice_evidence,
+                "status",
+                FailLooksPass("fail"),
+            )
+        with self.assertRaisesRegex(ValueError, "bundle_binding"):
+            cm.BenchEvidenceBundle(**_bundle_values(bundle))
+
+    def test_mutated_nested_schema_versions_refuse_bundle_construction(self) -> None:
+        def phase_evidence(bundle: cm.BenchEvidenceBundle) -> object:
+            return bundle.control_summary.owner_voice_evidence
+
+        for stage, getter in (
+            (1, lambda bundle: bundle.quality),
+            (1, lambda bundle: bundle.owner_voice),
+            (1, lambda bundle: bundle.window_authorization),
+            (1, lambda bundle: bundle.continuation),
+            (1, lambda bundle: bundle.window_consumption),
+            (1, lambda bundle: bundle.continuation_consumption),
+            (1, lambda bundle: bundle.boot_authorization),
+            (1, lambda bundle: bundle.live_authorization),
+            (1, lambda bundle: bundle.control_summary),
+            (1, phase_evidence),
+            (1, lambda bundle: bundle.control_summary.kernel_counters),
+            (1, lambda bundle: bundle.control_summary.rollback_witness),
+            (
+                1,
+                lambda bundle: bundle.control_summary.rollback_witness.kernel_counters,
+            ),
+            (1, lambda bundle: bundle.containment),
+            (1, lambda bundle: bundle.containment.snapshots[0]),
+            (1, lambda bundle: bundle.control_packet),
+            (1, lambda bundle: bundle.control_packet.turn_manifest),
+            (1, lambda bundle: bundle.control_packet.cycle_metrics[0]),
+            (1, lambda bundle: bundle.control_packet.cycle_witnesses[0]),
+            (1, lambda bundle: bundle.control_packet.cycle_witnesses[0].witness),
+            (1, lambda bundle: bundle.control_packet.kernel_counters),
+            (1, lambda bundle: bundle.bench_runtime_identity),
+            (1, lambda bundle: bundle.runtime_identity),
+            (1, lambda bundle: bundle.rollback),
+            (1, lambda bundle: bundle.rollback.witness),
+            (1, lambda bundle: bundle.rollback.witness.kernel_counters),
+            (1, lambda bundle: bundle.rollback.maps_witness),
+            (1, lambda bundle: bundle.rollback.kernel_counters),
+            (1, lambda bundle: bundle.rollback.containment_before),
+            (1, lambda bundle: bundle.rollback.containment_after),
+            (1, lambda bundle: bundle.bench_identity_doc.obj),
+            (1, lambda bundle: bundle.runtime_identity_doc.obj),
+            (1, lambda bundle: bundle.static_preflight.obj),
+            (1, lambda bundle: next(iter(bundle.containment_docs.values())).obj),
+            (3, lambda bundle: bundle.candidate_summary.cold_boot_witness),
+            (3, lambda bundle: bundle.candidate_summary.cold_boot_witness.kernel_counters),
+            (3, lambda bundle: bundle.cold_boot_maps),
+            (5, lambda bundle: bundle.candidate_summary.provisional_live_witness),
+            (5, lambda bundle: bundle.provisional_live_maps),
+        ):
+            bundle = _make_bundle(stage)
+            target = getter(bundle)
+            object.__setattr__(target, "schema_version", "evil.v9")
+            with self.subTest(stage=stage, target=type(target).__name__):
+                with self.assertRaisesRegex(ValueError, "bundle_binding"):
+                    cm.BenchEvidenceBundle(**_bundle_values(bundle))
+
+    def test_authorization_witness_fields_are_bound_to_their_roles(self) -> None:
+        bundle = _make_bundle()
+        swapped_boot = replace(
+            bundle.boot_authorization,
+            phase="live_witness_authorization",
+        )
+        swapped_live = replace(
+            bundle.live_authorization,
+            phase="boot_authorization",
+        )
+        with self.assertRaisesRegex(ValueError, "bundle_binding"):
+            _make_bundle(
+                boot_authorization=swapped_boot,
+                live_authorization=swapped_live,
+            )
+
+    def test_later_backend_maps_are_bound_to_their_semantic_roles(self) -> None:
+        p3 = _make_bundle(3)
+        wrong_cold_maps = replace(p3.cold_boot_maps, phase="cuda_candidate")
+        wrong_cold = replace(
+            p3.candidate_summary.cold_boot_witness,
+            runtime_maps_sha256=wrong_cold_maps.binding_sha256,
+        )
+        with self.assertRaisesRegex(ValueError, "bundle_binding"):
+            _make_bundle(
+                3,
+                cold_boot_maps=wrong_cold_maps,
+                candidate_summary=replace(
+                    p3.candidate_summary,
+                    cold_boot_witness=wrong_cold,
+                ),
+            )
+
+        p5 = _make_bundle(5)
+        wrong_live_maps = replace(p5.provisional_live_maps, phase="cold_boot")
+        wrong_live = replace(
+            p5.candidate_summary.provisional_live_witness,
+            runtime_maps_sha256=wrong_live_maps.binding_sha256,
+        )
+        with self.assertRaisesRegex(ValueError, "bundle_binding"):
+            _make_bundle(
+                5,
+                provisional_live_maps=wrong_live_maps,
+                candidate_summary=replace(
+                    p5.candidate_summary,
+                    provisional_live_witness=wrong_live,
+                ),
+            )
+
+    def test_cold_boot_kernel_counter_object_must_be_the_exact_type(self) -> None:
+        class CounterMasquerade:
+            clean = True
+
+            def packet(self) -> dict[str, int]:
+                return cm.KernelCounters.zero().packet()
+
+        bundle = _make_bundle(3)
+        cold = bundle.candidate_summary.cold_boot_witness
+        object.__setattr__(cold, "kernel_counters", CounterMasquerade())
+        with self.assertRaisesRegex(ValueError, "bundle_binding"):
+            cm.BenchEvidenceBundle(**_bundle_values(bundle))
+
+        for value in (False, -1):
+            bundle = _make_bundle(3)
+            cold = bundle.candidate_summary.cold_boot_witness
+            object.__setattr__(cold.kernel_counters, "xid", value)
+            with self.subTest(xid=value):
+                with self.assertRaisesRegex(ValueError, "bundle_binding"):
+                    cm.BenchEvidenceBundle(**_bundle_values(bundle))
+
+    def test_provisional_live_turns_are_revalidated_at_bundle_boundary(self) -> None:
+        for field, value in (
+            ("latency_ms", -1.0),
+            ("mtp_accepted_tokens", True),
+            ("output_length", 0),
+        ):
+            bundle = _make_bundle(5)
+            turn = bundle.candidate_summary.provisional_live_witness.turns[0]
+            object.__setattr__(turn, field, value)
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(ValueError, "bundle_binding"):
+                    cm.BenchEvidenceBundle(**_bundle_values(bundle))
+
+    def test_manifest_entries_are_exact_and_revalidated_at_bundle_boundary(self) -> None:
+        class IntegerMasquerade(int):
+            pass
+
+        bundle = _make_bundle()
+        entry = bundle.control_packet.turn_manifest.entries[0]
+        object.__setattr__(entry, "cycle", IntegerMasquerade(1))
+        with self.assertRaisesRegex(ValueError, "bundle_binding"):
+            cm.BenchEvidenceBundle(**_bundle_values(bundle))
+
+        bundle = _make_bundle()
+        entry = bundle.control_packet.turn_manifest.entries[0]
+        object.__setattr__(entry, "artifact_sha256", "not-a-sha")
+        with self.assertRaisesRegex(ValueError, "bundle_binding"):
+            cm.BenchEvidenceBundle(**_bundle_values(bundle))
+
+    def test_validation_provider_exceptions_are_normalized_at_public_boundary(self) -> None:
+        class ExplodingMapping(dict[str, cm.PersistedDoc]):
+            def values(self):  # type: ignore[override]
+                raise RuntimeError("attacker-controlled iteration")
+
+        bundle = _make_bundle()
+        with self.assertRaisesRegex(ValueError, "bundle_binding"):
+            _make_bundle(
+                containment_docs=ExplodingMapping(bundle.containment_docs)
+            )
+
+    def test_containment_document_role_keys_must_be_exact_strings(self) -> None:
+        class RoleMasquerade(str):
+            def __new__(cls, value: str, role: str):
+                instance = super().__new__(cls, value)
+                instance.role = role
+                return instance
+
+            def __hash__(self) -> int:
+                return hash(self.role)
+
+            def __eq__(self, other: object) -> bool:
+                return other == self.role
+
+            def split(self, sep=None, maxsplit=-1):  # type: ignore[override]
+                return self.role.split(sep, maxsplit)
+
+        bundle = _make_bundle()
+        poisoned = {
+            RoleMasquerade(f"evil-{key}", key): value
+            for key, value in bundle.containment_docs.items()
+        }
+        with self.assertRaisesRegex(ValueError, "bundle_binding"):
+            _make_bundle(containment_docs=poisoned)
 
 
 if __name__ == "__main__":

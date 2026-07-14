@@ -50,6 +50,10 @@ FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256 = (
 FROZEN_VULKAN_EFFECTIVE_ARGS_SHA256 = (
     "8fa9b789572e4d1d63f5d9e008797b14df5fc10b634b0a3858cd68fe008c583b"
 )
+# Compact JSON array of the common 27-token A/B argv tail after executable.
+FROZEN_BENCH_ARGS_SHA256 = (
+    "7fd627e1132ff30fb7f45df2cbf83d166002b0a0c56bcd07e169eca2180bd413"
+)
 FROZEN_BACKEND_ENVIRONMENT = MappingProxyType(
     {
         "CUDA_VISIBLE_DEVICES": "0",
@@ -274,6 +278,46 @@ def _authorization_ttl_matches(issued_at: str, expires_at: str, ttl_s: int) -> b
     return whole_seconds == ttl_s and issued_fraction == expires_fraction
 
 
+def _compare_utc_z(left: str, right: str) -> int:
+    """Compare canonical UTC timestamps without truncating fractional seconds."""
+
+    _validate_utc_z_timestamp(left)
+    _validate_utc_z_timestamp(right)
+    left_match = _UTC_Z_RE.fullmatch(left)
+    right_match = _UTC_Z_RE.fullmatch(right)
+    if left_match is None or right_match is None:  # guarded above; keeps typing honest
+        raise ValueError("invalid_timestamp")
+    left_whole = datetime.fromisoformat(left_match.group("whole") + "+00:00")
+    right_whole = datetime.fromisoformat(right_match.group("whole") + "+00:00")
+    if left_whole != right_whole:
+        return -1 if left_whole < right_whole else 1
+    left_fraction = left_match.group("fraction") or ""
+    right_fraction = right_match.group("fraction") or ""
+    width = max(len(left_fraction), len(right_fraction), 1)
+    left_digits = left_fraction.ljust(width, "0")
+    right_digits = right_fraction.ljust(width, "0")
+    if left_digits == right_digits:
+        return 0
+    return -1 if left_digits < right_digits else 1
+
+
+def _containment_brackets_exact(
+    containment: ContainmentWitness,
+    phase: str,
+    timestamp: str,
+) -> bool:
+    phase_snapshots = {
+        item.boundary: item
+        for item in containment.snapshots
+        if item.phase == phase
+    }
+    return (
+        set(phase_snapshots) == {"before", "after"}
+        and _compare_utc_z(phase_snapshots["before"].timestamp, timestamp) < 0
+        and _compare_utc_z(timestamp, phase_snapshots["after"].timestamp) < 0
+    )
+
+
 def validate_asset_path(path: Path) -> Path:
     """Validate an absolute, normalized path beneath one frozen owner root."""
 
@@ -422,6 +466,7 @@ BACKEND_MAP_WITNESS_SCHEMA = "cuda_migration.backend_map_witness.v1"
 TURN_MANIFEST_SCHEMA = "cuda_bench_driver.turn_manifest.v1"
 PHASE_PACKET_SCHEMA = "cuda_bench_driver.phase_packet.v1"
 ROLLBACK_EVIDENCE_BUNDLE_SCHEMA = "cuda_migration.rollback_evidence_bundle.v1"
+BENCH_EVIDENCE_BUNDLE_SCHEMA = "cuda_migration.bench_evidence_bundle.v1"
 
 _NONCE_RE = re.compile(r"^[0-9a-f]{64}$")
 _WINDOW_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
@@ -640,9 +685,10 @@ class CycleBackendWitness:
             raise ValueError("backend_witness_invariant")
         _validate_utc_z_timestamp(self.load_started)
         _validate_utc_z_timestamp(self.unload_proven)
-        start = _timestamp_value(self.load_started)
-        end = _timestamp_value(self.unload_proven)
-        if not start < _timestamp_value(self.witness.timestamp) < end:
+        if not (
+            _compare_utc_z(self.load_started, self.witness.timestamp) < 0
+            and _compare_utc_z(self.witness.timestamp, self.unload_proven) < 0
+        ):
             raise ValueError("witness_outside_interval")
 
     @property
@@ -1383,7 +1429,7 @@ class LoadInterval:
     def __post_init__(self) -> None:
         if self.component not in {"primary", "judge"}:
             raise ValueError("load_interval_component")
-        if _timestamp_value(self.started_at) >= _timestamp_value(self.ended_at):
+        if _compare_utc_z(self.started_at, self.ended_at) >= 0:
             raise ValueError("overlapping_load_intervals")
 
 
@@ -1424,16 +1470,20 @@ class ColdBootWitness:
             self.model_sha256,
         ):
             _validate_sha256(digest)
-        timestamp_value = _timestamp_value(self.timestamp)
         if len(self.load_intervals) != 2 or {item.component for item in self.load_intervals} != {
             "primary",
             "judge",
         }:
             raise ValueError("cold_boot_topology")
-        intervals = sorted(self.load_intervals, key=lambda item: _timestamp_value(item.started_at))
-        if _timestamp_value(intervals[0].ended_at) >= _timestamp_value(intervals[1].started_at):
+        first, second = self.load_intervals
+        if _compare_utc_z(first.started_at, second.started_at) > 0:
+            first, second = second, first
+        if _compare_utc_z(first.ended_at, second.started_at) >= 0:
             raise ValueError("overlapping_load_intervals")
-        if timestamp_value <= max(_timestamp_value(item.ended_at) for item in self.load_intervals):
+        if any(
+            _compare_utc_z(item.ended_at, self.timestamp) >= 0
+            for item in self.load_intervals
+        ):
             raise ValueError("evidence_timestamp_order")
         _validate_positive_number(self.steady_bar1_percent)
         _validate_nonnegative_int("restart_count", self.restart_count)
@@ -1989,8 +2039,12 @@ class PhasePacket:
             raise ValueError("bench_identity_mismatch")
         if any(witness.witness.phase != self.phase for witness in self.cycle_witnesses):
             raise ValueError("backend_witness_phase")
-        if _timestamp_value(self.cycle_one_before_snapshot_at) >= _timestamp_value(
-            self.cycle_witnesses[0].load_started
+        if (
+            _compare_utc_z(
+                self.cycle_one_before_snapshot_at,
+                self.cycle_witnesses[0].load_started,
+            )
+            >= 0
         ):
             raise ValueError("bench_identity_mismatch")
 
@@ -2311,11 +2365,17 @@ class ContainmentWitness:
         phase_snapshots = {item.boundary: item for item in self.snapshots if item.phase == phase}
         if set(phase_snapshots) != {"before", "after"}:
             return False
-        timestamp = _timestamp_value(witness_timestamp)
         return (
-            _timestamp_value(phase_snapshots["before"].timestamp)
-            < timestamp
-            < _timestamp_value(phase_snapshots["after"].timestamp)
+            _compare_utc_z(
+                phase_snapshots["before"].timestamp,
+                witness_timestamp,
+            )
+            < 0
+            and _compare_utc_z(
+                witness_timestamp,
+                phase_snapshots["after"].timestamp,
+            )
+            < 0
         )
 
     def phase_binding(self, phase: str) -> str:
@@ -2771,6 +2831,1434 @@ def decode_persisted_packet(data: bytes) -> PhasePacket:
     if not isinstance(persisted.obj, PhasePacket):
         raise ValueError("persisted_packet_schema")
     return persisted.obj
+
+
+_BENCH_IDENTITY_STABLE_FIELDS = (
+    "tag",
+    "commit",
+    "version",
+    "alias",
+    "model_sha256",
+    "model_bytes",
+    "runtime_sha256",
+    "library_hashes",
+    "production_override_sha256",
+    "backend_environment",
+    "runtime_manifest_sha256",
+    "rollback_manifest_sha256",
+    "cuda_toolkit",
+    "cuda_compiler",
+    "cmake_version",
+    "driver_version",
+    "gpu_identifier",
+    "compute_capability",
+    "backend",
+)
+_BASE_CONTAINMENT_KEYS = frozenset(
+    f"{phase}:{boundary}"
+    for phase in ("vulkan_baseline", "cuda_candidate", "vulkan_rollback")
+    for boundary in ("before", "after")
+)
+_AB_CONTAINMENT_DOC_KEYS = frozenset(
+    f"{phase}:{boundary}"
+    for phase in ("vulkan_baseline", "cuda_candidate")
+    for boundary in ("before", "after")
+)
+
+
+def _revalidate_bundle_component(value: object, expected_type: type[object]) -> None:
+    if type(value) is not expected_type:
+        raise ValueError("bundle_binding")
+    post_init = getattr(value, "__post_init__", None)
+    if not callable(post_init):
+        raise ValueError("bundle_binding")
+    post_init()
+
+
+def _require_exact_fields(
+    value: object,
+    names: tuple[str, ...],
+    allowed_types: tuple[type[object], ...],
+) -> None:
+    if any(type(getattr(value, name)) not in allowed_types for name in names):
+        raise ValueError("bundle_binding")
+
+
+def _require_exact_string_mapping(value: object) -> None:
+    if not isinstance(value, Mapping) or any(
+        type(key) is not str or type(item) is not str for key, item in value.items()
+    ):
+        raise ValueError("bundle_binding")
+
+
+def _require_exact_schema(value: object, expected: str) -> None:
+    if type(getattr(value, "schema_version")) is not str or value.schema_version != expected:
+        raise ValueError("bundle_binding")
+
+
+def _canonical_persisted_role(
+    value: object,
+    expected_type: type[object],
+) -> PersistedDoc:
+    if type(value) is not PersistedDoc:
+        raise ValueError("bundle_binding")
+    canonical = PersistedDoc(value.wrapper_bytes)
+    if type(canonical.obj) is not expected_type or type(value.obj) is not expected_type:
+        raise ValueError("bundle_binding")
+    if (
+        canonical.file_sha256 != value.file_sha256
+        or canonical.obj != value.obj
+        or canonical.obj.binding_sha256 != value.obj.binding_sha256
+    ):
+        raise ValueError("bundle_binding")
+    return canonical
+
+
+def _normalized_bench_summary_packet(summary: BenchSummary) -> dict[str, object]:
+    packet = _bench_packet(summary)
+    packet["cold_boot_witness_sha256"] = None
+    packet["provisional_live_witness_sha256"] = None
+    return packet
+
+
+@dataclass(frozen=True, slots=True)
+class BenchEvidenceBundle:
+    window_id: str
+    boot_id: str
+    gpu_uuid: str
+    driver_package_sha256: str
+    control_summary: BenchSummary
+    candidate_summary: BenchSummary
+    control_packet: PhasePacket
+    candidate_packet: PhasePacket
+    containment: ContainmentWitness
+    boot_authorization: AuthorizationWitness
+    live_authorization: AuthorizationWitness
+    bench_runtime_identity: RuntimeIdentity
+    runtime_identity: RuntimeIdentity
+    quality: QualityEvidence
+    owner_voice: OwnerVoiceReview
+    window_authorization: WindowAuthorizationDoc
+    continuation: ContinuationDoc
+    window_consumption: ConsumptionReceipt
+    continuation_consumption: ConsumptionReceipt
+    containment_docs: Mapping[str, PersistedDoc]
+    bench_identity_doc: PersistedDoc
+    runtime_identity_doc: PersistedDoc
+    static_preflight: PersistedDoc
+    rollback: RollbackEvidenceBundle
+    cold_boot_maps: RuntimeBackendWitness | None
+    provisional_live_maps: RuntimeBackendWitness | None
+    timestamp: str
+    schema_version: str = field(default=BENCH_EVIDENCE_BUNDLE_SCHEMA, init=False)
+
+    def __post_init__(self) -> None:
+        try:
+            self._validate_exact_components()
+            docs = self._validate_persisted_documents()
+            object.__setattr__(self, "containment_docs", MappingProxyType(docs))
+            self._validate_base_joins(docs)
+            self._validate_stage_prefix()
+            _validate_utc_z_timestamp(self.timestamp)
+            _validate_sha256(self.bench_binding_sha256)
+            _validate_sha256(self.binding_sha256)
+        except Exception as exc:
+            raise ValueError("bundle_binding") from exc
+
+    def _validate_exact_components(self) -> None:
+        if type(self.schema_version) is not str or self.schema_version != BENCH_EVIDENCE_BUNDLE_SCHEMA:
+            raise ValueError("bundle_binding")
+        if type(self.window_id) is not str or _WINDOW_ID_RE.fullmatch(self.window_id) is None:
+            raise ValueError("bundle_binding")
+        if type(self.boot_id) is not str or not self.boot_id:
+            raise ValueError("bundle_binding")
+        if type(self.gpu_uuid) is not str or _GPU_UUID_RE.fullmatch(self.gpu_uuid) is None:
+            raise ValueError("bundle_binding")
+        _validate_sha256(self.driver_package_sha256)
+
+        for value, expected in (
+            (self.control_summary, BenchSummary),
+            (self.candidate_summary, BenchSummary),
+            (self.control_packet, PhasePacket),
+            (self.candidate_packet, PhasePacket),
+            (self.containment, ContainmentWitness),
+            (self.boot_authorization, AuthorizationWitness),
+            (self.live_authorization, AuthorizationWitness),
+            (self.bench_runtime_identity, RuntimeIdentity),
+            (self.runtime_identity, RuntimeIdentity),
+            (self.quality, QualityEvidence),
+            (self.owner_voice, OwnerVoiceReview),
+            (self.window_authorization, WindowAuthorizationDoc),
+            (self.continuation, ContinuationDoc),
+            (self.window_consumption, ConsumptionReceipt),
+            (self.continuation_consumption, ConsumptionReceipt),
+            (self.rollback, RollbackEvidenceBundle),
+        ):
+            _revalidate_bundle_component(value, expected)
+        for value in (self.cold_boot_maps, self.provisional_live_maps):
+            if value is not None:
+                _revalidate_bundle_component(value, RuntimeBackendWitness)
+        self._validate_exact_builtin_shapes()
+        self._validate_schema_versions()
+
+        for summary in (self.control_summary, self.candidate_summary):
+            if (
+                type(summary.owner_voice_evidence) is not PhaseEvidence
+                or type(summary.kernel_counters) is not KernelCounters
+                or type(summary.rollback_witness) is not RollbackWitness
+                or type(summary.cycles) is not tuple
+                or any(type(cycle) is not CycleMetrics for cycle in summary.cycles)
+                or (
+                    summary.cold_boot_witness is not None
+                    and type(summary.cold_boot_witness) is not ColdBootWitness
+                )
+                or (
+                    summary.provisional_live_witness is not None
+                    and type(summary.provisional_live_witness) is not ProvisionalLiveWitness
+                )
+            ):
+                raise ValueError("bundle_binding")
+            summary.owner_voice_evidence.__post_init__()
+            summary.kernel_counters.__post_init__()
+            summary.rollback_witness.__post_init__()
+            for cycle in summary.cycles:
+                cycle.__post_init__()
+            if summary.cold_boot_witness is not None:
+                summary.cold_boot_witness.__post_init__()
+                summary.cold_boot_witness.kernel_counters.__post_init__()
+            if summary.provisional_live_witness is not None:
+                if type(summary.provisional_live_witness.turns) is not tuple or any(
+                    type(turn) is not LiveTurnWitness
+                    for turn in summary.provisional_live_witness.turns
+                ):
+                    raise ValueError("bundle_binding")
+                summary.provisional_live_witness.__post_init__()
+                for turn in summary.provisional_live_witness.turns:
+                    turn.__post_init__()
+
+        for packet in (self.control_packet, self.candidate_packet):
+            if (
+                type(packet.turn_manifest) is not TurnManifest
+                or type(packet.turn_manifest.entries) is not tuple
+                or any(
+                    type(entry) is not TurnManifestEntry
+                    for entry in packet.turn_manifest.entries
+                )
+                or type(packet.turn_records) is not tuple
+                or any(type(record) is not TurnRecord for record in packet.turn_records)
+                or type(packet.cycle_metrics) is not tuple
+                or any(type(metric) is not CycleMetrics for metric in packet.cycle_metrics)
+                or type(packet.cycle_witnesses) is not tuple
+                or any(type(item) is not CycleBackendWitness for item in packet.cycle_witnesses)
+                or any(
+                    type(item.witness) is not RuntimeBackendWitness
+                    for item in packet.cycle_witnesses
+                )
+                or type(packet.kernel_counters) is not KernelCounters
+            ):
+                raise ValueError("bundle_binding")
+            packet.turn_manifest.__post_init__()
+            for entry in packet.turn_manifest.entries:
+                entry.__post_init__()
+            for record in packet.turn_records:
+                record.__post_init__()
+            for metric in packet.cycle_metrics:
+                metric.__post_init__()
+            for item in packet.cycle_witnesses:
+                item.witness.__post_init__()
+                item.__post_init__()
+            packet.kernel_counters.__post_init__()
+
+        if type(self.containment.snapshots) is not tuple:
+            raise ValueError("bundle_binding")
+        for snapshot in self.containment.snapshots:
+            _revalidate_bundle_component(snapshot, ContainmentSnapshot)
+        rollback = self.rollback
+        if (
+            type(rollback.witness) is not RollbackWitness
+            or type(rollback.maps_witness) is not RuntimeBackendWitness
+            or type(rollback.kernel_counters) is not KernelCounters
+            or type(rollback.containment_before) is not ContainmentSnapshot
+            or type(rollback.containment_after) is not ContainmentSnapshot
+        ):
+            raise ValueError("bundle_binding")
+
+    def _validate_schema_versions(self) -> None:
+        """Pin every schema-bearing object crossing the public bundle boundary."""
+
+        expected: list[tuple[object, str]] = [
+            (self, BENCH_EVIDENCE_BUNDLE_SCHEMA),
+            (self.quality, QUALITY_EVIDENCE_SCHEMA),
+            (self.owner_voice, OWNER_VOICE_REVIEW_SCHEMA),
+            (self.window_authorization, WINDOW_AUTHORIZATION_SCHEMA),
+            (self.continuation, CONTINUATION_SCHEMA),
+            (self.window_consumption, CONSUMPTION_RECEIPT_SCHEMA),
+            (self.continuation_consumption, CONSUMPTION_RECEIPT_SCHEMA),
+            (self.control_summary, SCHEMA_VERSION),
+            (self.candidate_summary, SCHEMA_VERSION),
+            (self.control_packet, PHASE_PACKET_SCHEMA),
+            (self.candidate_packet, PHASE_PACKET_SCHEMA),
+            (self.containment, SCHEMA_VERSION),
+            (self.boot_authorization, SCHEMA_VERSION),
+            (self.live_authorization, SCHEMA_VERSION),
+            (self.bench_runtime_identity, SCHEMA_VERSION),
+            (self.runtime_identity, SCHEMA_VERSION),
+            (self.rollback, ROLLBACK_EVIDENCE_BUNDLE_SCHEMA),
+            (self.rollback.witness, SCHEMA_VERSION),
+            (self.rollback.maps_witness, SCHEMA_VERSION),
+            (self.rollback.kernel_counters, SCHEMA_VERSION),
+            (self.rollback.containment_before, SCHEMA_VERSION),
+            (self.rollback.containment_after, SCHEMA_VERSION),
+        ]
+        for summary in (self.control_summary, self.candidate_summary):
+            expected.extend(
+                (
+                    (summary.owner_voice_evidence, SCHEMA_VERSION),
+                    (summary.kernel_counters, SCHEMA_VERSION),
+                    (summary.rollback_witness, SCHEMA_VERSION),
+                    (summary.rollback_witness.kernel_counters, SCHEMA_VERSION),
+                )
+            )
+            expected.extend((cycle, SCHEMA_VERSION) for cycle in summary.cycles)
+            if summary.cold_boot_witness is not None:
+                expected.extend(
+                    (
+                        (summary.cold_boot_witness, SCHEMA_VERSION),
+                        (summary.cold_boot_witness.kernel_counters, SCHEMA_VERSION),
+                    )
+                )
+            if summary.provisional_live_witness is not None:
+                expected.append((summary.provisional_live_witness, SCHEMA_VERSION))
+        for packet in (self.control_packet, self.candidate_packet):
+            expected.extend(
+                (
+                    (packet.turn_manifest, TURN_MANIFEST_SCHEMA),
+                    (packet.kernel_counters, SCHEMA_VERSION),
+                )
+            )
+            expected.extend((metric, SCHEMA_VERSION) for metric in packet.cycle_metrics)
+            for witness in packet.cycle_witnesses:
+                expected.extend(
+                    (
+                        (witness, CYCLE_BACKEND_WITNESS_SCHEMA),
+                        (witness.witness, SCHEMA_VERSION),
+                    )
+                )
+        expected.extend(
+            (snapshot, SCHEMA_VERSION) for snapshot in self.containment.snapshots
+        )
+        for value in (self.cold_boot_maps, self.provisional_live_maps):
+            if value is not None:
+                expected.append((value, SCHEMA_VERSION))
+        expected.extend(
+            (
+                (
+                    _canonical_persisted_role(
+                        self.bench_identity_doc, RuntimeIdentity
+                    ).obj,
+                    SCHEMA_VERSION,
+                ),
+                (
+                    _canonical_persisted_role(
+                        self.runtime_identity_doc, RuntimeIdentity
+                    ).obj,
+                    SCHEMA_VERSION,
+                ),
+                (
+                    _canonical_persisted_role(
+                        self.static_preflight, StaticPreflightDoc
+                    ).obj,
+                    STATIC_PREFLIGHT_SCHEMA,
+                ),
+            )
+        )
+        expected.extend(
+            (
+                _canonical_persisted_role(doc, ContainmentSnapshot).obj,
+                SCHEMA_VERSION,
+            )
+            for doc in self.containment_docs.values()
+        )
+        for value, schema in expected:
+            _require_exact_schema(value, schema)
+
+    def _validate_exact_builtin_shapes(self) -> None:
+        _require_exact_fields(
+            self.quality,
+            (
+                "evaluator_version",
+                "control_manifest_sha256",
+                "candidate_manifest_sha256",
+                "recall_posture",
+                "timestamp",
+                "schema_version",
+            ),
+            (str,),
+        )
+        _require_exact_fields(
+            self.quality,
+            (
+                "false_absence_count",
+                "wrong_answered_ungrounded_count",
+                "type_regression_count",
+                "quality_failure_count",
+                "covered_turn_count",
+            ),
+            (int,),
+        )
+        _require_exact_fields(
+            self.owner_voice,
+            (
+                "producer",
+                "status",
+                "evaluator_version",
+                "control_manifest_sha256",
+                "candidate_manifest_sha256",
+                "artifact_sha256",
+                "timestamp",
+                "schema_version",
+            ),
+            (str,),
+        )
+        for authorization in (self.boot_authorization, self.live_authorization):
+            _require_exact_fields(
+                authorization,
+                ("phase", "status", "schema_version"),
+                (str,),
+            )
+            for name in ("artifact_sha256", "parent_sha256", "timestamp"):
+                if type(getattr(authorization, name)) not in (str, type(None)):
+                    raise ValueError("bundle_binding")
+        for document in (self.window_authorization, self.continuation):
+            _require_exact_fields(
+                document,
+                (
+                    "window_id",
+                    "boot_id",
+                    "nonce",
+                    "issued_at",
+                    "expires_at",
+                    "owner",
+                    "schema_version",
+                ),
+                (str,),
+            )
+            if type(document.phases) is not tuple or any(
+                type(phase) is not str for phase in document.phases
+            ):
+                raise ValueError("bundle_binding")
+        _require_exact_fields(
+            self.continuation, ("parent_vulkan_packet_sha256",), (str,)
+        )
+        for receipt in (self.window_consumption, self.continuation_consumption):
+            _require_exact_fields(
+                receipt,
+                ("nonce", "phase", "boot_id", "timestamp", "schema_version"),
+                (str,),
+            )
+
+        for identity in (self.bench_runtime_identity, self.runtime_identity):
+            _require_exact_fields(
+                identity,
+                (
+                    "tag",
+                    "commit",
+                    "alias",
+                    "model_sha256",
+                    "runtime_sha256",
+                    "mode",
+                    "production_override_sha256",
+                    "runtime_manifest_sha256",
+                    "rollback_manifest_sha256",
+                    "cuda_toolkit",
+                    "cuda_compiler",
+                    "cmake_version",
+                    "driver_version",
+                    "gpu_identifier",
+                    "compute_capability",
+                    "backend",
+                    "schema_version",
+                ),
+                (str,),
+            )
+            _require_exact_fields(identity, ("version", "model_bytes"), (int,))
+            if type(identity.effective_args) is not tuple or any(
+                type(argument) is not str for argument in identity.effective_args
+            ):
+                raise ValueError("bundle_binding")
+            _require_exact_string_mapping(identity.library_hashes)
+            _require_exact_string_mapping(identity.backend_environment)
+
+        for packet in (self.control_packet, self.candidate_packet):
+            _require_exact_fields(
+                packet,
+                (
+                    "phase",
+                    "outcome",
+                    "window_id",
+                    "boot_id",
+                    "gpu_uuid",
+                    "topology_sha256",
+                    "model_sha256",
+                    "corpus_sha256",
+                    "order_sha256",
+                    "effective_args_sha256",
+                    "driver_package_sha256",
+                    "authorization_preimage_sha256",
+                    "consumption_receipt_sha256",
+                    "static_preflight_sha256",
+                    "runtime_identity_sha256",
+                    "containment_before_sha256",
+                    "containment_after_sha256",
+                    "kernel_cursor_before",
+                    "kernel_cursor_after",
+                    "summary_projection_json",
+                    "cycle_one_before_snapshot_at",
+                    "timestamp",
+                    "schema_version",
+                ),
+                (str,),
+            )
+            _require_exact_fields(
+                packet.turn_manifest, ("phase", "schema_version"), (str,)
+            )
+            for entry in packet.turn_manifest.entries:
+                _require_exact_fields(entry, ("cycle", "ordinal"), (int,))
+                _require_exact_fields(entry, ("warmup",), (bool,))
+                _require_exact_fields(entry, ("artifact_sha256",), (str,))
+            for record in packet.turn_records:
+                _require_exact_fields(record, ("cycle", "ordinal"), (int,))
+                _require_exact_fields(record, ("warmup",), (bool,))
+                _require_exact_fields(
+                    record, ("artifact_sha256", "outcome"), (str,)
+                )
+                _require_exact_fields(
+                    record,
+                    (
+                        "e2e_ms",
+                        "ttft_ms",
+                        "prompt_per_second",
+                        "predicted_per_second",
+                    ),
+                    (float,),
+                )
+                for name in ("draft_n", "draft_n_accepted"):
+                    if type(getattr(record, name)) not in (int, type(None)):
+                        raise ValueError("bundle_binding")
+            for metric in packet.cycle_metrics:
+                _require_exact_fields(metric, ("cycle",), (int,))
+                _require_exact_fields(metric, ("topology_sha256",), (str,))
+                _require_exact_fields(
+                    metric,
+                    (
+                        "bar1_before_percent",
+                        "bar1_after_load_percent",
+                        "bar1_after_inference_percent",
+                        "bar1_after_unload_percent",
+                    ),
+                    (int, float),
+                )
+                _require_exact_fields(
+                    metric,
+                    (
+                        "vram_before_mib",
+                        "vram_after_load_mib",
+                        "vram_after_inference_mib",
+                        "vram_after_unload_mib",
+                    ),
+                    (int,),
+                )
+            for witness in packet.cycle_witnesses:
+                _require_exact_fields(witness, ("cycle",), (int,))
+                _require_exact_fields(
+                    witness,
+                    ("load_started", "unload_proven", "schema_version"),
+                    (str,),
+                )
+                _require_exact_fields(
+                    witness.witness,
+                    (
+                        "backend",
+                        "maps_sha256",
+                        "phase",
+                        "timestamp",
+                        "release_root_sha256",
+                        "schema_version",
+                    ),
+                    (str,),
+                )
+
+        for summary in (self.control_summary, self.candidate_summary):
+            _require_exact_fields(
+                summary,
+                (
+                    "phase",
+                    "alias",
+                    "model_sha256",
+                    "corpus_sha256",
+                    "order_sha256",
+                    "recall_posture",
+                    "schema_version",
+                ),
+                (str,),
+            )
+            _require_exact_fields(
+                summary,
+                (
+                    "sample_n",
+                    "warmup_count",
+                    "measured_sample_count",
+                    "load_cycles",
+                    "mtp_drafted_tokens",
+                    "mtp_accepted_tokens",
+                    "mtp_rejected_tokens",
+                    "false_absence_count",
+                    "wrong_answered_ungrounded_count",
+                    "type_regression_count",
+                    "quality_failure_count",
+                    "crash_count",
+                    "restart_count",
+                    "hang_count",
+                    "timeout_count",
+                ),
+                (int,),
+            )
+            _require_exact_fields(
+                summary,
+                (
+                    "seven_turn_max_ms",
+                    "p95_e2e_ms",
+                    "median_decode_tps",
+                    "median_prefill_tps",
+                    "unload_leak_mib",
+                ),
+                (float,),
+            )
+            _require_exact_fields(summary, ("mtp_initialized",), (bool,))
+            evidence = summary.owner_voice_evidence
+            _require_exact_fields(
+                evidence,
+                ("phase", "status", "schema_version"),
+                (str,),
+            )
+            for name in ("artifact_sha256", "timestamp"):
+                if type(getattr(evidence, name)) not in (str, type(None)):
+                    raise ValueError("bundle_binding")
+            if summary.cold_boot_witness is not None:
+                cold = summary.cold_boot_witness
+                if type(cold.kernel_counters) is not KernelCounters:
+                    raise ValueError("bundle_binding")
+                _require_exact_fields(
+                    cold,
+                    (
+                        "parent_sha256",
+                        "artifact_sha256",
+                        "timestamp",
+                        "topology_sha256",
+                        "containment_artifact_sha256",
+                        "runtime_sha256",
+                        "runtime_maps_sha256",
+                        "backend",
+                        "production_override_sha256",
+                        "alias",
+                        "model_sha256",
+                        "service_health",
+                        "schema_version",
+                    ),
+                    (str,),
+                )
+                _require_exact_fields(
+                    cold,
+                    ("model_bytes", "restart_count", "mtp_accepted_tokens"),
+                    (int,),
+                )
+                _require_exact_fields(cold, ("steady_bar1_percent",), (float,))
+                _require_exact_fields(cold, ("mtp_initialized",), (bool,))
+                if type(cold.load_intervals) is not tuple:
+                    raise ValueError("bundle_binding")
+                for interval in cold.load_intervals:
+                    if type(interval) is not LoadInterval:
+                        raise ValueError("bundle_binding")
+                    _require_exact_fields(
+                        interval, ("component", "started_at", "ended_at"), (str,)
+                    )
+            if summary.provisional_live_witness is not None:
+                live = summary.provisional_live_witness
+                _require_exact_fields(
+                    live,
+                    (
+                        "parent_sha256",
+                        "artifact_sha256",
+                        "timestamp",
+                        "containment_artifact_sha256",
+                        "runtime_sha256",
+                        "runtime_maps_sha256",
+                        "backend",
+                        "configuration_sha256",
+                        "corpus_sha256",
+                        "order_sha256",
+                        "schema_version",
+                    ),
+                    (str,),
+                )
+                if type(live.turns) is not tuple:
+                    raise ValueError("bundle_binding")
+                for turn in live.turns:
+                    if type(turn) is not LiveTurnWitness:
+                        raise ValueError("bundle_binding")
+                    _require_exact_fields(
+                        turn,
+                        (
+                            "ordinal",
+                            "false_absence_count",
+                            "wrong_answered_ungrounded_count",
+                            "type_regression_count",
+                            "mtp_accepted_tokens",
+                            "output_length",
+                        ),
+                        (int,),
+                    )
+                    _require_exact_fields(turn, ("latency_ms",), (float,))
+                    _require_exact_fields(
+                        turn, ("recall_posture", "artifact_sha256"), (str,)
+                    )
+                    _require_exact_fields(turn, ("mtp_initialized",), (bool,))
+
+        kernel_counters = [
+            self.control_summary.kernel_counters,
+            self.candidate_summary.kernel_counters,
+            self.control_summary.rollback_witness.kernel_counters,
+            self.candidate_summary.rollback_witness.kernel_counters,
+            self.control_packet.kernel_counters,
+            self.candidate_packet.kernel_counters,
+            self.rollback.witness.kernel_counters,
+            self.rollback.kernel_counters,
+        ]
+        kernel_counters.extend(
+            summary.cold_boot_witness.kernel_counters
+            for summary in (self.control_summary, self.candidate_summary)
+            if summary.cold_boot_witness is not None
+        )
+        for counters in kernel_counters:
+            _require_exact_fields(
+                counters,
+                _KERNEL_COUNTER_FIELDS,
+                (int,),
+            )
+            _require_exact_fields(counters, ("schema_version",), (str,))
+
+        backend_witnesses = [
+            self.rollback.maps_witness,
+            *(
+                witness.witness
+                for packet in (self.control_packet, self.candidate_packet)
+                for witness in packet.cycle_witnesses
+            ),
+        ]
+        backend_witnesses.extend(
+            value
+            for value in (self.cold_boot_maps, self.provisional_live_maps)
+            if value is not None
+        )
+        for witness in backend_witnesses:
+            _require_exact_fields(
+                witness,
+                (
+                    "backend",
+                    "maps_sha256",
+                    "phase",
+                    "timestamp",
+                    "release_root_sha256",
+                    "schema_version",
+                ),
+                (str,),
+            )
+
+        for snapshot in (
+            *self.containment.snapshots,
+            self.rollback.containment_before,
+            self.rollback.containment_after,
+        ):
+            _require_exact_fields(
+                snapshot,
+                (
+                    "phase",
+                    "boundary",
+                    "timestamp",
+                    "screen_flag_value",
+                    "active_state",
+                    "substate",
+                    "enabled_state",
+                    "flag_source_sha256",
+                    "vision_unit_sha256",
+                    "artifact_sha256",
+                    "schema_version",
+                ),
+                (str,),
+            )
+            _require_exact_fields(snapshot, ("port_closed",), (bool,))
+
+        for witness in (
+            self.control_summary.rollback_witness,
+            self.candidate_summary.rollback_witness,
+            self.rollback.witness,
+        ):
+            _require_exact_fields(
+                witness,
+                (
+                    "unit_sha256",
+                    "dropin_sha256",
+                    "runtime_sha256",
+                    "model_sha256",
+                    "alias",
+                    "health_state",
+                    "shared_library_manifest_sha256",
+                    "effective_args_sha256",
+                    "containment_artifact_sha256",
+                    "artifact_sha256",
+                    "timestamp",
+                    "schema_version",
+                ),
+                (str,),
+            )
+            _require_exact_fields(
+                witness,
+                ("mtp_accepted_tokens", "restart_count"),
+                (int,),
+            )
+            _require_exact_fields(witness, ("mtp_initialized",), (bool,))
+            _require_exact_fields(witness, ("bar1_percent", "vram_mib"), (float,))
+
+        _require_exact_fields(
+            self.rollback,
+            (
+                "kernel_cursor_before",
+                "kernel_cursor_after",
+                "producer",
+                "window_id",
+                "parent_control_packet_sha256",
+                "parent_candidate_packet_sha256",
+                "timestamp",
+                "schema_version",
+            ),
+            (str,),
+        )
+        preflight = _canonical_persisted_role(
+            self.static_preflight, StaticPreflightDoc
+        ).obj
+        _require_exact_fields(
+            preflight,
+            (
+                "gpu_uuid",
+                "driver_package_sha256",
+                "stub_sha256",
+                "timestamp",
+                "schema_version",
+            ),
+            (str,),
+        )
+        _require_exact_fields(preflight, ("corpus_verified",), (bool,))
+        _require_exact_string_mapping(preflight.checks)
+
+    def _validate_persisted_documents(self) -> dict[str, PersistedDoc]:
+        if not isinstance(self.containment_docs, Mapping):
+            raise ValueError("bundle_binding")
+        docs = dict(self.containment_docs)
+        if any(type(key) is not str for key in docs) or set(docs) != _AB_CONTAINMENT_DOC_KEYS:
+            raise ValueError("bundle_binding")
+        for key, doc in tuple(docs.items()):
+            canonical = _canonical_persisted_role(doc, ContainmentSnapshot)
+            expected_phase, expected_boundary = key.split(":", 1)
+            if (
+                canonical.obj.phase != expected_phase
+                or canonical.obj.boundary != expected_boundary
+            ):
+                raise ValueError("bundle_binding")
+            docs[key] = canonical
+        _canonical_persisted_role(self.bench_identity_doc, RuntimeIdentity)
+        _canonical_persisted_role(self.runtime_identity_doc, RuntimeIdentity)
+        _canonical_persisted_role(self.static_preflight, StaticPreflightDoc)
+        return docs
+
+    def _validate_base_joins(self, docs: Mapping[str, PersistedDoc]) -> None:
+        control = self.control_packet
+        candidate = self.candidate_packet
+        if (
+            control.phase != "vulkan_baseline"
+            or self.control_summary.phase != "vulkan_baseline"
+            or candidate.phase != "cuda_candidate"
+            or self.candidate_summary.phase != "cuda_candidate"
+            or control.outcome != "completed"
+            or candidate.outcome != "completed"
+        ):
+            raise ValueError("bundle_binding")
+        for packet in (control, candidate):
+            if (
+                packet.window_id != self.window_id
+                or packet.boot_id != self.boot_id
+                or packet.gpu_uuid != self.gpu_uuid
+                or packet.driver_package_sha256 != self.driver_package_sha256
+            ):
+                raise ValueError("bundle_binding")
+        if self.rollback.window_id != self.window_id:
+            raise ValueError("bundle_binding")
+
+        if (
+            control.authorization_preimage_sha256
+            != self.window_authorization.preimage_sha256
+            or candidate.authorization_preimage_sha256
+            != self.continuation.preimage_sha256
+            or control.consumption_receipt_sha256
+            != self.window_consumption.binding_sha256
+            or candidate.consumption_receipt_sha256
+            != self.continuation_consumption.binding_sha256
+            or self.window_consumption.nonce != self.window_authorization.nonce
+            or self.continuation_consumption.nonce != self.continuation.nonce
+            or self.window_authorization.nonce == self.continuation.nonce
+            or self.continuation.parent_vulkan_packet_sha256 != control.binding_sha256
+            or self.window_authorization.window_id != self.window_id
+            or self.continuation.window_id != self.window_id
+            or self.window_authorization.boot_id != self.boot_id
+            or self.continuation.boot_id != self.boot_id
+            or "vulkan_baseline" not in self.window_authorization.phases
+            or "cuda_candidate" not in self.continuation.phases
+            or self.window_authorization.owner != self.continuation.owner
+            or self.boot_authorization.phase != "boot_authorization"
+            or self.live_authorization.phase != "live_witness_authorization"
+            or self.window_consumption.phase != "vulkan_baseline"
+            or self.continuation_consumption.phase != "cuda_candidate"
+            or self.window_consumption.boot_id != self.boot_id
+            or self.continuation_consumption.boot_id != self.boot_id
+        ):
+            raise ValueError("bundle_binding")
+        if not (
+            _compare_utc_z(
+                self.window_authorization.issued_at,
+                self.window_consumption.timestamp,
+            )
+            <= 0
+            and _compare_utc_z(
+                self.window_consumption.timestamp,
+                self.window_authorization.expires_at,
+            )
+            < 0
+            and _compare_utc_z(
+                self.continuation.issued_at,
+                self.continuation_consumption.timestamp,
+            )
+            <= 0
+            and _compare_utc_z(
+                self.continuation_consumption.timestamp,
+                self.continuation.expires_at,
+            )
+            < 0
+            and _compare_utc_z(
+                self.continuation_consumption.timestamp,
+                self.window_authorization.expires_at,
+            )
+            < 0
+        ):
+            raise ValueError("bundle_binding")
+
+        citation_pairs = (
+            (control.containment_before_sha256, docs["vulkan_baseline:before"]),
+            (control.containment_after_sha256, docs["vulkan_baseline:after"]),
+            (candidate.containment_before_sha256, docs["cuda_candidate:before"]),
+            (candidate.containment_after_sha256, docs["cuda_candidate:after"]),
+        )
+        if any(citation != doc.file_sha256 for citation, doc in citation_pairs):
+            raise ValueError("bundle_binding")
+        phase_objects = {
+            key: value for key, value in self.containment.phase_hashes.items()
+        }
+        if any(
+            phase_objects.get(key) != doc.obj.binding_sha256
+            for key, doc in docs.items()
+        ):
+            raise ValueError("bundle_binding")
+        if (
+            phase_objects.get("vulkan_rollback:before")
+            != self.rollback.containment_before.binding_sha256
+            or phase_objects.get("vulkan_rollback:after")
+            != self.rollback.containment_after.binding_sha256
+        ):
+            raise ValueError("bundle_binding")
+
+        bench_doc = _canonical_persisted_role(
+            self.bench_identity_doc, RuntimeIdentity
+        )
+        runtime_doc = _canonical_persisted_role(
+            self.runtime_identity_doc, RuntimeIdentity
+        )
+        static_doc = _canonical_persisted_role(
+            self.static_preflight, StaticPreflightDoc
+        )
+        if (
+            self.bench_runtime_identity.mode != "bench"
+            or control.runtime_identity_sha256 != bench_doc.file_sha256
+            or candidate.runtime_identity_sha256 != bench_doc.file_sha256
+            or bench_doc.obj.binding_sha256
+            != self.bench_runtime_identity.binding_sha256
+            or bench_doc.obj != self.bench_runtime_identity
+            or runtime_doc.obj.binding_sha256 != self.runtime_identity.binding_sha256
+            or runtime_doc.obj != self.runtime_identity
+        ):
+            raise ValueError("bundle_binding")
+        for name in _BENCH_IDENTITY_STABLE_FIELDS:
+            left = getattr(self.bench_runtime_identity, name)
+            right = getattr(self.runtime_identity, name)
+            if isinstance(left, Mapping):
+                if dict(left) != dict(right):
+                    raise ValueError("bundle_binding")
+            elif left != right:
+                raise ValueError("bundle_binding")
+
+        preflight = static_doc.obj
+        if (
+            control.static_preflight_sha256 != static_doc.file_sha256
+            or candidate.static_preflight_sha256 != static_doc.file_sha256
+            or preflight.gpu_uuid != self.gpu_uuid
+            or preflight.driver_package_sha256 != self.driver_package_sha256
+            or preflight.checks["corpus"] != control.corpus_sha256
+            or preflight.checks["corpus"] != candidate.corpus_sha256
+            or preflight.checks["model"] != control.model_sha256
+            or preflight.checks["model"] != candidate.model_sha256
+            or preflight.checks["candidate_manifest"]
+            != self.bench_runtime_identity.runtime_manifest_sha256
+            or control.effective_args_sha256 != FROZEN_BENCH_ARGS_SHA256
+            or candidate.effective_args_sha256 != FROZEN_BENCH_ARGS_SHA256
+        ):
+            raise ValueError("bundle_binding")
+        if any(
+            snapshot.flag_source_sha256 != preflight.checks["flag_source"]
+            or snapshot.vision_unit_sha256 != preflight.checks["vision_unit"]
+            for snapshot in self.containment.snapshots
+        ):
+            raise ValueError("bundle_binding")
+
+        self._validate_packet_summary(control, self.control_summary)
+        self._validate_packet_summary(candidate, self.candidate_summary)
+        if (
+            self.quality.control_manifest_sha256
+            != control.turn_manifest.binding_sha256
+            or self.quality.candidate_manifest_sha256
+            != candidate.turn_manifest.binding_sha256
+            or self.owner_voice.control_manifest_sha256
+            != control.turn_manifest.binding_sha256
+            or self.owner_voice.candidate_manifest_sha256
+            != candidate.turn_manifest.binding_sha256
+        ):
+            raise ValueError("bundle_binding")
+        for summary in (self.control_summary, self.candidate_summary):
+            if any(
+                getattr(summary, name) != getattr(self.quality, name)
+                for name in (
+                    "false_absence_count",
+                    "wrong_answered_ungrounded_count",
+                    "type_regression_count",
+                    "recall_posture",
+                    "quality_failure_count",
+                )
+            ):
+                raise ValueError("bundle_binding")
+            if (
+                summary.owner_voice_evidence.artifact_sha256
+                != self.owner_voice.artifact_sha256
+                or summary.owner_voice_evidence.status != self.owner_voice.status
+                or summary.owner_voice_evidence.timestamp != self.owner_voice.timestamp
+            ):
+                raise ValueError("bundle_binding")
+
+        if (
+            self.rollback.parent_control_packet_sha256 != control.binding_sha256
+            or self.rollback.parent_candidate_packet_sha256
+            != candidate.binding_sha256
+            or self.rollback.witness.binding_sha256
+            != self.control_summary.rollback_witness.binding_sha256
+            or self.rollback.witness.binding_sha256
+            != self.candidate_summary.rollback_witness.binding_sha256
+            or self.rollback.kernel_counters != self.rollback.witness.kernel_counters
+            or self.rollback.witness.containment_artifact_sha256
+            != self.containment.phase_binding("vulkan_rollback")
+        ):
+            raise ValueError("bundle_binding")
+        if not (
+            _compare_utc_z(
+                self.rollback.containment_before.timestamp,
+                self.rollback.maps_witness.timestamp,
+            )
+            < 0
+            and _compare_utc_z(
+                self.rollback.maps_witness.timestamp,
+                self.rollback.containment_after.timestamp,
+            )
+            < 0
+            and _compare_utc_z(
+                self.rollback.containment_before.timestamp,
+                self.rollback.witness.timestamp,
+            )
+            < 0
+            and _compare_utc_z(
+                self.rollback.witness.timestamp,
+                self.rollback.containment_after.timestamp,
+            )
+            < 0
+        ):
+            raise ValueError("bundle_binding")
+        self._validate_phase_chronology(control, docs)
+        self._validate_phase_chronology(candidate, docs)
+        if not (
+            _compare_utc_z(control.timestamp, self.continuation.issued_at) <= 0
+            and _compare_utc_z(
+                control.timestamp,
+                docs["cuda_candidate:before"].obj.timestamp,
+            )
+            <= 0
+        ):
+            raise ValueError("bundle_binding")
+
+    def _validate_packet_summary(
+        self,
+        packet: PhasePacket,
+        summary: BenchSummary,
+    ) -> None:
+        if packet.summary_projection_json != _canonical_projection_json(
+            phase_summary_projection(summary)
+        ):
+            raise ValueError("bundle_binding")
+        statistics_packet = recompute_phase_statistics(packet.turn_records)
+        unload_leak = float(
+            sum(
+                max(0, metric.vram_after_unload_mib - metric.vram_before_mib)
+                for metric in packet.cycle_metrics
+            )
+        )
+        if (
+            summary.cycles != packet.cycle_metrics
+            or summary.unload_leak_mib != unload_leak
+            or summary.crash_count != statistics_packet["crash_count"]
+            or summary.restart_count != 0
+            or summary.hang_count != statistics_packet["hang_count"]
+            or summary.timeout_count != statistics_packet["timeout_count"]
+            or packet.model_sha256 != summary.model_sha256
+            or packet.corpus_sha256 != summary.corpus_sha256
+            or packet.order_sha256 != summary.order_sha256
+            or any(
+                packet.topology_sha256 != cycle.topology_sha256
+                for cycle in summary.cycles
+            )
+            or packet.kernel_counters != summary.kernel_counters
+        ):
+            raise ValueError("bundle_binding")
+
+    def _validate_phase_chronology(
+        self,
+        packet: PhasePacket,
+        docs: Mapping[str, PersistedDoc],
+    ) -> None:
+        before = docs[f"{packet.phase}:before"].obj
+        after = docs[f"{packet.phase}:after"].obj
+        receipt = (
+            self.window_consumption
+            if packet.phase == "vulkan_baseline"
+            else self.continuation_consumption
+        )
+        intervals = packet.cycle_witnesses
+        if not (
+            _compare_utc_z(before.timestamp, packet.cycle_one_before_snapshot_at)
+            <= 0
+            and _compare_utc_z(
+                packet.cycle_one_before_snapshot_at, receipt.timestamp
+            )
+            < 0
+            and _compare_utc_z(receipt.timestamp, intervals[0].load_started) < 0
+        ):
+            raise ValueError("bundle_binding")
+        previous_unload: str | None = None
+        for interval in intervals:
+            if (
+                _compare_utc_z(before.timestamp, interval.load_started) > 0
+                or _compare_utc_z(interval.load_started, interval.unload_proven) >= 0
+                or _compare_utc_z(
+                    interval.load_started, interval.witness.timestamp
+                )
+                >= 0
+                or _compare_utc_z(
+                    interval.witness.timestamp, interval.unload_proven
+                )
+                >= 0
+                or _compare_utc_z(interval.unload_proven, after.timestamp) > 0
+                or (
+                    previous_unload is not None
+                    and _compare_utc_z(previous_unload, interval.load_started) > 0
+                )
+            ):
+                raise ValueError("bundle_binding")
+            previous_unload = interval.unload_proven
+        if not (
+            _compare_utc_z(intervals[2].unload_proven, after.timestamp) <= 0
+            and _compare_utc_z(after.timestamp, packet.timestamp) <= 0
+        ):
+            raise ValueError("bundle_binding")
+
+    def _validate_stage_prefix(self) -> None:
+        snapshots = {
+            f"{snapshot.phase}:{snapshot.boundary}" for snapshot in self.containment.snapshots
+        }
+        cold = self.candidate_summary.cold_boot_witness
+        provisional = self.candidate_summary.provisional_live_witness
+        if (
+            self.control_summary.cold_boot_witness is not None
+            or self.control_summary.provisional_live_witness is not None
+        ):
+            raise ValueError("bundle_binding")
+
+        boot_status = self.boot_authorization.status
+        live_status = self.live_authorization.status
+        if boot_status == "not_attempted":
+            stage = 1
+        elif cold is None:
+            stage = 2
+        elif live_status == "not_attempted":
+            stage = 3
+        elif provisional is None:
+            stage = 4
+        else:
+            stage = 5
+
+        expected_snapshots = set(_BASE_CONTAINMENT_KEYS)
+        if stage >= 3:
+            expected_snapshots.update(
+                f"{phase}:{boundary}"
+                for phase in ("provisional_cuda_boot", "cold_boot")
+                for boundary in ("before", "after")
+            )
+        if stage >= 5:
+            expected_snapshots.update(
+                f"provisional_live:{boundary}" for boundary in ("before", "after")
+            )
+        if snapshots != expected_snapshots:
+            raise ValueError("bundle_binding")
+
+        if stage == 1:
+            if (
+                self.runtime_identity.mode != "bench"
+                or live_status != "not_attempted"
+                or cold is not None
+                or provisional is not None
+                or self.cold_boot_maps is not None
+                or self.provisional_live_maps is not None
+            ):
+                raise ValueError("bundle_binding")
+            return
+        if self.runtime_identity.mode != "production" or boot_status not in {"pass", "fail"}:
+            raise ValueError("bundle_binding")
+        self._validate_boot_authorization()
+        if stage == 2:
+            if (
+                live_status != "not_attempted"
+                or cold is not None
+                or provisional is not None
+                or self.cold_boot_maps is not None
+                or self.provisional_live_maps is not None
+            ):
+                raise ValueError("bundle_binding")
+            return
+        if boot_status != "pass" or cold is None or self.cold_boot_maps is None:
+            raise ValueError("bundle_binding")
+        self._validate_cold_stage(cold)
+        if stage == 3:
+            if (
+                live_status != "not_attempted"
+                or provisional is not None
+                or self.provisional_live_maps is not None
+            ):
+                raise ValueError("bundle_binding")
+            return
+        if not cold.passed or live_status not in {"pass", "fail"}:
+            raise ValueError("bundle_binding")
+        if (
+            self.live_authorization.parent_sha256 != cold.binding_sha256
+            or _compare_utc_z(cold.timestamp, self.live_authorization.timestamp) >= 0
+        ):
+            raise ValueError("bundle_binding")
+        if stage == 4:
+            if provisional is not None or self.provisional_live_maps is not None:
+                raise ValueError("bundle_binding")
+            return
+        if (
+            live_status != "pass"
+            or provisional is None
+            or self.provisional_live_maps is None
+        ):
+            raise ValueError("bundle_binding")
+        self._validate_provisional_stage(provisional)
+
+    def _validate_boot_authorization(self) -> None:
+        if self.boot_authorization.parent_sha256 != self.bench_binding_sha256:
+            raise ValueError("bundle_binding")
+        static_doc = _canonical_persisted_role(
+            self.static_preflight, StaticPreflightDoc
+        ).obj
+        latest = [
+            self.control_packet.timestamp,
+            self.candidate_packet.timestamp,
+            self.quality.timestamp,
+            self.owner_voice.timestamp,
+            self.rollback.timestamp,
+            self.rollback.witness.timestamp,
+            self.rollback.maps_witness.timestamp,
+            static_doc.timestamp,
+            *(snapshot.timestamp for snapshot in self.containment.snapshots if f"{snapshot.phase}:{snapshot.boundary}" in _BASE_CONTAINMENT_KEYS),
+        ]
+        if any(
+            _compare_utc_z(timestamp, self.boot_authorization.timestamp) >= 0
+            for timestamp in latest
+        ):
+            raise ValueError("bundle_binding")
+
+    def _validate_cold_stage(self, cold: ColdBootWitness) -> None:
+        maps = self.cold_boot_maps
+        if maps is None:
+            raise ValueError("bundle_binding")
+        if (
+            maps.phase != "cold_boot"
+            or cold.parent_sha256 != self.boot_authorization.binding_sha256
+            or _compare_utc_z(self.boot_authorization.timestamp, cold.timestamp) >= 0
+            or cold.containment_artifact_sha256
+            != self.containment.phase_binding("cold_boot")
+            or cold.runtime_sha256 != self.runtime_identity.runtime_sha256
+            or cold.runtime_maps_sha256 != maps.binding_sha256
+            or cold.backend != maps.backend
+            or cold.production_override_sha256
+            != self.runtime_identity.production_override_sha256
+            or cold.alias != self.runtime_identity.alias
+            or cold.model_sha256 != self.runtime_identity.model_sha256
+            or cold.model_bytes != self.runtime_identity.model_bytes
+            or not _containment_brackets_exact(
+                self.containment, "cold_boot", maps.timestamp
+            )
+            or not _containment_brackets_exact(
+                self.containment, "cold_boot", cold.timestamp
+            )
+        ):
+            raise ValueError("bundle_binding")
+
+    def _validate_provisional_stage(self, live: ProvisionalLiveWitness) -> None:
+        maps = self.provisional_live_maps
+        if maps is None:
+            raise ValueError("bundle_binding")
+        if (
+            maps.phase != "provisional_live"
+            or live.parent_sha256 != self.live_authorization.binding_sha256
+            or _compare_utc_z(self.live_authorization.timestamp, live.timestamp) >= 0
+            or live.containment_artifact_sha256
+            != self.containment.phase_binding("provisional_live")
+            or live.runtime_sha256 != self.runtime_identity.runtime_sha256
+            or live.runtime_maps_sha256 != maps.binding_sha256
+            or live.backend != maps.backend
+            or live.configuration_sha256 != self.runtime_identity.configuration_sha256
+            or not _containment_brackets_exact(
+                self.containment, "provisional_live", maps.timestamp
+            )
+            or not _containment_brackets_exact(
+                self.containment, "provisional_live", live.timestamp
+            )
+        ):
+            raise ValueError("bundle_binding")
+
+    @property
+    def bench_binding_sha256(self) -> str:
+        base_phase_hashes = {
+            key: value
+            for key, value in self.containment.phase_hashes.items()
+            if key in _BASE_CONTAINMENT_KEYS
+        }
+        return _packet_hash(
+            {
+                "schema": self.schema_version,
+                "window_id": self.window_id,
+                "boot_id": self.boot_id,
+                "gpu_uuid": self.gpu_uuid,
+                "driver_package_sha256": self.driver_package_sha256,
+                "bench_runtime_identity_sha256": (
+                    self.bench_runtime_identity.binding_sha256
+                ),
+                "control_packet_sha256": self.control_packet.binding_sha256,
+                "candidate_packet_sha256": self.candidate_packet.binding_sha256,
+                "control_summary": _normalized_bench_summary_packet(
+                    self.control_summary
+                ),
+                "candidate_summary": _normalized_bench_summary_packet(
+                    self.candidate_summary
+                ),
+                "containment_phase_hashes": base_phase_hashes,
+                "quality_sha256": self.quality.binding_sha256,
+                "owner_voice_sha256": self.owner_voice.binding_sha256,
+                "window_authorization_preimage_sha256": (
+                    self.window_authorization.preimage_sha256
+                ),
+                "continuation_preimage_sha256": self.continuation.preimage_sha256,
+                "window_consumption_sha256": self.window_consumption.binding_sha256,
+                "continuation_consumption_sha256": (
+                    self.continuation_consumption.binding_sha256
+                ),
+                "rollback_sha256": self.rollback.binding_sha256,
+            }
+        )
+
+    @property
+    def binding_sha256(self) -> str:
+        return _packet_hash(
+            {
+                "schema": self.schema_version,
+                "bench_binding_sha256": self.bench_binding_sha256,
+                "window_id": self.window_id,
+                "boot_id": self.boot_id,
+                "gpu_uuid": self.gpu_uuid,
+                "driver_package_sha256": self.driver_package_sha256,
+                "control_summary_sha256": self.control_summary.binding_sha256,
+                "candidate_summary_sha256": self.candidate_summary.binding_sha256,
+                "control_packet_sha256": self.control_packet.binding_sha256,
+                "candidate_packet_sha256": self.candidate_packet.binding_sha256,
+                "containment_sha256": self.containment.binding_sha256,
+                "boot_authorization_sha256": self.boot_authorization.binding_sha256,
+                "live_authorization_sha256": self.live_authorization.binding_sha256,
+                "bench_runtime_identity_sha256": (
+                    self.bench_runtime_identity.binding_sha256
+                ),
+                "runtime_identity_sha256": self.runtime_identity.binding_sha256,
+                "quality_sha256": self.quality.binding_sha256,
+                "owner_voice_sha256": self.owner_voice.binding_sha256,
+                "window_authorization_preimage_sha256": (
+                    self.window_authorization.preimage_sha256
+                ),
+                "continuation_preimage_sha256": self.continuation.preimage_sha256,
+                "window_consumption_sha256": self.window_consumption.binding_sha256,
+                "continuation_consumption_sha256": (
+                    self.continuation_consumption.binding_sha256
+                ),
+                "containment_doc_file_sha256s": {
+                    key: value.file_sha256
+                    for key, value in sorted(self.containment_docs.items())
+                },
+                "bench_identity_file_sha256": self.bench_identity_doc.file_sha256,
+                "runtime_identity_file_sha256": self.runtime_identity_doc.file_sha256,
+                "static_preflight_file_sha256": self.static_preflight.file_sha256,
+                "rollback_sha256": self.rollback.binding_sha256,
+                "cold_boot_maps_sha256": (
+                    self.cold_boot_maps.binding_sha256
+                    if self.cold_boot_maps is not None
+                    else None
+                ),
+                "provisional_live_maps_sha256": (
+                    self.provisional_live_maps.binding_sha256
+                    if self.provisional_live_maps is not None
+                    else None
+                ),
+                "timestamp": self.timestamp,
+            }
+        )
 
 
 @dataclass(frozen=True, slots=True)
