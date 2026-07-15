@@ -5,8 +5,22 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+def _close_sealed_entry_fd() -> None:
+    prefix = "/proc/self/fd/"
+    if not sys.argv[0].startswith(prefix):
+        return
+    try:
+        os.close(int(sys.argv[0][len(prefix) :]))
+    except (OSError, ValueError):
+        raise SystemExit("sealed_entry_fd_invalid") from None
+
+
+_close_sealed_entry_fd()
 
 
 STUB_SHA256_PATH_ENV = "CUDA_BENCH_STUB_PATH"

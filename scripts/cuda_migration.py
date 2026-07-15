@@ -464,7 +464,7 @@ PROVISIONAL_LIVE_WITNESS_SCHEMA = "cuda_migration.provisional_live_witness.v1"
 AUTHORIZATION_WITNESS_SCHEMA = "cuda_migration.authorization_witness.v1"
 BACKEND_MAP_WITNESS_SCHEMA = "cuda_migration.backend_map_witness.v1"
 TURN_MANIFEST_SCHEMA = "cuda_bench_driver.turn_manifest.v1"
-PHASE_PACKET_SCHEMA = "cuda_bench_driver.phase_packet.v1"
+PHASE_PACKET_SCHEMA = "cuda_bench_driver.phase_packet.v2"
 ROLLBACK_EVIDENCE_BUNDLE_SCHEMA = "cuda_migration.rollback_evidence_bundle.v1"
 BENCH_EVIDENCE_BUNDLE_SCHEMA = "cuda_migration.bench_evidence_bundle.v1"
 
@@ -1936,6 +1936,10 @@ class PhasePacket:
     order_sha256: str
     effective_args_sha256: str
     driver_package_sha256: str
+    pinned_path: str
+    pinned_sha256: str = field(
+        metadata={"scope": "entry_executable_content_only"}
+    )
     authorization_preimage_sha256: str
     consumption_receipt_sha256: str
     static_preflight_sha256: str
@@ -1975,6 +1979,12 @@ class PhasePacket:
             raise ValueError("boot_id_required")
         if not isinstance(self.gpu_uuid, str) or _GPU_UUID_RE.fullmatch(self.gpu_uuid) is None:
             raise ValueError("gpu_scope_violation")
+        if type(self.pinned_path) is not str:
+            raise ValueError("canonical_asset_path")
+        try:
+            validate_asset_path(Path(self.pinned_path))
+        except (OSError, TypeError, ValueError) as exc:
+            raise ValueError("canonical_asset_path") from exc
         for digest in (
             self.topology_sha256,
             self.model_sha256,
@@ -1982,6 +1992,7 @@ class PhasePacket:
             self.order_sha256,
             self.effective_args_sha256,
             self.driver_package_sha256,
+            self.pinned_sha256,
             self.authorization_preimage_sha256,
             self.consumption_receipt_sha256,
             self.static_preflight_sha256,
@@ -2123,6 +2134,8 @@ class PhasePacket:
                 "order_sha256": self.order_sha256,
                 "effective_args_sha256": self.effective_args_sha256,
                 "driver_package_sha256": self.driver_package_sha256,
+                "pinned_path": self.pinned_path,
+                "pinned_sha256": self.pinned_sha256,
                 "authorization_preimage_sha256": self.authorization_preimage_sha256,
                 "consumption_receipt_sha256": self.consumption_receipt_sha256,
                 "static_preflight_sha256": self.static_preflight_sha256,
@@ -2696,6 +2709,8 @@ _PHASE_PACKET_FIELDS = (
     "order_sha256",
     "effective_args_sha256",
     "driver_package_sha256",
+    "pinned_path",
+    "pinned_sha256",
     "authorization_preimage_sha256",
     "consumption_receipt_sha256",
     "static_preflight_sha256",
@@ -3304,6 +3319,8 @@ class BenchEvidenceBundle:
                     "order_sha256",
                     "effective_args_sha256",
                     "driver_package_sha256",
+                    "pinned_path",
+                    "pinned_sha256",
                     "authorization_preimage_sha256",
                     "consumption_receipt_sha256",
                     "static_preflight_sha256",
@@ -3825,6 +3842,14 @@ class BenchEvidenceBundle:
             or preflight.checks["model"] != candidate.model_sha256
             or preflight.checks["candidate_manifest"]
             != self.bench_runtime_identity.runtime_manifest_sha256
+            or control.pinned_path
+            != str(VULKAN_RELEASE_ROOT / "llama-server")
+            or control.pinned_sha256 != FROZEN_VULKAN_RUNTIME_SHA256
+            or control.pinned_sha256 != preflight.checks["incumbent_server"]
+            or candidate.pinned_path
+            != str(CUDA_RELEASE_ROOT / "llama-server")
+            or candidate.pinned_sha256
+            != self.bench_runtime_identity.runtime_sha256
             or control.effective_args_sha256 != FROZEN_BENCH_ARGS_SHA256
             or candidate.effective_args_sha256 != FROZEN_BENCH_ARGS_SHA256
         ):

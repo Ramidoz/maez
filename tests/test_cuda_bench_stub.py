@@ -4,11 +4,13 @@ import sys
 import unittest
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 from scripts.cuda_bench_stub import STUB_SHA256_PATH_ENV
 
 
 ALIAS = "qwen36-27b-mtp"
+STUB_PATH = Path(__file__).resolve().parents[1] / "scripts" / "cuda_bench_stub.py"
 PERSONAS = {
     "healthy",
     "readiness_timeout",
@@ -22,7 +24,7 @@ PERSONAS = {
 class StubTests(unittest.TestCase):
     def _spawn(self, *args: str) -> tuple[subprocess.Popen[str], int]:
         proc = subprocess.Popen(
-            [sys.executable, "-B", "-m", "scripts.cuda_bench_stub", *args],
+            [sys.executable, "-B", "-I", str(STUB_PATH), *args],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -179,8 +181,8 @@ class StubTests(unittest.TestCase):
             [
                 sys.executable,
                 "-B",
-                "-m",
-                "scripts.cuda_bench_stub",
+                "-I",
+                str(STUB_PATH),
                 "--persona",
                 "healthy",
                 "--alias",
@@ -235,8 +237,8 @@ class StubTests(unittest.TestCase):
             [
                 sys.executable,
                 "-B",
-                "-m",
-                "scripts.cuda_bench_stub",
+                "-I",
+                str(STUB_PATH),
                 "--persona",
                 "invented",
                 "--alias",
@@ -256,8 +258,8 @@ class StubTests(unittest.TestCase):
                     [
                         sys.executable,
                         "-B",
-                        "-m",
-                        "scripts.cuda_bench_stub",
+                        "-I",
+                        str(STUB_PATH),
                         "--persona",
                         "healthy",
                         "--alias",

@@ -3,14 +3,22 @@
 from __future__ import annotations
 
 import errno
+import fcntl
+import hashlib
 import inspect
 import json
 import os
+import select
+import signal
+import socket
 import stat
 import subprocess
+import sys
 import threading
+import time
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import FrozenInstanceError, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -67,7 +75,7 @@ EXPECTED_REFUSALS = frozenset(
 
 EXPECTED_SCHEMAS = {
     "STATIC_PREFLIGHT_SCHEMA": "cuda_bench_driver.static_preflight.v1",
-    "PHASE_PACKET_SCHEMA": "cuda_bench_driver.phase_packet.v1",
+    "PHASE_PACKET_SCHEMA": "cuda_bench_driver.phase_packet.v2",
     "REFUSAL_SCHEMA": "cuda_bench_driver.refusal.v1",
     "WINDOW_AUTHORIZATION_SCHEMA": "cuda_bench_driver.window_authorization.v1",
     "CONTINUATION_SCHEMA": "cuda_bench_driver.continuation.v1",
@@ -79,6 +87,123 @@ EXPECTED_SCHEMAS = {
     "ASSEMBLE_RECEIPT_SCHEMA": "cuda_bench_assemble.receipt.v1",
     "REHEARSAL_PACKET_SCHEMA": "cuda_bench_rehearsal.packet.v1",
 }
+
+STUB_PATH = Path(__file__).resolve().parents[1] / "scripts" / "cuda_bench_stub.py"
+STUB_SHA256 = hashlib.sha256(STUB_PATH.read_bytes()).hexdigest()
+
+
+@dataclass
+class _TestProcessLease:
+    pid: int
+    pidfd: int
+    popen: subprocess.Popen[bytes] | subprocess.Popen[str] | None
+    isolated_pgid: int | None
+    product_pidfds: set[tuple[int, int, int, int]]
+    ports: set[int]
+
+
+def _stub_argv(*extra: str) -> list[str]:
+    return [
+        sys.executable,
+        "-B",
+        "-I",
+        str(STUB_PATH),
+        "--persona",
+        "healthy",
+        "--alias",
+        "qwen36-27b-mtp",
+        *extra,
+    ]
+
+
+def _stub_pin(*, digest: str = STUB_SHA256) -> object:
+    return driver.SpawnPin(
+        kind="python_file",
+        pinned_path=STUB_PATH,
+        pinned_sha256=digest,
+        required_argv_prefix=(sys.executable, "-B", "-I", str(STUB_PATH)),
+    )
+
+
+def _binary_pin(path: Path) -> object:
+    return driver.SpawnPin(
+        kind="binary",
+        pinned_path=path,
+        pinned_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+        required_argv_prefix=(str(path),),
+    )
+
+
+def _python_file_pin(path: Path, digest: str) -> object:
+    return driver.SpawnPin(
+        kind="python_file",
+        pinned_path=path,
+        pinned_sha256=digest,
+        required_argv_prefix=(sys.executable, "-B", "-I", str(path)),
+    )
+
+
+def _free_loopback_port() -> int:
+    while True:
+        with socket.socket() as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            probe.bind(("127.0.0.1", 0))
+            port = int(probe.getsockname()[1])
+        if port != driver.BENCH_PORT:
+            return port
+
+
+def _write_listener_script(path: Path, sentinel: Path, port: int) -> None:
+    path.write_text(
+        "import os,pathlib,socket,sys,time\n"
+        "prefix='/proc/self/fd/'\n"
+        "if sys.argv[0].startswith(prefix): os.close(int(sys.argv[0][len(prefix):]))\n"
+        f"pathlib.Path({str(sentinel)!r}).touch()\n"
+        "server=socket.socket()\n"
+        "server.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)\n"
+        f"server.bind(('127.0.0.1',{port}))\n"
+        "server.listen()\n"
+        f"print('STUB_LISTENING port={port}',flush=True)\n"
+        "time.sleep(30)\n",
+        encoding="utf-8",
+    )
+
+
+def _stub_env(**extra: str) -> dict[str, str]:
+    return {
+        "HOME": os.environ.get("HOME", "/home/rohit"),
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "PYTHONUNBUFFERED": "1",
+        **extra,
+    }
+
+
+def _health(port: int) -> bool:
+    try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/health", timeout=1
+        ) as response:
+            return response.status == 200
+    except OSError:
+        return False
+
+
+def _wait_for(predicate: Callable[[], bool], *, timeout: float = 3.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return bool(predicate())
+
+
+def _test_process_identity(pid: int) -> tuple[int, int, str]:
+    rendered = Path(f"/proc/{pid}/stat").read_text()
+    suffix = rendered[rendered.rfind(")") + 2 :].split()
+    pgid = int(suffix[2])
+    start_time_ticks = int(suffix[19])
+    exe_sha256 = hashlib.sha256(Path(f"/proc/{pid}/exe").read_bytes()).hexdigest()
+    return pgid, start_time_ticks, exe_sha256
 
 
 @pytest.fixture
@@ -192,6 +317,9 @@ class _FakeSocket:
         if self.bind_error is not None:
             raise self.bind_error
 
+    def setsockopt(self, _level: int, _option: int, _value: int) -> None:
+        return
+
     def close(self) -> None:
         self.closed = True
         if self.close_error is not None:
@@ -225,6 +353,9 @@ def _provider_components(tier: str) -> dict[str, object]:
         journal_factory: object = driver.ProductionJournalFactory()
         artifact_policy: object = driver.ProductionArtifactPolicy()
         authorization_gate: object = driver.RealAuthorizationGate(artifact_policy)
+        server_launcher: object = driver.RealServerLauncher(
+            _binary_pin(Path(sys.executable))
+        )
     else:
         service_state = driver.SyntheticServiceState({})
         port_probe = driver.SyntheticPortProbe(set())
@@ -235,13 +366,14 @@ def _provider_components(tier: str) -> dict[str, object]:
         journal_factory = driver.RehearsalJournalFactory()
         artifact_policy = driver.RehearsalArtifactPolicy()
         authorization_gate = driver.RehearsalAuthorizationGate(artifact_policy)
+        server_launcher = driver.RehearsalServerLauncher(_stub_pin())
     return {
         "service_state": service_state,
         "port_probe": port_probe,
         "gpu": gpu,
         "kernel_log": kernel,
         "backend_maps": maps,
-        "server_launcher": _TieredFake(tier),
+        "server_launcher": server_launcher,
         "server_client": _TieredFake(tier),
         "authorization_gate": authorization_gate,
         "artifact_policy": artifact_policy,
@@ -1529,11 +1661,11 @@ class TestProviderSeams:
 
         assert production.encode("packet", document) == (
             b'{"binding_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
-            b'"fields":{"value":7},"schema":"cuda_bench_driver.phase_packet.v1"}\n'
+            b'"fields":{"value":7},"schema":"cuda_bench_driver.phase_packet.v2"}\n'
         )
         assert rehearsal.encode("packet", document) == (
             b'{"payload":{"binding_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
-            b'"fields":{"value":7},"schema":"cuda_bench_driver.phase_packet.v1"},'
+            b'"fields":{"value":7},"schema":"cuda_bench_driver.phase_packet.v2"},'
             b'"rehearsal_schema":"cuda_bench_rehearsal.packet.v1","tier":"rehearsal"}\n'
         )
         assert production.artifact_dir("journal") == "journals"
@@ -2416,6 +2548,1414 @@ def _cuda_authorities(
         parent_vulkan_packet_sha256=parent.binding_sha256,
     )
     return window, continuation, parent
+
+
+class TestServerLauncherFinalizer:
+    @pytest.fixture(autouse=True)
+    def _owned_process_registry(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> Iterator[None]:
+        """Retain independent pidfds so a failed assertion cannot leak a child."""
+
+        leases: list[_TestProcessLease] = []
+        real_popen = subprocess.Popen
+        real_guarded_popen = driver._guarded_popen
+        real_pidfd_open = os.pidfd_open
+        real_pidfd_signal = signal.pidfd_send_signal
+
+        def register_pid(
+            pid: int,
+            *,
+            popen: subprocess.Popen[bytes] | subprocess.Popen[str] | None,
+        ) -> _TestProcessLease:
+            if popen is not None:
+                existing = next(
+                    (lease for lease in leases if lease.popen is popen), None
+                )
+                if existing is not None:
+                    return existing
+            try:
+                pidfd = real_pidfd_open(pid)
+            except BaseException:
+                if popen is not None and popen.poll() is None:
+                    popen.kill()
+                    popen.wait(timeout=2)
+                raise
+            try:
+                pgid = os.getpgid(pid)
+            except OSError:
+                pgid = None
+            lease = _TestProcessLease(
+                pid=pid,
+                pidfd=pidfd,
+                popen=popen,
+                isolated_pgid=pgid if pgid == pid else None,
+                product_pidfds=set(),
+                ports=set(),
+            )
+            leases.append(lease)
+            return lease
+
+        def tracked_popen(*args: object, **kwargs: object) -> subprocess.Popen[object]:
+            proc = real_popen(*args, **kwargs)  # type: ignore[arg-type]
+            register_pid(proc.pid, popen=proc)  # type: ignore[arg-type]
+            return proc  # type: ignore[return-value]
+
+        def tracked_guarded_popen(
+            *args: object, **kwargs: object
+        ) -> tuple[object, ...]:
+            result = real_guarded_popen(*args, **kwargs)  # type: ignore[arg-type]
+            register_pid(result[0].pid, popen=result[0])
+            return result  # type: ignore[return-value]
+
+        self._test_process_leases = leases
+        self._register_test_pid = lambda pid: register_pid(pid, popen=None)
+        self._test_pidfd_signal = real_pidfd_signal
+        self._test_popen = tracked_popen
+        monkeypatch.setattr(driver, "_guarded_popen", tracked_guarded_popen)
+        cleanup_errors: list[str] = []
+        try:
+            yield
+        finally:
+            for lease in reversed(leases):
+                try:
+                    real_pidfd_signal(lease.pidfd, signal.SIGKILL)
+                except (OSError, ProcessLookupError):
+                    pass
+            for lease in reversed(leases):
+                proc = lease.popen
+                if proc is not None:
+                    try:
+                        proc.wait(timeout=2)
+                    except (ChildProcessError, subprocess.TimeoutExpired):
+                        cleanup_errors.append(f"unreaped:{lease.pid}")
+                    for stream_name in ("stdin", "stdout", "stderr"):
+                        stream = getattr(proc, stream_name, None)
+                        if stream is not None and not stream.closed:
+                            stream.close()
+            for lease in reversed(leases):
+                poller = select.poll()
+                try:
+                    poller.register(lease.pidfd, select.POLLIN | select.POLLHUP)
+                    if not poller.poll(2000):
+                        cleanup_errors.append(f"pidfd_alive:{lease.pid}")
+                except OSError:
+                    pass
+                for record in lease.product_pidfds:
+                    self._close_product_pidfd_if_owned(*record)
+                try:
+                    os.close(lease.pidfd)
+                except OSError:
+                    pass
+            for pgid in {
+                lease.isolated_pgid
+                for lease in leases
+                if lease.isolated_pgid is not None
+            }:
+                try:
+                    if not _wait_for(lambda pgid=pgid: not driver._pgid_members(pgid)):
+                        cleanup_errors.append(f"pgid_alive:{pgid}")
+                except driver.BenchRefusal:
+                    cleanup_errors.append(f"pgid_unproven:{pgid}")
+            for port in {port for lease in leases for port in lease.ports}:
+                if not _wait_for(lambda port=port: driver.RealPortProbe().is_free(port)):
+                    cleanup_errors.append(f"listener_alive:{port}")
+            assert not cleanup_errors, cleanup_errors
+
+    def _lease_for_popen(self, popen: subprocess.Popen[object]) -> _TestProcessLease:
+        return next(
+            lease for lease in self._test_process_leases if lease.popen is popen
+        )
+
+    def _register_owned_fd(
+        self, popen: subprocess.Popen[object], fd: int
+    ) -> None:
+        descriptor = os.fstat(fd)
+        self._lease_for_popen(popen).product_pidfds.add(
+            (fd, popen.pid, descriptor.st_dev, descriptor.st_ino)
+        )
+
+    def _close_product_pidfd_if_owned(
+        self,
+        fd: int,
+        expected_pid: int,
+        expected_device: int,
+        expected_inode: int,
+    ) -> bool:
+        try:
+            descriptor = os.fstat(fd)
+        except OSError:
+            return False
+        if (
+            descriptor.st_dev != expected_device
+            or descriptor.st_ino != expected_inode
+        ):
+            return False
+        state, bound_pid = driver._pidfd_bound_pid(fd)
+        if state == "bound" and bound_pid != expected_pid:
+            return False
+        if state not in {"bound", "gone"}:
+            return False
+        try:
+            os.close(fd)
+        except OSError:
+            return False
+        return True
+
+    def _register_child_evidence(self, child: object) -> object:
+        popen = child.popen  # type: ignore[attr-defined]
+        lease = self._lease_for_popen(popen)
+        descriptor = os.fstat(child.pidfd)  # type: ignore[attr-defined]
+        lease.product_pidfds.add(
+            (
+                child.pidfd,  # type: ignore[attr-defined]
+                child.pid,  # type: ignore[attr-defined]
+                descriptor.st_dev,
+                descriptor.st_ino,
+            )
+        )
+        port = child.port  # type: ignore[attr-defined]
+        if type(port) is int:
+            lease.ports.add(port)
+        return child
+
+    def _launcher(self) -> object:
+        return driver.RehearsalServerLauncher(_stub_pin())
+
+    def _spawn_stub(self) -> object:
+        child = self._launcher().spawn(  # type: ignore[attr-defined]
+            _stub_argv(), _stub_env()
+        )
+        return self._register_child_evidence(child)
+
+    def _test_cleanup(self, child: object) -> None:
+        popen = child.popen  # type: ignore[attr-defined]
+        if popen.poll() is None:
+            popen.terminate()
+            try:
+                popen.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                popen.kill()
+                popen.wait(timeout=2)
+        for stream_name in ("stdin", "stdout", "stderr"):
+            stream = getattr(popen, stream_name, None)
+            if stream is not None and not stream.closed:
+                stream.close()
+        pidfd = child.pidfd  # type: ignore[attr-defined]
+        lease = self._lease_for_popen(popen)
+        record = next(
+            (record for record in lease.product_pidfds if record[0] == pidfd),
+            None,
+        )
+        if record is not None:
+            self._close_product_pidfd_if_owned(*record)
+
+    def _spawn_stubborn_binary(self, tmp_path: Path) -> object:
+        ready = tmp_path / "sigterm-handler-ready"
+        executable = Path(sys.executable)
+        child = driver.RealServerLauncher(_binary_pin(executable)).spawn(
+            [
+                sys.executable,
+                "-B",
+                "-c",
+                (
+                    "import pathlib,signal,sys,time; "
+                    "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                    "pathlib.Path(sys.argv[1]).touch(); time.sleep(30)"
+                ),
+                str(ready),
+                "--port",
+                str(driver.BENCH_PORT),
+            ],
+            _stub_env(),
+        )
+        self._register_child_evidence(child)
+        try:
+            assert _wait_for(ready.exists)
+        except BaseException:
+            self._test_cleanup(child)
+            raise
+        return child
+
+    def test_rehearsal_launcher_refuses_noncanonical_python_target(
+        self, tmp_path: Path
+    ) -> None:
+        impostor = tmp_path / "impostor.py"
+        sentinel = tmp_path / "impostor-ran"
+        impostor.write_text(
+            "from pathlib import Path\n"
+            f"Path({str(sentinel)!r}).touch()\n"
+            "print('STUB_LISTENING port=12345', flush=True)\n",
+            encoding="utf-8",
+        )
+        pin = _python_file_pin(
+            impostor,
+            hashlib.sha256(impostor.read_bytes()).hexdigest(),
+        )
+        with pytest.raises(ValueError, match="spawn_pin_invalid"):
+            driver.RehearsalServerLauncher(pin)  # type: ignore[arg-type]
+        assert not sentinel.exists()
+
+    @pytest.mark.parametrize(
+        ("pin", "argv"),
+        [
+            (
+                lambda: _stub_pin(),
+                lambda: [
+                    sys.executable,
+                    "-B",
+                    "-I",
+                    str(STUB_PATH.with_name("not-the-pinned-stub.py")),
+                ],
+            ),
+            (
+                lambda: _stub_pin(digest="0" * 64),
+                lambda: _stub_argv(),
+            ),
+            (
+                lambda: _binary_pin(Path(sys.executable)),
+                lambda: ["/bin/false"],
+            ),
+        ],
+    )
+    def test_spawn_pinned_refuses_wrong_prefix_hash_or_binary(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        pin: object,
+        argv: object,
+    ) -> None:
+        monkeypatch.setattr(
+            driver.subprocess,
+            "Popen",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("refusal must precede spawn")
+            ),
+        )
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.spawn_pinned(argv(), pin=pin(), env=_stub_env())  # type: ignore[operator]
+        _assert_refusal(exc, "spawn_failure")
+
+    @pytest.mark.parametrize("mutation", ["replace_inode", "overwrite_in_place"])
+    def test_python_file_executes_sealed_verified_bytes_after_path_mutation(
+        self,
+        mutation: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        target = tmp_path / "pinned-target.py"
+        replacement = tmp_path / "replacement.py"
+        original_ran = tmp_path / "original-ran"
+        impostor_ran = tmp_path / "impostor-ran"
+        port = _free_loopback_port()
+        _write_listener_script(target, original_ran, port)
+        digest = hashlib.sha256(target.read_bytes()).hexdigest()
+        _write_listener_script(replacement, impostor_ran, port)
+        real_guarded_popen = driver._guarded_popen
+        spawned: list[object] = []
+
+        def swap_path_after_verified_open(
+            *args: object, **kwargs: object
+        ) -> object:
+            if mutation == "replace_inode":
+                os.replace(replacement, target)
+            else:
+                target.write_bytes(replacement.read_bytes())
+            return real_guarded_popen(*args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(driver, "_guarded_popen", swap_path_after_verified_open)
+        try:
+            child = driver.spawn_pinned(
+                [sys.executable, "-B", "-I", str(target)],
+                pin=_python_file_pin(target, digest),  # type: ignore[arg-type]
+                env=_stub_env(),
+            )
+            self._register_child_evidence(child)
+            spawned.append(child)
+
+            assert original_ran.exists()
+            assert not impostor_ran.exists()
+            assert child.pinned_path == str(target)  # type: ignore[attr-defined]
+            assert child.pinned_sha256 == digest  # type: ignore[attr-defined]
+            cmdline = Path(f"/proc/{child.pid}/cmdline").read_bytes().split(b"\0")  # type: ignore[attr-defined]
+            fd_argv = [
+                value
+                for value in cmdline
+                if value.startswith(b"/proc/self/fd/")
+            ]
+            assert len(fd_argv) == 1
+            executed_fd = int(fd_argv[0].rsplit(b"/", 1)[1])
+            assert not Path(f"/proc/{child.pid}/fd/{executed_fd}").exists()  # type: ignore[attr-defined]
+            assert os.fsencode(target) not in cmdline
+        finally:
+            for child in spawned:
+                self._test_cleanup(child)
+            assert _wait_for(lambda: driver.RealPortProbe().is_free(port))
+
+    def test_snapshot_is_fully_sealed_before_the_authoritative_hash(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        target = tmp_path / "entry.py"
+        target.write_text("print('sealed')\n", encoding="utf-8")
+        pin = _python_file_pin(target, hashlib.sha256(target.read_bytes()).hexdigest())
+        events: list[str] = []
+        real_fcntl = fcntl.fcntl
+        real_hash_fd = driver._hash_fd
+
+        def recording_fcntl(fd: int, command: int, argument: int = 0) -> int:
+            if command == fcntl.F_ADD_SEALS:
+                events.append("seal")
+            return real_fcntl(fd, command, argument)
+
+        def recording_hash(fd: int) -> str:
+            events.append("hash")
+            return real_hash_fd(fd)
+
+        monkeypatch.setattr(driver.fcntl, "fcntl", recording_fcntl)
+        monkeypatch.setattr(driver, "_hash_fd", recording_hash)
+        snapshot = driver._sealed_executable_snapshot(pin)
+        try:
+            required = (
+                fcntl.F_SEAL_WRITE
+                | fcntl.F_SEAL_GROW
+                | fcntl.F_SEAL_SHRINK
+                | fcntl.F_SEAL_SEAL
+            )
+            assert fcntl.fcntl(snapshot.fd, fcntl.F_GET_SEALS) & required == required
+            assert events == ["seal", "hash"]
+            with pytest.raises(OSError):
+                os.write(snapshot.fd, b"x")
+            with pytest.raises(OSError):
+                os.ftruncate(snapshot.fd, 0)
+            with pytest.raises(OSError):
+                fcntl.fcntl(snapshot.fd, fcntl.F_ADD_SEALS, fcntl.F_SEAL_FUTURE_WRITE)
+        finally:
+            os.close(snapshot.fd)
+
+    def test_memfd_creation_requests_host_executability_and_fails_typed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        target = tmp_path / "entry.py"
+        target.write_text("print('sealed')\n", encoding="utf-8")
+        pin = _python_file_pin(target, hashlib.sha256(target.read_bytes()).hexdigest())
+        real_memfd_create = os.memfd_create
+        observed_flags: list[int] = []
+
+        def recording_create(name: str, flags: int = 0) -> int:
+            observed_flags.append(flags)
+            return real_memfd_create(name, flags)
+
+        monkeypatch.setattr(driver.os, "memfd_create", recording_create)
+        snapshot = driver._sealed_executable_snapshot(pin)
+        os.close(snapshot.fd)
+        assert observed_flags
+        assert observed_flags[0] & driver.MFD_EXEC
+
+        monkeypatch.setattr(
+            driver.os,
+            "memfd_create",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                PermissionError(errno.EACCES, "memfd execution forbidden")
+            ),
+        )
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.spawn_pinned(
+                [sys.executable, "-B", "-I", str(target)],
+                pin=pin,
+                env=_stub_env(),
+            )
+        _assert_refusal(exc, "spawn_failure")
+
+    def test_binary_entry_executes_from_sealed_memfd_on_this_host(self) -> None:
+        executable = Path(sys.executable).resolve()
+        child = driver.spawn_pinned(
+            [str(executable), "-B", "-c", "import time; time.sleep(30)"],
+            pin=_binary_pin(executable),  # type: ignore[arg-type]
+            env=_stub_env(),
+        )
+        self._register_child_evidence(child)
+        try:
+            assert child.pinned_path == str(executable)
+            assert child.pinned_sha256 == hashlib.sha256(executable.read_bytes()).hexdigest()
+            assert os.readlink(f"/proc/{child.pid}/exe").startswith("/memfd:cuda-bench-entry")
+        finally:
+            self._test_cleanup(child)
+
+    def test_closed_verified_fd_refuses_without_executing_or_listening(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        target = tmp_path / "pinned-target.py"
+        sentinel = tmp_path / "target-ran"
+        port = _free_loopback_port()
+        _write_listener_script(target, sentinel, port)
+        digest = hashlib.sha256(target.read_bytes()).hexdigest()
+        real_guarded_popen = driver._guarded_popen
+        spawned: list[object] = []
+
+        def close_verified_fd(*args: object, **kwargs: object) -> object:
+            pinned_fd = kwargs.get("pinned_fd")
+            if type(pinned_fd) is int:
+                os.close(pinned_fd)
+            return real_guarded_popen(*args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(driver, "_guarded_popen", close_verified_fd)
+        try:
+            with pytest.raises(driver.BenchRefusal) as exc:
+                child = driver.spawn_pinned(
+                    [sys.executable, "-B", "-I", str(target)],
+                    pin=_python_file_pin(target, digest),  # type: ignore[arg-type]
+                    env=_stub_env(),
+                )
+                self._register_child_evidence(child)
+                spawned.append(child)
+            _assert_refusal(exc, "spawn_failure")
+            assert not sentinel.exists()
+            assert driver.RealPortProbe().is_free(port)
+        finally:
+            for child in spawned:
+                self._test_cleanup(child)
+            assert _wait_for(lambda: driver.RealPortProbe().is_free(port))
+
+    def test_pidfd_open_failure_closes_gate_without_executing_target(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sentinel = tmp_path / "target-executed"
+        shell = Path("/bin/sh")
+        captured: list[subprocess.Popen[bytes]] = []
+        real_popen = self._test_popen
+
+        def recording_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+            proc = real_popen(*args, **kwargs)  # type: ignore[arg-type]
+            captured.append(proc)
+            return proc
+
+        monkeypatch.setattr(driver.subprocess, "Popen", recording_popen)
+        monkeypatch.setattr(
+            driver.os,
+            "pidfd_open",
+            lambda _pid: (_ for _ in ()).throw(OSError(errno.EMFILE, "fd limit")),
+        )
+
+        argv = [str(shell), "-c", f"touch {sentinel}"]
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.spawn_pinned(argv, pin=_binary_pin(shell), env=_stub_env())
+        _assert_refusal(exc, "spawn_failure")
+
+        assert len(captured) == 1
+        guard = captured[0]
+        assert guard.wait(timeout=2) == 0
+        assert not sentinel.exists()
+        assert not Path(f"/proc/{guard.pid}").exists()
+
+    def test_pidfd_open_decoy_is_rejected_before_target_execution(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sentinel = tmp_path / "target-executed"
+        shell = Path("/bin/sh")
+        decoy = self._test_popen(
+            [sys.executable, "-B", "-c", "import time; time.sleep(30)"],
+            start_new_session=True,
+        )
+        captured: list[subprocess.Popen[bytes]] = []
+        real_popen = self._test_popen
+        real_pidfd_open = os.pidfd_open
+
+        def recording_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+            proc = real_popen(*args, **kwargs)  # type: ignore[arg-type]
+            captured.append(proc)
+            return proc
+
+        monkeypatch.setattr(driver.subprocess, "Popen", recording_popen)
+        monkeypatch.setattr(
+            driver.os,
+            "pidfd_open",
+            lambda _pid: real_pidfd_open(decoy.pid),
+        )
+        try:
+            with pytest.raises(driver.BenchRefusal) as exc:
+                driver.spawn_pinned(
+                    [str(shell), "-c", f"touch {sentinel}"],
+                    pin=_binary_pin(shell),  # type: ignore[arg-type]
+                    env=_stub_env(),
+                )
+            _assert_refusal(exc, "spawn_failure")
+            assert len(captured) == 1
+            assert captured[0].wait(timeout=2) == 0
+            assert decoy.poll() is None
+            assert not sentinel.exists()
+        finally:
+            if decoy.poll() is None:
+                decoy.kill()
+                decoy.wait(timeout=2)
+
+    def test_second_pipe_failure_closes_first_pipe_pair(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        real_pipe2 = os.pipe2
+        opened: list[int] = []
+        calls = 0
+
+        def fail_second_pipe(flags: int) -> tuple[int, int]:
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError(errno.EMFILE, "fd limit")
+            pair = real_pipe2(flags)
+            opened.extend(pair)
+            return pair
+
+        monkeypatch.setattr(driver.os, "pipe2", fail_second_pipe)
+        try:
+            with pytest.raises(driver.BenchRefusal) as exc:
+                driver.spawn_pinned(
+                    ["/bin/true"],
+                    pin=_binary_pin(Path("/bin/true")),  # type: ignore[arg-type]
+                    env=_stub_env(),
+                )
+            _assert_refusal(exc, "spawn_failure")
+            assert len(opened) == 2
+            for fd in opened:
+                with pytest.raises(OSError):
+                    os.fstat(fd)
+        finally:
+            for fd in opened:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+
+    @pytest.mark.parametrize("signum", [signal.SIGINT, signal.SIGTERM])
+    def test_interrupt_between_guard_spawn_and_pidfd_keeps_guard_inert(
+        self,
+        signum: int,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        sentinel = tmp_path / "target-executed"
+        shell = Path("/bin/sh")
+        captured: list[subprocess.Popen[bytes]] = []
+        real_popen = self._test_popen
+        real_pidfd_open = os.pidfd_open
+        old_handler = signal.getsignal(signum)
+
+        def recording_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+            proc = real_popen(*args, **kwargs)  # type: ignore[arg-type]
+            captured.append(proc)
+            return proc
+
+        def interrupt_before_pidfd(pid: int) -> int:
+            signal.raise_signal(signum)
+            return real_pidfd_open(pid)
+
+        signal.signal(signum, signal.default_int_handler)
+        monkeypatch.setattr(driver.subprocess, "Popen", recording_popen)
+        monkeypatch.setattr(driver.os, "pidfd_open", interrupt_before_pidfd)
+        try:
+            with pytest.raises(KeyboardInterrupt):
+                driver.spawn_pinned(
+                    [str(shell), "-c", f"touch {sentinel}"],
+                    pin=_binary_pin(shell),  # type: ignore[arg-type]
+                    env=_stub_env(),
+                )
+            assert len(captured) == 1
+            assert _wait_for(lambda: captured[0].poll() is not None, timeout=0.25)
+            assert captured[0].returncode == 0
+            assert not sentinel.exists()
+        finally:
+            signal.signal(signum, old_handler)
+            for guard in captured:
+                if guard.poll() is None:
+                    guard.kill()
+                    guard.wait(timeout=2)
+                for stream_name in ("stdin", "stdout", "stderr"):
+                    stream = getattr(guard, stream_name, None)
+                    if stream is not None and not stream.closed:
+                        stream.close()
+
+    @pytest.mark.parametrize("signum", [signal.SIGINT, signal.SIGTERM])
+    def test_interrupt_after_guard_helper_return_is_still_cleanup_owned(
+        self,
+        signum: int,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        sentinel = tmp_path / "target-executed"
+        shell = Path("/bin/sh")
+        captured: list[subprocess.Popen[bytes]] = []
+        real_popen = self._test_popen
+        real_guarded_popen = driver._guarded_popen
+        old_handler = signal.getsignal(signum)
+
+        def recording_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+            proc = real_popen(*args, **kwargs)  # type: ignore[arg-type]
+            captured.append(proc)
+            return proc
+
+        def interrupt_after_return(*args: object, **kwargs: object) -> object:
+            result = real_guarded_popen(*args, **kwargs)  # type: ignore[arg-type]
+            signal.raise_signal(signum)
+            return result
+
+        signal.signal(signum, signal.default_int_handler)
+        monkeypatch.setattr(driver.subprocess, "Popen", recording_popen)
+        monkeypatch.setattr(driver, "_guarded_popen", interrupt_after_return)
+        try:
+            with pytest.raises(KeyboardInterrupt):
+                driver.spawn_pinned(
+                    [str(shell), "-c", f"touch {sentinel}"],
+                    pin=_binary_pin(shell),  # type: ignore[arg-type]
+                    env=_stub_env(),
+                )
+            assert len(captured) == 1
+            assert _wait_for(lambda: captured[0].poll() is not None, timeout=0.25)
+            assert captured[0].returncode == 0
+            assert not sentinel.exists()
+        finally:
+            signal.signal(signum, old_handler)
+            for guard in captured:
+                if guard.poll() is None:
+                    guard.kill()
+                    guard.wait(timeout=2)
+                for stream_name in ("stdin", "stdout", "stderr"):
+                    stream = getattr(guard, stream_name, None)
+                    if stream is not None and not stream.closed:
+                        stream.close()
+
+    def test_post_pidfd_identity_failure_uses_only_pidfd_and_leaves_no_listener(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured: list[subprocess.Popen[bytes]] = []
+        announced: list[int] = []
+        sent: list[int] = []
+        real_popen = self._test_popen
+        real_announcement = driver._read_stub_announcement
+        real_pidfd_signal = signal.pidfd_send_signal
+
+        def recording_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+            proc = real_popen(*args, **kwargs)  # type: ignore[arg-type]
+            captured.append(proc)
+            return proc
+
+        def recording_announcement(proc: subprocess.Popen[bytes]) -> int:
+            port = real_announcement(proc)
+            announced.append(port)
+            return port
+
+        def recording_signal(
+            pidfd: int,
+            signum: int,
+            siginfo: object = None,
+            flags: int = 0,
+        ) -> None:
+            sent.append(signum)
+            real_pidfd_signal(pidfd, signum, siginfo, flags)
+
+        monkeypatch.setattr(driver.subprocess, "Popen", recording_popen)
+        monkeypatch.setattr(driver, "_read_stub_announcement", recording_announcement)
+        monkeypatch.setattr(
+            driver,
+            "_capture_target_identity",
+            lambda _pid: (_ for _ in ()).throw(OSError("identity unavailable")),
+        )
+        monkeypatch.setattr(driver.signal, "pidfd_send_signal", recording_signal)
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            self._launcher().spawn(_stub_argv(), _stub_env())  # type: ignore[attr-defined]
+        _assert_refusal(exc, "spawn_failure")
+
+        assert announced and len(captured) == 1
+        assert sent == [signal.SIGKILL]
+        assert captured[0].wait(timeout=2) == -signal.SIGKILL
+        assert _wait_for(lambda: driver.RealPortProbe().is_free(announced[0]))
+        assert not Path(f"/proc/{captured[0].pid}").exists()
+
+    def test_bootstrap_signal_failure_reports_cleanup_incomplete_not_spawn_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured: list[subprocess.Popen[bytes]] = []
+        announced: list[int] = []
+        real_popen = self._test_popen
+        real_announcement = driver._read_stub_announcement
+
+        def recording_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+            proc = real_popen(*args, **kwargs)  # type: ignore[arg-type]
+            captured.append(proc)
+            return proc
+
+        def recording_announcement(proc: subprocess.Popen[bytes]) -> int:
+            port = real_announcement(proc)
+            announced.append(port)
+            return port
+
+        monkeypatch.setattr(driver.subprocess, "Popen", recording_popen)
+        monkeypatch.setattr(driver, "_read_stub_announcement", recording_announcement)
+        monkeypatch.setattr(
+            driver,
+            "_capture_target_identity",
+            lambda _pid: (_ for _ in ()).throw(OSError("identity unavailable")),
+        )
+        monkeypatch.setattr(
+            driver.signal,
+            "pidfd_send_signal",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("signal failed")),
+        )
+        monkeypatch.setattr(driver, "KILL_WAIT_S", 0.05)
+        try:
+            with pytest.raises(driver.BenchRefusal) as exc:
+                self._launcher().spawn(_stub_argv(), _stub_env())  # type: ignore[attr-defined]
+            _assert_refusal(exc, "cleanup_incomplete")
+            assert len(captured) == 1 and announced
+            assert captured[0].poll() is None
+            assert _health(announced[0])
+        finally:
+            for proc in captured:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait(timeout=2)
+                for stream_name in ("stdin", "stdout", "stderr"):
+                    stream = getattr(proc, stream_name, None)
+                    if stream is not None and not stream.closed:
+                        stream.close()
+            if announced:
+                assert _wait_for(lambda: driver.RealPortProbe().is_free(announced[0]))
+
+    def test_identity_capture_follows_exec_proof_and_uses_target_executable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        order: list[str] = []
+        real_announcement = driver._read_stub_announcement
+        real_capture = driver._capture_target_identity
+
+        def announcement(proc: subprocess.Popen[bytes]) -> int:
+            port = real_announcement(proc)
+            order.append("target-announced")
+            return port
+
+        def capture(pid: int) -> tuple[int, int, str]:
+            order.append("identity-captured")
+            return real_capture(pid)
+
+        monkeypatch.setattr(driver, "_read_stub_announcement", announcement)
+        monkeypatch.setattr(driver, "_capture_target_identity", capture)
+        child = self._spawn_stub()
+        try:
+            assert order == ["target-announced", "identity-captured"]
+            assert child.pinned_sha256 == STUB_SHA256
+            assert child.exe_sha256 == hashlib.sha256(
+                Path(sys.executable).resolve().read_bytes()
+            ).hexdigest()
+        finally:
+            self._test_cleanup(child)
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            b"not-the-announcement\n",
+            b"STUB_LISTENING port=" + b"9" * 200 + b"\n",
+        ],
+    )
+    def test_stub_announcement_is_exact_and_bounded(self, payload: bytes) -> None:
+        proc = self._test_popen(
+            [sys.executable, "-B", "-c", f"import os; os.write(1, {payload!r})"],
+            stdout=subprocess.PIPE,
+        )
+        try:
+            with pytest.raises(driver.BenchRefusal) as exc:
+                driver._read_stub_announcement(proc)
+            _assert_refusal(exc, "spawn_failure")
+        finally:
+            proc.wait(timeout=2)
+            assert proc.stdout is not None
+            proc.stdout.close()
+
+    def test_stub_announcement_timeout_is_bounded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        proc = self._test_popen(
+            [sys.executable, "-B", "-c", "import time; time.sleep(30)"],
+            stdout=subprocess.PIPE,
+        )
+        monkeypatch.setattr(driver, "READINESS_TIMEOUT_S", 0.05)
+        try:
+            with pytest.raises(driver.BenchRefusal) as exc:
+                driver._read_stub_announcement(proc)
+            _assert_refusal(exc, "spawn_failure")
+        finally:
+            proc.kill()
+            proc.wait(timeout=2)
+            assert proc.stdout is not None
+            proc.stdout.close()
+
+    def test_hardened_absolute_stub_ignores_hostile_cwd_and_pythonpath(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        decoy_root = tmp_path / "decoy"
+        decoy_module = decoy_root / "scripts" / "cuda_bench_stub.py"
+        decoy_module.parent.mkdir(parents=True)
+        sentinel = tmp_path / "decoy-ran"
+        decoy_module.write_text(f"from pathlib import Path\nPath({str(sentinel)!r}).touch()\n")
+        monkeypatch.chdir(decoy_root)
+
+        child = self._launcher().spawn(  # type: ignore[attr-defined]
+            _stub_argv(), _stub_env(PYTHONPATH=str(decoy_root))
+        )
+        self._register_child_evidence(child)
+        try:
+            assert child.port != driver.BENCH_PORT
+            assert _health(child.port)
+            assert not sentinel.exists()
+        finally:
+            try:
+                result = driver.finalize(
+                    child,
+                    clock=driver.SystemClock(),
+                    port_probe=driver.RealPortProbe(),
+                    port=child.port,
+                )
+                assert result.outcome == "clean"
+            finally:
+                self._test_cleanup(child)
+
+    def test_same_pid_pidfd_survives_exec_and_terminates_ready_stub(self) -> None:
+        child = self._spawn_stub()
+        try:
+            pidfd_poll = select.poll()
+            pidfd_poll.register(
+                child.pidfd, select.POLLIN | select.POLLHUP | select.POLLERR
+            )
+            assert child.pid == child.pgid
+            assert driver._pgid_members(child.pgid) == [child.pid]
+            assert pidfd_poll.poll(0) == []
+            assert _health(child.port)
+
+            result = driver.finalize(
+                child,
+                clock=driver.SystemClock(),
+                port_probe=driver.RealPortProbe(),
+                port=child.port,
+            )
+
+            assert result.outcome == "clean"
+            assert result.signals_sent == ("SIGTERM",)
+            assert result.quadruple_reproofs == 1
+            assert result.surviving_pgid_members == ()
+            assert result.listener_free is True
+            assert _wait_for(lambda: not _health(child.port))
+        finally:
+            self._test_cleanup(child)
+
+    def test_clock_failure_cannot_prevent_process_and_listener_cleanup(self) -> None:
+        class BrokenClock:
+            tier = "rehearsal"
+
+            def now_utc(self) -> str:
+                raise OSError("clock unavailable")
+
+            def monotonic(self) -> float:
+                return time.monotonic()
+
+        child = self._spawn_stub()
+        try:
+            result = driver.finalize(
+                child,
+                clock=BrokenClock(),  # type: ignore[arg-type]
+                port_probe=driver.RealPortProbe(),
+                port=child.port,
+            )
+            assert result.outcome == "cleanup_incomplete"
+            assert result.signals_sent == ("SIGTERM",)
+            assert result.surviving_pgid_members == ()
+            assert result.listener_free is True
+            assert child.popen.poll() is not None
+            assert _wait_for(lambda: not _health(child.port))
+        finally:
+            self._test_cleanup(child)
+
+    def test_test_cleanup_never_closes_reused_child_pidfd_number(self) -> None:
+        child = self._spawn_stub()
+        original_record = next(
+            record
+            for record in self._lease_for_popen(child.popen).product_pidfds
+            if record[0] == child.pidfd
+        )
+        result = driver.finalize(
+            child,
+            clock=driver.SystemClock(),
+            port_probe=driver.RealPortProbe(),
+            port=child.port,
+        )
+        assert result.outcome == "clean"
+
+        sentinel = os.open("/dev/null", os.O_RDONLY | os.O_CLOEXEC)
+        if sentinel != child.pidfd:
+            os.dup2(sentinel, child.pidfd)
+            os.close(sentinel)
+            sentinel = child.pidfd
+        try:
+            assert self._close_product_pidfd_if_owned(*original_record) is False
+            os.fstat(sentinel)
+        finally:
+            os.close(sentinel)
+
+    def test_test_cleanup_never_closes_reused_gone_pidfd(self) -> None:
+        child = self._spawn_stub()
+        original_record = next(
+            record
+            for record in self._lease_for_popen(child.popen).product_pidfds
+            if record[0] == child.pidfd
+        )
+        result = driver.finalize(
+            child,
+            clock=driver.SystemClock(),
+            port_probe=driver.RealPortProbe(),
+            port=child.port,
+        )
+        assert result.outcome == "clean"
+
+        unrelated = self._test_popen([sys.executable, "-B", "-c", "pass"])
+        unrelated_pidfd = os.pidfd_open(unrelated.pid)
+        os.dup2(unrelated_pidfd, child.pidfd)
+        if unrelated_pidfd != child.pidfd:
+            os.close(unrelated_pidfd)
+        assert unrelated.wait(timeout=2) == 0
+        try:
+            assert driver._pidfd_bound_pid(child.pidfd) == ("gone", None)
+            assert self._close_product_pidfd_if_owned(*original_record) is False
+            os.fstat(child.pidfd)
+        finally:
+            try:
+                os.close(child.pidfd)
+            except OSError:
+                pass
+
+    def test_stubborn_child_is_reproved_before_pidfd_sigkill(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        child = self._spawn_stubborn_binary(tmp_path)
+        monkeypatch.setattr(driver, "SIGTERM_GRACE_S", 0.05)
+        try:
+            result = driver.finalize(
+                child,
+                clock=driver.SystemClock(),
+                port_probe=driver.RealPortProbe(),
+                port=None,
+            )
+
+            assert result.outcome == "clean"
+            assert result.signals_sent == ("SIGTERM", "SIGKILL")
+            assert result.quadruple_reproofs == 2
+            assert result.surviving_pgid_members == ()
+            assert child.popen.returncode == -signal.SIGKILL
+        finally:
+            self._test_cleanup(child)
+
+    def test_identity_drift_after_sigterm_withholds_pidfd_sigkill(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        child = self._spawn_stubborn_binary(tmp_path)
+        real_identity_proof = driver._identity_proof
+        reproof_calls = 0
+
+        def identity_drifts_after_term(observed: object) -> str:
+            nonlocal reproof_calls
+            reproof_calls += 1
+            if reproof_calls == 1:
+                return real_identity_proof(observed)  # type: ignore[arg-type]
+            return "mismatch"
+
+        monkeypatch.setattr(driver, "SIGTERM_GRACE_S", 0.05)
+        monkeypatch.setattr(driver, "_identity_proof", identity_drifts_after_term)
+        try:
+            result = driver.finalize(
+                child,
+                clock=driver.SystemClock(),
+                port_probe=driver.RealPortProbe(),
+                port=None,
+            )
+
+            assert result.outcome == "pid_reuse_detected"
+            assert result.signals_sent == ("SIGTERM",)
+            assert result.quadruple_reproofs == 2
+            assert result.surviving_pgid_members == (child.pid,)
+            assert child.popen.poll() is None
+        finally:
+            if child.popen.poll() is None:
+                child.popen.kill()
+                child.popen.wait(timeout=2)
+            self._test_cleanup(child)
+
+    def test_pidfd_swap_after_sigterm_cannot_redirect_sigkill(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        child = self._spawn_stubborn_binary(tmp_path)
+        decoy = self._test_popen(
+            [sys.executable, "-B", "-c", "import time; time.sleep(30)"],
+            start_new_session=True,
+        )
+        decoy_pidfd = os.pidfd_open(decoy.pid)
+        self._register_owned_fd(decoy, decoy_pidfd)
+        real_signal = signal.pidfd_send_signal
+
+        def swap_after_term(
+            pidfd: int,
+            signum: int,
+            siginfo: object = None,
+            flags: int = 0,
+        ) -> None:
+            real_signal(pidfd, signum, siginfo, flags)
+            if signum == signal.SIGTERM:
+                os.dup2(decoy_pidfd, child.pidfd)
+
+        monkeypatch.setattr(driver, "SIGTERM_GRACE_S", 0.05)
+        monkeypatch.setattr(driver.signal, "pidfd_send_signal", swap_after_term)
+        try:
+            result = driver.finalize(
+                child,
+                clock=driver.SystemClock(),
+                port_probe=driver.RealPortProbe(),
+                port=None,
+            )
+            assert result.outcome == "pid_reuse_detected"
+            assert result.signals_sent == ("SIGTERM",)
+            assert result.quadruple_reproofs == 2
+            assert child.popen.poll() is None
+            assert decoy.poll() is None
+        finally:
+            if child.popen.poll() is None:
+                child.popen.kill()
+                child.popen.wait(timeout=2)
+            if decoy.poll() is None:
+                decoy.kill()
+                decoy.wait(timeout=2)
+            self._test_cleanup(child)
+
+    @pytest.mark.parametrize("tamper", ["start_time_ticks", "exe_sha256"])
+    def test_live_identity_tamper_sends_nothing_and_leaves_stub_healthy(
+        self, tamper: str
+    ) -> None:
+        child = self._spawn_stub()
+        bad = replace(
+            child,
+            **(
+                {"start_time_ticks": child.start_time_ticks + 1}
+                if tamper == "start_time_ticks"
+                else {"exe_sha256": "0" * 64}
+            ),
+        )
+        try:
+            result = driver.finalize(
+                bad,
+                clock=driver.SystemClock(),
+                port_probe=driver.RealPortProbe(),
+                port=child.port,
+            )
+            assert result.outcome == "pid_reuse_detected"
+            assert result.signals_sent == ()
+            assert result.quadruple_reproofs == 1
+            assert _health(child.port)
+        finally:
+            self._test_cleanup(child)
+
+    def test_pidfd_must_name_same_pid_as_reproved_quadruple(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        first = self._test_popen(
+            [sys.executable, "-B", "-c", "import time; time.sleep(30)"],
+            start_new_session=True,
+        )
+        second = self._test_popen(
+            [sys.executable, "-B", "-c", "import time; time.sleep(30)"],
+            start_new_session=True,
+        )
+        second_pidfd = os.pidfd_open(second.pid)
+        self._register_owned_fd(second, second_pidfd)
+        pgid, start_time_ticks, exe_sha256 = _test_process_identity(first.pid)
+        mixed = driver.OwnedChild(
+            pid=first.pid,
+            pgid=pgid,
+            pidfd=second_pidfd,
+            start_time_ticks=start_time_ticks,
+            pinned_path=str(Path(sys.executable).resolve()),
+            pinned_sha256=exe_sha256,
+            exe_sha256=exe_sha256,
+            port=None,
+            popen=first,
+        )
+        monkeypatch.setattr(driver, "KILL_WAIT_S", 0.05)
+        try:
+            result = driver.finalize(
+                mixed,
+                clock=driver.SystemClock(),
+                port_probe=driver.RealPortProbe(),
+                port=None,
+            )
+
+            assert result.outcome == "pid_reuse_detected"
+            assert result.signals_sent == ()
+            assert result.quadruple_reproofs == 1
+            assert first.poll() is None
+            assert second.poll() is None
+        finally:
+            for proc in (first, second):
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait(timeout=2)
+
+    def test_unavailable_identity_proof_is_cleanup_incomplete_not_pid_reuse(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        child = self._spawn_stub()
+        monkeypatch.setattr(
+            driver,
+            "_capture_target_identity",
+            lambda _pid: (_ for _ in ()).throw(OSError("proc unavailable")),
+        )
+        try:
+            result = driver.finalize(
+                child,
+                clock=driver.SystemClock(),
+                port_probe=driver.RealPortProbe(),
+                port=child.port,
+            )
+            assert result.outcome == "cleanup_incomplete"
+            assert result.signals_sent == ()
+            assert result.quadruple_reproofs == 1
+            assert _health(child.port)
+        finally:
+            self._test_cleanup(child)
+
+    def test_vanished_leader_is_clean_without_signal(self) -> None:
+        proc = self._test_popen(
+            [sys.executable, "-B", "-c", "import sys; sys.stdin.read(1)"],
+            stdin=subprocess.PIPE,
+            start_new_session=True,
+        )
+        pidfd = os.pidfd_open(proc.pid)
+        self._register_owned_fd(proc, pidfd)
+        pgid, start_time_ticks, exe_sha256 = _test_process_identity(proc.pid)
+        child = driver.OwnedChild(
+            pid=proc.pid,
+            pgid=pgid,
+            pidfd=pidfd,
+            start_time_ticks=start_time_ticks,
+            pinned_path=str(Path(sys.executable).resolve()),
+            pinned_sha256=exe_sha256,
+            exe_sha256=exe_sha256,
+            port=None,
+            popen=proc,
+        )
+        assert proc.stdin is not None
+        proc.stdin.write(b"x")
+        proc.stdin.close()
+        assert proc.wait(timeout=2) == 0
+
+        result = driver.finalize(
+            child,
+            clock=driver.SystemClock(),
+            port_probe=driver.RealPortProbe(),
+            port=None,
+        )
+        assert result.outcome == "clean"
+        assert result.signals_sent == ()
+        assert result.quadruple_reproofs == 0
+
+    def test_leader_gone_group_remains_is_observed_never_signalled(self) -> None:
+        code = (
+            "import subprocess,sys; "
+            "p=subprocess.Popen([sys.executable,'-B','-c',"
+            "'import time; time.sleep(30)']); "
+            "print(p.pid, flush=True); sys.stdin.read(1)"
+        )
+        proc = self._test_popen(
+            [sys.executable, "-B", "-c", code],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        pidfd = os.pidfd_open(proc.pid)
+        self._register_owned_fd(proc, pidfd)
+        pgid, start_time_ticks, exe_sha256 = _test_process_identity(proc.pid)
+        assert proc.stdout is not None
+        grandchild = int(proc.stdout.readline().strip())
+        grandchild_lease = self._register_test_pid(grandchild)
+        child = driver.OwnedChild(
+            pid=proc.pid,
+            pgid=pgid,
+            pidfd=pidfd,
+            start_time_ticks=start_time_ticks,
+            pinned_path=str(Path(sys.executable).resolve()),
+            pinned_sha256=exe_sha256,
+            exe_sha256=exe_sha256,
+            port=None,
+            popen=proc,
+        )
+        try:
+            assert proc.stdin is not None
+            proc.stdin.write("x")
+            proc.stdin.close()
+            assert proc.wait(timeout=2) == 0
+            assert Path(f"/proc/{grandchild}").exists()
+
+            result = driver.finalize(
+                child,
+                clock=driver.SystemClock(),
+                port_probe=driver.RealPortProbe(),
+                port=None,
+            )
+            assert result.outcome == "cleanup_incomplete"
+            assert result.signals_sent == ()
+            assert grandchild in result.surviving_pgid_members
+            assert Path(f"/proc/{grandchild}").exists()
+        finally:
+            try:
+                self._test_pidfd_signal(grandchild_lease.pidfd, signal.SIGKILL)
+            except (OSError, ProcessLookupError):
+                pass
+            _wait_for(lambda: not Path(f"/proc/{grandchild}").exists())
+            if proc.stdout is not None:
+                proc.stdout.close()
+
+    def test_live_leader_with_unexpected_group_member_is_never_signalled(self) -> None:
+        code = (
+            "import subprocess,sys,time; "
+            "p=subprocess.Popen([sys.executable,'-B','-c',"
+            "'import time; time.sleep(30)']); "
+            "print(p.pid, flush=True); time.sleep(30)"
+        )
+        proc = self._test_popen(
+            [sys.executable, "-B", "-c", code],
+            stdout=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        pidfd = os.pidfd_open(proc.pid)
+        self._register_owned_fd(proc, pidfd)
+        pgid, start_time_ticks, exe_sha256 = _test_process_identity(proc.pid)
+        assert proc.stdout is not None
+        grandchild = int(proc.stdout.readline().strip())
+        grandchild_lease = self._register_test_pid(grandchild)
+        child = driver.OwnedChild(
+            pid=proc.pid,
+            pgid=pgid,
+            pidfd=pidfd,
+            start_time_ticks=start_time_ticks,
+            pinned_path=str(Path(sys.executable).resolve()),
+            pinned_sha256=exe_sha256,
+            exe_sha256=exe_sha256,
+            port=None,
+            popen=proc,
+        )
+        try:
+            assert proc.poll() is None
+            assert Path(f"/proc/{grandchild}").exists()
+
+            result = driver.finalize(
+                child,
+                clock=driver.SystemClock(),
+                port_probe=driver.RealPortProbe(),
+                port=None,
+            )
+
+            assert result.outcome == "cleanup_incomplete"
+            assert result.signals_sent == ()
+            assert result.quadruple_reproofs == 0
+            assert result.surviving_pgid_members == (proc.pid, grandchild)
+            assert proc.poll() is None
+            assert Path(f"/proc/{grandchild}").exists()
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=2)
+            try:
+                self._test_pidfd_signal(grandchild_lease.pidfd, signal.SIGKILL)
+            except (OSError, ProcessLookupError):
+                pass
+            _wait_for(lambda: not Path(f"/proc/{grandchild}").exists())
+            if proc.stdout is not None and not proc.stdout.closed:
+                proc.stdout.close()
+
+    def test_real_launcher_refuses_port_evidence_not_equal_to_18080(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        launcher = driver.RealServerLauncher(_binary_pin(Path(sys.executable)))
+        monkeypatch.setattr(
+            driver,
+            "spawn_pinned",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("port validation must precede spawn")
+            ),
+        )
+        with pytest.raises(driver.BenchRefusal) as exc:
+            launcher.spawn(
+                [sys.executable, "-B", "-c", "pass", "--port", "18081"],
+                _stub_env(),
+            )
+        _assert_refusal(exc, "spawn_failure")
+
+    def test_real_launcher_binds_post_exec_binary_and_exact_port(self) -> None:
+        executable = Path(sys.executable)
+        launcher = driver.RealServerLauncher(_binary_pin(executable))
+        child = launcher.spawn(
+            [
+                sys.executable,
+                "-B",
+                "-c",
+                "import time; time.sleep(30)",
+                "--port",
+                str(driver.BENCH_PORT),
+            ],
+            _stub_env(),
+        )
+        self._register_child_evidence(child)
+        try:
+            assert child.port == driver.BENCH_PORT
+            assert child.exe_sha256 == child.pinned_sha256
+            result = driver.finalize(
+                child,
+                clock=driver.SystemClock(),
+                port_probe=driver.RealPortProbe(),
+                port=None,
+            )
+            assert result.outcome == "clean"
+            assert result.signals_sent == ("SIGTERM",)
+        finally:
+            self._test_cleanup(child)
+
+    @pytest.mark.parametrize(
+        ("tier", "expected_type"),
+        [
+            ("production", "RealServerLauncher"),
+            ("rehearsal", "RehearsalServerLauncher"),
+        ],
+    )
+    def test_factory_returns_concrete_launcher(
+        self, tier: str, expected_type: str
+    ) -> None:
+        components = _provider_components(tier)
+        factory = driver.production_tier if tier == "production" else driver.rehearsal_tier
+        providers = factory(**components)
+        assert type(providers.server_launcher).__name__ == expected_type
+
+    @pytest.mark.parametrize("tier", ["production", "rehearsal"])
+    def test_factory_rejects_same_tier_launcher_impostor(self, tier: str) -> None:
+        class UnsafeLauncher:
+            def __init__(self, claimed_tier: str) -> None:
+                self.tier = claimed_tier
+
+            def spawn(self, argv: list[str], env: dict[str, str]) -> object:
+                raise AssertionError("unsafe launcher must never enter provider set")
+
+        components = _provider_components(tier)
+        components["server_launcher"] = UnsafeLauncher(tier)
+        factory = driver.production_tier if tier == "production" else driver.rehearsal_tier
+        with pytest.raises(driver.BenchRefusal) as exc:
+            factory(**components)
+        _assert_refusal(exc, "tier_mismatch")
+
+    def test_production_finalizer_never_constructs_group_signal(self) -> None:
+        source = Path("scripts/cuda_bench_driver.py").read_text()
+        assert "killpg" not in source
+        assert "os.kill(" not in source
 
 
 class TestAuthorizationArtifacts:

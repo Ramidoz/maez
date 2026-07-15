@@ -8,7 +8,7 @@ import shlex
 import subprocess
 import tempfile
 import unittest
-from dataclasses import FrozenInstanceError, replace
+from dataclasses import FrozenInstanceError, fields as dataclass_fields, replace
 from pathlib import Path
 
 from scripts import cuda_migration as cm
@@ -2793,6 +2793,19 @@ def _phase_packet(phase: str = "vulkan_baseline") -> cm.PhasePacket:
         order_sha256=ORDER_SHA,
         effective_args_sha256=SHA_D,
         driver_package_sha256=SHA_E,
+        pinned_path=str(
+            (
+                cm.VULKAN_RELEASE_ROOT
+                if phase == "vulkan_baseline"
+                else cm.CUDA_RELEASE_ROOT
+            )
+            / "llama-server"
+        ),
+        pinned_sha256=(
+            cm.FROZEN_VULKAN_RUNTIME_SHA256
+            if phase == "vulkan_baseline"
+            else SHA_B
+        ),
         authorization_preimage_sha256=SHA_A,
         consumption_receipt_sha256=SHA_B,
         static_preflight_sha256=SHA_C,
@@ -2825,6 +2838,8 @@ def _phase_packet_fields(packet: cm.PhasePacket) -> dict[str, object]:
         "order_sha256": packet.order_sha256,
         "effective_args_sha256": packet.effective_args_sha256,
         "driver_package_sha256": packet.driver_package_sha256,
+        "pinned_path": packet.pinned_path,
+        "pinned_sha256": packet.pinned_sha256,
         "authorization_preimage_sha256": packet.authorization_preimage_sha256,
         "consumption_receipt_sha256": packet.consumption_receipt_sha256,
         "static_preflight_sha256": packet.static_preflight_sha256,
@@ -3065,6 +3080,46 @@ class PhaseStatisticsTests(unittest.TestCase):
 
 
 class PhasePacketTests(unittest.TestCase):
+    def test_schema_v2_carries_entry_executable_pin_evidence(self) -> None:
+        self.assertEqual("cuda_bench_driver.phase_packet.v2", cm.PHASE_PACKET_SCHEMA)
+        self.assertEqual(
+            {"pinned_path", "pinned_sha256"},
+            {field.name for field in dataclass_fields(cm.PhasePacket)}
+            & {"pinned_path", "pinned_sha256"},
+        )
+
+    def test_pin_evidence_is_entry_executable_only_and_path_is_canonical(self) -> None:
+        packet = _phase_packet()
+        field_map = {
+            field.name: field for field in dataclass_fields(cm.PhasePacket)
+        }
+        self.assertEqual(
+            "entry_executable_content_only",
+            field_map["pinned_sha256"].metadata["scope"],
+        )
+        self.assertNotEqual(
+            packet.pinned_sha256,
+            cm.FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256,
+        )
+        for invalid in (
+            "relative/llama-server",
+            "/proc/self/fd/17",
+            [str(cm.VULKAN_RELEASE_ROOT / "llama-server")],
+        ):
+            with self.subTest(invalid=invalid):
+                with self.assertRaisesRegex(ValueError, "canonical_asset_path"):
+                    replace(packet, pinned_path=invalid)
+
+    def test_pin_path_and_hash_are_binding_fields(self) -> None:
+        packet = _phase_packet()
+        moved = replace(
+            packet,
+            pinned_path=str(cm.CUDA_RELEASE_ROOT / "llama-server"),
+        )
+        rehashed = replace(packet, pinned_sha256=SHA_E)
+        self.assertNotEqual(packet.binding_sha256, moved.binding_sha256)
+        self.assertNotEqual(packet.binding_sha256, rehashed.binding_sha256)
+
     def test_valid_packet_binds_all_preimages(self) -> None:
         packet = _phase_packet()
         cm._validate_sha256(packet.binding_sha256)
@@ -3308,6 +3363,16 @@ class PhasePacketTests(unittest.TestCase):
 
 
 class PhasePacketPersistenceTests(unittest.TestCase):
+    def test_phase_packet_v1_schema_is_retired(self) -> None:
+        packet = _phase_packet()
+        encoded = PersistedDocTests.wrapper(
+            "cuda_bench_driver.phase_packet.v1",
+            packet,
+            _phase_packet_fields(packet),
+        )
+        with self.assertRaisesRegex(ValueError, "persisted_schema_unknown"):
+            cm.PersistedDoc(encoded)
+
     def test_phase_packet_round_trips_through_the_single_decoder(self) -> None:
         packet = _phase_packet()
         encoded = PersistedDocTests.wrapper(
@@ -3327,7 +3392,24 @@ class PhasePacketPersistenceTests(unittest.TestCase):
             cm.RuntimeBackendWitness,
         )
         self.assertEqual(packet.binding_sha256, persisted.obj.binding_sha256)
+        self.assertEqual(packet.pinned_path, persisted.obj.pinned_path)
+        self.assertEqual(packet.pinned_sha256, persisted.obj.pinned_sha256)
         self.assertEqual(packet.binding_sha256, cm.decode_persisted_packet(encoded).binding_sha256)
+
+    def test_packet_missing_either_pin_field_refuses_round_trip(self) -> None:
+        packet = _phase_packet()
+        for missing in ("pinned_path", "pinned_sha256"):
+            fields_value = _phase_packet_fields(packet)
+            del fields_value[missing]
+            with self.subTest(missing=missing):
+                with self.assertRaisesRegex(ValueError, "persisted_roundtrip"):
+                    cm.PersistedDoc(
+                        PersistedDocTests.wrapper(
+                            cm.PHASE_PACKET_SCHEMA,
+                            packet,
+                            fields_value,
+                        )
+                    )
 
     def test_nested_packet_tamper_refuses_round_trip(self) -> None:
         packet = _phase_packet()
@@ -4021,6 +4103,7 @@ def _bundle_packet(
     consumption_receipt_sha256: str,
     static_preflight_sha256: str,
     runtime_identity_sha256: str,
+    pinned_sha256: str,
     containment_before_sha256: str,
     containment_after_sha256: str,
 ) -> cm.PhasePacket:
@@ -4038,6 +4121,15 @@ def _bundle_packet(
         order_sha256=ORDER_SHA,
         effective_args_sha256=cm.FROZEN_BENCH_ARGS_SHA256,
         driver_package_sha256=SHA_E,
+        pinned_path=str(
+            (
+                cm.VULKAN_RELEASE_ROOT
+                if phase == "vulkan_baseline"
+                else cm.CUDA_RELEASE_ROOT
+            )
+            / "llama-server"
+        ),
+        pinned_sha256=pinned_sha256,
         authorization_preimage_sha256=authorization_preimage_sha256,
         consumption_receipt_sha256=consumption_receipt_sha256,
         static_preflight_sha256=static_preflight_sha256,
@@ -4282,6 +4374,7 @@ def _make_bundle(stage: int = 1, **overrides: object) -> cm.BenchEvidenceBundle:
         consumption_receipt_sha256=window_receipt.binding_sha256,
         static_preflight_sha256=static_preflight.file_sha256,
         runtime_identity_sha256=bench_identity_doc.file_sha256,
+        pinned_sha256=cm.FROZEN_VULKAN_RUNTIME_SHA256,
         containment_before_sha256=containment_docs[
             "vulkan_baseline:before"
         ].file_sha256,
@@ -4300,6 +4393,7 @@ def _make_bundle(stage: int = 1, **overrides: object) -> cm.BenchEvidenceBundle:
         consumption_receipt_sha256=continuation_receipt.binding_sha256,
         static_preflight_sha256=static_preflight.file_sha256,
         runtime_identity_sha256=bench_identity_doc.file_sha256,
+        pinned_sha256=bench_identity.runtime_sha256,
         containment_before_sha256=containment_docs[
             "cuda_candidate:before"
         ].file_sha256,
@@ -4643,6 +4737,39 @@ class BenchEvidenceBundleTests(unittest.TestCase):
         )
         self.assertEqual(derived, cm.FROZEN_BENCH_ARGS_SHA256)
         self.assertNotEqual(derived, cm._packet_hash([*argv("18080")[:-1], "on"]))
+
+    def test_phase_pin_evidence_joins_the_separate_executable_authorities(self) -> None:
+        bundle = _make_bundle()
+        cases = (
+            {
+                "control_packet": replace(
+                    bundle.control_packet,
+                    pinned_path=str(cm.CUDA_RELEASE_ROOT / "llama-server"),
+                )
+            },
+            {
+                "control_packet": replace(
+                    bundle.control_packet,
+                    pinned_sha256=SHA_A,
+                )
+            },
+            {
+                "candidate_packet": replace(
+                    bundle.candidate_packet,
+                    pinned_path=str(cm.VULKAN_RELEASE_ROOT / "llama-server"),
+                )
+            },
+            {
+                "candidate_packet": replace(
+                    bundle.candidate_packet,
+                    pinned_sha256=SHA_C,
+                )
+            },
+        )
+        for changes in cases:
+            with self.subTest(changes=tuple(changes)):
+                with self.assertRaisesRegex(ValueError, "bundle_binding"):
+                    _rechain_base_bundle(bundle, **changes)
 
     def test_phase_outcome_and_scalar_joins_refuse(self) -> None:
         bundle = _make_bundle()

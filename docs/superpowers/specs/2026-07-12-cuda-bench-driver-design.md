@@ -54,10 +54,15 @@ restarts production after success or failure.
    loopback HTTP server imitating llama-server's `/health`, `/v1/models`,
    and `/completion` surface with closed personas {healthy,
    readiness_timeout, midturn_hang, crash, malformed_response,
-   wrong_identity}. Readiness is witnessed from `/health`, the exact-alias
+   wrong_identity}. Its reviewed logical argv is `python -B -I
+   /absolute/pinned/cuda_bench_stub.py`; at execution the launcher replaces
+   only that script operand with the sealed `/proc/self/fd/<ephemeral-fd>`
+   snapshot. Isolated file execution prevents cwd or `PYTHONPATH` from
+   substituting a same-named module.
+   Readiness is witnessed from `/health`, the exact-alias
    witness from `/v1/models`, inference from `/completion`; persona tests
    cover wrong, missing, and multiple aliases. The rehearsal launcher can
-   execute only this pinned module (path + content hash enforced), never an
+   execute only this pinned file (absolute path + content hash enforced), never an
    arbitrary binary or model path. It binds `127.0.0.1:0`; port 18080 is
    structurally forbidden in rehearsal.
 4. **Provider seams** — the ONLY swap point between tiers:
@@ -268,14 +273,42 @@ healthy persona reproduces these exact terminal-SSE keys.
 ## Error handling (amendment 7)
 
 Closed refusal vocabulary (Appendix). Cleanup is an **unconditional
-finalizer** — every post-spawn exit path reaches it — but signalling within
+finalizer** — every admitted-child exit path reaches it — but signalling within
 it is ownership-proven, never unconditional: at spawn the driver records
 PID, PGID, `/proc/<pid>/stat` start time, and the executable's content
-hash; before EVERY signal it re-proves that identity quadruple still
+hash; before EVERY admitted-child signal it re-proves that identity quadruple still
 matches. A quadruple mismatch is the typed refusal `pid_reuse_detected`
 (a RED-listed test scenario) and no signal is sent.
 
-Check-then-signal is itself a reuse race, so the leader is signalled only
+**Pidfd-before-exec bootstrap (B5 amendment, ruling 2026-07-15).** `Popen`
+first starts a same-PID inert guard in the new session. The guard blocks on
+a one-byte pipe and has not executed the target. The parent obtains the
+pidfd before sending the go byte; failure closes the pipe, so the guard
+exits 0 without a signal or target execution. A CLOEXEC status pipe proves
+the same PID crossed `execve`. Only then may post-exec identity be captured
+and `OwnedChild` admitted. Post-pidfd/pre-admission failure uses the retained
+pidfd for bootstrap cleanup; the quadruple rule begins at admission because
+no truthful target quadruple exists earlier. For rehearsal, admission also
+requires the exact `STUB_LISTENING` line and binds both the absolute pinned
+file hash and the post-exec interpreter hash. Required REDs prove EOF
+inertness, pidfd-acquisition refusal, post-pidfd cleanup, same-PID authority,
+post-exec capture ordering, and hostile cwd/`PYTHONPATH` isolation.
+
+**Sealed entry-executable snapshot (B5 GREEN amendment, ruling
+2026-07-15).** A pathname fd pins an inode, not immutable bytes, so the
+launcher never executes the checked regular file directly. It copies the
+entry executable into an executable memfd, applies
+`F_SEAL_WRITE|F_SEAL_GROW|F_SEAL_SHRINK|F_SEAL_SEAL`, hashes only after the
+seal set is final, then hands that same sealed kernel object to the inert
+guard. Binary targets use fd-exec; rehearsal Python targets use
+`-B -I /proc/self/fd/<ephemeral-fd>` and close that fd at target startup.
+`MFD_EXEC` or host-policy failure is the typed `spawn_failure`. The original
+absolute path and sealed-content SHA remain the human-readable evidence;
+the `/proc/self/fd` name is ephemeral and never persisted. This pin covers
+the entry executable only. Dynamically loaded backend libraries remain
+under the independent runtime-manifest/static-candidate proof.
+
+Check-then-signal is itself a reuse race, so an admitted leader is signalled only
 through a **pidfd retained from spawn** (`os.pidfd_open` immediately after
 fork, signals via `signal.pidfd_send_signal`): a pidfd names the process
 instance, not the PID, so a recycled PID can never be signalled. The
@@ -301,6 +334,11 @@ CONTAINMENT_AFTER → failed-packet write. All signals go through the
 leader's pidfd; PGID enumeration is OBSERVATIONAL ONLY — it proves group
 absence or reports `cleanup_incomplete`, and is never itself a signalling
 target. Kernel windows use journal cursors plus timestamps.
+Cleanup authority is independent of timestamp evidence: failure of the injected
+clock before or after teardown cannot escape the finalizer or strand a child.
+The result records `timestamp_unavailable` and is at least
+`cleanup_incomplete`, after process-group and listener absence have been
+attempted and witnessed.
 Distinct failure classes: `http_timeout` (request exceeded bound, server
 alive), `crash` (child exited uncommanded), `hang` (unresponsive; required
 forced SIGKILL), `spawn_failure` (child never reached readiness polling),
@@ -318,7 +356,8 @@ them yields a typed `cuda_bench_assemble.receipt.v1` with outcome
 
 Phase packets are immutable, phase-specific, and cryptographically bound to:
 window ID, boot ID, GPU UUID, ambient-topology hash, model/corpus/order
-hashes, exact effective argv hash, driver package hash, the authorization
+hashes, exact effective argv hash, driver package hash, the original absolute
+entry-executable path and sealed-content SHA-256, the authorization
 preimage hash and consumption-receipt hash for the phase, the phase's
 turn-artifact manifest hash, the phase's THREE cycle-indexed backend
 witnesses (typed preimages), its containment before/after snapshot pair,
@@ -335,6 +374,15 @@ manifest hash plus evaluator version — never an ambiguous singular
 "transcript hash." Assembly performs no measurement and accepts no raw
 CLI-entered counts. Owner-voice and rollback artifacts identify their
 producer and bind the same phase/window identities.
+
+The packet's single entry-executable pair is producer evidence from all
+three cycle launches, not a configuration assertion: every admitted child
+must report the same `(pinned_path, pinned_sha256)` pair. Any cycle-level
+path or hash drift is `identity_mismatch` and prevents a completed packet;
+the common pair is then copied from the admitted-child evidence into
+`phase_packet.v2`. The driver never re-derives it from `PhaseConfig` or the
+requested argv. This prevents one correctly pinned cycle from laundering a
+different executable used by either of the other two cycles.
 
 `maez.service` state is recorded **informationally** in containment
 snapshots: if running, its environ containment is checked; if stopped, the
@@ -404,7 +452,7 @@ mutation, no corpus authoring, no vision-flag changes.
 ## Appendix — frozen constants
 
 **Schema names.** `cuda_bench_driver.static_preflight.v1`,
-`cuda_bench_driver.phase_packet.v1`, `cuda_bench_driver.refusal.v1`,
+`cuda_bench_driver.phase_packet.v2`, `cuda_bench_driver.refusal.v1`,
 `cuda_bench_driver.window_authorization.v1`,
 `cuda_bench_driver.continuation.v1`,
 `cuda_bench_driver.consumption_receipt.v1`,
@@ -430,7 +478,8 @@ later-stage cold-boot witness), `cuda_migration.provisional_live_witness.v1`
 `cuda_migration.authorization_witness.v1` (persisted boot/live
 authorization witness), `cuda_migration.backend_map_witness.v1` (persisted
 cold-boot/provisional backend-map witness).
-(22 total; amended 2026-07-14 by the owner-ratified B3 turn-artifact ruling.)
+(22 total; the owner-ratified 2026-07-15 B5 amendment replaces phase-packet
+v1 with v2, so the schema-family count is unchanged.)
 
 **Closed refusal/outcome vocabulary (40 entries; `tier_mismatch` added
 2026-07-13 — a mixed production/rehearsal provider set refuses before any

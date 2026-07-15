@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import errno
 import copy
+import fcntl
 import hashlib
 import itertools
 import json
@@ -15,16 +16,19 @@ import math
 import os
 import re
 import secrets
+import select
+import signal
 import socket
 import stat
 import subprocess
+import sys
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_EVEN
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 from scripts import cuda_migration as cm
 
@@ -45,8 +49,20 @@ LISTENER_WAIT_S = 10
 UNLOAD_WAIT_S = 60
 FROZEN_BENCH_ARGS_SHA256 = "7fd627e1132ff30fb7f45df2cbf83d166002b0a0c56bcd07e169eca2180bd413"
 
+# Linux UAPI constants from <linux/memfd.h>.  Python 3.14 exposes the base
+# memfd flags but not these two execution-policy flags on this host.
+MFD_NOEXEC_SEAL = 0x0008
+MFD_EXEC = 0x0010
+_EXECUTABLE_MEMFD_FLAGS = os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING | MFD_EXEC
+_REQUIRED_MEMFD_SEALS = (
+    fcntl.F_SEAL_WRITE
+    | fcntl.F_SEAL_GROW
+    | fcntl.F_SEAL_SHRINK
+    | fcntl.F_SEAL_SEAL
+)
+
 STATIC_PREFLIGHT_SCHEMA = "cuda_bench_driver.static_preflight.v1"
-PHASE_PACKET_SCHEMA = "cuda_bench_driver.phase_packet.v1"
+PHASE_PACKET_SCHEMA = "cuda_bench_driver.phase_packet.v2"
 REFUSAL_SCHEMA = "cuda_bench_driver.refusal.v1"
 WINDOW_AUTHORIZATION_SCHEMA = "cuda_bench_driver.window_authorization.v1"
 CONTINUATION_SCHEMA = "cuda_bench_driver.continuation.v1"
@@ -715,6 +731,952 @@ class ServerLauncher(Protocol):
     tier: str
 
     def spawn(self, argv: list[str], env: dict[str, str]) -> "OwnedChild": ...  # noqa: F821
+
+
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+_STUB_ANNOUNCEMENT_RE = re.compile(rb"STUB_LISTENING port=([1-9][0-9]*)\n")
+_STUB_ANNOUNCEMENT_CAP = 128
+_REHEARSAL_STUB_PATH = Path(__file__).with_name("cuda_bench_stub.py")
+_GUARD_GO_BYTE = b"G"
+_GUARD_CODE = """\
+import os
+import signal
+import sys
+
+gate_fd = int(sys.argv[1])
+exec_fd = int(sys.argv[2])
+pin_fd = int(sys.argv[3])
+pin_kind = sys.argv[4]
+old_mask = {int(value) for value in sys.argv[5].split(",") if value}
+token = os.read(gate_fd, 1)
+os.close(gate_fd)
+if token != b"G":
+    os.close(exec_fd)
+    os.close(pin_fd)
+    raise SystemExit(0)
+target_argv = sys.argv[6:]
+signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+os.set_inheritable(exec_fd, False)
+try:
+    if pin_kind == "binary":
+        os.set_inheritable(pin_fd, False)
+        os.execve(pin_fd, target_argv, os.environ)
+    elif pin_kind == "python_file":
+        os.set_inheritable(pin_fd, True)
+        target_argv[3] = f"/proc/self/fd/{pin_fd}"
+        os.execve(target_argv[0], target_argv, os.environ)
+    else:
+        raise OSError("unknown pin kind")
+except BaseException:
+    try:
+        os.write(exec_fd, b"E")
+    finally:
+        os.close(exec_fd)
+    raise SystemExit(127)
+"""
+
+
+@dataclass(frozen=True)
+class SpawnPin:
+    kind: Literal["binary", "python_file"]
+    pinned_path: Path
+    pinned_sha256: str
+    required_argv_prefix: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if (
+            self.kind not in {"binary", "python_file"}
+            or not isinstance(self.pinned_path, Path)
+            or not self.pinned_path.is_absolute()
+            or type(self.pinned_sha256) is not str
+            or _SHA256_RE.fullmatch(self.pinned_sha256) is None
+            or type(self.required_argv_prefix) is not tuple
+            or not self.required_argv_prefix
+            or any(type(part) is not str or not part for part in self.required_argv_prefix)
+        ):
+            raise ValueError("spawn_pin_invalid")
+        if self.kind == "binary":
+            if self.required_argv_prefix[0] != str(self.pinned_path):
+                raise ValueError("spawn_pin_invalid")
+        elif self.required_argv_prefix != (
+            sys.executable,
+            "-B",
+            "-I",
+            str(self.pinned_path),
+        ):
+            raise ValueError("spawn_pin_invalid")
+
+
+@dataclass(frozen=True)
+class OwnedChild:
+    pid: int
+    pgid: int
+    pidfd: int
+    start_time_ticks: int
+    pinned_path: str
+    pinned_sha256: str
+    exe_sha256: str
+    port: int | None
+    popen: subprocess.Popen[bytes]
+
+    def __post_init__(self) -> None:
+        if (
+            any(
+                type(value) is not int or value <= 0
+                for value in (self.pid, self.pgid, self.start_time_ticks)
+            )
+            or type(self.pidfd) is not int
+            or self.pidfd < 0
+            or type(self.pinned_path) is not str
+            or not os.path.isabs(self.pinned_path)
+            or self.pinned_path.startswith("/proc/self/fd/")
+            or type(self.pinned_sha256) is not str
+            or _SHA256_RE.fullmatch(self.pinned_sha256) is None
+            or type(self.exe_sha256) is not str
+            or _SHA256_RE.fullmatch(self.exe_sha256) is None
+            or (
+                self.port is not None
+                and (type(self.port) is not int or not 0 < self.port <= 65_535)
+            )
+            or not isinstance(self.popen, subprocess.Popen)
+        ):
+            raise ValueError("owned_child_invalid")
+
+
+@dataclass(frozen=True)
+class FinalizeResult:
+    outcome: Literal["clean", "cleanup_incomplete", "pid_reuse_detected"]
+    signals_sent: tuple[str, ...]
+    quadruple_reproofs: int
+    surviving_pgid_members: tuple[int, ...]
+    listener_free: bool | None
+    started_at: str
+    finished_at: str
+
+    def __post_init__(self) -> None:
+        if (
+            self.outcome
+            not in {"clean", "cleanup_incomplete", "pid_reuse_detected"}
+            or type(self.signals_sent) is not tuple
+            or any(signal_name not in {"SIGTERM", "SIGKILL"} for signal_name in self.signals_sent)
+            or type(self.quadruple_reproofs) is not int
+            or self.quadruple_reproofs < 0
+            or type(self.surviving_pgid_members) is not tuple
+            or any(type(pid) is not int or pid <= 0 for pid in self.surviving_pgid_members)
+            or (self.listener_free is not None and type(self.listener_free) is not bool)
+            or type(self.started_at) is not str
+            or not self.started_at
+            or type(self.finished_at) is not str
+            or not self.finished_at
+        ):
+            raise ValueError("finalize_result_invalid")
+
+
+@dataclass(frozen=True)
+class _SealedExecutableSnapshot:
+    fd: int
+    pinned_path: str
+    pinned_sha256: str
+
+
+def _hash_file(path: Path) -> str:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        raise BenchRefusal("spawn_failure") from None
+
+
+def _hash_fd(fd: int) -> str:
+    try:
+        os.lseek(fd, 0, os.SEEK_SET)
+        digest = hashlib.sha256()
+        while True:
+            chunk = os.read(fd, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+        os.lseek(fd, 0, os.SEEK_SET)
+        return digest.hexdigest()
+    except OSError:
+        raise BenchRefusal("spawn_failure") from None
+
+
+def _sealed_executable_snapshot(pin: SpawnPin) -> _SealedExecutableSnapshot:
+    """Seal, then hash, the one entry executable the guard will use.
+
+    This binds only the entry executable.  Runtime shared-library integrity is
+    independently owned by the static runtime-manifest proof.
+    """
+
+    source_fd: int | None = None
+    snapshot_fd: int | None = None
+    try:
+        source_fd = os.open(pin.pinned_path, os.O_RDONLY | os.O_CLOEXEC)
+        source_before = os.fstat(source_fd)
+        if not stat.S_ISREG(source_before.st_mode):
+            raise BenchRefusal("spawn_failure")
+
+        snapshot_fd = os.memfd_create(
+            "cuda-bench-entry",
+            _EXECUTABLE_MEMFD_FLAGS,
+        )
+        while True:
+            chunk = os.read(source_fd, 1024 * 1024)
+            if not chunk:
+                break
+            offset = 0
+            while offset < len(chunk):
+                written = os.write(snapshot_fd, chunk[offset:])
+                if written <= 0:
+                    raise OSError("short memfd write")
+                offset += written
+
+        source_after = os.fstat(source_fd)
+        stable_fields = (
+            "st_dev",
+            "st_ino",
+            "st_size",
+            "st_mtime_ns",
+            "st_ctime_ns",
+        )
+        if any(
+            getattr(source_before, name) != getattr(source_after, name)
+            for name in stable_fields
+        ):
+            raise BenchRefusal("spawn_failure")
+
+        fcntl.fcntl(snapshot_fd, fcntl.F_ADD_SEALS, _REQUIRED_MEMFD_SEALS)
+        observed_seals = fcntl.fcntl(snapshot_fd, fcntl.F_GET_SEALS)
+        if observed_seals & _REQUIRED_MEMFD_SEALS != _REQUIRED_MEMFD_SEALS:
+            raise BenchRefusal("spawn_failure")
+        snapshot_sha256 = _hash_fd(snapshot_fd)
+        if snapshot_sha256 != pin.pinned_sha256:
+            raise BenchRefusal("spawn_failure")
+        snapshot_stat = os.fstat(snapshot_fd)
+        if not snapshot_stat.st_mode & 0o111 or not os.access(
+            f"/proc/self/fd/{snapshot_fd}", os.X_OK
+        ):
+            raise BenchRefusal("spawn_failure")
+        result = _SealedExecutableSnapshot(
+            fd=snapshot_fd,
+            pinned_path=str(pin.pinned_path),
+            pinned_sha256=snapshot_sha256,
+        )
+        snapshot_fd = None
+        return result
+    except BenchRefusal:
+        raise
+    except (OSError, ValueError):
+        raise BenchRefusal("spawn_failure") from None
+    finally:
+        for fd in (source_fd, snapshot_fd):
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+
+
+def _validate_spawn_inputs(
+    argv: list[str], *, pin: SpawnPin, env: dict[str, str]
+) -> None:
+    if (
+        type(argv) is not list
+        or not argv
+        or any(type(part) is not str or not part or "\0" in part for part in argv)
+        or type(env) is not dict
+        or any(
+            type(key) is not str
+            or not key
+            or "=" in key
+            or "\0" in key
+            or type(value) is not str
+            or "\0" in value
+            for key, value in env.items()
+        )
+    ):
+        raise BenchRefusal("spawn_failure")
+    prefix = pin.required_argv_prefix
+    if tuple(argv[: len(prefix)]) != prefix:
+        raise BenchRefusal("spawn_failure")
+    if pin.kind == "binary":
+        if argv[0] != str(pin.pinned_path):
+            raise BenchRefusal("spawn_failure")
+    else:
+        expected = (sys.executable, "-B", "-I", str(pin.pinned_path))
+        if tuple(argv[:4]) != expected:
+            raise BenchRefusal("spawn_failure")
+        try:
+            if pin.pinned_path.resolve(strict=True) != pin.pinned_path:
+                raise BenchRefusal("spawn_failure")
+        except OSError:
+            raise BenchRefusal("spawn_failure") from None
+
+
+def _close_popen_streams(popen: subprocess.Popen[bytes]) -> None:
+    for stream in (popen.stdin, popen.stdout, popen.stderr):
+        if stream is not None:
+            try:
+                stream.close()
+            except OSError:
+                pass
+
+
+def _pidfd_status(pidfd: int) -> Literal["alive", "gone", "uncertain"]:
+    try:
+        poller = select.poll()
+        poller.register(
+            pidfd,
+            select.POLLIN | select.POLLHUP | select.POLLERR | select.POLLNVAL,
+        )
+        events = poller.poll(0)
+        if not events:
+            return "alive"
+        event_mask = events[0][1]
+        if event_mask & select.POLLNVAL or event_mask & select.POLLERR:
+            return "uncertain"
+        if event_mask & select.POLLIN:
+            return "gone"
+        return "uncertain"
+    except (OSError, ValueError):
+        return "uncertain"
+
+
+def _wait_pidfd_gone(pidfd: int, timeout_s: float) -> bool:
+    try:
+        poller = select.poll()
+        poller.register(
+            pidfd,
+            select.POLLIN | select.POLLHUP | select.POLLERR | select.POLLNVAL,
+        )
+        events = poller.poll(max(0, int(timeout_s * 1000)))
+        return bool(events) and bool(events[0][1] & select.POLLIN)
+    except (OSError, ValueError):
+        return False
+
+
+def _pidfd_bound_pid(
+    pidfd: int,
+) -> tuple[Literal["bound", "gone", "unavailable"], int | None]:
+    try:
+        rendered = Path(f"/proc/self/fdinfo/{pidfd}").read_text(
+            encoding="utf-8", errors="strict"
+        )
+    except (OSError, UnicodeError):
+        return "unavailable", None
+    matches = [
+        line.split(":", 1)[1].strip()
+        for line in rendered.splitlines()
+        if line.startswith("Pid:")
+    ]
+    if len(matches) != 1:
+        return "unavailable", None
+    try:
+        pid = int(matches[0])
+    except ValueError:
+        return "unavailable", None
+    if pid == -1:
+        return "gone", None
+    if pid <= 0:
+        return "unavailable", None
+    return "bound", pid
+
+
+def _close_fd(fd: int | None) -> None:
+    if fd is None:
+        return
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+
+
+def _cleanup_inert_guard(
+    popen: subprocess.Popen[bytes] | None,
+    *,
+    pidfd: int | None,
+    gate_write: int | None,
+    exec_read: int | None,
+) -> bool:
+    _close_fd(gate_write)
+    _close_fd(exec_read)
+    if popen is None:
+        _close_fd(pidfd)
+        return True
+    clean = True
+    try:
+        popen.wait(timeout=KILL_WAIT_S)
+    except (subprocess.TimeoutExpired, OSError):
+        clean = False
+        state, bound_pid = (
+            _pidfd_bound_pid(pidfd) if pidfd is not None else ("unavailable", None)
+        )
+        if state == "bound" and bound_pid == popen.pid:
+            try:
+                signal.pidfd_send_signal(pidfd, signal.SIGKILL)  # type: ignore[arg-type]
+                popen.wait(timeout=KILL_WAIT_S)
+                clean = True
+            except (OSError, subprocess.TimeoutExpired):
+                clean = False
+    if popen.poll() is None:
+        clean = False
+    try:
+        if _pgid_members(popen.pid):
+            clean = False
+    except BenchRefusal:
+        clean = False
+    _close_fd(pidfd)
+    _close_popen_streams(popen)
+    return clean
+
+
+def _guarded_popen(
+    argv: list[str],
+    *,
+    env: dict[str, str],
+    capture_stdout: bool,
+    pinned_fd: int,
+    pin_kind: Literal["binary", "python_file"],
+) -> tuple[subprocess.Popen[bytes], int, int, int, set[signal.Signals]]:
+    gate_read: int | None = None
+    gate_write: int | None = None
+    exec_read: int | None = None
+    exec_write: int | None = None
+    popen: subprocess.Popen[bytes] | None = None
+    pidfd: int | None = None
+    old_mask: set[signal.Signals] | None = None
+    cleanup_complete = True
+    try:
+        old_mask = signal.pthread_sigmask(
+            signal.SIG_BLOCK,
+            {signal.SIGINT, signal.SIGTERM},
+        )
+        gate_read, gate_write = os.pipe2(os.O_CLOEXEC)
+        exec_read, exec_write = os.pipe2(os.O_CLOEXEC)
+        encoded_mask = ",".join(str(int(value)) for value in sorted(old_mask))
+        guard_argv = [
+            sys.executable,
+            "-B",
+            "-I",
+            "-c",
+            _GUARD_CODE,
+            str(gate_read),
+            str(exec_write),
+            str(pinned_fd),
+            pin_kind,
+            encoded_mask,
+            *argv,
+        ]
+        popen = subprocess.Popen(
+            guard_argv,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE if capture_stdout else subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=dict(env),
+            start_new_session=True,
+            pass_fds=(gate_read, exec_write, pinned_fd),
+            close_fds=True,
+            bufsize=0,
+        )
+        _close_fd(gate_read)
+        gate_read = None
+        _close_fd(exec_write)
+        exec_write = None
+        pidfd = os.pidfd_open(popen.pid)
+        binding_state, bound_pid = _pidfd_bound_pid(pidfd)
+        if binding_state != "bound" or bound_pid != popen.pid:
+            raise BenchRefusal("spawn_failure")
+        return popen, pidfd, gate_write, exec_read, old_mask
+    except BaseException as exc:
+        _close_fd(gate_read)
+        _close_fd(exec_write)
+        cleanup_complete = _cleanup_inert_guard(
+            popen,
+            pidfd=pidfd,
+            gate_write=gate_write,
+            exec_read=exec_read,
+        )
+        if old_mask is not None:
+            try:
+                signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+            except BaseException:
+                cleanup_complete = False
+        if not cleanup_complete:
+            raise BenchRefusal("cleanup_incomplete") from exc
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
+        if isinstance(exc, BenchRefusal):
+            raise
+        raise BenchRefusal("spawn_failure") from None
+
+
+def _release_guard(gate_write: int, exec_read: int) -> None:
+    try:
+        try:
+            if os.write(gate_write, _GUARD_GO_BYTE) != 1:
+                raise OSError("short guard write")
+        finally:
+            os.close(gate_write)
+        deadline = time.monotonic() + READINESS_TIMEOUT_S
+        while time.monotonic() < deadline:
+            ready, _, _ = select.select(
+                [exec_read], [], [], min(0.1, deadline - time.monotonic())
+            )
+            if not ready:
+                continue
+            marker = os.read(exec_read, 1)
+            if marker == b"":
+                return
+            raise BenchRefusal("spawn_failure")
+        raise BenchRefusal("spawn_failure")
+    except OSError:
+        raise BenchRefusal("spawn_failure") from None
+    finally:
+        os.close(exec_read)
+
+
+def _read_stub_announcement(popen: subprocess.Popen[bytes]) -> int:
+    if popen.stdout is None:
+        raise BenchRefusal("spawn_failure")
+    fd = popen.stdout.fileno()
+    payload = bytearray()
+    deadline = time.monotonic() + READINESS_TIMEOUT_S
+    try:
+        while b"\n" not in payload and len(payload) <= _STUB_ANNOUNCEMENT_CAP:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise BenchRefusal("spawn_failure")
+            ready, _, _ = select.select([fd], [], [], min(0.1, remaining))
+            if not ready:
+                if popen.poll() is not None:
+                    raise BenchRefusal("spawn_failure")
+                continue
+            chunk = os.read(fd, _STUB_ANNOUNCEMENT_CAP + 1 - len(payload))
+            if not chunk:
+                raise BenchRefusal("spawn_failure")
+            payload.extend(chunk)
+        match = _STUB_ANNOUNCEMENT_RE.fullmatch(bytes(payload))
+        if match is None:
+            raise BenchRefusal("spawn_failure")
+        port = int(match.group(1))
+        if not 0 < port <= 65_535 or port == BENCH_PORT:
+            raise BenchRefusal("spawn_failure")
+        return port
+    except OSError:
+        raise BenchRefusal("spawn_failure") from None
+
+
+def _parse_proc_stat(rendered: str) -> tuple[int, int, int]:
+    try:
+        open_paren = rendered.index("(")
+        close_paren = rendered.rindex(")")
+        pid = int(rendered[:open_paren].strip())
+        suffix = rendered[close_paren + 1 :].split()
+        pgid = int(suffix[2])
+        start_time_ticks = int(suffix[19])
+    except (IndexError, TypeError, ValueError):
+        raise OSError("malformed proc stat") from None
+    if pid <= 0 or pgid < 0 or start_time_ticks <= 0:
+        raise OSError("malformed proc stat")
+    return pid, pgid, start_time_ticks
+
+
+def _capture_target_identity(pid: int) -> tuple[int, int, str]:
+    if type(pid) is not int or pid <= 0:
+        raise OSError("invalid pid")
+    rendered = Path(f"/proc/{pid}/stat").read_text(
+        encoding="utf-8", errors="surrogateescape"
+    )
+    observed_pid, pgid, start_time_ticks = _parse_proc_stat(rendered)
+    if observed_pid != pid:
+        raise OSError("pid mismatch")
+    exe_sha256 = hashlib.sha256(Path(f"/proc/{pid}/exe").read_bytes()).hexdigest()
+    return pgid, start_time_ticks, exe_sha256
+
+
+def _bootstrap_abort(
+    popen: subprocess.Popen[bytes],
+    pidfd: int,
+    *,
+    port: int | None,
+) -> bool:
+    complete = True
+    try:
+        status = _pidfd_status(pidfd)
+        binding_state, bound_pid = _pidfd_bound_pid(pidfd)
+        if status == "alive" and binding_state == "bound" and bound_pid == popen.pid:
+            try:
+                signal.pidfd_send_signal(pidfd, signal.SIGKILL)
+            except ProcessLookupError:
+                if _pidfd_status(pidfd) != "gone":
+                    complete = False
+            except OSError:
+                complete = False
+        elif status == "alive":
+            complete = False
+        try:
+            popen.wait(timeout=KILL_WAIT_S)
+        except (OSError, subprocess.TimeoutExpired):
+            complete = False
+        try:
+            if _pgid_members(popen.pid):
+                complete = False
+        except BenchRefusal:
+            complete = False
+        if port is not None:
+            try:
+                if not RealPortProbe().is_free(port):
+                    complete = False
+            except BenchRefusal:
+                complete = False
+        return complete
+    finally:
+        _close_fd(pidfd)
+        _close_popen_streams(popen)
+
+
+def spawn_pinned(
+    argv: list[str], *, pin: SpawnPin, env: dict[str, str]
+) -> OwnedChild:
+    _validate_spawn_inputs(argv, pin=pin, env=env)
+    snapshot = _sealed_executable_snapshot(pin)
+    try:
+        popen, pidfd, gate_write, exec_read, old_mask = _guarded_popen(
+            argv,
+            env=env,
+            capture_stdout=pin.kind == "python_file",
+            pinned_fd=snapshot.fd,
+            pin_kind=pin.kind,
+        )
+    finally:
+        _close_fd(snapshot.fd)
+    port: int | None = None
+    mask_restored = False
+    target_release_attempted = False
+    try:
+        signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+        mask_restored = True
+        target_release_attempted = True
+        _release_guard(gate_write, exec_read)
+        port = _read_stub_announcement(popen) if pin.kind == "python_file" else None
+        pgid, start_time_ticks, exe_sha256 = _capture_target_identity(popen.pid)
+        if pgid != popen.pid:
+            raise BenchRefusal("spawn_failure")
+        expected_exe_sha256 = (
+            _hash_file(Path(sys.executable).resolve())
+            if pin.kind == "python_file"
+            else pin.pinned_sha256
+        )
+        if exe_sha256 != expected_exe_sha256:
+            raise BenchRefusal("spawn_failure")
+        return OwnedChild(
+            pid=popen.pid,
+            pgid=pgid,
+            pidfd=pidfd,
+            start_time_ticks=start_time_ticks,
+            pinned_path=snapshot.pinned_path,
+            pinned_sha256=pin.pinned_sha256,
+            exe_sha256=exe_sha256,
+            port=port,
+            popen=popen,
+        )
+    except BaseException as exc:
+        if target_release_attempted:
+            cleanup_complete = _bootstrap_abort(popen, pidfd, port=port)
+        else:
+            cleanup_complete = _cleanup_inert_guard(
+                popen,
+                pidfd=pidfd,
+                gate_write=gate_write,
+                exec_read=exec_read,
+            )
+        if not mask_restored:
+            try:
+                signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+            except BaseException:
+                cleanup_complete = False
+        if not cleanup_complete:
+            raise BenchRefusal("cleanup_incomplete") from exc
+        if isinstance(exc, BenchRefusal):
+            raise
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
+        raise BenchRefusal("spawn_failure") from None
+
+
+class RealServerLauncher:
+    tier = "production"
+
+    def __init__(self, pin: SpawnPin) -> None:
+        if not isinstance(pin, SpawnPin) or pin.kind != "binary":
+            raise ValueError("spawn_pin_invalid")
+        self.pin = pin
+
+    def spawn(self, argv: list[str], env: dict[str, str]) -> OwnedChild:
+        ports = [
+            argv[index + 1]
+            for index, value in enumerate(argv[:-1])
+            if value == "--port"
+        ] if type(argv) is list else []
+        if ports != [str(BENCH_PORT)]:
+            raise BenchRefusal("spawn_failure")
+        child = spawn_pinned(argv, pin=self.pin, env=env)
+        return replace(child, port=BENCH_PORT)
+
+
+class RehearsalServerLauncher:
+    tier = "rehearsal"
+
+    def __init__(self, pin: SpawnPin) -> None:
+        if (
+            not isinstance(pin, SpawnPin)
+            or pin.kind != "python_file"
+            or pin.pinned_path != _REHEARSAL_STUB_PATH
+        ):
+            raise ValueError("spawn_pin_invalid")
+        self.pin = pin
+
+    def spawn(self, argv: list[str], env: dict[str, str]) -> OwnedChild:
+        return spawn_pinned(argv, pin=self.pin, env=env)
+
+
+def _pgid_members(pgid: int) -> list[int]:
+    if type(pgid) is not int or pgid <= 0:
+        raise BenchRefusal("cleanup_incomplete")
+    members: list[int] = []
+    try:
+        entries = tuple(os.scandir("/proc"))
+    except OSError:
+        raise BenchRefusal("cleanup_incomplete") from None
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        try:
+            rendered = Path(entry.path, "stat").read_text(
+                encoding="utf-8", errors="surrogateescape"
+            )
+            pid, observed_pgid, _start = _parse_proc_stat(rendered)
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        except OSError:
+            raise BenchRefusal("cleanup_incomplete") from None
+        if observed_pgid == pgid:
+            members.append(pid)
+    return sorted(set(members))
+
+
+def _identity_proof(
+    child: OwnedChild,
+) -> Literal["match", "mismatch", "unavailable"]:
+    try:
+        pgid, start_time_ticks, exe_sha256 = _capture_target_identity(child.pid)
+    except OSError:
+        return "unavailable"
+    return "match" if (
+        pgid == child.pgid
+        and start_time_ticks == child.start_time_ticks
+        and exe_sha256 == child.exe_sha256
+    ) else "mismatch"
+
+
+def _identity_matches(child: OwnedChild) -> bool:
+    return _identity_proof(child) == "match"
+
+
+def _signal_authority_proof(
+    child: OwnedChild,
+) -> Literal["match", "mismatch", "gone", "unavailable"]:
+    if child.popen.pid != child.pid:
+        return "mismatch"
+    pidfd_status = _pidfd_status(child.pidfd)
+    binding_state, bound_pid = _pidfd_bound_pid(child.pidfd)
+    if pidfd_status == "gone" or binding_state == "gone":
+        return "gone"
+    if pidfd_status == "uncertain" or binding_state == "unavailable":
+        return "unavailable"
+    if bound_pid != child.pid:
+        return "mismatch"
+    return _identity_proof(child)
+
+
+def _reap_if_gone(child: OwnedChild) -> None:
+    if _pidfd_status(child.pidfd) == "gone":
+        try:
+            child.popen.wait(timeout=0)
+        except (subprocess.TimeoutExpired, ChildProcessError):
+            pass
+
+
+def _wait_group_absent(pgid: int, timeout_s: float) -> tuple[int, ...]:
+    deadline = time.monotonic() + timeout_s
+    while True:
+        members = tuple(_pgid_members(pgid))
+        if not members:
+            return ()
+        if time.monotonic() >= deadline:
+            return members
+        time.sleep(0.01)
+
+
+def _wait_listener_free(port_probe: PortProbe, port: int) -> bool | None:
+    deadline = time.monotonic() + LISTENER_WAIT_S
+    while True:
+        try:
+            if port_probe.is_free(port):
+                return True
+        except BenchRefusal:
+            return None
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.01)
+
+
+def _best_effort_timestamp(clock: Clock) -> tuple[str, bool]:
+    """Read evidence time without allowing the evidence provider to gate cleanup."""
+
+    try:
+        rendered = clock.now_utc()
+    except BaseException:
+        return "timestamp_unavailable", False
+    if type(rendered) is not str or not rendered:
+        return "timestamp_unavailable", False
+    return rendered, True
+
+
+def finalize(
+    child: OwnedChild,
+    *,
+    clock: Clock,
+    port_probe: PortProbe,
+    port: int | None,
+) -> FinalizeResult:
+    started_at, start_time_available = _best_effort_timestamp(clock)
+    signals_sent: list[str] = []
+    reproofs = 0
+    outcome: Literal["clean", "cleanup_incomplete", "pid_reuse_detected"] = (
+        "clean" if start_time_available else "cleanup_incomplete"
+    )
+    listener_free: bool | None = None
+    survivors: tuple[int, ...] = ()
+
+    def finish() -> FinalizeResult:
+        nonlocal outcome
+        try:
+            os.close(child.pidfd)
+        except OSError:
+            pass
+        _close_popen_streams(child.popen)
+        finished_at, finish_time_available = _best_effort_timestamp(clock)
+        if not finish_time_available and outcome == "clean":
+            outcome = "cleanup_incomplete"
+        return FinalizeResult(
+            outcome=outcome,
+            signals_sent=tuple(signals_sent),
+            quadruple_reproofs=reproofs,
+            surviving_pgid_members=survivors,
+            listener_free=listener_free,
+            started_at=started_at,
+            finished_at=finished_at,
+        )
+
+    status = _pidfd_status(child.pidfd)
+    if status == "uncertain":
+        outcome = "cleanup_incomplete"
+        try:
+            survivors = tuple(_pgid_members(child.pgid))
+        except BenchRefusal:
+            survivors = ()
+        return finish()
+    if status == "gone":
+        _reap_if_gone(child)
+        try:
+            survivors = tuple(_pgid_members(child.pgid))
+        except BenchRefusal:
+            outcome = "cleanup_incomplete"
+            return finish()
+        if survivors:
+            outcome = "cleanup_incomplete"
+            return finish()
+    else:
+        try:
+            members = tuple(_pgid_members(child.pgid))
+        except BenchRefusal:
+            outcome = "cleanup_incomplete"
+            return finish()
+        unexpected = tuple(pid for pid in members if pid != child.pid)
+        if unexpected:
+            outcome = "cleanup_incomplete"
+            survivors = members
+            return finish()
+        reproofs += 1
+        proof = _signal_authority_proof(child)
+        if proof == "mismatch":
+            outcome = "pid_reuse_detected"
+            survivors = members
+            return finish()
+        if proof == "unavailable":
+            outcome = "cleanup_incomplete"
+            survivors = members
+            return finish()
+        if proof == "match":
+            try:
+                signal.pidfd_send_signal(child.pidfd, signal.SIGTERM)
+                signals_sent.append("SIGTERM")
+            except ProcessLookupError:
+                pass
+            except OSError:
+                outcome = "cleanup_incomplete"
+                survivors = members
+                return finish()
+        if not _wait_pidfd_gone(child.pidfd, SIGTERM_GRACE_S):
+            try:
+                members = tuple(_pgid_members(child.pgid))
+            except BenchRefusal:
+                outcome = "cleanup_incomplete"
+                return finish()
+            unexpected = tuple(pid for pid in members if pid != child.pid)
+            if unexpected:
+                outcome = "cleanup_incomplete"
+                survivors = members
+                return finish()
+            reproofs += 1
+            proof = _signal_authority_proof(child)
+            if proof == "mismatch":
+                outcome = "pid_reuse_detected"
+                survivors = members
+                return finish()
+            if proof == "unavailable":
+                outcome = "cleanup_incomplete"
+                survivors = members
+                return finish()
+            if proof == "match":
+                try:
+                    signal.pidfd_send_signal(child.pidfd, signal.SIGKILL)
+                    signals_sent.append("SIGKILL")
+                except ProcessLookupError:
+                    pass
+                except OSError:
+                    outcome = "cleanup_incomplete"
+                    survivors = members
+                    return finish()
+                if not _wait_pidfd_gone(child.pidfd, KILL_WAIT_S):
+                    outcome = "cleanup_incomplete"
+        _reap_if_gone(child)
+
+    try:
+        survivors = _wait_group_absent(child.pgid, KILL_WAIT_S)
+    except BenchRefusal:
+        outcome = "cleanup_incomplete"
+        survivors = ()
+        return finish()
+    if survivors:
+        outcome = "cleanup_incomplete"
+        return finish()
+    if port is not None:
+        listener_free = _wait_listener_free(port_probe, port)
+        if listener_free is not True:
+            outcome = "cleanup_incomplete"
+    return finish()
 
 
 class AuthorizationGate(Protocol):
@@ -1392,6 +2354,7 @@ class RealPortProbe:
         failure = False
         try:
             try:
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 probe.bind(("127.0.0.1", port))
                 result = True
             except OSError as exc:
@@ -1999,6 +2962,11 @@ def _sealed_tier(
     clock: Clock,
     journal_factory: JournalFactory,
 ) -> Providers:
+    expected_launcher = (
+        RealServerLauncher if tier == "production" else RehearsalServerLauncher
+    )
+    if type(server_launcher) is not expected_launcher:
+        raise BenchRefusal("tier_mismatch")
     components = {
         "service_state": service_state,
         "port_probe": port_probe,
