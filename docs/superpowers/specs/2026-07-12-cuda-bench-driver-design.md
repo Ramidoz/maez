@@ -161,7 +161,11 @@ readiness + exact-alias witness → `/proc/<pid>/maps` backend witness →
 unload-complete proof] → KERNEL_DELTA → CONTAINMENT_AFTER → PACKET_WRITE.
 
 Every transition appends a content-light line to the phase journal. Literal
-prompts/responses exist only in bounded private per-turn artifacts.
+prompts/responses exist only in bounded private per-turn artifacts. Each
+literal document is wrapped as `cuda_bench_driver.turn_artifact.v1` with
+`binding_sha256: null`: its evidentiary identity is the SHA-256 of the
+persisted file bytes recorded by the manifest and `TurnRecord`, not a fake
+object-plane binding for content that has no typed constructor.
 
 **Two-gate preflight (amendment 5).**
 - `static-preflight` — safe while Maez is online: corpus file
@@ -405,6 +409,8 @@ mutation, no corpus authoring, no vision-flag changes.
 `cuda_bench_driver.continuation.v1`,
 `cuda_bench_driver.consumption_receipt.v1`,
 `cuda_bench_driver.turn_manifest.v1`,
+`cuda_bench_driver.turn_artifact.v1` (private literal document; wrapper
+binding is null and the persisted file hash is the evidence identity),
 `cuda_bench_driver.containment_snapshot.v1` (persisted lossless
 preimage: `binding_sha256` + complete constructor fields),
 `cuda_bench_driver.runtime_identity.v1` (same wrapper; complete
@@ -424,7 +430,7 @@ later-stage cold-boot witness), `cuda_migration.provisional_live_witness.v1`
 `cuda_migration.authorization_witness.v1` (persisted boot/live
 authorization witness), `cuda_migration.backend_map_witness.v1` (persisted
 cold-boot/provisional backend-map witness).
-(21 total; amended 2026-07-14 with the implementation-plan gate.)
+(22 total; amended 2026-07-14 by the owner-ratified B3 turn-artifact ruling.)
 
 **Closed refusal/outcome vocabulary (40 entries; `tier_mismatch` added
 2026-07-13 — a mixed production/rehearsal provider set refuses before any
