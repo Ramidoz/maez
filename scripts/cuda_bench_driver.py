@@ -14,6 +14,7 @@ import json
 import math
 import os
 import re
+import secrets
 import socket
 import stat
 import subprocess
@@ -115,6 +116,7 @@ _CONTENT_MARKERS = (
     '"pid"',
 )
 _JOURNAL_SEQUENCE = itertools.count()
+_AUTHORIZATION_RECEIPT_SEQUENCE = itertools.count()
 _NAME_SEED = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:+-]{0,127}")
 
 
@@ -391,6 +393,68 @@ def write_private_file(relative: str, data: bytes, *, root: Path = BENCH_ROOT) -
         os.fsync(fd)
         _check_file_fd(fd, expected_nlink=0, expected_size=len(data))
         published = _publish_anonymous_file(fd, parent_fd, parts[-1], expected_size=len(data))
+        _verify_path_binding(
+            relative,
+            root=root,
+            expected_chain=directory_chain,
+            expected_file=published,
+        )
+    except BaseException as exc:
+        if isinstance(exc, OSError):
+            _filesystem_hazard()
+        raise
+    finally:
+        if fd is not None:
+            os.close(fd)
+        os.close(parent_fd)
+    return Path(root).joinpath(*parts)
+
+
+def _create_consumption_marker(nonce: str, *, root: Path) -> Path:
+    """Publish the nonce's anchored atomic-link linearization point."""
+
+    relative = f"markers/{nonce}"
+    parent_fd, parts, directory_chain = _open_parent_fd(relative, root=root, create=True)
+    fd: int | None = None
+    try:
+        fd = _open_anonymous_file(parent_fd, append=False)
+        os.fsync(fd)
+        _check_file_fd(fd, expected_nlink=0, expected_size=0)
+        _check_directory_fd(parent_fd)
+        try:
+            os.link(
+                f"/proc/self/fd/{fd}",
+                parts[-1],
+                dst_dir_fd=parent_fd,
+                follow_symlinks=True,
+            )
+        except OSError as exc:
+            if exc.errno != errno.EEXIST:
+                _filesystem_hazard()
+            os.close(fd)
+            fd = None
+            try:
+                fd = os.open(
+                    parts[-1],
+                    os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                    dir_fd=parent_fd,
+                )
+            except OSError:
+                _filesystem_hazard()
+            os.set_inheritable(fd, False)
+            existing = _check_file_fd(fd, expected_size=0)
+            _check_directory_fd(parent_fd)
+            _verify_path_binding(
+                relative,
+                root=root,
+                expected_chain=directory_chain,
+                expected_file=existing,
+            )
+            raise BenchRefusal("authorization_consumed") from None
+        _check_directory_fd(parent_fd)
+        os.fsync(parent_fd)
+        _check_directory_fd(parent_fd)
+        published = _check_file_fd(fd, expected_size=0)
         _verify_path_binding(
             relative,
             root=root,
@@ -872,6 +936,409 @@ class RehearsalArtifactPolicy:
         except KeyError:
             raise ValueError("artifact_kind_invalid") from None
         return f"rehearsal/{directory}"
+
+
+def _window_authorization_doc(auth: "WindowAuthorization") -> cm.WindowAuthorizationDoc:
+    if (
+        type(auth.window_id) is not str
+        or type(auth.phases) is not tuple
+        or any(type(phase) is not str for phase in auth.phases)
+        or type(auth.boot_id) is not str
+        or type(auth.nonce) is not str
+        or type(auth.issued_at) is not str
+        or type(auth.expires_at) is not str
+        or type(auth.owner) is not str
+    ):
+        raise ValueError("authorization_fields_invalid")
+    return cm.WindowAuthorizationDoc(
+        window_id=auth.window_id,
+        phases=auth.phases,
+        boot_id=auth.boot_id,
+        nonce=auth.nonce,
+        issued_at=auth.issued_at,
+        expires_at=auth.expires_at,
+        owner=auth.owner,
+    )
+
+
+def _continuation_doc(auth: "Continuation") -> cm.ContinuationDoc:
+    if (
+        type(auth.window_id) is not str
+        or type(auth.phases) is not tuple
+        or any(type(phase) is not str for phase in auth.phases)
+        or type(auth.boot_id) is not str
+        or type(auth.nonce) is not str
+        or type(auth.issued_at) is not str
+        or type(auth.expires_at) is not str
+        or type(auth.owner) is not str
+        or type(auth.parent_vulkan_packet_sha256) is not str
+    ):
+        raise ValueError("authorization_fields_invalid")
+    return cm.ContinuationDoc(
+        window_id=auth.window_id,
+        phases=auth.phases,
+        boot_id=auth.boot_id,
+        nonce=auth.nonce,
+        issued_at=auth.issued_at,
+        expires_at=auth.expires_at,
+        owner=auth.owner,
+        parent_vulkan_packet_sha256=auth.parent_vulkan_packet_sha256,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class WindowAuthorization:
+    window_id: str
+    phases: tuple[str, ...]
+    boot_id: str
+    nonce: str
+    issued_at: str
+    expires_at: str
+    owner: str
+
+    def __post_init__(self) -> None:
+        _window_authorization_doc(self)
+
+    @property
+    def preimage_sha256(self) -> str:
+        return _window_authorization_doc(self).preimage_sha256
+
+
+@dataclass(frozen=True, slots=True)
+class Continuation:
+    window_id: str
+    phases: tuple[str, ...]
+    boot_id: str
+    nonce: str
+    issued_at: str
+    expires_at: str
+    owner: str
+    parent_vulkan_packet_sha256: str
+
+    def __post_init__(self) -> None:
+        _continuation_doc(self)
+
+    @property
+    def preimage_sha256(self) -> str:
+        return _continuation_doc(self).preimage_sha256
+
+
+@dataclass(frozen=True, slots=True)
+class ConsumedAuthority:
+    preimage_sha256: str
+    consumption_receipt_sha256: str
+    receipt: dict[str, object]
+
+
+_WINDOW_AUTHORIZATION_FIELDS = frozenset(
+    {"window_id", "phases", "boot_id", "nonce", "issued_at", "expires_at", "owner"}
+)
+_CONTINUATION_FIELDS = frozenset(
+    {*_WINDOW_AUTHORIZATION_FIELDS, "parent_vulkan_packet_sha256"}
+)
+
+
+def _json_object_without_duplicates(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    document: dict[str, object] = {}
+    for key, value in pairs:
+        if key in document:
+            raise ValueError("duplicate_key")
+        document[key] = value
+    return document
+
+
+def _parse_authorization_wrapper(
+    data: bytes,
+    *,
+    schema: str,
+    expected_fields: frozenset[str],
+) -> tuple[dict[str, object], str]:
+    try:
+        if type(data) is not bytes:
+            raise ValueError("authorization_bytes_required")
+        wrapper = json.loads(
+            data,
+            object_pairs_hook=_json_object_without_duplicates,
+            parse_constant=lambda _value: (_ for _ in ()).throw(ValueError("nonfinite")),
+        )
+        if type(wrapper) is not dict or set(wrapper) != {
+            "schema",
+            "binding_sha256",
+            "fields",
+        }:
+            raise ValueError("authorization_wrapper")
+        if type(wrapper["schema"]) is not str or wrapper["schema"] != schema:
+            raise ValueError("authorization_schema")
+        if type(wrapper["binding_sha256"]) is not str:
+            raise ValueError("authorization_binding")
+        fields = wrapper["fields"]
+        if type(fields) is not dict or set(fields) != expected_fields:
+            raise ValueError("authorization_fields")
+        phases = fields["phases"]
+        if type(phases) is not list or any(type(phase) is not str for phase in phases):
+            raise ValueError("authorization_phases")
+        return dict(fields), wrapper["binding_sha256"]
+    except (RecursionError, TypeError, UnicodeError, ValueError):
+        raise BenchRefusal("authorization_malformed") from None
+
+
+def parse_window_authorization(data: bytes) -> WindowAuthorization:
+    fields, binding = _parse_authorization_wrapper(
+        data,
+        schema=WINDOW_AUTHORIZATION_SCHEMA,
+        expected_fields=_WINDOW_AUTHORIZATION_FIELDS,
+    )
+    try:
+        authorization = WindowAuthorization(
+            **{**fields, "phases": tuple(fields["phases"])}  # type: ignore[arg-type]
+        )
+        if binding != authorization.preimage_sha256:
+            raise ValueError("authorization_binding")
+        return authorization
+    except (TypeError, ValueError):
+        raise BenchRefusal("authorization_malformed") from None
+
+
+def parse_continuation(data: bytes) -> Continuation:
+    fields, binding = _parse_authorization_wrapper(
+        data,
+        schema=CONTINUATION_SCHEMA,
+        expected_fields=_CONTINUATION_FIELDS,
+    )
+    try:
+        continuation = Continuation(
+            **{**fields, "phases": tuple(fields["phases"])}  # type: ignore[arg-type]
+        )
+        if binding != continuation.preimage_sha256:
+            raise ValueError("authorization_binding")
+        return continuation
+    except (TypeError, ValueError):
+        raise BenchRefusal("authorization_malformed") from None
+
+
+def _validated_clock_timestamp(timestamp: str) -> str:
+    try:
+        if type(timestamp) is not str:
+            raise ValueError("timestamp")
+        cm._validate_utc_z_timestamp(timestamp)
+        return timestamp
+    except (TypeError, ValueError):
+        raise BenchRefusal("provider_uncertain") from None
+
+
+def _prepare_authorization_consumption(
+    auth: object,
+    *,
+    phase: str,
+    boot_id: str,
+    clock: Clock,
+    policy: ArtifactPolicy,
+    expected_tier: str,
+    parent_window: WindowAuthorization | None,
+    parent_packet: cm.PhasePacket | None,
+) -> tuple[ConsumedAuthority, bytes, str]:
+    if (
+        type(getattr(policy, "tier", None)) is not str
+        or policy.tier != expected_tier
+        or not callable(getattr(policy, "encode", None))
+        or not callable(getattr(policy, "artifact_dir", None))
+    ):
+        raise BenchRefusal("tier_mismatch")
+
+    if phase == "vulkan_baseline":
+        if type(auth) is not WindowAuthorization:
+            raise BenchRefusal("authorization_scope_mismatch")
+        authority = auth
+        scorer_authority: cm.WindowAuthorizationDoc | cm.ContinuationDoc = (
+            _window_authorization_doc(authority)
+        )
+    elif phase == "cuda_candidate":
+        if type(auth) is not Continuation:
+            raise BenchRefusal("authorization_scope_mismatch")
+        authority = auth
+        scorer_authority = _continuation_doc(authority)
+    else:
+        raise BenchRefusal("authorization_scope_mismatch")
+    if phase not in authority.phases:
+        raise BenchRefusal("authorization_scope_mismatch")
+    if type(boot_id) is not str or authority.boot_id != boot_id:
+        raise BenchRefusal("authorization_boot_mismatch")
+
+    timestamp = _validated_clock_timestamp(clock.now_utc())
+    if cm._compare_utc_z(timestamp, authority.issued_at) < 0:
+        raise BenchRefusal("authorization_not_yet_valid")
+    if cm._compare_utc_z(timestamp, authority.expires_at) >= 0:
+        raise BenchRefusal("authorization_expired")
+
+    if type(authority) is Continuation:
+        if parent_window is None or parent_packet is None:
+            raise BenchRefusal("continuation_missing")
+        if type(parent_window) is not WindowAuthorization:
+            raise BenchRefusal("authorization_scope_mismatch")
+        if not isinstance(parent_packet, cm.PhasePacket):
+            raise BenchRefusal("continuation_parent_mismatch")
+        if parent_packet.phase != "vulkan_baseline" or parent_packet.outcome != "completed":
+            raise BenchRefusal("continuation_parent_mismatch")
+        try:
+            parent_binding = parent_packet.binding_sha256
+        except (AttributeError, TypeError, ValueError):
+            raise BenchRefusal("continuation_parent_mismatch") from None
+        if parent_binding != authority.parent_vulkan_packet_sha256:
+            raise BenchRefusal("continuation_parent_mismatch")
+        if (
+            parent_packet.window_id != authority.window_id
+            or parent_packet.boot_id != authority.boot_id
+        ):
+            raise BenchRefusal("authorization_scope_mismatch")
+        if (
+            parent_window.owner != authority.owner
+            or parent_window.window_id != authority.window_id
+            or parent_window.boot_id != authority.boot_id
+        ):
+            raise BenchRefusal("authorization_scope_mismatch")
+        if (
+            parent_window.preimage_sha256
+            != parent_packet.authorization_preimage_sha256
+        ):
+            raise BenchRefusal("continuation_parent_mismatch")
+        if cm._compare_utc_z(timestamp, parent_window.expires_at) >= 0:
+            raise BenchRefusal("authorization_expired")
+
+    receipt = cm.ConsumptionReceipt(
+        nonce=authority.nonce,
+        phase=phase,
+        boot_id=boot_id,
+        timestamp=timestamp,
+    )
+    receipt_document: dict[str, object] = {
+        "schema": receipt.schema_version,
+        "binding_sha256": receipt.binding_sha256,
+        "nonce": receipt.nonce,
+        "phase": receipt.phase,
+        "boot_id": receipt.boot_id,
+        "timestamp": receipt.timestamp,
+    }
+    encoded = policy.encode("consumption_receipt", dict(receipt_document))
+    receipt_dir = policy.artifact_dir("consumption_receipt")
+    if type(encoded) is not bytes or type(receipt_dir) is not str:
+        raise BenchRefusal("tier_mismatch")
+    return (
+        ConsumedAuthority(
+            preimage_sha256=scorer_authority.preimage_sha256,
+            consumption_receipt_sha256=receipt.binding_sha256,
+            receipt=dict(receipt_document),
+        ),
+        encoded,
+        receipt_dir,
+    )
+
+
+def consume_authorization(
+    auth: object,
+    *,
+    phase: str,
+    boot_id: str,
+    clock: Clock,
+    root: Path,
+    policy: ArtifactPolicy,
+    parent_window: WindowAuthorization | None = None,
+    parent_packet: cm.PhasePacket | None = None,
+) -> ConsumedAuthority:
+    consumed, encoded, receipt_dir = _prepare_authorization_consumption(
+        auth,
+        phase=phase,
+        boot_id=boot_id,
+        clock=clock,
+        policy=policy,
+        expected_tier="production",
+        parent_window=parent_window,
+        parent_packet=parent_packet,
+    )
+    nonce = consumed.receipt["nonce"]
+    if type(nonce) is not str:
+        raise BenchRefusal("authorization_malformed")
+    _create_consumption_marker(nonce, root=root)
+    write_private_file(
+        f"{receipt_dir}/consumption-{nonce}.json",
+        encoded,
+        root=root,
+    )
+    return consumed
+
+
+class RealAuthorizationGate:
+    tier = "production"
+
+    def __init__(self, policy: ArtifactPolicy) -> None:
+        if type(getattr(policy, "tier", None)) is not str or policy.tier != self.tier:
+            raise BenchRefusal("tier_mismatch")
+        self.policy = policy
+
+    def consume(
+        self,
+        authorization: object,
+        *,
+        phase: str,
+        boot_id: str,
+        parent_window: WindowAuthorization | None,
+        parent_packet: cm.PhasePacket | None,
+        root: Path,
+        clock: Clock,
+    ) -> ConsumedAuthority:
+        return consume_authorization(
+            authorization,
+            phase=phase,
+            boot_id=boot_id,
+            parent_window=parent_window,
+            parent_packet=parent_packet,
+            root=root,
+            clock=clock,
+            policy=self.policy,
+        )
+
+
+class RehearsalAuthorizationGate:
+    tier = "rehearsal"
+
+    def __init__(self, policy: ArtifactPolicy) -> None:
+        if type(getattr(policy, "tier", None)) is not str or policy.tier != self.tier:
+            raise BenchRefusal("tier_mismatch")
+        self.policy = policy
+
+    def consume(
+        self,
+        authorization: object,
+        *,
+        phase: str,
+        boot_id: str,
+        parent_window: WindowAuthorization | None,
+        parent_packet: cm.PhasePacket | None,
+        root: Path,
+        clock: Clock,
+    ) -> ConsumedAuthority:
+        consumed, encoded, receipt_dir = _prepare_authorization_consumption(
+            authorization,
+            phase=phase,
+            boot_id=boot_id,
+            clock=clock,
+            policy=self.policy,
+            expected_tier=self.tier,
+            parent_window=parent_window,
+            parent_packet=parent_packet,
+        )
+        if tuple(receipt_dir.split("/", 1))[:1] != ("rehearsal",):
+            raise BenchRefusal("tier_mismatch")
+        nonce = consumed.receipt["nonce"]
+        if type(nonce) is not str:
+            raise BenchRefusal("authorization_malformed")
+        sequence = next(_AUTHORIZATION_RECEIPT_SEQUENCE)
+        receipt_id = secrets.token_hex(16)
+        write_private_file(
+            f"{receipt_dir}/consumption-{nonce}-{sequence:06d}-{receipt_id}.json",
+            encoded,
+            root=root,
+        )
+        return consumed
 
 
 class _CommandRunner(Protocol):
@@ -1545,6 +2012,8 @@ def _sealed_tier(
         "clock": clock,
         "journal_factory": journal_factory,
     }
+    if getattr(authorization_gate, "policy", None) is not artifact_policy:
+        raise BenchRefusal("tier_mismatch")
     required_methods = {
         "service_state": ("is_active",),
         "port_probe": ("is_free",),

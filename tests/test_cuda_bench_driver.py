@@ -8,8 +8,10 @@ import json
 import os
 import stat
 import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import FrozenInstanceError, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -221,6 +223,8 @@ def _provider_components(tier: str) -> dict[str, object]:
         maps: object = driver.RealBackendMapProvider()
         clock: object = driver.SystemClock()
         journal_factory: object = driver.ProductionJournalFactory()
+        artifact_policy: object = driver.ProductionArtifactPolicy()
+        authorization_gate: object = driver.RealAuthorizationGate(artifact_policy)
     else:
         service_state = driver.SyntheticServiceState({})
         port_probe = driver.SyntheticPortProbe(set())
@@ -229,6 +233,8 @@ def _provider_components(tier: str) -> dict[str, object]:
         maps = driver.SyntheticBackendMap({})
         clock = driver.FrozenClock("2026-07-14T12:00:00Z")
         journal_factory = driver.RehearsalJournalFactory()
+        artifact_policy = driver.RehearsalArtifactPolicy()
+        authorization_gate = driver.RehearsalAuthorizationGate(artifact_policy)
     return {
         "service_state": service_state,
         "port_probe": port_probe,
@@ -237,12 +243,8 @@ def _provider_components(tier: str) -> dict[str, object]:
         "backend_maps": maps,
         "server_launcher": _TieredFake(tier),
         "server_client": _TieredFake(tier),
-        "authorization_gate": _TieredFake(tier),
-        "artifact_policy": (
-            driver.ProductionArtifactPolicy()
-            if tier == "production"
-            else driver.RehearsalArtifactPolicy()
-        ),
+        "authorization_gate": authorization_gate,
+        "artifact_policy": artifact_policy,
         "clock": clock,
         "journal_factory": journal_factory,
     }
@@ -2311,3 +2313,962 @@ class TestProviderSeams:
         assert clock.now_utc().endswith("Z")
         datetime.fromisoformat(clock.now_utc().replace("Z", "+00:00")).astimezone(UTC)
         assert isinstance(clock.monotonic(), float)
+
+
+_AUTH_NONCE_A = "a" * 64
+_AUTH_NONCE_B = "b" * 64
+
+
+def _window_fields(**overrides: object) -> dict[str, object]:
+    fields: dict[str, object] = {
+        "window_id": "window-1",
+        "phases": ["vulkan_baseline", "cuda_candidate"],
+        "boot_id": "boot-1",
+        "nonce": _AUTH_NONCE_A,
+        "issued_at": "2026-07-14T08:00:00Z",
+        "expires_at": "2026-07-14T12:00:00Z",
+        "owner": "owner-label-is-hash-bound-only",
+    }
+    fields.update(overrides)
+    return fields
+
+
+def _continuation_fields(**overrides: object) -> dict[str, object]:
+    fields = _window_fields(
+        phases=["cuda_candidate"],
+        nonce=_AUTH_NONCE_B,
+        issued_at="2026-07-14T11:00:00Z",
+        expires_at="2026-07-14T12:00:00Z",
+        parent_vulkan_packet_sha256="c" * 64,
+    )
+    fields.update(overrides)
+    return fields
+
+
+def _authorization_wrapper(kind: str, fields: dict[str, object]) -> bytes:
+    normalized = {**fields, "phases": tuple(fields["phases"])}  # type: ignore[arg-type]
+    doc = (
+        driver.cm.WindowAuthorizationDoc(**normalized)  # type: ignore[arg-type]
+        if kind == "window_authorization"
+        else driver.cm.ContinuationDoc(**normalized)  # type: ignore[arg-type]
+    )
+    return driver.ProductionArtifactPolicy().encode(
+        kind,
+        {
+            "schema": doc.schema_version,
+            "binding_sha256": doc.preimage_sha256,
+            **fields,
+        },
+    )
+
+
+def _mutated_wrapper(
+    data: bytes,
+    *,
+    outer: dict[str, object] | None = None,
+    fields: dict[str, object] | None = None,
+) -> bytes:
+    document = json.loads(data)
+    if outer is not None:
+        document.update(outer)
+    if fields is not None:
+        document["fields"].update(fields)
+    return (
+        json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        + "\n"
+    ).encode()
+
+
+def _scorer_phase_packet(phase: str = "vulkan_baseline") -> driver.cm.PhasePacket:
+    from tests.test_cuda_migration import _phase_packet
+
+    return _phase_packet(phase)
+
+
+def _cuda_authorities(
+    *,
+    packet: driver.cm.PhasePacket | None = None,
+    owner: str = "owner-label-is-hash-bound-only",
+) -> tuple[driver.WindowAuthorization, driver.Continuation, driver.cm.PhasePacket]:
+    parent = packet if packet is not None else _scorer_phase_packet()
+    window = driver.WindowAuthorization(
+        window_id="window-1",
+        phases=("vulkan_baseline", "cuda_candidate"),
+        boot_id="boot-1",
+        nonce=_AUTH_NONCE_A,
+        issued_at="2026-07-14T08:00:00Z",
+        expires_at="2026-07-14T12:00:00Z",
+        owner=owner,
+    )
+    object.__setattr__(
+        parent,
+        "authorization_preimage_sha256",
+        window.preimage_sha256,
+    )
+    continuation = driver.Continuation(
+        window_id="window-1",
+        phases=("cuda_candidate",),
+        boot_id="boot-1",
+        nonce=_AUTH_NONCE_B,
+        issued_at="2026-07-14T11:00:00Z",
+        expires_at="2026-07-14T12:00:00Z",
+        owner=owner,
+        parent_vulkan_packet_sha256=parent.binding_sha256,
+    )
+    return window, continuation, parent
+
+
+class TestAuthorizationArtifacts:
+    def test_canonical_private_wrappers_parse_to_frozen_local_types(
+        self, private_root: Path
+    ) -> None:
+        window_data = _authorization_wrapper("window_authorization", _window_fields())
+        continuation_data = _authorization_wrapper("continuation", _continuation_fields())
+        _private_file(private_root / "window.json", window_data)
+        _private_file(private_root / "continuation.json", continuation_data)
+
+        window = driver.parse_window_authorization(
+            driver.open_bench_file("window.json", root=private_root)
+        )
+        continuation = driver.parse_continuation(
+            driver.open_bench_file("continuation.json", root=private_root)
+        )
+
+        assert isinstance(window, driver.WindowAuthorization)
+        assert isinstance(continuation, driver.Continuation)
+        assert window.phases == ("vulkan_baseline", "cuda_candidate")
+        assert continuation.phases == ("cuda_candidate",)
+        with pytest.raises(FrozenInstanceError):
+            window.owner = "mutated"  # type: ignore[misc]
+        with pytest.raises(FrozenInstanceError):
+            continuation.owner = "mutated"  # type: ignore[misc]
+
+    def test_parsed_preimages_equal_the_scorer_document_canon(self) -> None:
+        window_fields = _window_fields(owner="a-different-owner-label")
+        continuation_fields = _continuation_fields(owner="a-different-owner-label")
+        window = driver.parse_window_authorization(
+            _authorization_wrapper("window_authorization", window_fields)
+        )
+        continuation = driver.parse_continuation(
+            _authorization_wrapper("continuation", continuation_fields)
+        )
+        scorer_window = driver.cm.WindowAuthorizationDoc(
+            **{**window_fields, "phases": tuple(window_fields["phases"])}  # type: ignore[arg-type]
+        )
+        scorer_continuation = driver.cm.ContinuationDoc(
+            **{
+                **continuation_fields,
+                "phases": tuple(continuation_fields["phases"]),  # type: ignore[arg-type]
+            }
+        )
+
+        assert window.preimage_sha256 == scorer_window.preimage_sha256
+        assert continuation.preimage_sha256 == scorer_continuation.preimage_sha256
+
+    @pytest.mark.parametrize(
+        "data",
+        [b"not-json", b"null", b"[]", b"{}", bytearray(b"{}"), "{}"],
+    )
+    def test_parsers_reject_bad_json_and_input_types(self, data: object) -> None:
+        for parser in (driver.parse_window_authorization, driver.parse_continuation):
+            with pytest.raises(driver.BenchRefusal) as exc:
+                parser(data)  # type: ignore[arg-type]
+            _assert_refusal(exc, "authorization_malformed")
+
+    @pytest.mark.parametrize("kind", ["window_authorization", "continuation"])
+    def test_parsers_accept_only_the_closed_bound_b3_wrapper(self, kind: str) -> None:
+        fields = _window_fields() if kind == "window_authorization" else _continuation_fields()
+        parser = (
+            driver.parse_window_authorization
+            if kind == "window_authorization"
+            else driver.parse_continuation
+        )
+        valid = _authorization_wrapper(kind, fields)
+        wrapper = json.loads(valid)
+        malformed: list[bytes] = [
+            (json.dumps({"schema": wrapper["schema"], **fields}) + "\n").encode()
+        ]
+        for key in ("schema", "binding_sha256", "fields"):
+            missing = dict(wrapper)
+            missing.pop(key)
+            malformed.append((json.dumps(missing) + "\n").encode())
+        malformed.append(_mutated_wrapper(valid, outer={"extra": True}))
+        malformed.append(_mutated_wrapper(valid, outer={"schema": "wrong.schema.v1"}))
+        malformed.append(_mutated_wrapper(valid, outer={"binding_sha256": "f" * 64}))
+        missing_field = json.loads(valid)
+        missing_field["fields"].pop("owner")
+        malformed.append((json.dumps(missing_field) + "\n").encode())
+        malformed.append(_mutated_wrapper(valid, fields={"extra": True}))
+
+        for data in malformed:
+            with pytest.raises(driver.BenchRefusal) as exc:
+                parser(data)
+            _assert_refusal(exc, "authorization_malformed")
+
+    @pytest.mark.parametrize(
+        ("field", "bad_value"),
+        [
+            ("window_id", ""),
+            ("window_id", "bad/window"),
+            ("window_id", "w" * 65),
+            ("window_id", 7),
+            ("nonce", "A" * 64),
+            ("nonce", "a" * 63),
+            ("nonce", 7),
+            ("phases", []),
+            ("phases", "vulkan_baseline"),
+            ("phases", ["not-a-phase"]),
+            ("phases", [7]),
+            ("boot_id", ""),
+            ("boot_id", 7),
+            ("owner", ""),
+            ("owner", 7),
+            ("issued_at", "2026-07-14T08:00:00+00:00"),
+            ("issued_at", "not-a-time"),
+            ("expires_at", "2026-07-14T12:00:00+00:00"),
+            ("expires_at", "2026-02-30T12:00:00Z"),
+            ("expires_at", "2026-07-14T12:00:01Z"),
+        ],
+    )
+    def test_window_parser_rejects_bad_fields_and_nonexact_ttl(
+        self, field: str, bad_value: object
+    ) -> None:
+        data = _mutated_wrapper(
+            _authorization_wrapper("window_authorization", _window_fields()),
+            fields={field: bad_value},
+        )
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.parse_window_authorization(data)
+        _assert_refusal(exc, "authorization_malformed")
+
+    @pytest.mark.parametrize(
+        ("field", "bad_value"),
+        [
+            ("parent_vulkan_packet_sha256", "A" * 64),
+            ("parent_vulkan_packet_sha256", "a" * 63),
+            ("parent_vulkan_packet_sha256", 7),
+            ("expires_at", "2026-07-14T12:00:01Z"),
+        ],
+    )
+    def test_continuation_parser_rejects_bad_parent_hash_and_nonexact_ttl(
+        self, field: str, bad_value: object
+    ) -> None:
+        data = _mutated_wrapper(
+            _authorization_wrapper("continuation", _continuation_fields()),
+            fields={field: bad_value},
+        )
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.parse_continuation(data)
+        _assert_refusal(exc, "authorization_malformed")
+
+    def test_different_owner_label_is_not_an_authorization_gate(
+        self, private_root: Path
+    ) -> None:
+        fields = _window_fields(owner="not-the-fixture-owner")
+        authorization = driver.parse_window_authorization(
+            _authorization_wrapper("window_authorization", fields)
+        )
+        policy = driver.ProductionArtifactPolicy()
+        result = driver.RealAuthorizationGate(policy).consume(
+            authorization,
+            phase="vulkan_baseline",
+            boot_id="boot-1",
+            parent_window=None,
+            parent_packet=None,
+            root=private_root,
+            clock=driver.FrozenClock("2026-07-14T11:30:00Z"),
+        )
+
+        assert authorization.owner == "not-the-fixture-owner"
+        assert result.preimage_sha256 == authorization.preimage_sha256
+
+    def test_real_gate_consumes_once_with_bound_private_artifacts(
+        self, private_root: Path
+    ) -> None:
+        authorization = driver.parse_window_authorization(
+            _authorization_wrapper("window_authorization", _window_fields())
+        )
+        policy = driver.ProductionArtifactPolicy()
+        result = driver.RealAuthorizationGate(policy).consume(
+            authorization,
+            phase="vulkan_baseline",
+            boot_id="boot-1",
+            parent_window=None,
+            parent_packet=None,
+            root=private_root,
+            clock=driver.FrozenClock("2026-07-14T11:30:00Z"),
+        )
+
+        marker = private_root / "markers" / authorization.nonce
+        receipts = list((private_root / "receipts").glob("*.json"))
+        assert marker.read_bytes() == b""
+        assert stat.S_IMODE(marker.stat().st_mode) == 0o600
+        assert len(receipts) == 1
+        assert stat.S_IMODE(receipts[0].stat().st_mode) == 0o600
+        wrapper = json.loads(receipts[0].read_bytes())
+        assert set(wrapper) == {"schema", "binding_sha256", "fields"}
+        assert wrapper["schema"] == driver.CONSUMPTION_RECEIPT_SCHEMA
+        assert wrapper["fields"] == {
+            "nonce": authorization.nonce,
+            "phase": "vulkan_baseline",
+            "boot_id": "boot-1",
+            "timestamp": "2026-07-14T11:30:00.000000Z",
+        }
+        scorer_receipt = driver.cm.ConsumptionReceipt(**wrapper["fields"])
+        assert result.preimage_sha256 == authorization.preimage_sha256
+        assert result.consumption_receipt_sha256 == scorer_receipt.binding_sha256
+        assert result.consumption_receipt_sha256 == wrapper["binding_sha256"]
+        assert result.receipt == {
+            "schema": driver.CONSUMPTION_RECEIPT_SCHEMA,
+            "binding_sha256": scorer_receipt.binding_sha256,
+            **wrapper["fields"],
+        }
+
+    def test_consumption_compares_full_timestamp_precision_and_samples_clock_once(
+        self, private_root: Path
+    ) -> None:
+        class ExactClock:
+            tier = "production"
+
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def now_utc(self) -> str:
+                self.calls += 1
+                return "2026-07-14T08:00:00.0000000Z"
+
+            def monotonic(self) -> float:
+                return 0.0
+
+        clock = ExactClock()
+        authorization = driver.WindowAuthorization(
+            window_id="window-1",
+            phases=("vulkan_baseline",),
+            boot_id="boot-1",
+            nonce=_AUTH_NONCE_A,
+            issued_at="2026-07-14T08:00:00.0000001Z",
+            expires_at="2026-07-14T12:00:00.0000001Z",
+            owner="any-owner-label",
+        )
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.consume_authorization(
+                authorization,
+                phase="vulkan_baseline",
+                boot_id="boot-1",
+                clock=clock,
+                root=private_root,
+                policy=driver.ProductionArtifactPolicy(),
+                parent_window=None,
+                parent_packet=None,
+            )
+        _assert_refusal(exc, "authorization_not_yet_valid")
+        assert clock.calls == 1
+        assert list(private_root.rglob("*")) == []
+
+    @pytest.mark.parametrize(
+        "case",
+        ["wrong_type", "wrong_phase_scope", "wrong_boot", "not_yet", "expired_equal"],
+    )
+    def test_baseline_prevalidation_refusals_never_publish_a_marker(
+        self, private_root: Path, case: str
+    ) -> None:
+        authorization: object = driver.WindowAuthorization(
+            window_id="window-1",
+            phases=("vulkan_baseline",),
+            boot_id="boot-1",
+            nonce=_AUTH_NONCE_A,
+            issued_at="2026-07-14T08:00:00Z",
+            expires_at="2026-07-14T12:00:00Z",
+            owner="any-owner-label",
+        )
+        boot_id = "boot-1"
+        now = "2026-07-14T11:30:00Z"
+        expected = "authorization_scope_mismatch"
+        if case == "wrong_type":
+            authorization = driver.Continuation(
+                **{
+                    **_continuation_fields(),
+                    "phases": ("cuda_candidate",),
+                }  # type: ignore[arg-type]
+            )
+        elif case == "wrong_phase_scope":
+            authorization = replace(authorization, phases=("cuda_candidate",))
+        elif case == "wrong_boot":
+            boot_id = "other-boot"
+            expected = "authorization_boot_mismatch"
+        elif case == "not_yet":
+            now = "2026-07-14T07:59:59Z"
+            expected = "authorization_not_yet_valid"
+        else:
+            now = "2026-07-14T12:00:00Z"
+            expected = "authorization_expired"
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.consume_authorization(
+                authorization,
+                phase="vulkan_baseline",
+                boot_id=boot_id,
+                clock=driver.FrozenClock(now),
+                root=private_root,
+                policy=driver.ProductionArtifactPolicy(),
+                parent_window=None,
+                parent_packet=None,
+            )
+        _assert_refusal(exc, expected)
+        assert list(private_root.rglob("*")) == []
+
+    @pytest.mark.parametrize(
+        ("case", "expected"),
+        [
+            ("missing_window", "continuation_missing"),
+            ("missing_packet", "continuation_missing"),
+            ("non_vulkan", "continuation_parent_mismatch"),
+            ("non_completed", "continuation_parent_mismatch"),
+            ("tampered", "continuation_parent_mismatch"),
+            ("packet_window", "authorization_scope_mismatch"),
+            ("packet_boot", "authorization_scope_mismatch"),
+        ],
+    )
+    def test_cuda_parent_refusals_are_typed_and_precede_marker_publication(
+        self, private_root: Path, case: str, expected: str
+    ) -> None:
+        window, continuation, packet = _cuda_authorities()
+        parent_window: object | None = window
+        parent_packet: driver.cm.PhasePacket | None = packet
+        if case == "missing_window":
+            parent_window = None
+        elif case == "missing_packet":
+            parent_packet = None
+        elif case == "non_vulkan":
+            parent_packet = _scorer_phase_packet("cuda_candidate")
+            continuation = replace(
+                continuation,
+                parent_vulkan_packet_sha256=parent_packet.binding_sha256,
+            )
+        elif case == "non_completed":
+            object.__setattr__(packet, "outcome", "crash")
+        elif case == "tampered":
+            object.__setattr__(packet, "timestamp", "2026-07-13T12:11:00Z")
+        elif case == "packet_window":
+            object.__setattr__(packet, "window_id", "other-window")
+            continuation = replace(
+                continuation,
+                parent_vulkan_packet_sha256=packet.binding_sha256,
+            )
+        elif case == "packet_boot":
+            object.__setattr__(packet, "boot_id", "other-boot")
+            continuation = replace(
+                continuation,
+                parent_vulkan_packet_sha256=packet.binding_sha256,
+            )
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.consume_authorization(
+                continuation,
+                phase="cuda_candidate",
+                boot_id="boot-1",
+                clock=driver.FrozenClock("2026-07-14T11:30:00Z"),
+                root=private_root,
+                policy=driver.ProductionArtifactPolicy(),
+                parent_window=parent_window,  # type: ignore[arg-type]
+                parent_packet=parent_packet,
+            )
+        _assert_refusal(exc, expected)
+        assert list(private_root.rglob("*")) == []
+
+    @pytest.mark.parametrize("field", ["owner", "window_id", "boot_id"])
+    def test_continuation_must_match_every_parent_window_scope_field(
+        self, private_root: Path, field: str
+    ) -> None:
+        window, continuation, packet = _cuda_authorities()
+        window = replace(window, **{field: f"different-{field}"})
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.consume_authorization(
+                continuation,
+                phase="cuda_candidate",
+                boot_id="boot-1",
+                clock=driver.FrozenClock("2026-07-14T11:30:00Z"),
+                root=private_root,
+                policy=driver.ProductionArtifactPolicy(),
+                parent_window=window,
+                parent_packet=packet,
+            )
+        _assert_refusal(exc, "authorization_scope_mismatch")
+        assert list(private_root.rglob("*")) == []
+
+    def test_different_same_label_parent_window_cannot_extend_cuda_authority(
+        self, private_root: Path
+    ) -> None:
+        window, continuation, packet = _cuda_authorities()
+        later_window = replace(
+            window,
+            issued_at="2026-07-14T09:00:00Z",
+            expires_at="2026-07-14T13:00:00Z",
+        )
+        continuation = replace(
+            continuation,
+            issued_at="2026-07-14T12:00:00Z",
+            expires_at="2026-07-14T13:00:00Z",
+        )
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.consume_authorization(
+                continuation,
+                phase="cuda_candidate",
+                boot_id="boot-1",
+                clock=driver.FrozenClock("2026-07-14T12:30:00Z"),
+                root=private_root,
+                policy=driver.ProductionArtifactPolicy(),
+                parent_window=later_window,
+                parent_packet=packet,
+            )
+        _assert_refusal(exc, "continuation_parent_mismatch")
+        assert list(private_root.rglob("*")) == []
+
+    def test_continuation_cannot_outlive_parent_window(self, private_root: Path) -> None:
+        window, continuation, packet = _cuda_authorities()
+        continuation = replace(
+            continuation,
+            issued_at="2026-07-14T11:30:00Z",
+            expires_at="2026-07-14T12:30:00Z",
+        )
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.consume_authorization(
+                continuation,
+                phase="cuda_candidate",
+                boot_id="boot-1",
+                clock=driver.FrozenClock("2026-07-14T12:00:00Z"),
+                root=private_root,
+                policy=driver.ProductionArtifactPolicy(),
+                parent_window=window,
+                parent_packet=packet,
+            )
+        _assert_refusal(exc, "authorization_expired")
+        assert list(private_root.rglob("*")) == []
+
+    def test_second_and_concurrent_consumers_observe_the_atomic_marker(
+        self, private_root: Path
+    ) -> None:
+        authorization = driver.WindowAuthorization(
+            **{**_window_fields(), "phases": ("vulkan_baseline",)}  # type: ignore[arg-type]
+        )
+        policy = driver.ProductionArtifactPolicy()
+        gate = driver.RealAuthorizationGate(policy)
+        kwargs = {
+            "phase": "vulkan_baseline",
+            "boot_id": "boot-1",
+            "parent_window": None,
+            "parent_packet": None,
+            "root": private_root,
+            "clock": driver.FrozenClock("2026-07-14T11:30:00Z"),
+        }
+
+        first = gate.consume(authorization, **kwargs)
+        with pytest.raises(driver.BenchRefusal) as exc:
+            gate.consume(authorization, **kwargs)
+        _assert_refusal(exc, "authorization_consumed")
+        assert first.preimage_sha256 == authorization.preimage_sha256
+
+        other_root = private_root.parent / "concurrent"
+        other_root.mkdir(mode=0o700)
+        other_auth = replace(authorization, nonce="d" * 64)
+        concurrent_kwargs = {**kwargs, "root": other_root}
+
+        def consume() -> object:
+            try:
+                return gate.consume(other_auth, **concurrent_kwargs)
+            except driver.BenchRefusal as refusal:
+                return refusal.code
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(executor.map(lambda _index: consume(), range(2)))
+        assert sum(isinstance(outcome, driver.ConsumedAuthority) for outcome in outcomes) == 1
+        assert outcomes.count("authorization_consumed") == 1
+
+    def test_loser_at_marker_publication_boundary_never_observes_filesystem_hazard(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        authorization = driver.WindowAuthorization(
+            **{**_window_fields(), "phases": ("vulkan_baseline",)}  # type: ignore[arg-type]
+        )
+        marker = private_root / "markers" / authorization.nonce
+        published = threading.Event()
+        loser_snapshotted = threading.Event()
+        winner_crossed_boundary = threading.Event()
+        real_fchmod = driver.os.fchmod
+        real_link = driver.os.link
+        real_verify_path_binding = driver._verify_path_binding
+
+        def controlled_fchmod(fd: int, mode: int) -> None:
+            if (
+                threading.current_thread().name == "marker-winner"
+                and os.path.lexists(marker)
+            ):
+                published.set()
+                if not loser_snapshotted.wait(timeout=5):
+                    raise AssertionError("loser did not snapshot published marker")
+                real_fchmod(fd, mode)
+                winner_crossed_boundary.set()
+                return
+            real_fchmod(fd, mode)
+
+        def controlled_link(
+            src: object, dst: object, *args: object, **kwargs: object
+        ) -> None:
+            real_link(src, dst, *args, **kwargs)  # type: ignore[arg-type]
+            if (
+                threading.current_thread().name == "marker-winner"
+                and dst == authorization.nonce
+            ):
+                published.set()
+                if not loser_snapshotted.wait(timeout=5):
+                    raise AssertionError("loser did not snapshot linked marker")
+                winner_crossed_boundary.set()
+
+        def controlled_verify_path_binding(
+            *args: object, **kwargs: object
+        ) -> None:
+            if threading.current_thread().name == "marker-loser":
+                loser_snapshotted.set()
+                if not winner_crossed_boundary.wait(timeout=5):
+                    raise AssertionError("winner did not cross publication boundary")
+            real_verify_path_binding(*args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(driver.os, "fchmod", controlled_fchmod)
+        monkeypatch.setattr(driver.os, "link", controlled_link)
+        monkeypatch.setattr(
+            driver,
+            "_verify_path_binding",
+            controlled_verify_path_binding,
+        )
+        gate = driver.RealAuthorizationGate(driver.ProductionArtifactPolicy())
+        kwargs = {
+            "phase": "vulkan_baseline",
+            "boot_id": "boot-1",
+            "parent_window": None,
+            "parent_packet": None,
+            "root": private_root,
+            "clock": driver.FrozenClock("2026-07-14T11:30:00Z"),
+        }
+        outcomes: dict[str, str] = {}
+
+        def consume(label: str) -> None:
+            if label == "loser" and not published.wait(timeout=5):
+                outcomes[label] = "publication_timeout"
+                return
+            try:
+                gate.consume(authorization, **kwargs)
+                outcomes[label] = "created"
+            except driver.BenchRefusal as refusal:
+                outcomes[label] = refusal.code
+            except BaseException as exc:  # test captures thread failures deterministically
+                outcomes[label] = type(exc).__name__
+
+        winner = threading.Thread(
+            target=consume,
+            args=("winner",),
+            name="marker-winner",
+        )
+        loser = threading.Thread(
+            target=consume,
+            args=("loser",),
+            name="marker-loser",
+        )
+        winner.start()
+        loser.start()
+        winner.join(timeout=10)
+        loser.join(timeout=10)
+
+        assert not winner.is_alive()
+        assert not loser.is_alive()
+        assert sorted(outcomes.values()) == ["authorization_consumed", "created"]
+
+    def test_receipt_write_failure_leaves_the_published_marker_burned(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        authorization = driver.WindowAuthorization(
+            **{**_window_fields(), "phases": ("vulkan_baseline",)}  # type: ignore[arg-type]
+        )
+        monkeypatch.setattr(
+            driver,
+            "write_private_file",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                driver.BenchRefusal("filesystem_hazard")
+            ),
+        )
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.consume_authorization(
+                authorization,
+                phase="vulkan_baseline",
+                boot_id="boot-1",
+                clock=driver.FrozenClock("2026-07-14T11:30:00Z"),
+                root=private_root,
+                policy=driver.ProductionArtifactPolicy(),
+                parent_window=None,
+                parent_packet=None,
+            )
+        _assert_refusal(exc, "filesystem_hazard")
+        assert driver.open_bench_file(
+            f"markers/{authorization.nonce}", root=private_root
+        ) == b""
+
+    def test_anchored_marker_eexist_is_consumed_without_path_exists_probe(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        authorization = driver.WindowAuthorization(
+            **{**_window_fields(), "phases": ("vulkan_baseline",)}  # type: ignore[arg-type]
+        )
+        marker_dir = private_root / "markers"
+        marker_dir.mkdir(mode=0o700)
+        _private_file(marker_dir / authorization.nonce, b"")
+        monkeypatch.setattr(
+            Path,
+            "exists",
+            lambda *_args: (_ for _ in ()).throw(AssertionError("TOCTOU exists probe")),
+        )
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.consume_authorization(
+                authorization,
+                phase="vulkan_baseline",
+                boot_id="boot-1",
+                clock=driver.FrozenClock("2026-07-14T11:30:00Z"),
+                root=private_root,
+                policy=driver.ProductionArtifactPolicy(),
+                parent_window=None,
+                parent_packet=None,
+            )
+        _assert_refusal(exc, "authorization_consumed")
+
+    @pytest.mark.parametrize(
+        "case",
+        ["symlink", "directory", "wrong_mode", "nonzero_size", "hardlink"],
+    )
+    def test_eexist_marker_requires_verified_private_empty_regular_file(
+        self, private_root: Path, case: str
+    ) -> None:
+        authorization = driver.WindowAuthorization(
+            **{**_window_fields(), "phases": ("vulkan_baseline",)}  # type: ignore[arg-type]
+        )
+        marker_dir = private_root / "markers"
+        marker_dir.mkdir(mode=0o700)
+        marker = marker_dir / authorization.nonce
+        if case == "symlink":
+            target = private_root / "symlink-target"
+            _private_file(target, b"")
+            marker.symlink_to(target)
+        elif case == "directory":
+            marker.mkdir(mode=0o700)
+        elif case == "wrong_mode":
+            _private_file(marker, b"")
+            os.chmod(marker, 0o640)
+        elif case == "nonzero_size":
+            _private_file(marker, b"not-an-empty-consumption-marker")
+        else:
+            source = private_root / "hardlink-source"
+            _private_file(source, b"")
+            os.link(source, marker)
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.consume_authorization(
+                authorization,
+                phase="vulkan_baseline",
+                boot_id="boot-1",
+                clock=driver.FrozenClock("2026-07-14T11:30:00Z"),
+                root=private_root,
+                policy=driver.ProductionArtifactPolicy(),
+                parent_window=None,
+                parent_packet=None,
+            )
+        _assert_refusal(exc, "filesystem_hazard")
+        assert list((private_root / "receipts").glob("*.json")) == []
+
+    def test_eexist_marker_path_substitution_is_filesystem_hazard(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        authorization = driver.WindowAuthorization(
+            **{**_window_fields(), "phases": ("vulkan_baseline",)}  # type: ignore[arg-type]
+        )
+        marker_dir = private_root / "markers"
+        marker_dir.mkdir(mode=0o700)
+        marker = marker_dir / authorization.nonce
+        _private_file(marker, b"")
+        verify_path_binding = driver._verify_path_binding
+
+        def substitute_marker_before_binding_check(*args: object, **kwargs: object) -> None:
+            marker.unlink()
+            _private_file(marker, b"")
+            verify_path_binding(*args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(
+            driver,
+            "_verify_path_binding",
+            substitute_marker_before_binding_check,
+        )
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.consume_authorization(
+                authorization,
+                phase="vulkan_baseline",
+                boot_id="boot-1",
+                clock=driver.FrozenClock("2026-07-14T11:30:00Z"),
+                root=private_root,
+                policy=driver.ProductionArtifactPolicy(),
+                parent_window=None,
+                parent_packet=None,
+            )
+        _assert_refusal(exc, "filesystem_hazard")
+        assert list((private_root / "receipts").glob("*.json")) == []
+
+    def test_receipt_encoding_happens_before_marker_publication(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        authorization = driver.WindowAuthorization(
+            **{**_window_fields(), "phases": ("vulkan_baseline",)}  # type: ignore[arg-type]
+        )
+        monkeypatch.setattr(
+            driver.ProductionArtifactPolicy,
+            "encode",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("encode failed")),
+        )
+        with pytest.raises(ValueError, match="encode failed"):
+            driver.consume_authorization(
+                authorization,
+                phase="vulkan_baseline",
+                boot_id="boot-1",
+                clock=driver.FrozenClock("2026-07-14T11:30:00Z"),
+                root=private_root,
+                policy=driver.ProductionArtifactPolicy(),
+                parent_window=None,
+                parent_packet=None,
+            )
+        assert list(private_root.rglob("*")) == []
+
+    def test_rehearsal_gate_is_incompatible_confined_and_does_not_burn_nonce(
+        self, private_root: Path
+    ) -> None:
+        authorization = driver.WindowAuthorization(
+            **{**_window_fields(), "phases": ("vulkan_baseline",)}  # type: ignore[arg-type]
+        )
+        canonical_input = private_root / "authorizations" / "window.json"
+        canonical_input.parent.mkdir(mode=0o700)
+        _private_file(
+            canonical_input,
+            _authorization_wrapper("window_authorization", _window_fields()),
+        )
+        before = {
+            path.relative_to(private_root).as_posix(): path.read_bytes()
+            for path in private_root.rglob("*")
+            if path.is_file()
+        }
+        policy = driver.RehearsalArtifactPolicy()
+        result = driver.RehearsalAuthorizationGate(policy).consume(
+            authorization,
+            phase="vulkan_baseline",
+            boot_id="boot-1",
+            parent_window=None,
+            parent_packet=None,
+            root=private_root,
+            clock=driver.FrozenClock("2026-07-14T11:30:00Z"),
+        )
+        after_outside = {
+            path.relative_to(private_root).as_posix(): path.read_bytes()
+            for path in private_root.rglob("*")
+            if path.is_file() and "rehearsal" not in path.relative_to(private_root).parts
+        }
+        rehearsal_files = [
+            path
+            for path in (private_root / "rehearsal").rglob("*")
+            if path.is_file()
+        ]
+
+        assert after_outside == before
+        assert len(rehearsal_files) == 1
+        wrapper = json.loads(rehearsal_files[0].read_bytes())
+        assert set(wrapper) == {"rehearsal_schema", "tier", "payload"}
+        assert wrapper["rehearsal_schema"] == driver.REHEARSAL_PACKET_SCHEMA
+        assert wrapper["payload"]["schema"] == driver.CONSUMPTION_RECEIPT_SCHEMA
+        assert wrapper["payload"]["fields"]["timestamp"] == (
+            "2026-07-14T11:30:00.000000Z"
+        )
+        assert result.consumption_receipt_sha256 == wrapper["payload"]["binding_sha256"]
+        assert not (private_root / "markers").exists()
+
+        real_policy = driver.ProductionArtifactPolicy()
+        real = driver.RealAuthorizationGate(real_policy).consume(
+            authorization,
+            phase="vulkan_baseline",
+            boot_id="boot-1",
+            parent_window=None,
+            parent_packet=None,
+            root=private_root,
+            clock=driver.FrozenClock("2026-07-14T11:30:00Z"),
+        )
+        assert real.preimage_sha256 == result.preimage_sha256
+
+    def test_rehearsal_receipt_name_survives_process_local_sequence_reset(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        authorization = driver.WindowAuthorization(
+            **{**_window_fields(), "phases": ("vulkan_baseline",)}  # type: ignore[arg-type]
+        )
+        policy = driver.RehearsalArtifactPolicy()
+        gate = driver.RehearsalAuthorizationGate(policy)
+        kwargs = {
+            "phase": "vulkan_baseline",
+            "boot_id": "boot-1",
+            "parent_window": None,
+            "parent_packet": None,
+            "root": private_root,
+            "clock": driver.FrozenClock("2026-07-14T11:30:00Z"),
+        }
+
+        monkeypatch.setattr(driver, "_AUTHORIZATION_RECEIPT_SEQUENCE", iter([0]))
+        gate.consume(authorization, **kwargs)
+        monkeypatch.setattr(driver, "_AUTHORIZATION_RECEIPT_SEQUENCE", iter([0]))
+        gate.consume(authorization, **kwargs)
+
+        receipts = list((private_root / "rehearsal" / "receipts").glob("*.json"))
+        assert len(receipts) == 2
+        assert not (private_root / "markers").exists()
+
+    def test_all_inv_2_surfaces_keep_the_identical_postponed_annotation(self) -> None:
+        surfaces = (
+            driver.AuthorizationGate.consume,
+            driver.RealAuthorizationGate.consume,
+            driver.RehearsalAuthorizationGate.consume,
+            driver.consume_authorization,
+        )
+        for surface in surfaces:
+            assert inspect.signature(surface).parameters["parent_packet"].annotation == (
+                "cm.PhasePacket | None"
+            )
+            assert surface.__annotations__["parent_packet"] == "cm.PhasePacket | None"
+
+    @pytest.mark.parametrize("tier", ["production", "rehearsal"])
+    def test_factory_returns_concrete_gate_with_the_identical_policy_object(
+        self, tier: str
+    ) -> None:
+        components = _provider_components(tier)
+        factory = driver.production_tier if tier == "production" else driver.rehearsal_tier
+        providers = factory(**components)
+        expected_type = (
+            driver.RealAuthorizationGate
+            if tier == "production"
+            else driver.RehearsalAuthorizationGate
+        )
+        assert type(providers.authorization_gate) is expected_type
+        assert providers.authorization_gate.policy is providers.artifact_policy
+
+    def test_factory_refuses_equal_but_distinct_gate_policy_before_any_write(
+        self, private_root: Path
+    ) -> None:
+        components = _provider_components("production")
+        components["artifact_policy"] = driver.ProductionArtifactPolicy()
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.production_tier(**components)
+        _assert_refusal(exc, "tier_mismatch")
+        assert list(private_root.rglob("*")) == []
