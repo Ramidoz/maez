@@ -96,8 +96,10 @@ class StubTests(unittest.TestCase):
         self.assertTrue(all(line.startswith("data: ") for line in lines), body)
         self.assertNotIn("[DONE]", body)
         events = [json.loads(line.removeprefix("data: ")) for line in lines]
-        self.assertNotIn("content", events[0])
+        self.assertEqual("", events[0]["content"])
+        self.assertIs(events[0]["stop"], False)
         self.assertTrue(events[1]["content"])
+        self.assertIs(events[1]["stop"], False)
         self.assertEqual(
             {
                 "prompt_per_second": 100.0,
@@ -110,6 +112,8 @@ class StubTests(unittest.TestCase):
             events[2]["timings"],
         )
         self.assertEqual("", events[2]["content"])
+        self.assertIs(events[2]["stop"], True)
+        self.assertEqual("sentinel", events[2]["prompt"])
 
     def test_missing_or_non_boolean_true_stream_flag_is_aggregate_json(self) -> None:
         _proc, port = self._spawn("--persona", "healthy", "--alias", ALIAS)
@@ -160,6 +164,16 @@ class StubTests(unittest.TestCase):
                     f"http://127.0.0.1:{port}/health", timeout=2
                 )
             self.assertEqual(503, caught.exception.code)
+            self.assertEqual(
+                {
+                    "error": {
+                        "code": 503,
+                        "message": "Loading model",
+                        "type": "unavailable_error",
+                    }
+                },
+                json.loads(caught.exception.read()),
+            )
 
     def test_wrong_identity_and_models_shape_personas(self) -> None:
         cases = (

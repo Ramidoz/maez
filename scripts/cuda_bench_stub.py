@@ -44,9 +44,8 @@ _TIMINGS = {
     "draft_n": 12,
     "draft_n_accepted": 9,
 }
-_METADATA_EVENT = {"slot_id": 0}
-_CONTENT_EVENT = {"content": "stub response"}
-_TERMINAL_EVENT = {"timings": _TIMINGS, "content": ""}
+_METADATA_EVENT = {"content": "", "stop": False, "id_slot": 0}
+_CONTENT_EVENT = {"content": "stub response", "stop": False}
 
 
 def _json_bytes(document: object) -> bytes:
@@ -97,7 +96,16 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/health":
             if self.server.persona == "readiness_timeout":
-                self._send_json(503, {"status": "loading"})
+                self._send_json(
+                    503,
+                    {
+                        "error": {
+                            "code": 503,
+                            "message": "Loading model",
+                            "type": "unavailable_error",
+                        }
+                    },
+                )
             else:
                 self._send_json(200, {"status": "ok"})
             return
@@ -144,7 +152,13 @@ class _Handler(BaseHTTPRequestHandler):
             while True:
                 time.sleep(60)
 
-        body = _sse_bytes(_METADATA_EVENT, _CONTENT_EVENT, _TERMINAL_EVENT)
+        terminal_event = {
+            "content": "",
+            "prompt": payload.get("prompt"),
+            "stop": True,
+            "timings": _TIMINGS,
+        }
+        body = _sse_bytes(_METADATA_EVENT, _CONTENT_EVENT, terminal_event)
         self._send(200, body, "text/event-stream")
 
 

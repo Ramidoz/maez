@@ -10,6 +10,7 @@ import errno
 import copy
 import fcntl
 import hashlib
+import http.client
 import itertools
 import json
 import math
@@ -20,15 +21,16 @@ import select
 import signal
 import socket
 import stat
+import statistics
 import subprocess
 import sys
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_EVEN
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Callable, Literal, Protocol
 
 from scripts import cuda_migration as cm
 
@@ -1705,6 +1707,824 @@ class ServerClient(Protocol):
     def stream(self, port: int, prompt: str) -> "TurnMeasurement": ...  # noqa: F821
 
 
+@dataclass(frozen=True, slots=True)
+class TurnMeasurement:
+    """One private in-memory turn measurement with a content-light repr."""
+
+    ttft_ms: float
+    e2e_ms: float
+    content: str = field(repr=False)
+    timings: dict[str, object] = field(repr=False)
+    terminal: dict[str, object] = field(repr=False)
+
+    def __repr__(self) -> str:
+        return (
+            "TurnMeasurement("
+            f"ttft_ms={self.ttft_ms!r}, e2e_ms={self.e2e_ms!r}, "
+            f"literal_chars={len(self.content)}, "
+            f"timing_field_count={len(self.timings)}, "
+            f"terminal_field_count={len(self.terminal)})"
+        )
+
+
+def parse_mtp(terminal_timings: dict[str, object]) -> tuple[int, int, int]:
+    """Validate the two b9596 per-request MTP counters and derive rejected."""
+
+    if type(terminal_timings) is not dict:
+        raise BenchRefusal("malformed_response")
+    if "draft_n" not in terminal_timings or "draft_n_accepted" not in terminal_timings:
+        raise BenchRefusal("mtp_unproven")
+    drafted = terminal_timings["draft_n"]
+    accepted = terminal_timings["draft_n_accepted"]
+    if (
+        type(drafted) is not int
+        or type(accepted) is not int
+        or drafted < 1
+        or accepted < 0
+        or accepted > drafted
+    ):
+        raise BenchRefusal("malformed_response")
+    return drafted, accepted, drafted - accepted
+
+
+def aggregate_mtp(
+    cycle_turn_mtp: list[list[tuple[int, int, int]]],
+) -> tuple[int, int, int]:
+    """Aggregate exactly seven validated request counters across three cycles."""
+
+    if type(cycle_turn_mtp) is not list or len(cycle_turn_mtp) != 3:
+        raise ValueError("sample_count")
+    drafted_total = 0
+    accepted_total = 0
+    for cycle in cycle_turn_mtp:
+        if type(cycle) is not list or len(cycle) != 7:
+            raise ValueError("sample_count")
+        for item in cycle:
+            if type(item) is not tuple or len(item) != 3:
+                raise BenchRefusal("malformed_response")
+            drafted, accepted, rejected = item
+            if (
+                type(drafted) is not int
+                or type(accepted) is not int
+                or type(rejected) is not int
+                or drafted < 1
+                or accepted < 0
+                or accepted > drafted
+                or rejected != drafted - accepted
+            ):
+                raise BenchRefusal("malformed_response")
+            drafted_total += drafted
+            accepted_total += accepted
+    return drafted_total, accepted_total, drafted_total - accepted_total
+
+
+def _finite_nonnegative_real(value: object) -> bool:
+    if type(value) not in {int, float}:
+        return False
+    try:
+        numeric = float(value)
+    except OverflowError:
+        return False
+    return math.isfinite(numeric) and numeric >= 0
+
+
+def phase_statistics(turns: list[TurnMeasurement]) -> dict[str, float]:
+    """Recompute the frozen latency and throughput statistics for 21 turns."""
+
+    if (
+        type(turns) is not list
+        or len(turns) != cm.FROZEN_MEASURED_SAMPLE_COUNT
+        or any(type(turn) is not TurnMeasurement for turn in turns)
+    ):
+        raise ValueError("sample_count")
+    e2e_values: list[float] = []
+    prefill_rates: list[float] = []
+    decode_rates: list[float] = []
+    for turn in turns:
+        if (
+            not _finite_nonnegative_real(turn.ttft_ms)
+            or not _finite_nonnegative_real(turn.e2e_ms)
+            or float(turn.ttft_ms) > float(turn.e2e_ms)
+            or type(turn.timings) is not dict
+        ):
+            raise BenchRefusal("malformed_response")
+        prefill = turn.timings.get("prompt_per_second")
+        decode = turn.timings.get("predicted_per_second")
+        if not _finite_nonnegative_real(prefill) or not _finite_nonnegative_real(decode):
+            raise BenchRefusal("malformed_response")
+        e2e_values.append(float(turn.e2e_ms))
+        prefill_rates.append(float(prefill))
+        decode_rates.append(float(decode))
+    e2e_values.sort()
+    p95_index = math.ceil(0.95 * len(e2e_values)) - 1
+    return {
+        "seven_turn_max_ms": max(e2e_values),
+        "p95_e2e_ms": e2e_values[p95_index],
+        "median_decode_tps": float(statistics.median(decode_rates)),
+        "median_prefill_tps": float(statistics.median(prefill_rates)),
+    }
+
+
+class _LiteralLoopbackHTTPConnection(http.client.HTTPConnection):
+    """HTTP/1.1 connection whose address path cannot invoke name resolution."""
+
+    def connect(self) -> None:
+        if self.host != "127.0.0.1" or self._tunnel_host is not None:
+            raise OSError("loopback transport invariant")
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            sock.settimeout(self.timeout)
+            if self.source_address:
+                sock.bind(self.source_address)
+            sock.connect(("127.0.0.1", self.port))
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except BaseException:
+            sock.close()
+            raise
+        self.sock = sock
+
+
+_ConnectionFactory = Callable[[str, int, float], object]
+_CLIENT_GUARD = object()
+_READ_CHUNK_BYTES = 64 * 1024
+
+
+def _monotonic(clock: Clock) -> float:
+    try:
+        value = clock.monotonic()
+    except Exception:
+        raise BenchRefusal("provider_uncertain") from None
+    if not _finite_nonnegative_real(value):
+        raise BenchRefusal("provider_uncertain")
+    return float(value)
+
+
+def _remaining_seconds(clock: Clock, deadline: float) -> float:
+    remaining = deadline - _monotonic(clock)
+    if remaining <= 0:
+        raise BenchRefusal("http_timeout")
+    return remaining
+
+
+def _set_connection_timeout(connection: object, timeout: float) -> None:
+    sock = getattr(connection, "sock", None)
+    if sock is None or not callable(getattr(sock, "settimeout", None)):
+        raise BenchRefusal("malformed_response")
+    try:
+        sock.settimeout(timeout)
+    except (OSError, TypeError, ValueError):
+        raise BenchRefusal("malformed_response") from None
+
+
+def _set_read_timeout(connection: object, response: object, timeout: float) -> None:
+    """Set the socket deadline after HTTP/1.0 may detach it from the connection."""
+
+    sock = getattr(connection, "sock", None)
+    if sock is None:
+        fp = getattr(response, "fp", None)
+        raw = getattr(fp, "raw", None)
+        sock = getattr(raw, "_sock", None)
+    if sock is None or not callable(getattr(sock, "settimeout", None)):
+        raise BenchRefusal("malformed_response")
+    try:
+        sock.settimeout(timeout)
+    except (OSError, TypeError, ValueError):
+        raise BenchRefusal("malformed_response") from None
+
+
+def _response_is_closed(response: object) -> bool:
+    isclosed = getattr(response, "isclosed", None)
+    if not callable(isclosed):
+        return False
+    try:
+        return isclosed() is True
+    except (OSError, http.client.HTTPException):
+        raise BenchRefusal("malformed_response") from None
+
+
+def _validate_response_framing(
+    response: object,
+    *,
+    expected_content_type: str,
+) -> int | None:
+    """Reject ambiguous HTTP framing before consuming any response bytes."""
+
+    getheaders = getattr(response, "getheaders", None)
+    if not callable(getheaders):
+        raise BenchRefusal("malformed_response")
+    try:
+        raw_headers = getheaders()
+    except (OSError, http.client.HTTPException):
+        raise BenchRefusal("malformed_response") from None
+    if type(raw_headers) is not list:
+        raise BenchRefusal("malformed_response")
+    headers: dict[str, list[str]] = {}
+    for row in raw_headers:
+        if (
+            type(row) is not tuple
+            or len(row) != 2
+            or type(row[0]) is not str
+            or type(row[1]) is not str
+        ):
+            raise BenchRefusal("malformed_response")
+        headers.setdefault(row[0].lower(), []).append(row[1])
+
+    content_types = headers.get("content-type", [])
+    if len(content_types) != 1:
+        raise BenchRefusal("malformed_response")
+    observed_content_type = content_types[0].split(";", 1)[0].strip().lower()
+    if observed_content_type != expected_content_type:
+        raise BenchRefusal("malformed_response")
+
+    content_lengths = headers.get("content-length", [])
+    transfer_encodings = headers.get("transfer-encoding", [])
+    if (
+        len(content_lengths) > 1
+        or len(transfer_encodings) > 1
+        or (content_lengths and transfer_encodings)
+    ):
+        raise BenchRefusal("malformed_response")
+    if transfer_encodings and transfer_encodings[0].strip().lower() != "chunked":
+        raise BenchRefusal("malformed_response")
+    if content_lengths:
+        rendered_length = content_lengths[0].strip()
+        if not rendered_length.isascii() or not rendered_length.isdecimal():
+            raise BenchRefusal("malformed_response")
+        normalized_length = rendered_length.lstrip("0") or "0"
+        rendered_cap = str(RESPONSE_BYTE_CAP)
+        if len(normalized_length) > len(rendered_cap) or (
+            len(normalized_length) == len(rendered_cap)
+            and normalized_length > rendered_cap
+        ):
+            raise BenchRefusal("response_too_large")
+        declared_length = int(normalized_length)
+        return declared_length
+    elif not transfer_encodings and getattr(response, "will_close", None) is not True:
+        raise BenchRefusal("malformed_response")
+    return None
+
+
+def _close_http_resources(*resources: object | None) -> None:
+    """Close every resource; ordinary close errors are non-authoritative."""
+
+    pending_base_exception: BaseException | None = None
+    for resource in resources:
+        close = getattr(resource, "close", None)
+        if not callable(close):
+            continue
+        try:
+            close()
+        except BaseException as exc:
+            if not isinstance(exc, Exception) and pending_base_exception is None:
+                pending_base_exception = exc
+    if pending_base_exception is not None:
+        raise pending_base_exception
+
+
+def _validate_http_inputs(port: int, timeout_ms: int) -> None:
+    if type(port) is not int or not 0 < port <= 65_535:
+        raise ValueError("port")
+    if type(timeout_ms) is not int or timeout_ms <= 0:
+        raise ValueError("request_timeout_ms")
+
+
+def _open_connection(
+    port: int,
+    *,
+    clock: Clock,
+    deadline: float,
+    connection_factory: _ConnectionFactory,
+) -> object:
+    connection: object | None = None
+    admitted = False
+    try:
+        connection = connection_factory(
+            "127.0.0.1", port, _remaining_seconds(clock, deadline)
+        )
+        connect = getattr(connection, "connect", None)
+        if not callable(connect):
+            raise BenchRefusal("malformed_response")
+        connect()
+        _set_connection_timeout(connection, _remaining_seconds(clock, deadline))
+        admitted = True
+        return connection
+    except BenchRefusal:
+        raise
+    except (TimeoutError, socket.timeout):
+        raise BenchRefusal("http_timeout") from None
+    except (OSError, http.client.HTTPException):
+        raise BenchRefusal("malformed_response") from None
+    finally:
+        if not admitted:
+            _close_http_resources(connection)
+
+
+def _next_sse_event(buffer: bytes) -> tuple[bytes | None, bytes]:
+    lf_index = buffer.find(b"\n\n")
+    crlf_index = buffer.find(b"\r\n\r\n")
+    candidates = [
+        (index, separator)
+        for index, separator in ((lf_index, b"\n\n"), (crlf_index, b"\r\n\r\n"))
+        if index >= 0
+    ]
+    if not candidates:
+        return None, buffer
+    index, separator = min(candidates, key=lambda item: item[0])
+    return buffer[:index], buffer[index + len(separator) :]
+
+
+def _sse_payload(event: bytes) -> bytes | None:
+    data_lines: list[bytes] = []
+    for raw_line in event.replace(b"\r\n", b"\n").split(b"\n"):
+        if not raw_line or raw_line.startswith(b":"):
+            continue
+        if raw_line.startswith(b"data:"):
+            data_lines.append(raw_line[5:].lstrip(b" "))
+            continue
+        raise BenchRefusal("malformed_response")
+    if not data_lines:
+        return None
+    return b"\n".join(data_lines)
+
+
+def _json_object_without_duplicates(
+    pairs: list[tuple[str, object]],
+) -> dict[str, object]:
+    document: dict[str, object] = {}
+    for key, value in pairs:
+        if key in document:
+            raise ValueError("duplicate_key")
+        document[key] = value
+    return document
+
+
+def _finite_json_float(rendered: str) -> float:
+    value = float(rendered)
+    if not math.isfinite(value):
+        raise ValueError("nonfinite")
+    return value
+
+
+def _reject_json_constant(_rendered: str) -> object:
+    raise ValueError("nonfinite")
+
+
+def _decode_protocol_json(payload: bytes | bytearray) -> object:
+    """Decode bounded wire JSON without ambiguity or non-finite numbers."""
+
+    try:
+        document = json.loads(
+            payload,
+            object_pairs_hook=_json_object_without_duplicates,
+            parse_float=_finite_json_float,
+            parse_constant=_reject_json_constant,
+        )
+        pending = [document]
+        while pending:
+            value = pending.pop()
+            if type(value) is str:
+                value.encode("utf-8")
+            elif type(value) is dict:
+                pending.extend(value.keys())
+                pending.extend(value.values())
+            elif type(value) is list:
+                pending.extend(value)
+        return document
+    except (
+        UnicodeError,
+        json.JSONDecodeError,
+        RecursionError,
+        TypeError,
+        ValueError,
+    ):
+        raise BenchRefusal("malformed_response") from None
+
+
+def stream_completion(
+    port: int,
+    prompt: str,
+    *,
+    clock: Clock,
+    request_timeout_ms: int = REQUEST_TIMEOUT_MS,
+    connection_factory: _ConnectionFactory = _LiteralLoopbackHTTPConnection,
+) -> TurnMeasurement:
+    """Measure one native llama.cpp SSE completion against literal loopback."""
+
+    _validate_http_inputs(port, request_timeout_ms)
+    if type(prompt) is not str:
+        raise ValueError("prompt")
+    body = json.dumps(
+        {"prompt": prompt, "stream": True},
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    deadline = _monotonic(clock) + request_timeout_ms / 1000
+    connection: object | None = None
+    response: object | None = None
+    try:
+        connection = _open_connection(
+            port,
+            clock=clock,
+            deadline=deadline,
+            connection_factory=connection_factory,
+        )
+        putrequest = getattr(connection, "putrequest", None)
+        putheader = getattr(connection, "putheader", None)
+        endheaders = getattr(connection, "endheaders", None)
+        getresponse = getattr(connection, "getresponse", None)
+        if not all(callable(item) for item in (putrequest, putheader, endheaders, getresponse)):
+            raise BenchRefusal("malformed_response")
+        _set_connection_timeout(connection, _remaining_seconds(clock, deadline))
+        putrequest("POST", "/completion", skip_accept_encoding=True)
+        putheader("Accept", "text/event-stream")
+        putheader("Content-Length", str(len(body)))
+        putheader("Content-Type", "application/json")
+        _set_connection_timeout(connection, _remaining_seconds(clock, deadline))
+        endheaders(body)
+        request_written_at = _monotonic(clock)
+        _remaining_seconds(clock, deadline)
+        _set_connection_timeout(connection, _remaining_seconds(clock, deadline))
+        response = getresponse()
+        _remaining_seconds(clock, deadline)
+        status = getattr(response, "status", None)
+        read1 = getattr(response, "read1", None)
+        if status != 200 or not callable(read1):
+            raise BenchRefusal("malformed_response")
+        declared_body_bytes = _validate_response_framing(
+            response,
+            expected_content_type="text/event-stream",
+        )
+
+        total_bytes = 0
+        buffer = b""
+        content_parts: list[str] = []
+        ttft_at: float | None = None
+        terminal_at: float | None = None
+        terminal: dict[str, object] | None = None
+        timings: dict[str, object] | None = None
+        while True:
+            _remaining_seconds(clock, deadline)
+            if _response_is_closed(response):
+                if (
+                    buffer
+                    or terminal is None
+                    or ttft_at is None
+                    or (
+                        declared_body_bytes is not None
+                        and total_bytes != declared_body_bytes
+                    )
+                ):
+                    raise BenchRefusal("malformed_response")
+                break
+            _set_read_timeout(
+                connection,
+                response,
+                _remaining_seconds(clock, deadline),
+            )
+            try:
+                chunk = read1(min(_READ_CHUNK_BYTES, RESPONSE_BYTE_CAP - total_bytes + 1))
+            except (TimeoutError, socket.timeout):
+                raise BenchRefusal("http_timeout") from None
+            except (OSError, http.client.HTTPException):
+                raise BenchRefusal("malformed_response") from None
+            arrived_at = _monotonic(clock)
+            if arrived_at >= deadline:
+                raise BenchRefusal("http_timeout")
+            if type(chunk) is not bytes:
+                raise BenchRefusal("malformed_response")
+            if not chunk:
+                if (
+                    buffer
+                    or terminal is None
+                    or ttft_at is None
+                    or (
+                        declared_body_bytes is not None
+                        and total_bytes != declared_body_bytes
+                    )
+                ):
+                    raise BenchRefusal("malformed_response")
+                break
+            total_bytes += len(chunk)
+            if total_bytes > RESPONSE_BYTE_CAP:
+                raise BenchRefusal("response_too_large")
+            buffer += chunk
+            while True:
+                event, buffer = _next_sse_event(buffer)
+                if event is None:
+                    break
+                if terminal is not None:
+                    raise BenchRefusal("malformed_response")
+                payload = _sse_payload(event)
+                if payload is None:
+                    continue
+                if payload == b"[DONE]":
+                    raise BenchRefusal("malformed_response")
+                document = _decode_protocol_json(payload)
+                if type(document) is not dict:
+                    raise BenchRefusal("malformed_response")
+                value = document.get("content")
+                if value is not None and type(value) is not str:
+                    raise BenchRefusal("malformed_response")
+                stop = document.get("stop")
+                if type(stop) is not bool:
+                    raise BenchRefusal("malformed_response")
+                if stop:
+                    if (
+                        terminal is not None
+                        or value != ""
+                        or type(document.get("prompt")) is not str
+                    ):
+                        raise BenchRefusal("malformed_response")
+                    candidate = document.get("timings")
+                    if type(candidate) is not dict:
+                        raise BenchRefusal("malformed_response")
+                    terminal = dict(document)
+                    timings = dict(candidate)
+                    terminal_at = arrived_at
+                    continue
+                if terminal is not None:
+                    raise BenchRefusal("malformed_response")
+                if value:
+                    content_parts.append(value)
+                    if ttft_at is None:
+                        ttft_at = arrived_at
+        if terminal is None or timings is None or terminal_at is None or ttft_at is None:
+            raise BenchRefusal("malformed_response")
+        ttft_ms = (ttft_at - request_written_at) * 1000
+        e2e_ms = (terminal_at - request_written_at) * 1000
+        if ttft_ms < 0 or e2e_ms < 0 or ttft_ms > e2e_ms:
+            raise BenchRefusal("malformed_response")
+        return TurnMeasurement(
+            ttft_ms=float(ttft_ms),
+            e2e_ms=float(e2e_ms),
+            content="".join(content_parts),
+            timings=timings,
+            terminal=terminal,
+        )
+    except BenchRefusal:
+        raise
+    except (TimeoutError, socket.timeout):
+        raise BenchRefusal("http_timeout") from None
+    except (OSError, http.client.HTTPException):
+        raise BenchRefusal("malformed_response") from None
+    finally:
+        _close_http_resources(response, connection)
+
+
+def _json_get(
+    port: int,
+    path: str,
+    *,
+    clock: Clock,
+    request_timeout_ms: int,
+    health_probe: bool,
+) -> object | None:
+    """Read one capped loopback JSON response without exposing response bytes."""
+
+    _validate_http_inputs(port, request_timeout_ms)
+    if path not in {"/health", "/v1/models"}:
+        raise ValueError("path")
+    deadline = _monotonic(clock) + request_timeout_ms / 1000
+    connection: object | None = None
+    response: object | None = None
+    try:
+        try:
+            connection = _open_connection(
+                port,
+                clock=clock,
+                deadline=deadline,
+                connection_factory=_LiteralLoopbackHTTPConnection,
+            )
+        except BenchRefusal as exc:
+            if health_probe and exc.code in {"http_timeout", "malformed_response"}:
+                return None
+            raise
+        putrequest = getattr(connection, "putrequest", None)
+        putheader = getattr(connection, "putheader", None)
+        endheaders = getattr(connection, "endheaders", None)
+        getresponse = getattr(connection, "getresponse", None)
+        if not all(callable(item) for item in (putrequest, putheader, endheaders, getresponse)):
+            raise BenchRefusal("malformed_response")
+        _set_connection_timeout(connection, _remaining_seconds(clock, deadline))
+        putrequest("GET", path, skip_accept_encoding=True)
+        putheader("Accept", "application/json")
+        _set_connection_timeout(connection, _remaining_seconds(clock, deadline))
+        endheaders()
+        _set_connection_timeout(connection, _remaining_seconds(clock, deadline))
+        response = getresponse()
+        _remaining_seconds(clock, deadline)
+        status = getattr(response, "status", None)
+        unready = health_probe and status == 503
+        if status != 200 and not unready:
+            raise BenchRefusal("malformed_response")
+        read1 = getattr(response, "read1", None)
+        if not callable(read1):
+            raise BenchRefusal("malformed_response")
+        declared_body_bytes = _validate_response_framing(
+            response,
+            expected_content_type="application/json",
+        )
+        body = bytearray()
+        while True:
+            _remaining_seconds(clock, deadline)
+            if _response_is_closed(response):
+                if (
+                    declared_body_bytes is not None
+                    and len(body) != declared_body_bytes
+                ):
+                    raise BenchRefusal("malformed_response")
+                break
+            _set_read_timeout(
+                connection,
+                response,
+                _remaining_seconds(clock, deadline),
+            )
+            chunk = read1(min(_READ_CHUNK_BYTES, RESPONSE_BYTE_CAP - len(body) + 1))
+            arrived_at = _monotonic(clock)
+            if arrived_at >= deadline:
+                raise BenchRefusal("http_timeout")
+            if type(chunk) is not bytes:
+                raise BenchRefusal("malformed_response")
+            if not chunk:
+                if (
+                    declared_body_bytes is not None
+                    and len(body) != declared_body_bytes
+                ):
+                    raise BenchRefusal("malformed_response")
+                break
+            body.extend(chunk)
+            if len(body) > RESPONSE_BYTE_CAP:
+                raise BenchRefusal("response_too_large")
+        document = _decode_protocol_json(body)
+        _remaining_seconds(clock, deadline)
+        if unready:
+            if type(document) is not dict or set(document) != {"error"}:
+                raise BenchRefusal("malformed_response")
+            error = document["error"]
+            if (
+                type(error) is not dict
+                or set(error) != {"code", "message", "type"}
+                or type(error["code"]) is not int
+                or error["code"] != 503
+                or type(error["message"]) is not str
+                or error["message"] != "Loading model"
+                or type(error["type"]) is not str
+                or error["type"] != "unavailable_error"
+            ):
+                raise BenchRefusal("malformed_response")
+            return None
+        return document
+    except BenchRefusal:
+        raise
+    except (TimeoutError, socket.timeout):
+        if health_probe:
+            return None
+        raise BenchRefusal("http_timeout") from None
+    except OSError:
+        if health_probe:
+            return None
+        raise BenchRefusal("malformed_response") from None
+    except http.client.HTTPException:
+        raise BenchRefusal("malformed_response") from None
+    finally:
+        _close_http_resources(response, connection)
+
+
+def _health_request(
+    port: int,
+    *,
+    clock: Clock,
+    request_timeout_ms: int,
+) -> bool:
+    document = _json_get(
+        port,
+        "/health",
+        clock=clock,
+        request_timeout_ms=request_timeout_ms,
+        health_probe=True,
+    )
+    if document is None:
+        return False
+    if type(document) is not dict or document != {"status": "ok"}:
+        raise BenchRefusal("malformed_response")
+    return True
+
+
+def _models_request(
+    port: int,
+    *,
+    clock: Clock,
+    request_timeout_ms: int,
+) -> list[str]:
+    document = _json_get(
+        port,
+        "/v1/models",
+        clock=clock,
+        request_timeout_ms=request_timeout_ms,
+        health_probe=False,
+    )
+    if type(document) is not dict or "data" not in document:
+        raise BenchRefusal("malformed_response")
+    rows = document["data"]
+    if type(rows) is not list:
+        raise BenchRefusal("malformed_response")
+    model_ids: list[str] = []
+    for row in rows:
+        if type(row) is not dict or type(row.get("id")) is not str or not row["id"]:
+            raise BenchRefusal("malformed_response")
+        model_ids.append(row["id"])
+    return model_ids
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class LoopbackServerClient:
+    """Sealed provider client using only the literal-loopback transport."""
+
+    tier: str
+    clock: Clock
+    host: str
+    request_timeout_ms: int
+
+    def __init__(
+        self,
+        *,
+        tier: str,
+        clock: Clock,
+        host: str,
+        request_timeout_ms: int,
+        _guard: object | None = None,
+    ) -> None:
+        if _guard is not _CLIENT_GUARD:
+            raise TypeError("sealed_client_factory_required")
+        if host != "127.0.0.1":
+            raise ValueError("loopback_literal_required")
+        if tier not in {"production", "rehearsal"} or getattr(clock, "tier", None) != tier:
+            raise ValueError("client_tier")
+        expected_clock = SystemClock if tier == "production" else RehearsalClock
+        if type(clock) is not expected_clock:
+            raise ValueError("transport_clock_required")
+        _validate_http_inputs(1, request_timeout_ms)
+        object.__setattr__(self, "tier", tier)
+        object.__setattr__(self, "clock", clock)
+        object.__setattr__(self, "host", host)
+        object.__setattr__(self, "request_timeout_ms", request_timeout_ms)
+
+    @classmethod
+    def production(
+        cls,
+        clock: Clock,
+        *,
+        host: str = "127.0.0.1",
+        request_timeout_ms: int = REQUEST_TIMEOUT_MS,
+    ) -> "LoopbackServerClient":
+        return cls(
+            tier="production",
+            clock=clock,
+            host=host,
+            request_timeout_ms=request_timeout_ms,
+            _guard=_CLIENT_GUARD,
+        )
+
+    @classmethod
+    def rehearsal(
+        cls,
+        clock: Clock,
+        *,
+        host: str = "127.0.0.1",
+        request_timeout_ms: int = REQUEST_TIMEOUT_MS,
+    ) -> "LoopbackServerClient":
+        return cls(
+            tier="rehearsal",
+            clock=clock,
+            host=host,
+            request_timeout_ms=request_timeout_ms,
+            _guard=_CLIENT_GUARD,
+        )
+
+    def health(self, port: int) -> bool:
+        return _health_request(
+            port,
+            clock=self.clock,
+            request_timeout_ms=self.request_timeout_ms,
+        )
+
+    def models(self, port: int) -> list[str]:
+        return _models_request(
+            port,
+            clock=self.clock,
+            request_timeout_ms=self.request_timeout_ms,
+        )
+
+    def stream(self, port: int, prompt: str) -> TurnMeasurement:
+        return stream_completion(
+            port,
+            prompt,
+            clock=self.clock,
+            request_timeout_ms=self.request_timeout_ms,
+        )
+
+
 class ArtifactPolicy(Protocol):
     tier: str
 
@@ -1998,15 +2818,6 @@ _WINDOW_AUTHORIZATION_FIELDS = frozenset(
 _CONTINUATION_FIELDS = frozenset(
     {*_WINDOW_AUTHORIZATION_FIELDS, "parent_vulkan_packet_sha256"}
 )
-
-
-def _json_object_without_duplicates(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    document: dict[str, object] = {}
-    for key, value in pairs:
-        if key in document:
-            raise ValueError("duplicate_key")
-        document[key] = value
-    return document
 
 
 def _parse_authorization_wrapper(
@@ -2639,10 +3450,26 @@ class RealBackendMapProvider:
 
 
 class SystemClock:
+    __slots__ = ()
     tier = "production"
 
     def now_utc(self) -> str:
         return datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+    def monotonic(self) -> float:
+        return time.monotonic()
+
+
+class RehearsalClock:
+    """Advancing local clock for full-fidelity stub transport rehearsal."""
+
+    __slots__ = ()
+    tier = "rehearsal"
+
+    def now_utc(self) -> str:
+        return datetime.now(UTC).isoformat(timespec="microseconds").replace(
+            "+00:00", "Z"
+        )
 
     def monotonic(self) -> float:
         return time.monotonic()
@@ -2966,6 +3793,10 @@ def _sealed_tier(
         RealServerLauncher if tier == "production" else RehearsalServerLauncher
     )
     if type(server_launcher) is not expected_launcher:
+        raise BenchRefusal("tier_mismatch")
+    if type(server_client) is not LoopbackServerClient:
+        raise BenchRefusal("tier_mismatch")
+    if server_client.clock is not clock:
         raise BenchRefusal("tier_mismatch")
     components = {
         "service_state": service_state,

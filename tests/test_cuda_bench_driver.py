@@ -5,6 +5,7 @@ from __future__ import annotations
 import errno
 import fcntl
 import hashlib
+import http.client
 import inspect
 import json
 import os
@@ -17,10 +18,12 @@ import sys
 import threading
 import time
 import urllib.request
+from contextlib import AbstractContextManager
 from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import FrozenInstanceError, dataclass, replace
 from datetime import UTC, datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -362,11 +365,16 @@ def _provider_components(tier: str) -> dict[str, object]:
         gpu = driver.SyntheticGpu([], [], [])
         kernel = driver.SyntheticKernelLog(zero_counts)
         maps = driver.SyntheticBackendMap({})
-        clock = driver.FrozenClock("2026-07-14T12:00:00Z")
+        clock = driver.RehearsalClock()
         journal_factory = driver.RehearsalJournalFactory()
         artifact_policy = driver.RehearsalArtifactPolicy()
         authorization_gate = driver.RehearsalAuthorizationGate(artifact_policy)
         server_launcher = driver.RehearsalServerLauncher(_stub_pin())
+    server_client = (
+        driver.LoopbackServerClient.production(clock)
+        if tier == "production"
+        else driver.LoopbackServerClient.rehearsal(clock)
+    )
     return {
         "service_state": service_state,
         "port_probe": port_probe,
@@ -374,7 +382,7 @@ def _provider_components(tier: str) -> dict[str, object]:
         "kernel_log": kernel,
         "backend_maps": maps,
         "server_launcher": server_launcher,
-        "server_client": _TieredFake(tier),
+        "server_client": server_client,
         "authorization_gate": authorization_gate,
         "artifact_policy": artifact_policy,
         "clock": clock,
@@ -3952,6 +3960,54 @@ class TestServerLauncherFinalizer:
             factory(**components)
         _assert_refusal(exc, "tier_mismatch")
 
+    def test_b6_client_integrates_with_native_framed_pinned_stub(self) -> None:
+        child = self._spawn_stub()
+        clock = driver.RehearsalClock()
+        client = driver.LoopbackServerClient.rehearsal(clock)
+        try:
+            assert client.health(child.port) is True
+            assert client.models(child.port) == ["qwen36-27b-mtp"]
+            measurement = client.stream(child.port, "private prompt sentinel")
+            assert measurement.content == "stub response"
+            assert measurement.terminal["content"] == ""
+            assert measurement.terminal["stop"] is True
+            assert measurement.terminal["prompt"] == "private prompt sentinel"
+            assert 0 < measurement.ttft_ms <= measurement.e2e_ms
+        finally:
+            result = driver.finalize(
+                child,
+                clock=clock,
+                port_probe=driver.RealPortProbe(),
+                port=child.port,
+            )
+        assert result.outcome == "clean"
+        assert result.listener_free is True
+
+    def test_b6_midturn_hang_times_out_and_finalizer_clears_listener(self) -> None:
+        argv = _stub_argv()
+        argv[argv.index("healthy")] = "midturn_hang"
+        child = self._launcher().spawn(argv, _stub_env())  # type: ignore[attr-defined]
+        self._register_child_evidence(child)
+        clock = driver.RehearsalClock()
+        client = driver.LoopbackServerClient.rehearsal(
+            clock,
+            request_timeout_ms=200,
+        )
+        try:
+            with pytest.raises(driver.BenchRefusal) as exc:
+                client.stream(child.port, "private timeout prompt sentinel")
+            _assert_refusal(exc, "http_timeout")
+            assert "private timeout prompt sentinel" not in str(exc.value)
+        finally:
+            result = driver.finalize(
+                child,
+                clock=clock,
+                port_probe=driver.RealPortProbe(),
+                port=child.port,
+            )
+        assert result.outcome == "clean"
+        assert result.listener_free is True
+
     def test_production_finalizer_never_constructs_group_signal(self) -> None:
         source = Path("scripts/cuda_bench_driver.py").read_text()
         assert "killpg" not in source
@@ -4812,3 +4868,1686 @@ class TestAuthorizationArtifacts:
             driver.production_tier(**components)
         _assert_refusal(exc, "tier_mismatch")
         assert list(private_root.rglob("*")) == []
+
+
+class _ScriptedHttpSocket:
+    def __init__(self) -> None:
+        self.timeouts: list[float] = []
+
+    def settimeout(self, timeout: float) -> None:
+        self.timeouts.append(timeout)
+
+
+class _ScriptedHttpResponse:
+    def __init__(
+        self,
+        clock: driver.FrozenClock,
+        reads: list[tuple[float, bytes]],
+        *,
+        status: int = 200,
+        content_type: str = "text/event-stream",
+        close_when_reads_exhausted: bool = False,
+        headers: list[tuple[str, str]] | None = None,
+    ) -> None:
+        self._clock = clock
+        self._reads = list(reads)
+        self.status = status
+        self._content_type = content_type
+        self._headers = list(
+            headers
+            if headers is not None
+            else [("Content-Type", content_type)]
+        )
+        self.will_close = True
+        self._close_when_reads_exhausted = close_when_reads_exhausted
+        self.closed = False
+
+    def getheader(self, name: str, default: str | None = None) -> str | None:
+        values = [value for key, value in self._headers if key.lower() == name.lower()]
+        if values:
+            return ", ".join(values)
+        return default
+
+    def getheaders(self) -> list[tuple[str, str]]:
+        return list(self._headers)
+
+    def read1(self, _amount: int) -> bytes:
+        if not self._reads:
+            return b""
+        delay, payload = self._reads.pop(0)
+        self._clock.advance(delay)
+        return payload
+
+    def close(self) -> None:
+        self.closed = True
+
+    def isclosed(self) -> bool:
+        return self._close_when_reads_exhausted and not self._reads
+
+
+class _ScriptedHttpConnection:
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        timeout: float,
+        *,
+        clock: driver.FrozenClock,
+        response: _ScriptedHttpResponse,
+        endheaders_delay: float = 0.0,
+    ) -> None:
+        self.host = host
+        self.port = port
+        self.timeout = timeout
+        self.clock = clock
+        self.response = response
+        self.endheaders_delay = endheaders_delay
+        self.sock = _ScriptedHttpSocket()
+        self.request: tuple[str, str] | None = None
+        self.headers: list[tuple[str, str]] = []
+        self.body: bytes | None = None
+        self.closed = False
+
+    def connect(self) -> None:
+        return
+
+    def putrequest(self, method: str, path: str, **_kwargs: object) -> None:
+        self.request = (method, path)
+
+    def putheader(self, name: str, value: str) -> None:
+        self.headers.append((name, value))
+
+    def endheaders(self, body: bytes | None = None) -> None:
+        self.clock.advance(self.endheaders_delay)
+        self.body = body
+
+    def getresponse(self) -> _ScriptedHttpResponse:
+        return self.response
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _scripted_connection_factory(
+    clock: driver.FrozenClock,
+    reads: list[tuple[float, bytes]],
+    *,
+    endheaders_delay: float = 0.0,
+    close_when_reads_exhausted: bool = False,
+) -> tuple[Callable[..., _ScriptedHttpConnection], list[_ScriptedHttpConnection]]:
+    connections: list[_ScriptedHttpConnection] = []
+    response = _ScriptedHttpResponse(
+        clock,
+        reads,
+        close_when_reads_exhausted=close_when_reads_exhausted,
+    )
+
+    def factory(host: str, port: int, timeout: float) -> _ScriptedHttpConnection:
+        connection = _ScriptedHttpConnection(
+            host,
+            port,
+            timeout,
+            clock=clock,
+            response=response,
+            endheaders_delay=endheaders_delay,
+        )
+        connections.append(connection)
+        return connection
+
+    return factory, connections
+
+
+class _LocalHttpScript:
+    def __init__(
+        self,
+        *,
+        health_status: int = 200,
+        health_body: bytes = b'{"status":"ok"}',
+        models_status: int = 200,
+        models_body: bytes = b'{"data":[{"id":"qwen36-27b-mtp"}]}',
+        completion_status: int = 200,
+        completion_body: bytes = (
+            b'data: {"content":"stub response","stop":false}\n\n'
+            b'data: {"content":"","prompt":"private prompt sentinel",'
+            b'"stop":true,"timings":{}}\n\n'
+        ),
+        completion_chunks: list[tuple[float, bytes]] | None = None,
+        completion_headers: list[tuple[str, str]] | None = None,
+        health_content_length: int | None = None,
+        completion_content_length: int | None = None,
+        redirect_to: str | None = None,
+    ) -> None:
+        self.health_status = health_status
+        self.health_body = health_body
+        self.models_status = models_status
+        self.models_body = models_body
+        self.completion_status = completion_status
+        self.completion_body = completion_body
+        self.completion_chunks = completion_chunks
+        self.completion_headers = list(completion_headers or [])
+        self.health_content_length = health_content_length
+        self.completion_content_length = completion_content_length
+        self.redirect_to = redirect_to
+        self.hits: list[tuple[str, str]] = []
+
+
+class _LocalHttpServer(ThreadingHTTPServer):
+    script: _LocalHttpScript
+
+
+class _LocalHttpHandler(BaseHTTPRequestHandler):
+    server: _LocalHttpServer
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        return
+
+    def _send(
+        self,
+        status: int,
+        body: bytes,
+        content_type: str,
+        *,
+        content_length: int | None = None,
+    ) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header(
+            "Content-Length",
+            str(len(body) if content_length is None else content_length),
+        )
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
+        self.wfile.flush()
+
+    def do_GET(self) -> None:  # noqa: N802
+        self.server.script.hits.append(("GET", self.path))
+        if self.path == "/health":
+            self._send(
+                self.server.script.health_status,
+                self.server.script.health_body,
+                "application/json",
+                content_length=self.server.script.health_content_length,
+            )
+            return
+        if self.path == "/v1/models":
+            self._send(
+                self.server.script.models_status,
+                self.server.script.models_body,
+                "application/json",
+            )
+            return
+        self._send(404, b"{}", "application/json")
+
+    def do_POST(self) -> None:  # noqa: N802
+        self.server.script.hits.append(("POST", self.path))
+        length = int(self.headers.get("Content-Length", "0"))
+        self.rfile.read(length)
+        if self.server.script.redirect_to is not None:
+            self.send_response(302)
+            self.send_header("Location", self.server.script.redirect_to)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if self.server.script.completion_chunks is not None:
+            chunks = self.server.script.completion_chunks
+            self.send_response(self.server.script.completion_status)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header(
+                "Content-Length",
+                str(sum(len(payload) for _delay, payload in chunks)),
+            )
+            for name, value in self.server.script.completion_headers:
+                self.send_header(name, value)
+            self.send_header("Connection", "close")
+            self.end_headers()
+            for delay, payload in chunks:
+                time.sleep(delay)
+                try:
+                    self.wfile.write(payload)
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    return
+            return
+        self._send(
+            self.server.script.completion_status,
+            self.server.script.completion_body,
+            "text/event-stream",
+            content_length=self.server.script.completion_content_length,
+        )
+
+
+class _ServingLocalHttp(AbstractContextManager[tuple[_LocalHttpScript, int]]):
+    def __init__(self, script: _LocalHttpScript) -> None:
+        self.script = script
+        self.server = _LocalHttpServer(("127.0.0.1", 0), _LocalHttpHandler)
+        self.server.script = script
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+
+    def __enter__(self) -> tuple[_LocalHttpScript, int]:
+        self.thread.start()
+        return self.script, int(self.server.server_address[1])
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
+        assert not self.thread.is_alive()
+
+
+class TestB6StreamingTiming:
+    def test_owner_interrupt_from_clock_is_never_retyped(self) -> None:
+        class InterruptClock:
+            tier = "rehearsal"
+
+            def now_utc(self) -> str:
+                return "2026-07-15T12:00:00Z"
+
+            def monotonic(self) -> float:
+                raise KeyboardInterrupt
+
+        with pytest.raises(KeyboardInterrupt):
+            driver.stream_completion(
+                43210,
+                "private prompt sentinel",
+                clock=InterruptClock(),
+            )
+
+    def test_cleanup_closes_every_resource_then_reraises_base_exception(self) -> None:
+        clock = driver.FrozenClock("2026-07-15T12:00:00Z")
+
+        class InterruptingResponse(_ScriptedHttpResponse):
+            def close(self) -> None:
+                self.closed = True
+                raise KeyboardInterrupt
+
+        response = InterruptingResponse(
+            clock,
+            [(0.010, b"data: private malformed sentinel\n\n")],
+        )
+        connections: list[_ScriptedHttpConnection] = []
+
+        def factory(host: str, port: int, timeout: float) -> _ScriptedHttpConnection:
+            connection = _ScriptedHttpConnection(
+                host,
+                port,
+                timeout,
+                clock=clock,
+                response=response,
+            )
+            connections.append(connection)
+            return connection
+
+        with pytest.raises(KeyboardInterrupt):
+            driver.stream_completion(
+                43210,
+                "private prompt sentinel",
+                clock=clock,
+                connection_factory=factory,
+            )
+
+        assert response.closed
+        assert connections[0].closed
+
+    def test_post_connect_setup_failure_closes_acquired_connection(self) -> None:
+        clock = driver.FrozenClock("2026-07-15T12:00:00Z")
+
+        class FailingSocket:
+            def settimeout(self, _timeout: float) -> None:
+                raise OSError("PRIVATE-TIMEOUT-SETUP-SENTINEL")
+
+        class Connection:
+            def __init__(self, _host: str, _port: int, _timeout: float) -> None:
+                self.sock = FailingSocket()
+                self.connected = False
+                self.closed = False
+
+            def connect(self) -> None:
+                self.connected = True
+
+            def close(self) -> None:
+                self.closed = True
+
+        connections: list[Connection] = []
+
+        def factory(host: str, port: int, timeout: float) -> Connection:
+            connection = Connection(host, port, timeout)
+            connections.append(connection)
+            return connection
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.stream_completion(
+                43210,
+                "private prompt sentinel",
+                clock=clock,
+                connection_factory=factory,
+            )
+
+        _assert_refusal(exc, "malformed_response")
+        assert connections[0].connected
+        assert connections[0].closed
+        assert "PRIVATE-TIMEOUT-SETUP-SENTINEL" not in str(exc.value)
+
+    def test_post_connect_owner_interrupt_closes_before_propagating(self) -> None:
+        class InterruptingClock:
+            tier = "rehearsal"
+
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def monotonic(self) -> float:
+                self.calls += 1
+                if self.calls == 3:
+                    raise KeyboardInterrupt
+                return 0.0
+
+            def now_utc(self) -> str:
+                return "2026-07-15T12:00:00Z"
+
+        class Connection:
+            def __init__(self, _host: str, _port: int, _timeout: float) -> None:
+                self.sock = _ScriptedHttpSocket()
+                self.connected = False
+                self.closed = False
+
+            def connect(self) -> None:
+                self.connected = True
+
+            def close(self) -> None:
+                self.closed = True
+
+        connections: list[Connection] = []
+
+        def factory(host: str, port: int, timeout: float) -> Connection:
+            connection = Connection(host, port, timeout)
+            connections.append(connection)
+            return connection
+
+        with pytest.raises(KeyboardInterrupt):
+            driver.stream_completion(
+                43210,
+                "private prompt sentinel",
+                clock=InterruptingClock(),
+                connection_factory=factory,
+            )
+
+        assert connections[0].connected
+        assert connections[0].closed
+
+    def test_oversized_clock_number_is_provider_uncertain(self) -> None:
+        class OversizedClock:
+            tier = "rehearsal"
+
+            def monotonic(self) -> int:
+                return 10**1_000
+
+            def now_utc(self) -> str:
+                return "2026-07-15T12:00:00Z"
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver._monotonic(OversizedClock())  # noqa: SLF001 - provider seam
+
+        _assert_refusal(exc, "provider_uncertain")
+
+    def test_completion_header_arrival_after_deadline_is_http_timeout(self) -> None:
+        clock = driver.FrozenClock("2026-07-15T12:00:00Z")
+        response = _ScriptedHttpResponse(
+            clock,
+            [],
+            status=500,
+        )
+
+        class DelayedHeadersConnection(_ScriptedHttpConnection):
+            def getresponse(self) -> _ScriptedHttpResponse:
+                clock.advance(0.200)
+                return super().getresponse()
+
+        def factory(host: str, port: int, timeout: float) -> _ScriptedHttpConnection:
+            return DelayedHeadersConnection(
+                host,
+                port,
+                timeout,
+                clock=clock,
+                response=response,
+            )
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.stream_completion(
+                43210,
+                "private prompt sentinel",
+                clock=clock,
+                request_timeout_ms=100,
+                connection_factory=factory,
+            )
+
+        _assert_refusal(exc, "http_timeout")
+
+    @pytest.mark.parametrize(
+        "extra_header",
+        [
+            ("Content-Length", "999"),
+            ("Transfer-Encoding", "identity"),
+            ("Transfer-Encoding", "chunked"),
+        ],
+    )
+    def test_raw_loopback_rejects_ambiguous_response_framing(
+        self, extra_header: tuple[str, str]
+    ) -> None:
+        script = _LocalHttpScript(
+            completion_chunks=[
+                (
+                    0.0,
+                    b'data: {"content":"stub response","stop":false}\n\n'
+                    b'data: {"content":"","prompt":"private prompt sentinel",'
+                    b'"stop":true,"timings":{}}\n\n',
+                )
+            ],
+            completion_headers=[extra_header],
+        )
+        client = driver.LoopbackServerClient.rehearsal(driver.RehearsalClock())
+
+        with _ServingLocalHttp(script) as (_script, port):
+            with pytest.raises(driver.BenchRefusal) as exc:
+                client.stream(port, "private prompt sentinel")
+
+        _assert_refusal(exc, "malformed_response")
+        assert "private prompt sentinel" not in str(exc.value)
+
+    def test_raw_loopback_rejects_short_declared_completion_body(self) -> None:
+        body = (
+            b'data: {"content":"private generated sentinel","stop":false}\n\n'
+            b'data: {"content":"","prompt":"private prompt sentinel",'
+            b'"stop":true,"timings":{}}\n\n'
+        )
+        script = _LocalHttpScript(
+            completion_body=body,
+            completion_content_length=len(body) + 8,
+        )
+        client = driver.LoopbackServerClient.rehearsal(driver.RehearsalClock())
+
+        with _ServingLocalHttp(script) as (_script, port):
+            with pytest.raises(driver.BenchRefusal) as exc:
+                client.stream(port, "private prompt sentinel")
+
+        _assert_refusal(exc, "malformed_response")
+        assert "private" not in str(exc.value)
+
+    def test_completion_rejects_duplicate_json_keys(self) -> None:
+        body = (
+            b'data: {"content":"private generated sentinel","stop":false}\n\n'
+            b'data: {"content":"","prompt":"private prompt sentinel",'
+            b'"stop":false,"stop":true,"timings":{}}\n\n'
+        )
+        client = driver.LoopbackServerClient.rehearsal(driver.RehearsalClock())
+
+        with _ServingLocalHttp(
+            _LocalHttpScript(completion_body=body)
+        ) as (_script, port):
+            with pytest.raises(driver.BenchRefusal) as exc:
+                client.stream(port, "private prompt sentinel")
+
+        _assert_refusal(exc, "malformed_response")
+        assert "private" not in str(exc.value)
+
+    @pytest.mark.parametrize("nonfinite", [b"NaN", b"1e9999"])
+    def test_completion_rejects_nonfinite_json_numbers(
+        self, nonfinite: bytes
+    ) -> None:
+        body = (
+            b'data: {"content":"private generated sentinel","stop":false}\n\n'
+            b'data: {"content":"","prompt":"private prompt sentinel",'
+            b'"stop":true,"timings":{},"ignored":'
+            + nonfinite
+            + b"}\n\n"
+        )
+        client = driver.LoopbackServerClient.rehearsal(driver.RehearsalClock())
+
+        with _ServingLocalHttp(
+            _LocalHttpScript(completion_body=body)
+        ) as (_script, port):
+            with pytest.raises(driver.BenchRefusal) as exc:
+                client.stream(port, "private prompt sentinel")
+
+        _assert_refusal(exc, "malformed_response")
+        assert "private" not in str(exc.value)
+
+    def test_completion_maps_recursive_json_failure_to_typed_refusal(self) -> None:
+        nested = b"[" * 100_000 + b"0" + b"]" * 100_000
+        body = (
+            b'data: {"content":"private generated sentinel","stop":false}\n\n'
+            b'data: {"content":"","prompt":"private prompt sentinel",'
+            b'"stop":true,"timings":{},"ignored":'
+            + nested
+            + b"}\n\n"
+        )
+        client = driver.LoopbackServerClient.rehearsal(driver.RehearsalClock())
+
+        with _ServingLocalHttp(
+            _LocalHttpScript(completion_body=body)
+        ) as (_script, port):
+            with pytest.raises(driver.BenchRefusal) as exc:
+                client.stream(port, "private prompt sentinel")
+
+        _assert_refusal(exc, "malformed_response")
+
+    def test_event_after_terminal_is_rejected_without_moving_e2e_to_eof(
+        self,
+    ) -> None:
+        clock = driver.FrozenClock("2026-07-15T12:00:00Z")
+        content = b'data: {"content":"private generated sentinel","stop":false}\n\n'
+        terminal = (
+            b'data: {"content":"","prompt":"private prompt sentinel",'
+            b'"stop":true,"timings":{}}\n\n'
+        )
+        trailing_comment = b": post-terminal comment\n\n"
+        factory, _connections = _scripted_connection_factory(
+            clock,
+            [
+                (0.100, content),
+                (0.100, terminal),
+                (0.500, trailing_comment),
+                (0.100, b""),
+            ],
+        )
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.stream_completion(
+                43210,
+                "private prompt sentinel",
+                clock=clock,
+                connection_factory=factory,
+            )
+
+        _assert_refusal(exc, "malformed_response")
+
+    def test_completion_rejects_lone_surrogate_json_string(self) -> None:
+        body = (
+            b'data: {"content":"\\ud800","stop":false}\n\n'
+            b'data: {"content":"","prompt":"private prompt sentinel",'
+            b'"stop":true,"timings":{}}\n\n'
+        )
+        client = driver.LoopbackServerClient.rehearsal(driver.RehearsalClock())
+
+        with _ServingLocalHttp(
+            _LocalHttpScript(completion_body=body)
+        ) as (_script, port):
+            with pytest.raises(driver.BenchRefusal) as exc:
+                client.stream(port, "private prompt sentinel")
+
+        _assert_refusal(exc, "malformed_response")
+
+    def test_byte_arrivals_define_ttft_and_e2e_and_post_shape_is_exact(self) -> None:
+        clock = driver.FrozenClock("2026-07-15T12:00:00Z")
+        prompt = "private prompt sentinel"
+        generated = "private generated sentinel"
+        metadata = b'data: {"content":"","stop":false}\n\n'
+        content = (
+            b'data: {"content":"private generated sentinel","stop":false}\n\n'
+        )
+        # b9596 native final framing is pinned by:
+        # server-context.cpp:4329-4338,3894-3908; server-task.cpp:752-774.
+        terminal = (
+            b'data: {"content":"","prompt":"private prompt sentinel",'
+            b'"stop":true,"timings":{"draft_n":12,"draft_n_accepted":9}}\n\n'
+        )
+        factory, connections = _scripted_connection_factory(
+            clock,
+            [
+                (0.050, metadata),
+                (0.150, content),
+                (0.200, terminal),
+                (0.900, b""),
+            ],
+            endheaders_delay=0.100,
+        )
+
+        result = driver.stream_completion(
+            43210,
+            prompt,
+            clock=clock,
+            connection_factory=factory,
+        )
+
+        assert result.ttft_ms == pytest.approx(200.0)
+        assert result.e2e_ms == pytest.approx(400.0)
+        assert result.content == generated
+        assert result.timings == {"draft_n": 12, "draft_n_accepted": 9}
+        assert result.terminal["prompt"] == prompt
+        assert len(connections) == 1
+        connection = connections[0]
+        assert connection.host == "127.0.0.1"
+        assert connection.port == 43210
+        assert connection.request == ("POST", "/completion")
+        assert connection.body == b'{"prompt":"private prompt sentinel","stream":true}'
+        assert dict(connection.headers) == {
+            "Accept": "text/event-stream",
+            "Content-Length": str(len(connection.body)),
+            "Content-Type": "application/json",
+        }
+        assert connection.response.closed
+        assert connection.closed
+
+    def test_json_parsing_delay_does_not_move_stored_content_arrival(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        clock = driver.FrozenClock("2026-07-15T12:00:00Z")
+        factory, _connections = _scripted_connection_factory(
+            clock,
+            [
+                (0.050, b'data: {"content":"","stop":false}\n\n'),
+                (
+                    0.150,
+                    b'data: {"content":"private generated sentinel",'
+                    b'"stop":false}\n\n',
+                ),
+                (
+                    0.200,
+                    b'data: {"content":"","prompt":"private prompt sentinel",'
+                    b'"stop":true,"timings":{}}\n\n',
+                ),
+                (0.800, b""),
+            ],
+            endheaders_delay=0.100,
+        )
+        real_loads = json.loads
+
+        def slow_loads(payload: object, *args: object, **kwargs: object) -> object:
+            clock.advance(1.0)
+            return real_loads(payload, *args, **kwargs)
+
+        monkeypatch.setattr(driver.json, "loads", slow_loads)
+
+        result = driver.stream_completion(
+            43210,
+            "private prompt sentinel",
+            clock=clock,
+            request_timeout_ms=10_000,
+            connection_factory=factory,
+        )
+
+        assert result.ttft_ms == pytest.approx(1_200.0)
+        assert result.e2e_ms == pytest.approx(2_400.0)
+
+    def test_fast_close_cannot_bypass_deadline_after_hostile_parsing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        clock = driver.FrozenClock("2026-07-15T12:00:00Z")
+        one_chunk = (
+            b'data: {"content":"private generated sentinel","stop":false}\n\n'
+            b'data: {"content":"","prompt":"private prompt sentinel",'
+            b'"stop":true,"timings":{}}\n\n'
+        )
+        factory, _connections = _scripted_connection_factory(
+            clock,
+            [(0.020, one_chunk)],
+            close_when_reads_exhausted=True,
+        )
+        real_loads = json.loads
+
+        def slow_loads(payload: object, *args: object, **kwargs: object) -> object:
+            clock.advance(0.060)
+            return real_loads(payload, *args, **kwargs)
+
+        monkeypatch.setattr(driver.json, "loads", slow_loads)
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.stream_completion(
+                43210,
+                "private prompt sentinel",
+                clock=clock,
+                request_timeout_ms=100,
+                connection_factory=factory,
+            )
+
+        _assert_refusal(exc, "http_timeout")
+        assert "private prompt sentinel" not in str(exc.value)
+
+    def test_same_chunk_content_and_terminal_allows_equal_timings(self) -> None:
+        clock = driver.FrozenClock("2026-07-15T12:00:00Z")
+        one_chunk = (
+            b'data: {"content":"private generated sentinel","stop":false}\n\n'
+            b'data: {"content":"","prompt":"private prompt sentinel",'
+            b'"stop":true,"timings":{}}\n\n'
+        )
+        factory, _connections = _scripted_connection_factory(
+            clock,
+            [(0.250, one_chunk), (0.500, b"")],
+        )
+
+        result = driver.stream_completion(
+            43210,
+            "private prompt sentinel",
+            clock=clock,
+            connection_factory=factory,
+        )
+
+        assert result.ttft_ms == pytest.approx(250.0)
+        assert result.e2e_ms == pytest.approx(250.0)
+        assert result.ttft_ms <= result.e2e_ms
+
+    def test_absolute_deadline_rejects_continuous_trickle(self) -> None:
+        clock = driver.FrozenClock("2026-07-15T12:00:00Z")
+        factory, connections = _scripted_connection_factory(
+            clock,
+            [
+                (0.040, b"data: {"),
+                (0.040, b'"slot_id":0'),
+                (0.040, b"}\n\n"),
+            ],
+        )
+        secret = "private timeout prompt sentinel"
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.stream_completion(
+                43210,
+                secret,
+                clock=clock,
+                request_timeout_ms=100,
+                connection_factory=factory,
+            )
+
+        _assert_refusal(exc, "http_timeout")
+        assert secret not in str(exc.value)
+        assert connections[0].response.closed
+        assert connections[0].closed
+        assert len(connections[0].sock.timeouts) >= 2
+
+    def test_done_is_a_wrong_endpoint_signal_even_after_a_terminal_event(self) -> None:
+        clock = driver.FrozenClock("2026-07-15T12:00:00Z")
+        secret = "private response sentinel"
+        factory, _connections = _scripted_connection_factory(
+            clock,
+            [
+                (
+                    0.010,
+                    (
+                        f'data: {{"content":"{secret}","stop":false}}\n\n'
+                        'data: {"content":"","prompt":"private prompt sentinel",'
+                        '"stop":true,"timings":{}}\n\n'
+                        "data: [DONE]\n\n"
+                    ).encode(),
+                )
+            ],
+        )
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.stream_completion(
+                43210,
+                "private prompt sentinel",
+                clock=clock,
+                connection_factory=factory,
+            )
+
+        _assert_refusal(exc, "malformed_response")
+        assert secret not in str(exc.value)
+        assert "private prompt sentinel" not in str(exc.value)
+
+    def test_clean_eof_without_stop_true_is_a_truncated_stream(self) -> None:
+        clock = driver.FrozenClock("2026-07-15T12:00:00Z")
+        factory, _connections = _scripted_connection_factory(
+            clock,
+            [
+                (
+                    0.010,
+                    b'data: {"content":"private partial sentinel",'
+                    b'"stop":false}\n\n',
+                ),
+                (0.010, b""),
+            ],
+        )
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.stream_completion(
+                43210,
+                "private prompt sentinel",
+                clock=clock,
+                connection_factory=factory,
+            )
+
+        _assert_refusal(exc, "malformed_response")
+        assert "private partial sentinel" not in str(exc.value)
+
+    def test_stop_false_timings_cannot_anchor_e2e(self) -> None:
+        clock = driver.FrozenClock("2026-07-15T12:00:00Z")
+        factory, _connections = _scripted_connection_factory(
+            clock,
+            [
+                (
+                    0.100,
+                    b'data: {"content":"private generated sentinel",'
+                    b'"stop":false,"timings":{"prompt_n":1}}\n\n',
+                ),
+                (
+                    0.300,
+                    b'data: {"content":"","prompt":"private prompt sentinel",'
+                    b'"stop":true,"timings":{"draft_n":12,'
+                    b'"draft_n_accepted":9}}\n\n',
+                ),
+                (0.900, b""),
+            ],
+        )
+
+        result = driver.stream_completion(
+            43210,
+            "private prompt sentinel",
+            clock=clock,
+            connection_factory=factory,
+        )
+
+        assert result.ttft_ms == pytest.approx(100.0)
+        assert result.e2e_ms == pytest.approx(400.0)
+        assert result.timings == {"draft_n": 12, "draft_n_accepted": 9}
+
+    def test_detokenized_terminal_prompt_is_not_false_compared_to_request(self) -> None:
+        # b9596's own test_completion.py:430 witnesses a BOS-prefixed terminal
+        # prompt; server-context.cpp:1838 builds it by detokenizing tokens.
+        clock = driver.FrozenClock("2026-07-15T12:00:00Z")
+        factory, _connections = _scripted_connection_factory(
+            clock,
+            [
+                (
+                    0.100,
+                    b'data: {"content":"private generated sentinel",'
+                    b'"stop":false}\n\n',
+                ),
+                (
+                    0.100,
+                    b'data: {"content":"","prompt":"<s> private prompt sentinel",'
+                    b'"stop":true,"timings":{}}\n\n',
+                ),
+                (0.100, b""),
+            ],
+        )
+
+        result = driver.stream_completion(
+            43210,
+            "private prompt sentinel",
+            clock=clock,
+            connection_factory=factory,
+        )
+
+        assert result.terminal["prompt"] == "<s> private prompt sentinel"
+
+    def test_malformed_sse_never_appears_in_refusal(self) -> None:
+        clock = driver.FrozenClock("2026-07-15T12:00:00Z")
+        secret = b"private malformed body sentinel"
+        factory, _connections = _scripted_connection_factory(
+            clock,
+            [(0.010, b"data: " + secret + b"\n\n")],
+        )
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.stream_completion(
+                43210,
+                "private prompt sentinel",
+                clock=clock,
+                connection_factory=factory,
+            )
+
+        _assert_refusal(exc, "malformed_response")
+        assert secret.decode() not in str(exc.value)
+
+    def test_stub_style_terminal_then_eof_is_valid(self) -> None:
+        clock = driver.FrozenClock("2026-07-15T12:00:00Z")
+        factory, _connections = _scripted_connection_factory(
+            clock,
+            [
+                (
+                    0.020,
+                    b'data: {"content":"stub response","stop":false}\n\n'
+                    b'data: {"content":"","prompt":"private prompt sentinel",'
+                    b'"stop":true,"timings":'
+                    b'{"draft_n":12,"draft_n_accepted":9}}\n\n',
+                ),
+                (0.010, b""),
+            ],
+        )
+
+        result = driver.stream_completion(
+            43210,
+            "private prompt sentinel",
+            clock=clock,
+            connection_factory=factory,
+        )
+
+        assert result.content == "stub response"
+        assert result.ttft_ms == pytest.approx(20.0)
+        assert result.e2e_ms == pytest.approx(20.0)
+
+    def test_completion_response_cap_is_typed_and_body_is_private(self) -> None:
+        clock = driver.FrozenClock("2026-07-15T12:00:00Z")
+        factory, _connections = _scripted_connection_factory(
+            clock,
+            [(0.010, b"S" * (driver.RESPONSE_BYTE_CAP + 1))],
+        )
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.stream_completion(
+                43210,
+                "private prompt sentinel",
+                clock=clock,
+                connection_factory=factory,
+            )
+
+        _assert_refusal(exc, "response_too_large")
+        assert "SSSS" not in str(exc.value)
+
+    def test_redirect_status_is_refused_without_second_connection(self) -> None:
+        clock = driver.FrozenClock("2026-07-15T12:00:00Z")
+        factory, connections = _scripted_connection_factory(clock, [],)
+        connections_response = _ScriptedHttpResponse(
+            clock,
+            [],
+            status=302,
+            content_type="text/plain",
+        )
+
+        def redirect_factory(
+            host: str, port: int, timeout: float
+        ) -> _ScriptedHttpConnection:
+            connection = _ScriptedHttpConnection(
+                host,
+                port,
+                timeout,
+                clock=clock,
+                response=connections_response,
+            )
+            connections.append(connection)
+            return connection
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.stream_completion(
+                43210,
+                "private prompt sentinel",
+                clock=clock,
+                connection_factory=redirect_factory,
+            )
+
+        _assert_refusal(exc, "malformed_response")
+        assert len(connections) == 1
+
+
+class TestB6LoopbackEndpoints:
+    def test_rehearsal_transport_clock_advances_with_real_time(self) -> None:
+        clock = driver.RehearsalClock()
+        before = clock.monotonic()
+        time.sleep(0.010)
+        assert clock.monotonic() > before
+
+    def test_real_trickle_cannot_refresh_the_absolute_deadline(self) -> None:
+        script = _LocalHttpScript(
+            completion_chunks=[
+                (0.020, b"data: {"),
+                (0.020, b'"content":"private'),
+                (0.020, b' sentinel","stop":false}\n\n'),
+                (
+                    0.020,
+                    b'data: {"content":"","prompt":"private prompt sentinel",'
+                    b'"stop":true,"timings":{}}\n\n',
+                ),
+            ]
+        )
+        clock = driver.RehearsalClock()
+        client = driver.LoopbackServerClient.rehearsal(
+            clock,
+            request_timeout_ms=50,
+        )
+        with _ServingLocalHttp(script) as (_script, port):
+            with pytest.raises(driver.BenchRefusal) as exc:
+                client.stream(port, "private prompt sentinel")
+        _assert_refusal(exc, "http_timeout")
+    def test_health_and_models_use_literal_loopback_without_dns(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        clock = driver.RehearsalClock()
+        client = driver.LoopbackServerClient.rehearsal(clock)
+        script = _LocalHttpScript()
+
+        with _ServingLocalHttp(script) as (observed, port):
+            monkeypatch.setattr(
+                socket,
+                "getaddrinfo",
+                lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                    AssertionError("DNS must be structurally unreachable")
+                ),
+            )
+            assert client.health(port) is True
+            assert client.models(port) == ["qwen36-27b-mtp"]
+
+        assert observed.hits == [("GET", "/health"), ("GET", "/v1/models")]
+
+    def test_models_accepts_the_b9596_outer_document_shape(self) -> None:
+        # b9596 tools/server/server-context.cpp:4503-4532 adds models/object
+        # alongside the authoritative OpenAI-compatible data rows.
+        body = json.dumps(
+            {
+                "models": [{"name": "qwen36-27b-mtp"}],
+                "object": "list",
+                "data": [
+                    {
+                        "id": "qwen36-27b-mtp",
+                        "object": "model",
+                        "owned_by": "llamacpp",
+                    }
+                ],
+            },
+            separators=(",", ":"),
+        ).encode()
+        client = driver.LoopbackServerClient.rehearsal(driver.RehearsalClock())
+        with _ServingLocalHttp(
+            _LocalHttpScript(models_body=body)
+        ) as (_script, port):
+            assert client.models(port) == ["qwen36-27b-mtp"]
+
+    def test_ordinary_unready_health_is_false_not_a_typed_refusal(self) -> None:
+        client = driver.LoopbackServerClient.rehearsal(driver.RehearsalClock())
+        with _ServingLocalHttp(
+            _LocalHttpScript(
+                health_status=503,
+                health_body=(
+                    b'{"error":{"code":503,"message":"Loading model",'
+                    b'"type":"unavailable_error"}}'
+                ),
+            )
+        ) as (_script, port):
+            assert client.health(port) is False
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            b"[]",
+            b'{"status":"loading"}',
+            b'{"error":{"code":"503","message":"Loading model",'
+            b'"type":"unavailable_error"}}',
+            b'{"error":{"code":503.0,"message":"Loading model",'
+            b'"type":"unavailable_error"}}',
+        ],
+        ids=["array", "obsolete-shape", "string-code", "float-code"],
+    )
+    def test_unready_health_rejects_valid_json_with_wrong_shape(
+        self, body: bytes
+    ) -> None:
+        client = driver.LoopbackServerClient.rehearsal(driver.RehearsalClock())
+        with _ServingLocalHttp(
+            _LocalHttpScript(health_status=503, health_body=body)
+        ) as (_script, port):
+            with pytest.raises(driver.BenchRefusal) as exc:
+                client.health(port)
+
+        _assert_refusal(exc, "malformed_response")
+
+    @pytest.mark.parametrize(
+        ("body", "reason"),
+        [
+            pytest.param(b"not-json", "malformed_response", id="malformed"),
+            pytest.param(
+                b"x" * (driver.RESPONSE_BYTE_CAP + 1),
+                "response_too_large",
+                id="over-cap",
+            ),
+        ],
+    )
+    def test_unready_health_still_validates_the_full_response(
+        self, body: bytes, reason: str
+    ) -> None:
+        client = driver.LoopbackServerClient.rehearsal(driver.RehearsalClock())
+        with _ServingLocalHttp(
+            _LocalHttpScript(health_status=503, health_body=body)
+        ) as (_script, port):
+            with pytest.raises(driver.BenchRefusal) as exc:
+                client.health(port)
+
+        _assert_refusal(exc, reason)
+
+    def test_health_header_arrival_after_deadline_is_http_timeout(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        clock = driver.FrozenClock("2026-07-15T12:00:00Z")
+        response = _ScriptedHttpResponse(
+            clock,
+            [(0.0, b'{"status":"loading"}')],
+            status=503,
+            content_type="application/json",
+            close_when_reads_exhausted=True,
+        )
+
+        class DelayedHeadersConnection(_ScriptedHttpConnection):
+            def getresponse(self) -> _ScriptedHttpResponse:
+                clock.advance(0.200)
+                return super().getresponse()
+
+        def factory(host: str, port: int, timeout: float) -> _ScriptedHttpConnection:
+            return DelayedHeadersConnection(
+                host,
+                port,
+                timeout,
+                clock=clock,
+                response=response,
+            )
+
+        monkeypatch.setattr(driver, "_LiteralLoopbackHTTPConnection", factory)
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver._health_request(  # noqa: SLF001 - deterministic transport seam
+                43210,
+                clock=clock,
+                request_timeout_ms=100,
+            )
+
+        _assert_refusal(exc, "http_timeout")
+
+    def test_health_redirect_is_protocol_malformed_not_ordinary_unready(self) -> None:
+        client = driver.LoopbackServerClient.rehearsal(driver.RehearsalClock())
+        with _ServingLocalHttp(
+            _LocalHttpScript(health_status=302, health_body=b"")
+        ) as (_script, port):
+            with pytest.raises(driver.BenchRefusal) as exc:
+                client.health(port)
+        _assert_refusal(exc, "malformed_response")
+
+    def test_malformed_http_status_is_typed_and_content_light(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        clock = driver.FrozenClock("2026-07-15T12:00:00Z")
+        response = _ScriptedHttpResponse(
+            clock,
+            [],
+            content_type="application/json",
+        )
+
+        class MalformedStatusConnection(_ScriptedHttpConnection):
+            def getresponse(self) -> _ScriptedHttpResponse:
+                raise http.client.BadStatusLine("PRIVATE-STATUS-SENTINEL")
+
+        def factory(host: str, port: int, timeout: float) -> _ScriptedHttpConnection:
+            return MalformedStatusConnection(
+                host,
+                port,
+                timeout,
+                clock=clock,
+                response=response,
+            )
+
+        monkeypatch.setattr(driver, "_LiteralLoopbackHTTPConnection", factory)
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver._health_request(  # noqa: SLF001 - deterministic transport seam
+                43210,
+                clock=clock,
+                request_timeout_ms=driver.REQUEST_TIMEOUT_MS,
+            )
+
+        _assert_refusal(exc, "malformed_response")
+        assert "PRIVATE-STATUS-SENTINEL" not in str(exc.value)
+
+    def test_json_parse_cannot_finish_after_the_absolute_deadline(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        clock = driver.FrozenClock("2026-07-15T12:00:00Z")
+        response = _ScriptedHttpResponse(
+            clock,
+            [(0.020, b'{"status":"ok"}')],
+            content_type="application/json",
+            close_when_reads_exhausted=True,
+        )
+
+        def factory(host: str, port: int, timeout: float) -> _ScriptedHttpConnection:
+            return _ScriptedHttpConnection(
+                host,
+                port,
+                timeout,
+                clock=clock,
+                response=response,
+            )
+
+        real_loads = json.loads
+
+        def slow_loads(payload: object, *args: object, **kwargs: object) -> object:
+            clock.advance(0.100)
+            return real_loads(payload, *args, **kwargs)
+
+        monkeypatch.setattr(driver, "_LiteralLoopbackHTTPConnection", factory)
+        monkeypatch.setattr(driver.json, "loads", slow_loads)
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver._health_request(  # noqa: SLF001 - deterministic transport seam
+                43210,
+                clock=clock,
+                request_timeout_ms=100,
+            )
+        _assert_refusal(exc, "http_timeout")
+
+    def test_json_endpoint_rejects_duplicate_content_length(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        clock = driver.FrozenClock("2026-07-15T12:00:00Z")
+        body = b'{"status":"ok"}'
+        response = _ScriptedHttpResponse(
+            clock,
+            [(0.010, body)],
+            content_type="application/json",
+            close_when_reads_exhausted=True,
+            headers=[
+                ("Content-Type", "application/json"),
+                ("Content-Length", str(len(body))),
+                ("Content-Length", str(len(body))),
+            ],
+        )
+
+        def factory(host: str, port: int, timeout: float) -> _ScriptedHttpConnection:
+            return _ScriptedHttpConnection(
+                host,
+                port,
+                timeout,
+                clock=clock,
+                response=response,
+            )
+
+        monkeypatch.setattr(driver, "_LiteralLoopbackHTTPConnection", factory)
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver._health_request(  # noqa: SLF001 - deterministic transport seam
+                43210,
+                clock=clock,
+                request_timeout_ms=driver.REQUEST_TIMEOUT_MS,
+            )
+        _assert_refusal(exc, "malformed_response")
+
+    def test_raw_health_rejects_short_declared_json_body(self) -> None:
+        body = b'{"status":"ok"}'
+        client = driver.LoopbackServerClient.rehearsal(driver.RehearsalClock())
+        script = _LocalHttpScript(
+            health_body=body,
+            health_content_length=len(body) + 8,
+        )
+
+        with _ServingLocalHttp(script) as (_script, port):
+            with pytest.raises(driver.BenchRefusal) as exc:
+                client.health(port)
+
+        _assert_refusal(exc, "malformed_response")
+
+    def test_health_rejects_duplicate_json_keys(self) -> None:
+        body = b'{"status":"bad","status":"ok"}'
+        client = driver.LoopbackServerClient.rehearsal(driver.RehearsalClock())
+
+        with _ServingLocalHttp(
+            _LocalHttpScript(health_body=body)
+        ) as (_script, port):
+            with pytest.raises(driver.BenchRefusal) as exc:
+                client.health(port)
+
+        _assert_refusal(exc, "malformed_response")
+
+    @pytest.mark.parametrize("nonfinite", [b"NaN", b"1e9999"])
+    def test_models_reject_nonfinite_json_numbers(self, nonfinite: bytes) -> None:
+        body = b'{"data":[{"id":"alias","ignored":' + nonfinite + b"}]}"
+        client = driver.LoopbackServerClient.rehearsal(driver.RehearsalClock())
+
+        with _ServingLocalHttp(
+            _LocalHttpScript(models_body=body)
+        ) as (_script, port):
+            with pytest.raises(driver.BenchRefusal) as exc:
+                client.models(port)
+
+        _assert_refusal(exc, "malformed_response")
+
+    def test_models_maps_recursive_json_failure_to_typed_refusal(self) -> None:
+        nested = b"[" * 100_000 + b"0" + b"]" * 100_000
+        body = b'{"data":[{"id":"alias","ignored":' + nested + b"}]}"
+        client = driver.LoopbackServerClient.rehearsal(driver.RehearsalClock())
+
+        with _ServingLocalHttp(
+            _LocalHttpScript(models_body=body)
+        ) as (_script, port):
+            with pytest.raises(driver.BenchRefusal) as exc:
+                client.models(port)
+
+        _assert_refusal(exc, "malformed_response")
+
+    def test_models_reject_lone_surrogate_json_string(self) -> None:
+        body = b'{"data":[{"id":"\\ud800"}]}'
+        client = driver.LoopbackServerClient.rehearsal(driver.RehearsalClock())
+
+        with _ServingLocalHttp(
+            _LocalHttpScript(models_body=body)
+        ) as (_script, port):
+            with pytest.raises(driver.BenchRefusal) as exc:
+                client.models(port)
+
+        _assert_refusal(exc, "malformed_response")
+
+    def test_pathological_content_length_is_typed_without_integer_conversion(
+        self,
+    ) -> None:
+        clock = driver.FrozenClock("2026-07-15T12:00:00Z")
+        response = _ScriptedHttpResponse(
+            clock,
+            [],
+            content_type="application/json",
+            headers=[
+                ("Content-Type", "application/json"),
+                ("Content-Length", "9" * 5_000),
+            ],
+        )
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver._validate_response_framing(  # noqa: SLF001 - protocol seam
+                response,
+                expected_content_type="application/json",
+            )
+
+        _assert_refusal(exc, "response_too_large")
+
+    def test_connection_refused_health_is_an_ordinary_false_state(self) -> None:
+        client = driver.LoopbackServerClient.rehearsal(driver.RehearsalClock())
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as blocker:
+            blocker.bind(("127.0.0.1", 0))
+            port = int(blocker.getsockname()[1])
+            assert client.health(port) is False
+
+    @pytest.mark.parametrize("endpoint", ["health", "models"])
+    def test_every_json_endpoint_enforces_the_response_cap(
+        self, endpoint: str
+    ) -> None:
+        secret = b"PRIVATE-ENDPOINT-BODY-" + b"x" * driver.RESPONSE_BYTE_CAP
+        kwargs = (
+            {"health_body": secret}
+            if endpoint == "health"
+            else {"models_body": secret}
+        )
+        client = driver.LoopbackServerClient.rehearsal(driver.RehearsalClock())
+        with _ServingLocalHttp(_LocalHttpScript(**kwargs)) as (_script, port):
+            with pytest.raises(driver.BenchRefusal) as exc:
+                getattr(client, endpoint)(port)
+
+        _assert_refusal(exc, "response_too_large")
+        assert secret[:20].decode() not in str(exc.value)
+
+    @pytest.mark.parametrize(
+        ("endpoint", "body"),
+        [
+            ("health", b'{"status":"PRIVATE-HEALTH-SENTINEL"}'),
+            ("models", b'{"data":"PRIVATE-MODELS-SENTINEL"}'),
+        ],
+    )
+    def test_malformed_json_endpoint_bodies_never_enter_refusals(
+        self, endpoint: str, body: bytes
+    ) -> None:
+        kwargs = {f"{endpoint}_body": body}
+        client = driver.LoopbackServerClient.rehearsal(driver.RehearsalClock())
+        with _ServingLocalHttp(_LocalHttpScript(**kwargs)) as (_script, port):
+            with pytest.raises(driver.BenchRefusal) as exc:
+                getattr(client, endpoint)(port)
+
+        _assert_refusal(exc, "malformed_response")
+        assert "PRIVATE" not in str(exc.value)
+
+    def test_real_redirect_is_refused_without_contacting_its_target(self) -> None:
+        sink_script = _LocalHttpScript()
+        clock = driver.RehearsalClock()
+        client = driver.LoopbackServerClient.rehearsal(clock)
+        with _ServingLocalHttp(sink_script) as (sink, sink_port):
+            redirect = _LocalHttpScript(
+                redirect_to=f"http://127.0.0.1:{sink_port}/completion"
+            )
+            with _ServingLocalHttp(redirect) as (source, source_port):
+                with pytest.raises(driver.BenchRefusal) as exc:
+                    client.stream(source_port, "PRIVATE-REDIRECT-PROMPT")
+
+        _assert_refusal(exc, "malformed_response")
+        assert source.hits == [("POST", "/completion")]
+        assert sink.hits == []
+        assert "PRIVATE-REDIRECT-PROMPT" not in str(exc.value)
+
+
+class TestB6ClientSeal:
+    def test_rehearsal_client_rejects_nonadvancing_transport_clock(self) -> None:
+        with pytest.raises(ValueError, match="^transport_clock_required$"):
+            driver.LoopbackServerClient.rehearsal(
+                driver.FrozenClock("2026-07-15T12:00:00Z")
+            )
+
+    @pytest.mark.parametrize("clock", [driver.SystemClock(), driver.RehearsalClock()])
+    def test_transport_clock_behavior_is_immutable_after_admission(
+        self, clock: object
+    ) -> None:
+        with pytest.raises(AttributeError):
+            clock.monotonic = lambda: 0.0  # type: ignore[attr-defined,method-assign]
+        with pytest.raises(AttributeError):
+            clock.tier = "rehearsal"  # type: ignore[attr-defined]
+
+    @pytest.mark.parametrize("host", ["localhost", "::1", "127.0.0.2"])
+    def test_nonliteral_loopback_host_is_rejected(self, host: str) -> None:
+        with pytest.raises(ValueError, match="^loopback_literal_required$"):
+            driver.LoopbackServerClient.production(driver.SystemClock(), host=host)
+
+    @pytest.mark.parametrize("tier", ["production", "rehearsal"])
+    def test_factory_returns_exact_client_with_identical_clock(self, tier: str) -> None:
+        components = _provider_components(tier)
+        clock = components["clock"]
+        client = (
+            driver.LoopbackServerClient.production(clock)
+            if tier == "production"
+            else driver.LoopbackServerClient.rehearsal(clock)
+        )
+        components["server_client"] = client
+        factory = driver.production_tier if tier == "production" else driver.rehearsal_tier
+
+        providers = factory(**components)
+
+        assert type(providers.server_client) is driver.LoopbackServerClient
+        assert providers.server_client.clock is providers.clock
+
+    def test_factory_rejects_equal_but_distinct_client_clock(self) -> None:
+        components = _provider_components("rehearsal")
+        client_clock = driver.RehearsalClock()
+        components["server_client"] = driver.LoopbackServerClient.rehearsal(
+            client_clock
+        )
+        assert client_clock is not components["clock"]
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.rehearsal_tier(**components)
+
+        _assert_refusal(exc, "tier_mismatch")
+
+    def test_factory_rejects_same_tier_fake_client(self) -> None:
+        components = _provider_components("production")
+        components["server_client"] = _TieredFake("production")
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.production_tier(**components)
+        _assert_refusal(exc, "tier_mismatch")
+
+    def test_factory_rejects_client_subclass(self) -> None:
+        class UnsafeClient(driver.LoopbackServerClient):
+            pass
+
+        components = _provider_components("rehearsal")
+        components["server_client"] = UnsafeClient.rehearsal(components["clock"])
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.rehearsal_tier(**components)
+        _assert_refusal(exc, "tier_mismatch")
+
+    def test_client_for_one_tier_cannot_enter_the_other(self) -> None:
+        components = _provider_components("production")
+        components["server_client"] = driver.LoopbackServerClient.rehearsal(
+            driver.RehearsalClock()
+        )
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.production_tier(**components)
+        _assert_refusal(exc, "tier_mismatch")
+
+    def test_sealed_provider_client_cannot_mutate_its_clock_after_admission(
+        self,
+    ) -> None:
+        components = _provider_components("rehearsal")
+        providers = driver.rehearsal_tier(**components)
+
+        with pytest.raises(FrozenInstanceError):
+            providers.server_client.clock = driver.FrozenClock(  # type: ignore[misc]
+                "2026-07-14T12:00:00Z"
+            )
+
+
+class TestB6Mtp:
+    def test_missing_wire_keys_are_unproven(self) -> None:
+        for timings in ({}, {"draft_n": 12}, {"draft_n_accepted": 9}):
+            with pytest.raises(driver.BenchRefusal) as exc:
+                driver.parse_mtp(timings)
+            _assert_refusal(exc, "mtp_unproven")
+
+    def test_valid_wire_pair_derives_rejected_and_ignores_forged_key(self) -> None:
+        assert driver.parse_mtp(
+            {
+                "draft_n": 12,
+                "draft_n_accepted": 9,
+                "draft_n_rejected": 999,
+            }
+        ) == (12, 9, 3)
+
+    @pytest.mark.parametrize(
+        "timings",
+        [
+            {"draft_n": 5, "draft_n_accepted": 9},
+            {"draft_n": 0, "draft_n_accepted": 0},
+            {"draft_n": True, "draft_n_accepted": 1},
+            {"draft_n": 1, "draft_n_accepted": False},
+            {"draft_n": 1.0, "draft_n_accepted": 1},
+            {"draft_n": 1, "draft_n_accepted": -1},
+        ],
+    )
+    def test_invalid_present_wire_pair_is_malformed(
+        self, timings: dict[str, object]
+    ) -> None:
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.parse_mtp(timings)
+        _assert_refusal(exc, "malformed_response")
+
+    def test_aggregate_requires_exact_three_by_seven_shape(self) -> None:
+        valid = [(12, 9, 3)] * 7
+        for cycles in ([valid] * 2, [valid, valid, valid[:6]]):
+            with pytest.raises(ValueError, match="^sample_count$"):
+                driver.aggregate_mtp(cycles)
+
+    @pytest.mark.parametrize(
+        "bad_entry",
+        [
+            (12, 9),
+            (12, 9, 999),
+            (0, 0, 0),
+            (12, 13, -1),
+            (True, 1, 0),
+        ],
+    )
+    def test_aggregate_rejects_malformed_or_inconsistent_tuple(
+        self, bad_entry: tuple[object, ...]
+    ) -> None:
+        cycles: list[list[tuple[object, ...]]] = [
+            [(12, 9, 3)] * 7,
+            [(12, 9, 3)] * 7,
+            [(12, 9, 3)] * 7,
+        ]
+        cycles[1][3] = bad_entry
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.aggregate_mtp(cycles)
+        _assert_refusal(exc, "malformed_response")
+
+    def test_aggregate_sums_three_cycles_and_rederives_rejected(self) -> None:
+        cycles = [
+            [(12, 9, 3)] * 7,
+            [(8, 2, 6)] * 7,
+            [(3, 0, 3)] * 7,
+        ]
+        assert driver.aggregate_mtp(cycles) == (161, 77, 84)
+
+
+def _b6_measurement(index: int) -> object:
+    return driver.TurnMeasurement(
+        ttft_ms=0.5,
+        e2e_ms=float(index),
+        content="private generated sentinel",
+        timings={
+            "prompt_per_second": float(100 + index),
+            "predicted_per_second": float(50 + index),
+        },
+        terminal={"prompt": "private prompt sentinel"},
+    )
+
+
+class TestB6Statistics:
+    def test_nearest_rank_medians_and_max_are_recomputed(self) -> None:
+        result = driver.phase_statistics(
+            [_b6_measurement(index) for index in range(1, 22)]
+        )
+        assert result == {
+            "seven_turn_max_ms": 21.0,
+            "p95_e2e_ms": 20.0,
+            "median_decode_tps": 61.0,
+            "median_prefill_tps": 111.0,
+        }
+
+    def test_wrong_sample_count_is_explicit(self) -> None:
+        with pytest.raises(ValueError, match="^sample_count$"):
+            driver.phase_statistics(
+                [_b6_measurement(index) for index in range(1, 21)]
+            )
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("e2e_ms", float("nan")),
+            ("ttft_ms", float("inf")),
+            ("e2e_ms", True),
+        ],
+    )
+    def test_invalid_wall_measurement_is_malformed(
+        self, field: str, value: object
+    ) -> None:
+        turns = [_b6_measurement(index) for index in range(1, 22)]
+        turns[0] = replace(turns[0], **{field: value})
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.phase_statistics(turns)
+        _assert_refusal(exc, "malformed_response")
+
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [
+            ("prompt_per_second", float("nan")),
+            ("predicted_per_second", float("inf")),
+            ("prompt_per_second", False),
+        ],
+    )
+    def test_invalid_server_rate_is_malformed(self, key: str, value: object) -> None:
+        turns = [_b6_measurement(index) for index in range(1, 22)]
+        timings = dict(turns[0].timings)
+        timings[key] = value
+        turns[0] = replace(turns[0], timings=timings)
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.phase_statistics(turns)
+        _assert_refusal(exc, "malformed_response")
+
+    def test_oversized_integer_server_rate_is_malformed(self) -> None:
+        turns = [_b6_measurement(index) for index in range(1, 22)]
+        timings = dict(turns[0].timings)
+        timings["prompt_per_second"] = 10**1_000
+        turns[0] = replace(turns[0], timings=timings)
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.phase_statistics(turns)
+
+        _assert_refusal(exc, "malformed_response")
+
+    def test_ttft_after_e2e_is_malformed(self) -> None:
+        turns = [_b6_measurement(index) for index in range(1, 22)]
+        turns[0] = replace(turns[0], ttft_ms=2.0, e2e_ms=1.0)
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.phase_statistics(turns)
+        _assert_refusal(exc, "malformed_response")
+
+    def test_measurement_repr_is_content_light(self) -> None:
+        measurement = _b6_measurement(1)
+        rendered = repr(measurement)
+        assert "private prompt sentinel" not in rendered
+        assert "private generated sentinel" not in rendered
+        assert "prompt" not in rendered
+        assert "content" not in rendered
