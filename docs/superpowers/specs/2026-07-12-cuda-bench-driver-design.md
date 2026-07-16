@@ -459,8 +459,10 @@ mutation, no corpus authoring, no vision-flag changes.
 `cuda_bench_driver.turn_manifest.v1`,
 `cuda_bench_driver.turn_artifact.v1` (private literal document; wrapper
 binding is null and the persisted file hash is the evidence identity),
-`cuda_bench_driver.containment_snapshot.v1` (persisted lossless
-preimage: `binding_sha256` + complete constructor fields),
+`cuda_bench_driver.containment_snapshot.v2` (persisted lossless
+preimage: `binding_sha256` + complete constructor fields, including the
+informational Maez state/process-flag observation; its derived artifact hash
+covers only observations while the binding also covers capture context),
 `cuda_bench_driver.runtime_identity.v1` (same wrapper; complete
 constructor fields, reconstructable — not the lossy `identity_packet`),
 `cuda_bench_assemble.receipt.v1`,

@@ -227,7 +227,8 @@ def containment_snapshot(phase: str, boundary: str, **overrides: object) -> cm.C
         "port_closed": True,
         "flag_source_sha256": SHA_D,
         "vision_unit_sha256": SHA_E,
-        "artifact_sha256": SHA_A,
+        "maez_active_state": "inactive",
+        "maez_process_screen_flag_value": None,
     }
     values.update(overrides)
     return cm.ContainmentSnapshot(**values)
@@ -2347,7 +2348,10 @@ class PersistedDocTests(unittest.TestCase):
             "port_closed": snapshot.port_closed,
             "flag_source_sha256": snapshot.flag_source_sha256,
             "vision_unit_sha256": snapshot.vision_unit_sha256,
-            "artifact_sha256": snapshot.artifact_sha256,
+            "maez_active_state": snapshot.maez_active_state,
+            "maez_process_screen_flag_value": (
+                snapshot.maez_process_screen_flag_value
+            ),
         }
 
     @staticmethod
@@ -2590,7 +2594,7 @@ class PersistedDocTests(unittest.TestCase):
     def test_tampered_fields_and_embedded_binding_fail_round_trip(self) -> None:
         snapshot = containment_snapshot("cuda_candidate", "before")
         fields = self.containment_fields(snapshot)
-        fields["artifact_sha256"] = SHA_B
+        fields["screen_flag_value"] = "1"
         with self.assertRaisesRegex(ValueError, "persisted_roundtrip"):
             cm.PersistedDoc(
                 self.wrapper(cm.CONTAINMENT_SNAPSHOT_SCHEMA, snapshot, fields)
@@ -2604,6 +2608,42 @@ class PersistedDocTests(unittest.TestCase):
                     binding=SHA_E,
                 )
             )
+
+    def test_containment_v2_round_trip_recomputes_artifact_from_observations(self) -> None:
+        snapshot = containment_snapshot("cuda_candidate", "before")
+        self.assertEqual(
+            "cuda_bench_driver.containment_snapshot.v2",
+            cm.CONTAINMENT_SNAPSHOT_SCHEMA,
+        )
+        contextual = replace(
+            snapshot,
+            phase="vulkan_baseline",
+            boundary="after",
+            timestamp="2026-07-13T12:30:00Z",
+        )
+        observed = replace(snapshot, screen_flag_value="1")
+        self.assertEqual(snapshot.artifact_sha256, contextual.artifact_sha256)
+        self.assertNotEqual(snapshot.binding_sha256, contextual.binding_sha256)
+        self.assertNotEqual(snapshot.artifact_sha256, observed.artifact_sha256)
+        self.assertNotEqual(snapshot.binding_sha256, snapshot.artifact_sha256)
+        encoded = self.wrapper(
+            cm.CONTAINMENT_SNAPSHOT_SCHEMA,
+            snapshot,
+            self.containment_fields(snapshot),
+        )
+        persisted = cm.PersistedDoc(encoded)
+        self.assertEqual(snapshot, persisted.obj)
+        self.assertEqual(snapshot.artifact_sha256, persisted.obj.artifact_sha256)
+
+    def test_containment_v1_is_rejected_after_atomic_v2_replacement(self) -> None:
+        snapshot = containment_snapshot("cuda_candidate", "before")
+        encoded = self.wrapper(
+            "cuda_bench_driver.containment_snapshot.v1",
+            snapshot,
+            self.containment_fields(snapshot),
+        )
+        with self.assertRaisesRegex(ValueError, "persisted_schema_unknown"):
+            cm.PersistedDoc(encoded)
 
     def test_noncanonical_and_unknown_wrappers_refuse_typed(self) -> None:
         snapshot = containment_snapshot("cuda_candidate", "before")
@@ -3110,14 +3150,27 @@ class PhasePacketTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "canonical_asset_path"):
                     replace(packet, pinned_path=invalid)
 
+    def test_phase_packet_accepts_only_the_exact_phase_release_executable(self) -> None:
+        packet = _phase_packet()
+        for invalid in (
+            str(cm.CUDA_RELEASE_ROOT / "llama-server"),
+            str(Path(__file__).resolve().parents[1] / "scripts" / "cuda_bench_stub.py"),
+            "/home/rohit/maez/scripts/cuda_bench_stub.py",
+        ):
+            with self.subTest(invalid=invalid):
+                with self.assertRaisesRegex(ValueError, "phase_executable_mismatch"):
+                    replace(packet, pinned_path=invalid)
+
+        candidate = _phase_packet("cuda_candidate")
+        with self.assertRaisesRegex(ValueError, "phase_executable_mismatch"):
+            replace(
+                candidate,
+                pinned_path=str(cm.VULKAN_RELEASE_ROOT / "llama-server"),
+            )
+
     def test_pin_path_and_hash_are_binding_fields(self) -> None:
         packet = _phase_packet()
-        moved = replace(
-            packet,
-            pinned_path=str(cm.CUDA_RELEASE_ROOT / "llama-server"),
-        )
         rehashed = replace(packet, pinned_sha256=SHA_E)
-        self.assertNotEqual(packet.binding_sha256, moved.binding_sha256)
         self.assertNotEqual(packet.binding_sha256, rehashed.binding_sha256)
 
     def test_valid_packet_binds_all_preimages(self) -> None:
@@ -3771,6 +3824,11 @@ class RollbackEvidenceBundleTests(unittest.TestCase):
             ({"active_state": {"state": "inactive"}}, "containment_state"),
             ({"substate": ["dead"]}, "containment_state"),
             ({"enabled_state": {"state": "disabled"}}, "containment_state"),
+            ({"maez_active_state": ["inactive"]}, "containment_state"),
+            (
+                {"maez_process_screen_flag_value": ["0"]},
+                "containment_state",
+            ),
         )
         for changes, reason in cases:
             with self.subTest(changes=tuple(changes)):
@@ -3780,6 +3838,45 @@ class RollbackEvidenceBundleTests(unittest.TestCase):
                 values.update(changes)
                 with self.assertRaisesRegex(ValueError, reason):
                     cm.ContainmentSnapshot(**values)
+
+    def test_active_maez_represents_dirty_process_flag_without_calling_it_clean(
+        self,
+    ) -> None:
+        for value in (None, ""):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "containment_state"):
+                    containment_snapshot(
+                        "vulkan_rollback",
+                        "before",
+                        maez_active_state="active",
+                        maez_process_screen_flag_value=value,
+                    )
+        dirty = containment_snapshot(
+            "vulkan_rollback",
+            "before",
+            maez_active_state="active",
+            maez_process_screen_flag_value="1",
+        )
+        self.assertFalse(dirty.clean)
+        active = containment_snapshot(
+            "vulkan_rollback",
+            "before",
+            maez_active_state="active",
+            maez_process_screen_flag_value="0",
+        )
+        self.assertTrue(active.clean)
+
+    def test_stopped_maez_accepts_only_absent_process_flag(self) -> None:
+        stopped = containment_snapshot("vulkan_rollback", "before")
+        self.assertIsNone(stopped.maez_process_screen_flag_value)
+        self.assertTrue(stopped.clean)
+        with self.assertRaisesRegex(ValueError, "containment_state"):
+            containment_snapshot(
+                "vulkan_rollback",
+                "before",
+                maez_active_state="inactive",
+                maez_process_screen_flag_value="0",
+            )
 
     def test_bundle_revalidates_bypassed_containment_shape(self) -> None:
         class TaggedString(str):
@@ -3944,7 +4041,7 @@ class RollbackEvidenceBundleTests(unittest.TestCase):
         malformed_counters = cm.KernelCounters.zero()
         object.__setattr__(malformed_counters, "xid", [])
         malformed_snapshot = containment_snapshot("vulkan_rollback", "before")
-        object.__setattr__(malformed_snapshot, "artifact_sha256", object())
+        object.__setattr__(malformed_snapshot, "flag_source_sha256", object())
         cases = (
             {"witness": malformed_witness},
             {"maps_witness": malformed_maps},
@@ -4740,23 +4837,21 @@ class BenchEvidenceBundleTests(unittest.TestCase):
 
     def test_phase_pin_evidence_joins_the_separate_executable_authorities(self) -> None:
         bundle = _make_bundle()
+        for packet, wrong_root in (
+            (bundle.control_packet, cm.CUDA_RELEASE_ROOT),
+            (bundle.candidate_packet, cm.VULKAN_RELEASE_ROOT),
+        ):
+            with self.subTest(phase=packet.phase, changed="pinned_path"):
+                with self.assertRaisesRegex(ValueError, "phase_executable_mismatch"):
+                    replace(
+                        packet,
+                        pinned_path=str(wrong_root / "llama-server"),
+                    )
         cases = (
             {
                 "control_packet": replace(
                     bundle.control_packet,
-                    pinned_path=str(cm.CUDA_RELEASE_ROOT / "llama-server"),
-                )
-            },
-            {
-                "control_packet": replace(
-                    bundle.control_packet,
                     pinned_sha256=SHA_A,
-                )
-            },
-            {
-                "candidate_packet": replace(
-                    bundle.candidate_packet,
-                    pinned_path=str(cm.VULKAN_RELEASE_ROOT / "llama-server"),
                 )
             },
             {

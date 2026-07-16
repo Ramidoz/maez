@@ -457,7 +457,7 @@ CONSUMPTION_RECEIPT_SCHEMA = "cuda_bench_driver.consumption_receipt.v1"
 WINDOW_AUTHORIZATION_SCHEMA = "cuda_bench_driver.window_authorization.v1"
 CONTINUATION_SCHEMA = "cuda_bench_driver.continuation.v1"
 STATIC_PREFLIGHT_SCHEMA = "cuda_bench_driver.static_preflight.v1"
-CONTAINMENT_SNAPSHOT_SCHEMA = "cuda_bench_driver.containment_snapshot.v1"
+CONTAINMENT_SNAPSHOT_SCHEMA = "cuda_bench_driver.containment_snapshot.v2"
 RUNTIME_IDENTITY_SCHEMA = "cuda_bench_driver.runtime_identity.v1"
 COLD_BOOT_WITNESS_SCHEMA = "cuda_migration.cold_boot_witness.v1"
 PROVISIONAL_LIVE_WITNESS_SCHEMA = "cuda_migration.provisional_live_witness.v1"
@@ -1981,8 +1981,22 @@ class PhasePacket:
             raise ValueError("gpu_scope_violation")
         if type(self.pinned_path) is not str:
             raise ValueError("canonical_asset_path")
+        pinned_path = Path(self.pinned_path)
+        if (
+            not pinned_path.is_absolute()
+            or self.pinned_path != os.path.normpath(self.pinned_path)
+            or pinned_path.resolve(strict=False).is_relative_to(Path("/proc"))
+        ):
+            raise ValueError("canonical_asset_path")
+        expected_executable = (
+            VULKAN_RELEASE_ROOT / "llama-server"
+            if self.phase == "vulkan_baseline"
+            else CUDA_RELEASE_ROOT / "llama-server"
+        )
+        if self.pinned_path != str(expected_executable):
+            raise ValueError("phase_executable_mismatch")
         try:
-            validate_asset_path(Path(self.pinned_path))
+            validate_asset_path(pinned_path)
         except (OSError, TypeError, ValueError) as exc:
             raise ValueError("canonical_asset_path") from exc
         for digest in (
@@ -2171,10 +2185,11 @@ class ContainmentSnapshot:
     active_state: str
     substate: str
     enabled_state: str
+    maez_active_state: str
+    maez_process_screen_flag_value: str | None
     port_closed: bool
     flag_source_sha256: str
     vision_unit_sha256: str
-    artifact_sha256: str
     schema_version: str = field(default=SCHEMA_VERSION, init=False)
 
     def __post_init__(self) -> None:
@@ -2198,14 +2213,26 @@ class ContainmentSnapshot:
                 self.active_state,
                 self.substate,
                 self.enabled_state,
+                self.maez_active_state,
             )
         ):
+            raise ValueError("containment_state")
+        if not self.maez_active_state:
+            raise ValueError("containment_state")
+        if (
+            self.maez_process_screen_flag_value is not None
+            and type(self.maez_process_screen_flag_value) is not str
+        ):
+            raise ValueError("containment_state")
+        if self.maez_active_state == "active":
+            if self.maez_process_screen_flag_value not in {"0", "1"}:
+                raise ValueError("containment_state")
+        elif self.maez_process_screen_flag_value is not None:
             raise ValueError("containment_state")
         _validate_timestamp(self.timestamp)
         for digest in (
             self.flag_source_sha256,
             self.vision_unit_sha256,
-            self.artifact_sha256,
         ):
             _validate_sha256(digest)
         _require_bool("port_closed", self.port_closed)
@@ -2217,7 +2244,37 @@ class ContainmentSnapshot:
             and self.active_state == "inactive"
             and self.substate == "dead"
             and self.enabled_state == "disabled"
+            and (
+                (
+                    self.maez_active_state == "active"
+                    and self.maez_process_screen_flag_value == "0"
+                )
+                or (
+                    self.maez_active_state == "inactive"
+                    and self.maez_process_screen_flag_value is None
+                )
+            )
             and self.port_closed
+        )
+
+    @property
+    def artifact_sha256(self) -> str:
+        """Hash only the observed containment facts, not capture context."""
+
+        return _packet_hash(
+            {
+                "screen_flag_value": self.screen_flag_value,
+                "flag_source_sha256": self.flag_source_sha256,
+                "active_state": self.active_state,
+                "substate": self.substate,
+                "enabled_state": self.enabled_state,
+                "vision_unit_sha256": self.vision_unit_sha256,
+                "port_closed": self.port_closed,
+                "maez_active_state": self.maez_active_state,
+                "maez_process_screen_flag_value": (
+                    self.maez_process_screen_flag_value
+                ),
+            }
         )
 
     @property
@@ -2234,6 +2291,10 @@ class ContainmentSnapshot:
                 "port_closed": self.port_closed,
                 "flag_source_sha256": self.flag_source_sha256,
                 "vision_unit_sha256": self.vision_unit_sha256,
+                "maez_active_state": self.maez_active_state,
+                "maez_process_screen_flag_value": (
+                    self.maez_process_screen_flag_value
+                ),
                 "artifact_sha256": self.artifact_sha256,
             }
         )
@@ -2443,7 +2504,8 @@ def _decode_containment_snapshot(fields: object) -> ContainmentSnapshot:
             "port_closed",
             "flag_source_sha256",
             "vision_unit_sha256",
-            "artifact_sha256",
+            "maez_active_state",
+            "maez_process_screen_flag_value",
         ),
     )
     return ContainmentSnapshot(**values)
@@ -2663,6 +2725,15 @@ def _decode_authorization_witness(fields: object) -> AuthorizationWitness:
     )
 
 
+def _decode_consumption_receipt(fields: object) -> ConsumptionReceipt:
+    return ConsumptionReceipt(
+        **_persisted_fields(
+            fields,
+            ("nonce", "phase", "boot_id", "timestamp"),
+        )
+    )
+
+
 def _decode_backend_map_witness(fields: object) -> RuntimeBackendWitness:
     return RuntimeBackendWitness(
         **_persisted_fields(
@@ -2787,6 +2858,7 @@ _PERSISTED_REGISTRY: Mapping[str, object] = MappingProxyType(
         COLD_BOOT_WITNESS_SCHEMA: _decode_cold_boot_witness,
         PROVISIONAL_LIVE_WITNESS_SCHEMA: _decode_provisional_live_witness,
         AUTHORIZATION_WITNESS_SCHEMA: _decode_authorization_witness,
+        CONSUMPTION_RECEIPT_SCHEMA: _decode_consumption_receipt,
         BACKEND_MAP_WITNESS_SCHEMA: _decode_backend_map_witness,
         ROLLBACK_EVIDENCE_BUNDLE_SCHEMA: _decode_rollback_evidence_bundle,
     }
@@ -3608,12 +3680,18 @@ class BenchEvidenceBundle:
                     "enabled_state",
                     "flag_source_sha256",
                     "vision_unit_sha256",
+                    "maez_active_state",
                     "artifact_sha256",
                     "schema_version",
                 ),
                 (str,),
             )
             _require_exact_fields(snapshot, ("port_closed",), (bool,))
+            _require_exact_fields(
+                snapshot,
+                ("maez_process_screen_flag_value",),
+                (str, type(None)),
+            )
 
         for witness in (
             self.control_summary.rollback_witness,

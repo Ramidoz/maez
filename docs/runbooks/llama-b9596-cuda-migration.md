@@ -265,16 +265,19 @@ pointer after its separate authorization.
 Before and after every reached phase, record a distinct containment artifact:
 
 - `maez.service` state is recorded informationally: if it is running,
-  `/proc/<maez-pid>/environ` must contain exactly
-  `MAEZ_SCREEN_PERCEPTION=0`; if the owner has stopped it for the window,
+  a system-scope show, `/proc/<maez-pid>/environ` read, and second
+  system-scope show must prove the same positive active PID, whose environment
+  contains exactly one `MAEZ_SCREEN_PERCEPTION=0`; if the owner has stopped it for the window,
   the stopped state is recorded and the missing PID is NOT a phase refusal;
-- `llama-vision.service` is inactive/dead and disabled;
+- the user-scope `llama-vision.service` is inactive/dead and disabled;
 - the vision endpoint is closed;
 - the flag-source and vision-unit hashes equal the Static preflight values and
   remain identical across the chain. The flag source is
   `/home/rohit/.config/maez/model.env` and the vision unit is
   `/home/rohit/.config/systemd/user/llama-vision.service`; both hashes are
-  captured in Static preflight alongside the incumbent identity hashes.
+  captured from the exact bytes inspected alongside the incumbent identity
+  hashes. The flag source must contain exactly one unambiguous
+  `MAEZ_SCREEN_PERCEPTION` assignment.
 
 Read-only collection is permitted only inside the scheduled window. Any
 missing, changed, or ambiguous field makes the phase unscored with a typed

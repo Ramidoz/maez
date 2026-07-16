@@ -9,6 +9,7 @@ import http.client
 import inspect
 import json
 import os
+import re
 import select
 import signal
 import socket
@@ -85,7 +86,7 @@ EXPECTED_SCHEMAS = {
     "CONSUMPTION_RECEIPT_SCHEMA": "cuda_bench_driver.consumption_receipt.v1",
     "TURN_MANIFEST_SCHEMA": "cuda_bench_driver.turn_manifest.v1",
     "TURN_ARTIFACT_SCHEMA": "cuda_bench_driver.turn_artifact.v1",
-    "CONTAINMENT_SNAPSHOT_SCHEMA": "cuda_bench_driver.containment_snapshot.v1",
+    "CONTAINMENT_SNAPSHOT_SCHEMA": "cuda_bench_driver.containment_snapshot.v2",
     "RUNTIME_IDENTITY_SCHEMA": "cuda_bench_driver.runtime_identity.v1",
     "ASSEMBLE_RECEIPT_SCHEMA": "cuda_bench_assemble.receipt.v1",
     "REHEARSAL_PACKET_SCHEMA": "cuda_bench_rehearsal.packet.v1",
@@ -284,6 +285,12 @@ class _TieredFake:
     def consume(self, *_args: object, **_kwargs: object) -> object:
         raise AssertionError("factory invoked provider")
 
+    def validate(self, *_args: object, **_kwargs: object) -> None:
+        raise AssertionError("factory invoked provider")
+
+    def capture(self, *_args: object, **_kwargs: object) -> object:
+        raise AssertionError("factory invoked provider")
+
     def encode(self, _kind: str, _document: dict[str, object]) -> bytes:
         raise AssertionError("factory invoked provider")
 
@@ -359,6 +366,19 @@ def _provider_components(tier: str) -> dict[str, object]:
         server_launcher: object = driver.RealServerLauncher(
             _binary_pin(Path(sys.executable))
         )
+        containment: object = driver.RealContainmentProvider(
+            clock=clock,
+            port_probe=port_probe,
+            command_reader=lambda _argv: (_ for _ in ()).throw(
+                AssertionError("live call")
+            ),
+            file_reader=lambda _path: (_ for _ in ()).throw(
+                AssertionError("live call")
+            ),
+            environ_reader=lambda _pid: (_ for _ in ()).throw(
+                AssertionError("live call")
+            ),
+        )
     else:
         service_state = driver.SyntheticServiceState({})
         port_probe = driver.SyntheticPortProbe(set())
@@ -370,6 +390,12 @@ def _provider_components(tier: str) -> dict[str, object]:
         artifact_policy = driver.RehearsalArtifactPolicy()
         authorization_gate = driver.RehearsalAuthorizationGate(artifact_policy)
         server_launcher = driver.RehearsalServerLauncher(_stub_pin())
+        containment = driver.SyntheticContainmentProvider(
+            clock=clock,
+            port_probe=port_probe,
+            flag_source_sha256="a" * 64,
+            vision_unit_sha256="b" * 64,
+        )
     server_client = (
         driver.LoopbackServerClient.production(clock)
         if tier == "production"
@@ -384,6 +410,7 @@ def _provider_components(tier: str) -> dict[str, object]:
         "server_launcher": server_launcher,
         "server_client": server_client,
         "authorization_gate": authorization_gate,
+        "containment": containment,
         "artifact_policy": artifact_policy,
         "clock": clock,
         "journal_factory": journal_factory,
@@ -1673,7 +1700,7 @@ class TestProviderSeams:
         )
         assert rehearsal.encode("packet", document) == (
             b'{"payload":{"binding_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
-            b'"fields":{"value":7},"schema":"cuda_bench_driver.phase_packet.v2"},'
+            b'"fields":{"value":7},"kind":"packet"},'
             b'"rehearsal_schema":"cuda_bench_rehearsal.packet.v1","tier":"rehearsal"}\n'
         )
         assert production.artifact_dir("journal") == "journals"
@@ -1699,7 +1726,8 @@ class TestProviderSeams:
             )
         )
         assert set(encoded) == {"rehearsal_schema", "tier", "payload"}
-        assert encoded["payload"]["schema"] == driver.TURN_ARTIFACT_SCHEMA
+        assert encoded["payload"]["kind"] == "turn_artifact"
+        assert "schema" not in encoded["payload"]
         assert encoded["payload"]["binding_sha256"] is None
 
     def test_individual_turn_never_emits_turn_manifest_schema(self) -> None:
@@ -1740,15 +1768,50 @@ class TestProviderSeams:
         with pytest.raises(TypeError, match="sealed_provider_factory_required"):
             replace(providers, clock=driver.SystemClock())
 
-    def test_both_sealed_factories_assemble_all_eleven_seams(self) -> None:
+    def test_both_sealed_factories_assemble_all_twelve_seams(self) -> None:
         production = driver.production_tier(**_provider_components("production"))
         rehearsal = driver.rehearsal_tier(**_provider_components("rehearsal"))
 
         assert production.tier == "production"
         assert rehearsal.tier == "rehearsal"
-        assert len(driver.Providers.__dataclass_fields__) == 12  # tier + eleven seams
+        assert len(driver.Providers.__dataclass_fields__) == 13  # tier + twelve seams
         assert production.artifact_policy.tier == "production"
         assert rehearsal.artifact_policy.tier == "rehearsal"
+
+    def test_factories_require_concrete_tier_gates_and_containment(self) -> None:
+        for tier, factory in (
+            ("production", driver.production_tier),
+            ("rehearsal", driver.rehearsal_tier),
+        ):
+            components = _provider_components(tier)
+            fake_gate = _TieredFake(tier)
+            fake_gate.policy = components["artifact_policy"]  # type: ignore[attr-defined]
+            components["authorization_gate"] = fake_gate
+            with pytest.raises(driver.BenchRefusal) as gate_exc:
+                factory(**components)
+            _assert_refusal(gate_exc, "tier_mismatch")
+
+            components = _provider_components(tier)
+            components["containment"] = _TieredFake(tier)
+            with pytest.raises(driver.BenchRefusal) as containment_exc:
+                factory(**components)
+            _assert_refusal(containment_exc, "tier_mismatch")
+
+    @pytest.mark.parametrize("tier", ["production", "rehearsal"])
+    def test_containment_clock_and_port_probe_are_identity_sealed(
+        self, tier: str
+    ) -> None:
+        components = _provider_components(tier)
+        containment = components["containment"]
+        assert containment.clock is components["clock"]
+        assert containment.port_probe is components["port_probe"]
+
+        other = _provider_components(tier)
+        components["containment"] = other["containment"]
+        factory = driver.production_tier if tier == "production" else driver.rehearsal_tier
+        with pytest.raises(driver.BenchRefusal) as exc:
+            factory(**components)
+        _assert_refusal(exc, "tier_mismatch")
 
     @pytest.mark.parametrize(
         "field",
@@ -1761,6 +1824,7 @@ class TestProviderSeams:
             "server_launcher",
             "server_client",
             "authorization_gate",
+            "containment",
             "artifact_policy",
             "clock",
             "journal_factory",
@@ -1787,6 +1851,7 @@ class TestProviderSeams:
             "server_launcher",
             "server_client",
             "authorization_gate",
+            "containment",
             "artifact_policy",
             "clock",
             "journal_factory",
@@ -4165,13 +4230,17 @@ class TestAuthorizationArtifacts:
             _authorization_wrapper("window_authorization", fields)
         )
         policy = driver.ProductionArtifactPolicy()
+        receipt_root = private_root / "attempt"
+        receipt_root.mkdir(mode=0o700)
         result = driver.RealAuthorizationGate(policy).consume(
             authorization,
             phase="vulkan_baseline",
             boot_id="boot-1",
+            expected_window_id="window-1",
             parent_window=None,
             parent_packet=None,
-            root=private_root,
+            authority_root=private_root,
+            receipt_root=receipt_root,
             clock=driver.FrozenClock("2026-07-14T11:30:00Z"),
         )
 
@@ -4185,18 +4254,22 @@ class TestAuthorizationArtifacts:
             _authorization_wrapper("window_authorization", _window_fields())
         )
         policy = driver.ProductionArtifactPolicy()
+        receipt_root = private_root / "attempt"
+        receipt_root.mkdir(mode=0o700)
         result = driver.RealAuthorizationGate(policy).consume(
             authorization,
             phase="vulkan_baseline",
             boot_id="boot-1",
+            expected_window_id="window-1",
             parent_window=None,
             parent_packet=None,
-            root=private_root,
+            authority_root=private_root,
+            receipt_root=receipt_root,
             clock=driver.FrozenClock("2026-07-14T11:30:00Z"),
         )
 
         marker = private_root / "markers" / authorization.nonce
-        receipts = list((private_root / "receipts").glob("*.json"))
+        receipts = list((receipt_root / "receipts").glob("*.json"))
         assert marker.read_bytes() == b""
         assert stat.S_IMODE(marker.stat().st_mode) == 0o600
         assert len(receipts) == 1
@@ -4252,8 +4325,10 @@ class TestAuthorizationArtifacts:
                 authorization,
                 phase="vulkan_baseline",
                 boot_id="boot-1",
+                expected_window_id="window-1",
                 clock=clock,
-                root=private_root,
+                authority_root=private_root,
+                receipt_root=private_root / "attempt",
                 policy=driver.ProductionArtifactPolicy(),
                 parent_window=None,
                 parent_packet=None,
@@ -4305,8 +4380,10 @@ class TestAuthorizationArtifacts:
                 authorization,
                 phase="vulkan_baseline",
                 boot_id=boot_id,
+                expected_window_id="window-1",
                 clock=driver.FrozenClock(now),
-                root=private_root,
+                authority_root=private_root,
+                receipt_root=private_root / "attempt",
                 policy=driver.ProductionArtifactPolicy(),
                 parent_window=None,
                 parent_packet=None,
@@ -4364,8 +4441,10 @@ class TestAuthorizationArtifacts:
                 continuation,
                 phase="cuda_candidate",
                 boot_id="boot-1",
+                expected_window_id="window-1",
                 clock=driver.FrozenClock("2026-07-14T11:30:00Z"),
-                root=private_root,
+                authority_root=private_root,
+                receipt_root=private_root / "attempt",
                 policy=driver.ProductionArtifactPolicy(),
                 parent_window=parent_window,  # type: ignore[arg-type]
                 parent_packet=parent_packet,
@@ -4385,8 +4464,10 @@ class TestAuthorizationArtifacts:
                 continuation,
                 phase="cuda_candidate",
                 boot_id="boot-1",
+                expected_window_id="window-1",
                 clock=driver.FrozenClock("2026-07-14T11:30:00Z"),
-                root=private_root,
+                authority_root=private_root,
+                receipt_root=private_root / "attempt",
                 policy=driver.ProductionArtifactPolicy(),
                 parent_window=window,
                 parent_packet=packet,
@@ -4414,8 +4495,10 @@ class TestAuthorizationArtifacts:
                 continuation,
                 phase="cuda_candidate",
                 boot_id="boot-1",
+                expected_window_id="window-1",
                 clock=driver.FrozenClock("2026-07-14T12:30:00Z"),
-                root=private_root,
+                authority_root=private_root,
+                receipt_root=private_root / "attempt",
                 policy=driver.ProductionArtifactPolicy(),
                 parent_window=later_window,
                 parent_packet=packet,
@@ -4435,8 +4518,10 @@ class TestAuthorizationArtifacts:
                 continuation,
                 phase="cuda_candidate",
                 boot_id="boot-1",
+                expected_window_id="window-1",
                 clock=driver.FrozenClock("2026-07-14T12:00:00Z"),
-                root=private_root,
+                authority_root=private_root,
+                receipt_root=private_root / "attempt",
                 policy=driver.ProductionArtifactPolicy(),
                 parent_window=window,
                 parent_packet=packet,
@@ -4452,12 +4537,16 @@ class TestAuthorizationArtifacts:
         )
         policy = driver.ProductionArtifactPolicy()
         gate = driver.RealAuthorizationGate(policy)
+        receipt_root = private_root / "attempt"
+        receipt_root.mkdir(mode=0o700)
         kwargs = {
             "phase": "vulkan_baseline",
             "boot_id": "boot-1",
+            "expected_window_id": "window-1",
             "parent_window": None,
             "parent_packet": None,
-            "root": private_root,
+            "authority_root": private_root,
+            "receipt_root": receipt_root,
             "clock": driver.FrozenClock("2026-07-14T11:30:00Z"),
         }
 
@@ -4469,8 +4558,14 @@ class TestAuthorizationArtifacts:
 
         other_root = private_root.parent / "concurrent"
         other_root.mkdir(mode=0o700)
+        other_receipt_root = other_root / "attempt"
+        other_receipt_root.mkdir(mode=0o700)
         other_auth = replace(authorization, nonce="d" * 64)
-        concurrent_kwargs = {**kwargs, "root": other_root}
+        concurrent_kwargs = {
+            **kwargs,
+            "authority_root": other_root,
+            "receipt_root": other_receipt_root,
+        }
 
         def consume() -> object:
             try:
@@ -4540,12 +4635,16 @@ class TestAuthorizationArtifacts:
             controlled_verify_path_binding,
         )
         gate = driver.RealAuthorizationGate(driver.ProductionArtifactPolicy())
+        receipt_root = private_root / "attempt"
+        receipt_root.mkdir(mode=0o700)
         kwargs = {
             "phase": "vulkan_baseline",
             "boot_id": "boot-1",
+            "expected_window_id": "window-1",
             "parent_window": None,
             "parent_packet": None,
-            "root": private_root,
+            "authority_root": private_root,
+            "receipt_root": receipt_root,
             "clock": driver.FrozenClock("2026-07-14T11:30:00Z"),
         }
         outcomes: dict[str, str] = {}
@@ -4594,13 +4693,17 @@ class TestAuthorizationArtifacts:
                 driver.BenchRefusal("filesystem_hazard")
             ),
         )
+        receipt_root = private_root / "attempt"
+        receipt_root.mkdir(mode=0o700)
         with pytest.raises(driver.BenchRefusal) as exc:
             driver.consume_authorization(
                 authorization,
                 phase="vulkan_baseline",
                 boot_id="boot-1",
+                expected_window_id="window-1",
                 clock=driver.FrozenClock("2026-07-14T11:30:00Z"),
-                root=private_root,
+                authority_root=private_root,
+                receipt_root=receipt_root,
                 policy=driver.ProductionArtifactPolicy(),
                 parent_window=None,
                 parent_packet=None,
@@ -4619,10 +4722,18 @@ class TestAuthorizationArtifacts:
         marker_dir = private_root / "markers"
         marker_dir.mkdir(mode=0o700)
         _private_file(marker_dir / authorization.nonce, b"")
+        marker = marker_dir / authorization.nonce
+        real_exists = Path.exists
+
+        def reject_marker_exists_probe(path: Path) -> bool:
+            if path == marker:
+                raise AssertionError("TOCTOU exists probe")
+            return real_exists(path)
+
         monkeypatch.setattr(
             Path,
             "exists",
-            lambda *_args: (_ for _ in ()).throw(AssertionError("TOCTOU exists probe")),
+            reject_marker_exists_probe,
         )
 
         with pytest.raises(driver.BenchRefusal) as exc:
@@ -4630,8 +4741,10 @@ class TestAuthorizationArtifacts:
                 authorization,
                 phase="vulkan_baseline",
                 boot_id="boot-1",
+                expected_window_id="window-1",
                 clock=driver.FrozenClock("2026-07-14T11:30:00Z"),
-                root=private_root,
+                authority_root=private_root,
+                receipt_root=private_root / "attempt",
                 policy=driver.ProductionArtifactPolicy(),
                 parent_window=None,
                 parent_packet=None,
@@ -4672,14 +4785,16 @@ class TestAuthorizationArtifacts:
                 authorization,
                 phase="vulkan_baseline",
                 boot_id="boot-1",
+                expected_window_id="window-1",
                 clock=driver.FrozenClock("2026-07-14T11:30:00Z"),
-                root=private_root,
+                authority_root=private_root,
+                receipt_root=private_root / "attempt",
                 policy=driver.ProductionArtifactPolicy(),
                 parent_window=None,
                 parent_packet=None,
             )
         _assert_refusal(exc, "filesystem_hazard")
-        assert list((private_root / "receipts").glob("*.json")) == []
+        assert list((private_root / "attempt" / "receipts").glob("*.json")) == []
 
     def test_eexist_marker_path_substitution_is_filesystem_hazard(
         self, private_root: Path, monkeypatch: pytest.MonkeyPatch
@@ -4709,14 +4824,16 @@ class TestAuthorizationArtifacts:
                 authorization,
                 phase="vulkan_baseline",
                 boot_id="boot-1",
+                expected_window_id="window-1",
                 clock=driver.FrozenClock("2026-07-14T11:30:00Z"),
-                root=private_root,
+                authority_root=private_root,
+                receipt_root=private_root / "attempt",
                 policy=driver.ProductionArtifactPolicy(),
                 parent_window=None,
                 parent_packet=None,
             )
         _assert_refusal(exc, "filesystem_hazard")
-        assert list((private_root / "receipts").glob("*.json")) == []
+        assert list((private_root / "attempt" / "receipts").glob("*.json")) == []
 
     def test_receipt_encoding_happens_before_marker_publication(
         self, private_root: Path, monkeypatch: pytest.MonkeyPatch
@@ -4734,8 +4851,10 @@ class TestAuthorizationArtifacts:
                 authorization,
                 phase="vulkan_baseline",
                 boot_id="boot-1",
+                expected_window_id="window-1",
                 clock=driver.FrozenClock("2026-07-14T11:30:00Z"),
-                root=private_root,
+                authority_root=private_root,
+                receipt_root=private_root / "attempt",
                 policy=driver.ProductionArtifactPolicy(),
                 parent_window=None,
                 parent_packet=None,
@@ -4760,13 +4879,17 @@ class TestAuthorizationArtifacts:
             if path.is_file()
         }
         policy = driver.RehearsalArtifactPolicy()
+        receipt_root = private_root / "attempt"
+        receipt_root.mkdir(mode=0o700)
         result = driver.RehearsalAuthorizationGate(policy).consume(
             authorization,
             phase="vulkan_baseline",
             boot_id="boot-1",
+            expected_window_id="window-1",
             parent_window=None,
             parent_packet=None,
-            root=private_root,
+            authority_root=private_root,
+            receipt_root=receipt_root,
             clock=driver.FrozenClock("2026-07-14T11:30:00Z"),
         )
         after_outside = {
@@ -4776,7 +4899,7 @@ class TestAuthorizationArtifacts:
         }
         rehearsal_files = [
             path
-            for path in (private_root / "rehearsal").rglob("*")
+            for path in (receipt_root / "rehearsal").rglob("*")
             if path.is_file()
         ]
 
@@ -4785,7 +4908,8 @@ class TestAuthorizationArtifacts:
         wrapper = json.loads(rehearsal_files[0].read_bytes())
         assert set(wrapper) == {"rehearsal_schema", "tier", "payload"}
         assert wrapper["rehearsal_schema"] == driver.REHEARSAL_PACKET_SCHEMA
-        assert wrapper["payload"]["schema"] == driver.CONSUMPTION_RECEIPT_SCHEMA
+        assert wrapper["payload"]["kind"] == "consumption_receipt"
+        assert "schema" not in wrapper["payload"]
         assert wrapper["payload"]["fields"]["timestamp"] == (
             "2026-07-14T11:30:00.000000Z"
         )
@@ -4797,9 +4921,11 @@ class TestAuthorizationArtifacts:
             authorization,
             phase="vulkan_baseline",
             boot_id="boot-1",
+            expected_window_id="window-1",
             parent_window=None,
             parent_packet=None,
-            root=private_root,
+            authority_root=private_root,
+            receipt_root=receipt_root,
             clock=driver.FrozenClock("2026-07-14T11:30:00Z"),
         )
         assert real.preimage_sha256 == result.preimage_sha256
@@ -4812,12 +4938,16 @@ class TestAuthorizationArtifacts:
         )
         policy = driver.RehearsalArtifactPolicy()
         gate = driver.RehearsalAuthorizationGate(policy)
+        receipt_root = private_root / "attempt"
+        receipt_root.mkdir(mode=0o700)
         kwargs = {
             "phase": "vulkan_baseline",
             "boot_id": "boot-1",
+            "expected_window_id": "window-1",
             "parent_window": None,
             "parent_packet": None,
-            "root": private_root,
+            "authority_root": private_root,
+            "receipt_root": receipt_root,
             "clock": driver.FrozenClock("2026-07-14T11:30:00Z"),
         }
 
@@ -4826,7 +4956,7 @@ class TestAuthorizationArtifacts:
         monkeypatch.setattr(driver, "_AUTHORIZATION_RECEIPT_SEQUENCE", iter([0]))
         gate.consume(authorization, **kwargs)
 
-        receipts = list((private_root / "rehearsal" / "receipts").glob("*.json"))
+        receipts = list((receipt_root / "rehearsal" / "receipts").glob("*.json"))
         assert len(receipts) == 2
         assert not (private_root / "markers").exists()
 
@@ -4842,6 +4972,582 @@ class TestAuthorizationArtifacts:
                 "cm.PhasePacket | None"
             )
             assert surface.__annotations__["parent_packet"] == "cm.PhasePacket | None"
+
+
+_B7_SANITIZED_PATH = (
+    "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+)
+
+
+def _b7_production_environment(phase: str) -> dict[str, str]:
+    common = {"HOME": "/home/rohit", "PATH": _B7_SANITIZED_PATH}
+    if phase == "vulkan_baseline":
+        return {
+            **common,
+            "LD_LIBRARY_PATH": str(driver.cm.VULKAN_RELEASE_ROOT),
+            "GGML_VK_VISIBLE_DEVICES": "0",
+            "CUDA_VISIBLE_DEVICES": "",
+        }
+    return {
+        **common,
+        "CUDA_VISIBLE_DEVICES": "0",
+        "GGML_VK_VISIBLE_DEVICES": "",
+        "LD_LIBRARY_PATH": (
+            f"{driver.cm.CUDA_RELEASE_ROOT}:"
+            f"{driver.cm.CUDA_TOOLKIT_LIBRARY_ROOT}"
+        ),
+    }
+
+
+def _b7_production_contract_case(
+    root: Path, phase: str
+) -> tuple[
+    driver.PhaseConfig,
+    driver.SpawnPin,
+    driver.cm.StaticPreflightDoc,
+    driver.cm.RuntimeIdentity,
+]:
+    harness = _b7_harness(root)
+    static_bytes = driver.open_bench_file(
+        harness.config.static_preflight_path,
+        root=root,
+    )
+    static = driver.cm.PersistedDoc(static_bytes).obj
+    assert type(static) is driver.cm.StaticPreflightDoc
+    identity = driver.cm.RuntimeIdentity(**harness.config.bench_identity_fields)
+    executable = (
+        driver.cm.VULKAN_RELEASE_ROOT / "llama-server"
+        if phase == "vulkan_baseline"
+        else driver.cm.CUDA_RELEASE_ROOT / "llama-server"
+    )
+    pin_sha256 = (
+        static.checks["incumbent_server"]
+        if phase == "vulkan_baseline"
+        else identity.runtime_sha256
+    )
+    pin = driver.SpawnPin(
+        kind="binary",
+        pinned_path=executable,
+        pinned_sha256=pin_sha256,
+        required_argv_prefix=(str(executable),),
+    )
+    config = replace(
+        harness.config,
+        argv=[str(executable), *identity.effective_args],
+        env=_b7_production_environment(phase),
+        expected_port=driver.BENCH_PORT,
+    )
+    if phase == "cuda_candidate":
+        window = _b7_authorization()
+        continuation = driver.Continuation(
+            window_id=window.window_id,
+            phases=("cuda_candidate",),
+            boot_id=window.boot_id,
+            nonce="8" * 64,
+            issued_at=window.issued_at,
+            expires_at=(
+                datetime.fromisoformat(window.issued_at.replace("Z", "+00:00"))
+                + driver.timedelta(seconds=driver.CONTINUATION_TTL_S)
+            ).isoformat().replace("+00:00", "Z"),
+            owner=window.owner,
+            parent_vulkan_packet_sha256="7" * 64,
+        )
+        config = replace(
+            config,
+            phase=phase,
+            authorization=continuation,
+            parent_window=window,
+            parent_packet_path="packets/vulkan-parent.json",
+        )
+    return config, pin, static, identity
+
+
+class TestB7SpecGateExecutionAuthority:
+    @pytest.mark.parametrize("phase", ["vulkan_baseline", "cuda_candidate"])
+    def test_true_stub_hash_and_exact_real_pin_reach_production_contract_without_spawn(
+        self, private_root: Path, phase: str
+    ) -> None:
+        config, pin, static, identity = _b7_production_contract_case(
+            private_root, phase
+        )
+        assert static.stub_sha256 == STUB_SHA256
+
+        admitted = driver._validate_production_execution_contract(
+            config,
+            launcher_pin=pin,
+            static=static,
+            runtime_identity=identity,
+        )
+
+        assert admitted.pinned_path == str(pin.pinned_path)
+        assert admitted.pinned_sha256 == pin.pinned_sha256
+        assert admitted.effective_args_sha256 == driver.FROZEN_BENCH_ARGS_SHA256
+        assert dict(admitted.environment) == config.env
+
+    @pytest.mark.parametrize(
+        "mutation",
+        ["argv", "env", "port", "pin_path", "pin_sha256"],
+    )
+    def test_production_execution_mutation_refuses_before_authority_or_spawn(
+        self, private_root: Path, mutation: str
+    ) -> None:
+        config, pin, static, identity = _b7_production_contract_case(
+            private_root, "vulkan_baseline"
+        )
+        if mutation == "argv":
+            argv = list(config.argv)
+            argv[-1] = "on"
+            config = replace(config, argv=argv)
+        elif mutation == "env":
+            config = replace(config, env={**config.env, "UNFROZEN": "1"})
+        elif mutation == "port":
+            config = replace(config, expected_port=18_081)
+        elif mutation == "pin_path":
+            pin = driver.SpawnPin(
+                kind="binary",
+                pinned_path=Path("/tmp/not-the-vulkan-binary"),
+                pinned_sha256=pin.pinned_sha256,
+                required_argv_prefix=("/tmp/not-the-vulkan-binary",),
+            )
+        else:
+            pin = driver.SpawnPin(
+                kind="binary",
+                pinned_path=pin.pinned_path,
+                pinned_sha256="f" * 64,
+                required_argv_prefix=pin.required_argv_prefix,
+            )
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver._validate_production_execution_contract(
+                config,
+                launcher_pin=pin,
+                static=static,
+                runtime_identity=identity,
+            )
+        _assert_refusal(exc, "identity_mismatch")
+
+
+class TestB7SpecGateContainmentAndFactories:
+    def test_known_dirty_maez_states_are_representable_but_never_clean(self) -> None:
+        active_flag_one = driver.cm.ContainmentSnapshot(
+            phase="vulkan_baseline",
+            boundary="before",
+            timestamp="2026-07-16T12:00:00Z",
+            screen_flag_value="0",
+            active_state="inactive",
+            substate="dead",
+            enabled_state="disabled",
+            maez_active_state="active",
+            maez_process_screen_flag_value="1",
+            port_closed=True,
+            flag_source_sha256="a" * 64,
+            vision_unit_sha256="b" * 64,
+        )
+        failed = replace(
+            active_flag_one,
+            maez_active_state="failed",
+            maez_process_screen_flag_value=None,
+        )
+
+        assert active_flag_one.clean is False
+        assert failed.clean is False
+
+    def test_real_containment_returns_dirty_observation_for_persistence(self) -> None:
+        vision = (
+            "ActiveState=inactive\nSubState=dead\n"
+            "UnitFileState=disabled\nMainPID=0\n"
+        )
+        maez = (
+            "ActiveState=active\nSubState=running\n"
+            "UnitFileState=enabled\nMainPID=7\n"
+        )
+        provider = driver.RealContainmentProvider(
+            clock=driver.SystemClock(),
+            port_probe=driver.SyntheticPortProbe({8082}),
+            command_reader=lambda argv: maez if "maez.service" in argv else vision,
+            file_reader=lambda path: (
+                b"MAEZ_SCREEN_PERCEPTION=0\n"
+                if path == driver.SCREEN_FLAG_SOURCE_PATH
+                else b"unit"
+            ),
+            environ_reader=lambda _pid: b"MAEZ_SCREEN_PERCEPTION=1\0",
+        )
+
+        snapshot = provider.capture("vulkan_baseline", "before")
+
+        assert snapshot.maez_process_screen_flag_value == "1"
+        assert snapshot.clean is False
+
+    def test_dirty_before_is_persisted_then_refused_before_consumption(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness = _b7_harness(private_root, nonce="3" * 64)
+        real_capture = harness.containment.capture
+
+        def dirty_capture(phase: str, boundary: str) -> object:
+            snapshot = real_capture(phase, boundary)
+            return (
+                replace(snapshot, screen_flag_value="1")
+                if boundary == "before"
+                else snapshot
+            )
+
+        monkeypatch.setattr(harness.containment, "capture", dirty_capture)
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+
+        fields = _b7_wrapper(path)["payload"]["fields"]
+        assert fields["outcome"] == "containment_violation"
+        assert fields["spawned"] is False
+        attempt = path.parents[2]
+        before_path = attempt / "rehearsal" / "containment" / "containment-before.json"
+        assert before_path.is_file()
+        persisted = json.loads(before_path.read_bytes())
+        assert persisted["payload"]["fields"]["screen_flag_value"] == "1"
+        assert not list(attempt.rglob("consumption-*.json"))
+
+    def test_containment_before_hashes_join_static_before_consumption(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness = _b7_harness(private_root, nonce="2" * 64)
+        real_capture = harness.containment.capture
+
+        def drifted_capture(phase: str, boundary: str) -> object:
+            snapshot = real_capture(phase, boundary)
+            return (
+                replace(snapshot, flag_source_sha256="f" * 64)
+                if boundary == "before"
+                else snapshot
+            )
+
+        monkeypatch.setattr(harness.containment, "capture", drifted_capture)
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+
+        fields = _b7_wrapper(path)["payload"]["fields"]
+        assert fields["outcome"] == "containment_violation"
+        assert fields["spawned"] is False
+        assert not list(path.parents[2].rglob("consumption-*.json"))
+
+    def test_containment_after_hash_drift_writes_failed_packet(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness = _b7_harness(private_root, nonce="1" * 64)
+        real_capture = harness.containment.capture
+
+        def drifted_capture(phase: str, boundary: str) -> object:
+            snapshot = real_capture(phase, boundary)
+            return (
+                replace(snapshot, vision_unit_sha256="f" * 64)
+                if boundary == "after"
+                else snapshot
+            )
+
+        monkeypatch.setattr(harness.containment, "capture", drifted_capture)
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+
+        fields = _b7_wrapper(path)["payload"]["fields"]
+        assert fields["outcome"] == "containment_violation"
+        assert fields["spawned"] is True
+        after_path = (
+            path.parents[2]
+            / "rehearsal"
+            / "containment"
+            / "containment-after.json"
+        )
+        assert after_path.is_file()
+
+    def test_cycle_one_anchor_is_after_completed_gpu_sample(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness = _b7_harness(private_root, nonce="0" * 64)
+        base = datetime.now(UTC).replace(microsecond=0)
+        clock_calls = 0
+        last_clock_before_first_memory: str | None = None
+        real_memory = harness.gpu.memory
+
+        def advancing_now(_clock: object) -> str:
+            nonlocal clock_calls
+            rendered = (base + driver.timedelta(microseconds=clock_calls)).isoformat(
+                timespec="microseconds"
+            ).replace("+00:00", "Z")
+            clock_calls += 1
+            return rendered
+
+        def observed_memory(uuid: str) -> tuple[float, int]:
+            nonlocal last_clock_before_first_memory
+            if last_clock_before_first_memory is None:
+                last_clock_before_first_memory = (
+                    base + driver.timedelta(microseconds=clock_calls - 1)
+                ).isoformat(timespec="microseconds").replace("+00:00", "Z")
+            return real_memory(uuid)
+
+        monkeypatch.setattr(driver.RehearsalClock, "now_utc", advancing_now)
+        monkeypatch.setattr(harness.gpu, "memory", observed_memory)
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+
+        fields = _b7_wrapper(path)["payload"]["fields"]
+        assert fields["outcome"] == "completed"
+        assert last_clock_before_first_memory is not None
+        assert (
+            driver.cm._compare_utc_z(
+                fields["cycle_one_before_snapshot_at"],
+                last_clock_before_first_memory,
+            )
+            > 0
+        )
+
+    @pytest.mark.parametrize("tier", ["production", "rehearsal"])
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "service_state",
+            "port_probe",
+            "gpu",
+            "kernel_log",
+            "backend_maps",
+            "artifact_policy",
+            "clock",
+            "journal_factory",
+        ],
+    )
+    def test_factories_reject_same_tier_protocol_fakes(
+        self, tier: str, field: str
+    ) -> None:
+        components = _provider_components(tier)
+        components[field] = _TieredFake(tier)
+        factory = driver.production_tier if tier == "production" else driver.rehearsal_tier
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            factory(**components)
+        _assert_refusal(exc, "tier_mismatch")
+
+    def test_production_factory_rejects_retagged_synthetic(self) -> None:
+        class RetaggedSyntheticGpu(driver.SyntheticGpu):
+            tier = "production"
+
+        components = _provider_components("production")
+        components["gpu"] = RetaggedSyntheticGpu([], [], [])
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.production_tier(**components)
+        _assert_refusal(exc, "tier_mismatch")
+
+    def test_rehearsal_expected_port_refuses_before_consume_or_spawn(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness = _b7_harness(private_root, nonce="6" * 64)
+        config = replace(harness.config, expected_port=driver.BENCH_PORT)
+        consume_calls = 0
+        spawn_calls = 0
+        real_consume = driver.RehearsalAuthorizationGate.consume
+        real_spawn = driver.RehearsalServerLauncher.spawn
+
+        def counted_consume(
+            gate: object, *args: object, **kwargs: object
+        ) -> object:
+            nonlocal consume_calls
+            consume_calls += 1
+            return real_consume(gate, *args, **kwargs)
+
+        def counted_spawn(
+            launcher: driver.RehearsalServerLauncher,
+            *args: object,
+            **kwargs: object,
+        ) -> object:
+            nonlocal spawn_calls
+            spawn_calls += 1
+            return real_spawn(launcher, *args, **kwargs)
+
+        monkeypatch.setattr(driver.RehearsalAuthorizationGate, "consume", counted_consume)
+        monkeypatch.setattr(driver.RehearsalServerLauncher, "spawn", counted_spawn)
+        path = driver.run_phase(config, harness.providers, root=private_root)
+
+        fields = _b7_wrapper(path)["payload"]["fields"]
+        assert fields["outcome"] == "identity_mismatch"
+        assert consume_calls == 0
+        assert spawn_calls == 0
+        assert not list(private_root.rglob("consumption-*.json"))
+
+    @pytest.mark.parametrize("phase", ["vulkan_baseline", "cuda_candidate"])
+    def test_authorization_window_must_join_config_window(
+        self, phase: str
+    ) -> None:
+        window, continuation, parent = _cuda_authorities()
+        authority: object = window if phase == "vulkan_baseline" else continuation
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.validate_authorization(
+                authority,
+                phase=phase,
+                boot_id="boot-1",
+                expected_window_id="foreign-window",
+                parent_window=window if phase == "cuda_candidate" else None,
+                parent_packet=parent if phase == "cuda_candidate" else None,
+                clock=driver.FrozenClock("2026-07-14T11:30:00Z"),
+            )
+        _assert_refusal(exc, "authorization_scope_mismatch")
+
+    def test_authorization_window_defines_attempt_scope_before_any_write(
+        self, private_root: Path
+    ) -> None:
+        harness = _b7_harness(private_root, nonce="5" * 64)
+        config = replace(harness.config, window_id="foreign-window")
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.run_phase(config, harness.providers, root=private_root)
+
+        _assert_refusal(exc, "authorization_scope_mismatch")
+        assert not (private_root / "windows").exists()
+
+    def test_authorization_boot_mismatch_refuses_before_any_write(
+        self, private_root: Path
+    ) -> None:
+        harness = _b7_harness(private_root, nonce="4" * 64)
+        config = replace(harness.config, boot_id="foreign-boot")
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.run_phase(config, harness.providers, root=private_root)
+
+        _assert_refusal(exc, "authorization_boot_mismatch")
+        assert not (private_root / "windows").exists()
+
+    def test_expiry_during_receipt_encode_is_revalidated_before_marker(
+        self, private_root: Path
+    ) -> None:
+        class MutableClock:
+            tier = "production"
+
+            def __init__(self) -> None:
+                self.now = "2026-07-14T11:30:00Z"
+
+            def now_utc(self) -> str:
+                return self.now
+
+            def monotonic(self) -> float:
+                return 0.0
+
+        class ExpiringPolicy:
+            tier = "production"
+
+            def encode(self, kind: str, document: dict[str, object]) -> bytes:
+                encoded = driver.ProductionArtifactPolicy().encode(kind, document)
+                clock.now = authorization.expires_at
+                return encoded
+
+            def artifact_dir(self, kind: str) -> str:
+                return driver.ProductionArtifactPolicy().artifact_dir(kind)
+
+        authorization = driver.WindowAuthorization(
+            **{
+                **_window_fields(),
+                "phases": ("vulkan_baseline",),
+            }  # type: ignore[arg-type]
+        )
+        clock = MutableClock()
+        attempt_root = private_root / "attempt"
+        attempt_root.mkdir(mode=0o700)
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.consume_authorization(
+                authorization,
+                phase="vulkan_baseline",
+                boot_id="boot-1",
+                expected_window_id="window-1",
+                clock=clock,
+                authority_root=private_root,
+                receipt_root=attempt_root,
+                policy=ExpiringPolicy(),
+                parent_window=None,
+                parent_packet=None,
+            )
+        _assert_refusal(exc, "authorization_expired")
+        assert not (private_root / "markers").exists()
+        assert not (attempt_root / "receipts").exists()
+
+    def test_consumption_wrapper_round_trips_object_binding_and_tamper_refuses(
+        self, private_root: Path
+    ) -> None:
+        authorization = driver.WindowAuthorization(
+            **{
+                **_window_fields(),
+                "phases": ("vulkan_baseline",),
+            }  # type: ignore[arg-type]
+        )
+        attempt_root = private_root / "attempt"
+        attempt_root.mkdir(mode=0o700)
+        consumed = driver.consume_authorization(
+            authorization,
+            phase="vulkan_baseline",
+            boot_id="boot-1",
+            expected_window_id="window-1",
+            clock=driver.FrozenClock("2026-07-14T11:30:00Z"),
+            authority_root=private_root,
+            receipt_root=attempt_root,
+            policy=driver.ProductionArtifactPolicy(),
+            parent_window=None,
+            parent_packet=None,
+        )
+        receipt_path = next((attempt_root / "receipts").glob("*.json"))
+        persisted = driver.cm.PersistedDoc(receipt_path.read_bytes())
+        assert type(persisted.obj) is driver.cm.ConsumptionReceipt
+        assert persisted.obj.binding_sha256 == consumed.consumption_receipt_sha256
+
+        wrapper = json.loads(receipt_path.read_bytes())
+        wrapper["fields"]["timestamp"] = "2026-07-14T11:31:00Z"
+        tampered = (
+            json.dumps(wrapper, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode()
+        with pytest.raises(ValueError, match="persisted_roundtrip"):
+            driver.cm.PersistedDoc(tampered)
+
+    def test_driver_permits_stage_mode_difference_and_cites_bench_identity_file(
+        self, private_root: Path
+    ) -> None:
+        from tests.test_cuda_migration import PersistedDocTests, argv, make_identity
+
+        harness = _b7_harness(private_root)
+        current = make_identity(mode="production", effective_args=argv("8080"))
+        current_fields = PersistedDocTests.identity_fields(current)
+        current_fields["effective_args"] = tuple(current_fields["effective_args"])
+        config = replace(harness.config, runtime_identity_fields=current_fields)
+        attempt_root = private_root / "identity-attempt"
+        attempt_root.mkdir(mode=0o700)
+
+        loaded = driver._load_phase_preimages(
+            config,
+            harness.providers,
+            root=private_root,
+            attempt_root=attempt_root,
+        )
+
+        bench_path = (
+            attempt_root
+            / "rehearsal"
+            / "identity"
+            / "bench_runtime_identity.json"
+        )
+        runtime_path = attempt_root / "rehearsal" / "identity" / "runtime_identity.json"
+        assert loaded[-1] == hashlib.sha256(bench_path.read_bytes()).hexdigest()
+        assert runtime_path.is_file()
+        assert bench_path.read_bytes() != runtime_path.read_bytes()
+
+    def test_driver_rejects_stable_identity_field_drift(self, private_root: Path) -> None:
+        from tests.test_cuda_migration import PersistedDocTests, make_identity
+
+        harness = _b7_harness(private_root)
+        drifted = make_identity(library_hashes={"libggml-cuda.so": "f" * 64})
+        drifted_fields = PersistedDocTests.identity_fields(drifted)
+        drifted_fields["effective_args"] = tuple(drifted_fields["effective_args"])
+        config = replace(harness.config, runtime_identity_fields=drifted_fields)
+        attempt_root = private_root / "identity-attempt"
+        attempt_root.mkdir(mode=0o700)
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver._load_phase_preimages(
+                config,
+                harness.providers,
+                root=private_root,
+                attempt_root=attempt_root,
+            )
+        _assert_refusal(exc, "identity_mismatch")
 
     @pytest.mark.parametrize("tier", ["production", "rehearsal"])
     def test_factory_returns_concrete_gate_with_the_identical_policy_object(
@@ -6551,3 +7257,1919 @@ class TestB6Statistics:
         assert "private generated sentinel" not in rendered
         assert "prompt" not in rendered
         assert "content" not in rendered
+
+
+class _SafeProductionPortProbe:
+    tier = "production"
+
+    def __init__(self, *, free: bool = True) -> None:
+        self.free = free
+        self.calls: list[int] = []
+
+    def is_free(self, port: int) -> bool:
+        self.calls.append(port)
+        return self.free
+
+
+class TestB7ContainmentV2:
+    @staticmethod
+    def _capture(*, maez_active: bool) -> tuple[object, list[tuple[str, object]]]:
+        calls: list[tuple[str, object]] = []
+        flag_bytes = b"HOME=/home/rohit\nMAEZ_SCREEN_PERCEPTION=0\n"
+        unit_bytes = b"[Service]\nExecStart=/frozen/vision\n"
+
+        def command_reader(argv: list[str]) -> str:
+            calls.append(("command", tuple(argv)))
+            unit = argv[-1]
+            if unit == "llama-vision.service":
+                return (
+                    "ActiveState=inactive\nSubState=dead\n"
+                    "UnitFileState=disabled\nMainPID=0\n"
+                )
+            if unit == "maez.service":
+                return (
+                    "ActiveState=active\nSubState=running\n"
+                    "UnitFileState=enabled\nMainPID=4321\n"
+                    if maez_active
+                    else "ActiveState=inactive\nSubState=dead\nUnitFileState=enabled\nMainPID=0\n"
+                )
+            raise AssertionError(unit)
+
+        def file_reader(path: Path) -> bytes:
+            calls.append(("file", path))
+            if path == driver.SCREEN_FLAG_SOURCE_PATH:
+                return flag_bytes
+            if path == driver.VISION_UNIT_PATH:
+                return unit_bytes
+            raise AssertionError(path)
+
+        def environ_reader(pid: int) -> bytes:
+            calls.append(("environ", pid))
+            return b"HOME=/home/rohit\0MAEZ_SCREEN_PERCEPTION=0\0"
+
+        port_probe = _SafeProductionPortProbe()
+        provider = driver.RealContainmentProvider(
+            clock=driver.SystemClock(),
+            port_probe=port_probe,
+            command_reader=command_reader,
+            file_reader=file_reader,
+            environ_reader=environ_reader,
+        )
+        snapshot = provider.capture("vulkan_baseline", "before")
+        return snapshot, calls
+
+    def test_real_capture_uses_fresh_injected_sensors_and_current_hashes(self) -> None:
+        first, first_calls = self._capture(maez_active=True)
+        second, second_calls = self._capture(maez_active=True)
+
+        assert first.screen_flag_value == "0"
+        assert first.active_state == "inactive"
+        assert first.substate == "dead"
+        assert first.enabled_state == "disabled"
+        assert first.port_closed is True
+        assert first.flag_source_sha256 == hashlib.sha256(
+            b"HOME=/home/rohit\nMAEZ_SCREEN_PERCEPTION=0\n"
+        ).hexdigest()
+        assert first.vision_unit_sha256 == hashlib.sha256(
+            b"[Service]\nExecStart=/frozen/vision\n"
+        ).hexdigest()
+        assert first.maez_active_state == "active"
+        assert first.maez_process_screen_flag_value == "0"
+        assert first.clean is True
+        contextual = replace(
+            first,
+            phase="cuda_candidate",
+            boundary="after",
+            timestamp="2026-07-15T23:59:59Z",
+        )
+        changed_observation = replace(first, screen_flag_value="1")
+        assert first.artifact_sha256 == contextual.artifact_sha256
+        assert first.binding_sha256 != contextual.binding_sha256
+        assert first.artifact_sha256 != changed_observation.artifact_sha256
+        assert first.artifact_sha256 != first.binding_sha256
+        first_commands = [value for kind, value in first_calls if kind == "command"]
+        assert first_commands.count(
+            ("systemctl", "--user", "show", "llama-vision.service")
+        ) == 1
+        assert first_commands.count(("systemctl", "show", "maez.service")) == 2
+        assert first_calls and second_calls
+        assert first is not second
+
+    def test_stopped_maez_does_not_fabricate_or_read_a_process_flag(self) -> None:
+        snapshot, calls = self._capture(maez_active=False)
+        assert snapshot.maez_active_state == "inactive"
+        assert snapshot.maez_process_screen_flag_value is None
+        assert snapshot.clean is True
+        assert not any(kind == "environ" for kind, _value in calls)
+
+    def test_active_maez_without_exact_process_flag_is_observed_as_dirty(self) -> None:
+        provider = driver.RealContainmentProvider(
+            clock=driver.SystemClock(),
+            port_probe=_SafeProductionPortProbe(),
+            command_reader=lambda argv: (
+                "ActiveState=inactive\nSubState=dead\nUnitFileState=disabled\nMainPID=0\n"
+                if argv[-1] == "llama-vision.service"
+                else "ActiveState=active\nSubState=running\nUnitFileState=enabled\nMainPID=7\n"
+            ),
+            file_reader=lambda path: (
+                b"MAEZ_SCREEN_PERCEPTION=0\n"
+                if path == driver.SCREEN_FLAG_SOURCE_PATH
+                else b"unit"
+            ),
+            environ_reader=lambda _pid: b"MAEZ_SCREEN_PERCEPTION=1\0",
+        )
+        snapshot = provider.capture("vulkan_baseline", "before")
+
+        assert snapshot.maez_active_state == "active"
+        assert snapshot.maez_process_screen_flag_value == "1"
+        assert snapshot.clean is False
+
+    @pytest.mark.parametrize(
+        "flag_bytes",
+        [
+            b"HOME=/home/rohit\n",
+            b"MAEZ_SCREEN_PERCEPTION=0\nMAEZ_SCREEN_PERCEPTION=0\n",
+            b"MAEZ_SCREEN_PERCEPTION=0\nMAEZ_SCREEN_PERCEPTION=1\n",
+        ],
+    )
+    def test_flag_source_requires_one_unambiguous_assignment_from_hashed_bytes(
+        self, flag_bytes: bytes
+    ) -> None:
+        provider = driver.RealContainmentProvider(
+            clock=driver.SystemClock(),
+            port_probe=_SafeProductionPortProbe(),
+            command_reader=lambda argv: (
+                "ActiveState=inactive\nSubState=dead\nUnitFileState=disabled\nMainPID=0\n"
+                if argv[-1] == "llama-vision.service"
+                else "ActiveState=inactive\nSubState=dead\nUnitFileState=enabled\nMainPID=0\n"
+            ),
+            file_reader=lambda path: (
+                flag_bytes if path == driver.SCREEN_FLAG_SOURCE_PATH else b"unit"
+            ),
+            environ_reader=lambda _pid: (_ for _ in ()).throw(
+                AssertionError("inactive Maez has no process environment")
+            ),
+        )
+        with pytest.raises(driver.BenchRefusal) as exc:
+            provider.capture("vulkan_baseline", "before")
+        _assert_refusal(exc, "containment_violation")
+
+    @pytest.mark.parametrize(
+        "second_show",
+        [
+            "ActiveState=inactive\nSubState=dead\nUnitFileState=enabled\nMainPID=0\n",
+            "ActiveState=active\nSubState=running\nUnitFileState=enabled\nMainPID=8\n",
+        ],
+    )
+    def test_active_maez_environment_read_is_bracketed_by_same_pid_active_shows(
+        self, second_show: str
+    ) -> None:
+        maez_shows = iter(
+            [
+                "ActiveState=active\nSubState=running\nUnitFileState=enabled\nMainPID=7\n",
+                second_show,
+            ]
+        )
+
+        def command_reader(argv: list[str]) -> str:
+            if argv[-1] == "llama-vision.service":
+                return (
+                    "ActiveState=inactive\nSubState=dead\n"
+                    "UnitFileState=disabled\nMainPID=0\n"
+                )
+            return next(maez_shows)
+
+        provider = driver.RealContainmentProvider(
+            clock=driver.SystemClock(),
+            port_probe=_SafeProductionPortProbe(),
+            command_reader=command_reader,
+            file_reader=lambda path: (
+                b"MAEZ_SCREEN_PERCEPTION=0\n"
+                if path == driver.SCREEN_FLAG_SOURCE_PATH
+                else b"unit"
+            ),
+            environ_reader=lambda pid: (
+                b"MAEZ_SCREEN_PERCEPTION=0\0"
+                if pid == 7
+                else (_ for _ in ()).throw(AssertionError("wrong pid read"))
+            ),
+        )
+        with pytest.raises(driver.BenchRefusal) as exc:
+            provider.capture("vulkan_baseline", "before")
+        _assert_refusal(exc, "provider_uncertain")
+
+
+@dataclass
+class _B7Harness:
+    config: object
+    providers: object
+    port_probe: object
+    gpu: object
+    containment: object
+    authorization_gate: object
+
+
+def _b7_authorization(*, nonce: str = "9" * 64) -> driver.WindowAuthorization:
+    issued = datetime.now(UTC).replace(microsecond=0) - driver.timedelta(minutes=30)
+    expires = issued + driver.timedelta(seconds=driver.WINDOW_TTL_S)
+    return driver.WindowAuthorization(
+        window_id="window-b7",
+        phases=("vulkan_baseline", "cuda_candidate"),
+        boot_id="boot-b7",
+        nonce=nonce,
+        issued_at=issued.isoformat().replace("+00:00", "Z"),
+        expires_at=expires.isoformat().replace("+00:00", "Z"),
+        owner="owner",
+    )
+
+
+def _b7_identity_fields() -> dict[str, object]:
+    from tests.test_cuda_migration import PersistedDocTests, make_identity
+
+    identity = make_identity()
+    fields = PersistedDocTests.identity_fields(identity)
+    fields["effective_args"] = tuple(fields["effective_args"])
+    return fields
+
+
+def _b7_write_static_preflight(root: Path) -> str:
+    from tests.test_cuda_migration import PersistedDocTests, StaticPreflightDocTests
+
+    identity = driver.cm.RuntimeIdentity(**_b7_identity_fields())
+    checks = StaticPreflightDocTests.checks()
+    checks.update(
+        {
+            "flag_source": "a" * 64,
+            "vision_unit": "b" * 64,
+            "candidate_manifest": identity.runtime_manifest_sha256,
+            "stub_pin": STUB_SHA256,
+        }
+    )
+    doc = driver.cm.StaticPreflightDoc(
+        gpu_uuid="GPU-12345678-1234-1234-1234-123456789abc",
+        driver_package_sha256="e" * 64,
+        stub_sha256=STUB_SHA256,
+        corpus_verified=True,
+        checks=checks,
+        timestamp="2026-07-15T12:00:00Z",
+    )
+    fields = {
+        "gpu_uuid": doc.gpu_uuid,
+        "driver_package_sha256": doc.driver_package_sha256,
+        "stub_sha256": doc.stub_sha256,
+        "corpus_verified": doc.corpus_verified,
+        "checks": dict(doc.checks),
+        "timestamp": doc.timestamp,
+    }
+    payload = PersistedDocTests.wrapper(
+        driver.STATIC_PREFLIGHT_SCHEMA,
+        doc,
+        fields,
+    )
+    relative = "receipts/static-preflight.json"
+    path = root / relative
+    path.parent.mkdir(mode=0o700)
+    _private_file(path, payload)
+    return relative
+
+
+def _b7_harness(
+    root: Path,
+    *,
+    persona: str = "healthy",
+    service_active: bool = False,
+    fail_containment: str | None = None,
+    fail_first_memory: bool = False,
+    topology_drift: bool = False,
+    nonce: str = "9" * 64,
+    request_timeout_ms: int = 250,
+) -> _B7Harness:
+    static_path = _b7_write_static_preflight(root)
+    clock = driver.RehearsalClock()
+    services = {
+        "llama-server.service": "active" if service_active else "inactive",
+        "llama-judge.service": "inactive",
+        "llama-vision.service": "inactive",
+    }
+    service_state = driver.SyntheticServiceState(services)
+    port_probe = driver.SyntheticPortProbe(
+        {driver.BENCH_PORT, *driver.PRODUCTION_PORTS}
+    )
+    synthetic_is_free = port_probe.is_free
+
+    def scoped_port_free(port: int) -> bool:
+        if port in {driver.BENCH_PORT, *driver.PRODUCTION_PORTS}:
+            return synthetic_is_free(port)
+        return driver.RealPortProbe().is_free(port)
+
+    port_probe.is_free = scoped_port_free
+    inventories = [[] for _index in range(16)]
+    if topology_drift:
+        inventories[5] = [(999_999, "other-gpu-process")]
+    memories = (
+        None
+        if fail_first_memory
+        else [
+            *[
+                value
+                for _cycle in range(3)
+                for value in ((1.0, 100), (2.0, 200), (3.0, 250), (1.0, 100))
+            ],
+            (1.0, 100),
+            (1.0, 100),
+            (1.0, 100),
+        ]
+    )
+    gpu = driver.SyntheticGpu(
+        ["GPU-12345678-1234-1234-1234-123456789abc"],
+        inventories,
+        memories,
+    )
+    kernel = driver.SyntheticKernelLog(dict.fromkeys(driver.KERNEL_COUNTER_KEYS, 0))
+    maps = driver.SyntheticBackendMap({})
+    maps.read_maps = lambda _pid: str(
+        driver.cm.VULKAN_RELEASE_ROOT / "libggml-vulkan.so"
+    )
+    policy = driver.RehearsalArtifactPolicy()
+    authorization_gate = driver.RehearsalAuthorizationGate(policy)
+    containment = driver.SyntheticContainmentProvider(
+        clock=clock,
+        port_probe=port_probe,
+        flag_source_sha256="a" * 64,
+        vision_unit_sha256="b" * 64,
+        fail_boundary=fail_containment,
+    )
+    launcher = driver.RehearsalServerLauncher(_stub_pin())
+    client = driver.LoopbackServerClient.rehearsal(
+        clock,
+        request_timeout_ms=request_timeout_ms,
+    )
+    providers = driver.rehearsal_tier(
+        service_state=service_state,
+        port_probe=port_probe,
+        gpu=gpu,
+        kernel_log=kernel,
+        backend_maps=maps,
+        server_launcher=launcher,
+        server_client=client,
+        authorization_gate=authorization_gate,
+        containment=containment,
+        artifact_policy=policy,
+        clock=clock,
+        journal_factory=driver.RehearsalJournalFactory(),
+    )
+    argv = _stub_argv()
+    argv[argv.index("healthy")] = persona
+    config = driver.PhaseConfig(
+        phase="vulkan_baseline",
+        argv=argv,
+        env=_stub_env(),
+        alias="qwen36-27b-mtp",
+        prompts=tuple(f"sentinel-{index}" for index in range(1, 8)),
+        authorization=_b7_authorization(nonce=nonce),
+        parent_window=None,
+        parent_packet_path=None,
+        bench_identity_fields=_b7_identity_fields(),
+        runtime_identity_fields=_b7_identity_fields(),
+        static_preflight_path=static_path,
+        gpu_uuid="GPU-12345678-1234-1234-1234-123456789abc",
+        boot_id="boot-b7",
+        window_id="window-b7",
+        expected_port=None,
+    )
+    return _B7Harness(
+        config=config,
+        providers=providers,
+        port_probe=port_probe,
+        gpu=gpu,
+        containment=containment,
+        authorization_gate=authorization_gate,
+    )
+
+
+def _b7_wrapper(path: Path) -> dict[str, object]:
+    wrapper = json.loads(path.read_bytes())
+    assert set(wrapper) == {"rehearsal_schema", "tier", "payload"}
+    assert wrapper["rehearsal_schema"] == driver.REHEARSAL_PACKET_SCHEMA
+    assert wrapper["tier"] == "rehearsal"
+    assert "schema" not in wrapper
+    return wrapper
+
+
+class TestB7PhaseStateMachine:
+    @pytest.fixture(autouse=True)
+    def _short_phase_bounds(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+        monkeypatch.setattr(driver, "READINESS_TIMEOUT_S", 0.25)
+        monkeypatch.setattr(driver, "UNLOAD_WAIT_S", 0.25)
+        spawned: list[driver.OwnedChild] = []
+        real_spawn = driver.RehearsalServerLauncher.spawn
+
+        def tracked_spawn(
+            launcher: driver.RehearsalServerLauncher,
+            argv: list[str],
+            env: dict[str, str],
+        ) -> driver.OwnedChild:
+            child = real_spawn(launcher, argv, env)
+            spawned.append(child)
+            return child
+
+        monkeypatch.setattr(driver.RehearsalServerLauncher, "spawn", tracked_spawn)
+        yield
+        for child in spawned:
+            if child.popen.poll() is None:
+                child.popen.kill()
+                child.popen.wait(timeout=3)
+            try:
+                os.close(child.pidfd)
+            except OSError:
+                pass
+
+    def test_healthy_rehearsal_runs_three_cycles_and_writes_incompatible_evidence(
+        self, private_root: Path
+    ) -> None:
+        harness = _b7_harness(private_root)
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+        wrapper = _b7_wrapper(path)
+        payload = wrapper["payload"]
+        assert payload["kind"] == "packet"
+        assert "schema" not in payload
+        fields = payload["fields"]
+        assert fields["outcome"] == "completed"
+        assert len(fields["turn_manifest"]["entries"]) == 24
+        assert len(fields["turn_records"]) == 24
+        assert len(fields["cycle_metrics"]) == 3
+        assert len(fields["cycle_witnesses"]) == 3
+        assert all(len(metric["topology_hashes"]) == 4 for metric in fields["cycle_metrics"])
+        assert len(
+            {
+                topology
+                for metric in fields["cycle_metrics"]
+                for topology in metric["topology_hashes"]
+            }
+        ) == 1
+        assert fields["pinned_path"] == str(STUB_PATH)
+        assert fields["pinned_sha256"] == STUB_SHA256
+        assert "/proc/self/fd/" not in path.read_text()
+        assert path.is_relative_to(
+            private_root / "rehearsal" / "windows" / "window-b7" / "vulkan_baseline"
+        )
+        with pytest.raises(ValueError):
+            driver.cm.PersistedDoc(path.read_bytes())
+        from tests.test_cuda_migration import _make_bundle
+
+        with pytest.raises(ValueError):
+            replace(_make_bundle(), control_packet=wrapper)
+
+    def test_validate_precedes_containment_and_consume_follows_cycle_one_before(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness = _b7_harness(private_root, nonce="8" * 64)
+        events: list[str] = []
+        containment = harness.containment
+        gpu = harness.gpu
+        real_validate = driver.RehearsalAuthorizationGate.validate
+        real_consume = driver.RehearsalAuthorizationGate.consume
+        real_capture = containment.capture
+        real_memory = gpu.memory
+
+        def counted_validate(
+            gate_self: object, *args: object, **kwargs: object
+        ) -> None:
+            events.append("validate")
+            real_validate(gate_self, *args, **kwargs)
+
+        def counted_consume(
+            gate_self: object, *args: object, **kwargs: object
+        ) -> object:
+            events.append("consume")
+            return real_consume(gate_self, *args, **kwargs)
+
+        monkeypatch.setattr(driver.RehearsalAuthorizationGate, "validate", counted_validate)
+        monkeypatch.setattr(driver.RehearsalAuthorizationGate, "consume", counted_consume)
+        containment.capture = lambda *args, **kwargs: (
+            events.append(f"containment-{args[1]}"),
+            real_capture(*args, **kwargs),
+        )[1]
+        gpu.memory = lambda *args, **kwargs: (
+            events.append("memory"),
+            real_memory(*args, **kwargs),
+        )[1]
+
+        driver.run_phase(harness.config, harness.providers, root=private_root)
+
+        assert events.index("validate") < events.index("containment-before")
+        assert events.index("containment-before") < events.index("memory")
+        assert events.index("memory") < events.index("consume")
+        assert events.count("validate") >= 2  # consume re-validates
+        assert harness.containment.capture_count == 2
+
+    @pytest.mark.parametrize(
+        ("failure", "expected"),
+        [
+            ("service", "preflight_service_active"),
+            ("containment", "containment_violation"),
+            ("gpu", "provider_uncertain"),
+            ("port", "preflight_bench_port_busy"),
+        ],
+    )
+    def test_all_pre_spawn_failures_refuse_without_calling_consume(
+        self,
+        private_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        failure: str,
+        expected: str,
+    ) -> None:
+        harness = _b7_harness(
+            private_root,
+            service_active=failure == "service",
+            fail_containment="before" if failure == "containment" else None,
+            fail_first_memory=failure == "gpu",
+            nonce=hashlib.sha256(failure.encode()).hexdigest(),
+        )
+        if failure == "port":
+            harness.port_probe._free.discard(driver.BENCH_PORT)
+        consumed = False
+
+        def forbidden_consume(*_args: object, **_kwargs: object) -> object:
+            nonlocal consumed
+            consumed = True
+            raise AssertionError("consume reached")
+
+        monkeypatch.setattr(
+            driver.RehearsalAuthorizationGate,
+            "consume",
+            lambda _self, *_args, **_kwargs: forbidden_consume(),
+        )
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+        fields = _b7_wrapper(path)["payload"]["fields"]
+        assert fields["outcome"] == expected
+        assert fields["spawned"] is False
+        assert consumed is False
+        assert not (private_root / "markers").exists()
+
+    @pytest.mark.parametrize(
+        "unit",
+        ["llama-server.service", "llama-judge.service", driver.VISION_UNIT],
+    )
+    @pytest.mark.parametrize(
+        "state",
+        [
+            "active",
+            "reloading",
+            "failed",
+            "activating",
+            "deactivating",
+            "maintenance",
+            "unknown",
+        ],
+    )
+    def test_every_noninactive_service_state_refuses_before_nonce_or_spawn(
+        self,
+        private_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        unit: str,
+        state: str,
+    ) -> None:
+        nonce = hashlib.sha256(f"{unit}:{state}".encode()).hexdigest()
+        harness = _b7_harness(private_root, nonce=nonce)
+        harness.providers.service_state._states[unit] = state
+        consumed = False
+        spawned = False
+
+        def forbidden_consume(*_args: object, **_kwargs: object) -> object:
+            nonlocal consumed
+            consumed = True
+            raise AssertionError("consume reached")
+
+        def forbidden_spawn(*_args: object, **_kwargs: object) -> object:
+            nonlocal spawned
+            spawned = True
+            raise AssertionError("spawn reached")
+
+        monkeypatch.setattr(
+            driver.RehearsalAuthorizationGate,
+            "consume",
+            lambda _self, *_args, **_kwargs: forbidden_consume(),
+        )
+        monkeypatch.setattr(
+            driver.RehearsalServerLauncher,
+            "spawn",
+            lambda _self, *_args, **_kwargs: forbidden_spawn(),
+        )
+
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+        fields = _b7_wrapper(path)["payload"]["fields"]
+
+        assert fields["outcome"] == "preflight_service_active"
+        assert fields["spawned"] is False
+        assert consumed is False
+        assert spawned is False
+        assert not (private_root / "markers").exists()
+
+    def test_tampered_parent_wrapper_refuses_before_consume_or_spawn(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness = _b7_harness(private_root, nonce="a" * 64)
+        parent_relative = "receipts/tampered-parent.json"
+        _private_file(private_root / parent_relative, b'{"schema":"tampered"}\n')
+        config = replace(harness.config, parent_packet_path=parent_relative)
+        consumed = False
+
+        def forbidden_consume(*_args: object, **_kwargs: object) -> object:
+            nonlocal consumed
+            consumed = True
+            raise AssertionError("consume reached")
+
+        monkeypatch.setattr(
+            driver.RehearsalAuthorizationGate,
+            "consume",
+            lambda _self, *_args, **_kwargs: forbidden_consume(),
+        )
+        path = driver.run_phase(config, harness.providers, root=private_root)
+        fields = _b7_wrapper(path)["payload"]["fields"]
+        assert fields["outcome"] == "continuation_parent_mismatch"
+        assert fields["spawned"] is False
+        assert consumed is False
+        assert not (private_root / "markers").exists()
+
+    def test_runtime_identity_drift_refuses_before_consume_or_spawn(
+        self, private_root: Path
+    ) -> None:
+        harness = _b7_harness(private_root, nonce="b" * 64)
+        runtime_fields = dict(harness.config.runtime_identity_fields)
+        runtime_fields["model_sha256"] = "f" * 64
+        config = replace(harness.config, runtime_identity_fields=runtime_fields)
+        path = driver.run_phase(config, harness.providers, root=private_root)
+        fields = _b7_wrapper(path)["payload"]["fields"]
+        assert fields["outcome"] == "identity_mismatch"
+        assert fields["spawned"] is False
+        assert not (private_root / "markers").exists()
+
+    def test_unexpected_pre_spawn_exception_becomes_reduced_provider_refusal(
+        self, private_root: Path
+    ) -> None:
+        harness = _b7_harness(private_root, nonce="c" * 64)
+        harness.containment.capture = lambda *_args: (_ for _ in ()).throw(
+            RuntimeError("unexpected sensor failure")
+        )
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+        fields = _b7_wrapper(path)["payload"]["fields"]
+        assert fields["outcome"] == "provider_uncertain"
+        assert fields["spawned"] is False
+        assert not (private_root / "markers").exists()
+
+    @pytest.mark.parametrize(
+        ("persona", "expected"),
+        [
+            ("readiness_timeout", "readiness_timeout"),
+            ("midturn_hang", "http_timeout"),
+            ("crash", "crash"),
+            ("malformed_response", "malformed_response"),
+            ("wrong_identity", "alias_mismatch"),
+        ],
+    )
+    def test_failure_personas_write_reduced_packet_and_real_residue_proof(
+        self, private_root: Path, persona: str, expected: str
+    ) -> None:
+        harness = _b7_harness(
+            private_root,
+            persona=persona,
+            nonce=hashlib.sha256(persona.encode()).hexdigest(),
+            request_timeout_ms=120,
+        )
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+        fields = _b7_wrapper(path)["payload"]["fields"]
+        assert fields["outcome"] == expected
+        assert fields["spawned"] is True
+        assert "turn_manifest" not in fields
+        assert fields["finalizer"]["listener_free"] is True
+        assert fields["finalizer"]["surviving_pgid_members"] == []
+        assert driver.RealPortProbe().is_free(fields["observed_port"])
+        assert driver._pgid_members(fields["observed_pgid"]) == []
+
+    @pytest.mark.parametrize("field", ["pinned_path", "pinned_sha256"])
+    def test_cycle_child_pin_drift_is_identity_mismatch(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch, field: str
+    ) -> None:
+        harness = _b7_harness(private_root, nonce=("6" if field == "pinned_path" else "7") * 64)
+        real_spawn = driver.RehearsalServerLauncher.spawn
+        calls = 0
+
+        def drifting_spawn(
+            launcher: driver.RehearsalServerLauncher,
+            argv: list[str],
+            env: dict[str, str],
+        ) -> driver.OwnedChild:
+            nonlocal calls
+            calls += 1
+            child = real_spawn(launcher, argv, env)
+            if calls == 2:
+                replacement = (
+                    {"pinned_path": "/home/rohit/maez/scripts/not-the-stub.py"}
+                    if field == "pinned_path"
+                    else {"pinned_sha256": "f" * 64}
+                )
+                return replace(child, **replacement)
+            return child
+
+        monkeypatch.setattr(driver.RehearsalServerLauncher, "spawn", drifting_spawn)
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+        fields = _b7_wrapper(path)["payload"]["fields"]
+        assert fields["outcome"] == "identity_mismatch"
+        assert "turn_manifest" not in fields
+
+    def test_topology_drift_fails_closed(self, private_root: Path) -> None:
+        harness = _b7_harness(private_root, topology_drift=True, nonce="5" * 64)
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+        assert _b7_wrapper(path)["payload"]["fields"]["outcome"] == "topology_drift"
+
+    @pytest.mark.parametrize("signum", [signal.SIGINT, signal.SIGTERM])
+    def test_both_driver_signals_finalize_and_write_interrupted_evidence(
+        self,
+        private_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        signum: int,
+    ) -> None:
+        harness = _b7_harness(private_root, nonce=("3" if signum == signal.SIGINT else "4") * 64)
+        handlers: dict[int, object] = {}
+        monkeypatch.setattr(
+            driver.signal,
+            "signal",
+            lambda number, handler: handlers.setdefault(number, handler),
+        )
+        client = harness.providers.server_client
+        real_stream = client.stream
+        fired = False
+
+        def interrupted_stream(
+            _client: driver.LoopbackServerClient,
+            port: int,
+            prompt: str,
+        ) -> object:
+            nonlocal fired
+            if not fired:
+                fired = True
+                handlers[signum](signum, None)
+            return real_stream(port, prompt)
+
+        monkeypatch.setattr(
+            driver.LoopbackServerClient,
+            "stream",
+            interrupted_stream,
+        )
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+        fields = _b7_wrapper(path)["payload"]["fields"]
+        assert fields["outcome"] == "interrupted"
+        assert fields["finalizer"]["listener_free"] is True
+        assert driver._pgid_members(fields["observed_pgid"]) == []
+
+
+class TestB7RemainingSpecGate:
+    @pytest.fixture(autouse=True)
+    def _short_phase_bounds(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+        monkeypatch.setattr(driver, "READINESS_TIMEOUT_S", 0.25)
+        monkeypatch.setattr(driver, "UNLOAD_WAIT_S", 0.15)
+        monkeypatch.setattr(driver, "SIGTERM_GRACE_S", 0.15)
+        monkeypatch.setattr(driver, "KILL_WAIT_S", 0.15)
+        monkeypatch.setattr(driver, "LISTENER_WAIT_S", 0.15)
+        spawned: list[driver.OwnedChild] = []
+        real_spawn = driver.RehearsalServerLauncher.spawn
+
+        def tracked_spawn(
+            launcher: driver.RehearsalServerLauncher,
+            argv: list[str],
+            env: dict[str, str],
+        ) -> driver.OwnedChild:
+            child = real_spawn(launcher, argv, env)
+            spawned.append(child)
+            return child
+
+        monkeypatch.setattr(driver.RehearsalServerLauncher, "spawn", tracked_spawn)
+        yield
+        for child in spawned:
+            if child.popen.poll() is None:
+                child.popen.kill()
+                child.popen.wait(timeout=3)
+            try:
+                os.close(child.pidfd)
+            except OSError:
+                pass
+
+    def test_real_launcher_returns_admitted_child_without_post_admission_work(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pin = driver.SpawnPin(
+            kind="binary",
+            pinned_path=driver.cm.VULKAN_RELEASE_ROOT / "llama-server",
+            pinned_sha256="a" * 64,
+            required_argv_prefix=(
+                str(driver.cm.VULKAN_RELEASE_ROOT / "llama-server"),
+            ),
+        )
+        launcher = driver.RealServerLauncher(pin)
+        sentinel = object()
+        admitted_ports: list[int | None] = []
+
+        def fake_spawn(
+            argv: list[str],
+            *,
+            pin: object,
+            env: dict[str, str],
+            admitted_port: int | None = None,
+        ) -> object:
+            assert argv[-2:] == ["--port", str(driver.BENCH_PORT)]
+            admitted_ports.append(admitted_port)
+            return sentinel
+
+        monkeypatch.setattr(driver, "spawn_pinned", fake_spawn)
+        result = launcher.spawn(
+            [str(pin.pinned_path), "--port", str(driver.BENCH_PORT)],
+            {},
+        )
+
+        assert result is sentinel
+        assert admitted_ports == [driver.BENCH_PORT]
+
+    def test_signal_during_launcher_handoff_still_finalizes_owned_child(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness = _b7_harness(private_root, nonce="e" * 64)
+        real_spawn = driver.RehearsalServerLauncher.spawn
+
+        def signal_before_return(
+            launcher: driver.RehearsalServerLauncher,
+            argv: list[str],
+            env: dict[str, str],
+        ) -> driver.OwnedChild:
+            child = real_spawn(launcher, argv, env)
+            os.kill(os.getpid(), signal.SIGTERM)
+            return child
+
+        monkeypatch.setattr(
+            driver.RehearsalServerLauncher,
+            "spawn",
+            signal_before_return,
+        )
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+        fields = _b7_wrapper(path)["payload"]["fields"]
+
+        assert fields["outcome"] == "interrupted"
+        assert fields["spawned"] is True
+        assert fields["finalizer"]["listener_free"] is True
+        assert driver._pgid_members(fields["observed_pgid"]) == []
+
+    @pytest.mark.parametrize(
+        "cleanup_outcome", ["cleanup_incomplete", "pid_reuse_detected"]
+    )
+    def test_cleanup_failure_dominates_request_failure(
+        self,
+        private_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        cleanup_outcome: str,
+    ) -> None:
+        harness = _b7_harness(
+            private_root,
+            persona="midturn_hang",
+            nonce=("f" if cleanup_outcome == "cleanup_incomplete" else "0") * 64,
+            request_timeout_ms=100,
+        )
+        real_finalize = driver.finalize
+
+        def degraded_finalize(*args: object, **kwargs: object) -> object:
+            result = real_finalize(*args, **kwargs)
+            return replace(result, outcome=cleanup_outcome)
+
+        monkeypatch.setattr(driver, "finalize", degraded_finalize)
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+        fields = _b7_wrapper(path)["payload"]["fields"]
+
+        assert fields["outcome"] == cleanup_outcome
+        assert fields["finalizer"]["outcome"] == cleanup_outcome
+
+    def test_forced_sigkill_classifies_live_timeout_as_hang(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness = _b7_harness(
+            private_root,
+            persona="midturn_hang",
+            nonce="1" * 64,
+            request_timeout_ms=100,
+        )
+        real_finalize = driver.finalize
+
+        def forced_finalize(*args: object, **kwargs: object) -> object:
+            result = real_finalize(*args, **kwargs)
+            return replace(result, signals_sent=("SIGTERM", "SIGKILL"))
+
+        monkeypatch.setattr(driver, "finalize", forced_finalize)
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+        fields = _b7_wrapper(path)["payload"]["fields"]
+
+        assert fields["outcome"] == "hang"
+        assert fields["finalizer"]["signals_sent"] == ["SIGTERM", "SIGKILL"]
+
+    def test_crash_stays_distinct_from_timeout_and_hang(self, private_root: Path) -> None:
+        harness = _b7_harness(
+            private_root,
+            persona="crash",
+            nonce="2" * 64,
+            request_timeout_ms=100,
+        )
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+        fields = _b7_wrapper(path)["payload"]["fields"]
+
+        assert fields["outcome"] == "crash"
+        assert "SIGKILL" not in fields["finalizer"]["signals_sent"]
+
+    def test_unload_waits_until_memory_returns_within_bound(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness = _b7_harness(private_root, nonce="3" * 64)
+        values = iter(
+            [
+                (1.0, 100),
+                (2.0, 200),
+                (3.0, 250),
+                (2.0, 150),
+                (1.0, 100),
+                (1.0, 100),
+                (2.0, 200),
+                (3.0, 250),
+                (1.0, 100),
+                (1.0, 100),
+                (2.0, 200),
+                (3.0, 250),
+                (1.0, 100),
+            ]
+        )
+        samples: list[tuple[float, int]] = []
+
+        def constant_inventory(_uuid: str) -> list[tuple[int, str]]:
+            return []
+
+        def delayed_memory(_uuid: str) -> tuple[float, int]:
+            value = next(values)
+            samples.append(value)
+            return value
+
+        monkeypatch.setattr(harness.gpu, "inventory", constant_inventory)
+        monkeypatch.setattr(harness.gpu, "memory", delayed_memory)
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+        fields = _b7_wrapper(path)["payload"]["fields"]
+
+        assert fields["outcome"] == "completed"
+        assert samples[:5] == [
+            (1.0, 100),
+            (2.0, 200),
+            (3.0, 250),
+            (2.0, 150),
+            (1.0, 100),
+        ]
+
+    def test_unload_timeout_retries_then_refuses(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness = _b7_harness(private_root, nonce="4" * 64)
+        calls = 0
+
+        def constant_inventory(_uuid: str) -> list[tuple[int, str]]:
+            return []
+
+        def never_unloaded(_uuid: str) -> tuple[float, int]:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return (1.0, 100)
+            if calls in {2, 3}:
+                return (3.0, 250)
+            return (2.0, 150)
+
+        monkeypatch.setattr(harness.gpu, "inventory", constant_inventory)
+        monkeypatch.setattr(harness.gpu, "memory", never_unloaded)
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+        fields = _b7_wrapper(path)["payload"]["fields"]
+
+        assert fields["outcome"] == "unload_incomplete"
+        assert calls > 4
+
+    def test_kernel_refusal_still_captures_containment_after(
+        self, private_root: Path
+    ) -> None:
+        harness = _b7_harness(private_root, nonce="5" * 64)
+        harness.providers.kernel_log._counts["Xid"] = 1
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+        fields = _b7_wrapper(path)["payload"]["fields"]
+
+        assert fields["outcome"] == "kernel_unmatched"
+        assert harness.containment.capture_count == 2
+        after = (
+            path.parents[2]
+            / "rehearsal"
+            / "containment"
+            / "containment-after.json"
+        )
+        assert after.is_file()
+
+    def test_backend_unproven_is_a_distinct_failed_packet(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness = _b7_harness(private_root, nonce="6" * 64)
+        monkeypatch.setattr(
+            harness.providers.backend_maps,
+            "read_maps",
+            lambda _pid: (
+                f"{driver.cm.VULKAN_RELEASE_ROOT}/libggml-vulkan.so\n"
+                f"{driver.cm.CUDA_RELEASE_ROOT}/libggml-cuda.so"
+            ),
+        )
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+        fields = _b7_wrapper(path)["payload"]["fields"]
+
+        assert fields["outcome"] == "backend_unproven"
+        assert fields["finalizer"]["outcome"] == "clean"
+
+    def test_reduced_packet_binds_every_observed_tail_preimage(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness = _b7_harness(private_root, nonce="d" * 64)
+        monkeypatch.setattr(
+            harness.providers.backend_maps,
+            "read_maps",
+            lambda _pid: "no backend mapping",
+        )
+
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+        fields = _b7_wrapper(path)["payload"]["fields"]
+        attempt_root = path.parents[2]
+        before = attempt_root / "rehearsal/containment/containment-before.json"
+        after = attempt_root / "rehearsal/containment/containment-after.json"
+        bench_identity = (
+            attempt_root / "rehearsal/identity/bench_runtime_identity.json"
+        )
+
+        assert fields["authorization_preimage_sha256"] == (
+            harness.config.authorization.preimage_sha256
+        )
+        assert re.fullmatch(r"[0-9a-f]{64}", fields["consumption_receipt_sha256"])
+        assert fields["containment_before_sha256"] == hashlib.sha256(
+            before.read_bytes()
+        ).hexdigest()
+        assert fields["containment_after_sha256"] == hashlib.sha256(
+            after.read_bytes()
+        ).hexdigest()
+        assert fields["static_preflight_sha256"] == hashlib.sha256(
+            (private_root / harness.config.static_preflight_path).read_bytes()
+        ).hexdigest()
+        assert fields["runtime_identity_sha256"] == hashlib.sha256(
+            bench_identity.read_bytes()
+        ).hexdigest()
+        assert fields["kernel_cursor_before"] != fields["kernel_cursor_after"]
+        assert fields["kernel_counters"] == {
+            "reusemappingdb_map": 0,
+            "pmap_cb": 0,
+            "mmu_walk_map": 0,
+            "nv_err_no_memory": 0,
+            "xid": 0,
+            "unmatched_nvrm": 0,
+        }
+
+    def test_finalize_to_unload_boundary_cannot_skip_unload(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness = _b7_harness(private_root, nonce="c" * 64)
+        real_append = driver._append_phase_transition
+        real_wait = driver._wait_for_unload
+        unload_calls = 0
+
+        def failed_finalize_journal(
+            journal: object,
+            clock: object,
+            transition: str,
+            **kwargs: object,
+        ) -> None:
+            if transition == "cycle_1_finalize":
+                raise driver.BenchRefusal("journal_failure")
+            real_append(journal, clock, transition, **kwargs)
+
+        def observed_unload(*args: object, **kwargs: object) -> object:
+            nonlocal unload_calls
+            unload_calls += 1
+            return real_wait(*args, **kwargs)
+
+        monkeypatch.setattr(driver, "_append_phase_transition", failed_finalize_journal)
+        monkeypatch.setattr(driver, "_wait_for_unload", observed_unload)
+
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+
+        assert _b7_wrapper(path)["payload"]["fields"]["outcome"] == (
+            "journal_failure"
+        )
+        assert unload_calls == 1
+
+    def test_any_forced_sigkill_after_healthy_turns_is_a_hang(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness = _b7_harness(private_root, nonce="b" * 64)
+        real_finalize = driver.finalize
+
+        def forced_finalize(*args: object, **kwargs: object) -> object:
+            result = real_finalize(*args, **kwargs)
+            return replace(result, signals_sent=("SIGTERM", "SIGKILL"))
+
+        monkeypatch.setattr(driver, "finalize", forced_finalize)
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+        fields = _b7_wrapper(path)["payload"]["fields"]
+
+        assert fields["outcome"] == "hang"
+        assert fields["finalizer"]["signals_sent"] == ["SIGTERM", "SIGKILL"]
+
+    def test_finalize_journal_detail_carries_the_complete_witness(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness = _b7_harness(private_root, nonce="a" * 64)
+        real_finalize = driver.finalize
+
+        def forced_finalize(*args: object, **kwargs: object) -> object:
+            result = real_finalize(*args, **kwargs)
+            return replace(result, signals_sent=("SIGTERM", "SIGKILL"))
+
+        monkeypatch.setattr(driver, "finalize", forced_finalize)
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+        journal_path = next(path.parents[2].rglob("*-journal.jsonl"))
+        event = next(
+            json.loads(line)
+            for line in journal_path.read_text().splitlines()
+            if json.loads(line)["transition"] == "cycle_1_finalize"
+        )
+
+        assert event["detail"] == _b7_wrapper(path)["payload"]["fields"]["finalizer"]
+        assert event["detail"]["signals_sent"] == ["SIGTERM", "SIGKILL"]
+
+    def test_completed_packet_publication_is_the_only_terminal_artifact(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness = _b7_harness(private_root, nonce="e" * 64)
+        real_append = driver.PhaseJournal.append
+
+        def forbid_post_publication_append(
+            journal: driver.PhaseJournal, *args: object, **kwargs: object
+        ) -> None:
+            if list(private_root.rglob("vulkan_baseline-completed.json")):
+                raise driver.BenchRefusal("journal_failure")
+            real_append(journal, *args, **kwargs)
+
+        monkeypatch.setattr(driver.PhaseJournal, "append", forbid_post_publication_append)
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+        terminals = list(private_root.rglob("vulkan_baseline-*.json"))
+
+        assert _b7_wrapper(path)["payload"]["fields"]["outcome"] == "completed"
+        assert terminals == [path]
+
+    def test_journal_close_failure_converts_success_to_one_journal_failure_artifact(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness = _b7_harness(private_root, nonce="f" * 64)
+        real_close = driver.PhaseJournal.close
+        close_calls = 0
+
+        def fail_first_close(journal: driver.PhaseJournal) -> None:
+            nonlocal close_calls
+            close_calls += 1
+            real_close(journal)
+            if close_calls == 1:
+                raise driver.BenchRefusal("journal_failure")
+
+        monkeypatch.setattr(driver.PhaseJournal, "close", fail_first_close)
+
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+        terminals = list(private_root.rglob("vulkan_baseline-*.json"))
+
+        assert _b7_wrapper(path)["payload"]["fields"]["outcome"] == "journal_failure"
+        assert terminals == [path]
+        assert not list(private_root.rglob("vulkan_baseline-completed.json"))
+
+    def test_post_terminal_signal_handler_restore_failure_returns_committed_path(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness = _b7_harness(private_root, nonce="1" * 64)
+        real_signal = driver.signal.signal
+        raised = False
+
+        def fail_after_committed_terminal(signum: int, handler: object) -> object:
+            nonlocal raised
+            previous = real_signal(signum, handler)
+            if (
+                not raised
+                and list(private_root.rglob("vulkan_baseline-completed.json"))
+            ):
+                raised = True
+                raise OSError("handler restore failed")
+            return previous
+
+        monkeypatch.setattr(driver.signal, "signal", fail_after_committed_terminal)
+
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+        terminals = list(private_root.rglob("vulkan_baseline-*.json"))
+
+        assert raised is True
+        assert _b7_wrapper(path)["payload"]["fields"]["outcome"] == "completed"
+        assert terminals == [path]
+
+    def test_post_terminal_signal_mask_restore_failure_returns_committed_path(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness = _b7_harness(private_root, nonce="2" * 64)
+        real_sigmask = driver.signal.pthread_sigmask
+        raised = False
+
+        def fail_after_committed_terminal(how: int, mask: object) -> object:
+            nonlocal raised
+            previous = real_sigmask(how, mask)
+            if (
+                not raised
+                and how == signal.SIG_SETMASK
+                and list(private_root.rglob("vulkan_baseline-completed.json"))
+            ):
+                raised = True
+                raise OSError("mask restore failed")
+            return previous
+
+        monkeypatch.setattr(driver.signal, "pthread_sigmask", fail_after_committed_terminal)
+
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+        terminals = list(private_root.rglob("vulkan_baseline-*.json"))
+
+        assert raised is True
+        assert _b7_wrapper(path)["payload"]["fields"]["outcome"] == "completed"
+        assert terminals == [path]
+
+    def test_sigterm_at_completed_link_returns_only_the_committed_terminal(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness = _b7_harness(private_root, nonce="3" * 64)
+        real_check_directory = driver._check_directory_fd
+        raised = False
+
+        def interrupt_first_postlink_check(fd: int) -> object:
+            nonlocal raised
+            if (
+                not raised
+                and list(private_root.rglob("vulkan_baseline-completed.json"))
+            ):
+                raised = True
+                signal.raise_signal(signal.SIGTERM)
+            return real_check_directory(fd)
+
+        monkeypatch.setattr(driver, "_check_directory_fd", interrupt_first_postlink_check)
+
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+        terminals = list(private_root.rglob("vulkan_baseline-*.json"))
+
+        assert raised is True
+        assert path.name == "vulkan_baseline-completed.json"
+        assert _b7_wrapper(path)["payload"]["fields"]["outcome"] == "completed"
+        assert terminals == [path]
+
+    @pytest.mark.parametrize(
+        ("terminal_kind", "expected_outcome"),
+        [
+            ("completed", "completed"),
+            ("reduced", "preflight_service_active"),
+        ],
+    )
+    def test_postlink_fsync_failure_returns_only_the_committed_terminal(
+        self,
+        private_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        terminal_kind: str,
+        expected_outcome: str,
+    ) -> None:
+        harness = _b7_harness(private_root, nonce=hashlib.sha256(terminal_kind.encode()).hexdigest())
+        if terminal_kind == "reduced":
+            harness.providers.service_state._states["llama-server.service"] = "active"
+        real_fsync = driver.os.fsync
+        failed = False
+
+        def fail_first_terminal_parent_fsync(fd: int) -> None:
+            nonlocal failed
+            if (
+                not failed
+                and stat.S_ISDIR(os.fstat(fd).st_mode)
+                and list(private_root.rglob("vulkan_baseline-*.json"))
+            ):
+                failed = True
+                raise OSError("post-link terminal fsync failure")
+            real_fsync(fd)
+
+        monkeypatch.setattr(driver.os, "fsync", fail_first_terminal_parent_fsync)
+
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+        terminals = list(private_root.rglob("vulkan_baseline-*.json"))
+
+        assert failed is True
+        assert _b7_wrapper(path)["payload"]["fields"]["outcome"] == expected_outcome
+        assert terminals == [path]
+
+    def test_failed_after_spawn_journal_closes_the_full_evidence_tail(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness = _b7_harness(private_root, nonce="9" * 64)
+        monkeypatch.setattr(
+            harness.providers.backend_maps,
+            "read_maps",
+            lambda _pid: "no backend mapping",
+        )
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+        journal_path = next(path.parents[2].rglob("*-journal.jsonl"))
+        transitions = [
+            json.loads(line)["transition"]
+            for line in journal_path.read_text().splitlines()
+        ]
+        required_tail = [
+            "cycle_1_backend_witness",
+            "cycle_1_finalize",
+            "cycle_1_after_unload",
+            "kernel_delta",
+            "containment_after",
+            "failed_packet_write",
+            "failed",
+        ]
+        positions = [transitions.index(name) for name in required_tail]
+
+        assert _b7_wrapper(path)["payload"]["fields"]["outcome"] == (
+            "backend_unproven"
+        )
+        assert positions == sorted(positions)
+
+    def test_completed_journal_has_the_canonical_transition_sequence(
+        self, private_root: Path
+    ) -> None:
+        harness = _b7_harness(private_root, nonce="7" * 64)
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+        journal_path = next(path.parents[2].rglob("*-journal.jsonl"))
+        observed = [
+            json.loads(line)["transition"]
+            for line in journal_path.read_text().splitlines()
+        ]
+        expected = [
+            "phase_preflight",
+            "containment_before",
+            "cycle_one_before_snapshot",
+            "consume_authorization",
+        ]
+        for cycle in (1, 2, 3):
+            expected.extend(
+                [
+                    f"cycle_{cycle}_before",
+                    f"cycle_{cycle}_load",
+                    f"cycle_{cycle}_readiness",
+                    f"cycle_{cycle}_alias",
+                    f"cycle_{cycle}_backend_witness",
+                    f"cycle_{cycle}_after_load",
+                    f"cycle_{cycle}_warmup",
+                    *[f"cycle_{cycle}_measured_{ordinal}" for ordinal in range(1, 8)],
+                    f"cycle_{cycle}_after_inference",
+                    f"cycle_{cycle}_finalize",
+                    f"cycle_{cycle}_after_unload",
+                ]
+            )
+        expected.extend(
+            [
+                "kernel_delta",
+                "containment_after",
+                "packet_write",
+                "completed",
+            ]
+        )
+        assert observed == expected
+
+    def test_completed_state_machine_is_single_use_under_private_test_factory(
+        self, private_root: Path
+    ) -> None:
+        harness = _b7_harness(private_root, nonce="8" * 64)
+        components = {
+            name: getattr(harness.providers, name)
+            for name in (
+                "service_state",
+                "port_probe",
+                "gpu",
+                "kernel_log",
+                "backend_maps",
+                "server_launcher",
+                "server_client",
+                "containment",
+                "artifact_policy",
+                "clock",
+                "journal_factory",
+            )
+        }
+        gate = driver._TestOnlySingleUseAuthorizationGate(
+            harness.providers.artifact_policy
+        )
+        components["authorization_gate"] = gate
+        providers = driver._test_rehearsal_tier(**components)
+
+        first = driver.run_phase(harness.config, providers, root=private_root)
+        second = driver.run_phase(harness.config, providers, root=private_root)
+
+        assert _b7_wrapper(first)["payload"]["fields"]["outcome"] == "completed"
+        retry = _b7_wrapper(second)["payload"]["fields"]
+        assert retry["outcome"] == "authorization_consumed"
+        assert retry["spawned"] is False
+        assert not (private_root / "markers").exists()
+
+        with pytest.raises(driver.BenchRefusal) as real_factory:
+            driver.rehearsal_tier(**components)
+        _assert_refusal(real_factory, "tier_mismatch")
+
+    def test_protocol_complete_test_gate_cannot_enter_real_factory(self) -> None:
+        class TestOnlyGate:
+            tier = "rehearsal"
+
+            def validate(self, *_args: object, **_kwargs: object) -> None:
+                return None
+
+            def consume(self, *_args: object, **_kwargs: object) -> object:
+                raise AssertionError("test only")
+
+        components = _provider_components("rehearsal")
+        components["authorization_gate"] = TestOnlyGate()
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.rehearsal_tier(**components)
+        _assert_refusal(exc, "tier_mismatch")
+
+    @pytest.mark.parametrize("phase", ["vulkan_baseline", "cuda_candidate"])
+    def test_typed_phase_packet_builder_is_reachable_without_a_model(
+        self, private_root: Path, phase: str
+    ) -> None:
+        from tests.test_cuda_migration import _phase_packet
+
+        config, pin, static, identity = _b7_production_contract_case(
+            private_root, phase
+        )
+        execution = driver._validate_production_execution_contract(
+            config,
+            launcher_pin=pin,
+            static=static,
+            runtime_identity=identity,
+        )
+        measured = _phase_packet(phase)
+        evidence = driver.CompletedPhaseEvidence(
+            admitted_pinned_path=measured.pinned_path,
+            admitted_pinned_sha256=measured.pinned_sha256,
+            topology_sha256=measured.topology_sha256,
+            consumed=driver.ConsumedAuthority(
+                measured.authorization_preimage_sha256,
+                measured.consumption_receipt_sha256,
+                {"nonce": config.authorization.nonce},
+            ),
+            static_preflight_sha256=measured.static_preflight_sha256,
+            bench_runtime_identity_sha256=measured.runtime_identity_sha256,
+            turn_manifest=measured.turn_manifest,
+            turn_records=measured.turn_records,
+            cycle_metrics=measured.cycle_metrics,
+            cycle_witnesses=measured.cycle_witnesses,
+            containment_before_sha256=measured.containment_before_sha256,
+            containment_after_sha256=measured.containment_after_sha256,
+            kernel_cursor_before=measured.kernel_cursor_before,
+            kernel_cursor_after=measured.kernel_cursor_after,
+            kernel_counters=measured.kernel_counters,
+            cycle_one_before_snapshot_at=measured.cycle_one_before_snapshot_at,
+            timestamp=measured.timestamp,
+        )
+        rebuilt = driver._build_completed_phase_packet(
+            config=config,
+            execution_contract=execution,
+            runtime_identity=identity,
+            static=static,
+            evidence=evidence,
+        )
+        fields = driver._phase_packet_fields(rebuilt)
+        encoded = driver.ProductionArtifactPolicy().encode(
+            "packet",
+            {"binding_sha256": rebuilt.binding_sha256, **fields},
+        )
+        persisted = driver.cm.PersistedDoc(encoded)
+
+        assert type(rebuilt) is driver.cm.PhasePacket
+        assert persisted.obj.binding_sha256 == rebuilt.binding_sha256
+        assert rebuilt.pinned_path == execution.pinned_path
+        assert rebuilt.pinned_sha256 == execution.pinned_sha256
+        assert rebuilt.effective_args_sha256 == execution.effective_args_sha256
+
+        with pytest.raises(driver.BenchRefusal) as tampered:
+            driver._build_completed_phase_packet(
+                config=config,
+                execution_contract=replace(
+                    execution,
+                    pinned_sha256=("f" if execution.pinned_sha256[0] != "f" else "e")
+                    * 64,
+                ),
+                runtime_identity=identity,
+                static=static,
+                evidence=evidence,
+            )
+        _assert_refusal(tampered, "identity_mismatch")
+
+        with pytest.raises(driver.BenchRefusal) as mismatched_admission:
+            driver._build_completed_phase_packet(
+                config=config,
+                execution_contract=execution,
+                runtime_identity=identity,
+                static=static,
+                evidence=replace(
+                    evidence,
+                    admitted_pinned_sha256=(
+                        "f" if evidence.admitted_pinned_sha256[0] != "f" else "e"
+                    )
+                    * 64,
+                ),
+            )
+        _assert_refusal(mismatched_admission, "identity_mismatch")
+
+    @pytest.mark.parametrize("gate_type", [
+        driver.RealAuthorizationGate,
+        driver.RehearsalAuthorizationGate,
+    ])
+    def test_authorization_gate_is_mutation_resistant_after_admission(
+        self, gate_type: type[object]
+    ) -> None:
+        policy: object = (
+            driver.ProductionArtifactPolicy()
+            if gate_type is driver.RealAuthorizationGate
+            else driver.RehearsalArtifactPolicy()
+        )
+        gate = gate_type(policy)
+        with pytest.raises((AttributeError, FrozenInstanceError, TypeError)):
+            gate.consume = lambda *_args, **_kwargs: None
+
+    @pytest.mark.parametrize(
+        "launcher",
+        [
+            driver.RealServerLauncher(_binary_pin(Path(sys.executable))),
+            driver.RehearsalServerLauncher(_stub_pin()),
+        ],
+    )
+    def test_launcher_pin_is_mutation_resistant_after_admission(
+        self, launcher: object
+    ) -> None:
+        forged = replace(launcher.pin, pinned_sha256="f" * 64)
+        with pytest.raises((AttributeError, FrozenInstanceError, TypeError)):
+            launcher.pin = forged
+
+    def test_config_mutation_during_consume_cannot_change_spawned_argv_or_env(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness = _b7_harness(private_root, nonce="f" * 64)
+        admitted_argv = list(harness.config.argv)
+        admitted_env = dict(harness.config.env)
+        real_consume = driver.RehearsalAuthorizationGate.consume
+        tracked_spawn = driver.RehearsalServerLauncher.spawn
+        observed: list[tuple[list[str], dict[str, str]]] = []
+
+        def mutating_consume(
+            gate: driver.RehearsalAuthorizationGate,
+            authorization: object,
+            **kwargs: object,
+        ) -> object:
+            result = real_consume(gate, authorization, **kwargs)
+            harness.config.argv.append("--forged-after-consume")
+            harness.config.env["FORGED_AFTER_CONSUME"] = "1"
+            return result
+
+        def observed_spawn(
+            launcher: driver.RehearsalServerLauncher,
+            argv: list[str],
+            env: dict[str, str],
+        ) -> driver.OwnedChild:
+            observed.append((list(argv), dict(env)))
+            return tracked_spawn(launcher, argv, env)
+
+        monkeypatch.setattr(driver.RehearsalAuthorizationGate, "consume", mutating_consume)
+        monkeypatch.setattr(driver.RehearsalServerLauncher, "spawn", observed_spawn)
+        path = driver.run_phase(harness.config, harness.providers, root=private_root)
+
+        assert _b7_wrapper(path)["payload"]["fields"]["outcome"] == "completed"
+        assert len(observed) == 3
+        assert all(argv == admitted_argv for argv, _env in observed)
+        assert all(env == admitted_env for _argv, env in observed)
+
+    @pytest.mark.parametrize("signum", [signal.SIGINT, signal.SIGTERM])
+    def test_real_driver_signal_in_subprocess_finalizes_without_residue(
+        self, private_root: Path, signum: int
+    ) -> None:
+        ready = private_root / "signal-ready.json"
+        code = "\n".join(
+            [
+                "import json, os, sys, time",
+                "from pathlib import Path",
+                "from scripts import cuda_bench_driver as driver",
+                "from tests.test_cuda_bench_driver import _b7_harness",
+                "root = Path(sys.argv[1])",
+                "driver.READINESS_TIMEOUT_S = 0.25",
+                "driver.UNLOAD_WAIT_S = 0.15",
+                "driver.SIGTERM_GRACE_S = 0.15",
+                "driver.KILL_WAIT_S = 0.15",
+                "driver.LISTENER_WAIT_S = 0.15",
+                "harness = _b7_harness(root, nonce=sys.argv[2])",
+                "def blocked(self, port, prompt):",
+                "    path = root / 'signal-ready.json'",
+                "    path.write_text(json.dumps({'port': port}), encoding='utf-8')",
+                "    os.chmod(path, 0o600)",
+                "    while True:",
+                "        time.sleep(0.05)",
+                "driver.LoopbackServerClient.stream = blocked",
+                "result = driver.run_phase(harness.config, harness.providers, root=root)",
+                "print('RESULT=' + str(result), flush=True)",
+            ]
+        )
+        process = subprocess.Popen(
+            [
+                "/home/rohit/maez/.venv/bin/python",
+                "-B",
+                "-c",
+                code,
+                str(private_root),
+                ("a" if signum == signal.SIGINT else "b") * 64,
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        try:
+            assert _wait_for(ready.is_file, timeout=8.0)
+            observed_port = json.loads(ready.read_text())["port"]
+            process.send_signal(signum)
+            stdout, stderr = process.communicate(timeout=8.0)
+        except BaseException:
+            process.kill()
+            process.wait(timeout=3)
+            raise
+
+        assert process.returncode == 0, stderr[-2_000:]
+        result_line = next(
+            line for line in stdout.splitlines() if line.startswith("RESULT=")
+        )
+        fields = _b7_wrapper(Path(result_line.removeprefix("RESULT=")))["payload"][
+            "fields"
+        ]
+        assert fields["outcome"] == "interrupted"
+        assert fields["finalizer"]["listener_free"] is True
+        assert driver.RealPortProbe().is_free(observed_port)
+        assert driver._pgid_members(fields["observed_pgid"]) == []
+
+    @pytest.mark.parametrize("signum", [signal.SIGINT, signal.SIGTERM])
+    def test_signal_during_entry_setup_becomes_typed_interrupted_outcome(
+        self, private_root: Path, signum: int
+    ) -> None:
+        ready = private_root / "entry-ready"
+        code = "\n".join(
+            [
+                "import json, os, signal, sys, time",
+                "from pathlib import Path",
+                "from scripts import cuda_bench_driver as driver",
+                "from tests.test_cuda_bench_driver import _b7_harness",
+                "root = Path(sys.argv[1])",
+                "driver.READINESS_TIMEOUT_S = 0.25",
+                "driver.UNLOAD_WAIT_S = 0.15",
+                "driver.SIGTERM_GRACE_S = 0.15",
+                "driver.KILL_WAIT_S = 0.15",
+                "driver.LISTENER_WAIT_S = 0.15",
+                "harness = _b7_harness(root, nonce=sys.argv[2])",
+                "allocate = driver._allocate_attempt",
+                "def delayed_allocate(**kwargs):",
+                "    path = root / 'entry-ready'",
+                "    path.write_text('ready', encoding='utf-8')",
+                "    os.chmod(path, 0o600)",
+                "    time.sleep(0.25)",
+                "    return allocate(**kwargs)",
+                "driver._allocate_attempt = delayed_allocate",
+                "result = driver.run_phase(harness.config, harness.providers, root=root)",
+                "print('RESULT=' + str(result), flush=True)",
+            ]
+        )
+        process = subprocess.Popen(
+            [
+                "/home/rohit/maez/.venv/bin/python",
+                "-B",
+                "-c",
+                code,
+                str(private_root),
+                ("c" if signum == signal.SIGINT else "d") * 64,
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        try:
+            assert _wait_for(ready.is_file, timeout=8.0)
+            process.send_signal(signum)
+            stdout, stderr = process.communicate(timeout=8.0)
+        except BaseException:
+            process.kill()
+            process.wait(timeout=3)
+            raise
+
+        assert process.returncode == 0, stderr[-2_000:]
+        result_line = next(
+            line for line in stdout.splitlines() if line.startswith("RESULT=")
+        )
+        fields = _b7_wrapper(Path(result_line.removeprefix("RESULT=")))["payload"][
+            "fields"
+        ]
+        assert fields["outcome"] == "interrupted"
+        assert fields["spawned"] is False
+
+
+class TestB7AttemptAllocation:
+    def test_disk_allocator_skips_existing_attempt(self, private_root: Path) -> None:
+        parent = private_root / "rehearsal" / "windows" / "window-b7" / "vulkan_baseline"
+        (parent / "attempt-000").mkdir(parents=True, mode=0o700)
+        for directory in (parent / "attempt-000", parent, *parent.parents[:3]):
+            os.chmod(directory, 0o700)
+        claimed = driver._allocate_attempt(
+            window_id="window-b7",
+            phase="vulkan_baseline",
+            policy=driver.RehearsalArtifactPolicy(),
+            root=private_root,
+        )
+        assert claimed.name == "attempt-001"
+
+    def test_allocator_retries_mkdirat_eexist_race(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = 0
+        real_claim = driver._claim_attempt_directory
+
+        def racing_claim(parent_fd: int, name: str) -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                os.mkdir(name, mode=0o700, dir_fd=parent_fd)
+                raise FileExistsError(errno.EEXIST, "simulated race", name)
+            real_claim(parent_fd, name)
+
+        monkeypatch.setattr(driver, "_claim_attempt_directory", racing_claim)
+        claimed = driver._allocate_attempt(
+            window_id="window-b7",
+            phase="vulkan_baseline",
+            policy=driver.RehearsalArtifactPolicy(),
+            root=private_root,
+        )
+        assert claimed.name == "attempt-001"
+        assert calls == 2
+
+
+class TestB7AuthorizationSplit:
+    def test_validate_is_write_free_and_consume_revalidates_into_separate_roots(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        authorization = _b7_authorization(nonce="2" * 64)
+        gate = driver.RealAuthorizationGate(driver.ProductionArtifactPolicy())
+        clock = driver.FrozenClock(datetime.now(UTC).isoformat().replace("+00:00", "Z"))
+        attempt_root = private_root / "attempt"
+        attempt_root.mkdir(mode=0o700)
+        gate.validate(
+            authorization,
+            phase="vulkan_baseline",
+            boot_id="boot-b7",
+            expected_window_id="window-b7",
+            parent_window=None,
+            parent_packet=None,
+            clock=clock,
+        )
+        assert list(private_root.rglob("*")) == [attempt_root]
+
+        validations = 0
+        real_validate_authorization = driver.validate_authorization
+
+        def counted_validate(*args: object, **kwargs: object) -> None:
+            nonlocal validations
+            validations += 1
+            real_validate_authorization(*args, **kwargs)
+
+        monkeypatch.setattr(driver, "validate_authorization", counted_validate)
+        gate.consume(
+            authorization,
+            phase="vulkan_baseline",
+            boot_id="boot-b7",
+            expected_window_id="window-b7",
+            parent_window=None,
+            parent_packet=None,
+            authority_root=private_root,
+            receipt_root=attempt_root,
+            clock=clock,
+        )
+        assert validations == 1
+        assert (private_root / "markers" / authorization.nonce).is_file()
+        assert len(list((attempt_root / "receipts").glob("*.json"))) == 1
+        assert not (private_root / "receipts").exists()
+        with pytest.raises(driver.BenchRefusal) as retry:
+            gate.consume(
+                authorization,
+                phase="vulkan_baseline",
+                boot_id="boot-b7",
+                expected_window_id="window-b7",
+                parent_window=None,
+                parent_packet=None,
+                authority_root=private_root,
+                receipt_root=attempt_root,
+                clock=clock,
+            )
+        _assert_refusal(retry, "authorization_consumed")
+
+    def test_expiry_between_validate_and_consume_publishes_no_marker(
+        self, private_root: Path
+    ) -> None:
+        class MutableClock:
+            tier = "production"
+
+            def __init__(self) -> None:
+                self.now = "2026-07-15T11:30:00Z"
+
+            def now_utc(self) -> str:
+                return self.now
+
+            def monotonic(self) -> float:
+                return 0.0
+
+        authorization = driver.WindowAuthorization(
+            window_id="window-b7",
+            phases=("vulkan_baseline",),
+            boot_id="boot-b7",
+            nonce="1" * 64,
+            issued_at="2026-07-15T08:00:00Z",
+            expires_at="2026-07-15T12:00:00Z",
+            owner="owner",
+        )
+        gate = driver.RealAuthorizationGate(driver.ProductionArtifactPolicy())
+        clock = MutableClock()
+        gate.validate(
+            authorization,
+            phase="vulkan_baseline",
+            boot_id="boot-b7",
+            expected_window_id="window-b7",
+            parent_window=None,
+            parent_packet=None,
+            clock=clock,
+        )
+        clock.now = authorization.expires_at
+        attempt_root = private_root / "attempt"
+        attempt_root.mkdir(mode=0o700)
+        with pytest.raises(driver.BenchRefusal) as exc:
+            gate.consume(
+                authorization,
+                phase="vulkan_baseline",
+                boot_id="boot-b7",
+                expected_window_id="window-b7",
+                parent_window=None,
+                parent_packet=None,
+                authority_root=private_root,
+                receipt_root=attempt_root,
+                clock=clock,
+            )
+        _assert_refusal(exc, "authorization_expired")
+        assert not (private_root / "markers").exists()
+        assert not (attempt_root / "receipts").exists()
+
+    def test_marker_authority_and_receipt_roots_must_be_distinct(
+        self, private_root: Path
+    ) -> None:
+        authorization = _b7_authorization(nonce="d" * 64)
+        gate = driver.RealAuthorizationGate(driver.ProductionArtifactPolicy())
+        clock = driver.FrozenClock(datetime.now(UTC).isoformat().replace("+00:00", "Z"))
+        with pytest.raises(driver.BenchRefusal) as exc:
+            gate.consume(
+                authorization,
+                phase="vulkan_baseline",
+                boot_id="boot-b7",
+                expected_window_id="window-b7",
+                parent_window=None,
+                parent_packet=None,
+                authority_root=private_root,
+                receipt_root=private_root,
+                clock=clock,
+            )
+        _assert_refusal(exc, "filesystem_hazard")
+        assert not (private_root / "markers").exists()
+
+    def test_inv2_annotation_is_identical_on_validate_and_consume_surfaces(self) -> None:
+        surfaces = (
+            driver.AuthorizationGate.validate,
+            driver.AuthorizationGate.consume,
+            driver.RealAuthorizationGate.validate,
+            driver.RealAuthorizationGate.consume,
+            driver.RehearsalAuthorizationGate.validate,
+            driver.RehearsalAuthorizationGate.consume,
+            driver.validate_authorization,
+            driver.consume_authorization,
+        )
+        for surface in surfaces:
+            assert inspect.signature(surface).parameters["parent_packet"].annotation == (
+                "cm.PhasePacket | None"
+            )
+            assert surface.__annotations__["parent_packet"] == "cm.PhasePacket | None"

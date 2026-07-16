@@ -26,10 +26,11 @@ import subprocess
 import sys
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_EVEN
 from pathlib import Path
+from types import MappingProxyType
 from typing import Callable, Literal, Protocol
 
 from scripts import cuda_migration as cm
@@ -38,6 +39,12 @@ from scripts import cuda_migration as cm
 BENCH_ROOT = Path("/home/rohit/maez/local/cuda_migration_bench")
 BENCH_PORT = 18080
 PRODUCTION_PORTS = (8080, 8081, 8082)
+SCREEN_FLAG_SOURCE_PATH = Path("/home/rohit/.config/maez/model.env")
+VISION_UNIT_PATH = Path(
+    "/home/rohit/.config/systemd/user/llama-vision.service"
+)
+VISION_UNIT = "llama-vision.service"
+MAEZ_UNIT = "maez.service"
 
 READINESS_TIMEOUT_S = 300
 REQUEST_TIMEOUT_MS = 30_000
@@ -50,6 +57,33 @@ KILL_WAIT_S = 15
 LISTENER_WAIT_S = 10
 UNLOAD_WAIT_S = 60
 FROZEN_BENCH_ARGS_SHA256 = "7fd627e1132ff30fb7f45df2cbf83d166002b0a0c56bcd07e169eca2180bd413"
+_SANITIZED_BENCH_PATH = (
+    "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+)
+_PHASE_BENCH_ENVIRONMENTS = MappingProxyType(
+    {
+        "vulkan_baseline": MappingProxyType(
+            {
+                "HOME": "/home/rohit",
+                "PATH": _SANITIZED_BENCH_PATH,
+                "LD_LIBRARY_PATH": str(cm.VULKAN_RELEASE_ROOT),
+                "GGML_VK_VISIBLE_DEVICES": "0",
+                "CUDA_VISIBLE_DEVICES": "",
+            }
+        ),
+        "cuda_candidate": MappingProxyType(
+            {
+                "HOME": "/home/rohit",
+                "PATH": _SANITIZED_BENCH_PATH,
+                "CUDA_VISIBLE_DEVICES": "0",
+                "GGML_VK_VISIBLE_DEVICES": "",
+                "LD_LIBRARY_PATH": (
+                    f"{cm.CUDA_RELEASE_ROOT}:{cm.CUDA_TOOLKIT_LIBRARY_ROOT}"
+                ),
+            }
+        ),
+    }
+)
 
 # Linux UAPI constants from <linux/memfd.h>.  Python 3.14 exposes the base
 # memfd flags but not these two execution-policy flags on this host.
@@ -71,7 +105,7 @@ CONTINUATION_SCHEMA = "cuda_bench_driver.continuation.v1"
 CONSUMPTION_RECEIPT_SCHEMA = "cuda_bench_driver.consumption_receipt.v1"
 TURN_MANIFEST_SCHEMA = "cuda_bench_driver.turn_manifest.v1"
 TURN_ARTIFACT_SCHEMA = "cuda_bench_driver.turn_artifact.v1"
-CONTAINMENT_SNAPSHOT_SCHEMA = "cuda_bench_driver.containment_snapshot.v1"
+CONTAINMENT_SNAPSHOT_SCHEMA = "cuda_bench_driver.containment_snapshot.v2"
 RUNTIME_IDENTITY_SCHEMA = "cuda_bench_driver.runtime_identity.v1"
 ASSEMBLE_RECEIPT_SCHEMA = "cuda_bench_assemble.receipt.v1"
 REHEARSAL_PACKET_SCHEMA = "cuda_bench_rehearsal.packet.v1"
@@ -291,7 +325,12 @@ def _open_anonymous_file(parent_fd: int, *, append: bool) -> int:
 
 
 def _publish_anonymous_file(
-    fd: int, parent_fd: int, name: str, *, expected_size: int
+    fd: int,
+    parent_fd: int,
+    name: str,
+    *,
+    expected_size: int,
+    on_link: Callable[[], None] | None = None,
 ) -> os.stat_result:
     _check_file_fd(fd, expected_nlink=0, expected_size=expected_size)
     _check_directory_fd(parent_fd)
@@ -304,6 +343,8 @@ def _publish_anonymous_file(
         )
     except OSError:
         _filesystem_hazard()
+    if on_link is not None:
+        on_link()
     _check_directory_fd(parent_fd)
     _check_file_fd(fd, expected_nlink=1, expected_size=expected_size)
     try:
@@ -398,19 +439,32 @@ def open_bench_file(relative: str, *, root: Path = BENCH_ROOT) -> bytes:
         os.close(fd)
 
 
-def write_private_file(relative: str, data: bytes, *, root: Path = BENCH_ROOT) -> Path:
+def write_private_file(
+    relative: str,
+    data: bytes,
+    *,
+    root: Path = BENCH_ROOT,
+    on_link: Callable[[Path], None] | None = None,
+) -> Path:
     """Exclusively create and fsync one owner-private file below root."""
 
     if type(data) is not bytes or len(data) > TURN_ARTIFACT_BYTE_CAP:
         _filesystem_hazard()
     parent_fd, parts, directory_chain = _open_parent_fd(relative, root=root, create=True)
+    final_path = Path(root).joinpath(*parts)
     fd: int | None = None
     try:
         fd = _open_anonymous_file(parent_fd, append=False)
         _write_all(fd, data)
         os.fsync(fd)
         _check_file_fd(fd, expected_nlink=0, expected_size=len(data))
-        published = _publish_anonymous_file(fd, parent_fd, parts[-1], expected_size=len(data))
+        published = _publish_anonymous_file(
+            fd,
+            parent_fd,
+            parts[-1],
+            expected_size=len(data),
+            on_link=(None if on_link is None else lambda: on_link(final_path)),
+        )
         _verify_path_binding(
             relative,
             root=root,
@@ -425,7 +479,7 @@ def write_private_file(relative: str, data: bytes, *, root: Path = BENCH_ROOT) -
         if fd is not None:
             os.close(fd)
         os.close(parent_fd)
-    return Path(root).joinpath(*parts)
+    return final_path
 
 
 def _create_consumption_marker(nonce: str, *, root: Path) -> Path:
@@ -569,7 +623,24 @@ class PhaseJournal:
             ).encode("utf-8")
         except Exception:
             raise BenchRefusal("journal_failure") from None
-        rendered = line.decode("utf-8").lower()
+        marker_document = {
+            "ts": ts,
+            "transition": transition,
+            "detail": {
+                key: (
+                    "<typed-refusal>"
+                    if type(value) is str and value in REFUSAL_VOCABULARY
+                    else value
+                )
+                for key, value in projected_detail.items()
+            },
+        }
+        rendered = json.dumps(
+            marker_document,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).lower()
         if any(marker in rendered for marker in _CONTENT_MARKERS):
             raise ValueError("content_light_violation")
         if self._fd is None:
@@ -644,6 +715,7 @@ class PhaseJournal:
 
 
 SYSTEMCTL_WHITELIST = frozenset({"show", "is-active"})
+_SYSTEMCTL = "systemctl"
 KERNEL_SIGNATURES = (
     "reusemappingdbMap",
     "pMapCb",
@@ -661,7 +733,13 @@ def systemctl_command(subcommand: str, unit: str) -> list[str]:
         raise ValueError("mutating_systemctl_forbidden")
     if type(unit) is not str or not unit:
         raise ValueError("unit_invalid")
-    return ["systemctl", "--user", subcommand, unit]
+    return [_SYSTEMCTL, "--user", subcommand, unit]
+
+
+def _systemctl_system_show_command(unit: str) -> list[str]:
+    if type(unit) is not str or not unit:
+        raise ValueError("unit_invalid")
+    return [_SYSTEMCTL, "show", unit]
 
 
 @dataclass
@@ -727,6 +805,14 @@ class Clock(Protocol):
     def now_utc(self) -> str: ...
 
     def monotonic(self) -> float: ...
+
+
+class ContainmentProvider(Protocol):
+    tier: str
+    clock: Clock
+    port_probe: PortProbe
+
+    def capture(self, phase: str, boundary: str) -> cm.ContainmentSnapshot: ...
 
 
 class ServerLauncher(Protocol):
@@ -1155,7 +1241,8 @@ def _guarded_popen(
         )
         gate_read, gate_write = os.pipe2(os.O_CLOEXEC)
         exec_read, exec_write = os.pipe2(os.O_CLOEXEC)
-        encoded_mask = ",".join(str(int(value)) for value in sorted(old_mask))
+        target_mask = old_mask.difference({signal.SIGINT, signal.SIGTERM})
+        encoded_mask = ",".join(str(int(value)) for value in sorted(target_mask))
         guard_argv = [
             sys.executable,
             "-B",
@@ -1338,9 +1425,22 @@ def _bootstrap_abort(
 
 
 def spawn_pinned(
-    argv: list[str], *, pin: SpawnPin, env: dict[str, str]
+    argv: list[str],
+    *,
+    pin: SpawnPin,
+    env: dict[str, str],
+    admitted_port: int | None = None,
 ) -> OwnedChild:
     _validate_spawn_inputs(argv, pin=pin, env=env)
+    if (
+        admitted_port is not None
+        and (
+            pin.kind != "binary"
+            or type(admitted_port) is not int
+            or not 0 < admitted_port <= 65_535
+        )
+    ):
+        raise BenchRefusal("spawn_failure")
     snapshot = _sealed_executable_snapshot(pin)
     try:
         popen, pidfd, gate_write, exec_read, old_mask = _guarded_popen(
@@ -1352,7 +1452,7 @@ def spawn_pinned(
         )
     finally:
         _close_fd(snapshot.fd)
-    port: int | None = None
+    port = admitted_port
     mask_restored = False
     target_release_attempted = False
     try:
@@ -1360,7 +1460,8 @@ def spawn_pinned(
         mask_restored = True
         target_release_attempted = True
         _release_guard(gate_write, exec_read)
-        port = _read_stub_announcement(popen) if pin.kind == "python_file" else None
+        if pin.kind == "python_file":
+            port = _read_stub_announcement(popen)
         pgid, start_time_ticks, exe_sha256 = _capture_target_identity(popen.pid)
         if pgid != popen.pid:
             raise BenchRefusal("spawn_failure")
@@ -1406,13 +1507,15 @@ def spawn_pinned(
         raise BenchRefusal("spawn_failure") from None
 
 
+@dataclass(frozen=True, slots=True)
 class RealServerLauncher:
-    tier = "production"
+    pin: SpawnPin
+    tier: str = field(default="production", init=False)
 
-    def __init__(self, pin: SpawnPin) -> None:
+    def __post_init__(self) -> None:
+        pin = self.pin
         if not isinstance(pin, SpawnPin) or pin.kind != "binary":
             raise ValueError("spawn_pin_invalid")
-        self.pin = pin
 
     def spawn(self, argv: list[str], env: dict[str, str]) -> OwnedChild:
         ports = [
@@ -1422,21 +1525,27 @@ class RealServerLauncher:
         ] if type(argv) is list else []
         if ports != [str(BENCH_PORT)]:
             raise BenchRefusal("spawn_failure")
-        child = spawn_pinned(argv, pin=self.pin, env=env)
-        return replace(child, port=BENCH_PORT)
+        return spawn_pinned(
+            argv,
+            pin=self.pin,
+            env=env,
+            admitted_port=BENCH_PORT,
+        )
 
 
+@dataclass(frozen=True, slots=True)
 class RehearsalServerLauncher:
-    tier = "rehearsal"
+    pin: SpawnPin
+    tier: str = field(default="rehearsal", init=False)
 
-    def __init__(self, pin: SpawnPin) -> None:
+    def __post_init__(self) -> None:
+        pin = self.pin
         if (
             not isinstance(pin, SpawnPin)
             or pin.kind != "python_file"
             or pin.pinned_path != _REHEARSAL_STUB_PATH
         ):
             raise ValueError("spawn_pin_invalid")
-        self.pin = pin
 
     def spawn(self, argv: list[str], env: dict[str, str]) -> OwnedChild:
         return spawn_pinned(argv, pin=self.pin, env=env)
@@ -1684,15 +1793,29 @@ def finalize(
 class AuthorizationGate(Protocol):
     tier: str
 
+    def validate(
+        self,
+        authorization: object,
+        *,
+        phase: str,
+        boot_id: str,
+        expected_window_id: str,
+        parent_window: object | None,
+        parent_packet: cm.PhasePacket | None,
+        clock: Clock,
+    ) -> None: ...
+
     def consume(
         self,
         authorization: object,
         *,
         phase: str,
         boot_id: str,
+        expected_window_id: str,
         parent_window: object | None,
         parent_packet: cm.PhasePacket | None,
-        root: Path,
+        authority_root: Path,
+        receipt_root: Path,
         clock: Clock,
     ) -> "ConsumedAuthority": ...  # noqa: F821
 
@@ -2703,7 +2826,12 @@ class RehearsalArtifactPolicy:
     tier: str = "rehearsal"
 
     def encode(self, kind: str, document: dict[str, object]) -> bytes:
-        payload = _production_artifact(kind, document)
+        production = _production_artifact(kind, document)
+        payload = {
+            "kind": kind,
+            "binding_sha256": production["binding_sha256"],
+            "fields": production["fields"],
+        }
         return _canonical_json(
             {
                 "rehearsal_schema": REHEARSAL_PACKET_SCHEMA,
@@ -2899,25 +3027,20 @@ def _validated_clock_timestamp(timestamp: str) -> str:
         raise BenchRefusal("provider_uncertain") from None
 
 
-def _prepare_authorization_consumption(
+def _validated_authority(
     auth: object,
     *,
     phase: str,
     boot_id: str,
+    expected_window_id: str,
     clock: Clock,
-    policy: ArtifactPolicy,
-    expected_tier: str,
     parent_window: WindowAuthorization | None,
     parent_packet: cm.PhasePacket | None,
-) -> tuple[ConsumedAuthority, bytes, str]:
-    if (
-        type(getattr(policy, "tier", None)) is not str
-        or policy.tier != expected_tier
-        or not callable(getattr(policy, "encode", None))
-        or not callable(getattr(policy, "artifact_dir", None))
-    ):
-        raise BenchRefusal("tier_mismatch")
-
+) -> tuple[
+    WindowAuthorization | Continuation,
+    cm.WindowAuthorizationDoc | cm.ContinuationDoc,
+    str,
+]:
     if phase == "vulkan_baseline":
         if type(auth) is not WindowAuthorization:
             raise BenchRefusal("authorization_scope_mismatch")
@@ -2933,6 +3056,11 @@ def _prepare_authorization_consumption(
     else:
         raise BenchRefusal("authorization_scope_mismatch")
     if phase not in authority.phases:
+        raise BenchRefusal("authorization_scope_mismatch")
+    if (
+        type(expected_window_id) is not str
+        or authority.window_id != expected_window_id
+    ):
         raise BenchRefusal("authorization_scope_mismatch")
     if type(boot_id) is not str or authority.boot_id != boot_id:
         raise BenchRefusal("authorization_boot_mismatch")
@@ -2977,6 +3105,61 @@ def _prepare_authorization_consumption(
         if cm._compare_utc_z(timestamp, parent_window.expires_at) >= 0:
             raise BenchRefusal("authorization_expired")
 
+    return authority, scorer_authority, timestamp
+
+
+def validate_authorization(
+    auth: object,
+    *,
+    phase: str,
+    boot_id: str,
+    expected_window_id: str,
+    clock: Clock,
+    parent_window: WindowAuthorization | None = None,
+    parent_packet: cm.PhasePacket | None = None,
+) -> None:
+    """Validate the current authority without writing or consuming its nonce."""
+
+    _validated_authority(
+        auth,
+        phase=phase,
+        boot_id=boot_id,
+        expected_window_id=expected_window_id,
+        clock=clock,
+        parent_window=parent_window,
+        parent_packet=parent_packet,
+    )
+
+
+def _prepare_authorization_consumption(
+    auth: object,
+    *,
+    phase: str,
+    boot_id: str,
+    expected_window_id: str,
+    clock: Clock,
+    policy: ArtifactPolicy,
+    expected_tier: str,
+    parent_window: WindowAuthorization | None,
+    parent_packet: cm.PhasePacket | None,
+) -> tuple[ConsumedAuthority, bytes, str]:
+    if (
+        type(getattr(policy, "tier", None)) is not str
+        or policy.tier != expected_tier
+        or not callable(getattr(policy, "encode", None))
+        or not callable(getattr(policy, "artifact_dir", None))
+    ):
+        raise BenchRefusal("tier_mismatch")
+    authority, scorer_authority, timestamp = _validated_authority(
+        auth,
+        phase=phase,
+        boot_id=boot_id,
+        expected_window_id=expected_window_id,
+        clock=clock,
+        parent_window=parent_window,
+        parent_packet=parent_packet,
+    )
+
     receipt = cm.ConsumptionReceipt(
         nonce=authority.nonce,
         phase=phase,
@@ -3011,8 +3194,10 @@ def consume_authorization(
     *,
     phase: str,
     boot_id: str,
+    expected_window_id: str,
     clock: Clock,
-    root: Path,
+    authority_root: Path,
+    receipt_root: Path,
     policy: ArtifactPolicy,
     parent_window: WindowAuthorization | None = None,
     parent_packet: cm.PhasePacket | None = None,
@@ -3021,31 +3206,65 @@ def consume_authorization(
         auth,
         phase=phase,
         boot_id=boot_id,
+        expected_window_id=expected_window_id,
         clock=clock,
         policy=policy,
         expected_tier="production",
         parent_window=parent_window,
         parent_packet=parent_packet,
     )
+    _require_distinct_roots(authority_root, receipt_root)
     nonce = consumed.receipt["nonce"]
     if type(nonce) is not str:
         raise BenchRefusal("authorization_malformed")
-    _create_consumption_marker(nonce, root=root)
+    _validated_authority(
+        auth,
+        phase=phase,
+        boot_id=boot_id,
+        expected_window_id=expected_window_id,
+        clock=clock,
+        parent_window=parent_window,
+        parent_packet=parent_packet,
+    )
+    _create_consumption_marker(nonce, root=authority_root)
     write_private_file(
         f"{receipt_dir}/consumption-{nonce}.json",
         encoded,
-        root=root,
+        root=receipt_root,
     )
     return consumed
 
 
+@dataclass(frozen=True, slots=True)
 class RealAuthorizationGate:
     tier = "production"
+    policy: ArtifactPolicy
 
-    def __init__(self, policy: ArtifactPolicy) -> None:
+    def __post_init__(self) -> None:
+        policy = self.policy
         if type(getattr(policy, "tier", None)) is not str or policy.tier != self.tier:
             raise BenchRefusal("tier_mismatch")
-        self.policy = policy
+
+    def validate(
+        self,
+        authorization: object,
+        *,
+        phase: str,
+        boot_id: str,
+        expected_window_id: str,
+        parent_window: WindowAuthorization | None,
+        parent_packet: cm.PhasePacket | None,
+        clock: Clock,
+    ) -> None:
+        validate_authorization(
+            authorization,
+            phase=phase,
+            boot_id=boot_id,
+            expected_window_id=expected_window_id,
+            parent_window=parent_window,
+            parent_packet=parent_packet,
+            clock=clock,
+        )
 
     def consume(
         self,
@@ -3053,30 +3272,66 @@ class RealAuthorizationGate:
         *,
         phase: str,
         boot_id: str,
+        expected_window_id: str,
         parent_window: WindowAuthorization | None,
         parent_packet: cm.PhasePacket | None,
-        root: Path,
+        authority_root: Path,
+        receipt_root: Path,
         clock: Clock,
     ) -> ConsumedAuthority:
+        self.validate(
+            authorization,
+            phase=phase,
+            boot_id=boot_id,
+            expected_window_id=expected_window_id,
+            parent_window=parent_window,
+            parent_packet=parent_packet,
+            clock=clock,
+        )
         return consume_authorization(
             authorization,
             phase=phase,
             boot_id=boot_id,
+            expected_window_id=expected_window_id,
             parent_window=parent_window,
             parent_packet=parent_packet,
-            root=root,
+            authority_root=authority_root,
+            receipt_root=receipt_root,
             clock=clock,
             policy=self.policy,
         )
 
 
+@dataclass(frozen=True, slots=True)
 class RehearsalAuthorizationGate:
     tier = "rehearsal"
+    policy: ArtifactPolicy
 
-    def __init__(self, policy: ArtifactPolicy) -> None:
+    def __post_init__(self) -> None:
+        policy = self.policy
         if type(getattr(policy, "tier", None)) is not str or policy.tier != self.tier:
             raise BenchRefusal("tier_mismatch")
-        self.policy = policy
+
+    def validate(
+        self,
+        authorization: object,
+        *,
+        phase: str,
+        boot_id: str,
+        expected_window_id: str,
+        parent_window: WindowAuthorization | None,
+        parent_packet: cm.PhasePacket | None,
+        clock: Clock,
+    ) -> None:
+        validate_authorization(
+            authorization,
+            phase=phase,
+            boot_id=boot_id,
+            expected_window_id=expected_window_id,
+            parent_window=parent_window,
+            parent_packet=parent_packet,
+            clock=clock,
+        )
 
     def consume(
         self,
@@ -3084,18 +3339,40 @@ class RehearsalAuthorizationGate:
         *,
         phase: str,
         boot_id: str,
+        expected_window_id: str,
         parent_window: WindowAuthorization | None,
         parent_packet: cm.PhasePacket | None,
-        root: Path,
+        authority_root: Path,
+        receipt_root: Path,
         clock: Clock,
     ) -> ConsumedAuthority:
+        self.validate(
+            authorization,
+            phase=phase,
+            boot_id=boot_id,
+            expected_window_id=expected_window_id,
+            parent_window=parent_window,
+            parent_packet=parent_packet,
+            clock=clock,
+        )
         consumed, encoded, receipt_dir = _prepare_authorization_consumption(
             authorization,
             phase=phase,
             boot_id=boot_id,
+            expected_window_id=expected_window_id,
             clock=clock,
             policy=self.policy,
             expected_tier=self.tier,
+            parent_window=parent_window,
+            parent_packet=parent_packet,
+        )
+        _require_distinct_roots(authority_root, receipt_root)
+        _validated_authority(
+            authorization,
+            phase=phase,
+            boot_id=boot_id,
+            expected_window_id=expected_window_id,
+            clock=clock,
             parent_window=parent_window,
             parent_packet=parent_packet,
         )
@@ -3109,9 +3386,124 @@ class RehearsalAuthorizationGate:
         write_private_file(
             f"{receipt_dir}/consumption-{nonce}-{sequence:06d}-{receipt_id}.json",
             encoded,
-            root=root,
+            root=receipt_root,
         )
         return consumed
+
+
+@dataclass(frozen=True, slots=True)
+class _TestOnlySingleUseAuthorizationGate:
+    """In-memory anti-replay gate reachable only through the private test tier."""
+
+    policy: ArtifactPolicy
+    tier: str = field(default="rehearsal", init=False)
+    _consumed: set[str] = field(default_factory=set, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if type(self.policy) is not RehearsalArtifactPolicy:
+            raise BenchRefusal("tier_mismatch")
+
+    def validate(
+        self,
+        authorization: object,
+        *,
+        phase: str,
+        boot_id: str,
+        expected_window_id: str,
+        parent_window: WindowAuthorization | None,
+        parent_packet: cm.PhasePacket | None,
+        clock: Clock,
+    ) -> None:
+        validate_authorization(
+            authorization,
+            phase=phase,
+            boot_id=boot_id,
+            expected_window_id=expected_window_id,
+            parent_window=parent_window,
+            parent_packet=parent_packet,
+            clock=clock,
+        )
+
+    def consume(
+        self,
+        authorization: object,
+        *,
+        phase: str,
+        boot_id: str,
+        expected_window_id: str,
+        parent_window: WindowAuthorization | None,
+        parent_packet: cm.PhasePacket | None,
+        authority_root: Path,
+        receipt_root: Path,
+        clock: Clock,
+    ) -> ConsumedAuthority:
+        del authority_root, receipt_root
+        self.validate(
+            authorization,
+            phase=phase,
+            boot_id=boot_id,
+            expected_window_id=expected_window_id,
+            parent_window=parent_window,
+            parent_packet=parent_packet,
+            clock=clock,
+        )
+        expected_type = WindowAuthorization if phase == "vulkan_baseline" else Continuation
+        if type(authorization) is not expected_type:
+            raise BenchRefusal("authorization_malformed")
+        if authorization.nonce in self._consumed:
+            raise BenchRefusal("authorization_consumed")
+        consumed, _encoded, _receipt_dir = _prepare_authorization_consumption(
+            authorization,
+            phase=phase,
+            boot_id=boot_id,
+            expected_window_id=expected_window_id,
+            clock=clock,
+            policy=self.policy,
+            expected_tier=self.tier,
+            parent_window=parent_window,
+            parent_packet=parent_packet,
+        )
+        self._consumed.add(authorization.nonce)
+        return consumed
+
+
+def _require_distinct_roots(authority_root: Path, receipt_root: Path) -> None:
+    try:
+        authority_path = os.fspath(authority_root)
+        receipt_path = os.fspath(receipt_root)
+    except TypeError:
+        _filesystem_hazard()
+    if (
+        not os.path.isabs(authority_path)
+        or not os.path.isabs(receipt_path)
+        or os.path.normpath(authority_path) == os.path.normpath(receipt_path)
+    ):
+        _filesystem_hazard()
+
+    authority_fd = _open_root_fd(authority_root)
+    try:
+        try:
+            receipt_fd = os.open(
+                receipt_path,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            )
+        except FileNotFoundError:
+            return
+        except (OSError, TypeError, ValueError):
+            _filesystem_hazard()
+        try:
+            _check_directory_fd(receipt_fd)
+            authority = os.fstat(authority_fd)
+            receipt = os.fstat(receipt_fd)
+            if (authority.st_dev, authority.st_ino) == (
+                receipt.st_dev,
+                receipt.st_ino,
+            ):
+                _filesystem_hazard()
+        finally:
+            os.close(receipt_fd)
+    finally:
+        os.close(authority_fd)
 
 
 class _CommandRunner(Protocol):
@@ -3475,6 +3867,231 @@ class RehearsalClock:
         return time.monotonic()
 
 
+_ContainmentCommandReader = Callable[[list[str]], str]
+_ContainmentFileReader = Callable[[Path], bytes]
+_ContainmentEnvironReader = Callable[[int], bytes]
+
+
+def _read_containment_command(argv: list[str]) -> str:
+    try:
+        result = _run_read_only(argv)
+    except Exception:
+        raise BenchRefusal("provider_uncertain") from None
+    if result.returncode != 0 or type(result.stdout) is not str:
+        raise BenchRefusal("provider_uncertain")
+    return result.stdout
+
+
+def _read_containment_file(path: Path) -> bytes:
+    try:
+        return path.read_bytes()
+    except OSError:
+        raise BenchRefusal("provider_uncertain") from None
+
+
+def _read_process_environ(pid: int) -> bytes:
+    if type(pid) is not int or pid <= 0:
+        raise BenchRefusal("provider_uncertain")
+    try:
+        return Path(f"/proc/{pid}/environ").read_bytes()
+    except OSError:
+        raise BenchRefusal("provider_uncertain") from None
+
+
+def _parse_systemd_show(text: str) -> dict[str, str | int]:
+    if type(text) is not str:
+        raise BenchRefusal("provider_uncertain")
+    expected = {"ActiveState", "SubState", "UnitFileState", "MainPID"}
+    values: dict[str, str] = {}
+    for line in text.splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key in expected:
+            if key in values or not value:
+                raise BenchRefusal("provider_uncertain")
+            values[key] = value
+    if set(values) != expected:
+        raise BenchRefusal("provider_uncertain")
+    rendered_pid = values.pop("MainPID")
+    if not rendered_pid.isascii() or not rendered_pid.isdecimal():
+        raise BenchRefusal("provider_uncertain")
+    pid = int(rendered_pid)
+    return {**values, "MainPID": pid}
+
+
+def _exact_env_assignment(data: bytes, *, nul_separated: bool) -> str:
+    if type(data) is not bytes:
+        raise BenchRefusal("provider_uncertain")
+    try:
+        text = data.decode("utf-8")
+    except UnicodeError:
+        raise BenchRefusal("provider_uncertain") from None
+    lines = text.split("\0" if nul_separated else "\n")
+    prefix = "MAEZ_SCREEN_PERCEPTION="
+    matches = [line[len(prefix) :] for line in lines if line.startswith(prefix)]
+    if len(matches) != 1 or matches[0] not in {"0", "1"}:
+        raise BenchRefusal("containment_violation")
+    return matches[0]
+
+
+class RealContainmentProvider:
+    tier = "production"
+
+    def __init__(
+        self,
+        *,
+        clock: Clock,
+        port_probe: PortProbe,
+        command_reader: _ContainmentCommandReader = _read_containment_command,
+        file_reader: _ContainmentFileReader = _read_containment_file,
+        environ_reader: _ContainmentEnvironReader = _read_process_environ,
+    ) -> None:
+        self.clock = clock
+        self.port_probe = port_probe
+        self._command_reader = command_reader
+        self._file_reader = file_reader
+        self._environ_reader = environ_reader
+        self.witness = ProviderWitness(synthetic=False, real_calls=0)
+
+    def _command(self, argv: list[str]) -> str:
+        self.witness.real_calls += 1
+        try:
+            value = self._command_reader(argv)
+        except BenchRefusal:
+            raise
+        except Exception:
+            raise BenchRefusal("provider_uncertain") from None
+        if type(value) is not str:
+            raise BenchRefusal("provider_uncertain")
+        return value
+
+    def _file(self, path: Path) -> bytes:
+        self.witness.real_calls += 1
+        try:
+            value = self._file_reader(path)
+        except BenchRefusal:
+            raise
+        except Exception:
+            raise BenchRefusal("provider_uncertain") from None
+        if type(value) is not bytes:
+            raise BenchRefusal("provider_uncertain")
+        return value
+
+    def capture(self, phase: str, boundary: str) -> cm.ContainmentSnapshot:
+        flag_bytes = self._file(SCREEN_FLAG_SOURCE_PATH)
+        unit_bytes = self._file(VISION_UNIT_PATH)
+        flag_value = _exact_env_assignment(flag_bytes, nul_separated=False)
+        vision = _parse_systemd_show(
+            self._command(systemctl_command("show", VISION_UNIT))
+        )
+        maez = _parse_systemd_show(
+            self._command(_systemctl_system_show_command(MAEZ_UNIT))
+        )
+        maez_state = maez["ActiveState"]
+        process_flag: str | None = None
+        if maez_state == "active":
+            pid = maez["MainPID"]
+            if type(pid) is not int or pid <= 0:
+                raise BenchRefusal("provider_uncertain")
+            self.witness.real_calls += 1
+            try:
+                environ = self._environ_reader(pid)
+            except BenchRefusal:
+                raise
+            except Exception:
+                raise BenchRefusal("provider_uncertain") from None
+            process_flag = _exact_env_assignment(environ, nul_separated=True)
+            second = _parse_systemd_show(
+                self._command(_systemctl_system_show_command(MAEZ_UNIT))
+            )
+            if second["ActiveState"] != "active" or second["MainPID"] != pid:
+                raise BenchRefusal("provider_uncertain")
+        elif maez["MainPID"] != 0:
+            raise BenchRefusal("provider_uncertain")
+        try:
+            timestamp = _validated_clock_timestamp(self.clock.now_utc())
+            port_closed = self.port_probe.is_free(8082)
+        except BenchRefusal:
+            raise
+        except Exception:
+            raise BenchRefusal("provider_uncertain") from None
+        if type(port_closed) is not bool:
+            raise BenchRefusal("provider_uncertain")
+        try:
+            snapshot = cm.ContainmentSnapshot(
+                phase=phase,
+                boundary=boundary,
+                timestamp=timestamp,
+                screen_flag_value=flag_value,
+                active_state=vision["ActiveState"],
+                substate=vision["SubState"],
+                enabled_state=vision["UnitFileState"],
+                maez_active_state=maez_state,
+                maez_process_screen_flag_value=process_flag,
+                port_closed=port_closed,
+                flag_source_sha256=hashlib.sha256(flag_bytes).hexdigest(),
+                vision_unit_sha256=hashlib.sha256(unit_bytes).hexdigest(),
+            )
+        except (TypeError, ValueError):
+            raise BenchRefusal("containment_violation") from None
+        return snapshot
+
+
+class SyntheticContainmentProvider:
+    tier = "rehearsal"
+
+    def __init__(
+        self,
+        *,
+        clock: Clock,
+        port_probe: PortProbe,
+        flag_source_sha256: str,
+        vision_unit_sha256: str,
+        fail_boundary: str | None = None,
+    ) -> None:
+        if fail_boundary not in {None, "before", "after"}:
+            raise ValueError("synthetic_containment_invalid")
+        if _SHA256_RE.fullmatch(flag_source_sha256) is None or _SHA256_RE.fullmatch(
+            vision_unit_sha256
+        ) is None:
+            raise ValueError("synthetic_containment_invalid")
+        self.clock = clock
+        self.port_probe = port_probe
+        self.flag_source_sha256 = flag_source_sha256
+        self.vision_unit_sha256 = vision_unit_sha256
+        self.fail_boundary = fail_boundary
+        self.capture_count = 0
+        self.witness = ProviderWitness(synthetic=True, real_calls=0)
+
+    def capture(self, phase: str, boundary: str) -> cm.ContainmentSnapshot:
+        self.capture_count += 1
+        if boundary == self.fail_boundary:
+            raise BenchRefusal("containment_violation")
+        try:
+            port_closed = self.port_probe.is_free(8082)
+            timestamp = _validated_clock_timestamp(self.clock.now_utc())
+            snapshot = cm.ContainmentSnapshot(
+                phase=phase,
+                boundary=boundary,
+                timestamp=timestamp,
+                screen_flag_value="0",
+                active_state="inactive",
+                substate="dead",
+                enabled_state="disabled",
+                maez_active_state="inactive",
+                maez_process_screen_flag_value=None,
+                port_closed=port_closed,
+                flag_source_sha256=self.flag_source_sha256,
+                vision_unit_sha256=self.vision_unit_sha256,
+            )
+        except BenchRefusal:
+            raise
+        except (TypeError, ValueError):
+            raise BenchRefusal("provider_uncertain") from None
+        return snapshot
+
+
 class SyntheticServiceState:
     tier = "rehearsal"
 
@@ -3732,7 +4349,313 @@ def ambient_topology_hash(
     return hashlib.sha256(encoded).hexdigest()
 
 
+_ATTEMPT_NAME_RE = re.compile(r"attempt-([0-9]{3,})")
+
+
+def _claim_attempt_directory(parent_fd: int, name: str) -> None:
+    os.mkdir(name, mode=0o700, dir_fd=parent_fd)
+
+
+def _allocate_attempt(
+    *,
+    window_id: str,
+    phase: str,
+    policy: ArtifactPolicy,
+    root: Path,
+) -> Path:
+    if (
+        type(window_id) is not str
+        or _NAME_SEED.fullmatch(window_id) is None
+        or phase not in {"vulkan_baseline", "cuda_candidate"}
+        or type(getattr(policy, "tier", None)) is not str
+        or policy.tier not in {"production", "rehearsal"}
+    ):
+        raise BenchRefusal("filesystem_hazard")
+    prefix = "rehearsal/" if policy.tier == "rehearsal" else ""
+    parent_relative = f"{prefix}windows/{window_id}/{phase}"
+    parent_fd, _parts, _chain = _open_parent_fd(
+        f"{parent_relative}/.attempt-anchor",
+        root=root,
+        create=True,
+    )
+    try:
+        try:
+            names = os.listdir(parent_fd)
+        except OSError:
+            _filesystem_hazard()
+        numbers = [
+            int(match.group(1))
+            for name in names
+            if (match := _ATTEMPT_NAME_RE.fullmatch(name)) is not None
+        ]
+        candidate = max(numbers, default=-1) + 1
+        while True:
+            name = f"attempt-{candidate:03d}"
+            try:
+                _claim_attempt_directory(parent_fd, name)
+            except FileExistsError:
+                candidate += 1
+                continue
+            except OSError:
+                _filesystem_hazard()
+            child_fd = _open_existing_directory(parent_fd, name)
+            os.close(child_fd)
+            return root / parent_relative / name
+    finally:
+        os.close(parent_fd)
+
+
 _PROVIDERS_GUARD = object()
+_TEST_TIER_GUARD = object()
+
+
+@dataclass(frozen=True)
+class PhaseConfig:
+    phase: str
+    argv: list[str]
+    env: dict[str, str]
+    alias: str
+    prompts: tuple[str, ...]
+    authorization: WindowAuthorization | Continuation
+    parent_window: WindowAuthorization | None
+    parent_packet_path: str | None
+    bench_identity_fields: dict[str, object]
+    runtime_identity_fields: dict[str, object]
+    static_preflight_path: str
+    gpu_uuid: str
+    boot_id: str
+    window_id: str
+    expected_port: int | None
+
+    def __post_init__(self) -> None:
+        if (
+            self.phase not in {"vulkan_baseline", "cuda_candidate"}
+            or type(self.argv) is not list
+            or not self.argv
+            or any(type(value) is not str or not value for value in self.argv)
+            or type(self.env) is not dict
+            or any(
+                type(key) is not str
+                or not key
+                or type(value) is not str
+                for key, value in self.env.items()
+            )
+            or type(self.alias) is not str
+            or not self.alias
+            or type(self.prompts) is not tuple
+            or len(self.prompts) != 7
+            or any(type(prompt) is not str or not prompt for prompt in self.prompts)
+            or type(self.bench_identity_fields) is not dict
+            or type(self.runtime_identity_fields) is not dict
+            or type(self.static_preflight_path) is not str
+            or not self.static_preflight_path
+            or type(self.gpu_uuid) is not str
+            or not self.gpu_uuid
+            or type(self.boot_id) is not str
+            or not self.boot_id
+            or type(self.window_id) is not str
+            or _NAME_SEED.fullmatch(self.window_id) is None
+            or (
+                self.expected_port is not None
+                and (
+                    type(self.expected_port) is not int
+                    or not 0 < self.expected_port <= 65_535
+                )
+            )
+        ):
+            raise ValueError("phase_config_invalid")
+        if self.phase == "vulkan_baseline":
+            if type(self.authorization) is not WindowAuthorization:
+                raise ValueError("phase_config_invalid")
+        elif type(self.authorization) is not Continuation:
+            raise ValueError("phase_config_invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class ProductionExecutionContract:
+    pinned_path: str
+    pinned_sha256: str
+    effective_args_sha256: str
+    argv: tuple[str, ...]
+    environment: Mapping[str, str]
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.pinned_path) is not str
+            or not os.path.isabs(self.pinned_path)
+            or type(self.pinned_sha256) is not str
+            or _SHA256_RE.fullmatch(self.pinned_sha256) is None
+            or self.effective_args_sha256 != FROZEN_BENCH_ARGS_SHA256
+            or type(self.argv) is not tuple
+            or not self.argv
+            or any(type(value) is not str or not value for value in self.argv)
+            or _effective_args_sha256(list(self.argv))
+            != self.effective_args_sha256
+            or not isinstance(self.environment, Mapping)
+            or any(
+                type(key) is not str or type(value) is not str
+                for key, value in self.environment.items()
+            )
+        ):
+            raise ValueError("production_execution_contract_invalid")
+        object.__setattr__(
+            self,
+            "environment",
+            MappingProxyType(dict(self.environment)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CompletedPhaseEvidence:
+    """Typed measured preimages consumed by the production packet builder."""
+
+    admitted_pinned_path: str
+    admitted_pinned_sha256: str
+    topology_sha256: str
+    consumed: ConsumedAuthority
+    static_preflight_sha256: str
+    bench_runtime_identity_sha256: str
+    turn_manifest: cm.TurnManifest
+    turn_records: tuple[cm.TurnRecord, ...]
+    cycle_metrics: tuple[cm.CycleMetrics, cm.CycleMetrics, cm.CycleMetrics]
+    cycle_witnesses: tuple[
+        cm.CycleBackendWitness,
+        cm.CycleBackendWitness,
+        cm.CycleBackendWitness,
+    ]
+    containment_before_sha256: str
+    containment_after_sha256: str
+    kernel_cursor_before: str
+    kernel_cursor_after: str
+    kernel_counters: cm.KernelCounters
+    cycle_one_before_snapshot_at: str
+    timestamp: str
+
+
+@dataclass(frozen=True, slots=True)
+class _PhaseTailEvidence:
+    containment_after: cm.ContainmentSnapshot | None
+    containment_after_file_sha256: str | None
+    kernel_cursor_after: str | None
+    kernel_counters: cm.KernelCounters | None
+    refusal: BenchRefusal | None
+
+
+@dataclass(slots=True)
+class _PhaseLifecycleState:
+    interrupted: bool = False
+    spawned_any: bool = False
+    observed_child: OwnedChild | None = None
+    current_child: OwnedChild | None = None
+    last_finalizer: FinalizeResult | None = None
+    active_cycle: int | None = None
+    active_memory_before: tuple[float, int] | None = None
+    common_topology: str | None = None
+
+    def admit(self, child: OwnedChild) -> None:
+        self.current_child = child
+        self.observed_child = child
+        self.spawned_any = True
+
+
+@dataclass(slots=True)
+class _TerminalCommit:
+    path: Path | None = None
+
+    def latch(self, path: Path) -> None:
+        if self.path is None:
+            self.path = path
+
+
+@dataclass(frozen=True, slots=True)
+class _CompletedCycles:
+    manifest_entries: tuple[cm.TurnManifestEntry, ...]
+    records: tuple[cm.TurnRecord, ...]
+    metrics: tuple[cm.CycleMetrics, cm.CycleMetrics, cm.CycleMetrics]
+    witnesses: tuple[
+        cm.CycleBackendWitness,
+        cm.CycleBackendWitness,
+        cm.CycleBackendWitness,
+    ]
+    topology_groups: tuple[
+        tuple[str, str, str, str],
+        tuple[str, str, str, str],
+        tuple[str, str, str, str],
+    ]
+    admitted_pin: tuple[str, str]
+
+
+def _effective_args_sha256(argv: list[str]) -> str:
+    if type(argv) is not list or not argv or any(
+        type(value) is not str or not value for value in argv
+    ):
+        raise BenchRefusal("identity_mismatch")
+    try:
+        encoded = json.dumps(
+            argv[1:],
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    except (RecursionError, TypeError, UnicodeError, ValueError):
+        raise BenchRefusal("identity_mismatch") from None
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _validate_production_execution_contract(
+    config: PhaseConfig,
+    *,
+    launcher_pin: SpawnPin,
+    static: cm.StaticPreflightDoc,
+    runtime_identity: cm.RuntimeIdentity,
+) -> ProductionExecutionContract:
+    if (
+        type(config) is not PhaseConfig
+        or type(launcher_pin) is not SpawnPin
+        or launcher_pin.kind != "binary"
+        or type(static) is not cm.StaticPreflightDoc
+        or type(runtime_identity) is not cm.RuntimeIdentity
+        or runtime_identity.mode != "bench"
+    ):
+        raise BenchRefusal("identity_mismatch")
+    expected_path = (
+        cm.VULKAN_RELEASE_ROOT / "llama-server"
+        if config.phase == "vulkan_baseline"
+        else cm.CUDA_RELEASE_ROOT / "llama-server"
+    )
+    expected_sha256 = (
+        static.checks["incumbent_server"]
+        if config.phase == "vulkan_baseline"
+        else runtime_identity.runtime_sha256
+    )
+    expected_environment = dict(_PHASE_BENCH_ENVIRONMENTS[config.phase])
+    args_sha256 = _effective_args_sha256(config.argv)
+    if (
+        launcher_pin.pinned_path != expected_path
+        or launcher_pin.pinned_sha256 != expected_sha256
+        or launcher_pin.required_argv_prefix != (str(expected_path),)
+        or config.argv[0] != str(expected_path)
+        or tuple(config.argv[1:]) != runtime_identity.effective_args
+        or args_sha256 != FROZEN_BENCH_ARGS_SHA256
+        or config.env != expected_environment
+        or config.expected_port != BENCH_PORT
+    ):
+        raise BenchRefusal("identity_mismatch")
+    if config.phase == "cuda_candidate" and any(
+        config.env.get(name) != value
+        for name, value in runtime_identity.backend_environment.items()
+    ):
+        raise BenchRefusal("identity_mismatch")
+    try:
+        return ProductionExecutionContract(
+            pinned_path=str(expected_path),
+            pinned_sha256=expected_sha256,
+            effective_args_sha256=args_sha256,
+            argv=tuple(config.argv),
+            environment=expected_environment,
+        )
+    except (TypeError, ValueError):
+        raise BenchRefusal("identity_mismatch") from None
 
 
 @dataclass(frozen=True, init=False)
@@ -3746,6 +4669,7 @@ class Providers:
     server_launcher: ServerLauncher
     server_client: ServerClient
     authorization_gate: AuthorizationGate
+    containment: ContainmentProvider
     artifact_policy: ArtifactPolicy
     clock: Clock
     journal_factory: JournalFactory
@@ -3762,6 +4686,7 @@ class Providers:
         server_launcher: ServerLauncher,
         server_client: ServerClient,
         authorization_gate: AuthorizationGate,
+        containment: ContainmentProvider,
         artifact_policy: ArtifactPolicy,
         clock: Clock,
         journal_factory: JournalFactory,
@@ -3785,19 +4710,47 @@ def _sealed_tier(
     server_launcher: ServerLauncher,
     server_client: ServerClient,
     authorization_gate: AuthorizationGate,
+    containment: ContainmentProvider,
     artifact_policy: ArtifactPolicy,
     clock: Clock,
     journal_factory: JournalFactory,
+    _test_guard: object | None = None,
 ) -> Providers:
-    expected_launcher = (
-        RealServerLauncher if tier == "production" else RehearsalServerLauncher
+    expected_types = (
+        {
+            "service_state": RealServiceStateProvider,
+            "port_probe": RealPortProbe,
+            "gpu": RealGpuProvider,
+            "kernel_log": RealKernelLogProvider,
+            "backend_maps": RealBackendMapProvider,
+            "server_launcher": RealServerLauncher,
+            "server_client": LoopbackServerClient,
+            "authorization_gate": RealAuthorizationGate,
+            "containment": RealContainmentProvider,
+            "artifact_policy": ProductionArtifactPolicy,
+            "clock": SystemClock,
+            "journal_factory": ProductionJournalFactory,
+        }
+        if tier == "production"
+        else {
+            "service_state": SyntheticServiceState,
+            "port_probe": SyntheticPortProbe,
+            "gpu": SyntheticGpu,
+            "kernel_log": SyntheticKernelLog,
+            "backend_maps": SyntheticBackendMap,
+            "server_launcher": RehearsalServerLauncher,
+            "server_client": LoopbackServerClient,
+            "authorization_gate": (
+                _TestOnlySingleUseAuthorizationGate
+                if _test_guard is _TEST_TIER_GUARD
+                else RehearsalAuthorizationGate
+            ),
+            "containment": SyntheticContainmentProvider,
+            "artifact_policy": RehearsalArtifactPolicy,
+            "clock": RehearsalClock,
+            "journal_factory": RehearsalJournalFactory,
+        }
     )
-    if type(server_launcher) is not expected_launcher:
-        raise BenchRefusal("tier_mismatch")
-    if type(server_client) is not LoopbackServerClient:
-        raise BenchRefusal("tier_mismatch")
-    if server_client.clock is not clock:
-        raise BenchRefusal("tier_mismatch")
     components = {
         "service_state": service_state,
         "port_probe": port_probe,
@@ -3807,11 +4760,18 @@ def _sealed_tier(
         "server_launcher": server_launcher,
         "server_client": server_client,
         "authorization_gate": authorization_gate,
+        "containment": containment,
         "artifact_policy": artifact_policy,
         "clock": clock,
         "journal_factory": journal_factory,
     }
+    if any(type(components[name]) is not expected for name, expected in expected_types.items()):
+        raise BenchRefusal("tier_mismatch")
+    if server_client.clock is not clock:
+        raise BenchRefusal("tier_mismatch")
     if getattr(authorization_gate, "policy", None) is not artifact_policy:
+        raise BenchRefusal("tier_mismatch")
+    if containment.clock is not clock or containment.port_probe is not port_probe:
         raise BenchRefusal("tier_mismatch")
     required_methods = {
         "service_state": ("is_active",),
@@ -3821,7 +4781,8 @@ def _sealed_tier(
         "backend_maps": ("read_maps",),
         "server_launcher": ("spawn",),
         "server_client": ("health", "models", "stream"),
-        "authorization_gate": ("consume",),
+        "authorization_gate": ("validate", "consume"),
+        "containment": ("capture",),
         "artifact_policy": ("encode", "artifact_dir"),
         "clock": ("now_utc", "monotonic"),
         "journal_factory": ("create",),
@@ -3835,6 +4796,16 @@ def _sealed_tier(
     return Providers(tier=tier, _guard=_PROVIDERS_GUARD, **components)
 
 
+def _test_rehearsal_tier(**components: object) -> Providers:
+    """Seal protocol-complete test components without widening real factories."""
+
+    return _sealed_tier(
+        "rehearsal",
+        _test_guard=_TEST_TIER_GUARD,
+        **components,
+    )
+
+
 def production_tier(
     *,
     service_state: ServiceStateProvider,
@@ -3845,6 +4816,7 @@ def production_tier(
     server_launcher: ServerLauncher,
     server_client: ServerClient,
     authorization_gate: AuthorizationGate,
+    containment: ContainmentProvider,
     artifact_policy: ArtifactPolicy,
     clock: Clock,
     journal_factory: JournalFactory,
@@ -3859,6 +4831,7 @@ def production_tier(
         server_launcher=server_launcher,
         server_client=server_client,
         authorization_gate=authorization_gate,
+        containment=containment,
         artifact_policy=artifact_policy,
         clock=clock,
         journal_factory=journal_factory,
@@ -3875,6 +4848,7 @@ def rehearsal_tier(
     server_launcher: ServerLauncher,
     server_client: ServerClient,
     authorization_gate: AuthorizationGate,
+    containment: ContainmentProvider,
     artifact_policy: ArtifactPolicy,
     clock: Clock,
     journal_factory: JournalFactory,
@@ -3889,7 +4863,1755 @@ def rehearsal_tier(
         server_launcher=server_launcher,
         server_client=server_client,
         authorization_gate=authorization_gate,
+        containment=containment,
         artifact_policy=artifact_policy,
         clock=clock,
         journal_factory=journal_factory,
     )
+
+
+def _containment_fields(snapshot: cm.ContainmentSnapshot) -> dict[str, object]:
+    return {
+        "phase": snapshot.phase,
+        "boundary": snapshot.boundary,
+        "timestamp": snapshot.timestamp,
+        "screen_flag_value": snapshot.screen_flag_value,
+        "active_state": snapshot.active_state,
+        "substate": snapshot.substate,
+        "enabled_state": snapshot.enabled_state,
+        "port_closed": snapshot.port_closed,
+        "flag_source_sha256": snapshot.flag_source_sha256,
+        "vision_unit_sha256": snapshot.vision_unit_sha256,
+        "maez_active_state": snapshot.maez_active_state,
+        "maez_process_screen_flag_value": (
+            snapshot.maez_process_screen_flag_value
+        ),
+    }
+
+
+def _runtime_identity_fields(identity: cm.RuntimeIdentity) -> dict[str, object]:
+    return {
+        "tag": identity.tag,
+        "commit": identity.commit,
+        "version": identity.version,
+        "alias": identity.alias,
+        "model_sha256": identity.model_sha256,
+        "model_bytes": identity.model_bytes,
+        "runtime_sha256": identity.runtime_sha256,
+        "library_hashes": dict(identity.library_hashes),
+        "effective_args": list(identity.effective_args),
+        "mode": identity.mode,
+        "production_override_sha256": identity.production_override_sha256,
+        "backend_environment": dict(identity.backend_environment),
+        "runtime_manifest_sha256": identity.runtime_manifest_sha256,
+        "rollback_manifest_sha256": identity.rollback_manifest_sha256,
+        "cuda_toolkit": identity.cuda_toolkit,
+        "cuda_compiler": identity.cuda_compiler,
+        "cmake_version": identity.cmake_version,
+        "driver_version": identity.driver_version,
+        "gpu_identifier": identity.gpu_identifier,
+        "compute_capability": identity.compute_capability,
+        "backend": identity.backend,
+    }
+
+
+def _turn_record_fields(record: cm.TurnRecord) -> dict[str, object]:
+    return {
+        name: getattr(record, name)
+        for name in (
+            "cycle",
+            "ordinal",
+            "warmup",
+            "artifact_sha256",
+            "outcome",
+            "e2e_ms",
+            "ttft_ms",
+            "prompt_per_second",
+            "predicted_per_second",
+            "draft_n",
+            "draft_n_accepted",
+        )
+    }
+
+
+def _cycle_metric_fields(
+    metric: cm.CycleMetrics,
+    *,
+    topology_hashes: tuple[str, str, str, str] | None = None,
+) -> dict[str, object]:
+    fields = {
+        name: getattr(metric, name)
+        for name in (
+            "cycle",
+            "topology_sha256",
+            "bar1_before_percent",
+            "bar1_after_load_percent",
+            "bar1_after_inference_percent",
+            "bar1_after_unload_percent",
+            "vram_before_mib",
+            "vram_after_load_mib",
+            "vram_after_inference_mib",
+            "vram_after_unload_mib",
+        )
+    }
+    if topology_hashes is not None:
+        fields["topology_hashes"] = list(topology_hashes)
+    return fields
+
+
+def _cycle_witness_fields(witness: cm.CycleBackendWitness) -> dict[str, object]:
+    return {
+        "cycle": witness.cycle,
+        "load_started": witness.load_started,
+        "unload_proven": witness.unload_proven,
+        "witness": {
+            "backend": witness.witness.backend,
+            "maps_sha256": witness.witness.maps_sha256,
+            "phase": witness.witness.phase,
+            "timestamp": witness.witness.timestamp,
+            "release_root_sha256": witness.witness.release_root_sha256,
+        },
+    }
+
+
+def _kernel_counter_fields(counters: cm.KernelCounters) -> dict[str, int]:
+    return {
+        "reusemappingdb_map": counters.reusemappingdb_map,
+        "pmap_cb": counters.pmap_cb,
+        "mmu_walk_map": counters.mmu_walk_map,
+        "nv_err_no_memory": counters.nv_err_no_memory,
+        "xid": counters.xid,
+        "unmatched_nvrm": counters.unmatched_nvrm,
+    }
+
+
+def _finalizer_fields(result: FinalizeResult) -> dict[str, object]:
+    return {
+        "outcome": result.outcome,
+        "signals_sent": list(result.signals_sent),
+        "quadruple_reproofs": result.quadruple_reproofs,
+        "surviving_pgid_members": list(result.surviving_pgid_members),
+        "listener_free": result.listener_free,
+        "started_at": result.started_at,
+        "finished_at": result.finished_at,
+    }
+
+
+def _persist_document(
+    *,
+    policy: ArtifactPolicy,
+    kind: str,
+    name: str,
+    document: dict[str, object],
+    root: Path,
+    on_link: Callable[[Path], None] | None = None,
+) -> tuple[Path, str]:
+    try:
+        encoded = policy.encode(kind, document)
+        directory = policy.artifact_dir(kind)
+    except (TypeError, ValueError):
+        raise BenchRefusal("tier_mismatch") from None
+    path = write_private_file(
+        f"{directory}/{name}",
+        encoded,
+        root=root,
+        on_link=on_link,
+    )
+    return path, hashlib.sha256(encoded).hexdigest()
+
+
+def _persist_terminal_document(
+    *,
+    policy: ArtifactPolicy,
+    kind: str,
+    name: str,
+    document: dict[str, object],
+    root: Path,
+    terminal: _TerminalCommit,
+) -> Path:
+    """Make the successful link the one terminal linearization point."""
+
+    if terminal.path is not None:
+        return terminal.path
+    try:
+        old_mask = signal.pthread_sigmask(
+            signal.SIG_BLOCK,
+            {signal.SIGINT, signal.SIGTERM},
+        )
+    except (OSError, ValueError):
+        raise BenchRefusal("cleanup_incomplete") from None
+    try:
+        try:
+            path, _file_sha = _persist_document(
+                policy=policy,
+                kind=kind,
+                name=name,
+                document=document,
+                root=root,
+                on_link=terminal.latch,
+            )
+        except BaseException:
+            if terminal.path is not None:
+                return terminal.path
+            raise
+        if terminal.path is None:
+            raise BenchRefusal("filesystem_hazard")
+        return path
+    finally:
+        try:
+            signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+        except (OSError, ValueError):
+            if terminal.path is None:
+                raise BenchRefusal("cleanup_incomplete") from None
+
+
+def _sample_gpu_stage(
+    providers: Providers,
+    *,
+    gpu_uuid: str,
+    owned_pids: set[int],
+) -> tuple[str, tuple[float, int]]:
+    try:
+        inventory = providers.gpu.inventory(gpu_uuid)
+        memory = providers.gpu.memory(gpu_uuid)
+        topology = ambient_topology_hash(inventory, owned_pids)
+    except BenchRefusal:
+        raise
+    except Exception:
+        raise BenchRefusal("provider_uncertain") from None
+    return topology, memory
+
+
+def _kernel_counters(values: dict[str, int]) -> cm.KernelCounters:
+    if set(values) != set(KERNEL_COUNTER_KEYS):
+        raise BenchRefusal("provider_uncertain")
+    try:
+        return cm.KernelCounters(
+            reusemappingdb_map=values["reusemappingdbMap"],
+            pmap_cb=values["pMapCb"],
+            mmu_walk_map=values["mmuWalkMap"],
+            nv_err_no_memory=values["NV_ERR_NO_MEMORY"],
+            xid=values["Xid"],
+            unmatched_nvrm=values["unmatched_nvrm"],
+        )
+    except (TypeError, ValueError):
+        raise BenchRefusal("provider_uncertain") from None
+
+
+def _stage_identities_match(
+    bench_identity: cm.RuntimeIdentity,
+    runtime_identity: cm.RuntimeIdentity,
+) -> bool:
+    for name in cm._BENCH_IDENTITY_STABLE_FIELDS:
+        bench_value = getattr(bench_identity, name)
+        runtime_value = getattr(runtime_identity, name)
+        if isinstance(bench_value, Mapping):
+            if not isinstance(runtime_value, Mapping) or dict(bench_value) != dict(
+                runtime_value
+            ):
+                return False
+        elif bench_value != runtime_value:
+            return False
+    return True
+
+
+def _load_phase_preimages(
+    config: PhaseConfig,
+    providers: Providers,
+    *,
+    root: Path,
+    attempt_root: Path,
+) -> tuple[
+    cm.RuntimeIdentity,
+    cm.RuntimeIdentity,
+    cm.StaticPreflightDoc,
+    cm.PhasePacket | None,
+    str,
+    str,
+]:
+    try:
+        static_bytes = open_bench_file(config.static_preflight_path, root=root)
+        persisted = cm.PersistedDoc(static_bytes)
+        if type(persisted.obj) is not cm.StaticPreflightDoc:
+            raise ValueError("static_preflight")
+        static = persisted.obj
+        bench_identity = cm.RuntimeIdentity(**config.bench_identity_fields)
+        runtime_identity = cm.RuntimeIdentity(**config.runtime_identity_fields)
+    except BenchRefusal:
+        raise
+    except (TypeError, ValueError):
+        raise BenchRefusal("identity_mismatch") from None
+    try:
+        canonical_stub_sha256 = _hash_file(_REHEARSAL_STUB_PATH)
+    except BenchRefusal:
+        raise BenchRefusal("identity_mismatch") from None
+    if (
+        not _stage_identities_match(bench_identity, runtime_identity)
+        or bench_identity.mode != "bench"
+        or bench_identity.alias != config.alias
+        or runtime_identity.alias != config.alias
+        or static.gpu_uuid != config.gpu_uuid
+        or static.checks["candidate_manifest"]
+        != bench_identity.runtime_manifest_sha256
+        or static.stub_sha256 != canonical_stub_sha256
+        or (
+            providers.tier == "rehearsal"
+            and (
+                providers.server_launcher.pin.pinned_path  # type: ignore[attr-defined]
+                != _REHEARSAL_STUB_PATH
+                or providers.server_launcher.pin.pinned_sha256  # type: ignore[attr-defined]
+                != static.stub_sha256
+            )
+        )
+    ):
+        raise BenchRefusal("identity_mismatch")
+
+    parent_packet: cm.PhasePacket | None = None
+    if config.parent_packet_path is not None:
+        try:
+            parent_bytes = open_bench_file(config.parent_packet_path, root=root)
+            parent_packet = cm.decode_persisted_packet(parent_bytes)
+        except (BenchRefusal, TypeError, ValueError):
+            raise BenchRefusal("continuation_parent_mismatch") from None
+    if config.phase == "vulkan_baseline":
+        if config.parent_window is not None or config.parent_packet_path is not None:
+            raise BenchRefusal("continuation_parent_mismatch")
+    elif config.parent_window is None or parent_packet is None:
+        raise BenchRefusal("continuation_missing")
+
+    bench_document = {
+        "schema": RUNTIME_IDENTITY_SCHEMA,
+        "binding_sha256": bench_identity.binding_sha256,
+        **_runtime_identity_fields(bench_identity),
+    }
+    runtime_document = {
+        "schema": RUNTIME_IDENTITY_SCHEMA,
+        "binding_sha256": runtime_identity.binding_sha256,
+        **_runtime_identity_fields(runtime_identity),
+    }
+    _bench_path, bench_file_sha = _persist_document(
+        policy=providers.artifact_policy,
+        kind="identity_document",
+        name="bench_runtime_identity.json",
+        document=bench_document,
+        root=attempt_root,
+    )
+    _runtime_path, _runtime_file_sha = _persist_document(
+        policy=providers.artifact_policy,
+        kind="identity_document",
+        name="runtime_identity.json",
+        document=runtime_document,
+        root=attempt_root,
+    )
+    return (
+        bench_identity,
+        runtime_identity,
+        static,
+        parent_packet,
+        hashlib.sha256(static_bytes).hexdigest(),
+        bench_file_sha,
+    )
+
+
+def _phase_preflight(
+    config: PhaseConfig,
+    providers: Providers,
+    *,
+    parent_packet: cm.PhasePacket | None,
+) -> None:
+    try:
+        for unit in (
+            "llama-server.service",
+            "llama-judge.service",
+            VISION_UNIT,
+        ):
+            if providers.service_state.is_active(unit) != "inactive":
+                raise BenchRefusal("preflight_service_active")
+        for port in PRODUCTION_PORTS:
+            if providers.port_probe.is_free(port) is not True:
+                raise BenchRefusal("preflight_port_open")
+        if providers.port_probe.is_free(BENCH_PORT) is not True:
+            raise BenchRefusal("preflight_bench_port_busy")
+        uuids = providers.gpu.enumerate_uuids()
+        if uuids != [config.gpu_uuid]:
+            raise BenchRefusal("gpu_scope_violation")
+        inventory = providers.gpu.inventory(config.gpu_uuid)
+    except BenchRefusal:
+        raise
+    except Exception:
+        raise BenchRefusal("provider_uncertain") from None
+    if any(os.path.basename(name) == "llama-server" for _pid, name in inventory):
+        raise BenchRefusal("preflight_gpu_occupied")
+    providers.authorization_gate.validate(
+        config.authorization,
+        phase=config.phase,
+        boot_id=config.boot_id,
+        expected_window_id=config.window_id,
+        parent_window=config.parent_window,
+        parent_packet=parent_packet,
+        clock=providers.clock,
+    )
+
+
+def _persist_containment(
+    snapshot: cm.ContainmentSnapshot,
+    providers: Providers,
+    *,
+    attempt_root: Path,
+) -> tuple[Path, str]:
+    return _persist_document(
+        policy=providers.artifact_policy,
+        kind="containment_snapshot",
+        name=f"containment-{snapshot.boundary}.json",
+        document={
+            "schema": CONTAINMENT_SNAPSHOT_SCHEMA,
+            "binding_sha256": snapshot.binding_sha256,
+            **_containment_fields(snapshot),
+        },
+        root=attempt_root,
+    )
+
+
+def _write_reduced_outcome(
+    *,
+    config: PhaseConfig,
+    providers: Providers,
+    attempt_root: Path,
+    outcome: str,
+    spawned: bool,
+    finalizer: FinalizeResult | None,
+    observed_child: OwnedChild | None,
+    consumed: ConsumedAuthority | None,
+    static_preflight_sha256: str | None,
+    runtime_identity_sha256: str | None,
+    containment_before_sha256: str | None,
+    containment_after_sha256: str | None,
+    kernel_cursor_before: str | None,
+    kernel_cursor_after: str | None,
+    kernel_counters: cm.KernelCounters | None,
+    terminal: _TerminalCommit,
+) -> Path:
+    timestamp = _validated_clock_timestamp(providers.clock.now_utc())
+    fields: dict[str, object] = {
+        "phase": config.phase,
+        "window_id": config.window_id,
+        "boot_id": config.boot_id,
+        "outcome": outcome,
+        "spawned": spawned,
+        "timestamp": timestamp,
+    }
+    if observed_child is not None:
+        fields.update(
+            {
+                "observed_port": observed_child.port,
+                "observed_pgid": observed_child.pgid,
+                "pinned_path": observed_child.pinned_path,
+                "pinned_sha256": observed_child.pinned_sha256,
+            }
+        )
+    if finalizer is not None:
+        fields["finalizer"] = _finalizer_fields(finalizer)
+    if consumed is not None:
+        fields["authorization_preimage_sha256"] = consumed.preimage_sha256
+        fields["consumption_receipt_sha256"] = (
+            consumed.consumption_receipt_sha256
+        )
+    optional_hashes = {
+        "static_preflight_sha256": static_preflight_sha256,
+        "runtime_identity_sha256": runtime_identity_sha256,
+        "containment_before_sha256": containment_before_sha256,
+        "containment_after_sha256": containment_after_sha256,
+        "kernel_cursor_before": kernel_cursor_before,
+        "kernel_cursor_after": kernel_cursor_after,
+    }
+    fields.update(
+        {name: value for name, value in optional_hashes.items() if value is not None}
+    )
+    if kernel_counters is not None:
+        fields["kernel_counters"] = _kernel_counter_fields(kernel_counters)
+    binding = hashlib.sha256(_canonical_json(fields)).hexdigest()
+    kind = "packet" if spawned else "refusal"
+    path = _persist_terminal_document(
+        policy=providers.artifact_policy,
+        kind=kind,
+        name=f"{config.phase}-{outcome}.json",
+        document={"binding_sha256": binding, **fields},
+        root=attempt_root,
+        terminal=terminal,
+    )
+    return path
+
+
+def _write_turn(
+    *,
+    config: PhaseConfig,
+    providers: Providers,
+    attempt_root: Path,
+    cycle: int,
+    ordinal: int,
+    prompt: str,
+    measurement: TurnMeasurement,
+) -> tuple[cm.TurnManifestEntry, cm.TurnRecord]:
+    warmup = ordinal == 0
+    document = {
+        "cycle": cycle,
+        "ordinal": ordinal,
+        "warmup": warmup,
+        "prompt": prompt,
+        "content": measurement.content,
+        "ttft_ms": measurement.ttft_ms,
+        "e2e_ms": measurement.e2e_ms,
+        "timings": measurement.timings,
+        "terminal": measurement.terminal,
+    }
+    encoded = providers.artifact_policy.encode("turn_artifact", document)
+    directory = providers.artifact_policy.artifact_dir("turn_artifact")
+    name = f"cycle-{cycle}-turn-{ordinal}.json"
+    write_private_file(f"{directory}/{name}", encoded, root=attempt_root)
+    artifact_sha = hashlib.sha256(encoded).hexdigest()
+    timings = measurement.timings
+    try:
+        prompt_rate = float(timings["prompt_per_second"])
+        predicted_rate = float(timings["predicted_per_second"])
+    except (KeyError, OverflowError, TypeError, ValueError):
+        raise BenchRefusal("malformed_response") from None
+    if warmup:
+        draft_n = None
+        accepted = None
+    else:
+        draft_n, accepted, _rejected = parse_mtp(timings)
+    try:
+        entry = cm.TurnManifestEntry(cycle, ordinal, warmup, artifact_sha)
+        record = cm.TurnRecord(
+            cycle=cycle,
+            ordinal=ordinal,
+            warmup=warmup,
+            artifact_sha256=artifact_sha,
+            outcome="completed",
+            e2e_ms=float(measurement.e2e_ms),
+            ttft_ms=float(measurement.ttft_ms),
+            prompt_per_second=prompt_rate,
+            predicted_per_second=predicted_rate,
+            draft_n=draft_n,
+            draft_n_accepted=accepted,
+        )
+    except (TypeError, ValueError):
+        raise BenchRefusal("malformed_response") from None
+    return entry, record
+
+
+def _authorization_attempt_window(config: PhaseConfig) -> str:
+    authority = config.authorization
+    expected_type = (
+        WindowAuthorization
+        if config.phase == "vulkan_baseline"
+        else Continuation
+    )
+    if (
+        type(authority) is not expected_type
+        or config.phase not in authority.phases
+        or authority.window_id != config.window_id
+    ):
+        raise BenchRefusal("authorization_scope_mismatch")
+    if authority.boot_id != config.boot_id:
+        raise BenchRefusal("authorization_boot_mismatch")
+    return authority.window_id
+
+
+def _summary_projection(
+    *,
+    phase: str,
+    model_sha256: str,
+    metrics: tuple[cm.CycleMetrics, cm.CycleMetrics, cm.CycleMetrics],
+    records: tuple[cm.TurnRecord, ...],
+    counters: cm.KernelCounters,
+) -> str:
+    statistics_packet = cm.recompute_phase_statistics(records)
+    unload_leak = sum(
+        max(0, metric.vram_after_unload_mib - metric.vram_before_mib)
+        for metric in metrics
+    )
+    projection = {
+        "phase": phase,
+        "alias": cm.FROZEN_ALIAS,
+        "model_sha256": model_sha256,
+        "corpus_sha256": cm.FROZEN_CORPUS_SHA256,
+        "order_sha256": cm.FROZEN_ORDER_SHA256,
+        "sample_n": cm.FROZEN_SAMPLE_N,
+        "warmup_count": cm.FROZEN_WARMUP_COUNT,
+        "measured_sample_count": cm.FROZEN_MEASURED_SAMPLE_COUNT,
+        "load_cycles": cm.FROZEN_LOAD_CYCLES,
+        "cycles": [cm._cycle_packet(metric) for metric in metrics],
+        "unload_leak_mib": float(unload_leak),
+        "kernel_counters": counters.packet(),
+        **statistics_packet,
+    }
+    return cm._canonical_projection_json(projection)
+
+
+def _phase_packet_fields(packet: cm.PhasePacket) -> dict[str, object]:
+    return {
+        "phase": packet.phase,
+        "outcome": packet.outcome,
+        "window_id": packet.window_id,
+        "boot_id": packet.boot_id,
+        "gpu_uuid": packet.gpu_uuid,
+        "topology_sha256": packet.topology_sha256,
+        "model_sha256": packet.model_sha256,
+        "corpus_sha256": packet.corpus_sha256,
+        "order_sha256": packet.order_sha256,
+        "effective_args_sha256": packet.effective_args_sha256,
+        "driver_package_sha256": packet.driver_package_sha256,
+        "pinned_path": packet.pinned_path,
+        "pinned_sha256": packet.pinned_sha256,
+        "authorization_preimage_sha256": packet.authorization_preimage_sha256,
+        "consumption_receipt_sha256": packet.consumption_receipt_sha256,
+        "static_preflight_sha256": packet.static_preflight_sha256,
+        "runtime_identity_sha256": packet.runtime_identity_sha256,
+        "turn_manifest": {
+            "phase": packet.turn_manifest.phase,
+            "entries": [
+                [entry.cycle, entry.ordinal, entry.warmup, entry.artifact_sha256]
+                for entry in packet.turn_manifest.entries
+            ],
+        },
+        "turn_records": [
+            _turn_record_fields(record) for record in packet.turn_records
+        ],
+        "cycle_metrics": [
+            _cycle_metric_fields(metric) for metric in packet.cycle_metrics
+        ],
+        "cycle_witnesses": [
+            _cycle_witness_fields(witness) for witness in packet.cycle_witnesses
+        ],
+        "containment_before_sha256": packet.containment_before_sha256,
+        "containment_after_sha256": packet.containment_after_sha256,
+        "kernel_cursor_before": packet.kernel_cursor_before,
+        "kernel_cursor_after": packet.kernel_cursor_after,
+        "kernel_counters": _kernel_counter_fields(packet.kernel_counters),
+        "summary_projection_json": packet.summary_projection_json,
+        "cycle_one_before_snapshot_at": packet.cycle_one_before_snapshot_at,
+        "timestamp": packet.timestamp,
+    }
+
+
+def _build_completed_phase_packet(
+    *,
+    config: PhaseConfig,
+    execution_contract: ProductionExecutionContract,
+    runtime_identity: cm.RuntimeIdentity,
+    static: cm.StaticPreflightDoc,
+    evidence: CompletedPhaseEvidence,
+) -> cm.PhasePacket:
+    """Build one production packet only from admitted execution and typed evidence."""
+
+    if (
+        type(config) is not PhaseConfig
+        or type(execution_contract) is not ProductionExecutionContract
+        or type(runtime_identity) is not cm.RuntimeIdentity
+        or type(static) is not cm.StaticPreflightDoc
+        or type(evidence) is not CompletedPhaseEvidence
+    ):
+        raise BenchRefusal("identity_mismatch")
+    expected_path = str(
+        (
+            cm.VULKAN_RELEASE_ROOT
+            if config.phase == "vulkan_baseline"
+            else cm.CUDA_RELEASE_ROOT
+        )
+        / "llama-server"
+    )
+    expected_sha256 = (
+        static.checks["incumbent_server"]
+        if config.phase == "vulkan_baseline"
+        else runtime_identity.runtime_sha256
+    )
+    if (
+        execution_contract.pinned_path != expected_path
+        or execution_contract.pinned_sha256 != expected_sha256
+        or evidence.admitted_pinned_path != execution_contract.pinned_path
+        or evidence.admitted_pinned_sha256 != execution_contract.pinned_sha256
+        or execution_contract.effective_args_sha256 != FROZEN_BENCH_ARGS_SHA256
+        or config.expected_port != BENCH_PORT
+    ):
+        raise BenchRefusal("identity_mismatch")
+    try:
+        return cm.PhasePacket(
+            phase=config.phase,
+            outcome="completed",
+            window_id=config.window_id,
+            boot_id=config.boot_id,
+            gpu_uuid=config.gpu_uuid,
+            topology_sha256=evidence.topology_sha256,
+            model_sha256=runtime_identity.model_sha256,
+            corpus_sha256=cm.FROZEN_CORPUS_SHA256,
+            order_sha256=cm.FROZEN_ORDER_SHA256,
+            effective_args_sha256=execution_contract.effective_args_sha256,
+            driver_package_sha256=static.driver_package_sha256,
+            pinned_path=execution_contract.pinned_path,
+            pinned_sha256=execution_contract.pinned_sha256,
+            authorization_preimage_sha256=evidence.consumed.preimage_sha256,
+            consumption_receipt_sha256=(
+                evidence.consumed.consumption_receipt_sha256
+            ),
+            static_preflight_sha256=evidence.static_preflight_sha256,
+            runtime_identity_sha256=evidence.bench_runtime_identity_sha256,
+            turn_manifest=evidence.turn_manifest,
+            turn_records=evidence.turn_records,
+            cycle_metrics=evidence.cycle_metrics,
+            cycle_witnesses=evidence.cycle_witnesses,
+            containment_before_sha256=evidence.containment_before_sha256,
+            containment_after_sha256=evidence.containment_after_sha256,
+            kernel_cursor_before=evidence.kernel_cursor_before,
+            kernel_cursor_after=evidence.kernel_cursor_after,
+            kernel_counters=evidence.kernel_counters,
+            summary_projection_json=_summary_projection(
+                phase=config.phase,
+                model_sha256=runtime_identity.model_sha256,
+                metrics=evidence.cycle_metrics,
+                records=evidence.turn_records,
+                counters=evidence.kernel_counters,
+            ),
+            cycle_one_before_snapshot_at=evidence.cycle_one_before_snapshot_at,
+            timestamp=evidence.timestamp,
+        )
+    except (TypeError, ValueError):
+        raise BenchRefusal("provider_uncertain") from None
+
+
+def _append_phase_transition(
+    journal: PhaseJournal,
+    clock: Clock,
+    transition: str,
+    *,
+    detail: Mapping[str, object] | None = None,
+) -> None:
+    journal.append(
+        ts=_validated_clock_timestamp(clock.now_utc()),
+        transition=transition,
+        detail={} if detail is None else detail,
+    )
+
+
+def _try_append_phase_transition(
+    journal: PhaseJournal,
+    clock: Clock,
+    transition: str,
+    *,
+    detail: Mapping[str, object] | None = None,
+) -> BenchRefusal | None:
+    try:
+        _append_phase_transition(
+            journal,
+            clock,
+            transition,
+            detail=detail,
+        )
+    except (BenchRefusal, ValueError):
+        return BenchRefusal("journal_failure")
+    return None
+
+
+def _spawn_with_interrupt_handoff(
+    launcher: ServerLauncher,
+    argv: list[str],
+    env: dict[str, str],
+    *,
+    admit: Callable[[OwnedChild], None],
+) -> OwnedChild:
+    """Block driver interrupts until the caller has recorded child ownership."""
+
+    try:
+        old_mask = signal.pthread_sigmask(
+            signal.SIG_BLOCK,
+            {signal.SIGINT, signal.SIGTERM},
+        )
+    except (OSError, ValueError):
+        raise BenchRefusal("spawn_failure") from None
+    try:
+        child = launcher.spawn(argv, env)
+        if type(child) is not OwnedChild:
+            raise BenchRefusal("spawn_failure")
+        admit(child)
+    finally:
+        try:
+            signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+        except (OSError, ValueError):
+            raise BenchRefusal("cleanup_incomplete") from None
+    return child
+
+
+def _resolved_cycle_failure(
+    pending: BaseException | None,
+    finalizer: FinalizeResult,
+    *,
+    child_exited_before_finalize: bool,
+    unload_refusal: BenchRefusal | None,
+    interrupted: bool,
+) -> BenchRefusal | None:
+    if finalizer.outcome != "clean":
+        return BenchRefusal(finalizer.outcome)
+    if interrupted or isinstance(pending, KeyboardInterrupt):
+        return BenchRefusal("interrupted")
+    if "SIGKILL" in finalizer.signals_sent:
+        return BenchRefusal("hang")
+    if unload_refusal is not None:
+        return unload_refusal
+    if pending is None:
+        return None
+    if isinstance(pending, BenchRefusal):
+        if pending.code == "malformed_response" and child_exited_before_finalize:
+            return BenchRefusal("crash")
+        return pending
+    return BenchRefusal("provider_uncertain")
+
+
+def _wait_for_unload(
+    providers: Providers,
+    *,
+    gpu_uuid: str,
+    memory_before: tuple[float, int],
+    expected_topology: str,
+    listener_free: bool | None,
+) -> tuple[str, tuple[float, int]]:
+    if listener_free is not True:
+        raise BenchRefusal("unload_incomplete")
+    deadline = _monotonic(providers.clock) + UNLOAD_WAIT_S
+    while True:
+        topology, memory = _sample_gpu_stage(
+            providers,
+            gpu_uuid=gpu_uuid,
+            owned_pids=set(),
+        )
+        if topology != expected_topology:
+            raise BenchRefusal("topology_drift")
+        if memory[0] <= memory_before[0] and memory[1] <= memory_before[1]:
+            return topology, memory
+        if _monotonic(providers.clock) >= deadline:
+            raise BenchRefusal("unload_incomplete")
+        time.sleep(0.01)
+
+
+def _collect_phase_tail(
+    *,
+    config: PhaseConfig,
+    providers: Providers,
+    attempt_root: Path,
+    static: cm.StaticPreflightDoc,
+    containment_before: cm.ContainmentSnapshot,
+    kernel_cursor_before: str,
+    journal: PhaseJournal,
+) -> _PhaseTailEvidence:
+    refusal: BenchRefusal | None = None
+    cursor_after: str | None = None
+    counters: cm.KernelCounters | None = None
+    containment_after: cm.ContainmentSnapshot | None = None
+    containment_after_file_sha: str | None = None
+
+    journal_refusal = _try_append_phase_transition(
+        journal,
+        providers.clock,
+        "kernel_delta",
+    )
+    if journal_refusal is not None:
+        refusal = journal_refusal
+    try:
+        cursor_after = providers.kernel_log.cursor()
+        counters = _kernel_counters(
+            providers.kernel_log.count_signatures(
+                kernel_cursor_before,
+                cursor_after,
+            )
+        )
+        if not counters.clean:
+            refusal = BenchRefusal("kernel_unmatched")
+    except BenchRefusal as error:
+        refusal = error
+    except Exception:
+        refusal = BenchRefusal("provider_uncertain")
+
+    journal_refusal = _try_append_phase_transition(
+        journal,
+        providers.clock,
+        "containment_after",
+    )
+    if refusal is None and journal_refusal is not None:
+        refusal = journal_refusal
+    try:
+        containment_after = providers.containment.capture(config.phase, "after")
+        _after_path, containment_after_file_sha = _persist_containment(
+            containment_after,
+            providers,
+            attempt_root=attempt_root,
+        )
+        if (
+            not containment_after.clean
+            or containment_after.flag_source_sha256
+            != static.checks["flag_source"]
+            or containment_after.vision_unit_sha256
+            != static.checks["vision_unit"]
+            or containment_after.flag_source_sha256
+            != containment_before.flag_source_sha256
+            or containment_after.vision_unit_sha256
+            != containment_before.vision_unit_sha256
+        ):
+            refusal = BenchRefusal("containment_violation")
+    except BenchRefusal as error:
+        if refusal is None or error.code == "containment_violation":
+            refusal = error
+    except Exception:
+        if refusal is None:
+            refusal = BenchRefusal("provider_uncertain")
+    return _PhaseTailEvidence(
+        containment_after=containment_after,
+        containment_after_file_sha256=containment_after_file_sha,
+        kernel_cursor_after=cursor_after,
+        kernel_counters=counters,
+        refusal=refusal,
+    )
+
+
+def _run_three_cycles(
+    *,
+    config: PhaseConfig,
+    providers: Providers,
+    attempt_root: Path,
+    journal: PhaseJournal,
+    lifecycle: _PhaseLifecycleState,
+    admitted_argv: tuple[str, ...],
+    admitted_env: Mapping[str, str],
+    expected_pin: tuple[str, str],
+    before_topology: str,
+    before_memory: tuple[float, int],
+) -> _CompletedCycles:
+    """Run exactly three identical-pin cycles and return measured preimages."""
+
+    manifest_entries: list[cm.TurnManifestEntry] = []
+    records: list[cm.TurnRecord] = []
+    metrics: list[cm.CycleMetrics] = []
+    witnesses: list[cm.CycleBackendWitness] = []
+    topology_groups: list[tuple[str, str, str, str]] = []
+    common_pin: tuple[str, str] | None = None
+    lifecycle.common_topology = before_topology
+
+    for cycle in (1, 2, 3):
+        lifecycle.active_cycle = cycle
+        _append_phase_transition(
+            journal,
+            providers.clock,
+            f"cycle_{cycle}_before",
+        )
+        if cycle == 1:
+            topology_before, memory_before = before_topology, before_memory
+        else:
+            topology_before, memory_before = _sample_gpu_stage(
+                providers,
+                gpu_uuid=config.gpu_uuid,
+                owned_pids=set(),
+            )
+        if topology_before != lifecycle.common_topology:
+            raise BenchRefusal("topology_drift")
+        lifecycle.active_memory_before = memory_before
+
+        _append_phase_transition(
+            journal,
+            providers.clock,
+            f"cycle_{cycle}_load",
+        )
+        load_started = _validated_clock_timestamp(providers.clock.now_utc())
+        child = _spawn_with_interrupt_handoff(
+            providers.server_launcher,
+            list(admitted_argv),
+            dict(admitted_env),
+            admit=lifecycle.admit,
+        )
+        if providers.tier == "production":
+            if config.expected_port != BENCH_PORT or child.port != BENCH_PORT:
+                raise BenchRefusal("identity_mismatch")
+        elif (
+            config.expected_port is not None
+            or child.port is None
+            or child.port == BENCH_PORT
+        ):
+            raise BenchRefusal("identity_mismatch")
+        child_pin = (child.pinned_path, child.pinned_sha256)
+        if child_pin != expected_pin:
+            raise BenchRefusal("identity_mismatch")
+        if common_pin is None:
+            common_pin = child_pin
+        elif child_pin != common_pin:
+            raise BenchRefusal("identity_mismatch")
+
+        pending: BaseException | None = None
+        topology_after_load = ""
+        topology_after_inference = ""
+        memory_after_load: tuple[float, int] = (0.0, 0)
+        memory_after_inference: tuple[float, int] = (0.0, 0)
+        runtime_witness: cm.RuntimeBackendWitness | None = None
+        child_exited_before_finalize = False
+        try:
+            _append_phase_transition(
+                journal,
+                providers.clock,
+                f"cycle_{cycle}_readiness",
+            )
+            deadline = _monotonic(providers.clock) + READINESS_TIMEOUT_S
+            while True:
+                if providers.server_client.health(child.port):
+                    break
+                if child.popen.poll() is not None:
+                    raise BenchRefusal("crash")
+                if _monotonic(providers.clock) >= deadline:
+                    raise BenchRefusal("readiness_timeout")
+                time.sleep(0.01)
+            _append_phase_transition(
+                journal,
+                providers.clock,
+                f"cycle_{cycle}_alias",
+            )
+            if providers.server_client.models(child.port) != [config.alias]:
+                raise BenchRefusal("alias_mismatch")
+            _append_phase_transition(
+                journal,
+                providers.clock,
+                f"cycle_{cycle}_backend_witness",
+            )
+            witness_at = _validated_clock_timestamp(providers.clock.now_utc())
+            try:
+                runtime_witness = cm.RuntimeBackendWitness.from_proc_maps(
+                    providers.backend_maps.read_maps(child.pid),
+                    phase=config.phase,
+                    timestamp=witness_at,
+                )
+            except BenchRefusal:
+                raise
+            except (TypeError, ValueError):
+                raise BenchRefusal("backend_unproven") from None
+            _append_phase_transition(
+                journal,
+                providers.clock,
+                f"cycle_{cycle}_after_load",
+            )
+            topology_after_load, memory_after_load = _sample_gpu_stage(
+                providers,
+                gpu_uuid=config.gpu_uuid,
+                owned_pids={child.pid},
+            )
+            if topology_after_load != lifecycle.common_topology:
+                raise BenchRefusal("topology_drift")
+
+            turn_prompts = (config.prompts[0], *config.prompts)
+            for ordinal, prompt in enumerate(turn_prompts):
+                _append_phase_transition(
+                    journal,
+                    providers.clock,
+                    (
+                        f"cycle_{cycle}_warmup"
+                        if ordinal == 0
+                        else f"cycle_{cycle}_measured_{ordinal}"
+                    ),
+                )
+                measurement = providers.server_client.stream(child.port, prompt)
+                if lifecycle.interrupted:
+                    raise BenchRefusal("interrupted")
+                entry, record = _write_turn(
+                    config=config,
+                    providers=providers,
+                    attempt_root=attempt_root,
+                    cycle=cycle,
+                    ordinal=ordinal,
+                    prompt=prompt,
+                    measurement=measurement,
+                )
+                manifest_entries.append(entry)
+                records.append(record)
+            _append_phase_transition(
+                journal,
+                providers.clock,
+                f"cycle_{cycle}_after_inference",
+            )
+            topology_after_inference, memory_after_inference = _sample_gpu_stage(
+                providers,
+                gpu_uuid=config.gpu_uuid,
+                owned_pids={child.pid},
+            )
+            if topology_after_inference != lifecycle.common_topology:
+                raise BenchRefusal("topology_drift")
+        except BaseException as exc:
+            pending = exc
+        finally:
+            child_exited_before_finalize = child.popen.poll() is not None
+            lifecycle.last_finalizer = finalize(
+                child,
+                clock=providers.clock,
+                port_probe=providers.port_probe,
+                port=child.port,
+            )
+
+        unload_refusal: BenchRefusal | None = None
+        try:
+            topology_after_unload, memory_after_unload = _wait_for_unload(
+                providers,
+                gpu_uuid=config.gpu_uuid,
+                memory_before=memory_before,
+                expected_topology=lifecycle.common_topology,
+                listener_free=lifecycle.last_finalizer.listener_free,
+            )
+        except BenchRefusal as error:
+            unload_refusal = error
+            topology_after_unload = lifecycle.common_topology
+            memory_after_unload = memory_before
+        lifecycle.current_child = None
+        _append_phase_transition(
+            journal,
+            providers.clock,
+            f"cycle_{cycle}_finalize",
+            detail=_finalizer_fields(lifecycle.last_finalizer),
+        )
+        _append_phase_transition(
+            journal,
+            providers.clock,
+            f"cycle_{cycle}_after_unload",
+            detail={
+                "outcome": (
+                    "completed" if unload_refusal is None else unload_refusal.code
+                )
+            },
+        )
+        resolved_failure = _resolved_cycle_failure(
+            pending,
+            lifecycle.last_finalizer,
+            child_exited_before_finalize=child_exited_before_finalize,
+            unload_refusal=unload_refusal,
+            interrupted=lifecycle.interrupted,
+        )
+        if resolved_failure is not None:
+            raise resolved_failure
+        if runtime_witness is None:
+            raise BenchRefusal("backend_unproven")
+
+        topology_group = (
+            topology_before,
+            topology_after_load,
+            topology_after_inference,
+            topology_after_unload,
+        )
+        if any(value != lifecycle.common_topology for value in topology_group):
+            raise BenchRefusal("topology_drift")
+        unload_proven = _validated_clock_timestamp(providers.clock.now_utc())
+        try:
+            metrics.append(
+                cm.CycleMetrics(
+                    cycle=cycle,
+                    topology_sha256=lifecycle.common_topology,
+                    bar1_before_percent=memory_before[0],
+                    bar1_after_load_percent=memory_after_load[0],
+                    bar1_after_inference_percent=memory_after_inference[0],
+                    bar1_after_unload_percent=memory_after_unload[0],
+                    vram_before_mib=memory_before[1],
+                    vram_after_load_mib=memory_after_load[1],
+                    vram_after_inference_mib=memory_after_inference[1],
+                    vram_after_unload_mib=memory_after_unload[1],
+                )
+            )
+            witnesses.append(
+                cm.CycleBackendWitness(
+                    witness=runtime_witness,
+                    cycle=cycle,
+                    load_started=load_started,
+                    unload_proven=unload_proven,
+                )
+            )
+        except (TypeError, ValueError):
+            raise BenchRefusal("provider_uncertain") from None
+        topology_groups.append(topology_group)
+
+    if common_pin is None:
+        raise BenchRefusal("identity_mismatch")
+    return _CompletedCycles(
+        manifest_entries=tuple(manifest_entries),
+        records=tuple(records),
+        metrics=(metrics[0], metrics[1], metrics[2]),
+        witnesses=(witnesses[0], witnesses[1], witnesses[2]),
+        topology_groups=(
+            topology_groups[0],
+            topology_groups[1],
+            topology_groups[2],
+        ),
+        admitted_pin=common_pin,
+    )
+
+
+def _publish_completed_phase(
+    *,
+    config: PhaseConfig,
+    providers: Providers,
+    attempt_root: Path,
+    journal: PhaseJournal,
+    lifecycle: _PhaseLifecycleState,
+    execution_contract: ProductionExecutionContract | None,
+    runtime_identity: cm.RuntimeIdentity,
+    static: cm.StaticPreflightDoc,
+    completed_cycles: _CompletedCycles,
+    consumed: ConsumedAuthority,
+    static_file_sha256: str,
+    bench_identity_file_sha256: str,
+    containment_before_sha256: str,
+    tail: _PhaseTailEvidence,
+    kernel_cursor_before: str,
+    cycle_one_before_at: str,
+    effective_args_sha256: str,
+    terminal: _TerminalCommit,
+) -> Path:
+    """Construct and publish the one terminal completed artifact."""
+
+    if (
+        tail.containment_after_file_sha256 is None
+        or tail.kernel_cursor_after is None
+        or tail.kernel_counters is None
+        or lifecycle.common_topology is None
+    ):
+        raise BenchRefusal("provider_uncertain")
+    containment_after_sha = tail.containment_after_file_sha256
+    kernel_cursor_after = tail.kernel_cursor_after
+    counters = tail.kernel_counters
+    common_pin = completed_cycles.admitted_pin
+    manifest = cm.TurnManifest(config.phase, completed_cycles.manifest_entries)
+    completed_at = _validated_clock_timestamp(providers.clock.now_utc())
+
+    if providers.tier == "production":
+        if execution_contract is None:
+            raise BenchRefusal("identity_mismatch")
+        packet = _build_completed_phase_packet(
+            config=config,
+            execution_contract=execution_contract,
+            runtime_identity=runtime_identity,
+            static=static,
+            evidence=CompletedPhaseEvidence(
+                admitted_pinned_path=common_pin[0],
+                admitted_pinned_sha256=common_pin[1],
+                topology_sha256=lifecycle.common_topology,
+                consumed=consumed,
+                static_preflight_sha256=static_file_sha256,
+                bench_runtime_identity_sha256=bench_identity_file_sha256,
+                turn_manifest=manifest,
+                turn_records=completed_cycles.records,
+                cycle_metrics=completed_cycles.metrics,
+                cycle_witnesses=completed_cycles.witnesses,
+                containment_before_sha256=containment_before_sha256,
+                containment_after_sha256=containment_after_sha,
+                kernel_cursor_before=kernel_cursor_before,
+                kernel_cursor_after=kernel_cursor_after,
+                kernel_counters=counters,
+                cycle_one_before_snapshot_at=cycle_one_before_at,
+                timestamp=completed_at,
+            ),
+        )
+        packet_fields = _phase_packet_fields(packet)
+        binding = packet.binding_sha256
+    else:
+        packet_fields = {
+            "phase": config.phase,
+            "outcome": "completed",
+            "window_id": config.window_id,
+            "boot_id": config.boot_id,
+            "gpu_uuid": config.gpu_uuid,
+            "topology_sha256": lifecycle.common_topology,
+            "model_sha256": runtime_identity.model_sha256,
+            "corpus_sha256": cm.FROZEN_CORPUS_SHA256,
+            "order_sha256": cm.FROZEN_ORDER_SHA256,
+            "effective_args_sha256": effective_args_sha256,
+            "driver_package_sha256": static.driver_package_sha256,
+            "pinned_path": common_pin[0],
+            "pinned_sha256": common_pin[1],
+            "authorization_preimage_sha256": consumed.preimage_sha256,
+            "consumption_receipt_sha256": consumed.consumption_receipt_sha256,
+            "static_preflight_sha256": static_file_sha256,
+            "runtime_identity_sha256": bench_identity_file_sha256,
+            "turn_manifest": {
+                "phase": config.phase,
+                "entries": [
+                    [entry.cycle, entry.ordinal, entry.warmup, entry.artifact_sha256]
+                    for entry in manifest.entries
+                ],
+            },
+            "turn_records": [
+                _turn_record_fields(record) for record in completed_cycles.records
+            ],
+            "cycle_metrics": [
+                _cycle_metric_fields(metric, topology_hashes=topologies)
+                for metric, topologies in zip(
+                    completed_cycles.metrics,
+                    completed_cycles.topology_groups,
+                    strict=True,
+                )
+            ],
+            "cycle_witnesses": [
+                _cycle_witness_fields(witness)
+                for witness in completed_cycles.witnesses
+            ],
+            "containment_before_sha256": containment_before_sha256,
+            "containment_after_sha256": containment_after_sha,
+            "kernel_cursor_before": kernel_cursor_before,
+            "kernel_cursor_after": kernel_cursor_after,
+            "kernel_counters": _kernel_counter_fields(counters),
+            "cycle_one_before_snapshot_at": cycle_one_before_at,
+            "timestamp": completed_at,
+        }
+        binding = hashlib.sha256(_canonical_json(packet_fields)).hexdigest()
+
+    _append_phase_transition(journal, providers.clock, "packet_write")
+    journal.append(ts=completed_at, transition="completed", detail={})
+    journal.close()
+    packet_path = _persist_terminal_document(
+        policy=providers.artifact_policy,
+        kind="packet",
+        name=f"{config.phase}-completed.json",
+        document={"binding_sha256": binding, **packet_fields},
+        root=attempt_root,
+        terminal=terminal,
+    )
+    return packet_path
+
+
+def _finish_failed_phase(
+    trigger: BaseException,
+    *,
+    config: PhaseConfig,
+    providers: Providers,
+    attempt_root: Path,
+    journal: PhaseJournal,
+    lifecycle: _PhaseLifecycleState,
+    static: cm.StaticPreflightDoc | None,
+    containment_before: cm.ContainmentSnapshot | None,
+    kernel_cursor_before: str | None,
+    tail_evidence: _PhaseTailEvidence | None,
+    consumed: ConsumedAuthority | None,
+    static_file_sha256: str | None,
+    bench_identity_file_sha256: str | None,
+    containment_before_file_sha256: str | None,
+    terminal: _TerminalCommit,
+) -> Path:
+    """Finish owned work, collect the observable tail, and publish one failure."""
+
+    if lifecycle.interrupted or isinstance(trigger, KeyboardInterrupt):
+        outcome = "interrupted"
+    elif isinstance(trigger, BenchRefusal):
+        outcome = trigger.code
+    else:
+        outcome = "provider_uncertain"
+
+    if lifecycle.current_child is not None:
+        child = lifecycle.current_child
+        lifecycle.observed_child = child
+        lifecycle.spawned_any = True
+        child_exited = child.popen.poll() is not None
+        lifecycle.last_finalizer = finalize(
+            child,
+            clock=providers.clock,
+            port_probe=providers.port_probe,
+            port=child.port,
+        )
+        if lifecycle.active_cycle is not None:
+            unload_refusal: BenchRefusal | None = None
+            if (
+                lifecycle.active_memory_before is not None
+                and lifecycle.common_topology is not None
+            ):
+                try:
+                    _wait_for_unload(
+                        providers,
+                        gpu_uuid=config.gpu_uuid,
+                        memory_before=lifecycle.active_memory_before,
+                        expected_topology=lifecycle.common_topology,
+                        listener_free=lifecycle.last_finalizer.listener_free,
+                    )
+                except BenchRefusal as error:
+                    unload_refusal = error
+            lifecycle.current_child = None
+            journal_error = _try_append_phase_transition(
+                journal,
+                providers.clock,
+                f"cycle_{lifecycle.active_cycle}_finalize",
+                detail=_finalizer_fields(lifecycle.last_finalizer),
+            )
+            unload_journal_error = _try_append_phase_transition(
+                journal,
+                providers.clock,
+                f"cycle_{lifecycle.active_cycle}_after_unload",
+                detail={
+                    "outcome": (
+                        "completed" if unload_refusal is None else unload_refusal.code
+                    )
+                },
+            )
+            if journal_error is None:
+                journal_error = unload_journal_error
+            resolved = _resolved_cycle_failure(
+                trigger,
+                lifecycle.last_finalizer,
+                child_exited_before_finalize=child_exited,
+                unload_refusal=unload_refusal,
+                interrupted=lifecycle.interrupted,
+            )
+            if resolved is not None:
+                outcome = resolved.code
+            if (
+                journal_error is not None
+                and outcome not in {"cleanup_incomplete", "pid_reuse_detected"}
+            ):
+                outcome = journal_error.code
+        else:
+            lifecycle.current_child = None
+    elif (
+        lifecycle.last_finalizer is not None
+        and lifecycle.last_finalizer.outcome != "clean"
+    ):
+        outcome = lifecycle.last_finalizer.outcome
+
+    if (
+        lifecycle.spawned_any
+        and tail_evidence is None
+        and static is not None
+        and containment_before is not None
+        and kernel_cursor_before is not None
+    ):
+        tail_evidence = _collect_phase_tail(
+            config=config,
+            providers=providers,
+            attempt_root=attempt_root,
+            static=static,
+            containment_before=containment_before,
+            kernel_cursor_before=kernel_cursor_before,
+            journal=journal,
+        )
+        if (
+            tail_evidence.refusal is not None
+            and outcome not in {"cleanup_incomplete", "pid_reuse_detected"}
+            and (
+                tail_evidence.refusal.code == "containment_violation"
+                or outcome == "provider_uncertain"
+            )
+        ):
+            outcome = tail_evidence.refusal.code
+
+    journal_error = _try_append_phase_transition(
+        journal,
+        providers.clock,
+        "failed_packet_write",
+        detail={"outcome": outcome},
+    )
+    if (
+        journal_error is not None
+        and outcome not in {"cleanup_incomplete", "pid_reuse_detected"}
+    ):
+        outcome = journal_error.code
+    journal_error = _try_append_phase_transition(
+        journal,
+        providers.clock,
+        "failed",
+        detail={"outcome": outcome},
+    )
+    if (
+        journal_error is not None
+        and outcome not in {"cleanup_incomplete", "pid_reuse_detected"}
+    ):
+        outcome = journal_error.code
+    try:
+        journal.close()
+    except (BenchRefusal, OSError, ValueError):
+        if outcome not in {"cleanup_incomplete", "pid_reuse_detected"}:
+            outcome = "journal_failure"
+    path = _write_reduced_outcome(
+        config=config,
+        providers=providers,
+        attempt_root=attempt_root,
+        outcome=outcome,
+        spawned=lifecycle.spawned_any,
+        finalizer=lifecycle.last_finalizer,
+        observed_child=(lifecycle.observed_child if lifecycle.spawned_any else None),
+        consumed=consumed,
+        static_preflight_sha256=static_file_sha256,
+        runtime_identity_sha256=bench_identity_file_sha256,
+        containment_before_sha256=containment_before_file_sha256,
+        containment_after_sha256=(
+            None
+            if tail_evidence is None
+            else tail_evidence.containment_after_file_sha256
+        ),
+        kernel_cursor_before=kernel_cursor_before,
+        kernel_cursor_after=(
+            None if tail_evidence is None else tail_evidence.kernel_cursor_after
+        ),
+        kernel_counters=(
+            None if tail_evidence is None else tail_evidence.kernel_counters
+        ),
+        terminal=terminal,
+    )
+    return path
+
+
+def run_phase(config: PhaseConfig, providers: Providers, *, root: Path) -> Path:
+    """Run one phase while closing the signal gap before evidence setup."""
+
+    terminal = _TerminalCommit()
+    try:
+        entry_signal_mask = signal.pthread_sigmask(
+            signal.SIG_BLOCK,
+            {signal.SIGINT, signal.SIGTERM},
+        )
+    except (OSError, ValueError):
+        raise BenchRefusal("cleanup_incomplete") from None
+    result: Path | None = None
+    pending: BaseException | None = None
+    try:
+        result = _run_phase_with_blocked_entry(
+            config,
+            providers,
+            root=root,
+            entry_signal_mask=entry_signal_mask,
+            terminal=terminal,
+        )
+    except BaseException as error:
+        pending = error
+    try:
+        signal.pthread_sigmask(signal.SIG_SETMASK, entry_signal_mask)
+    except (OSError, ValueError):
+        if terminal.path is None:
+            pending = BenchRefusal("cleanup_incomplete")
+    if terminal.path is not None:
+        return terminal.path
+    if pending is not None:
+        raise pending
+    if result is None:
+        raise BenchRefusal("provider_uncertain")
+    return result
+
+
+def _run_phase_with_blocked_entry(
+    config: PhaseConfig,
+    providers: Providers,
+    *,
+    root: Path,
+    entry_signal_mask: set[signal.Signals],
+    terminal: _TerminalCommit,
+) -> Path:
+    """Execute after the public entry point has blocked driver signals."""
+
+    if type(config) is not PhaseConfig or type(providers) is not Providers:
+        raise TypeError("phase_runner_contract")
+    if providers.tier != providers.artifact_policy.tier:
+        raise BenchRefusal("tier_mismatch")
+    authorization_window = _authorization_attempt_window(config)
+    attempt_root = _allocate_attempt(
+        window_id=authorization_window,
+        phase=config.phase,
+        policy=providers.artifact_policy,
+        root=root,
+    )
+    started_at = _validated_clock_timestamp(providers.clock.now_utc())
+    journal = providers.journal_factory.create(
+        config.phase,
+        journal_dir=providers.artifact_policy.artifact_dir("journal"),
+        timestamp=started_at,
+        root=attempt_root,
+    )
+    lifecycle = _PhaseLifecycleState()
+    static: cm.StaticPreflightDoc | None = None
+    containment_before: cm.ContainmentSnapshot | None = None
+    kernel_cursor_before: str | None = None
+    tail_evidence: _PhaseTailEvidence | None = None
+    consumed: ConsumedAuthority | None = None
+    static_file_sha: str | None = None
+    bench_identity_file_sha: str | None = None
+    containment_before_file_sha: str | None = None
+    old_handlers: dict[int, object] = {}
+
+    def on_signal(_signum: int, _frame: object) -> None:
+        if terminal.path is not None:
+            return
+        lifecycle.interrupted = True
+        raise BenchRefusal("interrupted")
+
+    def admit_child(child: OwnedChild) -> None:
+        lifecycle.admit(child)
+
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        old_handlers[signum] = signal.signal(signum, on_signal)
+
+    def finish_failed(trigger: BaseException) -> Path:
+        return _finish_failed_phase(
+            trigger,
+            config=config,
+            providers=providers,
+            attempt_root=attempt_root,
+            journal=journal,
+            lifecycle=lifecycle,
+            static=static,
+            containment_before=containment_before,
+            kernel_cursor_before=kernel_cursor_before,
+            tail_evidence=tail_evidence,
+            consumed=consumed,
+            static_file_sha256=static_file_sha,
+            bench_identity_file_sha256=bench_identity_file_sha,
+            containment_before_file_sha256=containment_before_file_sha,
+            terminal=terminal,
+        )
+
+    try:
+        signal.pthread_sigmask(signal.SIG_SETMASK, entry_signal_mask)
+        journal.append(ts=started_at, transition="phase_preflight", detail={})
+        (
+            bench_identity,
+            runtime_identity,
+            static,
+            parent_packet,
+            static_file_sha,
+            bench_identity_file_sha,
+        ) = _load_phase_preimages(
+            config,
+            providers,
+            root=root,
+            attempt_root=attempt_root,
+        )
+        launcher_pin = getattr(providers.server_launcher, "pin", None)
+        if type(launcher_pin) is not SpawnPin:
+            raise BenchRefusal("identity_mismatch")
+        execution_contract: ProductionExecutionContract | None = None
+        if providers.tier == "production":
+            execution_contract = _validate_production_execution_contract(
+                config,
+                launcher_pin=launcher_pin,
+                static=static,
+                runtime_identity=bench_identity,
+            )
+            admitted_pin = (
+                execution_contract.pinned_path,
+                execution_contract.pinned_sha256,
+            )
+            effective_args_sha256 = execution_contract.effective_args_sha256
+            admitted_argv = execution_contract.argv
+            admitted_env = execution_contract.environment
+        else:
+            if config.expected_port is not None:
+                raise BenchRefusal("identity_mismatch")
+            admitted_pin = (
+                str(launcher_pin.pinned_path),
+                launcher_pin.pinned_sha256,
+            )
+            admitted_argv = tuple(config.argv)
+            admitted_env = MappingProxyType(dict(config.env))
+            effective_args_sha256 = _effective_args_sha256(list(admitted_argv))
+        _phase_preflight(config, providers, parent_packet=parent_packet)
+
+        _append_phase_transition(
+            journal,
+            providers.clock,
+            "containment_before",
+        )
+        containment_before = providers.containment.capture(config.phase, "before")
+        _before_path, containment_before_file_sha = _persist_containment(
+            containment_before,
+            providers,
+            attempt_root=attempt_root,
+        )
+        if (
+            not containment_before.clean
+            or containment_before.flag_source_sha256
+            != static.checks["flag_source"]
+            or containment_before.vision_unit_sha256
+            != static.checks["vision_unit"]
+        ):
+            raise BenchRefusal("containment_violation")
+        kernel_cursor_before = providers.kernel_log.cursor()
+        before_topology, before_memory = _sample_gpu_stage(
+            providers,
+            gpu_uuid=config.gpu_uuid,
+            owned_pids=set(),
+        )
+        lifecycle.common_topology = before_topology
+        cycle_one_before_at = _validated_clock_timestamp(providers.clock.now_utc())
+        _append_phase_transition(
+            journal,
+            providers.clock,
+            "cycle_one_before_snapshot",
+        )
+
+        _append_phase_transition(
+            journal,
+            providers.clock,
+            "consume_authorization",
+        )
+        consumed = providers.authorization_gate.consume(
+            config.authorization,
+            phase=config.phase,
+            boot_id=config.boot_id,
+            expected_window_id=config.window_id,
+            parent_window=config.parent_window,
+            parent_packet=parent_packet,
+            authority_root=root,
+            receipt_root=attempt_root,
+            clock=providers.clock,
+        )
+
+        completed_cycles = _run_three_cycles(
+            config=config,
+            providers=providers,
+            attempt_root=attempt_root,
+            journal=journal,
+            lifecycle=lifecycle,
+            admitted_argv=admitted_argv,
+            admitted_env=admitted_env,
+            expected_pin=admitted_pin,
+            before_topology=before_topology,
+            before_memory=before_memory,
+        )
+
+        tail_evidence = _collect_phase_tail(
+            config=config,
+            providers=providers,
+            attempt_root=attempt_root,
+            static=static,
+            containment_before=containment_before,
+            kernel_cursor_before=kernel_cursor_before,
+            journal=journal,
+        )
+        if tail_evidence.refusal is not None:
+            raise tail_evidence.refusal
+        return _publish_completed_phase(
+            config=config,
+            providers=providers,
+            attempt_root=attempt_root,
+            journal=journal,
+            lifecycle=lifecycle,
+            execution_contract=execution_contract,
+            runtime_identity=runtime_identity,
+            static=static,
+            completed_cycles=completed_cycles,
+            consumed=consumed,
+            static_file_sha256=static_file_sha,
+            bench_identity_file_sha256=bench_identity_file_sha,
+            containment_before_sha256=containment_before_file_sha,
+            tail=tail_evidence,
+            kernel_cursor_before=kernel_cursor_before,
+            cycle_one_before_at=cycle_one_before_at,
+            effective_args_sha256=effective_args_sha256,
+            terminal=terminal,
+        )
+    except BenchRefusal as refusal:
+        return finish_failed(refusal)
+    except BaseException as unexpected:
+        return finish_failed(unexpected)
+    finally:
+        cleanup_error: BenchRefusal | None = None
+        for signum, previous in old_handlers.items():
+            try:
+                signal.signal(signum, previous)
+            except (OSError, ValueError):
+                cleanup_error = BenchRefusal("cleanup_incomplete")
+        try:
+            journal.close()
+        except (BenchRefusal, OSError, ValueError):
+            cleanup_error = BenchRefusal("journal_failure")
+        if cleanup_error is not None and terminal.path is None:
+            raise cleanup_error
