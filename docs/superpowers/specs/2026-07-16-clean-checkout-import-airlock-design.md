@@ -1,8 +1,8 @@
 # Clean-checkout import-provenance airlock — design
 
-Date: 2026-07-16
-Status: proposed for Claude gate; design and RED list only
-Branch: `feature/cuda-bench-driver` at parent `71b58bd`
+Date: 2026-07-16; lean amendment 2026-07-17
+Status: proposed for Claude gate; amended lean design and RED list only
+Branch: `feature/cuda-bench-driver` at parent `b669bad`
 Scope: gate integrity only; no CUDA phase, model, service, or runtime change
 
 ## Ruling and purpose
@@ -13,17 +13,24 @@ from a linked or detached worktree can therefore import a module that is absent
 from the audited commit but present in dirty main. That is the borrowed-green
 failure class: the checkout under review can pass with code it does not contain.
 
-This slice makes a **clean-checkout test gate** attest one narrow fact:
+This slice makes a **clean-checkout test gate** attest exactly this fact:
 
-> Every Maez-owned Python module used by the gate process or a Python descendant
-> launched through the inherited airlock interpreter contract came from a
-> tracked path in the checkout being audited, never another checkout.
+> Every Maez-owned module used by the gate process or an inherited-contract
+> Python descendant came from tracked code in the audited checkout; absolute
+> foreign-interpreter children and project-importing `-S` children are outside
+> this claim.
+
+That sentence is canonical. The implementation must place it verbatim
+in `AGENTS.md` beside the certifying command; the spec and the operator-facing
+instructions may not advertise different guarantees.
 
 It does not claim that the checkout is clean; the external gate still proves
 that with Git. It does not claim that tests are correct, that the full repository
 floor is healthy, or that hostile test code is sandboxed. It prevents accidental
-cross-checkout import borrowing through the normal repository subprocess paths
-and makes any detected provenance escape a typed, non-certifying refusal.
+cross-checkout import borrowing through the inherited interpreter path and makes
+any detected provenance escape a typed, non-certifying refusal. A deliberately
+constructed absolute-interpreter or `-S` bypass is neither contained nor
+certified.
 
 The user-approved boundary is launch-time isolation only. The shared venv,
 editable `.pth`, live daemon, model services, and owner-local configuration are
@@ -53,7 +60,8 @@ The design therefore uses a disposable child venv. This is not a permanent
 per-worktree environment: it is created for one gate invocation, contains no
 installed packages, and is removed before the command returns. Its purpose is
 to make the controlled interpreter itself become `sys.executable`, so normal
-children and grandchildren inherit the same checkout provenance.
+inherited-contract children and grandchildren inherit the same checkout
+provenance.
 
 ## Rejected alternatives
 
@@ -74,6 +82,20 @@ search locations can expand dynamically as paths change.
 Rejected as the final design. It is a useful first barrier but cannot support
 the Maez-wide gate-integrity claim while tests launch Python descendants.
 
+### Authenticate the inner stage with a nonce
+
+Rejected after design review. The inner stage performs work but cannot produce a
+certificate. Only the outer stage can certify, after marker, cleanup, and
+shared-`.pth` checks. A secret or single-use bootstrap protects an authority the
+inner does not possess.
+
+### Maintain a per-gate source profile and fixed-point AST closure
+
+Rejected as an adversarial-grade census for an accidental-borrowing threat. The
+runtime guard validates modules it actually observes. A fixed two-pattern
+tripwire covers the demonstrated hardcoded-child mistake without a profile,
+transitive target expansion, or future-gate file map.
+
 ### A durable venv per worktree
 
 Rejected as unnecessary operational state. Dependency drift, cleanup, and
@@ -85,10 +107,8 @@ management system.
 The implementation plan may touch only:
 
 - create `scripts/dev/worktree_test_airlock.py` — outer launcher, disposable
-  environment builder, provenance guard, and pytest entrypoint;
-- create `scripts/dev/worktree_airlock_profiles/lean_cuda.json` — the exact,
-  committed source-closure authority for this gate, containing normalized
-  tracked relative paths only;
+  environment builder, generated non-authoritative inner runner, provenance
+  guard, and pytest entrypoint;
 - extend `tests/test_worktree_airlock_imports.py` — the one existing worktree
   import authority, rather than creating a competing test surface;
 - modify `tests/test_cuda_bench_driver.py` — replace the two raw shared-venv
@@ -99,7 +119,8 @@ The implementation plan may touch only:
   remaining executable shared-venv literals with `sys.executable` so they inherit
   the airlock when run beneath it;
 - modify `AGENTS.md` — distinguish a local development run from a certifying
-  linked/detached-worktree gate and name the airlock command.
+  linked/detached-worktree gate, name the airlock command, and carry the
+  canonical claim and its two carve-outs verbatim.
 
 This slice does **not** modify `scripts/dev/bench_baseline.py` or its authority.
 The full-repo floor has been removed from the CUDA bench gate, and changing that
@@ -116,7 +137,7 @@ under review:
 ```text
 /home/rohit/maez/.venv/bin/python -I -S -B \
   <audited-checkout>/scripts/dev/worktree_test_airlock.py \
-  pytest lean_cuda -- <pytest-arguments...>
+  pytest -- <pytest-arguments...>
 ```
 
 There is no `--root`, `--python`, dependency-path, or alternate-site argument.
@@ -124,13 +145,6 @@ The audited checkout is derived from the launcher's resolved `__file__`; the
 current directory's `git rev-parse --show-toplevel` must identify that same
 checkout. Invocation from another repository or dirty main using a worktree's
 launcher refuses before pytest starts.
-
-`lean_cuda` selects the committed profile at the one canonical path above; it
-is a name, never a caller-provided manifest path. The profile has a closed
-schema, sorted unique relative paths, and no glob or prefix entries. Every entry
-must be a regular, non-symlinked file tracked at the audited HEAD. Adding a
-future gate profile or changing a closure is an reviewed source change with its
-own RED, not a command-line escape hatch.
 
 The outer launcher requires all of:
 
@@ -153,33 +167,51 @@ it cannot import a Maez project module before isolation exists.
 ## Two-stage execution
 
 The launcher has an outer construction stage and an inner pytest stage, but
-only one public command. The outer stage creates a random, owner-only bootstrap
-document inside the disposable directory. That document binds the resolved
-launcher, audited checkout, disposable interpreter, shared dependency root,
-violation directory, committed profile bytes/hash/count, and initial `.pth`
-snapshot. The outer stage then starts:
+only one certifying command. The outer stage creates a tiny `0600` inner runner
+inside the owner-only disposable directory, then starts:
 
 ```text
 <disposable-venv>/bin/python -I -B \
-  <audited-checkout>/scripts/dev/worktree_test_airlock.py \
-  pytest lean_cuda -- <validated-pytest-arguments...>
+  <disposable-root>/inner_runner.py \
+  -- <validated-pytest-arguments...>
 ```
 
-It passes the bootstrap path and nonce through private environment variables.
-The original outer invocation refuses if either variable was caller-supplied.
-The inner stage accepts them only when the document is a regular, owner-owned,
-single-linked `0600` file beneath the just-created owner-only temporary root;
-it verifies every binding before importing pytest and consumes the nonce. There
-is no public inner flag and no root, interpreter, dependency, or policy value is
-taken from the caller.
+Before importing project code, the generated runner duplicates its original
+stdout as a control descriptor, emits the fixed content-light start record
+`airlock_inner_noncertifying`, and redirects file descriptors 1 and 2 to a
+single-linked `0600` diagnostic file inside the disposable root. It then imports
+the already-guarded `scripts.dev.worktree_test_airlock._inner_main`, passes only
+the validated pytest argument vector, and writes a fixed completion record plus
+pytest status through the retained control descriptor after pytest returns. It
+carries no certificate writer or certificate token. A direct invocation can
+therefore expose only the two fixed non-certifying control records; test output
+never shares its stdout channel.
 
-The inner stage reopens the one canonical profile, revalidates its schema and
-tracked paths, and requires its bytes/hash/count to equal the bootstrap binding.
-A profile edit or replacement between stages refuses before pytest import.
+The outer launches the runner with that control descriptor captured, validates
+the exact start/completion grammar and agreement with the child exit status, and
+never relays those records to its own stdout. Missing, duplicated, malformed, or
+inconsistent control records are `airlock_child_setup_failed`. The private
+diagnostic bytes may be replayed only to outer stderr and are deleted with the
+disposable root; they are not certificate evidence. This is output provenance,
+not inner authentication.
 
-Consumption unlinks the bootstrap document and removes both private variables
-from the inner environment before pytest import. Neither the nonce nor an
-inner-mode trigger is inherited by tests or descendants.
+The inner function checks only execution correctness: the generated guard is
+installed; its embedded checkout matches the resolved launcher; `sys.executable`
+is the disposable interpreter; and the pytest config and violation directory
+are beneath the same disposable root. These are consistency checks only. The
+inner function owns no certification state and has no route to the outer
+certificate emitter.
+
+Only the outer control path can certify. Its stdout is reserved exclusively for
+the terminal certificate record; inner control and diagnostic output never
+enter it. It owns the pre-run `.pth` snapshot and
+the temporary root. After the inner exits, it first proves its owned process
+group empty, then checks the still-live violation directory and retains that
+result in outer memory. It removes the disposable environment, rechecks shared
+`.pth`, and only then may emit the certificate. Directly invoking the inner
+runner may run pytest and return `0`, but `_inner_main` never emits the reserved
+certificate. A clean pytest status without the outer certificate is
+non-certifying.
 
 The uniquely named `_maez_worktree_airlock_guard` module has its checkout and
 path policy embedded. The controlled `.pth` does **not** resolve it with a
@@ -195,11 +227,12 @@ This origin-bound load happens before CPython's later, single `sitecustomize`
 lookup, so the host's `/usr/lib/python3.14/sitecustomize.py` may coexist without
 shadowing the gate. A policy violation writes a marker and calls `os._exit(86)`.
 Later guard violations write a marker before raising. If test code catches that
-exception, the outer stage still sees the marker after the inner process exits.
+exception, the outer stage still sees the marker after its owned process group
+has cleared.
 Marker creation is exclusive inside the owner-only violation directory. If the
 guard cannot record the marker, it calls `os._exit(86)` instead of exposing a
 catchable exception whose evidence could be lost.
-The guard's bootstrap prelude uses only the already-loaded `sys`, `os`, and
+The guard's startup prelude uses only the already-loaded `sys`, `os`, and
 `builtins` modules. It canonicalizes path order before importing any other
 module: standard-library/extension roots, disposable site, audited checkout,
 then the exact shared dependency `purelib`.
@@ -208,8 +241,9 @@ then the exact shared dependency `purelib`.
 
 After the outer preflight, the launcher:
 
-1. snapshots the names, modes, sizes, and SHA-256 values of every `.pth` file in
-   the shared dependency `purelib`;
+1. snapshots into outer-owned memory the canonical sorted set of every `.pth`
+   name plus its `lstat` regular-file status, mode, size, and content SHA-256 in
+   the shared dependency `purelib`, before creating any temporary artifact;
 2. creates an owner-only temporary directory beneath `/tmp`;
 3. uses the standard library `venv` builder with `with_pip=False` and
    `system_site_packages=False` — no pip, package install, network, or shared
@@ -220,19 +254,24 @@ After the outer preflight, the launcher:
    generated guard's absolute path;
 5. writes that uniquely named guard module with the resolved checkout, allowed
    path roots, and Maez project-root names embedded;
-6. writes an empty, gate-owned pytest configuration and the private bootstrap
-   document used by the two-stage handoff;
+6. writes an empty, gate-owned pytest configuration and the non-authoritative
+   inner runner, with the runner's not-yet-created private diagnostic path
+   embedded;
 7. creates an owner-only, temp-scoped violation directory whose path is embedded
    in the generated guard; every process writes a content-light marker there
    before raising or terminating on a provenance violation;
 8. prepends the disposable `bin` directory to `PATH`, removes `PYTHONPATH`,
    `PYTHONHOME`, `PYTHONUSERBASE`, and `PYTHONSTARTUP`, sets
-   `PYTHONDONTWRITEBYTECODE=1`, and launches pytest with the disposable Python;
-9. checks the violation directory after pytest exits, so a child cannot catch an
+   `PYTHONDONTWRITEBYTECODE=1`, and launches the inner runner with the disposable
+   Python;
+9. proves the owned process group empty, then checks the still-live violation
+   directory and retains the result in outer memory, so a child cannot catch an
    exception and hide the gate breach from its parent;
 10. removes the temporary environment in an unconditional finalizer; then
-11. re-snapshots the shared `.pth` files and refuses if any byte, mode, name, or
-   size changed.
+11. re-snapshots the canonical shared `.pth` projection and refuses if any name,
+   file type, mode, size, or content hash changed; then
+12. emits a certificate only when pytest returned `0` and every integrity and
+   cleanup check passed.
 
 Adding the shared `purelib` as a path entry does not recursively process its
 `.pth` files. Only the disposable venv's controlled `.pth` is processed, and its
@@ -255,39 +294,53 @@ That inheritance has two explicit limits:
   not a shape the guard pretends to contain dynamically.
 
 Absolute interpreter literals and project-import descendants using `-S` are
-bypasses. They are forbidden in the executable source surface selected by a
-certifying gate. The committed `lean_cuda` profile is the authority for the
-initial closure: the airlock authority tests; CUDA migration, driver, and stub
-tests/modules; the ledger and subjective-duration subprocess suites changed by
-this slice; the project modules they import; and any literal helper those
-selected tests can transitively execute. It explicitly excludes the unrelated
-completion rail and the now-non-certifying `bench_baseline.py` floor helper and
-its tests; the lean-closure plan owns removal of the latter from the merge
-package. Each future scoped gate must add or amend a committed profile and RED.
+bypasses. The runtime guard does not claim to contain them.
 
-The profile is both an allowlist and a completeness claim. Every collected
-tracked test file and every tracked Maez module encountered by the meta-path
-dispatcher must be listed. Before executing a newly found Maez module, the
-dispatcher validates membership and scans its source. Every literal Python
-entry script referenced by an executable subprocess construction must also be
-listed. The scanner expands those literal targets to a fixed point and refuses
-an omitted transitive helper, even if that helper would otherwise be a valid
-tracked file in the audited checkout.
+## Fixed child-shape tripwire
 
-The scanner is AST-based for Python: it checks executable subprocess and
-exec/spawn call arguments, literal shell commands, and explicit environment
-mappings, not comments or unrelated prose. A listed literal shell entry helper
-is checked for a Python interpreter invocation before it can be accepted. The
-profile SHA-256 and total file count enter the evidence line. Dynamically
-synthesizing an executable path to evade that inventory is outside the
-accidental-borrowing threat model, not something the receipt claims to
-withstand.
+One test-only structural tripwire covers the demonstrated accidental house
+pattern without becoming a runtime source census. Its source set is fixed and
+enumerable from tracked files by these rules:
 
-The inner process is the outer launcher's only child and runs in an owned
-process group. On SIGINT or SIGTERM, the outer stage forwards the signal only to
-that owned group, waits boundedly for it to clear, and still performs the marker,
-shared-`.pth`, and temporary-directory finalizers. It never discovers or signals
-an ambient process.
+- `tests/test_cuda_*.py`;
+- `scripts/cuda_*.py`;
+- `scripts/dev/worktree_test_airlock.py`;
+- `tests/test_ledger_activation_v0.py`;
+- `tests/test_subjective_duration_meaningful_salience_seam.py`; and
+- `scripts/smoke_meaningful_salience_seam_migration.sh`.
+
+It recognizes exactly two executable shapes:
+
+1. a literal absolute shared-venv interpreter path whose basename is `python`,
+   `python3`, or a versioned `pythonX[.Y...]` alias, used as a child executable
+   or exported child interpreter; and
+2. a Python child using `-S` while importing a Maez module or executing a
+   tracked Maez script.
+
+The canonical outer launch is not a child construction and remains permitted.
+The airlock authority test itself is not in the tripwire target set because its
+control fixtures intentionally construct both forbidden shapes; those fixtures
+exercise the tripwire below its public scan boundary.
+
+This tripwire has no JSON profile, maintained file map, imported-module census,
+target expansion, fixed-point walk, or runtime discovery. It does not recurse
+from a listed source into another file. New files matching the fixed globs are
+scanned automatically; unrelated future gate files are not added one by one.
+Dynamically synthesized commands and sources outside this enumerable set remain
+outside the accidental-borrowing claim. Expanding this into a transitive closure
+is an explicit non-goal.
+
+Preflight Git subprocesses run synchronously and must be reaped before temporary
+construction. During the controlled pytest phase, the inner process is the
+outer launcher's only child and runs in an owned process group. On SIGINT or
+SIGTERM, the outer stage forwards the signal only to that owned group, waits
+boundedly for it to clear, and still performs the marker, shared-`.pth`, and
+temporary-directory finalizers. It never discovers or signals an ambient
+process. The same group-empty proof is mandatory after every normal or
+exceptional inner exit; a surviving member is
+`airlock_cleanup_incomplete`. The fixed terminal order is inner exit, group-
+empty proof, final marker scan, temporary cleanup, shared-`.pth` resnapshot, and
+only then possible certification.
 
 ## Path and import provenance guard
 
@@ -339,6 +392,13 @@ currently includes roots such as `core`, `daemon`, `skills`, `scripts`,
 `memory`, `tests`, `hardware`, `devices`, `tools`, `training`, `ui`, `cli`, and
 tracked top-level modules. No hand-maintained package list may drift behind the
 tree.
+
+“Maez-owned module” means a module whose top-level name or concrete tracked file
+belongs to that Git-derived set. The generated guard, generated inner runner,
+stdlib, frozen/builtin modules, and third-party dependencies are not Maez-owned;
+they have their own explicit origin rules. The airlock proves provenance, not
+Git cleanliness: the external detached-checkout ceremony must still prove the
+audited checkout is clean before and after the run.
 
 For every Maez-owned module, provenance validation covers all available planes:
 
@@ -400,11 +460,17 @@ The launcher disables pytest's cache provider and bytecode writes so the
 airlock itself leaves no repository artifact. Tests remain responsible for
 their own approved temporary files.
 
+The diagnostic no-execution modes `--collect-only`/`--co`, `--setup-only`, and
+`--setup-plan` remain usable and preserve pytest's status, but are explicitly
+non-certifying. More generally, the plugin must observe at least one test call
+phase before status `0` is certificate-eligible; a successful selection with no
+executed test emits no certificate.
+
 ## Outcomes and evidence
 
 Normal pytest exit statuses are preserved exactly. A red suite remains red; a
 collection error, interruption, or empty selection is never converted to a
-pass.
+pass. Only pytest status `0` is eligible for an outer certificate.
 
 Any airlock integrity failure dominates the pytest status and exits with the
 frozen non-pytest code `86`, printing one content-light refusal token to stderr.
@@ -412,12 +478,10 @@ The closed vocabulary is:
 
 - `airlock_invocation_invalid`
 - `airlock_checkout_mismatch`
-- `airlock_profile_invalid`
 - `airlock_environment_forbidden`
 - `airlock_dependency_unavailable`
 - `airlock_path_provenance_violation`
 - `airlock_import_provenance_violation`
-- `airlock_source_closure_violation`
 - `airlock_collection_escape`
 - `airlock_pytest_arguments_invalid`
 - `airlock_child_setup_failed`
@@ -430,11 +494,41 @@ If more than one failure is observed, the result is deterministic:
 vocabulary order above. Startup and descendant markers contain only a token and
 process-local ordinal; they never contain an imported path or test literal.
 
-On a provenance-clean start, stdout emits one content-light line carrying the
-checkout path, HEAD, interpreter version, the canonical shared-`.pth` snapshot
-SHA-256, the committed profile name/hash/file count, and
-`isolation=inherited_interpreter_contract`. It carries no `.pth` contents, test
-literals, environment values, or runtime data and writes no durable receipt.
+Only the outer control path may emit the reserved certificate prefix
+`MAEZ_AIRLOCK_CERTIFIED`. The generated runner contains no such literal or
+writer, `_inner_main` has no emitter call, and pytest output is isolated from
+outer stdout. The outer emits only after pytest
+returned `0`, the owned process group is empty, the pre-cleanup marker result is
+clean, temporary cleanup succeeded, and the post-cleanup shared-`.pth` snapshot
+exactly matches the pre-construction snapshot. Pytest statuses `1` through `5`
+propagate without a certificate; integrity failures return `86` without one.
+Certification is the pair `(canonical outer process exits 0, its final and only
+stdout record is a valid certificate)`. A matching string from any diagnostic
+or from a nonzero/direct-inner process is not certification. The certificate
+verifier captures stdout and stderr separately; a merged stream has no authority
+to certify. The certificate line carries only:
+
+- schema/version and `isolation=inherited_interpreter_contract`;
+- audited Git HEAD;
+- interpreter version and entry-binary SHA-256, never its path;
+- the canonical shared-`.pth` projection SHA-256; and
+- `pytest_args_sha256`, computed over the complete effective pytest argument
+  vector—including the airlock-added `-c`, rootdir, confcutdir, cache-disable,
+  and plugin arguments plus validated caller arguments—as compact UTF-8 JSON
+  (`ensure_ascii=False`, separators `,` and `:`).
+
+It contains no unhashed checkout, interpreter, or source path; no unhashed
+pytest argument or environment value; and no runtime-content literal. It writes
+no durable receipt. The generated inner-runner bytes have no certificate prefix
+or writer, and `_inner_main` never calls the outer emitter. Its fixed
+non-certifying start/completion records and absence of the outer certificate make
+a direct inner invocation non-certifying even when pytest returns `0`.
+
+The before/after projection equality, combined with a source-proven absence of
+any shared-venv write path, proves that the airlock did not mutate the shared
+`.pth` set. It does not claim to detect an adversarial external process that
+mutates and restores those files between snapshots; that is outside the stated
+accidental-borrowing threat model.
 
 ## Behavioral RED list
 
@@ -449,140 +543,127 @@ claims; those tests launch real local interpreters against temporary fixtures.
    invocation using the same base interpreter cannot resolve it. The already-
    observed real shared-venv path is retained as the source-level defect witness,
    but the RED never mutates or relies on dirty main.
-2. Missing each of `-I`, `-S`, and `-B` independently refuses before pytest
-   import.
-3. A hostile `PYTHONPATH`, user site, and hostile current directory contribute
-   no path or module to the airlocked process.
-4. The launcher derives the checkout from its own resolved file; a cwd whose Git
-   toplevel differs refuses, and there is no root-override argument. A hostile
-   `PATH` containing a fake `git` executable has no effect on discovery.
-5. A launcher symlink resolving to another checkout cannot make the lexical
-   caller directory authoritative.
-6. Pytest remains importable from the dependency `purelib`, while `site` was
-   never imported by the outer shared interpreter.
-7. Registered worktrees are enumerated from Git; the active checkout is unique,
-   and another registered or nested checkout never becomes allowed merely by
-   residing lexically beneath the active root.
-8. The `lean_cuda` profile is loaded only from its canonical committed path;
-   malformed, unsorted, duplicate, absolute, symlinked, untracked, or missing
-   entries refuse. A caller cannot supply a manifest path. Its canonical bytes
-   rehash to the profile hash later printed by the airlock. Replacing the
-   profile between outer binding and inner startup refuses before pytest.
+2. Missing `-I`, `-S`, or `-B` independently refuses before inner construction;
+   with all three present, pytest remains importable from dependency `purelib`
+   while the outer shared interpreter never imports `site` or a Maez module.
+3. Ambient `PYTHONPATH`, user site, a foreign cwd, and a fake `git` earlier on
+   `PATH` cannot affect discovery or imports; Git is invoked only by its absolute
+   host path with the airlock environment.
+4. The checkout comes from the resolved launcher and must equal cwd's Git
+   toplevel. A launcher symlink, another registered worktree, or a nested Git
+   checkout cannot become authoritative through lexical containment.
 
 ### B. Controlled site and shared-venv immutability
 
-9. The disposable environment is created without pip and contains exactly the
-   controlled `.pth` plus `_maez_worktree_airlock_guard.py` as gate-authored
-   site files. The `.pth` has two plain path entries and exactly one executable
-   origin-loader line. On this host, normal and `-I` child startup load the guard
-   from the disposable site directory even though the system
-`sitecustomize.py` also exists; its resolved module file is asserted. A
-hostile cwd containing a same-named decoy never executes that decoy. A
-missing, unreadable, or syntactically invalid generated guard exits `86`
-   before descendant code can run. A hostile cwd containing a stdlib-named
-   decoy also cannot intercept the guard's post-bootstrap imports.
-   A caller-supplied private bootstrap variable refuses; an inner handoff with a
-   wrong nonce, path, owner, mode, link count, or bound checkout refuses before
-   pytest import. After a valid handoff, neither private variable nor the
-   bootstrap file reaches pytest or a descendant.
-10. A sentinel executable line in a nested dependency `.pth` never runs; a plain
+5. The disposable environment has no pip or system-site inheritance. Beyond the
+   standard-library `venv` scaffold, its only gate-authored control files are the
+   controlled `.pth`, origin-bound guard, empty pytest config, inner runner, and
+   marker directory; the runner creates only its private diagnostic file.
+6. Normal and `-I` startup load the exact generated guard even though the host
+   system `sitecustomize.py` and hostile cwd decoys exist. A missing, unreadable,
+   or invalid guard exits `86` before user code; a stdlib-named cwd decoy cannot
+   intercept the guard's post-startup imports.
+7. A sentinel executable line in a nested dependency `.pth` never runs; a plain
    dependency package remains importable.
-11. The actual shared editable `.pth` file set has identical names, modes, sizes,
-   and hashes before and after a passing gate.
-12. The same immutability proof holds after a red suite, collection refusal,
-    SIGINT, and a child setup failure.
-13. The airlock leaves no disposable-venv directory after normal success,
-    ordinary pytest failure, or SIGINT; cleanup failure yields
-    `airlock_cleanup_incomplete`.
-14. Source and behavior prove no pip/network/systemctl/service/model command can
-    be constructed by the airlock. The outer stage imports no Maez module.
+8. The outer captures the canonical shared `.pth` projection in memory before
+   temporary construction and again after cleanup. The complete name set,
+   `lstat` regularity, modes, sizes, and content hashes are equal for a pass, red
+   suite, collection refusal, SIGINT, SIGTERM, and inner setup failure; source
+   inspection proves no shared-venv write path. The test makes no transient
+   external-mutation claim.
+9. The disposable root and owned process group are absent after success,
+   ordinary pytest failure, SIGINT, SIGTERM, and setup refusal. Cleanup failure
+   yields `airlock_cleanup_incomplete`.
+10. Source and behavior prove the airlock can construct no pip, network,
+    systemctl, service, model, or shared-venv write command.
 
 ### C. Parent import provenance
 
-15. `core.__path__`, `scripts.__path__`, and every other loaded Maez namespace
-    contain only audited-checkout locations.
-16. A foreign concrete module already seeded in `sys.modules` refuses before
-    collection.
-17. A mixed namespace `__path__` or `submodule_search_locations` refuses even
-    when `__file__ is None`.
-18. Removing a foreign path after importing its module does not repair the gate;
-    the retained origin still refuses.
-19. A path lexically beneath the checkout but symlinked outside it refuses.
-20. An untracked Python file and a module inside a nested registered/unregistered
-    Git checkout both refuse despite lexical containment beneath the active root.
-21. Late `sys.path.insert`, `append`, `extend`, slice assignment, and `+=` of a
-    foreign checkout each create a sticky refusal even if caught by test code.
-22. `site.addsitedir(shared_purelib)` cannot reopen the editable `.pth` side
-    door and leaves a sticky refusal.
-23. A current-checkout module and a third-party dependency both import
-    successfully from their distinct allowed roots. The exact shared `purelib`
-    exception does not permit any Maez-owned module to resolve from dirty main.
-24. The delegating meta-path dispatcher rejects a foreign Maez spec before its
-    loader executes, while a failing pytest assertion still uses pytest's normal
-    assertion-rewriting loader and retains rewritten diagnostics.
-25. A Maez module omitted from the committed profile refuses before its loader
-    executes. A listed parent that names an unlisted literal Python helper also
-    refuses before that helper can run; adding both files to a temporary valid
-    profile makes the same fixture pass.
-26. A child records a provenance violation, catches the local exception, and
-    exits zero; the outer gate observes the temp-scoped marker and still exits
-    `86`. If marker creation is made unavailable, the violating child exits
-    `86` directly and the outer gate still cannot certify.
+11. Every loaded Maez module plane—`__file__`, spec origin, namespace path, and
+    submodule search locations—contains only tracked audited-checkout code.
+12. A foreign concrete module seeded in `sys.modules`, a mixed namespace, or a
+    retained foreign origin after path removal refuses before certification.
+13. A symlinked-out path, untracked module, and nested registered or unregistered
+    Git checkout all refuse despite lexical containment.
+14. Late `sys.path` append/insert/extend/slice/`+=` mutation and
+    `site.addsitedir(shared_purelib)` each create a sticky refusal even if caught
+    locally.
+15. A current-checkout Maez module and a third-party dependency both import from
+    their distinct allowed roots; exact `purelib` permission never permits a
+    Maez-owned module from dirty main.
+16. The delegating meta-path dispatcher rejects a foreign Maez spec before its
+    loader executes while preserving pytest's assertion-rewriting loader and
+    diagnostics.
+17. A child catches its local provenance exception and exits zero; the outer
+    marker still forces exit `86`. If marker creation fails, the child exits `86`
+    directly and the outer cannot certify.
 
 ### D. Descendant provenance
 
-27. A control child spawned from a parent-only `-I -S -B` process demonstrates
+18. A control child spawned from a parent-only `-I -S -B` process demonstrates
     that isolation flags do not inherit and the shared `.pth` reappears.
-28. Under the implemented airlock, `sys.executable -c`, `python -c`, and
+19. Under the airlock, `sys.executable -c`, inherited `python -c`, and inherited
     `python3 -c` children all report the disposable interpreter, audited
-    checkout paths only, and no foreign Maez module. Normal `-c` startup replaces
-    `sys.path[0] == ""` with the audited cwd; a hostile cwd is removed.
-29. A child that launches a grandchild preserves the same provenance, and a
+    checkout paths only, and no foreign Maez module. Normal `-c` startup safely
+    normalizes an empty path entry; `env={}` is certifying only with the absolute
+    disposable `sys.executable`.
+20. A child that launches a grandchild preserves the same provenance, and a
     grandchild violation reaches the outer marker check.
-30. Children launched with no flags or `-I` remain provenance-clean. With
-    `env={}`, the absolute disposable `sys.executable` remains clean; bare
-    `python`/`python3` without the authored `PATH` is explicitly non-certifying.
-31. A structural source-closure audit refuses a project-import child using `-S`
-    or an absolute non-disposable interpreter. The design makes no dynamic
-    containment claim for those deliberate bypass shapes.
-32. The two B7 signal integration tests use `sys.executable`, resolve both
+21. The two B7 signal integration tests use `sys.executable`, resolve both
     `scripts.cuda_bench_driver` and their test helper beneath the worktree, and
     preserve their existing SIGINT/SIGTERM finalization and zero-residue claims.
-33. The currently known executable shared-interpreter literals in the ledger,
-    subjective-duration, and B7 tests are absent. Each certifying gate's selected
-    Python source closure contains no absolute-interpreter or project-import
-    `-S` subprocess construction; the closure expands over loaded tracked
-    modules and literal Python entry scripts before certification. Future
-    children must use the airlocked `sys.executable` or inherited PATH.
+    The ledger and subjective-duration subprocess cases also inherit
+    `sys.executable` and preserve their behavior.
+22. The fixed enumerable source set is scanned for exactly the two forbidden
+    child shapes. Fixtures prove absolute shared-venv `python`, `python3`, and
+    the live versioned `python3.12` alias are one caught category; bare inherited
+    `python3` is allowed; and the canonical outer command is not misclassified
+    as a child. A fixture outside the enumerated set is deliberately not claimed
+    or opened. Source and tests prove there is no profile, transitive expansion,
+    imported-module census, maintained map, or runtime discovery.
 
 ### E. Pytest and certification behavior
 
-34. Hostile `PYTEST_ADDOPTS` that selects fewer tests and `PYTEST_PLUGINS` that
-    loads a foreign plugin each refuse before collection.
-35. An explicit `-p`, `--pyargs`, root/confcut/config override, or `-o`
-    argument refuses; ordinary node IDs, `-k`, `-q`, and collection-only mode
-    remain available. A hostile repository config containing `addopts=-p` is
-    ignored in favor of the controlled empty config.
-36. A collected test or conftest outside the audited checkout refuses even if
-    pytest would otherwise run it successfully.
-37. An approved plugin loads only after its identity and origin are verified;
-    an installed but unapproved entry-point plugin remains unloaded.
-38. Pytest statuses `0` through `5` propagate unchanged when provenance is
-    clean; a sticky provenance violation overrides any of them with exit `86`.
-39. The airlock's own evidence line for a passing detached-worktree integration
-    run names the worktree HEAD and reports no `/home/rohit/maez` **project**
-    path unless that path is itself the audited checkout. Test output and
-    dependency diagnostics are not falsely claimed to omit the shared venv path.
-40. The existing direct-runner instructions in `AGENTS.md` remain explicitly
-    local-development evidence; every linked/detached certifying recipe names
-    the airlock.
+23. Ambient `PYTEST_ADDOPTS`/`PYTEST_PLUGINS`, explicit plugin/config/root/path
+    overrides, and hostile repository config cannot alter the gate. Ordinary
+    node IDs, `-k`, and `-q` remain available. Collection-only, setup-only, and
+    setup-plan modes preserve their pytest status but emit no certificate; a
+    status-`0` selection with zero observed test call phases is likewise
+    non-certifying.
+24. External collection/conftest and unapproved plugins refuse. Approved plugins
+    have allowed origins; clean pytest statuses `0` through `5` propagate, while
+    integrity failure dominates with `86` and only status `0` may certify.
+25. A passing test that prints a syntactically valid
+    `MAEZ_AIRLOCK_CERTIFIED` line to both stdout and stderr has those bytes
+    confined to the private diagnostic stream and cannot mint evidence. Direct
+    invocation of the generated inner runner may return `0` but exposes only its
+    fixed non-certifying start/completion records. Structural proof shows the
+    generated-runner bytes contain no certificate literal/writer and
+    `_inner_main` has no emitter call; only outer stdout can carry a certificate.
+    Missing or forged completion records refuse. Behavioral ordering proves the
+    outer emits only after pytest `0`, owned-group absence, retained clean marker
+    state, cleanup, and equal post-`.pth` snapshot. Statuses `1` through `5` and
+    integrity status `86` emit no certificate; interruption of the outer by
+    SIGINT or SIGTERM also completes the finalizers and emits none. Certification
+    requires separately captured outer exit `0` plus exactly one final stdout
+    record; a merged stdout/stderr stream cannot certify. That record
+    contains exactly HEAD, interpreter version/hash, `.pth` snapshot hash,
+    complete effective-pytest-argument hash, schema, and isolation label—no
+    unhashed checkout, interpreter, or source path; no unhashed pytest argument
+    or environment value; and no runtime-content literal. A caller-only argument
+    hash is demonstrably different.
+26. `AGENTS.md` labels direct shared-venv commands local-development-only, names
+    the certifying airlock command, and contains the canonical sentence and both
+    carve-outs verbatim. It also states that external Git cleanliness is still
+    required.
 
 ## Gate for this slice
 
 Claude's clean-checkout gate for the later implementation must require:
 
-1. the entire RED list has a witnessed pre-implementation failure or a named
-   source-level defect witness, followed by GREEN under the airlock;
+1. every numbered RED has a witnessed pre-implementation failure, followed by
+   GREEN under the airlock; source inspection may prove a structural subclaim
+   but may not substitute for the numbered RED's failing test;
 2. `tests/test_worktree_airlock_imports.py` plus the three affected subprocess
    suites pass through the real airlock entrypoint;
 3. ruff is clean on every touched Python file and `git diff --check` is clean;
@@ -598,9 +679,12 @@ The full repository floor, Chroma leak, worktree scanner, and Python 3.14.4 vs
 
 ## Predicted effect
 
-After implementation, a test gate launched from a detached or linked worktree
-cannot pass by importing a Maez module that exists only in dirty main through
-the shared editable-install `.pth`. The same holds for normal Python children
-and grandchildren. A provenance escape becomes a typed refusal, never borrowed
-green. Direct local development commands still work, but they are no longer
-accepted as clean-checkout certification.
+After implementation, every Maez-owned module used by a detached- or linked-
+worktree gate process or an inherited-contract Python descendant will come from
+tracked code in the audited checkout. Absolute foreign-interpreter children and
+project-importing `-S` children remain explicitly outside that claim. A detected
+provenance escape becomes a typed refusal, never borrowed green. A directly
+invoked inner runner remains non-certifying even when its tests pass; only the
+outer path can certify after marker, cleanup, and shared-`.pth` checks. Direct
+local development commands still work, but they are not clean-checkout
+certification.
