@@ -8885,7 +8885,7 @@ class TestB7RemainingSpecGate:
         )
         process = subprocess.Popen(
             [
-                "/home/rohit/maez/.venv/bin/python",
+                sys.executable,
                 "-B",
                 "-c",
                 code,
@@ -8952,7 +8952,7 @@ class TestB7RemainingSpecGate:
         )
         process = subprocess.Popen(
             [
-                "/home/rohit/maez/.venv/bin/python",
+                sys.executable,
                 "-B",
                 "-c",
                 code,

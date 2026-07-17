@@ -4,6 +4,7 @@ import json
 import os
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import closing
@@ -454,7 +455,7 @@ class SubjectiveDurationMeaningfulSalienceSeamTests(unittest.TestCase):
             result = subprocess.run(
                 [os.fspath(SMOKE_SCRIPT), os.fspath(source_db), os.fspath(scratch_db)],
                 check=False,
-                env={**os.environ, "PYTHON": "/home/rohit/maez/.venv/bin/python"},
+                env={**os.environ, "PYTHON": sys.executable},
                 text=True,
                 capture_output=True,
             )
