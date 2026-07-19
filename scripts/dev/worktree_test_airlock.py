@@ -2,8 +2,8 @@
 """Lean clean-checkout test airlock.
 
 This module's outer stage deliberately imports only the standard library.  The
-disposable no-pip interpreter is now built on the immutable invocation,
-checkout, and child-shape preflight. Runtime import provenance remains a subsequent task.
+disposable no-pip interpreter now carries a generated, checkout-bound path and
+import-provenance guard. Certification remains a subsequent task.
 """
 
 from __future__ import annotations
@@ -335,12 +335,616 @@ def _query_venv_purelib(python: Path) -> Path:
     return candidate
 
 
-def _guard_source() -> str:
-    return (
-        '"""Generated exact-origin airlock guard."""\n'
-        "AIRLOCK_LOAD_COUNT = globals().get('AIRLOCK_LOAD_COUNT', 0) + 1\n"
-        "AIRLOCK_READY = True\n"
+def _guard_source(
+    layout: AirlockLayout,
+    inventory: GitInventory,
+    *,
+    disposable_purelib: Path,
+    violation_dir: Path,
+    guard_path: Path | None = None,
+    runner_path: Path | None = None,
+) -> str:
+    """Render the origin-bound runtime provenance guard."""
+
+    checkout = layout.checkout.resolve()
+    shared_purelib = layout.shared_purelib.resolve()
+    disposable_purelib = disposable_purelib.resolve()
+    guard_path = (guard_path or violation_dir.parent / "guard.py").resolve()
+    runner_path = (runner_path or violation_dir.parent / "inner_runner.py").resolve()
+    tracked: list[str] = []
+    tracked_dirs: set[str] = {os.fspath(checkout)}
+    for relative in inventory.tracked_python_files:
+        if relative.is_absolute() or ".." in relative.parts:
+            raise AirlockRefusal("airlock_child_setup_failed")
+        absolute = checkout / relative
+        tracked.append(os.fspath(absolute))
+        for parent in absolute.parents:
+            try:
+                parent.relative_to(checkout)
+            except ValueError:
+                break
+            tracked_dirs.add(os.fspath(parent))
+    registered = tuple(
+        sorted(
+            {
+                os.fspath(path.resolve())
+                for path in inventory.registered_worktrees
+                if path.resolve() != checkout
+            }
+        )
     )
+    base_prefix = Path(sys.base_prefix).resolve()
+    version = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    stdlib_roots = tuple(
+        sorted(
+            {
+                os.fspath((base_prefix / "lib" / version).resolve()),
+                os.fspath((base_prefix / "lib" / f"{version.replace('.', '')}.zip").resolve()),
+                os.fspath((base_prefix / "lib" / version / "lib-dynload").resolve()),
+            }
+        )
+    )
+    header = (
+        '"""Generated exact-origin airlock guard."""\n'
+        f"_CHECKOUT = {os.fspath(checkout)!r}\n"
+        f"_SHARED_PURELIB = {os.fspath(shared_purelib)!r}\n"
+        f"_DISPOSABLE_PURELIB = {os.fspath(disposable_purelib)!r}\n"
+        f"_VIOLATION_DIR = {os.fspath(violation_dir.resolve())!r}\n"
+        f"_GUARD_PATH = {os.fspath(guard_path)!r}\n"
+        f"_RUNNER_PATH = {os.fspath(runner_path)!r}\n"
+        f"_TRACKED_FILES = frozenset({tuple(sorted(tracked))!r})\n"
+        f"_TRACKED_DIRS = frozenset({tuple(sorted(tracked_dirs))!r})\n"
+        f"_MAEZ_ROOTS = frozenset({tuple(sorted(inventory.maez_roots))!r})\n"
+        f"_OTHER_WORKTREES = {registered!r}\n"
+        f"_STDLIB_ROOTS = {stdlib_roots!r}\n"
+    )
+    body = r'''
+import os as _os
+import sys as _sys
+
+AIRLOCK_LOAD_COUNT = globals().get("AIRLOCK_LOAD_COUNT", 0) + 1
+_MARKER_ORDINAL = 0
+_SELF = _sys.modules.get(__name__)
+_MAIN = _sys.modules.get("__main__")
+
+
+class AirlockGuardViolation(RuntimeError):
+    pass
+
+
+def _inside(path, root):
+    try:
+        return _os.path.commonpath((path, root)) == root
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def _canonical(raw):
+    if not isinstance(raw, (str, bytes, _os.PathLike)):
+        _violate("airlock_path_provenance_violation")
+    try:
+        return _os.path.realpath(_os.path.abspath(_os.fspath(raw)))
+    except (OSError, TypeError, ValueError):
+        _violate("airlock_path_provenance_violation")
+
+
+def _has_nested_git(path):
+    cursor = path if _os.path.isdir(path) else _os.path.dirname(path)
+    while _inside(cursor, _CHECKOUT) and cursor != _CHECKOUT:
+        if _os.path.lexists(_os.path.join(cursor, ".git")):
+            return True
+        parent = _os.path.dirname(cursor)
+        if parent == cursor:
+            break
+        cursor = parent
+    return False
+
+
+def _record_marker(token):
+    global _MARKER_ORDINAL
+    _MARKER_ORDINAL += 1
+    ordinal = _MARKER_ORDINAL
+    name = f"{ordinal:08d}-{token}"
+    flags = _os.O_WRONLY | _os.O_CREAT | _os.O_EXCL
+    if hasattr(_os, "O_CLOEXEC"):
+        flags |= _os.O_CLOEXEC
+    if hasattr(_os, "O_NOFOLLOW"):
+        flags |= _os.O_NOFOLLOW
+    descriptor = None
+    try:
+        descriptor = _os.open(_os.path.join(_VIOLATION_DIR, name), flags, 0o600)
+        _os.fchmod(descriptor, 0o600)
+        payload = f"{ordinal}:{token}\n".encode("ascii")
+        if _os.write(descriptor, payload) != len(payload):
+            raise OSError("short marker write")
+        info = _os.fstat(descriptor)
+        if (
+            (info.st_mode & 0o170000) != 0o100000
+            or info.st_nlink != 1
+            or (info.st_mode & 0o777) != 0o600
+        ):
+            raise OSError("invalid marker")
+    except BaseException:
+        if descriptor is not None:
+            try:
+                _os.close(descriptor)
+            except OSError:
+                pass
+        _os._exit(86)
+    else:
+        _os.close(descriptor)
+
+
+def _violate(token):
+    _record_marker(token)
+    raise AirlockGuardViolation(token)
+
+
+def _admit_path(raw):
+    path = _canonical(raw)
+    if path == _DISPOSABLE_PURELIB:
+        return 1, path
+    if path == _CHECKOUT or path in _TRACKED_DIRS:
+        if _has_nested_git(path):
+            _violate("airlock_path_provenance_violation")
+        if any(path == root or _inside(path, root) for root in _OTHER_WORKTREES):
+            _violate("airlock_path_provenance_violation")
+        return 2, path
+    if path == _SHARED_PURELIB:
+        return 3, path
+    if path in _STDLIB_ROOTS:
+        return 0, path
+    _violate("airlock_path_provenance_violation")
+
+
+def _path_class(raw):
+    return _admit_path(raw)[0]
+
+
+def _canonical_path_sequence(values):
+    admitted = []
+    seen = set()
+    for raw in values:
+        path_class, path = _admit_path(raw)
+        if path not in seen:
+            admitted.append((path_class, path))
+            seen.add(path)
+    admitted.sort(key=lambda item: item[0])
+    return [path for _path_class_value, path in admitted]
+
+
+def _normalize_initial_path():
+    values = []
+    for raw in tuple(_sys.path):
+        if raw == "":
+            cwd = _canonical(_os.getcwd())
+            if cwd != _CHECKOUT and cwd not in _TRACKED_DIRS:
+                continue
+            raw = cwd
+        values.append(raw)
+    return _canonical_path_sequence(values)
+
+
+class _ValidatingPath(list):
+    def _replace(self, candidate):
+        canonical = _canonical_path_sequence(candidate)
+        list.__setitem__(self, slice(None), canonical)
+
+    def append(self, value):
+        candidate = list(self)
+        candidate.append(value)
+        self._replace(candidate)
+
+    def insert(self, index, value):
+        candidate = list(self)
+        candidate.insert(index, value)
+        self._replace(candidate)
+
+    def extend(self, values):
+        candidate = list(self)
+        candidate.extend(values)
+        self._replace(candidate)
+
+    def __setitem__(self, key, value):
+        candidate = list(self)
+        candidate[key] = value
+        self._replace(candidate)
+
+    def __iadd__(self, values):
+        candidate = list(self)
+        candidate += list(values)
+        self._replace(candidate)
+        return self
+
+    def reverse(self):
+        self._replace(self)
+
+    def sort(self, *args, **kwargs):
+        self._replace(self)
+
+
+_BASELINE_PATH = tuple(_normalize_initial_path())
+_sys.path = _ValidatingPath(_BASELINE_PATH)
+
+
+import site as _site
+
+
+_ORIGINAL_ADDSITEDIR = _site.addsitedir
+
+
+def _guarded_addsitedir(sitedir, *args, **kwargs):
+    path = _canonical(sitedir)
+    if path != _DISPOSABLE_PURELIB:
+        _violate("airlock_path_provenance_violation")
+    return _ORIGINAL_ADDSITEDIR(path, *args, **kwargs)
+
+
+_site.addsitedir = _guarded_addsitedir
+
+
+def _expected_files(fullname):
+    candidates = []
+    for base in _TRACKED_DIRS:
+        stem = _os.path.join(base, *fullname.split("."))
+        candidates.extend((stem + ".py", _os.path.join(stem, "__init__.py")))
+    return frozenset(candidate for candidate in candidates if candidate in _TRACKED_FILES)
+
+
+def _expected_directories(fullname):
+    return frozenset(
+        candidate
+        for base in _TRACKED_DIRS
+        for candidate in (_os.path.join(base, *fullname.split(".")),)
+        if candidate in _TRACKED_DIRS
+    )
+
+
+def _active_alias_exists(fullname):
+    active_bases = tuple(
+        path
+        for path in _sys.path
+        if isinstance(path, str) and (path == _CHECKOUT or path in _TRACKED_DIRS)
+    )
+    for base in active_bases:
+        stem = _os.path.join(base, *fullname.split("."))
+        if stem + ".py" in _TRACKED_FILES:
+            return True
+        if _os.path.join(stem, "__init__.py") in _TRACKED_FILES:
+            return True
+        if stem in _TRACKED_DIRS:
+            return True
+    return False
+
+
+def _module_plane_values(module=None, spec=None):
+    values = []
+
+    def append_locations(locations):
+        try:
+            values.extend(tuple(locations))
+        except TypeError:
+            _violate("airlock_import_provenance_violation")
+
+    if module is not None:
+        file_value = getattr(module, "__file__", None)
+        if file_value is not None:
+            values.append(file_value)
+    if spec is not None:
+        origin = getattr(spec, "origin", None)
+        if origin is not None:
+            values.append(origin)
+        locations = getattr(spec, "submodule_search_locations", None)
+        if locations is not None:
+            append_locations(locations)
+    if module is not None:
+        locations = getattr(module, "__path__", None)
+        if locations is not None:
+            append_locations(locations)
+    return tuple(values)
+
+
+def _is_stdlib_origin(value):
+    if value in {"built-in", "frozen"}:
+        return True
+    if not isinstance(value, str) or not _os.path.isabs(value):
+        return False
+    resolved = _os.path.realpath(value)
+    return any(resolved == root or _inside(resolved, root) for root in _STDLIB_ROOTS)
+
+
+def _module_is_owned(name, module=None, spec=None):
+    values = _module_plane_values(module=module, spec=spec)
+    for value in values:
+        if (
+            isinstance(value, str)
+            and value not in {"built-in", "frozen"}
+            and _os.path.isabs(value)
+        ):
+            lexical = _os.path.abspath(value)
+            if lexical in _TRACKED_FILES or _inside(lexical, _CHECKOUT):
+                return True
+    if values and all(_is_stdlib_origin(value) for value in values):
+        return False
+    if name.split(".", 1)[0] in _MAEZ_ROOTS:
+        return True
+    if _active_alias_exists(name):
+        return True
+    return False
+
+
+def _is_internal_airlock_module(name, module):
+    if (
+        name == "_maez_worktree_airlock_guard"
+        and module is _SELF
+        and getattr(module, "__file__", None) == _GUARD_PATH
+        and getattr(module, "__spec__", None) is None
+    ):
+        return True
+    return (
+        name == "__main__"
+        and module is _MAIN
+        and getattr(module, "__file__", None) == _RUNNER_PATH
+        and getattr(module, "__spec__", None) is None
+    )
+
+
+def _validate_concrete(fullname, raw):
+    if not isinstance(raw, str) or raw in {"built-in", "frozen"}:
+        _violate("airlock_import_provenance_violation")
+    lexical = _os.path.abspath(raw)
+    resolved = _canonical(raw)
+    if lexical != resolved or _has_nested_git(lexical):
+        _violate("airlock_import_provenance_violation")
+    try:
+        info = _os.lstat(lexical)
+    except OSError:
+        _violate("airlock_import_provenance_violation")
+    if (info.st_mode & 0o170000) != 0o100000:
+        _violate("airlock_import_provenance_violation")
+    if any(resolved == root or _inside(resolved, root) for root in _OTHER_WORKTREES):
+        _violate("airlock_import_provenance_violation")
+    expected = _expected_files(fullname)
+    if lexical not in _TRACKED_FILES or lexical not in expected:
+        _violate("airlock_import_provenance_violation")
+    return lexical
+
+
+def _validate_locations(fullname, values):
+    try:
+        locations = tuple(values)
+    except TypeError:
+        _violate("airlock_import_provenance_violation")
+    expected = _expected_directories(fullname)
+    if not locations:
+        _violate("airlock_import_provenance_violation")
+    for raw in locations:
+        if not isinstance(raw, str):
+            _violate("airlock_import_provenance_violation")
+        lexical = _os.path.abspath(raw)
+        resolved = _canonical(raw)
+        if (
+            lexical != resolved
+            or lexical not in expected
+            or lexical not in _TRACKED_DIRS
+            or _has_nested_git(lexical)
+            or not _os.path.isdir(lexical)
+        ):
+            _violate("airlock_import_provenance_violation")
+    return frozenset(_os.path.abspath(raw) for raw in locations)
+
+
+def _validate_planes(
+    fullname,
+    file_value,
+    spec_origin,
+    module_path,
+    search_locations,
+    *,
+    spec_only=False,
+):
+    if not spec_only:
+        has_concrete = file_value is not None or spec_origin is not None
+        if (file_value is None) != (spec_origin is None):
+            _violate("airlock_import_provenance_violation")
+        if has_concrete:
+            if (module_path is None) != (search_locations is None):
+                _violate("airlock_import_provenance_violation")
+        elif module_path is None or search_locations is None:
+            _violate("airlock_import_provenance_violation")
+    concrete = []
+    if file_value is not None:
+        concrete.append(_validate_concrete(fullname, file_value))
+    if spec_origin is not None:
+        concrete.append(_validate_concrete(fullname, spec_origin))
+    if concrete and len(set(concrete)) != 1:
+        _violate("airlock_import_provenance_violation")
+    location_sets = []
+    if module_path is not None:
+        location_sets.append(_validate_locations(fullname, module_path))
+    if search_locations is not None:
+        location_sets.append(_validate_locations(fullname, search_locations))
+    if location_sets and len(set(location_sets)) != 1:
+        _violate("airlock_import_provenance_violation")
+    if not concrete and not location_sets:
+        _violate("airlock_import_provenance_violation")
+    if concrete:
+        concrete_path = concrete[0]
+        is_package = _os.path.basename(concrete_path) == "__init__.py"
+        if not is_package and location_sets:
+            _violate("airlock_import_provenance_violation")
+        if is_package:
+            expected_locations = frozenset((_os.path.dirname(concrete_path),))
+            required_count = 1 if spec_only else 2
+            if (
+                len(location_sets) != required_count
+                or any(locations != expected_locations for locations in location_sets)
+            ):
+                _violate("airlock_import_provenance_violation")
+
+
+def validate_spec(fullname, spec):
+    if not _module_is_owned(fullname, spec=spec):
+        return spec
+    _validate_planes(
+        fullname,
+        None,
+        getattr(spec, "origin", None),
+        None,
+        getattr(spec, "submodule_search_locations", None),
+        spec_only=True,
+    )
+    return spec
+
+
+def audit_loaded_modules():
+    for name, module in tuple(_sys.modules.items()):
+        if module is None:
+            continue
+        if _is_internal_airlock_module(name, module):
+            continue
+        spec = getattr(module, "__spec__", None)
+        if not _module_is_owned(name, module=module, spec=spec):
+            continue
+        _validate_planes(
+            name,
+            getattr(module, "__file__", None),
+            getattr(spec, "origin", None) if spec is not None else None,
+            getattr(module, "__path__", None),
+            getattr(spec, "submodule_search_locations", None) if spec is not None else None,
+        )
+
+
+class _DelegatingDispatcher:
+    def __init__(self):
+        self._active_names = set()
+
+    def find_spec(self, fullname, path=None, target=None):
+        _audit_paths()
+        if fullname == "site":
+            _violate("airlock_import_provenance_violation")
+        if fullname in self._active_names:
+            _violate("airlock_import_provenance_violation")
+        self._active_names.add(fullname)
+        try:
+            for finder in tuple(_sys.meta_path):
+                if finder is self:
+                    continue
+                method = getattr(finder, "find_spec", None)
+                if method is None:
+                    continue
+                spec = method(fullname, path, target)
+                if spec is not None:
+                    return validate_spec(fullname, spec)
+            return None
+        finally:
+            self._active_names.discard(fullname)
+
+
+DISPATCHER = _DelegatingDispatcher()
+
+
+class _GuardedMetaPath(list):
+    def __init__(self, values=()):
+        list.__init__(self)
+        self._replace(values)
+
+    def _replace(self, candidate):
+        followers = [finder for finder in candidate if finder is not DISPATCHER]
+        list.__setitem__(self, slice(None), [DISPATCHER, *followers])
+
+    def append(self, value):
+        candidate = list(self)
+        candidate.append(value)
+        self._replace(candidate)
+
+    def insert(self, index, value):
+        candidate = list(self)
+        candidate.insert(index, value)
+        self._replace(candidate)
+
+    def extend(self, values):
+        candidate = list(self)
+        candidate.extend(values)
+        self._replace(candidate)
+
+    def __setitem__(self, key, value):
+        candidate = list(self)
+        candidate[key] = value
+        self._replace(candidate)
+
+    def __delitem__(self, key):
+        candidate = list(self)
+        del candidate[key]
+        self._replace(candidate)
+
+    def __iadd__(self, values):
+        candidate = list(self)
+        candidate += list(values)
+        self._replace(candidate)
+        return self
+
+    def __imul__(self, count):
+        candidate = list(self)
+        candidate *= count
+        self._replace(candidate)
+        return self
+
+    def pop(self, index=-1):
+        candidate = list(self)
+        value = candidate.pop(index)
+        self._replace(candidate)
+        return value
+
+    def remove(self, value):
+        candidate = list(self)
+        candidate.remove(value)
+        self._replace(candidate)
+
+    def clear(self):
+        self._replace(())
+
+    def reverse(self):
+        candidate = list(self)
+        candidate.reverse()
+        self._replace(candidate)
+
+    def sort(self, *args, **kwargs):
+        candidate = list(self)
+        candidate.sort(*args, **kwargs)
+        self._replace(candidate)
+
+
+def restore_dispatcher_front():
+    followers = [finder for finder in _sys.meta_path if finder is not DISPATCHER]
+    if isinstance(_sys.meta_path, _GuardedMetaPath):
+        _sys.meta_path._replace(followers)
+    else:
+        _sys.meta_path = _GuardedMetaPath(followers)
+
+
+def _audit_paths():
+    observed = tuple(_sys.path)
+    canonical = tuple(_canonical_path_sequence(observed))
+    if (
+        not isinstance(_sys.path, _ValidatingPath)
+        or observed != canonical
+        or not set(_BASELINE_PATH).issubset(observed)
+    ):
+        _violate("airlock_path_provenance_violation")
+
+
+def audit_before_pytest():
+    restore_dispatcher_front()
+    _audit_paths()
+    audit_loaded_modules()
+
+
+restore_dispatcher_front()
+audit_before_pytest()
+AIRLOCK_READY = True
+'''
+    return header + body
 
 
 def _origin_loader_line(guard: Path) -> str:
@@ -351,9 +955,11 @@ def _origin_loader_line(guard: Path) -> str:
     loader = (
         f"_n={module_name!r}\n"
         f"_p={path!r}\n"
+        "_o=sys.modules.get('os')\n"
+        "if _o is None: raise SystemExit(86)\n"
         "_m=sys.modules.get(_n)\n"
         "if _m is not None:\n"
-        " if getattr(_m,'__file__',None)!=_p or getattr(_m,'AIRLOCK_READY',False) is not True: os._exit(86)\n"
+        " if getattr(_m,'__file__',None)!=_p or getattr(_m,'AIRLOCK_READY',False) is not True: _o._exit(86)\n"
         "else:\n"
         " try:\n"
         "  _m=type(sys)(_n)\n"
@@ -361,11 +967,11 @@ def _origin_loader_line(guard: Path) -> str:
         "  sys.modules[_n]=_m\n"
         "  _raw=builtins.open(_p,'rb').read()\n"
         "  builtins.exec(builtins.compile(_raw,_p,'exec'),_m.__dict__)\n"
-        "  if getattr(_m,'__file__',None)!=_p or getattr(_m,'AIRLOCK_READY',False) is not True: os._exit(86)\n"
+        "  if getattr(_m,'__file__',None)!=_p or getattr(_m,'AIRLOCK_READY',False) is not True: _o._exit(86)\n"
         " except BaseException:\n"
-        "  os._exit(86)\n"
+        "  _o._exit(86)\n"
     )
-    return f"import builtins,sys,os;builtins.exec({loader!r})\n"
+    return f"import builtins,sys;builtins.exec({loader!r})\n"
 
 
 def _runner_source(diagnostic: Path) -> str:
@@ -386,6 +992,8 @@ def _runner_source(diagnostic: Path) -> str:
         "os.write(control,b'airlock_inner_noncertifying\\n')\n"
         "status=86\n"
         "try:\n"
+        " guard=sys.modules['_maez_worktree_airlock_guard']\n"
+        " guard.audit_before_pytest()\n"
         " import pytest\n"
         "except BaseException:\n"
         " pass\n"
@@ -413,7 +1021,6 @@ def _prepare_disposable(
 ) -> PreparedAirlock:
     """Build the one-run interpreter without touching the dependency venv."""
 
-    del inventory  # Task 3 embeds the complete tracked-origin policy.
     try:
         root = Path(tempfile.mkdtemp(prefix="maez-airlock-", dir=root_parent))
         root.chmod(0o700)
@@ -428,7 +1035,17 @@ def _prepare_disposable(
         runner = root / "inner_runner.py"
         diagnostic = root / "inner-diagnostic.log"
         controlled_pth = purelib / "maez-worktree-airlock.pth"
-        _private_write(guard, _guard_source())
+        _private_write(
+            guard,
+            _guard_source(
+                layout,
+                inventory,
+                disposable_purelib=purelib,
+                violation_dir=violation_dir,
+                guard_path=guard,
+                runner_path=runner,
+            ),
+        )
         _private_write(pytest_config, "")
         _private_write(runner, _runner_source(diagnostic))
         _private_write(
@@ -615,10 +1232,54 @@ def _run_owned_command(
 
 
 def _read_marker_state(violation_dir: Path) -> tuple[str, ...]:
+    guard_tokens = frozenset(
+        (
+            "airlock_path_provenance_violation",
+            "airlock_import_provenance_violation",
+        )
+    )
+    markers: list[tuple[int, str]] = []
     try:
-        return tuple(sorted(path.name for path in violation_dir.iterdir()))
-    except OSError:
+        entries = sorted(violation_dir.iterdir(), key=lambda path: path.name)
+        for path in entries:
+            matched = re.fullmatch(r"([0-9]{8})-([a-z0-9_]+)", path.name)
+            if matched is None:
+                raise AirlockRefusal("airlock_child_setup_failed")
+            ordinal = int(matched.group(1))
+            token = matched.group(2)
+            if token not in guard_tokens:
+                raise AirlockRefusal("airlock_child_setup_failed")
+            flags = os.O_RDONLY
+            if hasattr(os, "O_CLOEXEC"):
+                flags |= os.O_CLOEXEC
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            descriptor = os.open(path, flags)
+            try:
+                info = os.fstat(descriptor)
+                if (
+                    not stat.S_ISREG(info.st_mode)
+                    or info.st_uid != os.getuid()
+                    or info.st_nlink != 1
+                    or stat.S_IMODE(info.st_mode) != 0o600
+                ):
+                    raise AirlockRefusal("airlock_child_setup_failed")
+                payload = os.read(descriptor, 512)
+                if os.read(descriptor, 1):
+                    raise AirlockRefusal("airlock_child_setup_failed")
+            finally:
+                os.close(descriptor)
+            expected = f"{ordinal}:{token}\n".encode("ascii")
+            if payload != expected:
+                raise AirlockRefusal("airlock_child_setup_failed")
+            markers.append((ordinal, token))
+    except AirlockRefusal:
+        raise
+    except (OSError, UnicodeError, ValueError):
         raise AirlockRefusal("airlock_child_setup_failed") from None
+    if [ordinal for ordinal, _token in markers] != list(range(1, len(markers) + 1)):
+        raise AirlockRefusal("airlock_child_setup_failed")
+    return tuple(token for _ordinal, token in markers)
 
 
 _REFUSAL_VOCABULARY = (
@@ -702,8 +1363,22 @@ def _execute_outer(
                         tokens.append("airlock_dependency_unavailable")
                     else:
                         tokens.append("airlock_child_setup_failed")
-                if _read_marker_state(prepared.violation_dir):
-                    tokens.append("airlock_import_provenance_violation")
+                try:
+                    marker_tokens = _read_marker_state(prepared.violation_dir)
+                except AirlockRefusal:
+                    tokens = [
+                        token
+                        for token in tokens
+                        if token != "airlock_dependency_unavailable"
+                    ]
+                    raise
+                if marker_tokens:
+                    tokens = [
+                        token
+                        for token in tokens
+                        if token != "airlock_dependency_unavailable"
+                    ]
+                    tokens.extend(marker_tokens)
         except AirlockRefusal as refusal:
             tokens.append(refusal.token)
         except (OSError, subprocess.SubprocessError):
