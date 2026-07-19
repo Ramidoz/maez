@@ -2,20 +2,26 @@
 """Lean clean-checkout test airlock.
 
 This module's outer stage deliberately imports only the standard library.  The
-disposable interpreter and runtime import guard land in subsequent tasks; this
-first slice establishes the immutable invocation, checkout, and child-shape
-preflight that they rely on.
+disposable no-pip interpreter is now built on the immutable invocation,
+checkout, and child-shape preflight. Runtime import provenance remains a subsequent task.
 """
 
 from __future__ import annotations
 
 import ast
+import hashlib
 import os
 import re
 import shlex
+import shutil
+import signal
+import stat
 import subprocess
 import sys
 import sysconfig
+import tempfile
+import time
+import venv
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -60,6 +66,102 @@ class ChildShapeViolation:
     excerpt: str
 
 
+@dataclass(frozen=True)
+class PthEntry:
+    """One content-light member of the canonical shared ``.pth`` projection."""
+
+    name: str
+    is_regular: bool
+    mode: int
+    size: int
+    sha256: str | None
+
+
+@dataclass(frozen=True)
+class PreparedAirlock:
+    """Owner-only, one-run interpreter state beneath a disposable root."""
+
+    root: Path
+    venv: Path
+    python: Path
+    purelib: Path
+    controlled_pth: Path
+    guard: Path
+    pytest_config: Path
+    runner: Path
+    violation_dir: Path
+    diagnostic: Path
+    environment: Mapping[str, str]
+
+
+@dataclass(frozen=True)
+class OwnedRun:
+    """Content-light terminal facts for one owned process group."""
+
+    status: int
+    group_empty: bool
+
+
+class _OuterSignalScope:
+    """Own SIGINT/SIGTERM from pre-setup through the final integrity check."""
+
+    def __init__(self) -> None:
+        self.received: list[int] = []
+        self._process: subprocess.Popen[bytes] | None = None
+        self._previous: dict[int, Any] = {}
+
+    @property
+    def interrupted(self) -> bool:
+        return bool(self.received)
+
+    def _handle(self, signum: int, _frame: Any) -> None:
+        self.received.append(signum)
+        process = self._process
+        if process is None or process.poll() is not None:
+            return
+        try:
+            os.killpg(process.pid, signum)
+        except ProcessLookupError:
+            pass
+
+    def install(self) -> None:
+        try:
+            for signum in (signal.SIGINT, signal.SIGTERM):
+                self._previous[signum] = signal.getsignal(signum)
+                signal.signal(signum, self._handle)
+        except (OSError, ValueError):
+            self.restore()
+            raise AirlockRefusal("airlock_child_setup_failed") from None
+
+    def attach(self, process: subprocess.Popen[bytes]) -> None:
+        self._process = process
+        for signum in tuple(self.received):
+            if process.poll() is not None:
+                break
+            try:
+                os.killpg(process.pid, signum)
+            except ProcessLookupError:
+                break
+
+    def detach(self, process: subprocess.Popen[bytes]) -> None:
+        if self._process is process:
+            self._process = None
+
+    def inject_for_test(self, signum: int) -> None:
+        self._handle(signum, None)
+
+    def restore(self) -> bool:
+        complete = True
+        for signum, previous in reversed(tuple(self._previous.items())):
+            try:
+                signal.signal(signum, previous)
+            except (OSError, ValueError):
+                complete = False
+        self._previous.clear()
+        self._process = None
+        return complete
+
+
 def _git_environment() -> dict[str, str]:
     """Return an authored environment with no caller-controlled search path."""
 
@@ -74,6 +176,559 @@ def _git_environment() -> dict[str, str]:
         "LC_ALL": "C",
         "PATH": "/usr/bin:/bin",
     }
+
+
+def _snapshot_pth(purelib: Path) -> tuple[PthEntry, ...]:
+    """Read a canonical ``.pth`` projection without following a file symlink."""
+
+    flags = os.O_RDONLY | os.O_DIRECTORY
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        directory_fd = os.open(purelib, flags)
+    except OSError:
+        raise AirlockRefusal("airlock_shared_environment_changed") from None
+    entries: list[PthEntry] = []
+    try:
+        try:
+            names = sorted(name for name in os.listdir(directory_fd) if name.endswith(".pth"))
+        except OSError:
+            raise AirlockRefusal("airlock_shared_environment_changed") from None
+        for name in names:
+            try:
+                before = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            except OSError:
+                raise AirlockRefusal("airlock_shared_environment_changed") from None
+            regular = stat.S_ISREG(before.st_mode)
+            digest: str | None = None
+            if regular:
+                file_flags = os.O_RDONLY
+                if hasattr(os, "O_CLOEXEC"):
+                    file_flags |= os.O_CLOEXEC
+                if hasattr(os, "O_NOFOLLOW"):
+                    file_flags |= os.O_NOFOLLOW
+                try:
+                    descriptor = os.open(name, file_flags, dir_fd=directory_fd)
+                    try:
+                        opened = os.fstat(descriptor)
+                        hasher = hashlib.sha256()
+                        while block := os.read(descriptor, 131072):
+                            hasher.update(block)
+                        after = os.fstat(descriptor)
+                    finally:
+                        os.close(descriptor)
+                except OSError:
+                    raise AirlockRefusal("airlock_shared_environment_changed") from None
+                identity_before = (
+                    before.st_dev,
+                    before.st_ino,
+                    before.st_mode,
+                    before.st_size,
+                )
+                identity_opened = (
+                    opened.st_dev,
+                    opened.st_ino,
+                    opened.st_mode,
+                    opened.st_size,
+                )
+                identity_after = (
+                    after.st_dev,
+                    after.st_ino,
+                    after.st_mode,
+                    after.st_size,
+                )
+                if identity_before != identity_opened or identity_opened != identity_after:
+                    raise AirlockRefusal("airlock_shared_environment_changed")
+                digest = hasher.hexdigest()
+            entries.append(
+                PthEntry(
+                    name=name,
+                    is_regular=regular,
+                    mode=stat.S_IMODE(before.st_mode),
+                    size=before.st_size,
+                    sha256=digest,
+                )
+            )
+    finally:
+        os.close(directory_fd)
+    return tuple(entries)
+
+
+def _private_write(path: Path, content: str) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        payload = content.encode("utf-8")
+        view = memoryview(payload)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise OSError("short write")
+            view = view[written:]
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    info = path.stat()
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or stat.S_IMODE(info.st_mode) != 0o600:
+        raise AirlockRefusal("airlock_child_setup_failed")
+
+
+def _create_disposable_venv(root: Path, base_python: Path) -> None:
+    """Create a no-pip venv using the already-authorized base interpreter."""
+
+    if Path(base_python).resolve() != Path(sys.executable).resolve():
+        raise AirlockRefusal("airlock_invocation_invalid")
+    try:
+        venv.EnvBuilder(
+            with_pip=False,
+            system_site_packages=False,
+            symlinks=False,
+        ).create(root)
+    except (OSError, subprocess.SubprocessError):
+        raise AirlockRefusal("airlock_child_setup_failed") from None
+
+
+def _query_venv_purelib(python: Path) -> Path:
+    """Ask the created interpreter for its real versioned purelib."""
+
+    try:
+        result = subprocess.run(
+            [
+                os.fspath(python),
+                "-I",
+                "-S",
+                "-B",
+                "-c",
+                "import sysconfig;print(sysconfig.get_path('purelib'))",
+            ],
+            cwd=python.parent.parent,
+            env={
+                "HOME": "/nonexistent",
+                "LANG": "C",
+                "LC_ALL": "C",
+                "PATH": "/usr/bin:/bin",
+                "PYTHONDONTWRITEBYTECODE": "1",
+            },
+            shell=False,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, UnicodeError, subprocess.SubprocessError):
+        raise AirlockRefusal("airlock_child_setup_failed") from None
+    if result.returncode != 0:
+        raise AirlockRefusal("airlock_child_setup_failed")
+    candidate = Path(result.stdout.strip()).resolve()
+    try:
+        candidate.relative_to(python.parent.parent.resolve())
+    except ValueError:
+        raise AirlockRefusal("airlock_child_setup_failed") from None
+    if not candidate.is_dir():
+        raise AirlockRefusal("airlock_child_setup_failed")
+    return candidate
+
+
+def _guard_source() -> str:
+    return (
+        '"""Generated exact-origin airlock guard."""\n'
+        "AIRLOCK_LOAD_COUNT = globals().get('AIRLOCK_LOAD_COUNT', 0) + 1\n"
+        "AIRLOCK_READY = True\n"
+    )
+
+
+def _origin_loader_line(guard: Path) -> str:
+    """Return the one executable line permitted in the controlled path file."""
+
+    module_name = "_maez_worktree_airlock_guard"
+    path = os.fspath(guard)
+    loader = (
+        f"_n={module_name!r}\n"
+        f"_p={path!r}\n"
+        "_m=sys.modules.get(_n)\n"
+        "if _m is not None:\n"
+        " if getattr(_m,'__file__',None)!=_p or getattr(_m,'AIRLOCK_READY',False) is not True: os._exit(86)\n"
+        "else:\n"
+        " try:\n"
+        "  _m=type(sys)(_n)\n"
+        "  _m.__file__=_p\n"
+        "  sys.modules[_n]=_m\n"
+        "  _raw=builtins.open(_p,'rb').read()\n"
+        "  builtins.exec(builtins.compile(_raw,_p,'exec'),_m.__dict__)\n"
+        "  if getattr(_m,'__file__',None)!=_p or getattr(_m,'AIRLOCK_READY',False) is not True: os._exit(86)\n"
+        " except BaseException:\n"
+        "  os._exit(86)\n"
+    )
+    return f"import builtins,sys,os;builtins.exec({loader!r})\n"
+
+
+def _runner_source(diagnostic: Path) -> str:
+    """Generate a deliberately non-certifying Task-2 inner runner."""
+
+    return (
+        "import os,stat,sys\n"
+        "try:\n"
+        f" diagnostic=os.open({os.fspath(diagnostic)!r},os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)\n"
+        " os.fchmod(diagnostic,0o600)\n"
+        " diagnostic_info=os.fstat(diagnostic)\n"
+        "except BaseException:\n"
+        " os._exit(86)\n"
+        "if (not stat.S_ISREG(diagnostic_info.st_mode) or diagnostic_info.st_nlink!=1 or stat.S_IMODE(diagnostic_info.st_mode)!=0o600):\n"
+        " os._exit(86)\n"
+        "control=os.dup(1)\n"
+        "os.dup2(diagnostic,1);os.dup2(diagnostic,2);os.close(diagnostic)\n"
+        "os.write(control,b'airlock_inner_noncertifying\\n')\n"
+        "status=86\n"
+        "try:\n"
+        " import pytest\n"
+        "except BaseException:\n"
+        " pass\n"
+        "os.write(control,b'airlock_inner_complete:86\\n')\n"
+        "os.close(control)\n"
+        "raise SystemExit(status)\n"
+    )
+
+
+def _authored_environment(prepared_root: Path, python: Path) -> dict[str, str]:
+    return {
+        "HOME": os.fspath(prepared_root),
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PATH": f"{python.parent}:/usr/bin:/bin",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+
+
+def _prepare_disposable(
+    layout: AirlockLayout,
+    inventory: GitInventory,
+    *,
+    root_parent: Path = Path("/tmp"),
+) -> PreparedAirlock:
+    """Build the one-run interpreter without touching the dependency venv."""
+
+    del inventory  # Task 3 embeds the complete tracked-origin policy.
+    try:
+        root = Path(tempfile.mkdtemp(prefix="maez-airlock-", dir=root_parent))
+        root.chmod(0o700)
+        disposable_venv = root / "venv"
+        _create_disposable_venv(disposable_venv, layout.shared_python)
+        python = disposable_venv / "bin" / "python"
+        purelib = _query_venv_purelib(python)
+        violation_dir = root / "violations"
+        violation_dir.mkdir(mode=0o700)
+        guard = root / "guard.py"
+        pytest_config = root / "pytest.ini"
+        runner = root / "inner_runner.py"
+        diagnostic = root / "inner-diagnostic.log"
+        controlled_pth = purelib / "maez-worktree-airlock.pth"
+        _private_write(guard, _guard_source())
+        _private_write(pytest_config, "")
+        _private_write(runner, _runner_source(diagnostic))
+        _private_write(
+            controlled_pth,
+            f"{layout.checkout.resolve()}\n"
+            f"{layout.shared_purelib.resolve()}\n"
+            f"{_origin_loader_line(guard)}",
+        )
+        prepared = PreparedAirlock(
+            root=root,
+            venv=disposable_venv,
+            python=python,
+            purelib=purelib,
+            controlled_pth=controlled_pth,
+            guard=guard,
+            pytest_config=pytest_config,
+            runner=runner,
+            violation_dir=violation_dir,
+            diagnostic=diagnostic,
+            environment={},
+        )
+        return PreparedAirlock(
+            **{
+                **prepared.__dict__,
+                "environment": _authored_environment(root, python),
+            }
+        )
+    except AirlockRefusal:
+        if "root" in locals():
+            _cleanup_failed_setup(root)
+        raise
+    except (OSError, UnicodeError, subprocess.SubprocessError):
+        if "root" in locals():
+            _cleanup_failed_setup(root)
+        raise AirlockRefusal("airlock_child_setup_failed") from None
+
+
+def _remove_disposable(root: Path) -> None:
+    try:
+        shutil.rmtree(root)
+    except OSError:
+        raise AirlockRefusal("airlock_cleanup_incomplete") from None
+
+
+def _cleanup_failed_setup(root: Path) -> None:
+    try:
+        shutil.rmtree(root)
+    except OSError:
+        raise AirlockRefusal("airlock_cleanup_incomplete") from None
+
+
+def _parse_proc_stat(payload: str) -> tuple[str, int]:
+    """Return state and pgrp from proc stat after its final comm delimiter."""
+
+    open_index = payload.find("(")
+    close_index = payload.rfind(")")
+    if open_index <= 0 or close_index <= open_index:
+        raise ValueError("invalid proc stat")
+    fields = payload[close_index + 1 :].split()
+    if len(fields) < 3 or len(fields[0]) != 1:
+        raise ValueError("invalid proc stat")
+    return fields[0], int(fields[2])
+
+
+def _parse_proc_stat_pgrp(payload: str) -> int:
+    return _parse_proc_stat(payload)[1]
+
+
+def _read_proc_stat(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
+def _group_members(
+    process_group: int,
+    *,
+    proc_root: Path = Path("/proc"),
+    stat_reader: Callable[[Path], str] = _read_proc_stat,
+) -> tuple[int, ...]:
+    members: list[int] = []
+    try:
+        entries = tuple(proc_root.iterdir())
+    except OSError:
+        raise AirlockRefusal("airlock_cleanup_incomplete") from None
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        try:
+            state, observed_group = _parse_proc_stat(stat_reader(entry / "stat"))
+            if state != "Z" and observed_group == process_group:
+                members.append(int(entry.name))
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        except (OSError, UnicodeError, ValueError):
+            raise AirlockRefusal("airlock_cleanup_incomplete") from None
+    return tuple(sorted(members))
+
+
+def _clear_owned_group(
+    process_group: int,
+    *,
+    group_reader: Callable[[int], tuple[int, ...]] = _group_members,
+    signaler: Callable[[int, int], Any] = os.killpg,
+    sleeper: Callable[[float], Any] = time.sleep,
+) -> bool:
+    for sig, delay in ((signal.SIGTERM, 0.2), (signal.SIGKILL, 0.2)):
+        try:
+            members = group_reader(process_group)
+        except AirlockRefusal:
+            return False
+        if not members:
+            return True
+        try:
+            signaler(process_group, sig)
+        except ProcessLookupError:
+            return True
+        except OSError:
+            return False
+        sleeper(delay)
+    try:
+        return not group_reader(process_group)
+    except AirlockRefusal:
+        return False
+
+
+def _run_owned_command(
+    argv: Sequence[str],
+    *,
+    cwd: Path,
+    environment: Mapping[str, str],
+    forward_signal: int | None = None,
+    signal_scope: _OuterSignalScope | None = None,
+) -> OwnedRun:
+    process: subprocess.Popen[bytes] | None = None
+    owns_scope = signal_scope is None
+    scope = signal_scope or _OuterSignalScope()
+    restore_complete = True
+
+    try:
+        if owns_scope:
+            try:
+                scope.install()
+            except AirlockRefusal:
+                return OwnedRun(status=AIRLOCK_STATUS + 1, group_empty=True)
+        try:
+            process = subprocess.Popen(
+                list(argv),
+                cwd=cwd,
+                env=dict(environment),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                shell=False,
+                start_new_session=True,
+            )
+        except OSError:
+            return OwnedRun(status=AIRLOCK_STATUS + 1, group_empty=True)
+        scope.attach(process)
+        if forward_signal is not None:
+            time.sleep(0.1)
+            scope.inject_for_test(forward_signal)
+        try:
+            status = process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            status = AIRLOCK_STATUS + 1
+        group_empty = _clear_owned_group(process.pid)
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            group_empty = False
+        return OwnedRun(status=status, group_empty=group_empty)
+    finally:
+        if process is not None and process.poll() is None:
+            _clear_owned_group(process.pid)
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                pass
+        if process is not None:
+            scope.detach(process)
+        if owns_scope:
+            restore_complete = scope.restore()
+        if not restore_complete and process is not None:
+            _clear_owned_group(process.pid)
+
+
+def _read_marker_state(violation_dir: Path) -> tuple[str, ...]:
+    try:
+        return tuple(sorted(path.name for path in violation_dir.iterdir()))
+    except OSError:
+        raise AirlockRefusal("airlock_child_setup_failed") from None
+
+
+_REFUSAL_VOCABULARY = (
+    "airlock_invocation_invalid",
+    "airlock_checkout_mismatch",
+    "airlock_environment_forbidden",
+    "airlock_dependency_unavailable",
+    "airlock_path_provenance_violation",
+    "airlock_import_provenance_violation",
+    "airlock_collection_escape",
+    "airlock_pytest_arguments_invalid",
+    "airlock_child_setup_failed",
+    "airlock_shared_environment_changed",
+    "airlock_cleanup_incomplete",
+)
+
+
+def _select_refusal(
+    tokens: Sequence[str],
+    *,
+    shared_environment_changed: bool,
+    cleanup_complete: bool,
+) -> str | None:
+    """Select terminal evidence independently of exception timing."""
+
+    if shared_environment_changed:
+        return "airlock_shared_environment_changed"
+    if not cleanup_complete:
+        return "airlock_cleanup_incomplete"
+    present = frozenset(tokens)
+    return next((token for token in _REFUSAL_VOCABULARY if token in present), None)
+
+
+def _execute_outer(
+    layout: AirlockLayout,
+    inventory: GitInventory,
+    *,
+    root_parent: Path = Path("/tmp"),
+) -> str:
+    """Run Task 2's non-certifying child and close every finalizer in order."""
+
+    tokens: list[str] = []
+    prepared: PreparedAirlock | None = None
+    before: tuple[PthEntry, ...] | None = None
+    cleanup_complete = True
+    shared_environment_changed = False
+    signals = _OuterSignalScope()
+    signals_installed = False
+    try:
+        try:
+            signals.install()
+            signals_installed = True
+        except AirlockRefusal as refusal:
+            tokens.append(refusal.token)
+        try:
+            before = _snapshot_pth(layout.shared_purelib)
+            if not signals_installed or signals.interrupted:
+                tokens.append("airlock_child_setup_failed")
+            else:
+                prepared = _prepare_disposable(
+                    layout,
+                    inventory,
+                    root_parent=root_parent,
+                )
+                if signals.interrupted:
+                    tokens.append("airlock_child_setup_failed")
+                else:
+                    result = _run_owned_command(
+                        [
+                            os.fspath(prepared.python),
+                            "-I",
+                            "-B",
+                            os.fspath(prepared.runner),
+                        ],
+                        cwd=layout.checkout,
+                        environment=prepared.environment,
+                        signal_scope=signals,
+                    )
+                    cleanup_complete = result.group_empty
+                    if result.status == AIRLOCK_STATUS:
+                        tokens.append("airlock_dependency_unavailable")
+                    else:
+                        tokens.append("airlock_child_setup_failed")
+                if _read_marker_state(prepared.violation_dir):
+                    tokens.append("airlock_import_provenance_violation")
+        except AirlockRefusal as refusal:
+            tokens.append(refusal.token)
+        except (OSError, subprocess.SubprocessError):
+            tokens.append("airlock_child_setup_failed")
+    finally:
+        if prepared is not None:
+            try:
+                _remove_disposable(prepared.root)
+            except AirlockRefusal:
+                cleanup_complete = False
+        try:
+            after = _snapshot_pth(layout.shared_purelib)
+        except AirlockRefusal:
+            shared_environment_changed = True
+        else:
+            shared_environment_changed = before is None or after != before
+        if signals_installed and not signals.restore():
+            cleanup_complete = False
+        if signals.interrupted:
+            tokens.append("airlock_child_setup_failed")
+    return _select_refusal(
+        tokens,
+        shared_environment_changed=shared_environment_changed,
+        cleanup_complete=cleanup_complete,
+    ) or "airlock_child_setup_failed"
 
 
 def _run_git(
@@ -661,13 +1316,13 @@ def _run_preflight(layout: AirlockLayout) -> GitInventory:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Validate the immutable outer boundary; later tasks add execution."""
+    """Run the non-certifying Task-2 airlock boundary."""
 
     del argv
     try:
         layout = _validate_outer_invocation()
-        _run_preflight(layout)
-        raise AirlockRefusal("airlock_dependency_unavailable")
+        inventory = _run_preflight(layout)
+        raise AirlockRefusal(_execute_outer(layout, inventory))
     except AirlockRefusal as refusal:
         print(refusal.token, file=sys.stderr)
         return AIRLOCK_STATUS
