@@ -1,7 +1,7 @@
 # Clean-checkout import-provenance airlock — design
 
-Date: 2026-07-16; lean amendment 2026-07-17
-Status: proposed for Claude gate; amended lean design and RED list only
+Date: 2026-07-16; lean amendment 2026-07-17; Task-4 amendment 2026-07-20
+Status: proposed for Claude gate; amended lean design, RED list, and Task-4 ruling
 Branch: `feature/cuda-bench-driver` at parent `b669bad`
 Scope: gate integrity only; no CUDA phase, model, service, or runtime change
 
@@ -103,6 +103,16 @@ rebuild ownership would turn a small gate repair into another environment
 management system.
 
 ## Files and boundaries
+
+Task 4 is one atomic four-file slice and may modify exactly:
+
+- `docs/superpowers/plans/2026-07-17-clean-checkout-import-airlock.md`;
+- `docs/superpowers/specs/2026-07-16-clean-checkout-import-airlock-design.md`;
+- `scripts/dev/worktree_test_airlock.py`; and
+- `tests/test_worktree_airlock_imports.py`.
+
+No other Task-4 source, test, documentation, configuration, or runtime artifact
+is authorized.
 
 The implementation plan may touch only:
 
@@ -230,12 +240,71 @@ Later guard violations write a marker before raising. If test code catches that
 exception, the outer stage still sees the marker after its owned process group
 has cleared.
 Marker creation is exclusive inside the owner-only violation directory. If the
-guard cannot record the marker, it calls `os._exit(86)` instead of exposing a
-catchable exception whose evidence could be lost.
+guard cannot record the marker, including when `os.write` reports a short
+write or `os.close` fails after a complete write, it calls `os._exit(86)`
+instead of exposing a catchable exception whose evidence could be lost. A
+partial marker remains malformed evidence: the outer reader refuses it as
+`airlock_child_setup_failed` and never recovers a token from its prefix. A
+complete, private marker whose close reported failure remains valid sticky
+evidence for the outer reader.
 The guard's startup prelude uses only the already-loaded `sys`, `os`, and
 `builtins` modules. It canonicalizes path order before importing any other
 module: standard-library/extension roots, disposable site, audited checkout,
-then the exact shared dependency `purelib`.
+then the exact shared dependency `purelib`. The guard itself sets
+`sys.dont_write_bytecode = True`; bytecode suppression does not depend only on
+an inherited environment variable.
+
+Ordinary `-c` startup has one CPython-specific late-path seam. The controlled
+`.pth` guard loads during `site` processing before CPython inserts the command's
+late `sys.path[0]`. During guard load it therefore installs one process-global,
+flag-gated audit hook. The command-normalization flag is armed only when the
+captured startup mode is actual `-c`; a later event named
+`cpython.run_command` cannot arm it in a `-m` or script process. The first real
+`-c` event consumes the flag before doing any work, normalizes or drops the
+late path-zero entry through the existing path policy, reasserts bytecode
+suppression, and performs the strict path/module audit. Later command events
+strict-audit/refuse only and never re-normalize. A real `-m` or tracked script
+may emit `sys.audit("cpython.run_command", ...)` before ordinary imports while
+retaining its mode-correct path zero.
+
+The guard-load baseline audit and first post-startup strict audit are separate
+phases. Only the former may accept the canonical baseline before CPython has
+inserted path zero. A separate startup hook observes `cpython.run_module` and
+`cpython.run_file`. Module startup changes only the internal phase flag. File
+startup also revalidates the event filename and current `sys.argv[0]` against
+the exact guard-load admission, but never normalizes path zero or performs the
+strict path/module audit. The command hook is a literal no-op for both events.
+In ordinary `-m` and direct-script modes, the first post-startup strict audit
+must observe the exact mode-derived path zero followed by the baseline.
+Safe-path startup, including the generated `-I` runner, must instead observe
+and freeze the exact baseline. A missing, replaced, or reordered entry is a
+sticky refusal on that first mismatch; catching it and reinserting the expected
+value cannot re-arm startup admission. Successful admission freezes both the
+exact audited tuple and the identity of the guarded `sys.path` object. Every
+later audit requires the same object and tuple and canonically re-admits each
+path, so a same-text directory retarget is still refused. Wrapper mutation,
+`sys.path` reassignment, and direct base-list mutation cannot clear, transfer,
+or replace that freeze.
+
+Direct script entry has two pre-execution checks. Controlled `.pth` guard load
+canonicalizes `sys.argv[0]` and admits only an exact tracked Python file in the
+audited checkout. The sole non-tracked exception is the exact generated
+`_RUNNER_PATH`, already bound as the airlock's origin-checked internal module.
+On `cpython.run_file`, before CPython opens the file or executes any script
+byte, the startup hook canonicalizes the event's one filename and current
+`sys.argv[0]` again and requires both to equal the guard-load tuple. Thus an
+untracked checkout script, post-guard argv mismatch, or symlink swap is marked
+and refused before a sentinel write, self-deletion, import, or any other source
+statement. A tracked direct script remains admitted with its normal path-zero
+semantics. The hook is inert for unrelated audit events and never performs
+command normalization for `cpython.run_module` or `cpython.run_file`.
+
+This timing is source-bound to CPython v3.14.4
+[`Modules/main.c`](https://github.com/python/cpython/blob/v3.14.4/Modules/main.c):
+`pymain_run_python()` computes and inserts `path0` before dispatch;
+`pymain_run_command()` emits `cpython.run_command` before it dedents, compiles,
+or executes command text; and `pymain_run_file_obj()` emits `cpython.run_file`
+immediately before `Py_fopen()`.
 
 ## Disposable interpreter construction
 
@@ -284,17 +353,29 @@ the disposable interpreter because `sys.executable` and the front of `PATH`
 both point into the temporary venv. The controlled `.pth` restores the same
 uniquely named guard when a child starts normally or with `-I`.
 
+Those ordinary forms, plus absolute disposable `sys.executable` with `env={}`,
+are inside the inherited-descendant provenance contract and eligible for later
+outer certification. A descendant never certifies itself; the Task-5 outer
+boundary remains the sole certifier.
+
+A direct-script descendant is inside that contract only when its entry file is
+itself an exact tracked Python file in the audited checkout. Being located in a
+tracked directory is not sufficient authority. The exact generated internal
+runner is separately admitted by its already-bound `_RUNNER_PATH`; this does
+not create a general untracked-script carve-out.
+
 That inheritance has two explicit limits:
 
 - `python`/`python3` require the airlock-authored `PATH`; with an empty explicit
-  environment, the only certifying form is the absolute disposable
-  `sys.executable`;
+  environment, only absolute disposable `sys.executable` is inside the
+  inherited-descendant provenance contract and eligible for later outer
+  certification;
 - a descendant that passes `-S` disables the controlled `.pth` and its guard
   import. `-S` is therefore a forbidden project-import child shape,
   not a shape the guard pretends to contain dynamically.
 
-Absolute interpreter literals and project-import descendants using `-S` are
-bypasses. The runtime guard does not claim to contain them.
+Absolute foreign-interpreter literals and project-import descendants using
+`-S` are bypasses. The runtime guard does not claim to contain them.
 
 ## Fixed child-shape tripwire
 
@@ -417,11 +498,15 @@ unregistered Git checkout all refuse.
 A meta-path dispatcher validates Maez-owned specs before execution. It delegates
 to the remaining finders in their existing order, validates the returned spec,
 and returns that same spec and loader. This preserves pytest's assertion-
-rewriting finder instead of bypassing it with a second `PathFinder` lookup. Full
-scans run before pytest import, after plugin/config loading, after collection,
-after each test boundary, and in a finalizer. Violations are sticky and write the
-shared temp-scoped marker: removing the path, deleting the module, or catching a
-child exception later cannot turn the parent run back into evidence.
+rewriting finder instead of bypassing it with a second `PathFinder` lookup.
+Task 3 owns that dispatcher delegation. Task 5 later proves that the real pytest
+assertion-rewrite finder is strictly behind the dispatcher and that rewrite
+diagnostics remain intact; Task 4 does not implement or substitute that proof.
+Full scans run before pytest import, after plugin/config loading, after
+collection, after each test boundary, and in a finalizer. Violations are sticky
+and write the shared temp-scoped marker: removing the path, deleting the module,
+or catching a child exception later cannot turn the parent run back into
+evidence.
 
 Third-party dependencies may load from the shared dependency `purelib`; stdlib
 and builtin/frozen modules retain their normal origins. The airlock does not
@@ -491,8 +576,14 @@ The closed vocabulary is:
 If more than one failure is observed, the result is deterministic:
 `airlock_shared_environment_changed` dominates
 `airlock_cleanup_incomplete`, which dominates the first applicable token in the
-vocabulary order above. Startup and descendant markers contain only a token and
-process-local ordinal; they never contain an imported path or test literal.
+vocabulary order above. Marker filenames contain only a run-global ordinal.
+Each writer atomically claims the first available bounded ordinal with
+`O_CREAT|O_EXCL`, advancing only on `FileExistsError` contention; any other
+error or ordinal overflow exits `86`. The refusal token remains only in the
+content-light payload; markers never contain an imported path or test literal.
+Concurrent same-token children therefore leave two surviving markers, and
+concurrent different-token children both survive so closed-vocabulary priority,
+not process timing or a generic child-setup fallback, selects terminal evidence.
 
 Only the outer control path may emit the reserved certificate prefix
 `MAEZ_AIRLOCK_CERTIFIED`. The generated runner contains no such literal or
@@ -532,9 +623,12 @@ accidental-borrowing threat model.
 
 ## Behavioral RED list
 
-Every item below must be witnessed failing before implementation. Unit-only
-proof is insufficient for the startup, descendant, and shared-environment
-claims; those tests launch real local interpreters against temporary fixtures.
+Every genuine RED below must be witnessed failing before implementation.
+Item 18 is instead a required pre-code GREEN control and is recorded separately;
+it demonstrates the parent-only premise rather than missing Task-4 behavior.
+Unit-only proof is insufficient for the startup, descendant, and shared-
+environment claims; those tests launch real local interpreters against
+temporary fixtures.
 
 ### A. Startup and checkout identity
 
@@ -600,15 +694,41 @@ claims; those tests launch real local interpreters against temporary fixtures.
 
 ### D. Descendant provenance
 
-18. A control child spawned from a parent-only `-I -S -B` process demonstrates
-    that isolation flags do not inherit and the shared `.pth` reappears.
+18. **Pre-code GREEN control, not a RED:** a child spawned from a parent-only
+    `-I -S -B` process demonstrates that isolation flags do not inherit and the
+    synthetic shared editable `.pth` reappears. This control does not violate
+    the rule that every genuine RED must fail.
 19. Under the airlock, `sys.executable -c`, inherited `python -c`, and inherited
-    `python3 -c` children all report the disposable interpreter, audited
-    checkout paths only, and no foreign Maez module. Normal `-c` startup safely
-    normalizes an empty path entry; `env={}` is certifying only with the absolute
-    disposable `sys.executable`.
+    `python3 -c` children, plus absolute disposable `sys.executable -c` with
+    `env={}`, all report the disposable interpreter, audited checkout paths
+    only, and no foreign Maez module. They are inside the inherited-descendant
+    provenance contract and eligible for later outer certification; Task 5's
+    outer remains the sole certifier. All four allowed `-c` forms reach user
+    code guarded-clean after the one-shot `cpython.run_command` hook normalizes
+    or drops CPython's late path zero. Non-`run_command` audit events are inert;
+    a repeated `run_command` cannot re-normalize; and `-m` and script descendants
+    retain their path-zero semantics without accidental normalization. Their
+    first strict path audit admits only the mode-derived expected startup path
+    zero, consumes the one-shot allowance, and freezes the exact audited tuple
+    and guarded `sys.path` object identity; later wrapper mutation, reassignment,
+    or direct base-list mutation refuses. Removing or replacing late path zero
+    on the first post-startup audit refuses and cannot re-arm by reinsertion.
+    A synthetic `cpython.run_command` event in a real `-m` or tracked-script
+    process does not normalize or refuse its correct mode path. Tracked direct
+    scripts execute, while an untracked script in a tracked directory is
+    refused before its first statement. The guard itself sets
+    `sys.dont_write_bytecode = True`; before/after bytecode inventories for the
+    checkout, disposable root, and observed shared `purelib` remain identical
+    when the absolute disposable `env={}` form imports a fresh module from each
+    root. Bare `python`/`python3` with `env={}` remain outside the claim.
 20. A child that launches a grandchild preserves the same provenance, and a
-    grandchild violation reaches the outer marker check.
+    caught grandchild violation reaches the outer marker check. Concurrent
+    child writers atomically claim run-global marker ordinals: two same-token
+    violations leave two surviving markers, while two different-token
+    violations both survive and `_select_refusal` applies closed-vocabulary
+    priority deterministically, never `airlock_child_setup_failed` merely from
+    ordinal collision. A forced short marker write exits `86`, and the reader
+    rejects its malformed residue as `airlock_child_setup_failed`.
 21. The two B7 signal integration tests use `sys.executable`, resolve both
     `scripts.cuda_bench_driver` and their test helper beneath the worktree, and
     preserve their existing SIGINT/SIGTERM finalization and zero-residue claims.
@@ -661,9 +781,10 @@ claims; those tests launch real local interpreters against temporary fixtures.
 
 Claude's clean-checkout gate for the later implementation must require:
 
-1. every numbered RED has a witnessed pre-implementation failure, followed by
-   GREEN under the airlock; source inspection may prove a structural subclaim
-   but may not substitute for the numbered RED's failing test;
+1. every genuine numbered RED has a witnessed pre-implementation failure,
+   followed by GREEN under the airlock; item 18 has its separately recorded
+   pre-code GREEN control; source inspection may prove a structural subclaim but
+   may not substitute for a genuine numbered RED's failing test;
 2. `tests/test_worktree_airlock_imports.py` plus the three affected subprocess
    suites pass through the real airlock entrypoint;
 3. ruff is clean on every touched Python file and `git diff --check` is clean;

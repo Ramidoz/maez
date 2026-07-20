@@ -122,6 +122,142 @@ def _run_guarded(prepared, code: str, *, cwd: Path | None = None):
     )
 
 
+def _bytecode_inventory(root: Path) -> tuple[tuple[str, str], ...]:
+    entries = []
+    for path in root.rglob("*"):
+        if path.name == "__pycache__" and path.is_dir():
+            entries.append(("directory", path.relative_to(root).as_posix()))
+        elif path.suffix == ".pyc" and path.is_file():
+            entries.append(("file", path.relative_to(root).as_posix()))
+    return tuple(sorted(entries))
+
+
+def _install_pre_startup_mismatch_probe(
+    prepared,
+    result_path: Path,
+    *,
+    forbidden_first: Path | None = None,
+) -> None:
+    first_mutation = (
+        "list.__delitem__(sys.path, 0)"
+        if forbidden_first is None
+        else f"list.__setitem__(sys.path, 0, {os.fspath(forbidden_first)!r})"
+    )
+    restore_mutation = (
+        "list.insert(sys.path, 0, expected)"
+        if forbidden_first is None
+        else "list.__setitem__(sys.path, 0, expected)"
+    )
+    probe_source = textwrap.dedent(
+        f"""
+        import sys
+
+        if not getattr(sys, '_maez_task4_startup_probe_installed', False):
+            sys._maez_task4_startup_probe_installed = True
+
+            def _maez_task4_startup_probe(event, _args):
+                if event not in ('cpython.run_module', 'cpython.run_file'):
+                    return
+                guard = sys.modules.get('_maez_worktree_airlock_guard')
+                if guard is None:
+                    return
+                expected = guard._EXPECTED_STARTUP_PATH0
+                removed = sys.path[0]
+                {first_mutation}
+                first_refused = False
+                try:
+                    guard._audit_paths()
+                except RuntimeError:
+                    first_refused = True
+                {restore_mutation}
+                second_refused = False
+                try:
+                    guard._audit_paths()
+                except RuntimeError:
+                    second_refused = True
+                payload = (
+                    (b'1' if removed == expected else b'0')
+                    + b':'
+                    + (b'1' if first_refused else b'0')
+                    + b':'
+                    + (b'1' if second_refused else b'0')
+                )
+                os_module = sys.modules['os']
+                descriptor = os_module.open(
+                    {os.fspath(result_path)!r},
+                    os_module.O_WRONLY | os_module.O_CREAT | os_module.O_TRUNC,
+                    0o600,
+                )
+                try:
+                    os_module.write(descriptor, payload)
+                finally:
+                    os_module.close(descriptor)
+
+            sys.addaudithook(_maez_task4_startup_probe)
+        """
+    )
+    probe_line = f"import builtins;builtins.exec({probe_source!r})\n"
+    (prepared.purelib / "zz-maez-task4-startup-probe.pth").write_text(
+        probe_line, encoding="utf-8"
+    )
+
+
+def _run_concurrent_marker_writers(
+    prepared,
+    tokens: tuple[str, ...],
+    rendezvous: Path,
+) -> list[subprocess.CompletedProcess[str]]:
+    release = rendezvous / "release"
+    processes: list[subprocess.Popen[str]] = []
+    for index, token in enumerate(tokens):
+        ready = rendezvous / f"ready-{index}"
+        code = textwrap.dedent(
+            f"""
+            import pathlib
+            import sys
+            import time
+
+            guard = sys.modules['_maez_worktree_airlock_guard']
+            pathlib.Path({os.fspath(ready)!r}).touch()
+            release = pathlib.Path({os.fspath(release)!r})
+            while not release.exists():
+                time.sleep(0.001)
+            guard._record_marker({token!r})
+            """
+        )
+        processes.append(
+            subprocess.Popen(
+                [os.fspath(prepared.python), "-I", "-B", "-c", code],
+                cwd=prepared.root,
+                env=prepared.environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        )
+    deadline = time.monotonic() + 10
+    ready_paths = tuple(rendezvous / f"ready-{index}" for index in range(len(tokens)))
+    while not all(path.exists() for path in ready_paths):
+        if any(process.poll() is not None for process in processes):
+            break
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.002)
+    release.touch()
+    completed: list[subprocess.CompletedProcess[str]] = []
+    for process in processes:
+        stdout, stderr = process.communicate(timeout=10)
+        completed.append(
+            subprocess.CompletedProcess(
+                process.args,
+                process.returncode,
+                stdout,
+                stderr,
+            )
+        )
+    return completed
+
+
 class WorktreeAirlockImportTests(unittest.TestCase):
     def test_web_interface_does_not_inject_founder_checkout_into_sys_path(self):
         repo = Path(__file__).resolve().parent.parent
@@ -626,6 +762,980 @@ def test_borrowed_green_control_is_blocked_by_disposable_plain_dependency_path(
         airlock._remove_disposable(prepared.root)
 
 
+def test_parent_only_control_flags_do_not_inherit_and_editable_pth_reappears(
+    tmp_path: Path,
+):
+    airlock = _airlock()
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    (foreign / "shared_editable_probe.py").write_text(
+        "VALUE = 19\n", encoding="utf-8"
+    )
+    control = tmp_path / "parent-only-control"
+    airlock._create_disposable_venv(control, SHARED_PYTHON)
+    control_python = control / "bin" / "python"
+    control_purelib = airlock._query_venv_purelib(control_python)
+    (control_purelib / "synthetic-editable.pth").write_text(
+        f"{foreign}\n", encoding="utf-8"
+    )
+    child_code = (
+        "import json,shared_editable_probe,sys;"
+        "print(json.dumps({"
+        "'value':shared_editable_probe.VALUE,"
+        "'origin':shared_editable_probe.__file__,"
+        "'isolated':sys.flags.isolated,"
+        "'no_site':sys.flags.no_site,"
+        "'dont_write_bytecode':sys.flags.dont_write_bytecode}))"
+    )
+    parent_code = textwrap.dedent(
+        f"""
+        import json
+        import subprocess
+        import sys
+
+        child = subprocess.run(
+            [sys.executable, "-c", {child_code!r}],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        print(json.dumps({{
+            "parent_flags": [
+                sys.flags.isolated,
+                sys.flags.no_site,
+                sys.flags.dont_write_bytecode,
+            ],
+            "child_status": child.returncode,
+            "child": json.loads(child.stdout),
+        }}))
+        """
+    )
+
+    result = subprocess.run(
+        [os.fspath(control_python), "-I", "-S", "-B", "-c", parent_code],
+        cwd=tmp_path,
+        env={"HOME": os.fspath(tmp_path), "PATH": "/usr/bin:/bin"},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    observed = json.loads(result.stdout)
+    assert observed["parent_flags"] == [1, 1, 1]
+    assert observed["child_status"] == 0
+    assert observed["child"]["value"] == 19
+    assert Path(observed["child"]["origin"]) == foreign / "shared_editable_probe.py"
+    assert observed["child"]["isolated"] == 0
+    assert observed["child"]["no_site"] == 0
+    assert observed["child"]["dont_write_bytecode"] == 0
+
+
+def test_inherited_child_tracked_direct_script_entry_executes(tmp_path: Path):
+    sentinel = tmp_path / "tracked-script-ran"
+    source = f"open({os.fspath(sentinel)!r}, 'w').write('ran')\n"
+    airlock, layout, _inventory, prepared = _task3_prepared(
+        tmp_path, extra_files={"tools/tracked_entry.py": source}
+    )
+    script = layout.checkout / "tools/tracked_entry.py"
+    try:
+        result = subprocess.run(
+            [os.fspath(prepared.python), os.fspath(script)],
+            cwd=layout.checkout,
+            env=prepared.environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert sentinel.read_text(encoding="utf-8") == "ran"
+        assert airlock._read_marker_state(prepared.violation_dir) == ()
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+def test_inherited_child_untracked_direct_script_refuses_before_execution(
+    tmp_path: Path,
+):
+    sentinel = tmp_path / "untracked-script-ran"
+    airlock, layout, _inventory, prepared = _task3_prepared(
+        tmp_path, extra_files={"tools/anchor.py": "VALUE = 44\n"}
+    )
+    script = layout.checkout / "tools/untracked_entry.py"
+    script.write_text(
+        f"open({os.fspath(sentinel)!r}, 'w').write('ran')\n"
+        "__import__('os').unlink(__file__)\n",
+        encoding="utf-8",
+    )
+    try:
+        result = subprocess.run(
+            [os.fspath(prepared.python), os.fspath(script)],
+            cwd=layout.checkout,
+            env=prepared.environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode != 0, result.stdout + result.stderr
+        assert not sentinel.exists()
+        assert script.is_file()
+        assert airlock._read_marker_state(prepared.violation_dir) == (
+            "airlock_import_provenance_violation",
+        )
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+@pytest.mark.parametrize("mutation", ("argv", "symlink-swap"))
+def test_inherited_child_run_file_revalidates_entry_before_script_bytes(
+    tmp_path: Path,
+    mutation: str,
+):
+    sentinel = tmp_path / f"{mutation}-script-ran"
+    source = f"open({os.fspath(sentinel)!r}, 'w').write('ran')\n"
+    airlock, layout, _inventory, prepared = _task3_prepared(
+        tmp_path,
+        extra_files={"tools/revalidated_entry.py": source},
+    )
+    script = layout.checkout / "tools/revalidated_entry.py"
+    foreign = tmp_path / "foreign_entry.py"
+    foreign.write_text(source, encoding="utf-8")
+    if mutation == "argv":
+        probe_line = f"import sys;sys.argv[0]={os.fspath(foreign)!r}\n"
+    else:
+        probe_line = (
+            "import sys;"
+            "_o=sys.modules['os'];"
+            f"_o.unlink({os.fspath(script)!r});"
+            f"_o.symlink({os.fspath(foreign)!r},{os.fspath(script)!r})\n"
+        )
+    (prepared.purelib / "zz-maez-task4-run-file-swap.pth").write_text(
+        probe_line, encoding="utf-8"
+    )
+    try:
+        result = subprocess.run(
+            [os.fspath(prepared.python), os.fspath(script)],
+            cwd=layout.checkout,
+            env=prepared.environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode != 0, result.stdout + result.stderr
+        assert not sentinel.exists()
+        marker_tokens = airlock._read_marker_state(prepared.violation_dir)
+        assert marker_tokens[0] == "airlock_import_provenance_violation"
+        assert set(marker_tokens).issubset(
+            {
+                "airlock_import_provenance_violation",
+                "airlock_path_provenance_violation",
+            }
+        )
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+@pytest.mark.parametrize(
+    ("launcher", "empty_environment"),
+    (
+        ("sys-executable", False),
+        ("python", False),
+        ("python3", False),
+        ("sys-executable", True),
+    ),
+    ids=("sys-executable", "python", "python3", "absolute-env-empty"),
+)
+def test_inherited_child_c_forms_are_guarded_clean_without_bytecode_residue(
+    tmp_path: Path,
+    launcher: str,
+    empty_environment: bool,
+):
+    airlock, layout, _inventory, prepared = _task3_prepared(tmp_path)
+    before_artifacts = {
+        path.relative_to(layout.checkout)
+        for path in layout.checkout.rglob("*")
+        if path.name == "__pycache__" or path.suffix == ".pyc"
+    }
+    executable = (
+        os.fspath(prepared.python) if launcher == "sys-executable" else launcher
+    )
+    code = (
+        "import core.good,json,sys;"
+        "g=sys.modules['_maez_worktree_airlock_guard'];"
+        "print(json.dumps({"
+        "'executable':sys.executable,"
+        "'guard_ready':g.AIRLOCK_READY,"
+        "'module_origin':core.good.__file__,"
+        "'path':sys.path,"
+        "'dont_write_bytecode':sys.dont_write_bytecode}))"
+    )
+    try:
+        result = subprocess.run(
+            [executable, "-c", code],
+            cwd=layout.checkout,
+            env={} if empty_environment else prepared.environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        observed = json.loads(result.stdout)
+        assert Path(observed["executable"]).resolve().is_relative_to(
+            prepared.venv.resolve()
+        )
+        assert observed["guard_ready"] is True
+        assert Path(observed["module_origin"]) == layout.checkout / "core/good.py"
+        assert "" not in observed["path"]
+        assert observed["dont_write_bytecode"] is True
+        after_artifacts = {
+            path.relative_to(layout.checkout)
+            for path in layout.checkout.rglob("*")
+            if path.name == "__pycache__" or path.suffix == ".pyc"
+        }
+        assert after_artifacts == before_artifacts
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+def test_inherited_child_absolute_env_empty_preserves_all_bytecode_inventories(
+    tmp_path: Path,
+):
+    airlock, layout, _inventory, prepared = _task3_prepared(tmp_path)
+    disposable_probe = prepared.purelib / "disposable_probe.py"
+    disposable_probe.write_text("VALUE = 45\n", encoding="utf-8")
+    roots = (layout.checkout, prepared.root, layout.shared_purelib)
+    before = tuple(_bytecode_inventory(root) for root in roots)
+    code = (
+        "import core.good,dependency_probe,disposable_probe,json,sys;"
+        "g=sys.modules['_maez_worktree_airlock_guard'];"
+        "print(json.dumps({"
+        "'checkout':core.good.__file__,"
+        "'disposable':disposable_probe.__file__,"
+        "'dependency':dependency_probe.__file__,"
+        "'shared':g._SHARED_PURELIB,"
+        "'dont_write_bytecode':sys.dont_write_bytecode}))"
+    )
+    try:
+        result = subprocess.run(
+            [os.fspath(prepared.python), "-c", code],
+            cwd=layout.checkout,
+            env={},
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        observed = json.loads(result.stdout)
+        assert Path(observed["checkout"]) == layout.checkout / "core/good.py"
+        assert Path(observed["disposable"]) == disposable_probe
+        assert Path(observed["dependency"]) == (
+            layout.shared_purelib / "dependency_probe.py"
+        )
+        assert Path(observed["shared"]) == layout.shared_purelib
+        assert observed["dont_write_bytecode"] is True
+        assert tuple(_bytecode_inventory(root) for root in roots) == before
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+def test_inherited_child_run_command_audit_hook_is_inert_one_shot_and_consumes_first(
+    tmp_path: Path,
+):
+    airlock, layout, _inventory, prepared = _task3_prepared(tmp_path)
+    code = textwrap.dedent(
+        """
+        import json
+        import sys
+
+        guard = sys.modules['_maez_worktree_airlock_guard']
+        assert guard._RUN_COMMAND_PATH_PENDING is False
+        events = []
+        guard._normalize_command_path0 = lambda: events.append('normalize')
+        guard.audit_before_pytest = lambda: events.append('audit')
+        sys.audit('airlock.non_run_command')
+        inert_events = list(events)
+        sys.audit('cpython.run_command', 'repeat')
+        repeat_events = list(events)
+
+        class Expected(Exception):
+            pass
+
+        def first_work():
+            events.append(('pending-during-work', guard._RUN_COMMAND_PATH_PENDING))
+            raise Expected
+
+        guard._RUN_COMMAND_PATH_PENDING = True
+        guard._normalize_command_path0 = first_work
+        try:
+            guard._run_command_audit_hook('cpython.run_command', ('direct',))
+        except Expected:
+            pass
+        print(json.dumps({
+            'inert': inert_events,
+            'repeat': repeat_events,
+            'tail': events[-1],
+            'pending': guard._RUN_COMMAND_PATH_PENDING,
+        }))
+        """
+    )
+    try:
+        result = subprocess.run(
+            [os.fspath(prepared.python), "-c", code],
+            cwd=layout.checkout,
+            env=prepared.environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        observed = json.loads(result.stdout)
+        assert observed == {
+            "inert": [],
+            "repeat": ["audit"],
+            "tail": ["pending-during-work", False],
+            "pending": False,
+        }
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+def test_inherited_child_startup_phase_hook_never_normalizes_command_path(
+    tmp_path: Path,
+):
+    airlock, layout, _inventory, prepared = _task3_prepared(tmp_path)
+    code = textwrap.dedent(
+        """
+        import json
+        import sys
+
+        guard = sys.modules['_maez_worktree_airlock_guard']
+        events = []
+        guard._normalize_command_path0 = lambda: events.append('normalize')
+        guard._revalidate_run_file_event = (
+            lambda args: events.append(['revalidate', list(args)])
+        )
+
+        guard._PRE_STARTUP_BASELINE_AUDIT_PENDING = True
+        sys.audit('airlock.unrelated_startup_event')
+        unrelated_pending = guard._PRE_STARTUP_BASELINE_AUDIT_PENDING
+
+        sys.audit('cpython.run_module', 'synthetic-module')
+        module_pending = guard._PRE_STARTUP_BASELINE_AUDIT_PENDING
+
+        guard._PRE_STARTUP_BASELINE_AUDIT_PENDING = True
+        sys.audit('cpython.run_file', 'synthetic-script')
+        file_pending = guard._PRE_STARTUP_BASELINE_AUDIT_PENDING
+
+        print(json.dumps({
+            'events': events,
+            'unrelated_pending': unrelated_pending,
+            'module_pending': module_pending,
+            'file_pending': file_pending,
+        }))
+        """
+    )
+    try:
+        result = subprocess.run(
+            [os.fspath(prepared.python), "-c", code],
+            cwd=layout.checkout,
+            env=prepared.environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert json.loads(result.stdout) == {
+            "events": [["revalidate", ["synthetic-script"]]],
+            "unrelated_pending": True,
+            "module_pending": False,
+            "file_pending": False,
+        }
+        assert airlock._read_marker_state(prepared.violation_dir) == ()
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+@pytest.mark.parametrize("mode", ("module", "script"))
+def test_inherited_child_non_command_mode_cannot_arm_run_command_normalization(
+    tmp_path: Path,
+    mode: str,
+):
+    probe = textwrap.dedent(
+        """
+        __import__('sys').audit('cpython.run_command', 'synthetic-before-imports')
+        import json
+        import sys
+
+        guard = sys.modules['_maez_worktree_airlock_guard']
+        print(json.dumps({
+            'path0': sys.path[0],
+            'pending': guard._RUN_COMMAND_PATH_PENDING,
+        }))
+        """
+    )
+    airlock, layout, _inventory, prepared = _task3_prepared(
+        tmp_path,
+        extra_files={
+            "core/run_event_probe.py": probe,
+            "tools/run_event_probe.py": probe,
+        },
+    )
+    if mode == "module":
+        command = [os.fspath(prepared.python), "-m", "core.run_event_probe"]
+        expected = layout.checkout
+    else:
+        script = layout.checkout / "tools/run_event_probe.py"
+        command = [os.fspath(prepared.python), os.fspath(script)]
+        expected = script.parent
+    try:
+        result = subprocess.run(
+            command,
+            cwd=layout.checkout,
+            env=prepared.environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        observed = json.loads(result.stdout)
+        assert Path(observed["path0"]) == expected
+        assert observed["pending"] is False
+        assert airlock._read_marker_state(prepared.violation_dir) == ()
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+def test_inherited_child_post_startup_base_list_prefix_mutation_is_sticky(
+    tmp_path: Path,
+):
+    airlock, layout, _inventory, prepared = _task3_prepared(
+        tmp_path, extra_files={"plugins/anchor.py": "VALUE = 44\n"}
+    )
+    code = textwrap.dedent(
+        f"""
+        import sys
+
+        guard = sys.modules['_maez_worktree_airlock_guard']
+        list.insert(sys.path, 0, {os.fspath(layout.checkout / 'plugins')!r})
+        caught = False
+        try:
+            guard.audit_before_pytest()
+        except RuntimeError:
+            caught = True
+        assert caught
+        """
+    )
+    try:
+        result = _run_guarded(prepared, code, cwd=layout.checkout)
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert airlock._read_marker_state(prepared.violation_dir) == (
+            "airlock_path_provenance_violation",
+        )
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+@pytest.mark.parametrize("mode", ("module", "script"))
+def test_inherited_child_first_post_startup_mismatch_refuses_and_cannot_rearm(
+    tmp_path: Path,
+    mode: str,
+):
+    result_path = tmp_path / f"{mode}-startup-probe-result"
+    airlock, layout, _inventory, prepared = _task3_prepared(
+        tmp_path,
+        extra_files={"core/startup_probe.py": "\n", "tools/startup_probe.py": "\n"},
+    )
+    _install_pre_startup_mismatch_probe(prepared, result_path)
+    if mode == "module":
+        command = [os.fspath(prepared.python), "-m", "core.startup_probe"]
+    else:
+        command = [
+            os.fspath(prepared.python),
+            os.fspath(layout.checkout / "tools/startup_probe.py"),
+        ]
+    try:
+        result = subprocess.run(
+            command,
+            cwd=layout.checkout,
+            env=prepared.environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result_path.read_text(encoding="ascii") == "1:1:1", (
+            result.stdout + result.stderr
+        )
+        marker_tokens = airlock._read_marker_state(prepared.violation_dir)
+        assert len(marker_tokens) >= 2
+        assert set(marker_tokens) == {"airlock_path_provenance_violation"}
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+@pytest.mark.parametrize("mode", ("module", "script"))
+def test_inherited_child_forbidden_first_startup_mismatch_cannot_rearm(
+    tmp_path: Path,
+    mode: str,
+):
+    result_path = tmp_path / f"{mode}-forbidden-startup-probe-result"
+    airlock, layout, _inventory, prepared = _task3_prepared(
+        tmp_path,
+        extra_files={"core/startup_probe.py": "\n", "tools/startup_probe.py": "\n"},
+    )
+    _install_pre_startup_mismatch_probe(
+        prepared,
+        result_path,
+        forbidden_first=tmp_path / "foreign-startup-path",
+    )
+    if mode == "module":
+        command = [os.fspath(prepared.python), "-m", "core.startup_probe"]
+    else:
+        command = [
+            os.fspath(prepared.python),
+            os.fspath(layout.checkout / "tools/startup_probe.py"),
+        ]
+    try:
+        result = subprocess.run(
+            command,
+            cwd=layout.checkout,
+            env=prepared.environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result_path.read_text(encoding="ascii") == "1:1:1", (
+            result.stdout + result.stderr
+        )
+        marker_tokens = airlock._read_marker_state(prepared.violation_dir)
+        assert len(marker_tokens) >= 2
+        assert set(marker_tokens) == {"airlock_path_provenance_violation"}
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+@pytest.mark.parametrize("mode", ("module", "script"))
+def test_inherited_child_module_and_script_keep_path_zero_semantics(
+    tmp_path: Path,
+    mode: str,
+):
+    probe = textwrap.dedent(
+        """
+        import core.good
+        import json
+        import sys
+
+        guard = sys.modules['_maez_worktree_airlock_guard']
+        print(json.dumps({
+            'path0': sys.path[0],
+            'pending': guard._STARTUP_PATH0_PENDING,
+            'frozen': guard._FROZEN_STARTUP_PATH == tuple(sys.path),
+        }))
+        """
+    )
+    extra_files = {
+        "core/path0_probe.py": probe,
+        "tools/path0_probe.py": probe,
+    }
+    airlock, layout, _inventory, prepared = _task3_prepared(
+        tmp_path, extra_files=extra_files
+    )
+    if mode == "module":
+        command = [os.fspath(prepared.python), "-m", "core.path0_probe"]
+        expected = layout.checkout
+    else:
+        script = layout.checkout / "tools/path0_probe.py"
+        command = [os.fspath(prepared.python), os.fspath(script)]
+        expected = script.parent
+    try:
+        result = subprocess.run(
+            command,
+            cwd=layout.checkout,
+            env=prepared.environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        observed = json.loads(result.stdout)
+        assert Path(observed["path0"]) == expected
+        assert observed["pending"] is False
+        assert observed["frozen"] is True
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+@pytest.mark.parametrize("mode", ("module", "script"))
+@pytest.mark.parametrize("mutation", ("wrapper", "reassignment", "direct-list"))
+def test_inherited_child_frozen_startup_path_rejects_every_mutation_plane(
+    tmp_path: Path,
+    mode: str,
+    mutation: str,
+):
+    plugin = tmp_path / "checkout" / "plugins"
+    mutations = {
+        "wrapper": f"sys.path.append({os.fspath(plugin)!r})",
+        "reassignment": "sys.path = guard._ValidatingPath(sys.path)",
+        "direct-list": "list.pop(sys.path, 0)",
+    }
+    probe = textwrap.dedent(
+        f"""
+        import core.good
+        import sys
+
+        guard = sys.modules['_maez_worktree_airlock_guard']
+        assert guard._FROZEN_STARTUP_PATH == tuple(sys.path)
+        caught = False
+        try:
+            {mutations[mutation]}
+            guard._audit_paths()
+        except RuntimeError:
+            caught = True
+        assert caught
+        """
+    )
+    airlock, layout, _inventory, prepared = _task3_prepared(
+        tmp_path,
+        extra_files={
+            "core/freeze_probe.py": probe,
+            "tools/freeze_probe.py": probe,
+            "plugins/anchor.py": "VALUE = 44\n",
+        },
+    )
+    if mode == "module":
+        command = [os.fspath(prepared.python), "-m", "core.freeze_probe"]
+    else:
+        command = [
+            os.fspath(prepared.python),
+            os.fspath(layout.checkout / "tools/freeze_probe.py"),
+        ]
+    try:
+        result = subprocess.run(
+            command,
+            cwd=layout.checkout,
+            env=prepared.environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert airlock._read_marker_state(prepared.violation_dir) == (
+            "airlock_path_provenance_violation",
+        )
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+def test_inherited_child_frozen_startup_path_revalidates_same_text_target(
+    tmp_path: Path,
+):
+    sentinel = tmp_path / "retargeted-import-ran"
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    (foreign / "retarget_probe.py").write_text(
+        f"open({os.fspath(sentinel)!r}, 'w').write('ran')\n",
+        encoding="utf-8",
+    )
+    tools = tmp_path / "checkout" / "tools"
+    moved_tools = tmp_path / "checkout" / "tools-original"
+    probe = textwrap.dedent(
+        f"""
+        import core.good
+        import sys
+
+        guard = sys.modules['_maez_worktree_airlock_guard']
+        os_module = sys.modules['os']
+        os_module.rename({os.fspath(tools)!r}, {os.fspath(moved_tools)!r})
+        os_module.symlink({os.fspath(foreign)!r}, {os.fspath(tools)!r})
+        caught = False
+        try:
+            guard._audit_paths()
+        except RuntimeError:
+            caught = True
+        if not caught:
+            try:
+                __import__('retarget_probe')
+            except RuntimeError:
+                pass
+        """
+    )
+    airlock, layout, _inventory, prepared = _task3_prepared(
+        tmp_path,
+        extra_files={"tools/frozen_retarget.py": probe},
+    )
+    script = layout.checkout / "tools/frozen_retarget.py"
+    try:
+        result = subprocess.run(
+            [os.fspath(prepared.python), os.fspath(script)],
+            cwd=layout.checkout,
+            env=prepared.environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert not sentinel.exists()
+        assert airlock._read_marker_state(prepared.violation_dir) == (
+            "airlock_path_provenance_violation",
+        )
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+def test_inherited_grandchild_retains_disposable_guarded_provenance(tmp_path: Path):
+    airlock, layout, _inventory, prepared = _task3_prepared(tmp_path)
+    grandchild_code = (
+        "import core.good,json,sys;"
+        "g=sys.modules['_maez_worktree_airlock_guard'];"
+        "print(json.dumps({"
+        "'executable':sys.executable,"
+        "'origin':core.good.__file__,"
+        "'ready':g.AIRLOCK_READY,"
+        "'path':sys.path}))"
+    )
+    child_code = textwrap.dedent(
+        f"""
+        import json
+        import subprocess
+        import sys
+
+        grandchild = subprocess.run(
+            ['python3', '-c', {grandchild_code!r}],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        print(json.dumps({{
+            'executable': sys.executable,
+            'grandchild_status': grandchild.returncode,
+            'grandchild': json.loads(grandchild.stdout),
+        }}))
+        """
+    )
+    try:
+        result = subprocess.run(
+            ["python", "-c", child_code],
+            cwd=layout.checkout,
+            env=prepared.environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        observed = json.loads(result.stdout)
+        assert Path(observed["executable"]).resolve() == prepared.python.resolve()
+        assert observed["grandchild_status"] == 0
+        assert Path(observed["grandchild"]["executable"]).resolve().is_relative_to(
+            prepared.venv.resolve()
+        )
+        assert Path(observed["grandchild"]["origin"]) == layout.checkout / "core/good.py"
+        assert observed["grandchild"]["ready"] is True
+        assert "" not in observed["grandchild"]["path"]
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+def test_inherited_grandchild_caught_violation_leaves_sticky_marker(tmp_path: Path):
+    airlock, layout, _inventory, prepared = _task3_prepared(tmp_path)
+    grandchild_code = textwrap.dedent(
+        """
+        import sys
+        caught = False
+        try:
+            sys.path.append('/foreign/grandchild')
+        except RuntimeError:
+            caught = True
+        assert caught
+        """
+    )
+    child_code = textwrap.dedent(
+        f"""
+        import subprocess
+        import sys
+        grandchild = subprocess.run([sys.executable, '-c', {grandchild_code!r}])
+        assert grandchild.returncode == 0
+        """
+    )
+    try:
+        result = subprocess.run(
+            [os.fspath(prepared.python), "-c", child_code],
+            cwd=layout.checkout,
+            env=prepared.environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert airlock._read_marker_state(prepared.violation_dir) == (
+            "airlock_path_provenance_violation",
+        )
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+def test_inherited_child_absolute_foreign_interpreter_is_outside_without_no_site(
+    tmp_path: Path,
+):
+    airlock, _layout, _inventory, prepared = _task3_prepared(tmp_path)
+    probe = (
+        "import sys;"
+        "print(sys.executable);"
+        "print('_maez_worktree_airlock_guard' in sys.modules)"
+    )
+    try:
+        foreign = subprocess.run(
+            [
+                os.fspath(Path(sys._base_executable).resolve()),
+                "-I",
+                "-B",
+                "-c",
+                probe,
+            ],
+            cwd=tmp_path,
+            env=prepared.environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert foreign.returncode == 0, foreign.stderr
+        lines = foreign.stdout.splitlines()
+        assert Path(lines[0]).resolve() != prepared.python.resolve()
+        assert lines[1] == "False"
+        assert airlock._read_marker_state(prepared.violation_dir) == ()
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+def test_inherited_child_disposable_no_site_project_import_is_outside(
+    tmp_path: Path,
+):
+    airlock, layout, _inventory, prepared = _task3_prepared(tmp_path)
+    try:
+        no_site = subprocess.run(
+            [
+                os.fspath(prepared.python),
+                "-S",
+                "-B",
+                "-c",
+                "import core.good,sys;print(sys.executable);"
+                "print(core.good.__file__);"
+                "print('_maez_worktree_airlock_guard' in sys.modules)",
+            ],
+            cwd=layout.checkout,
+            env=prepared.environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert no_site.returncode == 0, no_site.stderr
+        lines = no_site.stdout.splitlines()
+        assert Path(lines[0]).resolve() == prepared.python.resolve()
+        assert Path(lines[1]) == layout.checkout / "core/good.py"
+        assert lines[2] == "False"
+        assert airlock._read_marker_state(prepared.violation_dir) == ()
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+def test_inherited_child_bare_empty_environment_interpreters_remain_outside(
+    tmp_path: Path,
+):
+    airlock, _layout, _inventory, prepared = _task3_prepared(tmp_path)
+    probe = (
+        "import sys;"
+        "print(sys.executable);"
+        "print('_maez_worktree_airlock_guard' in sys.modules)"
+    )
+    try:
+        for bare in ("python", "python3"):
+            resolved = shutil.which(bare, path=os.defpath)
+            if resolved is None:
+                with pytest.raises(FileNotFoundError):
+                    subprocess.run([bare, "-c", "pass"], env={}, check=False)
+                continue
+            outside = subprocess.run(
+                [bare, "-I", "-S", "-B", "-c", probe],
+                env={},
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            assert outside.returncode == 0, outside.stderr
+            lines = outside.stdout.splitlines()
+            assert Path(lines[0]).resolve() != prepared.python.resolve()
+            assert lines[1] == "False"
+        assert airlock._read_marker_state(prepared.violation_dir) == ()
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+def test_inherited_child_contract_contains_no_task5_certification_seam():
+    source = AIRLOCK_SOURCE.read_text(encoding="utf-8")
+
+    assert "MAEZ_AIRLOCK_CERTIFIED" not in source
+    assert "_emit_certificate" not in source
+
+
+def test_inherited_child_design_qualifies_absolute_interpreter_bypass_as_foreign():
+    design = (
+        REPO
+        / "docs/superpowers/specs/2026-07-16-clean-checkout-import-airlock-design.md"
+    ).read_text(encoding="utf-8")
+
+    assert "Absolute foreign-interpreter literals" in design
+    assert "Absolute interpreter literals and project-import descendants" not in design
+
+
+def test_inherited_child_task4_plan_authorizes_exact_atomic_four_file_scope():
+    plan = (
+        REPO / "docs/superpowers/plans/2026-07-17-clean-checkout-import-airlock.md"
+    ).read_text(encoding="utf-8")
+    task4 = plan.split("## Task 4: Inherited descendant contract", 1)[1].split(
+        "## Task 5:", 1
+    )[0]
+    files = task4.split("- [ ]", 1)[0]
+    expected = (
+        "docs/superpowers/plans/2026-07-17-clean-checkout-import-airlock.md",
+        "docs/superpowers/specs/2026-07-16-clean-checkout-import-airlock-design.md",
+        "scripts/dev/worktree_test_airlock.py",
+        "tests/test_worktree_airlock_imports.py",
+    )
+
+    assert files.count("- Modify:") == len(expected)
+    for path in expected:
+        assert f"- Modify: `{path}`" in files
+
+
+def test_inherited_child_direct_script_preexecution_validation_is_documented():
+    documents = (
+        REPO / "docs/superpowers/plans/2026-07-17-clean-checkout-import-airlock.md",
+        REPO
+        / "docs/superpowers/specs/2026-07-16-clean-checkout-import-airlock-design.md",
+    )
+
+    for document in documents:
+        text = document.read_text(encoding="utf-8")
+        assert "cpython.run_file" in text
+        assert "before CPython opens the file or executes any script" in text
+        assert "untracked script" in text
+        assert "_RUNNER_PATH" in text
+
+
 def test_task3_module_description_names_the_landed_airlock():
     airlock = _airlock()
 
@@ -718,7 +1828,11 @@ def test_disposable_layout_is_private_minimal_and_has_no_pip(tmp_path: Path):
         airlock._remove_disposable(prepared.root)
 
 
-def test_disposable_runner_creates_only_one_private_diagnostic(tmp_path: Path):
+@pytest.mark.parametrize("isolated", (True, False), ids=("safe-path", "script-path0"))
+def test_disposable_runner_creates_only_one_private_diagnostic(
+    tmp_path: Path,
+    isolated: bool,
+):
     airlock = _airlock()
     layout = airlock.AirlockLayout(
         shared_python=SHARED_PYTHON,
@@ -743,8 +1857,12 @@ def test_disposable_runner_creates_only_one_private_diagnostic(tmp_path: Path):
         layout, airlock._discover_inventory(REPO), root_parent=tmp_path
     )
     try:
+        command = [os.fspath(prepared.python)]
+        if isolated:
+            command.append("-I")
+        command.extend(("-B", os.fspath(prepared.runner)))
         result = subprocess.run(
-            [os.fspath(prepared.python), "-I", "-B", os.fspath(prepared.runner)],
+            command,
             cwd=REPO,
             env=prepared.environment,
             check=False,
@@ -763,6 +1881,7 @@ def test_disposable_runner_creates_only_one_private_diagnostic(tmp_path: Path):
         assert "MAEZ_AIRLOCK_CERTIFIED" not in prepared.runner.read_text(
             encoding="utf-8"
         )
+        assert airlock._read_marker_state(prepared.violation_dir) == ()
     finally:
         airlock._remove_disposable(prepared.root)
 
@@ -868,7 +1987,8 @@ def test_controlled_pth_exact_origin_is_idempotent_across_reprocessing(
         f"line={executable_line!r};"
         "builtins.exec(line);builtins.exec(line);"
         "m=sys.modules['_maez_worktree_airlock_guard'];"
-        "print(json.dumps([m.__file__,m.AIRLOCK_READY,m.AIRLOCK_LOAD_COUNT]))"
+        "print(json.dumps([m.__file__,m.AIRLOCK_READY,m.AIRLOCK_LOAD_COUNT,"
+        "m.AUDIT_HOOK_INSTALL_COUNT]))"
     )
     try:
         result = subprocess.run(
@@ -880,7 +2000,7 @@ def test_controlled_pth_exact_origin_is_idempotent_across_reprocessing(
             text=True,
         )
         assert result.returncode == 0, result.stderr
-        assert json.loads(result.stdout) == [os.fspath(prepared.guard), True, 1]
+        assert json.loads(result.stdout) == [os.fspath(prepared.guard), True, 1, 1]
     finally:
         airlock._remove_disposable(prepared.root)
 
@@ -2320,6 +3440,156 @@ def test_sticky_marker_write_failure_exits_86_directly(tmp_path: Path):
         airlock._remove_disposable(prepared.root)
 
 
+def test_inherited_child_marker_short_write_exits_86_and_reader_fails_closed(
+    tmp_path: Path,
+):
+    token = "airlock_path_provenance_violation"
+    airlock, layout, _inventory, prepared = _task3_prepared(tmp_path)
+    code = textwrap.dedent(
+        f"""
+        import sys
+
+        guard = sys.modules['_maez_worktree_airlock_guard']
+        real_write = guard._os.write
+
+        def short_write(descriptor, payload):
+            if payload == {f'{token}\n'.encode('ascii')!r}:
+                return real_write(descriptor, payload[:-1])
+            return real_write(descriptor, payload)
+
+        guard._os.write = short_write
+        guard._record_marker({token!r})
+        """
+    )
+    try:
+        result = _run_guarded(prepared, code, cwd=layout.checkout)
+
+        assert result.returncode == 86
+        markers = tuple(prepared.violation_dir.iterdir())
+        assert len(markers) == 1
+        assert markers[0].name == "00000001"
+        assert markers[0].read_bytes() == token.encode("ascii")
+        with pytest.raises(
+            airlock.AirlockRefusal, match="airlock_child_setup_failed"
+        ):
+            airlock._read_marker_state(prepared.violation_dir)
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+def test_inherited_child_marker_close_failure_exits_86_with_sticky_marker(
+    tmp_path: Path,
+):
+    token = "airlock_path_provenance_violation"
+    airlock, layout, _inventory, prepared = _task3_prepared(tmp_path)
+    code = textwrap.dedent(
+        f"""
+        import sys
+
+        guard = sys.modules['_maez_worktree_airlock_guard']
+
+        def close_failure(_descriptor):
+            raise OSError('forced marker close failure')
+
+        guard._os.close = close_failure
+        guard._record_marker({token!r})
+        """
+    )
+    try:
+        result = _run_guarded(prepared, code, cwd=layout.checkout)
+
+        assert result.returncode == 86
+        assert airlock._read_marker_state(prepared.violation_dir) == (token,)
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+def test_inherited_grandchild_marker_concurrency_preserves_same_token_writers(
+    tmp_path: Path,
+):
+    token = "airlock_path_provenance_violation"
+    airlock, _layout, _inventory, prepared = _task3_prepared(tmp_path)
+    try:
+        completed = _run_concurrent_marker_writers(
+            prepared, (token, token), tmp_path
+        )
+
+        assert [result.returncode for result in completed] == [0, 0], [
+            result.stderr for result in completed
+        ]
+        assert sorted(path.name for path in prepared.violation_dir.iterdir()) == [
+            "00000001",
+            "00000002",
+        ]
+        assert airlock._read_marker_state(prepared.violation_dir) == (token, token)
+        for marker in prepared.violation_dir.iterdir():
+            info = marker.stat()
+            assert stat.S_IMODE(info.st_mode) == 0o600
+            assert info.st_nlink == 1
+            assert marker.read_text(encoding="ascii") == f"{token}\n"
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+def test_inherited_grandchild_marker_concurrency_preserves_priority_not_timing(
+    tmp_path: Path,
+):
+    path_token = "airlock_path_provenance_violation"
+    import_token = "airlock_import_provenance_violation"
+    airlock, _layout, _inventory, prepared = _task3_prepared(tmp_path)
+    try:
+        completed = _run_concurrent_marker_writers(
+            prepared, (import_token, path_token), tmp_path
+        )
+
+        assert [result.returncode for result in completed] == [0, 0], [
+            result.stderr for result in completed
+        ]
+        marker_tokens = airlock._read_marker_state(prepared.violation_dir)
+        assert set(marker_tokens) == {path_token, import_token}
+        assert (
+            airlock._select_refusal(
+                marker_tokens,
+                shared_environment_changed=False,
+                cleanup_complete=True,
+            )
+            == path_token
+        )
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+def test_inherited_grandchild_marker_ordinal_overflow_exits_86(tmp_path: Path):
+    airlock, layout, _inventory, prepared = _task3_prepared(tmp_path)
+    existing = prepared.violation_dir / "00000001"
+    existing.write_text("airlock_path_provenance_violation\n", encoding="ascii")
+    existing.chmod(0o600)
+    code = (
+        "import sys;"
+        "g=sys.modules['_maez_worktree_airlock_guard'];"
+        "g._MAX_MARKER_ORDINAL=1;"
+        "g._record_marker('airlock_import_provenance_violation');"
+        "print('UNREACHABLE')"
+    )
+    try:
+        result = subprocess.run(
+            [os.fspath(prepared.python), "-I", "-B", "-c", code],
+            cwd=layout.checkout,
+            env=prepared.environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 86
+        assert "UNREACHABLE" not in result.stdout
+        assert sorted(path.name for path in prepared.violation_dir.iterdir()) == [
+            "00000001"
+        ]
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
 @pytest.mark.parametrize(
     "token",
     ("airlock_path_provenance_violation", "airlock_import_provenance_violation"),
@@ -2328,8 +3598,8 @@ def test_marker_reader_preserves_validated_refusal_token(tmp_path: Path, token: 
     airlock = _airlock()
     violation_dir = tmp_path / "violations"
     violation_dir.mkdir(mode=0o700)
-    marker = violation_dir / f"00000001-{token}"
-    marker.write_text(f"1:{token}\n", encoding="ascii")
+    marker = violation_dir / "00000001"
+    marker.write_text(f"{token}\n", encoding="ascii")
     marker.chmod(0o600)
 
     assert airlock._read_marker_state(violation_dir) == (token,)
@@ -2338,16 +3608,11 @@ def test_marker_reader_preserves_validated_refusal_token(tmp_path: Path, token: 
 @pytest.mark.parametrize(
     ("name", "payload"),
     (
-        (
-            "00000001-airlock_path_provenance_violation",
-            "2:airlock_path_provenance_violation\n",
-        ),
-        ("not-a-marker", "1:airlock_path_provenance_violation\n"),
-        ("00000001-unknown", "1:unknown\n"),
-        (
-            "00000001-airlock_dependency_unavailable",
-            "1:airlock_dependency_unavailable\n",
-        ),
+        ("00000001", "airlock_path_provenance_violation"),
+        ("not-a-marker", "airlock_path_provenance_violation\n"),
+        ("00000001", "unknown\n"),
+        ("00000001", "airlock_dependency_unavailable\n"),
+        ("00000002", "airlock_path_provenance_violation\n"),
     ),
 )
 def test_marker_reader_fails_closed_on_malformed_marker(
@@ -2359,6 +3624,32 @@ def test_marker_reader_fails_closed_on_malformed_marker(
     marker = violation_dir / name
     marker.write_text(payload, encoding="ascii")
     marker.chmod(0o600)
+
+    with pytest.raises(airlock.AirlockRefusal, match="airlock_child_setup_failed"):
+        airlock._read_marker_state(violation_dir)
+
+
+@pytest.mark.parametrize("damage", ("symlink", "hardlink", "mode"))
+def test_marker_reader_preserves_no_follow_single_link_private_file_contract(
+    tmp_path: Path,
+    damage: str,
+):
+    airlock = _airlock()
+    violation_dir = tmp_path / "violations"
+    violation_dir.mkdir(mode=0o700)
+    target = tmp_path / "target"
+    target.write_text("airlock_path_provenance_violation\n", encoding="ascii")
+    target.chmod(0o600)
+    marker = violation_dir / "00000001"
+    if damage == "symlink":
+        marker.symlink_to(target)
+    elif damage == "hardlink":
+        os.link(target, marker)
+    else:
+        marker.write_text(
+            "airlock_path_provenance_violation\n", encoding="ascii"
+        )
+        marker.chmod(0o644)
 
     with pytest.raises(airlock.AirlockRefusal, match="airlock_child_setup_failed"):
         airlock._read_marker_state(violation_dir)
@@ -2377,8 +3668,8 @@ def test_marker_refusal_precedes_generic_status_86_dependency_token(
     root = tmp_path / "prepared"
     violation_dir = root / "violations"
     violation_dir.mkdir(parents=True, mode=0o700)
-    marker = violation_dir / f"00000001-{token}"
-    marker.write_text(f"1:{token}\n", encoding="ascii")
+    marker = violation_dir / "00000001"
+    marker.write_text(f"{token}\n", encoding="ascii")
     marker.chmod(0o600)
     prepared = types.SimpleNamespace(
         root=root,
@@ -2409,8 +3700,8 @@ def test_malformed_outer_marker_precedes_generic_status_86_dependency_token(
     root = tmp_path / "prepared"
     violation_dir = root / "violations"
     violation_dir.mkdir(parents=True, mode=0o700)
-    marker = violation_dir / "00000001-unknown"
-    marker.write_text("1:unknown\n", encoding="ascii")
+    marker = violation_dir / "00000001"
+    marker.write_text("unknown\n", encoding="ascii")
     marker.chmod(0o600)
     prepared = types.SimpleNamespace(
         root=root,

@@ -402,10 +402,12 @@ def _guard_source(
 import os as _os
 import sys as _sys
 
+_sys.dont_write_bytecode = True
 AIRLOCK_LOAD_COUNT = globals().get("AIRLOCK_LOAD_COUNT", 0) + 1
-_MARKER_ORDINAL = 0
+_MAX_MARKER_ORDINAL = 99_999_999
 _SELF = _sys.modules.get(__name__)
 _MAIN = _sys.modules.get("__main__")
+_ADMITTED_MAIN_ENTRY = None
 
 
 class AirlockGuardViolation(RuntimeError):
@@ -441,38 +443,48 @@ def _has_nested_git(path):
 
 
 def _record_marker(token):
-    global _MARKER_ORDINAL
-    _MARKER_ORDINAL += 1
-    ordinal = _MARKER_ORDINAL
-    name = f"{ordinal:08d}-{token}"
     flags = _os.O_WRONLY | _os.O_CREAT | _os.O_EXCL
     if hasattr(_os, "O_CLOEXEC"):
         flags |= _os.O_CLOEXEC
     if hasattr(_os, "O_NOFOLLOW"):
         flags |= _os.O_NOFOLLOW
-    descriptor = None
     try:
-        descriptor = _os.open(_os.path.join(_VIOLATION_DIR, name), flags, 0o600)
-        _os.fchmod(descriptor, 0o600)
-        payload = f"{ordinal}:{token}\n".encode("ascii")
-        if _os.write(descriptor, payload) != len(payload):
-            raise OSError("short marker write")
-        info = _os.fstat(descriptor)
-        if (
-            (info.st_mode & 0o170000) != 0o100000
-            or info.st_nlink != 1
-            or (info.st_mode & 0o777) != 0o600
-        ):
-            raise OSError("invalid marker")
+        ordinals = range(1, _MAX_MARKER_ORDINAL + 1)
     except BaseException:
-        if descriptor is not None:
-            try:
-                _os.close(descriptor)
-            except OSError:
-                pass
         _os._exit(86)
-    else:
-        _os.close(descriptor)
+    for ordinal in ordinals:
+        descriptor = None
+        try:
+            descriptor = _os.open(
+                _os.path.join(_VIOLATION_DIR, f"{ordinal:08d}"), flags, 0o600
+            )
+        except FileExistsError:
+            continue
+        except BaseException:
+            _os._exit(86)
+        try:
+            _os.fchmod(descriptor, 0o600)
+            payload = f"{token}\n".encode("ascii")
+            if _os.write(descriptor, payload) != len(payload):
+                raise OSError("short marker write")
+            info = _os.fstat(descriptor)
+            if (
+                (info.st_mode & 0o170000) != 0o100000
+                or info.st_nlink != 1
+                or (info.st_mode & 0o777) != 0o600
+            ):
+                raise OSError("invalid marker")
+            _os.close(descriptor)
+            descriptor = None
+        except BaseException:
+            if descriptor is not None:
+                try:
+                    _os.close(descriptor)
+                except BaseException:
+                    pass
+            _os._exit(86)
+        return
+    _os._exit(86)
 
 
 def _violate(token):
@@ -525,8 +537,34 @@ def _normalize_initial_path():
     return _canonical_path_sequence(values)
 
 
+def _expected_startup_path0():
+    if not _sys.argv:
+        return None
+    argv0 = _sys.argv[0]
+    if _sys.flags.safe_path:
+        return None
+    if argv0 == "-m":
+        candidate = _os.getcwd()
+    elif not argv0 or argv0 in ("-c", "-"):
+        return None
+    else:
+        candidate = _os.path.dirname(_os.path.abspath(argv0))
+    try:
+        return _os.path.realpath(candidate)
+    except (OSError, TypeError, ValueError):
+        _violate("airlock_path_provenance_violation")
+
+
+_STARTUP_PATH0_PENDING = False
+_FROZEN_STARTUP_PATH = None
+_FROZEN_STARTUP_PATH_OBJECT = None
+_PRE_STARTUP_BASELINE_AUDIT_PENDING = True
+
+
 class _ValidatingPath(list):
     def _replace(self, candidate):
+        if self is _FROZEN_STARTUP_PATH_OBJECT:
+            _violate("airlock_path_provenance_violation")
         canonical = _canonical_path_sequence(candidate)
         list.__setitem__(self, slice(None), canonical)
 
@@ -565,6 +603,12 @@ class _ValidatingPath(list):
 
 _BASELINE_PATH = tuple(_normalize_initial_path())
 _sys.path = _ValidatingPath(_BASELINE_PATH)
+_EXPECTED_STARTUP_PATH0 = _expected_startup_path0()
+_STARTUP_PATH_AUDIT_REQUIRED = bool(
+    _sys.argv
+    and (_sys.argv[0] == "-m" or _sys.argv[0] not in ("", "-", "-c"))
+)
+_STARTUP_PATH0_PENDING = _STARTUP_PATH_AUDIT_REQUIRED
 
 
 import site as _site
@@ -681,6 +725,14 @@ def _is_internal_airlock_module(name, module):
         and getattr(module, "__spec__", None) is None
     ):
         return True
+    if (
+        name == "__main__"
+        and module is _MAIN
+        and _ADMITTED_MAIN_ENTRY is not None
+        and getattr(module, "__file__", None) == _ADMITTED_MAIN_ENTRY[1]
+        and getattr(module, "__spec__", None) is None
+    ):
+        return True
     return (
         name == "__main__"
         and module is _MAIN
@@ -783,6 +835,50 @@ def _validate_planes(
                 _violate("airlock_import_provenance_violation")
 
 
+def _validate_direct_entry(raw):
+    if not isinstance(raw, str):
+        _violate("airlock_import_provenance_violation")
+    lexical = _os.path.abspath(raw)
+    resolved = _canonical(raw)
+    if (
+        lexical != resolved
+        or _has_nested_git(lexical)
+        or any(
+            resolved == root or _inside(resolved, root) for root in _OTHER_WORKTREES
+        )
+    ):
+        _violate("airlock_import_provenance_violation")
+    try:
+        info = _os.lstat(lexical)
+    except OSError:
+        _violate("airlock_import_provenance_violation")
+    if (info.st_mode & 0o170000) != 0o100000:
+        _violate("airlock_import_provenance_violation")
+    if lexical != _RUNNER_PATH and lexical not in _TRACKED_FILES:
+        _violate("airlock_import_provenance_violation")
+    return lexical, resolved
+
+
+def _validate_startup_entry():
+    if not _sys.argv or _sys.argv[0] in {"", "-", "-c", "-m"}:
+        return None
+    return _validate_direct_entry(_sys.argv[0])
+
+
+def _revalidate_run_file_event(args):
+    if (
+        not isinstance(args, tuple)
+        or len(args) != 1
+        or _ADMITTED_MAIN_ENTRY is None
+        or not _sys.argv
+    ):
+        _violate("airlock_import_provenance_violation")
+    event_entry = _validate_direct_entry(args[0])
+    argv_entry = _validate_direct_entry(_sys.argv[0])
+    if event_entry != _ADMITTED_MAIN_ENTRY or argv_entry != _ADMITTED_MAIN_ENTRY:
+        _violate("airlock_import_provenance_violation")
+
+
 def validate_spec(fullname, spec):
     if not _module_is_owned(fullname, spec=spec):
         return spec
@@ -804,10 +900,15 @@ def audit_loaded_modules():
         if _is_internal_airlock_module(name, module):
             continue
         spec = getattr(module, "__spec__", None)
-        if not _module_is_owned(name, module=module, spec=spec):
+        validation_name = name
+        if name == "__main__" and module is _MAIN and spec is not None:
+            spec_name = getattr(spec, "name", None)
+            if isinstance(spec_name, str) and spec_name:
+                validation_name = spec_name
+        if not _module_is_owned(validation_name, module=module, spec=spec):
             continue
         _validate_planes(
-            name,
+            validation_name,
             getattr(module, "__file__", None),
             getattr(spec, "origin", None) if spec is not None else None,
             getattr(module, "__path__", None),
@@ -923,15 +1024,66 @@ def restore_dispatcher_front():
         _sys.meta_path = _GuardedMetaPath(followers)
 
 
-def _audit_paths():
-    observed = tuple(_sys.path)
-    canonical = tuple(_canonical_path_sequence(observed))
+def _startup_path_projection_valid(observed):
+    if _EXPECTED_STARTUP_PATH0 is None:
+        canonical = tuple(_canonical_path_sequence(observed))
+        return observed == _BASELINE_PATH and observed == canonical
     if (
-        not isinstance(_sys.path, _ValidatingPath)
-        or observed != canonical
-        or not set(_BASELINE_PATH).issubset(observed)
+        not observed
+        or observed[0] != _EXPECTED_STARTUP_PATH0
+        or observed[1:] != _BASELINE_PATH
+        or tuple(_canonical_path_sequence(observed[1:])) != _BASELINE_PATH
     ):
+        return False
+    if _ADMITTED_MAIN_ENTRY is not None and _ADMITTED_MAIN_ENTRY[0] == _RUNNER_PATH:
+        path0 = _os.path.dirname(_RUNNER_PATH)
+        if _canonical(path0) != path0 or not _os.path.isdir(path0):
+            _violate("airlock_path_provenance_violation")
+    else:
+        _path_class_value, path0 = _admit_path(observed[0])
+    return observed[0] == path0
+
+
+def _audit_paths():
+    global _PRE_STARTUP_BASELINE_AUDIT_PENDING
+    global _STARTUP_PATH0_PENDING
+    global _FROZEN_STARTUP_PATH, _FROZEN_STARTUP_PATH_OBJECT
+    path_object = _sys.path
+    if _PRE_STARTUP_BASELINE_AUDIT_PENDING:
+        if not isinstance(path_object, _ValidatingPath):
+            _violate("airlock_path_provenance_violation")
+        observed = tuple(path_object)
+        canonical = tuple(_canonical_path_sequence(observed))
+        if observed == _BASELINE_PATH and observed == canonical:
+            return
         _violate("airlock_path_provenance_violation")
+    if _FROZEN_STARTUP_PATH is not None:
+        if (
+            path_object is _FROZEN_STARTUP_PATH_OBJECT
+            and tuple(path_object) == _FROZEN_STARTUP_PATH
+            and _startup_path_projection_valid(_FROZEN_STARTUP_PATH)
+        ):
+            return
+        _violate("airlock_path_provenance_violation")
+    if _STARTUP_PATH0_PENDING:
+        _STARTUP_PATH0_PENDING = False
+        if not isinstance(path_object, _ValidatingPath):
+            _violate("airlock_path_provenance_violation")
+        observed = tuple(path_object)
+        if _startup_path_projection_valid(observed):
+            _FROZEN_STARTUP_PATH = observed
+            _FROZEN_STARTUP_PATH_OBJECT = path_object
+            return
+        _violate("airlock_path_provenance_violation")
+    if not isinstance(path_object, _ValidatingPath):
+        _violate("airlock_path_provenance_violation")
+    observed = tuple(path_object)
+    canonical = tuple(_canonical_path_sequence(observed))
+    if _STARTUP_PATH_AUDIT_REQUIRED:
+        _violate("airlock_path_provenance_violation")
+    if observed == canonical and set(_BASELINE_PATH).issubset(observed):
+        return
+    _violate("airlock_path_provenance_violation")
 
 
 def audit_before_pytest():
@@ -940,8 +1092,44 @@ def audit_before_pytest():
     audit_loaded_modules()
 
 
+def _normalize_command_path0():
+    normalized = _normalize_initial_path()
+    if isinstance(_sys.path, _ValidatingPath):
+        list.__setitem__(_sys.path, slice(None), normalized)
+    else:
+        _sys.path = _ValidatingPath(normalized)
+
+
+_RUN_COMMAND_PATH_PENDING = bool(_sys.argv and _sys.argv[0] == "-c")
+
+
+def _run_command_audit_hook(event, _args):
+    global _PRE_STARTUP_BASELINE_AUDIT_PENDING, _RUN_COMMAND_PATH_PENDING
+    if event != "cpython.run_command":
+        return
+    _PRE_STARTUP_BASELINE_AUDIT_PENDING = False
+    if _RUN_COMMAND_PATH_PENDING:
+        _RUN_COMMAND_PATH_PENDING = False
+        _normalize_command_path0()
+        _sys.dont_write_bytecode = True
+    audit_before_pytest()
+
+
+def _startup_phase_audit_hook(event, _args):
+    global _PRE_STARTUP_BASELINE_AUDIT_PENDING
+    if event not in ("cpython.run_module", "cpython.run_file"):
+        return
+    _PRE_STARTUP_BASELINE_AUDIT_PENDING = False
+    if event == "cpython.run_file":
+        _revalidate_run_file_event(_args)
+
+
+_ADMITTED_MAIN_ENTRY = _validate_startup_entry()
 restore_dispatcher_front()
 audit_before_pytest()
+AUDIT_HOOK_INSTALL_COUNT = globals().get("AUDIT_HOOK_INSTALL_COUNT", 0) + 1
+_sys.addaudithook(_run_command_audit_hook)
+_sys.addaudithook(_startup_phase_audit_hook)
 AIRLOCK_READY = True
 '''
     return header + body
@@ -1242,12 +1430,11 @@ def _read_marker_state(violation_dir: Path) -> tuple[str, ...]:
     try:
         entries = sorted(violation_dir.iterdir(), key=lambda path: path.name)
         for path in entries:
-            matched = re.fullmatch(r"([0-9]{8})-([a-z0-9_]+)", path.name)
+            matched = re.fullmatch(r"([0-9]{8})", path.name)
             if matched is None:
                 raise AirlockRefusal("airlock_child_setup_failed")
             ordinal = int(matched.group(1))
-            token = matched.group(2)
-            if token not in guard_tokens:
+            if ordinal < 1:
                 raise AirlockRefusal("airlock_child_setup_failed")
             flags = os.O_RDONLY
             if hasattr(os, "O_CLOEXEC"):
@@ -1269,8 +1456,11 @@ def _read_marker_state(violation_dir: Path) -> tuple[str, ...]:
                     raise AirlockRefusal("airlock_child_setup_failed")
             finally:
                 os.close(descriptor)
-            expected = f"{ordinal}:{token}\n".encode("ascii")
-            if payload != expected:
+            try:
+                token = payload.decode("ascii").removesuffix("\n")
+            except UnicodeError:
+                raise AirlockRefusal("airlock_child_setup_failed") from None
+            if payload != f"{token}\n".encode("ascii") or token not in guard_tokens:
                 raise AirlockRefusal("airlock_child_setup_failed")
             markers.append((ordinal, token))
     except AirlockRefusal:
