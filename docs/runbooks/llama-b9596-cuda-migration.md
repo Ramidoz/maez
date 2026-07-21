@@ -140,6 +140,41 @@ The effective argument vector is hashed after removing only the executable.
 The base unit, MTP drop-in, Vulkan runtime, library manifest, model, and
 argument packet together define the exact rollback identity.
 
+That combined rollback identity is reproducible from a durable canonical
+preimage, not from an unrecoverable frozen hash. In the order shown, serialize
+these eight `[name,value]` pairs as compact UTF-8 JSON with
+`ensure_ascii=False`, separators `(',', ':')`, `allow_nan=False`, and no
+trailing newline:
+
+```json
+[["unit_sha256","65dfc9e59267b54f4896d88db682538d2fc9ac20d97a80bbd3c6cdfedcadddaa"],["dropin_sha256","95f630a0b3a7095d9ca0328184d731077d9b8dcca8dc1eadf93094fa8c529f37"],["runtime_sha256","55c6ce2efc8feccd25bfab500c5ac70709152be6ff0c5bb2e0f478991519db69"],["library_manifest_sha256","c04ba04862db3b558deecbcc2b8f923a1dc7bce830b74592dd9157b784c86dd2"],["model_sha256","4085665ee36d82a672a238a43f0e5643f2f0e39f2d7bd5d373f0ef10ecf53095"],["model_bytes",17909097600],["alias","qwen36-27b-mtp"],["effective_args_sha256","8fa9b789572e4d1d63f5d9e008797b14df5fc10b634b0a3858cd68fe008c583b"]]
+```
+
+The canonical bytes are 582 bytes and hash to
+`4ccbadb4de46b8856bdc4fa130a52141784038693e0da0021205fbae3b7db3f2`.
+The exact rows live in committed code, and `static-preflight` creates or
+verifies the identical raw preimage at
+`local/cuda_migration_bench/preimages/rollback-manifest-4ccbadb4de46b8856bdc4fa130a52141784038693e0da0021205fbae3b7db3f2.json`.
+Creation uses a dedicated immutable durability path: true link-time EEXIST is
+separate from every other error; both a new file and a matching existing file
+must complete file and parent-directory fsync plus identity revalidation. A
+post-link/fsync failure never becomes success merely because matching bytes
+are visible. Both phase commands re-open and re-hash it read-only before
+measurement; they cannot create or repair it. This file is a reproducibility
+preimage, not a new evidence schema.
+
+cuda_compiler and cmake_version are fresh static-preflight host observations.
+They are not retroactive build provenance. These runtime-identity fields do
+not claim which tools built the already hashed candidate. The bounded CMake
+contract accepts either
+`3\.\d{1,2}\.\d{1,3}` or `4\.\d{1,2}\.\d{1,3}`; the current truthful host
+observation is `4.2.3` and must never be rewritten as a fictional 3.x value.
+Candidate `library_hashes` contains only fully verified regular `F` entries
+matching `lib*.so*` from `runtime-manifest.sha256`; symlink `L` rows are
+verified but excluded from that mapping. The manifest file itself is the sole
+permitted top-level file without a manifest row; every other unlisted
+top-level candidate asset refuses.
+
 ## Toolkit and sibling build
 
 CUDA 13.2 is an explicitly accepted cross-release exception: NVIDIA's signed
@@ -260,6 +295,21 @@ raw `env -i` commands in the phases below become REFERENCE ARGV ONLY — they
 document the exact frozen argument vector the driver must spawn. Running
 them by hand bypasses authorization consumption, packet production, and the
 turn-artifact manifest, and therefore cannot produce scoreable evidence.
+
+The only owner command surface is:
+
+```bash
+/home/rohit/maez/.venv/bin/python -B -m scripts.cuda_bench_cli <command> ...
+```
+
+Its closed commands are `static-preflight`, `rehearse`, `vulkan-baseline`,
+`cuda-candidate`, and `assemble-stage1`. It emits exactly one content-light
+JSON line. Exit 0 means an admitted `ok` outcome; parse refusal is 2; other
+refusals are 3; failed outcomes are 4; SIGINT/SIGTERM interruption is 130/143.
+No refusal that prints a valid receipt is shell-success. Every admitted command
+first persists a content-light admission receipt; if later terminal publication
+fails, that receipt is the non-null terminal binding. Parse/root/admission
+failure writes nothing and emits null artifact fields.
 
 Terminology: a refusal in these phases means the operator OPERATIONALLY
 remains on Vulkan — the production pointer was never mutated during a bench

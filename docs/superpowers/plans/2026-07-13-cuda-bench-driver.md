@@ -2,7 +2,8 @@
 
 > **Historical implementation record:** this plan was executed through B7.
 > Its unchecked boxes do not authorize new work. Use the gated lean design and
-> its forthcoming replacement plan for every remaining task.
+> `docs/superpowers/plans/2026-07-21-cuda-bench-lean-closure.md` for every
+> remaining task.
 
 **Current status (owner ruling, 2026-07-20):** Tasks A1--A6 and B1--B7 are
 implemented and gated on `feature/cuda-bench-driver`; the worktree import
@@ -10,8 +11,9 @@ airlock is also complete. The unimplemented B8--B10 closure, the full-repo
 `bench_baseline.py` gate, and INV-4's P2--P5 implementation obligations are
 superseded by
 `docs/superpowers/specs/2026-07-20-cuda-bench-lean-closure-design.md`.
-Do not execute the historical B8--B10 instructions below. A new TDD plan will
-be written from the lean design only after its written-spec gate passes.
+Do not execute the historical B8--B10 instructions below. The replacement TDD
+plan was written from the lean design after its written-spec gate passed and is
+the 2026-07-21 lean-closure plan named above.
 
 ## Execution lane and workflow (owner ruling, 2026-07-13)
 
@@ -600,7 +602,8 @@ measurement engine through B7 under
 `docs/superpowers/specs/2026-07-12-cuda-bench-driver-design.md`. Remaining
 closure work is governed only by
 `docs/superpowers/specs/2026-07-20-cuda-bench-lean-closure-design.md` and its
-forthcoming replacement plan.
+replacement plan,
+`docs/superpowers/plans/2026-07-21-cuda-bench-lean-closure.md`.
 
 **Architecture:** Part A extended the scorer (`scripts/cuda_migration.py`) with
 the bundle evidence contract and closed the legacy bypass. B1--B7 built the
@@ -620,9 +623,10 @@ mutates services.
 - Private files: `O_EXCL` creation, `0700` dirs / `0600` files; reads via trusted-anchor descriptor walk (anchor = bench root, `openat` + `O_NOFOLLOW` per component, regular file, owner UID, `st_nlink == 1`).
 - Frozen constants (Appendix of spec, copy verbatim): `READINESS_TIMEOUT_S=300`, `REQUEST_TIMEOUT_MS=30_000`, `SIGTERM_GRACE_S=10`, `RESPONSE_BYTE_CAP=4*1024*1024`, `TURN_ARTIFACT_BYTE_CAP=8*1024*1024`, `WINDOW_TTL_S=14_400`, `CONTINUATION_TTL_S=3_600`, `KILL_WAIT_S=15`, `LISTENER_WAIT_S=10`, `UNLOAD_WAIT_S=60`.
 - Closed refusal/outcome vocabulary: exactly the 40 entries in the spec appendix (incl. tier_mismatch).
-- Schema names exactly as the amended spec appendix lists (22 active
-  executable names; the live runtime receipt is included and the
-  never-implemented selection schema is retired).
+- Schema names exactly as the amended spec appendix lists (23 active
+  executable names; the live runtime receipt and first-durable-write command
+  admission receipt are included, and the never-implemented selection schema
+  is retired).
 - MTP wire: only `draft_n`/`draft_n_accepted`, present only when `draft_n > 0`; `rejected` derived; per-request aggregation (discard warmup, validate 7 pairs, sum→cycle, sum 3→phase).
 - Sample semantics: `sample_n=7`, `measured_sample_count=21`, quality over all 21.
 - Existing suite `tests/test_cuda_migration.py` must stay green after every task (68 tests / 242 subtests at start; Part A migrates specified tests deliberately).
@@ -1908,9 +1912,11 @@ Two additional lossless wrapper schemas + registry decoders:
 `AuthorizationWitness`) and `cuda_migration.backend_map_witness.v1`
 (persisted cold-boot/provisional `RuntimeBackendWitness`). A schema-keyed
 decoder can now distinguish every persisted family. Those dormant executable
-types remain. The active canon count is **22** after the 2026-07-20 ruling
-added the previously omitted live runtime-receipt family and retired the
-never-implemented assembly-selection schema.
+types remain. The 2026-07-20 ruling left the active canon at **22** by adding
+the previously omitted live runtime-receipt family and retiring the
+never-implemented assembly-selection schema. The later 2026-07-21 lean
+command-boundary amendment adds `cuda_bench_driver.command_admission.v1`, so
+the current active total is **23**.
 REDs: round-trip both; unknown-schema refusal unchanged.
 
 **INV-4 — Stage-prefix validation retained; producer obligation superseded.**

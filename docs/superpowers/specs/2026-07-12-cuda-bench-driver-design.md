@@ -181,6 +181,26 @@ object-plane binding for content that has no typed constructor.
   candidate-absent check), flag-source and vision-unit hashes, driver
   package hash, directory modes, stub pin, rehearsal readiness. Produces a
   static receipt.
+- The static command also freshly observes the host CUDA compiler, CMake,
+  driver, GPU, compute capability, and fully verifies the candidate manifest.
+  `cuda_compiler` and `cmake_version` are host observations at preflight,
+  **not retroactive build provenance**. The bounded CMake validator accepts
+  only 3.x.x or 4.x.x with one/two-digit minor and one-to-three-digit patch,
+  including the truthful host value `4.2.3`; it never substitutes a fictional
+  3.x value. `library_hashes` selects only verified regular `F` `lib*.so*`
+  manifest entries. `runtime-manifest.sha256` itself is the sole permitted
+  top-level file without a row; every other unlisted candidate asset refuses.
+  The phase commands rederive through the same read-only
+  collector and `run_phase` persists the complete identity documents;
+  `static_preflight.v1` itself stays unchanged.
+- The rollback-manifest hash is reproducible from the committed canonical
+  eight-field preimage (unit, drop-in, Vulkan runtime, Vulkan library
+  manifest, model hash and bytes, alias, effective-args hash). Its compact
+  ordered-pair JSON is 582 bytes and hashes to
+  `4ccbadb4de46b8856bdc4fa130a52141784038693e0da0021205fbae3b7db3f2`.
+  Static preflight creates or verifies those exact raw bytes under the private
+  root, and phase commands re-open them. This is a reproducibility asset, not
+  a new schema.
 - Phase preflight — only inside the owner window, after the owner stops
   production: the six refusal gates above plus boot-bound authorization and
   topology capture.
@@ -461,6 +481,10 @@ from it.
 **Schema names.** `cuda_bench_driver.static_preflight.v1`,
 `cuda_migration_runtime.v1` (the live bundle-bound promotion receipt),
 `cuda_bench_driver.phase_packet.v2`, `cuda_bench_driver.refusal.v1`,
+`cuda_bench_driver.command_admission.v1` (content-light first-durable-write
+receipt with exactly command, positive ordinal, bounded window ID or null,
+`status="admitted"`, and timestamp; wrapper binding is null and the persisted
+file hash is its identity),
 `cuda_bench_driver.window_authorization.v1`,
 `cuda_bench_driver.continuation.v1`,
 `cuda_bench_driver.consumption_receipt.v1`,
@@ -486,12 +510,13 @@ later-stage cold-boot witness), `cuda_migration.provisional_live_witness.v1`
 `cuda_migration.authorization_witness.v1` (persisted boot/live
 authorization witness), `cuda_migration.backend_map_witness.v1` (persisted
 cold-boot/provisional backend-map witness).
-(22 active executable families. The owner-ratified 2026-07-20 lean closure
+(23 active executable families. The owner-ratified 2026-07-20 lean closure
 adds the previously omitted live `cuda_migration_runtime.v1` receipt to the
 appendix and retires the never-implemented
-`cuda_bench_assemble.selection.v1`; no executable schema is removed and the
-count remains 22. The earlier B5 amendment still replaces phase-packet v1 with
-v2.)
+`cuda_bench_assemble.selection.v1`; no executable schema is removed. The
+2026-07-21 command-boundary amendment adds the honest admission receipt rather
+than misusing an unrelated schema, taking the count from 22 to 23. The earlier
+B5 amendment still replaces phase-packet v1 with v2.)
 
 **Closed refusal/outcome vocabulary (40 entries; `tier_mismatch` added
 2026-07-13 — a mixed production/rehearsal provider set refuses before any
