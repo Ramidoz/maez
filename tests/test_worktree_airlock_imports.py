@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import importlib.util
+import inspect
 import itertools
 import json
 import os
@@ -23,6 +25,76 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 AIRLOCK_SOURCE = REPO / "scripts" / "dev" / "worktree_test_airlock.py"
 SHARED_PYTHON = Path("/home/rohit/maez/.venv/bin/python")
+SHARED_PURELIB = Path(
+    subprocess.run(
+        [
+            os.fspath(SHARED_PYTHON),
+            "-I",
+            "-S",
+            "-B",
+            "-c",
+            "import sysconfig;print(sysconfig.get_path('purelib'))",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+).resolve()
+
+
+def _owned_airlock_roots(outer_pid: int) -> tuple[Path, ...]:
+    prefix = f"maez-airlock-{outer_pid}-"
+    roots: list[Path] = []
+    for candidate in Path("/tmp").glob(f"{prefix}*"):
+        try:
+            info = candidate.lstat()
+        except FileNotFoundError:
+            continue
+        if (
+            candidate.parent == Path("/tmp")
+            and candidate.name.startswith(prefix)
+            and stat.S_ISDIR(info.st_mode)
+            and info.st_uid == os.getuid()
+            and stat.S_IMODE(info.st_mode) == 0o700
+        ):
+            roots.append(candidate)
+    return tuple(sorted(roots))
+
+
+def _cleanup_owned_outer_test_run(airlock, outer_pid: int) -> None:
+    roots = _owned_airlock_roots(outer_pid)
+    runners = frozenset(os.fsencode(root / "inner_runner.py") for root in roots)
+
+    def owned_inner_groups() -> tuple[int, ...]:
+        groups: list[int] = []
+        for entry in Path("/proc").iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                arguments = (entry / "cmdline").read_bytes().split(b"\0")
+                pid = int(entry.name)
+                process_group = os.getpgid(pid)
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+            except (OSError, ValueError):
+                continue
+            if any(runner in arguments for runner in runners) and process_group == pid:
+                groups.append(process_group)
+        return tuple(sorted(set(groups)))
+
+    for process_group in owned_inner_groups():
+        try:
+            os.killpg(process_group, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and owned_inner_groups():
+        time.sleep(0.01)
+    for root in _owned_airlock_roots(outer_pid):
+        try:
+            airlock._remove_disposable(root)
+        except airlock.AirlockRefusal:
+            pass
 
 
 def _airlock():
@@ -32,6 +104,26 @@ def _airlock():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def test_shared_dependency_purelib_is_bound_to_the_canonical_interpreter():
+    observed = Path(
+        subprocess.run(
+            [
+                os.fspath(SHARED_PYTHON),
+                "-I",
+                "-S",
+                "-B",
+                "-c",
+                "import sysconfig;print(sysconfig.get_path('purelib'))",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    ).resolve()
+
+    assert SHARED_PURELIB == observed
 
 
 def _init_repo(path: Path) -> None:
@@ -72,6 +164,7 @@ def _task3_prepared(
     *,
     extra_files: dict[str, str] | None = None,
     dependency_purelib: Path | None = None,
+    caller_args: tuple[str, ...] = (),
 ):
     airlock = _airlock()
     checkout = tmp_path / "checkout"
@@ -82,6 +175,7 @@ def _task3_prepared(
         "core/__init__.py": "\n",
         "core/good.py": "VALUE = 41\n",
         "core/ns/leaf.py": "VALUE = 42\n",
+        "tests/__init__.py": "\n",
     }
     files.update(extra_files or {})
     for relative, content in files.items():
@@ -93,10 +187,11 @@ def _task3_prepared(
             "VALUE = 43\n", encoding="utf-8"
         )
     tracked = tuple(sorted((Path(path) for path in files), key=lambda item: item.as_posix()))
+    tracked_python = tuple(path for path in tracked if path.suffix == ".py")
     inventory = airlock.GitInventory(
         head="a" * 40,
         tracked_files=tracked,
-        tracked_python_files=tracked,
+        tracked_python_files=tracked_python,
         maez_roots=("core", "tests"),
         registered_worktrees=(checkout,),
     )
@@ -106,7 +201,7 @@ def _task3_prepared(
         checkout=checkout,
     )
     prepared = airlock._prepare_disposable(
-        layout, inventory, root_parent=tmp_path
+        layout, inventory, root_parent=tmp_path, caller_args=caller_args
     )
     return airlock, layout, inventory, prepared
 
@@ -312,7 +407,32 @@ def test_outer_invocation_refuses_each_missing_isolation_flag(flags: tuple[str, 
             os.fspath(AIRLOCK_SOURCE),
             "pytest",
             "--",
-            "tests/test_worktree_airlock_imports.py",
+            "tests/test_worktree_airlock_imports.py::test_pytest_boundary_leaf_passes",
+            "-q",
+        ],
+        cwd=REPO,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 86
+    assert result.stdout == ""
+    assert result.stderr.strip() == "airlock_invocation_invalid"
+
+
+def test_outer_invocation_refuses_relative_launcher_before_checkout_resolution():
+    result = subprocess.run(
+        [
+            os.fspath(SHARED_PYTHON),
+            "-I",
+            "-S",
+            "-B",
+            "scripts/dev/worktree_test_airlock.py",
+            "pytest",
+            "--",
+            "tests/test_worktree_airlock_imports.py::test_pytest_boundary_leaf_passes",
+            "-q",
         ],
         cwd=REPO,
         text=True,
@@ -1438,6 +1558,293 @@ def test_inherited_child_frozen_startup_path_rejects_every_mutation_plane(
         airlock._remove_disposable(prepared.root)
 
 
+def test_inherited_child_frozen_path_duplicate_is_true_noop_but_new_path_refuses(
+    tmp_path: Path,
+):
+    probe = textwrap.dedent(
+        """
+        import core.good
+        import os
+        import sys
+
+        guard = sys.modules['_maez_worktree_airlock_guard']
+        original = sys.path
+        before = tuple(sys.path)
+        sys.path.insert(0, guard._CHECKOUT)
+        assert sys.path is original
+        assert tuple(sys.path) == before
+        assert os.listdir(guard._VIOLATION_DIR) == []
+        caught = False
+        try:
+            sys.path.append(guard._CHECKOUT + '/plugins')
+        except RuntimeError:
+            caught = True
+        assert caught
+        """
+    )
+    airlock, layout, _inventory, prepared = _task3_prepared(
+        tmp_path,
+        extra_files={
+            "tools/noop_path_probe.py": probe,
+            "plugins/anchor.py": "VALUE = 44\n",
+        },
+    )
+    try:
+        result = subprocess.run(
+            [
+                os.fspath(prepared.python),
+                os.fspath(layout.checkout / "tools/noop_path_probe.py"),
+            ],
+            cwd=layout.checkout,
+            env=prepared.environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert airlock._read_marker_state(prepared.violation_dir) == (
+            "airlock_path_provenance_violation",
+        )
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+def test_inherited_child_reassigned_away_frozen_path_cannot_absorb_exact_noop(
+    tmp_path: Path,
+):
+    probe = textwrap.dedent(
+        """
+        import core.good
+        import sys
+
+        guard = sys.modules['_maez_worktree_airlock_guard']
+        saved = sys.path
+        sys.path = []
+        caught = False
+        try:
+            saved.insert(0, guard._CHECKOUT)
+        except RuntimeError:
+            caught = True
+        assert caught
+        """
+    )
+    airlock, layout, _inventory, prepared = _task3_prepared(
+        tmp_path,
+        extra_files={"tools/reassigned_path_probe.py": probe},
+    )
+    try:
+        result = subprocess.run(
+            [
+                os.fspath(prepared.python),
+                os.fspath(layout.checkout / "tools/reassigned_path_probe.py"),
+            ],
+            cwd=layout.checkout,
+            env=prepared.environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert airlock._read_marker_state(prepared.violation_dir) == (
+            "airlock_path_provenance_violation",
+        )
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "sys.path.append(guard._CHECKOUT)",
+        "sys.path.extend([guard._CHECKOUT])",
+        "sys.path.insert(1, guard._CHECKOUT)",
+        "sys.path.insert(False, guard._CHECKOUT)",
+        "sys.path.insert(0, guard._SHARED_PURELIB)",
+    ),
+    ids=(
+        "append-checkout",
+        "extend-checkout",
+        "insert-checkout-other-index",
+        "insert-checkout-bool-index",
+        "insert-other-duplicate-origin",
+    ),
+)
+def test_inherited_child_rejects_every_duplicate_path_shape_except_exact_noop(
+    tmp_path: Path,
+    mutation: str,
+):
+    probe = textwrap.dedent(
+        f"""
+        import core.good
+        import sys
+
+        guard = sys.modules['_maez_worktree_airlock_guard']
+        caught = False
+        try:
+            {mutation}
+        except RuntimeError:
+            caught = True
+        assert caught
+        """
+    )
+    airlock, layout, _inventory, prepared = _task3_prepared(
+        tmp_path,
+        extra_files={"tools/duplicate_path_shape_probe.py": probe},
+    )
+    try:
+        result = subprocess.run(
+            [
+                os.fspath(prepared.python),
+                os.fspath(layout.checkout / "tools/duplicate_path_shape_probe.py"),
+            ],
+            cwd=layout.checkout,
+            env=prepared.environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert airlock._read_marker_state(prepared.violation_dir) == (
+            "airlock_path_provenance_violation",
+        )
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+def test_inherited_child_exact_path_noop_refuses_after_sticky_violation(
+    tmp_path: Path,
+):
+    probe = textwrap.dedent(
+        """
+        import core.good
+        import sys
+
+        guard = sys.modules['_maez_worktree_airlock_guard']
+        first_caught = False
+        try:
+            sys.path.append(guard._CHECKOUT + '/foreign')
+        except RuntimeError:
+            first_caught = True
+        assert first_caught
+        second_caught = False
+        try:
+            sys.path.insert(0, guard._CHECKOUT)
+        except RuntimeError:
+            second_caught = True
+        assert second_caught
+        """
+    )
+    airlock, layout, _inventory, prepared = _task3_prepared(
+        tmp_path,
+        extra_files={"tools/sticky_then_noop_probe.py": probe},
+    )
+    try:
+        result = subprocess.run(
+            [
+                os.fspath(prepared.python),
+                os.fspath(layout.checkout / "tools/sticky_then_noop_probe.py"),
+            ],
+            cwd=layout.checkout,
+            env=prepared.environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert airlock._read_marker_state(prepared.violation_dir) == (
+            "airlock_path_provenance_violation",
+            "airlock_path_provenance_violation",
+        )
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+def test_inherited_child_lexical_duplicate_with_foreign_symlink_refuses(
+    tmp_path: Path,
+):
+    airlock, layout, _inventory, prepared = _task3_prepared(tmp_path)
+    foreign = tmp_path / "foreign" / "child"
+    foreign.mkdir(parents=True)
+    link = layout.checkout / "apparent-duplicate"
+    link.symlink_to(foreign, target_is_directory=True)
+    lexical_duplicate = os.fspath(link / "..")
+    assert os.path.normpath(lexical_duplicate) == os.fspath(layout.checkout)
+    code = textwrap.dedent(
+        f"""
+        import sys
+
+        caught = False
+        try:
+            sys.path.insert(0, {lexical_duplicate!r})
+        except RuntimeError:
+            caught = True
+        assert caught
+        """
+    )
+    try:
+        result = subprocess.run(
+            [os.fspath(prepared.python), "-I", "-B", "-c", code],
+            cwd=layout.checkout,
+            env=prepared.environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert airlock._read_marker_state(prepared.violation_dir) == (
+            "airlock_path_provenance_violation",
+        )
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+def test_inherited_child_frozen_path_noop_cannot_mask_prior_base_list_corruption(
+    tmp_path: Path,
+):
+    probe = textwrap.dedent(
+        """
+        import core.good
+        import sys
+
+        removed = list.pop(sys.path, 0)
+        caught = False
+        try:
+            sys.path.insert(0, removed)
+        except RuntimeError:
+            caught = True
+        assert caught
+        """
+    )
+    airlock, layout, _inventory, prepared = _task3_prepared(
+        tmp_path,
+        extra_files={"tools/corrupt_then_restore_probe.py": probe},
+    )
+    try:
+        result = subprocess.run(
+            [
+                os.fspath(prepared.python),
+                os.fspath(
+                    layout.checkout / "tools/corrupt_then_restore_probe.py"
+                ),
+            ],
+            cwd=layout.checkout,
+            env=prepared.environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert airlock._read_marker_state(prepared.violation_dir) == (
+            "airlock_path_provenance_violation",
+        )
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
 def test_inherited_child_frozen_startup_path_revalidates_same_text_target(
     tmp_path: Path,
 ):
@@ -1684,11 +2091,15 @@ def test_inherited_child_bare_empty_environment_interpreters_remain_outside(
         airlock._remove_disposable(prepared.root)
 
 
-def test_inherited_child_contract_contains_no_task5_certification_seam():
-    source = AIRLOCK_SOURCE.read_text(encoding="utf-8")
+def test_inherited_child_contract_contains_no_task5_certification_seam(tmp_path: Path):
+    airlock = _airlock()
+    runner = airlock._runner_source(tmp_path / "diagnostic")
+    inner = inspect.getsource(airlock._inner_main)
 
-    assert "MAEZ_AIRLOCK_CERTIFIED" not in source
-    assert "_emit_certificate" not in source
+    assert "MAEZ_AIRLOCK_CERTIFIED" not in runner
+    assert "MAEZ_AIRLOCK_CERTIFIED" not in inner
+    assert "_write_certificate" not in runner
+    assert "_write_certificate" not in inner
 
 
 def test_inherited_child_design_qualifies_absolute_interpreter_bypass_as_foreign():
@@ -1736,15 +2147,13 @@ def test_inherited_child_direct_script_preexecution_validation_is_documented():
         assert "_RUNNER_PATH" in text
 
 
-def test_task3_module_description_names_the_landed_airlock():
+def test_module_description_names_the_landed_certifying_airlock():
     airlock = _airlock()
 
-    assert "disposable no-pip interpreter now carries" in airlock.__doc__
+    assert "disposable no-pip interpreter carries" in airlock.__doc__
     assert "checkout-bound path and\nimport-provenance guard" in airlock.__doc__
-    assert "Certification remains a subsequent task" in airlock.__doc__
-    assert "Runtime import provenance remains a subsequent task" not in airlock.__doc__
-    assert "land in subsequent tasks" not in airlock.__doc__
-    assert "this first slice" not in airlock.__doc__
+    assert "only the outer stage can certify a completed run" in airlock.__doc__
+    assert "subsequent task" not in airlock.__doc__
 
 
 def test_disposable_interpreter_imports_pytest_without_outer_site_or_maez(
@@ -1872,7 +2281,7 @@ def test_disposable_runner_creates_only_one_private_diagnostic(
         assert result.returncode == 86
         assert result.stdout.splitlines() == [
             "airlock_inner_noncertifying",
-            "airlock_inner_complete:86",
+            "airlock_inner_complete:86:call_phase_observed=0",
         ]
         info = prepared.diagnostic.stat()
         assert stat.S_ISREG(info.st_mode)
@@ -3415,13 +3824,16 @@ def test_sticky_marker_forces_outer_refusal_after_exception_is_caught(
                 "_run_owned_command",
                 lambda *_a, **_k: airlock.OwnedRun(status=0, group_empty=True),
             )
-            monkeypatch.setattr(airlock, "_remove_disposable", lambda _root: None)
-            assert (
-                airlock._execute_outer(layout, inventory, root_parent=tmp_path)
-                == "airlock_path_provenance_violation"
+            monkeypatch.setattr(airlock, "_remove_disposable", shutil.rmtree)
+            terminal = airlock._execute_outer(
+                layout, inventory, root_parent=tmp_path
             )
+            assert terminal.refusal == "airlock_path_provenance_violation"
+            assert terminal.status == 86
+            assert terminal.certificate is None
     finally:
-        airlock._remove_disposable(prepared.root)
+        if prepared.root.exists():
+            airlock._remove_disposable(prepared.root)
 
 
 def test_sticky_marker_write_failure_exits_86_directly(tmp_path: Path):
@@ -3675,9 +4087,16 @@ def test_marker_refusal_precedes_generic_status_86_dependency_token(
         root=root,
         python=root / "venv/bin/python",
         runner=root / "inner_runner.py",
+        pytest_config=root / "pytest.ini",
         environment={},
         violation_dir=violation_dir,
+        diagnostic=root / "diagnostic",
     )
+    prepared.python.parent.mkdir(parents=True)
+    prepared.python.write_bytes(b"interpreter")
+    prepared.pytest_config.write_text("", encoding="utf-8")
+    prepared.diagnostic.write_bytes(b"")
+    prepared.diagnostic.chmod(0o600)
     snapshots = iter(((), ()))
     monkeypatch.setattr(airlock, "_snapshot_pth", lambda _path: next(snapshots))
     monkeypatch.setattr(airlock, "_prepare_disposable", lambda *_a, **_k: prepared)
@@ -3686,9 +4105,12 @@ def test_marker_refusal_precedes_generic_status_86_dependency_token(
         "_run_owned_command",
         lambda *_a, **_k: airlock.OwnedRun(status=86, group_empty=True),
     )
-    monkeypatch.setattr(airlock, "_remove_disposable", lambda _root: None)
+    monkeypatch.setattr(airlock, "_remove_disposable", shutil.rmtree)
 
-    assert airlock._execute_outer(layout, inventory, root_parent=tmp_path) == token
+    terminal = airlock._execute_outer(layout, inventory, root_parent=tmp_path)
+    assert terminal.refusal == token
+    assert terminal.status == 86
+    assert terminal.certificate is None
 
 
 def test_malformed_outer_marker_precedes_generic_status_86_dependency_token(
@@ -3707,9 +4129,16 @@ def test_malformed_outer_marker_precedes_generic_status_86_dependency_token(
         root=root,
         python=root / "venv/bin/python",
         runner=root / "inner_runner.py",
+        pytest_config=root / "pytest.ini",
         environment={},
         violation_dir=violation_dir,
+        diagnostic=root / "diagnostic",
     )
+    prepared.python.parent.mkdir(parents=True)
+    prepared.python.write_bytes(b"interpreter")
+    prepared.pytest_config.write_text("", encoding="utf-8")
+    prepared.diagnostic.write_bytes(b"")
+    prepared.diagnostic.chmod(0o600)
     snapshots = iter(((), ()))
     monkeypatch.setattr(airlock, "_snapshot_pth", lambda _path: next(snapshots))
     monkeypatch.setattr(airlock, "_prepare_disposable", lambda *_a, **_k: prepared)
@@ -3718,12 +4147,12 @@ def test_malformed_outer_marker_precedes_generic_status_86_dependency_token(
         "_run_owned_command",
         lambda *_a, **_k: airlock.OwnedRun(status=86, group_empty=True),
     )
-    monkeypatch.setattr(airlock, "_remove_disposable", lambda _root: None)
+    monkeypatch.setattr(airlock, "_remove_disposable", shutil.rmtree)
 
-    assert (
-        airlock._execute_outer(layout, inventory, root_parent=tmp_path)
-        == "airlock_child_setup_failed"
-    )
+    terminal = airlock._execute_outer(layout, inventory, root_parent=tmp_path)
+    assert terminal.refusal == "airlock_child_setup_failed"
+    assert terminal.status == 86
+    assert terminal.certificate is None
 
 
 @pytest.mark.parametrize("state", ["wrong-origin", "partial"])
@@ -3912,7 +4341,6 @@ def test_shared_pth_real_outer_is_identical_and_disposable_root_is_removed():
         ).stdout.strip()
     )
     before = airlock._snapshot_pth(shared_purelib)
-    roots_before = set(Path("/tmp").glob("maez-airlock-*"))
     process = subprocess.Popen(
         [
             os.fspath(SHARED_PYTHON),
@@ -3922,7 +4350,8 @@ def test_shared_pth_real_outer_is_identical_and_disposable_root_is_removed():
             os.fspath(AIRLOCK_SOURCE),
             "pytest",
             "--",
-            "tests/test_worktree_airlock_imports.py",
+            "tests/test_worktree_airlock_imports.py::test_pytest_boundary_leaf_passes",
+            "-q",
         ],
         cwd=REPO,
         stdout=subprocess.PIPE,
@@ -3930,18 +4359,28 @@ def test_shared_pth_real_outer_is_identical_and_disposable_root_is_removed():
         text=True,
     )
     observed_roots: set[Path] = set()
-    while process.poll() is None:
-        observed_roots.update(set(Path("/tmp").glob("maez-airlock-*")) - roots_before)
-        time.sleep(0.002)
-    stdout, stderr = process.communicate(timeout=2)
-    after = airlock._snapshot_pth(shared_purelib)
+    try:
+        deadline = time.monotonic() + 10
+        while process.poll() is None and time.monotonic() < deadline:
+            observed_roots.update(_owned_airlock_roots(process.pid))
+            time.sleep(0.002)
+        stdout, stderr = process.communicate(timeout=2)
+        observed_roots.update(_owned_airlock_roots(process.pid))
+        after = airlock._snapshot_pth(shared_purelib)
 
-    assert process.returncode == 86
-    assert stdout == ""
-    assert stderr.strip() == "airlock_dependency_unavailable"
-    assert observed_roots
-    assert all(not root.exists() for root in observed_roots)
-    assert before == after
+        assert process.returncode == 0
+        assert stdout.startswith("MAEZ_AIRLOCK_CERTIFIED ")
+        assert stdout.count("\n") == 1
+        assert "1 passed" in stderr
+        assert observed_roots
+        assert all(not root.exists() for root in observed_roots)
+        assert not _owned_airlock_roots(process.pid)
+        assert before == after
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=3)
+        _cleanup_owned_outer_test_run(airlock, process.pid)
 
 
 @pytest.mark.parametrize(
@@ -4037,7 +4476,188 @@ def test_owned_group_signal_permission_error_is_failed_cleanup_proof():
     )
 
 
-def test_owned_group_cleanup_finds_stubborn_grandchild_with_odd_comm(tmp_path: Path):
+def test_group_member_proof_counts_zombie_as_residue(tmp_path: Path):
+    airlock = _airlock()
+    process = tmp_path / "456"
+    process.mkdir()
+    (process / "stat").write_text(
+        "456 (owned zombie) Z 1 123 123 0 0 0", encoding="utf-8"
+    )
+
+    assert airlock._group_members(123, proc_root=tmp_path) == (456,)
+
+
+def test_owned_group_requires_two_empty_scans_and_catches_fork_replacement():
+    airlock = _airlock()
+    observations = iter(((), (101,), (101,), (), ()))
+    signals: list[int] = []
+    sleeps: list[float] = []
+
+    result = airlock._clear_owned_group(
+        100,
+        group_reader=lambda _group: next(observations),
+        signaler=lambda _group, signum: signals.append(signum),
+        sleeper=sleeps.append,
+    )
+
+    assert result is True
+    assert signals == [signal.SIGTERM, signal.SIGKILL]
+    assert sleeps.count(0.05) >= 2
+
+
+def test_normal_exit_never_signals_numeric_group_after_leader_is_reaped(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    airlock = _airlock()
+    cleanup_signals: list[int] = []
+    observed_groups: list[int] = []
+
+    class ReapedProcess:
+        pid = 4242
+        returncode = 0
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout):
+            del timeout
+            return 0
+
+        def communicate(self, timeout):
+            del timeout
+            return b"", b""
+
+    process = ReapedProcess()
+    scope = types.SimpleNamespace(
+        interrupted=False,
+        attach=lambda _process: None,
+        detach=lambda _process: None,
+    )
+    monkeypatch.setattr(airlock.subprocess, "Popen", lambda *_a, **_k: process)
+    monkeypatch.setattr(
+        airlock,
+        "_clear_owned_group",
+        lambda group: cleanup_signals.append(group) or True,
+    )
+    monkeypatch.setattr(
+        airlock,
+        "_reaped_group_is_quiescent",
+        lambda group: observed_groups.append(group) or False,
+        raising=False,
+    )
+
+    result = airlock._run_owned_command(
+        ("/tracked/child",),
+        cwd=tmp_path,
+        environment={},
+        signal_scope=scope,
+    )
+
+    assert result.group_empty is False
+    assert observed_groups == [process.pid]
+    assert cleanup_signals == []
+
+
+def test_interrupted_cleanup_stops_signalling_after_wait_reaps_leader(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    airlock = _airlock()
+    signals: list[tuple[int, int]] = []
+    observations = iter(((777,), (888,)))
+
+    class ReapedAfterTerm:
+        pid = 4242
+
+        def wait(self, timeout):
+            del timeout
+            return 143
+
+    monkeypatch.setattr(
+        airlock, "_group_members", lambda _group: next(observations)
+    )
+    monkeypatch.setattr(
+        airlock.os,
+        "killpg",
+        lambda group, signum: signals.append((group, signum)),
+    )
+
+    assert airlock._clear_interrupted_owned_group(ReapedAfterTerm()) is False
+    assert signals == [(4242, signal.SIGTERM)]
+
+
+def test_signal_handler_during_cleanup_forwards_without_reaping_leader(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    airlock = _airlock()
+    polls: list[str] = []
+    signals: list[tuple[int, int]] = []
+
+    class ExitedButUnreaped:
+        pid = 4242
+        returncode = None
+
+        def poll(self):
+            polls.append("poll")
+            self.returncode = 143
+            return self.returncode
+
+    process = ExitedButUnreaped()
+    scope = airlock._OuterSignalScope()
+    scope._process = process
+    monkeypatch.setattr(
+        airlock.os,
+        "killpg",
+        lambda group, signum: signals.append((group, signum)),
+    )
+
+    scope._handle(signal.SIGTERM, None)
+
+    assert polls == []
+    assert process.returncode is None
+    assert signals == [(process.pid, signal.SIGTERM)]
+
+    process.returncode = 143
+    scope._handle(signal.SIGTERM, None)
+    assert polls == []
+    assert signals == [(process.pid, signal.SIGTERM)]
+
+
+def test_signal_attach_replays_pending_signal_without_reaping_leader(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    airlock = _airlock()
+    polls: list[str] = []
+    signals: list[tuple[int, int]] = []
+
+    class ExitedButUnreaped:
+        pid = 4242
+        returncode = None
+
+        def poll(self):
+            polls.append("poll")
+            self.returncode = 130
+            return self.returncode
+
+    process = ExitedButUnreaped()
+    scope = airlock._OuterSignalScope()
+    scope.received.append(signal.SIGINT)
+    monkeypatch.setattr(
+        airlock.os,
+        "killpg",
+        lambda group, signum: signals.append((group, signum)),
+    )
+
+    scope.attach(process)
+
+    assert polls == []
+    assert process.returncode is None
+    assert signals == [(process.pid, signal.SIGINT)]
+
+
+def test_normal_exit_observes_same_group_residue_without_signalling(
+    tmp_path: Path,
+):
     airlock = _airlock()
     libc = ctypes.CDLL(None, use_errno=True)
     prior_subreaper = ctypes.c_int()
@@ -4075,17 +4695,8 @@ def test_owned_group_cleanup_finds_stubborn_grandchild_with_odd_comm(tmp_path: P
         )
         assert child_pid_file.exists()
         child_pid = int(child_pid_file.read_text(encoding="utf-8"))
-        assert result.group_empty is True
-        deadline = time.monotonic() + 3
-        while time.monotonic() < deadline:
-            try:
-                waited, _status = os.waitpid(child_pid, os.WNOHANG)
-            except ChildProcessError:
-                break
-            if waited == child_pid:
-                break
-            time.sleep(0.02)
-        assert not Path(f"/proc/{child_pid}").exists()
+        assert result.group_empty is False
+        assert Path(f"/proc/{child_pid}").exists()
     finally:
         try:
             if child_pid is None and child_pid_file.exists():
@@ -4226,10 +4837,12 @@ def test_cleanup_signal_during_setup_cannot_bypass_outer_finalizers(
         module._snapshot_pth = observed_snapshot
         module._prepare_disposable = blocked_prepare
         module._run_owned_command = forbidden_child
-        token = module._execute_outer(
+        terminal = module._execute_outer(
             layout, inventory, root_parent=pathlib.Path({os.fspath(tmp_path)!r})
         )
-        pathlib.Path({os.fspath(outcome)!r}).write_text(token, encoding='utf-8')
+        pathlib.Path({os.fspath(outcome)!r}).write_text(
+            terminal.refusal or '', encoding='utf-8'
+        )
         """
     )
     wrapper = subprocess.Popen(
@@ -4381,21 +4994,83 @@ def test_disposable_setup_cleanup_failure_dominates_original_refusal(
             original_rmtree(root)
 
 
-def test_outer_task2_terminal_order_is_fixed_and_cleanup_is_unconditional(
+def test_outer_refuses_when_owned_root_is_renamed_and_replaced(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     airlock = _airlock()
     layout = _synthetic_layout(tmp_path)
     inventory = _inventory_for(layout.checkout)
+    real_prepare = airlock._prepare_disposable
+    captured: list[object] = []
+    renamed: Path | None = None
+
+    def prepare(*args, **kwargs):
+        prepared = real_prepare(*args, **kwargs)
+        captured.append(prepared)
+        return prepared
+
+    def replace_root(*_args, **_kwargs):
+        nonlocal renamed
+        prepared = captured[0]
+        renamed = prepared.root.with_name(f"{prepared.root.name}-renamed")
+        prepared.root.rename(renamed)
+        prepared.root.mkdir(mode=0o700)
+        prepared.violation_dir.mkdir(mode=0o700)
+        prepared.diagnostic.write_bytes(b"")
+        prepared.diagnostic.chmod(0o600)
+        return airlock.OwnedRun(
+            status=0,
+            group_empty=True,
+            control=(
+                b"airlock_inner_noncertifying\n"
+                b"airlock_inner_complete:0:call_phase_observed=1\n"
+            ),
+        )
+
+    monkeypatch.setattr(airlock, "_prepare_disposable", prepare)
+    monkeypatch.setattr(airlock, "_run_owned_command", replace_root)
+    try:
+        terminal = airlock._execute_outer(
+            layout,
+            inventory,
+            caller_args=("scripts/dev/worktree_test_airlock.py", "-q"),
+            root_parent=tmp_path,
+        )
+
+        assert terminal.status == 86
+        assert terminal.refusal == "airlock_cleanup_incomplete"
+        assert terminal.certificate is None
+        assert renamed is not None and renamed.exists()
+    finally:
+        for candidate in (renamed, *(item.root for item in captured)):
+            if candidate is not None and candidate.exists():
+                airlock._remove_disposable(candidate)
+
+
+def test_outer_malformed_terminal_order_is_fixed_and_cleanup_is_unconditional(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    airlock = _airlock()
+    layout = _synthetic_layout(tmp_path)
+    inventory = _inventory_for(layout.checkout)
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "python").write_bytes(b"python")
+    (root / "pytest.ini").write_text("", encoding="utf-8")
+    (root / "diagnostic").write_bytes(b"")
+    (root / "diagnostic").chmod(0o600)
+    (root / "violations").mkdir()
     prepared = types.SimpleNamespace(
-        root=tmp_path / "root",
-        python=tmp_path / "root/venv/bin/python",
-        runner=tmp_path / "root/inner_runner.py",
+        root=root,
+        python=root / "python",
+        pytest_config=root / "pytest.ini",
+        diagnostic=root / "diagnostic",
+        runner=root / "inner_runner.py",
         environment={},
-        violation_dir=tmp_path / "root/violations",
+        violation_dir=root / "violations",
     )
     events: list[str] = []
-    snapshots = iter((("before",), ("before",)))
+    snapshots = iter(((), ()))
 
     monkeypatch.setattr(
         airlock,
@@ -4421,13 +5096,104 @@ def test_outer_task2_terminal_order_is_fixed_and_cleanup_is_unconditional(
     monkeypatch.setattr(
         airlock,
         "_remove_disposable",
-        lambda _root: events.append("remove"),
+        lambda target: events.append("remove") or shutil.rmtree(target),
     )
 
-    token = airlock._execute_outer(layout, inventory, root_parent=tmp_path)
+    terminal = airlock._execute_outer(layout, inventory, root_parent=tmp_path)
 
-    assert token == "airlock_dependency_unavailable"
+    assert terminal.refusal == "airlock_child_setup_failed"
+    assert terminal.status == 86
     assert events == ["snapshot", "prepare", "run", "markers", "remove", "snapshot"]
+
+
+@pytest.mark.parametrize("pytest_status", (0, 1), ids=("green", "red"))
+def test_large_valid_diagnostic_is_truncated_without_rewriting_pytest_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    pytest_status: int,
+):
+    airlock = _airlock()
+    layout = _synthetic_layout(tmp_path)
+    inventory = _inventory_for(layout.checkout)
+    root = tmp_path / "attempt"
+    root.mkdir()
+    violations = root / "violations"
+    violations.mkdir()
+    diagnostic = root / "diagnostic"
+    python = root / "python"
+    python.write_bytes(b"interpreter")
+    pytest_config = root / "pytest.ini"
+    pytest_config.write_text("", encoding="utf-8")
+    prepared = types.SimpleNamespace(
+        root=root,
+        python=python,
+        runner=root / "runner.py",
+        pytest_config=pytest_config,
+        environment={},
+        violation_dir=violations,
+        diagnostic=diagnostic,
+    )
+    snapshots = iter(((), ()))
+    monkeypatch.setattr(airlock, "_snapshot_pth", lambda _path: next(snapshots))
+    monkeypatch.setattr(airlock, "_prepare_disposable", lambda *_a, **_k: prepared)
+
+    def run(*_args, **_kwargs):
+        diagnostic.write_bytes(b"x" * (1_048_576 + 1))
+        diagnostic.chmod(0o600)
+        return airlock.OwnedRun(
+            status=pytest_status,
+            group_empty=True,
+            control=(
+                b"airlock_inner_noncertifying\n"
+                + f"airlock_inner_complete:{pytest_status}:"
+                "call_phase_observed=1\n".encode()
+            ),
+        )
+
+    monkeypatch.setattr(airlock, "_run_owned_command", run)
+    monkeypatch.setattr(airlock, "_prepared_root_processes_absent", lambda _root: True)
+    monkeypatch.setattr(airlock, "_read_marker_state", lambda _path: ())
+    monkeypatch.setattr(airlock, "_remove_disposable", shutil.rmtree)
+
+    terminal = airlock._execute_outer(
+        layout,
+        inventory,
+        caller_args=("scripts/dev/worktree_test_airlock.py", "-q"),
+        root_parent=tmp_path,
+    )
+
+    assert terminal.status == pytest_status
+    assert terminal.refusal is None
+    assert (terminal.certificate is not None) is (pytest_status == 0)
+    assert terminal.diagnostic.endswith(b"MAEZ_AIRLOCK_DIAGNOSTIC_TRUNCATED\n")
+    assert len(terminal.diagnostic) <= 1_048_576 + 40
+
+
+@pytest.mark.parametrize("hazard", ("mode", "hardlink", "symlink", "directory"))
+def test_private_diagnostic_filesystem_hazards_still_refuse(
+    tmp_path: Path,
+    hazard: str,
+):
+    airlock = _airlock()
+    diagnostic = tmp_path / "diagnostic"
+    if hazard == "directory":
+        diagnostic.mkdir(mode=0o700)
+    elif hazard == "symlink":
+        target = tmp_path / "target"
+        target.write_bytes(b"diagnostic")
+        target.chmod(0o600)
+        diagnostic.symlink_to(target)
+    else:
+        diagnostic.write_bytes(b"diagnostic")
+        diagnostic.chmod(0o600 if hazard == "hardlink" else 0o644)
+        if hazard == "hardlink":
+            os.link(diagnostic, tmp_path / "second-link")
+
+    with pytest.raises(
+        airlock.AirlockRefusal,
+        match="airlock_child_setup_failed",
+    ):
+        airlock._read_private_diagnostic(diagnostic)
 
 
 def test_outer_terminal_precedence_uses_observed_final_state_not_exception_timing(
@@ -4440,10 +5206,18 @@ def test_outer_terminal_precedence_uses_observed_final_state_not_exception_timin
         root=tmp_path / "root",
         python=tmp_path / "python",
         runner=tmp_path / "runner",
+        pytest_config=tmp_path / "pytest.ini",
         environment={},
         violation_dir=tmp_path / "violations",
+        diagnostic=tmp_path / "diagnostic",
     )
-    snapshots = iter((("before",), ("after",)))
+    prepared.python.write_bytes(b"interpreter")
+    prepared.pytest_config.write_text("", encoding="utf-8")
+    prepared.diagnostic.write_bytes(b"")
+    prepared.diagnostic.chmod(0o600)
+    before = airlock.PthEntry("before.pth", True, 0o600, 1, "a" * 64)
+    after = airlock.PthEntry("after.pth", True, 0o600, 1, "b" * 64)
+    snapshots = iter(((before,), (after,)))
     monkeypatch.setattr(airlock, "_snapshot_pth", lambda _path: next(snapshots))
     monkeypatch.setattr(airlock, "_prepare_disposable", lambda *_a, **_k: prepared)
     monkeypatch.setattr(
@@ -4458,10 +5232,10 @@ def test_outer_terminal_precedence_uses_observed_final_state_not_exception_timin
 
     monkeypatch.setattr(airlock, "_remove_disposable", cleanup_fails)
 
-    assert (
-        airlock._execute_outer(layout, inventory, root_parent=tmp_path)
-        == "airlock_shared_environment_changed"
-    )
+    terminal = airlock._execute_outer(layout, inventory, root_parent=tmp_path)
+    assert terminal.refusal == "airlock_shared_environment_changed"
+    assert terminal.status == 86
+    assert terminal.certificate is None
 
 
 def test_outer_equal_snapshot_with_unproven_group_is_cleanup_incomplete(
@@ -4474,10 +5248,16 @@ def test_outer_equal_snapshot_with_unproven_group_is_cleanup_incomplete(
         root=tmp_path / "root",
         python=tmp_path / "python",
         runner=tmp_path / "runner",
+        pytest_config=tmp_path / "pytest.ini",
         environment={},
         violation_dir=tmp_path / "violations",
+        diagnostic=tmp_path / "diagnostic",
     )
-    snapshots = iter((("same",), ("same",)))
+    prepared.python.write_bytes(b"interpreter")
+    prepared.pytest_config.write_text("", encoding="utf-8")
+    prepared.diagnostic.write_bytes(b"")
+    prepared.diagnostic.chmod(0o600)
+    snapshots = iter(((), ()))
     monkeypatch.setattr(airlock, "_snapshot_pth", lambda _path: next(snapshots))
     monkeypatch.setattr(airlock, "_prepare_disposable", lambda *_a, **_k: prepared)
     monkeypatch.setattr(
@@ -4488,10 +5268,10 @@ def test_outer_equal_snapshot_with_unproven_group_is_cleanup_incomplete(
     monkeypatch.setattr(airlock, "_read_marker_state", lambda _path: ())
     monkeypatch.setattr(airlock, "_remove_disposable", lambda _root: None)
 
-    assert (
-        airlock._execute_outer(layout, inventory, root_parent=tmp_path)
-        == "airlock_cleanup_incomplete"
-    )
+    terminal = airlock._execute_outer(layout, inventory, root_parent=tmp_path)
+    assert terminal.refusal == "airlock_cleanup_incomplete"
+    assert terminal.status == 86
+    assert terminal.certificate is None
 
 
 def test_forbidden_capability_surface_is_structurally_absent():
@@ -4509,6 +5289,2961 @@ def test_forbidden_capability_surface_is_structurally_absent():
     assert "system_site_packages=False" in source
     assert "start_new_session=True" in source
     assert "os.O_NOFOLLOW" in source
+
+
+def test_operator_and_design_docs_state_the_same_narrow_airlock_claim():
+    claim = (
+        "Every Maez-owned module used by the gate process or an "
+        "inherited-contract Python descendant came from tracked code in the "
+        "audited checkout; absolute foreign-interpreter children and "
+        "project-importing `-S` children are outside this claim."
+    )
+    boundary = (
+        "Same-process frame/FD introspection and deliberate in-process forgery "
+        "are outside the airlock's guarantee."
+    )
+    def normalized_document(path: Path) -> str:
+        lines = (
+            line.removeprefix("> ")
+            for line in path.read_text(encoding="utf-8").splitlines()
+        )
+        return " ".join("\n".join(lines).split())
+
+    agents = normalized_document(REPO / "AGENTS.md")
+    design = normalized_document(
+        REPO
+        / "docs/superpowers/specs/2026-07-16-clean-checkout-import-airlock-design.md"
+    )
+
+    assert claim in agents
+    assert claim in design
+    assert boundary in agents
+    assert boundary in design
+    assert "/home/rohit/maez/.venv/bin/python -I -S -B" in agents
+    assert "scripts/dev/worktree_test_airlock.py" in agents
+    assert "makes no sandbox claim" in agents
+    assert "makes no sandbox" in design
+
+
+# Task 5 REDs: pytest is a closed certification boundary, not a pass-through CLI.
+
+
+_SIGNAL_COLLECTION_NODE = (
+    "tests/test_worktree_airlock_imports.py::test_airlock_signal_collection_probe"
+)
+_SIGNAL_CALL_NODE = (
+    "tests/test_worktree_airlock_imports.py::test_airlock_signal_call_probe"
+)
+_SIGNAL_IGNORE_NODE = (
+    "tests/test_worktree_airlock_imports.py::test_airlock_signal_ignore_probe"
+)
+_DETACHED_DESCENDANT_NODE = (
+    "tests/test_worktree_airlock_imports.py::"
+    "test_airlock_detached_descendant_probe"
+)
+
+
+def _block_for_real_airlock_signal(
+    phase: str, *, ignore_signals: bool = False
+) -> None:
+    if ignore_signals:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    root = Path(os.environ["HOME"])
+    ready = root / f"signal-{phase}-ready"
+    descriptor = os.open(
+        ready,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        0o600,
+    )
+    try:
+        payload = f"{os.getpid()}:{os.getpgrp()}\n".encode("ascii")
+        assert os.write(descriptor, payload) == len(payload)
+    finally:
+        os.close(descriptor)
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        time.sleep(0.05)
+    raise AssertionError("bounded signal probe expired")
+
+
+if _SIGNAL_COLLECTION_NODE in sys.argv:
+    _block_for_real_airlock_signal("collection")
+
+
+def test_airlock_signal_collection_probe():
+    assert True
+
+
+def test_airlock_signal_call_probe():
+    if _SIGNAL_CALL_NODE in sys.argv:
+        _block_for_real_airlock_signal("call")
+
+
+def test_airlock_signal_ignore_probe():
+    if _SIGNAL_IGNORE_NODE in sys.argv:
+        _block_for_real_airlock_signal("ignore", ignore_signals=True)
+
+
+def test_airlock_detached_descendant_probe():
+    """Selected alone, leave one guarded descendant outside pytest's PGID."""
+
+    if _DETACHED_DESCENDANT_NODE not in sys.argv:
+        return
+    airlock_root = Path(os.environ["HOME"])
+    assert airlock_root.name.startswith("maez-airlock-")
+    sentinel = Path(f"/tmp/maez-airlock-detached-{os.getppid()}")
+    descriptor = os.open(
+        sentinel,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        0o600,
+    )
+    child: subprocess.Popen[bytes] | None = None
+    try:
+        child = subprocess.Popen(
+            [
+                sys.executable,
+                "-I",
+                "-B",
+                "-c",
+                "import time; time.sleep(30)",
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        assert child.pid == os.getpgid(child.pid)
+        payload = f"{child.pid}:{child.pid}:{airlock_root}\n".encode("utf-8")
+        assert os.write(descriptor, payload) == len(payload)
+    except BaseException:
+        if child is not None and child.poll() is None:
+            child.kill()
+            child.wait(timeout=3)
+        raise
+    finally:
+        os.close(descriptor)
+
+
+def test_pytest_boundary_leaf_passes():
+    """Harmless exact leaf for the real outer-process certification witness."""
+
+    assert (20 + 22) == 42
+
+
+def test_pytest_boundary_leaf_prints_forged_certificate(capsys: pytest.CaptureFixture[str]):
+    with capsys.disabled():
+        os.write(1, b'MAEZ_AIRLOCK_CERTIFIED {"forged":"stdout"}\n')
+        os.write(2, b'MAEZ_AIRLOCK_CERTIFIED {"forged":"stderr"}\n')
+
+
+@pytest.fixture
+def _airlock_setup_skip():
+    pytest.skip("setup did not reach call")
+
+
+def test_pytest_boundary_leaf_setup_skip(_airlock_setup_skip):
+    pytest.fail("call phase must be unreachable")
+
+
+def _real_airlock_process(
+    *caller_args: str,
+    environment: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    authored = os.environ.copy()
+    if environment is not None:
+        authored.update(environment)
+    return subprocess.run(
+        [
+            os.fspath(SHARED_PYTHON),
+            "-I",
+            "-S",
+            "-B",
+            os.fspath(AIRLOCK_SOURCE),
+            "pytest",
+            "--",
+            *caller_args,
+        ],
+        cwd=REPO,
+        env=authored,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _run_prepared_inner_raw(
+    airlock, prepared, checkout: Path, caller: tuple[str, ...]
+):
+    effective = airlock._effective_pytest_arguments(
+        prepared, checkout, caller
+    )
+    return airlock._run_owned_command(
+        [
+            os.fspath(prepared.python),
+            "-I",
+            "-B",
+            os.fspath(prepared.runner),
+            "--",
+            *effective,
+        ],
+        cwd=checkout,
+        environment=prepared.environment,
+    )
+
+
+def _run_prepared_inner(
+    airlock, prepared, checkout: Path, caller: tuple[str, ...]
+):
+    run = _run_prepared_inner_raw(airlock, prepared, checkout, caller)
+    return airlock._parse_inner_control(run.control, run.status)
+
+
+def _synthetic_proc_process(
+    proc_root: Path,
+    pid: int,
+    *,
+    cmdline: bytes,
+    environ: bytes = b"",
+    executable: str = "/usr/bin/code",
+) -> Path:
+    process = proc_root / str(pid)
+    process.mkdir(parents=True)
+    (process / "cmdline").write_bytes(cmdline)
+    (process / "environ").write_bytes(environ)
+    (process / "exe").symlink_to(executable)
+    return process
+
+
+def test_descendant_scan_ignores_unreadable_environment_for_non_python(
+    tmp_path: Path,
+):
+    airlock = _airlock()
+    prepared_root = tmp_path / "maez-airlock-owned"
+    prepared_root.mkdir()
+    proc_root = tmp_path / "proc"
+    process = _synthetic_proc_process(
+        proc_root,
+        101,
+        cmdline=b"/usr/bin/code\0--unity-launch\0",
+    )
+    reads: list[str] = []
+
+    def read_bytes(path: Path, limit: int) -> bytes:
+        reads.append(path.name)
+        if path.name == "environ":
+            raise PermissionError("ambient environment is unreadable")
+        payload = path.read_bytes()
+        assert len(payload) <= limit
+        return payload
+
+    assert airlock._scan_prepared_root_processes(
+        prepared_root,
+        proc_root=proc_root,
+        byte_reader=read_bytes,
+    )
+    assert process.exists()
+    assert reads == ["cmdline"]
+
+
+def test_descendant_scan_refuses_unreadable_environment_for_python(
+    tmp_path: Path,
+):
+    airlock = _airlock()
+    prepared_root = tmp_path / "maez-airlock-owned"
+    prepared_root.mkdir()
+    proc_root = tmp_path / "proc"
+    _synthetic_proc_process(
+        proc_root,
+        102,
+        cmdline=b"python3\0-c\0pass\0",
+        executable="/usr/bin/python3",
+    )
+
+    def read_bytes(path: Path, limit: int) -> bytes:
+        if path.name == "environ":
+            raise PermissionError("relevant environment is unreadable")
+        payload = path.read_bytes()
+        assert len(payload) <= limit
+        return payload
+
+    assert not airlock._scan_prepared_root_processes(
+        prepared_root,
+        proc_root=proc_root,
+        byte_reader=read_bytes,
+    )
+
+
+def test_descendant_scan_finds_bare_python_from_inherited_environment(
+    tmp_path: Path,
+):
+    airlock = _airlock()
+    prepared_root = tmp_path / "maez-airlock-owned"
+    prepared_root.mkdir()
+    proc_root = tmp_path / "proc"
+    _synthetic_proc_process(
+        proc_root,
+        103,
+        cmdline=b"python\0-c\0pass\0",
+        environ=(
+            f"VIRTUAL_ENV={prepared_root / 'venv'}\0"
+            f"PATH={prepared_root / 'venv/bin'}:/usr/bin\0"
+        ).encode(),
+        executable="/usr/bin/python3",
+    )
+
+    assert not airlock._scan_prepared_root_processes(
+        prepared_root,
+        proc_root=proc_root,
+    )
+
+
+@pytest.mark.parametrize("missing_name", ("cmdline", "environ"))
+def test_descendant_scan_reproves_relevant_python_vanished_on_missing_proc_file(
+    tmp_path: Path,
+    missing_name: str,
+):
+    airlock = _airlock()
+    prepared_root = tmp_path / "maez-airlock-owned"
+    prepared_root.mkdir()
+    proc_root = tmp_path / "proc"
+    _synthetic_proc_process(
+        proc_root,
+        104,
+        cmdline=b"python3\0-c\0pass\0",
+        executable="/usr/bin/python3",
+    )
+
+    def read_bytes(path: Path, limit: int) -> bytes:
+        if path.name == missing_name:
+            raise FileNotFoundError("process metadata disappeared")
+        payload = path.read_bytes()
+        assert len(payload) <= limit
+        return payload
+
+    assert not airlock._scan_prepared_root_processes(
+        prepared_root,
+        proc_root=proc_root,
+        byte_reader=read_bytes,
+    )
+
+
+def test_descendant_scan_stops_at_the_process_count_bound(tmp_path: Path):
+    airlock = _airlock()
+    prepared_root = tmp_path / "maez-airlock-owned"
+    prepared_root.mkdir()
+
+    class BoundedProcRoot:
+        def __init__(self) -> None:
+            self.consumed = 0
+
+        def iterdir(self):
+            while True:
+                self.consumed += 1
+                if self.consumed > airlock._PROC_SCAN_MAX_PROCESSES + 1:
+                    raise AssertionError("scanner consumed beyond its bound")
+                yield tmp_path / str(self.consumed)
+
+    proc_root = BoundedProcRoot()
+    assert not airlock._scan_prepared_root_processes(
+        prepared_root,
+        proc_root=proc_root,
+    )
+    assert proc_root.consumed == airlock._PROC_SCAN_MAX_PROCESSES + 1
+
+
+def test_descendant_absence_requires_two_ordered_scans(tmp_path: Path):
+    airlock = _airlock()
+    prepared_root = tmp_path / "maez-airlock-owned"
+    prepared_root.mkdir()
+    events: list[object] = []
+    answers = iter((True, False))
+
+    def scanner(root: Path) -> bool:
+        events.append(("scan", root))
+        return next(answers)
+
+    def sleeper(delay: float) -> None:
+        events.append(("sleep", delay))
+
+    assert not airlock._prepared_root_processes_absent(
+        prepared_root,
+        scanner=scanner,
+        sleeper=sleeper,
+    )
+    assert events == [
+        ("scan", prepared_root),
+        ("sleep", 0.05),
+        ("scan", prepared_root),
+    ]
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    (
+        ("@pytest-args.txt",),
+        ("-qk", "leaf"),
+        ("--quiet",),
+        ("--import-mode=importlib",),
+        ("--import-mode", "importlib"),
+        (os.fspath(REPO / "tests/test_worktree_airlock_imports.py"),),
+        ("tests/../tests/test_worktree_airlock_imports.py",),
+        ("--", "tests/test_worktree_airlock_imports.py"),
+    ),
+    ids=(
+        "response-file",
+        "clustered-short",
+        "unknown-alias",
+        "import-mode-equals",
+        "import-mode-split",
+        "absolute",
+        "dotdot",
+        "nested-separator",
+    ),
+)
+def test_pytest_boundary_rejects_each_unsealed_caller_shape(
+    arguments: tuple[str, ...],
+):
+    airlock = _airlock()
+
+    with pytest.raises(
+        airlock.AirlockRefusal, match="airlock_pytest_arguments_invalid"
+    ):
+        airlock._parse_pytest_invocation(
+            ("pytest", "--", *arguments), REPO, environment={}
+        )
+
+
+def test_pytest_boundary_rejects_response_file_hidden_as_k_expression(
+    tmp_path: Path,
+):
+    response_file = tmp_path / "pytest.args"
+    response_file.write_text("leaf\n--tb=no\n", encoding="utf-8")
+
+    process = _real_airlock_process(
+        "tests/test_worktree_airlock_imports.py::test_pytest_boundary_leaf_passes",
+        "-k",
+        f"@{response_file}",
+        "-q",
+    )
+
+    assert process.returncode == 86
+    assert process.stdout == ""
+    assert "MAEZ_AIRLOCK_CERTIFIED" not in process.stdout + process.stderr
+    assert process.stderr.rstrip().endswith("airlock_pytest_arguments_invalid")
+
+
+@pytest.mark.parametrize("expression", ("@args.txt", "--tb=no"))
+def test_pytest_boundary_rejects_non_expression_k_operands(expression: str):
+    airlock = _airlock()
+
+    with pytest.raises(
+        airlock.AirlockRefusal, match="airlock_pytest_arguments_invalid"
+    ):
+        airlock._parse_pytest_invocation(
+            (
+                "pytest",
+                "--",
+                "tests/test_worktree_airlock_imports.py",
+                "-k",
+                expression,
+            ),
+            REPO,
+            environment={},
+        )
+
+
+@pytest.mark.parametrize(
+    "caller_args",
+    (
+        (
+            b"tests/test_worktree_airlock_imports.py::test_pytest_boundary_leaf_passes",
+            b"-k",
+            b"\xff",
+            b"-q",
+        ),
+        (
+            b"tests/test_worktree_airlock_imports.py::test_pytest_boundary_leaf_passes\xff",
+            b"-q",
+        ),
+    ),
+    ids=("k-expression", "node-suffix"),
+)
+def test_real_outer_rejects_non_utf8_caller_arguments(caller_args: tuple[bytes, ...]):
+    process = subprocess.run(
+        [
+            os.fsencode(SHARED_PYTHON),
+            b"-I",
+            b"-S",
+            b"-B",
+            os.fsencode(AIRLOCK_SOURCE),
+            b"pytest",
+            b"--",
+            *caller_args,
+        ],
+        cwd=REPO,
+        check=False,
+        capture_output=True,
+    )
+
+    assert process.returncode == 86
+    assert process.stdout == b""
+    assert b"Traceback" not in process.stderr
+    assert process.stderr.rstrip().endswith(b"airlock_pytest_arguments_invalid")
+
+
+def test_pytest_boundary_rejects_selector_symlink_escape(tmp_path: Path):
+    airlock = _airlock()
+    checkout = tmp_path / "checkout"
+    outside = tmp_path / "outside"
+    checkout.mkdir()
+    outside.mkdir()
+    (outside / "test_external.py").write_text("def test_x(): pass\n", encoding="utf-8")
+    (checkout / "tests").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(
+        airlock.AirlockRefusal, match="airlock_pytest_arguments_invalid"
+    ):
+        airlock._parse_pytest_invocation(
+            ("pytest", "--", "tests/test_external.py::test_x"),
+            checkout,
+            environment={},
+        )
+
+
+@pytest.mark.parametrize("variable", ("PYTEST_ADDOPTS", "PYTEST_PLUGINS"))
+def test_pytest_boundary_rejects_even_empty_ambient_pytest_variables_before_prepare(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    variable: str,
+):
+    airlock = _airlock()
+    layout = _synthetic_layout(tmp_path)
+    inventory = _inventory_for(layout.checkout)
+    monkeypatch.setenv(variable, "")
+    monkeypatch.setattr(airlock, "_validate_outer_invocation", lambda: layout)
+    monkeypatch.setattr(airlock, "_run_preflight", lambda _layout: inventory)
+    monkeypatch.setattr(
+        airlock,
+        "_prepare_disposable",
+        lambda *_args, **_kwargs: pytest.fail("disposable construction was reached"),
+    )
+
+    status = airlock.main(
+        ("pytest", "--", "scripts/dev/worktree_test_airlock.py")
+    )
+
+    captured = capsys.readouterr()
+    assert status == 86
+    assert captured.out == ""
+    assert captured.err == "airlock_pytest_arguments_invalid\n"
+
+
+def test_pytest_boundary_accepts_only_frozen_small_surface_and_preserves_order():
+    airlock = _airlock()
+    caller = (
+        "tests/test_worktree_airlock_imports.py::test_pytest_boundary_leaf_passes",
+        "-q",
+        "-k",
+        "leaf and not forged",
+        "--collect-only",
+    )
+
+    assert airlock._parse_pytest_invocation(
+        ("pytest", "--", *caller), REPO, environment={}
+    ) == caller
+
+
+def test_pytest_boundary_requires_a_selector_and_rejects_empty_k_expression():
+    airlock = _airlock()
+    for caller in ((), ("-q",), ("-k", ""), ("-k",)):
+        with pytest.raises(
+            airlock.AirlockRefusal, match="airlock_pytest_arguments_invalid"
+        ):
+            airlock._parse_pytest_invocation(
+                ("pytest", "--", *caller), REPO, environment={}
+            )
+
+
+def test_pytest_boundary_freezes_and_hashes_the_complete_owned_vector(tmp_path: Path):
+    caller = ("core/good.py", "-q")
+    airlock, layout, inventory, prepared = _task3_prepared(
+        tmp_path, caller_args=caller
+    )
+    try:
+        effective = airlock._effective_pytest_arguments(
+            prepared, tmp_path / "checkout", caller
+        )
+        assert effective == (
+            "-c",
+            os.fspath(prepared.pytest_config),
+            "--rootdir",
+            os.fspath(tmp_path / "checkout"),
+            "--confcutdir",
+            os.fspath(tmp_path / "checkout"),
+            "-p",
+            "no:cacheprovider",
+            "-p",
+            "anyio.pytest_plugin",
+            *caller,
+        )
+        expected = hashlib.sha256(
+            json.dumps(
+                effective,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        assert airlock._hash_effective_pytest_arguments(effective) == expected
+        assert airlock._hash_effective_pytest_arguments(effective) != (
+            airlock._hash_effective_pytest_arguments(caller)
+        )
+        assert prepared.environment["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] == "1"
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+def test_owned_empty_config_defeats_hostile_checkout_pytest_configuration(
+    tmp_path: Path,
+):
+    airlock, layout, inventory, prepared = _task3_prepared(
+        tmp_path,
+        dependency_purelib=SHARED_PURELIB,
+        extra_files={
+            "scripts/dev/worktree_test_airlock.py": AIRLOCK_SOURCE.read_text(
+                encoding="utf-8"
+            ),
+            "pytest.ini": textwrap.dedent(
+                """
+                [pytest]
+                addopts = --collect-only -p definitely_missing_airlock_plugin
+                pythonpath = /foreign-airlock-path
+                """
+            ),
+            "tests/test_config_boundary.py": textwrap.dedent(
+                """
+                import sys
+
+                def test_owned_config_wins():
+                    assert '/foreign-airlock-path' not in sys.path
+                """
+            ),
+        },
+    )
+    try:
+        control = _run_prepared_inner(
+            airlock,
+            prepared,
+            tmp_path / "checkout",
+            ("tests/test_config_boundary.py", "-q"),
+        )
+        assert control.status == 0
+        assert control.call_phase_observed is True
+        assert airlock._read_marker_state(prepared.violation_dir) == ()
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+def test_pytest_status_five_is_honest_empty_selection(tmp_path: Path):
+    airlock, layout, _inventory, prepared = _task3_prepared(
+        tmp_path,
+        dependency_purelib=SHARED_PURELIB,
+        extra_files={
+            "scripts/dev/worktree_test_airlock.py": AIRLOCK_SOURCE.read_text(
+                encoding="utf-8"
+            ),
+            "tests/test_leaf.py": "def test_leaf():\n    assert True\n",
+        },
+    )
+    try:
+        control = _run_prepared_inner(
+            airlock,
+            prepared,
+            layout.checkout,
+            ("tests/test_leaf.py", "-q", "-k", "definitely_no_match"),
+        )
+
+        assert control.status == 5
+        assert control.call_phase_observed is False
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+def test_pytest_status_six_is_honest_max_warnings_error(tmp_path: Path):
+    conftest = textwrap.dedent(
+        """
+        def pytest_configure(config):
+            config.option.max_warnings = 0
+        """
+    )
+    test_source = textwrap.dedent(
+        """
+        import warnings
+
+        def test_warns():
+            warnings.warn('airlock status six witness', UserWarning)
+        """
+    )
+    airlock, layout, _inventory, prepared = _task3_prepared(
+        tmp_path,
+        dependency_purelib=SHARED_PURELIB,
+        extra_files={
+            "scripts/dev/worktree_test_airlock.py": AIRLOCK_SOURCE.read_text(
+                encoding="utf-8"
+            ),
+            "tests/conftest.py": conftest,
+            "tests/test_warns.py": test_source,
+        },
+    )
+    try:
+        control = _run_prepared_inner(
+            airlock,
+            prepared,
+            layout.checkout,
+            ("tests/test_warns.py", "-q"),
+        )
+
+        assert control.status == 6
+        assert control.call_phase_observed is True
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+@pytest.mark.parametrize("status", tuple(range(7)))
+def test_pytest_status_closed_standard_set_propagates_exactly(status: int):
+    airlock = _airlock()
+
+    assert airlock._normalize_pytest_status(status) == status
+
+
+@pytest.mark.parametrize("status", (-1, 7, 42, 86, 255))
+def test_pytest_status_outside_closed_set_is_child_setup_failure(status: int):
+    airlock = _airlock()
+
+    with pytest.raises(airlock.AirlockRefusal, match="airlock_child_setup_failed"):
+        airlock._normalize_pytest_status(status)
+
+
+def test_inner_noncertifying_control_parser_requires_exact_status_and_call_bit():
+    airlock = _airlock()
+    valid = (
+        b"airlock_inner_noncertifying\n"
+        b"airlock_inner_complete:0:call_phase_observed=1\n"
+    )
+    parsed = airlock._parse_inner_control(valid, 0)
+    assert parsed.status == 0
+    assert parsed.call_phase_observed is True
+    malformed = (
+        b"",
+        b"airlock_inner_noncertifying\n",
+        valid + b"airlock_inner_complete:0:call_phase_observed=1\n",
+        b"airlock_inner_noncertifying\nairlock_inner_complete:0\n",
+        b"airlock_inner_noncertifying\n"
+        b"airlock_inner_complete:0:call_phase_observed=1:certificate_eligible=1\n",
+        b"airlock_inner_noncertifying\n"
+        b"airlock_inner_complete:00:call_phase_observed=1\n",
+    )
+    for payload in malformed:
+        with pytest.raises(airlock.AirlockRefusal, match="airlock_child_setup_failed"):
+            airlock._parse_inner_control(payload, 0)
+
+
+@pytest.mark.parametrize("status", tuple(range(8)))
+def test_pytest_status_outer_preserves_closed_set_and_refuses_out_of_set(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+):
+    airlock = _airlock()
+    layout = _synthetic_layout(tmp_path)
+    inventory = _inventory_for(layout.checkout)
+    root = tmp_path / "attempt"
+    root.mkdir()
+    violation_dir = root / "violations"
+    violation_dir.mkdir()
+    diagnostic = root / "diagnostic"
+    diagnostic.write_bytes(b"pytest diagnostic\n")
+    diagnostic.chmod(0o600)
+    python = root / "python"
+    python.write_bytes(b"interpreter")
+    prepared = types.SimpleNamespace(
+        root=root,
+        python=python,
+        runner=root / "runner.py",
+        pytest_config=root / "pytest.ini",
+        environment={},
+        violation_dir=violation_dir,
+        diagnostic=diagnostic,
+    )
+    prepared.pytest_config.write_text("", encoding="utf-8")
+    control = (
+        "airlock_inner_noncertifying\n"
+        f"airlock_inner_complete:{status}:call_phase_observed=1\n"
+    ).encode("ascii")
+    monkeypatch.setattr(airlock, "_prepare_disposable", lambda *_a, **_k: prepared)
+    monkeypatch.setattr(
+        airlock,
+        "_run_owned_command",
+        lambda *_a, **_k: airlock.OwnedRun(
+            status=status, group_empty=True, control=control
+        ),
+    )
+    monkeypatch.setattr(airlock, "_read_marker_state", lambda _path: ())
+    monkeypatch.setattr(airlock, "_remove_disposable", shutil.rmtree)
+    monkeypatch.setattr(airlock, "_snapshot_pth", lambda _path: ())
+
+    terminal = airlock._execute_outer(
+        layout,
+        inventory,
+        caller_args=("scripts/dev/worktree_test_airlock.py",),
+        root_parent=tmp_path,
+    )
+
+    if status in range(7):
+        assert terminal.status == status
+        assert terminal.refusal is None
+        assert (terminal.certificate is not None) is (status == 0)
+    else:
+        assert terminal.status == 86
+        assert terminal.refusal == "airlock_child_setup_failed"
+        assert terminal.certificate is None
+
+
+def test_pytest_status_malformed_control_is_integrity_refusal_in_outer_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    airlock = _airlock()
+    layout = _synthetic_layout(tmp_path)
+    inventory = _inventory_for(layout.checkout)
+    root = tmp_path / "attempt"
+    root.mkdir()
+    violation_dir = root / "violations"
+    violation_dir.mkdir()
+    diagnostic = root / "diagnostic"
+    diagnostic.write_bytes(b"private details\n")
+    diagnostic.chmod(0o600)
+    prepared = types.SimpleNamespace(
+        root=root,
+        python=root / "python",
+        runner=root / "runner.py",
+        pytest_config=root / "pytest.ini",
+        environment={},
+        violation_dir=violation_dir,
+        diagnostic=diagnostic,
+    )
+    monkeypatch.setattr(airlock, "_prepare_disposable", lambda *_a, **_k: prepared)
+    monkeypatch.setattr(
+        airlock,
+        "_run_owned_command",
+        lambda *_a, **_k: airlock.OwnedRun(
+            status=0,
+            group_empty=True,
+            control=b"airlock_inner_noncertifying\nmalformed\n",
+        ),
+    )
+    monkeypatch.setattr(airlock, "_read_marker_state", lambda _path: ())
+    monkeypatch.setattr(airlock, "_remove_disposable", shutil.rmtree)
+    monkeypatch.setattr(airlock, "_snapshot_pth", lambda _path: ())
+
+    terminal = airlock._execute_outer(
+        layout,
+        inventory,
+        caller_args=("scripts/dev/worktree_test_airlock.py",),
+        root_parent=tmp_path,
+    )
+
+    assert terminal.status == 86
+    assert terminal.refusal == "airlock_child_setup_failed"
+    assert terminal.certificate is None
+
+
+def test_inner_noncertifying_runner_and_inner_main_cannot_emit_certificate(tmp_path: Path):
+    airlock, _layout, _inventory, prepared = _task3_prepared(
+        tmp_path,
+        dependency_purelib=SHARED_PURELIB,
+        extra_files={
+            "scripts/dev/worktree_test_airlock.py": AIRLOCK_SOURCE.read_text(
+                encoding="utf-8"
+            ),
+            "tests/test_leaf.py": "def test_leaf():\n    assert True\n",
+        },
+    )
+    try:
+        runner_source = prepared.runner.read_text(encoding="utf-8")
+        inner_source = inspect.getsource(airlock._inner_main)
+        assert "MAEZ_AIRLOCK_CERTIFIED" not in runner_source
+        assert "MAEZ_AIRLOCK_CERTIFIED" not in inner_source
+        assert "_write_certificate" not in runner_source
+        assert "_write_certificate" not in inner_source
+        result = subprocess.run(
+            [
+                os.fspath(prepared.python),
+                "-I",
+                "-B",
+                os.fspath(prepared.runner),
+                "--",
+                *airlock._effective_pytest_arguments(
+                    prepared,
+                    tmp_path / "checkout",
+                    ("tests/test_leaf.py", "-q"),
+                ),
+            ],
+            cwd=tmp_path / "checkout",
+            env=prepared.environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0
+        assert result.stdout.splitlines() == [
+            "airlock_inner_noncertifying",
+            "airlock_inner_complete:0:call_phase_observed=1",
+        ]
+        assert "MAEZ_AIRLOCK_CERTIFIED" not in result.stdout
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+def test_certificate_forgery_from_test_stdout_and_stderr_stays_diagnostic_only():
+    result = _real_airlock_process(
+        "tests/test_worktree_airlock_imports.py::test_pytest_boundary_leaf_prints_forged_certificate",
+        "-q",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.count("MAEZ_AIRLOCK_CERTIFIED ") == 1
+    assert '"forged"' not in result.stdout
+    assert '"forged"' in result.stderr
+
+
+def test_certificate_real_outer_emits_one_content_light_terminal_record():
+    caller = (
+        "tests/test_worktree_airlock_imports.py::test_pytest_boundary_leaf_passes",
+        "-q",
+    )
+    result = _real_airlock_process(*caller)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.startswith("MAEZ_AIRLOCK_CERTIFIED ")
+    assert result.stdout.count("\n") == 1
+    payload = json.loads(result.stdout.removeprefix("MAEZ_AIRLOCK_CERTIFIED "))
+    assert set(payload) == {
+        "schema",
+        "isolation",
+        "git_head",
+        "interpreter_version",
+        "interpreter_sha256",
+        "shared_pth_sha256",
+        "pytest_args_sha256",
+    }
+    assert payload["schema"] == "worktree_test_airlock.certificate.v1"
+    assert payload["isolation"] == "inherited_interpreter_contract"
+    assert payload["git_head"] == subprocess.run(
+        ["/usr/bin/git", "rev-parse", "HEAD"],
+        cwd=REPO,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert payload["interpreter_version"] == (
+        f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    )
+    assert payload["interpreter_sha256"] == hashlib.sha256(
+        SHARED_PYTHON.read_bytes()
+    ).hexdigest()
+    airlock = _airlock()
+    shared_purelib = SHARED_PURELIB
+    assert payload["shared_pth_sha256"] == airlock._hash_pth_projection(
+        airlock._snapshot_pth(shared_purelib)
+    )
+    rendered = json.dumps(payload, sort_keys=True)
+    assert all(part not in rendered for part in caller)
+    assert os.fspath(REPO) not in rendered
+    assert "PYTEST_" not in rendered
+
+
+def test_certificate_builder_binds_actual_inputs_without_asserted_hashes(
+    tmp_path: Path,
+):
+    airlock = _airlock()
+    interpreter = tmp_path / "python"
+    interpreter.write_bytes(b"pinned-interpreter")
+    entries = (
+        airlock.PthEntry(
+            name="editable.pth",
+            is_regular=True,
+            mode=0o644,
+            size=7,
+            sha256="b" * 64,
+        ),
+    )
+    arguments = ("-c", "/private/pytest.ini", "tests/test_leaf.py", "-q")
+    inventory = airlock.GitInventory(
+        head="a" * 40,
+        tracked_files=(),
+        tracked_python_files=(),
+        maez_roots=(),
+        registered_worktrees=(),
+    )
+
+    certificate = airlock._build_certificate(
+        inventory=inventory,
+        interpreter=interpreter,
+        shared_pth=entries,
+        effective_pytest_args=arguments,
+    )
+
+    expected_pth = json.dumps(
+        (
+            {
+                "name": "editable.pth",
+                "is_regular": True,
+                "mode": 0o644,
+                "size": 7,
+                "sha256": "b" * 64,
+            },
+        ),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    expected_arguments = json.dumps(
+        arguments, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
+    assert certificate["git_head"] == "a" * 40
+    assert certificate["interpreter_sha256"] == hashlib.sha256(
+        b"pinned-interpreter"
+    ).hexdigest()
+    assert certificate["shared_pth_sha256"] == hashlib.sha256(
+        expected_pth
+    ).hexdigest()
+    assert certificate["pytest_args_sha256"] == hashlib.sha256(
+        expected_arguments
+    ).hexdigest()
+
+
+@pytest.mark.parametrize(
+    "mode",
+    ("--collect-only", "--collectonly", "--co", "--setup-only", "--setup-plan"),
+)
+def test_certificate_status_zero_without_plugin_observed_call_does_not_certify(
+    mode: str,
+):
+    result = _real_airlock_process(
+        "tests/test_worktree_airlock_imports.py::test_pytest_boundary_leaf_passes",
+        mode,
+        "-q",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+    assert "MAEZ_AIRLOCK_CERTIFIED" not in result.stderr
+
+
+def test_certificate_setup_skip_status_zero_without_call_does_not_certify():
+    result = _real_airlock_process(
+        "tests/test_worktree_airlock_imports.py::test_pytest_boundary_leaf_setup_skip",
+        "-q",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+    assert "MAEZ_AIRLOCK_CERTIFIED" not in result.stderr
+
+
+def test_pytest_status_one_is_honest_red_not_integrity_and_never_certifies(tmp_path: Path):
+    airlock, _layout, _inventory, prepared = _task3_prepared(
+        tmp_path,
+        dependency_purelib=SHARED_PURELIB,
+        extra_files={
+            "scripts/dev/worktree_test_airlock.py": AIRLOCK_SOURCE.read_text(
+                encoding="utf-8"
+            ),
+            "tests/test_failure.py": "def test_failure():\n    assert 2 + 2 == 5\n",
+        },
+    )
+    try:
+        control = _run_prepared_inner(
+            airlock, prepared, tmp_path / "checkout", ("tests/test_failure.py", "-q")
+        )
+        assert control.status == 1
+        assert control.call_phase_observed is True
+        diagnostic = prepared.diagnostic.read_text(encoding="utf-8")
+        assert "assert (2 + 2) == 5" in diagnostic or "assert 4 == 5" in diagnostic
+        assert "airlock_" not in diagnostic
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+def test_plugin_origin_dispatcher_precedes_assertion_rewrite_and_diagnostics_survive(
+    tmp_path: Path,
+):
+    events = tmp_path / "rewrite-events"
+    conftest = textwrap.dedent(
+        f"""
+        import sys
+        from pathlib import Path
+
+        guard = sys.modules['_maez_worktree_airlock_guard']
+        original = guard.validate_spec
+
+        def observed(fullname, spec):
+            if fullname == 'tests.test_rewrite':
+                with Path({os.fspath(events)!r}).open('a', encoding='utf-8') as stream:
+                    stream.write('validate\\n')
+            return original(fullname, spec)
+
+        guard.validate_spec = observed
+        """
+    )
+    airlock, _layout, _inventory, prepared = _task3_prepared(
+        tmp_path,
+        dependency_purelib=SHARED_PURELIB,
+        extra_files={
+            "scripts/dev/worktree_test_airlock.py": AIRLOCK_SOURCE.read_text(
+                encoding="utf-8"
+            ),
+            "tests/conftest.py": conftest,
+            "tests/test_rewrite.py": (
+                "import sys\n"
+                "from pathlib import Path\n"
+                f"with Path({os.fspath(events)!r}).open('a', encoding='utf-8') as stream:\n"
+                "    stream.write('execute\\n')\n"
+                "def test_rewrite():\n"
+                "    guard = sys.modules['_maez_worktree_airlock_guard']\n"
+                "    assert sys.meta_path[0] is guard.DISPATCHER\n"
+                "    assert any(type(f).__module__ == '_pytest.assertion.rewrite' "
+                "and type(f).__name__ == 'AssertionRewritingHook' "
+                "for f in sys.meta_path[1:])\n"
+                "    actual = 2 + 2\n"
+                "    expected = 5\n"
+                "    assert actual == expected\n"
+            ),
+        },
+    )
+    try:
+        control = _run_prepared_inner(
+            airlock, prepared, tmp_path / "checkout", ("tests/test_rewrite.py", "-q")
+        )
+        diagnostic = prepared.diagnostic.read_text(encoding="utf-8")
+        assert control.status == 1
+        assert "assert 4 == 5" in diagnostic
+        assert events.read_text(encoding="utf-8").splitlines() == [
+            "validate",
+            "execute",
+        ]
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+def test_plugin_origin_unpaired_report_cannot_create_failure_or_call_evidence():
+    airlock = _airlock()
+    guard = types.SimpleNamespace(
+        audit_before_pytest=lambda: None,
+        restore_dispatcher_front=lambda: None,
+        DISPATCHER=object(),
+    )
+    plugin = airlock._AirlockPytestPlugin(
+        guard=guard,
+        checkout=REPO,
+        shared_purelib=SHARED_PURELIB,
+    )
+    plugin.pytest_runtest_logreport(
+        types.SimpleNamespace(when="call", failed=True)
+    )
+
+    assert plugin.call_phase_observed is False
+    assert plugin.failure_observed is False
+    assert plugin.final_snapshot(0).certificate_eligible is False
+
+
+@pytest.mark.parametrize(
+    ("kind", "expected"),
+    (
+        ("plugin", "airlock_import_provenance_violation"),
+        ("item", "airlock_collection_escape"),
+        ("external-conftest", "airlock_collection_escape"),
+        ("untracked-conftest", "airlock_collection_escape"),
+    ),
+)
+def test_plugin_origin_and_collection_refusal_mapping_is_pinned(
+    tmp_path: Path,
+    kind: str,
+    expected: str,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    airlock = _airlock()
+    checkout = tmp_path / "checkout"
+    shared = tmp_path / "shared"
+    outside = tmp_path / "outside"
+    checkout.mkdir()
+    shared.mkdir()
+    outside.mkdir()
+    seen: list[str] = []
+
+    def violate(token: str):
+        seen.append(token)
+        raise RuntimeError(token)
+
+    guard = types.SimpleNamespace(
+        audit_before_pytest=lambda: None,
+        restore_dispatcher_front=lambda: None,
+        DISPATCHER=object(),
+        _violate=violate,
+        _TRACKED_FILES=frozenset(),
+    )
+    plugin = airlock._AirlockPytestPlugin(
+        guard=guard,
+        checkout=checkout,
+        shared_purelib=shared,
+    )
+    conftest = "conftest" in kind
+    foreign = (
+        (checkout if kind == "untracked-conftest" else outside) / "conftest.py"
+        if conftest
+        else outside / "test_x.py"
+    )
+    foreign.write_text("\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match=expected):
+        if kind == "plugin":
+            module = types.ModuleType("unapproved_plugin")
+            module.__file__ = os.fspath(foreign)
+            module.__spec__ = importlib.util.spec_from_file_location(
+                "unapproved_plugin", foreign
+            )
+            assert module.__spec__ is not None
+            module.__loader__ = module.__spec__.loader
+            module.__package__ = module.__spec__.parent
+            monkeypatch.setitem(sys.modules, "unapproved_plugin", module)
+            plugin.pytest_plugin_registered(module, "unapproved", None)
+        elif kind == "item":
+            wrapper = plugin.pytest_collection_modifyitems(
+                None,
+                None,
+                [types.SimpleNamespace(path=foreign, nodeid="foreign")],
+            )
+            next(wrapper)
+            wrapper.send(None)
+        else:
+            module = types.ModuleType("conftest")
+            module.__file__ = os.fspath(foreign)
+            module.__spec__ = importlib.util.spec_from_file_location(
+                "conftest", foreign
+            )
+            assert module.__spec__ is not None
+            module.__loader__ = module.__spec__.loader
+            module.__package__ = module.__spec__.parent
+            monkeypatch.setitem(sys.modules, "conftest", module)
+            plugin.pytest_plugin_registered(module, os.fspath(foreign), None)
+
+    assert seen == [expected]
+
+
+def test_real_preimport_untracked_conftest_maps_collection_escape(
+    tmp_path: Path,
+):
+    selector = "tests/test_leaf.py::test_leaf"
+    airlock, layout, inventory, prepared = _task3_prepared(
+        tmp_path,
+        dependency_purelib=SHARED_PURELIB,
+        caller_args=(selector, "-q"),
+        extra_files={
+            "scripts/dev/worktree_test_airlock.py": AIRLOCK_SOURCE.read_text(
+                encoding="utf-8"
+            ),
+            "tests/test_leaf.py": "def test_leaf():\n    assert True\n",
+        },
+    )
+    airlock._remove_disposable(prepared.root)
+    (layout.checkout / "tests/conftest.py").write_text(
+        "VALUE = 'untracked'\n", encoding="utf-8"
+    )
+    runs = tmp_path / "runs"
+    runs.mkdir()
+
+    terminal = airlock._execute_outer(
+        layout,
+        inventory,
+        caller_args=(selector, "-q"),
+        root_parent=runs,
+    )
+
+    assert terminal.status == 86
+    assert terminal.refusal == "airlock_collection_escape"
+    assert terminal.certificate is None
+
+
+def test_real_preimport_external_conftest_maps_collection_escape_before_execution(
+    tmp_path: Path,
+):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = tmp_path / "external-conftest-executed"
+    foreign = outside / "conftest.py"
+    foreign.write_text(
+        "from pathlib import Path\n"
+        f"Path({os.fspath(sentinel)!r}).write_text('executed', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    probe = textwrap.dedent(
+        f"""
+        import importlib.util
+        import sys
+
+        class ExternalConftestFinder:
+            def find_spec(self, fullname, path=None, target=None):
+                del path, target
+                if fullname == 'foreign_conftest':
+                    return importlib.util.spec_from_file_location(
+                        fullname, {os.fspath(foreign)!r}
+                    )
+                return None
+
+        sys.meta_path.append(ExternalConftestFinder())
+
+        def test_external_conftest():
+            import foreign_conftest
+
+            assert foreign_conftest is not None
+        """
+    )
+    airlock, layout, _inventory, prepared = _task3_prepared(
+        tmp_path,
+        extra_files={
+            "scripts/dev/worktree_test_airlock.py": AIRLOCK_SOURCE.read_text(
+                encoding="utf-8"
+            ),
+            "tests/test_external_conftest.py": probe,
+        },
+        dependency_purelib=SHARED_PURELIB,
+    )
+    try:
+        run = _run_prepared_inner_raw(
+            airlock,
+            prepared,
+            layout.checkout,
+            ("tests/test_external_conftest.py", "-q"),
+        )
+
+        assert not sentinel.exists(), (
+            run,
+            prepared.diagnostic.read_text(encoding="utf-8", errors="replace"),
+        )
+        assert airlock._read_marker_state(prepared.violation_dir) == (
+            "airlock_collection_escape",
+        ), (
+            run,
+            prepared.diagnostic.read_text(encoding="utf-8", errors="replace"),
+        )
+        assert run.status != 0
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+def test_plugin_origin_accepts_only_exact_anyio_plugin_from_shared_purelib():
+    airlock = _airlock()
+    anyio_plugin = __import__("anyio.pytest_plugin", fromlist=("pytest_plugin",))
+    shared = SHARED_PURELIB
+    guard = types.SimpleNamespace(
+        audit_before_pytest=lambda: None,
+        restore_dispatcher_front=lambda: None,
+        DISPATCHER=object(),
+        _TRACKED_FILES=frozenset(),
+        _violate=lambda token: pytest.fail(f"unexpected refusal: {token}"),
+    )
+    plugin = airlock._AirlockPytestPlugin(
+        guard=guard,
+        checkout=REPO,
+        shared_purelib=shared,
+    )
+
+    plugin.pytest_plugin_registered(
+        anyio_plugin, "anyio.pytest_plugin", None
+    )
+
+
+def test_plugin_origin_rejects_core_module_under_wrong_registration_name():
+    airlock = _airlock()
+    core_plugin = __import__("_pytest.main", fromlist=("main",))
+    shared = SHARED_PURELIB
+    plugin = _airlock_plugin_for_unit_test(airlock, REPO, shared)
+
+    with pytest.raises(RuntimeError, match="airlock_import_provenance_violation"):
+        plugin.pytest_plugin_registered(
+            core_plugin, "definitely-wrong-registration", None
+        )
+
+
+def test_plugin_origin_rejects_unapproved_module_inside_shared_purelib(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    airlock = _airlock()
+    checkout = tmp_path / "checkout"
+    shared = tmp_path / "shared"
+    checkout.mkdir()
+    shared.mkdir()
+    origin = shared / "rogue.py"
+    origin.write_text("\n", encoding="utf-8")
+    module = _synthetic_plugin_module("_pytest.rogue", origin)
+    monkeypatch.setitem(sys.modules, "_pytest.rogue", module)
+    plugin = _airlock_plugin_for_unit_test(airlock, checkout, shared)
+
+    with pytest.raises(RuntimeError, match="airlock_import_provenance_violation"):
+        plugin.pytest_plugin_registered(module, "rogue", None)
+
+
+def test_terminal_order_certificate_is_last_after_every_outer_finalizer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    airlock = _airlock()
+    events: list[str] = []
+    layout = _synthetic_layout(tmp_path)
+    selector = layout.checkout / "test_leaf.py"
+    selector.write_text("def test_leaf(): pass\n", encoding="utf-8")
+    inventory = _inventory_for(layout.checkout)
+    root = tmp_path / "attempt"
+    root.mkdir()
+    violation_dir = root / "violations"
+    violation_dir.mkdir()
+    diagnostic = root / "diagnostic"
+    diagnostic.write_bytes(b"")
+    diagnostic.chmod(0o600)
+    python = root / "python"
+    python.write_bytes(b"interpreter")
+    pytest_config = root / "pytest.ini"
+    pytest_config.write_text("", encoding="utf-8")
+    prepared = types.SimpleNamespace(
+        root=root,
+        python=python,
+        runner=root / "runner.py",
+        pytest_config=pytest_config,
+        environment={},
+        violation_dir=violation_dir,
+        diagnostic=diagnostic,
+    )
+    monkeypatch.setattr(airlock, "_validate_outer_invocation", lambda: layout)
+    monkeypatch.setattr(airlock, "_run_preflight", lambda _layout: inventory)
+    monkeypatch.setattr(
+        airlock,
+        "_snapshot_pth",
+        lambda _path: events.append("snapshot") or (),
+    )
+    monkeypatch.setattr(
+        airlock,
+        "_prepare_disposable",
+        lambda *_a, **_k: events.append("prepare") or prepared,
+    )
+    monkeypatch.setattr(
+        airlock,
+        "_run_owned_command",
+        lambda *_a, **_k: events.append("run")
+        or airlock.OwnedRun(
+            status=0,
+            group_empty=True,
+            control=(
+                b"airlock_inner_noncertifying\n"
+                b"airlock_inner_complete:0:call_phase_observed=1\n"
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        airlock,
+        "_read_marker_state",
+        lambda _path: events.append("marker") or (),
+    )
+    monkeypatch.setattr(
+        airlock,
+        "_prepared_root_processes_absent",
+        lambda _root: events.append("descendants") or True,
+    )
+
+    def remove(path: Path) -> None:
+        events.append("remove")
+        shutil.rmtree(path)
+
+    monkeypatch.setattr(airlock, "_remove_disposable", remove)
+    original_restore = airlock._OuterSignalScope.restore
+
+    def restore(scope) -> bool:
+        events.append("signals")
+        return original_restore(scope)
+
+    monkeypatch.setattr(airlock._OuterSignalScope, "restore", restore)
+    original_write = airlock._write_certificate
+
+    def write(payload, *, stream=sys.stdout) -> None:
+        events.append("certificate")
+        original_write(payload, stream=stream)
+
+    monkeypatch.setattr(airlock, "_write_certificate", write)
+
+    status = airlock.main(("pytest", "--", "test_leaf.py"))
+    captured = capsys.readouterr()
+
+    assert events == [
+        "snapshot",
+        "prepare",
+        "run",
+        "descendants",
+        "marker",
+        "remove",
+        "snapshot",
+        "signals",
+        "certificate",
+    ]
+    assert status == 0
+    assert captured.out.startswith("MAEZ_AIRLOCK_CERTIFIED ")
+    payload = json.loads(captured.out.removeprefix("MAEZ_AIRLOCK_CERTIFIED "))
+    effective = (
+        "-c",
+        os.fspath(pytest_config),
+        "--rootdir",
+        os.fspath(layout.checkout),
+        "--confcutdir",
+        os.fspath(layout.checkout),
+        "-p",
+        "no:cacheprovider",
+        "-p",
+        "anyio.pytest_plugin",
+        "test_leaf.py",
+    )
+    expected_args = hashlib.sha256(
+        json.dumps(
+            effective, ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
+    ).hexdigest()
+    expected_pth = hashlib.sha256(
+        json.dumps(
+            (), ensure_ascii=False, separators=(",", ":"), sort_keys=True
+        ).encode("utf-8")
+    ).hexdigest()
+    assert payload == {
+        "schema": "worktree_test_airlock.certificate.v1",
+        "isolation": "inherited_interpreter_contract",
+        "git_head": inventory.head,
+        "interpreter_version": (
+            f"{sys.version_info.major}.{sys.version_info.minor}."
+            f"{sys.version_info.micro}"
+        ),
+        "interpreter_sha256": hashlib.sha256(b"interpreter").hexdigest(),
+        "shared_pth_sha256": expected_pth,
+        "pytest_args_sha256": expected_args,
+    }
+
+
+@pytest.mark.parametrize(
+    "mode",
+    ("--collect-only", "--collectonly", "--co", "--setup-only", "--setup-plan"),
+)
+def test_diagnostic_mode_outer_rejects_forged_positive_call_control(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+):
+    airlock = _airlock()
+    layout = _synthetic_layout(tmp_path)
+    inventory = _inventory_for(layout.checkout)
+    root = tmp_path / "attempt"
+    root.mkdir()
+    violation_dir = root / "violations"
+    violation_dir.mkdir()
+    python = root / "python"
+    python.write_bytes(b"interpreter")
+    pytest_config = root / "pytest.ini"
+    pytest_config.write_text("", encoding="utf-8")
+    diagnostic = root / "diagnostic"
+    diagnostic.write_bytes(b"")
+    diagnostic.chmod(0o600)
+    prepared = types.SimpleNamespace(
+        root=root,
+        python=python,
+        runner=root / "runner.py",
+        pytest_config=pytest_config,
+        environment={},
+        violation_dir=violation_dir,
+        diagnostic=diagnostic,
+    )
+    forged = (
+        b"airlock_inner_noncertifying\n"
+        b"airlock_inner_complete:0:call_phase_observed=1\n"
+    )
+    monkeypatch.setattr(airlock, "_prepare_disposable", lambda *_a, **_k: prepared)
+    monkeypatch.setattr(
+        airlock,
+        "_run_owned_command",
+        lambda *_a, **_k: airlock.OwnedRun(
+            status=0, group_empty=True, control=forged
+        ),
+    )
+    monkeypatch.setattr(airlock, "_read_marker_state", lambda _path: ())
+    monkeypatch.setattr(airlock, "_remove_disposable", shutil.rmtree)
+    monkeypatch.setattr(airlock, "_snapshot_pth", lambda _path: ())
+
+    terminal = airlock._execute_outer(
+        layout,
+        inventory,
+        caller_args=("tests/test_leaf.py", mode),
+        root_parent=tmp_path,
+    )
+
+    assert terminal.status == 0
+    assert terminal.refusal is None
+    assert terminal.certificate is None
+
+
+@pytest.mark.parametrize("raw_status", (False, True, 1.5, "1"))
+def test_inner_validates_raw_pytest_status_before_conversion(
+    monkeypatch: pytest.MonkeyPatch,
+    raw_status: object,
+):
+    airlock = _airlock()
+    import pytest as real_pytest
+
+    guard = types.SimpleNamespace(
+        audit_before_pytest=lambda: None,
+        restore_dispatcher_front=lambda: None,
+        _CHECKOUT=os.fspath(REPO),
+        _SHARED_PURELIB=os.fspath(SHARED_PURELIB),
+        DISPATCHER=object(),
+    )
+    monkeypatch.setitem(sys.modules, "_maez_worktree_airlock_guard", guard)
+    monkeypatch.setattr(real_pytest, "main", lambda *_a, **_k: raw_status)
+
+    result = airlock._inner_main(("tests/test_leaf.py",))
+
+    assert result.status == 86
+    assert result.call_phase_observed is False
+
+
+def test_inner_rejects_raw_status_without_invoking_conversion_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    airlock = _airlock()
+    import pytest as real_pytest
+
+    conversions: list[str] = []
+
+    class ConversionTrap:
+        def __int__(self):
+            conversions.append("int")
+            return 0
+
+        def __index__(self):
+            conversions.append("index")
+            return 0
+
+        def __str__(self):
+            conversions.append("str")
+            return "0"
+
+    guard = types.SimpleNamespace(
+        audit_before_pytest=lambda: None,
+        restore_dispatcher_front=lambda: None,
+        _CHECKOUT=os.fspath(REPO),
+        _SHARED_PURELIB=os.fspath(SHARED_PURELIB),
+        DISPATCHER=object(),
+    )
+    monkeypatch.setitem(sys.modules, "_maez_worktree_airlock_guard", guard)
+    monkeypatch.setattr(real_pytest, "main", lambda *_a, **_k: ConversionTrap())
+
+    result = airlock._inner_main(("tests/test_leaf.py",))
+
+    assert result.status == 86
+    assert result.call_phase_observed is False
+    assert conversions == []
+
+
+@pytest.mark.parametrize("raw_status", (0, 1))
+def test_inner_requires_completed_global_observer_lifecycle_for_every_status(
+    monkeypatch: pytest.MonkeyPatch,
+    raw_status: int,
+):
+    airlock = _airlock()
+    import pytest as real_pytest
+
+    violations: list[str] = []
+
+    def violate(token: str) -> None:
+        violations.append(token)
+        raise RuntimeError(token)
+
+    guard = types.SimpleNamespace(
+        audit_before_pytest=lambda: None,
+        restore_dispatcher_front=lambda: None,
+        _CHECKOUT=os.fspath(REPO),
+        _SHARED_PURELIB=os.fspath(SHARED_PURELIB),
+        DISPATCHER=object(),
+        _violate=violate,
+    )
+    monkeypatch.setitem(sys.modules, "_maez_worktree_airlock_guard", guard)
+    monkeypatch.setattr(real_pytest, "main", lambda *_a, **_k: raw_status)
+
+    result = airlock._inner_main(("tests/test_leaf.py",))
+
+    assert result.status == 86
+    assert result.call_phase_observed is False
+    assert violations == ["airlock_import_provenance_violation"]
+
+
+def test_inner_runner_keeps_control_and_lifecycle_state_out_of_main_module(
+    tmp_path: Path,
+):
+    airlock, _layout, _inventory, prepared = _task3_prepared(
+        tmp_path,
+        dependency_purelib=SHARED_PURELIB,
+        extra_files={
+            "scripts/dev/worktree_test_airlock.py": AIRLOCK_SOURCE.read_text(
+                encoding="utf-8"
+            ),
+            "tests/test_runner_state.py": textwrap.dedent(
+                """
+                import __main__
+
+                def test_runner_state_is_not_test_visible():
+                    for name in ('control', 'status', 'call_phase_observed'):
+                        assert not hasattr(__main__, name)
+                """
+            ),
+        },
+    )
+    try:
+        control = _run_prepared_inner(
+            airlock,
+            prepared,
+            tmp_path / "checkout",
+            ("tests/test_runner_state.py", "-q"),
+        )
+        assert control.status == 0
+        assert control.call_phase_observed is True
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+def _airlock_plugin_for_unit_test(airlock, checkout: Path, shared: Path):
+    def violate(token: str) -> None:
+        raise RuntimeError(token)
+
+    guard = types.SimpleNamespace(
+        audit_before_pytest=lambda: None,
+        restore_dispatcher_front=lambda: None,
+        DISPATCHER=object(),
+        _TRACKED_FILES=frozenset(),
+        _violate=violate,
+    )
+    return airlock._AirlockPytestPlugin(
+        guard=guard,
+        checkout=checkout,
+        shared_purelib=shared,
+    )
+
+
+def _bound_airlock_plugin_for_report_test(tmp_path: Path):
+    airlock = _airlock()
+    checkout = tmp_path / "checkout"
+    shared = tmp_path / "shared"
+    checkout.mkdir()
+    shared.mkdir()
+    item_path = checkout / "test_leaf.py"
+    item_path.write_text("def test_leaf():\n    assert True\n", encoding="utf-8")
+    item = types.SimpleNamespace(path=item_path, nodeid="test_leaf.py::test_leaf")
+    plugin = _airlock_plugin_for_unit_test(airlock, checkout, shared)
+    plugin._bind_items((item,))
+    return airlock, plugin, item
+
+
+def _pytest_call_and_report(phase: str, nodeid: str):
+    from _pytest.reports import TestReport
+    from _pytest.runner import CallInfo
+
+    call = CallInfo.from_call(lambda: None, when=phase)
+    report = TestReport(
+        nodeid=nodeid,
+        location=("test_leaf.py", 0, "test_leaf"),
+        keywords={},
+        outcome="passed",
+        longrepr=None,
+        when=phase,
+    )
+    return call, report
+
+
+def _finish_report_wrapper(plugin, item, call, report) -> None:
+    wrapper = plugin.pytest_runtest_makereport(item, call)
+    next(wrapper)
+    with pytest.raises(StopIteration) as stopped:
+        wrapper.send(report)
+    assert stopped.value.value is report
+
+
+@pytest.mark.parametrize("lookalike", ("call", "report"))
+def test_plugin_makereport_rejects_lookalike_lifecycle_objects(
+    tmp_path: Path,
+    lookalike: str,
+):
+    _airlock_module, plugin, item = _bound_airlock_plugin_for_report_test(tmp_path)
+    call, report = _pytest_call_and_report("setup", item.nodeid)
+    if lookalike == "call":
+        call = types.SimpleNamespace(when="setup")
+    else:
+        report = types.SimpleNamespace(when="setup", failed=False)
+    wrapper = plugin.pytest_runtest_makereport(item, call)
+    if lookalike == "call":
+        with pytest.raises(RuntimeError, match="airlock_import_provenance_violation"):
+            next(wrapper)
+        return
+    next(wrapper)
+
+    with pytest.raises(RuntimeError, match="airlock_import_provenance_violation"):
+        wrapper.send(report)
+
+
+def test_plugin_makereport_rejects_exact_objects_in_out_of_order_phase(
+    tmp_path: Path,
+):
+    _airlock_module, plugin, item = _bound_airlock_plugin_for_report_test(tmp_path)
+    call, report = _pytest_call_and_report("call", item.nodeid)
+    wrapper = plugin.pytest_runtest_makereport(item, call)
+    next(wrapper)
+
+    with pytest.raises(RuntimeError, match="airlock_import_provenance_violation"):
+        wrapper.send(report)
+
+
+def test_plugin_report_lifecycle_accepts_exact_order_and_ignores_replay(
+    tmp_path: Path,
+):
+    _airlock_module, plugin, item = _bound_airlock_plugin_for_report_test(tmp_path)
+    for phase in ("setup", "call", "teardown"):
+        call, report = _pytest_call_and_report(phase, item.nodeid)
+        _finish_report_wrapper(plugin, item, call, report)
+        plugin.pytest_runtest_logreport(report)
+        plugin.pytest_runtest_logreport(report)
+
+    assert plugin.call_phase_observed is True
+    assert plugin.failure_observed is False
+
+
+@pytest.mark.parametrize(
+    ("failing", "expected_status"),
+    ((False, 0), (True, 1)),
+    ids=("passing-subtests", "failing-subtest"),
+)
+def test_plugin_real_subtests_complete_without_forging_top_level_lifecycle(
+    tmp_path: Path,
+    failing: bool,
+    expected_status: int,
+):
+    source = textwrap.dedent(
+        f"""
+        import unittest
+
+        class TestSubtests(unittest.TestCase):
+            def test_values(self):
+                for value in (1, 2):
+                    with self.subTest(value=value):
+                        if {failing!r} and value == 2:
+                            self.assertEqual(value, 1)
+                        else:
+                            self.assertGreater(value, 0)
+        """
+    )
+    airlock, _layout, _inventory, prepared = _task3_prepared(
+        tmp_path,
+        dependency_purelib=SHARED_PURELIB,
+        extra_files={
+            "scripts/dev/worktree_test_airlock.py": AIRLOCK_SOURCE.read_text(
+                encoding="utf-8"
+            ),
+            "tests/test_subtests.py": source,
+        },
+    )
+    try:
+        run = _run_prepared_inner_raw(
+            airlock,
+            prepared,
+            tmp_path / "checkout",
+            ("tests/test_subtests.py", "-q"),
+        )
+        markers = airlock._read_marker_state(prepared.violation_dir)
+        assert run.status == expected_status, (
+            run,
+            markers,
+            prepared.diagnostic.read_text(encoding="utf-8", errors="replace"),
+        )
+        control = airlock._parse_inner_control(run.control, run.status)
+
+        assert control.status == expected_status
+        assert control.call_phase_observed is True
+        assert markers == ()
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+@pytest.mark.parametrize("abort_shape", ("pytest-exit", "protocol-swallow"))
+def test_plugin_partial_status_zero_run_never_certifies(
+    tmp_path: Path,
+    abort_shape: str,
+):
+    if abort_shape == "pytest-exit":
+        conftest = ""
+        middle = "import pytest\n\ndef test_b():\n    pytest.exit('stop', returncode=0)\n"
+    else:
+        conftest = textwrap.dedent(
+            """
+            def pytest_runtest_protocol(item):
+                if item.name == 'test_b':
+                    return True
+                return None
+            """
+        )
+        middle = "def test_b():\n    assert False\n"
+    suite = "def test_a():\n    assert True\n\n" + middle
+    if abort_shape == "pytest-exit":
+        suite += "\ndef test_c():\n    assert False\n"
+    files = {
+        "scripts/dev/worktree_test_airlock.py": AIRLOCK_SOURCE.read_text(
+            encoding="utf-8"
+        ),
+        "tests/test_partial.py": suite,
+    }
+    if conftest:
+        files["tests/conftest.py"] = conftest
+    airlock, _layout, _inventory, prepared = _task3_prepared(
+        tmp_path,
+        dependency_purelib=SHARED_PURELIB,
+        extra_files=files,
+    )
+    try:
+        run = _run_prepared_inner_raw(
+            airlock,
+            prepared,
+            tmp_path / "checkout",
+            ("tests/test_partial.py", "-q"),
+        )
+        markers = airlock._read_marker_state(prepared.violation_dir)
+
+        assert run.status == 86
+        assert "airlock_inner_complete:86" in run.control.decode("ascii")
+        assert set(markers) == {"airlock_import_provenance_violation"}
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+def test_plugin_makereport_refuses_next_phase_before_prior_report_is_logged(
+    tmp_path: Path,
+):
+    _airlock_module, plugin, item = _bound_airlock_plugin_for_report_test(tmp_path)
+    setup_call, setup_report = _pytest_call_and_report("setup", item.nodeid)
+    _finish_report_wrapper(plugin, item, setup_call, setup_report)
+    call, report = _pytest_call_and_report("call", item.nodeid)
+    wrapper = plugin.pytest_runtest_makereport(item, call)
+    next(wrapper)
+
+    with pytest.raises(RuntimeError, match="airlock_import_provenance_violation"):
+        wrapper.send(report)
+
+
+def _pytest_collect_report():
+    from _pytest.reports import CollectReport
+
+    return CollectReport(
+        nodeid="tests/test_leaf.py",
+        outcome="passed",
+        longrepr=None,
+        result=[],
+    )
+
+
+def test_plugin_rejects_published_collect_report_without_created_identity(
+    tmp_path: Path,
+):
+    airlock = _airlock()
+    checkout = tmp_path / "checkout"
+    shared = tmp_path / "shared"
+    checkout.mkdir()
+    shared.mkdir()
+    plugin = _airlock_plugin_for_unit_test(airlock, checkout, shared)
+
+    with pytest.raises(RuntimeError, match="airlock_import_provenance_violation"):
+        plugin.pytest_collectreport(_pytest_collect_report())
+
+
+def test_plugin_rejects_replayed_published_collect_report(tmp_path: Path):
+    airlock = _airlock()
+    checkout = tmp_path / "checkout"
+    shared = tmp_path / "shared"
+    checkout.mkdir()
+    shared.mkdir()
+    plugin = _airlock_plugin_for_unit_test(airlock, checkout, shared)
+    report = _pytest_collect_report()
+    wrapper = plugin.pytest_make_collect_report(object())
+    next(wrapper)
+    with pytest.raises(StopIteration):
+        wrapper.send(report)
+
+    plugin.pytest_collectreport(report)
+    with pytest.raises(RuntimeError, match="airlock_import_provenance_violation"):
+        plugin.pytest_collectreport(report)
+
+
+def test_plugin_call_and_failure_state_is_read_only_and_fake_reports_are_ignored(
+    tmp_path: Path,
+):
+    airlock = _airlock()
+    checkout = tmp_path / "checkout"
+    shared = tmp_path / "shared"
+    checkout.mkdir()
+    shared.mkdir()
+    plugin = _airlock_plugin_for_unit_test(airlock, checkout, shared)
+
+    with pytest.raises(AttributeError):
+        plugin.call_phase_observed = True
+    with pytest.raises(AttributeError):
+        plugin.failure_observed = True
+    plugin.pytest_runtest_logreport(
+        types.SimpleNamespace(when="call", failed=False)
+    )
+
+    assert plugin.call_phase_observed is False
+    assert plugin.failure_observed is False
+
+
+@pytest.mark.parametrize(
+    ("mode", "conftest"),
+    (
+        (
+            "--setup-only",
+            textwrap.dedent(
+                """
+                def pytest_configure(config):
+                    for plugin in config.pluginmanager.get_plugins():
+                        if type(plugin).__name__ == '_AirlockPytestPlugin':
+                            try:
+                                plugin.call_phase_observed = True
+                            except (AttributeError, TypeError):
+                                pass
+                """
+            ),
+        ),
+        (
+            "--collect-only",
+            textwrap.dedent(
+                """
+                import types
+
+                def pytest_collection_modifyitems(config, items):
+                    del items
+                    for plugin in config.pluginmanager.get_plugins():
+                        if type(plugin).__name__ == '_AirlockPytestPlugin':
+                            plugin.pytest_runtest_logreport(
+                                types.SimpleNamespace(when='call', failed=False)
+                            )
+                """
+            ),
+        ),
+        (
+            "--setup-only",
+            textwrap.dedent(
+                """
+                import pytest
+
+                @pytest.hookimpl(tryfirst=True)
+                def pytest_runtest_logreport(report):
+                    if report.when == 'setup':
+                        report.when = 'call'
+                """
+            ),
+        ),
+    ),
+    ids=("direct-assignment", "fake-report", "mutated-setup-report"),
+)
+def test_plugin_diagnostic_modes_reject_test_reported_call_phase(
+    tmp_path: Path,
+    mode: str,
+    conftest: str,
+):
+    airlock, _layout, _inventory, prepared = _task3_prepared(
+        tmp_path,
+        dependency_purelib=SHARED_PURELIB,
+        extra_files={
+            "scripts/dev/worktree_test_airlock.py": AIRLOCK_SOURCE.read_text(
+                encoding="utf-8"
+            ),
+            "tests/conftest.py": conftest,
+            "tests/test_leaf.py": "def test_leaf():\n    assert True\n",
+        },
+    )
+    try:
+        control = _run_prepared_inner(
+            airlock,
+            prepared,
+            tmp_path / "checkout",
+            ("tests/test_leaf.py", mode, "-q"),
+        )
+        assert control.status == 0
+        assert control.call_phase_observed is False
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+def test_plugin_rejects_extra_plugin_object_exported_from_tracked_conftest(
+    tmp_path: Path,
+):
+    conftest = textwrap.dedent(
+        """
+        class ExtraPlugin:
+            pass
+
+        def pytest_configure(config):
+            config.pluginmanager.register(
+                ExtraPlugin(), 'extra-from-conftest-instance'
+            )
+        """
+    )
+    airlock, _layout, _inventory, prepared = _task3_prepared(
+        tmp_path,
+        dependency_purelib=SHARED_PURELIB,
+        extra_files={
+            "scripts/dev/worktree_test_airlock.py": AIRLOCK_SOURCE.read_text(
+                encoding="utf-8"
+            ),
+            "tests/conftest.py": conftest,
+            "tests/test_leaf.py": "def test_leaf():\n    assert True\n",
+        },
+    )
+    try:
+        run = _run_prepared_inner_raw(
+            airlock,
+            prepared,
+            tmp_path / "checkout",
+            ("tests/test_leaf.py", "-q"),
+        )
+        markers = airlock._read_marker_state(prepared.violation_dir)
+
+        assert run.status == 86
+        assert set(markers) == {"airlock_import_provenance_violation"}
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+def test_plugin_failure_fact_survives_report_and_exit_status_mutation(
+    tmp_path: Path,
+):
+    conftest = textwrap.dedent(
+        """
+        import pytest
+
+        @pytest.hookimpl(tryfirst=True)
+        def pytest_runtest_logreport(report):
+            report.outcome = 'passed'
+
+        @pytest.hookimpl(trylast=True)
+        def pytest_sessionfinish(session):
+            session.exitstatus = 0
+        """
+    )
+    airlock, _layout, _inventory, prepared = _task3_prepared(
+        tmp_path,
+        dependency_purelib=SHARED_PURELIB,
+        extra_files={
+            "scripts/dev/worktree_test_airlock.py": AIRLOCK_SOURCE.read_text(
+                encoding="utf-8"
+            ),
+            "tests/conftest.py": conftest,
+            "tests/test_failure.py": "def test_failure():\n    assert 2 + 2 == 5\n",
+        },
+    )
+    try:
+        control = _run_prepared_inner(
+            airlock,
+            prepared,
+            tmp_path / "checkout",
+            ("tests/test_failure.py", "-q"),
+        )
+        assert control.status == 1
+        assert control.call_phase_observed is True
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+@pytest.mark.parametrize(
+    ("source", "expected_status"),
+    (
+        (
+            "import pytest\n\ndef test_skip_in_call():\n    pytest.skip('skip')\n",
+            0,
+        ),
+        (
+            "import unittest\n\nclass TestSkip(unittest.TestCase):\n"
+            "    def test_skip(self):\n        self.skipTest('skip')\n",
+            0,
+        ),
+        (
+            "import unittest\n\ndef test_plain_unittest_skip():\n"
+            "    raise unittest.SkipTest('skip')\n",
+            0,
+        ),
+        (
+            "import pytest\n\n@pytest.mark.xfail\ndef test_expected_failure():\n"
+            "    assert False\n",
+            0,
+        ),
+        (
+            "import pytest\n\ndef test_imperative_xfail():\n"
+            "    pytest.xfail('expected')\n",
+            0,
+        ),
+        (
+            "import pytest\n\n@pytest.mark.xfail\ndef test_non_strict_xpass():\n"
+            "    assert True\n",
+            0,
+        ),
+        (
+            "import pytest\n\n@pytest.mark.xfail(strict=True)\n"
+            "def test_strict_xpass():\n    assert True\n",
+            1,
+        ),
+    ),
+    ids=(
+        "call-skip",
+        "unittest-call-skip",
+        "plain-unittest-skip",
+        "expected-xfail",
+        "imperative-xfail",
+        "non-strict-xpass",
+        "strict-xpass",
+    ),
+)
+def test_plugin_failure_truth_preserves_skip_and_xfail_semantics(
+    tmp_path: Path,
+    source: str,
+    expected_status: int,
+):
+    airlock, _layout, _inventory, prepared = _task3_prepared(
+        tmp_path,
+        dependency_purelib=SHARED_PURELIB,
+        extra_files={
+            "scripts/dev/worktree_test_airlock.py": AIRLOCK_SOURCE.read_text(
+                encoding="utf-8"
+            ),
+            "tests/test_outcome.py": source,
+        },
+    )
+    try:
+        control = _run_prepared_inner(
+            airlock,
+            prepared,
+            tmp_path / "checkout",
+            ("tests/test_outcome.py", "-q"),
+        )
+
+        assert control.status == expected_status
+        assert control.call_phase_observed is True
+        assert airlock._read_marker_state(prepared.violation_dir) == ()
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+def test_plugin_rejects_firstresult_report_that_launders_failing_call(
+    tmp_path: Path,
+):
+    conftest = textwrap.dedent(
+        """
+        import pytest
+        from _pytest.reports import TestReport
+
+        @pytest.hookimpl(tryfirst=True)
+        def pytest_runtest_makereport(item, call):
+            report = TestReport.from_item_and_call(item, call)
+            if call.when == 'call' and call.excinfo is not None:
+                report.outcome = 'passed'
+                report.longrepr = None
+            return report
+        """
+    )
+    airlock, layout, inventory, prepared = _task3_prepared(
+        tmp_path,
+        dependency_purelib=SHARED_PURELIB,
+        extra_files={
+            "scripts/dev/worktree_test_airlock.py": AIRLOCK_SOURCE.read_text(
+                encoding="utf-8"
+            ),
+            "tests/conftest.py": conftest,
+            "tests/test_failure.py": "def test_failure():\n    assert 2 + 2 == 5\n",
+        },
+    )
+    try:
+        airlock._remove_disposable(prepared.root)
+        terminal = airlock._execute_outer(
+            layout,
+            inventory,
+            caller_args=("tests/test_failure.py", "-q"),
+            root_parent=tmp_path,
+        )
+
+        assert terminal.status == 86
+        assert terminal.refusal == "airlock_import_provenance_violation"
+        assert terminal.certificate is None
+    finally:
+        if prepared.root.exists():
+            airlock._remove_disposable(prepared.root)
+
+
+def _synthetic_plugin_module(
+    name: str,
+    origin: Path,
+    *,
+    spec_origin: Path | None = None,
+) -> types.ModuleType:
+    module = types.ModuleType(name)
+    module.__file__ = os.fspath(origin)
+    module.__spec__ = importlib.util.spec_from_file_location(
+        name, spec_origin or origin
+    )
+    assert module.__spec__ is not None
+    module.__loader__ = module.__spec__.loader
+    module.__package__ = module.__spec__.parent
+    return module
+
+
+@pytest.mark.parametrize(
+    "plane",
+    (
+        "file",
+        "spec-origin",
+        "module-path",
+        "spec-search",
+        "module-path-only",
+        "spec-search-only",
+    ),
+)
+def test_plugin_origin_rejects_every_disagreeing_origin_plane(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    plane: str,
+):
+    airlock = _airlock()
+    checkout = tmp_path / "checkout"
+    shared = tmp_path / "shared"
+    outside = tmp_path / "outside"
+    checkout.mkdir()
+    shared.mkdir()
+    outside.mkdir()
+    allowed_file = shared / "pytest_plugin.py"
+    foreign_file = outside / "pytest_plugin.py"
+    allowed_file.write_text("\n", encoding="utf-8")
+    foreign_file.write_text("\n", encoding="utf-8")
+    file_origin = foreign_file if plane == "file" else allowed_file
+    spec_origin = foreign_file if plane == "spec-origin" else allowed_file
+    module = _synthetic_plugin_module(
+        "anyio.pytest_plugin", file_origin, spec_origin=spec_origin
+    )
+    assert module.__spec__ is not None
+    if plane in {"module-path", "module-path-only"}:
+        module.__path__ = [os.fspath(foreign_file.parent)]
+    if plane in {"spec-search", "spec-search-only"}:
+        module.__spec__.submodule_search_locations = [
+            os.fspath(foreign_file.parent)
+        ]
+    if plane == "module-path":
+        module.__spec__.submodule_search_locations = [
+            os.fspath(allowed_file.parent)
+        ]
+    if plane == "spec-search":
+        module.__path__ = [os.fspath(allowed_file.parent)]
+    monkeypatch.setitem(sys.modules, "anyio.pytest_plugin", module)
+    plugin = _airlock_plugin_for_unit_test(airlock, checkout, shared)
+
+    with pytest.raises(RuntimeError, match="airlock_import_provenance_violation"):
+        plugin.pytest_plugin_registered(module, "anyio.pytest_plugin", None)
+
+
+def test_plugin_origin_requires_exact_loaded_module_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    airlock = _airlock()
+    checkout = tmp_path / "checkout"
+    shared = tmp_path / "shared"
+    checkout.mkdir()
+    shared.mkdir()
+    origin = shared / "pytest_plugin.py"
+    origin.write_text("\n", encoding="utf-8")
+    loaded = _synthetic_plugin_module("anyio.pytest_plugin", origin)
+    impostor = _synthetic_plugin_module("anyio.pytest_plugin", origin)
+    monkeypatch.setitem(sys.modules, "anyio.pytest_plugin", loaded)
+    plugin = _airlock_plugin_for_unit_test(airlock, checkout, shared)
+
+    with pytest.raises(RuntimeError, match="airlock_import_provenance_violation"):
+        plugin.pytest_plugin_registered(impostor, "anyio.pytest_plugin", None)
+
+
+def test_plugin_origin_requires_object_type_exported_by_loaded_module(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    airlock = _airlock()
+    checkout = tmp_path / "checkout"
+    shared = tmp_path / "shared"
+    checkout.mkdir()
+    shared.mkdir()
+    origin = shared / "synthetic.py"
+    origin.write_text("\n", encoding="utf-8")
+    module = _synthetic_plugin_module("_pytest.synthetic", origin)
+
+    class Impostor:
+        pass
+
+    Impostor.__module__ = "_pytest.synthetic"
+    module.Impostor = object()
+    monkeypatch.setitem(sys.modules, "_pytest.synthetic", module)
+    plugin = _airlock_plugin_for_unit_test(airlock, checkout, shared)
+
+    with pytest.raises(RuntimeError, match="airlock_import_provenance_violation"):
+        plugin.pytest_plugin_registered(Impostor(), "synthetic", None)
+
+
+def test_registered_plugin_origin_is_revalidated_during_lifecycle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    airlock = _airlock()
+    checkout = tmp_path / "checkout"
+    shared = tmp_path / "shared"
+    outside = tmp_path / "outside"
+    checkout.mkdir()
+    shared.mkdir()
+    outside.mkdir()
+    origin = shared / "pytest_plugin.py"
+    foreign = outside / "pytest_plugin.py"
+    origin.write_text("\n", encoding="utf-8")
+    foreign.write_text("\n", encoding="utf-8")
+    module = _synthetic_plugin_module("anyio.pytest_plugin", origin)
+    monkeypatch.setitem(sys.modules, "anyio.pytest_plugin", module)
+    plugin = _airlock_plugin_for_unit_test(airlock, checkout, shared)
+    plugin.pytest_plugin_registered(module, "anyio.pytest_plugin", None)
+    assert module.__spec__ is not None
+    module.__spec__.origin = os.fspath(foreign)
+
+    with pytest.raises(RuntimeError, match="airlock_import_provenance_violation"):
+        plugin.pytest_configure(None)
+
+
+def test_registered_plugin_module_identity_is_revalidated_in_real_lifecycle(
+    tmp_path: Path,
+):
+    conftest = textwrap.dedent(
+        """
+        import sys
+        import anyio.pytest_plugin as anyio_plugin
+
+        def pytest_collection_finish(session):
+            del session
+            anyio_plugin.__name__ = '_pytest.rogue'
+            anyio_plugin.__spec__.name = '_pytest.rogue'
+            anyio_plugin.__package__ = '_pytest'
+            sys.modules['_pytest.rogue'] = anyio_plugin
+        """
+    )
+    airlock, layout, _inventory, prepared = _task3_prepared(
+        tmp_path,
+        dependency_purelib=SHARED_PURELIB,
+        extra_files={
+            "scripts/dev/worktree_test_airlock.py": AIRLOCK_SOURCE.read_text(
+                encoding="utf-8"
+            ),
+            "tests/conftest.py": conftest,
+            "tests/test_leaf.py": "def test_leaf():\n    assert True\n",
+        },
+    )
+    try:
+        run = _run_prepared_inner_raw(
+            airlock,
+            prepared,
+            layout.checkout,
+            ("tests/test_leaf.py", "-q"),
+        )
+        markers = airlock._read_marker_state(prepared.violation_dir)
+
+        assert run.status in {*range(1, 7), airlock.AIRLOCK_STATUS}
+        assert markers
+        assert set(markers) == {"airlock_import_provenance_violation"}
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+def test_late_guarded_path_state_drift_is_rechecked_in_real_lifecycle(
+    tmp_path: Path,
+):
+    conftest = textwrap.dedent(
+        """
+        import sys
+
+        def pytest_collection_finish(session):
+            del session
+            list.append(sys.path, '/foreign-airlock-path')
+        """
+    )
+    airlock, layout, _inventory, prepared = _task3_prepared(
+        tmp_path,
+        dependency_purelib=SHARED_PURELIB,
+        extra_files={
+            "scripts/dev/worktree_test_airlock.py": AIRLOCK_SOURCE.read_text(
+                encoding="utf-8"
+            ),
+            "tests/conftest.py": conftest,
+            "tests/test_leaf.py": "def test_leaf():\n    assert True\n",
+        },
+    )
+    try:
+        run = _run_prepared_inner_raw(
+            airlock,
+            prepared,
+            layout.checkout,
+            ("tests/test_leaf.py", "-q"),
+        )
+        markers = airlock._read_marker_state(prepared.violation_dir)
+
+        assert run.status in {*range(1, 7), airlock.AIRLOCK_STATUS}
+        assert markers
+        assert set(markers) == {"airlock_path_provenance_violation"}
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+@pytest.mark.parametrize("boundary", ("collection", "teardown"))
+def test_collection_item_retarget_is_caught_at_late_and_final_boundaries(
+    tmp_path: Path,
+    boundary: str,
+):
+    hook = (
+        "pytest_collection_modifyitems"
+        if boundary == "collection"
+        else "pytest_runtest_teardown"
+    )
+    conftest = textwrap.dedent(
+        f"""
+        from pathlib import Path
+        import pytest
+
+        @pytest.hookimpl(trylast=True)
+        def {hook}({"config, items" if boundary == "collection" else "item"}):
+            {"for item in items:" if boundary == "collection" else ""}
+                {"item" if boundary == "collection" else "item"}.path = Path('/etc/hosts')
+        """
+    )
+    airlock, _layout, _inventory, prepared = _task3_prepared(
+        tmp_path,
+        dependency_purelib=SHARED_PURELIB,
+        extra_files={
+            "scripts/dev/worktree_test_airlock.py": AIRLOCK_SOURCE.read_text(
+                encoding="utf-8"
+            ),
+            "tests/conftest.py": conftest,
+            "tests/test_leaf.py": "def test_leaf():\n    assert True\n",
+        },
+    )
+    try:
+        run = _run_prepared_inner_raw(
+            airlock,
+            prepared,
+            tmp_path / "checkout",
+            ("tests/test_leaf.py", "-q"),
+        )
+        assert run.status in {*range(1, 7), airlock.AIRLOCK_STATUS}
+        markers = airlock._read_marker_state(prepared.violation_dir)
+        assert markers, (
+            run,
+            prepared.diagnostic.read_text(encoding="utf-8", errors="replace"),
+        )
+        assert set(markers) == {"airlock_collection_escape"}
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+@pytest.mark.parametrize("mutation", ("remove", "reorder"))
+def test_rewrite_hook_identity_and_order_are_reproved_after_conftest_mutation(
+    tmp_path: Path,
+    mutation: str,
+):
+    mutation_code = (
+        "list.remove(sys.meta_path, hook)"
+        if mutation == "remove"
+        else "list.__setitem__(sys.meta_path, slice(None), [hook, guard.DISPATCHER, *rest])"
+    )
+    conftest = textwrap.dedent(
+        f"""
+        import sys
+
+        def pytest_collection_finish(session):
+            del session
+            guard = sys.modules['_maez_worktree_airlock_guard']
+            hooks = [finder for finder in sys.meta_path
+                     if type(finder).__module__ == '_pytest.assertion.rewrite'
+                     and type(finder).__name__ == 'AssertionRewritingHook']
+            assert len(hooks) == 1
+            hook = hooks[0]
+            rest = [finder for finder in sys.meta_path
+                    if finder is not hook and finder is not guard.DISPATCHER]
+            {mutation_code}
+        """
+    )
+    airlock, _layout, _inventory, prepared = _task3_prepared(
+        tmp_path,
+        dependency_purelib=SHARED_PURELIB,
+        extra_files={
+            "scripts/dev/worktree_test_airlock.py": AIRLOCK_SOURCE.read_text(
+                encoding="utf-8"
+            ),
+            "tests/conftest.py": conftest,
+            "tests/test_leaf.py": "def test_leaf():\n    assert True\n",
+        },
+    )
+    try:
+        run = _run_prepared_inner_raw(
+            airlock,
+            prepared,
+            tmp_path / "checkout",
+            ("tests/test_leaf.py", "-q"),
+        )
+        assert run.status in {*range(1, 7), airlock.AIRLOCK_STATUS}
+        markers = airlock._read_marker_state(prepared.violation_dir)
+        assert markers
+        assert set(markers) == {"airlock_import_provenance_violation"}
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+@pytest.mark.parametrize("boundary", ("unconfigure", "cleanup"))
+@pytest.mark.parametrize("mutation", ("remove", "reorder"))
+def test_rewrite_hook_identity_and_order_are_reproved_at_final_cleanup(
+    tmp_path: Path,
+    boundary: str,
+    mutation: str,
+):
+    mutation_code = (
+        "list.remove(sys.meta_path, hook)"
+        if mutation == "remove"
+        else "list.__setitem__(sys.meta_path, slice(None), [hook, guard.DISPATCHER, *rest])"
+    )
+    registration = (
+        "def pytest_unconfigure(config):\n"
+        "    del config\n"
+        "    _mutate_rewrite_hook()\n"
+        if boundary == "unconfigure"
+        else "def pytest_configure(config):\n"
+        "    config.add_cleanup(_mutate_rewrite_hook)\n"
+    )
+    conftest = (
+        textwrap.dedent(
+            f"""
+        import sys
+
+        def _mutate_rewrite_hook():
+            guard = sys.modules['_maez_worktree_airlock_guard']
+            hooks = [finder for finder in sys.meta_path
+                     if type(finder).__module__ == '_pytest.assertion.rewrite'
+                     and type(finder).__name__ == 'AssertionRewritingHook']
+            assert len(hooks) == 1
+            hook = hooks[0]
+            rest = [finder for finder in sys.meta_path
+                    if finder is not hook and finder is not guard.DISPATCHER]
+            {mutation_code}
+        """
+        )
+        + "\n"
+        + registration
+    )
+    airlock, _layout, _inventory, prepared = _task3_prepared(
+        tmp_path,
+        dependency_purelib=SHARED_PURELIB,
+        extra_files={
+            "scripts/dev/worktree_test_airlock.py": AIRLOCK_SOURCE.read_text(
+                encoding="utf-8"
+            ),
+            "tests/conftest.py": conftest,
+            "tests/test_leaf.py": "def test_leaf():\n    assert True\n",
+        },
+    )
+    try:
+        run = _run_prepared_inner_raw(
+            airlock,
+            prepared,
+            tmp_path / "checkout",
+            ("tests/test_leaf.py", "-q"),
+        )
+        markers = airlock._read_marker_state(prepared.violation_dir)
+        assert run.status in {*range(1, 7), airlock.AIRLOCK_STATUS}
+        assert markers, (
+            run,
+            prepared.diagnostic.read_text(encoding="utf-8", errors="replace"),
+        )
+        assert set(markers) == {"airlock_import_provenance_violation"}
+    finally:
+        airlock._remove_disposable(prepared.root)
+
+
+@pytest.mark.parametrize("phase", ("collection", "call"))
+@pytest.mark.parametrize("signum", (signal.SIGINT, signal.SIGTERM))
+def test_real_outer_signal_mid_pytest_never_certifies_and_finalizes(
+    phase: str,
+    signum: int,
+):
+    airlock = _airlock()
+    shared_purelib = Path(
+        subprocess.run(
+            [
+                os.fspath(SHARED_PYTHON),
+                "-I",
+                "-S",
+                "-B",
+                "-c",
+                "import sysconfig;print(sysconfig.get_path('purelib'))",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    )
+    before_pth = airlock._snapshot_pth(shared_purelib)
+    selector = (
+        _SIGNAL_COLLECTION_NODE if phase == "collection" else _SIGNAL_CALL_NODE
+    )
+    process = subprocess.Popen(
+        [
+            os.fspath(SHARED_PYTHON),
+            "-I",
+            "-S",
+            "-B",
+            os.fspath(AIRLOCK_SOURCE),
+            "pytest",
+            "--",
+            selector,
+            "-q",
+        ],
+        cwd=REPO,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    owned_pattern = f"maez-airlock-{process.pid}-*"
+    observed_root: Path | None = None
+    inner_pid: int | None = None
+    inner_pgid: int | None = None
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            for candidate in Path("/tmp").glob(owned_pattern):
+                ready = candidate / f"signal-{phase}-ready"
+                if ready.exists():
+                    observed_root = candidate
+                    inner_pid, inner_pgid = (
+                        int(part)
+                        for part in ready.read_text(encoding="ascii").strip().split(":")
+                    )
+                    break
+            if observed_root is not None:
+                break
+            if process.poll() is not None:
+                break
+            time.sleep(0.02)
+        assert observed_root is not None
+        assert inner_pid is not None and inner_pgid == inner_pid
+        assert process.poll() is None
+        os.kill(process.pid, signum)
+        stdout, stderr = process.communicate(timeout=10)
+
+        assert process.returncode == 86
+        assert stdout == ""
+        assert "MAEZ_AIRLOCK_CERTIFIED" not in stdout + stderr
+        assert stderr.rstrip().endswith("airlock_child_setup_failed")
+        assert airlock._snapshot_pth(shared_purelib) == before_pth
+        assert not Path(f"/proc/{inner_pid}").exists()
+        assert not observed_root.exists()
+        assert not tuple(Path("/tmp").glob(owned_pattern))
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=3)
+        _cleanup_owned_outer_test_run(airlock, process.pid)
+
+
+def test_real_outer_refuses_when_successful_test_leaves_detached_descendant():
+    airlock = _airlock()
+    shared_purelib = Path(
+        subprocess.run(
+            [
+                os.fspath(SHARED_PYTHON),
+                "-I",
+                "-S",
+                "-B",
+                "-c",
+                "import sysconfig;print(sysconfig.get_path('purelib'))",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    )
+    before_pth = airlock._snapshot_pth(shared_purelib)
+    process = subprocess.Popen(
+        [
+            os.fspath(SHARED_PYTHON),
+            "-I",
+            "-S",
+            "-B",
+            os.fspath(AIRLOCK_SOURCE),
+            "pytest",
+            "--",
+            _DETACHED_DESCENDANT_NODE,
+            "-q",
+        ],
+        cwd=REPO,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    sentinel = Path(f"/tmp/maez-airlock-detached-{process.pid}")
+    child_pid: int | None = None
+    child_pgid: int | None = None
+    prepared_root: Path | None = None
+    try:
+        stdout, stderr = process.communicate(timeout=15)
+        assert sentinel.exists()
+        raw_pid, raw_pgid, raw_root = sentinel.read_text(
+            encoding="utf-8"
+        ).strip().split(":", 2)
+        child_pid = int(raw_pid)
+        child_pgid = int(raw_pgid)
+        prepared_root = Path(raw_root)
+
+        assert process.returncode == 86
+        assert stdout == ""
+        assert "MAEZ_AIRLOCK_CERTIFIED" not in stdout + stderr
+        assert "1 passed" in stderr
+        assert stderr.rstrip().endswith("airlock_cleanup_incomplete")
+        assert Path(f"/proc/{child_pid}").exists()
+        assert airlock._snapshot_pth(shared_purelib) == before_pth
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=3)
+        pidfd: int | None = None
+        if child_pid is not None and Path(f"/proc/{child_pid}").exists():
+            process_path = Path(f"/proc/{child_pid}")
+            pidfd = os.pidfd_open(child_pid)
+            arguments = (process_path / "cmdline").read_bytes().split(b"\0")
+            assert process_path.stat().st_uid == os.getuid()
+            assert child_pgid == child_pid == os.getpgid(child_pid)
+            assert prepared_root is not None
+            expected_python = os.fsencode(prepared_root / "venv/bin/python")
+            assert expected_python in arguments
+            signal.pidfd_send_signal(pidfd, signal.SIGKILL)
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline and process_path.exists():
+                time.sleep(0.01)
+            assert not process_path.exists()
+        if pidfd is not None:
+            os.close(pidfd)
+        if sentinel.exists():
+            info = sentinel.lstat()
+            assert stat.S_ISREG(info.st_mode)
+            assert info.st_uid == os.getuid()
+            assert info.st_nlink == 1
+            assert stat.S_IMODE(info.st_mode) == 0o600
+            sentinel.unlink()
+        _cleanup_owned_outer_test_run(airlock, process.pid)
+        assert airlock._snapshot_pth(shared_purelib) == before_pth
+
+
+@pytest.mark.parametrize("signum", (signal.SIGINT, signal.SIGTERM))
+def test_real_outer_signal_escalates_when_inner_ignores_signal(signum: int):
+    airlock = _airlock()
+    shared_purelib = Path(
+        subprocess.run(
+            [
+                os.fspath(SHARED_PYTHON),
+                "-I",
+                "-S",
+                "-B",
+                "-c",
+                "import sysconfig;print(sysconfig.get_path('purelib'))",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    )
+    before_pth = airlock._snapshot_pth(shared_purelib)
+    process = subprocess.Popen(
+        [
+            os.fspath(SHARED_PYTHON),
+            "-I",
+            "-S",
+            "-B",
+            os.fspath(AIRLOCK_SOURCE),
+            "pytest",
+            "--",
+            _SIGNAL_IGNORE_NODE,
+            "-q",
+        ],
+        cwd=REPO,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    owned_pattern = f"maez-airlock-{process.pid}-*"
+    observed_root: Path | None = None
+    inner_pid: int | None = None
+    inner_pgid: int | None = None
+    timed_out = False
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            for candidate in Path("/tmp").glob(owned_pattern):
+                ready = candidate / "signal-ignore-ready"
+                if ready.exists():
+                    observed_root = candidate
+                    inner_pid, inner_pgid = (
+                        int(part)
+                        for part in ready.read_text(encoding="ascii").strip().split(":")
+                    )
+                    break
+            if observed_root is not None or process.poll() is not None:
+                break
+            time.sleep(0.02)
+        assert observed_root is not None
+        assert inner_pid is not None and inner_pgid == inner_pid
+        started = time.monotonic()
+        os.kill(process.pid, signum)
+        try:
+            stdout, stderr = process.communicate(timeout=2.0)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            raise AssertionError("airlock outer hung on a signal-ignoring child")
+
+        assert time.monotonic() - started < 1.5
+        assert process.returncode == 86
+        assert stdout == ""
+        assert "MAEZ_AIRLOCK_CERTIFIED" not in stdout + stderr
+        assert stderr.rstrip().endswith("airlock_child_setup_failed")
+        assert airlock._snapshot_pth(shared_purelib) == before_pth
+        assert not Path(f"/proc/{inner_pid}").exists()
+        assert not observed_root.exists()
+        assert not tuple(Path("/tmp").glob(owned_pattern))
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=3)
+        _cleanup_owned_outer_test_run(airlock, process.pid)
+        if timed_out:
+            assert airlock._snapshot_pth(shared_purelib) == before_pth
 
 
 if __name__ == "__main__":

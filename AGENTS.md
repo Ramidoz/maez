@@ -74,6 +74,41 @@ These are *covenant-level* — any fork that drops them stops being a Maez. Capt
 - **Reference original sources** in commits, ADRs, code comments. Future agents reading the code should be able to trace each architectural choice back to the research that informed it.
 - **Slice-driven research.** When scoping a slice, the first step is grep BAD + ADRs + memory bank, then run focused Paperclip search on prior art relevant to *this* slice. Whole-repo research sweeps are reserved for satisfactory points (after major architecture lands).
 
+### Certifying linked/detached-worktree tests
+
+Direct shared-venv pytest commands are local-development runs, not certifying
+worktree-provenance evidence. The certifying entrypoint is:
+
+```text
+/home/rohit/maez/.venv/bin/python -I -S -B \
+  <audited-checkout>/scripts/dev/worktree_test_airlock.py \
+  pytest -- <allowed-pytest-selector-and-options...>
+```
+
+> Every Maez-owned module used by the gate process or an inherited-contract Python descendant came from tracked code in the audited checkout; absolute foreign-interpreter children and project-importing `-S` children are outside this claim.
+
+> Same-process frame/FD introspection and deliberate in-process forgery are outside the airlock's guarantee.
+
+The certificate makes a provenance claim only. It makes no sandbox claim, and
+Git cleanliness remains a separate external gate requirement.
+
+The airlock's own invariant-violation self-tests are a documented bootstrap
+exception: run the complete self-test file non-certifying under the pinned
+`-I -S -B` interpreter with only the audited checkout and dependency purelib
+added explicitly, so `site` and shared `.pth` files are never processed. The
+complete seven-file compatibility family also runs non-certifying in a
+disposable no-pip, no-guard venv with only plain checkout and dependency-purelib
+path lines. A certifying run is limited to the exact harmless leaf, the full
+ledger-activation file, and the two tracked-entry-compatible B7 nodes named in
+the airlock plan; it must not claim that deliberate guard-violation fixtures or
+refused entry shapes ran cleanly inside the guard.
+
+The certificate is not a global process-supervisor receipt. The outer clears
+its owned group and refuses when its bounded read-only check still sees an
+ordinary same-UID descendant referencing the exact disposable root; zero
+selected-test process/listener residue remains a separate external gate
+witness.
+
 ## What NOT to do
 
 - **Don't propose new architecture in conversation without grepping BAD first.** Every "this looks like a gap" check first.

@@ -1,8 +1,8 @@
 # Clean-checkout import-provenance airlock — design
 
-Date: 2026-07-16; lean amendment 2026-07-17; Task-4 amendment 2026-07-20
-Status: proposed for Claude gate; amended lean design, RED list, and Task-4 ruling
-Branch: `feature/cuda-bench-driver` at parent `b669bad`
+Date: 2026-07-16; lean amendment 2026-07-17; Task-4/Task-5 amendments 2026-07-20
+Status: Task 5 implemented on the feature branch; awaiting external gate
+Branch: `feature/cuda-bench-driver`; Task-5 implementation parent `64c27e7`
 Scope: gate integrity only; no CUDA phase, model, service, or runtime change
 
 ## Ruling and purpose
@@ -23,6 +23,14 @@ This slice makes a **clean-checkout test gate** attest exactly this fact:
 That sentence is canonical. The implementation must place it verbatim
 in `AGENTS.md` beside the certifying command; the spec and the operator-facing
 instructions may not advertise different guarantees.
+
+The narrowed implementation boundary is canonical too and must appear verbatim
+beside that command and claim:
+
+> Same-process frame/FD introspection and deliberate in-process forgery are outside the airlock's guarantee.
+
+The airlock makes a provenance claim only. It makes no sandbox or adversarial-
+code containment claim.
 
 It does not claim that the checkout is clean; the external gate still proves
 that with Git. It does not claim that tests are correct, that the full repository
@@ -62,6 +70,63 @@ installed packages, and is removed before the command returns. Its purpose is
 to make the controlled interpreter itself become `sys.executable`, so normal
 inherited-contract children and grandchildren inherit the same checkout
 provenance.
+
+## Task-5 certifier ruling
+
+Pytest 9.1.1 has a closed standard exit-status set of `0` through `6`; the
+certifier preserves every member unchanged and reserves `86` for airlock
+integrity failures or an out-of-set child status. Only status `0` plus clean
+provenance plus a call phase observed by the airlock's own in-memory plugin may
+certify. The caller pytest surface is a strict allowlist, ambient pytest control
+variables refuse on presence before disposable construction, and the complete
+gate-owned pytest vector is hashed into terminal evidence. Task 5 also supplies
+the deferred binding proof that pytest's assertion-rewrite finder remains
+strictly behind the provenance dispatcher while rewriting diagnostics survive.
+
+After `sys.path` is frozen, the only absorbed insertion is a marker-free no-op:
+the operation must be exact `insert(0, audited_checkout)`, `type(index) is int`,
+the live guarded object and tuple must still be exactly frozen, and the marker
+directory must be pristine. The insertion is absorbed without changing the
+tuple. Append, extend, assignment, a different index or value, lexical aliases,
+prior corruption, or any sticky violation refuses and cannot be cleared or
+laundered. This does not change the frozen effective pytest vector;
+caller-forced `--import-mode` remains outside the allowlist.
+
+The primary no-execution-mode control belongs to the outer. After the inner has
+exited, the outer unconditionally withholds certification for every accepted
+collect/setup diagnostic mode, regardless of the inner status, call-phase bit,
+or control record. Inner checks are defense-in-depth: private monotonic state is
+derived only from the identity-linked lifecycle of genuine pytest `CallInfo`
+and `TestReport` objects. Only that lifecycle may set the serialized call-phase
+bit; full eligibility and integrity remain private and do not widen the frozen
+completion grammar. Runner control locals are hidden inside a
+private function closure, and the raw pytest status is checked against the
+accepted closed set before any conversion.
+
+The airlock's complete self-test is a non-certifying bootstrap exception. Its
+fixtures deliberately corrupt guarded path, module, plugin, and rewrite state
+to prove typed refusal, so putting the whole file inside the certifier would
+require the certifier to call those violations clean. The full self-test runs
+under the pinned `-I -S -B` interpreter with only the audited checkout and
+dependency purelib added explicitly and with `site`/shared `.pth` processing
+absent. The complete seven-file consumer family runs separately in a
+disposable, no-pip, **no-guard** compatibility venv. Its sole `.pth` contains
+only plain path lines for the audited checkout and dependency purelib, so
+descendants inherit the disposable `sys.executable` without processing the
+shared editable `.pth`; this lane is explicitly non-certifying.
+
+The real outer certificate is limited to the exact harmless leaf, the complete
+ledger-activation file, and the two B7 nodes whose entry shapes are admitted by
+the tracked-file contract:
+
+- `tests/test_worktree_airlock_imports.py::test_pytest_boundary_leaf_passes`;
+- `tests/test_ledger_activation_v0.py`;
+- `tests/test_cuda_bench_driver.py::TestB7ContainmentV2::test_real_capture_uses_fresh_injected_sensors_and_current_hashes`; and
+- `tests/test_cuda_bench_driver.py::TestB7RemainingSpecGate::test_real_launcher_returns_admitted_child_without_post_admission_work`.
+
+That split is evidence honesty, not reduced testing: the full family remains a
+required compatibility pass, while only entry shapes the airlock can truthfully
+attest enter its certificate.
 
 ## Rejected alternatives
 
@@ -191,8 +256,17 @@ stdout as a control descriptor, emits the fixed content-light start record
 `airlock_inner_noncertifying`, and redirects file descriptors 1 and 2 to a
 single-linked `0600` diagnostic file inside the disposable root. It then imports
 the already-guarded `scripts.dev.worktree_test_airlock._inner_main`, passes only
-the validated pytest argument vector, and writes a fixed completion record plus
-pytest status through the retained control descriptor after pytest returns. It
+the validated pytest argument vector, and writes exactly
+`airlock_inner_complete:<status>:call_phase_observed=<0|1>` plus a newline
+through the retained control descriptor after pytest returns. `<status>` is the
+decimal pytest return status and the bit comes only from the airlock's in-memory
+plugin completing its private identity-linked lifecycle of genuine pytest
+`CallInfo`/`TestReport` objects, culminating in
+`pytest_runtest_logreport` with `report.when == "call"`; test code cannot set
+it. The runner keeps its control descriptor and control-record
+locals inside a private function closure, outside module globals and the test
+namespace. The inner validates the raw pytest return status before integer or
+string conversion. It
 carries no certificate writer or certificate token. A direct invocation can
 therefore expose only the two fixed non-certifying control records; test output
 never shares its stdout channel.
@@ -205,12 +279,12 @@ diagnostic bytes may be replayed only to outer stderr and are deleted with the
 disposable root; they are not certificate evidence. This is output provenance,
 not inner authentication.
 
-The inner function checks only execution correctness: the generated guard is
+The inner function checks execution correctness: the generated guard is
 installed; its embedded checkout matches the resolved launcher; `sys.executable`
 is the disposable interpreter; and the pytest config and violation directory
-are beneath the same disposable root. These are consistency checks only. The
-inner function owns no certification state and has no route to the outer
-certificate emitter.
+are beneath the same disposable root. Its in-memory plugin owns private
+full-lifecycle eligibility state, but that state is not certification authority:
+the inner function has no route to the outer certificate emitter.
 
 Only the outer control path can certify. Its stdout is reserved exclusively for
 the terminal certificate record; inner control and diagnostic output never
@@ -222,6 +296,12 @@ result in outer memory. It removes the disposable environment, rechecks shared
 runner may run pytest and return `0`, but `_inner_main` never emits the reserved
 certificate. A clean pytest status without the outer certificate is
 non-certifying.
+
+After the inner exits and before any certificate decision, the outer checks the
+validated caller mode. If any accepted collect/setup diagnostic mode was
+requested, the run is unconditionally non-certifying even if status is `0` and
+the completion record claims `call_phase_observed=1`. Inner control evidence
+cannot override this outer fact.
 
 The uniquely named `_maez_worktree_airlock_guard` module has its checkout and
 path policy embedded. The controlled `.pth` does **not** resolve it with a
@@ -333,14 +413,17 @@ After the outer preflight, the launcher:
    `PYTHONHOME`, `PYTHONUSERBASE`, and `PYTHONSTARTUP`, sets
    `PYTHONDONTWRITEBYTECODE=1`, and launches the inner runner with the disposable
    Python;
-9. proves the owned process group empty, then checks the still-live violation
-   directory and retains the result in outer memory, so a child cannot catch an
-   exception and hide the gate breach from its parent;
+9. proves the owned process group empty, performs two clean bounded scans for
+   ordinary same-UID descendants still referencing the exact disposable root,
+   then checks the still-live violation directory and retains the result in
+   outer memory, so a child cannot catch an exception and hide the gate breach
+   from its parent;
 10. removes the temporary environment in an unconditional finalizer; then
 11. re-snapshots the canonical shared `.pth` projection and refuses if any name,
    file type, mode, size, or content hash changed; then
-12. emits a certificate only when pytest returned `0` and every integrity and
-   cleanup check passed.
+12. emits a certificate only when pytest returned `0`, the airlock plugin
+   observed a call phase, and every provenance, integrity, and cleanup check
+   passed.
 
 Adding the shared `purelib` as a path entry does not recursively process its
 `.pth` files. Only the disposable venv's controlled `.pth` is processed, and its
@@ -414,14 +497,32 @@ is an explicit non-goal.
 Preflight Git subprocesses run synchronously and must be reaped before temporary
 construction. During the controlled pytest phase, the inner process is the
 outer launcher's only child and runs in an owned process group. On SIGINT or
-SIGTERM, the outer stage forwards the signal only to that owned group, waits
-boundedly for it to clear, and still performs the marker, shared-`.pth`, and
-temporary-directory finalizers. It never discovers or signals an ambient
-process. The same group-empty proof is mandatory after every normal or
+SIGTERM, the outer stage forwards a signal only while the original group leader
+remains unreaped, waits boundedly for it to clear, and still performs the
+marker, shared-`.pth`, and temporary-directory finalizers. Once `wait()` reaps
+that leader—on normal exit or during interruption—numeric PGID authority is
+gone: every later group check is observation-only, and residue refuses rather
+than signalling a possibly reused group. It never discovers or signals an
+ambient process. The same group-empty proof is mandatory after every normal or
 exceptional inner exit; a surviving member is
 `airlock_cleanup_incomplete`. The fixed terminal order is inner exit, group-
-empty proof, final marker scan, temporary cleanup, shared-`.pth` resnapshot, and
-only then possible certification.
+empty proof, read-only ordinary-descendant quiescence check, final marker scan,
+temporary cleanup, shared-`.pth` resnapshot, and only then possible
+certification.
+
+This is not a global process-supervisor boundary. After the owned group clears,
+the outer performs two bounded read-only `/proc` scans for ordinary same-UID
+descendants whose NUL-delimited argv or relevant Python environment still
+references the exact disposable root. A live match or uncertainty on a
+relevant Python process yields `airlock_cleanup_incomplete`; the airlock never
+signals that process. Deliberately scrubbing both argv and environment remains
+inside the explicit in-process-forgery carve-out. The external gate separately
+proves zero selected-test process/listener residue.
+
+This signal path is witnessed during an active run, not only before spawn or
+after completion: both SIGINT and SIGTERM are delivered once mid-collection and
+once mid-call. Every case is non-certifying, reaches the finalizers, leaves no
+owned process, and preserves the shared `.pth` projection byte-for-byte.
 
 ## Path and import provenance guard
 
@@ -455,7 +556,15 @@ active root; lexical containment alone never makes a nested checkout trusted.
 The guard replaces `sys.path` with a validating list that records a sticky
 violation before rejecting a foreign `append`, `insert`, `extend`, slice
 assignment, or in-place addition. A later reassignment of `sys.path` is caught
-by the hook and final audits.
+by the hook and final audits. There is one post-freeze restoration exception,
+and it does not mutate the list: exact `insert(0, audited_checkout)` is
+absorbed as an immediate marker-free no-op only if the index has exact type
+`int`, the value is the canonical audited-checkout string, the live object is
+the frozen guarded object, its tuple is still exactly the frozen tuple, and
+marker state is pristine. A same-looking lexical path does not qualify. A
+symlink alias, any other already-present trusted path, any new or different
+origin, an already-corrupted object or tuple, or any prior sticky violation
+refuses; the no-op cannot clear or launder earlier evidence.
 
 Calling `site.addsitedir(shared_purelib)` is also forbidden: it would attempt to
 process the editable `.pth`. If test code tries it, the foreign path addition is
@@ -500,7 +609,8 @@ to the remaining finders in their existing order, validates the returned spec,
 and returns that same spec and loader. This preserves pytest's assertion-
 rewriting finder instead of bypassing it with a second `PathFinder` lookup.
 Task 3 owns that dispatcher delegation. Task 5 later proves that the real pytest
-assertion-rewrite finder is strictly behind the dispatcher and that rewrite
+`AssertionRewritingHook` is strictly behind the dispatcher, that provenance
+validation runs first, and that assertion rewriting and useful failure
 diagnostics remain intact; Task 4 does not implement or substitute that proof.
 Full scans run before pytest import, after plugin/config loading, after
 collection, after each test boundary, and in a finalizer. Violations are sticky
@@ -514,8 +624,10 @@ claim those packages belong to the audited checkout.
 
 ## Pytest boundary
 
-The launcher rejects ambient `PYTEST_ADDOPTS` and `PYTEST_PLUGINS`, sets
-`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`, and explicitly loads only the approved
+Before disposable construction, the launcher rejects the *presence* of ambient
+`PYTEST_ADDOPTS` or `PYTEST_PLUGINS`, including an empty value, as
+`airlock_pytest_arguments_invalid`. It sets
+`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` and explicitly loads only the approved
 installed plugin set. At design time the only installed `pytest11` plugin is
 `anyio.pytest_plugin`; its module origin must resolve under the dependency
 `purelib`. Adding another plugin requires an explicit source change and RED.
@@ -527,19 +639,59 @@ second pre-guard import surface. If Maez later needs repository pytest settings,
 those settings must become explicit airlock inputs with their own origin/hash
 tests rather than being discovered implicitly.
 
-The airlock owns `--rootdir` and `--confcutdir`, both pinned to the audited
-checkout. Caller attempts to override them, use `--pyargs`, inject `-p`, or use
-`-c`, or use `-o/--override-ini` refuse as
+The caller surface is a closed allowlist, not an exclusion list. A request must
+contain at least one relative path or node selector. The selector's path prefix
+before any `::` node components must contain no `..` component and must
+canonically resolve beneath the audited checkout; absolute paths and lexical
+in-checkout paths that symlink-resolve outside refuse. In addition to selectors,
+the only accepted caller arguments are exact `-q`, exact split `-k EXPR`, and
+the diagnostic modes `--collect-only`, `--collectonly`, `--co`, `--setup-only`,
+and `--setup-plan`. Every other option or alias, `@` response file, nested `--`,
+and clustered short form such as `-qk` refuses as
 `airlock_pytest_arguments_invalid`.
+
+The complete effective pytest vector is frozen in this exact order:
+
+```text
+-c <temporary-empty-config>
+--rootdir <audited-checkout>
+--confcutdir <audited-checkout>
+-p no:cacheprovider
+-p anyio.pytest_plugin
+<validated-caller-arguments...>
+```
+
+The outer hashes this full vector into terminal evidence; a hash of only the
+caller suffix has no authority.
 
 A pytest plugin object supplied directly by the airlock verifies:
 
 - every non-core loaded plugin is the airlock plugin, a tracked in-checkout
   conftest selected by pytest, or a member of the explicit third-party allowlist,
-  and originates in the audited checkout or pytest's dependency root;
+  has the exact allowed module and type identity, and has every present origin
+  plane—`__file__`, spec origin, `__path__`, and spec submodule search
+  locations—admitted beneath the audited checkout or pytest's dependency root;
 - every collected test item resolves beneath the audited checkout; and
 - the path/import guard remains installed and unviolated at collection and test
   boundaries.
+
+It also owns the `call_phase_observed` bit. Only completion of its private
+identity-linked genuine pytest lifecycle, culminating in
+`pytest_runtest_logreport` with `report.when == "call"`, may set the bit; no
+test-facing input can claim or override it. A
+wrongly-originated or unapproved plugin maps to
+`airlock_import_provenance_violation`. An external collected item or conftest
+maps to `airlock_collection_escape`.
+
+The plugin's lifecycle state is private and monotonic. It advances only from
+identity-linked genuine pytest `CallInfo`/`TestReport` objects and exposes only
+the lifecycle-derived call-phase fact to the inner completion encoder; full
+eligibility and integrity remain private;
+lookalike, repeated, or out-of-order objects cannot advance or reset it. Plugin
+origin planes, exact module/type identity, collected-item paths, guard state,
+and provenance-dispatcher/assertion-rewrite presence and order are rechecked
+throughout the lifecycle, including after hookwrapper yields and at the final
+checkpoint. A one-time pre-run check is insufficient.
 
 The launcher disables pytest's cache provider and bytecode writes so the
 airlock itself leaves no repository artifact. Tests remain responsible for
@@ -547,15 +699,21 @@ their own approved temporary files.
 
 The diagnostic no-execution modes `--collect-only`/`--co`, `--setup-only`, and
 `--setup-plan` remain usable and preserve pytest's status, but are explicitly
-non-certifying. More generally, the plugin must observe at least one test call
-phase before status `0` is certificate-eligible; a successful selection with no
-executed test emits no certificate.
+non-certifying. This is an outer-unconditional rule applied after inner exit;
+no status, call-phase bit, or control record can override it. The plugin's
+private full-lifecycle eligibility remains a second defense: a successful
+ordinary selection with no genuine completed test-call lifecycle emits no
+certificate.
 
 ## Outcomes and evidence
 
-Normal pytest exit statuses are preserved exactly. A red suite remains red; a
-collection error, interruption, or empty selection is never converted to a
-pass. Only pytest status `0` is eligible for an outer certificate.
+Pytest's closed standard exit-status set `0` through `6` is preserved exactly.
+A red suite remains status `1`; an empty selection remains status `5`; a
+warnings error remains status `6`; and no member of the set is converted to an
+airlock failure. Only status `0`, clean provenance, and an airlock-plugin-
+observed call phase together are eligible for an outer certificate. A child
+status outside `0` through `6` is not an accepted standard pytest outcome and
+becomes `airlock_child_setup_failed` with status `86`.
 
 Any airlock integrity failure dominates the pytest status and exits with the
 frozen non-pytest code `86`, printing one content-light refusal token to stderr.
@@ -589,10 +747,15 @@ Only the outer control path may emit the reserved certificate prefix
 `MAEZ_AIRLOCK_CERTIFIED`. The generated runner contains no such literal or
 writer, `_inner_main` has no emitter call, and pytest output is isolated from
 outer stdout. The outer emits only after pytest
-returned `0`, the owned process group is empty, the pre-cleanup marker result is
-clean, temporary cleanup succeeded, and the post-cleanup shared-`.pth` snapshot
-exactly matches the pre-construction snapshot. Pytest statuses `1` through `5`
-propagate without a certificate; integrity failures return `86` without one.
+returned `0`, the owned process group is empty, both ordinary-descendant scans
+are clean, the pre-cleanup marker result is clean, the plugin reported an
+observed call phase, temporary cleanup succeeded, and the post-cleanup
+shared-`.pth` snapshot exactly matches the pre-construction snapshot. Pytest
+statuses `1` through `6` propagate without a certificate;
+integrity failures return `86` without one.
+An accepted collect/setup diagnostic mode is never eligible, regardless of the
+inner completion record; this outer veto is evaluated after inner exit and
+before the certificate branch.
 Certification is the pair `(canonical outer process exits 0, its final and only
 stdout record is a valid certificate)`. A matching string from any diagnostic
 or from a nonzero/direct-inner process is not certification. The certificate
@@ -679,9 +842,15 @@ temporary fixtures.
     retained foreign origin after path removal refuses before certification.
 13. A symlinked-out path, untracked module, and nested registered or unregistered
     Git checkout all refuse despite lexical containment.
-14. Late `sys.path` append/insert/extend/slice/`+=` mutation and
+14. Late `sys.path` append/extend/slice/`+=` mutation and
     `site.addsitedir(shared_purelib)` each create a sticky refusal even if caught
-    locally.
+    locally. An `insert` does too except for the exact post-freeze canonical-
+    duplicate no-op: REDs prove the index has exact type `int` and value zero,
+    the candidate is the canonical audited-checkout string, the live object and
+    tuple remain exactly frozen, and the marker directory remains empty
+    immediately. A lexical symlink alias, any other already-present trusted
+    path, a new/different path, prior object/tuple corruption, or a prior sticky
+    violation refuses and cannot be laundered.
 15. A current-checkout Maez module and a third-party dependency both import from
     their distinct allowed roots; exact `purelib` permission never permits a
     Maez-owned module from dirty main.
@@ -744,15 +913,42 @@ temporary fixtures.
 
 ### E. Pytest and certification behavior
 
-23. Ambient `PYTEST_ADDOPTS`/`PYTEST_PLUGINS`, explicit plugin/config/root/path
-    overrides, and hostile repository config cannot alter the gate. Ordinary
-    node IDs, `-k`, and `-q` remain available. Collection-only, setup-only, and
-    setup-plan modes preserve their pytest status but emit no certificate; a
-    status-`0` selection with zero observed test call phases is likewise
-    non-certifying.
-24. External collection/conftest and unapproved plugins refuse. Approved plugins
-    have allowed origins; clean pytest statuses `0` through `5` propagate, while
-    integrity failure dominates with `86` and only status `0` may certify.
+23. Ambient `PYTEST_ADDOPTS`/`PYTEST_PLUGINS` refuses on presence—even empty—
+    before disposable construction. The strict caller allowlist requires an
+    in-checkout relative path/node selector and admits only exact `-q`, split
+    `-k EXPR`, and the named collect/setup diagnostic modes alongside it. REDs
+    independently reject every bypass class: `@` response file, clustered
+    `-qk`, unknown alias, nested `--`, absolute path, `..`, and a selector that
+    is lexically in-checkout but symlink-resolves outside. The effective vector
+    has the frozen gate-owned prefix and its complete hash differs from a
+    caller-only hash. Collection-only, setup-only, and setup-plan modes preserve
+    their pytest status but emit no certificate. Each accepted diagnostic mode
+    remains non-certifying under a forged-positive inner bit/control record,
+    proving the outer post-exit veto is primary. A status-`0` ordinary selection
+    with no full genuine plugin lifecycle is likewise non-certifying.
+24. External collection/conftest and unapproved plugins refuse under the pinned
+    `airlock_collection_escape` and `airlock_import_provenance_violation`
+    mappings respectively. Approved plugins bind every present origin plane and
+    exact allowed module/type identity. The in-memory plugin alone derives full
+    eligibility from identity-linked genuine pytest `CallInfo`/`TestReport`
+    lifecycle objects; lookalikes, repeats, and out-of-order events cannot set
+    it. Runner control locals remain inside a private function closure, and a
+    raw status object with conversion side effects refuses before conversion.
+    Item paths, all origin planes, guard state, and dispatcher/rewrite
+    presence/order are rechecked after hook yields and at finalization. REDs
+    prove the real pytest `AssertionRewritingHook` sits strictly behind the
+    provenance dispatcher, provenance validation fires first, and assertion
+    rewriting plus helpful failure diagnostics survive. Pytest statuses `0`
+    through `6` propagate unchanged: `1` remains a red suite, `5` an empty
+    selection, and `6` a warnings error. Only `0` plus clean provenance plus an
+    observed call phase may certify; only an out-of-set status becomes
+    `airlock_child_setup_failed`/`86`. The same Task-5 RED group witnesses the
+    post-freeze insertion boundary: only exact
+    `insert(0, audited_checkout)` with an exact integer index, frozen object and
+    tuple, and pristine marker state yields an immediate no-op; duplicate
+    append/extend/assignment, a different index or value, a lexical symlink
+    alias, prior corruption, or a sticky violation refuses and cannot be
+    laundered.
 25. A passing test that prints a syntactically valid
     `MAEZ_AIRLOCK_CERTIFIED` line to both stdout and stderr has those bytes
     confined to the private diagnostic stream and cannot mint evidence. Direct
@@ -760,22 +956,38 @@ temporary fixtures.
     fixed non-certifying start/completion records. Structural proof shows the
     generated-runner bytes contain no certificate literal/writer and
     `_inner_main` has no emitter call; only outer stdout can carry a certificate.
-    Missing or forged completion records refuse. Behavioral ordering proves the
-    outer emits only after pytest `0`, owned-group absence, retained clean marker
-    state, cleanup, and equal post-`.pth` snapshot. Statuses `1` through `5` and
-    integrity status `86` emit no certificate; interruption of the outer by
-    SIGINT or SIGTERM also completes the finalizers and emits none. Certification
+    Missing or forged completion records refuse. Private diagnostic replay is
+    bounded to 1 MiB; excess bytes are omitted behind one fixed content-light
+    truncation marker without rewriting an otherwise honest pytest status,
+    while filesystem/type/ownership/link/mode hazards still refuse. An ordinary
+    inherited disposable-Python child that starts a new session and remains live after its
+    passing test returns yields `airlock_cleanup_incomplete` and no certificate:
+    two bounded same-UID `/proc` scans observe its exact disposable-root
+    reference without signalling it, and the test's own finalizer removes it.
+    An unreadable ambient non-Python process is irrelevant; uncertainty on a
+    relevant Python process refuses. Behavioral ordering proves the outer emits
+    only after pytest `0`, an airlock-plugin-observed call phase,
+    owned-group absence, two clean ordinary-descendant scans, retained clean
+    marker state, cleanup, and equal post-`.pth` snapshot. Statuses `1` through
+    `6` and integrity status `86`
+    emit no certificate; interruption of the outer by
+    SIGINT or SIGTERM at mid-collection and mid-call also completes the
+    finalizers, leaves no owned process, preserves shared `.pth` byte-for-byte,
+    and emits none. Certification
     requires separately captured outer exit `0` plus exactly one final stdout
     record; a merged stdout/stderr stream cannot certify. That record
     contains exactly HEAD, interpreter version/hash, `.pth` snapshot hash,
     complete effective-pytest-argument hash, schema, and isolation label—no
     unhashed checkout, interpreter, or source path; no unhashed pytest argument
     or environment value; and no runtime-content literal. A caller-only argument
-    hash is demonstrably different.
+    hash is demonstrably different. The real-outer integration test selects a
+    harmless exact leaf node rather than its own file, so it cannot recurse into
+    itself.
 26. `AGENTS.md` labels direct shared-venv commands local-development-only, names
-    the certifying airlock command, and contains the canonical sentence and both
-    carve-outs verbatim. It also states that external Git cleanliness is still
-    required.
+    the certifying airlock command, and contains the canonical sentence, both
+    carve-outs, and the exact same-process frame/FD and deliberate-forgery
+    boundary verbatim. It makes no sandbox claim and states that external Git
+    cleanliness is still required.
 
 ## Gate for this slice
 
@@ -785,8 +997,11 @@ Claude's clean-checkout gate for the later implementation must require:
    followed by GREEN under the airlock; item 18 has its separately recorded
    pre-code GREEN control; source inspection may prove a structural subclaim but
    may not substitute for a genuine numbered RED's failing test;
-2. `tests/test_worktree_airlock_imports.py` plus the three affected subprocess
-   suites pass through the real airlock entrypoint;
+2. the complete `tests/test_worktree_airlock_imports.py` suite passes through
+   the controlled non-certifying no-site bootstrap runner; the complete
+   seven-file family passes through the disposable no-guard compatibility lane;
+   and exactly the 20-test tracked-entry-compatible set named above passes
+   through the real airlock entrypoint;
 3. ruff is clean on every touched Python file and `git diff --check` is clean;
 4. the shared `.pth` projection is byte/mode-identical before and after;
 5. main's unrelated dirty work is untouched;

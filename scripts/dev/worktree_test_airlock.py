@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Lean clean-checkout test airlock.
 
-This module's outer stage deliberately imports only the standard library.  The
-disposable no-pip interpreter now carries a generated, checkout-bound path and
-import-provenance guard. Certification remains a subsequent task.
+This module's outer stage deliberately imports only the standard library.  A
+disposable no-pip interpreter carries a generated checkout-bound path and
+import-provenance guard; only the outer stage can certify a completed run.
 """
 
 from __future__ import annotations
 
 import ast
 import hashlib
+import json
 import os
 import re
 import shlex
@@ -32,6 +33,48 @@ SHARED_VENV = Path("/home/rohit/maez/.venv")
 SHARED_PYTHON = SHARED_VENV / "bin" / "python"
 HOST_GIT = Path("/usr/bin/git")
 AIRLOCK_STATUS = 86
+
+_PYTEST_CORE_MODULE_REGISTRATIONS = frozenset(
+    (
+        "assertion",
+        "capture",
+        "debugging",
+        "doctest",
+        "faulthandler",
+        "fixtures",
+        "helpconfig",
+        "junitxml",
+        "legacypath",
+        "logging",
+        "main",
+        "mark",
+        "monkeypatch",
+        "pastebin",
+        "python",
+        "recwarn",
+        "reports",
+        "runner",
+        "setuponly",
+        "setupplan",
+        "skipping",
+        "subtests",
+        "terminal",
+        "threadexception",
+        "tmpdir",
+        "unittest",
+        "unraisableexception",
+        "warnings",
+    )
+)
+_PYTEST_CORE_TYPE_REGISTRATIONS = {
+    ("_pytest.capture", "CaptureManager"): "capturemanager",
+    ("_pytest.config", "Config"): "pytestconfig",
+    ("_pytest.fixtures", "FixtureManager"): "funcmanage",
+    ("_pytest.legacypath", "LegacyTmpdirPlugin"): "legacypath-tmpdir",
+    ("_pytest.logging", "LoggingPlugin"): "logging-plugin",
+    ("_pytest.main", "Session"): "session",
+    ("_pytest.terminal", "TerminalReporter"): "terminalreporter",
+}
 
 
 class AirlockRefusal(RuntimeError):
@@ -82,6 +125,8 @@ class PreparedAirlock:
     """Owner-only, one-run interpreter state beneath a disposable root."""
 
     root: Path
+    root_device: int
+    root_inode: int
     venv: Path
     python: Path
     purelib: Path
@@ -100,6 +145,71 @@ class OwnedRun:
 
     status: int
     group_empty: bool
+    control: bytes = b""
+    stderr: bytes = b""
+
+
+@dataclass(frozen=True)
+class InnerControl:
+    """Fixed non-certifying facts returned over the private control pipe."""
+
+    status: int
+    call_phase_observed: bool
+
+
+@dataclass(frozen=True)
+class InnerResult:
+    """Private in-process result returned to the generated runner."""
+
+    status: int
+    call_phase_observed: bool
+
+
+@dataclass(frozen=True)
+class OuterResult:
+    """Terminal result published only after every outer finalizer completed."""
+
+    status: int
+    refusal: str | None
+    certificate: Mapping[str, str] | None
+    diagnostic: bytes
+
+
+@dataclass(frozen=True)
+class _PluginBinding:
+    registration_name: str
+    plugin: Any
+    module: Any
+    module_name: str
+    exported_type: type[Any] | None
+    origin: Path
+    package_locations: tuple[Path, ...]
+
+
+@dataclass(frozen=True)
+class _ItemBinding:
+    item: Any
+    path: Path
+    nodeid: str
+
+
+@dataclass(frozen=True)
+class _ReportBinding:
+    report: Any
+    call: Any
+    item: Any
+    phase: str
+    failed: bool
+
+
+@dataclass(frozen=True)
+class _EligibilitySnapshot:
+    status: int
+    call_phase_observed: bool
+    failure_observed: bool
+    integrity_complete: bool
+    item_lifecycles_complete: bool
+    certificate_eligible: bool
 
 
 class _OuterSignalScope:
@@ -117,7 +227,7 @@ class _OuterSignalScope:
     def _handle(self, signum: int, _frame: Any) -> None:
         self.received.append(signum)
         process = self._process
-        if process is None or process.poll() is not None:
+        if process is None or process.returncode is not None:
             return
         try:
             os.killpg(process.pid, signum)
@@ -136,7 +246,7 @@ class _OuterSignalScope:
     def attach(self, process: subprocess.Popen[bytes]) -> None:
         self._process = process
         for signum in tuple(self.received):
-            if process.poll() is not None:
+            if process.returncode is not None:
                 break
             try:
                 os.killpg(process.pid, signum)
@@ -425,7 +535,7 @@ def _canonical(raw):
     if not isinstance(raw, (str, bytes, _os.PathLike)):
         _violate("airlock_path_provenance_violation")
     try:
-        return _os.path.realpath(_os.path.abspath(_os.fspath(raw)))
+        return _os.path.realpath(_os.fspath(raw))
     except (OSError, TypeError, ValueError):
         _violate("airlock_path_provenance_violation")
 
@@ -564,6 +674,8 @@ _PRE_STARTUP_BASELINE_AUDIT_PENDING = True
 class _ValidatingPath(list):
     def _replace(self, candidate):
         if self is _FROZEN_STARTUP_PATH_OBJECT:
+            if tuple(self) != _FROZEN_STARTUP_PATH:
+                _violate("airlock_path_provenance_violation")
             _violate("airlock_path_provenance_violation")
         canonical = _canonical_path_sequence(candidate)
         list.__setitem__(self, slice(None), canonical)
@@ -574,6 +686,26 @@ class _ValidatingPath(list):
         self._replace(candidate)
 
     def insert(self, index, value):
+        if self is _FROZEN_STARTUP_PATH_OBJECT:
+            if _sys.path is not self:
+                _violate("airlock_path_provenance_violation")
+            if tuple(self) != _FROZEN_STARTUP_PATH:
+                _violate("airlock_path_provenance_violation")
+            _path_class_value, inserted = _admit_path(value)
+            if (
+                type(index) is int
+                and index == 0
+                and isinstance(value, str)
+                and value == _CHECKOUT
+                and inserted == _CHECKOUT
+            ):
+                try:
+                    marker_names = _os.listdir(_VIOLATION_DIR)
+                except OSError:
+                    _violate("airlock_path_provenance_violation")
+                if not marker_names:
+                    return
+                _violate("airlock_path_provenance_violation")
         candidate = list(self)
         candidate.insert(index, value)
         self._replace(candidate)
@@ -742,23 +874,28 @@ def _is_internal_airlock_module(name, module):
 
 
 def _validate_concrete(fullname, raw):
+    refusal = (
+        "airlock_collection_escape"
+        if isinstance(raw, str) and _os.path.basename(raw) == "conftest.py"
+        else "airlock_import_provenance_violation"
+    )
     if not isinstance(raw, str) or raw in {"built-in", "frozen"}:
-        _violate("airlock_import_provenance_violation")
+        _violate(refusal)
     lexical = _os.path.abspath(raw)
     resolved = _canonical(raw)
     if lexical != resolved or _has_nested_git(lexical):
-        _violate("airlock_import_provenance_violation")
+        _violate(refusal)
     try:
         info = _os.lstat(lexical)
     except OSError:
-        _violate("airlock_import_provenance_violation")
+        _violate(refusal)
     if (info.st_mode & 0o170000) != 0o100000:
-        _violate("airlock_import_provenance_violation")
+        _violate(refusal)
     if any(resolved == root or _inside(resolved, root) for root in _OTHER_WORKTREES):
-        _violate("airlock_import_provenance_violation")
+        _violate(refusal)
     expected = _expected_files(fullname)
     if lexical not in _TRACKED_FILES or lexical not in expected:
-        _violate("airlock_import_provenance_violation")
+        _violate(refusal)
     return lexical
 
 
@@ -880,12 +1017,19 @@ def _revalidate_run_file_event(args):
 
 
 def validate_spec(fullname, spec):
-    if not _module_is_owned(fullname, spec=spec):
+    origin = getattr(spec, "origin", None)
+    conftest = (
+        isinstance(fullname, str)
+        and fullname.rsplit(".", 1)[-1] == "conftest"
+    ) or (
+        isinstance(origin, str) and _os.path.basename(origin) == "conftest.py"
+    )
+    if not conftest and not _module_is_owned(fullname, spec=spec):
         return spec
     _validate_planes(
         fullname,
         None,
-        getattr(spec, "origin", None),
+        origin,
         None,
         getattr(spec, "submodule_search_locations", None),
         spec_only=True,
@@ -1162,32 +1306,814 @@ def _origin_loader_line(guard: Path) -> str:
     return f"import builtins,sys;builtins.exec({loader!r})\n"
 
 
+class _AirlockPytestPlugin:
+    """Observe pytest provenance and call phases without certifying them."""
+
+    def __init__(self, *, guard: Any, checkout: Path, shared_purelib: Path) -> None:
+        self._guard = guard
+        self._checkout = checkout.resolve()
+        self._shared_purelib = shared_purelib.resolve()
+        self.__call_phase_observed = False
+        self.__failure_observed = False
+        self.__provenance_validated_first = False
+        self.__final_audit_complete = False
+        self.__rewrite_hook: Any | None = None
+        self.__manager: Any | None = None
+        self.__self_registration_name: str | None = None
+        self.__final_cleanup_registered = False
+        self.__registrations_sealed = False
+        self.__plugin_bindings: dict[str, _PluginBinding] = {}
+        self.__item_bindings: dict[int, _ItemBinding] = {}
+        self.__item_phase_state: dict[int, str] = {}
+        self.__pending_report_by_item: dict[int, _ReportBinding] = {}
+        self.__report_bindings: dict[int, _ReportBinding] = {}
+        self.__consumed_reports: set[int] = set()
+        self.__collect_report_bindings: dict[int, tuple[Any, bool]] = {}
+        self.__consumed_collect_reports: set[int] = set()
+
+    @property
+    def call_phase_observed(self) -> bool:
+        return self.__call_phase_observed
+
+    @property
+    def failure_observed(self) -> bool:
+        return self.__failure_observed
+
+    @staticmethod
+    def _inside(path: Path, root: Path) -> bool:
+        try:
+            path.relative_to(root)
+        except ValueError:
+            return False
+        return True
+
+    def _refuse(self, token: str) -> None:
+        self._guard._violate(token)
+
+    def _canonical_file(self, value: Any) -> Path:
+        if not isinstance(value, str) or not os.path.isabs(value):
+            self._refuse("airlock_import_provenance_violation")
+        try:
+            return Path(value).resolve(strict=True)
+        except OSError:
+            self._refuse("airlock_import_provenance_violation")
+            raise AssertionError("unreachable")
+
+    def _canonical_locations(self, values: Any) -> tuple[Path, ...] | None:
+        if values is None:
+            return None
+        try:
+            raw_values = tuple(values)
+        except TypeError:
+            self._refuse("airlock_import_provenance_violation")
+            raise AssertionError("unreachable")
+        return tuple(self._canonical_file(value) for value in raw_values)
+
+    def _derive_plugin_binding(
+        self, plugin: Any, registration_name: str
+    ) -> _PluginBinding:
+        exported_type: type[Any] | None
+        if isinstance(plugin, type(sys)):
+            module = plugin
+            exported_type = None
+            module_name = getattr(module, "__name__", None)
+            if not isinstance(module_name, str) or sys.modules.get(module_name) is not module:
+                self._refuse("airlock_import_provenance_violation")
+        else:
+            exported_type = plugin if isinstance(plugin, type) else type(plugin)
+            module_name = getattr(exported_type, "__module__", None)
+            if not isinstance(module_name, str):
+                self._refuse("airlock_import_provenance_violation")
+            module = sys.modules.get(module_name)
+            if (
+                not isinstance(module, type(sys))
+                or getattr(module, exported_type.__name__, None) is not exported_type
+            ):
+                self._refuse("airlock_import_provenance_violation")
+        spec = getattr(module, "__spec__", None)
+        if spec is None or getattr(spec, "name", None) != module_name:
+            self._refuse("airlock_import_provenance_violation")
+        origin = self._canonical_file(getattr(module, "__file__", None))
+        if self._canonical_file(getattr(spec, "origin", None)) != origin:
+            self._refuse("airlock_import_provenance_violation")
+        if getattr(module, "__loader__", None) is not getattr(spec, "loader", None):
+            self._refuse("airlock_import_provenance_violation")
+        if getattr(module, "__package__", None) != getattr(spec, "parent", None):
+            self._refuse("airlock_import_provenance_violation")
+        module_locations = self._canonical_locations(getattr(module, "__path__", None))
+        spec_locations = self._canonical_locations(
+            getattr(spec, "submodule_search_locations", None)
+        )
+        if module_locations != spec_locations:
+            self._refuse("airlock_import_provenance_violation")
+        locations = module_locations or ()
+        if locations and any(location != origin.parent for location in locations):
+            self._refuse("airlock_import_provenance_violation")
+        return _PluginBinding(
+            registration_name=registration_name,
+            plugin=plugin,
+            module=module,
+            module_name=module_name,
+            exported_type=exported_type,
+            origin=origin,
+            package_locations=locations,
+        )
+
+    def _binding_is_allowed(self, binding: _PluginBinding) -> bool:
+        origin = binding.origin
+        if origin.name == "conftest.py":
+            tracked = frozenset(getattr(self._guard, "_TRACKED_FILES", ()))
+            if not self._inside(origin, self._checkout) or os.fspath(origin) not in tracked:
+                self._refuse("airlock_collection_escape")
+            return (
+                binding.exported_type is None
+                and binding.plugin is binding.module
+                and binding.registration_name == os.fspath(origin)
+            )
+        if (
+            binding.module_name == "anyio.pytest_plugin"
+            and binding.exported_type is None
+            and binding.registration_name == "anyio.pytest_plugin"
+            and self._inside(origin, self._shared_purelib)
+        ):
+            return True
+        if not self._inside(origin, self._shared_purelib):
+            return False
+        if binding.exported_type is None:
+            expected_module = f"_pytest.{binding.registration_name}"
+            return (
+                binding.registration_name in _PYTEST_CORE_MODULE_REGISTRATIONS
+                and binding.module_name == expected_module
+            )
+        type_key = (
+            binding.module_name,
+            binding.exported_type.__name__,
+        )
+        expected_registration = _PYTEST_CORE_TYPE_REGISTRATIONS.get(type_key)
+        if expected_registration is not None:
+            return binding.registration_name == expected_registration
+        if type_key == ("_pytest.config", "PytestPluginManager"):
+            return binding.registration_name == str(id(binding.plugin))
+        return False
+
+    def _revalidate_plugins(self) -> None:
+        for name, binding in tuple(self.__plugin_bindings.items()):
+            observed = self._derive_plugin_binding(binding.plugin, name)
+            if (
+                observed.plugin is not binding.plugin
+                or observed.module is not binding.module
+                or observed.module_name != binding.module_name
+                or observed.exported_type is not binding.exported_type
+                or observed.origin != binding.origin
+                or observed.package_locations != binding.package_locations
+                or not self._binding_is_allowed(observed)
+            ):
+                self._refuse("airlock_import_provenance_violation")
+        if not self.__registrations_sealed:
+            return
+        manager = self.__manager
+        if manager is None or not hasattr(manager, "list_name_plugin"):
+            self._refuse("airlock_import_provenance_violation")
+        live = {
+            name: plugin
+            for name, plugin in manager.list_name_plugin()
+            if plugin is not None
+        }
+        if (
+            self.__self_registration_name is None
+            or live.get(self.__self_registration_name) is not self
+        ):
+            self._refuse("airlock_import_provenance_violation")
+        expected_names = set(self.__plugin_bindings) | {self.__self_registration_name}
+        if set(live) != expected_names:
+            self._refuse("airlock_import_provenance_violation")
+        for name, binding in self.__plugin_bindings.items():
+            if live.get(name) is not binding.plugin:
+                self._refuse("airlock_import_provenance_violation")
+
+    def _rewrite_indexes(self) -> tuple[list[int], list[int]]:
+        hook = self.__rewrite_hook
+        rewrite_indexes = [
+            index
+            for index, finder in enumerate(sys.meta_path)
+            if finder is hook
+        ]
+        dispatcher_indexes = [
+            index
+            for index, finder in enumerate(sys.meta_path)
+            if finder is self._guard.DISPATCHER
+        ]
+        return rewrite_indexes, dispatcher_indexes
+
+    def _bind_rewrite_hook(self, manager: Any) -> None:
+        hook = getattr(manager, "rewrite_hook", None)
+        module = sys.modules.get("_pytest.assertion.rewrite")
+        expected_type = (
+            getattr(module, "AssertionRewritingHook", None)
+            if module is not None
+            else None
+        )
+        if hook is None or expected_type is None or type(hook) is not expected_type:
+            self._refuse("airlock_import_provenance_violation")
+        self.__rewrite_hook = hook
+        self._audit_rewrite_hook()
+
+    def _audit_rewrite_hook(self) -> None:
+        if self.__rewrite_hook is None:
+            return
+        rewrite_indexes, dispatcher_indexes = self._rewrite_indexes()
+        if (
+            len(rewrite_indexes) != 1
+            or len(dispatcher_indexes) != 1
+            or dispatcher_indexes[0] != 0
+            or dispatcher_indexes[0] >= rewrite_indexes[0]
+        ):
+            self._refuse("airlock_import_provenance_violation")
+
+    def _audit(self) -> None:
+        self._audit_rewrite_hook()
+        self._guard.audit_before_pytest()
+        self._audit_rewrite_hook()
+        self._revalidate_plugins()
+
+    def _observe_item(self, item: Any) -> _ItemBinding:
+        try:
+            path = Path(os.fspath(getattr(item, "path", None))).resolve(strict=True)
+        except (OSError, TypeError, ValueError):
+            self._refuse("airlock_collection_escape")
+            raise AssertionError("unreachable")
+        nodeid = getattr(item, "nodeid", None)
+        if not isinstance(nodeid, str) or not nodeid or not self._inside(
+            path, self._checkout
+        ):
+            self._refuse("airlock_collection_escape")
+        return _ItemBinding(item=item, path=path, nodeid=nodeid)
+
+    def _bind_items(self, items: Sequence[Any]) -> None:
+        bindings = tuple(self._observe_item(item) for item in items)
+        self.__item_bindings = {id(binding.item): binding for binding in bindings}
+        self.__item_phase_state = {
+            id(binding.item): "setup" for binding in bindings
+        }
+
+    def _audit_item(self, item: Any) -> None:
+        binding = self.__item_bindings.get(id(item))
+        observed = self._observe_item(item)
+        if (
+            binding is None
+            or observed.item is not binding.item
+            or observed.path != binding.path
+            or observed.nodeid != binding.nodeid
+        ):
+            self._refuse("airlock_collection_escape")
+
+    def _audit_items(self) -> None:
+        for binding in tuple(self.__item_bindings.values()):
+            self._audit_item(binding.item)
+
+    def _pytest_type(self, module_name: str, type_name: str) -> type[Any]:
+        module = sys.modules.get(module_name)
+        expected = getattr(module, type_name, None) if module is not None else None
+        if not isinstance(expected, type):
+            self._refuse("airlock_import_provenance_violation")
+        return expected
+
+    def _audit_report_state(self) -> None:
+        if self.__pending_report_by_item or not set(
+            self.__report_bindings
+        ).issubset(self.__consumed_reports):
+            self._refuse("airlock_import_provenance_violation")
+
+    def _item_lifecycles_complete(self) -> bool:
+        return bool(self.__item_phase_state) and all(
+            state == "complete" for state in self.__item_phase_state.values()
+        )
+
+    def _phase_is_expected(self, item_id: int, phase: str) -> bool:
+        state = self.__item_phase_state.get(item_id)
+        return (
+            (state == "setup" and phase == "setup")
+            or (state == "call_or_teardown" and phase in {"call", "teardown"})
+            or (state == "teardown" and phase == "teardown")
+        )
+
+    def _advance_phase(self, item_id: int, phase: str) -> None:
+        next_state = {
+            "setup": "call_or_teardown",
+            "call": "teardown",
+            "teardown": "complete",
+        }[phase]
+        self.__item_phase_state[item_id] = next_state
+
+    def _report_control_types(self) -> tuple[type[Any], type[Any]]:
+        outcomes = sys.modules.get("_pytest.outcomes")
+        skip = getattr(outcomes, "skip", None) if outcomes is not None else None
+        xfail = getattr(outcomes, "xfail", None) if outcomes is not None else None
+        skip_type = getattr(skip, "Exception", None)
+        xfail_type = getattr(xfail, "Exception", None)
+        if not isinstance(skip_type, type) or not isinstance(xfail_type, type):
+            self._refuse("airlock_import_provenance_violation")
+        return skip_type, xfail_type
+
+    def _raw_report_kind(self, excinfo: Any) -> str:
+        if excinfo is None:
+            return "passed"
+        skip_type, xfail_type = self._report_control_types()
+        value = getattr(excinfo, "value", None)
+        if isinstance(value, skip_type):
+            return "skipped"
+        if isinstance(value, xfail_type):
+            return "xfailed"
+        if isinstance(value, BaseExceptionGroup):
+            try:
+                _matched, remainder = value.split(skip_type)
+            except (TypeError, ValueError):
+                self._refuse("airlock_import_provenance_violation")
+            if remainder is None:
+                return "skipped"
+        return "failed"
+
+    def _validated_unittest_excinfo(
+        self,
+        item: Any,
+        before: Any,
+        unittest_excinfo: tuple[Any, ...] | None,
+        after: Any,
+    ) -> Any:
+        if after is before:
+            return after
+        unittest = sys.modules.get("unittest")
+        skip_test = getattr(unittest, "SkipTest", None) if unittest is not None else None
+        skip_type, _xfail_type = self._report_control_types()
+        function_type = self._pytest_type("_pytest.python", "Function")
+        if (
+            type(item) is function_type
+            and unittest_excinfo is None
+            and isinstance(skip_test, type)
+            and isinstance(getattr(before, "value", None), skip_test)
+            and isinstance(getattr(after, "value", None), skip_type)
+            and str(getattr(after, "value", None))
+            == str(getattr(before, "value", None))
+        ):
+            return after
+        unittest_module = sys.modules.get("_pytest.unittest")
+        item_type = (
+            getattr(unittest_module, "TestCaseFunction", None)
+            if unittest_module is not None
+            else None
+        )
+        if (
+            not isinstance(item_type, type)
+            or type(item) is not item_type
+            or not unittest_excinfo
+            or tuple(getattr(item, "_excinfo", ())) != unittest_excinfo[1:]
+        ):
+            self._refuse("airlock_import_provenance_violation")
+        injected = unittest_excinfo[0]
+        if after is injected:
+            return after
+        if (
+            not isinstance(skip_test, type)
+            or not isinstance(getattr(injected, "value", None), skip_test)
+            or not isinstance(getattr(after, "value", None), skip_type)
+            or str(getattr(after, "value", None)) != str(getattr(injected, "value", None))
+        ):
+            self._refuse("airlock_import_provenance_violation")
+        return after
+
+    def _xfail_state(self, item: Any) -> Any:
+        skipping = sys.modules.get("_pytest.skipping")
+        key = getattr(skipping, "xfailed_key", None) if skipping is not None else None
+        stash = getattr(item, "stash", None)
+        get = getattr(stash, "get", None)
+        if key is None or not callable(get):
+            return None
+        try:
+            return get(key, None)
+        except (KeyError, TypeError):
+            self._refuse("airlock_import_provenance_violation")
+
+    def _validated_report_failure(
+        self, item: Any, phase: str, excinfo: Any, report: Any
+    ) -> bool:
+        outcome = getattr(report, "outcome", None)
+        if (
+            outcome not in {"passed", "failed", "skipped"}
+            or (getattr(report, "failed", False) is True) != (outcome == "failed")
+            or (getattr(report, "passed", False) is True) != (outcome == "passed")
+            or (getattr(report, "skipped", False) is True) != (outcome == "skipped")
+            or (outcome == "passed" and getattr(report, "longrepr", None) is not None)
+            or (outcome != "passed" and getattr(report, "longrepr", None) is None)
+        ):
+            self._refuse("airlock_import_provenance_violation")
+        raw_kind = self._raw_report_kind(excinfo)
+        xfail_state = self._xfail_state(item)
+        has_wasxfail = hasattr(report, "wasxfail")
+        if has_wasxfail:
+            reason = getattr(report, "wasxfail", None)
+            if not isinstance(reason, str):
+                self._refuse("airlock_import_provenance_violation")
+            if raw_kind == "xfailed":
+                message = getattr(getattr(excinfo, "value", None), "msg", None)
+                if outcome != "skipped" or reason != message:
+                    self._refuse("airlock_import_provenance_violation")
+                return False
+            expected_reason = getattr(xfail_state, "reason", None)
+            expected_strict = getattr(xfail_state, "strict", None)
+            if (
+                not isinstance(expected_reason, str)
+                or reason != expected_reason
+                or raw_kind not in {"passed", "failed"}
+                or (raw_kind == "passed" and outcome != "passed")
+                or (raw_kind == "passed" and expected_strict is not False)
+                or (raw_kind == "failed" and outcome != "skipped")
+            ):
+                self._refuse("airlock_import_provenance_violation")
+            return False
+        if raw_kind == "xfailed":
+            self._refuse("airlock_import_provenance_violation")
+        if raw_kind == "passed" and outcome == "failed":
+            reason = getattr(xfail_state, "reason", None)
+            if (
+                phase != "call"
+                or getattr(xfail_state, "strict", None) is not True
+                or not isinstance(reason, str)
+                or getattr(report, "longrepr", None) != f"[XPASS(strict)] {reason}"
+            ):
+                self._refuse("airlock_import_provenance_violation")
+            return True
+        expected_outcome = {
+            "passed": "passed",
+            "skipped": "skipped",
+            "failed": "failed",
+        }[raw_kind]
+        if outcome != expected_outcome:
+            self._refuse("airlock_import_provenance_violation")
+        return outcome == "failed"
+
+    def pytest_plugin_registered(
+        self, plugin: Any, plugin_name: str, manager: Any
+    ) -> None:
+        if self.__manager is None:
+            self.__manager = manager
+        elif manager is not self.__manager:
+            self._refuse("airlock_import_provenance_violation")
+        if not isinstance(plugin_name, str) or not plugin_name:
+            self._refuse("airlock_import_provenance_violation")
+        if plugin is self:
+            self.__self_registration_name = plugin_name
+            return
+        binding = self._derive_plugin_binding(plugin, plugin_name)
+        if not self._binding_is_allowed(binding):
+            if plugin_name.endswith("conftest.py"):
+                self._refuse("airlock_collection_escape")
+            self._refuse("airlock_import_provenance_violation")
+        existing = self.__plugin_bindings.get(plugin_name)
+        if existing is not None and existing.plugin is not plugin:
+            self._refuse("airlock_import_provenance_violation")
+        self.__plugin_bindings[plugin_name] = binding
+        if self.__registrations_sealed:
+            self._audit()
+
+    def pytest_load_initial_conftests(
+        self, early_config: Any, parser: Any, args: Any
+    ) -> Any:
+        del parser, args
+        if getattr(early_config, "pluginmanager", None) is not self.__manager:
+            self._refuse("airlock_import_provenance_violation")
+        self._bind_rewrite_hook(self.__manager)
+        add_cleanup = getattr(early_config, "add_cleanup", None)
+        if not callable(add_cleanup) or self.__final_cleanup_registered:
+            self._refuse("airlock_import_provenance_violation")
+        add_cleanup(self._final_pre_rewrite_cleanup_audit)
+        self.__final_cleanup_registered = True
+        self.__provenance_validated_first = True
+        self.__registrations_sealed = True
+        self._audit()
+        result = yield
+        self._audit()
+        return result
+
+    def pytest_configure(self, config: Any) -> None:
+        if getattr(config, "pluginmanager", None) is not self.__manager:
+            self._refuse("airlock_import_provenance_violation")
+        self._audit()
+
+    def pytest_collection_modifyitems(
+        self, session: Any, config: Any, items: Sequence[Any]
+    ) -> Any:
+        del session, config
+        self._audit()
+        result = yield
+        self._audit()
+        self._bind_items(items)
+        return result
+
+    def pytest_runtest_setup(self, item: Any) -> Any:
+        self._audit()
+        self._audit_item(item)
+        result = yield
+        self._audit()
+        self._audit_item(item)
+        return result
+
+    def pytest_runtest_call(self, item: Any) -> Any:
+        self._audit()
+        self._audit_item(item)
+        result = yield
+        self._audit()
+        self._audit_item(item)
+        return result
+
+    def pytest_runtest_teardown(self, item: Any) -> Any:
+        self._audit()
+        self._audit_item(item)
+        result = yield
+        self._audit()
+        self._audit_item(item)
+        return result
+
+    def pytest_runtest_makereport(self, item: Any, call: Any) -> Any:
+        self._audit()
+        self._audit_item(item)
+        call_type = self._pytest_type("_pytest.runner", "CallInfo")
+        if type(call) is not call_type:
+            self._refuse("airlock_import_provenance_violation")
+        phase = getattr(call, "when", None)
+        excinfo_before = getattr(call, "excinfo", None)
+        unittest_excinfo = getattr(item, "_excinfo", None)
+        if isinstance(unittest_excinfo, list):
+            unittest_excinfo = tuple(unittest_excinfo)
+        else:
+            unittest_excinfo = None
+        call_timing = (
+            getattr(call, "duration", None),
+            getattr(call, "start", None),
+            getattr(call, "stop", None),
+        )
+        report = yield
+        report_type = self._pytest_type("_pytest.reports", "TestReport")
+        excinfo = self._validated_unittest_excinfo(
+            item,
+            excinfo_before,
+            unittest_excinfo,
+            getattr(call, "excinfo", None),
+        )
+        if (
+            type(call) is not call_type
+            or type(report) is not report_type
+            or getattr(call, "when", None) != phase
+            or (
+                getattr(call, "duration", None),
+                getattr(call, "start", None),
+                getattr(call, "stop", None),
+            )
+            != call_timing
+        ):
+            self._refuse("airlock_import_provenance_violation")
+        failed = self._validated_report_failure(item, phase, excinfo, report)
+        item_id = id(item)
+        binding = self.__item_bindings.get(item_id)
+        if (
+            binding is None
+            or phase not in {"setup", "call", "teardown"}
+            or getattr(report, "when", None) != phase
+            or getattr(report, "nodeid", None) != binding.nodeid
+            or not self._phase_is_expected(item_id, phase)
+            or item_id in self.__pending_report_by_item
+            or id(report) in self.__report_bindings
+        ):
+            self._refuse("airlock_import_provenance_violation")
+        report_binding = _ReportBinding(
+            report=report,
+            call=call,
+            item=item,
+            phase=phase,
+            failed=failed,
+        )
+        self.__report_bindings[id(report)] = report_binding
+        self.__pending_report_by_item[item_id] = report_binding
+        self._audit_item(item)
+        return report
+
+    def pytest_runtest_logreport(self, report: Any) -> None:
+        report_id = id(report)
+        matched = self.__report_bindings.get(report_id)
+        if matched is None or matched.report is not report:
+            subtests_module = sys.modules.get("_pytest.subtests")
+            subtest_type = (
+                getattr(subtests_module, "SubtestReport", None)
+                if subtests_module is not None
+                else None
+            )
+            if not isinstance(subtest_type, type) or type(report) is not subtest_type:
+                return
+            if report_id in self.__consumed_reports:
+                return
+            candidates = tuple(
+                binding
+                for binding in self.__pending_report_by_item.values()
+                if binding.phase == "call"
+                and getattr(report, "when", None) == "call"
+                and getattr(report, "nodeid", None)
+                == getattr(binding.report, "nodeid", None)
+                and getattr(report, "outcome", None)
+                == getattr(binding.report, "outcome", None)
+                and getattr(report, "location", None)
+                == getattr(binding.report, "location", None)
+                and (getattr(report, "failed", False) is True) == binding.failed
+            )
+            if len(candidates) != 1:
+                self._refuse("airlock_import_provenance_violation")
+            matched = candidates[0]
+            item_id = id(matched.item)
+            if self.__pending_report_by_item.get(item_id) is not matched:
+                self._refuse("airlock_import_provenance_violation")
+            del self.__pending_report_by_item[item_id]
+            self.__consumed_reports.update((id(matched.report), report_id))
+            self._audit_item(matched.item)
+            if matched.failed:
+                self.__failure_observed = True
+            return
+        if report_id in self.__consumed_reports:
+            return
+        item_id = id(matched.item)
+        if self.__pending_report_by_item.get(item_id) is not matched:
+            self._refuse("airlock_import_provenance_violation")
+        del self.__pending_report_by_item[item_id]
+        self.__consumed_reports.add(report_id)
+        self._advance_phase(item_id, matched.phase)
+        self._audit_item(matched.item)
+        if matched.phase == "call":
+            self.__call_phase_observed = True
+        if matched.failed:
+            self.__failure_observed = True
+
+    def pytest_make_collect_report(self, collector: Any) -> Any:
+        del collector
+        report = yield
+        report_type = self._pytest_type("_pytest.reports", "CollectReport")
+        if type(report) is not report_type or id(report) in self.__collect_report_bindings:
+            self._refuse("airlock_import_provenance_violation")
+        self.__collect_report_bindings[id(report)] = (
+            report,
+            getattr(report, "failed", False) is True,
+        )
+        return report
+
+    def pytest_collectreport(self, report: Any) -> None:
+        report_id = id(report)
+        matched = self.__collect_report_bindings.get(report_id)
+        if matched is None or matched[0] is not report:
+            self._refuse("airlock_import_provenance_violation")
+        if report_id in self.__consumed_collect_reports:
+            self._refuse("airlock_import_provenance_violation")
+        self.__consumed_collect_reports.add(report_id)
+        if matched[1] is True:
+            self.__failure_observed = True
+
+    def pytest_sessionfinish(self, session: Any, exitstatus: Any) -> Any:
+        del exitstatus
+        self._audit()
+        result = yield
+        self._audit()
+        self._audit_items()
+        self._audit_report_state()
+        if self.__failure_observed and getattr(session, "exitstatus", None) == 0:
+            session.exitstatus = 1
+        return result
+
+    def pytest_unconfigure(self, config: Any) -> Any:
+        if getattr(config, "pluginmanager", None) is not self.__manager:
+            self._refuse("airlock_import_provenance_violation")
+        self._audit()
+        result = yield
+        self._audit()
+        self._audit_items()
+        self._audit_report_state()
+        return result
+
+    def _final_pre_rewrite_cleanup_audit(self) -> None:
+        self._audit()
+        self._audit_items()
+        self._audit_report_state()
+        self.__final_audit_complete = True
+
+    def final_snapshot(self, status: int) -> _EligibilitySnapshot:
+        normalized = _normalize_pytest_status(status)
+        if normalized == 0 and self.__failure_observed:
+            normalized = 1
+        integrity_complete = (
+            self.__provenance_validated_first and self.__final_audit_complete
+        )
+        item_lifecycles_complete = self._item_lifecycles_complete()
+        eligible = (
+            normalized == 0
+            and self.__call_phase_observed
+            and not self.__failure_observed
+            and item_lifecycles_complete
+            and integrity_complete
+        )
+        return _EligibilitySnapshot(
+            status=normalized,
+            call_phase_observed=self.__call_phase_observed,
+            failure_observed=self.__failure_observed,
+            integrity_complete=integrity_complete,
+            item_lifecycles_complete=item_lifecycles_complete,
+            certificate_eligible=eligible,
+        )
+
+
+def _normalize_pytest_status(status: int) -> int:
+    if isinstance(status, bool) or not isinstance(status, int) or status not in range(7):
+        raise AirlockRefusal("airlock_child_setup_failed")
+    return status
+
+
+def _install_pytest_hook_markers(pytest: Any) -> None:
+    wrappers = {
+        "pytest_load_initial_conftests": {"wrapper": True, "tryfirst": True},
+        "pytest_collection_modifyitems": {"wrapper": True, "tryfirst": True},
+        "pytest_runtest_setup": {"wrapper": True, "tryfirst": True},
+        "pytest_runtest_call": {"wrapper": True, "tryfirst": True},
+        "pytest_runtest_teardown": {"wrapper": True, "tryfirst": True},
+        "pytest_runtest_makereport": {"wrapper": True, "tryfirst": True},
+        "pytest_make_collect_report": {"wrapper": True, "trylast": True},
+        "pytest_sessionfinish": {"wrapper": True, "tryfirst": True},
+        "pytest_unconfigure": {"wrapper": True, "tryfirst": True},
+    }
+    for name, options in wrappers.items():
+        pytest.hookimpl(**options)(getattr(_AirlockPytestPlugin, name))
+
+
+def _inner_main(pytest_arguments: Sequence[str]) -> InnerResult:
+    """Run pytest behind the guard; terminal publication is deliberately absent."""
+
+    try:
+        guard = sys.modules["_maez_worktree_airlock_guard"]
+        guard.audit_before_pytest()
+        import pytest
+
+        guard.restore_dispatcher_front()
+        guard.audit_before_pytest()
+        _install_pytest_hook_markers(pytest)
+        plugin = _AirlockPytestPlugin(
+            guard=guard,
+            checkout=Path(guard._CHECKOUT),
+            shared_purelib=Path(guard._SHARED_PURELIB),
+        )
+        raw_status = pytest.main(list(pytest_arguments), plugins=[plugin])
+        status = _normalize_pytest_status(raw_status)
+        snapshot = plugin.final_snapshot(status)
+        if not snapshot.integrity_complete or (
+            snapshot.status == 0
+            and snapshot.call_phase_observed
+            and not snapshot.certificate_eligible
+        ):
+            guard._violate("airlock_import_provenance_violation")
+        return InnerResult(
+            status=snapshot.status,
+            call_phase_observed=snapshot.call_phase_observed,
+        )
+    except BaseException:
+        return InnerResult(
+            status=AIRLOCK_STATUS,
+            call_phase_observed=False,
+        )
+
+
 def _runner_source(diagnostic: Path) -> str:
-    """Generate a deliberately non-certifying Task-2 inner runner."""
+    """Generate a fixed-control, deliberately non-certifying inner runner."""
 
     return (
-        "import os,stat,sys\n"
-        "try:\n"
-        f" diagnostic=os.open({os.fspath(diagnostic)!r},os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)\n"
-        " os.fchmod(diagnostic,0o600)\n"
-        " diagnostic_info=os.fstat(diagnostic)\n"
-        "except BaseException:\n"
-        " os._exit(86)\n"
-        "if (not stat.S_ISREG(diagnostic_info.st_mode) or diagnostic_info.st_nlink!=1 or stat.S_IMODE(diagnostic_info.st_mode)!=0o600):\n"
-        " os._exit(86)\n"
-        "control=os.dup(1)\n"
-        "os.dup2(diagnostic,1);os.dup2(diagnostic,2);os.close(diagnostic)\n"
-        "os.write(control,b'airlock_inner_noncertifying\\n')\n"
-        "status=86\n"
-        "try:\n"
-        " guard=sys.modules['_maez_worktree_airlock_guard']\n"
-        " guard.audit_before_pytest()\n"
-        " import pytest\n"
-        "except BaseException:\n"
-        " pass\n"
-        "os.write(control,b'airlock_inner_complete:86\\n')\n"
-        "os.close(control)\n"
-        "raise SystemExit(status)\n"
+        "import os,stat,sys,traceback\n"
+        "def _run_airlock_inner():\n"
+        " try:\n"
+        f"  diagnostic=os.open({os.fspath(diagnostic)!r},os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)\n"
+        "  os.fchmod(diagnostic,0o600)\n"
+        "  diagnostic_info=os.fstat(diagnostic)\n"
+        " except BaseException:\n"
+        "  os._exit(86)\n"
+        " if (not stat.S_ISREG(diagnostic_info.st_mode) or diagnostic_info.st_nlink!=1 or stat.S_IMODE(diagnostic_info.st_mode)!=0o600):\n"
+        "  os._exit(86)\n"
+        " control=os.dup(1)\n"
+        " os.dup2(diagnostic,1);os.dup2(diagnostic,2);os.close(diagnostic)\n"
+        " os.write(control,b'airlock_inner_noncertifying\\n')\n"
+        " status=86;call_phase_observed=False\n"
+        " try:\n"
+        "  guard=sys.modules['_maez_worktree_airlock_guard']\n"
+        "  guard.audit_before_pytest()\n"
+        "  if len(sys.argv)<2 or sys.argv[1]!='--': raise RuntimeError('invalid runner argv')\n"
+        "  from scripts.dev import worktree_test_airlock as airlock\n"
+        "  result=airlock._inner_main(tuple(sys.argv[2:]))\n"
+        "  status=result.status;call_phase_observed=result.call_phase_observed\n"
+        " except BaseException:\n"
+        "  traceback.print_exc()\n"
+        " completion=(f'airlock_inner_complete:{status}:call_phase_observed={int(call_phase_observed)}\\n').encode('ascii')\n"
+        " os.write(control,completion)\n"
+        " os.close(control)\n"
+        " return status\n"
+        "raise SystemExit(_run_airlock_inner())\n"
     )
 
 
@@ -1197,8 +2123,109 @@ def _authored_environment(prepared_root: Path, python: Path) -> dict[str, str]:
         "LANG": "C",
         "LC_ALL": "C",
         "PATH": f"{python.parent}:/usr/bin:/bin",
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
         "PYTHONDONTWRITEBYTECODE": "1",
     }
+
+
+_PYTEST_FLAG_TOKENS = frozenset(
+    ("-q", "--collect-only", "--collectonly", "--co", "--setup-only", "--setup-plan")
+)
+_PYTEST_DIAGNOSTIC_TOKENS = frozenset(
+    ("--collect-only", "--collectonly", "--co", "--setup-only", "--setup-plan")
+)
+
+
+def _selector_is_inside_checkout(token: str, checkout: Path) -> bool:
+    path_token = token.split("::", 1)[0]
+    if not path_token or token.startswith("@"):
+        return False
+    path = Path(path_token)
+    if path.is_absolute() or ".." in path.parts:
+        return False
+    try:
+        resolved_checkout = checkout.resolve(strict=True)
+        resolved = (resolved_checkout / path).resolve(strict=True)
+        resolved.relative_to(resolved_checkout)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _parse_pytest_invocation(
+    argv: Sequence[str],
+    checkout: Path,
+    *,
+    environment: Mapping[str, str],
+) -> tuple[str, ...]:
+    """Validate the intentionally tiny caller-controlled pytest surface."""
+
+    try:
+        if any(
+            not isinstance(token, str)
+            or token.encode("utf-8").decode("utf-8") != token
+            for token in argv
+        ):
+            raise UnicodeError
+    except UnicodeError:
+        raise AirlockRefusal("airlock_pytest_arguments_invalid") from None
+    if "PYTEST_ADDOPTS" in environment or "PYTEST_PLUGINS" in environment:
+        raise AirlockRefusal("airlock_pytest_arguments_invalid")
+    if len(argv) < 3 or tuple(argv[:2]) != ("pytest", "--"):
+        raise AirlockRefusal("airlock_pytest_arguments_invalid")
+    caller = tuple(argv[2:])
+    selector_seen = False
+    index = 0
+    while index < len(caller):
+        token = caller[index]
+        if token in _PYTEST_FLAG_TOKENS:
+            index += 1
+            continue
+        if token == "-k":
+            if (
+                index + 1 >= len(caller)
+                or not caller[index + 1]
+                or caller[index + 1].startswith(("-", "@"))
+            ):
+                raise AirlockRefusal("airlock_pytest_arguments_invalid")
+            index += 2
+            continue
+        if token.startswith("-") or token.startswith("@"):
+            raise AirlockRefusal("airlock_pytest_arguments_invalid")
+        if not _selector_is_inside_checkout(token, checkout):
+            raise AirlockRefusal("airlock_pytest_arguments_invalid")
+        selector_seen = True
+        index += 1
+    if not selector_seen:
+        raise AirlockRefusal("airlock_pytest_arguments_invalid")
+    return caller
+
+
+def _effective_pytest_arguments(
+    prepared: PreparedAirlock,
+    checkout: Path,
+    caller_args: Sequence[str],
+) -> tuple[str, ...]:
+    return (
+        "-c",
+        os.fspath(prepared.pytest_config),
+        "--rootdir",
+        os.fspath(checkout),
+        "--confcutdir",
+        os.fspath(checkout),
+        "-p",
+        "no:cacheprovider",
+        "-p",
+        "anyio.pytest_plugin",
+        *caller_args,
+    )
+
+
+def _hash_effective_pytest_arguments(arguments: Sequence[str]) -> str:
+    payload = json.dumps(
+        tuple(arguments), ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _prepare_disposable(
@@ -1206,12 +2233,18 @@ def _prepare_disposable(
     inventory: GitInventory,
     *,
     root_parent: Path = Path("/tmp"),
+    caller_args: Sequence[str] = (),
 ) -> PreparedAirlock:
     """Build the one-run interpreter without touching the dependency venv."""
 
     try:
-        root = Path(tempfile.mkdtemp(prefix="maez-airlock-", dir=root_parent))
+        root = Path(
+            tempfile.mkdtemp(prefix=f"maez-airlock-{os.getpid()}-", dir=root_parent)
+        )
         root.chmod(0o700)
+        root_info = root.stat(follow_symlinks=False)
+        if not stat.S_ISDIR(root_info.st_mode) or root_info.st_uid != os.getuid():
+            raise AirlockRefusal("airlock_child_setup_failed")
         disposable_venv = root / "venv"
         _create_disposable_venv(disposable_venv, layout.shared_python)
         python = disposable_venv / "bin" / "python"
@@ -1244,6 +2277,8 @@ def _prepare_disposable(
         )
         prepared = PreparedAirlock(
             root=root,
+            root_device=root_info.st_dev,
+            root_inode=root_info.st_ino,
             venv=disposable_venv,
             python=python,
             purelib=purelib,
@@ -1255,6 +2290,10 @@ def _prepare_disposable(
             diagnostic=diagnostic,
             environment={},
         )
+        # Constructing the vector here proves the temporary config exists before
+        # any child can consume its path.  The value is recomputed by outer when
+        # it binds the certificate, rather than stored as mutable authority.
+        _effective_pytest_arguments(prepared, layout.checkout, caller_args)
         return PreparedAirlock(
             **{
                 **prepared.__dict__,
@@ -1276,6 +2315,19 @@ def _remove_disposable(root: Path) -> None:
         shutil.rmtree(root)
     except OSError:
         raise AirlockRefusal("airlock_cleanup_incomplete") from None
+
+
+def _prepared_root_is_owned(prepared: PreparedAirlock) -> bool:
+    try:
+        observed = prepared.root.stat(follow_symlinks=False)
+    except OSError:
+        return False
+    return (
+        stat.S_ISDIR(observed.st_mode)
+        and observed.st_uid == os.getuid()
+        and observed.st_dev == prepared.root_device
+        and observed.st_ino == prepared.root_inode
+    )
 
 
 def _cleanup_failed_setup(root: Path) -> None:
@@ -1321,14 +2373,26 @@ def _group_members(
         if not entry.name.isdigit():
             continue
         try:
-            state, observed_group = _parse_proc_stat(stat_reader(entry / "stat"))
-            if state != "Z" and observed_group == process_group:
+            _state, observed_group = _parse_proc_stat(stat_reader(entry / "stat"))
+            if observed_group == process_group:
                 members.append(int(entry.name))
         except (FileNotFoundError, ProcessLookupError):
             continue
         except (OSError, UnicodeError, ValueError):
             raise AirlockRefusal("airlock_cleanup_incomplete") from None
     return tuple(sorted(members))
+
+
+def _group_is_quiescent(
+    process_group: int,
+    *,
+    group_reader: Callable[[int], tuple[int, ...]],
+    sleeper: Callable[[float], Any],
+) -> bool:
+    if group_reader(process_group):
+        return False
+    sleeper(0.05)
+    return not group_reader(process_group)
 
 
 def _clear_owned_group(
@@ -1340,22 +2404,68 @@ def _clear_owned_group(
 ) -> bool:
     for sig, delay in ((signal.SIGTERM, 0.2), (signal.SIGKILL, 0.2)):
         try:
-            members = group_reader(process_group)
+            if _group_is_quiescent(
+                process_group, group_reader=group_reader, sleeper=sleeper
+            ):
+                return True
         except AirlockRefusal:
             return False
-        if not members:
-            return True
         try:
             signaler(process_group, sig)
         except ProcessLookupError:
-            return True
+            continue
         except OSError:
             return False
         sleeper(delay)
     try:
-        return not group_reader(process_group)
+        return _group_is_quiescent(
+            process_group, group_reader=group_reader, sleeper=sleeper
+        )
     except AirlockRefusal:
         return False
+
+
+def _reaped_group_is_quiescent(
+    process_group: int,
+    *,
+    group_reader: Callable[[int], tuple[int, ...]] = _group_members,
+    sleeper: Callable[[float], Any] = time.sleep,
+) -> bool:
+    """Observe a reaped leader's old numeric group without signalling it."""
+
+    try:
+        return _group_is_quiescent(
+            process_group, group_reader=group_reader, sleeper=sleeper
+        )
+    except AirlockRefusal:
+        return False
+
+
+def _clear_interrupted_owned_group(process: subprocess.Popen[bytes]) -> bool:
+    """Bound an interrupted child group while its original leader is known."""
+
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            if _group_is_quiescent(
+                process.pid, group_reader=_group_members, sleeper=time.sleep
+            ):
+                return True
+        except AirlockRefusal:
+            return False
+        try:
+            os.killpg(process.pid, sig)
+        except ProcessLookupError:
+            continue
+        except OSError:
+            return False
+        try:
+            process.wait(timeout=0.2)
+        except subprocess.TimeoutExpired:
+            continue
+        return _reaped_group_is_quiescent(
+            process.pid, group_reader=_group_members
+        )
+    return _reaped_group_is_quiescent(process.pid, group_reader=_group_members)
 
 
 def _run_owned_command(
@@ -1370,6 +2480,7 @@ def _run_owned_command(
     owns_scope = signal_scope is None
     scope = signal_scope or _OuterSignalScope()
     restore_complete = True
+    group_empty: bool | None = None
 
     try:
         if owns_scope:
@@ -1383,8 +2494,8 @@ def _run_owned_command(
                 cwd=cwd,
                 env=dict(environment),
                 stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 shell=False,
                 start_new_session=True,
             )
@@ -1394,29 +2505,184 @@ def _run_owned_command(
         if forward_signal is not None:
             time.sleep(0.1)
             scope.inject_for_test(forward_signal)
+        interrupt_deadline: float | None = None
+        while process.poll() is None:
+            if scope.interrupted:
+                if interrupt_deadline is None:
+                    interrupt_deadline = time.monotonic() + 0.25
+                elif time.monotonic() >= interrupt_deadline:
+                    group_empty = _clear_interrupted_owned_group(process)
+                    break
+            time.sleep(0.01)
         try:
-            status = process.wait(timeout=5)
+            status = process.wait(timeout=1)
         except subprocess.TimeoutExpired:
             status = AIRLOCK_STATUS + 1
-        group_empty = _clear_owned_group(process.pid)
-        try:
-            process.wait(timeout=1)
-        except subprocess.TimeoutExpired:
             group_empty = False
-        return OwnedRun(status=status, group_empty=group_empty)
+        if group_empty is None:
+            group_empty = _reaped_group_is_quiescent(process.pid)
+        try:
+            control, child_stderr = process.communicate(timeout=1)
+        except subprocess.TimeoutExpired:
+            control, child_stderr = b"", b""
+            group_empty = False
+        if len(control) > 4096 or len(child_stderr) > 4096:
+            return OwnedRun(
+                status=AIRLOCK_STATUS + 1,
+                group_empty=group_empty,
+            )
+        return OwnedRun(
+            status=status,
+            group_empty=group_empty,
+            control=control,
+            stderr=child_stderr,
+        )
     finally:
-        if process is not None and process.poll() is None:
-            _clear_owned_group(process.pid)
-            try:
-                process.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                pass
+        if process is not None and process.returncode is None:
+            if process.poll() is None:
+                _clear_owned_group(process.pid)
+                try:
+                    process.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    pass
         if process is not None:
             scope.detach(process)
         if owns_scope:
             restore_complete = scope.restore()
-        if not restore_complete and process is not None:
+        if (
+            not restore_complete
+            and process is not None
+            and process.returncode is None
+        ):
             _clear_owned_group(process.pid)
+
+
+def _parse_inner_control(payload: bytes, child_status: int) -> InnerControl:
+    if len(payload) > 4096:
+        raise AirlockRefusal("airlock_child_setup_failed")
+    try:
+        text = payload.decode("ascii")
+    except UnicodeError:
+        raise AirlockRefusal("airlock_child_setup_failed") from None
+    matched = re.fullmatch(
+        r"airlock_inner_noncertifying\n"
+        r"airlock_inner_complete:([0-6]):call_phase_observed=([01])\n",
+        text,
+    )
+    if matched is None:
+        raise AirlockRefusal("airlock_child_setup_failed")
+    status = _normalize_pytest_status(int(matched.group(1)))
+    if status != child_status:
+        raise AirlockRefusal("airlock_child_setup_failed")
+    call_phase_observed = matched.group(2) == "1"
+    return InnerControl(
+        status=status,
+        call_phase_observed=call_phase_observed,
+    )
+
+
+_DIAGNOSTIC_LIMIT = 1_048_576
+_DIAGNOSTIC_TRUNCATION_MARKER = b"\nMAEZ_AIRLOCK_DIAGNOSTIC_TRUNCATED\n"
+
+
+def _read_private_diagnostic(
+    path: Path, *, limit: int = _DIAGNOSTIC_LIMIT
+) -> bytes:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags)
+        try:
+            info = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.getuid()
+                or info.st_nlink != 1
+                or stat.S_IMODE(info.st_mode) != 0o600
+            ):
+                raise AirlockRefusal("airlock_child_setup_failed")
+            payload = bytearray()
+            while len(payload) <= limit:
+                block = os.read(
+                    descriptor,
+                    min(131_072, limit + 1 - len(payload)),
+                )
+                if not block:
+                    break
+                payload.extend(block)
+        finally:
+            os.close(descriptor)
+    except AirlockRefusal:
+        raise
+    except OSError:
+        raise AirlockRefusal("airlock_child_setup_failed") from None
+    truncated = info.st_size > limit or len(payload) > limit
+    bounded = bytes(payload[:limit])
+    return (
+        bounded + _DIAGNOSTIC_TRUNCATION_MARKER
+        if truncated
+        else bounded
+    )
+
+
+def _sha256_file(path: Path) -> str:
+    try:
+        hasher = hashlib.sha256()
+        with path.open("rb") as stream:
+            while block := stream.read(131072):
+                hasher.update(block)
+    except OSError:
+        raise AirlockRefusal("airlock_child_setup_failed") from None
+    return hasher.hexdigest()
+
+
+def _hash_pth_projection(entries: Sequence[PthEntry]) -> str:
+    projection = tuple(
+        {
+            "name": entry.name,
+            "is_regular": entry.is_regular,
+            "mode": entry.mode,
+            "size": entry.size,
+            "sha256": entry.sha256,
+        }
+        for entry in entries
+    )
+    payload = json.dumps(
+        projection, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _build_certificate(
+    *,
+    inventory: GitInventory,
+    interpreter: Path,
+    shared_pth: Sequence[PthEntry],
+    effective_pytest_args: Sequence[str],
+) -> dict[str, str]:
+    return {
+        "schema": "worktree_test_airlock.certificate.v1",
+        "isolation": "inherited_interpreter_contract",
+        "git_head": inventory.head,
+        "interpreter_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+        "interpreter_sha256": _sha256_file(interpreter),
+        "shared_pth_sha256": _hash_pth_projection(shared_pth),
+        "pytest_args_sha256": _hash_effective_pytest_arguments(
+            effective_pytest_args
+        ),
+    }
+
+
+def _write_certificate(
+    payload: Mapping[str, str], *, stream: Any = sys.stdout
+) -> None:
+    rendered = json.dumps(
+        dict(payload), ensure_ascii=False, separators=(",", ":"), sort_keys=True
+    )
+    print(f"MAEZ_AIRLOCK_CERTIFIED {rendered}", file=stream)
 
 
 def _read_marker_state(violation_dir: Path) -> tuple[str, ...]:
@@ -1424,6 +2690,7 @@ def _read_marker_state(violation_dir: Path) -> tuple[str, ...]:
         (
             "airlock_path_provenance_violation",
             "airlock_import_provenance_violation",
+            "airlock_collection_escape",
         )
     )
     markers: list[tuple[int, str]] = []
@@ -1503,13 +2770,161 @@ def _select_refusal(
     return next((token for token in _REFUSAL_VOCABULARY if token in present), None)
 
 
+_PROC_SCAN_MAX_PROCESSES = 16_384
+_PROC_SCAN_MAX_BYTES = 131_072
+_PYTHON_EXECUTABLE_NAME = re.compile(rb"python(?:\d+(?:\.\d+)*)?")
+
+
+def _read_bounded_proc_bytes(path: Path, limit: int) -> bytes:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags)
+    try:
+        payload = bytearray()
+        while len(payload) <= limit:
+            block = os.read(descriptor, min(65_536, limit + 1 - len(payload)))
+            if not block:
+                break
+            payload.extend(block)
+    finally:
+        os.close(descriptor)
+    if len(payload) > limit:
+        raise OSError("process metadata exceeds the bounded scan")
+    return bytes(payload)
+
+
+def _field_references_prepared_root(field: bytes, root: bytes) -> bool:
+    offset = 0
+    while (index := field.find(root, offset)) >= 0:
+        boundary = index + len(root)
+        if boundary == len(field) or field[boundary : boundary + 1] == b"/":
+            return True
+        offset = index + 1
+    return False
+
+
+def _pythonish_executable(raw: bytes) -> bool:
+    name = raw.rstrip(b"/").rsplit(b"/", 1)[-1]
+    return _PYTHON_EXECUTABLE_NAME.fullmatch(name) is not None
+
+
+def _same_uid_process_still_exists(process: Path) -> bool:
+    try:
+        info = process.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid()
+
+
+def _scan_prepared_root_processes(
+    prepared_root: Path,
+    *,
+    proc_root: Path = Path("/proc"),
+    byte_reader: Callable[[Path, int], bytes] = _read_bounded_proc_bytes,
+) -> bool:
+    """Return true only when one bounded same-UID scan finds no descendant.
+
+    The scan is deliberately content-light: process bytes are compared in
+    memory and never returned or persisted.  An unreadable environment matters
+    only after argv0 or ``/proc/<pid>/exe`` establishes a Python candidate.
+    """
+
+    root = os.fsencode(os.fspath(prepared_root.absolute()))
+    entries: list[Path] = []
+    try:
+        for entry in proc_root.iterdir():
+            if not entry.name.isdigit():
+                continue
+            entries.append(entry)
+            if len(entries) > _PROC_SCAN_MAX_PROCESSES:
+                return False
+    except OSError:
+        return False
+    entries.sort(key=lambda entry: int(entry.name))
+
+    for process in entries:
+        try:
+            info = process.stat(follow_symlinks=False)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return False
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+            continue
+
+        executable_python = False
+        try:
+            executable_python = _pythonish_executable(
+                os.fsencode(os.readlink(process / "exe"))
+            )
+        except FileNotFoundError:
+            if not _same_uid_process_still_exists(process):
+                continue
+        except OSError:
+            # argv0 can still prove relevance below.  A non-Python candidate
+            # with an unreadable executable does not poison the host-wide scan.
+            pass
+
+        try:
+            command = byte_reader(process / "cmdline", _PROC_SCAN_MAX_BYTES)
+        except FileNotFoundError:
+            if executable_python and _same_uid_process_still_exists(process):
+                return False
+            continue
+        except OSError:
+            if executable_python:
+                return False
+            continue
+        arguments = tuple(value for value in command.split(b"\0") if value)
+        if any(_field_references_prepared_root(value, root) for value in arguments):
+            return False
+
+        argv_python = bool(arguments) and _pythonish_executable(arguments[0])
+        if not (argv_python or executable_python):
+            continue
+        try:
+            environment = byte_reader(
+                process / "environ", _PROC_SCAN_MAX_BYTES
+            )
+        except FileNotFoundError:
+            if _same_uid_process_still_exists(process):
+                return False
+            continue
+        except OSError:
+            return False
+        variables = tuple(value for value in environment.split(b"\0") if value)
+        if any(_field_references_prepared_root(value, root) for value in variables):
+            return False
+    return True
+
+
+def _prepared_root_processes_absent(
+    prepared_root: Path,
+    *,
+    scanner: Callable[[Path], bool] = _scan_prepared_root_processes,
+    sleeper: Callable[[float], Any] = time.sleep,
+) -> bool:
+    """Require two clean same-UID scans separated by the frozen 50 ms gap."""
+
+    first_clean = scanner(prepared_root)
+    sleeper(0.05)
+    second_clean = scanner(prepared_root)
+    return first_clean and second_clean
+
+
 def _execute_outer(
     layout: AirlockLayout,
     inventory: GitInventory,
     *,
+    caller_args: Sequence[str] = (),
     root_parent: Path = Path("/tmp"),
-) -> str:
-    """Run Task 2's non-certifying child and close every finalizer in order."""
+) -> OuterResult:
+    """Run pytest and return terminal facts only after every finalizer closes."""
 
     tokens: list[str] = []
     prepared: PreparedAirlock | None = None
@@ -1518,6 +2933,10 @@ def _execute_outer(
     shared_environment_changed = False
     signals = _OuterSignalScope()
     signals_installed = False
+    pytest_status = AIRLOCK_STATUS
+    call_phase_observed = False
+    diagnostic = b""
+    candidate_certificate: Mapping[str, str] | None = None
     try:
         try:
             signals.install()
@@ -1533,6 +2952,16 @@ def _execute_outer(
                     layout,
                     inventory,
                     root_parent=root_parent,
+                    caller_args=caller_args,
+                )
+                effective_arguments = _effective_pytest_arguments(
+                    prepared, layout.checkout, caller_args
+                )
+                candidate_certificate = _build_certificate(
+                    inventory=inventory,
+                    interpreter=prepared.python,
+                    shared_pth=before or (),
+                    effective_pytest_args=effective_arguments,
                 )
                 if signals.interrupted:
                     tokens.append("airlock_child_setup_failed")
@@ -1543,31 +2972,36 @@ def _execute_outer(
                             "-I",
                             "-B",
                             os.fspath(prepared.runner),
+                            "--",
+                            *effective_arguments,
                         ],
                         cwd=layout.checkout,
                         environment=prepared.environment,
                         signal_scope=signals,
                     )
                     cleanup_complete = result.group_empty
-                    if result.status == AIRLOCK_STATUS:
-                        tokens.append("airlock_dependency_unavailable")
-                    else:
+                    if cleanup_complete and not _prepared_root_processes_absent(
+                        prepared.root
+                    ):
+                        cleanup_complete = False
+                    try:
+                        control = _parse_inner_control(result.control, result.status)
+                    except AirlockRefusal:
                         tokens.append("airlock_child_setup_failed")
+                    else:
+                        pytest_status = control.status
+                        call_phase_observed = control.call_phase_observed
+                    if result.stderr:
+                        tokens.append("airlock_child_setup_failed")
+                    try:
+                        diagnostic = _read_private_diagnostic(prepared.diagnostic)
+                    except AirlockRefusal as refusal:
+                        tokens.append(refusal.token)
                 try:
                     marker_tokens = _read_marker_state(prepared.violation_dir)
                 except AirlockRefusal:
-                    tokens = [
-                        token
-                        for token in tokens
-                        if token != "airlock_dependency_unavailable"
-                    ]
                     raise
                 if marker_tokens:
-                    tokens = [
-                        token
-                        for token in tokens
-                        if token != "airlock_dependency_unavailable"
-                    ]
                     tokens.extend(marker_tokens)
         except AirlockRefusal as refusal:
             tokens.append(refusal.token)
@@ -1576,8 +3010,14 @@ def _execute_outer(
     finally:
         if prepared is not None:
             try:
+                if type(prepared) is PreparedAirlock and not _prepared_root_is_owned(
+                    prepared
+                ):
+                    raise AirlockRefusal("airlock_cleanup_incomplete")
                 _remove_disposable(prepared.root)
             except AirlockRefusal:
+                cleanup_complete = False
+            if prepared.root.exists():
                 cleanup_complete = False
         try:
             after = _snapshot_pth(layout.shared_purelib)
@@ -1589,11 +3029,35 @@ def _execute_outer(
             cleanup_complete = False
         if signals.interrupted:
             tokens.append("airlock_child_setup_failed")
-    return _select_refusal(
+    refusal = _select_refusal(
         tokens,
         shared_environment_changed=shared_environment_changed,
         cleanup_complete=cleanup_complete,
-    ) or "airlock_child_setup_failed"
+    )
+    if refusal is not None:
+        return OuterResult(
+            status=AIRLOCK_STATUS,
+            refusal=refusal,
+            certificate=None,
+            diagnostic=diagnostic,
+        )
+    certificate = (
+        candidate_certificate
+        if (
+            pytest_status == 0
+            and call_phase_observed
+            and not any(
+                token in _PYTEST_DIAGNOSTIC_TOKENS for token in caller_args
+            )
+        )
+        else None
+    )
+    return OuterResult(
+        status=pytest_status,
+        refusal=None,
+        certificate=certificate,
+        diagnostic=diagnostic,
+    )
 
 
 def _run_git(
@@ -2134,6 +3598,8 @@ def _scan_forbidden_child_shapes(
 
 
 def _validate_outer_invocation() -> AirlockLayout:
+    if sys.argv[0] != os.fspath(Path(__file__).resolve()):
+        raise AirlockRefusal("airlock_invocation_invalid")
     flags = sys.flags
     if (
         Path(sys.executable) != SHARED_PYTHON
@@ -2180,14 +3646,44 @@ def _run_preflight(layout: AirlockLayout) -> GitInventory:
     return inventory
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    """Run the non-certifying Task-2 airlock boundary."""
+def _replay_diagnostic(payload: bytes) -> None:
+    if not payload:
+        return
+    buffer = getattr(sys.stderr, "buffer", None)
+    if buffer is not None:
+        buffer.write(payload)
+        buffer.flush()
+        return
+    sys.stderr.write(payload.decode("utf-8", errors="replace"))
+    sys.stderr.flush()
 
-    del argv
+
+def _publish_terminal(result: OuterResult) -> int:
+    _replay_diagnostic(result.diagnostic)
+    if result.refusal is not None:
+        print(result.refusal, file=sys.stderr)
+    elif result.certificate is not None:
+        _write_certificate(result.certificate)
+    return result.status
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run the sole certifying outer airlock boundary."""
+
+    arguments = tuple(sys.argv[1:] if argv is None else argv)
     try:
         layout = _validate_outer_invocation()
+        caller_args = _parse_pytest_invocation(
+            arguments, layout.checkout, environment=os.environ
+        )
         inventory = _run_preflight(layout)
-        raise AirlockRefusal(_execute_outer(layout, inventory))
+        return _publish_terminal(
+            _execute_outer(
+                layout,
+                inventory,
+                caller_args=caller_args,
+            )
+        )
     except AirlockRefusal as refusal:
         print(refusal.token, file=sys.stderr)
         return AIRLOCK_STATUS
