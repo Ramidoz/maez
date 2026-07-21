@@ -1,15 +1,18 @@
 # CUDA A/B bench driver — design
 
-Status: spec approved for planning; no implementation yet. Companion to the
-b9596 CUDA migration package (`scripts/cuda_migration.py`, runbook
-`docs/runbooks/llama-b9596-cuda-migration.md`). The driver executes the
-offline A/B measurement those documents describe; the scorer in
+Status: scorer Part A, driver B2--B7, and the worktree import airlock are
+implemented on `feature/cuda-bench-driver`. The owner-ratified lean closure in
+`docs/superpowers/specs/2026-07-20-cuda-bench-lean-closure-design.md`
+supersedes this document's unimplemented multi-stage assembler/CLI closure.
+The driver executes the offline A/B measurement; the scorer in
 `cuda_migration.py` remains the only decision authority.
 
-Sequence of record (owner, 2026-07-12): build and gate the inert driver while
-Maez stays online → rehearse collection/rollback handling without model or
-service contact → independently verify corpus and runtime identities → owner
-names the offline window → run the frozen A/B.
+Sequence of record (owner, amended 2026-07-20): finish and gate the lean
+five-command closure through the worktree airlock → merge it inertly → owner
+names the A/B measurement window → measure, then owner restores production to
+the unchanged Vulkan posture → owner separately authorizes the manual rollback
+drill → assemble a stage-1 verdict. Any permanent cutover is a third, future
+owner act.
 
 ## Authority boundary
 
@@ -29,28 +32,26 @@ The driver refuses to run a phase unless ALL of:
 5. corpus, runtime, and rollback identities match the frozen hashes;
 6. an explicit owner-window authorization artifact is present and current.
 
-The driver may terminate only child process groups it created itself
-(spawned with `start_new_session`). It never signals an ambient PID and never
-restarts production after success or failure.
+The driver may signal only an admitted child leader through the retained pidfd
+for that process instance. Numeric PID and PGID signalling are forbidden;
+process-group enumeration is observational evidence only. It never signals an
+ambient process and never restarts production after success or failure.
 
 ## Components
 
-1. **`scripts/cuda_bench_driver.py`** — orchestration state machine + CLI:
-   `static-preflight`, `preflight`, `rehearse`, `vulkan-baseline`,
-   `cuda-candidate`. Owns measurement; owns nothing else.
-2. **`scripts/cuda_bench_assemble.py`** — `assemble` command. Structurally
-   measurement-free: imports no providers and never calls the legacy
-   unbound evaluator (test-enforced). Fuses phase packets plus external
-   evidence into a `BenchEvidenceBundle` for the new scorer entrypoint, or
-   emits a typed `assembly_refused` / `unscorable` receipt. It never mints
-   `keep_vulkan` or any operational verdict — that conversion belongs to the
-   scorer alone. Its writing surface is exactly two things: its own
-   receipts, and the versioned assembly-selection chain via the
-   `select-append` subcommand (draft read only from the anchored
-   `drafts/selection-draft.json`; each selection file written once,
-   `O_EXCL`, hash-chained to its predecessor). (Amended 2026-07-14 with
-   the implementation-plan gate.)
-3. **`scripts/cuda_bench_stub.py`** — the pinned rehearsal stub: a minimal
+1. **`scripts/cuda_bench_driver.py`** — the implemented orchestration state
+   machine and measurement engine. It owns measurement; it owns no live
+   service action.
+2. **`scripts/cuda_bench_cli.py`** — the lean five-command surface:
+   `static-preflight`, `rehearse`, `vulkan-baseline`, `cuda-candidate`, and
+   `assemble-stage1`. No cutover or service-mutation command exists.
+3. **`scripts/cuda_bench_assemble.py`** — the stage-1-only adapter.
+   Structurally measurement-free: imports no providers and never calls the
+   private inner evaluator. It reads owner-selected relative paths under the
+   canonical private root, constructs the existing `BenchEvidenceBundle`,
+   calls `evaluate_promotion_bundle`, and writes only its content-light
+   receipt. There is no selection chain or later-stage input.
+4. **`scripts/cuda_bench_stub.py`** — the pinned rehearsal stub: a minimal
    loopback HTTP server imitating llama-server's `/health`, `/v1/models`,
    and `/completion` surface with closed personas {healthy,
    readiness_timeout, midturn_hang, crash, malformed_response,
@@ -65,7 +66,7 @@ restarts production after success or failure.
    execute only this pinned file (absolute path + content hash enforced), never an
    arbitrary binary or model path. It binds `127.0.0.1:0`; port 18080 is
    structurally forbidden in rehearsal.
-4. **Provider seams** — the ONLY swap point between tiers:
+5. **Provider seams** — the ONLY swap point between tiers:
    `ServiceStateProvider` (read-only systemctl), `PortProbe`, `GpuProvider`
    (nvidia-smi queries), `KernelLogProvider` (journalctl cursor reads),
    `ServerLauncher` (spawns the pinned server binary with an explicit
@@ -245,7 +246,10 @@ turns. Frozen statistics over the 21 measured turns per phase:
   first streamed SSE `data:` event whose JSON payload contains a non-empty
   generated-text field (`content`). Metadata, keep-alive, or empty-content
   events never count;
-- e2e = request-write-complete → final chunk received;
+- e2e = request-write-complete → byte arrival of the native `/completion`
+  event carrying `stop:true`; clean EOF must follow, `[DONE]` is rejected, and
+  parse completion or EOF timing never substitutes for the terminal-event
+  arrival;
 - warmup turns are excluded from every statistic;
 - MTP counters are PER-REQUEST on the wire: b9596 resets them each request
   and reports them in that request's terminal response — there is no
@@ -438,20 +442,24 @@ narrowed, not closed.
 - Rehearsal tier: the `rehearse` command against the pinned stub on
   `127.0.0.1:0`, proving spawn/poll/timeout/kill mechanics and cleanup
   claims for real.
-- Structural tests: no mutating systemctl verb constructible; assembler
-  never references the legacy evaluator; rehearsal artifacts rejected by
-  assembler and scorer; frozen corpus unread in rehearsal; stub launcher
-  refuses any non-pinned executable.
+- Structural tests: no mutating systemctl verb constructible; the stage-1
+  assembler never references the private inner evaluator or any measurement
+  provider; rehearsal artifacts are rejected by assembler and scorer; the
+  frozen corpus is unread in rehearsal; the stub launcher refuses any
+  non-pinned executable; no cutover command or verdict-to-action path exists.
 
 ## Non-goals
 
-No promotion decision (scorer-only), no rollback drill execution, no
-cold-boot or provisional-live witnesses, no unit-file writes, no service
-mutation, no corpus authoring, no vision-flag changes.
+No production promotion or cutover, no rollback drill execution, no cold-boot
+or provisional-live producer, no unit-file writes, no service mutation, no
+corpus authoring, no vision-flag changes. The lean adapter may obtain the
+scorer's stage-1 `bench_passed`/`keep_vulkan` verdict; it performs no action
+from it.
 
 ## Appendix — frozen constants
 
 **Schema names.** `cuda_bench_driver.static_preflight.v1`,
+`cuda_migration_runtime.v1` (the live bundle-bound promotion receipt),
 `cuda_bench_driver.phase_packet.v2`, `cuda_bench_driver.refusal.v1`,
 `cuda_bench_driver.window_authorization.v1`,
 `cuda_bench_driver.continuation.v1`,
@@ -466,8 +474,6 @@ covers only observations while the binding also covers capture context),
 `cuda_bench_driver.runtime_identity.v1` (same wrapper; complete
 constructor fields, reconstructable — not the lossy `identity_packet`),
 `cuda_bench_assemble.receipt.v1`,
-`cuda_bench_assemble.selection.v1` (typed assembly-selection manifest:
-exact per-attempt input paths + file hashes),
 `cuda_bench_rehearsal.packet.v1` (deliberately incompatible),
 `cuda_migration.bench_evidence_bundle.v1`,
 `cuda_migration.cycle_backend_witness.v1`,
@@ -480,8 +486,12 @@ later-stage cold-boot witness), `cuda_migration.provisional_live_witness.v1`
 `cuda_migration.authorization_witness.v1` (persisted boot/live
 authorization witness), `cuda_migration.backend_map_witness.v1` (persisted
 cold-boot/provisional backend-map witness).
-(22 total; the owner-ratified 2026-07-15 B5 amendment replaces phase-packet
-v1 with v2, so the schema-family count is unchanged.)
+(22 active executable families. The owner-ratified 2026-07-20 lean closure
+adds the previously omitted live `cuda_migration_runtime.v1` receipt to the
+appendix and retires the never-implemented
+`cuda_bench_assemble.selection.v1`; no executable schema is removed and the
+count remains 22. The earlier B5 amendment still replaces phase-packet v1 with
+v2.)
 
 **Closed refusal/outcome vocabulary (40 entries; `tier_mismatch` added
 2026-07-13 — a mixed production/rehearsal provider set refuses before any

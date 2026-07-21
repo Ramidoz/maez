@@ -4,6 +4,11 @@ Status: reviewed procedure only; CUDA is not promoted. Rohit alone opens each
 offline or live window. A build, a fast bench, or a provisional boot does not
 change the production decision.
 
+The lean bench closure recognizes three separate owner acts: (1) authorize the
+A/B measurement phases, (2) separately authorize the manual rollback drill,
+which transiently changes the live pointer and restores it, and (3) separately
+authorize any future permanent cutover. No earlier act implies a later one.
+
 This procedure changes only the backend beneath the same b9596 model packet.
 It keeps tag `b9596`, commit
 `18ef86ecec723361362a332a79b4d913fd724d40`, model bytes, alias
@@ -119,6 +124,18 @@ The incumbent values must be exactly:
 - compact effective-argument-vector SHA-256:
   `8fa9b789572e4d1d63f5d9e008797b14df5fc10b634b0a3858cd68fe008c583b`.
 
+The driver's `static-preflight` also requires exactly one GPU and binds its
+UUID into the receipt, both packets, and every later `nvidia-smi -i <UUID>`
+query. Zero or multiple GPUs is `gpu_scope_violation`. It computes each exact
+file-byte SHA-256 for `scripts/cuda_migration.py`,
+`scripts/cuda_bench_driver.py`, `scripts/cuda_bench_stub.py`,
+`scripts/cuda_bench_cli.py`, and `scripts/cuda_bench_assemble.py`, in that
+order. The package preimage is compact UTF-8 JSON
+`[[relative_path,lowercase_file_sha256],...]` with `ensure_ascii=False`,
+separators `(',', ':')`, and no trailing newline; the package identity is the
+SHA-256 of those bytes. This deliberate three-to-five-file identity must join
+both phase packets.
+
 The effective argument vector is hashed after removing only the executable.
 The base unit, MTP drop-in, Vulkan runtime, library manifest, model, and
 argument packet together define the exact rollback identity.
@@ -229,11 +246,13 @@ the package exists or static checks pass.
 
 ## OWNER AUTHORIZATION STOP
 
-Everything below contacts, stops, starts, or replaces a model-service pointer.
-Proceed only after Rohit's explicit authorization for the named phase and a
-timestamped authorization artifact in
-`/home/rohit/maez/local/cuda_migration_bench/`. Authorization for one phase
-does not authorize a later boot or live witness.
+The offline phase sections below may contact a bench model after Rohit has
+manually stopped production. The rollback drill and future cutover sections
+also mutate the live service pointer. Proceed only after Rohit's explicit
+authorization for the named act and the corresponding owner artifact in
+`/home/rohit/maez/local/cuda_migration_bench/`. A/B authorization permits only
+the Vulkan phase and its bound CUDA continuation. It does not authorize the
+rollback drill, a later boot/live witness, or cutover.
 
 Once the bench driver (spec:
 `docs/superpowers/specs/2026-07-12-cuda-bench-driver-design.md`) lands, the
@@ -246,8 +265,9 @@ Terminology: a refusal in these phases means the operator OPERATIONALLY
 remains on Vulkan — the production pointer was never mutated during a bench
 phase, so there is nothing to restore; simply stop. Only the scorer's
 `evaluate_promotion_bundle` mints the typed `keep_vulkan` decision as a
-`PromotionVerdict`; the driver and assembler record refusals and receipts,
-never verdicts.
+`PromotionVerdict`; the driver records measurements/refusals, while the inert
+stage-1 assembler may carry the scorer's verdict in its receipt. Neither
+performs an operational action from it.
 
 Use these ports exactly:
 
@@ -292,12 +312,20 @@ content-light receipt; store only hashes, counts, time bounds, and verdicts.
 
 ## Offline Vulkan baseline
 
-With a fresh containment-before artifact and identical GPU-process inventory
-hash, stop the primary and judge only within the authorized window. Start the
-exact b9596 Vulkan-MTP control on loopback bench port 18080:
+Only after Rohit names and opens the A/B measurement window, manually stop the
+primary and judge. The driver does not do this. Then invoke the Vulkan phase:
+it reruns the six gates fresh, proves the production services/ports are already
+inactive, records containment-before and the identical GPU-process inventory,
+and consumes the owner authorization only after cycle one's final no-spawn
+snapshot. A prior `static-preflight` receipt is evidence, not permission to
+skip these live checks. The command then starts the exact b9596 Vulkan-MTP
+control on loopback bench port 18080 using the reference argument/environment
+split below:
 
 ```bash
+# Owner ceremony, outside the driver:
 systemctl --user stop llama-server.service llama-judge.service
+# Reference invocation only; the driver constructs this argv + sanitized env:
 env -i HOME=/home/rohit PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin LD_LIBRARY_PATH=/home/rohit/llama.cpp-release/llama-b9596/llama-b9596 GGML_VK_VISIBLE_DEVICES=0 CUDA_VISIBLE_DEVICES= /home/rohit/llama.cpp-release/llama-b9596/llama-b9596/llama-server -m /home/rohit/maez/models/llamacpp/mtp/Qwen3.6-27B-UD-Q4_K_XL.gguf --alias qwen36-27b-mtp --host 127.0.0.1 --port 18080 --ctx-size 40960 --parallel 1 --n-gpu-layers 999 -fa on --cache-type-k q4_0 --cache-type-v q4_0 --spec-type draft-mtp --spec-draft-n-max 3 --kv-unified -fit off
 ```
 
@@ -308,7 +336,10 @@ end-to-end latency, MTP drafted/accepted/rejected counts, FB VRAM and BAR1
 before load/after load/after inference/after unload, restart/crash/hang/timeout
 counts, unload leak, kernel deltas, and the private output-artifact hash.
 Streaming chunks are not tokens. After each cycle, prove complete unload
-before the next load. Finish with a containment-after artifact.
+before the next load. TTFT ends at byte arrival of the first non-empty generated
+content event. End-to-end latency ends at byte arrival of the native
+`/completion` event carrying `stop:true`; clean EOF must follow and a `[DONE]`
+frame is a wrong-endpoint refusal. Finish with a containment-after artifact.
 
 ## Offline CUDA candidate
 
@@ -325,6 +356,11 @@ CUDA mapping with no Vulkan mapping. A mixed, absent, or ambiguous backend is
 typed `backend_unproven` refusal and the phase is unscored (path 1 —
 no pointer mutation to restore). Complete all three unloads
 and the containment-after artifact before scoring.
+
+The driver exits with production in the same already-offline state it required
+at entry; it never restarts a service. The owner closes the A/B measurement
+act by restoring the exact Vulkan service posture. That manual close is not a
+CUDA pointer change and does not authorize the rollback drill or cutover.
 
 ## Quality and MTP witness
 
@@ -353,9 +389,12 @@ or quality failure.
 
 ## Exact Vulkan rollback drill
 
-First preserve an offline recovery copy of the exact incumbent authority, then
-rehearse the real pointer transition. This occurs only inside the authorized
-offline window:
+This is not a driver command and is not implied by A/B authorization. It is a
+separate, manual, owner-authorized act because it transiently changes the live
+service pointer. `bench_passed` is unreachable without its complete typed
+evidence. First preserve and hash an offline recovery copy of the exact
+incumbent authority; only then rehearse the real pointer transition inside the
+separately authorized offline window:
 
 ```bash
 install -d -m 0700 /home/rohit/maez/local/cuda_migration_bench/recovery/
@@ -391,12 +430,17 @@ clean closed/unmatched kernel deltas, and phase containment before/after.
 Print and keep the rollback commands above with the recovery copies. If
 the GPU freezes before the session is usable, execute the first command from a
 recovery console before the user service can retry; the next user-service load
-then resolves to exact Vulkan-MTP. A failed rollback drill ends the migration
-with `keep_vulkan`.
+then resolves to exact Vulkan-MTP. A complete but failing rollback drill may
+reach the scorer and produce `keep_vulkan`. An incomplete drill is unscorable:
+it mints no verdict, makes no byte-identical claim, and recovery takes priority.
+`bench_passed` is possible only after exact Vulkan restoration has been
+re-witnessed.
 
 ## Decision state machine
 
 The state machine is closed, typed, chronological, and SHA-256 parented:
+the lean closure can reach only items 1--2. Items 3--4 document dormant scorer
+states and authorize no current command, boot, live witness, or cutover.
 
 1. The operational default is Vulkan. Missing, partial, or unscored
    evidence produces refusal/unscorable receipts — never a verdict. The
@@ -404,7 +448,8 @@ The state machine is closed, typed, chronological, and SHA-256 parented:
    `evaluate_promotion_bundle`; when it follows a live pointer mutation, it
    directs the recovery procedure to the exact Vulkan pointer.
 2. `bench_passed` requires a complete passing A/B plus passing rollback drill.
-   It changes no live state.
+   The verdict itself changes no live state and can exist only after the
+   drill's transient mutation has restored exact Vulkan.
 3. `provisional_cuda_boot` requires a new explicit boot-authorization artifact
    whose parent is the complete `bench_passed` artifact. It is one witnessed
    boot, not promotion.
@@ -426,27 +471,26 @@ they split in two — recovery is identical, receipt semantics are not:
 The deliberate rollback drill is an evidence-producing phase, never a
 failure handler.
 
-## Proposed cutover
+## Proposed cutover (future separate gate; outside the lean closure)
 
-This phase is forbidden at `bench_passed`. After explicit boot authorization,
-verify that its SHA-256 parent is the complete bench artifact, then install the
-reviewed merged template as the only later candidate pointer:
+Cutover is forbidden at `bench_passed` and has no command or executable
+procedure in the lean bench package or this current runbook. It requires a
+future design, its own owner-authored cutover authorization, its own named
+window, and its own gate. A/B authorization, rollback-drill authorization, and
+the dormant boot authorization are each explicitly insufficient. Until that
+future contract lands, installing the CUDA override, reloading systemd, or
+restarting the production brain onto CUDA is unauthorized.
 
-```bash
-install -m 0600 /home/rohit/maez/config/systemd/llama-server-b9596-cuda.override.conf /home/rohit/.config/systemd/user/llama-server.service.d/99-b9596-cuda.conf
-systemctl --user daemon-reload
-systemctl --user restart llama-server.service
-```
+The previously drafted install/restart commands are intentionally removed from
+the executable runbook. A future cutover gate must re-derive and review its
+commands, prove the argument/backend identity, and preserve exact rollback; it
+must not inherit authority merely from this historical design.
 
-The installed pointer must preserve the exact argument-vector hash apart from
-the executable/backend selectors, alias `qwen36-27b-mtp`, and
-`PRODUCTION_PORT=8080`. Failure to prove the candidate runtime map, health,
-alias, MTP initialization/nonzero acceptance, or containment invokes the exact
-rollback immediately.
+## Cold-boot witness (dormant future contract; non-executable)
 
-## Cold-boot witness
-
-Only `provisional_cuda_boot` permits one real reboot. The timestamped witness
+This section records scorer semantics only; it authorizes no reboot or service
+mutation until the future cutover gate exists. Under that future contract,
+only `provisional_cuda_boot` would permit one real reboot. The timestamped witness
 must be after and parented to the boot authorization. It records the complete
 production topology: primary and staggered judge load intervals must not
 overlap; primary backend maps must prove CUDA only; full-topology BAR1 must
@@ -457,9 +501,10 @@ field yields a refusal/unscorable receipt with no verdict; a complete
 witness with a FAILED bound reaches the scorer, whose verdict is
 `keep_vulkan`.
 
-## Provisional-live witness
+## Provisional-live witness (dormant future contract; non-executable)
 
-The cold boot does not authorize conversation testing. Rohit must issue a
+This section likewise records dormant scorer semantics, not a current
+procedure. A future cold boot would not authorize conversation testing. Rohit must issue a
 second explicit authorization, timestamped after and parented to the passing
 cold-boot artifact. Only then may the seven ordered natural-text turns run
 through the real production seam. The witness is content-light, hash-bound to

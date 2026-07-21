@@ -1,6 +1,17 @@
 # CUDA A/B Bench Driver Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Historical implementation record:** this plan was executed through B7.
+> Its unchecked boxes do not authorize new work. Use the gated lean design and
+> its forthcoming replacement plan for every remaining task.
+
+**Current status (owner ruling, 2026-07-20):** Tasks A1--A6 and B1--B7 are
+implemented and gated on `feature/cuda-bench-driver`; the worktree import
+airlock is also complete. The unimplemented B8--B10 closure, the full-repo
+`bench_baseline.py` gate, and INV-4's P2--P5 implementation obligations are
+superseded by
+`docs/superpowers/specs/2026-07-20-cuda-bench-lean-closure-design.md`.
+Do not execute the historical B8--B10 instructions below. A new TDD plan will
+be written from the lean design only after its written-spec gate passes.
 
 ## Execution lane and workflow (owner ruling, 2026-07-13)
 
@@ -8,42 +19,22 @@
 RED/GREEN → Codex spec review → Codex quality review → feature-branch
 commit → Claude clean-checkout gate. Main stays untouched until final merge.
 
-- ALL work happens on branch `feature/cuda-bench-driver` inside an isolated
-  git worktree — never the dirty main checkout. The branch does not exist
-  yet, so creation uses `-b`:
-  `git worktree add -b feature/cuda-bench-driver /home/rohit/maez-wt-bench main`
-  (branch created from main's current commit at Task 0 time).
-- EVERY test command in this plan uses the pinned interpreter:
-  `/home/rohit/maez/.venv/bin/python -B -m pytest` — never bare `python3`
-  (PATH-dependent resolution is a borrowed-green hazard). Lint uses the
-  venv's `/home/rohit/maez/.venv/bin/ruff` (0.15.12, verified present).
-- Per-task commit gate (runs in the feature worktree BEFORE each commit),
-  honoring AGENTS.md's "suite green + ruff clean before commit" and
-  "don't drop the count" floor: (1) affected suite green
-  (`tests/test_cuda_migration.py` always, plus every test file the task
-  touched); (2) `/home/rohit/maez/.venv/bin/ruff check <changed .py files>`
-  clean; (3) full-repo NO-NEW-RED reconciliation + collection-count floor
-  via the same `scripts/dev/bench_baseline.py reconcile` used by Task 0b and
-  B10 (below) — pre-existing baseline reds tolerated, new reds or a
-  shrunken collection count fail the commit. BOOTSTRAP EXCEPTION (explicit,
-  once): the FIRST commit — Task 0b's helper itself — cannot reconcile
-  against an authority that does not exist yet; its gate is Task 0b's
-  pre-code witness equality check (the helper commit may not bless its own
-  regressions) plus its own suite + ruff. Every later commit reconciles
-  normally.
-- Commits land on the feature branch only. The Claude gate per task:
-  fresh detached worktree of the branch head, run of ALL TEST FILES THAT
-  EXIST AT THAT BRANCH HEAD among the five bench/scorer/baseline files
-  (early Part A tasks have only `tests/test_cuda_migration.py` +
-  `tests/test_bench_baseline.py`; the set grows as tasks land — a gate
-  must never point at files that don't exist yet), PLUS
-  `scripts/dev/bench_baseline.py reconcile` in that same detached worktree
-  (the clean-checkout no-new-red witness — reconciliation is not left to
-  the dirty precommit worktree alone), pinned interpreter, exit status
-  captured UNMASKED (see B10 for the exact shape). A failed gate reopens
-  the task; no commit ever lands after its gate ran.
+- All remaining work stays on the existing `feature/cuda-bench-driver`
+  branch in `/home/rohit/maez-wt-bench`; main remains untouched until the
+  scoped merge gate.
+- Tests that can certify run through the completed worktree airlock, whose
+  disposable interpreter prevents the shared editable-install `.pth` from
+  lending dirty-main imports to the checkout. Direct shared-venv runs are
+  useful non-certifying evidence only.
+- The full-repo baseline helper and report plugin are retired. They are not a
+  per-task or final gate and are deleted by the lean closure. The gate is the
+  focused bench/scorer suite, ruff, residue/dormancy witnesses, and a dedicated
+  tracked-entry-compatible airlock selection.
+- Codex continues to build RED-first; independent Codex reviews precede each
+  branch commit; Claude gates the committed head through the airlock. A failed
+  gate reopens the task. No post-gate commit is allowed.
 
-### Task 0: worktree, Explore agent, repo baseline (before any code)
+### Historical Task 0 (complete): worktree and Explore pass
 
 - [ ] Create the branch + worktree FIRST (nothing can run "in the worktree"
   before it exists):
@@ -63,7 +54,7 @@ commit → Claude clean-checkout gate. Main stays untouched until final merge.
   trusts it, and tests written after a complete implementation can never
   witness the missing-implementation RED).
 
-### Task 0b: TDD the baseline tool, then record the baseline
+### Historical Task 0b (complete, apparatus now retired): baseline bootstrap
 
 **Files:**
 - Create: `scripts/dev/bench_baseline.py`, `scripts/dev/bench_report_plugin.py`, `tests/test_bench_baseline.py`
@@ -604,21 +595,34 @@ if __name__ == "__main__":
   bootstrap-exception commit; everything after reconciles against the
   recorded authority.
 
-**Goal:** Build the inert, owner-gated bench driver + scorer extension that executes the offline Vulkan-vs-CUDA A/B per spec `docs/superpowers/specs/2026-07-12-cuda-bench-driver-design.md` (gate-approved through iterative review; the spec file is the authority, not a round count).
+**Goal:** The historical work built the inert, owner-gated scorer and
+measurement engine through B7 under
+`docs/superpowers/specs/2026-07-12-cuda-bench-driver-design.md`. Remaining
+closure work is governed only by
+`docs/superpowers/specs/2026-07-20-cuda-bench-lean-closure-design.md` and its
+forthcoming replacement plan.
 
-**Architecture:** Part A extends the scorer (`scripts/cuda_migration.py`) with the bundle evidence contract and closes the legacy bypass. Part B builds three new modules — pinned rehearsal stub, orchestration driver with provider seams, measurement-free assembler. The driver never mutates services; everything below runs and tests while Maez stays online.
+**Architecture:** Part A extended the scorer (`scripts/cuda_migration.py`) with
+the bundle evidence contract and closed the legacy bypass. B1--B7 built the
+pinned rehearsal stub and orchestration driver. The lean replacement adds a
+separate CLI and stage-1-only measurement-free assembler. No bench command
+mutates services.
 
 **Tech Stack:** Python 3.12+ stdlib only (dataclasses, http.server, urllib, os.pidfd_open, unittest). No new dependencies. Tests via `/home/rohit/maez/.venv/bin/python -B -m pytest` (repo standard).
 
 ## Global Constraints
 
 - ZERO mutating systemctl anywhere: only `show`/`is-active` subcommands constructible (whitelist builder + structural test).
-- The driver terminates ONLY child process groups it created (`start_new_session=True`); leader signals go through a pidfd retained from spawn; PGID enumeration is observational only.
+- The driver signals ONLY an admitted child leader through its retained pidfd;
+  numeric PID/PGID signalling is forbidden and PGID enumeration is
+  observational only.
 - Rehearsal: stub binds `127.0.0.1:0` (18080 structurally forbidden); frozen corpus NEVER read; artifacts use incompatible schema `cuda_bench_rehearsal.packet.v1` under `rehearsal/`; cannot mint production receipts.
 - Private files: `O_EXCL` creation, `0700` dirs / `0600` files; reads via trusted-anchor descriptor walk (anchor = bench root, `openat` + `O_NOFOLLOW` per component, regular file, owner UID, `st_nlink == 1`).
 - Frozen constants (Appendix of spec, copy verbatim): `READINESS_TIMEOUT_S=300`, `REQUEST_TIMEOUT_MS=30_000`, `SIGTERM_GRACE_S=10`, `RESPONSE_BYTE_CAP=4*1024*1024`, `TURN_ARTIFACT_BYTE_CAP=8*1024*1024`, `WINDOW_TTL_S=14_400`, `CONTINUATION_TTL_S=3_600`, `KILL_WAIT_S=15`, `LISTENER_WAIT_S=10`, `UNLOAD_WAIT_S=60`.
 - Closed refusal/outcome vocabulary: exactly the 40 entries in the spec appendix (incl. tier_mismatch).
-- Schema names exactly as the spec appendix lists (22 names).
+- Schema names exactly as the amended spec appendix lists (22 active
+  executable names; the live runtime receipt is included and the
+  never-implemented selection schema is retired).
 - MTP wire: only `draft_n`/`draft_n_accepted`, present only when `draft_n > 0`; `rejected` derived; per-request aggregation (discard warmup, validate 7 pairs, sum→cycle, sum 3→phase).
 - Sample semantics: `sample_n=7`, `measured_sample_count=21`, quality over all 21.
 - Existing suite `tests/test_cuda_migration.py` must stay green after every task (68 tests / 242 subtests at start; Part A migrates specified tests deliberately).
@@ -1698,7 +1702,7 @@ def test_no_mutating_verb_constructible(self) -> None:
   - `aggregate_mtp(cycle_turn_mtp: list[list[tuple[int,int,int]]]) -> tuple[int,int,int]` — sum 7 per cycle, sum 3 cycles.
 - Consumes: B2 constants/refusals, B3 `Clock`.
 
-- [ ] **Step 1: Failing tests** — `parse_mtp({})` → mtp_unproven; `parse_mtp({"draft_n": 12, "draft_n_accepted": 9})` → `(12, 9, 3)`; `parse_mtp({"draft_n": 5, "draft_n_accepted": 9})` → malformed_response; `phase_statistics` with 21 synthetic turns checks nearest-rank p95 (construct e2e = 1..21 → p95 = 20); stream test against the B1 stub healthy persona: TTFT strictly greater than 0 and measured at the CONTENT event (stub's first event is metadata — assert `ttft_ms < e2e_ms` and that content matches); `midturn_hang` persona → http_timeout (run with a shrunk timeout injected via parameter default override for test speed: `stream_completion(..., request_timeout_ms=2_000)` — include this optional param, default `REQUEST_TIMEOUT_MS`).
+- [ ] **Step 1: Failing tests** — `parse_mtp({})` → mtp_unproven; `parse_mtp({"draft_n": 12, "draft_n_accepted": 9})` → `(12, 9, 3)`; `parse_mtp({"draft_n": 5, "draft_n_accepted": 9})` → malformed_response; `phase_statistics` with 21 synthetic turns checks nearest-rank p95 (construct e2e = 1..21 → p95 = 20); stream test against the B1 stub healthy persona: TTFT is measured at the first generated-content byte arrival and e2e at the native `/completion` event carrying `stop:true`; same-chunk `ttft_ms == e2e_ms` is valid, clean EOF is required, and `[DONE]` is rejected; `midturn_hang` persona → http_timeout (run with a shrunk timeout injected via parameter default override for test speed: `stream_completion(..., request_timeout_ms=2_000)` — include this optional param, default `REQUEST_TIMEOUT_MS`).
 - [ ] **Step 2: Run to verify failure.**
 - [ ] **Step 3: Implement** per Interfaces.
 - [ ] **Step 4: Run** — pass.
@@ -1723,7 +1727,15 @@ def test_no_mutating_verb_constructible(self) -> None:
 - [ ] **Step 4: Run** — pass. Also re-run the FULL driver test file.
 - [ ] **Step 5: Commit** (`feat(bench): phase state machine with typed packets and unconditional finalizer`, Predicted effect: a phase either yields one completed packet, one failed packet with honest partials, or a pre-spawn refusal artifact — never a mixed or silent outcome).
 
-### Task B8: assembler (`scripts/cuda_bench_assemble.py`)
+## Superseded closure record (non-normative)
+
+The owner ruling of 2026-07-20 cuts the historical Tasks B8--B10 below. They
+are retained only to explain the design debt that was consciously removed;
+their checkboxes, interfaces, selection chain, stage-2--5 cases, shared-venv
+commands, and full-repo floor are not implementation requirements. The new
+lean design is the sole authority for the replacement plan.
+
+### Historical Task B8 (superseded): multi-stage assembler
 
 (Ordered BEFORE the CLI so the driver-package hash computed in B9's
 `static-preflight` covers all three `cuda_bench_*.py` files, all of which
@@ -1743,7 +1755,7 @@ exist by then.)
 - [ ] **Step 4: Run** — pass.
 - [ ] **Step 5: Commit** (`feat(bench): measurement-free assembler feeding the bundle-only scorer`, Predicted effect: the only path from packets to a verdict runs through BenchEvidenceBundle; incomplete evidence yields typed non-verdict receipts).
 
-### Task B9: CLI — static-preflight, preflight, rehearse, vulkan-baseline, cuda-candidate
+### Historical Task B9 (superseded): old CLI
 
 **Files:**
 - Modify: `scripts/cuda_bench_driver.py` (argparse `main()`)
@@ -1763,7 +1775,7 @@ exist by then.)
 - [ ] **Step 4: Run** — pass. All five bench/scorer/baseline test files: `/home/rohit/maez/.venv/bin/python -B -m pytest tests/test_cuda_bench_driver.py tests/test_cuda_bench_stub.py tests/test_cuda_bench_assemble.py tests/test_cuda_migration.py tests/test_bench_baseline.py -q`.
 - [ ] **Step 5: Commit** (`feat(bench): driver CLI — two-gate preflight and rehearsal`, Predicted effect: static-preflight runs green today with Maez online; rehearse exercises the full state machine against the stub; phase commands refuse without owner artifacts — nothing can touch production).
 
-### Task B10: final gate — full suite, clean branch worktree, structural sweep
+### Historical Task B10 (superseded): full-repo floor gate
 
 **Files:**
 - Test: all five test files.
@@ -1890,33 +1902,25 @@ body's older `dict | None` protocol wording is superseded. Annotation-level
 RED reads `__annotations__` on all eight call surfaces and asserts
 string-identical annotations.
 
-**INV-3 — Later-stage document families get their own schemas (A2/B8).**
+**INV-3 — Later-stage document families get their own schemas (A2).**
 Two additional lossless wrapper schemas + registry decoders:
 `cuda_migration.authorization_witness.v1` (persisted boot/live
 `AuthorizationWitness`) and `cuda_migration.backend_map_witness.v1`
 (persisted cold-boot/provisional `RuntimeBackendWitness`). A schema-keyed
-decoder can now distinguish every persisted family; the frozen canon count
-is **22** after the owner-ratified B3 turn-artifact ruling (spec appendix
-updated atomically with this plan).
+decoder can now distinguish every persisted family. Those dormant executable
+types remain. The active canon count is **22** after the 2026-07-20 ruling
+added the previously omitted live runtime-receipt family and retired the
+never-implemented assembly-selection schema.
 REDs: round-trip both; unknown-schema refusal unchanged.
 
-**INV-4 — Closed later-stage prefix matrix (B8).**
-`later_stage` member sets are valid ONLY as one of these exact prefixes:
-
-- **P1** (stage 1): `later_stage` null.
-- **P2** (+boot authorized): `{boot_authorization, production_identity}`.
-- **P3** (+cold boot): P2 ∪ `{cold_boot_maps, cold_boot_witness,
-  provisional_cuda_boot_containment, cold_boot_containment}`.
-- **P4** (+live authorization): P3 ∪ `{live_authorization}`.
-- **P5** (+provisional live): P4 ∪ `{provisional_live_maps,
-  provisional_live_witness, provisional_live_containment}`.
-
-ANY other combination — partial, superset, or non-prefix — yields the
-typed `unscorable` receipt BEFORE scorer entry (a boot authorization
-without its production identity must never reach the gate and mint a
-verdict). REDs: one missing-member case per stage P2–P5; plus SUCCESSFUL
-stage-3 and stage-4 assembly tests alongside the existing stage-2 and
-stage-5 ones.
+**INV-4 — Stage-prefix validation retained; producer obligation superseded.**
+The existing `BenchEvidenceBundle.__post_init__` still validates that a
+stage-1 bundle is the genuine P1 prefix: boot/live authorizations are
+`not_attempted`, later maps/witnesses/containment are absent, and the runtime
+identity has the required stage-1 shape. That scorer logic and its malformed-P1
+refusals remain gated. The lean closure does not implement or test an assembler
+producer for P2--P5; the old later-stage matrix and successful stage-2--5
+assembly obligations are superseded. Dormant scorer types are not deleted.
 
 **INV-5 — Literal turn artifacts name their own type (B3/B6/B7).**
 Every individual private literal turn document uses
@@ -1929,6 +1933,8 @@ could honestly be recomputed. REDs pin the production kind-to-schema map,
 the incompatible rehearsal wrapper, the null binding, and the structural
 absence of `turn_manifest.v1` from individual-turn encoding.
 
-**FREEZE.** No further prose amendments to this plan except by owner
-ruling. Implementation proceeds per the execution lane (Task 0 →
-Task 0b → A1…A6 → B1…B10), with these invariants as required REDs.
+**FREEZE, amended by owner ruling 2026-07-20.** Tasks through B7 are the
+completed historical record. B8--B10 do not execute. Remaining implementation
+follows the new plan produced from the gated lean-closure design; INV-1--3 and
+INV-5 stay as landed properties, while amended INV-4 above preserves only the
+scorer's stage-1 validation.
