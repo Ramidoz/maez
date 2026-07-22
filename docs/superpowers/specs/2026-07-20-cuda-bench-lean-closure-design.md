@@ -325,26 +325,42 @@ containing only:
 - `artifact_sha256`.
 
 `artifact_ref` and `artifact_sha256` are an all-or-none pair. Initial
-validation is provisional. Root admission linearizes at the command's first
-durable write: an O_EXCL `cuda_bench_driver.command_admission.v1` receipt,
-reopened through the anchored reader and hashed while the admitted root
-descriptor remains held. The receipt carries only command, its positive
-ordinal, bounded window ID or null, `status="admitted"`, and timestamp. It
-contains no arguments,
-authorization, paths, prompts, responses, or environment values.
+validation is provisional. Root admission linearizes only after an O_EXCL
+`cuda_bench_driver.command_admission.v1` receipt has been linked,
+parent-fsynced, reopened through the anchored reader, hashed while the admitted
+root descriptor remains held, and latched into an immutable `CommandAttempt`
+before the signal mask is restored. The receipt carries only command, its
+positive ordinal, bounded window ID or null, `status="admitted"`, and
+timestamp. It contains no arguments, authorization, paths, prompts, responses,
+or environment values.
 
-Before that receipt exists, any parse, root, link, fsync, reopen, identity, or
-hash failure writes nowhere and emits the pre-admission
-`refused`/`filesystem_hazard` null/null result. Once it exists, every terminal
-line carries a non-null pair: normally the final command/phase artifact; if a
-later auxiliary or terminal publication fails, the already-durable admission
-receipt is the content-light fallback binding. The command never tries an
-alternate root. A concurrent owner rename/unlink of the private root after
-admission is an unsupported substrate violation; command-long namespace
-locking against the owner is outside this lean threat model. There is still no
-software-selected fallback or public alternate-root input.
+Before linearization, a catchable parse, root, link, fsync, reopen, identity,
+or hash failure writes nowhere only when identity-proven unlink plus parent
+fsync successfully restores the private bench-root tree. If that cleanup
+cannot be completed or proven, the command reports
+`failed`/`cleanup_incomplete` with null artifact fields and makes no
+unchanged-tree claim. Once admission has linearized, every terminal line
+carries a non-null pair: normally the final command/phase artifact; if a later
+auxiliary or terminal publication fails, the already-durable admission receipt
+is the content-light fallback binding. The command never tries an alternate
+root. A concurrent owner rename/unlink of the private root after admission is
+an unsupported substrate violation; command-long namespace locking against the
+owner is outside this lean threat model. There is still no software-selected
+fallback or public alternate-root input.
 `invocation_invalid` is the CLI-local typed outcome for rejected syntax and
 does not widen the driver's closed phase-refusal vocabulary.
+
+An uncatchable SIGKILL, process death, or power loss after the final-name link
+but before linearization may leave a complete content-light orphan in the
+private bench root. That is the deliberately honest limit of this lean
+transaction; no journal or recovery layer is implied. Every command-admission
+receipt, including a fully written orphan, is structurally non-evidence: its
+wrapper binding is null, its schema has no `PersistedDoc` decoder, the stage-1
+assembler rejects it, and no restart path can reconstruct a `CommandAttempt`
+from it. Command allocation and the existing phase-attempt allocator share one
+disk scan-max-plus-one primitive over their respective closed filename shapes;
+the command form starts at positive ordinal 1. An orphan's persisted ordinal is
+therefore never resumed or reused across process restarts.
 
 Admission and non-phase terminal receipts use root-level names
 `command-<command>-attempt-NNN-<role>.json`, where role is exactly `admission`
@@ -358,9 +374,12 @@ rehearsal commands normally bind their already-unique attempt terminal, while
 their admission receipt remains the failure fallback.
 
 SIGINT and SIGTERM are blocked across admission's link/fsync/reopen/hash
-transaction. A signal observed before linearization follows identity-proven
-cleanup and leaves no receipt; a pending signal delivered after linearization
-binds the durable admission receipt. There is no linked-but-unadmitted state.
+transaction. A catchable signal observed before linearization follows
+identity-proven cleanup; it leaves no receipt only when that cleanup and parent
+fsync complete. The immutable `CommandAttempt` is latched before unmasking, so
+a pending signal delivered after linearization carries the exact durable
+admission binding. Uncatchable-death and failed-cleanup orphan semantics are
+the explicit exceptions above, not silently strengthened into crash atomicity.
 
 Every later read/write keeps the existing anchored per-open contract: the
 canonical 0700 owner root, descriptor walk, `O_NOFOLLOW`, and owner-only
@@ -382,7 +401,9 @@ terminal line and exits by a closed map: admitted `ok` is 0;
 4; SIGINT/SIGTERM interruptions are 130/143. The CLI installs a temporary
 outer signal scope so non-phase interruption never leaks Python's traceback;
 library parsers and the assembler still do not catch arbitrary
-`BaseException`.
+`BaseException`. If a signal-triggered pre-admission cleanup cannot complete,
+the honest result is `failed`/`cleanup_incomplete` and exit 4 rather than an
+`interrupted` claim.
 
 Terminal publication is one signal-linearized transaction. The outer handler
 never prints. The emitter blocks SIGINT/SIGTERM, snapshots any already-pending
@@ -422,6 +443,13 @@ files, unit state, model pointers, and runtime assets byte-identical:
 
 That claim covers the five commands only. It does not cover the manual rollback
 drill described next.
+
+The production guarantee is independent of the private bench-root transaction:
+even an uncatchable command crash cannot mutate units, overrides, model
+pointers, or runtime assets because none of the five commands has that
+capability. Only the private bench root may retain the structurally non-evidence
+orphan described above. A bench-root orphan is never described as a production
+change.
 
 ## Manual rollback-drill carve-out
 
@@ -527,6 +555,16 @@ Implementation is TDD and must witness these failures before code:
 - signal arrival before, during, or after terminal emission still yields one
   complete selected record whose exit code matches it; the handler itself
   never writes.
+- a subprocess killed after the admission link but before linearization may
+  leave one complete admission orphan, but `PersistedDoc` rejects it, no
+  `CommandAttempt` can be reconstructed from it, and a restarted allocator
+  advances to disk `max(ordinal) + 1` rather than reusing it;
+- an identity-proven cleanup that completes restores the prior bench-root tree,
+  while injected unlink or cleanup-fsync failure reports
+  `failed`/`cleanup_incomplete` with null artifact fields and never claims the
+  tree was unchanged; and
+- a pending signal delivered during mask restoration carries the exact
+  immutable admission binding latched before unmasking.
 
 ## Verification and merge gate
 

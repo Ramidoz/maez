@@ -500,6 +500,11 @@ contains `cuda_bench_driver.command_admission.v1` once, and no 22-count test or
 appendix assertion survives. The assembler/scorer reject an admission wrapper as
 stage-1 evidence; production encoding has null `binding_sha256`, while
 rehearsal encoding has no production top-level `schema` key.
+Every command-admission receipt is a decoder-free control record, never bundle
+evidence. Task 3 proves that even complete orphan bytes are rejected by
+`PersistedDoc`; Task 8 repeats the proof through the real assembler once that
+entrypoint exists. No finalization marker can upgrade an admission receipt into
+stage-1 evidence.
 
 Add one atomic publisher using names
 `command-<command>-attempt-NNN-<role>.json`, with role closed to
@@ -509,20 +514,37 @@ If the rehearsal directory did not pre-exist, the publisher identity-tracks
 its mkdir and removes that still-empty directory on pre-admission failure. One
 held root descriptor governs anonymous-file write/fsync, ordinal selection,
 atomic link, parent fsync, anchored reopen, and hash verification. Only a true
-`EEXIST` advances the ordinal. A fixed/timestamp name or retry after any other
-error is forbidden.
+`EEXIST` advances the ordinal. Factor the existing `_allocate_attempt`
+disk-scan/claim loop into one shared primitive used by both phase attempts and
+command attempts, parameterized only by their closed name shape and starting
+ordinal. The command form scans persisted command-attempt names and selects
+`max(persisted ordinal) + 1`, starting at 1, so a slot left by an uncatchable
+prior process is never resumed or reused after restart. No second allocator or
+process-local counter may become an ordinal authority. A fixed/timestamp name
+or retry after any other error is forbidden.
 
 Block SIGINT and SIGTERM across the admission transaction before the link and
 restore the prior mask only after either (a) reopen+hash has linearized
-admission or (b) identity-proven cleanup plus parent fsync has restored the
-pre-admission tree. RED injects each signal at link, parent-fsync, reopen, and
-hash boundaries: before linearization the tree is unchanged/null-null; after
-linearization the pending signal yields 130/143 and binds the admission
-receipt. There is no linked-but-unadmitted state visible to the CLI.
+admission, latched its immutable `CommandAttempt`, and made that exact binding
+available to the outer signal scope, or (b) identity-proven cleanup plus parent
+fsync has restored the pre-admission tree. RED injects each signal at link,
+parent-fsync, reopen, hash, and mask-restoration boundaries: a catchable signal
+before linearization leaves the tree unchanged/null-null only when cleanup
+completes; after linearization the pending signal yields 130/143 and binds the
+exact latched admission receipt.
 
 Admission linearizes only after the admission receipt is reopened and hashed.
 A disappearing/replaced root, link/fsync/reopen/hash failure before that point
-leaves the full root tree unchanged, uses no fallback, and emits null/null.
+leaves the full private bench-root tree unchanged only when identity-proven
+unlink and cleanup parent-fsync complete. Injected unlink or cleanup-fsync
+failure emits `failed`/`cleanup_incomplete` with null artifact fields and never
+claims the tree was unchanged. An uncatchable SIGKILL, process death, or power
+loss after link may leave a complete content-light orphan and no terminal line.
+That orphan remains structurally inadmissible: its null-binding command schema
+has no decoder or assembler role, it cannot reconstruct a `CommandAttempt`, and
+the next process advances past its disk ordinal. This honest private-bench-root
+limit does not weaken the production byte-identical guarantee: the five
+commands have no unit, override, model-pointer, or runtime-asset mutation path.
 After admission, all outcomes emit a non-null pair: normally the final
 phase/rehearsal/command artifact, or the admission receipt itself if any later
 auxiliary/terminal publication fails. Add the load-bearing RED that publishes
@@ -537,19 +559,23 @@ or traceback may appear on either stream.
 
 Pin CLI return codes independently of prose: admitted `status="ok"` is 0;
 pre-parse `invocation_invalid` is 2; any other `status="refused"` is 3; and
-`status="failed"` is 4. SIGINT and SIGTERM are the sole exceptions, returning
-130 and 143 respectively with outcome `interrupted`. No refused/failed command
-may print a valid terminal object and exit zero. RED every command across its
+`status="failed"` is 4. SIGINT and SIGTERM interruptions return 130 and 143
+respectively when the interrupted outcome can be emitted honestly; a signal
+whose required pre-admission cleanup fails instead remains
+`failed`/`cleanup_incomplete` with exit 4. No refused/failed command may print a
+valid terminal object and exit zero. RED every command across its
 ok/refused/failed shape while preserving exactly one terminal line.
 
 Install a CLI-only signal scope for both SIGINT and SIGTERM. It raises a
 private command-interruption exception caught at the outer boundary; library
 loaders still do not catch `BaseException`. Before admission it emits the
-content-light null/null interrupted line; after admission it binds the
-admission receipt. Mid-command signal REDs for static-preflight, rehearsal
-pre-run, and assembly prove one line, the signal-specific exit status, no
-traceback/path/literal, finalizer/cleanup where a child existed, no residue,
-and unchanged shared `.pth`.
+content-light null/null interrupted line only after successful identity-proven
+cleanup; cleanup failure emits `failed`/`cleanup_incomplete` instead. After
+admission it binds the admission receipt. Mid-command signal REDs for
+static-preflight, rehearsal pre-run, and assembly prove one line, the
+signal-specific honest exit status, no traceback/path/literal,
+finalizer/cleanup where a child existed, no residue, and unchanged shared
+`.pth`.
 
 Make terminal emission itself a signal-linearized transaction and add REDs at
 all three boundaries: before the terminal write, while the stdout write is in
@@ -564,6 +590,20 @@ line. A signal observed before the snapshot selects the one interrupted line
 and 130/143. Use fd-level capture in the tests. Assert one complete line and a
 matching exit code at every injection point, never normal-line/signal-exit,
 signal-line/normal-exit, two lines, or a partial second line.
+
+Add binding REDs for the crash-honesty amendment:
+
+- kill a subprocess after full admission content has been linked but before
+  reopen/hash linearization; prove no terminal line is fabricated, the complete
+  orphan refuses at `PersistedDoc`, and no in-memory attempt can be recovered;
+- start a new allocator against that root and prove disk scan-max-plus-one
+  advances beyond the orphan instead of reusing its ordinal, and a structural
+  RED proves phase and command allocation call the same shared disk allocator;
+- inject identity-unlink and cleanup-parent-fsync failures and prove
+  `failed`/`cleanup_incomplete` with null artifact fields, never an unchanged
+  tree claim; and
+- deliver SIGINT/SIGTERM during mask restoration and prove the interrupted
+  terminal line cites the exact admission pair latched before unmasking.
 
 - [ ] **Step 2: Witness RED**
 
@@ -729,7 +769,7 @@ git commit -m "feat(bench): seal the lean command boundary" \
   -m "The CLI exposes only five inert commands and emits one non-echoing content-light terminal document with an all-or-none artifact binding." \
   -m "## Predicted effect
 
-Malformed or pre-root invocations write nothing and emit null artifact fields; any root-admitted outcome emits exactly one private artifact binding without echoing rejected input."
+Malformed or pre-root invocations write nothing and emit null artifact fields; any root-admitted outcome emits exactly one private artifact binding without echoing rejected input. A killed process may leave only a decoder-free bench-root orphan, while production remains byte-identical."
 ```
 
 ### Task 4: Implement the single read-only static collector and `static-preflight`
@@ -1481,6 +1521,10 @@ directory, wrong owner/mode, missing file, unknown/rehearsal schema, and type
 mismatch all refuse `assembly_refused` before scorer entry. Extra attempts and
 decoys on disk are ignored; exactly those 16 paths are opened. An AST RED
 forbids `glob`, `rglob`, `iterdir`, `scandir`, and raw `open`.
+Pointing any selected field at a complete
+`cuda_bench_driver.command_admission.v1` receipt, including a crash orphan,
+must also refuse `assembly_refused` before scorer entry. This is the
+assembler-path half of Task 3's decoder-level orphan proof.
 
 - [ ] **Step 2: Witness RED**
 
