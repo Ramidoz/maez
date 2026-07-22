@@ -2778,6 +2778,39 @@ def _decode_backend_map_witness(fields: object) -> RuntimeBackendWitness:
     )
 
 
+_QUALITY_EVIDENCE_FIELDS = (
+    "evaluator_version",
+    "control_manifest_sha256",
+    "candidate_manifest_sha256",
+    "false_absence_count",
+    "wrong_answered_ungrounded_count",
+    "type_regression_count",
+    "recall_posture",
+    "quality_failure_count",
+    "covered_turn_count",
+    "timestamp",
+)
+_OWNER_VOICE_REVIEW_FIELDS = (
+    "producer",
+    "status",
+    "evaluator_version",
+    "control_manifest_sha256",
+    "candidate_manifest_sha256",
+    "artifact_sha256",
+    "timestamp",
+)
+
+
+def _decode_quality_evidence(fields: object) -> QualityEvidence:
+    return QualityEvidence(**_persisted_fields(fields, _QUALITY_EVIDENCE_FIELDS))
+
+
+def _decode_owner_voice_review(fields: object) -> OwnerVoiceReview:
+    return OwnerVoiceReview(
+        **_persisted_fields(fields, _OWNER_VOICE_REVIEW_FIELDS)
+    )
+
+
 _TURN_RECORD_FIELDS = (
     "cycle",
     "ordinal",
@@ -2890,6 +2923,8 @@ _PERSISTED_REGISTRY: Mapping[str, object] = MappingProxyType(
         RUNTIME_IDENTITY_SCHEMA: _decode_runtime_identity,
         STATIC_PREFLIGHT_SCHEMA: _decode_static_preflight,
         PHASE_PACKET_SCHEMA: _decode_phase_packet,
+        QUALITY_EVIDENCE_SCHEMA: _decode_quality_evidence,
+        OWNER_VOICE_REVIEW_SCHEMA: _decode_owner_voice_review,
         COLD_BOOT_WITNESS_SCHEMA: _decode_cold_boot_witness,
         PROVISIONAL_LIVE_WITNESS_SCHEMA: _decode_provisional_live_witness,
         AUTHORIZATION_WITNESS_SCHEMA: _decode_authorization_witness,

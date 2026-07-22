@@ -2342,6 +2342,29 @@ class StaticPreflightDocTests(unittest.TestCase):
                     self.make_doc(checks=checks)
 
 
+_QUALITY_EVIDENCE_FIELDS_FOR_TEST = (
+    "evaluator_version",
+    "control_manifest_sha256",
+    "candidate_manifest_sha256",
+    "false_absence_count",
+    "wrong_answered_ungrounded_count",
+    "type_regression_count",
+    "recall_posture",
+    "quality_failure_count",
+    "covered_turn_count",
+    "timestamp",
+)
+_OWNER_VOICE_REVIEW_FIELDS_FOR_TEST = (
+    "producer",
+    "status",
+    "evaluator_version",
+    "control_manifest_sha256",
+    "candidate_manifest_sha256",
+    "artifact_sha256",
+    "timestamp",
+)
+
+
 class PersistedDocTests(unittest.TestCase):
     @staticmethod
     def wrapper(
@@ -2499,6 +2522,130 @@ class PersistedDocTests(unittest.TestCase):
             "corpus_sha256": witness.corpus_sha256,
             "order_sha256": witness.order_sha256,
         }
+
+    def test_quality_evidence_persisted_round_trip(self) -> None:
+        evidence = cm.QualityEvidence(
+            evaluator_version="grounding_judge.v3",
+            control_manifest_sha256=SHA_A,
+            candidate_manifest_sha256=SHA_B,
+            false_absence_count=0,
+            wrong_answered_ungrounded_count=0,
+            type_regression_count=0,
+            recall_posture="pass",
+            quality_failure_count=0,
+            covered_turn_count=21,
+            timestamp="2026-07-13T12:00:00Z",
+        )
+        fields = {
+            name: getattr(evidence, name)
+            for name in _QUALITY_EVIDENCE_FIELDS_FOR_TEST
+        }
+
+        restored = cm.PersistedDoc(
+            self.wrapper(cm.QUALITY_EVIDENCE_SCHEMA, evidence, fields)
+        ).obj
+
+        self.assertIs(type(restored), cm.QualityEvidence)
+        self.assertEqual(evidence, restored)
+
+    def test_quality_evidence_persisted_tampering_refuses_round_trip(self) -> None:
+        evidence = cm.QualityEvidence(
+            evaluator_version="grounding_judge.v3",
+            control_manifest_sha256=SHA_A,
+            candidate_manifest_sha256=SHA_B,
+            false_absence_count=0,
+            wrong_answered_ungrounded_count=0,
+            type_regression_count=0,
+            recall_posture="pass",
+            quality_failure_count=0,
+            covered_turn_count=21,
+            timestamp="2026-07-13T12:00:00Z",
+        )
+        fields = {
+            name: getattr(evidence, name)
+            for name in _QUALITY_EVIDENCE_FIELDS_FOR_TEST
+        }
+        missing = dict(fields)
+        del missing["timestamp"]
+        extra = {**fields, "schema_version": cm.QUALITY_EVIDENCE_SCHEMA}
+        altered = {**fields, "candidate_manifest_sha256": SHA_C}
+
+        for label, tampered in (
+            ("missing", missing),
+            ("extra", extra),
+            ("altered", altered),
+        ):
+            with self.subTest(label=label):
+                with self.assertRaises(ValueError) as raised:
+                    cm.PersistedDoc(
+                        self.wrapper(
+                            cm.QUALITY_EVIDENCE_SCHEMA,
+                            evidence,
+                            tampered,
+                        )
+                    )
+                self.assertIs(type(raised.exception), ValueError)
+                self.assertEqual(("persisted_roundtrip",), raised.exception.args)
+
+    def test_owner_voice_review_persisted_round_trip(self) -> None:
+        review = cm.OwnerVoiceReview(
+            producer="owner_human",
+            status="pass",
+            evaluator_version="owner_voice.v1",
+            control_manifest_sha256=SHA_A,
+            candidate_manifest_sha256=SHA_B,
+            artifact_sha256=SHA_C,
+            timestamp="2026-07-13T12:00:00Z",
+        )
+        fields = {
+            name: getattr(review, name)
+            for name in _OWNER_VOICE_REVIEW_FIELDS_FOR_TEST
+        }
+
+        restored = cm.PersistedDoc(
+            self.wrapper(cm.OWNER_VOICE_REVIEW_SCHEMA, review, fields)
+        ).obj
+
+        self.assertIs(type(restored), cm.OwnerVoiceReview)
+        self.assertEqual(review, restored)
+
+    def test_owner_voice_review_persisted_tampering_refuses_round_trip(
+        self,
+    ) -> None:
+        review = cm.OwnerVoiceReview(
+            producer="owner_human",
+            status="pass",
+            evaluator_version="owner_voice.v1",
+            control_manifest_sha256=SHA_A,
+            candidate_manifest_sha256=SHA_B,
+            artifact_sha256=SHA_C,
+            timestamp="2026-07-13T12:00:00Z",
+        )
+        fields = {
+            name: getattr(review, name)
+            for name in _OWNER_VOICE_REVIEW_FIELDS_FOR_TEST
+        }
+        missing = dict(fields)
+        del missing["timestamp"]
+        extra = {**fields, "schema_version": cm.OWNER_VOICE_REVIEW_SCHEMA}
+        altered = {**fields, "artifact_sha256": SHA_D}
+
+        for label, tampered in (
+            ("missing", missing),
+            ("extra", extra),
+            ("altered", altered),
+        ):
+            with self.subTest(label=label):
+                with self.assertRaises(ValueError) as raised:
+                    cm.PersistedDoc(
+                        self.wrapper(
+                            cm.OWNER_VOICE_REVIEW_SCHEMA,
+                            review,
+                            tampered,
+                        )
+                    )
+                self.assertIs(type(raised.exception), ValueError)
+                self.assertEqual(("persisted_roundtrip",), raised.exception.args)
 
     def test_runtime_identity_round_trip_restores_tuple_and_frozen_mappings(self) -> None:
         identity = make_identity()
