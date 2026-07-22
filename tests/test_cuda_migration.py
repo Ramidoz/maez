@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import json
+import hashlib
 import inspect
+import json
 import shlex
 import subprocess
 import tempfile
@@ -111,7 +112,7 @@ def make_identity(**overrides: object) -> cm.RuntimeIdentity:
             "LD_LIBRARY_PATH": CUDA_RUNTIME_LD_PATH,
         },
         "runtime_manifest_sha256": SHA_D,
-        "rollback_manifest_sha256": SHA_E,
+        "rollback_manifest_sha256": cm.FROZEN_ROLLBACK_MANIFEST_SHA256,
         "cuda_toolkit": "13.2",
         "cuda_compiler": "13.2.78",
         "cmake_version": "3.31.6",
@@ -335,6 +336,52 @@ class IdentityAndArgvTests(unittest.TestCase):
         self.assertEqual("cuda", make_identity().backend)
         with self.assertRaisesRegex(ValueError, "model_identity_mismatch"):
             make_identity(model_sha256=SHA_A)
+
+    def test_runtime_identity_accepts_true_bounded_cmake_4(self) -> None:
+        replaced = replace(make_identity(), cmake_version="4.2.3")
+        factory = make_identity(cmake_version="4.2.3")
+
+        self.assertEqual("4.2.3", replaced.cmake_version)
+        self.assertEqual("4.2.3", factory.cmake_version)
+
+    def test_runtime_identity_rejects_unbounded_cmake(self) -> None:
+        for cmake_version in (
+            "2.99.999",
+            "5.0.0",
+            "4.123.1",
+            "4.1.1234",
+            "4.2",
+            "4.2.3.4",
+            "4.٢.٣",
+            "3.１２.３",
+            "latest",
+            True,
+        ):
+            with self.subTest(cmake_version=cmake_version, path="replace"):
+                with self.assertRaisesRegex(ValueError, "runtime_identity_mismatch"):
+                    replace(make_identity(), cmake_version=cmake_version)
+            with self.subTest(cmake_version=cmake_version, path="factory"):
+                with self.assertRaisesRegex(ValueError, "runtime_identity_mismatch"):
+                    make_identity(cmake_version=cmake_version)
+
+    def test_rollback_manifest_preimage_is_durable_and_recomputable(self) -> None:
+        rows = [list(row) for row in cm.FROZEN_ROLLBACK_MANIFEST_FIELDS]
+        recomputed = json.dumps(
+            rows,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+
+        expected_sha256 = "4ccbadb4de46b8856bdc4fa130a52141784038693e0da0021205fbae3b7db3f2"
+        self.assertEqual(582, len(recomputed))
+        self.assertEqual(recomputed, cm.frozen_rollback_manifest_preimage())
+        self.assertEqual(expected_sha256, hashlib.sha256(recomputed).hexdigest())
+        self.assertEqual(expected_sha256, cm.FROZEN_ROLLBACK_MANIFEST_SHA256)
+
+    def test_runtime_identity_requires_reproducible_rollback_manifest(self) -> None:
+        with self.assertRaisesRegex(ValueError, "runtime_identity_mismatch"):
+            make_identity(rollback_manifest_sha256=SHA_A)
 
     def test_paths_are_restricted_to_three_canonical_roots(self) -> None:
         for path in (
@@ -1317,7 +1364,6 @@ class CodeQualityInvariantTests(unittest.TestCase):
         valid_changes = (
             {"runtime_sha256": SHA_C},
             {"runtime_manifest_sha256": SHA_C},
-            {"rollback_manifest_sha256": SHA_C},
             {"production_override_sha256": SHA_C},
             {"cuda_compiler": "13.2.79"},
             {"cmake_version": "3.31.7"},
@@ -1330,6 +1376,7 @@ class CodeQualityInvariantTests(unittest.TestCase):
 
         rejected_changes = (
             {"tag": "b9597"},
+            {"rollback_manifest_sha256": SHA_C},
             {"gpu_identifier": "NVIDIA RTX 5090"},
             {"compute_capability": "9.0"},
         )
@@ -1677,6 +1724,7 @@ class Task4TruthAndRunbookContractTests(unittest.TestCase):
     ROOT = Path(__file__).resolve().parents[1]
     MODEL_STATE = ROOT / "config/model_state.json"
     RUNBOOK = ROOT / "docs/runbooks/llama-b9596-cuda-migration.md"
+    DESIGN = ROOT / "docs/superpowers/specs/2026-07-20-cuda-bench-lean-closure-design.md"
     GITIGNORE = ROOT / ".gitignore"
 
     def read_required(self, path: Path) -> str:
@@ -1705,6 +1753,15 @@ class Task4TruthAndRunbookContractTests(unittest.TestCase):
     def test_private_cuda_bench_directory_is_gitignored(self) -> None:
         lines = self.read_required(self.GITIGNORE).splitlines()
         self.assertIn("/local/cuda_migration_bench/", lines)
+
+    def test_host_tool_observations_are_not_retroactive_build_provenance(self) -> None:
+        statement = (
+            "cuda_compiler and cmake_version are fresh static-preflight host observations.\n"
+            "They are not retroactive build provenance."
+        )
+        for path in (self.RUNBOOK, self.DESIGN):
+            with self.subTest(path=path):
+                self.assertEqual(1, self.read_required(path).count(statement))
 
     def test_runbook_names_every_frozen_phase_and_typed_decision(self) -> None:
         runbook = self.read_required(self.RUNBOOK)

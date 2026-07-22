@@ -50,6 +50,19 @@ FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256 = (
 FROZEN_VULKAN_EFFECTIVE_ARGS_SHA256 = (
     "8fa9b789572e4d1d63f5d9e008797b14df5fc10b634b0a3858cd68fe008c583b"
 )
+FROZEN_ROLLBACK_MANIFEST_FIELDS = (
+    ("unit_sha256", FROZEN_VULKAN_UNIT_SHA256),
+    ("dropin_sha256", FROZEN_VULKAN_DROPIN_SHA256),
+    ("runtime_sha256", FROZEN_VULKAN_RUNTIME_SHA256),
+    ("library_manifest_sha256", FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256),
+    ("model_sha256", FROZEN_MODEL_SHA256),
+    ("model_bytes", FROZEN_MODEL_BYTES),
+    ("alias", FROZEN_ALIAS),
+    ("effective_args_sha256", FROZEN_VULKAN_EFFECTIVE_ARGS_SHA256),
+)
+FROZEN_ROLLBACK_MANIFEST_SHA256 = (
+    "4ccbadb4de46b8856bdc4fa130a52141784038693e0da0021205fbae3b7db3f2"
+)
 # Compact JSON array of the common 27-token A/B argv tail after executable.
 FROZEN_BENCH_ARGS_SHA256 = (
     "7fd627e1132ff30fb7f45df2cbf83d166002b0a0c56bcd07e169eca2180bd413"
@@ -68,6 +81,9 @@ EvidenceStatus = Literal["not_attempted", "pass", "fail"]
 
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 _LIBRARY_RE = re.compile(r"lib[A-Za-z0-9_.+-]+\.so(?:\.[0-9]+)*\Z")
+_CMAKE_VERSION_RE = re.compile(
+    r"(?:3\.\d{1,2}\.\d{1,3}|4\.\d{1,2}\.\d{1,3})\Z", re.ASCII
+)
 _UTC_Z_RE = re.compile(
     r"(?P<whole>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})"
     r"(?:\.(?P<fraction>[0-9]+))?Z\Z"
@@ -198,6 +214,15 @@ _REQUIRED_HELP_TOKENS = (
     "--kv-unified",
     "-fit",
 )
+
+
+def frozen_rollback_manifest_preimage() -> bytes:
+    return json.dumps(
+        [list(row) for row in FROZEN_ROLLBACK_MANIFEST_FIELDS],
+        ensure_ascii=False,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
 
 
 def _validate_sha256(value: str) -> str:
@@ -1028,6 +1053,12 @@ class RuntimeIdentity:
             raise ValueError("runtime_identity_mismatch")
         if self.model_sha256 != FROZEN_MODEL_SHA256 or self.model_bytes != FROZEN_MODEL_BYTES:
             raise ValueError("model_identity_mismatch")
+        if (
+            type(self.cmake_version) is not str
+            or _CMAKE_VERSION_RE.fullmatch(self.cmake_version) is None
+            or self.rollback_manifest_sha256 != FROZEN_ROLLBACK_MANIFEST_SHA256
+        ):
+            raise ValueError("runtime_identity_mismatch")
         for digest in (
             self.model_sha256,
             self.runtime_sha256,
@@ -1053,7 +1084,6 @@ class RuntimeIdentity:
         bounded_metadata = (
             self.cuda_toolkit == "13.2"
             and re.fullmatch(r"13\.2\.\d{1,3}", self.cuda_compiler) is not None
-            and re.fullmatch(r"3\.\d{1,2}\.\d{1,3}", self.cmake_version) is not None
             and re.fullmatch(r"\d{3}\.\d{1,3}\.\d{1,3}", self.driver_version) is not None
             and re.fullmatch(r"NVIDIA (?:GeForce )?RTX 4090", self.gpu_identifier) is not None
             and self.compute_capability == "8.9"
@@ -1107,6 +1137,12 @@ class RuntimeIdentity:
             raise ValueError("model_identity_mismatch")
         if model_sha256 != FROZEN_MODEL_SHA256:
             raise ValueError("model_identity_mismatch")
+        if (
+            type(cmake_version) is not str
+            or _CMAKE_VERSION_RE.fullmatch(cmake_version) is None
+            or rollback_manifest_sha256 != FROZEN_ROLLBACK_MANIFEST_SHA256
+        ):
+            raise ValueError("runtime_identity_mismatch")
         hashes = {name: _validate_sha256(digest) for name, digest in library_hashes.items()}
         if any(_LIBRARY_RE.fullmatch(name) is None for name in hashes):
             raise ValueError("invalid_library_name")
@@ -1120,7 +1156,6 @@ class RuntimeIdentity:
         bounded_metadata = (
             cuda_toolkit == "13.2"
             and re.fullmatch(r"13\.2\.\d{1,3}", cuda_compiler) is not None
-            and re.fullmatch(r"3\.\d{1,2}\.\d{1,3}", cmake_version) is not None
             and re.fullmatch(r"\d{3}\.\d{1,3}\.\d{1,3}", driver_version) is not None
             and re.fullmatch(r"NVIDIA (?:GeForce )?RTX 4090", gpu_identifier) is not None
             and compute_capability == "8.9"
