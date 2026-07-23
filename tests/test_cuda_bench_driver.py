@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import errno
 import fcntl
 import hashlib
@@ -26,6 +27,7 @@ from dataclasses import FrozenInstanceError, dataclass, replace
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -221,6 +223,875 @@ def private_root(tmp_path: Path) -> Path:
 def _private_file(path: Path, payload: bytes = b"evidence") -> None:
     path.write_bytes(payload)
     os.chmod(path, 0o600)
+
+
+class TestTask4ImmutablePreimage:
+    def test_publish_or_verify_immutable_creates_preimages_only_for_static(
+        self, private_root: Path
+    ) -> None:
+        attempt = _command_admit(private_root)
+        relative = (
+            "preimages/rollback-manifest-"
+            + hashlib.sha256(b"rollback").hexdigest()
+            + ".json"
+        )
+
+        path = driver.publish_or_verify_immutable(
+            relative, b"rollback", attempt=attempt, root=private_root
+        )
+
+        assert path == private_root / relative
+        assert path.read_bytes() == b"rollback"
+        assert stat.S_IMODE((private_root / "preimages").stat().st_mode) == 0o700
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+    def test_publish_or_verify_immutable_accepts_exact_existing_bytes(
+        self, private_root: Path
+    ) -> None:
+        attempt = _command_admit(private_root)
+        relative = (
+            "preimages/rollback-manifest-"
+            + hashlib.sha256(b"rollback").hexdigest()
+            + ".json"
+        )
+        first = driver.publish_or_verify_immutable(
+            relative, b"rollback", attempt=attempt, root=private_root
+        )
+
+        second = driver.publish_or_verify_immutable(
+            relative, b"rollback", attempt=attempt, root=private_root
+        )
+
+        assert first == second
+
+    def test_publish_or_verify_immutable_rejects_mismatched_existing_bytes(
+        self, private_root: Path
+    ) -> None:
+        attempt = _command_admit(private_root)
+        expected = b"rollback"
+        relative = (
+            "preimages/rollback-manifest-"
+            + hashlib.sha256(expected).hexdigest()
+            + ".json"
+        )
+        preimages = private_root / "preimages"
+        preimages.mkdir(mode=0o700)
+        os.chmod(preimages, 0o700)
+        _private_file(private_root / relative, b"different")
+
+        with pytest.raises(driver.BenchRefusal, match="filesystem_hazard"):
+            driver.publish_or_verify_immutable(
+                relative, expected, attempt=attempt, root=private_root
+            )
+
+    def test_publish_or_verify_immutable_requires_content_addressed_name(
+        self, private_root: Path
+    ) -> None:
+        attempt = _command_admit(private_root)
+        relative = "preimages/rollback-manifest-" + ("a" * 64) + ".json"
+
+        with pytest.raises(driver.BenchRefusal, match="filesystem_hazard"):
+            driver.publish_or_verify_immutable(
+                relative, b"rollback", attempt=attempt, root=private_root
+            )
+
+        assert not (private_root / "preimages").exists()
+
+    def test_verify_existing_immutable_never_creates_missing_preimages(
+        self, private_root: Path
+    ) -> None:
+        attempt = _command_admit(
+            private_root, command="vulkan-baseline", window_id="window-a"
+        )
+        relative = (
+            "preimages/rollback-manifest-"
+            + hashlib.sha256(b"rollback").hexdigest()
+            + ".json"
+        )
+
+        with pytest.raises(driver.BenchRefusal, match="filesystem_hazard"):
+            driver.verify_existing_immutable(
+                relative, b"rollback", attempt=attempt, root=private_root
+            )
+
+        assert not (private_root / "preimages").exists()
+
+    def test_publish_or_verify_immutable_reopens_admission_under_exact_root(
+        self, tmp_path: Path
+    ) -> None:
+        root_a = tmp_path / "a"
+        root_b = tmp_path / "b"
+        for root in (root_a, root_b):
+            root.mkdir(mode=0o700)
+            os.chmod(root, 0o700)
+        attempt = _command_admit(root_a)
+        copied_admission = root_b / attempt.admission_ref
+        _private_file(
+            copied_admission,
+            (root_a / attempt.admission_ref).read_bytes(),
+        )
+        relative = (
+            "preimages/rollback-manifest-"
+            + hashlib.sha256(b"rollback").hexdigest()
+            + ".json"
+        )
+
+        with pytest.raises(driver.BenchRefusal, match="filesystem_hazard"):
+            driver.publish_or_verify_immutable(
+                relative, b"rollback", attempt=attempt, root=root_b
+            )
+        assert not (root_b / "preimages").exists()
+
+    def test_publish_or_verify_immutable_refuses_same_inode_admission_corruption(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        attempt = _command_admit(private_root)
+        admission = private_root / attempt.admission_ref
+        original = admission.read_bytes()
+        corrupted = bytes([original[0] ^ 1]) + original[1:]
+        assert len(corrupted) == len(original)
+        data = b"rollback"
+        relative = (
+            "preimages/rollback-manifest-"
+            + hashlib.sha256(data).hexdigest()
+            + ".json"
+        )
+        real_write_all = driver._write_all
+        fired = False
+
+        def corrupt_after_authority_read(fd: int, payload: bytes) -> None:
+            nonlocal fired
+            if payload == data and not fired:
+                fired = True
+                admission.write_bytes(corrupted)
+                os.chmod(admission, 0o600)
+            real_write_all(fd, payload)
+
+        monkeypatch.setattr(driver, "_write_all", corrupt_after_authority_read)
+
+        with pytest.raises(driver.BenchRefusal, match="filesystem_hazard"):
+            driver.publish_or_verify_immutable(
+                relative, data, attempt=attempt, root=private_root
+            )
+
+        assert fired
+
+    @pytest.mark.parametrize("mutation", ("delete", "replace"))
+    def test_publish_or_verify_immutable_refuses_deleted_or_replaced_admission(
+        self, private_root: Path, mutation: str
+    ) -> None:
+        attempt = _command_admit(private_root)
+        admission = private_root / attempt.admission_ref
+        admission.unlink()
+        if mutation == "replace":
+            _private_file(admission, b"replacement")
+        relative = (
+            "preimages/rollback-manifest-"
+            + hashlib.sha256(b"rollback").hexdigest()
+            + ".json"
+        )
+
+        with pytest.raises(driver.BenchRefusal, match="filesystem_hazard"):
+            driver.publish_or_verify_immutable(
+                relative, b"rollback", attempt=attempt, root=private_root
+            )
+        assert not (private_root / "preimages").exists()
+
+    def test_publish_or_verify_immutable_refuses_exact_bytes_replacement(
+        self, private_root: Path
+    ) -> None:
+        attempt = _command_admit(private_root)
+        admission = private_root / attempt.admission_ref
+        original = admission.read_bytes()
+        admission.unlink()
+        _private_file(admission, original)
+        relative = (
+            "preimages/rollback-manifest-"
+            + hashlib.sha256(b"rollback").hexdigest()
+            + ".json"
+        )
+
+        with pytest.raises(driver.BenchRefusal, match="filesystem_hazard"):
+            driver.publish_or_verify_immutable(
+                relative, b"rollback", attempt=attempt, root=private_root
+            )
+
+        assert not (private_root / "preimages").exists()
+
+    def test_verify_existing_immutable_rejects_static_attempt_namespace(
+        self, private_root: Path
+    ) -> None:
+        static_attempt = _command_admit(private_root)
+        relative = (
+            "preimages/rollback-manifest-"
+            + hashlib.sha256(b"rollback").hexdigest()
+            + ".json"
+        )
+        driver.publish_or_verify_immutable(
+            relative, b"rollback", attempt=static_attempt, root=private_root
+        )
+
+        with pytest.raises(driver.BenchRefusal, match="filesystem_hazard"):
+            driver.verify_existing_immutable(
+                relative, b"rollback", attempt=static_attempt, root=private_root
+            )
+
+    @pytest.mark.parametrize(
+        "command", ("vulkan-baseline", "cuda-candidate")
+    )
+    def test_verify_existing_immutable_accepts_each_phase_namespace(
+        self, private_root: Path, command: str
+    ) -> None:
+        static_attempt = _command_admit(private_root)
+        data = b"rollback"
+        relative = (
+            "preimages/rollback-manifest-"
+            + hashlib.sha256(data).hexdigest()
+            + ".json"
+        )
+        driver.publish_or_verify_immutable(
+            relative, data, attempt=static_attempt, root=private_root
+        )
+        phase_attempt = _command_admit(
+            private_root, command=command, window_id="window-a"
+        )
+
+        assert driver.verify_existing_immutable(
+            relative, data, attempt=phase_attempt, root=private_root
+        ) == private_root / relative
+
+    @pytest.mark.parametrize("hazard", ("symlink_dir", "wrong_mode_dir"))
+    def test_publish_or_verify_immutable_refuses_preimages_directory_hazard(
+        self, private_root: Path, tmp_path: Path, hazard: str
+    ) -> None:
+        attempt = _command_admit(private_root)
+        preimages = private_root / "preimages"
+        if hazard == "symlink_dir":
+            outside = tmp_path / "outside"
+            outside.mkdir(mode=0o700)
+            preimages.symlink_to(outside, target_is_directory=True)
+        else:
+            preimages.mkdir(mode=0o755)
+            os.chmod(preimages, 0o755)
+        relative = (
+            "preimages/rollback-manifest-"
+            + hashlib.sha256(b"rollback").hexdigest()
+            + ".json"
+        )
+
+        with pytest.raises(driver.BenchRefusal, match="filesystem_hazard"):
+            driver.publish_or_verify_immutable(
+                relative, b"rollback", attempt=attempt, root=private_root
+            )
+
+    @pytest.mark.parametrize("hazard", ("hardlink", "wrong_mode"))
+    def test_verify_existing_immutable_refuses_file_hazard(
+        self, private_root: Path, hazard: str
+    ) -> None:
+        static_attempt = _command_admit(private_root)
+        data = b"rollback"
+        relative = (
+            "preimages/rollback-manifest-"
+            + hashlib.sha256(data).hexdigest()
+            + ".json"
+        )
+        path = driver.publish_or_verify_immutable(
+            relative, data, attempt=static_attempt, root=private_root
+        )
+        if hazard == "hardlink":
+            os.link(path, private_root / "second-link")
+        else:
+            os.chmod(path, 0o640)
+        phase_attempt = _command_admit(
+            private_root, command="vulkan-baseline", window_id="window-a"
+        )
+
+        with pytest.raises(driver.BenchRefusal, match="filesystem_hazard"):
+            driver.verify_existing_immutable(
+                relative, data, attempt=phase_attempt, root=private_root
+            )
+
+    def test_publish_or_verify_immutable_post_link_parent_fsync_failure_refuses(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        static_attempt = _command_admit(private_root)
+        preimages = private_root / "preimages"
+        preimages.mkdir(mode=0o700)
+        os.chmod(preimages, 0o700)
+        data = b"rollback"
+        relative = (
+            "preimages/rollback-manifest-"
+            + hashlib.sha256(data).hexdigest()
+            + ".json"
+        )
+        real_fsync = driver.os.fsync
+        failed = False
+
+        def fail_parent_once(fd: int) -> None:
+            nonlocal failed
+            if stat.S_ISDIR(os.fstat(fd).st_mode) and not failed:
+                failed = True
+                raise OSError(errno.EIO, "parent fsync")
+            real_fsync(fd)
+
+        monkeypatch.setattr(driver.os, "fsync", fail_parent_once)
+        with pytest.raises(driver.BenchRefusal, match="filesystem_hazard"):
+            driver.publish_or_verify_immutable(
+                relative, data, attempt=static_attempt, root=private_root
+            )
+        assert failed
+        assert (private_root / relative).read_bytes() == data
+
+        monkeypatch.setattr(driver.os, "fsync", real_fsync)
+        assert driver.publish_or_verify_immutable(
+            relative, data, attempt=static_attempt, root=private_root
+        ) == private_root / relative
+
+    def test_publish_or_verify_immutable_refuses_post_link_content_laundering(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        attempt = _command_admit(private_root)
+        preimages = private_root / "preimages"
+        preimages.mkdir(mode=0o700)
+        os.chmod(preimages, 0o700)
+        data = b"rollback"
+        relative = (
+            "preimages/rollback-manifest-"
+            + hashlib.sha256(data).hexdigest()
+            + ".json"
+        )
+        path = private_root / relative
+        real_fsync = driver.os.fsync
+        fired = False
+
+        def mutate_before_parent_sync_returns(fd: int) -> None:
+            nonlocal fired
+            if stat.S_ISDIR(os.fstat(fd).st_mode) and not fired:
+                fired = True
+                path.write_bytes(b"X" * len(data))
+                os.chmod(path, 0o600)
+            real_fsync(fd)
+
+        monkeypatch.setattr(driver.os, "fsync", mutate_before_parent_sync_returns)
+
+        with pytest.raises(driver.BenchRefusal, match="filesystem_hazard"):
+            driver.publish_or_verify_immutable(
+                relative, data, attempt=attempt, root=private_root
+            )
+
+        assert fired
+        assert path.read_bytes() != data
+
+    def test_publish_or_verify_immutable_rebinds_parent_after_final_read(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        attempt = _command_admit(private_root)
+        preimages = private_root / "preimages"
+        preimages.mkdir(mode=0o700)
+        os.chmod(preimages, 0o700)
+        data = b"rollback"
+        relative = (
+            "preimages/rollback-manifest-"
+            + hashlib.sha256(data).hexdigest()
+            + ".json"
+        )
+        real_read_exact = driver._read_exact_immutable
+        calls = 0
+
+        def substitute_after_final_read(
+            parent_fd: int, name: str, expected: bytes
+        ) -> os.stat_result:
+            nonlocal calls
+            observed = real_read_exact(parent_fd, name, expected)
+            calls += 1
+            if calls == 1:
+                preimages.rename(private_root / "preimages-original")
+                preimages.mkdir(mode=0o700)
+                os.chmod(preimages, 0o700)
+                _private_file(preimages / name, expected)
+            return observed
+
+        monkeypatch.setattr(
+            driver, "_read_exact_immutable", substitute_after_final_read
+        )
+
+        with pytest.raises(driver.BenchRefusal, match="filesystem_hazard"):
+            driver.publish_or_verify_immutable(
+                relative, data, attempt=attempt, root=private_root
+            )
+
+        assert calls == 1
+
+    @pytest.mark.parametrize("target", ("file", "parent"))
+    def test_publish_or_verify_immutable_existing_durability_failure_refuses(
+        self,
+        private_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        target: str,
+    ) -> None:
+        static_attempt = _command_admit(private_root)
+        data = b"rollback"
+        relative = (
+            "preimages/rollback-manifest-"
+            + hashlib.sha256(data).hexdigest()
+            + ".json"
+        )
+        driver.publish_or_verify_immutable(
+            relative, data, attempt=static_attempt, root=private_root
+        )
+        real_fsync = driver.os.fsync
+        failed = False
+        regular_syncs = 0
+
+        def fail_selected_once(fd: int) -> None:
+            nonlocal failed, regular_syncs
+            is_directory = stat.S_ISDIR(os.fstat(fd).st_mode)
+            if not is_directory:
+                regular_syncs += 1
+            selected = (
+                is_directory
+                if target == "parent"
+                else (not is_directory and regular_syncs == 2)
+            )
+            if not failed and selected:
+                failed = True
+                raise OSError(errno.EIO, "durability")
+            real_fsync(fd)
+
+        monkeypatch.setattr(driver.os, "fsync", fail_selected_once)
+        with pytest.raises(driver.BenchRefusal, match="filesystem_hazard"):
+            driver.publish_or_verify_immutable(
+                relative, data, attempt=static_attempt, root=private_root
+            )
+        assert failed
+
+    def test_publish_or_verify_immutable_orders_file_fsync_link_parent_fsync(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        attempt = _command_admit(private_root)
+        preimages = private_root / "preimages"
+        preimages.mkdir(mode=0o700)
+        os.chmod(preimages, 0o700)
+        data = b"rollback"
+        relative = (
+            "preimages/rollback-manifest-"
+            + hashlib.sha256(data).hexdigest()
+            + ".json"
+        )
+        events: list[str] = []
+        real_fsync = driver.os.fsync
+        real_link = driver.os.link
+
+        def observed_fsync(fd: int) -> None:
+            events.append(
+                "parent_fsync"
+                if stat.S_ISDIR(os.fstat(fd).st_mode)
+                else "file_fsync"
+            )
+            real_fsync(fd)
+
+        def observed_link(*args: object, **kwargs: object) -> None:
+            events.append("link")
+            real_link(*args, **kwargs)
+
+        monkeypatch.setattr(driver.os, "fsync", observed_fsync)
+        monkeypatch.setattr(driver.os, "link", observed_link)
+
+        driver.publish_or_verify_immutable(
+            relative, data, attempt=attempt, root=private_root
+        )
+
+        assert events.index("file_fsync") < events.index("link")
+        assert events.index("link") < events.index("parent_fsync")
+
+    def test_publish_or_verify_immutable_file_fsync_failure_leaves_no_final_name(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        attempt = _command_admit(private_root)
+        data = b"rollback"
+        relative = (
+            "preimages/rollback-manifest-"
+            + hashlib.sha256(data).hexdigest()
+            + ".json"
+        )
+        real_fsync = driver.os.fsync
+
+        def fail_regular(fd: int) -> None:
+            if stat.S_ISREG(os.fstat(fd).st_mode):
+                raise OSError(errno.EIO, "file fsync")
+            real_fsync(fd)
+
+        monkeypatch.setattr(driver.os, "fsync", fail_regular)
+
+        with pytest.raises(driver.BenchRefusal, match="filesystem_hazard"):
+            driver.publish_or_verify_immutable(
+                relative, data, attempt=attempt, root=private_root
+            )
+
+        assert not (private_root / relative).exists()
+
+    def test_publish_or_verify_immutable_exact_eexist_syncs_file_and_parent(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        attempt = _command_admit(private_root)
+        data = b"rollback"
+        relative = (
+            "preimages/rollback-manifest-"
+            + hashlib.sha256(data).hexdigest()
+            + ".json"
+        )
+        driver.publish_or_verify_immutable(
+            relative, data, attempt=attempt, root=private_root
+        )
+        syncs: list[str] = []
+        real_fsync = driver.os.fsync
+
+        def observed(fd: int) -> None:
+            syncs.append(
+                "parent"
+                if stat.S_ISDIR(os.fstat(fd).st_mode)
+                else "file"
+            )
+            real_fsync(fd)
+
+        monkeypatch.setattr(driver.os, "fsync", observed)
+
+        driver.publish_or_verify_immutable(
+            relative, data, attempt=attempt, root=private_root
+        )
+
+        assert "file" in syncs
+        assert "parent" in syncs
+
+    def test_publish_or_verify_immutable_non_eexist_link_failure_never_reopens(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        attempt = _command_admit(private_root)
+        data = b"rollback"
+        relative = (
+            "preimages/rollback-manifest-"
+            + hashlib.sha256(data).hexdigest()
+            + ".json"
+        )
+        preimages = private_root / "preimages"
+        preimages.mkdir(mode=0o700)
+        os.chmod(preimages, 0o700)
+        _private_file(private_root / relative, data)
+
+        def fail_link(*_args: object, **_kwargs: object) -> None:
+            raise OSError(errno.EIO, "not EEXIST")
+
+        monkeypatch.setattr(driver.os, "link", fail_link)
+
+        with pytest.raises(driver.BenchRefusal, match="filesystem_hazard"):
+            driver.publish_or_verify_immutable(
+                relative, data, attempt=attempt, root=private_root
+            )
+
+    def test_publish_or_verify_immutable_has_no_broad_link_error_branch(
+        self,
+    ) -> None:
+        source = inspect.getsource(driver.publish_or_verify_immutable)
+        tree = ast.parse(source)
+        handlers = [
+            handler
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Try)
+            for handler in node.handlers
+        ]
+        names = {
+            ast.unparse(handler.type)
+            for handler in handlers
+            if handler.type is not None
+        }
+
+        assert "FileExistsError" in names
+        assert not any(
+            "BenchRefusal" in name or "Exception" in name
+            for name in names
+        )
+
+    @pytest.mark.parametrize(
+        "hazard",
+        (
+            "wrong_owner_dir",
+            "mkdir_failure",
+            "root_fsync_failure",
+            "identity_substitution",
+        ),
+    )
+    def test_publish_or_verify_immutable_refuses_each_directory_creation_hazard(
+        self,
+        private_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        hazard: str,
+    ) -> None:
+        attempt = _command_admit(private_root)
+        data = b"rollback"
+        relative = (
+            "preimages/rollback-manifest-"
+            + hashlib.sha256(data).hexdigest()
+            + ".json"
+        )
+        real_fstat = driver.os.fstat
+        real_fsync = driver.os.fsync
+        real_mkdir = driver.os.mkdir
+        real_open = driver.os.open
+        preimages_open_count = 0
+
+        def wrong_owner_fstat(fd: int) -> os.stat_result:
+            info = real_fstat(fd)
+            try:
+                rendered = os.readlink(f"/proc/self/fd/{fd}")
+            except OSError:
+                return info
+            if rendered == str(private_root / "preimages"):
+                return SimpleNamespace(
+                    **{
+                        name: getattr(info, name)
+                        for name in (
+                            "st_mode",
+                            "st_dev",
+                            "st_ino",
+                            "st_nlink",
+                            "st_size",
+                            "st_mtime_ns",
+                            "st_ctime_ns",
+                        )
+                    },
+                    st_uid=os.geteuid() + 1,
+                )
+            return info
+
+        def fail_mkdir(
+            path: str,
+            mode: int = 0o777,
+            *,
+            dir_fd: int | None = None,
+        ) -> None:
+            if path == "preimages":
+                raise OSError(errno.EIO, "mkdir")
+            real_mkdir(path, mode=mode, dir_fd=dir_fd)
+
+        def fail_root_fsync(fd: int) -> None:
+            try:
+                rendered = os.readlink(f"/proc/self/fd/{fd}")
+            except OSError:
+                rendered = ""
+            if rendered == str(private_root):
+                raise OSError(errno.EIO, "root fsync")
+            real_fsync(fd)
+
+        def substitute_open(
+            path: object,
+            flags: int,
+            mode: int = 0o777,
+            *,
+            dir_fd: int | None = None,
+        ) -> int:
+            nonlocal preimages_open_count
+            if path == "preimages":
+                preimages_open_count += 1
+                if preimages_open_count == 2:
+                    (private_root / "preimages").rename(
+                        private_root / "preimages-original"
+                    )
+                    (private_root / "preimages").mkdir(mode=0o700)
+                    os.chmod(private_root / "preimages", 0o700)
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+
+        if hazard == "wrong_owner_dir":
+            monkeypatch.setattr(driver.os, "fstat", wrong_owner_fstat)
+        elif hazard == "mkdir_failure":
+            monkeypatch.setattr(driver.os, "mkdir", fail_mkdir)
+        elif hazard == "root_fsync_failure":
+            monkeypatch.setattr(driver.os, "fsync", fail_root_fsync)
+        else:
+            monkeypatch.setattr(driver.os, "open", substitute_open)
+
+        with pytest.raises(driver.BenchRefusal, match="filesystem_hazard"):
+            driver.publish_or_verify_immutable(
+                relative, data, attempt=attempt, root=private_root
+            )
+
+    def test_publish_or_verify_immutable_accepts_exact_directory_creation_race(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        attempt = _command_admit(private_root)
+        data = b"rollback"
+        relative = (
+            "preimages/rollback-manifest-"
+            + hashlib.sha256(data).hexdigest()
+            + ".json"
+        )
+        real_mkdir = driver.os.mkdir
+        raced = False
+
+        def race_mkdir(
+            path: str,
+            mode: int = 0o777,
+            *,
+            dir_fd: int | None = None,
+        ) -> None:
+            nonlocal raced
+            if path == "preimages" and not raced:
+                raced = True
+                real_mkdir(path, mode=mode, dir_fd=dir_fd)
+                raise FileExistsError(errno.EEXIST, "raced")
+            real_mkdir(path, mode=mode, dir_fd=dir_fd)
+
+        monkeypatch.setattr(driver.os, "mkdir", race_mkdir)
+
+        assert driver.publish_or_verify_immutable(
+            relative, data, attempt=attempt, root=private_root
+        ) == private_root / relative
+        assert raced
+
+    def test_verify_existing_immutable_never_repairs_invalid_directory(
+        self, private_root: Path
+    ) -> None:
+        static_attempt = _command_admit(private_root)
+        data = b"rollback"
+        relative = (
+            "preimages/rollback-manifest-"
+            + hashlib.sha256(data).hexdigest()
+            + ".json"
+        )
+        path = driver.publish_or_verify_immutable(
+            relative, data, attempt=static_attempt, root=private_root
+        )
+        phase_attempt = _command_admit(
+            private_root, command="vulkan-baseline", window_id="window-a"
+        )
+        preimages = path.parent
+        os.chmod(preimages, 0o755)
+
+        with pytest.raises(driver.BenchRefusal, match="filesystem_hazard"):
+            driver.verify_existing_immutable(
+                relative, data, attempt=phase_attempt, root=private_root
+            )
+
+        assert stat.S_IMODE(preimages.stat().st_mode) == 0o755
+        assert path.read_bytes() == data
+
+    @pytest.mark.parametrize(
+        "hazard", ("symlink", "wrong_owner", "inode_substitution")
+    )
+    def test_verify_existing_immutable_refuses_each_final_file_hazard(
+        self,
+        private_root: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        hazard: str,
+    ) -> None:
+        static_attempt = _command_admit(private_root)
+        data = b"rollback"
+        relative = (
+            "preimages/rollback-manifest-"
+            + hashlib.sha256(data).hexdigest()
+            + ".json"
+        )
+        path = driver.publish_or_verify_immutable(
+            relative, data, attempt=static_attempt, root=private_root
+        )
+        phase_attempt = _command_admit(
+            private_root, command="cuda-candidate", window_id="window-a"
+        )
+        real_fstat = driver.os.fstat
+        real_fsync = driver.os.fsync
+        if hazard == "symlink":
+            target = tmp_path / "target"
+            _private_file(target, data)
+            path.unlink()
+            path.symlink_to(target)
+        elif hazard == "wrong_owner":
+            def wrong_owner(fd: int) -> os.stat_result:
+                info = real_fstat(fd)
+                try:
+                    rendered = os.readlink(f"/proc/self/fd/{fd}")
+                except OSError:
+                    return info
+                if rendered == str(path):
+                    return SimpleNamespace(
+                        **{
+                            name: getattr(info, name)
+                            for name in (
+                                "st_mode",
+                                "st_dev",
+                                "st_ino",
+                                "st_nlink",
+                                "st_size",
+                                "st_mtime_ns",
+                                "st_ctime_ns",
+                            )
+                        },
+                        st_uid=os.geteuid() + 1,
+                    )
+                return info
+
+            monkeypatch.setattr(driver.os, "fstat", wrong_owner)
+        else:
+            fired = False
+
+            def substitute_after_file_sync(fd: int) -> None:
+                nonlocal fired
+                if stat.S_ISREG(real_fstat(fd).st_mode) and not fired:
+                    fired = True
+                    path.rename(private_root / "preimages/original")
+                    _private_file(path, data)
+                real_fsync(fd)
+
+            monkeypatch.setattr(driver.os, "fsync", substitute_after_file_sync)
+
+        with pytest.raises(driver.BenchRefusal, match="filesystem_hazard"):
+            driver.verify_existing_immutable(
+                relative, data, attempt=phase_attempt, root=private_root
+            )
+
+    @pytest.mark.parametrize(
+        "mutation", ("root_b", "delete", "replace", "exact_replace")
+    )
+    def test_verify_existing_immutable_reopens_admission_and_root(
+        self, tmp_path: Path, mutation: str
+    ) -> None:
+        root_a = tmp_path / "a"
+        root_b = tmp_path / "b"
+        for root in (root_a, root_b):
+            root.mkdir(mode=0o700)
+            os.chmod(root, 0o700)
+        static_attempt = _command_admit(root_a)
+        data = b"rollback"
+        relative = (
+            "preimages/rollback-manifest-"
+            + hashlib.sha256(data).hexdigest()
+            + ".json"
+        )
+        driver.publish_or_verify_immutable(
+            relative, data, attempt=static_attempt, root=root_a
+        )
+        phase_attempt = _command_admit(
+            root_a, command="vulkan-baseline", window_id="window-a"
+        )
+        root = root_a
+        admission = root_a / phase_attempt.admission_ref
+        original = admission.read_bytes()
+        if mutation == "root_b":
+            root = root_b
+            (root_b / "preimages").mkdir(mode=0o700)
+            os.chmod(root_b / "preimages", 0o700)
+            _private_file(root_b / relative, data)
+            _private_file(root_b / phase_attempt.admission_ref, original)
+        else:
+            admission.unlink()
+            if mutation == "replace":
+                _private_file(admission, b"replacement")
+            elif mutation == "exact_replace":
+                _private_file(admission, original)
+
+        with pytest.raises(driver.BenchRefusal, match="filesystem_hazard"):
+            driver.verify_existing_immutable(
+                relative, data, attempt=phase_attempt, root=root
+            )
 
 
 def _assert_refusal(exc: pytest.ExceptionInfo[driver.BenchRefusal], code: str) -> None:
@@ -2623,6 +3494,103 @@ def _cuda_authorities(
     return window, continuation, parent
 
 
+def _parent_completion_evidence(
+    packet: driver.cm.PhasePacket,
+) -> driver.ParentCompletionEvidence:
+    policy = driver.ProductionArtifactPolicy()
+    packet_ref = (
+        "windows/window-1/vulkan-baseline/attempt-001/"
+        "packets/phase-packet.json"
+    )
+    packet_bytes = policy.encode(
+        "packet",
+        {
+            "binding_sha256": packet.binding_sha256,
+            **driver._phase_packet_fields(packet),
+        },
+    )
+    packet_doc = driver.cm.PersistedDoc(packet_bytes)
+    admission_ref = "command-vulkan-baseline-attempt-001-admission.json"
+    admission_bytes = policy.encode(
+        "command_admission",
+        {
+            "command": "vulkan-baseline",
+            "ordinal": 1,
+            "window_id": packet.window_id,
+            "status": "admitted",
+            "timestamp": "2026-07-14T08:00:00Z",
+        },
+    )
+    admission = driver.cm.CommandAdmissionPreimage(
+        admission_ref,
+        admission_bytes,
+    )
+    completion = driver.cm.CommandCompletionDoc(
+        command="vulkan-baseline",
+        ordinal=1,
+        window_id=packet.window_id,
+        admission_ref=admission.selected_ref,
+        admission_sha256=admission.file_sha256,
+        artifact_ref=packet_ref,
+        artifact_sha256=packet_doc.file_sha256,
+        artifact_schema=driver.cm.PHASE_PACKET_SCHEMA,
+        status="completed",
+        timestamp="2026-07-14T10:59:59Z",
+    )
+    completion_doc = driver.cm.PersistedDoc(
+        policy.encode(
+            "command_completion",
+            {
+                "binding_sha256": completion.binding_sha256,
+                "command": completion.command,
+                "ordinal": completion.ordinal,
+                "window_id": completion.window_id,
+                "admission_ref": completion.admission_ref,
+                "admission_sha256": completion.admission_sha256,
+                "artifact_ref": completion.artifact_ref,
+                "artifact_sha256": completion.artifact_sha256,
+                "artifact_schema": completion.artifact_schema,
+                "status": completion.status,
+                "timestamp": completion.timestamp,
+            },
+        )
+    )
+    return driver.ParentCompletionEvidence(
+        packet=packet,
+        packet_ref=packet_ref,
+        packet_doc=packet_doc,
+        admission=admission,
+        completion_doc=completion_doc,
+    )
+
+
+def _completion_doc_with_timestamp(
+    evidence: driver.ParentCompletionEvidence,
+    timestamp: str,
+) -> driver.cm.PersistedDoc:
+    completion = evidence.completion_doc.obj
+    assert type(completion) is driver.cm.CommandCompletionDoc
+    changed = replace(completion, timestamp=timestamp)
+    return driver.cm.PersistedDoc(
+        driver.ProductionArtifactPolicy().encode(
+            "command_completion",
+            {
+                "binding_sha256": changed.binding_sha256,
+                "command": changed.command,
+                "ordinal": changed.ordinal,
+                "window_id": changed.window_id,
+                "admission_ref": changed.admission_ref,
+                "admission_sha256": changed.admission_sha256,
+                "artifact_ref": changed.artifact_ref,
+                "artifact_sha256": changed.artifact_sha256,
+                "artifact_schema": changed.artifact_schema,
+                "status": changed.status,
+                "timestamp": changed.timestamp,
+            },
+        )
+    )
+
+
 class TestServerLauncherFinalizer:
     @pytest.fixture(autouse=True)
     def _owned_process_registry(
@@ -4452,6 +5420,256 @@ class TestAuthorizationArtifacts:
         _assert_refusal(exc, expected)
         assert list(private_root.rglob("*")) == []
 
+    def test_cuda_gate_rejects_bare_parent_packet_before_nonce_burn(
+        self, private_root: Path
+    ) -> None:
+        window, continuation, packet = _cuda_authorities()
+        receipt_root = private_root / "attempt"
+        receipt_root.mkdir(mode=0o700)
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.RealAuthorizationGate(
+                driver.ProductionArtifactPolicy()
+            ).consume(
+                continuation,
+                phase="cuda_candidate",
+                boot_id="boot-1",
+                expected_window_id="window-1",
+                parent_window=window,
+                parent_packet=packet,
+                parent_completion=None,
+                authority_root=private_root,
+                receipt_root=receipt_root,
+                clock=driver.FrozenClock("2026-07-14T11:30:00Z"),
+            )
+
+        _assert_refusal(exc, "continuation_parent_mismatch")
+        assert not (private_root / "markers").exists()
+        assert list(receipt_root.rglob("*")) == []
+
+    def test_cuda_gate_revalidates_parent_completion_before_nonce_burn(
+        self, private_root: Path
+    ) -> None:
+        window, continuation, packet = _cuda_authorities()
+        evidence = _parent_completion_evidence(packet)
+        object.__setattr__(evidence, "packet_ref", "packets/other.json")
+        receipt_root = private_root / "attempt"
+        receipt_root.mkdir(mode=0o700)
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.RealAuthorizationGate(
+                driver.ProductionArtifactPolicy()
+            ).consume(
+                continuation,
+                phase="cuda_candidate",
+                boot_id="boot-1",
+                expected_window_id="window-1",
+                parent_window=window,
+                parent_packet=packet,
+                parent_completion=evidence,
+                authority_root=private_root,
+                receipt_root=receipt_root,
+                clock=driver.FrozenClock("2026-07-14T11:30:00Z"),
+            )
+
+        _assert_refusal(exc, "continuation_parent_mismatch")
+        assert not (private_root / "markers").exists()
+        assert list(receipt_root.rglob("*")) == []
+
+    @pytest.mark.parametrize("case", ("forged_doc", "mutated_obj"))
+    def test_cuda_gate_requires_canonical_parent_completion_preimages(
+        self, private_root: Path, case: str
+    ) -> None:
+        window, continuation, packet = _cuda_authorities()
+        evidence = _parent_completion_evidence(packet)
+        if case == "forged_doc":
+            forged_doc = SimpleNamespace(
+                obj=evidence.completion_doc.obj,
+                file_sha256=evidence.completion_doc.file_sha256,
+            )
+            object.__setattr__(evidence, "completion_doc", forged_doc)
+        else:
+            completion = evidence.completion_doc.obj
+            assert type(completion) is driver.cm.CommandCompletionDoc
+            forged_ref = "packets/forged.json"
+            object.__setattr__(
+                evidence.completion_doc,
+                "_obj",
+                replace(completion, artifact_ref=forged_ref),
+            )
+            object.__setattr__(evidence, "packet_ref", forged_ref)
+        receipt_root = private_root / "attempt"
+        receipt_root.mkdir(mode=0o700)
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.RealAuthorizationGate(
+                driver.ProductionArtifactPolicy()
+            ).consume(
+                continuation,
+                phase="cuda_candidate",
+                boot_id="boot-1",
+                expected_window_id="window-1",
+                parent_window=window,
+                parent_packet=packet,
+                parent_completion=evidence,
+                authority_root=private_root,
+                receipt_root=receipt_root,
+                clock=driver.FrozenClock("2026-07-14T11:30:00Z"),
+            )
+
+        _assert_refusal(exc, "continuation_parent_mismatch")
+        assert not (private_root / "markers").exists()
+        assert list(receipt_root.rglob("*")) == []
+
+    def test_cuda_gate_rejects_completion_before_parent_packet_without_burn(
+        self, private_root: Path
+    ) -> None:
+        packet = replace(
+            _scorer_phase_packet(),
+            timestamp="2026-07-14T10:59:58Z",
+        )
+        window, continuation, packet = _cuda_authorities(packet=packet)
+        evidence = _parent_completion_evidence(packet)
+        object.__setattr__(
+            evidence,
+            "completion_doc",
+            _completion_doc_with_timestamp(
+                evidence,
+                "2026-07-14T10:59:57Z",
+            ),
+        )
+        receipt_root = private_root / "attempt"
+        receipt_root.mkdir(mode=0o700)
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.RealAuthorizationGate(
+                driver.ProductionArtifactPolicy()
+            ).consume(
+                continuation,
+                phase="cuda_candidate",
+                boot_id="boot-1",
+                expected_window_id="window-1",
+                parent_window=window,
+                parent_packet=packet,
+                parent_completion=evidence,
+                authority_root=private_root,
+                receipt_root=receipt_root,
+                clock=driver.FrozenClock("2026-07-14T11:30:00Z"),
+            )
+
+        _assert_refusal(exc, "continuation_parent_mismatch")
+        assert not (private_root / "markers").exists()
+        assert list(receipt_root.rglob("*")) == []
+
+    @pytest.mark.parametrize(
+        "completion_timestamp",
+        (
+            "2026-07-14T11:00:01Z",
+            "2026-07-14T11:30:01Z",
+        ),
+    )
+    def test_cuda_gate_rejects_parent_completion_after_authority_or_consumption(
+        self,
+        private_root: Path,
+        completion_timestamp: str,
+    ) -> None:
+        window, continuation, packet = _cuda_authorities()
+        evidence = _parent_completion_evidence(packet)
+        object.__setattr__(
+            evidence,
+            "completion_doc",
+            _completion_doc_with_timestamp(
+                evidence,
+                completion_timestamp,
+            ),
+        )
+        receipt_root = private_root / "attempt"
+        receipt_root.mkdir(mode=0o700)
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.RealAuthorizationGate(
+                driver.ProductionArtifactPolicy()
+            ).consume(
+                continuation,
+                phase="cuda_candidate",
+                boot_id="boot-1",
+                expected_window_id="window-1",
+                parent_window=window,
+                parent_packet=packet,
+                parent_completion=evidence,
+                authority_root=private_root,
+                receipt_root=receipt_root,
+                clock=driver.FrozenClock("2026-07-14T11:30:00Z"),
+            )
+
+        _assert_refusal(exc, "continuation_parent_mismatch")
+        assert not (private_root / "markers").exists()
+        assert list(receipt_root.rglob("*")) == []
+
+    def test_verified_pair_rejects_swapped_admission_command(
+        self, private_root: Path
+    ) -> None:
+        _window, _continuation, packet = _cuda_authorities()
+        evidence = _parent_completion_evidence(packet)
+        policy = driver.ProductionArtifactPolicy()
+        swapped_ref = "command-cuda-candidate-attempt-001-admission.json"
+        swapped_bytes = policy.encode(
+            "command_admission",
+            {
+                "command": "cuda-candidate",
+                "ordinal": evidence.admission.ordinal,
+                "window_id": packet.window_id,
+                "status": "admitted",
+                "timestamp": evidence.admission.timestamp,
+            },
+        )
+        swapped_admission = driver.cm.CommandAdmissionPreimage(
+            swapped_ref,
+            swapped_bytes,
+        )
+        completion = evidence.completion_doc.obj
+        assert type(completion) is driver.cm.CommandCompletionDoc
+        swapped_completion = replace(
+            completion,
+            admission_ref=swapped_admission.selected_ref,
+            admission_sha256=swapped_admission.file_sha256,
+        )
+        completion_ref = (
+            "command-vulkan-baseline-attempt-001-completion.json"
+        )
+        completion_bytes = policy.encode(
+            "command_completion",
+            {
+                "binding_sha256": swapped_completion.binding_sha256,
+                "command": swapped_completion.command,
+                "ordinal": swapped_completion.ordinal,
+                "window_id": swapped_completion.window_id,
+                "admission_ref": swapped_completion.admission_ref,
+                "admission_sha256": swapped_completion.admission_sha256,
+                "artifact_ref": swapped_completion.artifact_ref,
+                "artifact_sha256": swapped_completion.artifact_sha256,
+                "artifact_schema": swapped_completion.artifact_schema,
+                "status": swapped_completion.status,
+                "timestamp": swapped_completion.timestamp,
+            },
+        )
+        _private_file(private_root / swapped_ref, swapped_bytes)
+        _private_file(private_root / completion_ref, completion_bytes)
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver._load_verified_completion_pair(
+                admission_ref=swapped_ref,
+                completion_ref=completion_ref,
+                artifact_ref=evidence.packet_ref,
+                artifact_bytes=evidence.packet_doc.wrapper_bytes,
+                expected_command="vulkan-baseline",
+                expected_window_id=packet.window_id,
+                expected_type=driver.cm.PhasePacket,
+                root=private_root,
+            )
+
+        _assert_refusal(exc, "continuation_parent_mismatch")
+
     @pytest.mark.parametrize("field", ["owner", "window_id", "boot_id"])
     def test_continuation_must_match_every_parent_window_scope_field(
         self, private_root: Path, field: str
@@ -4471,6 +5689,7 @@ class TestAuthorizationArtifacts:
                 policy=driver.ProductionArtifactPolicy(),
                 parent_window=window,
                 parent_packet=packet,
+                parent_completion=_parent_completion_evidence(packet),
             )
         _assert_refusal(exc, "authorization_scope_mismatch")
         assert list(private_root.rglob("*")) == []
@@ -4525,6 +5744,7 @@ class TestAuthorizationArtifacts:
                 policy=driver.ProductionArtifactPolicy(),
                 parent_window=window,
                 parent_packet=packet,
+                parent_completion=_parent_completion_evidence(packet),
             )
         _assert_refusal(exc, "authorization_expired")
         assert list(private_root.rglob("*")) == []
@@ -4962,9 +6182,13 @@ class TestAuthorizationArtifacts:
 
     def test_all_inv_2_surfaces_keep_the_identical_postponed_annotation(self) -> None:
         surfaces = (
+            driver.AuthorizationGate.validate,
             driver.AuthorizationGate.consume,
+            driver.RealAuthorizationGate.validate,
             driver.RealAuthorizationGate.consume,
+            driver.RehearsalAuthorizationGate.validate,
             driver.RehearsalAuthorizationGate.consume,
+            driver.validate_authorization,
             driver.consume_authorization,
         )
         for surface in surfaces:
@@ -4972,6 +6196,15 @@ class TestAuthorizationArtifacts:
                 "cm.PhasePacket | None"
             )
             assert surface.__annotations__["parent_packet"] == "cm.PhasePacket | None"
+            assert (
+                inspect.signature(surface)
+                .parameters["parent_completion"]
+                .annotation
+                == "ParentCompletionEvidence | None"
+            )
+            assert surface.__annotations__["parent_completion"] == (
+                "ParentCompletionEvidence | None"
+            )
 
 
 # Task 3 command-admission REDs intentionally resolve new APIs at test runtime.
@@ -9488,6 +10721,90 @@ class TestB7PhaseStateMachine:
             except OSError:
                 pass
 
+    def test_production_phase_rejects_static_completion_before_admission(
+        self, private_root: Path
+    ) -> None:
+        config, _pin, _static, _identity = _b7_production_contract_case(
+            private_root,
+            "vulkan_baseline",
+        )
+        policy = driver.ProductionArtifactPolicy()
+        admission_ref = "command-static-preflight-attempt-001-admission.json"
+        admission_bytes = policy.encode(
+            "command_admission",
+            {
+                "command": "static-preflight",
+                "ordinal": 1,
+                "window_id": None,
+                "status": "admitted",
+                "timestamp": "2026-07-15T12:00:02Z",
+            },
+        )
+        admission = driver.cm.CommandAdmissionPreimage(
+            admission_ref,
+            admission_bytes,
+        )
+        static_bytes = driver.open_bench_file(
+            config.static_preflight_path,
+            root=private_root,
+        )
+        static_doc = driver.cm.PersistedDoc(static_bytes)
+        completion = driver.cm.CommandCompletionDoc(
+            command="static-preflight",
+            ordinal=admission.ordinal,
+            window_id=None,
+            admission_ref=admission.selected_ref,
+            admission_sha256=admission.file_sha256,
+            artifact_ref=config.static_preflight_path,
+            artifact_sha256=static_doc.file_sha256,
+            artifact_schema=driver.cm.STATIC_PREFLIGHT_SCHEMA,
+            status="completed",
+            timestamp="2026-07-15T12:00:01Z",
+        )
+        completion_ref = (
+            "command-static-preflight-attempt-001-completion.json"
+        )
+        completion_bytes = policy.encode(
+            "command_completion",
+            {
+                "binding_sha256": completion.binding_sha256,
+                "command": completion.command,
+                "ordinal": completion.ordinal,
+                "window_id": completion.window_id,
+                "admission_ref": completion.admission_ref,
+                "admission_sha256": completion.admission_sha256,
+                "artifact_ref": completion.artifact_ref,
+                "artifact_sha256": completion.artifact_sha256,
+                "artifact_schema": completion.artifact_schema,
+                "status": completion.status,
+                "timestamp": completion.timestamp,
+            },
+        )
+        _private_file(private_root / admission_ref, admission_bytes)
+        _private_file(private_root / completion_ref, completion_bytes)
+        attempt_root = private_root / "attempt"
+        attempt_root.mkdir(mode=0o700)
+        config = replace(
+            config,
+            static_admission_path=admission_ref,
+            static_completion_path=completion_ref,
+        )
+        providers = driver.production_tier(
+            **_provider_components("production")
+        )
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver._load_phase_preimages(
+                config,
+                providers,
+                root=private_root,
+                attempt_root=attempt_root,
+            )
+
+        _assert_refusal(exc, "identity_mismatch")
+        assert not (private_root / "markers").exists()
+        assert list(attempt_root.iterdir()) == []
+
     def test_healthy_rehearsal_runs_three_cycles_and_writes_incompatible_evidence(
         self, private_root: Path
     ) -> None:
@@ -10273,12 +11590,11 @@ class TestB7RemainingSpecGate:
 
         monkeypatch.setattr(driver.signal, "signal", fail_after_committed_terminal)
 
-        path = driver.run_phase(harness.config, harness.providers, root=private_root)
-        terminals = list(private_root.rglob("vulkan_baseline-*.json"))
+        with pytest.raises(driver.BenchRefusal, match="^cleanup_incomplete$"):
+            driver.run_phase(harness.config, harness.providers, root=private_root)
 
         assert raised is True
-        assert _b7_wrapper(path)["payload"]["fields"]["outcome"] == "completed"
-        assert terminals == [path]
+        assert not list(private_root.rglob("*command-completion*.json"))
 
     def test_post_terminal_signal_mask_restore_failure_returns_committed_path(
         self, private_root: Path, monkeypatch: pytest.MonkeyPatch
@@ -10301,12 +11617,11 @@ class TestB7RemainingSpecGate:
 
         monkeypatch.setattr(driver.signal, "pthread_sigmask", fail_after_committed_terminal)
 
-        path = driver.run_phase(harness.config, harness.providers, root=private_root)
-        terminals = list(private_root.rglob("vulkan_baseline-*.json"))
+        with pytest.raises(driver.BenchRefusal, match="^cleanup_incomplete$"):
+            driver.run_phase(harness.config, harness.providers, root=private_root)
 
         assert raised is True
-        assert _b7_wrapper(path)["payload"]["fields"]["outcome"] == "completed"
-        assert terminals == [path]
+        assert not list(private_root.rglob("*command-completion*.json"))
 
     def test_sigterm_at_completed_link_returns_only_the_committed_terminal(
         self, private_root: Path, monkeypatch: pytest.MonkeyPatch
@@ -10331,15 +11646,15 @@ class TestB7RemainingSpecGate:
         terminals = list(private_root.rglob("vulkan_baseline-*.json"))
 
         assert raised is True
-        assert path.name == "vulkan_baseline-completed.json"
-        assert _b7_wrapper(path)["payload"]["fields"]["outcome"] == "completed"
-        assert terminals == [path]
+        assert path.name != "vulkan_baseline-completed.json"
+        assert _b7_wrapper(path)["payload"]["fields"]["outcome"] != "completed"
+        assert not list(private_root.rglob("*command-completion*.json"))
+        assert path in terminals
 
     @pytest.mark.parametrize(
         ("terminal_kind", "expected_outcome"),
         [
             ("completed", "completed"),
-            ("reduced", "preflight_service_active"),
         ],
     )
     def test_postlink_fsync_failure_returns_only_the_committed_terminal(
@@ -10350,8 +11665,6 @@ class TestB7RemainingSpecGate:
         expected_outcome: str,
     ) -> None:
         harness = _b7_harness(private_root, nonce=hashlib.sha256(terminal_kind.encode()).hexdigest())
-        if terminal_kind == "reduced":
-            harness.providers.service_state._states["llama-server.service"] = "active"
         real_fsync = driver.os.fsync
         failed = False
 
@@ -10372,8 +11685,22 @@ class TestB7RemainingSpecGate:
         terminals = list(private_root.rglob("vulkan_baseline-*.json"))
 
         assert failed is True
-        assert _b7_wrapper(path)["payload"]["fields"]["outcome"] == expected_outcome
-        assert terminals == [path]
+        observed = _b7_wrapper(path)["payload"]["fields"]["outcome"]
+        if terminal_kind == "completed":
+            assert observed in {"filesystem_hazard", "journal_failure"}
+            assert not list(
+                private_root.rglob("*command-completion*.json")
+            )
+            orphan = next(
+                private_root.rglob("vulkan_baseline-completed.json")
+            )
+            assert orphan != path
+            assert _b7_wrapper(orphan)["payload"]["fields"]["outcome"] == (
+                "completed"
+            )
+        else:
+            assert observed == expected_outcome
+        assert path in terminals
 
     def test_failed_after_spawn_journal_closes_the_full_evidence_tail(
         self, private_root: Path, monkeypatch: pytest.MonkeyPatch
@@ -10829,6 +12156,49 @@ class TestB7AttemptAllocation:
         assert calls == 2
 
 
+class TestCompletionArtifactPolicy:
+    def test_command_completion_schema_is_the_twenty_fourth_closed_family(
+        self,
+    ) -> None:
+        assert len(driver.cm.ACTIVE_SCHEMA_FAMILIES) == 24
+        assert len(set(driver.cm.ACTIVE_SCHEMA_FAMILIES)) == 24
+        assert (
+            "cuda_bench_driver.command_completion.v1"
+            in driver.cm.ACTIVE_SCHEMA_FAMILIES
+        )
+        assert driver._ARTIFACT_SCHEMAS["command_completion"] == (
+            "cuda_bench_driver.command_completion.v1"
+        )
+        fields = {
+            "binding_sha256": "a" * 64,
+            "command": "static-preflight",
+            "ordinal": 1,
+            "window_id": None,
+            "admission_ref": "command-static-preflight-attempt-001-admission.json",
+            "admission_sha256": "b" * 64,
+            "artifact_ref": "receipts/static-preflight-attempt-001.json",
+            "artifact_sha256": "c" * 64,
+            "artifact_schema": driver.STATIC_PREFLIGHT_SCHEMA,
+            "status": "completed",
+            "timestamp": "2026-07-15T11:59:00Z",
+        }
+        production = json.loads(
+            driver.ProductionArtifactPolicy().encode(
+                "command_completion", fields
+            )
+        )
+        rehearsal = json.loads(
+            driver.RehearsalArtifactPolicy().encode(
+                "command_completion", fields
+            )
+        )
+        assert production["schema"] == (
+            "cuda_bench_driver.command_completion.v1"
+        )
+        assert rehearsal["rehearsal_schema"] == driver.REHEARSAL_PACKET_SCHEMA
+        assert "schema" not in rehearsal
+
+
 class TestB7AuthorizationSplit:
     def test_validate_is_write_free_and_consume_revalidates_into_separate_roots(
         self, private_root: Path, monkeypatch: pytest.MonkeyPatch
@@ -10978,3 +12348,12 @@ class TestB7AuthorizationSplit:
                 "cm.PhasePacket | None"
             )
             assert surface.__annotations__["parent_packet"] == "cm.PhasePacket | None"
+            assert (
+                inspect.signature(surface)
+                .parameters["parent_completion"]
+                .annotation
+                == "ParentCompletionEvidence | None"
+            )
+            assert surface.__annotations__["parent_completion"] == (
+                "ParentCompletionEvidence | None"
+            )

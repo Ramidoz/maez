@@ -12,12 +12,14 @@ import signal
 import subprocess
 import sys
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from scripts import cuda_bench_cli as cli
 from scripts import cuda_bench_driver as driver
+from scripts import cuda_migration as cm
 
 
 PUBLIC_COMMANDS = (
@@ -77,6 +79,1738 @@ class _FixedClock:
         return 0.0
 
 
+def _static_test_observation() -> cli.StaticObservation:
+    stub_sha = "a" * 64
+    doc = cm.StaticPreflightDoc(
+        gpu_uuid="GPU-01234567-89ab-cdef-0123-456789abcdef",
+        driver_package_sha256="b" * 64,
+        stub_sha256=stub_sha,
+        corpus_verified=True,
+        checks={
+            "corpus": cm.FROZEN_CORPUS_SHA256,
+            "incumbent_unit": cm.FROZEN_VULKAN_UNIT_SHA256,
+            "incumbent_dropin": cm.FROZEN_VULKAN_DROPIN_SHA256,
+            "incumbent_server": cm.FROZEN_VULKAN_RUNTIME_SHA256,
+            "model": cm.FROZEN_MODEL_SHA256,
+            "library_manifest": cm.FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256,
+            "effective_args": cm.FROZEN_VULKAN_EFFECTIVE_ARGS_SHA256,
+            "flag_source": "c" * 64,
+            "vision_unit": "d" * 64,
+            "candidate_manifest": cm.FROZEN_CUDA_RUNTIME_MANIFEST_SHA256,
+            "bench_root_mode": "700",
+            "stub_pin": stub_sha,
+        },
+        timestamp=FIXED_TIMESTAMP,
+    )
+    return cli.StaticObservation(
+        doc, object(), cm.frozen_rollback_manifest_preimage()
+    )
+
+
+def _write_candidate_file(path: Path, payload: bytes) -> tuple[str, int]:
+    path.write_bytes(payload)
+    os.chmod(path, 0o700 if path.name == "llama-server" else 0o600)
+    return hashlib.sha256(payload).hexdigest(), len(payload)
+
+
+def _self_consistent_candidate(root: Path) -> tuple[str, str, str]:
+    root.mkdir()
+    cuda_sha, cuda_size = _write_candidate_file(
+        root / "libggml-cuda.so", b"substitute-cuda"
+    )
+    server_sha, server_size = _write_candidate_file(
+        root / "llama-server", b"substitute-server"
+    )
+    rows = (
+        f"F\t{cuda_sha}\t{cuda_size}\tlibggml-cuda.so\n"
+        f"F\t{server_sha}\t{server_size}\tllama-server\n"
+    ).encode()
+    (root / "runtime-manifest.sha256").write_bytes(rows)
+    os.chmod(root / "runtime-manifest.sha256", 0o600)
+    return server_sha, cuda_sha, hashlib.sha256(rows).hexdigest()
+
+
+def _candidate_rows(root: Path) -> tuple[str, str, list[str]]:
+    root.mkdir()
+    cuda_sha, cuda_size = _write_candidate_file(
+        root / "libggml-cuda.so", b"cuda"
+    )
+    server_sha, server_size = _write_candidate_file(
+        root / "llama-server", b"server"
+    )
+    return (
+        server_sha,
+        cuda_sha,
+        [
+            f"F\t{cuda_sha}\t{cuda_size}\tlibggml-cuda.so\n",
+            f"F\t{server_sha}\t{server_size}\tllama-server\n",
+        ],
+    )
+
+
+def _write_runtime_manifest(root: Path, rows: list[str]) -> bytes:
+    payload = "".join(rows).encode()
+    path = root / "runtime-manifest.sha256"
+    path.write_bytes(payload)
+    os.chmod(path, 0o600)
+    return payload
+
+
+def _pin_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    server_sha: str,
+    cuda_sha: str,
+    manifest: bytes,
+) -> None:
+    monkeypatch.setattr(cm, "FROZEN_CUDA_SERVER_SHA256", server_sha)
+    monkeypatch.setattr(cm, "FROZEN_CUDA_BACKEND_SHA256", cuda_sha)
+    monkeypatch.setattr(
+        cm,
+        "FROZEN_CUDA_RUNTIME_MANIFEST_SHA256",
+        hashlib.sha256(manifest).hexdigest(),
+    )
+
+
+class TestTask4StaticPreflight:
+    def test_static_preflight_canonical_asset_paths_are_exact(self) -> None:
+        paths = cli.CANONICAL_STATIC_ASSETS
+        assert paths == cli.StaticAssetPaths(
+            unit=Path("/home/rohit/.config/systemd/user/llama-server.service"),
+            dropin=Path(
+                "/home/rohit/.config/systemd/user/"
+                "llama-server.service.d/mtp.conf"
+            ),
+            vulkan_root=cm.VULKAN_RELEASE_ROOT,
+            candidate_root=cm.CUDA_RELEASE_ROOT,
+            model=Path(cm.FROZEN_MODEL_PATH),
+            cuda_override=Path(
+                "/home/rohit/maez/config/systemd/"
+                "llama-server-b9596-cuda.override.conf"
+            ),
+            nvcc=Path("/usr/local/cuda-13.2/bin/nvcc"),
+            cmake=Path("/usr/bin/cmake"),
+            nvidia_smi=Path("/usr/bin/nvidia-smi"),
+            flag_source=driver.SCREEN_FLAG_SOURCE_PATH,
+            vision_unit=driver.VISION_UNIT_PATH,
+            stub=Path("/home/rohit/maez/scripts/cuda_bench_stub.py"),
+        )
+
+    def test_runtime_manifest_self_consistent_substitute_cannot_inherit_identity(
+        self, tmp_path: Path
+    ) -> None:
+        candidate = tmp_path / "candidate"
+        server_sha, cuda_sha, manifest_sha = _self_consistent_candidate(candidate)
+        assert server_sha != cm.FROZEN_CUDA_SERVER_SHA256
+        assert cuda_sha != cm.FROZEN_CUDA_BACKEND_SHA256
+        assert manifest_sha != cm.FROZEN_CUDA_RUNTIME_MANIFEST_SHA256
+
+        with pytest.raises(driver.BenchRefusal, match="identity_mismatch"):
+            cli._verify_candidate_runtime_manifest(candidate)
+
+    def test_runtime_manifest_symlink_cuda_backend_refuses_even_when_target_verifies(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        candidate = tmp_path / "candidate"
+        candidate.mkdir()
+        target_sha, target_size = _write_candidate_file(
+            candidate / "libggml-cuda.so.1", b"cuda-backend"
+        )
+        (candidate / "libggml-cuda.so").symlink_to("libggml-cuda.so.1")
+        server_sha, server_size = _write_candidate_file(
+            candidate / "llama-server", b"server"
+        )
+        link_sha = hashlib.sha256(b"libggml-cuda.so.1").hexdigest()
+        rows = (
+            f"L\t{link_sha}\tlibggml-cuda.so\tlibggml-cuda.so.1\n"
+            f"F\t{target_sha}\t{target_size}\tlibggml-cuda.so.1\n"
+            f"F\t{server_sha}\t{server_size}\tllama-server\n"
+        ).encode()
+        (candidate / "runtime-manifest.sha256").write_bytes(rows)
+        os.chmod(candidate / "runtime-manifest.sha256", 0o600)
+        monkeypatch.setattr(cm, "FROZEN_CUDA_SERVER_SHA256", server_sha)
+        monkeypatch.setattr(cm, "FROZEN_CUDA_BACKEND_SHA256", target_sha)
+        monkeypatch.setattr(
+            cm,
+            "FROZEN_CUDA_RUNTIME_MANIFEST_SHA256",
+            hashlib.sha256(rows).hexdigest(),
+        )
+
+        with pytest.raises(driver.BenchRefusal, match="identity_mismatch"):
+            cli._verify_candidate_runtime_manifest(candidate)
+        assert link_sha != target_sha
+
+    def test_runtime_manifest_library_hashes_include_exact_regular_cuda_backend(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        candidate = tmp_path / "candidate"
+        server_sha, cuda_sha, manifest_sha = _self_consistent_candidate(candidate)
+        monkeypatch.setattr(cm, "FROZEN_CUDA_SERVER_SHA256", server_sha)
+        monkeypatch.setattr(cm, "FROZEN_CUDA_BACKEND_SHA256", cuda_sha)
+        monkeypatch.setattr(
+            cm, "FROZEN_CUDA_RUNTIME_MANIFEST_SHA256", manifest_sha
+        )
+
+        observed = cli._verify_candidate_runtime_manifest(candidate)
+
+        assert observed.library_hashes["libggml-cuda.so"] == cuda_sha
+
+    @pytest.mark.parametrize("pin", ("server", "backend", "manifest"))
+    def test_runtime_manifest_enforces_each_frozen_candidate_pin_independently(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        pin: str,
+    ) -> None:
+        candidate = tmp_path / "candidate"
+        server_sha, cuda_sha, manifest_sha = _self_consistent_candidate(candidate)
+        monkeypatch.setattr(cm, "FROZEN_CUDA_SERVER_SHA256", server_sha)
+        monkeypatch.setattr(cm, "FROZEN_CUDA_BACKEND_SHA256", cuda_sha)
+        monkeypatch.setattr(
+            cm, "FROZEN_CUDA_RUNTIME_MANIFEST_SHA256", manifest_sha
+        )
+        monkeypatch.setattr(
+            cm,
+            {
+                "server": "FROZEN_CUDA_SERVER_SHA256",
+                "backend": "FROZEN_CUDA_BACKEND_SHA256",
+                "manifest": "FROZEN_CUDA_RUNTIME_MANIFEST_SHA256",
+            }[pin],
+            "0" * 64,
+        )
+
+        with pytest.raises(driver.BenchRefusal, match="identity_mismatch"):
+            cli._verify_candidate_runtime_manifest(candidate)
+
+    @pytest.mark.parametrize(
+        "hazard",
+        (
+            "grammar",
+            "order",
+            "duplicate",
+            "control",
+            "hash",
+            "size",
+            "unlisted",
+            "vulkan",
+        ),
+    )
+    def test_runtime_manifest_strict_candidate_hazards_refuse(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        hazard: str,
+    ) -> None:
+        candidate = tmp_path / "candidate"
+        server_sha, cuda_sha, rows = _candidate_rows(candidate)
+        if hazard == "grammar":
+            rows[0] = "X\t" + rows[0][2:]
+        elif hazard == "order":
+            rows.reverse()
+        elif hazard == "duplicate":
+            rows.insert(1, rows[0])
+        elif hazard == "control":
+            rows[0] = rows[0].replace("libggml-cuda.so", "libggml-\x01cuda.so")
+        elif hazard == "hash":
+            fields = rows[0].split("\t")
+            fields[1] = "0" * 64
+            rows[0] = "\t".join(fields)
+        elif hazard == "size":
+            fields = rows[0].split("\t")
+            fields[2] = str(int(fields[2]) + 1)
+            rows[0] = "\t".join(fields)
+        elif hazard == "unlisted":
+            _write_candidate_file(candidate / "extra", b"extra")
+        elif hazard == "vulkan":
+            digest, size = _write_candidate_file(
+                candidate / "libggml-vulkan.so", b"vulkan"
+            )
+            rows.insert(
+                1, f"F\t{digest}\t{size}\tlibggml-vulkan.so\n"
+            )
+        manifest = _write_runtime_manifest(candidate, rows)
+        _pin_candidate(
+            monkeypatch,
+            server_sha=server_sha,
+            cuda_sha=cuda_sha,
+            manifest=manifest,
+        )
+
+        with pytest.raises(driver.BenchRefusal, match="identity_mismatch"):
+            cli._verify_candidate_runtime_manifest(candidate)
+
+    @pytest.mark.parametrize(
+        "hazard", ("external", "cycle", "dangling", "unlisted_target")
+    )
+    def test_runtime_manifest_symlink_chain_hazards_refuse(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        hazard: str,
+    ) -> None:
+        candidate = tmp_path / "candidate"
+        server_sha, cuda_sha, rows = _candidate_rows(candidate)
+        if hazard == "external":
+            (candidate / "libalias.so").symlink_to("../outside")
+            target = "../outside"
+            rows.insert(
+                1,
+                "L\t"
+                + hashlib.sha256(os.fsencode(target)).hexdigest()
+                + f"\tlibalias.so\t{target}\n",
+            )
+        elif hazard == "cycle":
+            (candidate / "libalias.so").symlink_to("libalias2.so")
+            (candidate / "libalias2.so").symlink_to("libalias.so")
+            for name, target in (
+                ("libalias.so", "libalias2.so"),
+                ("libalias2.so", "libalias.so"),
+            ):
+                rows.insert(
+                    1,
+                    "L\t"
+                    + hashlib.sha256(os.fsencode(target)).hexdigest()
+                    + f"\t{name}\t{target}\n",
+                )
+        elif hazard == "dangling":
+            (candidate / "libalias.so").symlink_to("libmissing.so")
+            target = "libmissing.so"
+            rows.insert(
+                1,
+                "L\t"
+                + hashlib.sha256(os.fsencode(target)).hexdigest()
+                + f"\tlibalias.so\t{target}\n",
+            )
+        else:
+            _write_candidate_file(candidate / "libtarget.so", b"target")
+            (candidate / "libalias.so").symlink_to("libtarget.so")
+            target = "libtarget.so"
+            rows.insert(
+                1,
+                "L\t"
+                + hashlib.sha256(os.fsencode(target)).hexdigest()
+                + f"\tlibalias.so\t{target}\n",
+            )
+        rows.sort(key=lambda row: os.fsencode(row.split("\t")[2 if row.startswith("L") else 3]))
+        manifest = _write_runtime_manifest(candidate, rows)
+        _pin_candidate(
+            monkeypatch,
+            server_sha=server_sha,
+            cuda_sha=cuda_sha,
+            manifest=manifest,
+        )
+
+        with pytest.raises(driver.BenchRefusal, match="identity_mismatch"):
+            cli._verify_candidate_runtime_manifest(candidate)
+
+    @pytest.mark.parametrize("target_hash_kind", ("literal", "referent"))
+    def test_runtime_manifest_auxiliary_link_hashes_literal_target_only(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        target_hash_kind: str,
+    ) -> None:
+        candidate = tmp_path / "candidate"
+        server_sha, cuda_sha, rows = _candidate_rows(candidate)
+        target_sha, target_size = _write_candidate_file(
+            candidate / "libtarget.so", b"target"
+        )
+        target = "libtarget.so"
+        (candidate / "libalias.so").symlink_to(target)
+        link_sha = (
+            hashlib.sha256(os.fsencode(target)).hexdigest()
+            if target_hash_kind == "literal"
+            else target_sha
+        )
+        rows.extend(
+            (
+                f"L\t{link_sha}\tlibalias.so\t{target}\n",
+                f"F\t{target_sha}\t{target_size}\tlibtarget.so\n",
+            )
+        )
+        rows.sort(key=lambda row: os.fsencode(row.split("\t")[2 if row.startswith("L") else 3]))
+        manifest = _write_runtime_manifest(candidate, rows)
+        _pin_candidate(
+            monkeypatch,
+            server_sha=server_sha,
+            cuda_sha=cuda_sha,
+            manifest=manifest,
+        )
+
+        if target_hash_kind == "referent":
+            with pytest.raises(driver.BenchRefusal, match="identity_mismatch"):
+                cli._verify_candidate_runtime_manifest(candidate)
+        else:
+            observed = cli._verify_candidate_runtime_manifest(candidate)
+            assert "libalias.so" not in observed.library_hashes
+            assert observed.library_hashes["libtarget.so"] == target_sha
+
+    @pytest.mark.parametrize(
+        "hazard",
+        (
+            "f_is_symlink",
+            "self_manifest",
+            "missing_field",
+            "extra_field",
+            "missing_newline",
+            "crlf",
+        ),
+    )
+    def test_runtime_manifest_row_shape_and_regular_file_contract_refuses(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        hazard: str,
+    ) -> None:
+        candidate = tmp_path / "candidate"
+        server_sha, cuda_sha, rows = _candidate_rows(candidate)
+        if hazard == "f_is_symlink":
+            backend = candidate / "libggml-cuda.so"
+            backend.rename(candidate / "libggml-cuda.so.1")
+            backend.symlink_to("libggml-cuda.so.1")
+        elif hazard == "self_manifest":
+            rows.append(
+                f"F\t{'0' * 64}\t0\truntime-manifest.sha256\n"
+            )
+            rows.sort(key=lambda row: os.fsencode(row.split("\t")[3]))
+        elif hazard == "missing_field":
+            rows[0] = "\t".join(rows[0].rstrip("\n").split("\t")[:-1]) + "\n"
+        elif hazard == "extra_field":
+            rows[0] = rows[0].rstrip("\n") + "\textra\n"
+        elif hazard == "missing_newline":
+            rows[-1] = rows[-1].rstrip("\n")
+        elif hazard == "crlf":
+            rows[0] = rows[0].rstrip("\n") + "\r\n"
+        manifest = _write_runtime_manifest(candidate, rows)
+        _pin_candidate(
+            monkeypatch,
+            server_sha=server_sha,
+            cuda_sha=cuda_sha,
+            manifest=manifest,
+        )
+
+        with pytest.raises(driver.BenchRefusal, match="identity_mismatch"):
+            cli._verify_candidate_runtime_manifest(candidate)
+
+    @pytest.mark.parametrize("mutation", ("add_unlisted", "replace_verified"))
+    def test_runtime_manifest_refuses_bundle_drift_during_verification(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        mutation: str,
+    ) -> None:
+        candidate = tmp_path / "candidate"
+        server_sha, cuda_sha, manifest_sha = _self_consistent_candidate(candidate)
+        monkeypatch.setattr(cm, "FROZEN_CUDA_SERVER_SHA256", server_sha)
+        monkeypatch.setattr(cm, "FROZEN_CUDA_BACKEND_SHA256", cuda_sha)
+        monkeypatch.setattr(
+            cm, "FROZEN_CUDA_RUNTIME_MANIFEST_SHA256", manifest_sha
+        )
+        real_stable = cli._stable_regular_record_at
+        fired = False
+
+        def mutate_after_first_verified(
+            directory_fd: int, name: str
+        ) -> cli._StaticRegularRecord:
+            nonlocal fired
+            observed = real_stable(directory_fd, name)
+            if not fired:
+                fired = True
+                if mutation == "add_unlisted":
+                    _write_candidate_file(candidate / "unlisted", b"x")
+                else:
+                    path = candidate / name
+                    path.write_bytes(b"X" * observed.size)
+            return observed
+
+        monkeypatch.setattr(
+            cli, "_stable_regular_record_at", mutate_after_first_verified
+        )
+
+        with pytest.raises(driver.BenchRefusal, match="identity_mismatch"):
+            cli._verify_candidate_runtime_manifest(candidate)
+
+    def test_runtime_manifest_final_barrier_rebinds_canonical_candidate_path(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        candidate = tmp_path / "candidate"
+        server_sha, cuda_sha, manifest_sha = _self_consistent_candidate(candidate)
+        monkeypatch.setattr(cm, "FROZEN_CUDA_SERVER_SHA256", server_sha)
+        monkeypatch.setattr(cm, "FROZEN_CUDA_BACKEND_SHA256", cuda_sha)
+        monkeypatch.setattr(
+            cm, "FROZEN_CUDA_RUNTIME_MANIFEST_SHA256", manifest_sha
+        )
+        real_listdir = cli.os.listdir
+        calls = 0
+
+        def replace_after_final_listing(path: object) -> list[str]:
+            nonlocal calls
+            names = real_listdir(path)
+            calls += 1
+            if calls == 3:
+                candidate.rename(tmp_path / "candidate-original")
+                candidate.mkdir()
+            return names
+
+        monkeypatch.setattr(cli.os, "listdir", replace_after_final_listing)
+
+        with pytest.raises(driver.BenchRefusal, match="identity_mismatch"):
+            cli._verify_candidate_runtime_manifest(candidate)
+
+        assert calls >= 3
+
+    def test_runtime_manifest_final_barrier_rechecks_earlier_file_identity(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        candidate = tmp_path / "candidate"
+        server_sha, cuda_sha, manifest_sha = _self_consistent_candidate(candidate)
+        monkeypatch.setattr(cm, "FROZEN_CUDA_SERVER_SHA256", server_sha)
+        monkeypatch.setattr(cm, "FROZEN_CUDA_BACKEND_SHA256", cuda_sha)
+        monkeypatch.setattr(
+            cm, "FROZEN_CUDA_RUNTIME_MANIFEST_SHA256", manifest_sha
+        )
+        real_stable = cli._stable_regular_record_at
+        calls = 0
+
+        def mutate_earlier_before_later_completes(
+            directory_fd: int, name: str
+        ) -> cli._StaticRegularRecord:
+            nonlocal calls
+            calls += 1
+            if calls == 4:
+                backend = candidate / "libggml-cuda.so"
+                backend.write_bytes(b"X" * backend.stat().st_size)
+            return real_stable(directory_fd, name)
+
+        monkeypatch.setattr(
+            cli,
+            "_stable_regular_record_at",
+            mutate_earlier_before_later_completes,
+        )
+
+        with pytest.raises(driver.BenchRefusal, match="identity_mismatch"):
+            cli._verify_candidate_runtime_manifest(candidate)
+
+        assert calls == 4
+
+    def test_host_observation_enumerates_one_gpu_and_scopes_every_query(
+        self, tmp_path: Path
+    ) -> None:
+        calls: list[tuple[str, ...]] = []
+        paths = cli.StaticAssetPaths(
+            *(tmp_path / name for name in (
+                "unit", "dropin", "vulkan", "candidate", "model",
+                "override", "nvcc", "cmake", "nvidia-smi", "flag",
+                "vision", "stub",
+            ))
+        )
+
+        def runner(
+            argv: tuple[str, ...], *, timeout_s: int
+        ) -> subprocess.CompletedProcess[str]:
+            assert timeout_s > 0
+            calls.append(argv)
+            if argv[0] == str(paths.nvcc):
+                out = "Cuda compilation tools, release 13.2, V13.2.78\n"
+            elif argv[0] == str(paths.cmake):
+                out = "cmake version 4.2.3\n\nCMake suite maintained.\n"
+            elif "--query-gpu=uuid" in argv:
+                out = "GPU-01234567-89ab-cdef-0123-456789abcdef\n"
+            else:
+                out = "595.71.05, NVIDIA GeForce RTX 4090, 8.9\n"
+            return subprocess.CompletedProcess(argv, 0, out, "")
+
+        observed = cli._collect_host_tool_observations(
+            runner=runner, paths=paths
+        )
+
+        assert observed.cmake_version == "4.2.3"
+        assert observed.cuda_compiler == "13.2.78"
+        gpu_calls = [call for call in calls if call[0] == str(paths.nvidia_smi)]
+        assert len(gpu_calls) == 2
+        assert "-i" not in gpu_calls[0]
+        assert gpu_calls[1][gpu_calls[1].index("-i") + 1] == observed.gpu_uuid
+        assert all(Path(call[0]).is_absolute() for call in calls)
+
+    @pytest.mark.parametrize(
+        "rows",
+        (
+            "",
+            "GPU-01234567-89ab-cdef-0123-456789abcdef\n"
+            "GPU-11234567-89ab-cdef-0123-456789abcdef\n",
+        ),
+    )
+    def test_host_observation_refuses_non_single_gpu(
+        self, tmp_path: Path, rows: str
+    ) -> None:
+        paths = cli.StaticAssetPaths(
+            *(tmp_path / name for name in (
+                "unit", "dropin", "vulkan", "candidate", "model",
+                "override", "nvcc", "cmake", "nvidia-smi", "flag",
+                "vision", "stub",
+            ))
+        )
+
+        def runner(
+            argv: tuple[str, ...], *, timeout_s: int
+        ) -> subprocess.CompletedProcess[str]:
+            del timeout_s
+            if "--query-gpu=uuid" in argv:
+                return subprocess.CompletedProcess(argv, 0, rows, "")
+            return subprocess.CompletedProcess(argv, 0, "", "")
+
+        with pytest.raises(driver.BenchRefusal, match="gpu_scope_violation"):
+            cli._collect_host_tool_observations(runner=runner, paths=paths)
+
+    def test_host_observation_refuses_malformed_gpu_uuid(
+        self, tmp_path: Path
+    ) -> None:
+        paths = cli.StaticAssetPaths(
+            *(tmp_path / name for name in (
+                "unit", "dropin", "vulkan", "candidate", "model",
+                "override", "nvcc", "cmake", "nvidia-smi", "flag",
+                "vision", "stub",
+            ))
+        )
+
+        def runner(
+            argv: tuple[str, ...], *, timeout_s: int
+        ) -> subprocess.CompletedProcess[str]:
+            del timeout_s
+            return subprocess.CompletedProcess(argv, 0, "GPU-not-a-uuid\n", "")
+
+        with pytest.raises(driver.BenchRefusal, match="gpu_scope_violation"):
+            cli._collect_host_tool_observations(runner=runner, paths=paths)
+
+    @pytest.mark.parametrize(
+        "metadata",
+        (
+            "",
+            "595.71.05, RTX 4090, 8.9\n595.71.05, RTX 4090, 8.9\n",
+            "missing,columns\n",
+        ),
+    )
+    def test_host_observation_refuses_malformed_metadata_rows(
+        self, tmp_path: Path, metadata: str
+    ) -> None:
+        paths = cli.StaticAssetPaths(
+            *(tmp_path / name for name in (
+                "unit", "dropin", "vulkan", "candidate", "model",
+                "override", "nvcc", "cmake", "nvidia-smi", "flag",
+                "vision", "stub",
+            ))
+        )
+
+        def runner(
+            argv: tuple[str, ...], *, timeout_s: int
+        ) -> subprocess.CompletedProcess[str]:
+            del timeout_s
+            output = (
+                "GPU-01234567-89ab-cdef-0123-456789abcdef\n"
+                if "--query-gpu=uuid" in argv
+                else metadata
+            )
+            return subprocess.CompletedProcess(argv, 0, output, "")
+
+        with pytest.raises(driver.BenchRefusal, match="provider_uncertain"):
+            cli._collect_host_tool_observations(runner=runner, paths=paths)
+
+    @pytest.mark.parametrize(
+        "hazard", ("nonzero", "exception", "non_string", "oversized")
+    )
+    def test_host_runner_refuses_each_untrusted_result_shape(
+        self, hazard: str
+    ) -> None:
+        def runner(
+            argv: tuple[str, ...], *, timeout_s: int
+        ) -> subprocess.CompletedProcess[str]:
+            del timeout_s
+            if hazard == "exception":
+                raise TimeoutError("private output")
+            if hazard == "nonzero":
+                return subprocess.CompletedProcess(argv, 1, "private", "private")
+            if hazard == "non_string":
+                return subprocess.CompletedProcess(argv, 0, b"bytes", b"")
+            return subprocess.CompletedProcess(argv, 0, "x" * (64 * 1024 + 1), "")
+
+        with pytest.raises(driver.BenchRefusal, match="provider_uncertain") as exc:
+            cli._runner_stdout(runner, ("/absolute/tool",))
+        assert "private" not in str(exc.value)
+
+    def test_read_only_runner_uses_exact_sanitized_subprocess_contract(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        observed: dict[str, object] = {}
+
+        def fake_run(
+            argv: tuple[str, ...], **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            observed["argv"] = argv
+            observed.update(kwargs)
+            return subprocess.CompletedProcess(argv, 0, "ok", "")
+
+        monkeypatch.setattr(cli.subprocess, "run", fake_run)
+        result = cli._run_read_only(("/usr/bin/tool", "--version"), timeout_s=7)
+
+        assert result.returncode == 0
+        assert observed == {
+            "argv": ("/usr/bin/tool", "--version"),
+            "env": {
+                "HOME": "/home/rohit",
+                "LANG": "C",
+                "LC_ALL": "C",
+                "PATH": "/usr/bin:/bin",
+            },
+            "shell": False,
+            "timeout": 7,
+            "capture_output": True,
+            "text": True,
+            "check": False,
+        }
+
+    @pytest.mark.parametrize(
+        "hazard", ("nvcc_release", "nvcc_patch", "cmake_prefix", "cmake_version")
+    )
+    def test_host_observation_refuses_malformed_nvcc_or_cmake(
+        self, tmp_path: Path, hazard: str
+    ) -> None:
+        paths = cli.StaticAssetPaths(
+            *(tmp_path / name for name in (
+                "unit", "dropin", "vulkan", "candidate", "model",
+                "override", "nvcc", "cmake", "nvidia-smi", "flag",
+                "vision", "stub",
+            ))
+        )
+
+        def runner(
+            argv: tuple[str, ...], *, timeout_s: int
+        ) -> subprocess.CompletedProcess[str]:
+            del timeout_s
+            if "--query-gpu=uuid" in argv:
+                output = "GPU-01234567-89ab-cdef-0123-456789abcdef\n"
+            elif argv[0] == str(paths.nvidia_smi):
+                output = "595.71.05, NVIDIA GeForce RTX 4090, 8.9\n"
+            elif argv[0] == str(paths.nvcc):
+                output = {
+                    "nvcc_release": (
+                        "Cuda compilation tools, release 13.1, V13.1.1\n"
+                    ),
+                    "nvcc_patch": (
+                        "Cuda compilation tools, release 13.2, V13.2.1234\n"
+                    ),
+                }.get(
+                    hazard,
+                    "Cuda compilation tools, release 13.2, V13.2.78\n",
+                )
+            else:
+                output = {
+                    "cmake_prefix": "prefix cmake version 4.2.3\n",
+                    "cmake_version": "cmake version 5.0.0\n",
+                }.get(hazard, "cmake version 4.2.3\n")
+            return subprocess.CompletedProcess(argv, 0, output, "")
+
+        with pytest.raises(driver.BenchRefusal, match="identity_mismatch"):
+            cli._collect_host_tool_observations(runner=runner, paths=paths)
+
+    @pytest.mark.parametrize(
+        "hazard", ("size", "hash", "count", "empty")
+    )
+    def test_static_preflight_corpus_contract_refuses_each_invalid_shape(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        hazard: str,
+    ) -> None:
+        root = tmp_path / "bench"
+        root.mkdir(mode=0o700)
+        os.chmod(root, 0o700)
+        values = ["x" * 257, *(["x"] * 6)]
+        if hazard == "count":
+            values = ["x" * 261, *(["x"] * 5)]
+        elif hazard == "empty":
+            values = ["x" * 258, "", *(["x"] * 5)]
+        payload = json.dumps(values, separators=(",", ":")).encode()
+        assert len(payload) == 285
+        corpus = root / "corpus.json"
+        corpus.write_bytes(payload)
+        os.chmod(corpus, 0o600)
+        monkeypatch.setattr(
+            cm, "FROZEN_CORPUS_SHA256", hashlib.sha256(payload).hexdigest()
+        )
+        if hazard == "size":
+            corpus.write_bytes(payload[:-1])
+        elif hazard == "hash":
+            corpus.write_bytes(payload[:-1] + b"!")
+
+        with pytest.raises(driver.BenchRefusal, match="corpus_unavailable"):
+            cli._validate_frozen_corpus(root=root)
+
+    def test_static_preflight_corpus_contract_accepts_exact_seven_nonempty(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "bench"
+        root.mkdir(mode=0o700)
+        os.chmod(root, 0o700)
+        payload = json.dumps(
+            ["x" * 257, *(["x"] * 6)], separators=(",", ":")
+        ).encode()
+        assert len(payload) == 285
+        corpus = root / "corpus.json"
+        corpus.write_bytes(payload)
+        os.chmod(corpus, 0o600)
+        expected = hashlib.sha256(payload).hexdigest()
+        monkeypatch.setattr(cm, "FROZEN_CORPUS_SHA256", expected)
+
+        assert cli._validate_frozen_corpus(root=root) == expected
+
+    def test_driver_package_identity_is_ordered_five_file_preimage(self) -> None:
+        digest, preimage = cli._driver_package_sha256()
+        rows = json.loads(preimage)
+        assert [row[0] for row in rows] == [
+            "scripts/cuda_migration.py",
+            "scripts/cuda_bench_driver.py",
+            "scripts/cuda_bench_stub.py",
+            "scripts/cuda_bench_cli.py",
+            "scripts/cuda_bench_assemble.py",
+        ]
+        assert hashlib.sha256(preimage).hexdigest() == digest
+
+    def test_driver_package_member_order_and_byte_drift_change_identity(
+        self, tmp_path: Path
+    ) -> None:
+        members = tuple(f"scripts/member-{index}.py" for index in range(5))
+        for index, relative in enumerate(members):
+            path = tmp_path / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(f"member-{index}".encode())
+            os.chmod(path, 0o600)
+
+        baseline, _ = cli._driver_package_sha256(
+            repo_root=tmp_path, members=members
+        )
+        reordered, _ = cli._driver_package_sha256(
+            repo_root=tmp_path, members=tuple(reversed(members))
+        )
+        changed = tmp_path / members[0]
+        changed.write_bytes(b"changed")
+        byte_drift, _ = cli._driver_package_sha256(
+            repo_root=tmp_path, members=members
+        )
+        substitute = tmp_path / "scripts/substitute.py"
+        substitute.write_bytes(b"substitute")
+        os.chmod(substitute, 0o600)
+        member_drift, _ = cli._driver_package_sha256(
+            repo_root=tmp_path,
+            members=(*members[:-1], "scripts/substitute.py"),
+        )
+
+        assert len({baseline, reordered, byte_drift, member_drift}) == 4
+
+    @pytest.mark.parametrize(
+        "field",
+        (
+            "unit_sha256",
+            "dropin_sha256",
+            "vulkan_runtime_sha256",
+            "vulkan_library_manifest_sha256",
+            "model_sha256",
+            "model_bytes",
+            "alias",
+            "effective_args",
+        ),
+    )
+    def test_rollback_preimage_refuses_each_named_input_drift(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        field: str,
+    ) -> None:
+        assets = cli._AssetObservation(
+            unit_sha256=cm.FROZEN_VULKAN_UNIT_SHA256,
+            dropin_sha256=cm.FROZEN_VULKAN_DROPIN_SHA256,
+            vulkan_runtime_sha256=cm.FROZEN_VULKAN_RUNTIME_SHA256,
+            vulkan_library_manifest_sha256=(
+                cm.FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256
+            ),
+            model_sha256=cm.FROZEN_MODEL_SHA256,
+            model_bytes=cm.FROZEN_MODEL_BYTES,
+            override_sha256="a" * 64,
+            flag_source_sha256="b" * 64,
+            vision_unit_sha256="c" * 64,
+            stub_sha256="d" * 64,
+        )
+        if field == "alias":
+            monkeypatch.setattr(cm, "FROZEN_ALIAS", "different")
+        elif field == "effective_args":
+            monkeypatch.setattr(
+                cm, "FROZEN_VULKAN_EFFECTIVE_ARGS_SHA256", "0" * 64
+            )
+        elif field == "model_bytes":
+            assets = replace(assets, model_bytes=assets.model_bytes + 1)
+        else:
+            assets = replace(assets, **{field: "0" * 64})
+
+        with pytest.raises(driver.BenchRefusal, match="identity_mismatch"):
+            cli._build_rollback_preimage(assets)
+
+    @pytest.mark.parametrize(
+        "hazard", ("symlink", "directory", "inode_swap", "in_place")
+    )
+    def test_static_external_file_stability_hazards_refuse(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        hazard: str,
+    ) -> None:
+        path = tmp_path / "asset"
+        if hazard == "directory":
+            path.mkdir()
+        else:
+            path.write_bytes(b"original")
+            os.chmod(path, 0o600)
+        if hazard == "symlink":
+            target = tmp_path / "target"
+            path.rename(target)
+            path.symlink_to(target)
+        real_read = cli.os.read
+        fired = False
+
+        def mutate_after_read(fd: int, size: int) -> bytes:
+            nonlocal fired
+            payload = real_read(fd, size)
+            if payload and not fired:
+                fired = True
+                if hazard == "inode_swap":
+                    path.rename(tmp_path / "old")
+                    path.write_bytes(b"original")
+                    os.chmod(path, 0o600)
+                elif hazard == "in_place":
+                    path.write_bytes(b"changed!")
+            return payload
+
+        if hazard in {"inode_swap", "in_place"}:
+            monkeypatch.setattr(cli.os, "read", mutate_after_read)
+
+        with pytest.raises(driver.BenchRefusal, match="identity_mismatch"):
+            cli._stable_regular_file(path)
+
+    def test_vulkan_manifest_serializes_files_and_literal_links_from_disk(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "vulkan"
+        root.mkdir()
+        expected_rows: list[dict[str, object]] = []
+        for index in range(36):
+            name = f"lib{index:02d}.so"
+            payload = f"payload-{index}".encode()
+            path = root / name
+            path.write_bytes(payload)
+            os.chmod(path, 0o600)
+            expected_rows.append(
+                {
+                    "path": name,
+                    "type": "file",
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                    "bytes": len(payload),
+                }
+            )
+        for index in range(3):
+            name = f"libalias{index}.so"
+            target = f"lib{index:02d}.so"
+            (root / name).symlink_to(target)
+            expected_rows.append(
+                {"path": name, "type": "symlink", "target": target}
+            )
+        expected_rows.sort(key=lambda row: os.fsencode(str(row["path"])))
+        preimage = json.dumps(
+            expected_rows,
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode()
+        expected = hashlib.sha256(preimage).hexdigest()
+        monkeypatch.setattr(
+            cm, "FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256", expected
+        )
+
+        assert cli._vulkan_library_manifest(root) == expected
+
+    def test_static_symlink_read_refuses_identity_change(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "root"
+        root.mkdir()
+        (root / "target-a").write_bytes(b"a")
+        (root / "target-b").write_bytes(b"b")
+        link = root / "libalias.so"
+        link.symlink_to("target-a")
+        directory_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+        real_readlink = cli.os.readlink
+        fired = False
+
+        def swap_after_read(
+            path: object, *, dir_fd: int | None = None
+        ) -> str:
+            nonlocal fired
+            target = real_readlink(path, dir_fd=dir_fd)
+            if not fired:
+                fired = True
+                link.unlink()
+                link.symlink_to("target-b")
+            return target
+
+        monkeypatch.setattr(cli.os, "readlink", swap_after_read)
+        try:
+            with pytest.raises(driver.BenchRefusal, match="identity_mismatch"):
+                cli._stable_symlink_at(directory_fd, "libalias.so")
+        finally:
+            os.close(directory_fd)
+
+    def test_static_asset_collector_reads_exact_named_assets(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        vulkan = tmp_path / "vulkan"
+        vulkan.mkdir()
+        paths = cli.StaticAssetPaths(
+            unit=tmp_path / "unit",
+            dropin=tmp_path / "dropin",
+            vulkan_root=vulkan,
+            candidate_root=tmp_path / "candidate",
+            model=tmp_path / "model",
+            cuda_override=tmp_path / "override",
+            nvcc=tmp_path / "nvcc",
+            cmake=tmp_path / "cmake",
+            nvidia_smi=tmp_path / "nvidia-smi",
+            flag_source=tmp_path / "flag",
+            vision_unit=tmp_path / "vision",
+            stub=tmp_path / "stub",
+        )
+        assets = {
+            paths.unit: b"unit",
+            paths.dropin: b"dropin",
+            vulkan / "llama-server": b"vulkan-runtime",
+            paths.model: b"model",
+            paths.cuda_override: b"override",
+            paths.flag_source: b"flag",
+            paths.vision_unit: b"vision",
+            paths.stub: b"stub",
+        }
+        for path, payload in assets.items():
+            path.write_bytes(payload)
+            os.chmod(path, 0o600)
+        monkeypatch.setattr(
+            cm,
+            "FROZEN_VULKAN_UNIT_SHA256",
+            hashlib.sha256(assets[paths.unit]).hexdigest(),
+        )
+        monkeypatch.setattr(
+            cm,
+            "FROZEN_VULKAN_DROPIN_SHA256",
+            hashlib.sha256(assets[paths.dropin]).hexdigest(),
+        )
+        monkeypatch.setattr(
+            cm,
+            "FROZEN_VULKAN_RUNTIME_SHA256",
+            hashlib.sha256(assets[vulkan / "llama-server"]).hexdigest(),
+        )
+        monkeypatch.setattr(
+            cm,
+            "FROZEN_MODEL_SHA256",
+            hashlib.sha256(assets[paths.model]).hexdigest(),
+        )
+        monkeypatch.setattr(cm, "FROZEN_MODEL_BYTES", len(assets[paths.model]))
+        monkeypatch.setattr(
+            cli,
+            "_vulkan_library_manifest",
+            lambda root: (
+                cm.FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256
+                if root == vulkan
+                else (_ for _ in ()).throw(AssertionError("wrong root"))
+            ),
+        )
+
+        observed = cli._collect_static_asset_hashes(paths)
+
+        assert observed.override_sha256 == hashlib.sha256(
+            assets[paths.cuda_override]
+        ).hexdigest()
+        assert observed.flag_source_sha256 == hashlib.sha256(
+            assets[paths.flag_source]
+        ).hexdigest()
+        assert observed.vision_unit_sha256 == hashlib.sha256(
+            assets[paths.vision_unit]
+        ).hexdigest()
+        assert observed.stub_sha256 == hashlib.sha256(
+            assets[paths.stub]
+        ).hexdigest()
+
+    def test_static_preflight_collector_builds_one_shared_truthful_observation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        assets = cli._AssetObservation(
+            unit_sha256=cm.FROZEN_VULKAN_UNIT_SHA256,
+            dropin_sha256=cm.FROZEN_VULKAN_DROPIN_SHA256,
+            vulkan_runtime_sha256=cm.FROZEN_VULKAN_RUNTIME_SHA256,
+            vulkan_library_manifest_sha256=(
+                cm.FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256
+            ),
+            model_sha256=cm.FROZEN_MODEL_SHA256,
+            model_bytes=cm.FROZEN_MODEL_BYTES,
+            override_sha256="a" * 64,
+            flag_source_sha256="b" * 64,
+            vision_unit_sha256="c" * 64,
+            stub_sha256="d" * 64,
+        )
+        candidate = cli._CandidateObservation(
+            runtime_sha256=cm.FROZEN_CUDA_SERVER_SHA256,
+            runtime_manifest_sha256=cm.FROZEN_CUDA_RUNTIME_MANIFEST_SHA256,
+            library_hashes={
+                "libggml-cuda.so": cm.FROZEN_CUDA_BACKEND_SHA256
+            },
+        )
+        host = cli._HostObservation(
+            gpu_uuid="GPU-01234567-89ab-cdef-0123-456789abcdef",
+            driver_version="595.71.05",
+            gpu_identifier="NVIDIA GeForce RTX 4090",
+            compute_capability="8.9",
+            cuda_compiler="13.2.78",
+            cmake_version="4.2.3",
+        )
+        monkeypatch.setattr(
+            cli,
+            "_validate_frozen_corpus",
+            lambda **_kwargs: cm.FROZEN_CORPUS_SHA256,
+        )
+        monkeypatch.setattr(
+            cli, "_collect_static_asset_hashes", lambda _paths: assets
+        )
+        monkeypatch.setattr(
+            cli,
+            "_verify_candidate_runtime_manifest",
+            lambda _root: candidate,
+        )
+        monkeypatch.setattr(
+            cli,
+            "_collect_host_tool_observations",
+            lambda **_kwargs: host,
+        )
+        monkeypatch.setattr(
+            cli,
+            "_driver_package_sha256",
+            lambda: ("e" * 64, b"package-preimage"),
+        )
+        paths = cli.StaticAssetPaths(
+            *(tmp_path / name for name in (
+                "unit", "dropin", "vulkan", "candidate", "model",
+                "override", "nvcc", "cmake", "nvidia-smi", "flag",
+                "vision", "stub",
+            ))
+        )
+
+        observed = cli.collect_static_observation(
+            root=tmp_path,
+            paths=paths,
+            runner=lambda *_args, **_kwargs: None,
+            clock=_FixedClock("production"),
+        )
+
+        assert observed.rollback_preimage == cm.frozen_rollback_manifest_preimage()
+        assert observed.runtime_identity.mode == "bench"
+        assert observed.runtime_identity.cmake_version == "4.2.3"
+        assert observed.runtime_identity.runtime_sha256 == (
+            cm.FROZEN_CUDA_SERVER_SHA256
+        )
+        assert observed.static_doc.gpu_uuid == host.gpu_uuid
+        assert observed.static_doc.checks["candidate_manifest"] == (
+            cm.FROZEN_CUDA_RUNTIME_MANIFEST_SHA256
+        )
+
+    def test_static_preflight_dispatches_real_handler_not_placeholder(self) -> None:
+        source = inspect.getsource(cli.main)
+        assert "_static_preflight_handler" in source
+
+    def test_static_preflight_persists_preimage_and_typed_receipt(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        root = tmp_path / "bench"
+        root.mkdir(mode=0o700)
+        os.chmod(root, 0o700)
+        preimage = cm.frozen_rollback_manifest_preimage()
+        stub_sha = "a" * 64
+        doc = cm.StaticPreflightDoc(
+            gpu_uuid="GPU-01234567-89ab-cdef-0123-456789abcdef",
+            driver_package_sha256="b" * 64,
+            stub_sha256=stub_sha,
+            corpus_verified=True,
+            checks={
+                "corpus": cm.FROZEN_CORPUS_SHA256,
+                "incumbent_unit": cm.FROZEN_VULKAN_UNIT_SHA256,
+                "incumbent_dropin": cm.FROZEN_VULKAN_DROPIN_SHA256,
+                "incumbent_server": cm.FROZEN_VULKAN_RUNTIME_SHA256,
+                "model": cm.FROZEN_MODEL_SHA256,
+                "library_manifest": cm.FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256,
+                "effective_args": cm.FROZEN_VULKAN_EFFECTIVE_ARGS_SHA256,
+                "flag_source": "c" * 64,
+                "vision_unit": "d" * 64,
+                "candidate_manifest": cm.FROZEN_CUDA_RUNTIME_MANIFEST_SHA256,
+                "bench_root_mode": "700",
+                "stub_pin": stub_sha,
+            },
+            timestamp=FIXED_TIMESTAMP,
+        )
+        observation = cli.StaticObservation(doc, object(), preimage)
+        monkeypatch.setattr(
+            cli,
+            "collect_static_observation",
+            lambda **_kwargs: observation,
+        )
+
+        def handler(attempt: driver.CommandAttempt, *, root: Path) -> object:
+            return cli._static_preflight_handler(
+                attempt,
+                root=root,
+                clock=_FixedClock("production"),
+            )
+
+        exit_status = _private_run("static-preflight", handler, root=root)
+        captured = capfd.readouterr()
+
+        assert exit_status == 0
+        terminal = _one_terminal_line(captured.out)
+        assert captured.err == ""
+        assert terminal["outcome"] == "static_preflight_ready"
+        assert terminal["artifact_ref"].endswith("-terminal.json")
+        completion_path = root / terminal["artifact_ref"]
+        assert completion_path.is_file()
+        preimage_path = (
+            root
+            / "preimages"
+            / (
+                "rollback-manifest-"
+                + hashlib.sha256(preimage).hexdigest()
+                + ".json"
+            )
+        )
+        assert preimage_path.read_bytes() == preimage
+        persisted = cm.PersistedDoc(completion_path.read_bytes())
+        assert isinstance(persisted.obj, cm.CommandCompletionDoc)
+        completion = persisted.obj
+        assert completion.command == "static-preflight"
+        assert completion.admission_ref.endswith("-admission.json")
+        assert completion.admission_sha256 == hashlib.sha256(
+            (root / completion.admission_ref).read_bytes()
+        ).hexdigest()
+        static_path = root / completion.artifact_ref
+        assert static_path.is_file()
+        assert completion.artifact_sha256 == hashlib.sha256(
+            static_path.read_bytes()
+        ).hexdigest()
+        static_persisted = cm.PersistedDoc(static_path.read_bytes())
+        assert static_persisted.obj == doc
+
+    def test_static_preflight_receipt_failure_keeps_preimage_and_cites_admission(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        root = tmp_path / "bench"
+        root.mkdir(mode=0o700)
+        os.chmod(root, 0o700)
+        preimage = cm.frozen_rollback_manifest_preimage()
+        stub_sha = "a" * 64
+        doc = cm.StaticPreflightDoc(
+            gpu_uuid="GPU-01234567-89ab-cdef-0123-456789abcdef",
+            driver_package_sha256="b" * 64,
+            stub_sha256=stub_sha,
+            corpus_verified=True,
+            checks={
+                "corpus": cm.FROZEN_CORPUS_SHA256,
+                "incumbent_unit": cm.FROZEN_VULKAN_UNIT_SHA256,
+                "incumbent_dropin": cm.FROZEN_VULKAN_DROPIN_SHA256,
+                "incumbent_server": cm.FROZEN_VULKAN_RUNTIME_SHA256,
+                "model": cm.FROZEN_MODEL_SHA256,
+                "library_manifest": cm.FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256,
+                "effective_args": cm.FROZEN_VULKAN_EFFECTIVE_ARGS_SHA256,
+                "flag_source": "c" * 64,
+                "vision_unit": "d" * 64,
+                "candidate_manifest": cm.FROZEN_CUDA_RUNTIME_MANIFEST_SHA256,
+                "bench_root_mode": "700",
+                "stub_pin": stub_sha,
+            },
+            timestamp=FIXED_TIMESTAMP,
+        )
+        monkeypatch.setattr(
+            cli,
+            "collect_static_observation",
+            lambda **_kwargs: cli.StaticObservation(doc, object(), preimage),
+        )
+        monkeypatch.setattr(
+            driver,
+            "write_private_file",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                driver.BenchRefusal("filesystem_hazard")
+            ),
+        )
+
+        def handler(attempt: driver.CommandAttempt, *, root: Path) -> object:
+            return cli._static_preflight_handler(
+                attempt,
+                root=root,
+                clock=_FixedClock("production"),
+            )
+
+        exit_status = _private_run("static-preflight", handler, root=root)
+        captured = capfd.readouterr()
+        terminal = _one_terminal_line(captured.out)
+        admission = next(root.glob("*-admission.json"))
+
+        assert exit_status == 3
+        assert captured.err == ""
+        assert terminal == {
+            "status": "refused",
+            "outcome": "filesystem_hazard",
+            "window_id": None,
+            "artifact_ref": admission.name,
+            "artifact_sha256": hashlib.sha256(admission.read_bytes()).hexdigest(),
+        }
+        assert not next(root.glob("*-terminal.json"), None)
+        preimage_path = (
+            root
+            / "preimages"
+            / (
+                "rollback-manifest-"
+                + hashlib.sha256(preimage).hexdigest()
+                + ".json"
+            )
+        )
+        assert preimage_path.read_bytes() == preimage
+
+    def test_static_preflight_preimage_failure_cites_admission_and_mints_no_receipt(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        root = tmp_path / "bench"
+        root.mkdir(mode=0o700)
+        os.chmod(root, 0o700)
+        preimage = cm.frozen_rollback_manifest_preimage()
+        stub_sha = "a" * 64
+        doc = cm.StaticPreflightDoc(
+            gpu_uuid="GPU-01234567-89ab-cdef-0123-456789abcdef",
+            driver_package_sha256="b" * 64,
+            stub_sha256=stub_sha,
+            corpus_verified=True,
+            checks={
+                "corpus": cm.FROZEN_CORPUS_SHA256,
+                "incumbent_unit": cm.FROZEN_VULKAN_UNIT_SHA256,
+                "incumbent_dropin": cm.FROZEN_VULKAN_DROPIN_SHA256,
+                "incumbent_server": cm.FROZEN_VULKAN_RUNTIME_SHA256,
+                "model": cm.FROZEN_MODEL_SHA256,
+                "library_manifest": cm.FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256,
+                "effective_args": cm.FROZEN_VULKAN_EFFECTIVE_ARGS_SHA256,
+                "flag_source": "c" * 64,
+                "vision_unit": "d" * 64,
+                "candidate_manifest": cm.FROZEN_CUDA_RUNTIME_MANIFEST_SHA256,
+                "bench_root_mode": "700",
+                "stub_pin": stub_sha,
+            },
+            timestamp=FIXED_TIMESTAMP,
+        )
+        monkeypatch.setattr(
+            cli,
+            "collect_static_observation",
+            lambda **_kwargs: cli.StaticObservation(doc, object(), preimage),
+        )
+        monkeypatch.setattr(
+            driver,
+            "publish_or_verify_immutable",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                driver.BenchRefusal("filesystem_hazard")
+            ),
+        )
+
+        def handler(attempt: driver.CommandAttempt, *, root: Path) -> object:
+            return cli._static_preflight_handler(
+                attempt,
+                root=root,
+                clock=_FixedClock("production"),
+            )
+
+        exit_status = _private_run("static-preflight", handler, root=root)
+        captured = capfd.readouterr()
+        terminal = _one_terminal_line(captured.out)
+        admission = next(root.glob("*-admission.json"))
+
+        assert exit_status == 3
+        assert captured.err == ""
+        assert terminal["outcome"] == "filesystem_hazard"
+        assert terminal["artifact_ref"] == admission.name
+        assert terminal["artifact_sha256"] == hashlib.sha256(
+            admission.read_bytes()
+        ).hexdigest()
+        assert not next(root.glob("receipts/*"), None)
+        assert not next(root.glob("*-terminal.json"), None)
+
+    def test_static_preflight_signal_after_artifact_refuses_without_completion(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        root = tmp_path / "bench"
+        root.mkdir(mode=0o700)
+        os.chmod(root, 0o700)
+        observation = _static_test_observation()
+        monkeypatch.setattr(
+            cli,
+            "collect_static_observation",
+            lambda **_kwargs: observation,
+        )
+        real_write = driver.write_private_file
+        signalled = False
+
+        def write_then_signal(
+            relative: str, data: bytes, *, root: Path
+        ) -> Path:
+            nonlocal signalled
+            path = real_write(relative, data, root=root)
+            if relative.startswith("receipts/static-preflight-"):
+                signalled = True
+                os.kill(os.getpid(), signal.SIGTERM)
+            return path
+
+        monkeypatch.setattr(driver, "write_private_file", write_then_signal)
+
+        def handler(attempt: driver.CommandAttempt, *, root: Path) -> object:
+            return cli._static_preflight_handler(
+                attempt,
+                root=root,
+                clock=_FixedClock("production"),
+            )
+
+        exit_status = _private_run("static-preflight", handler, root=root)
+        captured = capfd.readouterr()
+        terminal = _one_terminal_line(captured.out)
+
+        assert signalled
+        assert exit_status == 128 + signal.SIGTERM
+        assert captured.err == ""
+        assert terminal["status"] == "refused"
+        assert terminal["outcome"] == "interrupted"
+        admission = next(root.glob("*-admission.json"))
+        assert terminal["artifact_ref"] == admission.name
+        assert hashlib.sha256(admission.read_bytes()).hexdigest() == (
+            terminal["artifact_sha256"]
+        )
+        orphan = next(root.glob("receipts/static-preflight-*.json"))
+        assert isinstance(
+            cm.PersistedDoc(orphan.read_bytes()).obj,
+            cm.StaticPreflightDoc,
+        )
+        assert not next(root.glob("*-terminal.json"), None)
+
+    def test_sigkill_before_completion_link_leaves_inadmissible_static_orphan(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        root = tmp_path / "bench"
+        root.mkdir(mode=0o700)
+        os.chmod(root, 0o700)
+
+        result = _run_static_completion_hard_death_subprocess(root)
+
+        assert result.returncode == -signal.SIGKILL
+        assert result.stdout == ""
+        assert result.stderr == ""
+        static_orphan = next(root.glob("receipts/static-preflight-*.json"))
+        assert isinstance(
+            cm.PersistedDoc(static_orphan.read_bytes()).obj,
+            cm.StaticPreflightDoc,
+        )
+        assert not next(root.glob("*-terminal.json"), None)
+        next_attempt = driver._admit_command(
+            command="static-preflight",
+            window_id=None,
+            policy=driver.ProductionArtifactPolicy(),
+            clock=_FixedClock("production"),
+            root=root,
+        )
+        assert next_attempt.ordinal == 2
+        assert next_attempt.admission_ref.endswith(
+            "attempt-002-admission.json"
+        )
+
+    @pytest.mark.parametrize("signum", (signal.SIGINT, signal.SIGTERM))
+    def test_static_completion_wins_signal_after_exact_validation(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capfd: pytest.CaptureFixture[str],
+        signum: signal.Signals,
+    ) -> None:
+        root = tmp_path / "bench"
+        root.mkdir(mode=0o700)
+        os.chmod(root, 0o700)
+        monkeypatch.setattr(
+            cli,
+            "collect_static_observation",
+            lambda **_kwargs: _static_test_observation(),
+        )
+        real_publish = driver.publish_command_artifact
+        callback_calls = 0
+
+        def publish_then_signal(
+            attempt: driver.CommandAttempt,
+            role: str,
+            encoded: bytes,
+            *,
+            root: Path,
+            on_committed: Callable[[str, str], None] | None = None,
+        ) -> tuple[str, str]:
+            nonlocal callback_calls
+            assert on_committed is not None
+
+            def latch_then_signal(relative: str, digest: str) -> None:
+                nonlocal callback_calls
+                on_committed(relative, digest)
+                callback_calls += 1
+                os.kill(os.getpid(), signum)
+
+            return real_publish(
+                attempt,
+                role,
+                encoded,
+                root=root,
+                on_committed=latch_then_signal,
+            )
+
+        monkeypatch.setattr(
+            driver,
+            "publish_command_artifact",
+            publish_then_signal,
+        )
+
+        def handler(attempt: driver.CommandAttempt, *, root: Path) -> object:
+            return cli._static_preflight_handler(
+                attempt,
+                root=root,
+                clock=_FixedClock("production"),
+            )
+
+        exit_status = _private_run("static-preflight", handler, root=root)
+        captured = capfd.readouterr()
+        terminal = _one_terminal_line(captured.out)
+
+        assert exit_status == 0
+        assert captured.err == ""
+        assert terminal["status"] == "ok"
+        assert terminal["outcome"] == "static_preflight_ready"
+        assert callback_calls == 1
+        completion_path = root / str(terminal["artifact_ref"])
+        completion = cm.PersistedDoc(completion_path.read_bytes()).obj
+        assert type(completion) is cm.CommandCompletionDoc
+
+    def test_static_preflight_signal_before_receipt_refuses_without_orphan(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        root = tmp_path / "bench"
+        root.mkdir(mode=0o700)
+        os.chmod(root, 0o700)
+        observation = _static_test_observation()
+        monkeypatch.setattr(
+            cli,
+            "collect_static_observation",
+            lambda **_kwargs: observation,
+        )
+        real_publish = driver.publish_or_verify_immutable
+
+        def publish_then_signal(*args: object, **kwargs: object) -> Path:
+            path = real_publish(*args, **kwargs)
+            os.kill(os.getpid(), signal.SIGTERM)
+            return path
+
+        monkeypatch.setattr(
+            driver, "publish_or_verify_immutable", publish_then_signal
+        )
+
+        def handler(attempt: driver.CommandAttempt, *, root: Path) -> object:
+            return cli._static_preflight_handler(
+                attempt,
+                root=root,
+                clock=_FixedClock("production"),
+            )
+
+        exit_status = _private_run("static-preflight", handler, root=root)
+        captured = capfd.readouterr()
+        terminal = _one_terminal_line(captured.out)
+        admission = next(root.glob("*-admission.json"))
+
+        assert exit_status == 128 + signal.SIGTERM
+        assert captured.err == ""
+        assert terminal["status"] == "refused"
+        assert terminal["outcome"] == "interrupted"
+        assert terminal["artifact_ref"] == admission.name
+        assert terminal["artifact_sha256"] == hashlib.sha256(
+            admission.read_bytes()
+        ).hexdigest()
+        assert not next(root.glob("receipts/*"), None)
+
+    def test_static_preflight_latched_success_reproves_receipt_before_output(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        root = tmp_path / "bench"
+        root.mkdir(mode=0o700)
+        os.chmod(root, 0o700)
+        observation = _static_test_observation()
+        monkeypatch.setattr(
+            cli,
+            "collect_static_observation",
+            lambda **_kwargs: observation,
+        )
+
+        def handler(attempt: driver.CommandAttempt, *, root: Path) -> object:
+            completed = cli._static_preflight_handler(
+                attempt,
+                root=root,
+                clock=_FixedClock("production"),
+            )
+            (root / str(completed.artifact_ref)).unlink()
+            return completed
+
+        exit_status = _private_run("static-preflight", handler, root=root)
+        captured = capfd.readouterr()
+        terminal = _one_terminal_line(captured.out)
+        admission = next(root.glob("*-admission.json"))
+
+        assert exit_status == 4
+        assert captured.err == ""
+        assert terminal["status"] == "failed"
+        assert terminal["outcome"] == "provider_uncertain"
+        assert terminal["artifact_ref"] == admission.name
+        assert terminal["artifact_sha256"] == hashlib.sha256(
+            admission.read_bytes()
+        ).hexdigest()
+
+    @pytest.mark.parametrize(
+        "mutation",
+        (
+            "in_place",
+            "delete",
+            "replace_inode",
+            "mode",
+            "hardlink",
+            "root_substitution",
+        ),
+    )
+    def test_static_preflight_latch_failure_after_normalize_never_commits_success(
+        self,
+        mutation: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        root = tmp_path / "bench"
+        root.mkdir(mode=0o700)
+        os.chmod(root, 0o700)
+        monkeypatch.setattr(
+            cli,
+            "collect_static_observation",
+            lambda **_kwargs: _static_test_observation(),
+        )
+        real_normalize = cli._normalize_handler_result
+        real_reprove = cli._static_success_latch_is_current
+        admission_binding: tuple[str, str] | None = None
+        observed_masks: list[set[int]] = []
+
+        def normalize_then_mutate(
+            attempt: driver.CommandAttempt,
+            value: object,
+            *,
+            root: Path,
+        ) -> cli.TerminalResult:
+            nonlocal admission_binding
+            normalized = real_normalize(attempt, value, root=root)
+            assert normalized.status == "ok"
+            assert normalized.artifact_ref is not None
+            receipt = root / normalized.artifact_ref
+            admission_binding = (
+                attempt.admission_ref,
+                attempt.admission_sha256,
+            )
+            if mutation == "in_place":
+                payload = bytearray(receipt.read_bytes())
+                payload[0] ^= 1
+                receipt.write_bytes(payload)
+                os.chmod(receipt, 0o600)
+            elif mutation == "delete":
+                receipt.unlink()
+            elif mutation == "replace_inode":
+                payload = receipt.read_bytes()
+                receipt.unlink()
+                receipt.write_bytes(payload)
+                os.chmod(receipt, 0o600)
+            elif mutation == "mode":
+                os.chmod(receipt, 0o640)
+            elif mutation == "hardlink":
+                os.link(receipt, root / "receipt-hardlink")
+            elif mutation == "root_substitution":
+                displaced = root.with_name("bench-displaced")
+                root.rename(displaced)
+                root.mkdir(mode=0o700)
+                os.chmod(root, 0o700)
+            else:  # pragma: no cover - parameter list is closed above.
+                raise AssertionError(mutation)
+            return normalized
+
+        def observe_reproof_mask(latch: object) -> bool:
+            current = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+            observed_masks.append({int(item) for item in current})
+            return real_reprove(latch)
+
+        monkeypatch.setattr(cli, "_normalize_handler_result", normalize_then_mutate)
+        monkeypatch.setattr(
+            cli, "_static_success_latch_is_current", observe_reproof_mask
+        )
+
+        def handler(attempt: driver.CommandAttempt, *, root: Path) -> object:
+            return cli._static_preflight_handler(
+                attempt,
+                root=root,
+                clock=_FixedClock("production"),
+            )
+
+        exit_status = _private_run("static-preflight", handler, root=root)
+        captured = capfd.readouterr()
+        terminal = _one_terminal_line(captured.out)
+
+        assert admission_binding is not None
+        assert exit_status == 4
+        assert captured.err == ""
+        assert terminal["status"] == "failed"
+        assert terminal["outcome"] == "provider_uncertain"
+        assert terminal["artifact_ref"] == admission_binding[0]
+        assert terminal["artifact_sha256"] == admission_binding[1]
+        assert observed_masks
+        assert {int(item) for item in cli._WATCHED_SIGNALS}.issubset(
+            observed_masks[0]
+        )
+
+
 def _private_run(
     command: str,
     handler: Callable[..., object],
@@ -134,6 +1868,39 @@ def _terminal_artifact_handler(status: str) -> Callable[..., object]:
 
 
 class TestSealedParser:
+    @pytest.mark.parametrize(
+        "command",
+        ("vulkan-baseline", "cuda-candidate"),
+    )
+    def test_phase_cli_has_no_success_or_completion_producer_before_task7(
+        self,
+        command: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        def observe_handler(
+            observed_command: str,
+            handler: Callable[..., object],
+            *,
+            root: Path,
+            clock: driver.Clock,
+        ) -> int:
+            del clock
+            assert observed_command == command
+            assert handler is cli._unimplemented_handler
+            result = handler(object(), root=root)
+            assert result == cli.TerminalResult(
+                "refused",
+                "assembly_refused",
+                None,
+                None,
+                None,
+            )
+            return 3
+
+        monkeypatch.setattr(cli, "_run_command", observe_handler)
+
+        assert cli.main([command]) == 3
+
     def test_parser_has_exactly_five_public_choices(self) -> None:
         parser = cli.build_parser()
         subparsers = parser._subparsers
@@ -1247,6 +3014,44 @@ def _run_terminal_publication_signal_subprocess(
     )
     return subprocess.run(
         [sys.executable, "-B", "-c", code, str(root), boundary, str(signum)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+
+def _run_static_completion_hard_death_subprocess(
+    root: Path,
+) -> subprocess.CompletedProcess[str]:
+    code = "\n".join(
+        (
+            "import os, signal, sys",
+            "from pathlib import Path",
+            "from scripts import cuda_bench_cli as cli",
+            "from scripts import cuda_bench_driver as driver",
+            "from tests.test_cuda_bench_cli import _static_test_observation",
+            "root = Path(sys.argv[1])",
+            "cli.collect_static_observation = lambda **_kwargs: _static_test_observation()",
+            "real_link = driver.os.link",
+            "def kill_before_completion_link(*args, **kwargs):",
+            "    if str(args[1]).endswith('-terminal.json'):",
+            "        os.kill(os.getpid(), signal.SIGKILL)",
+            "    return real_link(*args, **kwargs)",
+            "driver.os.link = kill_before_completion_link",
+            "class Clock:",
+            "    tier = 'production'",
+            f"    def now_utc(self): return {FIXED_TIMESTAMP!r}",
+            "    def monotonic(self): return 0.0",
+            "def handler(attempt, *, root):",
+            "    return cli._static_preflight_handler(attempt, root=root, clock=Clock())",
+            "rc = cli._run_command('static-preflight', handler, root=root, clock=Clock())",
+            "raise SystemExit(rc)",
+        )
+    )
+    return subprocess.run(
+        [sys.executable, "-B", "-c", code, str(root)],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
@@ -2520,7 +4325,7 @@ class TestOwnerSurfaceAuthorityAbsence:
             "scripts/cuda_bench_assemble.py",
         ),
     )
-    def test_owner_surface_has_no_direct_production_mutation_capability(
+    def test_static_preflight_owner_surface_has_no_production_mutation(
         self, relative: str
     ) -> None:
         tree = ast.parse((REPO_ROOT / relative).read_text(encoding="utf-8"))
@@ -2533,9 +4338,17 @@ class TestOwnerSurfaceAuthorityAbsence:
                 )
             elif isinstance(node, ast.ImportFrom) and node.module:
                 imported_roots.add(node.module.partition(".")[0])
-        assert imported_roots.isdisjoint(
-            {"subprocess", "socket", "http", "urllib", "shutil", "dbus", "systemd"}
-        )
+        forbidden_imports = {
+            "socket",
+            "http",
+            "urllib",
+            "shutil",
+            "dbus",
+            "systemd",
+        }
+        if relative != "scripts/cuda_bench_cli.py":
+            forbidden_imports.add("subprocess")
+        assert imported_roots.isdisjoint(forbidden_imports)
 
         called = {
             name
@@ -2544,33 +4357,51 @@ class TestOwnerSurfaceAuthorityAbsence:
             and (name := _ast_qualname(node.func)) is not None
         }
         called_leafs = {name.rpartition(".")[2].lstrip("_") for name in called}
-        assert called.isdisjoint(
-            {
-                "os.system",
-                "os.popen",
-                "os.execl",
-                "os.execle",
-                "os.execlp",
-                "os.execlpe",
-                "os.execv",
-                "os.execve",
-                "os.execvp",
-                "os.execvpe",
-                "subprocess.Popen",
-                "subprocess.run",
-                "subprocess.call",
-                "subprocess.check_call",
-                "subprocess.check_output",
-                "os.remove",
-                "os.unlink",
-                "os.rename",
-                "os.replace",
-                "os.symlink",
-                "os.link",
-                "os.chmod",
-                "os.chown",
-            }
-        )
+        forbidden_calls = {
+            "os.system",
+            "os.popen",
+            "os.execl",
+            "os.execle",
+            "os.execlp",
+            "os.execlpe",
+            "os.execv",
+            "os.execve",
+            "os.execvp",
+            "os.execvpe",
+            "subprocess.Popen",
+            "subprocess.call",
+            "subprocess.check_call",
+            "subprocess.check_output",
+            "os.remove",
+            "os.unlink",
+            "os.rename",
+            "os.replace",
+            "os.symlink",
+            "os.link",
+            "os.chmod",
+            "os.chown",
+        }
+        if relative != "scripts/cuda_bench_cli.py":
+            forbidden_calls.add("subprocess.run")
+        assert called.isdisjoint(forbidden_calls)
+        if relative == "scripts/cuda_bench_cli.py":
+            run_calls = [
+                node
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Call)
+                and _ast_qualname(node.func) == "subprocess.run"
+            ]
+            assert len(run_calls) == 1
+            enclosing = next(
+                node
+                for node in tree.body
+                if isinstance(node, ast.FunctionDef)
+                and node.name == "_run_read_only"
+            )
+            assert run_calls[0] in set(ast.walk(enclosing))
+            keywords = {item.arg: item.value for item in run_calls[0].keywords}
+            assert isinstance(keywords["shell"], ast.Constant)
+            assert keywords["shell"].value is False
         assert called_leafs.isdisjoint(
             {
                 "stop_service",

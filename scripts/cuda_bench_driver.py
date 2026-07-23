@@ -101,6 +101,7 @@ STATIC_PREFLIGHT_SCHEMA = "cuda_bench_driver.static_preflight.v1"
 PHASE_PACKET_SCHEMA = "cuda_bench_driver.phase_packet.v2"
 REFUSAL_SCHEMA = "cuda_bench_driver.refusal.v1"
 COMMAND_ADMISSION_SCHEMA = "cuda_bench_driver.command_admission.v1"
+COMMAND_COMPLETION_SCHEMA = "cuda_bench_driver.command_completion.v1"
 WINDOW_AUTHORIZATION_SCHEMA = "cuda_bench_driver.window_authorization.v1"
 CONTINUATION_SCHEMA = "cuda_bench_driver.continuation.v1"
 CONSUMPTION_RECEIPT_SCHEMA = "cuda_bench_driver.consumption_receipt.v1"
@@ -331,7 +332,6 @@ def _publish_anonymous_file(
     name: str,
     *,
     expected_size: int,
-    on_link: Callable[[], None] | None = None,
 ) -> os.stat_result:
     _check_file_fd(fd, expected_nlink=0, expected_size=expected_size)
     _check_directory_fd(parent_fd)
@@ -344,8 +344,6 @@ def _publish_anonymous_file(
         )
     except OSError:
         _filesystem_hazard()
-    if on_link is not None:
-        on_link()
     _check_directory_fd(parent_fd)
     _check_file_fd(fd, expected_nlink=1, expected_size=expected_size)
     try:
@@ -464,7 +462,6 @@ def write_private_file(
             parent_fd,
             parts[-1],
             expected_size=len(data),
-            on_link=(None if on_link is None else lambda: on_link(final_path)),
         )
         _verify_path_binding(
             relative,
@@ -472,6 +469,8 @@ def write_private_file(
             expected_chain=directory_chain,
             expected_file=published,
         )
+        if on_link is not None:
+            on_link(final_path)
     except BaseException as exc:
         if isinstance(exc, OSError):
             _filesystem_hazard()
@@ -1791,6 +1790,66 @@ def finalize(
     return finish()
 
 
+@dataclass(frozen=True, slots=True)
+class ParentCompletionEvidence:
+    packet: cm.PhasePacket
+    packet_ref: str
+    packet_doc: cm.PersistedDoc
+    admission: cm.CommandAdmissionPreimage
+    completion_doc: cm.PersistedDoc
+
+    def __post_init__(self) -> None:
+        try:
+            if (
+                type(self.packet_doc) is not cm.PersistedDoc
+                or type(self.completion_doc) is not cm.PersistedDoc
+                or type(self.admission) is not cm.CommandAdmissionPreimage
+            ):
+                raise ValueError("parent completion")
+            packet_doc = cm.PersistedDoc(self.packet_doc.wrapper_bytes)
+            completion_doc = cm.PersistedDoc(
+                self.completion_doc.wrapper_bytes
+            )
+            admission = cm.CommandAdmissionPreimage(
+                self.admission.selected_ref,
+                self.admission.wrapper_bytes,
+            )
+            completion = completion_doc.obj
+            if (
+                type(self.packet) is not cm.PhasePacket
+                or type(packet_doc.obj) is not cm.PhasePacket
+                or packet_doc.obj != self.packet
+                or packet_doc.obj != self.packet_doc.obj
+                or completion_doc.obj != self.completion_doc.obj
+                or admission != self.admission
+                or type(completion) is not cm.CommandCompletionDoc
+                or admission.command != "vulkan-baseline"
+                or admission.window_id != self.packet.window_id
+                or completion.command != "vulkan-baseline"
+                or completion.ordinal != admission.ordinal
+                or completion.decoded_phase != "vulkan_baseline"
+                or completion.window_id != self.packet.window_id
+                or completion.admission_ref != admission.selected_ref
+                or completion.admission_sha256 != admission.file_sha256
+                or completion.artifact_ref != self.packet_ref
+                or completion.artifact_sha256 != packet_doc.file_sha256
+                or completion.artifact_schema != cm.PHASE_PACKET_SCHEMA
+                or cm._compare_utc_z(
+                    admission.timestamp,
+                    completion.timestamp,
+                )
+                >= 0
+                or cm._compare_utc_z(
+                    packet_doc.obj.timestamp,
+                    completion.timestamp,
+                )
+                > 0
+            ):
+                raise ValueError("parent completion")
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise BenchRefusal("continuation_parent_mismatch") from exc
+
+
 class AuthorizationGate(Protocol):
     tier: str
 
@@ -1803,6 +1862,7 @@ class AuthorizationGate(Protocol):
         expected_window_id: str,
         parent_window: object | None,
         parent_packet: cm.PhasePacket | None,
+        parent_completion: ParentCompletionEvidence | None = None,
         clock: Clock,
     ) -> None: ...
 
@@ -1815,6 +1875,7 @@ class AuthorizationGate(Protocol):
         expected_window_id: str,
         parent_window: object | None,
         parent_packet: cm.PhasePacket | None,
+        parent_completion: ParentCompletionEvidence | None = None,
         authority_root: Path,
         receipt_root: Path,
         clock: Clock,
@@ -2720,6 +2781,7 @@ _ARTIFACT_SCHEMAS = {
     "packet": PHASE_PACKET_SCHEMA,
     "refusal": REFUSAL_SCHEMA,
     "command_admission": COMMAND_ADMISSION_SCHEMA,
+    "command_completion": COMMAND_COMPLETION_SCHEMA,
     "receipt": ASSEMBLE_RECEIPT_SCHEMA,
     "consumption_receipt": CONSUMPTION_RECEIPT_SCHEMA,
     "containment_snapshot": CONTAINMENT_SNAPSHOT_SCHEMA,
@@ -2740,6 +2802,7 @@ _ARTIFACT_DIRECTORIES = {
     "turn_artifact": "turns",
     "turn_manifest": "turns",
     "static_preflight": "receipts",
+    "command_completion": "",
     "window_authorization": "authorizations",
     "continuation": "authorizations",
     "journal": "journals",
@@ -3038,6 +3101,7 @@ def _validated_authority(
     clock: Clock,
     parent_window: WindowAuthorization | None,
     parent_packet: cm.PhasePacket | None,
+    parent_completion: ParentCompletionEvidence | None,
 ) -> tuple[
     WindowAuthorization | Continuation,
     cm.WindowAuthorizationDoc | cm.ContinuationDoc,
@@ -3104,6 +3168,35 @@ def _validated_authority(
             != parent_packet.authorization_preimage_sha256
         ):
             raise BenchRefusal("continuation_parent_mismatch")
+        if type(parent_completion) is not ParentCompletionEvidence:
+            raise BenchRefusal("continuation_parent_mismatch")
+        try:
+            verified_parent_completion = ParentCompletionEvidence(
+                packet=parent_completion.packet,
+                packet_ref=parent_completion.packet_ref,
+                packet_doc=parent_completion.packet_doc,
+                admission=parent_completion.admission,
+                completion_doc=parent_completion.completion_doc,
+            )
+        except BenchRefusal:
+            raise BenchRefusal("continuation_parent_mismatch") from None
+        if verified_parent_completion.packet != parent_packet:
+            raise BenchRefusal("continuation_parent_mismatch")
+        completion = verified_parent_completion.completion_doc.obj
+        if (
+            type(completion) is not cm.CommandCompletionDoc
+            or cm._compare_utc_z(
+                completion.timestamp,
+                authority.issued_at,
+            )
+            > 0
+            or cm._compare_utc_z(
+                completion.timestamp,
+                timestamp,
+            )
+            > 0
+        ):
+            raise BenchRefusal("continuation_parent_mismatch")
         if cm._compare_utc_z(timestamp, parent_window.expires_at) >= 0:
             raise BenchRefusal("authorization_expired")
 
@@ -3119,6 +3212,7 @@ def validate_authorization(
     clock: Clock,
     parent_window: WindowAuthorization | None = None,
     parent_packet: cm.PhasePacket | None = None,
+    parent_completion: ParentCompletionEvidence | None = None,
 ) -> None:
     """Validate the current authority without writing or consuming its nonce."""
 
@@ -3130,6 +3224,7 @@ def validate_authorization(
         clock=clock,
         parent_window=parent_window,
         parent_packet=parent_packet,
+        parent_completion=parent_completion,
     )
 
 
@@ -3144,6 +3239,7 @@ def _prepare_authorization_consumption(
     expected_tier: str,
     parent_window: WindowAuthorization | None,
     parent_packet: cm.PhasePacket | None,
+    parent_completion: ParentCompletionEvidence | None,
 ) -> tuple[ConsumedAuthority, bytes, str]:
     if (
         type(getattr(policy, "tier", None)) is not str
@@ -3160,6 +3256,7 @@ def _prepare_authorization_consumption(
         clock=clock,
         parent_window=parent_window,
         parent_packet=parent_packet,
+        parent_completion=parent_completion,
     )
 
     receipt = cm.ConsumptionReceipt(
@@ -3203,6 +3300,7 @@ def consume_authorization(
     policy: ArtifactPolicy,
     parent_window: WindowAuthorization | None = None,
     parent_packet: cm.PhasePacket | None = None,
+    parent_completion: ParentCompletionEvidence | None = None,
 ) -> ConsumedAuthority:
     consumed, encoded, receipt_dir = _prepare_authorization_consumption(
         auth,
@@ -3214,6 +3312,7 @@ def consume_authorization(
         expected_tier="production",
         parent_window=parent_window,
         parent_packet=parent_packet,
+        parent_completion=parent_completion,
     )
     _require_distinct_roots(authority_root, receipt_root)
     nonce = consumed.receipt["nonce"]
@@ -3227,6 +3326,7 @@ def consume_authorization(
         clock=clock,
         parent_window=parent_window,
         parent_packet=parent_packet,
+        parent_completion=parent_completion,
     )
     _create_consumption_marker(nonce, root=authority_root)
     write_private_file(
@@ -3256,6 +3356,7 @@ class RealAuthorizationGate:
         expected_window_id: str,
         parent_window: WindowAuthorization | None,
         parent_packet: cm.PhasePacket | None,
+        parent_completion: ParentCompletionEvidence | None = None,
         clock: Clock,
     ) -> None:
         validate_authorization(
@@ -3265,6 +3366,7 @@ class RealAuthorizationGate:
             expected_window_id=expected_window_id,
             parent_window=parent_window,
             parent_packet=parent_packet,
+            parent_completion=parent_completion,
             clock=clock,
         )
 
@@ -3277,6 +3379,7 @@ class RealAuthorizationGate:
         expected_window_id: str,
         parent_window: WindowAuthorization | None,
         parent_packet: cm.PhasePacket | None,
+        parent_completion: ParentCompletionEvidence | None = None,
         authority_root: Path,
         receipt_root: Path,
         clock: Clock,
@@ -3288,6 +3391,7 @@ class RealAuthorizationGate:
             expected_window_id=expected_window_id,
             parent_window=parent_window,
             parent_packet=parent_packet,
+            parent_completion=parent_completion,
             clock=clock,
         )
         return consume_authorization(
@@ -3297,6 +3401,7 @@ class RealAuthorizationGate:
             expected_window_id=expected_window_id,
             parent_window=parent_window,
             parent_packet=parent_packet,
+            parent_completion=parent_completion,
             authority_root=authority_root,
             receipt_root=receipt_root,
             clock=clock,
@@ -3323,6 +3428,7 @@ class RehearsalAuthorizationGate:
         expected_window_id: str,
         parent_window: WindowAuthorization | None,
         parent_packet: cm.PhasePacket | None,
+        parent_completion: ParentCompletionEvidence | None = None,
         clock: Clock,
     ) -> None:
         validate_authorization(
@@ -3332,6 +3438,7 @@ class RehearsalAuthorizationGate:
             expected_window_id=expected_window_id,
             parent_window=parent_window,
             parent_packet=parent_packet,
+            parent_completion=parent_completion,
             clock=clock,
         )
 
@@ -3344,6 +3451,7 @@ class RehearsalAuthorizationGate:
         expected_window_id: str,
         parent_window: WindowAuthorization | None,
         parent_packet: cm.PhasePacket | None,
+        parent_completion: ParentCompletionEvidence | None = None,
         authority_root: Path,
         receipt_root: Path,
         clock: Clock,
@@ -3355,6 +3463,7 @@ class RehearsalAuthorizationGate:
             expected_window_id=expected_window_id,
             parent_window=parent_window,
             parent_packet=parent_packet,
+            parent_completion=parent_completion,
             clock=clock,
         )
         consumed, encoded, receipt_dir = _prepare_authorization_consumption(
@@ -3367,6 +3476,7 @@ class RehearsalAuthorizationGate:
             expected_tier=self.tier,
             parent_window=parent_window,
             parent_packet=parent_packet,
+            parent_completion=parent_completion,
         )
         _require_distinct_roots(authority_root, receipt_root)
         _validated_authority(
@@ -3377,6 +3487,7 @@ class RehearsalAuthorizationGate:
             clock=clock,
             parent_window=parent_window,
             parent_packet=parent_packet,
+            parent_completion=parent_completion,
         )
         if tuple(receipt_dir.split("/", 1))[:1] != ("rehearsal",):
             raise BenchRefusal("tier_mismatch")
@@ -3414,6 +3525,7 @@ class _TestOnlySingleUseAuthorizationGate:
         expected_window_id: str,
         parent_window: WindowAuthorization | None,
         parent_packet: cm.PhasePacket | None,
+        parent_completion: ParentCompletionEvidence | None = None,
         clock: Clock,
     ) -> None:
         validate_authorization(
@@ -3423,6 +3535,7 @@ class _TestOnlySingleUseAuthorizationGate:
             expected_window_id=expected_window_id,
             parent_window=parent_window,
             parent_packet=parent_packet,
+            parent_completion=parent_completion,
             clock=clock,
         )
 
@@ -3435,6 +3548,7 @@ class _TestOnlySingleUseAuthorizationGate:
         expected_window_id: str,
         parent_window: WindowAuthorization | None,
         parent_packet: cm.PhasePacket | None,
+        parent_completion: ParentCompletionEvidence | None = None,
         authority_root: Path,
         receipt_root: Path,
         clock: Clock,
@@ -3447,6 +3561,7 @@ class _TestOnlySingleUseAuthorizationGate:
             expected_window_id=expected_window_id,
             parent_window=parent_window,
             parent_packet=parent_packet,
+            parent_completion=parent_completion,
             clock=clock,
         )
         expected_type = WindowAuthorization if phase == "vulkan_baseline" else Continuation
@@ -3464,6 +3579,7 @@ class _TestOnlySingleUseAuthorizationGate:
             expected_tier=self.tier,
             parent_window=parent_window,
             parent_packet=parent_packet,
+            parent_completion=parent_completion,
         )
         self._consumed.add(authorization.nonce)
         return consumed
@@ -4472,6 +4588,8 @@ class CommandAttempt:
     admission_ref: str
     admission_sha256: str
     namespace: str
+    _root_identity: tuple[int, int]
+    _admission_identity: tuple[int, int]
 
     def __init__(
         self,
@@ -4480,6 +4598,8 @@ class CommandAttempt:
         admission_ref: str,
         admission_sha256: str,
         namespace: str,
+        root_identity: tuple[int, int],
+        admission_identity: tuple[int, int],
         *,
         _guard: object,
     ) -> None:
@@ -4490,6 +4610,8 @@ class CommandAttempt:
         object.__setattr__(self, "admission_ref", admission_ref)
         object.__setattr__(self, "admission_sha256", admission_sha256)
         object.__setattr__(self, "namespace", namespace)
+        object.__setattr__(self, "_root_identity", root_identity)
+        object.__setattr__(self, "_admission_identity", admission_identity)
 
 
 class _CommandInterrupted(BaseException):
@@ -4976,6 +5098,11 @@ def _admit_command(
                     _command_ref(namespace, name),
                     final_digest,
                     namespace,
+                    (
+                        _check_directory_fd(root_fd).st_dev,
+                        _check_directory_fd(root_fd).st_ino,
+                    ),
+                    (final_info.st_dev, final_info.st_ino),
                     _guard=_COMMAND_ATTEMPT_GUARD,
                 )
                 linearized = True
@@ -5082,10 +5209,13 @@ def publish_command_artifact(
     encoded: bytes,
     *,
     root: Path,
+    on_committed: Callable[[str, str], None] | None = None,
 ) -> tuple[str, str]:
     if type(attempt) is not CommandAttempt or role not in {"admission", "terminal"}:
         raise ValueError("command_artifact_invalid")
     if type(encoded) is not bytes or len(encoded) > TURN_ARTIFACT_BYTE_CAP:
+        raise ValueError("command_artifact_invalid")
+    if on_committed is not None and not callable(on_committed):
         raise ValueError("command_artifact_invalid")
     expected_admission = _command_ref(
         attempt.namespace,
@@ -5153,6 +5283,8 @@ def publish_command_artifact(
             os.close(fd)
             fd = None
             result = (relative, digest)
+            if on_committed is not None:
+                on_committed(*result)
         except (Exception, KeyboardInterrupt, _CommandInterrupted) as exc:
             failure = exc
 
@@ -5236,6 +5368,403 @@ def publish_command_artifact(
                     pass
 
 
+_IMMUTABLE_PREIMAGE_RE = re.compile(
+    r"preimages/rollback-manifest-[0-9a-f]{64}\.json\Z"
+)
+
+
+@dataclass(slots=True)
+class _ImmutableAttemptAuthority:
+    root_fd: int
+    admission_fd: int
+    root: Path
+    admission_name: str
+    payload: bytes
+    admission_identity: tuple[int, ...]
+
+    def reprove(self) -> None:
+        try:
+            if not _held_root_is_bound(self.root_fd, self.root):
+                _filesystem_hazard()
+            os.lseek(self.admission_fd, 0, os.SEEK_SET)
+            initial = _check_file_fd(
+                self.admission_fd, expected_size=len(self.payload)
+            )
+            chunks: list[bytes] = []
+            remaining = len(self.payload) + 1
+            while remaining:
+                chunk = os.read(
+                    self.admission_fd, min(remaining, 1024 * 1024)
+                )
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            final = _check_file_fd(
+                self.admission_fd, expected_size=len(self.payload)
+            )
+            named = os.stat(
+                self.admission_name,
+                dir_fd=self.root_fd,
+                follow_symlinks=False,
+            )
+            if (
+                b"".join(chunks) != self.payload
+                or _stable_file_identity(initial) != self.admission_identity
+                or _stable_file_identity(final) != self.admission_identity
+                or not stat.S_ISREG(named.st_mode)
+                or named.st_uid != os.geteuid()
+                or named.st_nlink != 1
+                or stat.S_IMODE(named.st_mode) != 0o600
+                or _stable_file_identity(named) != self.admission_identity
+            ):
+                _filesystem_hazard()
+        except OSError:
+            _filesystem_hazard()
+
+    def close(self) -> None:
+        os.close(self.admission_fd)
+        os.close(self.root_fd)
+
+
+def _open_immutable_attempt_authority(
+    attempt: CommandAttempt,
+    *,
+    root: Path,
+    permitted_commands: frozenset[str],
+) -> _ImmutableAttemptAuthority:
+    """Re-enter through the supplied root; an in-memory attempt is not authority."""
+
+    if (
+        type(attempt) is not CommandAttempt
+        or attempt.command not in permitted_commands
+        or attempt.namespace != ""
+    ):
+        _filesystem_hazard()
+    expected = _command_ref(
+        attempt.namespace,
+        _command_name(attempt.command, attempt.ordinal, "admission"),
+    )
+    if attempt.admission_ref != expected:
+        _filesystem_hazard()
+    root_fd: int | None = None
+    admission_fd: int | None = None
+    try:
+        root_fd = _open_root_fd(root)
+        root_info = _check_directory_fd(root_fd)
+        if (root_info.st_dev, root_info.st_ino) != attempt._root_identity:
+            _filesystem_hazard()
+        admission_fd = os.open(
+            expected, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=root_fd
+        )
+        os.set_inheritable(admission_fd, False)
+        initial = _check_file_fd(admission_fd)
+        chunks: list[bytes] = []
+        remaining = TURN_ARTIFACT_BYTE_CAP + 1
+        while remaining:
+            chunk = os.read(admission_fd, min(remaining, 1024 * 1024))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        payload = b"".join(chunks)
+        final = _check_file_fd(admission_fd)
+        current_admission = os.stat(
+            expected, dir_fd=root_fd, follow_symlinks=False
+        )
+        if hashlib.sha256(payload).hexdigest() != attempt.admission_sha256:
+            _filesystem_hazard()
+        if (
+            len(payload) > TURN_ARTIFACT_BYTE_CAP
+            or len(payload) != initial.st_size
+            or _stable_file_identity(initial) != _stable_file_identity(final)
+            or not stat.S_ISREG(current_admission.st_mode)
+            or current_admission.st_uid != os.geteuid()
+            or current_admission.st_nlink != 1
+            or stat.S_IMODE(current_admission.st_mode) != 0o600
+            or _stable_file_identity(final)
+            != _stable_file_identity(current_admission)
+            or (current_admission.st_dev, current_admission.st_ino)
+            != attempt._admission_identity
+        ):
+            _filesystem_hazard()
+        wrapper = json.loads(payload)
+        fields = wrapper["fields"]
+        if (
+            wrapper.get("schema") != COMMAND_ADMISSION_SCHEMA
+            or fields.get("command") != attempt.command
+            or fields.get("ordinal") != attempt.ordinal
+            or fields.get("status") != "admitted"
+        ):
+            _filesystem_hazard()
+        authority = _ImmutableAttemptAuthority(
+            root_fd=root_fd,
+            admission_fd=admission_fd,
+            root=Path(root),
+            admission_name=expected,
+            payload=payload,
+            admission_identity=_stable_file_identity(final),
+        )
+        root_fd = None
+        admission_fd = None
+        return authority
+    except (AttributeError, KeyError, OSError, TypeError, ValueError):
+        _filesystem_hazard()
+    finally:
+        if admission_fd is not None:
+            os.close(admission_fd)
+        if root_fd is not None:
+            os.close(root_fd)
+
+
+def _immutable_parts(relative: str) -> tuple[str, str]:
+    if (
+        type(relative) is not str
+        or _IMMUTABLE_PREIMAGE_RE.fullmatch(relative) is None
+    ):
+        _filesystem_hazard()
+    directory, name = relative.split("/", 1)
+    return directory, name
+
+
+def _validate_immutable_content_address(relative: str, data: bytes) -> None:
+    expected = hashlib.sha256(data).hexdigest()
+    if relative != f"preimages/rollback-manifest-{expected}.json":
+        _filesystem_hazard()
+
+
+def _open_preimages_directory(
+    *,
+    root: Path,
+    create: bool,
+    expected_root_identity: tuple[int, int],
+) -> tuple[int, int]:
+    root_fd = _open_root_fd(root)
+    root_info = _check_directory_fd(root_fd)
+    if (root_info.st_dev, root_info.st_ino) != expected_root_identity:
+        os.close(root_fd)
+        _filesystem_hazard()
+    created_identity: tuple[int, int] | None = None
+    parent_fd: int | None = None
+    try:
+        try:
+            parent_fd = os.open(
+                "preimages",
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=root_fd,
+            )
+        except FileNotFoundError:
+            if not create:
+                _filesystem_hazard()
+            try:
+                os.mkdir("preimages", mode=0o700, dir_fd=root_fd)
+                created = os.stat(
+                    "preimages", dir_fd=root_fd, follow_symlinks=False
+                )
+                created_identity = (created.st_dev, created.st_ino)
+            except FileExistsError:
+                pass
+            except OSError:
+                _filesystem_hazard()
+            try:
+                os.fsync(root_fd)
+                parent_fd = os.open(
+                    "preimages",
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=root_fd,
+                )
+            except OSError:
+                _filesystem_hazard()
+        except OSError:
+            _filesystem_hazard()
+        opened = _check_directory_fd(parent_fd)
+        current = os.stat("preimages", dir_fd=root_fd, follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(current.st_mode)
+            or not _same_inode(opened, current)
+            or (
+                created_identity is not None
+                and created_identity != (opened.st_dev, opened.st_ino)
+            )
+        ):
+            _filesystem_hazard()
+        assert parent_fd is not None
+        return root_fd, parent_fd
+    except BaseException:
+        if parent_fd is not None:
+            os.close(parent_fd)
+        os.close(root_fd)
+        raise
+
+
+def _read_exact_immutable(
+    parent_fd: int,
+    name: str,
+    expected: bytes,
+) -> os.stat_result:
+    fd: int | None = None
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+        initial = _check_file_fd(fd, expected_size=len(expected))
+        payload = bytearray()
+        while len(payload) <= len(expected):
+            chunk = os.read(fd, len(expected) + 1 - len(payload))
+            if not chunk:
+                break
+            payload.extend(chunk)
+        if bytes(payload) != expected:
+            _filesystem_hazard()
+        final = _check_file_fd(fd, expected_size=len(expected))
+        if _stable_file_identity(initial) != _stable_file_identity(final):
+            _filesystem_hazard()
+        os.fsync(fd)
+        os.fsync(parent_fd)
+        after = _check_file_fd(fd, expected_size=len(expected))
+        named = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if (
+            _stable_file_identity(final) != _stable_file_identity(after)
+            or not _same_inode(after, named)
+        ):
+            _filesystem_hazard()
+        return after
+    except OSError:
+        _filesystem_hazard()
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def _preimages_is_bound(root_fd: int, parent_fd: int) -> bool:
+    try:
+        held = _check_directory_fd(parent_fd)
+        named = os.stat("preimages", dir_fd=root_fd, follow_symlinks=False)
+    except (BenchRefusal, OSError):
+        return False
+    return stat.S_ISDIR(named.st_mode) and _same_inode(held, named)
+
+
+def publish_or_verify_immutable(
+    relative: str,
+    data: bytes,
+    *,
+    attempt: CommandAttempt,
+    root: Path,
+) -> Path:
+    """Create once after static admission, or durably verify exact prior bytes."""
+
+    _directory, name = _immutable_parts(relative)
+    if type(data) is not bytes or len(data) > TURN_ARTIFACT_BYTE_CAP:
+        _filesystem_hazard()
+    _validate_immutable_content_address(relative, data)
+    authority = _open_immutable_attempt_authority(
+        attempt, root=root, permitted_commands=frozenset({"static-preflight"})
+    )
+    try:
+        root_fd, parent_fd = _open_preimages_directory(
+            root=root,
+            create=True,
+            expected_root_identity=attempt._root_identity,
+        )
+        fd: int | None = None
+        try:
+            fd = _open_anonymous_file(parent_fd, append=False)
+            _write_all(fd, data)
+            os.fsync(fd)
+            source = _check_file_fd(
+                fd, expected_nlink=0, expected_size=len(data)
+            )
+            try:
+                os.link(
+                    f"/proc/self/fd/{fd}",
+                    name,
+                    dst_dir_fd=parent_fd,
+                    follow_symlinks=True,
+                )
+            except FileExistsError:
+                os.close(fd)
+                fd = None
+                _read_exact_immutable(parent_fd, name, data)
+                if (
+                    not _held_root_is_bound(root_fd, root)
+                    or not _preimages_is_bound(root_fd, parent_fd)
+                ):
+                    _filesystem_hazard()
+                authority.reprove()
+                return Path(root) / relative
+            except OSError:
+                _filesystem_hazard()
+            _check_file_fd(fd, expected_nlink=1, expected_size=len(data))
+            os.fsync(parent_fd)
+            published = _check_file_fd(
+                fd, expected_nlink=1, expected_size=len(data)
+            )
+            named = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            if (
+                not _same_inode(source, published)
+                or not _same_inode(published, named)
+                or not _held_root_is_bound(root_fd, root)
+                or not _preimages_is_bound(root_fd, parent_fd)
+            ):
+                _filesystem_hazard()
+            _read_exact_immutable(parent_fd, name, data)
+            if (
+                not _held_root_is_bound(root_fd, root)
+                or not _preimages_is_bound(root_fd, parent_fd)
+            ):
+                _filesystem_hazard()
+            authority.reprove()
+            return Path(root) / relative
+        except OSError:
+            _filesystem_hazard()
+        finally:
+            if fd is not None:
+                os.close(fd)
+            os.close(parent_fd)
+            os.close(root_fd)
+    finally:
+        authority.close()
+
+
+def verify_existing_immutable(
+    relative: str,
+    data: bytes,
+    *,
+    attempt: CommandAttempt,
+    root: Path,
+) -> Path:
+    """Phase-only verification; this function never creates or repairs."""
+
+    _directory, name = _immutable_parts(relative)
+    if type(data) is not bytes or len(data) > TURN_ARTIFACT_BYTE_CAP:
+        _filesystem_hazard()
+    _validate_immutable_content_address(relative, data)
+    authority = _open_immutable_attempt_authority(
+        attempt,
+        root=root,
+        permitted_commands=frozenset({"vulkan-baseline", "cuda-candidate"}),
+    )
+    try:
+        root_fd, parent_fd = _open_preimages_directory(
+            root=root,
+            create=False,
+            expected_root_identity=attempt._root_identity,
+        )
+        try:
+            _read_exact_immutable(parent_fd, name, data)
+            if (
+                not _held_root_is_bound(root_fd, root)
+                or not _preimages_is_bound(root_fd, parent_fd)
+            ):
+                _filesystem_hazard()
+            authority.reprove()
+            return Path(root) / relative
+        finally:
+            os.close(parent_fd)
+            os.close(root_fd)
+    finally:
+        authority.close()
+
+
 _PROVIDERS_GUARD = object()
 _TEST_TIER_GUARD = object()
 
@@ -5257,6 +5786,10 @@ class PhaseConfig:
     boot_id: str
     window_id: str
     expected_port: int | None
+    static_admission_path: str | None = None
+    static_completion_path: str | None = None
+    parent_admission_path: str | None = None
+    parent_completion_path: str | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -5860,7 +6393,7 @@ def _persist_terminal_document(
     root: Path,
     terminal: _TerminalCommit,
 ) -> Path:
-    """Make the successful link the one terminal linearization point."""
+    """Latch only after durable publication and anchored identity validation."""
 
     if terminal.path is not None:
         return terminal.path
@@ -5946,6 +6479,68 @@ def _stage_identities_match(
     return True
 
 
+def _load_verified_completion_pair(
+    *,
+    admission_ref: str | None,
+    completion_ref: str | None,
+    artifact_ref: str,
+    artifact_bytes: bytes,
+    expected_command: str,
+    expected_window_id: str | None,
+    expected_type: type[object],
+    root: Path,
+) -> tuple[
+    cm.CommandAdmissionPreimage,
+    cm.PersistedDoc,
+    cm.PersistedDoc,
+]:
+    if admission_ref is None or completion_ref is None:
+        raise BenchRefusal("continuation_parent_mismatch")
+    try:
+        admission = cm.CommandAdmissionPreimage(
+            admission_ref,
+            open_bench_file(admission_ref, root=root),
+        )
+        completion_doc = cm.PersistedDoc(
+            open_bench_file(completion_ref, root=root)
+        )
+        artifact_doc = cm.PersistedDoc(artifact_bytes)
+    except (BenchRefusal, TypeError, ValueError):
+        raise BenchRefusal("continuation_parent_mismatch") from None
+    completion = completion_doc.obj
+    if (
+        type(completion) is not cm.CommandCompletionDoc
+        or type(artifact_doc.obj) is not expected_type
+        or admission.command != expected_command
+        or completion.command != expected_command
+        or completion.ordinal != admission.ordinal
+        or completion.window_id != expected_window_id
+        or admission.window_id != expected_window_id
+        or completion.admission_ref != admission.selected_ref
+        or completion.admission_sha256 != admission.file_sha256
+        or completion.artifact_ref != artifact_ref
+        or completion.artifact_sha256 != artifact_doc.file_sha256
+        or completion.artifact_schema
+        != (
+            cm.STATIC_PREFLIGHT_SCHEMA
+            if expected_type is cm.StaticPreflightDoc
+            else cm.PHASE_PACKET_SCHEMA
+        )
+        or cm._compare_utc_z(
+            admission.timestamp,
+            completion.timestamp,
+        )
+        >= 0
+        or cm._compare_utc_z(
+            artifact_doc.obj.timestamp,
+            completion.timestamp,
+        )
+        > 0
+    ):
+        raise BenchRefusal("continuation_parent_mismatch")
+    return admission, completion_doc, artifact_doc
+
+
 def _load_phase_preimages(
     config: PhaseConfig,
     providers: Providers,
@@ -5957,6 +6552,7 @@ def _load_phase_preimages(
     cm.RuntimeIdentity,
     cm.StaticPreflightDoc,
     cm.PhasePacket | None,
+    ParentCompletionEvidence | None,
     str,
     str,
 ]:
@@ -5997,7 +6593,24 @@ def _load_phase_preimages(
     ):
         raise BenchRefusal("identity_mismatch")
 
+    if providers.tier == "production":
+        try:
+            _load_verified_completion_pair(
+                admission_ref=config.static_admission_path,
+                completion_ref=config.static_completion_path,
+                artifact_ref=config.static_preflight_path,
+                artifact_bytes=static_bytes,
+                expected_command="static-preflight",
+                expected_window_id=None,
+                expected_type=cm.StaticPreflightDoc,
+                root=root,
+            )
+        except BenchRefusal:
+            raise BenchRefusal("identity_mismatch") from None
+
     parent_packet: cm.PhasePacket | None = None
+    parent_completion: ParentCompletionEvidence | None = None
+    parent_bytes: bytes | None = None
     if config.parent_packet_path is not None:
         try:
             parent_bytes = open_bench_file(config.parent_packet_path, root=root)
@@ -6005,10 +6618,39 @@ def _load_phase_preimages(
         except (BenchRefusal, TypeError, ValueError):
             raise BenchRefusal("continuation_parent_mismatch") from None
     if config.phase == "vulkan_baseline":
-        if config.parent_window is not None or config.parent_packet_path is not None:
+        if (
+            config.parent_window is not None
+            or config.parent_packet_path is not None
+            or config.parent_admission_path is not None
+            or config.parent_completion_path is not None
+        ):
             raise BenchRefusal("continuation_parent_mismatch")
     elif config.parent_window is None or parent_packet is None:
         raise BenchRefusal("continuation_missing")
+    elif providers.tier == "production":
+        if parent_bytes is None:
+            raise BenchRefusal("continuation_parent_mismatch")
+        parent_admission, parent_completion_doc, parent_packet_doc = (
+            _load_verified_completion_pair(
+            admission_ref=config.parent_admission_path,
+            completion_ref=config.parent_completion_path,
+            artifact_ref=config.parent_packet_path,
+            artifact_bytes=parent_bytes,
+            expected_command="vulkan-baseline",
+            expected_window_id=config.window_id,
+            expected_type=cm.PhasePacket,
+            root=root,
+        )
+        )
+        if config.parent_packet_path is None:
+            raise BenchRefusal("continuation_parent_mismatch")
+        parent_completion = ParentCompletionEvidence(
+            packet=parent_packet,
+            packet_ref=config.parent_packet_path,
+            packet_doc=parent_packet_doc,
+            admission=parent_admission,
+            completion_doc=parent_completion_doc,
+        )
 
     bench_document = {
         "schema": RUNTIME_IDENTITY_SCHEMA,
@@ -6039,6 +6681,7 @@ def _load_phase_preimages(
         runtime_identity,
         static,
         parent_packet,
+        parent_completion,
         hashlib.sha256(static_bytes).hexdigest(),
         bench_file_sha,
     )
@@ -6049,6 +6692,7 @@ def _phase_preflight(
     providers: Providers,
     *,
     parent_packet: cm.PhasePacket | None,
+    parent_completion: ParentCompletionEvidence | None,
 ) -> None:
     try:
         for unit in (
@@ -6080,6 +6724,7 @@ def _phase_preflight(
         expected_window_id=config.window_id,
         parent_window=config.parent_window,
         parent_packet=parent_packet,
+        parent_completion=parent_completion,
         clock=providers.clock,
     )
 
@@ -6994,13 +7639,12 @@ def _publish_completed_phase(
     _append_phase_transition(journal, providers.clock, "packet_write")
     journal.append(ts=completed_at, transition="completed", detail={})
     journal.close()
-    packet_path = _persist_terminal_document(
+    packet_path, _packet_file_sha256 = _persist_document(
         policy=providers.artifact_policy,
         kind="packet",
         name=f"{config.phase}-completed.json",
         document={"binding_sha256": binding, **packet_fields},
         root=attempt_root,
-        terminal=terminal,
     )
     return packet_path
 
@@ -7297,6 +7941,7 @@ def _run_phase_with_blocked_entry(
             runtime_identity,
             static,
             parent_packet,
+            parent_completion,
             static_file_sha,
             bench_identity_file_sha,
         ) = _load_phase_preimages(
@@ -7333,7 +7978,12 @@ def _run_phase_with_blocked_entry(
             admitted_argv = tuple(config.argv)
             admitted_env = MappingProxyType(dict(config.env))
             effective_args_sha256 = _effective_args_sha256(list(admitted_argv))
-        _phase_preflight(config, providers, parent_packet=parent_packet)
+        _phase_preflight(
+            config,
+            providers,
+            parent_packet=parent_packet,
+            parent_completion=parent_completion,
+        )
 
         _append_phase_transition(
             journal,
@@ -7380,6 +8030,7 @@ def _run_phase_with_blocked_entry(
             expected_window_id=config.window_id,
             parent_window=config.parent_window,
             parent_packet=parent_packet,
+            parent_completion=parent_completion,
             authority_root=root,
             receipt_root=attempt_root,
             clock=providers.clock,

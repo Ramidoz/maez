@@ -46,6 +46,15 @@ FROZEN_VULKAN_RUNTIME_SHA256 = "55c6ce2efc8feccd25bfab500c5ac70709152be6ff0c5bb2
 FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256 = (
     "c04ba04862db3b558deecbcc2b8f923a1dc7bce830b74592dd9157b784c86dd2"
 )
+FROZEN_CUDA_SERVER_SHA256 = (
+    "33abb514fdbf2d590447fb08d608b7cb8c89cfa6b7b639226ada5a178728360f"
+)
+FROZEN_CUDA_BACKEND_SHA256 = (
+    "e46a6888eb1dd78e07a6c80522f13f17e3c3b60c6ab6fdb56718456ca91861a7"
+)
+FROZEN_CUDA_RUNTIME_MANIFEST_SHA256 = (
+    "8989bfb2d7bda18c8493973a6356e3d2912eb8bc85ce64d8130859134a7310bd"
+)
 # Compact JSON array of the effective incumbent mtp.conf argv after executable.
 FROZEN_VULKAN_EFFECTIVE_ARGS_SHA256 = (
     "8fa9b789572e4d1d63f5d9e008797b14df5fc10b634b0a3858cd68fe008c583b"
@@ -482,6 +491,8 @@ CONSUMPTION_RECEIPT_SCHEMA = "cuda_bench_driver.consumption_receipt.v1"
 WINDOW_AUTHORIZATION_SCHEMA = "cuda_bench_driver.window_authorization.v1"
 CONTINUATION_SCHEMA = "cuda_bench_driver.continuation.v1"
 STATIC_PREFLIGHT_SCHEMA = "cuda_bench_driver.static_preflight.v1"
+COMMAND_ADMISSION_SCHEMA = "cuda_bench_driver.command_admission.v1"
+COMMAND_COMPLETION_SCHEMA = "cuda_bench_driver.command_completion.v1"
 CONTAINMENT_SNAPSHOT_SCHEMA = "cuda_bench_driver.containment_snapshot.v2"
 RUNTIME_IDENTITY_SCHEMA = "cuda_bench_driver.runtime_identity.v1"
 COLD_BOOT_WITNESS_SCHEMA = "cuda_migration.cold_boot_witness.v1"
@@ -492,6 +503,33 @@ TURN_MANIFEST_SCHEMA = "cuda_bench_driver.turn_manifest.v1"
 PHASE_PACKET_SCHEMA = "cuda_bench_driver.phase_packet.v2"
 ROLLBACK_EVIDENCE_BUNDLE_SCHEMA = "cuda_migration.rollback_evidence_bundle.v1"
 BENCH_EVIDENCE_BUNDLE_SCHEMA = "cuda_migration.bench_evidence_bundle.v1"
+
+ACTIVE_SCHEMA_FAMILIES = (
+    STATIC_PREFLIGHT_SCHEMA,
+    SCHEMA_VERSION,
+    PHASE_PACKET_SCHEMA,
+    "cuda_bench_driver.refusal.v1",
+    COMMAND_ADMISSION_SCHEMA,
+    WINDOW_AUTHORIZATION_SCHEMA,
+    CONTINUATION_SCHEMA,
+    CONSUMPTION_RECEIPT_SCHEMA,
+    TURN_MANIFEST_SCHEMA,
+    "cuda_bench_driver.turn_artifact.v1",
+    CONTAINMENT_SNAPSHOT_SCHEMA,
+    RUNTIME_IDENTITY_SCHEMA,
+    "cuda_bench_assemble.receipt.v1",
+    "cuda_bench_rehearsal.packet.v1",
+    BENCH_EVIDENCE_BUNDLE_SCHEMA,
+    CYCLE_BACKEND_WITNESS_SCHEMA,
+    QUALITY_EVIDENCE_SCHEMA,
+    OWNER_VOICE_REVIEW_SCHEMA,
+    ROLLBACK_EVIDENCE_BUNDLE_SCHEMA,
+    COLD_BOOT_WITNESS_SCHEMA,
+    PROVISIONAL_LIVE_WITNESS_SCHEMA,
+    AUTHORIZATION_WITNESS_SCHEMA,
+    BACKEND_MAP_WITNESS_SCHEMA,
+    COMMAND_COMPLETION_SCHEMA,
+)
 
 _NONCE_RE = re.compile(r"^[0-9a-f]{64}$")
 _WINDOW_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
@@ -1011,6 +1049,171 @@ class StaticPreflightDoc:
                 "stub_sha256": self.stub_sha256,
                 "corpus_verified": self.corpus_verified,
                 "checks": dict(sorted(self.checks.items())),
+                "timestamp": self.timestamp,
+            }
+        )
+
+
+_COMPLETION_MATRIX = MappingProxyType(
+    {
+        "static-preflight": (STATIC_PREFLIGHT_SCHEMA, None),
+        "vulkan-baseline": (PHASE_PACKET_SCHEMA, "vulkan_baseline"),
+        "cuda-candidate": (PHASE_PACKET_SCHEMA, "cuda_candidate"),
+    }
+)
+
+
+def _validate_private_ref(value: object) -> str:
+    if (
+        type(value) is not str
+        or not value
+        or len(value.encode("utf-8")) > 512
+        or value.startswith("/")
+    ):
+        raise ValueError("command_completion_invalid")
+    path = Path(value)
+    if any(part in {"", ".", ".."} for part in path.parts):
+        raise ValueError("command_completion_invalid")
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class CommandAdmissionPreimage:
+    """Decoder-free canonical command admission carried for completion joins."""
+
+    selected_ref: str
+    wrapper_bytes: bytes
+    command: str = field(init=False)
+    ordinal: int = field(init=False)
+    window_id: str | None = field(init=False)
+    timestamp: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        if type(self.wrapper_bytes) is not bytes:
+            raise ValueError("command_admission_invalid")
+        try:
+            wrapper = json.loads(self.wrapper_bytes)
+            canonical = _canonical_wrapper_bytes(wrapper)
+        except (OverflowError, TypeError, UnicodeError, ValueError) as exc:
+            raise ValueError("command_admission_invalid") from exc
+        if (
+            canonical != self.wrapper_bytes
+            or not isinstance(wrapper, Mapping)
+            or set(wrapper) != {"schema", "binding_sha256", "fields"}
+            or wrapper["schema"] != COMMAND_ADMISSION_SCHEMA
+            or wrapper["binding_sha256"] is not None
+            or not isinstance(wrapper["fields"], Mapping)
+            or set(wrapper["fields"])
+            != {"command", "ordinal", "window_id", "status", "timestamp"}
+        ):
+            raise ValueError("command_admission_invalid")
+        values = dict(wrapper["fields"])
+        command = values["command"]
+        ordinal = values["ordinal"]
+        window_id = values["window_id"]
+        if (
+            type(command) is not str
+            or command not in _COMPLETION_MATRIX
+            or type(ordinal) is not int
+            or isinstance(ordinal, bool)
+            or ordinal < 1
+            or values["status"] != "admitted"
+            or (
+                command == "static-preflight"
+                and window_id is not None
+            )
+            or (
+                command != "static-preflight"
+                and (
+                    type(window_id) is not str
+                    or _WINDOW_ID_RE.fullmatch(window_id) is None
+                )
+            )
+        ):
+            raise ValueError("command_admission_invalid")
+        try:
+            _validate_utc_z_timestamp(values["timestamp"])
+            _validate_private_ref(self.selected_ref)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("command_admission_invalid") from exc
+        expected_ref = (
+            f"command-{command}-attempt-{ordinal:03d}-admission.json"
+        )
+        if self.selected_ref != expected_ref:
+            raise ValueError("command_admission_invalid")
+        object.__setattr__(self, "command", command)
+        object.__setattr__(self, "ordinal", ordinal)
+        object.__setattr__(self, "window_id", window_id)
+        object.__setattr__(self, "timestamp", values["timestamp"])
+
+    @property
+    def file_sha256(self) -> str:
+        return hashlib.sha256(self.wrapper_bytes).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class CommandCompletionDoc:
+    command: str
+    ordinal: int
+    window_id: str | None
+    admission_ref: str
+    admission_sha256: str
+    artifact_ref: str
+    artifact_sha256: str
+    artifact_schema: str
+    status: str
+    timestamp: str
+    schema_version: str = field(default=COMMAND_COMPLETION_SCHEMA, init=False)
+
+    def __post_init__(self) -> None:
+        expected = _COMPLETION_MATRIX.get(self.command)
+        if (
+            expected is None
+            or type(self.ordinal) is not int
+            or isinstance(self.ordinal, bool)
+            or self.ordinal < 1
+            or self.status != "completed"
+            or self.artifact_schema != expected[0]
+            or (
+                self.command == "static-preflight"
+                and self.window_id is not None
+            )
+            or (
+                self.command != "static-preflight"
+                and (
+                    type(self.window_id) is not str
+                    or _WINDOW_ID_RE.fullmatch(self.window_id) is None
+                )
+            )
+        ):
+            raise ValueError("command_completion_invalid")
+        try:
+            _validate_private_ref(self.admission_ref)
+            _validate_private_ref(self.artifact_ref)
+            _validate_sha256(self.admission_sha256)
+            _validate_sha256(self.artifact_sha256)
+            _validate_utc_z_timestamp(self.timestamp)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("command_completion_invalid") from exc
+
+    @property
+    def decoded_phase(self) -> str | None:
+        return _COMPLETION_MATRIX[self.command][1]
+
+    @property
+    def binding_sha256(self) -> str:
+        return _packet_hash(
+            {
+                "schema": self.schema_version,
+                "command": self.command,
+                "ordinal": self.ordinal,
+                "window_id": self.window_id,
+                "admission_ref": self.admission_ref,
+                "admission_sha256": self.admission_sha256,
+                "artifact_ref": self.artifact_ref,
+                "artifact_sha256": self.artifact_sha256,
+                "artifact_schema": self.artifact_schema,
+                "status": self.status,
                 "timestamp": self.timestamp,
             }
         )
@@ -2917,12 +3120,32 @@ def _decode_phase_packet(fields: object) -> PhasePacket:
     return PhasePacket(**values)
 
 
+def _decode_command_completion(fields: object) -> CommandCompletionDoc:
+    values = _persisted_fields(
+        fields,
+        (
+            "command",
+            "ordinal",
+            "window_id",
+            "admission_ref",
+            "admission_sha256",
+            "artifact_ref",
+            "artifact_sha256",
+            "artifact_schema",
+            "status",
+            "timestamp",
+        ),
+    )
+    return CommandCompletionDoc(**values)
+
+
 _PERSISTED_REGISTRY: Mapping[str, object] = MappingProxyType(
     {
         CONTAINMENT_SNAPSHOT_SCHEMA: _decode_containment_snapshot,
         RUNTIME_IDENTITY_SCHEMA: _decode_runtime_identity,
         STATIC_PREFLIGHT_SCHEMA: _decode_static_preflight,
         PHASE_PACKET_SCHEMA: _decode_phase_packet,
+        COMMAND_COMPLETION_SCHEMA: _decode_command_completion,
         QUALITY_EVIDENCE_SCHEMA: _decode_quality_evidence,
         OWNER_VOICE_REVIEW_SCHEMA: _decode_owner_voice_review,
         COLD_BOOT_WITNESS_SCHEMA: _decode_cold_boot_witness,
@@ -3103,6 +3326,17 @@ class BenchEvidenceBundle:
     bench_identity_doc: PersistedDoc
     runtime_identity_doc: PersistedDoc
     static_preflight: PersistedDoc
+    static_preflight_ref: str
+    static_admission: CommandAdmissionPreimage
+    static_completion: PersistedDoc
+    control_admission: CommandAdmissionPreimage
+    control_completion: PersistedDoc
+    candidate_admission: CommandAdmissionPreimage
+    candidate_completion: PersistedDoc
+    control_packet_doc: PersistedDoc
+    control_packet_ref: str
+    candidate_packet_doc: PersistedDoc
+    candidate_packet_ref: str
     rollback: RollbackEvidenceBundle
     cold_boot_maps: RuntimeBackendWitness | None
     provisional_live_maps: RuntimeBackendWitness | None
@@ -3149,6 +3383,9 @@ class BenchEvidenceBundle:
             (self.continuation, ContinuationDoc),
             (self.window_consumption, ConsumptionReceipt),
             (self.continuation_consumption, ConsumptionReceipt),
+            (self.static_admission, CommandAdmissionPreimage),
+            (self.control_admission, CommandAdmissionPreimage),
+            (self.candidate_admission, CommandAdmissionPreimage),
             (self.rollback, RollbackEvidenceBundle),
         ):
             _revalidate_bundle_component(value, expected)
@@ -3326,6 +3563,36 @@ class BenchEvidenceBundle:
                         self.static_preflight, StaticPreflightDoc
                     ).obj,
                     STATIC_PREFLIGHT_SCHEMA,
+                ),
+                (
+                    _canonical_persisted_role(
+                        self.static_completion, CommandCompletionDoc
+                    ).obj,
+                    COMMAND_COMPLETION_SCHEMA,
+                ),
+                (
+                    _canonical_persisted_role(
+                        self.control_completion, CommandCompletionDoc
+                    ).obj,
+                    COMMAND_COMPLETION_SCHEMA,
+                ),
+                (
+                    _canonical_persisted_role(
+                        self.candidate_completion, CommandCompletionDoc
+                    ).obj,
+                    COMMAND_COMPLETION_SCHEMA,
+                ),
+                (
+                    _canonical_persisted_role(
+                        self.control_packet_doc, PhasePacket
+                    ).obj,
+                    PHASE_PACKET_SCHEMA,
+                ),
+                (
+                    _canonical_persisted_role(
+                        self.candidate_packet_doc, PhasePacket
+                    ).obj,
+                    PHASE_PACKET_SCHEMA,
                 ),
             )
         )
@@ -3843,11 +4110,23 @@ class BenchEvidenceBundle:
         _canonical_persisted_role(self.bench_identity_doc, RuntimeIdentity)
         _canonical_persisted_role(self.runtime_identity_doc, RuntimeIdentity)
         _canonical_persisted_role(self.static_preflight, StaticPreflightDoc)
+        _canonical_persisted_role(
+            self.static_completion, CommandCompletionDoc
+        )
+        _canonical_persisted_role(
+            self.control_completion, CommandCompletionDoc
+        )
+        _canonical_persisted_role(
+            self.candidate_completion, CommandCompletionDoc
+        )
+        _canonical_persisted_role(self.control_packet_doc, PhasePacket)
+        _canonical_persisted_role(self.candidate_packet_doc, PhasePacket)
         return docs
 
     def _validate_base_joins(self, docs: Mapping[str, PersistedDoc]) -> None:
         control = self.control_packet
         candidate = self.candidate_packet
+        self._validate_completion_joins(docs)
         if (
             control.phase != "vulkan_baseline"
             or self.control_summary.phase != "vulkan_baseline"
@@ -3923,6 +4202,103 @@ class BenchEvidenceBundle:
             )
             < 0
         ):
+            raise ValueError("bundle_binding")
+
+    def _validate_completion_joins(
+        self, docs: Mapping[str, PersistedDoc]
+    ) -> None:
+        control = self.control_packet
+        candidate = self.candidate_packet
+        static_doc = _canonical_persisted_role(
+            self.static_preflight, StaticPreflightDoc
+        )
+        control_doc = _canonical_persisted_role(
+            self.control_packet_doc, PhasePacket
+        )
+        candidate_doc = _canonical_persisted_role(
+            self.candidate_packet_doc, PhasePacket
+        )
+        rows = (
+            (
+                self.static_admission,
+                _canonical_persisted_role(
+                    self.static_completion, CommandCompletionDoc
+                ),
+                self.static_preflight_ref,
+                static_doc,
+                "static-preflight",
+                None,
+            ),
+            (
+                self.control_admission,
+                _canonical_persisted_role(
+                    self.control_completion, CommandCompletionDoc
+                ),
+                self.control_packet_ref,
+                control_doc,
+                "vulkan-baseline",
+                self.control_packet,
+            ),
+            (
+                self.candidate_admission,
+                _canonical_persisted_role(
+                    self.candidate_completion, CommandCompletionDoc
+                ),
+                self.candidate_packet_ref,
+                candidate_doc,
+                "cuda-candidate",
+                self.candidate_packet,
+            ),
+        )
+        for admission, completion_doc, artifact_ref, artifact_doc, command, packet in rows:
+            _validate_private_ref(artifact_ref)
+            completion = completion_doc.obj
+            if (
+                admission.command != command
+                or completion.command != command
+                or completion.ordinal != admission.ordinal
+                or completion.window_id != admission.window_id
+                or completion.admission_ref != admission.selected_ref
+                or completion.admission_sha256 != admission.file_sha256
+                or completion.artifact_ref != artifact_ref
+                or completion.artifact_sha256 != artifact_doc.file_sha256
+                or (
+                    command == "static-preflight"
+                    and completion.artifact_schema != STATIC_PREFLIGHT_SCHEMA
+                )
+                or (
+                    command != "static-preflight"
+                    and completion.artifact_schema != PHASE_PACKET_SCHEMA
+                )
+            ):
+                raise ValueError("bundle_binding")
+            if packet is None:
+                if completion.decoded_phase is not None or admission.window_id is not None:
+                    raise ValueError("bundle_binding")
+            elif (
+                artifact_doc.obj != packet
+                or completion.decoded_phase != packet.phase
+                or completion.window_id != packet.window_id
+                or packet.window_id != self.window_id
+            ):
+                raise ValueError("bundle_binding")
+            if _compare_utc_z(
+                admission.timestamp, completion.timestamp
+            ) >= 0:
+                raise ValueError("bundle_binding")
+            if _compare_utc_z(
+                artifact_doc.obj.timestamp,
+                completion.timestamp,
+            ) > 0:
+                raise ValueError("bundle_binding")
+        control_completion = _canonical_persisted_role(
+            self.control_completion,
+            CommandCompletionDoc,
+        ).obj
+        if _compare_utc_z(
+            control_completion.timestamp,
+            self.continuation.issued_at,
+        ) > 0:
             raise ValueError("bundle_binding")
 
         citation_pairs = (
@@ -4282,6 +4658,18 @@ class BenchEvidenceBundle:
             self.rollback.witness.timestamp,
             self.rollback.maps_witness.timestamp,
             static_doc.timestamp,
+            _canonical_persisted_role(
+                self.static_completion,
+                CommandCompletionDoc,
+            ).obj.timestamp,
+            _canonical_persisted_role(
+                self.control_completion,
+                CommandCompletionDoc,
+            ).obj.timestamp,
+            _canonical_persisted_role(
+                self.candidate_completion,
+                CommandCompletionDoc,
+            ).obj.timestamp,
             *(snapshot.timestamp for snapshot in self.containment.snapshots if f"{snapshot.phase}:{snapshot.boundary}" in _BASE_CONTAINMENT_KEYS),
         ]
         if any(
@@ -4376,6 +4764,11 @@ class BenchEvidenceBundle:
                 "continuation_consumption_sha256": (
                     self.continuation_consumption.binding_sha256
                 ),
+                "command_completion_file_sha256s": {
+                    "static_preflight": self.static_completion.file_sha256,
+                    "vulkan_baseline": self.control_completion.file_sha256,
+                    "cuda_candidate": self.candidate_completion.file_sha256,
+                },
                 "rollback_sha256": self.rollback.binding_sha256,
             }
         )
@@ -4418,6 +4811,20 @@ class BenchEvidenceBundle:
                 "bench_identity_file_sha256": self.bench_identity_doc.file_sha256,
                 "runtime_identity_file_sha256": self.runtime_identity_doc.file_sha256,
                 "static_preflight_file_sha256": self.static_preflight.file_sha256,
+                "static_admission_file_sha256": self.static_admission.file_sha256,
+                "static_completion_file_sha256": self.static_completion.file_sha256,
+                "control_admission_file_sha256": self.control_admission.file_sha256,
+                "control_completion_file_sha256": self.control_completion.file_sha256,
+                "candidate_admission_file_sha256": (
+                    self.candidate_admission.file_sha256
+                ),
+                "candidate_completion_file_sha256": (
+                    self.candidate_completion.file_sha256
+                ),
+                "control_packet_file_sha256": self.control_packet_doc.file_sha256,
+                "candidate_packet_file_sha256": (
+                    self.candidate_packet_doc.file_sha256
+                ),
                 "rollback_sha256": self.rollback.binding_sha256,
                 "cold_boot_maps_sha256": (
                     self.cold_boot_maps.binding_sha256

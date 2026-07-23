@@ -29,6 +29,88 @@ CUDA_RELEASE = "/home/rohit/llama.cpp-release/llama-b9596-cuda13.2-sm89"
 CUDA_TOOLKIT_LIB = "/usr/local/cuda-13.2/targets/x86_64-linux/lib"
 CUDA_RUNTIME_LD_PATH = f"{CUDA_RELEASE}:{CUDA_TOOLKIT_LIB}"
 
+VULKAN_LIBRARY_MANIFEST_FIXTURE = (
+    {"path": "libggml-base.so", "type": "symlink", "target": "libggml-base.so.0"},
+    {"path": "libggml-base.so.0", "type": "symlink", "target": "libggml-base.so.0.14.0"},
+    {"path": "libggml-base.so.0.14.0", "type": "file", "sha256": "fda7a894b7277ab0a719bafe8cb07cfa516b904f10b79b4b5e980b550f1fe4d7", "bytes": 901704},
+    {"path": "libggml-cpu-alderlake.so", "type": "file", "sha256": "e68909a8eece33ddc0ebd5c400555ceb0aeee2742a6ba201311bf27ed76aaf16", "bytes": 1124296},
+    {"path": "libggml-cpu-cannonlake.so", "type": "file", "sha256": "8f30ceed95a603b2a005fb12bbc5487be7572ebf8c4474f932a56e9482e5b546", "bytes": 1269288},
+    {"path": "libggml-cpu-cascadelake.so", "type": "file", "sha256": "09d522bcd22a2d1b2af1d2348b07b79fd527b35efa0051d7d7c6548df6117d69", "bytes": 1265192},
+    {"path": "libggml-cpu-cooperlake.so", "type": "file", "sha256": "c7255b1db8d7a49734b83562036a79b45132ce2e8cdba34a91579f230eb19346", "bytes": 1265256},
+    {"path": "libggml-cpu-haswell.so", "type": "file", "sha256": "069a842fbf93af33b4f9bfb40c9c236e8ac6de28475a3e278018a30b676930b9", "bytes": 1128392},
+    {"path": "libggml-cpu-icelake.so", "type": "file", "sha256": "0f8e7d66f9dd17b0e5977354f52ddcb1a5a5881817297e003e3acc50a92f58de", "bytes": 1265192},
+    {"path": "libggml-cpu-ivybridge.so", "type": "file", "sha256": "65776601d168aa441fcc1f9b0011b57cd074f9173ef14702ce6c94576635ae43", "bytes": 1073672},
+    {"path": "libggml-cpu-piledriver.so", "type": "file", "sha256": "4904c6a181ca5ef52854ad11dab34ed73cfb73a1234fc033de7d6336cb8b7d2b", "bytes": 1069576},
+    {"path": "libggml-cpu-sandybridge.so", "type": "file", "sha256": "26917caf2a728b54ca12b3de1331f7b796fb83f81c06ce695d69b30a92ee437d", "bytes": 1064360},
+    {"path": "libggml-cpu-sapphirerapids.so", "type": "file", "sha256": "128851850ef95de8e5e1450770eb9ae27e6078d497b4940f604997a5b43434bd", "bytes": 1531624},
+    {"path": "libggml-cpu-skylakex.so", "type": "file", "sha256": "597da0588a698c96d7e02cbf87d1a81967ee56c196819078c09c43bb8ac35c23", "bytes": 1269288},
+    {"path": "libggml-cpu-sse42.so", "type": "file", "sha256": "cd412b3bd7e72fcbcf87a51b541cce1debbda3529deaf46e608af833d869b2b9", "bytes": 865168},
+    {"path": "libggml-cpu-x64.so", "type": "file", "sha256": "3f218adf0cf76faebe58f12275a1f4121b0042e7a71415a1c5232634cb60f2b4", "bytes": 861240},
+    {"path": "libggml-cpu-zen4.so", "type": "file", "sha256": "29058a4f79f3e2c0be729cb499ce5fe959c4c1dca5ffcff498904e58b9412047", "bytes": 1265256},
+    {"path": "libggml-rpc.so", "type": "file", "sha256": "ef7d487e35149f506d94deb1e9637ace289924b75d112480858383679d55bc78", "bytes": 158640},
+    {"path": "libggml-vulkan.so", "type": "file", "sha256": "14246b67191e630cb02dd0c0b10184a7554ca05b2241853756cf4487be9d13d1", "bytes": 74672536},
+    {"path": "libggml.so", "type": "symlink", "target": "libggml.so.0"},
+    {"path": "libggml.so.0", "type": "symlink", "target": "libggml.so.0.14.0"},
+    {"path": "libggml.so.0.14.0", "type": "file", "sha256": "18f9bc407572a54d8a2d53b9d0d47795ee680c5543bd59b6b161ee3044b08a75", "bytes": 54936},
+    {"path": "libllama-batched-bench-impl.so", "type": "file", "sha256": "318a85e161ccbe32a05dd6521ebc0db313579fb01909d423b55f337d83f277d2", "bytes": 48960},
+    {"path": "libllama-bench-impl.so", "type": "file", "sha256": "ca1eabf30833752f0d67df730a074188512bb2336674e080e7c25b3727ab9532", "bytes": 454840},
+    {"path": "libllama-cli-impl.so", "type": "file", "sha256": "50aade26e3d4ea53d7878e79c390c24cbc545149e5b77b498724a2dcdc88b0bc", "bytes": 1699352},
+    {"path": "libllama-common.so", "type": "symlink", "target": "libllama-common.so.0"},
+    {"path": "libllama-common.so.0", "type": "symlink", "target": "libllama-common.so.0.0.9596"},
+    {"path": "libllama-common.so.0.0.9596", "type": "file", "sha256": "7be2f405f24661b3b988e2a1028472847c465b2960559cd34b85f246fd8d68e6", "bytes": 5796408},
+    {"path": "libllama-completion-impl.so", "type": "file", "sha256": "c81a3c82ec56bfcf751a82a4a623593af8d7d9c52e06cdd6b302128442d0fdf7", "bytes": 118672},
+    {"path": "libllama-fit-params-impl.so", "type": "file", "sha256": "d14f92fa166449be5fc06eebe1308a666409caec59efdc539883b86e273b24a9", "bytes": 39840},
+    {"path": "libllama-perplexity-impl.so", "type": "file", "sha256": "f730c89ecd62873c75f8c0ceb17579c2e4f69e72c7ed9c586a47606d7db647a4", "bytes": 171632},
+    {"path": "libllama-quantize-impl.so", "type": "file", "sha256": "fd889e9128195ce339b060803945e80ffba20bd0162814d370fc9d173ef836b6", "bytes": 85880},
+    {"path": "libllama-server-impl.so", "type": "file", "sha256": "81f6a34b40bcf37e77e5cc78931f2c77ad17c8003acfc6f72a739dc43c4e08e5", "bytes": 12439936},
+    {"path": "libllama.so", "type": "symlink", "target": "libllama.so.0"},
+    {"path": "libllama.so.0", "type": "symlink", "target": "libllama.so.0.0.9596"},
+    {"path": "libllama.so.0.0.9596", "type": "file", "sha256": "5e6f4b1dfb725bf4a8cab9e8a79ea2f1ea74dedd5f85b108d949ea9cad43088d", "bytes": 3673976},
+    {"path": "libmtmd.so", "type": "symlink", "target": "libmtmd.so.0"},
+    {"path": "libmtmd.so.0", "type": "symlink", "target": "libmtmd.so.0.0.9596"},
+    {"path": "libmtmd.so.0.0.9596", "type": "file", "sha256": "f57f7e6e59674b4a10f7cea0f0aaab7bdc11ed4158e005b61d6c1a63b53c32c2", "bytes": 1345328},
+)
+
+
+class TestTask4FrozenStaticIdentity(unittest.TestCase):
+    def test_vulkan_library_manifest_recipe_recomputes_frozen_hash(self) -> None:
+        self.assertEqual(len(VULKAN_LIBRARY_MANIFEST_FIXTURE), 39)
+        self.assertEqual(
+            tuple(row["path"] for row in VULKAN_LIBRARY_MANIFEST_FIXTURE),
+            tuple(
+                sorted(
+                    (row["path"] for row in VULKAN_LIBRARY_MANIFEST_FIXTURE),
+                    key=lambda value: value.encode(),
+                )
+            ),
+        )
+        preimage = json.dumps(
+            VULKAN_LIBRARY_MANIFEST_FIXTURE,
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode()
+        self.assertFalse(preimage.endswith(b"\n"))
+        self.assertEqual(
+            hashlib.sha256(preimage).hexdigest(),
+            cm.FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256,
+        )
+
+    def test_frozen_cuda_candidate_has_three_exact_identity_pins(self) -> None:
+        self.assertEqual(
+            cm.FROZEN_CUDA_SERVER_SHA256,
+            "33abb514fdbf2d590447fb08d608b7cb8c89cfa6b7b639226ada5a178728360f",
+        )
+        self.assertEqual(
+            cm.FROZEN_CUDA_BACKEND_SHA256,
+            "e46a6888eb1dd78e07a6c80522f13f17e3c3b60c6ab6fdb56718456ca91861a7",
+        )
+        self.assertEqual(
+            cm.FROZEN_CUDA_RUNTIME_MANIFEST_SHA256,
+            "8989bfb2d7bda18c8493973a6356e3d2912eb8bc85ce64d8130859134a7310bd",
+        )
+
 
 def argv(port: str) -> tuple[str, ...]:
     return (
@@ -4353,6 +4435,343 @@ def _static_fields(doc: cm.StaticPreflightDoc) -> dict[str, object]:
     }
 
 
+class CommandCompletionContractTests(unittest.TestCase):
+    @staticmethod
+    def admission_bytes(
+        command: str,
+        *,
+        ordinal: int = 1,
+        window_id: str | None = None,
+    ) -> bytes:
+        return (
+            json.dumps(
+                {
+                    "schema": cm.COMMAND_ADMISSION_SCHEMA,
+                    "binding_sha256": None,
+                    "fields": {
+                        "command": command,
+                        "ordinal": ordinal,
+                        "window_id": window_id,
+                        "status": "admitted",
+                        "timestamp": "2026-07-13T11:57:00Z",
+                    },
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+            + b"\n"
+        )
+
+    @staticmethod
+    def completion_fields(
+        *,
+        command: str = "static-preflight",
+        ordinal: int = 1,
+        window_id: str | None = None,
+        admission_ref: str = "command-static-preflight-attempt-001-admission.json",
+        admission_sha256: str = SHA_A,
+        artifact_ref: str = "receipts/static-preflight-attempt-001.json",
+        artifact_sha256: str = SHA_B,
+        artifact_schema: str = cm.STATIC_PREFLIGHT_SCHEMA,
+    ) -> dict[str, object]:
+        return {
+            "command": command,
+            "ordinal": ordinal,
+            "window_id": window_id,
+            "admission_ref": admission_ref,
+            "admission_sha256": admission_sha256,
+            "artifact_ref": artifact_ref,
+            "artifact_sha256": artifact_sha256,
+            "artifact_schema": artifact_schema,
+            "status": "completed",
+            "timestamp": "2026-07-13T11:58:01Z",
+        }
+
+    def test_command_completion_round_trips_as_typed_persisted_document(self) -> None:
+        completion = cm.CommandCompletionDoc(**self.completion_fields())
+        persisted = _persisted_doc(
+            cm.COMMAND_COMPLETION_SCHEMA,
+            completion,
+            self.completion_fields(),
+        )
+
+        self.assertIs(type(persisted.obj), cm.CommandCompletionDoc)
+        self.assertEqual(completion, persisted.obj)
+
+    def test_command_completion_matrix_is_closed(self) -> None:
+        bad_rows = (
+            self.completion_fields(
+                command="vulkan-baseline",
+                window_id=None,
+                artifact_schema=cm.PHASE_PACKET_SCHEMA,
+            ),
+            self.completion_fields(
+                command="static-preflight",
+                window_id="window-1",
+            ),
+            self.completion_fields(
+                command="rehearse",
+                artifact_schema=cm.STATIC_PREFLIGHT_SCHEMA,
+            ),
+        )
+        for values in bad_rows:
+            with self.subTest(values=values):
+                with self.assertRaisesRegex(ValueError, "command_completion_invalid"):
+                    cm.CommandCompletionDoc(**values)
+
+    def test_command_admission_preimage_recomputes_file_hash_without_decoder(self) -> None:
+        payload = self.admission_bytes("static-preflight")
+        admission = cm.CommandAdmissionPreimage(
+            "command-static-preflight-attempt-001-admission.json",
+            payload,
+        )
+
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), admission.file_sha256)
+        self.assertEqual("static-preflight", admission.command)
+        self.assertEqual(1, admission.ordinal)
+        self.assertIsNone(admission.window_id)
+
+    def test_public_bundle_surface_requires_all_completion_preimages(self) -> None:
+        required = {
+            "static_admission",
+            "static_completion",
+            "control_admission",
+            "control_completion",
+            "candidate_admission",
+            "candidate_completion",
+            "control_packet_doc",
+            "candidate_packet_doc",
+            "static_preflight_ref",
+            "control_packet_ref",
+            "candidate_packet_ref",
+        }
+        self.assertTrue(
+            required.issubset(cm.BenchEvidenceBundle.__dataclass_fields__)
+        )
+
+    def test_direct_bundle_construction_rejects_omitted_completion(self) -> None:
+        values = _bundle_values(_make_bundle())
+        del values["candidate_completion"]
+
+        with self.assertRaises((TypeError, ValueError)):
+            cm.BenchEvidenceBundle(**values)
+
+    def test_direct_bundle_rejects_forged_completion_artifact_ref(self) -> None:
+        bundle = _make_bundle()
+        forged = replace(
+            bundle.control_completion.obj,
+            artifact_ref="packets/forged-but-safe.json",
+        )
+        values = self.completion_fields(
+            command=forged.command,
+            ordinal=forged.ordinal,
+            window_id=forged.window_id,
+            admission_ref=forged.admission_ref,
+            admission_sha256=forged.admission_sha256,
+            artifact_ref=forged.artifact_ref,
+            artifact_sha256=forged.artifact_sha256,
+            artifact_schema=forged.artifact_schema,
+        )
+        values["timestamp"] = forged.timestamp
+        forged_doc = _persisted_doc(
+            cm.COMMAND_COMPLETION_SCHEMA, forged, values
+        )
+        with self.assertRaisesRegex(ValueError, "bundle_binding"):
+            cm.BenchEvidenceBundle(
+                **{
+                    **_bundle_values(bundle),
+                    "control_completion": forged_doc,
+                }
+            )
+
+    def test_direct_bundle_rejects_control_candidate_admission_swap(self) -> None:
+        bundle = _make_bundle()
+        control = bundle.control_completion.obj
+        swapped = replace(
+            control,
+            admission_ref=bundle.candidate_admission.selected_ref,
+            admission_sha256=bundle.candidate_admission.file_sha256,
+        )
+        values = self.completion_fields(
+            command=swapped.command,
+            ordinal=swapped.ordinal,
+            window_id=swapped.window_id,
+            admission_ref=swapped.admission_ref,
+            admission_sha256=swapped.admission_sha256,
+            artifact_ref=swapped.artifact_ref,
+            artifact_sha256=swapped.artifact_sha256,
+            artifact_schema=swapped.artifact_schema,
+        )
+        values["timestamp"] = swapped.timestamp
+        swapped_doc = _persisted_doc(
+            cm.COMMAND_COMPLETION_SCHEMA,
+            swapped,
+            values,
+        )
+
+        with self.assertRaisesRegex(ValueError, "bundle_binding"):
+            cm.BenchEvidenceBundle(
+                **{
+                    **_bundle_values(bundle),
+                    "control_admission": bundle.candidate_admission,
+                    "control_completion": swapped_doc,
+                }
+            )
+
+    def test_direct_bundle_rejects_completion_before_terminal_artifact(
+        self,
+    ) -> None:
+        bundle = _make_bundle()
+        rows = (
+            ("static_completion", "2026-07-13T11:57:59Z"),
+            ("control_completion", "2026-07-13T12:00:11Z"),
+            ("candidate_completion", "2026-07-13T12:01:11Z"),
+        )
+        for field_name, timestamp in rows:
+            with self.subTest(field_name=field_name):
+                original_doc = getattr(bundle, field_name)
+                completion = replace(original_doc.obj, timestamp=timestamp)
+                values = self.completion_fields(
+                    command=completion.command,
+                    ordinal=completion.ordinal,
+                    window_id=completion.window_id,
+                    admission_ref=completion.admission_ref,
+                    admission_sha256=completion.admission_sha256,
+                    artifact_ref=completion.artifact_ref,
+                    artifact_sha256=completion.artifact_sha256,
+                    artifact_schema=completion.artifact_schema,
+                )
+                values["timestamp"] = completion.timestamp
+                completion_doc = _persisted_doc(
+                    cm.COMMAND_COMPLETION_SCHEMA,
+                    completion,
+                    values,
+                )
+                with self.assertRaisesRegex(ValueError, "bundle_binding"):
+                    cm.BenchEvidenceBundle(
+                        **{
+                            **_bundle_values(bundle),
+                            field_name: completion_doc,
+                        }
+                    )
+
+    def test_boot_authorization_must_follow_all_command_completions(self) -> None:
+        stage_one = _make_bundle(1)
+        late_completion = replace(
+            stage_one.candidate_completion.obj,
+            timestamp="2026-07-13T12:03:01Z",
+        )
+        values = self.completion_fields(
+            command=late_completion.command,
+            ordinal=late_completion.ordinal,
+            window_id=late_completion.window_id,
+            admission_ref=late_completion.admission_ref,
+            admission_sha256=late_completion.admission_sha256,
+            artifact_ref=late_completion.artifact_ref,
+            artifact_sha256=late_completion.artifact_sha256,
+            artifact_schema=late_completion.artifact_schema,
+        )
+        values["timestamp"] = late_completion.timestamp
+        late_doc = _persisted_doc(
+            cm.COMMAND_COMPLETION_SCHEMA,
+            late_completion,
+            values,
+        )
+        late_stage_one = cm.BenchEvidenceBundle(
+            **{
+                **_bundle_values(stage_one),
+                "candidate_completion": late_doc,
+            }
+        )
+        stage_two = _make_bundle(2)
+        boot = replace(
+            stage_two.boot_authorization,
+            parent_sha256=late_stage_one.bench_binding_sha256,
+        )
+
+        with self.assertRaisesRegex(ValueError, "bundle_binding"):
+            cm.BenchEvidenceBundle(
+                **{
+                    **_bundle_values(stage_two),
+                    "candidate_completion": late_doc,
+                    "boot_authorization": boot,
+                }
+            )
+
+    def test_direct_bundle_rejects_control_completion_after_continuation_issue(
+        self,
+    ) -> None:
+        bundle = _make_bundle()
+        completion = replace(
+            bundle.control_completion.obj,
+            timestamp="2026-07-13T12:00:15Z",
+        )
+        values = self.completion_fields(
+            command=completion.command,
+            ordinal=completion.ordinal,
+            window_id=completion.window_id,
+            admission_ref=completion.admission_ref,
+            admission_sha256=completion.admission_sha256,
+            artifact_ref=completion.artifact_ref,
+            artifact_sha256=completion.artifact_sha256,
+            artifact_schema=completion.artifact_schema,
+        )
+        values["timestamp"] = completion.timestamp
+        completion_doc = _persisted_doc(
+            cm.COMMAND_COMPLETION_SCHEMA,
+            completion,
+            values,
+        )
+
+        with self.assertRaisesRegex(ValueError, "bundle_binding"):
+            cm.BenchEvidenceBundle(
+                **{
+                    **_bundle_values(bundle),
+                    "control_completion": completion_doc,
+                }
+            )
+
+    def test_completion_hashes_change_bench_anchor_but_later_stages_do_not(
+        self,
+    ) -> None:
+        stage_one = _make_bundle(1)
+        stage_five = _make_bundle(5)
+        self.assertEqual(
+            stage_one.bench_binding_sha256,
+            stage_five.bench_binding_sha256,
+        )
+
+        completion = replace(
+            stage_one.static_completion.obj,
+            timestamp="2026-07-13T11:58:02Z",
+        )
+        values = self.completion_fields(
+            command=completion.command,
+            ordinal=completion.ordinal,
+            window_id=completion.window_id,
+            admission_ref=completion.admission_ref,
+            admission_sha256=completion.admission_sha256,
+            artifact_ref=completion.artifact_ref,
+            artifact_sha256=completion.artifact_sha256,
+            artifact_schema=completion.artifact_schema,
+        )
+        values["timestamp"] = completion.timestamp
+        changed_doc = _persisted_doc(
+            cm.COMMAND_COMPLETION_SCHEMA, completion, values
+        )
+        changed_bundle = cm.BenchEvidenceBundle(
+            **{
+                **_bundle_values(stage_one),
+                "static_completion": changed_doc,
+            }
+        )
+        self.assertNotEqual(
+            stage_one.bench_binding_sha256,
+            changed_bundle.bench_binding_sha256,
+        )
+
+
 def _bundle_cycle_witnesses(
     phase: str,
     *,
@@ -4702,6 +5121,88 @@ def _make_bundle(stage: int = 1, **overrides: object) -> cm.BenchEvidenceBundle:
             "cuda_candidate:after"
         ].file_sha256,
     )
+    static_preflight_ref = "receipts/static-preflight-attempt-001.json"
+    control_packet_ref = (
+        "windows/window-1/vulkan_baseline/attempt-000/"
+        "packets/vulkan_baseline-completed.json"
+    )
+    candidate_packet_ref = (
+        "windows/window-1/cuda_candidate/attempt-000/"
+        "packets/cuda_candidate-completed.json"
+    )
+    static_admission = cm.CommandAdmissionPreimage(
+        "command-static-preflight-attempt-001-admission.json",
+        CommandCompletionContractTests.admission_bytes("static-preflight"),
+    )
+    control_admission = cm.CommandAdmissionPreimage(
+        "command-vulkan-baseline-attempt-001-admission.json",
+        CommandCompletionContractTests.admission_bytes(
+            "vulkan-baseline", window_id="window-1"
+        ),
+    )
+    candidate_admission = cm.CommandAdmissionPreimage(
+        "command-cuda-candidate-attempt-001-admission.json",
+        CommandCompletionContractTests.admission_bytes(
+            "cuda-candidate", window_id="window-1"
+        ),
+    )
+    control_packet_doc = _persisted_doc(
+        cm.PHASE_PACKET_SCHEMA,
+        control_packet,
+        _phase_packet_fields(control_packet),
+    )
+    candidate_packet_doc = _persisted_doc(
+        cm.PHASE_PACKET_SCHEMA,
+        candidate_packet,
+        _phase_packet_fields(candidate_packet),
+    )
+
+    def completion_doc(
+        command: str,
+        admission: cm.CommandAdmissionPreimage,
+        artifact_ref: str,
+        artifact: cm.PersistedDoc,
+        timestamp: str,
+    ) -> cm.PersistedDoc:
+        values = CommandCompletionContractTests.completion_fields(
+            command=command,
+            ordinal=admission.ordinal,
+            window_id=admission.window_id,
+            admission_ref=admission.selected_ref,
+            admission_sha256=admission.file_sha256,
+            artifact_ref=artifact_ref,
+            artifact_sha256=artifact.file_sha256,
+            artifact_schema=(
+                cm.STATIC_PREFLIGHT_SCHEMA
+                if command == "static-preflight"
+                else cm.PHASE_PACKET_SCHEMA
+            ),
+        )
+        values["timestamp"] = timestamp
+        obj = cm.CommandCompletionDoc(**values)
+        return _persisted_doc(cm.COMMAND_COMPLETION_SCHEMA, obj, values)
+
+    static_completion = completion_doc(
+        "static-preflight",
+        static_admission,
+        static_preflight_ref,
+        static_preflight,
+        "2026-07-13T11:58:01Z",
+    )
+    control_completion = completion_doc(
+        "vulkan-baseline",
+        control_admission,
+        control_packet_ref,
+        control_packet_doc,
+        "2026-07-13T12:00:13Z",
+    )
+    candidate_completion = completion_doc(
+        "cuda-candidate",
+        candidate_admission,
+        candidate_packet_ref,
+        candidate_packet_doc,
+        "2026-07-13T12:01:13Z",
+    )
     quality = cm.QualityEvidence(
         evaluator_version="quality-v1",
         control_manifest_sha256=control_packet.turn_manifest.binding_sha256,
@@ -4803,6 +5304,17 @@ def _make_bundle(stage: int = 1, **overrides: object) -> cm.BenchEvidenceBundle:
             bench_identity_doc=bench_identity_doc,
             runtime_identity_doc=bench_identity_doc,
             static_preflight=static_preflight,
+            static_preflight_ref=static_preflight_ref,
+            static_admission=static_admission,
+            static_completion=static_completion,
+            control_admission=control_admission,
+            control_completion=control_completion,
+            candidate_admission=candidate_admission,
+            candidate_completion=candidate_completion,
+            control_packet_doc=control_packet_doc,
+            control_packet_ref=control_packet_ref,
+            candidate_packet_doc=candidate_packet_doc,
+            candidate_packet_ref=candidate_packet_ref,
             rollback=rollback,
             cold_boot_maps=None,
             provisional_live_maps=None,
@@ -4937,6 +5449,17 @@ def _make_bundle(stage: int = 1, **overrides: object) -> cm.BenchEvidenceBundle:
         "bench_identity_doc": bench_identity_doc,
         "runtime_identity_doc": runtime_identity_doc,
         "static_preflight": static_preflight,
+        "static_preflight_ref": static_preflight_ref,
+        "static_admission": static_admission,
+        "static_completion": static_completion,
+        "control_admission": control_admission,
+        "control_completion": control_completion,
+        "candidate_admission": candidate_admission,
+        "candidate_completion": candidate_completion,
+        "control_packet_doc": control_packet_doc,
+        "control_packet_ref": control_packet_ref,
+        "candidate_packet_doc": candidate_packet_doc,
+        "candidate_packet_ref": candidate_packet_ref,
         "rollback": rollback,
         "cold_boot_maps": cold_maps,
         "provisional_live_maps": provisional_maps,
