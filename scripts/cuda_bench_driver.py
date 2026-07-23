@@ -100,6 +100,7 @@ _REQUIRED_MEMFD_SEALS = (
 STATIC_PREFLIGHT_SCHEMA = "cuda_bench_driver.static_preflight.v1"
 PHASE_PACKET_SCHEMA = "cuda_bench_driver.phase_packet.v2"
 REFUSAL_SCHEMA = "cuda_bench_driver.refusal.v1"
+COMMAND_ADMISSION_SCHEMA = "cuda_bench_driver.command_admission.v1"
 WINDOW_AUTHORIZATION_SCHEMA = "cuda_bench_driver.window_authorization.v1"
 CONTINUATION_SCHEMA = "cuda_bench_driver.continuation.v1"
 CONSUMPTION_RECEIPT_SCHEMA = "cuda_bench_driver.consumption_receipt.v1"
@@ -2718,6 +2719,7 @@ class RehearsalJournalFactory:
 _ARTIFACT_SCHEMAS = {
     "packet": PHASE_PACKET_SCHEMA,
     "refusal": REFUSAL_SCHEMA,
+    "command_admission": COMMAND_ADMISSION_SCHEMA,
     "receipt": ASSEMBLE_RECEIPT_SCHEMA,
     "consumption_receipt": CONSUMPTION_RECEIPT_SCHEMA,
     "containment_snapshot": CONTAINMENT_SNAPSHOT_SCHEMA,
@@ -2793,7 +2795,7 @@ def _production_artifact(kind: str, document: Mapping[str, object]) -> dict[str,
         raise ValueError("artifact_document_invalid")
     _validate_artifact_value(fields)
     binding = fields.pop("binding_sha256", None)
-    if kind == "turn_artifact":
+    if kind in {"turn_artifact", "command_admission"}:
         binding = None
     elif binding is not None and (
         type(binding) is not str or re.fullmatch(r"[0-9a-f]{64}", binding) is None
@@ -4349,11 +4351,50 @@ def ambient_topology_hash(
     return hashlib.sha256(encoded).hexdigest()
 
 
-_ATTEMPT_NAME_RE = re.compile(r"attempt-([0-9]{3,})")
+_ATTEMPT_NAME_RE = re.compile(r"attempt-(?P<ordinal>[0-9]{3,})")
+
+
+class _DiskOrdinalCollision(Exception):
+    """A collision raised only by the allocator's claim syscall."""
 
 
 def _claim_attempt_directory(parent_fd: int, name: str) -> None:
-    os.mkdir(name, mode=0o700, dir_fd=parent_fd)
+    try:
+        os.mkdir(name, mode=0o700, dir_fd=parent_fd)
+    except OSError as exc:
+        if exc.errno == errno.EEXIST:
+            raise _DiskOrdinalCollision from None
+        raise
+
+
+def _allocate_disk_ordinal(
+    parent_fd: int,
+    *,
+    name_pattern: re.Pattern[str],
+    starting_ordinal: int,
+    claim: Callable[[int], None],
+) -> int:
+    """Claim scan-max-plus-one from one held directory descriptor."""
+
+    if type(starting_ordinal) is not int or starting_ordinal < 0:
+        raise ValueError("ordinal_start_invalid")
+    try:
+        names = os.listdir(parent_fd)
+    except OSError:
+        _filesystem_hazard()
+    numbers = [
+        int(match.group("ordinal"))
+        for name in names
+        if (match := name_pattern.fullmatch(name)) is not None
+    ]
+    candidate = max(numbers, default=starting_ordinal - 1) + 1
+    while True:
+        try:
+            claim(candidate)
+        except _DiskOrdinalCollision:
+            candidate += 1
+            continue
+        return candidate
 
 
 def _allocate_attempt(
@@ -4379,30 +4420,820 @@ def _allocate_attempt(
         create=True,
     )
     try:
+        def claim_phase_attempt(ordinal: int) -> None:
+            try:
+                _claim_attempt_directory(parent_fd, f"attempt-{ordinal:03d}")
+            except FileExistsError as exc:
+                if exc.errno == errno.EEXIST:
+                    raise _DiskOrdinalCollision from None
+                raise
+
         try:
-            names = os.listdir(parent_fd)
+            candidate = _allocate_disk_ordinal(
+                parent_fd,
+                name_pattern=_ATTEMPT_NAME_RE,
+                starting_ordinal=0,
+                claim=claim_phase_attempt,
+            )
         except OSError:
             _filesystem_hazard()
-        numbers = [
-            int(match.group(1))
-            for name in names
-            if (match := _ATTEMPT_NAME_RE.fullmatch(name)) is not None
-        ]
-        candidate = max(numbers, default=-1) + 1
-        while True:
-            name = f"attempt-{candidate:03d}"
-            try:
-                _claim_attempt_directory(parent_fd, name)
-            except FileExistsError:
-                candidate += 1
-                continue
-            except OSError:
-                _filesystem_hazard()
-            child_fd = _open_existing_directory(parent_fd, name)
-            os.close(child_fd)
-            return root / parent_relative / name
+        name = f"attempt-{candidate:03d}"
+        child_fd = _open_existing_directory(parent_fd, name)
+        os.close(child_fd)
+        return root / parent_relative / name
     finally:
         os.close(parent_fd)
+
+
+_COMMAND_NAMES = (
+    "static-preflight",
+    "rehearse",
+    "vulkan-baseline",
+    "cuda-candidate",
+    "assemble-stage1",
+)
+_COMMAND_ARTIFACT_NAME_RE = re.compile(
+    r"(?:(?P<quarantine>\.command-cleanup-))?"
+    r"command-[a-z][a-z0-9-]*-attempt-(?P<ordinal>[0-9]{3,})-"
+    r"(?:admission|terminal)\.json"
+    r"(?(quarantine)-[0-9a-f]{32}|)"
+)
+_COMMAND_NAMESPACE_QUARANTINE_RE = re.compile(
+    r"\.command-cleanup-rehearsal-[0-9a-f]{32}"
+)
+_COMMAND_SIGNALS = frozenset({signal.SIGINT, signal.SIGTERM})
+_COMMAND_ATTEMPT_GUARD = object()
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class CommandAttempt:
+    command: str
+    ordinal: int
+    admission_ref: str
+    admission_sha256: str
+    namespace: str
+
+    def __init__(
+        self,
+        command: str,
+        ordinal: int,
+        admission_ref: str,
+        admission_sha256: str,
+        namespace: str,
+        *,
+        _guard: object,
+    ) -> None:
+        if _guard is not _COMMAND_ATTEMPT_GUARD:
+            raise ValueError("command_attempt_sealed")
+        object.__setattr__(self, "command", command)
+        object.__setattr__(self, "ordinal", ordinal)
+        object.__setattr__(self, "admission_ref", admission_ref)
+        object.__setattr__(self, "admission_sha256", admission_sha256)
+        object.__setattr__(self, "namespace", namespace)
+
+
+class _CommandInterrupted(BaseException):
+    """Explicit CLI interruption, optionally bound to a latched admission."""
+
+    def __init__(self, signum: int, attempt: CommandAttempt | None = None) -> None:
+        if signum not in _COMMAND_SIGNALS:
+            raise ValueError("command_signal_invalid")
+        self.signum = int(signum)
+        self.attempt = attempt
+        super().__init__(self.signum)
+
+
+def _command_name(command: str, ordinal: int, role: str) -> str:
+    if (
+        command not in _COMMAND_NAMES
+        or type(ordinal) is not int
+        or ordinal < 1
+        or role not in {"admission", "terminal"}
+    ):
+        raise ValueError("command_artifact_invalid")
+    return f"command-{command}-attempt-{ordinal:03d}-{role}.json"
+
+
+def _command_ref(namespace: str, name: str) -> str:
+    if namespace == "":
+        return name
+    if namespace == "rehearsal":
+        return f"rehearsal/{name}"
+    raise ValueError("command_namespace_invalid")
+
+
+def _same_inode(left: os.stat_result, right: os.stat_result) -> bool:
+    return (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
+
+
+def _held_root_is_bound(root_fd: int, root: Path) -> bool:
+    try:
+        held = _check_directory_fd(root_fd)
+        current = os.stat(root, follow_symlinks=False)
+    except (BenchRefusal, OSError, TypeError, ValueError):
+        return False
+    return (
+        stat.S_ISDIR(current.st_mode)
+        and current.st_uid == os.geteuid()
+        and stat.S_IMODE(current.st_mode) == 0o700
+        and _same_inode(held, current)
+    )
+
+
+def _held_namespace_is_bound(root_fd: int, parent_fd: int, namespace: str) -> bool:
+    if namespace == "":
+        try:
+            return _same_inode(_check_directory_fd(root_fd), _check_directory_fd(parent_fd))
+        except BenchRefusal:
+            return False
+    try:
+        held = _check_directory_fd(parent_fd)
+        current = os.stat(namespace, dir_fd=root_fd, follow_symlinks=False)
+    except (BenchRefusal, OSError):
+        return False
+    return stat.S_ISDIR(current.st_mode) and _same_inode(held, current)
+
+
+def _named_inode_matches(parent_fd: int, name: str, expected: os.stat_result) -> bool:
+    try:
+        current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except OSError:
+        return False
+    return stat.S_ISREG(current.st_mode) and _same_inode(current, expected)
+
+
+def _read_held_file(parent_fd: int, name: str) -> tuple[bytes, os.stat_result]:
+    fd: int | None = None
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+        os.set_inheritable(fd, False)
+        initial = _check_file_fd(fd)
+        chunks: list[bytes] = []
+        remaining = TURN_ARTIFACT_BYTE_CAP + 1
+        while remaining:
+            chunk = os.read(fd, min(remaining, 1024 * 1024))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        payload = b"".join(chunks)
+        final = _check_file_fd(fd)
+        if (
+            len(payload) > TURN_ARTIFACT_BYTE_CAP
+            or len(payload) != initial.st_size
+            or _stable_file_identity(initial) != _stable_file_identity(final)
+        ):
+            _filesystem_hazard()
+        return payload, final
+    except OSError:
+        _filesystem_hazard()
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def _consume_pending_command_signal() -> int | None:
+    pending = set(signal.sigpending()).intersection(_COMMAND_SIGNALS)
+    if not pending:
+        return None
+    selected = signal.SIGTERM if signal.SIGTERM in pending else signal.SIGINT
+    while True:
+        current = set(signal.sigpending()).intersection(_COMMAND_SIGNALS)
+        if not current:
+            break
+        signal.sigwait(current)
+    return int(selected)
+
+
+def _command_signal_checkpoint() -> None:
+    signum = _consume_pending_command_signal()
+    if signum is not None:
+        raise _CommandInterrupted(signum)
+
+
+def _restore_command_mask_after_cleanup(
+    old_mask: set[signal.Signals],
+) -> None:
+    """Best-effort restoration that cannot replace a cleanup refusal."""
+
+    for _attempt in range(2):
+        try:
+            signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+            return
+        except (OSError, ValueError, _CommandInterrupted):
+            pass
+
+
+def _acquire_cleanup_name(
+    parent_fd: int,
+    name: str,
+    expected_identity: tuple[int, int],
+    *,
+    directory: bool,
+) -> str:
+    observed = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    observed_matches = (
+        stat.S_ISDIR(observed.st_mode) if directory else stat.S_ISREG(observed.st_mode)
+    ) and (observed.st_dev, observed.st_ino) == expected_identity
+    if not observed_matches:
+        raise OSError(errno.ESTALE, "cleanup target changed")
+
+    quarantine = f".command-cleanup-{name}-{secrets.token_hex(16)}"
+    os.rename(
+        name,
+        quarantine,
+        src_dir_fd=parent_fd,
+        dst_dir_fd=parent_fd,
+    )
+    acquired = os.stat(quarantine, dir_fd=parent_fd, follow_symlinks=False)
+    if (
+        (stat.S_ISDIR(acquired.st_mode) if directory else stat.S_ISREG(acquired.st_mode))
+        and (acquired.st_dev, acquired.st_ino) == expected_identity
+    ):
+        return quarantine
+    raise OSError(errno.ESTALE, "cleanup acquisition changed")
+
+
+def _command_disk_max_ordinal(root_fd: int) -> int:
+    """Return the run-global command ordinal from one locked bench root."""
+
+    directory_fds = [root_fd]
+    child_fds: list[int] = []
+    try:
+        try:
+            root_names = os.listdir(root_fd)
+        except OSError:
+            _filesystem_hazard()
+        child_names = sorted(
+            name
+            for name in root_names
+            if name == "rehearsal"
+            or _COMMAND_NAMESPACE_QUARANTINE_RE.fullmatch(name) is not None
+        )
+        for child_name in child_names:
+            try:
+                child_fd = os.open(
+                    child_name,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=root_fd,
+                )
+            except OSError:
+                _filesystem_hazard()
+            child_fds.append(child_fd)
+            _check_directory_fd(child_fd)
+            directory_fds.append(child_fd)
+        ordinals = [
+            int(match.group("ordinal"))
+            for name in root_names
+            if (match := _COMMAND_ARTIFACT_NAME_RE.fullmatch(name)) is not None
+        ]
+        for directory_fd in directory_fds[1:]:
+            for name in os.listdir(directory_fd):
+                match = _COMMAND_ARTIFACT_NAME_RE.fullmatch(name)
+                if match is not None:
+                    ordinals.append(int(match.group("ordinal")))
+        return max(ordinals, default=0)
+    except OSError:
+        _filesystem_hazard()
+    finally:
+        for child_fd in reversed(child_fds):
+            os.close(child_fd)
+
+
+def _restore_populated_namespace(
+    root_fd: int,
+    namespace: str,
+    quarantine: str,
+    namespace_identity: tuple[int, int],
+) -> None:
+    """Restore the creator inode while preserving an empty replacement."""
+
+    replacement_fd: int | None = None
+    replacement_quarantine: str | None = None
+    try:
+        replacement_fd = os.open(
+            namespace,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=root_fd,
+        )
+        replacement = _check_directory_fd(replacement_fd)
+        if (replacement.st_dev, replacement.st_ino) == namespace_identity:
+            raise OSError(errno.ESTALE, "command namespace restore changed")
+        if os.listdir(replacement_fd):
+            raise OSError(errno.ENOTEMPTY, "replacement namespace populated")
+        replacement_quarantine = _acquire_cleanup_name(
+            root_fd,
+            namespace,
+            (replacement.st_dev, replacement.st_ino),
+            directory=True,
+        )
+        try:
+            os.rename(
+                quarantine,
+                namespace,
+                src_dir_fd=root_fd,
+                dst_dir_fd=root_fd,
+            )
+        except BaseException:
+            try:
+                os.stat(namespace, dir_fd=root_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                os.rename(
+                    replacement_quarantine,
+                    namespace,
+                    src_dir_fd=root_fd,
+                    dst_dir_fd=root_fd,
+                )
+                os.fsync(root_fd)
+            raise
+        restored = os.stat(namespace, dir_fd=root_fd, follow_symlinks=False)
+        if not stat.S_ISDIR(restored.st_mode) or (
+            restored.st_dev,
+            restored.st_ino,
+        ) != namespace_identity:
+            raise OSError(errno.ESTALE, "command namespace restore changed")
+        os.fsync(root_fd)
+    finally:
+        if replacement_fd is not None:
+            os.close(replacement_fd)
+
+
+def _cleanup_command_claim(
+    *,
+    root_fd: int,
+    parent_fd: int,
+    namespace: str,
+    namespace_created: bool,
+    namespace_identity: tuple[int, int] | None,
+    linked_name: str | None,
+    linked_info: os.stat_result | None,
+) -> None:
+    lock_held = False
+    try:
+        fcntl.flock(root_fd, fcntl.LOCK_EX)
+        lock_held = True
+        if linked_name is not None:
+            if linked_info is None:
+                raise OSError(errno.ESTALE, "command binding changed")
+            if not _named_inode_matches(parent_fd, linked_name, linked_info):
+                raise OSError(errno.ESTALE, "command binding changed")
+            acquired = _acquire_cleanup_name(
+                parent_fd,
+                linked_name,
+                (linked_info.st_dev, linked_info.st_ino),
+                directory=False,
+            )
+            os.unlink(acquired, dir_fd=parent_fd)
+            os.fsync(parent_fd)
+        if namespace_created:
+            if namespace_identity is None:
+                raise OSError(errno.ESTALE, "command namespace changed")
+            cleanup_namespace_fd = parent_fd
+            close_cleanup_namespace_fd = False
+            if parent_fd == root_fd:
+                cleanup_namespace_fd = os.open(
+                    namespace,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=root_fd,
+                )
+                close_cleanup_namespace_fd = True
+            try:
+                if close_cleanup_namespace_fd:
+                    opened = _check_directory_fd(cleanup_namespace_fd)
+                    if (opened.st_dev, opened.st_ino) != namespace_identity:
+                        raise OSError(errno.ESTALE, "command namespace changed")
+                if os.listdir(cleanup_namespace_fd):
+                    raise OSError(errno.ENOTEMPTY, "command namespace populated")
+            finally:
+                if close_cleanup_namespace_fd:
+                    os.close(cleanup_namespace_fd)
+            acquired = _acquire_cleanup_name(
+                root_fd,
+                namespace,
+                namespace_identity,
+                directory=True,
+            )
+            try:
+                os.rmdir(acquired, dir_fd=root_fd)
+            except OSError as exc:
+                if exc.errno not in {errno.EEXIST, errno.ENOTEMPTY}:
+                    raise
+                try:
+                    os.stat(namespace, dir_fd=root_fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    os.rename(
+                        acquired,
+                        namespace,
+                        src_dir_fd=root_fd,
+                        dst_dir_fd=root_fd,
+                    )
+                    restored = os.stat(
+                        namespace, dir_fd=root_fd, follow_symlinks=False
+                    )
+                    if not stat.S_ISDIR(restored.st_mode) or (
+                        restored.st_dev,
+                        restored.st_ino,
+                    ) != namespace_identity:
+                        raise OSError(errno.ESTALE, "command namespace restore changed")
+                    os.fsync(root_fd)
+                else:
+                    _restore_populated_namespace(
+                        root_fd,
+                        namespace,
+                        acquired,
+                        namespace_identity,
+                    )
+                raise
+            os.fsync(root_fd)
+    except (BenchRefusal, OSError):
+        raise BenchRefusal("cleanup_incomplete") from None
+    finally:
+        if lock_held:
+            try:
+                fcntl.flock(root_fd, fcntl.LOCK_UN)
+            except OSError:
+                raise BenchRefusal("cleanup_incomplete") from None
+
+
+def _admit_command(
+    command: str,
+    window_id: str | None,
+    policy: ArtifactPolicy,
+    clock: Clock,
+    root: Path,
+    *,
+    _on_latched: Callable[[CommandAttempt], None] | None = None,
+    _on_cleanup_incomplete: Callable[[], None] | None = None,
+) -> CommandAttempt:
+    tier = getattr(policy, "tier", None)
+    namespace = "rehearsal" if tier == "rehearsal" else ""
+    if (
+        command not in _COMMAND_NAMES
+        or tier not in {"production", "rehearsal"}
+        or (command == "rehearse") != (tier == "rehearsal")
+        or (
+            window_id is not None
+            and (type(window_id) is not str or _NAME_SEED.fullmatch(window_id) is None)
+        )
+    ):
+        raise BenchRefusal("filesystem_hazard")
+
+    old_mask: set[signal.Signals] | None = signal.pthread_sigmask(
+        signal.SIG_BLOCK, _COMMAND_SIGNALS
+    )
+    root_fd: int | None = None
+    parent_fd: int | None = None
+    namespace_created = False
+    namespace_identity: tuple[int, int] | None = None
+    linked_name: str | None = None
+    linked_info: os.stat_result | None = None
+    latched: CommandAttempt | None = None
+    linearized = False
+    failure: BaseException | None = None
+    try:
+        root_fd = _open_root_fd(root)
+        parent_fd = root_fd
+
+        def claim(ordinal: int) -> None:
+            nonlocal latched, linearized, linked_info, linked_name
+            name = _command_name(command, ordinal, "admission")
+            fields: dict[str, object] = {
+                "command": command,
+                "ordinal": ordinal,
+                "window_id": window_id,
+                "status": "admitted",
+                "timestamp": _validated_clock_timestamp(clock.now_utc()),
+            }
+            encoded = policy.encode("command_admission", fields)
+            fd: int | None = None
+            try:
+                fd = _open_anonymous_file(parent_fd, append=False)
+                _write_all(fd, encoded)
+                os.fsync(fd)
+                source = _check_file_fd(
+                    fd, expected_nlink=0, expected_size=len(encoded)
+                )
+                lock_held = False
+                try:
+                    fcntl.flock(root_fd, fcntl.LOCK_EX)
+                    lock_held = True
+                    if ordinal <= _command_disk_max_ordinal(root_fd):
+                        raise _DiskOrdinalCollision
+                    try:
+                        os.link(
+                            f"/proc/self/fd/{fd}",
+                            name,
+                            dst_dir_fd=parent_fd,
+                            follow_symlinks=True,
+                        )
+                        linked_name, linked_info = name, source
+                    except OSError as exc:
+                        if exc.errno == errno.EEXIST:
+                            raise _DiskOrdinalCollision from None
+                        if _named_inode_matches(parent_fd, name, source):
+                            linked_name, linked_info = name, source
+                        raise
+                    except (KeyboardInterrupt, _CommandInterrupted):
+                        if _named_inode_matches(parent_fd, name, source):
+                            linked_name, linked_info = name, source
+                        raise
+                finally:
+                    if lock_held:
+                        fcntl.flock(root_fd, fcntl.LOCK_UN)
+                _command_signal_checkpoint()
+                if not _held_root_is_bound(root_fd, root) or not _held_namespace_is_bound(
+                    root_fd, parent_fd, namespace
+                ):
+                    raise BenchRefusal("filesystem_hazard")
+                os.fsync(parent_fd)
+                _command_signal_checkpoint()
+                reopened, reopened_info = _read_held_file(parent_fd, name)
+                _command_signal_checkpoint()
+                if (
+                    reopened != encoded
+                    or not _same_inode(source, reopened_info)
+                    or not _held_root_is_bound(root_fd, root)
+                ):
+                    raise BenchRefusal("filesystem_hazard")
+                digest = hashlib.sha256(reopened).hexdigest()
+                _command_signal_checkpoint()
+                final_bytes, final_info = _read_held_file(parent_fd, name)
+                final_digest = hashlib.sha256(final_bytes).hexdigest()
+                if (
+                    final_bytes != encoded
+                    or final_digest != digest
+                    or not _same_inode(source, final_info)
+                    or not _held_root_is_bound(root_fd, root)
+                    or not _held_namespace_is_bound(root_fd, parent_fd, namespace)
+                    or not _named_inode_matches(parent_fd, name, source)
+                ):
+                    raise BenchRefusal("filesystem_hazard")
+                os.close(fd)
+                fd = None
+                latched = CommandAttempt(
+                    command,
+                    ordinal,
+                    _command_ref(namespace, name),
+                    final_digest,
+                    namespace,
+                    _guard=_COMMAND_ATTEMPT_GUARD,
+                )
+                linearized = True
+            finally:
+                if fd is not None:
+                    os.close(fd)
+
+        try:
+            if namespace:
+                try:
+                    parent_fd = os.open(
+                        namespace,
+                        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                        dir_fd=root_fd,
+                    )
+                except FileNotFoundError:
+                    try:
+                        os.mkdir(namespace, mode=0o700, dir_fd=root_fd)
+                        namespace_created = True
+                        created = os.stat(
+                            namespace, dir_fd=root_fd, follow_symlinks=False
+                        )
+                        namespace_identity = (created.st_dev, created.st_ino)
+                    except FileExistsError:
+                        pass
+                    parent_fd = os.open(
+                        namespace,
+                        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                        dir_fd=root_fd,
+                    )
+                opened_namespace = _check_directory_fd(parent_fd)
+                if namespace_created and namespace_identity != (
+                    opened_namespace.st_dev,
+                    opened_namespace.st_ino,
+                ):
+                    raise BenchRefusal("filesystem_hazard")
+            _allocate_disk_ordinal(
+                parent_fd,
+                name_pattern=_COMMAND_ARTIFACT_NAME_RE,
+                starting_ordinal=1,
+                claim=claim,
+            )
+        except (Exception, KeyboardInterrupt, _CommandInterrupted) as exc:
+            failure = exc
+
+        if failure is not None:
+            try:
+                _cleanup_command_claim(
+                    root_fd=root_fd,
+                    parent_fd=parent_fd,
+                    namespace=namespace,
+                    namespace_created=namespace_created,
+                    namespace_identity=namespace_identity,
+                    linked_name=linked_name,
+                    linked_info=linked_info,
+                )
+            except BenchRefusal as cleanup_exc:
+                _consume_pending_command_signal()
+                if _on_cleanup_incomplete is not None:
+                    _on_cleanup_incomplete()
+                _restore_command_mask_after_cleanup(old_mask)
+                old_mask = None
+                raise cleanup_exc
+            pending_signum = _consume_pending_command_signal()
+            try:
+                signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+            except _CommandInterrupted as interrupted:
+                raise _CommandInterrupted(interrupted.signum) from None
+            old_mask = None
+            if isinstance(failure, _CommandInterrupted):
+                raise _CommandInterrupted(failure.signum) from None
+            if pending_signum is not None:
+                raise _CommandInterrupted(pending_signum) from None
+            if isinstance(failure, KeyboardInterrupt):
+                raise failure
+            if isinstance(failure, BenchRefusal):
+                raise failure
+            raise BenchRefusal("filesystem_hazard") from None
+
+        if latched is None or not linearized:
+            raise BenchRefusal("filesystem_hazard")
+        if _on_latched is not None:
+            _on_latched(latched)
+        try:
+            signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+        except _CommandInterrupted as interrupted:
+            raise _CommandInterrupted(interrupted.signum, latched) from None
+        old_mask = None
+        return latched
+    finally:
+        try:
+            if parent_fd is not None and parent_fd != root_fd:
+                os.close(parent_fd)
+            if root_fd is not None:
+                os.close(root_fd)
+        finally:
+            if old_mask is not None:
+                _restore_command_mask_after_cleanup(old_mask)
+
+
+def publish_command_artifact(
+    attempt: CommandAttempt,
+    role: str,
+    encoded: bytes,
+    *,
+    root: Path,
+) -> tuple[str, str]:
+    if type(attempt) is not CommandAttempt or role not in {"admission", "terminal"}:
+        raise ValueError("command_artifact_invalid")
+    if type(encoded) is not bytes or len(encoded) > TURN_ARTIFACT_BYTE_CAP:
+        raise ValueError("command_artifact_invalid")
+    expected_admission = _command_ref(
+        attempt.namespace,
+        _command_name(attempt.command, attempt.ordinal, "admission"),
+    )
+    if attempt.admission_ref != expected_admission:
+        raise BenchRefusal("filesystem_hazard")
+
+    old_mask: set[signal.Signals] | None = signal.pthread_sigmask(
+        signal.SIG_BLOCK, _COMMAND_SIGNALS
+    )
+    root_fd: int | None = None
+    parent_fd: int | None = None
+    linked_name: str | None = None
+    linked_info: os.stat_result | None = None
+    try:
+        root_fd = _open_root_fd(root)
+        parent_fd = root_fd
+        if attempt.namespace:
+            parent_fd = _open_existing_directory(root_fd, attempt.namespace)
+        admission_name = _command_name(attempt.command, attempt.ordinal, "admission")
+        admission_bytes, _admission_info = _read_held_file(parent_fd, admission_name)
+        if hashlib.sha256(admission_bytes).hexdigest() != attempt.admission_sha256:
+            raise BenchRefusal("filesystem_hazard")
+
+        name = _command_name(attempt.command, attempt.ordinal, role)
+        relative = _command_ref(attempt.namespace, name)
+        fd: int | None = None
+        source: os.stat_result | None = None
+        result: tuple[str, str] | None = None
+        failure: BaseException | None = None
+        cleanup_failure: BenchRefusal | None = None
+        try:
+            fd = _open_anonymous_file(parent_fd, append=False)
+            _write_all(fd, encoded)
+            os.fsync(fd)
+            source = _check_file_fd(fd, expected_nlink=0, expected_size=len(encoded))
+            os.link(
+                f"/proc/self/fd/{fd}",
+                name,
+                dst_dir_fd=parent_fd,
+                follow_symlinks=True,
+            )
+            linked_name, linked_info = name, source
+            _command_signal_checkpoint()
+            if not _held_root_is_bound(root_fd, root) or not _held_namespace_is_bound(
+                root_fd, parent_fd, attempt.namespace
+            ):
+                raise BenchRefusal("filesystem_hazard")
+            os.fsync(parent_fd)
+            _command_signal_checkpoint()
+            reopened, reopened_info = _read_held_file(parent_fd, name)
+            if reopened != encoded or not _same_inode(source, reopened_info):
+                raise BenchRefusal("filesystem_hazard")
+            digest = hashlib.sha256(reopened).hexdigest()
+            _command_signal_checkpoint()
+            if (
+                not _held_root_is_bound(root_fd, root)
+                or not _held_namespace_is_bound(
+                    root_fd, parent_fd, attempt.namespace
+                )
+                or not _named_inode_matches(parent_fd, name, source)
+            ):
+                raise BenchRefusal("filesystem_hazard")
+            os.close(fd)
+            fd = None
+            result = (relative, digest)
+        except (Exception, KeyboardInterrupt, _CommandInterrupted) as exc:
+            failure = exc
+
+        if fd is not None:
+            try:
+                os.close(fd)
+                fd = None
+            except (OSError, KeyboardInterrupt, _CommandInterrupted) as exc:
+                if failure is None:
+                    failure = exc
+
+        if failure is not None:
+            if (
+                linked_name is None
+                and source is not None
+                and _named_inode_matches(parent_fd, name, source)
+            ):
+                linked_name, linked_info = name, source
+            if linked_name is not None:
+                try:
+                    _cleanup_command_claim(
+                        root_fd=root_fd,
+                        parent_fd=parent_fd,
+                        namespace=attempt.namespace,
+                        namespace_created=False,
+                        namespace_identity=None,
+                        linked_name=linked_name,
+                        linked_info=linked_info,
+                    )
+                except BenchRefusal as exc:
+                    cleanup_failure = exc
+
+        pending_signum = _consume_pending_command_signal()
+        if cleanup_failure is not None:
+            _restore_command_mask_after_cleanup(old_mask)
+            old_mask = None
+            raise cleanup_failure
+
+        restore_signum: int | None = None
+        try:
+            signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+        except _CommandInterrupted as exc:
+            restore_signum = exc.signum
+        old_mask = None
+
+        failure_signum: int | None = None
+        if isinstance(failure, _CommandInterrupted):
+            failure_signum = failure.signum
+        elif isinstance(failure, KeyboardInterrupt):
+            failure_signum = int(signal.SIGINT)
+        observed_signals = {
+            signum
+            for signum in (failure_signum, pending_signum, restore_signum)
+            if signum is not None
+        }
+        if int(signal.SIGTERM) in observed_signals:
+            raise _CommandInterrupted(int(signal.SIGTERM)) from None
+        if int(signal.SIGINT) in observed_signals:
+            raise _CommandInterrupted(int(signal.SIGINT)) from None
+
+        if isinstance(failure, BenchRefusal):
+            raise failure
+        if failure is not None:
+            raise failure
+        if result is None:
+            raise BenchRefusal("filesystem_hazard")
+        return result
+    except OSError:
+        raise BenchRefusal("filesystem_hazard") from None
+    finally:
+        try:
+            if parent_fd is not None and parent_fd != root_fd:
+                os.close(parent_fd)
+            if root_fd is not None:
+                os.close(root_fd)
+        finally:
+            if old_mask is not None:
+                try:
+                    signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+                except _CommandInterrupted:
+                    pass
 
 
 _PROVIDERS_GUARD = object()

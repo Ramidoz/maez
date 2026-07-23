@@ -1719,7 +1719,7 @@ class TestProviderSeams:
             "fields": {"literal": "private"},
         }
 
-    def test_rehearsal_turn_artifact_is_incompatible_with_schema_22_payload(self) -> None:
+    def test_rehearsal_turn_artifact_is_incompatible_with_production_schema(self) -> None:
         encoded = json.loads(
             driver.RehearsalArtifactPolicy().encode(
                 "turn_artifact", {"literal": "private"}
@@ -4974,6 +4974,1810 @@ class TestAuthorizationArtifacts:
             assert surface.__annotations__["parent_packet"] == "cm.PhasePacket | None"
 
 
+# Task 3 command-admission REDs intentionally resolve new APIs at test runtime.
+# This keeps the pre-implementation focused witness at pytest rc=1 rather than
+# turning the existing driver module import into a collection error.
+_COMMAND_TIMESTAMP = "2026-07-21T12:00:00Z"
+_COMMAND_SCHEMA = "cuda_bench_driver.command_admission.v1"
+_COMMANDS = (
+    "static-preflight",
+    "rehearse",
+    "vulkan-baseline",
+    "cuda-candidate",
+    "assemble-stage1",
+)
+
+
+class _CommandClock:
+    def __init__(self, tier: str) -> None:
+        self.tier = tier
+
+    def now_utc(self) -> str:
+        return _COMMAND_TIMESTAMP
+
+    def monotonic(self) -> float:
+        return 0.0
+
+
+def _task3_api(name: str) -> object:
+    return getattr(driver, name)
+
+
+def _command_admit(
+    root: Path,
+    *,
+    command: str = "static-preflight",
+    rehearsal: bool = False,
+    window_id: str | None = None,
+) -> object:
+    try:
+        admit = getattr(driver, "_admit_command")
+    except AttributeError:
+        admit = getattr(driver, "admit_command")
+    policy = (
+        driver.RehearsalArtifactPolicy()
+        if rehearsal
+        else driver.ProductionArtifactPolicy()
+    )
+    return admit(
+        command=command,
+        window_id=window_id,
+        policy=policy,
+        clock=_CommandClock(policy.tier),
+        root=root,
+    )
+
+
+def _command_tree(root: Path) -> dict[str, tuple[str, int, bytes]]:
+    observed: dict[str, tuple[str, int, bytes]] = {}
+    for path in sorted(root.rglob("*")):
+        relative = str(path.relative_to(root))
+        info = path.lstat()
+        kind = "directory" if path.is_dir() else "file"
+        data = b"" if path.is_dir() else path.read_bytes()
+        observed[relative] = (kind, stat.S_IMODE(info.st_mode), data)
+    return observed
+
+
+def _command_admission_fields(
+    *, command: str = "static-preflight", ordinal: int = 1
+) -> dict[str, object]:
+    return {
+        "command": command,
+        "ordinal": ordinal,
+        "window_id": None,
+        "status": "admitted",
+        "timestamp": _COMMAND_TIMESTAMP,
+    }
+
+
+class TestTask3CommandAdmissionCanon:
+    def test_command_admission_exact_schema_23_canon(self) -> None:
+        command_schema = _task3_api("COMMAND_ADMISSION_SCHEMA")
+        actual = (
+            driver.STATIC_PREFLIGHT_SCHEMA,
+            driver.cm.SCHEMA_VERSION,
+            driver.PHASE_PACKET_SCHEMA,
+            driver.REFUSAL_SCHEMA,
+            command_schema,
+            driver.WINDOW_AUTHORIZATION_SCHEMA,
+            driver.CONTINUATION_SCHEMA,
+            driver.CONSUMPTION_RECEIPT_SCHEMA,
+            driver.TURN_MANIFEST_SCHEMA,
+            driver.TURN_ARTIFACT_SCHEMA,
+            driver.CONTAINMENT_SNAPSHOT_SCHEMA,
+            driver.RUNTIME_IDENTITY_SCHEMA,
+            driver.ASSEMBLE_RECEIPT_SCHEMA,
+            driver.REHEARSAL_PACKET_SCHEMA,
+            driver.cm.BENCH_EVIDENCE_BUNDLE_SCHEMA,
+            driver.cm.CYCLE_BACKEND_WITNESS_SCHEMA,
+            driver.cm.QUALITY_EVIDENCE_SCHEMA,
+            driver.cm.OWNER_VOICE_REVIEW_SCHEMA,
+            driver.cm.ROLLBACK_EVIDENCE_BUNDLE_SCHEMA,
+            driver.cm.COLD_BOOT_WITNESS_SCHEMA,
+            driver.cm.PROVISIONAL_LIVE_WITNESS_SCHEMA,
+            driver.cm.AUTHORIZATION_WITNESS_SCHEMA,
+            driver.cm.BACKEND_MAP_WITNESS_SCHEMA,
+        )
+        expected = (
+            "cuda_bench_driver.static_preflight.v1",
+            "cuda_migration_runtime.v1",
+            "cuda_bench_driver.phase_packet.v2",
+            "cuda_bench_driver.refusal.v1",
+            _COMMAND_SCHEMA,
+            "cuda_bench_driver.window_authorization.v1",
+            "cuda_bench_driver.continuation.v1",
+            "cuda_bench_driver.consumption_receipt.v1",
+            "cuda_bench_driver.turn_manifest.v1",
+            "cuda_bench_driver.turn_artifact.v1",
+            "cuda_bench_driver.containment_snapshot.v2",
+            "cuda_bench_driver.runtime_identity.v1",
+            "cuda_bench_assemble.receipt.v1",
+            "cuda_bench_rehearsal.packet.v1",
+            "cuda_migration.bench_evidence_bundle.v1",
+            "cuda_migration.cycle_backend_witness.v1",
+            "cuda_migration.quality_evidence.v1",
+            "cuda_migration.owner_voice_review.v1",
+            "cuda_migration.rollback_evidence_bundle.v1",
+            "cuda_migration.cold_boot_witness.v1",
+            "cuda_migration.provisional_live_witness.v1",
+            "cuda_migration.authorization_witness.v1",
+            "cuda_migration.backend_map_witness.v1",
+        )
+        assert actual == expected
+        assert len(actual) == len(set(actual)) == 23
+        assert actual.count(_COMMAND_SCHEMA) == 1
+        assert "cuda_bench_assemble.selection.v1" not in actual
+
+    def test_command_admission_production_shape_is_exact_and_null_bound(self) -> None:
+        encoded = driver.ProductionArtifactPolicy().encode(
+            "command_admission", _command_admission_fields()
+        )
+        wrapper = json.loads(encoded)
+        assert encoded == (
+            json.dumps(wrapper, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode()
+        assert wrapper == {
+            "schema": _COMMAND_SCHEMA,
+            "binding_sha256": None,
+            "fields": _command_admission_fields(),
+        }
+
+    def test_command_admission_rehearsal_shape_is_incompatible(self) -> None:
+        encoded = driver.RehearsalArtifactPolicy().encode(
+            "command_admission", _command_admission_fields(command="rehearse")
+        )
+        wrapper = json.loads(encoded)
+        assert "schema" not in wrapper
+        assert wrapper == {
+            "rehearsal_schema": driver.REHEARSAL_PACKET_SCHEMA,
+            "tier": "rehearsal",
+            "payload": {
+                "kind": "command_admission",
+                "binding_sha256": None,
+                "fields": _command_admission_fields(command="rehearse"),
+            },
+        }
+
+    def test_complete_command_admission_bytes_have_no_persisted_decoder(self) -> None:
+        encoded = driver.ProductionArtifactPolicy().encode(
+            "command_admission", _command_admission_fields()
+        )
+        assert _COMMAND_SCHEMA not in driver.cm._PERSISTED_REGISTRY
+        with pytest.raises(ValueError, match="^persisted_schema_unknown$"):
+            driver.cm.PersistedDoc(encoded)
+
+        finalized = json.loads(encoded)
+        finalized["fields"]["finalized"] = True
+        finalized_bytes = (
+            json.dumps(finalized, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode()
+        with pytest.raises(ValueError, match="^persisted_schema_unknown$"):
+            driver.cm.PersistedDoc(finalized_bytes)
+
+
+class TestTask3CommandArtifactAllocation:
+    def test_command_admission_allocator_mints_immutable_attempt(
+        self, private_root: Path
+    ) -> None:
+        attempt = _command_admit(private_root, window_id="window-1")
+        attempt_type = _task3_api("CommandAttempt")
+        assert type(attempt) is attempt_type
+        assert (
+            attempt.command,
+            attempt.ordinal,
+            attempt.namespace,
+            attempt.admission_ref,
+        ) == (
+            "static-preflight",
+            1,
+            "",
+            "command-static-preflight-attempt-001-admission.json",
+        )
+        assert re.fullmatch(r"[0-9a-f]{64}", attempt.admission_sha256)
+        admission = private_root / attempt.admission_ref
+        assert admission.is_file()
+        assert stat.S_IMODE(admission.stat().st_mode) == 0o600
+        assert hashlib.sha256(admission.read_bytes()).hexdigest() == (
+            attempt.admission_sha256
+        )
+        with pytest.raises((AttributeError, FrozenInstanceError, TypeError)):
+            attempt.ordinal = 2
+
+    def test_command_artifact_names_share_admission_ordinal_and_namespace(
+        self, private_root: Path
+    ) -> None:
+        publish = _task3_api("publish_command_artifact")
+        production = _command_admit(private_root)
+        encoded = driver.ProductionArtifactPolicy().encode(
+            "refusal", {"outcome": "assembly_refused"}
+        )
+        terminal_ref, digest = publish(
+            production, "terminal", encoded, root=private_root
+        )
+        assert terminal_ref == "command-static-preflight-attempt-001-terminal.json"
+        assert hashlib.sha256((private_root / terminal_ref).read_bytes()).hexdigest() == digest
+
+        rehearsal = _command_admit(
+            private_root, command="rehearse", rehearsal=True
+        )
+        rehearsal_bytes = driver.RehearsalArtifactPolicy().encode(
+            "refusal", {"outcome": "assembly_refused"}
+        )
+        rehearsal_ref, _ = publish(
+            rehearsal, "terminal", rehearsal_bytes, root=private_root
+        )
+        assert rehearsal.admission_ref == (
+            "rehearsal/command-rehearse-attempt-002-admission.json"
+        )
+        assert rehearsal_ref == (
+            "rehearsal/command-rehearse-attempt-002-terminal.json"
+        )
+
+    def test_command_artifact_role_is_closed_and_direct_forge_cannot_publish(
+        self, private_root: Path
+    ) -> None:
+        publish = _task3_api("publish_command_artifact")
+        attempt = _command_admit(private_root)
+        encoded = driver.ProductionArtifactPolicy().encode(
+            "refusal", {"outcome": "assembly_refused"}
+        )
+        with pytest.raises((ValueError, driver.BenchRefusal)):
+            publish(attempt, "receipt", encoded, root=private_root)
+
+        with pytest.raises((TypeError, ValueError)):
+            replace(attempt, ordinal=attempt.ordinal + 1)
+
+        attempt_type = _task3_api("CommandAttempt")
+        try:
+            forged = attempt_type(
+                command=attempt.command,
+                ordinal=attempt.ordinal + 1,
+                admission_ref=attempt.admission_ref,
+                admission_sha256=attempt.admission_sha256,
+                namespace=attempt.namespace,
+            )
+        except (TypeError, ValueError):
+            return
+        with pytest.raises((ValueError, driver.BenchRefusal)):
+            publish(forged, "terminal", encoded, root=private_root)
+
+    def test_command_admission_disk_scan_uses_max_plus_one_for_both_roles(
+        self, private_root: Path
+    ) -> None:
+        for name in (
+            "command-static-preflight-attempt-003-admission.json",
+            "command-static-preflight-attempt-009-terminal.json",
+            "command-other-attempt-012-admission.json",
+            "unrelated-attempt-999.json",
+        ):
+            _private_file(private_root / name, b"{}\n")
+        attempt = _command_admit(private_root)
+        assert attempt.ordinal == 13
+        assert attempt.admission_ref.endswith("attempt-013-admission.json")
+
+    def test_phase_and_command_call_the_same_shared_disk_allocator(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        shared = _task3_api("_allocate_disk_ordinal")
+        observed: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+        def spy(*args: object, **kwargs: object) -> object:
+            observed.append((args, dict(kwargs)))
+            return shared(*args, **kwargs)
+
+        monkeypatch.setattr(driver, "_allocate_disk_ordinal", spy)
+        phase_attempt = driver._allocate_attempt(
+            window_id="window-shared-allocator",
+            phase="vulkan_baseline",
+            policy=driver.ProductionArtifactPolicy(),
+            root=private_root,
+        )
+        command_attempt = _command_admit(private_root)
+
+        assert phase_attempt.name == "attempt-000"
+        assert command_attempt.ordinal == 1
+        assert len(observed) == 2
+
+    def test_command_admission_retries_only_true_eexist(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        real_link = driver.os.link
+        calls = 0
+
+        def racing_link(*args: object, **kwargs: object) -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                real_link(*args, **kwargs)
+                raise FileExistsError(errno.EEXIST, "simulated race")
+            real_link(*args, **kwargs)
+
+        monkeypatch.setattr(driver.os, "link", racing_link)
+        attempt = _command_admit(private_root)
+        assert attempt.ordinal == 2
+        assert calls == 2
+        assert sorted(path.name for path in private_root.glob("*-admission.json")) == [
+            "command-static-preflight-attempt-001-admission.json",
+            "command-static-preflight-attempt-002-admission.json",
+        ]
+
+    def test_command_admission_never_retries_non_eexist(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = 0
+
+        def failing_link(*_args: object, **_kwargs: object) -> None:
+            nonlocal calls
+            calls += 1
+            raise OSError(errno.EIO, "injected I/O failure")
+
+        monkeypatch.setattr(driver.os, "link", failing_link)
+        with pytest.raises(driver.BenchRefusal):
+            _command_admit(private_root)
+        assert calls == 1
+        assert _command_tree(private_root) == {}
+
+    def test_command_artifact_sequential_same_clock_invocations_are_unique(
+        self, private_root: Path
+    ) -> None:
+        publish = _task3_api("publish_command_artifact")
+        encoded = driver.ProductionArtifactPolicy().encode(
+            "refusal", {"outcome": "assembly_refused"}
+        )
+        observed: list[tuple[str, str]] = []
+        for _ in range(8):
+            attempt = _command_admit(private_root)
+            terminal_ref, _ = publish(
+                attempt, "terminal", encoded, root=private_root
+            )
+            observed.append((attempt.admission_ref, terminal_ref))
+        assert len({item for pair in observed for item in pair}) == 16
+        assert [
+            int(re.search(r"attempt-([0-9]+)", pair[0]).group(1))
+            for pair in observed
+        ] == list(range(1, 9))
+
+    def test_command_artifact_concurrent_same_clock_invocations_are_unique(
+        self, private_root: Path
+    ) -> None:
+        publish = _task3_api("publish_command_artifact")
+        encoded = driver.ProductionArtifactPolicy().encode(
+            "refusal", {"outcome": "assembly_refused"}
+        )
+
+        def invoke(_index: int) -> tuple[str, str]:
+            attempt = _command_admit(private_root)
+            terminal_ref, _ = publish(
+                attempt, "terminal", encoded, root=private_root
+            )
+            return attempt.admission_ref, terminal_ref
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            observed = list(pool.map(invoke, range(16)))
+        refs = [item for pair in observed for item in pair]
+        assert len(refs) == len(set(refs)) == 32
+        assert sorted(
+            int(re.search(r"attempt-([0-9]+)", pair[0]).group(1))
+            for pair in observed
+        ) == list(range(1, 17))
+
+    @staticmethod
+    def _admit_after_synchronized_empty_scan(
+        private_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        commands: tuple[str, str],
+    ) -> list[object]:
+        real_listdir = driver.os.listdir
+        barrier = threading.Barrier(2)
+        scan_lock = threading.Lock()
+        synchronized_scans = 0
+
+        def synchronized_listdir(fd: int) -> list[str]:
+            nonlocal synchronized_scans
+            names = real_listdir(fd)
+            with scan_lock:
+                should_wait = synchronized_scans < 2
+                if should_wait:
+                    synchronized_scans += 1
+            if should_wait:
+                assert names == []
+                barrier.wait(timeout=5)
+            return names
+
+        monkeypatch.setattr(driver.os, "listdir", synchronized_listdir)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            attempts = list(
+                pool.map(
+                    lambda command: _command_admit(
+                        private_root,
+                        command=command,
+                    ),
+                    commands,
+                )
+            )
+        assert synchronized_scans == 2
+        return attempts
+
+    def test_same_command_atomic_claim_resolves_synchronized_scan_collision(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        attempts = self._admit_after_synchronized_empty_scan(
+            private_root,
+            monkeypatch,
+            ("static-preflight", "static-preflight"),
+        )
+        assert sorted(attempt.ordinal for attempt in attempts) == [1, 2]
+
+    def test_command_ordinals_are_global_across_different_commands(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        attempts = self._admit_after_synchronized_empty_scan(
+            private_root,
+            monkeypatch,
+            ("static-preflight", "vulkan-baseline"),
+        )
+        assert sorted(attempt.ordinal for attempt in attempts) == [1, 2]
+
+    def test_command_ordinals_are_global_across_processes(
+        self, private_root: Path
+    ) -> None:
+        coordination = private_root / "coordination"
+        coordination.mkdir(mode=0o700)
+        code = "\n".join(
+            (
+                "import json, os, sys, time",
+                "from pathlib import Path",
+                "from scripts import cuda_bench_driver as driver",
+                "root, command = Path(sys.argv[1]), sys.argv[2]",
+                "coordination = root / 'coordination'",
+                "real_listdir = driver.os.listdir",
+                "first_scan = [True]",
+                "def synchronized_listdir(fd):",
+                "    names = real_listdir(fd)",
+                "    if first_scan[0]:",
+                "        first_scan[0] = False",
+                "        marker = coordination / command",
+                "        marker.write_text('ready', encoding='utf-8')",
+                "        os.chmod(marker, 0o600)",
+                "        other = coordination / ('vulkan-baseline' if command == 'static-preflight' else 'static-preflight')",
+                "        deadline = time.monotonic() + 5",
+                "        while not other.is_file():",
+                "            if time.monotonic() >= deadline: raise RuntimeError('sync timeout')",
+                "            time.sleep(0.005)",
+                "    return names",
+                "driver.os.listdir = synchronized_listdir",
+                "attempt = driver._admit_command(command, None, driver.ProductionArtifactPolicy(), driver.FrozenClock('2026-07-16T12:00:00Z'), root)",
+                "print(json.dumps({'ordinal': attempt.ordinal}))",
+            )
+        )
+        processes = [
+            subprocess.Popen(
+                [sys.executable, "-B", "-c", code, str(private_root), command],
+                cwd=Path(__file__).resolve().parents[1],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            for command in ("static-preflight", "vulkan-baseline")
+        ]
+        results: list[subprocess.CompletedProcess[str]] = []
+        try:
+            for process in processes:
+                stdout, stderr = process.communicate(timeout=10)
+                results.append(
+                    subprocess.CompletedProcess(
+                        process.args,
+                        process.returncode,
+                        stdout,
+                        stderr,
+                    )
+                )
+        finally:
+            for process in processes:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=3)
+
+        assert [result.returncode for result in results] == [0, 0], [
+            result.stderr for result in results
+        ]
+        assert sorted(json.loads(result.stdout)["ordinal"] for result in results) == [
+            1,
+            2,
+        ]
+
+    def test_global_ordinal_unlock_failure_cleans_the_linked_claim(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        real_flock = driver.fcntl.flock
+        failed = False
+
+        def failing_unlock(fd: int, operation: int) -> None:
+            nonlocal failed
+            real_flock(fd, operation)
+            if operation == driver.fcntl.LOCK_UN and not failed:
+                failed = True
+                raise OSError(errno.EIO, "ordinal unlock failed")
+
+        monkeypatch.setattr(driver.fcntl, "flock", failing_unlock)
+        with pytest.raises(driver.BenchRefusal, match="^filesystem_hazard$"):
+            _command_admit(private_root)
+
+        assert failed is True
+        assert _command_tree(private_root) == {}
+
+    def test_invalid_quarantine_validation_closes_its_directory_fd(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        quarantine_name = f".command-cleanup-rehearsal-{'a' * 32}"
+        quarantine = private_root / quarantine_name
+        quarantine.mkdir(mode=0o700)
+        quarantine.chmod(0o755)
+        real_open = driver.os.open
+        opened: list[int] = []
+
+        def capture_open(path: object, *args: object, **kwargs: object) -> int:
+            fd = real_open(path, *args, **kwargs)
+            if path == quarantine_name:
+                opened.append(fd)
+            return fd
+
+        monkeypatch.setattr(driver.os, "open", capture_open)
+        with pytest.raises(driver.BenchRefusal, match="^filesystem_hazard$"):
+            _command_admit(private_root)
+
+        assert len(opened) == 1
+        try:
+            os.fstat(opened[0])
+        except OSError as exc:
+            assert exc.errno == errno.EBADF
+        else:
+            os.close(opened[0])
+            pytest.fail("invalid quarantine descriptor escaped validation")
+
+
+class TestTask3CommandAdmissionTransaction:
+    @pytest.mark.parametrize("boundary", ("link", "parent_fsync", "reopen", "hash"))
+    def test_command_admission_prelinearization_failures_cleanup_tree(
+        self,
+        private_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        boundary: str,
+    ) -> None:
+        before = _command_tree(private_root)
+        linked = False
+        failed = False
+        real_link = driver.os.link
+        real_fsync = driver.os.fsync
+        real_open = driver.os.open
+        real_sha256 = driver.hashlib.sha256
+
+        def injected_link(*args: object, **kwargs: object) -> None:
+            nonlocal linked
+            if boundary == "link":
+                raise OSError(errno.EIO, "link")
+            real_link(*args, **kwargs)
+            linked = True
+
+        def injected_fsync(fd: int) -> None:
+            nonlocal failed
+            if (
+                boundary == "parent_fsync"
+                and linked
+                and not failed
+                and stat.S_ISDIR(os.fstat(fd).st_mode)
+            ):
+                failed = True
+                raise OSError(errno.EIO, "parent fsync")
+            real_fsync(fd)
+
+        def injected_open(path: object, flags: int, *args: object, **kwargs: object) -> int:
+            nonlocal failed
+            if (
+                boundary == "reopen"
+                and linked
+                and not failed
+                and str(path).endswith("-admission.json")
+                and flags & os.O_ACCMODE == os.O_RDONLY
+            ):
+                failed = True
+                raise OSError(errno.EIO, "reopen")
+            return real_open(path, flags, *args, **kwargs)
+
+        def injected_sha256(*args: object, **kwargs: object) -> object:
+            nonlocal failed
+            if boundary == "hash" and linked and not failed:
+                failed = True
+                raise OSError(errno.EIO, "hash")
+            return real_sha256(*args, **kwargs)
+
+        monkeypatch.setattr(driver.os, "link", injected_link)
+        monkeypatch.setattr(driver.os, "fsync", injected_fsync)
+        monkeypatch.setattr(driver.os, "open", injected_open)
+        monkeypatch.setattr(driver.hashlib, "sha256", injected_sha256)
+        with pytest.raises((driver.BenchRefusal, OSError)):
+            _command_admit(private_root)
+        assert _command_tree(private_root) == before
+
+    def test_command_admission_catchable_post_link_failure_cleans_up(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        real_link = driver.os.link
+
+        def interrupted_link(*args: object, **kwargs: object) -> None:
+            real_link(*args, **kwargs)
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(driver.os, "link", interrupted_link)
+        with pytest.raises((KeyboardInterrupt, driver.BenchRefusal)):
+            _command_admit(private_root)
+        assert _command_tree(private_root) == {}
+
+    @pytest.mark.parametrize("cleanup_failure", ("unlink", "parent_fsync"))
+    def test_command_admission_cleanup_failure_is_typed_cleanup_incomplete(
+        self,
+        private_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        cleanup_failure: str,
+    ) -> None:
+        linked = False
+        directory_syncs = 0
+        real_link = driver.os.link
+        real_fsync = driver.os.fsync
+        real_unlink = driver.os.unlink
+
+        def tracking_link(*args: object, **kwargs: object) -> None:
+            nonlocal linked
+            real_link(*args, **kwargs)
+            linked = True
+
+        def failing_fsync(fd: int) -> None:
+            nonlocal directory_syncs
+            if linked and stat.S_ISDIR(os.fstat(fd).st_mode):
+                directory_syncs += 1
+                if directory_syncs == 1 or cleanup_failure == "parent_fsync":
+                    raise OSError(errno.EIO, "directory fsync")
+            real_fsync(fd)
+
+        def failing_unlink(*args: object, **kwargs: object) -> None:
+            if cleanup_failure == "unlink":
+                raise OSError(errno.EIO, "unlink")
+            real_unlink(*args, **kwargs)
+
+        monkeypatch.setattr(driver.os, "link", tracking_link)
+        monkeypatch.setattr(driver.os, "fsync", failing_fsync)
+        monkeypatch.setattr(driver.os, "unlink", failing_unlink)
+        with pytest.raises(driver.BenchRefusal) as exc:
+            _command_admit(private_root)
+        _assert_refusal(exc, "cleanup_incomplete")
+
+    def test_command_admission_held_root_detects_replacement_and_cleans_original(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        displaced = private_root.with_name("displaced")
+        real_link = driver.os.link
+
+        def replacing_link(*args: object, **kwargs: object) -> None:
+            real_link(*args, **kwargs)
+            private_root.rename(displaced)
+            private_root.mkdir(mode=0o700)
+            os.chmod(private_root, 0o700)
+
+        monkeypatch.setattr(driver.os, "link", replacing_link)
+        with pytest.raises(driver.BenchRefusal):
+            _command_admit(private_root)
+        assert _command_tree(private_root) == {}
+        assert _command_tree(displaced) == {}
+
+    def test_command_admission_holds_one_root_fd_without_path_reopen(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        real_open_root = driver._open_root_fd
+        open_root_calls = 0
+
+        def observed_open_root(root: Path) -> int:
+            nonlocal open_root_calls
+            open_root_calls += 1
+            return real_open_root(root)
+
+        def forbidden_path_reopen(*_args: object, **_kwargs: object) -> bytes:
+            raise AssertionError("admission reopened through root path")
+
+        monkeypatch.setattr(driver, "_open_root_fd", observed_open_root)
+        monkeypatch.setattr(driver, "open_bench_file", forbidden_path_reopen)
+        attempt = _command_admit(private_root)
+
+        assert open_root_calls == 1
+        assert (private_root / attempt.admission_ref).is_file()
+
+    def test_command_admission_rehearsal_directory_cleanup_is_identity_scoped(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        real_link = driver.os.link
+
+        def failing_link(*_args: object, **_kwargs: object) -> None:
+            raise OSError(errno.EIO, "link")
+
+        monkeypatch.setattr(driver.os, "link", failing_link)
+        with pytest.raises(driver.BenchRefusal):
+            _command_admit(private_root, command="rehearse", rehearsal=True)
+        assert _command_tree(private_root) == {}
+
+        rehearsal = private_root / "rehearsal"
+        rehearsal.mkdir(mode=0o700)
+        os.chmod(rehearsal, 0o700)
+        sentinel = rehearsal / "sentinel"
+        _private_file(sentinel, b"owner-existing")
+        with pytest.raises(driver.BenchRefusal):
+            _command_admit(private_root, command="rehearse", rehearsal=True)
+        assert _command_tree(private_root) == {
+            "rehearsal": ("directory", 0o700, b""),
+            "rehearsal/sentinel": ("file", 0o600, b"owner-existing"),
+        }
+        monkeypatch.setattr(driver.os, "link", real_link)
+
+    def test_command_artifact_publication_requires_exact_latched_binding(
+        self, private_root: Path
+    ) -> None:
+        publish = _task3_api("publish_command_artifact")
+        attempt = _command_admit(private_root)
+        encoded = driver.ProductionArtifactPolicy().encode(
+            "refusal", {"outcome": "assembly_refused"}
+        )
+        admission = private_root / attempt.admission_ref
+        admission.unlink()
+        _private_file(admission, b"{}\n")
+        with pytest.raises(driver.BenchRefusal):
+            publish(attempt, "terminal", encoded, root=private_root)
+        assert not list(private_root.glob("*-terminal.json"))
+
+
+class TestTask3CommandAdmissionCrashHonesty:
+    def test_full_linked_sigkill_orphan_has_no_terminal_or_attempt_recovery(
+        self, private_root: Path, tmp_path: Path
+    ) -> None:
+        ready = tmp_path / "linked-ready"
+        code = "\n".join(
+            (
+                "import os, sys, time",
+                "from pathlib import Path",
+                "from scripts import cuda_bench_driver as driver",
+                "root, ready = Path(sys.argv[1]), Path(sys.argv[2])",
+                "real_link = driver.os.link",
+                "def linked(*args, **kwargs):",
+                "    real_link(*args, **kwargs)",
+                "    ready.write_text('linked', encoding='utf-8')",
+                "    while True: time.sleep(0.05)",
+                "driver.os.link = linked",
+                "try: admit = getattr(driver, '_admit_command')",
+                "except AttributeError: admit = getattr(driver, 'admit_command')",
+                "class Clock:",
+                "    tier = 'production'",
+                f"    def now_utc(self): return {_COMMAND_TIMESTAMP!r}",
+                "    def monotonic(self): return 0.0",
+                "attempt = admit(command='static-preflight', window_id=None, policy=driver.ProductionArtifactPolicy(), clock=Clock(), root=root)",
+                "print(attempt, flush=True)",
+            )
+        )
+        process = subprocess.Popen(
+            [sys.executable, "-B", "-c", code, str(private_root), str(ready)],
+            cwd=Path(__file__).resolve().parents[1],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        try:
+            assert _wait_for(ready.is_file, timeout=8.0)
+            process.kill()
+            stdout, stderr = process.communicate(timeout=5.0)
+        except BaseException:
+            process.kill()
+            process.wait(timeout=3.0)
+            raise
+
+        assert process.returncode == -signal.SIGKILL
+        assert stdout == ""
+        assert stderr == ""
+        assert not list(private_root.glob("*-terminal.json"))
+        orphan = next(private_root.glob("*-admission.json"))
+        wrapper = json.loads(orphan.read_bytes())
+        assert wrapper == {
+            "schema": _COMMAND_SCHEMA,
+            "binding_sha256": None,
+            "fields": _command_admission_fields(),
+        }
+        with pytest.raises(ValueError, match="^persisted_schema_unknown$"):
+            driver.cm.PersistedDoc(orphan.read_bytes())
+        attempt_type = _task3_api("CommandAttempt")
+        assert not hasattr(attempt_type, "from_admission")
+        assert not hasattr(driver, "recover_command_attempt")
+
+        restarted = _command_admit(private_root)
+        assert restarted.ordinal == 2
+        assert restarted.admission_ref.endswith("attempt-002-admission.json")
+
+    @pytest.mark.parametrize("signum", (signal.SIGINT, signal.SIGTERM))
+    def test_command_admission_latches_exact_binding_before_unmask(
+        self, private_root: Path, signum: int
+    ) -> None:
+        code = "\n".join(
+            (
+                "import json, os, signal, sys",
+                "from pathlib import Path",
+                "from scripts import cuda_bench_cli as cli",
+                "from scripts import cuda_bench_driver as driver",
+                "root = Path(sys.argv[1])",
+                "real_mask = signal.pthread_sigmask",
+                "restore_calls = 0",
+                "def injected_mask(how, mask):",
+                "    global restore_calls",
+                "    if how == signal.SIG_SETMASK:",
+                "        restore_calls += 1",
+                "        if restore_calls == 1: os.kill(os.getpid(), int(sys.argv[2]))",
+                "    return real_mask(how, mask)",
+                "driver.signal.pthread_sigmask = injected_mask",
+                "class Clock:",
+                "    tier = 'production'",
+                f"    def now_utc(self): return {_COMMAND_TIMESTAMP!r}",
+                "    def monotonic(self): return 0.0",
+                "def forbidden(*_args, **_kwargs): raise AssertionError('handler ran')",
+                "raise SystemExit(cli._run_command('static-preflight', forbidden, root=root, clock=Clock()))",
+            )
+        )
+        result = subprocess.run(
+            [sys.executable, "-B", "-c", code, str(private_root), str(signum)],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == (130 if signum == signal.SIGINT else 143)
+        assert result.stderr == ""
+        assert result.stdout.count("\n") == 1
+        terminal = json.loads(result.stdout)
+        assert terminal["outcome"] == "interrupted"
+        assert terminal["artifact_ref"].endswith("-admission.json")
+        admission = private_root / terminal["artifact_ref"]
+        assert hashlib.sha256(admission.read_bytes()).hexdigest() == terminal[
+            "artifact_sha256"
+        ]
+
+    def test_command_artifact_adds_no_process_local_counter_authority(self) -> None:
+        import ast
+
+        tree = ast.parse(Path(driver.__file__).read_text(encoding="utf-8"))
+        process_counter_names: set[str] = set()
+        for node in tree.body:
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            value = node.value
+            if not (
+                isinstance(value, ast.Call)
+                and isinstance(value.func, ast.Attribute)
+                and isinstance(value.func.value, ast.Name)
+                and value.func.value.id == "itertools"
+                and value.func.attr == "count"
+            ):
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            process_counter_names.update(
+                target.id for target in targets if isinstance(target, ast.Name)
+            )
+
+        command_nodes = [
+            node
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            and "command" in node.name.lower()
+        ]
+        assert command_nodes
+        for command_node in command_nodes:
+            for nested in ast.walk(command_node):
+                assert not (
+                    isinstance(nested, ast.Call)
+                    and isinstance(nested.func, ast.Attribute)
+                    and isinstance(nested.func.value, ast.Name)
+                    and nested.func.value.id == "itertools"
+                    and nested.func.attr == "count"
+                )
+                assert not (
+                    isinstance(nested, ast.Name)
+                    and isinstance(nested.ctx, ast.Load)
+                    and nested.id in process_counter_names
+                )
+
+
+class TestTask3ReviewAdmissionFailureBoundaries:
+    @pytest.mark.parametrize(
+        "boundary", ("file_fsync", "parent_fsync", "reopen", "hash")
+    )
+    def test_only_link_eexist_advances_the_disk_ordinal(
+        self,
+        private_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        boundary: str,
+    ) -> None:
+        real_fsync = driver.os.fsync
+        real_open = driver.os.open
+        real_sha256 = driver.hashlib.sha256
+        real_link = driver.os.link
+        state = {"failed": False, "linked": False, "link_calls": 0}
+
+        def injected_link(*args: object, **kwargs: object) -> None:
+            state["link_calls"] += 1
+            real_link(*args, **kwargs)
+            state["linked"] = True
+
+        def injected_fsync(fd: int) -> None:
+            is_directory = stat.S_ISDIR(os.fstat(fd).st_mode)
+            should_fail = (
+                boundary == "file_fsync" and not state["linked"] and not is_directory
+            ) or (
+                boundary == "parent_fsync" and state["linked"] and is_directory
+            )
+            if should_fail and not state["failed"]:
+                state["failed"] = True
+                raise FileExistsError(errno.EEXIST, "non-link durability failure")
+            real_fsync(fd)
+
+        def injected_open(
+            path: object, flags: int, *args: object, **kwargs: object
+        ) -> int:
+            if (
+                boundary == "reopen"
+                and state["linked"]
+                and not state["failed"]
+                and str(path).endswith("-admission.json")
+                and flags & os.O_ACCMODE == os.O_RDONLY
+            ):
+                state["failed"] = True
+                raise FileExistsError(errno.EEXIST, "non-link reopen failure")
+            return real_open(path, flags, *args, **kwargs)
+
+        def injected_sha256(*args: object, **kwargs: object) -> object:
+            if boundary == "hash" and state["linked"] and not state["failed"]:
+                state["failed"] = True
+                raise FileExistsError(errno.EEXIST, "non-link hash failure")
+            return real_sha256(*args, **kwargs)
+
+        monkeypatch.setattr(driver.os, "link", injected_link)
+        monkeypatch.setattr(driver.os, "fsync", injected_fsync)
+        monkeypatch.setattr(driver.os, "open", injected_open)
+        monkeypatch.setattr(driver.hashlib, "sha256", injected_sha256)
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            _command_admit(private_root)
+
+        _assert_refusal(exc, "filesystem_hazard")
+        assert state["failed"] is True
+        assert state["link_calls"] <= 1
+        assert not list(private_root.glob("*attempt-002*"))
+        assert _command_tree(private_root) == {}
+
+    @pytest.mark.parametrize("boundary", ("second_open", "validation"))
+    def test_rehearsal_namespace_setup_failure_restores_tree_and_signal_mask(
+        self,
+        private_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        boundary: str,
+    ) -> None:
+        real_open = driver.os.open
+        real_check = driver._check_directory_fd
+        namespace_opens = 0
+        directory_checks = 0
+        injected = False
+        original_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+
+        def injected_open(
+            path: object, flags: int, *args: object, **kwargs: object
+        ) -> int:
+            nonlocal injected, namespace_opens
+            if path == "rehearsal" and kwargs.get("dir_fd") is not None:
+                namespace_opens += 1
+                if boundary == "second_open" and namespace_opens == 2:
+                    injected = True
+                    raise OSError(errno.EIO, "namespace reopen failure")
+            return real_open(path, flags, *args, **kwargs)
+
+        def injected_check(fd: int) -> os.stat_result:
+            nonlocal directory_checks, injected
+            directory_checks += 1
+            if boundary == "validation" and directory_checks == 2:
+                injected = True
+                raise driver.BenchRefusal("filesystem_hazard")
+            return real_check(fd)
+
+        monkeypatch.setattr(driver.os, "open", injected_open)
+        monkeypatch.setattr(driver, "_check_directory_fd", injected_check)
+
+        caught: BaseException | None = None
+        observed_mask: set[signal.Signals] | None = None
+        try:
+            try:
+                _command_admit(private_root, command="rehearse", rehearsal=True)
+            except BaseException as exc:
+                caught = exc
+            observed_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, original_mask)
+
+        assert injected is True
+        assert isinstance(caught, driver.BenchRefusal)
+        assert caught.code == "filesystem_hazard"
+        assert observed_mask == original_mask
+        assert _command_tree(private_root) == {}
+
+
+def _replacement_inode_survives(
+    root: Path, identity: tuple[int, int], *, directory: bool
+) -> bool:
+    for path in root.rglob("*"):
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            continue
+        if (info.st_dev, info.st_ino) != identity:
+            continue
+        return stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)
+    return False
+
+
+class TestTask3ReviewAdmissionIdentityProofs:
+    @pytest.mark.parametrize("target", ("linked_file", "created_namespace"))
+    def test_cleanup_never_deletes_a_post_observation_replacement(
+        self,
+        private_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        target: str,
+    ) -> None:
+        replacement_identity: tuple[int, int] | None = None
+        swapped = False
+        real_fsync = driver.os.fsync
+        real_link = driver.os.link
+        real_named_match = driver._named_inode_matches
+        real_stat = driver.os.stat
+        linked = False
+        failed = False
+        namespace_stats = 0
+
+        def injected_link(*args: object, **kwargs: object) -> None:
+            nonlocal linked
+            if target == "created_namespace":
+                raise OSError(errno.EIO, "trigger namespace cleanup")
+            real_link(*args, **kwargs)
+            linked = True
+
+        def injected_fsync(fd: int) -> None:
+            nonlocal failed
+            if (
+                target == "linked_file"
+                and linked
+                and not failed
+                and stat.S_ISDIR(os.fstat(fd).st_mode)
+            ):
+                failed = True
+                raise OSError(errno.EIO, "trigger linked-file cleanup")
+            real_fsync(fd)
+
+        def swap_after_named_observation(
+            parent_fd: int, name: str, expected: os.stat_result
+        ) -> bool:
+            nonlocal replacement_identity, swapped
+            matched = real_named_match(parent_fd, name, expected)
+            if target == "linked_file" and matched and not swapped:
+                swapped = True
+                os.rename(
+                    name,
+                    f"observed-{name}",
+                    src_dir_fd=parent_fd,
+                    dst_dir_fd=parent_fd,
+                )
+                fd = os.open(
+                    name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    0o600,
+                    dir_fd=parent_fd,
+                )
+                try:
+                    os.write(fd, b"replacement-must-survive\n")
+                    info = os.fstat(fd)
+                    replacement_identity = (info.st_dev, info.st_ino)
+                finally:
+                    os.close(fd)
+            return matched
+
+        def swap_after_namespace_observation(
+            path: object, *args: object, **kwargs: object
+        ) -> os.stat_result:
+            nonlocal namespace_stats, replacement_identity, swapped
+            info = real_stat(path, *args, **kwargs)
+            if (
+                target == "created_namespace"
+                and path == "rehearsal"
+                and kwargs.get("dir_fd") is not None
+            ):
+                namespace_stats += 1
+                if namespace_stats == 2 and not swapped:
+                    swapped = True
+                    root_fd = int(kwargs["dir_fd"])
+                    os.rename(
+                        "rehearsal",
+                        "observed-rehearsal",
+                        src_dir_fd=root_fd,
+                        dst_dir_fd=root_fd,
+                    )
+                    os.mkdir("rehearsal", mode=0o700, dir_fd=root_fd)
+                    replacement = real_stat(
+                        "rehearsal", dir_fd=root_fd, follow_symlinks=False
+                    )
+                    replacement_identity = (replacement.st_dev, replacement.st_ino)
+            return info
+
+        monkeypatch.setattr(driver.os, "link", injected_link)
+        monkeypatch.setattr(driver.os, "fsync", injected_fsync)
+        monkeypatch.setattr(driver, "_named_inode_matches", swap_after_named_observation)
+        monkeypatch.setattr(driver.os, "stat", swap_after_namespace_observation)
+
+        caught: BaseException | None = None
+        try:
+            _command_admit(
+                private_root,
+                command="rehearse" if target == "created_namespace" else "static-preflight",
+                rehearsal=target == "created_namespace",
+            )
+        except BaseException as exc:
+            caught = exc
+
+        assert swapped is True
+        assert isinstance(caught, driver.BenchRefusal)
+        assert caught.code == "cleanup_incomplete"
+        assert replacement_identity is not None
+        assert _replacement_inode_survives(
+            private_root,
+            replacement_identity,
+            directory=target == "created_namespace",
+        )
+
+    def test_created_rehearsal_identity_cannot_be_swapped_before_open(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        real_stat = driver.os.stat
+        replacement_identity: tuple[int, int] | None = None
+        swapped = False
+
+        def swap_after_post_mkdir_stat(
+            path: object, *args: object, **kwargs: object
+        ) -> os.stat_result:
+            nonlocal replacement_identity, swapped
+            info = real_stat(path, *args, **kwargs)
+            if (
+                not swapped
+                and path == "rehearsal"
+                and kwargs.get("dir_fd") is not None
+            ):
+                swapped = True
+                root_fd = int(kwargs["dir_fd"])
+                os.rename(
+                    "rehearsal",
+                    "created-rehearsal",
+                    src_dir_fd=root_fd,
+                    dst_dir_fd=root_fd,
+                )
+                os.mkdir("rehearsal", mode=0o700, dir_fd=root_fd)
+                replacement = real_stat(
+                    "rehearsal", dir_fd=root_fd, follow_symlinks=False
+                )
+                replacement_identity = (replacement.st_dev, replacement.st_ino)
+            return info
+
+        monkeypatch.setattr(driver.os, "stat", swap_after_post_mkdir_stat)
+
+        attempt: object | None = None
+        caught: BaseException | None = None
+        try:
+            attempt = _command_admit(
+                private_root, command="rehearse", rehearsal=True
+            )
+        except BaseException as exc:
+            caught = exc
+
+        assert swapped is True
+        assert attempt is None
+        assert isinstance(caught, driver.BenchRefusal)
+        assert caught.code in {"filesystem_hazard", "cleanup_incomplete"}
+        assert replacement_identity is not None
+        assert _replacement_inode_survives(
+            private_root, replacement_identity, directory=True
+        )
+
+
+def _run_dual_signal_publication_cleanup(
+    root: Path,
+) -> subprocess.CompletedProcess[str]:
+    code = "\n".join(
+        (
+            "import json, os, signal, sys",
+            "from pathlib import Path",
+            "from scripts import cuda_bench_cli as cli",
+            "from scripts import cuda_bench_driver as driver",
+            "root = Path(sys.argv[1])",
+            "class Clock:",
+            "    tier = 'production'",
+            f"    def now_utc(self): return {_COMMAND_TIMESTAMP!r}",
+            "    def monotonic(self): return 0.0",
+            "attempt = driver._admit_command('static-preflight', None, driver.ProductionArtifactPolicy(), Clock(), root)",
+            "real_link = driver.os.link",
+            "real_rename = driver.os.rename",
+            "fired = {'sigint': False, 'sigterm': False}",
+            "def injected_link(*args, **kwargs):",
+            "    result = real_link(*args, **kwargs)",
+            "    if str(args[1]).endswith('-terminal.json'):",
+            "        fired['sigint'] = True",
+            "        os.kill(os.getpid(), signal.SIGINT)",
+            "    return result",
+            "def injected_rename(*args, **kwargs):",
+            "    result = real_rename(*args, **kwargs)",
+            "    if str(args[0]).endswith('-terminal.json'):",
+            "        fired['sigterm'] = True",
+            "        os.kill(os.getpid(), signal.SIGTERM)",
+            "    return result",
+            "driver.os.link = injected_link",
+            "driver.os.rename = injected_rename",
+            "previous = cli._install_command_signal_scope()",
+            "observed = {}",
+            "try:",
+            "    encoded = driver.ProductionArtifactPolicy().encode('refusal', {'outcome': 'assembly_refused'})",
+            "    driver.publish_command_artifact(attempt, 'terminal', encoded, root=root)",
+            "    observed = {'kind': 'returned'}",
+            "except driver._CommandInterrupted as exc:",
+            "    observed = {'kind': 'interrupted', 'signum': exc.signum}",
+            "except driver.BenchRefusal as exc:",
+            "    observed = {'kind': 'refused', 'code': exc.code}",
+            "finally:",
+            "    cli._restore_command_signal_scope(previous)",
+            "observed['injected'] = fired",
+            "print(json.dumps(observed, sort_keys=True, separators=(',', ':')))",
+        )
+    )
+    return subprocess.run(
+        [sys.executable, "-B", "-c", code, str(root)],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+
+class TestTask3ReviewConsolidatedBindingBoundaries:
+    @pytest.mark.parametrize("operation", ("admit", "publish"))
+    def test_command_root_fd_is_signal_owned_from_acquisition(
+        self,
+        private_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        operation: str,
+    ) -> None:
+        attempt = _command_admit(private_root) if operation == "publish" else None
+        encoded = driver.ProductionArtifactPolicy().encode(
+            "refusal", {"outcome": "assembly_refused"}
+        )
+        real_open_root = driver._open_root_fd
+        opened: list[int] = []
+
+        def interrupt_after_open(root: Path) -> int:
+            fd = real_open_root(root)
+            opened.append(fd)
+            os.kill(os.getpid(), signal.SIGTERM)
+            return fd
+
+        def interrupt_handler(signum: int, _frame: object) -> None:
+            raise driver._CommandInterrupted(signum)
+
+        previous_handler = signal.signal(signal.SIGTERM, interrupt_handler)
+        monkeypatch.setattr(driver, "_open_root_fd", interrupt_after_open)
+        try:
+            with pytest.raises(driver._CommandInterrupted):
+                if operation == "admit":
+                    _command_admit(private_root)
+                else:
+                    assert attempt is not None
+                    driver.publish_command_artifact(
+                        attempt, "terminal", encoded, root=private_root
+                    )
+        finally:
+            signal.signal(signal.SIGTERM, previous_handler)
+
+        assert len(opened) == 1
+        try:
+            os.fstat(opened[0])
+        except OSError as exc:
+            assert exc.errno == errno.EBADF
+        else:
+            os.close(opened[0])
+            pytest.fail("root descriptor escaped its signal-ownership region")
+
+    @pytest.mark.parametrize(
+        ("command", "rehearsal"),
+        (("static-preflight", False), ("rehearse", True)),
+    )
+    def test_quarantined_orphan_advances_the_next_disk_ordinal(
+        self,
+        private_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        command: str,
+        rehearsal: bool,
+    ) -> None:
+        real_fsync = driver.os.fsync
+        real_link = driver.os.link
+        real_unlink = driver.os.unlink
+        linked = False
+        failed_parent_fsync = False
+        failed_unlink = False
+
+        def injected_link(*args: object, **kwargs: object) -> None:
+            nonlocal linked
+            real_link(*args, **kwargs)
+            if str(args[1]).endswith("-admission.json"):
+                linked = True
+
+        def injected_fsync(fd: int) -> None:
+            nonlocal failed_parent_fsync
+            if linked and not failed_parent_fsync and stat.S_ISDIR(os.fstat(fd).st_mode):
+                failed_parent_fsync = True
+                raise OSError(errno.EIO, "trigger cleanup")
+            real_fsync(fd)
+
+        def injected_unlink(path: object, *args: object, **kwargs: object) -> None:
+            nonlocal failed_unlink
+            if str(path).startswith(".command-cleanup-") and not failed_unlink:
+                failed_unlink = True
+                raise OSError(errno.EIO, "leave quarantine")
+            real_unlink(path, *args, **kwargs)
+
+        monkeypatch.setattr(driver.os, "link", injected_link)
+        monkeypatch.setattr(driver.os, "fsync", injected_fsync)
+        monkeypatch.setattr(driver.os, "unlink", injected_unlink)
+
+        with pytest.raises(driver.BenchRefusal, match="cleanup_incomplete"):
+            _command_admit(
+                private_root,
+                command=command,
+                rehearsal=rehearsal,
+            )
+        orphans = list(private_root.rglob(".command-cleanup-*"))
+        assert len(orphans) == 1
+        with pytest.raises(ValueError):
+            driver.cm.PersistedDoc(orphans[0].read_bytes())
+
+        monkeypatch.undo()
+        policy_name = (
+            "RehearsalArtifactPolicy" if rehearsal else "ProductionArtifactPolicy"
+        )
+        code = "\n".join(
+            (
+                "import json, sys",
+                "from pathlib import Path",
+                "from scripts import cuda_bench_driver as driver",
+                "class Clock:",
+                f"    tier = {('rehearsal' if rehearsal else 'production')!r}",
+                f"    def now_utc(self): return {_COMMAND_TIMESTAMP!r}",
+                "    def monotonic(self): return 0.0",
+                f"policy = driver.{policy_name}()",
+                f"attempt = driver._admit_command({command!r}, None, policy, Clock(), Path(sys.argv[1]))",
+                "print(json.dumps({'ordinal': attempt.ordinal}))",
+            )
+        )
+        result = subprocess.run(
+            [sys.executable, "-B", "-c", code, str(private_root)],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+        assert result.returncode == 0
+        assert result.stderr == ""
+        assert json.loads(result.stdout) == {"ordinal": 2}
+
+    def test_source_fd_close_failure_cannot_erase_a_constructed_binding(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        real_open_anonymous = driver._open_anonymous_file
+        real_close = driver.os.close
+        real_attempt_type = driver.CommandAttempt
+        source_fd: int | None = None
+        failed = False
+        constructed: list[object] = []
+        latched: list[object] = []
+
+        def capture_source(*args: object, **kwargs: object) -> int:
+            nonlocal source_fd
+            source_fd = real_open_anonymous(*args, **kwargs)
+            return source_fd
+
+        def recording_attempt(*args: object, **kwargs: object) -> object:
+            value = real_attempt_type(*args, **kwargs)
+            constructed.append(value)
+            return value
+
+        def failing_close(fd: int) -> None:
+            nonlocal failed
+            if fd == source_fd and not failed:
+                failed = True
+                raise OSError(errno.EIO, "source close")
+            real_close(fd)
+
+        monkeypatch.setattr(driver, "_open_anonymous_file", capture_source)
+        monkeypatch.setattr(driver, "CommandAttempt", recording_attempt)
+        monkeypatch.setattr(driver.os, "close", failing_close)
+        caught: BaseException | None = None
+        try:
+            driver._admit_command(
+                "static-preflight",
+                None,
+                driver.ProductionArtifactPolicy(),
+                _CommandClock("production"),
+                private_root,
+                _on_latched=latched.append,
+            )
+        except BaseException as exc:
+            caught = exc
+        finally:
+            if source_fd is not None:
+                try:
+                    real_close(source_fd)
+                except OSError:
+                    pass
+
+        assert failed is True
+        assert caught is not None
+        if constructed:
+            assert latched == constructed
+            attempt = constructed[0]
+            admission = private_root / attempt.admission_ref
+            assert admission.is_file()
+            assert hashlib.sha256(admission.read_bytes()).hexdigest() == (
+                attempt.admission_sha256
+            )
+        else:
+            assert latched == []
+            assert not list(private_root.glob("*-admission.json"))
+
+    def test_cleanup_is_signal_protected_and_term_wins_priority(
+        self, private_root: Path
+    ) -> None:
+        result = _run_dual_signal_publication_cleanup(private_root)
+        assert result.returncode == 0
+        assert result.stderr == ""
+        assert json.loads(result.stdout) == {
+            "injected": {"sigint": True, "sigterm": True},
+            "kind": "interrupted",
+            "signum": 15,
+        }
+        assert not list(private_root.rglob("*-terminal.json"))
+        assert not list(private_root.rglob(".command-cleanup-*"))
+
+    def test_terminal_cleanup_failure_dominates_mask_restore_failure(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        attempt = _command_admit(private_root)
+        encoded = driver.ProductionArtifactPolicy().encode(
+            "refusal", {"outcome": "assembly_refused"}
+        )
+        real_link = driver.os.link
+        real_fsync = driver.os.fsync
+        real_unlink = driver.os.unlink
+        real_pthread_sigmask = driver.signal.pthread_sigmask
+        terminal_linked = False
+        durability_failed = False
+        restore_failed = False
+
+        def tracking_link(*args: object, **kwargs: object) -> None:
+            nonlocal terminal_linked
+            real_link(*args, **kwargs)
+            if str(args[1]).endswith("-terminal.json"):
+                terminal_linked = True
+
+        def failing_fsync(fd: int) -> None:
+            nonlocal durability_failed
+            if (
+                terminal_linked
+                and not durability_failed
+                and stat.S_ISDIR(os.fstat(fd).st_mode)
+            ):
+                durability_failed = True
+                raise OSError(errno.EIO, "terminal durability")
+            real_fsync(fd)
+
+        def failing_unlink(path: object, *args: object, **kwargs: object) -> None:
+            if str(path).startswith(".command-cleanup-"):
+                raise OSError(errno.EIO, "identity cleanup")
+            real_unlink(path, *args, **kwargs)
+
+        def failing_restore(how: int, mask: object) -> object:
+            nonlocal restore_failed
+            if how == signal.SIG_SETMASK and not restore_failed:
+                restore_failed = True
+                raise OSError(errno.EIO, "mask restore")
+            return real_pthread_sigmask(how, mask)
+
+        monkeypatch.setattr(driver.os, "link", tracking_link)
+        monkeypatch.setattr(driver.os, "fsync", failing_fsync)
+        monkeypatch.setattr(driver.os, "unlink", failing_unlink)
+        monkeypatch.setattr(driver.signal, "pthread_sigmask", failing_restore)
+
+        with pytest.raises(driver.BenchRefusal, match="^cleanup_incomplete$"):
+            driver.publish_command_artifact(
+                attempt, "terminal", encoded, root=private_root
+            )
+        assert terminal_linked is True
+        assert durability_failed is True
+        assert restore_failed is True
+
+    def test_concurrent_rehearsal_population_is_not_renamed_by_creator_cleanup(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        real_link = driver.os.link
+        observed_identity: tuple[int, int] | None = None
+
+        def failing_link(*args: object, **kwargs: object) -> None:
+            nonlocal observed_identity
+            if str(args[1]).endswith("-admission.json"):
+                namespace = private_root / "rehearsal"
+                info = namespace.stat()
+                observed_identity = (info.st_dev, info.st_ino)
+
+                def populate() -> None:
+                    _private_file(namespace / "concurrent-artifact.json", b"peer\n")
+
+                worker = threading.Thread(target=populate)
+                worker.start()
+                worker.join(timeout=5)
+                assert not worker.is_alive()
+                raise OSError(errno.EIO, "creator fails")
+            real_link(*args, **kwargs)
+
+        monkeypatch.setattr(driver.os, "link", failing_link)
+        with pytest.raises(driver.BenchRefusal, match="cleanup_incomplete"):
+            _command_admit(private_root, command="rehearse", rehearsal=True)
+
+        namespace = private_root / "rehearsal"
+        assert observed_identity is not None
+        current = namespace.stat()
+        assert (current.st_dev, current.st_ino) == observed_identity
+        assert (namespace / "concurrent-artifact.json").read_bytes() == b"peer\n"
+        assert not list(private_root.glob(".command-cleanup-*"))
+
+    def test_peer_write_after_namespace_quarantine_stays_canonical(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        real_link = driver.os.link
+        real_rename = driver.os.rename
+        held_namespace_fd: int | None = None
+        held_replacement_fd: int | None = None
+        original_identity: tuple[int, int] | None = None
+        replacement_identity: tuple[int, int] | None = None
+        injected = False
+
+        def failing_link(*args: object, **kwargs: object) -> None:
+            nonlocal held_namespace_fd, original_identity
+            if str(args[1]).endswith("-admission.json"):
+                held_namespace_fd = os.open(
+                    private_root / "rehearsal",
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                )
+                observed = os.fstat(held_namespace_fd)
+                original_identity = (observed.st_dev, observed.st_ino)
+                assert os.listdir(held_namespace_fd) == []
+                raise OSError(errno.EIO, "creator fails after empty precheck")
+            real_link(*args, **kwargs)
+
+        def populate_after_quarantine(
+            source: object,
+            target: object,
+            *args: object,
+            **kwargs: object,
+        ) -> None:
+            nonlocal held_replacement_fd, injected, replacement_identity
+            real_rename(source, target, *args, **kwargs)
+            if source != "rehearsal" or not str(target).startswith(
+                ".command-cleanup-rehearsal-"
+            ):
+                return
+            if injected:
+                return
+            assert held_namespace_fd is not None
+            injected = True
+            peer_fd = os.open(
+                "peer.json",
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=held_namespace_fd,
+            )
+            try:
+                os.write(peer_fd, b"peer-evidence\n")
+                os.fsync(peer_fd)
+            finally:
+                os.close(peer_fd)
+            root_fd = int(kwargs["dst_dir_fd"])
+            os.mkdir("rehearsal", mode=0o700, dir_fd=root_fd)
+            held_replacement_fd = os.open(
+                "rehearsal",
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=root_fd,
+            )
+            replacement = os.fstat(held_replacement_fd)
+            replacement_identity = (replacement.st_dev, replacement.st_ino)
+
+        monkeypatch.setattr(driver.os, "link", failing_link)
+        monkeypatch.setattr(driver.os, "rename", populate_after_quarantine)
+        try:
+            with pytest.raises(driver.BenchRefusal, match="^cleanup_incomplete$"):
+                _command_admit(private_root, command="rehearse", rehearsal=True)
+            assert held_replacement_fd is not None
+            late_peer_fd = os.open(
+                "late-peer.json",
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=held_replacement_fd,
+            )
+            try:
+                os.write(late_peer_fd, b"late-peer-evidence\n")
+                os.fsync(late_peer_fd)
+            finally:
+                os.close(late_peer_fd)
+            hidden_admission = driver.RehearsalArtifactPolicy().encode(
+                "command_admission",
+                {
+                    "command": "rehearse",
+                    "ordinal": 1,
+                    "window_id": None,
+                    "status": "admitted",
+                    "timestamp": _COMMAND_TIMESTAMP,
+                },
+            )
+            hidden_fd = os.open(
+                "command-rehearse-attempt-001-admission.json",
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=held_replacement_fd,
+            )
+            try:
+                os.write(hidden_fd, hidden_admission)
+                os.fsync(hidden_fd)
+            finally:
+                os.close(hidden_fd)
+        finally:
+            if held_namespace_fd is not None:
+                os.close(held_namespace_fd)
+            if held_replacement_fd is not None:
+                os.close(held_replacement_fd)
+
+        namespace = private_root / "rehearsal"
+        current = namespace.stat()
+        assert injected is True
+        assert original_identity is not None
+        assert replacement_identity is not None
+        assert original_identity != replacement_identity
+        assert (current.st_dev, current.st_ino) == original_identity
+        assert (namespace / "peer.json").read_bytes() == b"peer-evidence\n"
+        quarantines = list(private_root.glob(".command-cleanup-rehearsal-*"))
+        assert len(quarantines) == 1
+        quarantine = quarantines[0]
+        quarantined = quarantine.stat()
+        assert (quarantined.st_dev, quarantined.st_ino) == replacement_identity
+        assert (quarantine / "late-peer.json").read_bytes() == b"late-peer-evidence\n"
+        assert (
+            quarantine / "command-rehearse-attempt-001-admission.json"
+        ).read_bytes() == hidden_admission
+
+        monkeypatch.setattr(driver.os, "link", real_link)
+        monkeypatch.setattr(driver.os, "rename", real_rename)
+        next_attempt = _command_admit(private_root)
+        assert next_attempt.ordinal == 2
+
+    def test_same_inode_same_length_mutation_never_returns_a_stale_attempt(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        real_checkpoint = driver._command_signal_checkpoint
+        checkpoints = 0
+        mutated = False
+        before_identity: tuple[int, int, int] | None = None
+
+        def mutate_after_first_hash() -> None:
+            nonlocal before_identity, checkpoints, mutated
+            real_checkpoint()
+            checkpoints += 1
+            if checkpoints != 4:
+                return
+            admission = next(private_root.glob("*-admission.json"))
+            original = admission.read_bytes()
+            changed = bytearray(original)
+            changed[0] ^= 1
+            info = admission.stat()
+            before_identity = (info.st_dev, info.st_ino, info.st_size)
+            fd = os.open(admission, os.O_WRONLY | os.O_NOFOLLOW)
+            try:
+                assert os.write(fd, changed) == len(changed)
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            mutated = True
+
+        monkeypatch.setattr(driver, "_command_signal_checkpoint", mutate_after_first_hash)
+        attempt: object | None = None
+        caught: BaseException | None = None
+        try:
+            attempt = _command_admit(private_root)
+        except BaseException as exc:
+            caught = exc
+
+        assert mutated is True
+        assert before_identity is not None
+        admission = next(private_root.rglob("*-admission.json"), None)
+        if admission is not None:
+            info = admission.stat()
+            assert (info.st_dev, info.st_ino, info.st_size) == before_identity
+        assert attempt is None
+        assert isinstance(caught, driver.BenchRefusal)
+
+
+class TestTask3ReviewAdmissionReplacementProofs:
+    @pytest.mark.parametrize("target", ("root", "namespace", "admission"))
+    def test_final_admission_revalidation_rejects_post_hash_replacement(
+        self,
+        private_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        target: str,
+    ) -> None:
+        real_checkpoint = driver._command_signal_checkpoint
+        checkpoints = 0
+        replaced = False
+        displaced_root = private_root.with_name(f"{private_root.name}-observed")
+
+        def replace_after_hash() -> None:
+            nonlocal checkpoints, replaced
+            real_checkpoint()
+            checkpoints += 1
+            if checkpoints != 4:
+                return
+            replaced = True
+            if target == "root":
+                private_root.rename(displaced_root)
+                private_root.mkdir(mode=0o700)
+                os.chmod(private_root, 0o700)
+                return
+            if target == "namespace":
+                namespace = private_root / "rehearsal"
+                namespace.rename(private_root / "observed-rehearsal")
+                namespace.mkdir(mode=0o700)
+                os.chmod(namespace, 0o700)
+                return
+            admission = next(private_root.glob("*-admission.json"))
+            admission.rename(admission.with_name(f"observed-{admission.name}"))
+            _private_file(admission, b"replacement-must-not-bind\n")
+
+        monkeypatch.setattr(driver, "_command_signal_checkpoint", replace_after_hash)
+
+        attempt: object | None = None
+        caught: BaseException | None = None
+        try:
+            attempt = _command_admit(
+                private_root,
+                command="rehearse" if target == "namespace" else "static-preflight",
+                rehearsal=target == "namespace",
+            )
+        except BaseException as exc:
+            caught = exc
+
+        assert replaced is True
+        assert attempt is None
+        assert isinstance(caught, driver.BenchRefusal)
+        assert caught.code in {"filesystem_hazard", "cleanup_incomplete"}
+
+
 _B7_SANITIZED_PATH = (
     "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 )
@@ -8019,6 +9823,7 @@ class TestB7PhaseStateMachine:
         )
         path = driver.run_phase(harness.config, harness.providers, root=private_root)
         fields = _b7_wrapper(path)["payload"]["fields"]
+        assert fired is True
         assert fields["outcome"] == "interrupted"
         assert fields["finalizer"]["listener_free"] is True
         assert driver._pgid_members(fields["observed_pgid"]) == []
