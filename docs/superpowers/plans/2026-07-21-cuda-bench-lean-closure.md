@@ -1804,6 +1804,16 @@ each completion to its admission and underlying artifact file bytes, enforces
 the closed matrix, and includes the three completion file hashes in the
 stage-stable `bench_binding_sha256`.
 
+Because `PersistedDoc` carries bytes/hash/object but no selected locator, the
+bundle also carries exactly three bounded relative string fields:
+`static_preflight_ref`, `control_packet_ref`, and `candidate_packet_ref`.
+These are compared to the corresponding completion's `artifact_ref`.
+`CommandAdmissionPreimage` is a non-schema frozen carrier containing its
+selected relative ref plus canonical wrapper bytes, recomputed file hash, and
+frozen admission fields; it deliberately does not enter `_PERSISTED_REGISTRY`
+or become standalone evidence. The assembler owns anchored-root validation of
+all refs, while the bundle constructor owns their exact internal joins.
+
 Pin the four identity assignments literally:
 
 ```python

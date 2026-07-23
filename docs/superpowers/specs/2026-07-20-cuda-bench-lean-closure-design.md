@@ -338,6 +338,18 @@ the full binding, but never this completed-bench anchor. Command admission
 remains decoder-free as standalone evidence; the bundle's admission-preimage
 type can only reconstruct its frozen wrapper fields and file hash for these
 completion joins.
+
+`PersistedDoc` intentionally has no filesystem locator, so the bundle carries
+exactly three additional bounded relative strings: `static_preflight_ref`,
+`control_packet_ref`, and `candidate_packet_ref`. Each must equal the
+corresponding completion's `artifact_ref`. Each
+`CommandAdmissionPreimage` non-schema carrier likewise holds its selected
+relative ref plus canonical wrapper bytes and recomputed file hash. It is not
+registered as a persisted evidence schema and cannot become evidence alone.
+The assembler proves every ref is beneath the anchored private root; the
+bundle proves the ref/hash/object relationships without trusting the assembler
+to recreate them.
+
 The dormant P2--P5 scorer types and validation remain in
 `cuda_migration.py`; this closure adds no producer or CLI for them.
 
