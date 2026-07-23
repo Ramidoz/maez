@@ -1170,22 +1170,25 @@ probe = driver.SyntheticPortProbe(
 )
 assert probe.is_free(8080) is True          # synthetic, no socket call
 generation = ports.reserve_launch()
-ports.activate_from_launcher(generation, dynamic_stub_port)
-assert probe.is_free(dynamic_stub_port) is False  # real literal-loopback probe
-assert ports.current == (generation, dynamic_stub_port)
+lease = ports.activate_from_launcher(generation, dynamic_stub_port)
+assert probe.is_free(lease.port, lease=lease) is False  # literal loopback only
+assert ports.current == lease
 ```
 
 Invalid map text, bool/nonpositive PID, non-loopback/dynamic fixed-port
 contact, unregistered arbitrary non-fixed port, concurrent registration while
-a generation is active, stale retired-port probing, and mixed-tier adapter
-construction must refuse before any
-socket call (monkeypatch `socket.socket.bind` to make that absence observable).
+a generation is active, a stale lease (including same-number reuse under a
+new generation), and mixed-tier adapter construction must refuse before any
+socket call (monkeypatch `socket.socket` construction to make that absence
+observable).
 `RehearsalServerLauncher` and `SyntheticPortProbe` must hold the
 same registry object by identity; a structurally equal distinct registry is
-`tier_mismatch`. The load-bearing RED scripts three deliberately distinct
-ephemeral ports: cycle 1 registers, finalizer observes it free and retires it;
-cycles 2 and 3 repeat with increasing generations; the stock phase completes
-all three and leaves no current/stale listener. No test monkeypatches
+`tier_mismatch`. The load-bearing RED runs three independently OS-assigned
+ephemeral leases: cycle 1 registers, finalizer observes its exact lease free
+and retires it; cycles 2 and 3 repeat with strictly increasing generations.
+Numeric port distinctness is intentionally not claimed because port-zero
+allocation may honestly reuse a number. The stock phase completes all three
+and leaves no current lease/listener. No test monkeypatches
 `read_maps` or `is_free`. Residue proof enumerates same-UID `/proc/*/exe` and
 `/proc/*/fd/*` for `memfd:cuda-bench-entry`; it does not rely on a stub-name
 `pgrep`, because the sealed launcher replaces argv/path identity with the
@@ -1215,33 +1218,51 @@ existing positional call. `read_maps` rejects bool/nonpositive PIDs, selects
 the exact PID row or the frozen default, revalidates it with
 `cm.parse_backend_maps`, and otherwise raises `provider_uncertain`.
 
-Add process-local `RehearsalPortRegistry` with a lock, monotonic generation
-counter, and at most one reserved-or-active generation. Only
+Add frozen process-memory-only
+`RehearsalPortLease(generation: int, port: int)` and a
+`RehearsalPortRegistry` with a lock, monotonic generation counter, and at most
+one reserved-or-active generation. Only
 `RehearsalServerLauncher` calls `reserve_launch() -> generation` before spawn;
 a concurrent reservation or active generation refuses before any child exists.
 The launcher passes a rehearsal-only callback into `spawn_pinned`. After the
 stub announcement and target identity are proven, but before `OwnedChild`
 escapes bootstrap ownership, that callback calls
-`activate_from_launcher(generation, port)`.
+`activate_from_launcher(generation, port) -> RehearsalPortLease`. The exact
+lease is stored on `OwnedChild` and threaded through `finalize` into
+`SyntheticPortProbe.is_free(port, *, lease=...)`. Fixed production/bench port
+checks remain lease-free and wholly synthetic.
 
-Extend `spawn_pinned` with an optional private post-identity callback invoked
-inside its existing try/`_bootstrap_abort` scope. A callback failure therefore
-kills/reaps the pidfd-owned child and proves listener absence before raising.
-The launcher cancels an unactivated reservation on every spawn/callback
-failure. Production passes no callback and its behavior is unchanged. After
-cleanup, the same numeric port may be issued again only as a new generation.
+Extend `spawn_pinned` with an optional private post-identity callback, validated
+before the executable snapshot/spawn and permitted only for rehearsal
+`python_file` pins. Invoke it inside the existing try/`_bootstrap_abort` scope.
+A callback failure therefore kills/reaps the pidfd-owned child and proves
+listener absence before raising. Activation validates everything before one
+atomic, non-throwing state mutation; otherwise cancellation is exact for both
+reserved and active generations. The launcher catches `BaseException` and
+cancels the exact unescaped generation on every spawn/callback failure.
+Production rejects a callback structurally and its behavior is unchanged.
+After cleanup, the same numeric port may be issued again only under a new
+lease generation.
 `SyntheticPortProbe` receives the shared registry through keyword-only
 `rehearsal_ports`; existing fixed-port tests may omit it, in which case every
 non-fixed port refuses.
 
 For 8080/8081/8082/18080 the probe returns only configured synthetic answers.
-For the one current launcher-issued port it performs a literal
-`socket.bind(("127.0.0.1", port))`. A failed bind reports occupied without
-changing registry state. A successful bind proves listener absence and
-atomically retires that exact current generation; any stale/concurrent
-generation mismatch refuses. Arbitrary non-fixed ports refuse before socket
-construction. No hostname, proxy, or service contact exists. Registry state
-is bounded process memory and is never serialized.
+The configured set is closed to exactly those four ports; no arbitrary fixed
+port can become synthetic. For the one exact current launcher-issued lease the
+probe snapshots registry state under the lock, releases the lock, performs a
+literal `socket.bind(("127.0.0.1", lease.port))`, then reacquires the lock and
+compare-before-retires that exact lease. No registry lock is held across bind.
+A failed bind reports occupied without changing registry state. A successful
+bind proves listener absence and retires only if the same lease is still
+current. A stale lease, including an old generation whose numeric port has
+been reused, refuses before socket construction and cannot inspect or retire
+the current lease. Arbitrary non-fixed ports refuse before socket construction.
+No hostname, proxy, or production-service contact exists. The synthetic
+provider witness increments `real_calls` for this literal-loopback bind,
+honestly recording the kernel contact; the tier guarantee is zero production
+contact, not zero syscalls. Registry/lease state is bounded process memory and
+is never serialized.
 
 Add optional `rehearsal_ports` to `RehearsalServerLauncher` for direct legacy
 tests. Extend `_sealed_tier`, not `rehearsal_tier`, to require by object

@@ -234,13 +234,17 @@ Rehearsal:
 
 Its launcher and port probe share one process-local generation registry by
 object identity. The launcher reserves a generation before spawn, then
-activates its announced port inside `spawn_pinned`'s bootstrap-owned callback;
-callback failure uses the existing pidfd bootstrap abort before the child can
-escape. Each of the three sequential children may claim a new ephemeral port
+activates its announced port inside `spawn_pinned`'s bootstrap-owned callback
+as a frozen `RehearsalPortLease(generation, port)`. The callback is validated
+before snapshot/spawn, remains inside the pidfd bootstrap-abort scope, and
+activation either fails before mutation or completes one non-throwing atomic
+mutation. The exact lease travels through `OwnedChild` to `finalize` and the
+probe. Each of the three sequential children may claim a new ephemeral lease
 only after the prior finalizer has proved listener absence and retired that
-generation; concurrent reservations or stale ports refuse before socket
-contact. The stock constructor owns this registry; the landed tier aggregator
-only seals the supplied adapters.
+exact lease. Concurrent reservations and stale leases—including an old
+generation after the same numeric port is reused—refuse before socket contact.
+The stock constructor owns this registry; the landed tier aggregator only
+seals the supplied adapters.
 
 Rehearsal alone uses a one-second readiness bound and one-second request bound
 so the real timeout/hang personas complete promptly. `PhaseConfig` carries the
@@ -250,12 +254,18 @@ a CLI/environment override.
 
 The stock rehearsal provider set must run without per-test monkeypatching.
 Its backend-map adapter returns a frozen valid synthetic map for the launcher
-PID allocated at runtime. Its port adapter answers the four fixed production
-and bench ports synthetically, but probes only the launcher-chosen ephemeral
-literal-loopback port for real. Launcher and probe share one process-memory
-registry by object identity; an arbitrary non-fixed port refuses before any
-socket call. Thus unpredictable child PIDs and cleanup of
-the actual ephemeral listener are witnessed without contacting production.
+PID allocated at runtime. Its port adapter answers exactly the four fixed
+production and bench ports synthetically and lease-free, but probes only the
+launcher-chosen ephemeral literal-loopback lease for real. It snapshots the
+current lease under lock, binds with no registry lock held, then
+compare-before-retires the exact lease. The synthetic witness counts that
+literal-loopback bind as a real call while still proving zero production
+contact. Launcher and probe share one process-memory registry by object
+identity; an arbitrary non-fixed port or stale lease refuses before any socket
+call. Thus unpredictable child PIDs and cleanup of the actual ephemeral
+listener are witnessed without contacting production. The three-cycle witness
+requires strictly increasing lease generations, not distinct numeric ports:
+honest OS port-zero allocation may reuse a number.
 
 All six stub personas exercise the real spawn, readiness, HTTP, timeout,
 interrupt, and pidfd cleanup path. Rehearsal cannot mint production-shaped
@@ -591,8 +601,11 @@ Implementation is TDD and must witness these failures before code:
 - cleanup leaves no listener, stub process, or owned child; and
 - stock sealed providers accept an unpredictable child PID, use the frozen
   synthetic backend map, and probe only the actual launcher-registered
-  ephemeral port through one shared process-memory registry without instance
-  monkeypatching or probing arbitrary ports.
+  ephemeral lease through one shared process-memory registry without instance
+  monkeypatching or probing arbitrary ports; and
+- stale same-number leases refuse before socket contact, while three sequential
+  cycles prove strictly increasing generations without falsely requiring
+  distinct OS-assigned numeric ports.
 
 ### Production phases
 
