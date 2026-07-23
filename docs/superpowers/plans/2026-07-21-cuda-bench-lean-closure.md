@@ -139,6 +139,22 @@ All three are required. A different candidate that is internally
 self-consistent but differs at any pinned plane refuses; it cannot inherit the
 frozen b9596 identity.
 
+`cuda_bench_driver.command_completion.v1` is active schema 24. Its fields are
+exactly `command`, positive `ordinal`, bounded `window_id` or null,
+`admission_ref`, `admission_sha256`, `artifact_ref`, `artifact_sha256`,
+`artifact_schema`, `status="completed"`, and `timestamp`. Its production
+matrix is closed:
+
+| command | artifact_schema | phase | window_id |
+|---|---|---|---|
+| `static-preflight` | `cuda_bench_driver.static_preflight.v1` | null | null |
+| `vulkan-baseline` | `cuda_bench_driver.phase_packet.v2` | `vulkan_baseline` | equals packet |
+| `cuda-candidate` | `cuda_bench_driver.phase_packet.v2` | `cuda_candidate` | equals packet |
+
+`rehearse` remains incompatibly rehearsal-encoded and never mints a production
+completion. `assemble-stage1` emits its existing scorer-bound receipt, not a
+command completion.
+
 The truthful CMake validator is exactly:
 
 ```python
@@ -436,7 +452,8 @@ def _decode_owner_voice_review(fields: object) -> OwnerVoiceReview:
 Map `QUALITY_EVIDENCE_SCHEMA` and `OWNER_VOICE_REVIEW_SCHEMA` to those
 decoders in `_PERSISTED_REGISTRY`. This closes decoder coverage; it does not
 add schemas, so the count remains 22 at this task. Task 3 then adds the honest
-command-admission family and atomically raises the final package count to 23.
+command-admission family and raises the active count to 23; Task 4 adds the
+closed command-completion family and raises the final package count to 24.
 
 - [ ] **Step 4: GREEN, review, and commit**
 
@@ -526,6 +543,8 @@ canon count 22 -> 23 atomically in the plan and spec. Its fields are exactly
 `command`, positive `ordinal`, bounded `window_id` or null,
 `status="admitted"`, and `timestamp`, with a null wrapper binding; the
 persisted file hash is its identity.
+Task 4 separately adds `cuda_bench_driver.command_completion.v1` as family 24;
+admission itself remains schema 23.
 Rehearsal encodes the same payload through `RehearsalArtifactPolicy`, so it
 remains an incompatible rehearsal document beneath `rehearsal/` and never
 mints the production schema.
@@ -926,6 +945,11 @@ RED families:
   order, or byte drift changes it;
 - `static-preflight` performs no service mutation, socket contact, model load,
   or corpus inference and enforces exactly one GPU.
+- `CommandCompletionDoc` accepts only the frozen static matrix row and refuses
+  wrong command/schema/phase/window, non-completed status, or any admission or
+  artifact mismatch. Direct `BenchEvidenceBundle` construction without the
+  required completion preimages refuses; callers cannot bypass this by
+  entering the public constructor directly.
 
 Write the immutable-create/EEXIST/fsync/path-hazard RED family in
 `tests/test_cuda_bench_driver.py` before either helper exists. It covers the
@@ -1080,10 +1104,17 @@ bounded absolute canonical paths.
 
 Encode with `ProductionArtifactPolicy().encode("static_preflight", fields)`.
 The handler order is admission -> collect -> publish-or-verify rollback
-preimage -> publish terminal. Publish the terminal with the already-issued
-`CommandAttempt` and emit
-`static_preflight_ready` with the relative path/hash. The command validates
-tool observations; complete identities are persisted later by `run_phase`.
+preimage -> publish `static_preflight.v1` -> publish
+`command_completion.v1` -> publish terminal. Completion may linearize only
+after the underlying static document has completed file fsync, final-name
+link, parent fsync, anchored reopen, and hash validation. It cites that
+validated artifact plus the exact admission pair. Publish the terminal with
+the completion's relative path/hash and emit `static_preflight_ready`. A
+catchable failure before completion reports honestly; an uncatchable death
+after the underlying artifact but before completion is a safe false negative:
+the static document may exist, but cannot enter a bundle and no completed
+claim is fabricated. The command validates tool observations; complete
+identities are persisted later by `run_phase`.
 No canonical-root command is run during this branch checkpoint: tests inject
 temporary roots. The scaffold assembler therefore never escapes as a durable
 canonical package identity before Tasks 8-9 complete it.
@@ -1425,9 +1456,13 @@ Healthy rehearsal completes on an ephemeral loopback port; every failure persona
 
 - [ ] **Step 1: Write exact `PhaseConfig` and refusal-order REDs**
 
-For `vulkan-baseline`, require relative window-authorization and static
-preflight refs. For `cuda-candidate`, require relative continuation,
-parent-window, completed Vulkan packet, and static-preflight refs.
+For `vulkan-baseline`, require relative window-authorization, static-preflight,
+static-admission, and static-completion refs. For `cuda-candidate`, require
+relative continuation, parent-window, completed Vulkan packet, its matching
+Vulkan command-admission and command-completion refs, plus the same
+static-preflight/admission/completion refs. A completion is never accepted
+without the exact admission preimage it cites; a durable underlying artifact
+without its completion is not a completed producer result.
 
 Tests assert:
 
@@ -1462,6 +1497,15 @@ and therefore refuses. Config/artifact window, boot, owner, parent packet, faile
 packet, static identity, active service/port/GPU, and continuation expiry
 failures must call neither `consume` nor `spawn`. Ambient environment canaries
 must not enter the exact phase environment.
+
+Add completion REDs for both phase rows in the frozen matrix. A phase
+completion is published only after the packet's file fsync, final-name link,
+parent fsync, anchored reopen, and hash validation, and must join the packet's
+phase/window plus the exact command admission. A wrong/missing static
+completion refuses both phases; a wrong/missing Vulkan completion refuses CUDA
+before nonce consumption. Crash after packet durability but before completion
+produces no completion and is an honest safe false negative, never a fabricated
+completed phase.
 
 Both commands call the pure collector and then
 `verify_existing_immutable` on the exact rollback preimage. Missing/drifted
@@ -1516,6 +1560,15 @@ invent a second phase-engine root abstraction.
 `run_phase` remains the authority for fresh six-gate revalidation,
 containment-before, nonce consumption at the last no-spawn point, three-cycle
 measurement, identity-document persistence, and pidfd cleanup.
+
+After `run_phase` returns a completed persisted packet, the CLI anchored-opens
+and validates that packet, then publishes the matching
+`cuda_bench_driver.command_completion.v1` only after the packet's full
+fsync/link/parent-fsync/reopen/hash sequence is proven. The terminal line binds
+the completion document, not merely the packet. Refused or failed packets
+never mint completion. CUDA additionally proves that its selected completed
+Vulkan parent packet is the artifact named by a valid Vulkan completion with
+the same window before continuation consumption.
 
 Define the shared exact A/B argument tail in the CLI and assert its compact
 JSON SHA-256 equals `FROZEN_BENCH_ARGS_SHA256`:
@@ -1580,6 +1633,12 @@ Define the exact input surface:
 class Stage1ArtifactPaths:
     control_packet: str
     candidate_packet: str
+    static_admission: str
+    static_completion: str
+    control_admission: str
+    control_completion: str
+    candidate_admission: str
+    candidate_completion: str
     window_authorization: str
     continuation: str
     window_consumption: str
@@ -1599,12 +1658,20 @@ class Stage1ArtifactPaths:
 Every field is required. Absolute, `..`, symlink component/final, hardlink,
 directory, wrong owner/mode, missing file, unknown/rehearsal schema, and type
 mismatch all refuse `assembly_refused` before scorer entry. Extra attempts and
-decoys on disk are ignored; exactly those 16 paths are opened. An AST RED
+decoys on disk are ignored; exactly those 22 paths are opened. An AST RED
 forbids `glob`, `rglob`, `iterdir`, `scandir`, and raw `open`.
 Pointing any selected field at a complete
 `cuda_bench_driver.command_admission.v1` receipt, including a crash orphan,
 must also refuse `assembly_refused` before scorer entry. This is the
 assembler-path half of Task 3's decoder-level orphan proof.
+
+The three admissions and three completions are typed carried preimages, not
+hash-only assertions. Each completion must cite its selected admission and
+underlying artifact by exact relative ref/hash and satisfy the frozen
+command/schema/phase/window matrix. A durable static document or phase packet
+without its matching completion is unscorable. Direct construction of
+`BenchEvidenceBundle` with a completion omitted, substituted, or forged must
+refuse in `__post_init__`; assembler routing is not the only enforcement point.
 
 - [ ] **Step 2: Witness RED**
 
@@ -1631,9 +1698,12 @@ from scripts.cuda_bench_driver import (
 )
 ```
 
-Decode packets with `decode_persisted_packet`; decode receipt, containment,
-identity, static, quality, owner, and rollback wrappers with `PersistedDoc` and
-an exact type check. Convert the two parsed driver authorization objects to
+Decode packet, completion, containment, identity, static, quality, owner, and
+rollback wrappers with `PersistedDoc` and an exact type check. Command
+admission deliberately remains decoder-free as a standalone artifact; rebuild
+its frozen fields only through the bundle's admission-preimage type, whose
+file hash is recomputed from its canonical wrapper bytes. Convert the two
+parsed driver authorization objects to
 the existing `WindowAuthorizationDoc`/`ContinuationDoc`. Map all malformed
 bytes/path/type errors to `BenchRefusal("assembly_refused") from None`; do not
 catch `KeyboardInterrupt`, `SystemExit`, or `BaseException`.
@@ -1679,7 +1749,13 @@ scorer suite.
 
 Add a selected-current-identity RED: mutate the runtime-identity wrapper while
 leaving the bench wrapper untouched and prove bundle construction refuses.
-Every one of the sixteen selected paths must influence the result.
+Every one of the twenty-two selected paths must influence the result.
+Add direct-constructor REDs proving no caller can omit a completion, swap its
+admission/artifact preimage, or construct a bundle whose completion matrix
+does not match the decoded static/packet phase and window. The three completion
+document hashes enter `bench_binding_sha256`; authorizations and later
+boot/live evidence may change the full binding but must not change that bench
+anchor.
 
 - [ ] **Step 5: Witness P1 RED**
 
@@ -1719,9 +1795,14 @@ and packets; the canonical six-snapshot containment witness; the two
 `not_attempted` authorizations; bench/current identity both from the selected
 bench/current identity documents; typed quality/owner/window/continuation/
 consumption documents; the four base containment documents; each selected
-identity wrapper in its corresponding persisted-doc role; typed static preflight and
-rollback; both later maps `None`; and the caller-supplied timestamp. Do not
-recreate join logic; the existing constructor is the only join/P1 authority.
+identity wrapper in its corresponding persisted-doc role; typed static
+preflight and rollback; persisted control/candidate packet preimages; all
+three selected admission preimages and completion `PersistedDoc`s; both later
+maps `None`; and the caller-supplied timestamp. Do not recreate join logic;
+the existing constructor is the only join/P1 authority. Its validation joins
+each completion to its admission and underlying artifact file bytes, enforces
+the closed matrix, and includes the three completion file hashes in the
+stage-stable `bench_binding_sha256`.
 
 Pin the four identity assignments literally:
 
@@ -1754,7 +1835,7 @@ Commit:
 ```bash
 git add scripts/cuda_bench_assemble.py tests/test_cuda_bench_assemble.py
 git commit -m "feat(bench): construct owner-selected stage-one bundle" \
-  -m "The measurement-free assembler opens sixteen explicit private artifacts and delegates every evidence join and P1-prefix check to BenchEvidenceBundle." \
+  -m "The measurement-free assembler opens twenty-two explicit private artifacts and delegates every evidence join and P1-prefix check to BenchEvidenceBundle." \
   -m "## Predicted effect
 
 A complete coherent stage-1 document set constructs one P1 bundle; any missing, escaped, rehearsal, tampered, or later-stage input refuses before scorer entry."
@@ -1827,7 +1908,7 @@ bundle-free route.
 
 - [ ] **Step 4: Wire `assemble-stage1` into the CLI**
 
-The parser takes exactly the sixteen relative arguments. It constructs
+The parser takes exactly the twenty-two relative arguments. It constructs
 `Stage1ArtifactPaths`, calls the pure assembler, and uses the CLI's existing
 already-admitted `CommandAttempt` to persist exactly one `receipt` terminal
 through `publish_command_artifact`; it never allocates a second attempt.

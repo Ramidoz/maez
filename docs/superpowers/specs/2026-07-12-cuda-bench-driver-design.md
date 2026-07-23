@@ -485,6 +485,10 @@ from it.
 receipt with exactly command, positive ordinal, bounded window ID or null,
 `status="admitted"`, and timestamp; wrapper binding is null and the persisted
 file hash is its identity),
+`cuda_bench_driver.command_completion.v1` (durable terminal proof for exactly
+the closed static-preflight, Vulkan-baseline, and CUDA-candidate
+command/artifact/phase matrix; it binds the exact admission and underlying
+artifact file hashes),
 `cuda_bench_driver.window_authorization.v1`,
 `cuda_bench_driver.continuation.v1`,
 `cuda_bench_driver.consumption_receipt.v1`,
@@ -510,13 +514,15 @@ later-stage cold-boot witness), `cuda_migration.provisional_live_witness.v1`
 `cuda_migration.authorization_witness.v1` (persisted boot/live
 authorization witness), `cuda_migration.backend_map_witness.v1` (persisted
 cold-boot/provisional backend-map witness).
-(23 active executable families. The owner-ratified 2026-07-20 lean closure
+(24 active executable families. The owner-ratified 2026-07-20 lean closure
 adds the previously omitted live `cuda_migration_runtime.v1` receipt to the
 appendix and retires the never-implemented
 `cuda_bench_assemble.selection.v1`; no executable schema is removed. The
 2026-07-21 command-boundary amendment adds the honest admission receipt rather
-than misusing an unrelated schema, taking the count from 22 to 23. The earlier
-B5 amendment still replaces phase-packet v1 with v2.)
+than misusing an unrelated schema, taking the count from 22 to 23. The uniform
+completion amendment adds one honest family for all three evidence commands,
+taking the count from 23 to 24. The earlier B5 amendment still replaces
+phase-packet v1 with v2.)
 
 **Closed refusal/outcome vocabulary (40 entries; `tier_mismatch` added
 2026-07-13 — a mixed production/rehearsal provider set refuses before any

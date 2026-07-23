@@ -265,8 +265,9 @@ evidence.
 
 The owner first opens the named A/B window and manually stops the production
 brain and judge. The command then takes exact relative paths for the window
-authorization and static-preflight document, loads the canonical private
-corpus, constructs the frozen Vulkan `PhaseConfig`, and calls `run_phase`.
+authorization, static-preflight document, its command admission, and matching
+static command completion, loads the canonical private corpus, constructs the
+frozen Vulkan `PhaseConfig`, and calls `run_phase`.
 
 It refuses unless the brain, judge, and vision service/ports are already in the
 required inactive state. It never stops them. `run_phase` repeats all six gates
@@ -277,10 +278,12 @@ no-spawn snapshot succeed.
 ### `cuda-candidate`
 
 This command takes exact relative paths for the continuation authorization,
-its parent window authorization, the completed Vulkan packet, and the same
-static-preflight document. It verifies the continuation's owner, window, boot,
-expiry, and parent-packet binding before the nonce can burn, constructs the
-frozen CUDA `PhaseConfig`, and calls the same `run_phase`.
+its parent window authorization, the completed Vulkan packet, its command
+admission and matching completion, and the same static-preflight
+document/admission/completion. It verifies the continuation's owner, window,
+boot, expiry, parent-packet binding, and admission/completion/packet join before
+the nonce can burn, constructs the frozen CUDA `PhaseConfig`, and calls the
+same `run_phase`.
 
 It also requires production to be already inactive and never stops or starts
 anything. The Vulkan packet, CUDA packet, authorizations, receipts, boot ID,
@@ -297,6 +300,8 @@ or implicit attempt discovery.
 The selected evidence includes:
 
 - completed Vulkan and CUDA phase packets and their turn/cycle evidence;
+- the static, Vulkan, and CUDA command admissions and matching completion
+  documents;
 - both authorization preimages and consumption receipts;
 - the four A/B containment documents;
 - bench/current runtime-identity documents;
@@ -322,6 +327,17 @@ remain in the stage-1 shape required by the scorer.
 `BenchEvidenceBundle.__post_init__` remains the authority for a genuine P1
 prefix. A malformed pseudo-stage-1 bundle, non-`not_attempted` later
 authorization, non-null later evidence, or runtime-mode drift still refuses.
+It directly requires the persisted control/candidate packet bytes, all three
+admission preimages, and all three completion preimages; it recomputes every
+file hash and joins each completion to its admission plus decoded
+static/packet artifact under the closed command/schema/phase/window matrix.
+Calling the constructor directly cannot bypass completion validation. The
+three completion-document file hashes enter the stage-stable
+`bench_binding_sha256`: later authorizations and boot/live evidence may change
+the full binding, but never this completed-bench anchor. Command admission
+remains decoder-free as standalone evidence; the bundle's admission-preimage
+type can only reconstruct its frozen wrapper fields and file hash for these
+completion joins.
 The dormant P2--P5 scorer types and validation remain in
 `cuda_migration.py`; this closure adds no producer or CLI for them.
 
@@ -334,6 +350,23 @@ path performs two same-bundle evaluations by design; the assembler never
 imports or calls `_evaluate_promotion_gate`. Structural or missing evidence
 produces `assembly_refused`/unscorable output without scorer entry and without
 a verdict.
+
+`cuda_bench_driver.command_completion.v1` is active schema 24. Its exact fields
+are `command`, positive `ordinal`, bounded `window_id` or null,
+`admission_ref`, `admission_sha256`, `artifact_ref`, `artifact_sha256`,
+`artifact_schema`, `status="completed"`, and `timestamp`. Production completion
+is closed to:
+
+| command | artifact_schema | decoded phase | window |
+|---|---|---|---|
+| `static-preflight` | `cuda_bench_driver.static_preflight.v1` | null | null |
+| `vulkan-baseline` | `cuda_bench_driver.phase_packet.v2` | `vulkan_baseline` | equals packet |
+| `cuda-candidate` | `cuda_bench_driver.phase_packet.v2` | `cuda_candidate` | equals packet |
+
+`rehearse` remains incompatible rehearsal evidence and never produces this
+schema. `assemble-stage1` retains its scorer receipt and also never produces
+it. A completion joins its exact admission and decoded underlying artifact; it
+is not a free-form success receipt.
 
 ## Output and privacy
 
@@ -362,9 +395,12 @@ fsync successfully restores the private bench-root tree. If that cleanup
 cannot be completed or proven, the command reports
 `failed`/`cleanup_incomplete` with null artifact fields and makes no
 unchanged-tree claim. Once admission has linearized, every terminal line
-carries a non-null pair: normally the final command/phase artifact; if a later
-auxiliary or terminal publication fails, the already-durable admission receipt
-is the content-light fallback binding. The command never tries an alternate
+carries a non-null pair. Static/Vulkan/CUDA success binds the matching command
+completion, published only after the underlying artifact's file fsync,
+final-name link, parent fsync, anchored reopen, and hash validation. Rehearsal
+and assembly bind their existing terminal evidence. If later auxiliary or
+terminal publication fails, the already-durable admission receipt is the
+content-light fallback binding. The command never tries an alternate
 root. A concurrent owner rename/unlink of the private root after admission is
 an unsupported substrate violation; command-long namespace locking against the
 owner is outside this lean threat model. There is still no software-selected
@@ -383,6 +419,12 @@ from it. Command allocation and the existing phase-attempt allocator share one
 disk scan-max-plus-one primitive over their respective closed filename shapes;
 the command form starts at positive ordinal 1. An orphan's persisted ordinal is
 therefore never resumed or reused across process restarts.
+
+An uncatchable death after a static document or phase packet becomes durable
+but before its completion linearizes is an intentional safe false negative:
+the underlying artifact may remain, but the assembler and bundle constructor
+reject it as incomplete. No restart synthesizes completion and no terminal
+claims success.
 
 Admission and non-phase terminal receipts use root-level names
 `command-<command>-attempt-NNN-<role>.json`, where role is exactly `admission`
@@ -452,9 +494,10 @@ finalizer. The leader is signalled only through its retained pidfd. Numeric
 PID/PGID signalling is forbidden; process-group enumeration is observational
 evidence only. SIGINT and SIGTERM take the same bounded cleanup path.
 
-A phase publishes exactly one terminal artifact: completed packet, failed
-packet with only observed facts, or pre-spawn refusal. Cleanup cannot mint a
-contradictory second ending.
+A phase engine publishes exactly one packet ending: completed packet, failed
+packet with only observed facts, or pre-spawn refusal. Only a completed packet
+can then receive the command completion that the CLI terminal binds. Cleanup,
+refusal, and failed packets cannot mint a contradictory completion.
 
 For all three outcomes below, the five commands leave production service
 files, unit state, model pointers, and runtime assets byte-identical:
@@ -522,6 +565,9 @@ Implementation is TDD and must witness these failures before code:
 - root-A-to-root-B, deleted-admission, and replaced-admission refusals;
 - absolute single-GPU enumeration plus UUID-scoped metadata and bounded
   absolute nvcc/CMake argv; and
+- static completion only after the static artifact's full durability/reopen/
+  hash proof, with missing/wrong admission/artifact/matrix refusal and a
+  hard-death safe-false-negative witness; and
 - proof that compiler/CMake wording is observation-only, never build
   provenance.
 
@@ -543,6 +589,9 @@ Implementation is TDD and must witness these failures before code:
 - wrong window/boot/owner/parent/static identity refuses before consumption;
 - after-consumption crash/timeout/signal leaves the nonce burned and publishes
   exactly one failed artifact; and
+- completed Vulkan/CUDA packets alone are not completion; exact completion
+  follows full durability proof, CUDA requires its Vulkan parent's completion,
+  and refused/failed/hard-death paths mint none; and
 - pidfd-only cleanup leaves no bench listener or owned child.
 
 ### Stage-1 assembly
@@ -552,6 +601,9 @@ Implementation is TDD and must witness these failures before code:
 - rehearsal or failed phase packets;
 - multiple attempts never guessed;
 - any stage-2--5 member or malformed P1 prefix;
+- all six admission/completion preimages, their 22-path influence, closed
+  command/schema/phase/window joins, and direct-constructor anti-bypass;
+- completion hashes included in stage-stable `bench_binding_sha256`; and
 - assembly refusal proves the scorer was not called;
 - complete pass/fail bundles traverse `evaluate_promotion_bundle` exactly
   twice on the same object (initial verdict, then receipt revalidation) and
@@ -647,14 +699,18 @@ families: the old appendix omitted the live receipt schema
 `cuda_migration_runtime.v1` while listing the never-implemented
 `cuda_bench_assemble.selection.v1`. That exchange keeps the pre-amendment count
 at 22 and removes no executable schema. The first-durable-write correction
-adds `cuda_bench_driver.command_admission.v1`, so this lean package's final
-active count is 23.
+adds `cuda_bench_driver.command_admission.v1`, taking the active count to 23.
+The uniform durable-completion correction adds exactly one family,
+`cuda_bench_driver.command_completion.v1`, taking the final active count to
+24. It covers only the closed static/Vulkan/CUDA matrix; rehearsal and
+assembly do not mint it.
 
-The owner-ratified Task-4 amendment adds no schema: it freezes the reproducible
-incumbent manifest and three candidate identity pins, limits `preimages/`
-creation to admitted static preflight, binds immutable helpers to the exact
-root/namespace admission, and pins host-query argv. It expands no runtime
-authority.
+The earlier owner-ratified Task-4 identity amendment adds no schema: it freezes
+the reproducible incumbent manifest and three candidate identity pins, limits
+`preimages/` creation to admitted static preflight, binds immutable helpers to
+the exact root/namespace admission, and pins host-query argv. The later
+completion amendment uniformly closes the static and already-gated B7
+hard-death orphan gap without expanding runtime authority.
 
 ## Non-goals
 
