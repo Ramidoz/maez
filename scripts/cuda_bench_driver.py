@@ -24,6 +24,7 @@ import stat
 import statistics
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -742,16 +743,19 @@ def _systemctl_system_show_command(unit: str) -> list[str]:
     return [_SYSTEMCTL, "show", unit]
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class ProviderWitness:
     synthetic: bool
     real_calls: int
+    loopback_kernel_calls: int = 0
 
     def __post_init__(self) -> None:
         if (
             type(self.synthetic) is not bool
             or type(self.real_calls) is not int
             or self.real_calls < 0
+            or type(self.loopback_kernel_calls) is not int
+            or self.loopback_kernel_calls < 0
             or (self.synthetic and self.real_calls != 0)
         ):
             raise ValueError("provider_witness_invalid")
@@ -759,6 +763,81 @@ class ProviderWitness:
     def assert_no_real_calls(self) -> None:
         if not self.synthetic or self.real_calls != 0:
             raise AssertionError("synthetic_provider_contacted_real_surface")
+
+    def canonical_bytes(self) -> bytes:
+        return _canonical_json(
+            {
+                "synthetic": self.synthetic,
+                "real_calls": self.real_calls,
+                "loopback_kernel_calls": self.loopback_kernel_calls,
+            }
+        )
+
+    @property
+    def binding_sha256(self) -> str:
+        return hashlib.sha256(self.canonical_bytes()).hexdigest()
+
+    @classmethod
+    def from_canonical_bytes(
+        cls,
+        payload: bytes,
+        *,
+        expected_binding_sha256: str | None = None,
+    ) -> "ProviderWitness":
+        try:
+            if type(payload) is not bytes or not payload or len(payload) > 256:
+                raise ValueError
+            document = json.loads(
+                payload,
+                object_pairs_hook=_json_object_without_duplicates,
+                parse_constant=_reject_json_constant,
+            )
+            if type(document) is not dict or set(document) != {
+                "synthetic",
+                "real_calls",
+                "loopback_kernel_calls",
+            }:
+                raise ValueError
+            witness = cls(
+                synthetic=document["synthetic"],
+                real_calls=document["real_calls"],
+                loopback_kernel_calls=document["loopback_kernel_calls"],
+            )
+            if witness.canonical_bytes() != payload:
+                raise ValueError
+        except (KeyError, TypeError, UnicodeError, ValueError):
+            raise ValueError("provider_witness_serialization_invalid") from None
+        if expected_binding_sha256 is not None:
+            if (
+                type(expected_binding_sha256) is not str
+                or _SHA256_RE.fullmatch(expected_binding_sha256) is None
+                or witness.binding_sha256 != expected_binding_sha256
+            ):
+                raise ValueError("provider_witness_binding_mismatch")
+        return witness
+
+
+class _WitnessedProvider:
+    def _init_provider_witness(self, *, synthetic: bool) -> None:
+        if type(synthetic) is not bool:
+            raise ValueError("provider_witness_invalid")
+        self._witness_synthetic = synthetic
+        self._witness_real_calls = 0
+        self._witness_loopback_kernel_calls = 0
+
+    @property
+    def witness(self) -> ProviderWitness:
+        return ProviderWitness(
+            synthetic=self._witness_synthetic,
+            real_calls=self._witness_real_calls,
+            loopback_kernel_calls=self._witness_loopback_kernel_calls,
+        )
+
+    def _record_real_call(self) -> None:
+        self._witness_real_calls += 1
+
+    def _record_loopback_kernel_call(self) -> None:
+        self._witness_loopback_kernel_calls += 1
 
 
 class ServiceStateProvider(Protocol):
@@ -770,7 +849,12 @@ class ServiceStateProvider(Protocol):
 class PortProbe(Protocol):
     tier: str
 
-    def is_free(self, port: int) -> bool: ...
+    def is_free(
+        self,
+        port: int,
+        *,
+        lease: "RehearsalPortLease | None" = None,
+    ) -> bool: ...
 
 
 class GpuProvider(Protocol):
@@ -895,6 +979,91 @@ class SpawnPin:
             raise ValueError("spawn_pin_invalid")
 
 
+@dataclass(frozen=True, slots=True)
+class RehearsalPortLease:
+    generation: int
+    port: int
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.generation) is not int
+            or self.generation <= 0
+            or type(self.port) is not int
+            or not 0 < self.port <= 65_535
+            or self.port in {*PRODUCTION_PORTS, BENCH_PORT}
+        ):
+            raise ValueError("rehearsal_port_lease_invalid")
+
+
+class RehearsalPortRegistry:
+    """Hold one process-local reservation/lease with monotonic generations."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._generation = 0
+        self._reserved_generation: int | None = None
+        self._active: RehearsalPortLease | None = None
+
+    @property
+    def current(self) -> RehearsalPortLease | None:
+        with self._lock:
+            return self._active
+
+    def reserve_launch(self) -> int:
+        with self._lock:
+            if self._reserved_generation is not None or self._active is not None:
+                raise BenchRefusal("provider_uncertain")
+            self._generation += 1
+            self._reserved_generation = self._generation
+            return self._generation
+
+    def activate_from_launcher(
+        self, generation: int, port: int
+    ) -> RehearsalPortLease:
+        if type(generation) is not int or generation <= 0:
+            raise BenchRefusal("provider_uncertain")
+        try:
+            lease = RehearsalPortLease(generation, port)
+        except (TypeError, ValueError):
+            raise BenchRefusal("provider_uncertain") from None
+        with self._lock:
+            if (
+                self._reserved_generation != generation
+                or self._active is not None
+            ):
+                raise BenchRefusal("provider_uncertain")
+            self._reserved_generation = None
+            self._active = lease
+        return lease
+
+    def cancel_launch(self, generation: int) -> None:
+        if type(generation) is not int or generation <= 0:
+            raise BenchRefusal("provider_uncertain")
+        with self._lock:
+            if self._reserved_generation == generation:
+                self._reserved_generation = None
+                return
+            if self._active is not None and self._active.generation == generation:
+                self._active = None
+                return
+            raise BenchRefusal("provider_uncertain")
+
+    def snapshot_exact(self, lease: RehearsalPortLease) -> None:
+        if type(lease) is not RehearsalPortLease:
+            raise BenchRefusal("provider_uncertain")
+        with self._lock:
+            if self._active is not lease:
+                raise BenchRefusal("provider_uncertain")
+
+    def retire_exact(self, lease: RehearsalPortLease) -> None:
+        if type(lease) is not RehearsalPortLease:
+            raise BenchRefusal("provider_uncertain")
+        with self._lock:
+            if self._active is not lease:
+                raise BenchRefusal("provider_uncertain")
+            self._active = None
+
+
 @dataclass(frozen=True)
 class OwnedChild:
     pid: int
@@ -906,6 +1075,7 @@ class OwnedChild:
     exe_sha256: str
     port: int | None
     popen: subprocess.Popen[bytes]
+    rehearsal_port_lease: RehearsalPortLease | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -925,6 +1095,13 @@ class OwnedChild:
             or (
                 self.port is not None
                 and (type(self.port) is not int or not 0 < self.port <= 65_535)
+            )
+            or (
+                self.rehearsal_port_lease is not None
+                and (
+                    type(self.rehearsal_port_lease) is not RehearsalPortLease
+                    or self.port != self.rehearsal_port_lease.port
+                )
             )
             or not isinstance(self.popen, subprocess.Popen)
         ):
@@ -1348,7 +1525,7 @@ def _read_stub_announcement(popen: subprocess.Popen[bytes]) -> int:
         if match is None:
             raise BenchRefusal("spawn_failure")
         port = int(match.group(1))
-        if not 0 < port <= 65_535 or port == BENCH_PORT:
+        if not 0 < port <= 65_535 or port in {*PRODUCTION_PORTS, BENCH_PORT}:
             raise BenchRefusal("spawn_failure")
         return port
     except OSError:
@@ -1430,8 +1607,13 @@ def spawn_pinned(
     pin: SpawnPin,
     env: dict[str, str],
     admitted_port: int | None = None,
+    _post_identity: Callable[[int], RehearsalPortLease] | None = None,
 ) -> OwnedChild:
     _validate_spawn_inputs(argv, pin=pin, env=env)
+    if _post_identity is not None and (
+        pin.kind != "python_file" or not callable(_post_identity)
+    ):
+        raise BenchRefusal("spawn_failure")
     if (
         admitted_port is not None
         and (
@@ -1472,6 +1654,16 @@ def spawn_pinned(
         )
         if exe_sha256 != expected_exe_sha256:
             raise BenchRefusal("spawn_failure")
+        rehearsal_port_lease = None
+        if _post_identity is not None:
+            if port is None:
+                raise BenchRefusal("spawn_failure")
+            rehearsal_port_lease = _post_identity(port)
+            if (
+                type(rehearsal_port_lease) is not RehearsalPortLease
+                or rehearsal_port_lease.port != port
+            ):
+                raise BenchRefusal("spawn_failure")
         return OwnedChild(
             pid=popen.pid,
             pgid=pgid,
@@ -1482,6 +1674,7 @@ def spawn_pinned(
             exe_sha256=exe_sha256,
             port=port,
             popen=popen,
+            rehearsal_port_lease=rehearsal_port_lease,
         )
     except BaseException as exc:
         if target_release_attempted:
@@ -1536,6 +1729,7 @@ class RealServerLauncher:
 @dataclass(frozen=True, slots=True)
 class RehearsalServerLauncher:
     pin: SpawnPin
+    rehearsal_ports: RehearsalPortRegistry | None = None
     tier: str = field(default="rehearsal", init=False)
 
     def __post_init__(self) -> None:
@@ -1544,11 +1738,33 @@ class RehearsalServerLauncher:
             not isinstance(pin, SpawnPin)
             or pin.kind != "python_file"
             or pin.pinned_path != _REHEARSAL_STUB_PATH
+            or (
+                self.rehearsal_ports is not None
+                and type(self.rehearsal_ports) is not RehearsalPortRegistry
+            )
         ):
             raise ValueError("spawn_pin_invalid")
 
     def spawn(self, argv: list[str], env: dict[str, str]) -> OwnedChild:
-        return spawn_pinned(argv, pin=self.pin, env=env)
+        registry = self.rehearsal_ports
+        if registry is None:
+            return spawn_pinned(argv, pin=self.pin, env=env)
+        generation = registry.reserve_launch()
+        try:
+            return spawn_pinned(
+                argv,
+                pin=self.pin,
+                env=env,
+                _post_identity=lambda port: registry.activate_from_launcher(
+                    generation, port
+                ),
+            )
+        except BaseException:
+            try:
+                registry.cancel_launch(generation)
+            except BenchRefusal:
+                pass
+            raise
 
 
 def _pgid_members(pgid: int) -> list[int]:
@@ -1629,11 +1845,21 @@ def _wait_group_absent(pgid: int, timeout_s: float) -> tuple[int, ...]:
         time.sleep(0.01)
 
 
-def _wait_listener_free(port_probe: PortProbe, port: int) -> bool | None:
+def _wait_listener_free(
+    port_probe: PortProbe,
+    port: int,
+    *,
+    lease: RehearsalPortLease | None = None,
+) -> bool | None:
     deadline = time.monotonic() + LISTENER_WAIT_S
     while True:
         try:
-            if port_probe.is_free(port):
+            free = (
+                port_probe.is_free(port)
+                if lease is None
+                else port_probe.is_free(port, lease=lease)
+            )
+            if free:
                 return True
         except BenchRefusal:
             return None
@@ -1669,6 +1895,18 @@ def finalize(
     )
     listener_free: bool | None = None
     survivors: tuple[int, ...] = ()
+    lease = child.rehearsal_port_lease
+    effective_port = port
+    port_binding_valid = True
+    if lease is not None:
+        if child.port != lease.port:
+            port_binding_valid = False
+        elif port is None:
+            effective_port = lease.port
+        elif port != lease.port:
+            port_binding_valid = False
+    if not port_binding_valid:
+        outcome = "cleanup_incomplete"
 
     def finish() -> FinalizeResult:
         nonlocal outcome
@@ -1783,8 +2021,12 @@ def finalize(
     if survivors:
         outcome = "cleanup_incomplete"
         return finish()
-    if port is not None:
-        listener_free = _wait_listener_free(port_probe, port)
+    if port_binding_valid and effective_port is not None:
+        listener_free = _wait_listener_free(
+            port_probe,
+            effective_port,
+            lease=lease,
+        )
         if listener_free is not True:
             outcome = "cleanup_incomplete"
     return finish()
@@ -3632,15 +3874,15 @@ def _run_read_only(argv: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(argv, check=False, capture_output=True, text=True)
 
 
-class RealServiceStateProvider:
+class RealServiceStateProvider(_WitnessedProvider):
     tier = "production"
 
     def __init__(self, *, runner: _CommandRunner = _run_read_only) -> None:
         self._runner = runner
-        self.witness = ProviderWitness(synthetic=False, real_calls=0)
+        self._init_provider_witness(synthetic=False)
 
     def is_active(self, unit: str) -> str:
-        self.witness.real_calls += 1
+        self._record_real_call()
         try:
             result = self._runner(systemctl_command("is-active", unit))
         except Exception:
@@ -3657,16 +3899,25 @@ class RealServiceStateProvider:
         return state
 
 
-class RealPortProbe:
+class RealPortProbe(_WitnessedProvider):
     tier = "production"
 
     def __init__(self) -> None:
-        self.witness = ProviderWitness(synthetic=False, real_calls=0)
+        self._init_provider_witness(synthetic=False)
 
-    def is_free(self, port: int) -> bool:
-        if type(port) is not int or not 0 < port <= 65_535:
+    def is_free(
+        self,
+        port: int,
+        *,
+        lease: RehearsalPortLease | None = None,
+    ) -> bool:
+        if (
+            type(port) is not int
+            or not 0 < port <= 65_535
+            or lease is not None
+        ):
             raise BenchRefusal("provider_uncertain")
-        self.witness.real_calls += 1
+        self._record_real_call()
         try:
             probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         except OSError:
@@ -3829,15 +4080,15 @@ def _parse_memory_sections(text: str) -> dict[str, tuple[int, int]]:
     return parsed
 
 
-class RealGpuProvider:
+class RealGpuProvider(_WitnessedProvider):
     tier = "production"
 
     def __init__(self, *, runner: _CommandRunner = _run_read_only) -> None:
         self._runner = runner
-        self.witness = ProviderWitness(synthetic=False, real_calls=0)
+        self._init_provider_witness(synthetic=False)
 
     def _query(self, argv: list[str]) -> str:
-        self.witness.real_calls += 1
+        self._record_real_call()
         return _command_output(self._runner, argv)
 
     def enumerate_uuids(self) -> list[str]:
@@ -3884,15 +4135,15 @@ def _parse_cursor(text: str) -> str:
     return matches[0]
 
 
-class RealKernelLogProvider:
+class RealKernelLogProvider(_WitnessedProvider):
     tier = "production"
 
     def __init__(self, *, runner: _CommandRunner = _run_read_only) -> None:
         self._runner = runner
-        self.witness = ProviderWitness(synthetic=False, real_calls=0)
+        self._init_provider_witness(synthetic=False)
 
     def _query(self, argv: list[str]) -> str:
-        self.witness.real_calls += 1
+        self._record_real_call()
         return _command_output(self._runner, argv)
 
     def cursor(self) -> str:
@@ -3943,16 +4194,16 @@ class RealKernelLogProvider:
         return counts
 
 
-class RealBackendMapProvider:
+class RealBackendMapProvider(_WitnessedProvider):
     tier = "production"
 
     def __init__(self) -> None:
-        self.witness = ProviderWitness(synthetic=False, real_calls=0)
+        self._init_provider_witness(synthetic=False)
 
     def read_maps(self, pid: int) -> str:
         if type(pid) is not int or pid <= 0:
             raise BenchRefusal("provider_uncertain")
-        self.witness.real_calls += 1
+        self._record_real_call()
         try:
             return Path(f"/proc/{pid}/maps").read_text(encoding="utf-8")
         except (OSError, UnicodeError):
@@ -4053,7 +4304,7 @@ def _exact_env_assignment(data: bytes, *, nul_separated: bool) -> str:
     return matches[0]
 
 
-class RealContainmentProvider:
+class RealContainmentProvider(_WitnessedProvider):
     tier = "production"
 
     def __init__(
@@ -4070,10 +4321,10 @@ class RealContainmentProvider:
         self._command_reader = command_reader
         self._file_reader = file_reader
         self._environ_reader = environ_reader
-        self.witness = ProviderWitness(synthetic=False, real_calls=0)
+        self._init_provider_witness(synthetic=False)
 
     def _command(self, argv: list[str]) -> str:
-        self.witness.real_calls += 1
+        self._record_real_call()
         try:
             value = self._command_reader(argv)
         except BenchRefusal:
@@ -4085,7 +4336,7 @@ class RealContainmentProvider:
         return value
 
     def _file(self, path: Path) -> bytes:
-        self.witness.real_calls += 1
+        self._record_real_call()
         try:
             value = self._file_reader(path)
         except BenchRefusal:
@@ -4112,7 +4363,7 @@ class RealContainmentProvider:
             pid = maez["MainPID"]
             if type(pid) is not int or pid <= 0:
                 raise BenchRefusal("provider_uncertain")
-            self.witness.real_calls += 1
+            self._record_real_call()
             try:
                 environ = self._environ_reader(pid)
             except BenchRefusal:
@@ -4156,7 +4407,7 @@ class RealContainmentProvider:
         return snapshot
 
 
-class SyntheticContainmentProvider:
+class SyntheticContainmentProvider(_WitnessedProvider):
     tier = "rehearsal"
 
     def __init__(
@@ -4180,7 +4431,7 @@ class SyntheticContainmentProvider:
         self.vision_unit_sha256 = vision_unit_sha256
         self.fail_boundary = fail_boundary
         self.capture_count = 0
-        self.witness = ProviderWitness(synthetic=True, real_calls=0)
+        self._init_provider_witness(synthetic=True)
 
     def capture(self, phase: str, boundary: str) -> cm.ContainmentSnapshot:
         self.capture_count += 1
@@ -4210,12 +4461,12 @@ class SyntheticContainmentProvider:
         return snapshot
 
 
-class SyntheticServiceState:
+class SyntheticServiceState(_WitnessedProvider):
     tier = "rehearsal"
 
     def __init__(self, states: dict[str, str]) -> None:
         self._states = dict(states)
-        self.witness = ProviderWitness(synthetic=True, real_calls=0)
+        self._init_provider_witness(synthetic=True)
 
     def is_active(self, unit: str) -> str:
         if type(unit) is not str or not unit:
@@ -4229,32 +4480,88 @@ class SyntheticServiceState:
         return state
 
 
-class SyntheticPortProbe:
+class SyntheticPortProbe(_WitnessedProvider):
     tier = "rehearsal"
 
-    def __init__(self, free: set[int]) -> None:
+    def __init__(
+        self,
+        free: set[int],
+        *,
+        rehearsal_ports: RehearsalPortRegistry | None = None,
+    ) -> None:
         try:
             self._free = set(free)
         except (TypeError, ValueError):
             self._free = set()
             self._configuration_valid = False
         else:
+            fixed_ports = {*PRODUCTION_PORTS, BENCH_PORT}
             self._configuration_valid = type(free) is set and all(
                 type(port) is int and 0 < port <= 65_535 for port in self._free
-            )
-        self.witness = ProviderWitness(synthetic=True, real_calls=0)
+            ) and self._free <= fixed_ports
+        if (
+            rehearsal_ports is not None
+            and type(rehearsal_ports) is not RehearsalPortRegistry
+        ):
+            self._configuration_valid = False
+        self.rehearsal_ports = rehearsal_ports
+        self._init_provider_witness(synthetic=True)
 
-    def is_free(self, port: int) -> bool:
+    def is_free(
+        self,
+        port: int,
+        *,
+        lease: RehearsalPortLease | None = None,
+    ) -> bool:
         if (
             not self._configuration_valid
             or type(port) is not int
             or not 0 < port <= 65_535
         ):
             raise BenchRefusal("provider_uncertain")
-        return port in self._free
+        fixed_ports = {*PRODUCTION_PORTS, BENCH_PORT}
+        if port in fixed_ports:
+            if lease is not None:
+                raise BenchRefusal("provider_uncertain")
+            return port in self._free
+        registry = self.rehearsal_ports
+        if (
+            type(registry) is not RehearsalPortRegistry
+            or type(lease) is not RehearsalPortLease
+            or lease.port != port
+        ):
+            raise BenchRefusal("provider_uncertain")
+        registry.snapshot_exact(lease)
+        self._record_loopback_kernel_call()
+        try:
+            probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        except OSError:
+            raise BenchRefusal("provider_uncertain") from None
+        result: bool | None = None
+        failure = False
+        try:
+            try:
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                probe.bind(("127.0.0.1", port))
+                result = True
+            except OSError as exc:
+                if exc.errno == errno.EADDRINUSE:
+                    result = False
+                else:
+                    failure = True
+        finally:
+            try:
+                probe.close()
+            except OSError:
+                failure = True
+        if failure or result is None:
+            raise BenchRefusal("provider_uncertain")
+        if result:
+            registry.retire_exact(lease)
+        return result
 
 
-class SyntheticGpu:
+class SyntheticGpu(_WitnessedProvider):
     tier = "rehearsal"
 
     def __init__(
@@ -4274,7 +4581,7 @@ class SyntheticGpu:
         )
         self._inventory_index = 0
         self._memory_index = 0
-        self.witness = ProviderWitness(synthetic=True, real_calls=0)
+        self._init_provider_witness(synthetic=True)
 
     def enumerate_uuids(self) -> list[str]:
         if any(not _valid_gpu_uuid(uuid) for uuid in self._uuids):
@@ -4324,7 +4631,7 @@ class SyntheticGpu:
         return value
 
 
-class SyntheticKernelLog:
+class SyntheticKernelLog(_WitnessedProvider):
     tier = "rehearsal"
 
     def __init__(self, counts: dict[str, int]) -> None:
@@ -4334,7 +4641,7 @@ class SyntheticKernelLog:
             raise ValueError("synthetic_kernel_invalid")
         self._counts = dict(counts)
         self._cursor_sequence = itertools.count(1)
-        self.witness = ProviderWitness(synthetic=True, real_calls=0)
+        self._init_provider_witness(synthetic=True)
 
     def cursor(self) -> str:
         return f"synthetic-cursor-{next(self._cursor_sequence):06d}"
@@ -4354,10 +4661,15 @@ class SyntheticKernelLog:
         return dict(self._counts)
 
 
-class SyntheticBackendMap:
+class SyntheticBackendMap(_WitnessedProvider):
     tier = "rehearsal"
 
-    def __init__(self, maps_text_by_pid: dict[int, str]) -> None:
+    def __init__(
+        self,
+        maps_text_by_pid: dict[int, str],
+        *,
+        default_maps_text: str | None = None,
+    ) -> None:
         try:
             self._maps = dict(maps_text_by_pid)
         except (TypeError, ValueError):
@@ -4367,21 +4679,35 @@ class SyntheticBackendMap:
             self._configuration_valid = all(
                 type(pid) is int and pid > 0 for pid in self._maps
             )
-        self.witness = ProviderWitness(synthetic=True, real_calls=0)
+        self._default_maps_text = default_maps_text
+        if self._configuration_valid:
+            for evidence in (*self._maps.values(), default_maps_text):
+                if evidence is None:
+                    continue
+                if type(evidence) is not str:
+                    self._configuration_valid = False
+                    break
+                try:
+                    cm.parse_backend_maps(evidence)
+                except ValueError:
+                    self._configuration_valid = False
+                    break
+        self._init_provider_witness(synthetic=True)
 
     def read_maps(self, pid: int) -> str:
         if not self._configuration_valid or type(pid) is not int or pid <= 0:
             raise BenchRefusal("provider_uncertain")
-        try:
-            evidence = self._maps[pid]
-        except KeyError:
-            raise BenchRefusal("provider_uncertain") from None
+        evidence = self._maps.get(pid, self._default_maps_text)
         if type(evidence) is not str:
+            raise BenchRefusal("provider_uncertain") from None
+        try:
+            cm.parse_backend_maps(evidence)
+        except ValueError:
             raise BenchRefusal("provider_uncertain")
         return evidence
 
 
-class FrozenClock:
+class FrozenClock(_WitnessedProvider):
     tier = "rehearsal"
 
     def __init__(self, start_ts: str, *, monotonic_start: float = 0.0) -> None:
@@ -4404,7 +4730,7 @@ class FrozenClock:
         ):
             raise ValueError("frozen_clock_invalid")
         self._monotonic = monotonic_value
-        self.witness = ProviderWitness(synthetic=True, real_calls=0)
+        self._init_provider_witness(synthetic=True)
 
     def now_utc(self) -> str:
         return self._instant.astimezone(UTC).isoformat(timespec="microseconds").replace(
@@ -6137,6 +6463,14 @@ def _sealed_tier(
         raise BenchRefusal("tier_mismatch")
     if containment.clock is not clock or containment.port_probe is not port_probe:
         raise BenchRefusal("tier_mismatch")
+    if tier == "rehearsal":
+        launcher_registry = getattr(server_launcher, "rehearsal_ports", None)
+        probe_registry = getattr(port_probe, "rehearsal_ports", None)
+        if (
+            type(launcher_registry) is not RehearsalPortRegistry
+            or launcher_registry is not probe_registry
+        ):
+            raise BenchRefusal("tier_mismatch")
     required_methods = {
         "service_state": ("is_active",),
         "port_probe": ("is_free",),

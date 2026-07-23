@@ -1098,6 +1098,65 @@ def _assert_refusal(exc: pytest.ExceptionInfo[driver.BenchRefusal], code: str) -
     assert exc.value.code == code
 
 
+def _assert_no_provider_witness_counter_conflation(
+    source: str,
+    *,
+    label: str,
+) -> None:
+    field_names = {"real_calls", "loopback_kernel_calls"}
+    tree = ast.parse(source)
+    aliases: set[str] = set()
+    assignments: list[tuple[list[ast.expr], ast.expr, int]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            assignments.append((list(node.targets), node.value, node.lineno))
+        elif isinstance(node, ast.AnnAssign):
+            assignments.append(([node.target], node.value, node.lineno))
+
+    def simple_origin(value: ast.expr) -> bool:
+        return (
+            isinstance(value, ast.Attribute) and value.attr in field_names
+        ) or (isinstance(value, ast.Name) and value.id in aliases)
+
+    changed = True
+    while changed:
+        changed = False
+        for targets, value, _lineno in assignments:
+            if not simple_origin(value):
+                continue
+            for target in targets:
+                if isinstance(target, ast.Name) and target.id not in aliases:
+                    aliases.add(target.id)
+                    changed = True
+    if aliases:
+        raise AssertionError(f"counter alias in {label}: {sorted(aliases)!r}")
+
+    def referenced_counters(node: ast.AST) -> set[str]:
+        return {
+            child.attr
+            for child in ast.walk(node)
+            if isinstance(child, ast.Attribute) and child.attr in field_names
+        }
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.BinOp) and referenced_counters(node):
+            raise AssertionError(f"counter conflation in {label}:{node.lineno}")
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in {"sum", "min", "max"}
+            and referenced_counters(node)
+        ):
+            raise AssertionError(f"counter conflation in {label}:{node.lineno}")
+        if (
+            isinstance(node, ast.AugAssign)
+            and isinstance(node.target, ast.Attribute)
+            and node.target.attr in field_names
+            and referenced_counters(node.value)
+        ):
+            raise AssertionError(f"counter conflation in {label}:{node.lineno}")
+
+
 class _ExplodingMapping(Mapping[str, object]):
     def __getitem__(self, key: str) -> object:
         raise RuntimeError(f"unexpected lookup: {key}")
@@ -1120,7 +1179,14 @@ class _TieredFake:
     def is_active(self, _unit: str) -> str:
         raise AssertionError("factory invoked provider")
 
-    def is_free(self, _port: int) -> bool:
+    def is_free(
+        self,
+        _port: int,
+        *,
+        lease: driver.RehearsalPortLease | None = None,
+    ) -> bool:
+        if lease is not None:
+            raise driver.BenchRefusal("provider_uncertain")
         raise AssertionError("factory invoked provider")
 
     def enumerate_uuids(self) -> list[str]:
@@ -1251,8 +1317,11 @@ def _provider_components(tier: str) -> dict[str, object]:
             ),
         )
     else:
+        rehearsal_ports = driver.RehearsalPortRegistry()
         service_state = driver.SyntheticServiceState({})
-        port_probe = driver.SyntheticPortProbe(set())
+        port_probe = driver.SyntheticPortProbe(
+            set(), rehearsal_ports=rehearsal_ports
+        )
         gpu = driver.SyntheticGpu([], [], [])
         kernel = driver.SyntheticKernelLog(zero_counts)
         maps = driver.SyntheticBackendMap({})
@@ -1260,7 +1329,9 @@ def _provider_components(tier: str) -> dict[str, object]:
         journal_factory = driver.RehearsalJournalFactory()
         artifact_policy = driver.RehearsalArtifactPolicy()
         authorization_gate = driver.RehearsalAuthorizationGate(artifact_policy)
-        server_launcher = driver.RehearsalServerLauncher(_stub_pin())
+        server_launcher = driver.RehearsalServerLauncher(
+            _stub_pin(), rehearsal_ports=rehearsal_ports
+        )
         containment = driver.SyntheticContainmentProvider(
             clock=clock,
             port_probe=port_probe,
@@ -2828,7 +2899,11 @@ class TestProviderSeams:
         for value in providers.values():
             witness = getattr(value, "witness", None)
             if witness is not None:
-                assert witness == driver.ProviderWitness(synthetic=True, real_calls=0)
+                assert witness == driver.ProviderWitness(
+                    synthetic=True,
+                    real_calls=0,
+                    loopback_kernel_calls=0,
+                )
 
     @pytest.mark.parametrize(
         ("synthetic", "real_calls"),
@@ -2839,6 +2914,196 @@ class TestProviderSeams:
     ) -> None:
         with pytest.raises(ValueError, match="provider_witness_invalid"):
             driver.ProviderWitness(synthetic=synthetic, real_calls=real_calls)  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize("loopback_kernel_calls", [True, -1, 1.0])
+    def test_provider_witness_rejects_malformed_loopback_kernel_count(
+        self, loopback_kernel_calls: object
+    ) -> None:
+        with pytest.raises(ValueError, match="provider_witness_invalid"):
+            driver.ProviderWitness(
+                synthetic=True,
+                real_calls=0,
+                loopback_kernel_calls=loopback_kernel_calls,  # type: ignore[arg-type]
+            )
+
+    def test_provider_witness_assertion_distinguishes_contact_dimensions(
+        self,
+    ) -> None:
+        sanctioned = driver.ProviderWitness(
+            synthetic=True,
+            real_calls=0,
+            loopback_kernel_calls=3,
+        )
+        sanctioned.assert_no_real_calls()
+        with pytest.raises(
+            AssertionError,
+            match="synthetic_provider_contacted_real_surface",
+        ):
+            driver.ProviderWitness(
+                synthetic=False,
+                real_calls=0,
+                loopback_kernel_calls=3,
+            ).assert_no_real_calls()
+        with pytest.raises(ValueError, match="provider_witness_invalid"):
+            driver.ProviderWitness(
+                synthetic=True,
+                real_calls=1,
+                loopback_kernel_calls=0,
+            )
+
+    def test_provider_witness_snapshot_is_frozen_and_cannot_mint_invalid_state(
+        self,
+    ) -> None:
+        witness = driver.ProviderWitness(
+            synthetic=True,
+            real_calls=0,
+            loopback_kernel_calls=2,
+        )
+        before_bytes = witness.canonical_bytes()
+        before_hash = witness.binding_sha256
+        for field, value in (
+            ("real_calls", 1),
+            ("real_calls", -1),
+            ("loopback_kernel_calls", True),
+            ("loopback_kernel_calls", -1),
+        ):
+            with pytest.raises(FrozenInstanceError):
+                setattr(witness, field, value)
+        assert witness.canonical_bytes() == before_bytes
+        assert witness.binding_sha256 == before_hash
+
+    def test_provider_exposes_read_only_stable_witness_snapshots(
+        self,
+    ) -> None:
+        registry = driver.RehearsalPortRegistry()
+        probe = driver.SyntheticPortProbe(
+            {8080, 8081, 8082, 18080},
+            rehearsal_ports=registry,
+        )
+        port = _free_loopback_port()
+        lease = registry.activate_from_launcher(registry.reserve_launch(), port)
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("127.0.0.1", port))
+        listener.listen()
+        before = probe.witness
+        before_bytes = before.canonical_bytes()
+        before_hash = before.binding_sha256
+        try:
+            assert probe.is_free(port, lease=lease) is False
+        finally:
+            listener.close()
+        after = probe.witness
+
+        assert before is not after
+        assert before.canonical_bytes() == before_bytes
+        assert before.binding_sha256 == before_hash
+        assert before.loopback_kernel_calls == 0
+        assert after.loopback_kernel_calls == 1
+        assert before.real_calls == after.real_calls == 0
+        after.assert_no_real_calls()
+        with pytest.raises(AttributeError):
+            probe.witness = before  # type: ignore[misc]
+
+    def test_real_provider_advances_only_real_contact_dimension(self) -> None:
+        probe = driver.RealPortProbe()
+        before = probe.witness
+        port = _free_loopback_port()
+
+        assert probe.is_free(port) is True
+        after = probe.witness
+
+        assert before.real_calls == 0
+        assert after.real_calls == 1
+        assert before.loopback_kernel_calls == after.loopback_kernel_calls == 0
+        assert before.binding_sha256 != after.binding_sha256
+
+    def test_provider_witness_canonical_round_trip_binds_both_counters(
+        self,
+    ) -> None:
+        witness = driver.ProviderWitness(
+            synthetic=True,
+            real_calls=0,
+            loopback_kernel_calls=3,
+        )
+        expected = (
+            b'{"loopback_kernel_calls":3,"real_calls":0,"synthetic":true}\n'
+        )
+
+        assert witness.canonical_bytes() == expected
+        assert witness.binding_sha256 == hashlib.sha256(expected).hexdigest()
+        assert (
+            driver.ProviderWitness.from_canonical_bytes(
+                expected,
+                expected_binding_sha256=witness.binding_sha256,
+            )
+            == witness
+        )
+
+    def test_provider_witness_loopback_tamper_changes_binding_or_refuses(
+        self,
+    ) -> None:
+        witness = driver.ProviderWitness(
+            synthetic=True,
+            real_calls=0,
+            loopback_kernel_calls=3,
+        )
+        tampered = (
+            b'{"loopback_kernel_calls":4,"real_calls":0,"synthetic":true}\n'
+        )
+        changed = driver.ProviderWitness.from_canonical_bytes(tampered)
+        assert changed.binding_sha256 != witness.binding_sha256
+        with pytest.raises(ValueError, match="provider_witness_binding_mismatch"):
+            driver.ProviderWitness.from_canonical_bytes(
+                tampered,
+                expected_binding_sha256=witness.binding_sha256,
+            )
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            b'{"loopback_kernel_calls":3,"real_calls":0,"synthetic":true}',
+            b'{"real_calls":0,"loopback_kernel_calls":3,"synthetic":true}\n',
+            b'{"extra":0,"loopback_kernel_calls":3,"real_calls":0,"synthetic":true}\n',
+            b'{"loopback_kernel_calls":3,"loopback_kernel_calls":4,"real_calls":0,"synthetic":true}\n',
+        ],
+    )
+    def test_provider_witness_refuses_noncanonical_or_ambiguous_bytes(
+        self, payload: bytes
+    ) -> None:
+        with pytest.raises(ValueError, match="provider_witness_serialization_invalid"):
+            driver.ProviderWitness.from_canonical_bytes(payload)
+
+    def test_provider_witness_structural_guard_rejects_aliased_conflation(
+        self,
+    ) -> None:
+        violating_source = """
+def collapse(witness):
+    real = witness.real_calls
+    inherited = real
+    loopback = witness.loopback_kernel_calls
+    return inherited + loopback
+"""
+        with pytest.raises(AssertionError, match="counter alias|counter conflation"):
+            _assert_no_provider_witness_counter_conflation(
+                violating_source,
+                label="synthetic_alias_fixture",
+            )
+
+    def test_provider_witness_dimensions_are_never_summed_or_aliased(
+        self,
+    ) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        for path in (
+            repo_root / "scripts" / "cuda_bench_driver.py",
+            repo_root / "scripts" / "cuda_migration.py",
+        ):
+            _assert_no_provider_witness_counter_conflation(
+                path.read_text(encoding="utf-8"),
+                label=path.name,
+            )
+        assertion_source = inspect.getsource(driver.ProviderWitness.assert_no_real_calls)
+        assert "loopback_kernel_calls" not in assertion_source
 
     def test_missing_synthetic_service_state_is_provider_uncertain(self) -> None:
         service = driver.SyntheticServiceState({})
@@ -2951,6 +3216,477 @@ class TestProviderSeams:
         with pytest.raises(driver.BenchRefusal) as exc:
             provider.read_maps(pid)  # type: ignore[arg-type]
         _assert_refusal(exc, "provider_uncertain")
+
+    def test_dynamic_pid_uses_validated_default_backend_map(self) -> None:
+        maps_text = str(driver.cm.VULKAN_RELEASE_ROOT / "libggml-vulkan.so")
+        provider = driver.SyntheticBackendMap(
+            {}, default_maps_text=maps_text
+        )
+
+        assert provider.read_maps(123_456) == maps_text
+        with pytest.raises(driver.BenchRefusal) as invalid_pid:
+            provider.read_maps(True)  # type: ignore[arg-type]
+        _assert_refusal(invalid_pid, "provider_uncertain")
+
+    @pytest.mark.parametrize(
+        "maps_text",
+        ["no backend here", "libggml-vulkan.so libggml-cuda.so", b"bytes"],
+    )
+    def test_dynamic_pid_rejects_invalid_default_backend_map(
+        self, maps_text: object
+    ) -> None:
+        provider = driver.SyntheticBackendMap(
+            {}, default_maps_text=maps_text  # type: ignore[arg-type]
+        )
+        with pytest.raises(driver.BenchRefusal) as exc:
+            provider.read_maps(123_456)
+        _assert_refusal(exc, "provider_uncertain")
+
+    def test_ephemeral_port_lease_is_exact_and_fixed_ports_never_touch_socket(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        registry = driver.RehearsalPortRegistry()
+        probe = driver.SyntheticPortProbe(
+            {8080, 8081, 8082, 18080},
+            rehearsal_ports=registry,
+        )
+        socket_calls = 0
+
+        def forbidden_socket(*_args: object, **_kwargs: object) -> object:
+            nonlocal socket_calls
+            socket_calls += 1
+            raise AssertionError("fixed port attempted socket contact")
+
+        monkeypatch.setattr(driver.socket, "socket", forbidden_socket)
+        assert all(probe.is_free(port) is True for port in (8080, 8081, 8082, 18080))
+        assert socket_calls == 0
+
+        generation = registry.reserve_launch()
+        lease = registry.activate_from_launcher(generation, 32_123)
+        assert lease == driver.RehearsalPortLease(generation, 32_123)
+        assert registry.current == lease
+
+    def test_ephemeral_port_probe_retires_only_the_exact_current_lease(self) -> None:
+        registry = driver.RehearsalPortRegistry()
+        probe = driver.SyntheticPortProbe(
+            {8080, 8081, 8082, 18080},
+            rehearsal_ports=registry,
+        )
+        listener = socket.socket()
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        port = int(listener.getsockname()[1])
+        generation = registry.reserve_launch()
+        lease = registry.activate_from_launcher(generation, port)
+        try:
+            assert probe.is_free(port, lease=lease) is False
+            assert registry.current == lease
+        finally:
+            listener.close()
+
+        assert probe.is_free(port, lease=lease) is True
+        assert registry.current is None
+        assert probe.witness == driver.ProviderWitness(
+            synthetic=True,
+            real_calls=0,
+            loopback_kernel_calls=2,
+        )
+        probe.witness.assert_no_real_calls()
+
+    def test_ephemeral_port_finalizer_without_port_uses_exact_child_lease(
+        self,
+    ) -> None:
+        registry = driver.RehearsalPortRegistry()
+        probe = driver.SyntheticPortProbe(
+            {8080, 8081, 8082, 18080},
+            rehearsal_ports=registry,
+        )
+        port = _free_loopback_port()
+        lease = registry.activate_from_launcher(registry.reserve_launch(), port)
+        proc = subprocess.Popen(
+            [sys.executable, "-B", "-c", "pass"],
+            start_new_session=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        pidfd = os.pidfd_open(proc.pid)
+        pgid, start_time_ticks, exe_sha256 = _test_process_identity(proc.pid)
+        assert proc.wait(timeout=3) == 0
+        child = driver.OwnedChild(
+            pid=proc.pid,
+            pgid=pgid,
+            pidfd=pidfd,
+            start_time_ticks=start_time_ticks,
+            pinned_path=str(Path(sys.executable).resolve()),
+            pinned_sha256=exe_sha256,
+            exe_sha256=exe_sha256,
+            port=port,
+            popen=proc,
+            rehearsal_port_lease=lease,
+        )
+
+        result = driver.finalize(
+            child,
+            clock=driver.SystemClock(),
+            port_probe=probe,
+            port=None,
+        )
+
+        assert result.outcome == "clean"
+        assert result.listener_free is True
+        assert registry.current is None
+        assert probe.witness.loopback_kernel_calls == 1
+
+    def test_ephemeral_port_finalizer_mismatch_cannot_retire_current_lease(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        registry = driver.RehearsalPortRegistry()
+        probe = driver.SyntheticPortProbe(
+            {8080, 8081, 8082, 18080},
+            rehearsal_ports=registry,
+        )
+        port = _free_loopback_port()
+        lease = registry.activate_from_launcher(registry.reserve_launch(), port)
+        proc = subprocess.Popen(
+            [sys.executable, "-B", "-c", "pass"],
+            start_new_session=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        pidfd = os.pidfd_open(proc.pid)
+        pgid, start_time_ticks, exe_sha256 = _test_process_identity(proc.pid)
+        assert proc.wait(timeout=3) == 0
+        child = driver.OwnedChild(
+            pid=proc.pid,
+            pgid=pgid,
+            pidfd=pidfd,
+            start_time_ticks=start_time_ticks,
+            pinned_path=str(Path(sys.executable).resolve()),
+            pinned_sha256=exe_sha256,
+            exe_sha256=exe_sha256,
+            port=port,
+            popen=proc,
+            rehearsal_port_lease=lease,
+        )
+        monkeypatch.setattr(
+            driver.socket,
+            "socket",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("mismatched finalizer attempted socket contact")
+            ),
+        )
+
+        result = driver.finalize(
+            child,
+            clock=driver.SystemClock(),
+            port_probe=probe,
+            port=port + 1,
+        )
+
+        assert result.outcome == "cleanup_incomplete"
+        assert result.listener_free is None
+        assert registry.current == lease
+        assert probe.witness.loopback_kernel_calls == 0
+
+    def test_ephemeral_port_same_number_stale_lease_refuses_before_socket(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        registry = driver.RehearsalPortRegistry()
+        probe = driver.SyntheticPortProbe(
+            {8080, 8081, 8082, 18080},
+            rehearsal_ports=registry,
+        )
+        port = _free_loopback_port()
+        first = registry.activate_from_launcher(registry.reserve_launch(), port)
+        assert probe.is_free(port, lease=first) is True
+        second = registry.activate_from_launcher(registry.reserve_launch(), port)
+        assert second.generation > first.generation
+
+        def forbidden_socket(*_args: object, **_kwargs: object) -> object:
+            raise AssertionError("stale lease attempted socket contact")
+
+        monkeypatch.setattr(driver.socket, "socket", forbidden_socket)
+        with pytest.raises(driver.BenchRefusal) as stale:
+            probe.is_free(port, lease=first)
+        _assert_refusal(stale, "provider_uncertain")
+        assert registry.current == second
+
+    def test_ephemeral_port_value_equal_clone_is_not_the_exact_lease(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        registry = driver.RehearsalPortRegistry()
+        probe = driver.SyntheticPortProbe(
+            {8080, 8081, 8082, 18080},
+            rehearsal_ports=registry,
+        )
+        port = _free_loopback_port()
+        current = registry.activate_from_launcher(registry.reserve_launch(), port)
+        clone = driver.RehearsalPortLease(current.generation, current.port)
+        assert clone == current
+        assert clone is not current
+        monkeypatch.setattr(
+            driver.socket,
+            "socket",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("cloned lease attempted socket contact")
+            ),
+        )
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            probe.is_free(port, lease=clone)
+
+        _assert_refusal(exc, "provider_uncertain")
+        assert registry.current is current
+
+    def test_ephemeral_port_cross_registry_equal_lease_cannot_retire_current(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        first_registry = driver.RehearsalPortRegistry()
+        second_registry = driver.RehearsalPortRegistry()
+        port = _free_loopback_port()
+        stale = first_registry.activate_from_launcher(
+            first_registry.reserve_launch(), port
+        )
+        current = second_registry.activate_from_launcher(
+            second_registry.reserve_launch(), port
+        )
+        assert stale == current
+        assert stale is not current
+        probe = driver.SyntheticPortProbe(
+            {8080, 8081, 8082, 18080},
+            rehearsal_ports=second_registry,
+        )
+        monkeypatch.setattr(
+            driver.socket,
+            "socket",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("cross-registry lease attempted socket contact")
+            ),
+        )
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            probe.is_free(port, lease=stale)
+
+        _assert_refusal(exc, "provider_uncertain")
+        assert second_registry.current is current
+
+    def test_ephemeral_port_unregistered_dynamic_refuses_before_socket(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        probe = driver.SyntheticPortProbe(
+            {8080, 8081, 8082, 18080},
+            rehearsal_ports=driver.RehearsalPortRegistry(),
+        )
+        monkeypatch.setattr(
+            driver.socket,
+            "socket",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("unregistered port attempted socket contact")
+            ),
+        )
+        with pytest.raises(driver.BenchRefusal) as exc:
+            probe.is_free(32_123)
+        _assert_refusal(exc, "provider_uncertain")
+
+    def test_stock_rehearsal_real_port_probe_rejects_lease(self) -> None:
+        lease = driver.RehearsalPortLease(1, 32_123)
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.RealPortProbe().is_free(32_123, lease=lease)
+        _assert_refusal(exc, "provider_uncertain")
+
+    @pytest.mark.parametrize("free", [{8080, 8081, 8082, 18080, 32_123}])
+    def test_ephemeral_port_fixed_configuration_is_exact(
+        self, free: set[int], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        registry = driver.RehearsalPortRegistry()
+        probe = driver.SyntheticPortProbe(free, rehearsal_ports=registry)
+        monkeypatch.setattr(
+            driver.socket,
+            "socket",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("invalid configuration attempted socket contact")
+            ),
+        )
+        with pytest.raises(driver.BenchRefusal) as exc:
+            probe.is_free(8080)
+        _assert_refusal(exc, "provider_uncertain")
+
+    def test_ephemeral_port_contested_reservation_refuses_before_spawn(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        registry = driver.RehearsalPortRegistry()
+        launcher = driver.RehearsalServerLauncher(
+            _stub_pin(), rehearsal_ports=registry
+        )
+        registry.reserve_launch()
+        spawned = False
+
+        def forbidden_spawn(*_args: object, **_kwargs: object) -> object:
+            nonlocal spawned
+            spawned = True
+            raise AssertionError("contested reservation reached spawn")
+
+        monkeypatch.setattr(driver, "spawn_pinned", forbidden_spawn)
+        with pytest.raises(driver.BenchRefusal) as exc:
+            launcher.spawn(_stub_argv(), _stub_env())
+        _assert_refusal(exc, "provider_uncertain")
+        assert spawned is False
+
+    def test_ephemeral_port_launcher_and_probe_registry_identity_is_sealed(
+        self,
+    ) -> None:
+        components = _provider_components("rehearsal")
+        components["server_launcher"] = driver.RehearsalServerLauncher(
+            _stub_pin(), rehearsal_ports=driver.RehearsalPortRegistry()
+        )
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.rehearsal_tier(**components)
+        _assert_refusal(exc, "tier_mismatch")
+
+    def test_stock_rehearsal_production_callback_refuses_before_snapshot(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            driver,
+            "_sealed_executable_snapshot",
+            lambda _pin: (_ for _ in ()).throw(
+                AssertionError("production callback reached snapshot")
+            ),
+        )
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.spawn_pinned(
+                [str(Path(sys.executable).resolve())],
+                pin=_binary_pin(Path(sys.executable).resolve()),
+                env=_stub_env(),
+                _post_identity=lambda _port: None,
+            )
+        _assert_refusal(exc, "spawn_failure")
+
+    @pytest.mark.parametrize("forbidden_port", [8080, 8081, 8082, 18080])
+    def test_stock_rehearsal_fixed_port_announcement_refuses_before_real_probe(
+        self, forbidden_port: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        read_fd, write_fd = os.pipe()
+        os.write(
+            write_fd,
+            f"STUB_LISTENING port={forbidden_port}\n".encode("ascii"),
+        )
+        os.close(write_fd)
+        stdout = os.fdopen(read_fd, "rb", buffering=0)
+
+        class AnnouncingProcess:
+            def __init__(self) -> None:
+                self.stdout = stdout
+
+            @staticmethod
+            def poll() -> None:
+                return None
+
+        contacted = False
+
+        def forbidden_probe(
+            _probe: object,
+            _port: int,
+            *,
+            lease: object = None,
+        ) -> bool:
+            del lease
+            nonlocal contacted
+            contacted = True
+            raise AssertionError("fixed announcement reached real port probe")
+
+        monkeypatch.setattr(driver.RealPortProbe, "is_free", forbidden_probe)
+        try:
+            with pytest.raises(driver.BenchRefusal) as exc:
+                driver._read_stub_announcement(AnnouncingProcess())  # type: ignore[arg-type]
+            _assert_refusal(exc, "spawn_failure")
+            assert contacted is False
+        finally:
+            stdout.close()
+
+    def test_ephemeral_port_activation_failure_aborts_child_and_cancels_reservation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        registry = driver.RehearsalPortRegistry()
+        launcher = driver.RehearsalServerLauncher(
+            _stub_pin(), rehearsal_ports=registry
+        )
+        observed_ports: list[int] = []
+
+        def fail_activation(
+            _registry: object, _generation: int, port: int
+        ) -> object:
+            observed_ports.append(port)
+            raise driver.BenchRefusal("provider_uncertain")
+
+        monkeypatch.setattr(
+            driver.RehearsalPortRegistry,
+            "activate_from_launcher",
+            fail_activation,
+        )
+        with pytest.raises(driver.BenchRefusal) as exc:
+            launcher.spawn(_stub_argv(), _stub_env())
+        _assert_refusal(exc, "provider_uncertain")
+        assert registry.current is None
+        assert len(observed_ports) == 1
+        assert _wait_for(
+            lambda: driver.RealPortProbe().is_free(observed_ports[0]),
+            timeout=3.0,
+        )
+
+    def test_ephemeral_port_stale_lease_finalizer_cannot_retire_reused_port(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        registry = driver.RehearsalPortRegistry()
+        probe = driver.SyntheticPortProbe(
+            {8080, 8081, 8082, 18080},
+            rehearsal_ports=registry,
+        )
+        port = _free_loopback_port()
+        stale = registry.activate_from_launcher(registry.reserve_launch(), port)
+        assert probe.is_free(port, lease=stale) is True
+        current = registry.activate_from_launcher(registry.reserve_launch(), port)
+
+        proc = subprocess.Popen(
+            [sys.executable, "-B", "-c", "pass"],
+            start_new_session=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        pidfd = os.pidfd_open(proc.pid)
+        pgid, start_time_ticks, exe_sha256 = _test_process_identity(proc.pid)
+        assert proc.wait(timeout=3) == 0
+        child = driver.OwnedChild(
+            pid=proc.pid,
+            pgid=pgid,
+            pidfd=pidfd,
+            start_time_ticks=start_time_ticks,
+            pinned_path=str(Path(sys.executable).resolve()),
+            pinned_sha256=exe_sha256,
+            exe_sha256=exe_sha256,
+            port=port,
+            popen=proc,
+            rehearsal_port_lease=stale,
+        )
+        monkeypatch.setattr(
+            driver.socket,
+            "socket",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("stale finalizer attempted socket contact")
+            ),
+        )
+
+        result = driver.finalize(
+            child,
+            clock=driver.SystemClock(),
+            port_probe=probe,
+            port=port,
+        )
+
+        assert result.outcome == "cleanup_incomplete"
+        assert result.listener_free is None
+        assert registry.current == current
 
     def test_synthetic_kernel_requires_the_exact_counter_shape(self) -> None:
         with pytest.raises(ValueError, match="synthetic_kernel_invalid"):
@@ -10303,7 +11039,14 @@ class _SafeProductionPortProbe:
         self.free = free
         self.calls: list[int] = []
 
-    def is_free(self, port: int) -> bool:
+    def is_free(
+        self,
+        port: int,
+        *,
+        lease: driver.RehearsalPortLease | None = None,
+    ) -> bool:
+        if lease is not None:
+            raise driver.BenchRefusal("provider_uncertain")
         self.calls.append(port)
         return self.free
 
@@ -10501,6 +11244,7 @@ class _B7Harness:
     config: object
     providers: object
     port_probe: object
+    rehearsal_ports: object
     gpu: object
     containment: object
     authorization_gate: object
@@ -10589,17 +11333,11 @@ def _b7_harness(
         "llama-vision.service": "inactive",
     }
     service_state = driver.SyntheticServiceState(services)
+    rehearsal_ports = driver.RehearsalPortRegistry()
     port_probe = driver.SyntheticPortProbe(
-        {driver.BENCH_PORT, *driver.PRODUCTION_PORTS}
+        {driver.BENCH_PORT, *driver.PRODUCTION_PORTS},
+        rehearsal_ports=rehearsal_ports,
     )
-    synthetic_is_free = port_probe.is_free
-
-    def scoped_port_free(port: int) -> bool:
-        if port in {driver.BENCH_PORT, *driver.PRODUCTION_PORTS}:
-            return synthetic_is_free(port)
-        return driver.RealPortProbe().is_free(port)
-
-    port_probe.is_free = scoped_port_free
     inventories = [[] for _index in range(16)]
     if topology_drift:
         inventories[5] = [(999_999, "other-gpu-process")]
@@ -10623,9 +11361,11 @@ def _b7_harness(
         memories,
     )
     kernel = driver.SyntheticKernelLog(dict.fromkeys(driver.KERNEL_COUNTER_KEYS, 0))
-    maps = driver.SyntheticBackendMap({})
-    maps.read_maps = lambda _pid: str(
-        driver.cm.VULKAN_RELEASE_ROOT / "libggml-vulkan.so"
+    maps = driver.SyntheticBackendMap(
+        {},
+        default_maps_text=str(
+            driver.cm.VULKAN_RELEASE_ROOT / "libggml-vulkan.so"
+        ),
     )
     policy = driver.RehearsalArtifactPolicy()
     authorization_gate = driver.RehearsalAuthorizationGate(policy)
@@ -10636,7 +11376,9 @@ def _b7_harness(
         vision_unit_sha256="b" * 64,
         fail_boundary=fail_containment,
     )
-    launcher = driver.RehearsalServerLauncher(_stub_pin())
+    launcher = driver.RehearsalServerLauncher(
+        _stub_pin(), rehearsal_ports=rehearsal_ports
+    )
     client = driver.LoopbackServerClient.rehearsal(
         clock,
         request_timeout_ms=request_timeout_ms,
@@ -10678,6 +11420,7 @@ def _b7_harness(
         config=config,
         providers=providers,
         port_probe=port_probe,
+        rehearsal_ports=rehearsal_ports,
         gpu=gpu,
         containment=containment,
         authorization_gate=authorization_gate,
@@ -10805,10 +11548,23 @@ class TestB7PhaseStateMachine:
         assert not (private_root / "markers").exists()
         assert list(attempt_root.iterdir()) == []
 
-    def test_healthy_rehearsal_runs_three_cycles_and_writes_incompatible_evidence(
-        self, private_root: Path
+    def test_stock_rehearsal_runs_three_cycles_and_writes_incompatible_evidence(
+        self, private_root: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         harness = _b7_harness(private_root)
+        observed_leases: list[object] = []
+        tracked_spawn = driver.RehearsalServerLauncher.spawn
+
+        def observe_lease(
+            launcher: driver.RehearsalServerLauncher,
+            argv: list[str],
+            env: dict[str, str],
+        ) -> driver.OwnedChild:
+            child = tracked_spawn(launcher, argv, env)
+            observed_leases.append(child.rehearsal_port_lease)
+            return child
+
+        monkeypatch.setattr(driver.RehearsalServerLauncher, "spawn", observe_lease)
         path = driver.run_phase(harness.config, harness.providers, root=private_root)
         wrapper = _b7_wrapper(path)
         payload = wrapper["payload"]
@@ -10830,6 +11586,19 @@ class TestB7PhaseStateMachine:
         ) == 1
         assert fields["pinned_path"] == str(STUB_PATH)
         assert fields["pinned_sha256"] == STUB_SHA256
+        assert [lease.generation for lease in observed_leases] == [1, 2, 3]
+        assert all(type(lease) is driver.RehearsalPortLease for lease in observed_leases)
+        assert harness.rehearsal_ports.current is None
+        assert all(driver.RealPortProbe().is_free(lease.port) for lease in observed_leases)
+        assert harness.port_probe.witness == driver.ProviderWitness(
+            synthetic=True,
+            real_calls=0,
+            loopback_kernel_calls=3,
+        )
+        harness.port_probe.witness.assert_no_real_calls()
+        harness_source = inspect.getsource(_b7_harness)
+        assert ".is_free =" not in harness_source
+        assert ".read_maps =" not in harness_source
         assert "/proc/self/fd/" not in path.read_text()
         assert path.is_relative_to(
             private_root / "rehearsal" / "windows" / "window-b7" / "vulkan_baseline"
