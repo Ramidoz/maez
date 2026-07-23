@@ -1,7 +1,8 @@
 # CUDA A/B bench — lean closure design
 
 Status: owner-ratified and written-spec-gated design; pre-plan amendments
-ratified 2026-07-21. This document supersedes the unimplemented B8--B10
+ratified 2026-07-21 and Task-4 identity amendment ratified 2026-07-23. This
+document supersedes the unimplemented B8--B10
 closure in `docs/superpowers/plans/2026-07-13-cuda-bench-driver.md` and the
 multi-stage assembler surface in
 `docs/superpowers/specs/2026-07-12-cuda-bench-driver-design.md`.
@@ -138,8 +139,10 @@ version is accepted only when it matches the bounded pattern
 valid; substituting a fictional 3.x value is forbidden.
 
 Zero GPUs or more than one GPU is `gpu_scope_violation`. A reordered or
-substituted UUID cannot enter a phase packet. Every later `nvidia-smi` query is
-scoped with `-i <bound-uuid>`.
+substituted UUID cannot enter a phase packet. UUID enumeration is one absolute
+`/usr/bin/nvidia-smi` invocation; every later metadata query uses that binary
+with `-i <bound-uuid>`. nvcc and CMake likewise use only their bounded absolute
+canonical binaries, never PATH lookup.
 
 The driver-package hash is deliberately re-frozen over the ordered file hashes
 of:
@@ -168,6 +171,20 @@ The sole allowed top-level file without a row is
 final hash. Every other unlisted top-level runtime asset refuses. A valid
 candidate includes `libggml-cuda.so` and no Vulkan backend.
 
+Internal consistency is not identity. The candidate must also match the frozen
+server, `libggml-cuda.so`, and runtime-manifest hashes, respectively:
+`33abb514fdbf2d590447fb08d608b7cb8c89cfa6b7b639226ada5a178728360f`,
+`e46a6888eb1dd78e07a6c80522f13f17e3c3b60c6ab6fdb56718456ca91861a7`,
+and `8989bfb2d7bda18c8493973a6356e3d2912eb8bc85ce64d8130859134a7310bd`.
+A self-consistent substitute refuses rather than inheriting b9596 identity.
+
+The incumbent Vulkan manifest's committed 39-row preimage encodes regular rows
+as `{path,type:"file",sha256,bytes}` and symlink rows as
+`{path,type:"symlink",target}`, orders them by relative filename bytes, and
+serializes with sorted keys, compact separators, UTF-8 `ensure_ascii=False`,
+`allow_nan=False`, and no newline. Its fixture must recompute
+`c04ba04862db3b558deecbcc2b8f923a1dc7bce830b74592dd9157b784c86dd2`.
+
 The rollback-manifest identity has a durable, reproducible preimage rather
 than a hash-only promise. The canonical value is this ordered eight-element
 JSON array of `[name,value]` pairs:
@@ -187,9 +204,14 @@ below the private bench root through a dedicated immutable durability
 primitive. Only a true link-time `EEXIST` selects verification; matching
 existing bytes are accepted only after file and parent fsync plus identity
 revalidation. A post-link or fsync failure is never laundered as idempotent
-success. Phase commands re-open and verify that exact preimage read-only; they
-cannot create or repair it. This raw reproducibility asset is not a new
-evidence schema. The
+success. Only an admitted static-preflight may create missing `preimages/` via
+anchored `mkdirat` at 0700, bench-root fsync, and reopen/identity validation;
+an exact existing directory is accepted, while symlink, wrong mode/owner, or
+mkdir/fsync/identity failure refuses. Phase commands verify only: absence
+refuses and they never create or repair. Both immutable helpers reopen the
+admission receipt under the exact supplied root and command namespace; root
+substitution or a deleted/replaced receipt refuses. This raw reproducibility
+asset is not a new evidence schema. The
 separate command-admission receipt defined below is one new executable family,
 so the active schema count becomes 23.
 
@@ -490,8 +512,16 @@ Implementation is TDD and must witness these failures before code:
 - candidate-manifest regular-file library selection, with symlink, byte-count,
   hash, ordering, duplicate, escape, unlisted-asset, and backend drift
   refusals;
+- exact three-plane candidate pins, including a self-consistent substitute
+  that must refuse;
+- the exact 39-row Vulkan fixture, row shapes, byte ordering, serialization,
+  and frozen-hash recomputation;
 - exact rollback-preimage recomputation from all eight named inputs, durable
   private-copy verification, and refusal after any input/preimage drift; and
+- static-only `preimages/` creation and phase absent-directory no-create REDs;
+- root-A-to-root-B, deleted-admission, and replaced-admission refusals;
+- absolute single-GPU enumeration plus UUID-scoped metadata and bounded
+  absolute nvcc/CMake argv; and
 - proof that compiler/CMake wording is observation-only, never build
   provenance.
 
@@ -619,6 +649,12 @@ families: the old appendix omitted the live receipt schema
 at 22 and removes no executable schema. The first-durable-write correction
 adds `cuda_bench_driver.command_admission.v1`, so this lean package's final
 active count is 23.
+
+The owner-ratified Task-4 amendment adds no schema: it freezes the reproducible
+incumbent manifest and three candidate identity pins, limits `preimages/`
+creation to admitted static preflight, binds immutable helpers to the exact
+root/namespace admission, and pins host-query argv. It expands no runtime
+authority.
 
 ## Non-goals
 

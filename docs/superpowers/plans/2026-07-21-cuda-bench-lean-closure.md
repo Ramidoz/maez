@@ -104,6 +104,41 @@ bytes. Committed code/docs are the durable source; static preflight also
 creates or verifies an identical raw copy at
 `preimages/rollback-manifest-<sha>.json` beneath the private root.
 
+The frozen 39-row Vulkan library-manifest preimage has one exact recipe.
+Represent a regular entry as
+`{"path":relative_name,"type":"file","sha256":lowercase_sha256,"bytes":size}`
+and a symlink entry as
+`{"path":relative_name,"type":"symlink","target":literal_readlink_payload}`.
+Sort rows by the relative filename's encoded bytes, then serialize the array
+with `sort_keys=True`, `ensure_ascii=False`, compact separators `(',', ':')`,
+`allow_nan=False`, UTF-8, and no trailing newline. A committed literal 39-row
+fixture in `tests/test_cuda_migration.py` must independently recompute
+`FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256`:
+
+```python
+FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256 = (
+    "c04ba04862db3b558deecbcc2b8f923a1dc7bce830b74592dd9157b784c86dd2"
+)
+```
+
+The reviewed CUDA candidate is pinned at all three identity planes:
+
+```python
+FROZEN_CUDA_SERVER_SHA256 = (
+    "33abb514fdbf2d590447fb08d608b7cb8c89cfa6b7b639226ada5a178728360f"
+)
+FROZEN_CUDA_BACKEND_SHA256 = (
+    "e46a6888eb1dd78e07a6c80522f13f17e3c3b60c6ab6fdb56718456ca91861a7"
+)
+FROZEN_CUDA_RUNTIME_MANIFEST_SHA256 = (
+    "8989bfb2d7bda18c8493973a6356e3d2912eb8bc85ce64d8130859134a7310bd"
+)
+```
+
+All three are required. A different candidate that is internally
+self-consistent but differs at any pinned plane refuses; it cannot inherit the
+frozen b9596 identity.
+
 The truthful CMake validator is exactly:
 
 ```python
@@ -775,8 +810,10 @@ Malformed or pre-root invocations write nothing and emit null artifact fields; a
 ### Task 4: Implement the single read-only static collector and `static-preflight`
 
 **Files:**
+- Modify: `scripts/cuda_migration.py` (frozen manifest recipe and candidate pins)
 - Modify: `scripts/cuda_bench_driver.py` (immutable preimage I/O only)
 - Modify: `scripts/cuda_bench_cli.py`
+- Modify: `tests/test_cuda_migration.py` (literal manifest fixture and pin REDs)
 - Modify: `tests/test_cuda_bench_driver.py` (immutable preimage REDs only)
 - Modify: `tests/test_cuda_bench_cli.py`
 
@@ -856,17 +893,35 @@ RED families:
   every other unlisted top-level asset refuses;
 - `library_hashes` contains only verified F `lib*.so*`, includes
   `libggml-cuda.so`, and excludes all L rows; any Vulkan backend refuses;
+- the candidate server, verified regular `libggml-cuda.so`, and complete
+  runtime-manifest hashes equal the three frozen CUDA pins; a different
+  self-consistent runtime whose rows and self-manifest all verify still
+  refuses and cannot inherit the frozen identity;
 - exact one-GPU output is accepted; zero/two rows is `gpu_scope_violation`;
-  every metadata query includes `-i <uuid>`;
-- `nvcc` parses only `release 13.2, V13.2.<1-3 digits>`; CMake parses the
+  UUID enumeration is one absolute `/usr/bin/nvidia-smi` invocation, and every
+  subsequent metadata query uses the absolute binary and includes
+  `-i <uuid>`;
+- only the absolute pinned nvcc and CMake binaries may be invoked; `nvcc`
+  parses only `release 13.2, V13.2.<1-3 digits>`, while CMake parses the
   literal first line `cmake version 4.2.3` and never substitutes 3.x;
-- exact 39-entry Vulkan manifest reproduces the frozen hash;
+- the committed exact 39-entry Vulkan fixture uses regular
+  `{path,type:"file",sha256,bytes}` and symlink
+  `{path,type:"symlink",target}` rows, relative-filename byte ordering, and
+  compact sorted-key UTF-8 JSON with `ensure_ascii=False`,
+  `allow_nan=False`, and no newline; it reproduces
+  `c04ba04862db3b558deecbcc2b8f923a1dc7bce830b74592dd9157b784c86dd2`;
 - any change to unit, drop-in, Vulkan runtime/library manifest, model
   hash/bytes, alias, or args changes/refuses the rollback preimage;
 - the 582-byte raw preimage is created once at the content-addressed relative
   path, reopened on later runs, and refuses if existing bytes differ; true
   EEXIST is distinguished from post-link/fsync failure, and both the file and
   parent directory have a witnessed durability barrier;
+- only an admitted `static-preflight` may create the `preimages/` directory,
+  using anchored `mkdirat` at mode 0700 followed by bench-root fsync and
+  reopen/identity validation; an exact valid existing directory is accepted,
+  while symlink, wrong mode/owner, mkdir failure, fsync failure, or identity
+  substitution refuses; phase verification with `preimages/` absent refuses
+  and never creates or repairs it;
 - five-file package identity uses the ordered compact pair array; member,
   order, or byte drift changes it;
 - `static-preflight` performs no service mutation, socket contact, model load,
@@ -876,7 +931,11 @@ Write the immutable-create/EEXIST/fsync/path-hazard RED family in
 `tests/test_cuda_bench_driver.py` before either helper exists. It covers the
 new-file and exact-existing-file branches, ordering proof, mismatched bytes,
 symlink/hardlink/mode/owner/path substitution, and every injected durability
-failure named in Step 3.
+failure named in Step 3. Both helpers must reopen the command-admission receipt
+under the exact supplied root and command namespace before acting; add REDs
+for a `CommandAttempt` admitted under root A being presented under root B, and
+for its admission receipt being deleted or replaced. No in-memory attempt
+alone is sufficient authority.
 
 - [ ] **Step 2: Witness RED**
 
@@ -884,6 +943,10 @@ Run:
 
 ```bash
 set +e
+/home/rohit/maez/.venv/bin/python -B -m pytest -q \
+  tests/test_cuda_migration.py \
+  -k 'vulkan_library_manifest_recipe or frozen_cuda_candidate'
+migration_red_rc=$?
 /home/rohit/maez/.venv/bin/python -B -m pytest -q \
   tests/test_cuda_bench_cli.py \
   -k 'static_preflight or runtime_manifest or host_observation or rollback_preimage or driver_package'
@@ -893,12 +956,13 @@ cli_red_rc=$?
   -k 'publish_or_verify_immutable or verify_existing_immutable'
 driver_red_rc=$?
 set -e
+test "$migration_red_rc" -eq 1
 test "$cli_red_rc" -eq 1
 test "$driver_red_rc" -eq 1
 ```
 
-Expected: FAIL because the collector, command, and immutable preimage helpers
-do not exist.
+Expected: FAIL because the frozen manifest/candidate constants, collector,
+command, and immutable preimage helpers do not exist.
 
 - [ ] **Step 3: Implement one collector used by preflight and phases**
 
@@ -943,10 +1007,14 @@ The implementation must:
 2. stably verify unit/drop-in/Vulkan/model/candidate/stub/flag/unit inputs;
 3. validate every candidate manifest row before selecting regular libraries,
    permit exactly the self-manifest `runtime-manifest.sha256` outside those
-   rows, and refuse any second unlisted top-level entry;
-4. query exactly one GPU, then scope all GPU metadata to that UUID;
+   rows, refuse any second unlisted top-level entry, and enforce the server,
+   CUDA backend, and runtime-manifest frozen hashes even when a substitute is
+   internally self-consistent;
+4. query exactly one GPU through absolute `/usr/bin/nvidia-smi`, then scope
+   every absolute-binary GPU metadata query to that UUID with `-i <uuid>`;
 5. parse truthful nvcc/CMake output into `RuntimeIdentity`;
-6. recompute the raw rollback preimage without writing it;
+6. recompute the 39-row Vulkan manifest from the frozen row/serialization
+   recipe and recompute the raw rollback preimage without writing it;
 7. hash the exact five package files in frozen order; and
 8. return `StaticPreflightDoc` plus the complete identity from the same
    observation.
@@ -957,13 +1025,21 @@ admission receipt is durable, calls
 `publish_or_verify_immutable(relative, bytes, attempt=attempt, root=root)`.
 Both phase handlers call `verify_existing_immutable(...)` instead; absence or
 drift refuses before `run_phase`, nonce consumption, attempt allocation, or
-any phase write.
+any phase write. Only that admitted static-preflight handler may create a
+missing `preimages/` directory. It does so by anchored `mkdirat` at 0700,
+fsyncs the bench-root directory, and reopens and identity-validates the child
+before publication. An exact existing directory is validated and reused.
+Phase helpers are verify-only: they refuse an absent or invalid directory and
+never create, chmod, chown, replace, or repair it.
 
 Implement `publish_or_verify_immutable(...)` and
 `verify_existing_immutable(...)` in the driver's existing descriptor-walk I/O
 boundary now, after their REDs. They accept the admitted `CommandAttempt` as
-an ordering proof, while the explicit `root=` remains the existing testable
-library seam; neither helper may run before admission.
+an ordering proof only after reopening and verifying that attempt's admission
+receipt under the exact explicit `root=` and expected command namespace. The
+root remains the existing testable library seam, but an attempt admitted under
+another root, or one whose admission receipt was deleted or replaced, refuses;
+neither helper may run before admission.
 
 The immutable publisher is implemented in this task beside the descriptor-walk
 I/O. Its sequence is: anonymous write -> file fsync -> direct link. Only a
@@ -995,7 +1071,10 @@ The lean collector always constructs mode `bench`; it has no production-mode
 or cutover branch. The production constants use absolute canonical paths. `subprocess.run` is
 allowed only in the injected read-only runner, with a sanitized environment,
 fixed absolute argv[0], `shell=False`, bounded timeout, and captured output
-that is never included in a refusal.
+that is never included in a refusal. GPU UUID enumeration occurs once through
+absolute `/usr/bin/nvidia-smi`; every metadata invocation uses that same
+absolute binary with `-i <uuid>`. nvcc and CMake likewise use only their
+bounded absolute canonical paths.
 
 - [ ] **Step 4: Persist `static_preflight.v1` and emit its binding**
 
@@ -1028,12 +1107,13 @@ Commit:
 
 ```bash
 git add scripts/cuda_bench_driver.py scripts/cuda_bench_cli.py \
+  scripts/cuda_migration.py tests/test_cuda_migration.py \
   tests/test_cuda_bench_driver.py tests/test_cuda_bench_cli.py
 git commit -m "feat(bench): collect truthful static preflight evidence" \
-  -m "One read-only collector verifies the candidate, incumbent, host tools, single GPU, package identity, and durable rollback preimage without claiming build provenance." \
+  -m "One read-only collector verifies the pinned candidate, reproducible incumbent manifest, host tools, single GPU, package identity, and durable rollback preimage without claiming build provenance." \
   -m "## Predicted effect
 
-The host's CMake 4.2.3 and verified regular CUDA libraries reach RuntimeIdentity unchanged; any identity/preimage drift refuses before a phase can consume authority."
+The host's CMake 4.2.3 and the exact three-plane CUDA candidate reach RuntimeIdentity unchanged; any substitute candidate, manifest/preimage drift, cross-root admission, or absent phase preimage directory refuses before a phase can consume authority."
 ```
 
 ### Task 5: Make the stock rehearsal provider set handle real child identity
