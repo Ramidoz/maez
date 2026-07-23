@@ -1194,6 +1194,20 @@ and leaves no current lease/listener. No test monkeypatches
 `pgrep`, because the sealed launcher replaces argv/path identity with the
 memfd handle.
 
+`ProviderWitness` has two independent exact integer counters. `real_calls`
+means production/external-surface contact and remains exactly zero for every
+synthetic provider. `loopback_kernel_calls` means only the sanctioned
+literal-loopback kernel binds used to prove ephemeral-listener absence. Both
+reject booleans and negative values. `assert_no_real_calls()` checks only the
+production/external counter and therefore remains true after sanctioned
+loopback probes. The implementation must never sum, alias, or otherwise
+conflate the dimensions. Canonical witness serialization and its binding hash
+carry both independently; exact round-trip preserves both, and changing only
+`loopback_kernel_calls` changes the binding or makes a supplied binding
+refuse. RED each validation leg, both assertion directions, exact
+round-trip/tamper behavior, and a structural scan across scorer, bundle, and
+witness surfaces proving no sum or conflation path.
+
 - [ ] **Step 2: Witness RED**
 
 Run:
@@ -1259,10 +1273,11 @@ current. A stale lease, including an old generation whose numeric port has
 been reused, refuses before socket construction and cannot inspect or retire
 the current lease. Arbitrary non-fixed ports refuse before socket construction.
 No hostname, proxy, or production-service contact exists. The synthetic
-provider witness increments `real_calls` for this literal-loopback bind,
-honestly recording the kernel contact; the tier guarantee is zero production
-contact, not zero syscalls. Registry/lease state is bounded process memory and
-is never serialized.
+provider witness increments only `loopback_kernel_calls` for this
+literal-loopback bind, honestly recording the sanctioned kernel contact while
+`real_calls` remains exactly zero and continues to mean zero
+production/external-surface contact. Registry/lease state is bounded process
+memory and is never serialized.
 
 Add optional `rehearsal_ports` to `RehearsalServerLauncher` for direct legacy
 tests. Extend `_sealed_tier`, not `rehearsal_tier`, to require by object

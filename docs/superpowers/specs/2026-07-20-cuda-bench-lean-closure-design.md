@@ -258,14 +258,21 @@ PID allocated at runtime. Its port adapter answers exactly the four fixed
 production and bench ports synthetically and lease-free, but probes only the
 launcher-chosen ephemeral literal-loopback lease for real. It snapshots the
 current lease under lock, binds with no registry lock held, then
-compare-before-retires the exact lease. The synthetic witness counts that
-literal-loopback bind as a real call while still proving zero production
-contact. Launcher and probe share one process-memory registry by object
-identity; an arbitrary non-fixed port or stale lease refuses before any socket
-call. Thus unpredictable child PIDs and cleanup of the actual ephemeral
-listener are witnessed without contacting production. The three-cycle witness
-requires strictly increasing lease generations, not distinct numeric ports:
-honest OS port-zero allocation may reuse a number.
+compare-before-retires the exact lease. `ProviderWitness` keeps two independent
+exact integer dimensions: `real_calls` means production/external-surface
+contact and is exactly zero for synthetic providers;
+`loopback_kernel_calls` means only sanctioned literal-loopback binds used to
+prove ephemeral-listener absence. Both reject booleans and negative values.
+`assert_no_real_calls()` examines only `real_calls` and remains true after
+loopback probing. No sum, alias, or conflation between the dimensions is
+permitted. Canonical witness serialization and its binding hash carry both
+independently, round-trip them exactly, and detect a change to either.
+Launcher and probe share one process-memory registry by object identity; an
+arbitrary non-fixed port or stale lease refuses before any socket call. Thus
+unpredictable child PIDs and cleanup of the actual ephemeral listener are
+witnessed without contacting production. The three-cycle witness requires
+strictly increasing lease generations, not distinct numeric ports: honest OS
+port-zero allocation may reuse a number.
 
 All six stub personas exercise the real spawn, readiness, HTTP, timeout,
 interrupt, and pidfd cleanup path. Rehearsal cannot mint production-shaped
