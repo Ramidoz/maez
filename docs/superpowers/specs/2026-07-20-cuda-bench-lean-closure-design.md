@@ -318,6 +318,59 @@ anything. The Vulkan packet, CUDA packet, authorizations, receipts, boot ID,
 window ID, GPU UUID, corpus, model, order, package, and runtime identities must
 join exactly.
 
+### Ratified production-command closure details
+
+Before either phase command creates its command admission, the CLI
+anchored-opens and parses its selected authority: `WindowAuthorization` for
+Vulkan and `Continuation` for CUDA. The exact parsed `window_id` is carried
+into the command-admission preimage. A pre-admission path or parse failure
+emits a null artifact pair, creates zero artifacts, and cannot burn a nonce.
+An absent window or any admission/config/authority window mismatch refuses
+before phase execution.
+
+The existing static durable-success latch is generalized into the one latch
+used by every durable command producer: static preflight, Vulkan, and CUDA.
+The latch becomes authoritative only from the immutable writer's
+`on_committed` callback, after file fsync, final-name link, parent fsync,
+anchored reopen, and exact identity/hash validation. A signal before link
+produces `interrupted` and no completion. A signal after durable validation
+cannot erase success. Phase code does not invent a parallel latch or duplicate
+the completion join already performed by `run_phase`.
+
+At phase entry the fresh and selected `StaticPreflightDoc` values compare
+exactly on every retained identity field: `gpu_uuid`,
+`driver_package_sha256`, `stub_sha256`, `corpus_verified`, and the complete
+`checks` mapping. `timestamp` is excluded only from equality because the
+observations occur at different times; both timestamps must still pass the
+schema's structural validation. Any non-timestamp mutation refuses.
+
+The phase prompt loader delegates to the existing frozen-corpus validator.
+There is one structural parser and one validation contract. The returned tuple
+preserves the JSON array's exact order and duplicates; it is never sorted,
+deduplicated, normalized, or reparsed by a second implementation.
+
+Reduced phase evidence has one strict terminal classification. A
+binding-valid reduced artifact with `spawned:false` maps to `refused`; a
+binding-valid reduced artifact with `spawned:true` maps to `failed`. Neither
+case mints `command_completion.v1`. Malformed, binding-invalid, wrong-schema,
+wrong-phase, or wrong-window reduced evidence fails closed, and neither
+`PersistedDoc` nor completed-packet decoding may treat it as complete. The
+stage-1 assembler remains Task 8 and is not implemented as part of this
+classification.
+
+The public phase arguments are closed. Vulkan requires exactly relative
+`--window-authorization`, `--static-preflight`, `--static-admission`, and
+`--static-completion` refs. CUDA requires exactly relative `--continuation`,
+`--parent-window`, `--parent-packet`, `--parent-admission`,
+`--parent-completion`, and those same three static refs. Root, port, timeout,
+model, corpus, environment, and mutation switches do not exist.
+
+Non-spawning parser, validation, configuration, and provider-construction
+logic remains eligible for worktree-airlock certification. Any phase-spawning
+proof is instead a direct witness with intrinsic module-origin pinning and
+strict process, listener, and artifact residue checks. No phase-spawning test
+receives an airlock exemption.
+
 ### `assemble-stage1`
 
 This command is an inert adapter over already-gated scorer code. The owner

@@ -1504,6 +1504,53 @@ Healthy rehearsal completes on an ephemeral loopback port; every failure persona
 - Modify: `scripts/cuda_bench_cli.py`
 - Modify: `tests/test_cuda_bench_cli.py`
 
+#### User-ratified Task-7 closure amendments (2026-07-24)
+
+These amendments are part of Task 7, not later assembler work:
+
+1. **Bind admission to the selected phase window.** Before `_run_command`
+   creates a command admission, it anchored-opens and parses the selected
+   `WindowAuthorization` for Vulkan or `Continuation` for CUDA. The exact
+   parsed `window_id` is threaded into `_admit_command`; `None` or any later
+   phase/config mismatch refuses. A pre-admission path/parse failure emits a
+   null artifact pair, creates zero artifacts, and never burns the nonce.
+   RED decodes both admissions and proves their exact selected window.
+2. **Use one durable-success latch for every durable producer.** Generalize
+   the existing static-only latch for static, Vulkan, and CUDA rather than
+   adding a second phase latch. Success becomes authoritative only in the
+   `on_committed` callback after file fsync, final-name link, parent fsync,
+   anchored reopen, and exact identity/hash validation. A signal before link
+   yields interrupted with no completion. A signal after that durable
+   validation yields success for either phase.
+3. **Compare the complete retained static schema except observation time.**
+   Compare `gpu_uuid`, `driver_package_sha256`, `stub_sha256`,
+   `corpus_verified`, and the full `checks` mapping. The selected document's
+   timestamp and the fresh timestamp must each pass their schema's structural
+   validation, but timestamp is the sole field excluded from equality. Any
+   non-timestamp mutation refuses.
+4. **Keep one frozen-corpus parser.** `_load_frozen_prompts` delegates to the
+   existing frozen-corpus validator; it does not implement a second parser or
+   structural checker. The validated loader returns the seven strings in the
+   exact persisted order and preserves deliberate duplicates. RED includes a
+   duplicate-bearing corpus in exact order and a structural proof that there
+   is one validator implementation.
+5. **Classify reduced phase artifacts strictly.** A binding-valid reduced
+   artifact with `spawned:false` is a pre-spawn `refused` terminal; one with
+   `spawned:true` is a spawned `failed` terminal. Neither mints a command
+   completion. Malformed, schema-wrong, phase/window-mismatched, or otherwise
+   binding-invalid reduced artifacts fail closed and cannot be consumed as
+   complete. Task 7 proves no completion is minted and that `PersistedDoc` or
+   completed-packet decode refuses; it does not implement the Task-8
+   assembler.
+
+The exact retained static equality fields are therefore `gpu_uuid`,
+`driver_package_sha256`, `stub_sha256`, `corpus_verified`, and the complete
+`checks` mapping. `timestamp` is excluded only from equality, never from
+structural validation. The non-spawning parser/config/provider surfaces remain
+airlock-certifiable. Phase-spawning paths require a direct witness with
+intrinsic module-origin pinning and process/listener/artifact residue proof;
+there is no airlock exemption.
+
 - [ ] **Step 1: Write exact `PhaseConfig` and refusal-order REDs**
 
 For `vulkan-baseline`, require relative window-authorization, static-preflight,
@@ -1513,6 +1560,13 @@ Vulkan command-admission and command-completion refs, plus the same
 static-preflight/admission/completion refs. A completion is never accepted
 without the exact admission preimage it cites; a durable underlying artifact
 without its completion is not a completed producer result.
+
+The parser surface is exact. Vulkan accepts only `--window-authorization`,
+`--static-preflight`, `--static-admission`, and `--static-completion`. CUDA
+accepts only `--continuation`, `--parent-window`, `--parent-packet`,
+`--parent-admission`, `--parent-completion`, and the same three static refs.
+Neither phase exposes root, port, timeout, model, corpus, environment, or
+mutation switches.
 
 Tests assert:
 
