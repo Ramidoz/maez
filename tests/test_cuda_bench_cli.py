@@ -9,6 +9,7 @@ import inspect
 import json
 import os
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -130,6 +131,43 @@ def _task6_memfd_count() -> int:
         if "memfd:cuda-bench-entry" in target:
             count += 1
     return count
+
+
+def _assert_module_from_checkout(
+    module: object,
+    expected_relative: str,
+) -> None:
+    checkout_root = Path(__file__).resolve().parents[1]
+    try:
+        relative = Path(expected_relative)
+        origin_value = getattr(module, "__file__")
+        if (
+            type(expected_relative) is not str
+            or relative.is_absolute()
+            or any(part in {"", ".", ".."} for part in relative.parts)
+            or type(origin_value) is not str
+            or not origin_value
+        ):
+            raise ValueError("module_origin")
+        expected_lexical = checkout_root / relative
+        origin_lexical = Path(origin_value)
+        if (
+            expected_relative != relative.as_posix()
+            or not origin_lexical.is_absolute()
+            or origin_value != str(origin_lexical)
+            or origin_lexical != expected_lexical
+        ):
+            raise ValueError("module_origin")
+        expected = expected_lexical.resolve(strict=True)
+        origin = origin_lexical.resolve(strict=True)
+        if (
+            not stat.S_ISREG(expected.stat().st_mode)
+            or not stat.S_ISREG(origin.stat().st_mode)
+            or origin != expected
+        ):
+            raise ValueError("module_origin")
+    except (AttributeError, OSError, TypeError, ValueError):
+        raise AssertionError("checkout_module_origin") from None
 
 
 class _FixedClock:
@@ -1892,6 +1930,53 @@ def _private_run(
 
 
 class TestTask6RehearseCommand:
+    def test_direct_witness_rejects_foreign_module_origin(
+        self, tmp_path: Path
+    ) -> None:
+        foreign = tmp_path / "cuda_bench_cli.py"
+        foreign.write_text("FOREIGN = True\n", encoding="utf-8")
+        fake_module = type(
+            "ForeignModule",
+            (),
+            {"__file__": str(foreign)},
+        )
+
+        with pytest.raises(AssertionError, match="checkout_module_origin"):
+            _assert_module_from_checkout(
+                fake_module,
+                "scripts/cuda_bench_cli.py",
+            )
+
+    def test_direct_witness_rejects_foreign_module_origin_symlink_alias(
+        self, tmp_path: Path
+    ) -> None:
+        foreign_alias = tmp_path / "cuda_bench_cli.py"
+        foreign_alias.symlink_to(REPO_ROOT / "scripts/cuda_bench_cli.py")
+        fake_module = type(
+            "ForeignAliasModule",
+            (),
+            {"__file__": str(foreign_alias)},
+        )
+
+        with pytest.raises(AssertionError, match="checkout_module_origin"):
+            _assert_module_from_checkout(
+                fake_module,
+                "scripts/cuda_bench_cli.py",
+            )
+
+    def test_direct_witness_rejects_relative_module_origin(self) -> None:
+        fake_module = type(
+            "RelativeModule",
+            (),
+            {"__file__": "scripts/cuda_bench_cli.py"},
+        )
+
+        with pytest.raises(AssertionError, match="checkout_module_origin"):
+            _assert_module_from_checkout(
+                fake_module,
+                "scripts/cuda_bench_cli.py",
+            )
+
     def test_rehearse_parser_is_exact_and_has_no_timeout_or_asset_override(self) -> None:
         parsed = cli.build_parser().parse_args(
             [
@@ -2091,6 +2176,8 @@ class TestTask6RehearseCommand:
         monkeypatch: pytest.MonkeyPatch,
         capfd: pytest.CaptureFixture[str],
     ) -> None:
+        _assert_module_from_checkout(cli, "scripts/cuda_bench_cli.py")
+        _assert_module_from_checkout(driver, "scripts/cuda_bench_driver.py")
         root = tmp_path / "bench"
         root.mkdir(mode=0o700)
         os.chmod(root, 0o700)
