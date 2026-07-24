@@ -6116,6 +6116,7 @@ class PhaseConfig:
     static_completion_path: str | None = None
     parent_admission_path: str | None = None
     parent_completion_path: str | None = None
+    readiness_timeout_s: float = READINESS_TIMEOUT_S
 
     def __post_init__(self) -> None:
         if (
@@ -6458,6 +6459,14 @@ def _sealed_tier(
     if any(type(components[name]) is not expected for name, expected in expected_types.items()):
         raise BenchRefusal("tier_mismatch")
     if server_client.clock is not clock:
+        raise BenchRefusal("tier_mismatch")
+    if (
+        tier == "production"
+        and (
+            REQUEST_TIMEOUT_MS != 30_000
+            or server_client.request_timeout_ms != 30_000
+        )
+    ):
         raise BenchRefusal("tier_mismatch")
     if getattr(authorization_gate, "policy", None) is not artifact_policy:
         raise BenchRefusal("tier_mismatch")
@@ -7665,7 +7674,9 @@ def _run_three_cycles(
                 providers.clock,
                 f"cycle_{cycle}_readiness",
             )
-            deadline = _monotonic(providers.clock) + READINESS_TIMEOUT_S
+            deadline = (
+                _monotonic(providers.clock) + config.readiness_timeout_s
+            )
             while True:
                 if providers.server_client.health(child.port):
                     break
@@ -8210,6 +8221,23 @@ def _run_phase_with_blocked_entry(
     if type(config) is not PhaseConfig or type(providers) is not Providers:
         raise TypeError("phase_runner_contract")
     if providers.tier != providers.artifact_policy.tier:
+        raise BenchRefusal("tier_mismatch")
+    timeout = config.readiness_timeout_s
+    if (
+        type(timeout) not in {int, float}
+        or not math.isfinite(timeout)
+        or (
+            providers.tier == "production"
+            and (
+                READINESS_TIMEOUT_S != 300
+                or timeout != 300
+            )
+        )
+        or (
+            providers.tier == "rehearsal"
+            and not 0 < timeout <= 5
+        )
+    ):
         raise BenchRefusal("tier_mismatch")
     authorization_window = _authorization_attempt_window(config)
     attempt_root = _allocate_attempt(

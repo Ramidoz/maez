@@ -11,6 +11,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -66,6 +67,69 @@ def _one_terminal_line(stdout: str) -> dict[str, object]:
         "artifact_sha256",
     }
     return decoded
+
+
+def _task6_identity_fields() -> dict[str, object]:
+    from tests.test_cuda_migration import PersistedDocTests, make_identity
+
+    fields = PersistedDocTests.identity_fields(make_identity())
+    fields["effective_args"] = tuple(fields["effective_args"])
+    return fields
+
+
+def _task6_static_preflight(root: Path) -> tuple[str, cm.StaticPreflightDoc]:
+    identity = cm.RuntimeIdentity(**_task6_identity_fields())
+    stub_sha = hashlib.sha256(
+        (REPO_ROOT / "scripts/cuda_bench_stub.py").read_bytes()
+    ).hexdigest()
+    doc = cm.StaticPreflightDoc(
+        gpu_uuid="GPU-12345678-1234-1234-1234-123456789abc",
+        driver_package_sha256="e" * 64,
+        stub_sha256=stub_sha,
+        corpus_verified=True,
+        checks={
+            "corpus": cm.FROZEN_CORPUS_SHA256,
+            "incumbent_unit": cm.FROZEN_VULKAN_UNIT_SHA256,
+            "incumbent_dropin": cm.FROZEN_VULKAN_DROPIN_SHA256,
+            "incumbent_server": cm.FROZEN_VULKAN_RUNTIME_SHA256,
+            "model": cm.FROZEN_MODEL_SHA256,
+            "library_manifest": cm.FROZEN_VULKAN_LIBRARY_MANIFEST_SHA256,
+            "effective_args": cm.FROZEN_VULKAN_EFFECTIVE_ARGS_SHA256,
+            "flag_source": "a" * 64,
+            "vision_unit": "b" * 64,
+            "candidate_manifest": identity.runtime_manifest_sha256,
+            "bench_root_mode": "700",
+            "stub_pin": stub_sha,
+        },
+        timestamp=FIXED_TIMESTAMP,
+    )
+    fields = {
+        "binding_sha256": doc.binding_sha256,
+        "gpu_uuid": doc.gpu_uuid,
+        "driver_package_sha256": doc.driver_package_sha256,
+        "stub_sha256": doc.stub_sha256,
+        "corpus_verified": doc.corpus_verified,
+        "checks": dict(doc.checks),
+        "timestamp": doc.timestamp,
+    }
+    relative = "receipts/static-preflight-task6.json"
+    path = root / relative
+    path.parent.mkdir(mode=0o700)
+    path.write_bytes(driver.ProductionArtifactPolicy().encode("static_preflight", fields))
+    os.chmod(path, 0o600)
+    return relative, doc
+
+
+def _task6_memfd_count() -> int:
+    count = 0
+    for path in (*Path("/proc").glob("[0-9]*/exe"), *Path("/proc").glob("[0-9]*/fd/*")):
+        try:
+            target = os.readlink(path)
+        except OSError:
+            continue
+        if "memfd:cuda-bench-entry" in target:
+            count += 1
+    return count
 
 
 class _FixedClock:
@@ -1827,6 +1891,373 @@ def _private_run(
     )
 
 
+class TestTask6RehearseCommand:
+    def test_rehearse_parser_is_exact_and_has_no_timeout_or_asset_override(self) -> None:
+        parsed = cli.build_parser().parse_args(
+            [
+                "rehearse",
+                "--static-preflight",
+                "receipts/static.json",
+                "--persona",
+                "healthy",
+            ]
+        )
+        assert vars(parsed) == {
+            "command": "rehearse",
+            "static_preflight": "receipts/static.json",
+            "persona": "healthy",
+        }
+        for forbidden in (
+            "--root",
+            "--timeout",
+            "--port",
+            "--model",
+            "--corpus",
+            "--readiness-timeout",
+            "--request-timeout",
+        ):
+            with pytest.raises(cli.InvocationRefusal):
+                cli.build_parser().parse_args(
+                    [
+                        "rehearse",
+                        "--static-preflight",
+                        "receipts/static.json",
+                        "--persona",
+                        "healthy",
+                        forbidden,
+                        "value",
+                    ]
+                )
+
+    def test_rehearsal_identity_collector_uses_selected_wrapper_not_corpus_or_model(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "bench"
+        root.mkdir(mode=0o700)
+        os.chmod(root, 0o700)
+        relative, static = _task6_static_preflight(root)
+        identity = cm.RuntimeIdentity(**_task6_identity_fields())
+        opened: list[str] = []
+        observation_log: list[str] = []
+        real_open = driver.open_bench_file
+
+        def tracked_open(path: str, *, root: Path) -> bytes:
+            if path != relative:
+                raise AssertionError(f"forbidden bench read: {path}")
+            opened.append(path)
+            return real_open(path, root=root)
+
+        def candidate(root: Path) -> cli._CandidateObservation:
+            assert root == cli.CANONICAL_STATIC_ASSETS.candidate_root
+            observation_log.append("candidate")
+            return cli._CandidateObservation(
+                identity.runtime_sha256,
+                identity.runtime_manifest_sha256,
+                identity.library_hashes,
+            )
+
+        def package() -> tuple[str, bytes]:
+            observation_log.append("package")
+            return static.driver_package_sha256, b"package"
+
+        def host(**kwargs: object) -> cli._HostObservation:
+            assert kwargs["paths"] == cli.CANONICAL_STATIC_ASSETS
+            observation_log.append("host")
+            return cli._HostObservation(
+                gpu_uuid=static.gpu_uuid,
+                driver_version=identity.driver_version,
+                gpu_identifier=identity.gpu_identifier,
+                compute_capability=identity.compute_capability,
+                cuda_compiler=identity.cuda_compiler,
+                cmake_version=identity.cmake_version,
+            )
+
+        def stable(path: Path) -> tuple[str, int]:
+            assert path == cli.CANONICAL_STATIC_ASSETS.cuda_override
+            observation_log.append("override")
+            return identity.production_override_sha256, 1
+
+        monkeypatch.setattr(driver, "open_bench_file", tracked_open)
+        monkeypatch.setattr(
+            cli,
+            "_verify_candidate_runtime_manifest",
+            candidate,
+        )
+        monkeypatch.setattr(
+            cli,
+            "_driver_package_sha256",
+            package,
+        )
+        monkeypatch.setattr(
+            cli,
+            "_collect_host_tool_observations",
+            host,
+        )
+        monkeypatch.setattr(cli, "_stable_regular_file", stable)
+
+        selected, observed_identity = cli._collect_rehearsal_identity(
+            relative,
+            root=root,
+            paths=cli.CANONICAL_STATIC_ASSETS,
+            runner=lambda *_args, **_kwargs: None,
+        )
+
+        assert selected == static
+        assert observed_identity == identity
+        assert opened == [relative]
+        assert observation_log == ["candidate", "package", "host", "override"]
+        assert "corpus.json" not in opened
+        assert str(cli.CANONICAL_STATIC_ASSETS.model) not in opened
+
+    @pytest.mark.parametrize(
+        "drift",
+        ("candidate_manifest", "package", "gpu", "tool"),
+    )
+    def test_rehearse_identity_collector_rejects_each_observation_drift(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        drift: str,
+    ) -> None:
+        root = tmp_path / "bench"
+        root.mkdir(mode=0o700)
+        os.chmod(root, 0o700)
+        relative, static = _task6_static_preflight(root)
+        identity = cm.RuntimeIdentity(**_task6_identity_fields())
+        candidate_manifest = (
+            "f" * 64
+            if drift == "candidate_manifest"
+            else identity.runtime_manifest_sha256
+        )
+        package_sha = (
+            "f" * 64
+            if drift == "package"
+            else static.driver_package_sha256
+        )
+        gpu_uuid = (
+            "GPU-ffffffff-ffff-ffff-ffff-ffffffffffff"
+            if drift == "gpu"
+            else static.gpu_uuid
+        )
+        compiler = "0.0.0" if drift == "tool" else identity.cuda_compiler
+        monkeypatch.setattr(
+            cli,
+            "_verify_candidate_runtime_manifest",
+            lambda _root: cli._CandidateObservation(
+                identity.runtime_sha256,
+                candidate_manifest,
+                identity.library_hashes,
+            ),
+        )
+        monkeypatch.setattr(
+            cli,
+            "_driver_package_sha256",
+            lambda: (package_sha, b"package"),
+        )
+        monkeypatch.setattr(
+            cli,
+            "_collect_host_tool_observations",
+            lambda **_kwargs: cli._HostObservation(
+                gpu_uuid=gpu_uuid,
+                driver_version=identity.driver_version,
+                gpu_identifier=identity.gpu_identifier,
+                compute_capability=identity.compute_capability,
+                cuda_compiler=compiler,
+                cmake_version=identity.cmake_version,
+            ),
+        )
+        monkeypatch.setattr(
+            cli,
+            "_stable_regular_file",
+            lambda path: (
+                identity.production_override_sha256,
+                1,
+            ),
+        )
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            cli._collect_rehearsal_identity(
+                relative,
+                root=root,
+                paths=cli.CANONICAL_STATIC_ASSETS,
+                runner=lambda *_args, **_kwargs: None,
+            )
+
+        assert exc.value.code == "identity_mismatch"
+
+    def test_all_personas_run_actual_rehearse_cli_without_residue(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        root = tmp_path / "bench"
+        root.mkdir(mode=0o700)
+        os.chmod(root, 0o700)
+        static_ref, static_doc = _task6_static_preflight(root)
+        static_before = (root / static_ref).read_bytes()
+        identity = cm.RuntimeIdentity(**_task6_identity_fields())
+        monkeypatch.setattr(driver, "BENCH_ROOT", root)
+        observation_calls = {
+            "candidate": 0,
+            "package": 0,
+            "host": 0,
+            "override": 0,
+        }
+        selected_opens = 0
+        real_open = driver.open_bench_file
+
+        def guarded_open(relative: str, *, root: Path) -> bytes:
+            nonlocal selected_opens
+            if relative == "corpus.json" or relative == str(
+                cli.CANONICAL_STATIC_ASSETS.model
+            ):
+                raise AssertionError(f"forbidden rehearsal read: {relative}")
+            if relative == static_ref:
+                selected_opens += 1
+            return real_open(relative, root=root)
+
+        def candidate(candidate_root: Path) -> cli._CandidateObservation:
+            assert candidate_root == cli.CANONICAL_STATIC_ASSETS.candidate_root
+            observation_calls["candidate"] += 1
+            return cli._CandidateObservation(
+                identity.runtime_sha256,
+                identity.runtime_manifest_sha256,
+                identity.library_hashes,
+            )
+
+        def package() -> tuple[str, bytes]:
+            observation_calls["package"] += 1
+            return static_doc.driver_package_sha256, b"package"
+
+        def host(**kwargs: object) -> cli._HostObservation:
+            assert kwargs["paths"] == cli.CANONICAL_STATIC_ASSETS
+            observation_calls["host"] += 1
+            return cli._HostObservation(
+                gpu_uuid=static_doc.gpu_uuid,
+                driver_version=identity.driver_version,
+                gpu_identifier=identity.gpu_identifier,
+                compute_capability=identity.compute_capability,
+                cuda_compiler=identity.cuda_compiler,
+                cmake_version=identity.cmake_version,
+            )
+
+        def stable(path: Path) -> tuple[str, int]:
+            if path != cli.CANONICAL_STATIC_ASSETS.cuda_override:
+                raise AssertionError(f"forbidden static read: {path}")
+            observation_calls["override"] += 1
+            return identity.production_override_sha256, 1
+
+        monkeypatch.setattr(driver, "open_bench_file", guarded_open)
+        monkeypatch.setattr(
+            cli,
+            "_verify_candidate_runtime_manifest",
+            candidate,
+        )
+        monkeypatch.setattr(cli, "_driver_package_sha256", package)
+        monkeypatch.setattr(cli, "_collect_host_tool_observations", host)
+        monkeypatch.setattr(cli, "_stable_regular_file", stable)
+        children: list[driver.OwnedChild] = []
+        real_spawn = driver.RehearsalServerLauncher.spawn
+
+        def tracked_spawn(
+            launcher: driver.RehearsalServerLauncher,
+            argv: list[str],
+            env: dict[str, str],
+        ) -> driver.OwnedChild:
+            child = real_spawn(launcher, argv, env)
+            children.append(child)
+            return child
+
+        monkeypatch.setattr(driver.RehearsalServerLauncher, "spawn", tracked_spawn)
+        expected = (
+            ("healthy", "completed"),
+            ("readiness_timeout", "readiness_timeout"),
+            ("midturn_hang", "http_timeout"),
+            ("crash", "crash"),
+            ("malformed_response", "malformed_response"),
+            ("wrong_identity", "alias_mismatch"),
+        )
+        production_before = {
+            path.relative_to(root)
+            for path in root.rglob("*.json")
+            if not str(path.relative_to(root)).startswith("rehearsal/")
+        }
+        marker_before = tuple((root / "markers").glob("*")) if (root / "markers").exists() else ()
+        started = time.monotonic()
+        healthy_children: list[driver.OwnedChild] = []
+        for persona, outcome in expected:
+            before = {path.relative_to(root) for path in root.rglob("*")}
+            child_start = len(children)
+            rc = cli.main(
+                [
+                    "rehearse",
+                    "--static-preflight",
+                    static_ref,
+                    "--persona",
+                    persona,
+                ]
+            )
+            captured = capfd.readouterr()
+            terminal = _one_terminal_line(captured.out)
+            assert captured.err == ""
+            assert rc == (0 if outcome == "completed" else 3), terminal
+            assert terminal["outcome"] == outcome
+            assert type(terminal["artifact_ref"]) is str
+            artifact_ref = terminal["artifact_ref"]
+            assert artifact_ref.startswith("rehearsal/")
+            artifact = driver.open_bench_file(artifact_ref, root=root)
+            assert hashlib.sha256(artifact).hexdigest() == terminal["artifact_sha256"]
+            wrapper = json.loads(artifact)
+            assert set(wrapper) == {"rehearsal_schema", "tier", "payload"}
+            assert wrapper["rehearsal_schema"] == driver.REHEARSAL_PACKET_SCHEMA
+            assert wrapper["tier"] == "rehearsal"
+            assert wrapper["payload"]["fields"]["outcome"] == outcome
+            new_paths = {
+                path.relative_to(root)
+                for path in root.rglob("*")
+                if path.is_file()
+            } - before
+            assert new_paths
+            assert all(str(path).startswith("rehearsal/") for path in new_paths)
+            persona_children = children[child_start:]
+            assert persona_children
+            assert all(child.port != 18080 for child in persona_children)
+            assert all(child.popen.poll() is not None for child in persona_children)
+            assert all(driver._pgid_members(child.pgid) == [] for child in persona_children)
+            assert all(driver.RealPortProbe().is_free(child.port) for child in persona_children)
+            if persona == "healthy":
+                healthy_children = persona_children
+        elapsed = time.monotonic() - started
+
+        assert elapsed < 15
+        assert selected_opens == 12
+        assert observation_calls == {
+            "candidate": 6,
+            "package": 6,
+            "host": 6,
+            "override": 6,
+        }
+        assert [child.rehearsal_port_lease.generation for child in healthy_children] == [1, 2, 3]
+        assert all(
+            child.rehearsal_port_lease is not None
+            and driver.RealPortProbe().is_free(child.rehearsal_port_lease.port)
+            for child in healthy_children
+        )
+        assert (root / static_ref).read_bytes() == static_before
+        assert {
+            path.relative_to(root)
+            for path in root.rglob("*.json")
+            if not str(path.relative_to(root)).startswith("rehearsal/")
+        } == production_before
+        assert (
+            tuple((root / "markers").glob("*"))
+            if (root / "markers").exists()
+            else ()
+        ) == marker_before
+        assert _task6_memfd_count() == 0
+
+
 def _terminal_artifact_handler(status: str) -> Callable[..., object]:
     def handler(attempt: object, *, root: Path) -> object:
         if status == "ok":
@@ -1910,18 +2341,27 @@ class TestSealedParser:
 
     def test_parser_and_main_expose_no_root_or_asset_authority(self) -> None:
         parser = cli.build_parser()
-        option_strings = {
+        assert {
             option
             for action in parser._actions
             for option in action.option_strings
-        }
-        for subparser in parser._subparsers._group_actions[0].choices.values():
-            option_strings.update(
+        } == set()
+        command_options = {}
+        for command, subparser in (
+            parser._subparsers._group_actions[0].choices.items()
+        ):
+            command_options[command] = {
                 option
                 for action in subparser._actions
                 for option in action.option_strings
-            )
-        assert option_strings == set()
+            }
+        assert command_options == {
+            "static-preflight": set(),
+            "rehearse": {"--static-preflight", "--persona"},
+            "vulkan-baseline": set(),
+            "cuda-candidate": set(),
+            "assemble-stage1": set(),
+        }
         assert tuple(inspect.signature(cli.main).parameters) == ("argv",)
 
     def test_public_main_is_structurally_bound_to_driver_bench_root(self) -> None:

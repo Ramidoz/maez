@@ -10,8 +10,10 @@ import re
 import signal
 import stat
 import subprocess
+import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import FrameType
 from types import MappingProxyType
@@ -36,6 +38,25 @@ _cleanup_incomplete_committing = False
 _linearized_static_success: _StaticSuccessLatch | None = None
 _STATIC_READ_BYTE_CAP = 32 * 1024 * 1024 * 1024
 _STATIC_COMMAND_TIMEOUT_S = 30
+REHEARSAL_READINESS_TIMEOUT_S = 1.0
+REHEARSAL_REQUEST_TIMEOUT_MS = 1_000
+_REHEARSAL_PERSONAS = (
+    "crash",
+    "healthy",
+    "malformed_response",
+    "midturn_hang",
+    "readiness_timeout",
+    "wrong_identity",
+)
+_REHEARSAL_PROMPTS = (
+    "sentinel-alpha",
+    "sentinel-bravo",
+    "sentinel-charlie",
+    "sentinel-delta",
+    "sentinel-echo",
+    "sentinel-foxtrot",
+    "sentinel-golf",
+)
 _PACKAGE_MEMBERS = (
     "scripts/cuda_migration.py",
     "scripts/cuda_bench_driver.py",
@@ -907,6 +928,65 @@ def collect_static_observation(
     return StaticObservation(static_doc, identity, rollback_preimage)
 
 
+def _collect_rehearsal_identity(
+    static_preflight_ref: str,
+    *,
+    root: Path,
+    paths: StaticAssetPaths = CANONICAL_STATIC_ASSETS,
+    runner: ReadOnlyRunner = _run_read_only,
+) -> tuple[cm.StaticPreflightDoc, cm.RuntimeIdentity]:
+    """Collect rehearsal identity without opening corpus or model bytes."""
+
+    try:
+        persisted = cm.PersistedDoc(
+            driver.open_bench_file(static_preflight_ref, root=root)
+        )
+        static = persisted.obj
+        if type(static) is not cm.StaticPreflightDoc:
+            raise ValueError("static_preflight")
+        candidate = _verify_candidate_runtime_manifest(paths.candidate_root)
+        package_sha256, _package_preimage = _driver_package_sha256()
+        host = _collect_host_tool_observations(runner=runner, paths=paths)
+        override_sha256, _override_bytes = _stable_regular_file(
+            paths.cuda_override
+        )
+        if (
+            static.driver_package_sha256 != package_sha256
+            or static.gpu_uuid != host.gpu_uuid
+            or static.checks["candidate_manifest"]
+            != candidate.runtime_manifest_sha256
+            or static.checks["model"] != cm.FROZEN_MODEL_SHA256
+        ):
+            raise ValueError("rehearsal_identity")
+        identity = cm.RuntimeIdentity.from_static_evidence(
+            tag=cm.FROZEN_TAG,
+            commit=cm.FROZEN_COMMIT,
+            version=cm.FROZEN_VERSION,
+            alias=cm.FROZEN_ALIAS,
+            model_sha256=cm.FROZEN_MODEL_SHA256,
+            model_bytes=cm.FROZEN_MODEL_BYTES,
+            runtime_sha256=candidate.runtime_sha256,
+            library_hashes=candidate.library_hashes,
+            effective_args=cm._MODE_ARGS["bench"],
+            mode="bench",
+            production_override_sha256=override_sha256,
+            backend_environment=cm.FROZEN_BACKEND_ENVIRONMENT,
+            runtime_manifest_sha256=candidate.runtime_manifest_sha256,
+            rollback_manifest_sha256=cm.FROZEN_ROLLBACK_MANIFEST_SHA256,
+            cuda_toolkit="13.2",
+            cuda_compiler=host.cuda_compiler,
+            cmake_version=host.cmake_version,
+            driver_version=host.driver_version,
+            gpu_identifier=host.gpu_identifier,
+            compute_capability=host.compute_capability,
+        )
+    except driver.BenchRefusal:
+        raise
+    except (KeyError, TypeError, ValueError):
+        raise driver.BenchRefusal("identity_mismatch") from None
+    return static, identity
+
+
 def _static_preflight_fields(doc: cm.StaticPreflightDoc) -> dict[str, object]:
     return {
         "binding_sha256": doc.binding_sha256,
@@ -1153,11 +1233,33 @@ class NonEchoingParser(argparse.ArgumentParser):
         raise InvocationRefusal
 
 
+def _relative_ref(value: str) -> str:
+    if (
+        type(value) is not str
+        or not value
+        or os.path.isabs(value)
+        or any(part in {"", ".", ".."} for part in value.split("/"))
+    ):
+        raise argparse.ArgumentTypeError("relative_ref")
+    return value
+
+
 def build_parser() -> NonEchoingParser:
     parser = NonEchoingParser(add_help=False)
     commands = parser.add_subparsers(dest="command", required=True)
     for command in PUBLIC_COMMANDS:
-        commands.add_parser(command, add_help=False)
+        command_parser = commands.add_parser(command, add_help=False)
+        if command == "rehearse":
+            command_parser.add_argument(
+                "--static-preflight",
+                type=_relative_ref,
+                required=True,
+            )
+            command_parser.add_argument(
+                "--persona",
+                choices=_REHEARSAL_PERSONAS,
+                required=True,
+            )
     return parser
 
 
@@ -1696,6 +1798,186 @@ def _unimplemented_handler(
     return TerminalResult("refused", "assembly_refused", None, None, None)
 
 
+def _rehearsal_providers(
+    static: cm.StaticPreflightDoc,
+    *,
+    clock: driver.RehearsalClock,
+) -> driver.Providers:
+    registry = driver.RehearsalPortRegistry()
+    port_probe = driver.SyntheticPortProbe(
+        {driver.BENCH_PORT, *driver.PRODUCTION_PORTS},
+        rehearsal_ports=registry,
+    )
+    policy = driver.RehearsalArtifactPolicy()
+    memories = [
+        value
+        for _cycle in range(3)
+        for value in (
+            (1.0, 100),
+            (2.0, 200),
+            (3.0, 250),
+            (1.0, 100),
+        )
+    ]
+    memories.extend(((1.0, 100), (1.0, 100), (1.0, 100)))
+    pin = driver.SpawnPin(
+        kind="python_file",
+        pinned_path=driver._REHEARSAL_STUB_PATH,
+        pinned_sha256=static.stub_sha256,
+        required_argv_prefix=(
+            sys.executable,
+            "-B",
+            "-I",
+            str(driver._REHEARSAL_STUB_PATH),
+        ),
+    )
+    return driver.rehearsal_tier(
+        service_state=driver.SyntheticServiceState(
+            {
+                "llama-server.service": "inactive",
+                "llama-judge.service": "inactive",
+                driver.VISION_UNIT: "inactive",
+            }
+        ),
+        port_probe=port_probe,
+        gpu=driver.SyntheticGpu(
+            [static.gpu_uuid],
+            [[] for _index in range(16)],
+            memories,
+        ),
+        kernel_log=driver.SyntheticKernelLog(
+            dict.fromkeys(driver.KERNEL_COUNTER_KEYS, 0)
+        ),
+        backend_maps=driver.SyntheticBackendMap(
+            {},
+            default_maps_text=str(
+                cm.VULKAN_RELEASE_ROOT / "libggml-vulkan.so"
+            ),
+        ),
+        server_launcher=driver.RehearsalServerLauncher(
+            pin,
+            rehearsal_ports=registry,
+        ),
+        server_client=driver.LoopbackServerClient.rehearsal(
+            clock,
+            request_timeout_ms=REHEARSAL_REQUEST_TIMEOUT_MS,
+        ),
+        authorization_gate=driver.RehearsalAuthorizationGate(policy),
+        containment=driver.SyntheticContainmentProvider(
+            clock=clock,
+            port_probe=port_probe,
+            flag_source_sha256=static.checks["flag_source"],
+            vision_unit_sha256=static.checks["vision_unit"],
+        ),
+        artifact_policy=policy,
+        clock=clock,
+        journal_factory=driver.RehearsalJournalFactory(),
+    )
+
+
+def _rehearsal_handler(
+    attempt: driver.CommandAttempt,
+    *,
+    root: Path,
+    clock: driver.RehearsalClock,
+    static_preflight_ref: str,
+    persona: str,
+) -> TerminalResult:
+    static, identity = _collect_rehearsal_identity(
+        static_preflight_ref,
+        root=root,
+    )
+    providers = _rehearsal_providers(static, clock=clock)
+    now = datetime.fromisoformat(
+        clock.now_utc().replace("Z", "+00:00")
+    ).astimezone(UTC)
+    issued = now - timedelta(minutes=1)
+    expires = issued + timedelta(seconds=driver.WINDOW_TTL_S)
+    window_id = f"rehearsal-{attempt.ordinal:03d}"
+    boot_id = "rehearsal-boot"
+    authorization = driver.WindowAuthorization(
+        window_id=window_id,
+        phases=("vulkan_baseline",),
+        boot_id=boot_id,
+        nonce=hashlib.sha256(
+            f"{attempt.admission_sha256}:{persona}".encode()
+        ).hexdigest(),
+        issued_at=issued.isoformat(timespec="microseconds").replace(
+            "+00:00", "Z"
+        ),
+        expires_at=expires.isoformat(timespec="microseconds").replace(
+            "+00:00", "Z"
+        ),
+        owner="rehearsal",
+    )
+    identity_fields = driver._runtime_identity_fields(identity)
+    identity_fields["effective_args"] = tuple(identity.effective_args)
+    argv = [
+        sys.executable,
+        "-B",
+        "-I",
+        str(driver._REHEARSAL_STUB_PATH),
+        "--persona",
+        persona,
+        "--alias",
+        cm.FROZEN_ALIAS,
+    ]
+    config = driver.PhaseConfig(
+        phase="vulkan_baseline",
+        argv=argv,
+        env={
+            "HOME": "/home/rohit",
+            "PATH": "/usr/bin:/bin",
+            "PYTHONUNBUFFERED": "1",
+        },
+        alias=cm.FROZEN_ALIAS,
+        prompts=_REHEARSAL_PROMPTS,
+        authorization=authorization,
+        parent_window=None,
+        parent_packet_path=None,
+        bench_identity_fields=dict(identity_fields),
+        runtime_identity_fields=dict(identity_fields),
+        static_preflight_path=static_preflight_ref,
+        gpu_uuid=static.gpu_uuid,
+        boot_id=boot_id,
+        window_id=window_id,
+        expected_port=None,
+        readiness_timeout_s=REHEARSAL_READINESS_TIMEOUT_S,
+    )
+    phase_path = driver.run_phase(config, providers, root=root)
+    try:
+        phase_ref = str(phase_path.relative_to(root))
+        phase_bytes = driver.open_bench_file(phase_ref, root=root)
+        wrapper = json.loads(phase_bytes)
+        payload = wrapper["payload"]
+        fields = payload["fields"]
+        if (
+            set(wrapper) != {"rehearsal_schema", "tier", "payload"}
+            or wrapper["rehearsal_schema"]
+            != driver.REHEARSAL_PACKET_SCHEMA
+            or wrapper["tier"] != "rehearsal"
+            or type(payload) is not dict
+            or type(fields) is not dict
+            or type(fields.get("outcome")) is not str
+        ):
+            raise ValueError("rehearsal_document")
+        outcome = fields["outcome"]
+    except (
+        KeyError,
+        OSError,
+        TypeError,
+        ValueError,
+    ):
+        raise driver.BenchRefusal("provider_uncertain") from None
+    return TerminalResult(
+        "ok" if outcome == "completed" else "refused",
+        outcome,
+        None,
+        phase_ref,
+        hashlib.sha256(phase_bytes).hexdigest(),
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     global _cleanup_incomplete_committing, _linearized_static_success
     global _terminal_committed
@@ -1758,6 +2040,26 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
 
             handler = static_handler
+        elif command == "rehearse":
+            if type(clock) is not driver.RehearsalClock:
+                return _commit_terminal(
+                    TerminalResult(
+                        "failed", "provider_uncertain", None, None, None
+                    )
+                )
+
+            def rehearsal_handler(
+                attempt: driver.CommandAttempt, *, root: Path
+            ) -> TerminalResult:
+                return _rehearsal_handler(
+                    attempt,
+                    root=root,
+                    clock=clock,
+                    static_preflight_ref=parsed.static_preflight,
+                    persona=parsed.persona,
+                )
+
+            handler = rehearsal_handler
         return _run_command(
             command,
             handler,

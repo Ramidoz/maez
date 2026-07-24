@@ -8809,6 +8809,7 @@ def _b7_production_contract_case(
         argv=[str(executable), *identity.effective_args],
         env=_b7_production_environment(phase),
         expected_port=driver.BENCH_PORT,
+        readiness_timeout_s=driver.READINESS_TIMEOUT_S,
     )
     if phase == "cuda_candidate":
         window = _b7_authorization()
@@ -10780,6 +10781,26 @@ class TestB6LoopbackEndpoints:
 
 
 class TestB6ClientSeal:
+    def test_production_request_timeout_is_sealed_before_provider_admission(
+        self,
+    ) -> None:
+        clock = driver.SystemClock()
+        assert (
+            driver.LoopbackServerClient.production(clock).request_timeout_ms
+            == driver.REQUEST_TIMEOUT_MS
+            == 30_000
+        )
+        components = _provider_components("production")
+        components["server_client"] = driver.LoopbackServerClient.production(
+            components["clock"],
+            request_timeout_ms=1,
+        )
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.production_tier(**components)
+
+        _assert_refusal(exc, "tier_mismatch")
+
     def test_rehearsal_client_rejects_nonadvancing_transport_clock(self) -> None:
         with pytest.raises(ValueError, match="^transport_clock_required$"):
             driver.LoopbackServerClient.rehearsal(
@@ -11415,6 +11436,7 @@ def _b7_harness(
         boot_id="boot-b7",
         window_id="window-b7",
         expected_port=None,
+        readiness_timeout_s=request_timeout_ms / 1_000,
     )
     return _B7Harness(
         config=config,
@@ -11434,6 +11456,49 @@ def _b7_wrapper(path: Path) -> dict[str, object]:
     assert wrapper["tier"] == "rehearsal"
     assert "schema" not in wrapper
     return wrapper
+
+
+class TestTask6TierTimeoutBounds:
+    @pytest.mark.parametrize("readiness_timeout_s", (299.0, 1.0))
+    def test_production_readiness_timeout_bound_refuses_before_artifacts(
+        self, private_root: Path, readiness_timeout_s: float
+    ) -> None:
+        config, _pin, _static, _identity = _b7_production_contract_case(
+            private_root,
+            "vulkan_baseline",
+        )
+        config = replace(config, readiness_timeout_s=readiness_timeout_s)
+        before = sorted(path.relative_to(private_root) for path in private_root.rglob("*"))
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.run_phase(
+                config,
+                driver.production_tier(**_provider_components("production")),
+                root=private_root,
+            )
+
+        _assert_refusal(exc, "tier_mismatch")
+        assert sorted(path.relative_to(private_root) for path in private_root.rglob("*")) == before
+
+    @pytest.mark.parametrize(
+        "readiness_timeout_s",
+        (5.000001, 0.0, -1.0, True, float("inf"), float("nan")),
+    )
+    def test_rehearsal_readiness_timeout_bound_refuses_before_artifacts(
+        self, private_root: Path, readiness_timeout_s: object
+    ) -> None:
+        harness = _b7_harness(private_root)
+        config = replace(
+            harness.config,
+            readiness_timeout_s=readiness_timeout_s,
+        )
+        before = sorted(path.relative_to(private_root) for path in private_root.rglob("*"))
+
+        with pytest.raises(driver.BenchRefusal) as exc:
+            driver.run_phase(config, harness.providers, root=private_root)
+
+        _assert_refusal(exc, "tier_mismatch")
+        assert sorted(path.relative_to(private_root) for path in private_root.rglob("*")) == before
 
 
 class TestB7PhaseStateMachine:
