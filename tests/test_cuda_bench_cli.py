@@ -967,7 +967,9 @@ class TestTask4StaticPreflight:
         expected = hashlib.sha256(payload).hexdigest()
         monkeypatch.setattr(cm, "FROZEN_CORPUS_SHA256", expected)
 
-        assert cli._validate_frozen_corpus(root=root) == expected
+        assert cli._validate_frozen_corpus(root=root) == tuple(
+            json.loads(payload)
+        )
 
     def test_driver_package_identity_is_ordered_five_file_preimage(self) -> None:
         digest, preimage = cli._driver_package_sha256()
@@ -1285,7 +1287,7 @@ class TestTask4StaticPreflight:
         monkeypatch.setattr(
             cli,
             "_validate_frozen_corpus",
-            lambda **_kwargs: cm.FROZEN_CORPUS_SHA256,
+            lambda **_kwargs: tuple(f"prompt-{index}" for index in range(7)),
         )
         monkeypatch.setattr(
             cli, "_collect_static_asset_hashes", lambda _paths: assets
@@ -1835,7 +1837,7 @@ class TestTask4StaticPreflight:
             lambda **_kwargs: _static_test_observation(),
         )
         real_normalize = cli._normalize_handler_result
-        real_reprove = cli._static_success_latch_is_current
+        real_reprove = cli._durable_success_latch_is_current
         admission_binding: tuple[str, str] | None = None
         observed_masks: list[set[int]] = []
 
@@ -1886,7 +1888,7 @@ class TestTask4StaticPreflight:
 
         monkeypatch.setattr(cli, "_normalize_handler_result", normalize_then_mutate)
         monkeypatch.setattr(
-            cli, "_static_success_latch_is_current", observe_reproof_mask
+            cli, "_durable_success_latch_is_current", observe_reproof_mask
         )
 
         def handler(attempt: driver.CommandAttempt, *, root: Path) -> object:
@@ -2386,39 +2388,6 @@ def _terminal_artifact_handler(status: str) -> Callable[..., object]:
 
 
 class TestSealedParser:
-    @pytest.mark.parametrize(
-        "command",
-        ("vulkan-baseline", "cuda-candidate"),
-    )
-    def test_phase_cli_has_no_success_or_completion_producer_before_task7(
-        self,
-        command: str,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        def observe_handler(
-            observed_command: str,
-            handler: Callable[..., object],
-            *,
-            root: Path,
-            clock: driver.Clock,
-        ) -> int:
-            del clock
-            assert observed_command == command
-            assert handler is cli._unimplemented_handler
-            result = handler(object(), root=root)
-            assert result == cli.TerminalResult(
-                "refused",
-                "assembly_refused",
-                None,
-                None,
-                None,
-            )
-            return 3
-
-        monkeypatch.setattr(cli, "_run_command", observe_handler)
-
-        assert cli.main([command]) == 3
-
     def test_parser_has_exactly_five_public_choices(self) -> None:
         parser = cli.build_parser()
         subparsers = parser._subparsers
@@ -2445,8 +2414,22 @@ class TestSealedParser:
         assert command_options == {
             "static-preflight": set(),
             "rehearse": {"--static-preflight", "--persona"},
-            "vulkan-baseline": set(),
-            "cuda-candidate": set(),
+            "vulkan-baseline": {
+                "--window-authorization",
+                "--static-preflight",
+                "--static-admission",
+                "--static-completion",
+            },
+            "cuda-candidate": {
+                "--continuation",
+                "--parent-window",
+                "--parent-packet",
+                "--parent-admission",
+                "--parent-completion",
+                "--static-preflight",
+                "--static-admission",
+                "--static-completion",
+            },
             "assemble-stage1": set(),
         }
         assert tuple(inspect.signature(cli.main).parameters) == ("argv",)
@@ -2699,7 +2682,9 @@ class TestRootAdmissionAndExitStatus:
         }
         assert after == before
 
-    @pytest.mark.parametrize("command", PUBLIC_COMMANDS)
+    @pytest.mark.parametrize(
+        "command", ("static-preflight", "rehearse", "assemble-stage1")
+    )
     @pytest.mark.parametrize(
         ("status", "expected_exit"),
         (("ok", 0), ("refused", 3), ("failed", 4)),
@@ -5015,3 +5000,1283 @@ class TestAssemblerAuthorityAbsence:
         assert public == {"annotations"}
         assert type(module.annotations).__module__ == "__future__"
         assert list(tmp_path.iterdir()) == before
+
+
+class TestTask7ProductionMeasurementCommands:
+    VULKAN_ARGS = (
+        "--window-authorization",
+        "authority/window.json",
+        "--static-preflight",
+        "receipts/static.json",
+        "--static-admission",
+        "commands/static-admission.json",
+        "--static-completion",
+        "commands/static-completion.json",
+    )
+    CUDA_ARGS = (
+        "--continuation",
+        "authority/continuation.json",
+        "--parent-window",
+        "authority/window.json",
+        "--parent-packet",
+        "packets/vulkan.json",
+        "--parent-admission",
+        "commands/vulkan-admission.json",
+        "--parent-completion",
+        "commands/vulkan-completion.json",
+        "--static-preflight",
+        "receipts/static.json",
+        "--static-admission",
+        "commands/static-admission.json",
+        "--static-completion",
+        "commands/static-completion.json",
+    )
+
+    @pytest.mark.parametrize(
+        ("command", "arguments", "expected_names"),
+        (
+            (
+                "vulkan-baseline",
+                VULKAN_ARGS,
+                {
+                    "window_authorization",
+                    "static_preflight",
+                    "static_admission",
+                    "static_completion",
+                },
+            ),
+            (
+                "cuda-candidate",
+                CUDA_ARGS,
+                {
+                    "continuation",
+                    "parent_window",
+                    "parent_packet",
+                    "parent_admission",
+                    "parent_completion",
+                    "static_preflight",
+                    "static_admission",
+                    "static_completion",
+                },
+            ),
+        ),
+    )
+    def test_production_phase_parser_is_exact(
+        self,
+        command: str,
+        arguments: tuple[str, ...],
+        expected_names: set[str],
+    ) -> None:
+        parsed = cli.build_parser().parse_args((command, *arguments))
+        assert set(vars(parsed)) == {"command", *expected_names}
+        for forbidden in (
+            "--root",
+            "--port",
+            "--timeout",
+            "--model",
+            "--corpus",
+            "--env",
+            "--restart",
+        ):
+            with pytest.raises(cli.InvocationRefusal):
+                cli.build_parser().parse_args((command, *arguments, forbidden, "x"))
+
+    def test_frozen_tail_is_exact_and_hash_bound(self) -> None:
+        assert cli.FROZEN_BENCH_ARGV_TAIL == (
+            "-m",
+            cm.FROZEN_MODEL_PATH,
+            "--alias",
+            cm.FROZEN_ALIAS,
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "18080",
+            "--ctx-size",
+            "40960",
+            "--parallel",
+            "1",
+            "--n-gpu-layers",
+            "999",
+            "-fa",
+            "on",
+            "--cache-type-k",
+            "q4_0",
+            "--cache-type-v",
+            "q4_0",
+            "--spec-type",
+            "draft-mtp",
+            "--spec-draft-n-max",
+            "3",
+            "--kv-unified",
+            "-fit",
+            "off",
+        )
+        encoded = json.dumps(
+            list(cli.FROZEN_BENCH_ARGV_TAIL),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode()
+        assert hashlib.sha256(encoded).hexdigest() == cm.FROZEN_BENCH_ARGS_SHA256
+
+    def test_frozen_prompt_loader_delegates_and_preserves_duplicates(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        prompts = ("one", "two", "one", "three", "four", "five", "six")
+        monkeypatch.setattr(
+            cli, "_validate_frozen_corpus", lambda *, root: prompts
+        )
+        assert cli._load_frozen_prompts(root=tmp_path) == prompts
+        source = inspect.getsource(cli._load_frozen_prompts)
+        assert source.count("_validate_frozen_corpus") == 1
+        assert "json.loads" not in source
+
+    @pytest.mark.parametrize(
+        "field",
+        (
+            "gpu_uuid",
+            "driver_package_sha256",
+            "stub_sha256",
+            "corpus_verified",
+            "checks",
+        ),
+    )
+    def test_static_identity_compares_every_non_timestamp_field(
+        self, field: str
+    ) -> None:
+        selected = _static_test_observation().static_doc
+        if field == "checks":
+            checks = dict(selected.checks)
+            checks["vision_unit"] = "f" * 64
+            mutated = replace(selected, checks=checks)
+        elif field == "corpus_verified":
+            mutated = replace(selected)
+            object.__setattr__(mutated, "corpus_verified", False)
+        elif field == "gpu_uuid":
+            mutated = replace(
+                selected,
+                gpu_uuid="GPU-11111111-2222-3333-4444-555555555555",
+            )
+        elif field == "stub_sha256":
+            checks = dict(selected.checks)
+            checks["stub_pin"] = "f" * 64
+            mutated = replace(selected, stub_sha256="f" * 64, checks=checks)
+        else:
+            mutated = replace(selected, **{field: "f" * 64})
+        with pytest.raises(driver.BenchRefusal, match="identity_mismatch"):
+            cli._require_static_match(selected, mutated)
+        cli._require_static_match(
+            selected,
+            replace(selected, timestamp="2026-07-21T12:00:01Z"),
+        )
+
+    def test_phase_window_is_parsed_before_admission_and_bound(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        tmp_path.chmod(0o700)
+        authorization = driver.WindowAuthorization(
+            window_id="window-task7",
+            phases=("vulkan_baseline", "cuda_candidate"),
+            boot_id="boot-task7",
+            nonce="a" * 64,
+            issued_at="2026-07-24T10:00:00Z",
+            expires_at="2026-07-24T14:00:00Z",
+            owner="owner",
+        )
+        opened: list[str] = []
+        admitted: list[str | None] = []
+        monkeypatch.setattr(
+            driver,
+            "open_bench_file",
+            lambda relative, *, root: opened.append(relative) or b"authorization",
+        )
+        monkeypatch.setattr(
+            driver, "parse_window_authorization", lambda _data: authorization
+        )
+        real_admit = driver._admit_command
+
+        def admit(**kwargs: object) -> driver.CommandAttempt:
+            admitted.append(kwargs["window_id"])  # type: ignore[arg-type]
+            return real_admit(**kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(driver, "_admit_command", admit)
+        result = cli._run_command(
+            "vulkan-baseline",
+            lambda _attempt, *, root, authorization: cli.TerminalResult(
+                "refused",
+                "preflight_service_active",
+                "window-task7",
+                None,
+                None,
+            ),
+            root=tmp_path,
+            clock=_FixedClock("production"),
+            authority_ref="authority/window.json",
+        )
+        assert result == 3
+        assert opened[0] == "authority/window.json"
+        assert admitted == ["window-task7"]
+        path = next(tmp_path.glob("*admission.json"))
+        admission = cm.CommandAdmissionPreimage(
+            str(path.relative_to(tmp_path)), path.read_bytes()
+        )
+        assert admission.window_id == "window-task7"
+
+    def test_nonce_unburned_pre_admission_authority_failure_creates_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        tmp_path.chmod(0o700)
+        monkeypatch.setattr(
+            driver,
+            "open_bench_file",
+            lambda _relative, *, root: (_ for _ in ()).throw(
+                driver.BenchRefusal("filesystem_hazard")
+            ),
+        )
+        assert (
+            cli._run_command(
+                "vulkan-baseline",
+                lambda _attempt, *, root, authorization: (_ for _ in ()).throw(
+                    AssertionError("handler called")
+                ),
+                root=tmp_path,
+                clock=_FixedClock("production"),
+                authority_ref="authority/window.json",
+            )
+            == 3
+        )
+        assert list(tmp_path.iterdir()) == []
+
+    def test_cuda_continuation_window_is_bound_into_admission(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        tmp_path.chmod(0o700)
+        continuation = driver.Continuation(
+            window_id="window-task7",
+            phases=("cuda_candidate",),
+            boot_id="boot-task7",
+            nonce="b" * 64,
+            issued_at="2026-07-24T12:00:00Z",
+            expires_at="2026-07-24T13:00:00Z",
+            owner="owner",
+            parent_vulkan_packet_sha256="c" * 64,
+        )
+        monkeypatch.setattr(
+            driver,
+            "open_bench_file",
+            lambda _relative, *, root: b"continuation",
+        )
+        monkeypatch.setattr(
+            driver, "parse_continuation", lambda _data: continuation
+        )
+        assert (
+            cli._run_command(
+                "cuda-candidate",
+                lambda _attempt, *, root, authorization: cli.TerminalResult(
+                    "refused",
+                    "preflight_service_active",
+                    authorization.window_id,
+                    None,
+                    None,
+                ),
+                root=tmp_path,
+                clock=_FixedClock("production"),
+                authority_ref="authority/continuation.json",
+            )
+            == 3
+        )
+        path = next(tmp_path.glob("*admission.json"))
+        admission = cm.CommandAdmissionPreimage(
+            str(path.relative_to(tmp_path)), path.read_bytes()
+        )
+        assert admission.command == "cuda-candidate"
+        assert admission.window_id == continuation.window_id
+
+    def test_production_environment_phase_config_is_exact(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        observation = replace(
+            _static_test_observation(),
+            runtime_identity=cm.RuntimeIdentity(**_task6_identity_fields()),
+        )
+        identity = observation.runtime_identity
+        assert isinstance(identity, cm.RuntimeIdentity)
+        window = driver.WindowAuthorization(
+            window_id="window-task7",
+            phases=("vulkan_baseline", "cuda_candidate"),
+            boot_id="boot-task7",
+            nonce="a" * 64,
+            issued_at="2026-07-24T10:00:00Z",
+            expires_at="2026-07-24T14:00:00Z",
+            owner="owner",
+        )
+        prompts = tuple(f"prompt-{index}" for index in range(7))
+        monkeypatch.setattr(cli, "_load_frozen_prompts", lambda *, root: prompts)
+        monkeypatch.setattr(cli, "_read_boot_id", lambda: "boot-task7")
+        args = cli.build_parser().parse_args(
+            ("vulkan-baseline", *self.VULKAN_ARGS)
+        )
+        args._root = Path("/tmp/task7-config")
+        args._authorization = window
+        config = cli._vulkan_config(args, observation)
+        identity_fields = driver._runtime_identity_fields(identity)
+        identity_fields["effective_args"] = tuple(identity.effective_args)
+        assert config.argv == [
+            str(cm.VULKAN_RELEASE_ROOT / "llama-server"),
+            *cli.FROZEN_BENCH_ARGV_TAIL,
+        ]
+        assert config.env == dict(
+            driver._PHASE_BENCH_ENVIRONMENTS["vulkan_baseline"]
+        )
+        assert config.expected_port == 18080
+        assert config.readiness_timeout_s == driver.READINESS_TIMEOUT_S
+        assert config.window_id == window.window_id
+        assert config.boot_id == "boot-task7"
+        assert config.bench_identity_fields == identity_fields
+        assert config.runtime_identity_fields == identity_fields
+        assert config.prompts == prompts
+
+    def test_production_environment_cuda_config_parent_paths_and_order(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        observation = replace(
+            _static_test_observation(),
+            runtime_identity=cm.RuntimeIdentity(**_task6_identity_fields()),
+        )
+        continuation = driver.Continuation(
+            window_id="window-task7",
+            phases=("cuda_candidate",),
+            boot_id="boot-task7",
+            nonce="b" * 64,
+            issued_at="2026-07-24T12:00:00Z",
+            expires_at="2026-07-24T13:00:00Z",
+            owner="owner",
+            parent_vulkan_packet_sha256="c" * 64,
+        )
+        parent = driver.WindowAuthorization(
+            window_id="window-task7",
+            phases=("vulkan_baseline", "cuda_candidate"),
+            boot_id="boot-task7",
+            nonce="a" * 64,
+            issued_at="2026-07-24T10:00:00Z",
+            expires_at="2026-07-24T14:00:00Z",
+            owner="owner",
+        )
+        prompts = tuple(f"prompt-{index}" for index in range(7))
+        monkeypatch.setattr(cli, "_load_frozen_prompts", lambda *, root: prompts)
+        monkeypatch.setattr(cli, "_read_boot_id", lambda: "boot-task7")
+        monkeypatch.setattr(
+            driver, "open_bench_file", lambda _relative, *, root: b"window"
+        )
+        monkeypatch.setattr(
+            driver, "parse_window_authorization", lambda _data: parent
+        )
+        args = cli.build_parser().parse_args(
+            ("cuda-candidate", *self.CUDA_ARGS)
+        )
+        args._root = Path("/tmp/task7-config")
+        args._authorization = continuation
+        config = cli._cuda_config(args, observation)
+        assert config.argv == [
+            str(cm.CUDA_RELEASE_ROOT / "llama-server"),
+            *cli.FROZEN_BENCH_ARGV_TAIL,
+        ]
+        assert config.env == dict(
+            driver._PHASE_BENCH_ENVIRONMENTS["cuda_candidate"]
+        )
+        assert config.prompts == prompts
+        assert config.window_id == continuation.window_id
+        assert config.parent_window is parent
+        assert config.parent_packet_path == args.parent_packet
+        assert config.parent_admission_path == args.parent_admission
+        assert config.parent_completion_path == args.parent_completion
+
+    def test_no_service_mutation_production_provider_factory_is_exact(
+        self,
+    ) -> None:
+        identity = cm.RuntimeIdentity(**_task6_identity_fields())
+        assert isinstance(identity, cm.RuntimeIdentity)
+        providers = cli._production_providers("vulkan_baseline", identity)
+        assert type(providers.service_state) is driver.RealServiceStateProvider
+        assert type(providers.port_probe) is driver.RealPortProbe
+        assert type(providers.gpu) is driver.RealGpuProvider
+        assert type(providers.kernel_log) is driver.RealKernelLogProvider
+        assert type(providers.backend_maps) is driver.RealBackendMapProvider
+        assert type(providers.server_launcher) is driver.RealServerLauncher
+        assert type(providers.authorization_gate) is driver.RealAuthorizationGate
+        assert type(providers.containment) is driver.RealContainmentProvider
+        source = inspect.getsource(cli._production_providers)
+        for forbidden in (
+            '"stop"',
+            '"start"',
+            '"restart"',
+            '"enable"',
+            '"disable"',
+            '"install"',
+            '"override"',
+        ):
+            assert forbidden not in source
+
+    def test_verify_existing_rollback_is_read_only_and_not_repaired(self) -> None:
+        source = inspect.getsource(cli._phase_handler)
+        assert source.count("verify_existing_immutable") == 1
+        assert "publish_or_verify_immutable" not in source
+        assert "write_private_file" not in source
+
+    def test_malformed_selected_static_timestamp_refuses_structurally(self) -> None:
+        doc = _static_test_observation().static_doc
+        fields = cli._static_preflight_fields(doc)
+        fields["timestamp"] = "2026-07-24 12:00:00"
+        encoded = driver.ProductionArtifactPolicy().encode(
+            "static_preflight", fields
+        )
+        with pytest.raises(ValueError, match="persisted_roundtrip"):
+            cm.PersistedDoc(encoded)
+
+    @pytest.mark.parametrize(
+        ("phase", "command"),
+        (
+            ("vulkan_baseline", "vulkan-baseline"),
+            ("cuda_candidate", "cuda-candidate"),
+        ),
+    )
+    def test_phase_completion_signal_before_link_never_latches_success(
+        self,
+        phase: str,
+        command: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        tmp_path.chmod(0o700)
+        attempt = driver._admit_command(
+            command=command,
+            window_id="window-task7",
+            policy=driver.ProductionArtifactPolicy(),
+            clock=_FixedClock("production"),
+            root=tmp_path,
+        )
+        from tests.test_cuda_migration import _phase_packet
+
+        packet = _phase_packet(phase)
+        object.__setattr__(packet, "window_id", "window-task7")
+        (tmp_path / "packet.json").write_bytes(b"packet")
+        (tmp_path / "packet.json").chmod(0o600)
+        monkeypatch.setattr(
+            driver, "open_bench_file", lambda _relative, *, root: b"packet"
+        )
+        monkeypatch.setattr(cm, "decode_persisted_packet", lambda _data: packet)
+        monkeypatch.setattr(
+            driver,
+            "publish_command_artifact",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                driver._CommandInterrupted(signal.SIGTERM, attempt)
+            ),
+        )
+        latched: list[cli.TerminalResult] = []
+        monkeypatch.setattr(
+            cli,
+            "_latch_durable_success",
+            lambda result, **_kwargs: latched.append(result),
+        )
+        with pytest.raises(driver._CommandInterrupted):
+            cli._publish_phase_completion(
+                attempt,
+                phase_ref="packet.json",
+                expected_phase=phase,
+                expected_window_id="window-task7",
+                root=tmp_path,
+                clock=_FixedClock("production"),
+            )
+        assert latched == []
+        assert not any(
+            "terminal" in path.name for path in tmp_path.rglob("*.json")
+        )
+
+    @pytest.mark.parametrize(
+        ("phase", "command"),
+        (
+            ("vulkan_baseline", "vulkan-baseline"),
+            ("cuda_candidate", "cuda-candidate"),
+        ),
+    )
+    def test_phase_completion_signal_after_durable_validation_latches_success(
+        self,
+        phase: str,
+        command: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        tmp_path.chmod(0o700)
+        attempt = driver._admit_command(
+            command=command,
+            window_id="window-task7",
+            policy=driver.ProductionArtifactPolicy(),
+            clock=_FixedClock("production"),
+            root=tmp_path,
+        )
+        from tests.test_cuda_migration import _phase_packet
+
+        packet = _phase_packet(phase)
+        object.__setattr__(packet, "window_id", "window-task7")
+        (tmp_path / "packet.json").write_bytes(b"packet")
+        (tmp_path / "packet.json").chmod(0o600)
+        monkeypatch.setattr(
+            driver, "open_bench_file", lambda _relative, *, root: b"packet"
+        )
+        monkeypatch.setattr(cm, "decode_persisted_packet", lambda _data: packet)
+
+        def publish(
+            _attempt: driver.CommandAttempt,
+            _role: str,
+            _data: bytes,
+            *,
+            root: Path,
+            on_committed: Callable[[str, str], None],
+        ) -> tuple[str, str]:
+            del root
+            on_committed("command-completion.json", "f" * 64)
+            raise driver._CommandInterrupted(signal.SIGTERM, attempt)
+
+        monkeypatch.setattr(driver, "publish_command_artifact", publish)
+        latched: list[cli.TerminalResult] = []
+        monkeypatch.setattr(
+            cli,
+            "_latch_durable_success",
+            lambda result, **_kwargs: latched.append(result),
+        )
+        with pytest.raises(driver._CommandInterrupted):
+            cli._publish_phase_completion(
+                attempt,
+                phase_ref="packet.json",
+                expected_phase=phase,
+                expected_window_id="window-task7",
+                root=tmp_path,
+                clock=_FixedClock("production"),
+            )
+        assert latched == [
+            cli.TerminalResult(
+                "ok",
+                "completed",
+                "window-task7",
+                "command-completion.json",
+                "f" * 64,
+            )
+        ]
+
+    @pytest.mark.parametrize(
+        ("spawned", "schema", "expected_status"),
+        (
+            (False, driver.REFUSAL_SCHEMA, "refused"),
+            (True, driver.PHASE_PACKET_SCHEMA, "failed"),
+        ),
+    )
+    def test_reduced_phase_artifact_maps_honestly_without_completion(
+        self,
+        spawned: bool,
+        schema: str,
+        expected_status: str,
+        tmp_path: Path,
+    ) -> None:
+        tmp_path.chmod(0o700)
+        fields = {
+            "phase": "vulkan_baseline",
+            "window_id": "window-task7",
+            "boot_id": "boot-task7",
+            "outcome": "preflight_service_active",
+            "spawned": spawned,
+            "timestamp": FIXED_TIMESTAMP,
+        }
+        binding = hashlib.sha256(driver._canonical_json(fields)).hexdigest()
+        wrapper = driver._canonical_json(
+            {
+                "schema": schema,
+                "binding_sha256": binding,
+                "fields": fields,
+            }
+        )
+        path = tmp_path / "reduced.json"
+        path.write_bytes(wrapper)
+        path.chmod(0o600)
+        result = cli._phase_artifact_result(
+            "reduced.json",
+            expected_phase="vulkan_baseline",
+            expected_window_id="window-task7",
+            root=tmp_path,
+        )
+        assert result.status == expected_status
+        assert result.outcome == "preflight_service_active"
+        assert result.artifact_ref == "reduced.json"
+        assert not any("completion" in item.name for item in tmp_path.iterdir())
+        with pytest.raises(ValueError):
+            cm.decode_persisted_packet(wrapper)
+
+    def test_binding_invalid_reduced_phase_artifact_fails_closed(
+        self, tmp_path: Path
+    ) -> None:
+        wrapper = driver._canonical_json(
+            {
+                "schema": driver.REFUSAL_SCHEMA,
+                "binding_sha256": "0" * 64,
+                "fields": {
+                    "phase": "vulkan_baseline",
+                    "window_id": "window-task7",
+                    "boot_id": "boot-task7",
+                    "outcome": "preflight_service_active",
+                    "spawned": False,
+                    "timestamp": FIXED_TIMESTAMP,
+                },
+            }
+        )
+        path = tmp_path / "reduced.json"
+        path.write_bytes(wrapper)
+        path.chmod(0o600)
+        with pytest.raises(driver.BenchRefusal, match="provider_uncertain"):
+            cli._phase_artifact_result(
+                "reduced.json",
+                expected_phase="vulkan_baseline",
+                expected_window_id="window-task7",
+                root=tmp_path,
+            )
+
+    def test_phase_completion_validator_reopens_and_joins_underlying_packet(
+        self, tmp_path: Path
+    ) -> None:
+        tmp_path.chmod(0o700)
+        attempt = driver._admit_command(
+            command="vulkan-baseline",
+            window_id="window-task7",
+            policy=driver.ProductionArtifactPolicy(),
+            clock=_FixedClock("production"),
+            root=tmp_path,
+        )
+        completion = cm.CommandCompletionDoc(
+            command="vulkan-baseline",
+            ordinal=attempt.ordinal,
+            window_id="window-task7",
+            admission_ref=attempt.admission_ref,
+            admission_sha256=attempt.admission_sha256,
+            artifact_ref="packets/missing-phase-packet.json",
+            artifact_sha256="f" * 64,
+            artifact_schema=cm.PHASE_PACKET_SCHEMA,
+            status="completed",
+            timestamp="2026-07-21T12:00:01Z",
+        )
+        encoded = driver.ProductionArtifactPolicy().encode(
+            "command_completion", cli._completion_fields(completion)
+        )
+        completion_ref = cli._expected_terminal_ref(attempt)
+        driver.write_private_file(completion_ref, encoded, root=tmp_path)
+        result = cli.TerminalResult(
+            "ok",
+            "completed",
+            "window-task7",
+            completion_ref,
+            hashlib.sha256(encoded).hexdigest(),
+        )
+        assert cli._valid_command_completion_result(
+            attempt, result, root=tmp_path
+        ) is False
+
+    @pytest.mark.parametrize("mutation", ("delete", "replace"))
+    def test_durable_phase_latch_reproves_joined_packet(
+        self, mutation: str, tmp_path: Path
+    ) -> None:
+        from tests.test_cuda_migration import _phase_packet
+
+        tmp_path.chmod(0o700)
+        packet = _phase_packet("vulkan_baseline")
+        packet_ref = "packets/vulkan.json"
+        packet_bytes = driver.ProductionArtifactPolicy().encode(
+            "packet",
+            {
+                "binding_sha256": packet.binding_sha256,
+                **driver._phase_packet_fields(packet),
+            },
+        )
+        driver.write_private_file(packet_ref, packet_bytes, root=tmp_path)
+        attempt = driver._admit_command(
+            command="vulkan-baseline",
+            window_id=packet.window_id,
+            policy=driver.ProductionArtifactPolicy(),
+            clock=driver.FrozenClock("2026-07-14T07:00:00Z"),
+            root=tmp_path,
+        )
+        result = cli._publish_phase_completion(
+            attempt,
+            phase_ref=packet_ref,
+            expected_phase="vulkan_baseline",
+            expected_window_id=packet.window_id,
+            root=tmp_path,
+            clock=driver.FrozenClock("2026-07-21T12:00:01Z"),
+        )
+        latch = cli._linearized_durable_success
+        assert latch is not None
+        path = tmp_path / packet_ref
+        if mutation == "delete":
+            path.unlink()
+        else:
+            payload = path.read_bytes()
+            path.unlink()
+            path.write_bytes(payload)
+            path.chmod(0o600)
+        assert cli._durable_success_latch_is_current(latch) is False
+        assert result.status == "ok"
+
+    def test_nonfrozen_order_packet_cannot_mint_completion(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from tests.test_cuda_migration import _phase_packet
+
+        tmp_path.chmod(0o700)
+        packet = _phase_packet("vulkan_baseline")
+        object.__setattr__(packet, "order_sha256", "d" * 64)
+        attempt = driver._admit_command(
+            command="vulkan-baseline",
+            window_id=packet.window_id,
+            policy=driver.ProductionArtifactPolicy(),
+            clock=driver.FrozenClock("2026-07-14T07:00:00Z"),
+            root=tmp_path,
+        )
+        monkeypatch.setattr(
+            driver, "open_bench_file", lambda _relative, *, root: b"packet"
+        )
+        monkeypatch.setattr(cm, "decode_persisted_packet", lambda _data: packet)
+        monkeypatch.setattr(
+            driver,
+            "publish_command_artifact",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("completion published")
+            ),
+        )
+        with pytest.raises(driver.BenchRefusal, match="provider_uncertain"):
+            cli._publish_phase_completion(
+                attempt,
+                phase_ref="packets/vulkan.json",
+                expected_phase="vulkan_baseline",
+                expected_window_id=packet.window_id,
+                root=tmp_path,
+                clock=driver.FrozenClock("2026-07-21T12:00:01Z"),
+            )
+
+    @pytest.mark.parametrize(
+        ("spawned", "outcome", "status"),
+        (
+            (False, "cleanup_incomplete", "refused"),
+            (True, "cleanup_incomplete", "failed"),
+            (False, "interrupted", "refused"),
+        ),
+    )
+    def test_trusted_reduced_terminal_preserves_driver_outcome(
+        self,
+        spawned: bool,
+        outcome: str,
+        status: str,
+        tmp_path: Path,
+    ) -> None:
+        tmp_path.chmod(0o700)
+        attempt = driver._admit_command(
+            command="vulkan-baseline",
+            window_id="window-task7",
+            policy=driver.ProductionArtifactPolicy(),
+            clock=_FixedClock("production"),
+            root=tmp_path,
+        )
+        fields = {
+            "phase": "vulkan_baseline",
+            "window_id": "window-task7",
+            "boot_id": "boot-task7",
+            "outcome": outcome,
+            "spawned": spawned,
+            "timestamp": FIXED_TIMESTAMP,
+        }
+        wrapper = driver._canonical_json(
+            {
+                "schema": (
+                    driver.PHASE_PACKET_SCHEMA
+                    if spawned
+                    else driver.REFUSAL_SCHEMA
+                ),
+                "binding_sha256": hashlib.sha256(
+                    driver._canonical_json(fields)
+                ).hexdigest(),
+                "fields": fields,
+            }
+        )
+        path = tmp_path / "reduced.json"
+        path.write_bytes(wrapper)
+        path.chmod(0o600)
+        phase_result = cli._phase_artifact_result(
+            "reduced.json",
+            expected_phase="vulkan_baseline",
+            expected_window_id="window-task7",
+            root=tmp_path,
+        )
+        normalized = cli._normalize_handler_result(
+            attempt,
+            phase_result,
+            root=tmp_path,
+            trust_phase_results=True,
+        )
+        assert normalized.status == status
+        assert normalized.outcome == outcome
+
+    def test_arbitrary_handler_cannot_construct_trusted_phase_result(self) -> None:
+        with pytest.raises(ValueError, match="trusted_phase_result"):
+            cli._TrustedPhaseResult(
+                cli.TerminalResult(
+                    "failed",
+                    "cleanup_incomplete",
+                    "window-task7",
+                    "artifact.json",
+                    "f" * 64,
+                ),
+                _guard=object(),
+            )
+
+    def test_arbitrary_run_command_handler_cannot_mint_reserved_reduced_outcome(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        tmp_path.chmod(0o700)
+        authorization = driver.WindowAuthorization(
+            window_id="window-task7",
+            phases=("vulkan_baseline", "cuda_candidate"),
+            boot_id="boot-task7",
+            nonce="a" * 64,
+            issued_at="2026-07-24T10:00:00Z",
+            expires_at="2026-07-24T14:00:00Z",
+            owner="owner",
+        )
+        monkeypatch.setattr(
+            driver, "parse_window_authorization", lambda _data: authorization
+        )
+        real_open = driver.open_bench_file
+        monkeypatch.setattr(
+            driver,
+            "open_bench_file",
+            lambda relative, *, root: (
+                b"authorization"
+                if relative == "authority.json"
+                else real_open(relative, root=root)
+            ),
+        )
+        fields = {
+            "phase": "vulkan_baseline",
+            "window_id": authorization.window_id,
+            "boot_id": authorization.boot_id,
+            "outcome": "cleanup_incomplete",
+            "spawned": False,
+            "timestamp": FIXED_TIMESTAMP,
+        }
+        reduced = driver._canonical_json(
+            {
+                "schema": driver.REFUSAL_SCHEMA,
+                "binding_sha256": hashlib.sha256(
+                    driver._canonical_json(fields)
+                ).hexdigest(),
+                "fields": fields,
+            }
+        )
+        (tmp_path / "forged-reduced.json").write_bytes(reduced)
+        (tmp_path / "forged-reduced.json").chmod(0o600)
+        def arbitrary_handler(
+            _attempt: driver.CommandAttempt,
+            *,
+            root: Path,
+            authorization: driver.WindowAuthorization,
+        ) -> object:
+            return cli._phase_artifact_result(
+                "forged-reduced.json",
+                expected_phase="vulkan_baseline",
+                expected_window_id=authorization.window_id,
+                root=root,
+            )
+
+        rc = cli._run_command(
+            "vulkan-baseline",
+            arbitrary_handler,
+            root=tmp_path,
+            clock=_FixedClock("production"),
+            authority_ref="authority.json",
+        )
+        terminal = _one_terminal_line(capfd.readouterr().out)
+
+        assert rc == 4
+        assert terminal["status"] == "failed"
+        assert terminal["outcome"] == "provider_uncertain"
+
+    @pytest.mark.parametrize(
+        ("command", "parser_name"),
+        (
+            ("vulkan-baseline", "parse_window_authorization"),
+            ("cuda-candidate", "parse_continuation"),
+        ),
+    )
+    def test_both_phase_parse_failures_are_null_and_nonce_unburned(
+        self,
+        command: str,
+        parser_name: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        tmp_path.chmod(0o700)
+        monkeypatch.setattr(
+            driver, "open_bench_file", lambda _relative, *, root: b"malformed"
+        )
+        monkeypatch.setattr(
+            driver,
+            parser_name,
+            lambda _data: (_ for _ in ()).throw(ValueError("malformed")),
+        )
+        called = False
+
+        def handler(
+            _attempt: driver.CommandAttempt,
+            *,
+            root: Path,
+            authorization: object,
+        ) -> object:
+            nonlocal called
+            called = True
+            return None
+
+        assert (
+            cli._run_command(
+                command,
+                handler,
+                root=tmp_path,
+                clock=_FixedClock("production"),
+                authority_ref="authority.json",
+            )
+            == 3
+        )
+        assert called is False
+        assert list(tmp_path.iterdir()) == []
+
+    @pytest.mark.parametrize(
+        "hazard", ("schema", "phase", "window", "malformed")
+    )
+    def test_reduced_artifact_complete_refusal_matrix(
+        self, hazard: str, tmp_path: Path
+    ) -> None:
+        fields = {
+            "phase": (
+                "cuda_candidate" if hazard == "phase" else "vulkan_baseline"
+            ),
+            "window_id": "wrong-window" if hazard == "window" else "window-task7",
+            "boot_id": "boot-task7",
+            "outcome": "preflight_service_active",
+            "spawned": False,
+            "timestamp": FIXED_TIMESTAMP,
+        }
+        wrapper: bytes
+        if hazard == "malformed":
+            wrapper = b"{"
+        else:
+            wrapper = driver._canonical_json(
+                {
+                    "schema": (
+                        driver.PHASE_PACKET_SCHEMA
+                        if hazard == "schema"
+                        else driver.REFUSAL_SCHEMA
+                    ),
+                    "binding_sha256": hashlib.sha256(
+                        driver._canonical_json(fields)
+                    ).hexdigest(),
+                    "fields": fields,
+                }
+            )
+        path = tmp_path / "reduced.json"
+        path.write_bytes(wrapper)
+        path.chmod(0o600)
+        with pytest.raises(driver.BenchRefusal, match="provider_uncertain"):
+            cli._phase_artifact_result(
+                "reduced.json",
+                expected_phase="vulkan_baseline",
+                expected_window_id="window-task7",
+                root=tmp_path,
+            )
+
+    @pytest.mark.parametrize(
+        ("command", "phase"),
+        (
+            ("vulkan-baseline", "vulkan_baseline"),
+            ("cuda-candidate", "cuda_candidate"),
+        ),
+    )
+    def test_phase_main_calls_collector_verify_and_run_once_without_residue(
+        self,
+        command: str,
+        phase: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        root = tmp_path / command
+        root.mkdir(mode=0o700)
+        root.chmod(0o700)
+        observation = replace(
+            _static_test_observation(),
+            runtime_identity=cm.RuntimeIdentity(**_task6_identity_fields()),
+        )
+        policy = driver.ProductionArtifactPolicy()
+        window = driver.WindowAuthorization(
+            window_id="window-task7",
+            phases=("vulkan_baseline", "cuda_candidate"),
+            boot_id="boot-task7",
+            nonce="a" * 64,
+            issued_at="2026-07-24T10:00:00Z",
+            expires_at="2026-07-24T14:00:00Z",
+            owner="owner",
+        )
+        continuation = driver.Continuation(
+            window_id=window.window_id,
+            phases=("cuda_candidate",),
+            boot_id=window.boot_id,
+            nonce="b" * 64,
+            issued_at="2026-07-24T12:00:00Z",
+            expires_at="2026-07-24T13:00:00Z",
+            owner=window.owner,
+            parent_vulkan_packet_sha256="c" * 64,
+        )
+        authority = window if command == "vulkan-baseline" else continuation
+        authority_kind = (
+            "window_authorization"
+            if command == "vulkan-baseline"
+            else "continuation"
+        )
+        authority_fields = {
+            "binding_sha256": authority.preimage_sha256,
+            "window_id": authority.window_id,
+            "phases": authority.phases,
+            "boot_id": authority.boot_id,
+            "nonce": authority.nonce,
+            "issued_at": authority.issued_at,
+            "expires_at": authority.expires_at,
+            "owner": authority.owner,
+        }
+        if type(authority) is driver.Continuation:
+            authority_fields["parent_vulkan_packet_sha256"] = (
+                authority.parent_vulkan_packet_sha256
+            )
+        authority_ref = "authority.json"
+        driver.write_private_file(
+            authority_ref,
+            policy.encode(authority_kind, authority_fields),
+            root=root,
+        )
+        static_ref = "static.json"
+        driver.write_private_file(
+            static_ref,
+            policy.encode(
+                "static_preflight",
+                cli._static_preflight_fields(observation.static_doc),
+            ),
+            root=root,
+        )
+        calls = {"collect": 0, "verify": 0, "run": 0}
+        monkeypatch.setattr(driver, "BENCH_ROOT", root)
+
+        def collect(**_kwargs: object) -> cli.StaticObservation:
+            calls["collect"] += 1
+            return observation
+
+        monkeypatch.setattr(cli, "collect_static_observation", collect)
+
+        def verify(*_args: object, **_kwargs: object) -> Path:
+            calls["verify"] += 1
+            assert not (root / "preimages").exists()
+            return root / "preimages" / "verified.json"
+
+        monkeypatch.setattr(driver, "verify_existing_immutable", verify)
+        config = type(
+            "Config",
+            (),
+            {"phase": phase, "window_id": window.window_id},
+        )()
+        monkeypatch.setattr(
+            cli,
+            "_vulkan_config" if command == "vulkan-baseline" else "_cuda_config",
+            lambda _args, _observation: config,
+        )
+        monkeypatch.setattr(
+            cli, "_production_providers", lambda _phase, _identity: object()
+        )
+
+        def run(
+            _config: object, _providers: object, *, root: Path
+        ) -> Path:
+            calls["run"] += 1
+            assert calls == {"collect": 1, "verify": 1, "run": 1}
+            assert not (root / "preimages").exists()
+            fields = {
+                "phase": phase,
+                "window_id": window.window_id,
+                "boot_id": window.boot_id,
+                "outcome": "preflight_service_active",
+                "spawned": False,
+                "timestamp": FIXED_TIMESTAMP,
+            }
+            relative = "refusals/reduced.json"
+            driver.write_private_file(
+                relative,
+                driver._canonical_json(
+                    {
+                        "schema": driver.REFUSAL_SCHEMA,
+                        "binding_sha256": hashlib.sha256(
+                            driver._canonical_json(fields)
+                        ).hexdigest(),
+                        "fields": fields,
+                    }
+                ),
+                root=root,
+            )
+            return root / relative
+
+        monkeypatch.setattr(driver, "run_phase", run)
+        common = (
+            "--static-preflight",
+            static_ref,
+            "--static-admission",
+            "static-admission.json",
+            "--static-completion",
+            "static-completion.json",
+        )
+        argv = (
+            (
+                command,
+                "--window-authorization",
+                authority_ref,
+                *common,
+            )
+            if command == "vulkan-baseline"
+            else (
+                command,
+                "--continuation",
+                authority_ref,
+                "--parent-window",
+                "parent-window.json",
+                "--parent-packet",
+                "parent-packet.json",
+                "--parent-admission",
+                "parent-admission.json",
+                "--parent-completion",
+                "parent-completion.json",
+                *common,
+            )
+        )
+        assert cli.main(argv) == 3
+        terminal = _one_terminal_line(capfd.readouterr().out)
+        assert terminal["status"] == "refused"
+        assert terminal["window_id"] == window.window_id
+        assert calls == {"collect": 1, "verify": 1, "run": 1}
+        assert not (root / "markers").exists()
+        assert not (root / "preimages").exists()
+        assert not any("completion" in path.name for path in root.rglob("*.json"))
+
+    @pytest.mark.parametrize(
+        ("command", "phase"),
+        (
+            ("vulkan-baseline", "vulkan_baseline"),
+            ("cuda-candidate", "cuda_candidate"),
+        ),
+    )
+    def test_verify_existing_refusal_is_pre_run_nonce_unburned_tree_stable(
+        self,
+        command: str,
+        phase: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        root = tmp_path / command
+        root.mkdir(mode=0o700)
+        root.chmod(0o700)
+        observation = replace(
+            _static_test_observation(),
+            runtime_identity=cm.RuntimeIdentity(**_task6_identity_fields()),
+        )
+        static_ref = "static.json"
+        driver.write_private_file(
+            static_ref,
+            driver.ProductionArtifactPolicy().encode(
+                "static_preflight",
+                cli._static_preflight_fields(observation.static_doc),
+            ),
+            root=root,
+        )
+        attempt = driver._admit_command(
+            command=command,
+            window_id="window-task7",
+            policy=driver.ProductionArtifactPolicy(),
+            clock=_FixedClock("production"),
+            root=root,
+        )
+        before = {
+            str(path.relative_to(root)): path.read_bytes()
+            for path in root.rglob("*")
+            if path.is_file()
+        }
+        authority: driver.WindowAuthorization | driver.Continuation
+        if phase == "vulkan_baseline":
+            authority = driver.WindowAuthorization(
+                window_id="window-task7",
+                phases=("vulkan_baseline", "cuda_candidate"),
+                boot_id="boot-task7",
+                nonce="a" * 64,
+                issued_at="2026-07-24T10:00:00Z",
+                expires_at="2026-07-24T14:00:00Z",
+                owner="owner",
+            )
+            args = cli.build_parser().parse_args(
+                (command, *self.VULKAN_ARGS)
+            )
+        else:
+            authority = driver.Continuation(
+                window_id="window-task7",
+                phases=("cuda_candidate",),
+                boot_id="boot-task7",
+                nonce="b" * 64,
+                issued_at="2026-07-24T12:00:00Z",
+                expires_at="2026-07-24T13:00:00Z",
+                owner="owner",
+                parent_vulkan_packet_sha256="c" * 64,
+            )
+            args = cli.build_parser().parse_args((command, *self.CUDA_ARGS))
+        args.static_preflight = static_ref
+        monkeypatch.setattr(
+            cli,
+            "collect_static_observation",
+            lambda **_kwargs: observation,
+        )
+        monkeypatch.setattr(
+            driver,
+            "verify_existing_immutable",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                driver.BenchRefusal("filesystem_hazard")
+            ),
+        )
+        monkeypatch.setattr(
+            driver,
+            "run_phase",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("run_phase called")
+            ),
+        )
+        with pytest.raises(driver.BenchRefusal, match="filesystem_hazard"):
+            cli._phase_handler(
+                attempt,
+                root=root,
+                clock=_FixedClock("production"),
+                args=args,
+                authorization=authority,
+            )
+        after = {
+            str(path.relative_to(root)): path.read_bytes()
+            for path in root.rglob("*")
+            if path.is_file()
+        }
+        assert after == before
+        assert not (root / "markers").exists()
+        assert not (root / "preimages").exists()

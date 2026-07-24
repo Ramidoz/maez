@@ -35,7 +35,7 @@ _CLI_RESERVED_OUTCOMES = frozenset({"cleanup_incomplete", "interrupted"})
 _pthread_sigmask = signal.pthread_sigmask
 _terminal_committed = False
 _cleanup_incomplete_committing = False
-_linearized_static_success: _StaticSuccessLatch | None = None
+_linearized_durable_success: _DurableSuccessLatch | None = None
 _STATIC_READ_BYTE_CAP = 32 * 1024 * 1024 * 1024
 _STATIC_COMMAND_TIMEOUT_S = 30
 REHEARSAL_READINESS_TIMEOUT_S = 1.0
@@ -57,6 +57,45 @@ _REHEARSAL_PROMPTS = (
     "sentinel-foxtrot",
     "sentinel-golf",
 )
+FROZEN_BENCH_ARGV_TAIL = (
+    "-m",
+    cm.FROZEN_MODEL_PATH,
+    "--alias",
+    cm.FROZEN_ALIAS,
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "18080",
+    "--ctx-size",
+    "40960",
+    "--parallel",
+    "1",
+    "--n-gpu-layers",
+    "999",
+    "-fa",
+    "on",
+    "--cache-type-k",
+    "q4_0",
+    "--cache-type-v",
+    "q4_0",
+    "--spec-type",
+    "draft-mtp",
+    "--spec-draft-n-max",
+    "3",
+    "--kv-unified",
+    "-fit",
+    "off",
+)
+_FROZEN_BENCH_ARGV_SHA256 = hashlib.sha256(
+    json.dumps(
+        list(FROZEN_BENCH_ARGV_TAIL),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+).hexdigest()
+if _FROZEN_BENCH_ARGV_SHA256 != cm.FROZEN_BENCH_ARGS_SHA256:
+    raise RuntimeError("frozen_bench_argv_mismatch")
 _PACKAGE_MEMBERS = (
     "scripts/cuda_migration.py",
     "scripts/cuda_bench_driver.py",
@@ -770,7 +809,7 @@ def _driver_package_sha256(
     return hashlib.sha256(preimage).hexdigest(), preimage
 
 
-def _validate_frozen_corpus(*, root: Path) -> str:
+def _validate_frozen_corpus(*, root: Path) -> tuple[str, ...]:
     try:
         payload = driver.open_bench_file("corpus.json", root=root)
         if (
@@ -785,13 +824,49 @@ def _validate_frozen_corpus(*, root: Path) -> str:
             or any(type(item) is not str or not item for item in decoded)
         ):
             raise driver.BenchRefusal("corpus_unavailable")
-        return cm.FROZEN_CORPUS_SHA256
+        return tuple(decoded)
     except driver.BenchRefusal as exc:
         if exc.code == "corpus_unavailable":
             raise
         raise driver.BenchRefusal("corpus_unavailable") from None
     except (TypeError, ValueError):
         raise driver.BenchRefusal("corpus_unavailable") from None
+
+
+def _load_frozen_prompts(*, root: Path) -> tuple[str, ...]:
+    return _validate_frozen_corpus(root=root)
+
+
+def _read_boot_id() -> str:
+    try:
+        value = Path("/proc/sys/kernel/random/boot_id").read_text(
+            encoding="ascii"
+        ).strip()
+    except (OSError, UnicodeError):
+        raise driver.BenchRefusal("provider_uncertain") from None
+    if re.fullmatch(
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+        r"[0-9a-f]{4}-[0-9a-f]{12}",
+        value,
+    ) is None:
+        raise driver.BenchRefusal("provider_uncertain")
+    return value
+
+
+def _require_static_match(
+    selected: cm.StaticPreflightDoc,
+    fresh: cm.StaticPreflightDoc,
+) -> None:
+    if (
+        type(selected) is not cm.StaticPreflightDoc
+        or type(fresh) is not cm.StaticPreflightDoc
+        or selected.gpu_uuid != fresh.gpu_uuid
+        or selected.driver_package_sha256 != fresh.driver_package_sha256
+        or selected.stub_sha256 != fresh.stub_sha256
+        or selected.corpus_verified != fresh.corpus_verified
+        or dict(selected.checks) != dict(fresh.checks)
+    ):
+        raise driver.BenchRefusal("identity_mismatch")
 
 
 def _collect_static_asset_hashes(paths: StaticAssetPaths) -> _AssetObservation:
@@ -870,7 +945,8 @@ def collect_static_observation(
     runner: ReadOnlyRunner = _run_read_only,
     clock: driver.Clock,
 ) -> StaticObservation:
-    corpus_sha = _validate_frozen_corpus(root=root)
+    _validate_frozen_corpus(root=root)
+    corpus_sha = cm.FROZEN_CORPUS_SHA256
     assets = _collect_static_asset_hashes(paths)
     candidate = _verify_candidate_runtime_manifest(paths.candidate_root)
     host = _collect_host_tool_observations(runner=runner, paths=paths)
@@ -1000,11 +1076,12 @@ def _static_preflight_fields(doc: cm.StaticPreflightDoc) -> dict[str, object]:
 
 
 @dataclass(frozen=True, slots=True)
-class _StaticSuccessLatch:
+class _DurableSuccessLatch:
     result: TerminalResult
     root: Path
     root_identity: tuple[int, ...]
     receipt_identity: tuple[int, ...]
+    semantic_validator: Callable[[], bool] | None = None
 
 
 def _static_latch_identity(value: os.stat_result) -> tuple[int, ...]:
@@ -1020,7 +1097,7 @@ def _static_latch_identity(value: os.stat_result) -> tuple[int, ...]:
     )
 
 
-def _static_success_latch_is_current(latch: _StaticSuccessLatch) -> bool:
+def _durable_success_latch_is_current(latch: _DurableSuccessLatch) -> bool:
     result = latch.result
     if result.artifact_ref is None or result.artifact_sha256 is None:
         return False
@@ -1032,7 +1109,7 @@ def _static_success_latch_is_current(latch: _StaticSuccessLatch) -> bool:
         )
     except Exception:
         return False
-    return (
+    filesystem_current = (
         hashlib.sha256(payload).hexdigest() == result.artifact_sha256
         and stat.S_ISDIR(root_info.st_mode)
         and _static_latch_identity(root_info) == latch.root_identity
@@ -1041,6 +1118,59 @@ def _static_success_latch_is_current(latch: _StaticSuccessLatch) -> bool:
         and receipt_info.st_nlink == 1
         and stat.S_IMODE(receipt_info.st_mode) == 0o600
         and _static_latch_identity(receipt_info) == latch.receipt_identity
+    )
+    if not filesystem_current:
+        return False
+    validator = latch.semantic_validator
+    if validator is None:
+        return True
+    try:
+        return validator() is True
+    except Exception:
+        return False
+
+
+def _latch_durable_success(
+    result: TerminalResult,
+    *,
+    root: Path,
+    semantic_validator: Callable[[], bool] | None = None,
+) -> None:
+    global _linearized_durable_success
+    if not _binding_is_current(result, root=root):
+        raise _StaticTerminalPublicationFailure("filesystem_hazard")
+    try:
+        root_info = os.stat(root, follow_symlinks=False)
+        assert result.artifact_ref is not None
+        receipt_info = os.stat(root / result.artifact_ref, follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(root_info.st_mode)
+            or not stat.S_ISREG(receipt_info.st_mode)
+            or receipt_info.st_uid != os.geteuid()
+            or receipt_info.st_nlink != 1
+            or stat.S_IMODE(receipt_info.st_mode) != 0o600
+        ):
+            raise OSError("durable receipt identity")
+    except (AssertionError, OSError):
+        raise _StaticTerminalPublicationFailure("filesystem_hazard") from None
+    if semantic_validator is not None:
+        try:
+            if semantic_validator() is not True:
+                raise _StaticTerminalPublicationFailure(
+                    "filesystem_hazard"
+                )
+        except _StaticTerminalPublicationFailure:
+            raise
+        except Exception:
+            raise _StaticTerminalPublicationFailure(
+                "filesystem_hazard"
+            ) from None
+    _linearized_durable_success = _DurableSuccessLatch(
+        result,
+        Path(root),
+        _static_latch_identity(root_info),
+        _static_latch_identity(receipt_info),
+        semantic_validator,
     )
 
 
@@ -1076,7 +1206,7 @@ def _static_preflight_handler(
         f"{policy.artifact_dir('static_preflight')}/"
         f"static-preflight-attempt-{attempt.ordinal:03d}.json"
     )
-    global _linearized_static_success
+    global _linearized_durable_success
     old_mask: set[int] | None = None
     try:
         old_mask = _pthread_sigmask(signal.SIG_BLOCK, _WATCHED_SIGNALS)
@@ -1123,7 +1253,7 @@ def _static_preflight_handler(
             completion_ref: str,
             completion_sha256: str,
         ) -> None:
-            global _linearized_static_success
+            global _linearized_durable_success
             nonlocal completed
             candidate = TerminalResult(
                 "ok",
@@ -1132,34 +1262,8 @@ def _static_preflight_handler(
                 completion_ref,
                 completion_sha256,
             )
-            if not _binding_is_current(candidate, root=root):
-                raise _StaticTerminalPublicationFailure(
-                    "filesystem_hazard"
-                )
-            try:
-                root_info = os.stat(root, follow_symlinks=False)
-                receipt_info = os.stat(
-                    root / completion_ref, follow_symlinks=False
-                )
-                if (
-                    not stat.S_ISDIR(root_info.st_mode)
-                    or not stat.S_ISREG(receipt_info.st_mode)
-                    or receipt_info.st_uid != os.geteuid()
-                    or receipt_info.st_nlink != 1
-                    or stat.S_IMODE(receipt_info.st_mode) != 0o600
-                ):
-                    raise OSError("static receipt identity")
-            except OSError:
-                raise _StaticTerminalPublicationFailure(
-                    "filesystem_hazard"
-                ) from None
             completed = candidate
-            _linearized_static_success = _StaticSuccessLatch(
-                candidate,
-                Path(root),
-                _static_latch_identity(root_info),
-                _static_latch_identity(receipt_info),
-            )
+            _latch_durable_success(candidate, root=root)
 
         completion_ref, completion_sha256 = driver.publish_command_artifact(
             attempt,
@@ -1181,7 +1285,7 @@ def _static_preflight_handler(
             try:
                 _pthread_sigmask(signal.SIG_SETMASK, old_mask)
             except driver._CommandInterrupted:
-                if _linearized_static_success is None:
+                if _linearized_durable_success is None:
                     raise
 
 
@@ -1228,6 +1332,36 @@ class TerminalResult:
                 raise ValueError("terminal_artifact_pair")
 
 
+_TRUSTED_PHASE_GUARD = object()
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class _TrustedPhaseResult:
+    terminal: TerminalResult
+
+    def __init__(
+        self,
+        terminal: TerminalResult,
+        *,
+        _guard: object,
+    ) -> None:
+        if _guard is not _TRUSTED_PHASE_GUARD or type(terminal) is not TerminalResult:
+            raise ValueError("trusted_phase_result")
+        object.__setattr__(self, "terminal", terminal)
+
+    @property
+    def status(self) -> str:
+        return self.terminal.status
+
+    @property
+    def outcome(self) -> str:
+        return self.terminal.outcome
+
+    @property
+    def artifact_ref(self) -> str | None:
+        return self.terminal.artifact_ref
+
+
 class NonEchoingParser(argparse.ArgumentParser):
     def error(self, _message: str) -> Never:
         raise InvocationRefusal
@@ -1260,6 +1394,30 @@ def build_parser() -> NonEchoingParser:
                 choices=_REHEARSAL_PERSONAS,
                 required=True,
             )
+        elif command == "vulkan-baseline":
+            for name in (
+                "window-authorization",
+                "static-preflight",
+                "static-admission",
+                "static-completion",
+            ):
+                command_parser.add_argument(
+                    f"--{name}", type=_relative_ref, required=True
+                )
+        elif command == "cuda-candidate":
+            for name in (
+                "continuation",
+                "parent-window",
+                "parent-packet",
+                "parent-admission",
+                "parent-completion",
+                "static-preflight",
+                "static-admission",
+                "static-completion",
+            ):
+                command_parser.add_argument(
+                    f"--{name}", type=_relative_ref, required=True
+                )
     return parser
 
 
@@ -1313,7 +1471,7 @@ def _commit_terminal(
 ) -> int:
     global _terminal_committed
     _terminal_committed = False
-    latch = _linearized_static_success
+    latch = _linearized_durable_success
     linearized: TerminalResult | None = None
     preblock_signals: set[int] = set()
     if interrupted_signum in _WATCHED_SIGNALS:
@@ -1337,7 +1495,7 @@ def _commit_terminal(
         latch_is_current = False
         if latch is not None:
             try:
-                latch_is_current = _static_success_latch_is_current(latch)
+                latch_is_current = _durable_success_latch_is_current(latch)
             except Exception:
                 latch_is_current = False
         if latch_is_current:
@@ -1398,7 +1556,7 @@ def _on_command_signal(signum: int, _frame: FrameType | None) -> None:
     if (
         _terminal_committed
         or _cleanup_incomplete_committing
-        or _linearized_static_success is not None
+        or _linearized_durable_success is not None
     ):
         return
     raise driver._CommandInterrupted(signum)
@@ -1528,7 +1686,7 @@ def _valid_command_completion_result(
     except Exception:
         return False
     completion = persisted.obj
-    return (
+    if not (
         type(completion) is cm.CommandCompletionDoc
         and persisted.file_sha256 == result.artifact_sha256
         and completion.command == attempt.command
@@ -1536,6 +1694,36 @@ def _valid_command_completion_result(
         and completion.admission_ref == attempt.admission_ref
         and completion.admission_sha256 == attempt.admission_sha256
         and completion.window_id == result.window_id
+    ):
+        return False
+    if attempt.command == "static-preflight":
+        return True
+    expected_type: type[object] = cm.PhasePacket
+    try:
+        artifact_bytes = driver.open_bench_file(
+            completion.artifact_ref, root=root
+        )
+        _admission, _completion, artifact = (
+            driver._load_verified_completion_pair(
+                admission_ref=attempt.admission_ref,
+                completion_ref=result.artifact_ref,
+                artifact_ref=completion.artifact_ref,
+                artifact_bytes=artifact_bytes,
+                expected_command=attempt.command,
+                expected_window_id=result.window_id,
+                expected_type=expected_type,
+                root=root,
+            )
+        )
+    except Exception:
+        return False
+    packet = artifact.obj
+    return (
+        type(packet) is cm.PhasePacket
+        and packet.phase == completion.decoded_phase
+        and packet.window_id == result.window_id
+        and packet.outcome == "completed"
+        and packet.order_sha256 == cm.FROZEN_ORDER_SHA256
     )
 
 
@@ -1568,13 +1756,21 @@ def _normalize_handler_result(
     value: object,
     *,
     root: Path,
+    trust_phase_results: bool = False,
 ) -> TerminalResult:
-    if type(value) is not TerminalResult:
+    trusted_phase = type(value) is _TrustedPhaseResult and trust_phase_results
+    if trusted_phase:
+        result = value.terminal
+    elif type(value) is TerminalResult:
+        result = value
+    else:
         return _admission_result(attempt, status="failed", outcome="provider_uncertain")
-    result = value
     if (
         result.outcome == "invocation_invalid"
-        or result.outcome in _CLI_RESERVED_OUTCOMES
+        or (
+            result.outcome in _CLI_RESERVED_OUTCOMES
+            and not trusted_phase
+        )
         or (
             _is_command_control_ref(result.artifact_ref)
             and not _valid_command_completion_result(
@@ -1640,14 +1836,17 @@ def _run_command(
     *,
     root: Path,
     clock: driver.Clock,
+    authority_ref: str | None = None,
 ) -> int:
-    global _cleanup_incomplete_committing, _linearized_static_success
+    global _cleanup_incomplete_committing, _linearized_durable_success
     global _terminal_committed
     _terminal_committed = False
     _cleanup_incomplete_committing = False
-    _linearized_static_success = None
+    _linearized_durable_success = None
     old_handlers: dict[signal.Signals, object] = {}
     attempt: driver.CommandAttempt | None = None
+    authorization: driver.WindowAuthorization | driver.Continuation | None = None
+    window_id: str | None = None
 
     def latch_admission(value: driver.CommandAttempt) -> None:
         nonlocal attempt
@@ -1686,24 +1885,58 @@ def _run_command(
                 "failed", "provider_uncertain", None, None, None
             )
             return _commit_terminal(terminal)
+        if command in {"vulkan-baseline", "cuda-candidate"}:
+            try:
+                if authority_ref is None:
+                    raise driver.BenchRefusal("invocation_invalid")
+                authority_bytes = driver.open_bench_file(authority_ref, root=root)
+                authorization = (
+                    driver.parse_window_authorization(authority_bytes)
+                    if command == "vulkan-baseline"
+                    else driver.parse_continuation(authority_bytes)
+                )
+                window_id = authorization.window_id
+                if not window_id:
+                    raise driver.BenchRefusal("authorization_window_mismatch")
+            except driver.BenchRefusal as exc:
+                terminal = TerminalResult("refused", exc.code, None, None, None)
+                return _commit_terminal(terminal)
+            except (TypeError, ValueError):
+                terminal = TerminalResult(
+                    "refused", "authorization_malformed", None, None, None
+                )
+                return _commit_terminal(terminal)
         try:
             attempt = driver._admit_command(
                 command=command,
-                window_id=None,
+                window_id=window_id,
                 policy=policy,
                 clock=clock,
                 root=root,
                 _on_latched=latch_admission,
                 _on_cleanup_incomplete=suppress_cleanup_interruption,
             )
-            value = handler(attempt, root=root)
-            terminal = _normalize_handler_result(attempt, value, root=root)
+            value = (
+                handler(attempt, root=root, authorization=authorization)
+                if authorization is not None
+                else handler(attempt, root=root)
+            )
+            terminal = (
+                _normalize_handler_result(
+                    attempt,
+                    value,
+                    root=root,
+                    trust_phase_results=True,
+                )
+                if type(handler) is _ProductionPhaseHandler
+                else _normalize_handler_result(attempt, value, root=root)
+            )
         except driver._CommandInterrupted as interrupted:
             bound = interrupted.attempt if interrupted.attempt is not None else attempt
             terminal = TerminalResult(
                 "refused",
                 "interrupted",
-                None,
+                window_id,
                 None if bound is None else bound.admission_ref,
                 None if bound is None else bound.admission_sha256,
             )
@@ -1771,13 +2004,33 @@ def _run_command(
                 attempt, status="refused", outcome="interrupted"
             )
         )
+        if attempt is not None and window_id is not None and terminal.window_id is None:
+            terminal = TerminalResult(
+                terminal.status,
+                terminal.outcome,
+                window_id,
+                terminal.artifact_ref,
+                terminal.artifact_sha256,
+            )
+        if (
+            fallback is not None
+            and window_id is not None
+            and fallback.window_id is None
+        ):
+            fallback = TerminalResult(
+                fallback.status,
+                fallback.outcome,
+                window_id,
+                fallback.artifact_ref,
+                fallback.artifact_sha256,
+            )
         return _commit_terminal(terminal, interruption_fallback=fallback)
     except driver._CommandInterrupted as interrupted:
         bound = interrupted.attempt if interrupted.attempt is not None else attempt
         terminal = TerminalResult(
             "refused",
             "interrupted",
-            None,
+            window_id,
             None if bound is None else bound.admission_ref,
             None if bound is None else bound.admission_sha256,
         )
@@ -1978,12 +2231,464 @@ def _rehearsal_handler(
     )
 
 
+def _production_providers(
+    phase: Literal["vulkan_baseline", "cuda_candidate"],
+    identity: cm.RuntimeIdentity,
+) -> driver.Providers:
+    if (
+        phase not in {"vulkan_baseline", "cuda_candidate"}
+        or type(identity) is not cm.RuntimeIdentity
+    ):
+        raise driver.BenchRefusal("identity_mismatch")
+    runtime = (
+        cm.VULKAN_RELEASE_ROOT
+        if phase == "vulkan_baseline"
+        else cm.CUDA_RELEASE_ROOT
+    ) / "llama-server"
+    runtime_sha256 = (
+        cm.FROZEN_VULKAN_RUNTIME_SHA256
+        if phase == "vulkan_baseline"
+        else identity.runtime_sha256
+    )
+    clock = driver.SystemClock()
+    port_probe = driver.RealPortProbe()
+    policy = driver.ProductionArtifactPolicy()
+    return driver.production_tier(
+        service_state=driver.RealServiceStateProvider(),
+        port_probe=port_probe,
+        gpu=driver.RealGpuProvider(),
+        kernel_log=driver.RealKernelLogProvider(),
+        backend_maps=driver.RealBackendMapProvider(),
+        server_launcher=driver.RealServerLauncher(
+            driver.SpawnPin(
+                kind="binary",
+                pinned_path=runtime,
+                pinned_sha256=runtime_sha256,
+                required_argv_prefix=(str(runtime),),
+            )
+        ),
+        server_client=driver.LoopbackServerClient.production(clock),
+        authorization_gate=driver.RealAuthorizationGate(policy),
+        containment=driver.RealContainmentProvider(
+            clock=clock, port_probe=port_probe
+        ),
+        artifact_policy=policy,
+        clock=clock,
+        journal_factory=driver.ProductionJournalFactory(),
+    )
+
+
+def _identity_fields(identity: cm.RuntimeIdentity) -> dict[str, object]:
+    fields = driver._runtime_identity_fields(identity)
+    fields["effective_args"] = tuple(identity.effective_args)
+    return fields
+
+
+def _vulkan_config(
+    args: argparse.Namespace,
+    observation: StaticObservation,
+) -> driver.PhaseConfig:
+    root = args._root
+    authorization = args._authorization
+    if (
+        not isinstance(root, Path)
+        or type(authorization) is not driver.WindowAuthorization
+        or type(observation) is not StaticObservation
+        or type(observation.runtime_identity) is not cm.RuntimeIdentity
+    ):
+        raise driver.BenchRefusal("identity_mismatch")
+    identity_fields = _identity_fields(observation.runtime_identity)
+    runtime = cm.VULKAN_RELEASE_ROOT / "llama-server"
+    return driver.PhaseConfig(
+        phase="vulkan_baseline",
+        argv=[str(runtime), *FROZEN_BENCH_ARGV_TAIL],
+        env=dict(driver._PHASE_BENCH_ENVIRONMENTS["vulkan_baseline"]),
+        alias=cm.FROZEN_ALIAS,
+        prompts=_load_frozen_prompts(root=root),
+        authorization=authorization,
+        parent_window=None,
+        parent_packet_path=None,
+        bench_identity_fields=dict(identity_fields),
+        runtime_identity_fields=dict(identity_fields),
+        static_preflight_path=args.static_preflight,
+        static_admission_path=args.static_admission,
+        static_completion_path=args.static_completion,
+        gpu_uuid=observation.static_doc.gpu_uuid,
+        boot_id=_read_boot_id(),
+        window_id=authorization.window_id,
+        expected_port=driver.BENCH_PORT,
+        readiness_timeout_s=driver.READINESS_TIMEOUT_S,
+    )
+
+
+def _cuda_config(
+    args: argparse.Namespace,
+    observation: StaticObservation,
+) -> driver.PhaseConfig:
+    root = args._root
+    continuation = args._authorization
+    if (
+        not isinstance(root, Path)
+        or type(continuation) is not driver.Continuation
+        or type(observation) is not StaticObservation
+        or type(observation.runtime_identity) is not cm.RuntimeIdentity
+    ):
+        raise driver.BenchRefusal("identity_mismatch")
+    try:
+        parent_window = driver.parse_window_authorization(
+            driver.open_bench_file(args.parent_window, root=root)
+        )
+    except driver.BenchRefusal:
+        raise
+    except (TypeError, ValueError):
+        raise driver.BenchRefusal("continuation_parent_mismatch") from None
+    identity_fields = _identity_fields(observation.runtime_identity)
+    runtime = cm.CUDA_RELEASE_ROOT / "llama-server"
+    return driver.PhaseConfig(
+        phase="cuda_candidate",
+        argv=[str(runtime), *FROZEN_BENCH_ARGV_TAIL],
+        env=dict(driver._PHASE_BENCH_ENVIRONMENTS["cuda_candidate"]),
+        alias=cm.FROZEN_ALIAS,
+        prompts=_load_frozen_prompts(root=root),
+        authorization=continuation,
+        parent_window=parent_window,
+        parent_packet_path=args.parent_packet,
+        parent_admission_path=args.parent_admission,
+        parent_completion_path=args.parent_completion,
+        bench_identity_fields=dict(identity_fields),
+        runtime_identity_fields=dict(identity_fields),
+        static_preflight_path=args.static_preflight,
+        static_admission_path=args.static_admission,
+        static_completion_path=args.static_completion,
+        gpu_uuid=observation.static_doc.gpu_uuid,
+        boot_id=_read_boot_id(),
+        window_id=continuation.window_id,
+        expected_port=driver.BENCH_PORT,
+        readiness_timeout_s=driver.READINESS_TIMEOUT_S,
+    )
+
+
+def _phase_artifact_result(
+    phase_ref: str,
+    *,
+    expected_phase: str,
+    expected_window_id: str,
+    root: Path,
+) -> _TrustedPhaseResult:
+    try:
+        payload = driver.open_bench_file(phase_ref, root=root)
+        wrapper = json.loads(
+            payload,
+            object_pairs_hook=driver._json_object_without_duplicates,
+            parse_constant=driver._reject_json_constant,
+        )
+        if type(wrapper) is not dict or set(wrapper) != {
+            "schema",
+            "binding_sha256",
+            "fields",
+        }:
+            raise ValueError("reduced_wrapper")
+        fields = wrapper["fields"]
+        if type(fields) is not dict:
+            raise ValueError("reduced_fields")
+        spawned = fields.get("spawned")
+        expected_schema = (
+            driver.PHASE_PACKET_SCHEMA
+            if spawned is True
+            else driver.REFUSAL_SCHEMA
+        )
+        outcome = fields.get("outcome")
+        timestamp = fields.get("timestamp")
+        if (
+            type(spawned) is not bool
+            or wrapper["schema"] != expected_schema
+            or wrapper["binding_sha256"]
+            != hashlib.sha256(driver._canonical_json(fields)).hexdigest()
+            or fields.get("phase") != expected_phase
+            or fields.get("window_id") != expected_window_id
+            or type(fields.get("boot_id")) is not str
+            or not fields["boot_id"]
+            or type(outcome) is not str
+            or re.fullmatch(r"[a-z][a-z0-9_]{0,63}", outcome) is None
+            or type(timestamp) is not str
+            or not timestamp.endswith("Z")
+            or datetime.fromisoformat(timestamp.replace("Z", "+00:00")).tzinfo
+            is None
+        ):
+            raise ValueError("reduced_binding")
+        try:
+            cm.decode_persisted_packet(payload)
+        except ValueError:
+            pass
+        else:
+            raise ValueError("reduced_decoded_complete")
+        return _TrustedPhaseResult(
+            TerminalResult(
+                "failed" if spawned else "refused",
+                outcome,
+                expected_window_id,
+                phase_ref,
+                hashlib.sha256(payload).hexdigest(),
+            ),
+            _guard=_TRUSTED_PHASE_GUARD,
+        )
+    except driver.BenchRefusal:
+        raise
+    except (KeyError, OSError, TypeError, ValueError):
+        raise driver.BenchRefusal("provider_uncertain") from None
+
+
+def _completion_fields(completion: cm.CommandCompletionDoc) -> dict[str, object]:
+    return {
+        "binding_sha256": completion.binding_sha256,
+        "command": completion.command,
+        "ordinal": completion.ordinal,
+        "window_id": completion.window_id,
+        "admission_ref": completion.admission_ref,
+        "admission_sha256": completion.admission_sha256,
+        "artifact_ref": completion.artifact_ref,
+        "artifact_sha256": completion.artifact_sha256,
+        "artifact_schema": completion.artifact_schema,
+        "status": completion.status,
+        "timestamp": completion.timestamp,
+    }
+
+
+def _phase_completion_is_current(
+    attempt: driver.CommandAttempt,
+    result: TerminalResult,
+    *,
+    phase_ref: str,
+    phase_identity: tuple[int, ...],
+    root: Path,
+) -> bool:
+    try:
+        before = os.stat(root / phase_ref, follow_symlinks=False)
+    except OSError:
+        return False
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or before.st_uid != os.geteuid()
+        or before.st_nlink != 1
+        or stat.S_IMODE(before.st_mode) != 0o600
+        or _static_latch_identity(before) != phase_identity
+        or not _valid_command_completion_result(attempt, result, root=root)
+    ):
+        return False
+    try:
+        after = os.stat(root / phase_ref, follow_symlinks=False)
+    except OSError:
+        return False
+    return _static_latch_identity(after) == phase_identity
+
+
+def _publish_phase_completion(
+    attempt: driver.CommandAttempt,
+    *,
+    phase_ref: str,
+    expected_phase: Literal["vulkan_baseline", "cuda_candidate"],
+    expected_window_id: str,
+    root: Path,
+    clock: driver.Clock,
+) -> TerminalResult:
+    try:
+        phase_bytes = driver.open_bench_file(phase_ref, root=root)
+        packet = cm.decode_persisted_packet(phase_bytes)
+    except driver.BenchRefusal:
+        raise
+    except (TypeError, ValueError):
+        raise driver.BenchRefusal("provider_uncertain") from None
+    if (
+        packet.phase != expected_phase
+        or packet.window_id != expected_window_id
+        or packet.outcome != "completed"
+        or packet.order_sha256 != cm.FROZEN_ORDER_SHA256
+    ):
+        raise driver.BenchRefusal("provider_uncertain")
+    try:
+        phase_info = os.stat(root / phase_ref, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(phase_info.st_mode)
+            or phase_info.st_uid != os.geteuid()
+            or phase_info.st_nlink != 1
+            or stat.S_IMODE(phase_info.st_mode) != 0o600
+        ):
+            raise OSError("phase packet identity")
+        phase_identity = _static_latch_identity(phase_info)
+    except OSError:
+        raise driver.BenchRefusal("filesystem_hazard") from None
+    completion = cm.CommandCompletionDoc(
+        command=attempt.command,
+        ordinal=attempt.ordinal,
+        window_id=expected_window_id,
+        admission_ref=attempt.admission_ref,
+        admission_sha256=attempt.admission_sha256,
+        artifact_ref=phase_ref,
+        artifact_sha256=hashlib.sha256(phase_bytes).hexdigest(),
+        artifact_schema=cm.PHASE_PACKET_SCHEMA,
+        status="completed",
+        timestamp=clock.now_utc(),
+    )
+    encoded = driver.ProductionArtifactPolicy().encode(
+        "command_completion", _completion_fields(completion)
+    )
+    completed: TerminalResult | None = None
+
+    def latch_completion(completion_ref: str, completion_sha256: str) -> None:
+        nonlocal completed
+        candidate = TerminalResult(
+            "ok",
+            "completed",
+            expected_window_id,
+            completion_ref,
+            completion_sha256,
+        )
+        _latch_durable_success(
+            candidate,
+            root=root,
+            semantic_validator=lambda: _valid_command_completion_result(
+                attempt, candidate, root=root
+            )
+            and _phase_completion_is_current(
+                attempt,
+                candidate,
+                phase_ref=phase_ref,
+                phase_identity=phase_identity,
+                root=root,
+            ),
+        )
+        completed = candidate
+
+    completion_ref, completion_sha256 = driver.publish_command_artifact(
+        attempt,
+        "terminal",
+        encoded,
+        root=root,
+        on_committed=latch_completion,
+    )
+    if (
+        completed is None
+        or completed.artifact_ref != completion_ref
+        or completed.artifact_sha256 != completion_sha256
+    ):
+        raise driver.BenchRefusal("filesystem_hazard")
+    return completed
+
+
+def _phase_handler(
+    attempt: driver.CommandAttempt,
+    *,
+    root: Path,
+    clock: driver.Clock,
+    args: argparse.Namespace,
+    authorization: driver.WindowAuthorization | driver.Continuation,
+) -> TerminalResult | _TrustedPhaseResult:
+    observation = collect_static_observation(root=root, clock=clock)
+    try:
+        selected = cm.PersistedDoc(
+            driver.open_bench_file(args.static_preflight, root=root)
+        ).obj
+    except driver.BenchRefusal:
+        raise
+    except (TypeError, ValueError):
+        raise driver.BenchRefusal("identity_mismatch") from None
+    if type(selected) is not cm.StaticPreflightDoc:
+        raise driver.BenchRefusal("identity_mismatch")
+    _require_static_match(selected, observation.static_doc)
+    preimage_sha256 = hashlib.sha256(observation.rollback_preimage).hexdigest()
+    driver.verify_existing_immutable(
+        f"preimages/rollback-manifest-{preimage_sha256}.json",
+        observation.rollback_preimage,
+        attempt=attempt,
+        root=root,
+    )
+    args._root = root
+    args._authorization = authorization
+    config = (
+        _vulkan_config(args, observation)
+        if args.command == "vulkan-baseline"
+        else _cuda_config(args, observation)
+    )
+    if config.window_id != authorization.window_id:
+        raise driver.BenchRefusal("authorization_window_mismatch")
+    providers = _production_providers(config.phase, observation.runtime_identity)
+    phase_path = driver.run_phase(config, providers, root=root)
+    try:
+        phase_ref = str(phase_path.relative_to(root))
+    except ValueError:
+        raise driver.BenchRefusal("provider_uncertain") from None
+    try:
+        packet = cm.decode_persisted_packet(
+            driver.open_bench_file(phase_ref, root=root)
+        )
+    except driver.BenchRefusal:
+        raise
+    except (TypeError, ValueError):
+        return _phase_artifact_result(
+            phase_ref,
+            expected_phase=config.phase,
+            expected_window_id=config.window_id,
+            root=root,
+        )
+    if (
+        packet.phase != config.phase
+        or packet.window_id != config.window_id
+        or packet.outcome != "completed"
+        or packet.order_sha256 != cm.FROZEN_ORDER_SHA256
+    ):
+        raise driver.BenchRefusal("provider_uncertain")
+    return _publish_phase_completion(
+        attempt,
+        phase_ref=phase_ref,
+        expected_phase=config.phase,
+        expected_window_id=config.window_id,
+        root=root,
+        clock=clock,
+    )
+
+
+_PRODUCTION_PHASE_HANDLER_GUARD = object()
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class _ProductionPhaseHandler:
+    clock: driver.Clock
+    args: argparse.Namespace
+
+    def __init__(
+        self,
+        *,
+        clock: driver.Clock,
+        args: argparse.Namespace,
+        _guard: object,
+    ) -> None:
+        if _guard is not _PRODUCTION_PHASE_HANDLER_GUARD:
+            raise ValueError("production_phase_handler")
+        object.__setattr__(self, "clock", clock)
+        object.__setattr__(self, "args", args)
+
+    def __call__(
+        self,
+        attempt: driver.CommandAttempt,
+        *,
+        root: Path,
+        authorization: driver.WindowAuthorization | driver.Continuation,
+    ) -> TerminalResult | _TrustedPhaseResult:
+        return _phase_handler(
+            attempt,
+            root=root,
+            clock=self.clock,
+            args=self.args,
+            authorization=authorization,
+        )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    global _cleanup_incomplete_committing, _linearized_static_success
+    global _cleanup_incomplete_committing, _linearized_durable_success
     global _terminal_committed
     _terminal_committed = False
     _cleanup_incomplete_committing = False
-    _linearized_static_success = None
+    _linearized_durable_success = None
     old_handlers: dict[signal.Signals, object] = {}
     try:
         try:
@@ -2060,11 +2765,26 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
 
             handler = rehearsal_handler
+        elif command in {"vulkan-baseline", "cuda-candidate"}:
+            handler = _ProductionPhaseHandler(
+                clock=clock,
+                args=parsed,
+                _guard=_PRODUCTION_PHASE_HANDLER_GUARD,
+            )
         return _run_command(
             command,
             handler,
             root=driver.BENCH_ROOT,
             clock=clock,
+            authority_ref=(
+                parsed.window_authorization
+                if command == "vulkan-baseline"
+                else (
+                    parsed.continuation
+                    if command == "cuda-candidate"
+                    else None
+                )
+            ),
         )
     except driver._CommandInterrupted as interrupted:
         return _commit_terminal(
