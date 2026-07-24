@@ -276,7 +276,18 @@ port-zero allocation may reuse a number.
 
 All six stub personas exercise the real spawn, readiness, HTTP, timeout,
 interrupt, and pidfd cleanup path. Rehearsal cannot mint production-shaped
-evidence.
+evidence. This real spawned-stub family is a direct, **non-certifying**
+compatibility witness with strict process, listener, PGID, sealed-memfd, and
+artifact residue checks. The current airlock aborts the whole run on the first
+sealed-memfd descendant initialization failure; it does not turn that failure
+into a per-test refusal, and rehearsal adds no airlock exemption. The existing
+lifecycle-fixture/whole-run-abort debt remains explicit and unchanged.
+
+Task 6 airlock certification is therefore limited to non-spawning surfaces:
+CLI parsing and allowlisting, tier timeout bounds, provider construction and
+tier/registry sealing, owner-selected static-preflight handling without
+corpus/model reads, marker/schema isolation, and content-light terminal
+handling. The proof split changes no runtime design.
 
 ### `vulkan-baseline`
 

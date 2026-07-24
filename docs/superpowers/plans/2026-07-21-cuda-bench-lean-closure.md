@@ -1380,6 +1380,13 @@ require it below 15 seconds on the local test host; no test may monkeypatch a
 module timeout constant or sleep. The healthy case must record three distinct
 sequential launcher-port generations and retire all three.
 
+This six-persona family is a direct, **non-certifying** compatibility witness.
+It must also prove zero sealed-memfd and artifact residue. The current airlock
+aborts the whole run when the first sealed-memfd descendant cannot initialize;
+that is whole-run abort behavior, not a per-test refusal. Task 6 does not add
+or alter an airlock exemption. The lifecycle-fixture/whole-run-abort debt
+remains explicit and unchanged.
+
 Before implementation, add tier-bound timeout REDs: a production
 `PhaseConfig` with readiness below the frozen 300 seconds and a rehearsal
 config above five seconds each refuse `tier_mismatch`; no CLI flag or
@@ -1451,6 +1458,13 @@ not promotion-eligible evidence because every emitted wrapper remains in the
 incompatible rehearsal schema.
 
 - [ ] **Step 4: GREEN, residue proof, review, and commit**
+
+Task 6 airlock review covers only its non-spawning surfaces: CLI
+parsing/allowlist, tier timeout bounds, provider construction and tier/registry
+sealing, static-preflight selection without corpus/model reads, marker/schema
+isolation, and content-light terminal handling. The real six-persona spawned
+stub family remains direct non-certifying evidence with strict
+process/listener/PGID/memfd/artifact residue checks.
 
 Run:
 
