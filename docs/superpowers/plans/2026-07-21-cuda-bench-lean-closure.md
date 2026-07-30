@@ -1764,9 +1764,13 @@ directory, wrong owner/mode, missing file, unknown/rehearsal schema, and type
 mismatch all refuse `assembly_refused` before scorer entry. Extra attempts and
 decoys on disk are ignored; exactly those 22 paths are opened. An AST RED
 forbids `glob`, `rglob`, `iterdir`, `scandir`, and raw `open`.
-Pointing any selected field at a complete
-`cuda_bench_driver.command_admission.v1` receipt, including a crash orphan,
-must also refuse `assembly_refused` before scorer entry. This is the
+Pointing any **non-admission role** at a complete
+`cuda_bench_driver.command_admission.v1` receipt must refuse
+`assembly_refused` before scorer entry. The three admission roles require that
+schema, but role-scoping does not admit a crash orphan: a selected admission
+without its exact durable completion must still refuse `assembly_refused`.
+Add one correct-role orphan RED per command and cross-role REDs for
+static-as-Vulkan, Vulkan-as-CUDA, and CUDA-as-Vulkan. This is the
 assembler-path half of Task 3's decoder-level orphan proof.
 
 The three admissions and three completions are typed carried preimages, not
@@ -1808,7 +1812,11 @@ admission deliberately remains decoder-free as a standalone artifact; rebuild
 its frozen fields only through the bundle's admission-preimage type, whose
 file hash is recomputed from its canonical wrapper bytes. Convert the two
 parsed driver authorization objects to
-the existing `WindowAuthorizationDoc`/`ContinuationDoc`. Map all malformed
+the existing `WindowAuthorizationDoc`/`ContinuationDoc`, but first require
+each selected authorization wrapper to equal its compact, sorted-key,
+single-newline canonical bytes exactly. Whitespace-only and key-order changes
+to either wrapper refuse `assembly_refused`; semantically equivalent
+noncanonical JSON cannot disappear during parsing. Map all malformed
 bytes/path/type errors to `BenchRefusal("assembly_refused") from None`; do not
 catch `KeyboardInterrupt`, `SystemExit`, or `BaseException`.
 
@@ -1853,7 +1861,30 @@ scorer suite.
 
 Add a selected-current-identity RED: mutate the runtime-identity wrapper while
 leaving the bench wrapper untouched and prove bundle construction refuses.
-Every one of the twenty-two selected paths must influence the result.
+Every one of the twenty-two selected artifacts must influence the result:
+mutating its accepted canonical bytes or decoded typed value must either
+change the bundle binding or refuse construction. Locator spelling is not
+evidence identity—two owner-selected files with identical accepted canonical
+bytes may produce identical evidence—but locator **safety** remains mandatory:
+absolute, `..`, symlink component/final, hardlink, directory, wrong owner/mode,
+missing, and root-escape paths all refuse.
+
+Pin the participation plane for every field so none can be inert:
+
+| Selected field(s) | Participating plane |
+| --- | --- |
+| `control_packet`, `candidate_packet` | `PersistedDoc` canonical file bytes/hash plus exact `PhasePacket` object |
+| `static_admission`, `control_admission`, `candidate_admission` | canonical wrapper bytes/hash plus selected-ref, command, ordinal, window, and completion joins |
+| `static_completion`, `control_completion`, `candidate_completion` | `PersistedDoc` canonical file bytes/hash plus exact `CommandCompletionDoc` object |
+| `window_authorization`, `continuation` | canonical wrapper bytes required before parser; typed authorization preimage participates in packet/receipt/window/boot/owner/parent joins |
+| `window_consumption`, `continuation_consumption` | `PersistedDoc` canonical file bytes/hash plus exact `ConsumptionReceipt` object |
+| four A/B containment fields | `PersistedDoc` canonical file bytes/hash plus exact phase/boundary `ContainmentSnapshot` object |
+| `bench_identity`, `runtime_identity` | `PersistedDoc` canonical file bytes/hash plus exact role-specific `RuntimeIdentity` object |
+| `static_preflight` | `PersistedDoc` canonical file bytes/hash plus exact `StaticPreflightDoc` object |
+| `quality` | `PersistedDoc` canonical file bytes/hash plus exact `QualityEvidence` object and summary joins |
+| `owner_voice` | `PersistedDoc` canonical file bytes/hash plus exact `OwnerVoiceReview` object and summary joins |
+| `rollback` | `PersistedDoc` canonical file bytes/hash plus exact `RollbackEvidenceBundle` object and parent/containment/kernel joins |
+
 Add direct-constructor REDs proving no caller can omit a completion, swap its
 admission/artifact preimage, or construct a bundle whose completion matrix
 does not match the decoded static/packet phase and window. The three completion

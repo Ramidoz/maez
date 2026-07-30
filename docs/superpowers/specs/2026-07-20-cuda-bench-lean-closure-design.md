@@ -392,6 +392,13 @@ The selected evidence includes:
 - the complete owner-produced rollback evidence bundle, including its
   containment and kernel witnesses.
 
+The twenty-two roles are type-scoped. A command-admission document is required
+in each of the three admission roles and refused in every other role. This
+does not make a crash-orphan admission evidence: an admission in its correct
+role without the exact matching durable completion remains unscorable, and
+cross-command admission substitution refuses on the command/window/completion
+join.
+
 Quality, owner-voice, and rollback documents are external owner-window
 evidence, not facts the assembler measures or fills in. Their existing typed
 schemas are reused. The CLI adds no auto-authoring command and the assembler
@@ -430,6 +437,36 @@ registered as a persisted evidence schema and cannot become evidence alone.
 The assembler proves every ref is beneath the anchored private root; the
 bundle proves the ref/hash/object relationships without trusting the assembler
 to recreate them.
+
+Both owner authorization wrappers must be byte-canonical before their existing
+driver parsers run: compact sorted-key UTF-8 JSON with the frozen trailing
+newline. Whitespace or key-order variants refuse even when they decode to the
+same values. This keeps authorization bytes and their typed meaning on one
+plane rather than allowing changed bytes to disappear during reconstruction.
+
+Every selected artifact has one enumerated participation plane:
+
+| Selected field(s) | Participating plane |
+| --- | --- |
+| control/candidate packets | persisted file bytes/hash and exact packet object |
+| three admissions | canonical bytes/hash, selected ref, frozen fields, and exact completion join |
+| three completions | persisted file bytes/hash and exact completion object |
+| window authorization/continuation | canonical bytes, typed preimage, and authorization joins |
+| two consumption receipts | persisted file bytes/hash and exact receipt object |
+| four A/B containment documents | persisted file bytes/hash and exact phase/boundary object |
+| bench/current identities | persisted file bytes/hash and exact role-specific identity object |
+| static preflight | persisted file bytes/hash and exact static object |
+| quality | persisted file bytes/hash, exact quality object, and summary joins |
+| owner voice | persisted file bytes/hash, exact review object, and summary joins |
+| rollback | persisted file bytes/hash, exact bundle object, and parent/containment/kernel joins |
+
+For each of the twenty-two, changing accepted canonical bytes or its decoded
+typed value must change the bundle binding or refuse construction. Locator
+spelling is not evidence identity: identical accepted bytes beneath two safe
+owner-selected locators may yield identical evidence. Locator safety is
+unchanged and mandatory—absolute, parent traversal, symlink component/final,
+hardlink, directory, wrong owner/mode, missing, and root-escape selections
+refuse before scorer entry.
 
 The dormant P2--P5 scorer types and validation remain in
 `cuda_migration.py`; this closure adds no producer or CLI for them.
@@ -697,8 +734,12 @@ Implementation is TDD and must witness these failures before code:
 - rehearsal or failed phase packets;
 - multiple attempts never guessed;
 - any stage-2--5 member or malformed P1 prefix;
-- all six admission/completion preimages, their 22-path influence, closed
-  command/schema/phase/window joins, and direct-constructor anti-bypass;
+- correct-role admission orphans without completions, non-admission and
+  cross-command admission substitutions, and noncanonical window/continuation
+  wrappers;
+- all six admission/completion preimages, the enumerated 22-artifact mutation
+  proof, closed command/schema/phase/window joins, and direct-constructor
+  anti-bypass;
 - completion hashes included in stage-stable `bench_binding_sha256`; and
 - assembly refusal proves the scorer was not called;
 - complete pass/fail bundles traverse `evaluate_promotion_bundle` exactly
