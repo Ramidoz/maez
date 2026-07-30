@@ -2058,11 +2058,40 @@ The parser takes exactly the twenty-two relative arguments. It constructs
 already-admitted `CommandAttempt` to persist exactly one `receipt` terminal
 through `publish_command_artifact`; it never allocates a second attempt.
 Same-clock and concurrent assembly invocations receive distinct
-O_EXCL-claimed ordinals. Refused assembly
-persists a content-light `assembly_refused` receipt with no decision/verdict;
-pre-root refusal keeps the null/null output pair.
+ordinals through the existing disk max-plus-one allocator: held-root locking,
+anonymous-file fsync, atomic link, parent fsync, anchored reopen/hash
+validation, and `EEXIST` collision advancement. No second allocator or
+`O_EXCL` claim is introduced here.
+
+Terminal validation is command-aware through one closed, exhaustive matrix:
+`static-preflight`, `vulkan-baseline`, and `cuda-candidate` accept only their
+existing `command_completion.v1`; `rehearse` accepts only its incompatible
+rehearsal packet; and `assemble-stage1` accepts only a canonical
+`cuda_bench_assemble.receipt.v1`. A receipt in a phase role and a command
+completion in the assembly role both refuse. The assembly receipt must be
+published at the exact terminal name derived from the already-admitted command
+and ordinal; wrong schema, noncanonical bytes, outcome mismatch, or binding
+mismatch fails closed.
+
+A complete scored `bench_passed` or `keep_vulkan` is `status="ok"` with exit
+zero. Exit zero means only that the scorer completed honestly; it carries zero
+migration or cutover authority. The receipt's explicit `decision` distinguishes
+the two outcomes and is the only verdict fact. A structurally unscorable input
+persists a content-light `assembly_refused` receipt with null binding and no
+decision, verdict, reasons, or scorer call, then returns `status="refused"` /
+exit 3. A scorer or receipt-builder defect is not collapsed into
+`assembly_refused`: it returns `status="failed"` with null binding and no
+verdict. Pre-root refusal keeps the null/null output pair.
 Tests call the private assembly-command handler with a tmpdir root; public
 `main` remains bound to the canonical root and accepts no override.
+
+RED the entire matrix and outcome split: receipt-in-phase and
+completion-in-assembly substitutions; both distinct exit-zero verdict receipts;
+exit-zero-alone carries no migration authorization; zero scorer calls on
+`assembly_refused`; scorer defects remain failed rather than owner-input
+refusals; canonical receipt/binding/outcome validation; one admission and one
+terminal sharing the existing ordinal; and distinct sequential/concurrent
+ordinals from the existing allocator.
 
 Add a behavioral authority RED: replace every service/pointer/override/install
 surface with a function that raises, return `bench_passed` from the assembler,

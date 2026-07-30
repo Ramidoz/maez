@@ -481,6 +481,17 @@ imports or calls `_evaluate_promotion_gate`. Structural or missing evidence
 produces `assembly_refused`/unscorable output without scorer entry and without
 a verdict.
 
+The assembly command has three honest terminal states. A complete scored
+`bench_passed` or scorer-minted `keep_vulkan` is `status="ok"` / exit 0. Exit
+zero says only that evaluation completed: it grants no migration, drill,
+cutover, service, pointer, or installation authority. The two receipts remain
+plainly distinguishable by their explicit `decision`, and any later owner gate
+must read that decision rather than infer one from process status. Structurally
+missing or malformed owner evidence produces an `assembly_refused` receipt
+with null binding and no decision, reasons, verdict, or scorer call, then exits
+3. A scorer or receipt-builder defect is an internal failed outcome with null
+binding and no verdict; it is never mislabeled as an owner-input refusal.
+
 `cuda_bench_driver.command_completion.v1` is active schema 24. Its exact fields
 are `command`, positive `ordinal`, bounded `window_id` or null,
 `admission_ref`, `admission_sha256`, `artifact_ref`, `artifact_sha256`,
@@ -498,6 +509,24 @@ schema. `assemble-stage1` retains its scorer receipt and also never produces
 it. A completion joins its exact admission and decoded underlying artifact; it
 is not a free-form success receipt.
 
+Terminal evidence is governed by one closed, exhaustive command/schema matrix:
+
+| command | only accepted successful terminal evidence |
+|---|---|
+| `static-preflight` | `cuda_bench_driver.command_completion.v1` |
+| `rehearse` | incompatible `cuda_bench_rehearsal.packet.v1` |
+| `vulkan-baseline` | `cuda_bench_driver.command_completion.v1` |
+| `cuda-candidate` | `cuda_bench_driver.command_completion.v1` |
+| `assemble-stage1` | canonical `cuda_bench_assemble.receipt.v1` |
+
+The validator remains command-aware and exhaustive rather than accepting a
+generic terminal wrapper. A scorer receipt in a static/phase role refuses, as
+does a command completion in the assembly role. An assembly receipt must use
+the terminal filename derived from the already-admitted command and ordinal;
+its canonical bytes, file hash, wrapper binding, terminal outcome, and carried
+decision/bundle hashes must agree. An `assembly_refused` receipt instead has
+null binding and no verdict fields.
+
 ## Output and privacy
 
 Each command prints exactly one canonical, content-light terminal JSON line
@@ -510,14 +539,15 @@ containing only:
 - `artifact_sha256`.
 
 `artifact_ref` and `artifact_sha256` are an all-or-none pair. Initial
-validation is provisional. Root admission linearizes only after an O_EXCL
-`cuda_bench_driver.command_admission.v1` receipt has been linked,
-parent-fsynced, reopened through the anchored reader, hashed while the admitted
-root descriptor remains held, and latched into an immutable `CommandAttempt`
-before the signal mask is restored. The receipt carries only command, its
-positive ordinal, bounded window ID or null, `status="admitted"`, and
-timestamp. It contains no arguments, authorization, paths, prompts, responses,
-or environment values.
+validation is provisional. Root admission chooses a disk max-plus-one ordinal
+under the held-root lock, fsyncs an anonymous file, atomically links the
+`cuda_bench_driver.command_admission.v1` receipt, parent-fsyncs, reopens it
+through the anchored reader, validates its hash while the admitted root
+descriptor remains held, and latches an immutable `CommandAttempt` before the
+signal mask is restored. Only `EEXIST` advances the ordinal. The receipt carries
+only command, its positive ordinal, bounded window ID or null,
+`status="admitted"`, and timestamp. It contains no arguments, authorization,
+paths, prompts, responses, or environment values.
 
 Before linearization, a catchable parse, root, link, fsync, reopen, identity,
 or hash failure writes nowhere only when identity-proven unlink plus parent
