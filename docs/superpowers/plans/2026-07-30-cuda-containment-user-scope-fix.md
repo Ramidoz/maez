@@ -215,5 +215,14 @@ operator health endpoint reports running. Do not restart the watchdog service.
 
 - [ ] **Step 4: Keep the mutation boundary closed**
 
-Confirm the separate `skills/evolution_engine.py` system-scope mutation path
-is unchanged and report it for its own owner-gated audit.
+Confirm both system-scope mutation paths—evolution-engine self-modification
+restart and authenticated cockpit restart—are unchanged and report them for
+their own owner-gated audit.
+
+- [ ] **Step 5: Preserve the owner-ratified sequence**
+
+Record the four owner-facing wrong-scope status surfaces—CLI status, web
+debug/journal status, cockpit state, and Telegram status—for the immediately
+sequenced cockpit-honesty repair. That slice must prove whether any false
+status can flow into Maez's prompt or evidence envelope. Land it before
+opening the separate mutation-path review.

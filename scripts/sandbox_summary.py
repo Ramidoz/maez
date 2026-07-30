@@ -333,7 +333,7 @@ def format_report(
         push("  Confirm by checking the env var on the daemon process:")
         push(
             "    sudo tr '\\0' '\\n' < "
-            "/proc/$(systemctl show -p MainPID --value maez.service)/environ "
+            "/proc/$(systemctl --user show -p MainPID --value maez.service)/environ "
             "| grep MAEZ_EVIDENCE_ENVELOPE_DISABLED"
         )
     elif truncations:

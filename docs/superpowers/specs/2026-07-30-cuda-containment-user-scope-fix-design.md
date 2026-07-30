@@ -98,9 +98,17 @@ scope too.
 
 The watchdog service is not restarted by this repair; activating committed
 code in the live watchdog remains a separate owner-authorized runtime action.
-The distinct mutating system-scope implementation in
-`skills/evolution_engine.py` is outside this read-only sensor repair and
-requires its own owner-gated audit.
+The completed sibling sweep also found four owner-facing status surfaces with
+the same wrong-scope assumption: CLI status, web debug/journal status, cockpit
+state, and Telegram status. They are explicitly split into the immediately
+sequenced cockpit-honesty repair; that slice must also prove none of their
+false body facts flow into Maez's prompt or evidence envelope.
+
+Two mutating paths are separately owner-gated: the evolution-engine
+self-modification restart and the authenticated cockpit restart. Their real
+wrong-scope behavior must be characterized before either is changed. The
+read-only status slice lands before this mutation review opens; neither split
+piece is deferred or silently folded into this repair.
 
 No service action, parser relaxation, state-machine change, authorization
 change, model load, phase execution, rollback drill, or cutover is part of

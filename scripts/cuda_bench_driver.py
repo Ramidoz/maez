@@ -737,12 +737,6 @@ def systemctl_command(subcommand: str, unit: str) -> list[str]:
     return [_SYSTEMCTL, "--user", subcommand, unit]
 
 
-def _systemctl_system_show_command(unit: str) -> list[str]:
-    if type(unit) is not str or not unit:
-        raise ValueError("unit_invalid")
-    return [_SYSTEMCTL, "show", unit]
-
-
 @dataclass(frozen=True, slots=True)
 class ProviderWitness:
     synthetic: bool
@@ -4355,7 +4349,7 @@ class RealContainmentProvider(_WitnessedProvider):
             self._command(systemctl_command("show", VISION_UNIT))
         )
         maez = _parse_systemd_show(
-            self._command(_systemctl_system_show_command(MAEZ_UNIT))
+            self._command(systemctl_command("show", MAEZ_UNIT))
         )
         maez_state = maez["ActiveState"]
         process_flag: str | None = None
@@ -4372,7 +4366,7 @@ class RealContainmentProvider(_WitnessedProvider):
                 raise BenchRefusal("provider_uncertain") from None
             process_flag = _exact_env_assignment(environ, nul_separated=True)
             second = _parse_systemd_show(
-                self._command(_systemctl_system_show_command(MAEZ_UNIT))
+                self._command(systemctl_command("show", MAEZ_UNIT))
             )
             if second["ActiveState"] != "active" or second["MainPID"] != pid:
                 raise BenchRefusal("provider_uncertain")

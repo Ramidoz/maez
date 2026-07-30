@@ -25,6 +25,12 @@ class MaezWatchdogLivenessTests(unittest.TestCase):
 
             self.assertTrue(maez_watchdog.is_maez_active())
 
+        run.assert_called_once_with(
+            ["systemctl", "--user", "is-active", "maez.service"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
         get.assert_called_once_with(maez_watchdog.OPERATOR_HEALTH_URL, timeout=3)
         self.assertEqual(
             maez_watchdog.OPERATOR_HEALTH_URL,
