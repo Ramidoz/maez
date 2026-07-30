@@ -521,7 +521,7 @@ def test_checkout_identity_refuses_nested_git_authority(tmp_path: Path):
         airlock._resolve_checkout(launcher, nested)
 
 
-def test_checkout_identity_discovers_tracked_inventory_from_absolute_git():
+def test_retired_floor_inventory_discovers_tracked_inventory_from_absolute_git():
     airlock = _airlock()
     checkout = airlock._resolve_checkout(AIRLOCK_SOURCE, REPO)
     inventory = airlock._discover_inventory(checkout)
@@ -531,7 +531,13 @@ def test_checkout_identity_discovers_tracked_inventory_from_absolute_git():
     assert inventory.tracked_python_files == tuple(
         sorted(inventory.tracked_python_files, key=lambda path: path.as_posix())
     )
-    assert Path("scripts/dev/bench_baseline.py") in inventory.tracked_python_files
+    for removed in (
+        "scripts/dev/bench_baseline.py",
+        "scripts/dev/bench_report_plugin.py",
+        "tests/test_bench_baseline.py",
+    ):
+        assert not (checkout / removed).exists()
+    assert (checkout / "scripts/dev/worktree_test_airlock.py").is_file()
     assert {"core", "scripts", "skills", "tests"} <= set(inventory.maez_roots)
     assert REPO in inventory.registered_worktrees
     assert (

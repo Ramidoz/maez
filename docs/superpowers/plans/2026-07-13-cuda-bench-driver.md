@@ -5,11 +5,12 @@
 > `docs/superpowers/plans/2026-07-21-cuda-bench-lean-closure.md` for every
 > remaining task.
 
-**Current status (owner ruling, 2026-07-20):** Tasks A1--A6 and B1--B7 are
-implemented and gated on `feature/cuda-bench-driver`; the worktree import
-airlock is also complete. The unimplemented B8--B10 closure, the full-repo
-`bench_baseline.py` gate, and INV-4's P2--P5 implementation obligations are
-superseded by
+**Current status (owner ruling, updated 2026-07-30):** Tasks A1--A6 and B1--B7
+are implemented and gated on `feature/cuda-bench-driver`; the worktree import
+airlock is also complete. The lean closure implementation is complete on that
+feature branch, and the dead full-repo floor (`bench_baseline.py`, its report
+plugin, and its test) is deleted. The historical B8--B10 closure and INV-4's
+P2--P5 implementation obligations are superseded by
 `docs/superpowers/specs/2026-07-20-cuda-bench-lean-closure-design.md`.
 Do not execute the historical B8--B10 instructions below. The replacement TDD
 plan was written from the lean design after its written-spec gate passed and is
@@ -28,8 +29,8 @@ commit → Claude clean-checkout gate. Main stays untouched until final merge.
   disposable interpreter prevents the shared editable-install `.pth` from
   lending dirty-main imports to the checkout. Direct shared-venv runs are
   useful non-certifying evidence only.
-- The full-repo baseline helper and report plugin are retired. They are not a
-  per-task or final gate and are deleted by the lean closure. The gate is the
+- The full-repo baseline helper and report plugin are retired and deleted. They
+  are not a per-task or final gate. The gate is the
   focused bench/scorer suite, ruff, residue/dormancy witnesses, and a dedicated
   tracked-entry-compatible airlock selection.
 - Codex continues to build RED-first; independent Codex reviews precede each

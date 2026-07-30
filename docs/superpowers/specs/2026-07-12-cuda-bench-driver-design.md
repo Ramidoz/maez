@@ -1,8 +1,9 @@
 # CUDA A/B bench driver — design
 
-Status: scorer Part A, driver B2--B7, and the worktree import airlock are
-implemented on `feature/cuda-bench-driver`. The owner-ratified lean closure in
-`docs/superpowers/specs/2026-07-20-cuda-bench-lean-closure-design.md`
+Status: scorer Part A, driver B2--B7, the worktree import airlock, and the lean
+closure are implemented on `feature/cuda-bench-driver`; the dead full-repo
+baseline helper, report plugin, and test are deleted. The owner-ratified lean
+closure in `docs/superpowers/specs/2026-07-20-cuda-bench-lean-closure-design.md`
 supersedes this document's unimplemented multi-stage assembler/CLI closure.
 The driver executes the offline A/B measurement; the scorer in
 `cuda_migration.py` remains the only decision authority.

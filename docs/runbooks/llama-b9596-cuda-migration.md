@@ -4,6 +4,10 @@ Status: reviewed procedure only; CUDA is not promoted. Rohit alone opens each
 offline or live window. A build, a fast bench, or a provisional boot does not
 change the production decision.
 
+The lean closure is complete on `feature/cuda-bench-driver`; its dead full-repo
+baseline helper, report plugin, and test are deleted. Certification uses the
+dedicated lean integration node, not the retired floor.
+
 The lean bench closure recognizes three separate owner acts: (1) authorize the
 A/B measurement phases, (2) separately authorize the manual rollback drill,
 which transiently changes the live pointer and restores it, and (3) separately

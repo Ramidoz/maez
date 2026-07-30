@@ -60,6 +60,44 @@ def run_cli_raw(*argv: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _call_one_shot_cli_in_process(argv: tuple[str, ...] | list[str]) -> int:
+    """Call the process entry point, then restore this test process exactly."""
+
+    caller_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+    try:
+        return cli.main(argv)
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, caller_mask)
+
+
+@pytest.mark.parametrize("raises", (False, True))
+def test_in_process_one_shot_cli_harness_restores_exact_caller_mask(
+    monkeypatch: pytest.MonkeyPatch,
+    raises: bool,
+) -> None:
+    original = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+    watched = {signal.SIGINT, signal.SIGTERM}
+    caller_mask = (set(original) - watched) | {signal.SIGUSR1}
+
+    def fake_main(_argv: object) -> int:
+        signal.pthread_sigmask(signal.SIG_BLOCK, watched)
+        if raises:
+            raise SystemExit(9)
+        return 7
+
+    try:
+        signal.pthread_sigmask(signal.SIG_SETMASK, caller_mask)
+        monkeypatch.setattr(cli, "main", fake_main)
+        if raises:
+            with pytest.raises(SystemExit, match="9"):
+                _call_one_shot_cli_in_process(("rehearse",))
+        else:
+            assert _call_one_shot_cli_in_process(("rehearse",)) == 7
+        assert signal.pthread_sigmask(signal.SIG_BLOCK, set()) == caller_mask
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, original)
+
+
 def _one_terminal_line(stdout: str) -> dict[str, object]:
     assert stdout.endswith("\n")
     assert stdout.count("\n") == 1
@@ -2283,7 +2321,7 @@ class TestTask6RehearseCommand:
         for persona, outcome in expected:
             before = {path.relative_to(root) for path in root.rglob("*")}
             child_start = len(children)
-            rc = cli.main(
+            rc = _call_one_shot_cli_in_process(
                 [
                     "rehearse",
                     "--static-preflight",
@@ -7253,7 +7291,7 @@ class TestTask7ProductionMeasurementCommands:
                 *common,
             )
         )
-        assert cli.main(argv) == 3
+        assert _call_one_shot_cli_in_process(argv) == 3
         terminal = _one_terminal_line(capfd.readouterr().out)
         assert terminal["status"] == "refused"
         assert terminal["window_id"] == window.window_id

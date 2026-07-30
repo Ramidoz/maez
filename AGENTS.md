@@ -96,12 +96,20 @@ The airlock's own invariant-violation self-tests are a documented bootstrap
 exception: run the complete self-test file non-certifying under the pinned
 `-I -S -B` interpreter with only the audited checkout and dependency purelib
 added explicitly, so `site` and shared `.pth` files are never processed. The
-complete seven-file compatibility family also runs non-certifying in a
+complete six-file compatibility family also runs non-certifying in a
 disposable no-pip, no-guard venv with only plain checkout and dependency-purelib
 path lines. A certifying run is limited to the exact harmless leaf, the full
 ledger-activation file, and the two tracked-entry-compatible B7 nodes named in
-the airlock plan; it must not claim that deliberate guard-violation fixtures or
-refused entry shapes ran cleanly inside the guard.
+the airlock plan, plus the exact lean CUDA-bench node named below; it must not
+claim that deliberate guard-violation fixtures or refused entry shapes ran
+cleanly inside the guard.
+
+For the completed lean CUDA-bench closure, the honest certifying selection is
+exactly:
+
+```text
+tests/test_cuda_bench_assemble.py::TestLeanAirlockIntegration::test_stage1_owner_selected_evidence_returns_bundle_bound_verdict_without_mutation
+```
 
 The certificate is not a global process-supervisor receipt. The outer clears
 its owned group and refuses when its bounded read-only check still sees an

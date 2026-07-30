@@ -2147,8 +2147,10 @@ Complete evidence returns bench_passed or scorer-minted keep_vulkan with product
 - Delete: `scripts/dev/bench_report_plugin.py`
 - Delete: `tests/test_bench_baseline.py`
 - Modify: `tests/test_worktree_airlock_imports.py:500-550`
+- Modify: `tests/test_cuda_bench_cli.py` (test harness only; production CLI stays byte-identical)
 - Modify: `tests/test_cuda_bench_assemble.py`
 - Modify: `AGENTS.md`
+- Modify: `docs/superpowers/plans/2026-07-21-cuda-bench-lean-closure.md`
 - Modify: `docs/superpowers/plans/2026-07-13-cuda-bench-driver.md`
 - Modify: `docs/superpowers/specs/2026-07-12-cuda-bench-driver-design.md`
 - Modify: `docs/runbooks/llama-b9596-cuda-migration.md`
@@ -2210,6 +2212,15 @@ its historical task record.
 `AGENTS.md` must name the dedicated integration node as an honest certifying
 selection. It must not advertise the retired full-floor gate.
 
+**Task 10 gate amendment (owner-ratified 2026-07-30):** three tests call the
+one-shot `cuda_bench_cli.main()` entry point inside pytest's long-lived process.
+Production deliberately leaves SIGINT/SIGTERM blocked after terminal
+publication until process exit, so those tests must restore their exact caller
+mask after `main()` returns or raises. Add a test-only, exception-safe wrapper
+and a direct normal/raising RED proving mask-before equals mask-after. The
+wrapper must never restore during `main()`, and
+`scripts/cuda_bench_cli.py` must remain byte-identical.
+
 - [ ] **Step 4: GREEN, reviews, and commit before certification**
 
 Run:
@@ -2236,7 +2247,8 @@ Commit the scoped deletion/integration/canon package:
 git rm scripts/dev/bench_baseline.py scripts/dev/bench_report_plugin.py \
   tests/test_bench_baseline.py
 git add AGENTS.md tests/test_worktree_airlock_imports.py \
-  tests/test_cuda_bench_assemble.py \
+  tests/test_cuda_bench_cli.py tests/test_cuda_bench_assemble.py \
+  docs/superpowers/plans/2026-07-21-cuda-bench-lean-closure.md \
   docs/superpowers/plans/2026-07-13-cuda-bench-driver.md \
   docs/superpowers/specs/2026-07-12-cuda-bench-driver-design.md \
   docs/runbooks/llama-b9596-cuda-migration.md
