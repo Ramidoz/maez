@@ -176,3 +176,44 @@ root for any later Vulkan/CUDA phase commands.
 Relay both commits, RED→GREEN evidence, live PID/flag witness, fresh
 static-preflight artifact reference/hash, test counts, Ruff, clean worktree,
 and confirmation that no phase ran and no nonce was consumed.
+
+### Task 1b: Close the identical read-only watchdog sibling
+
+**Files:**
+- Modify: `skills/maez_watchdog.py`
+- Modify: `tests/test_maez_watchdog_service.py`
+- Modify: `scripts/sandbox_summary.py`
+- Modify: `docs/TRACK_A.md`
+
+- [ ] **Step 1: Write the exact-argv failing test**
+
+Strengthen the positive watchdog test to require:
+
+```python
+run.assert_called_once_with(
+    ["systemctl", "--user", "is-active", "maez.service"],
+    capture_output=True,
+    text=True,
+    timeout=5,
+)
+```
+
+The pre-fix test must fail because the live code omits `--user`.
+
+- [ ] **Step 2: Implement only the read-only scope correction**
+
+Add `--user` to the watchdog liveness probe. Do not change its HTTP-health
+requirement, transition state, notification behavior, timing, or exception
+policy. Correct the matching read-only instructions in
+`scripts/sandbox_summary.py` and `docs/TRACK_A.md`.
+
+- [ ] **Step 3: Verify focused and live GREEN**
+
+Run the watchdog unit suite, Ruff, and a read-only live witness. The live
+witness must return true only when both the user unit is active and the
+operator health endpoint reports running. Do not restart the watchdog service.
+
+- [ ] **Step 4: Keep the mutation boundary closed**
+
+Confirm the separate `skills/evolution_engine.py` system-scope mutation path
+is unchanged and report it for its own owner-gated audit.

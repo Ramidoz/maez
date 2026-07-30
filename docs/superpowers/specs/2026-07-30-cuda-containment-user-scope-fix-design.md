@@ -76,6 +76,32 @@ evidence must cite the fresh receipt produced by the corrected package.
 ## Scope and non-goals
 
 Modified runtime code is limited to the command used by the Maez containment
-sensor and deletion of its now-unused system-scope builder. No service action,
-parser relaxation, state-machine change, authorization change, model load,
-phase execution, rollback drill, or cutover is part of this fix.
+sensor, deletion of its now-unused system-scope builder, and the same
+read-only scope correction in the independent Maez watchdog discovered by the
+required sibling sweep. The watchdog correction changes only:
+
+```python
+["systemctl", "is-active", "maez.service"]
+```
+
+to:
+
+```python
+["systemctl", "--user", "is-active", "maez.service"]
+```
+
+Its HTTP health requirement remains unchanged. A regression test pins the
+exact argv so a system-scope not-found result cannot again masquerade as a
+real liveness observation. The stale read-only operator instructions in
+`scripts/sandbox_summary.py` and `docs/TRACK_A.md` are corrected to name user
+scope too.
+
+The watchdog service is not restarted by this repair; activating committed
+code in the live watchdog remains a separate owner-authorized runtime action.
+The distinct mutating system-scope implementation in
+`skills/evolution_engine.py` is outside this read-only sensor repair and
+requires its own owner-gated audit.
+
+No service action, parser relaxation, state-machine change, authorization
+change, model load, phase execution, rollback drill, or cutover is part of
+this fix.
