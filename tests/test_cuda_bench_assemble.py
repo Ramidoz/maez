@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import os
-from dataclasses import fields, replace
+from dataclasses import FrozenInstanceError, fields, replace
 from pathlib import Path
+from types import MappingProxyType
 from unittest import mock
 
 import pytest
@@ -301,6 +303,31 @@ def _materialize_stage_one(root: Path) -> tuple[object, object]:
 
 def _build(root: Path, paths: object) -> cm.BenchEvidenceBundle:
     return assemble.build_stage1_bundle(paths, root=root, timestamp=TIMESTAMP)
+
+
+def _keep_vulkan_bundle() -> cm.BenchEvidenceBundle:
+    bundle = migration_tests._make_bundle(1)
+    quality = replace(bundle.quality, false_absence_count=1)
+    control_summary = migration_tests._summary_for_bundle_packet(
+        bundle.control_packet,
+        quality=quality,
+        owner=bundle.owner_voice,
+        rollback_witness=bundle.rollback.witness,
+    )
+    candidate_summary = migration_tests._summary_for_bundle_packet(
+        bundle.candidate_packet,
+        quality=quality,
+        owner=bundle.owner_voice,
+        rollback_witness=bundle.rollback.witness,
+    )
+    return cm.BenchEvidenceBundle(
+        **{
+            **migration_tests._bundle_values(bundle),
+            "quality": quality,
+            "control_summary": control_summary,
+            "candidate_summary": candidate_summary,
+        }
+    )
 
 
 def test_artifact_paths_are_exactly_the_twenty_two_ratified_roles() -> None:
@@ -649,6 +676,302 @@ def test_assembler_is_measurement_free_and_imports_only_four_driver_names() -> N
         "ServerLauncher",
         "journalctl",
         "_evaluate_promotion_gate",
-        "evaluate_promotion_bundle",
     )
     assert all(token not in source for token in forbidden)
+
+
+def test_stage1_evaluation_is_a_frozen_slotted_result() -> None:
+    assert tuple(assemble.Stage1Evaluation.__slots__) == (
+        "bundle",
+        "verdict",
+        "receipt",
+    )
+    bundle = migration_tests._make_bundle(1)
+    verdict = cm.evaluate_promotion_bundle(bundle)
+    result = assemble.Stage1Evaluation(
+        bundle=bundle,
+        verdict=verdict,
+        receipt=MappingProxyType({}),
+    )
+
+    with pytest.raises(FrozenInstanceError):
+        result.receipt = MappingProxyType({"changed": True})
+
+
+def test_public_scorer_call_count_is_twice_on_the_same_built_bundle(
+    tmp_path: Path,
+) -> None:
+    paths, _expected = _materialize_stage_one(tmp_path)
+    real_evaluate = cm.evaluate_promotion_bundle
+    observed: list[cm.BenchEvidenceBundle] = []
+
+    def recording_evaluate(
+        bundle: cm.BenchEvidenceBundle,
+    ) -> cm.PromotionVerdict:
+        observed.append(bundle)
+        return real_evaluate(bundle)
+
+    with mock.patch.object(
+        cm, "evaluate_promotion_bundle", recording_evaluate
+    ):
+        result = assemble.assemble_stage1(
+            paths,
+            root=tmp_path,
+            timestamp=TIMESTAMP,
+        )
+
+    assert len(observed) == 2
+    assert observed[0] is observed[1] is result.bundle
+    assert result.verdict.decision == "bench_passed"
+
+
+@pytest.mark.parametrize("collision_at", ("explicit_scorer", "receipt_reentry"))
+def test_post_build_assembly_refusal_is_internal_evaluation_failure(
+    tmp_path: Path,
+    collision_at: str,
+) -> None:
+    paths, _expected = _materialize_stage_one(tmp_path)
+    real_evaluate = cm.evaluate_promotion_bundle
+    observed: list[cm.BenchEvidenceBundle] = []
+
+    def colliding_evaluate(
+        bundle: cm.BenchEvidenceBundle,
+    ) -> cm.PromotionVerdict:
+        observed.append(bundle)
+        if collision_at == "explicit_scorer" or len(observed) == 2:
+            raise driver.BenchRefusal("assembly_refused")
+        return real_evaluate(bundle)
+
+    with (
+        mock.patch.object(
+            cm,
+            "evaluate_promotion_bundle",
+            colliding_evaluate,
+        ),
+        pytest.raises(Exception) as captured,
+    ):
+        assemble.assemble_stage1(
+            paths,
+            root=tmp_path,
+            timestamp=TIMESTAMP,
+        )
+
+    assert type(captured.value).__name__ == "_Stage1EvaluationFailure"
+    assert not isinstance(captured.value, driver.BenchRefusal)
+    assert len(observed) == (
+        1 if collision_at == "explicit_scorer" else 2
+    )
+    assert all(type(bundle) is cm.BenchEvidenceBundle for bundle in observed)
+    assert len({id(bundle) for bundle in observed}) == 1
+
+
+def test_bench_passed_receipt_is_immutable_and_bound_to_both_bundle_hashes(
+    tmp_path: Path,
+) -> None:
+    paths, _expected = _materialize_stage_one(tmp_path)
+    result = assemble.assemble_stage1(
+        paths,
+        root=tmp_path,
+        timestamp=TIMESTAMP,
+    )
+
+    assert type(result.receipt) is MappingProxyType
+    assert result.verdict.decision == "bench_passed"
+    assert result.receipt["decision"] == "bench_passed"
+    assert (
+        result.receipt["bench_binding_sha256"]
+        == result.bundle.bench_binding_sha256
+    )
+    assert (
+        result.receipt["bundle_binding_sha256"]
+        == result.bundle.binding_sha256
+    )
+    assert (
+        result.receipt["gate_bindings"]["bench_evidence_sha256"]
+        == result.bundle.bench_binding_sha256
+    )
+
+
+def test_keep_vulkan_is_a_distinct_scorer_minted_stage1_verdict(
+    tmp_path: Path,
+) -> None:
+    bundle = _keep_vulkan_bundle()
+    with mock.patch.object(
+        assemble,
+        "build_stage1_bundle",
+        return_value=bundle,
+    ):
+        result = assemble.assemble_stage1(
+            mock.sentinel.paths,
+            root=tmp_path,
+            timestamp=TIMESTAMP,
+        )
+
+    assert result.verdict.decision == "keep_vulkan"
+    assert result.verdict.reasons == ("false_absence",)
+    assert result.receipt["decision"] == "keep_vulkan"
+    assert result.receipt["bench_binding_sha256"] == bundle.bench_binding_sha256
+    assert result.receipt["bundle_binding_sha256"] == bundle.binding_sha256
+
+
+def test_structural_refusal_never_calls_public_scorer_or_receipt_builder(
+    tmp_path: Path,
+) -> None:
+    paths, _expected = _materialize_stage_one(tmp_path)
+    (tmp_path / paths.quality).unlink()
+
+    with (
+        mock.patch.object(
+            cm,
+            "evaluate_promotion_bundle",
+            side_effect=AssertionError("scorer called"),
+        ),
+        mock.patch.object(
+            cm,
+            "build_receipt",
+            side_effect=AssertionError("receipt builder called"),
+        ),
+        pytest.raises(driver.BenchRefusal, match="assembly_refused"),
+    ):
+        assemble.assemble_stage1(
+            paths,
+            root=tmp_path,
+            timestamp=TIMESTAMP,
+        )
+
+
+class TestLeanAirlockIntegration:
+    def test_stage1_owner_selected_evidence_returns_bundle_bound_verdict_without_mutation(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        root = tmp_path / "bench"
+        root.mkdir(mode=0o700)
+        outside = tmp_path / "outside"
+        outside.mkdir(mode=0o700)
+        outside_witness = outside / "production-witness"
+        outside_witness.write_bytes(b"unchanged\n")
+        os.chmod(outside_witness, 0o600)
+        paths, _expected = _materialize_stage_one(root)
+        production_witness = {
+            relative: hashlib.sha256(
+                (Path(__file__).parents[1] / relative).read_bytes()
+            ).hexdigest()
+            for relative in (
+                "scripts/cuda_migration.py",
+                "scripts/cuda_bench_driver.py",
+            )
+        }
+        before = {
+            path.relative_to(tmp_path): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in tmp_path.rglob("*")
+            if path.is_file()
+        }
+        opened: list[tuple[str, Path]] = []
+        real_open = driver.open_bench_file
+
+        def recording_open(relative: str, *, root: Path) -> bytes:
+            opened.append((relative, root))
+            return real_open(relative, root=root)
+
+        monkeypatch.setattr(assemble, "open_bench_file", recording_open)
+        scorer_calls: list[cm.BenchEvidenceBundle] = []
+        real_scorer = cm.evaluate_promotion_bundle
+
+        def recording_scorer(
+            bundle: cm.BenchEvidenceBundle,
+        ) -> cm.PromotionVerdict:
+            scorer_calls.append(bundle)
+            return real_scorer(bundle)
+
+        monkeypatch.setattr(
+            cm,
+            "evaluate_promotion_bundle",
+            recording_scorer,
+        )
+        forbidden = mock.Mock(
+            side_effect=AssertionError("forbidden action surface reached")
+        )
+        writer_calls: list[Path] = []
+
+        def guarded_writer(
+            *args: object,
+            root: Path,
+            **_kwargs: object,
+        ) -> object:
+            relative = args[0] if args and type(args[0]) is str else "terminal"
+            target = (root / relative).resolve()
+            writer_calls.append(target)
+            if (
+                root.resolve() != admitted_root
+                or not target.is_relative_to(admitted_root)
+            ):
+                raise AssertionError("write outside admitted root")
+            raise AssertionError("filesystem writer reached")
+
+        admitted_root = root.resolve()
+        for name in (
+            "write_private_file",
+            "publish_command_artifact",
+            "publish_or_verify_immutable",
+        ):
+            monkeypatch.setattr(driver, name, guarded_writer)
+        for target, names in (
+            (
+                driver,
+                (
+                    "run_phase",
+                    "production_tier",
+                    "rehearsal_tier",
+                    "RealServiceStateProvider",
+                    "RealGpuProvider",
+                    "ServerLauncher",
+                ),
+            ),
+            (
+                cm,
+                (
+                    "stop_service",
+                    "start_service",
+                    "restart_service",
+                    "install_override",
+                    "remove_override",
+                    "set_model_pointer",
+                    "switch_model_pointer",
+                    "cutover",
+                    "rollback_drill",
+                ),
+            ),
+        ):
+            for name in names:
+                monkeypatch.setattr(target, name, forbidden, raising=False)
+
+        result = assemble.assemble_stage1(
+            paths,
+            root=root,
+            timestamp=TIMESTAMP,
+        )
+
+        after = {
+            path.relative_to(tmp_path): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in tmp_path.rglob("*")
+            if path.is_file()
+        }
+        assert result.verdict.decision == "bench_passed"
+        assert result.receipt["bundle_binding_sha256"] == result.bundle.binding_sha256
+        assert result.receipt["bench_binding_sha256"] == result.bundle.bench_binding_sha256
+        assert opened == [
+            (getattr(paths, name), root) for name in EXPECTED_PATH_FIELDS
+        ]
+        assert len(scorer_calls) == 2
+        assert scorer_calls[0] is scorer_calls[1] is result.bundle
+        forbidden.assert_not_called()
+        assert writer_calls == []
+        assert after == before
+        assert production_witness == {
+            relative: hashlib.sha256(
+                (Path(__file__).parents[1] / relative).read_bytes()
+            ).hexdigest()
+            for relative in production_witness
+        }

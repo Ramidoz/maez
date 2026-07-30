@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import argparse
 import hashlib
 import importlib
 import inspect
@@ -14,11 +15,15 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import replace
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import fields, replace
 from pathlib import Path
+from types import MappingProxyType
+from unittest import mock
 
 import pytest
 
+from scripts import cuda_bench_assemble as assemble
 from scripts import cuda_bench_cli as cli
 from scripts import cuda_bench_driver as driver
 from scripts import cuda_migration as cm
@@ -2430,8 +2435,18 @@ class TestSealedParser:
                 "--static-admission",
                 "--static-completion",
             },
-            "assemble-stage1": set(),
+            "assemble-stage1": {
+                f"--{field.name.replace('_', '-')}"
+                for field in fields(assemble.Stage1ArtifactPaths)
+            },
         }
+        assembly_parser = parser._subparsers._group_actions[0].choices[
+            "assemble-stage1"
+        ]
+        assert tuple(
+            action.dest
+            for action in assembly_parser._actions
+        ) == tuple(field.name for field in fields(assemble.Stage1ArtifactPaths))
         assert tuple(inspect.signature(cli.main).parameters) == ("argv",)
 
     def test_public_main_is_structurally_bound_to_driver_bench_root(self) -> None:
@@ -2682,14 +2697,12 @@ class TestRootAdmissionAndExitStatus:
         }
         assert after == before
 
-    @pytest.mark.parametrize(
-        "command", ("static-preflight", "rehearse", "assemble-stage1")
-    )
+    @pytest.mark.parametrize("command", ("static-preflight", "rehearse"))
     @pytest.mark.parametrize(
         ("status", "expected_exit"),
-        (("ok", 0), ("refused", 3), ("failed", 4)),
+        (("refused", 3), ("failed", 4)),
     )
-    def test_every_command_maps_status_to_exact_exit_status_and_one_output(
+    def test_non_assembly_refusal_maps_to_exact_exit_status_and_one_output(
         self,
         tmp_path: Path,
         capfd: pytest.CaptureFixture[str],
@@ -3688,7 +3701,7 @@ class TestTask3ReviewRemainingOutputBoundaries:
             ),
         ),
     )
-    def test_valid_non_command_final_reference_survives_normalization(
+    def test_non_matrix_success_reference_fails_closed(
         self,
         tmp_path: Path,
         capfd: pytest.CaptureFixture[str],
@@ -3713,15 +3726,12 @@ class TestTask3ReviewRemainingOutputBoundaries:
         exit_status = _private_run(command, handler, root=root)
         captured = capfd.readouterr()
 
-        assert exit_status == 0
+        assert exit_status == 4
         assert captured.err == ""
-        assert _one_terminal_line(captured.out) == {
-            "status": "ok",
-            "outcome": "command_complete",
-            "window_id": None,
-            "artifact_ref": relative,
-            "artifact_sha256": hashlib.sha256(payload).hexdigest(),
-        }
+        terminal = _one_terminal_line(captured.out)
+        assert terminal["status"] == "failed"
+        assert terminal["outcome"] == "provider_uncertain"
+        assert terminal["artifact_ref"].endswith("-admission.json")
         assert list(root.rglob("*-admission.json"))
 
     @pytest.mark.parametrize(
@@ -4957,49 +4967,1125 @@ class TestOwnerSurfaceAuthorityAbsence:
 
 
 class TestAssemblerAuthorityAbsence:
-    def test_assembler_scaffold_ast_is_exactly_inert(self) -> None:
+    def test_assembler_uses_only_public_scorer_and_no_action_surface(self) -> None:
         path = REPO_ROOT / "scripts" / "cuda_bench_assemble.py"
         source = path.read_text(encoding="utf-8")
         tree = ast.parse(source)
-        assert len(tree.body) == 2
-        assert isinstance(tree.body[0], ast.Expr)
-        assert isinstance(tree.body[0].value, ast.Constant)
-        assert type(tree.body[0].value.value) is str
-        assert isinstance(tree.body[1], ast.ImportFrom)
-        assert tree.body[1].module == "__future__"
-        assert [(alias.name, alias.asname) for alias in tree.body[1].names] == [
-            ("annotations", None)
-        ]
-        assert not any(
-            isinstance(
-                node,
-                (
-                    ast.Call,
-                    ast.FunctionDef,
-                    ast.AsyncFunctionDef,
-                    ast.ClassDef,
-                    ast.Assign,
-                    ast.AnnAssign,
-                    ast.With,
-                ),
-            )
+        called = {
+            name
             for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and (name := _ast_qualname(node.func)) is not None
+        }
+        assert "cm.evaluate_promotion_bundle" in called
+        assert "_evaluate_promotion_gate" not in source
+        assert called.isdisjoint(
+            {
+                "driver.run_phase",
+                "driver.write_private_file",
+                "driver.publish_command_artifact",
+                "subprocess.run",
+                "os.open",
+                "os.link",
+                "os.unlink",
+                "os.rename",
+                "os.replace",
+            }
+        )
+        assert {
+            name.rpartition(".")[2].lstrip("_")
+            for name in called
+        }.isdisjoint(
+            {
+                "stop_service",
+                "start_service",
+                "restart_service",
+                "install_override",
+                "set_model_pointer",
+                "switch_model_pointer",
+                "promote",
+                "cutover",
+                "rollback_drill",
+            }
         )
 
-    def test_assembler_scaffold_import_has_no_api_or_side_effect(
+    def test_assembler_import_exposes_only_inert_selection_and_evaluation_api(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.chdir(tmp_path)
         before = list(tmp_path.iterdir())
         module = importlib.import_module("scripts.cuda_bench_assemble")
-        public = {
-            name
-            for name in vars(module)
-            if not name.startswith("__")
-        }
-        assert public == {"annotations"}
-        assert type(module.annotations).__module__ == "__future__"
+        assert tuple(field.name for field in fields(module.Stage1ArtifactPaths))
+        assert tuple(field.name for field in fields(module.Stage1Evaluation)) == (
+            "bundle",
+            "verdict",
+            "receipt",
+        )
+        assert callable(module.build_stage1_bundle)
+        assert callable(module.assemble_stage1)
         assert list(tmp_path.iterdir()) == before
+
+
+def _task9_paths_namespace() -> argparse.Namespace:
+    return argparse.Namespace(
+        **{
+            field.name: f"selected/{field.name}.json"
+            for field in fields(assemble.Stage1ArtifactPaths)
+        }
+    )
+
+
+def _task9_evaluation(
+    decision: str = "bench_passed",
+) -> assemble.Stage1Evaluation:
+    from tests import test_cuda_migration as migration_tests
+
+    bundle = migration_tests._make_bundle(1)
+    verdict = cm.evaluate_promotion_bundle(bundle)
+    if decision == "keep_vulkan":
+        verdict = replace(
+            verdict,
+            decision="keep_vulkan",
+            reasons=("false_absence",),
+        )
+    with mock.patch.object(
+        cm,
+        "evaluate_promotion_bundle",
+        return_value=verdict,
+    ):
+        receipt = cm.build_receipt(bundle, verdict, timestamp=FIXED_TIMESTAMP)
+    return assemble.Stage1Evaluation(
+        bundle=bundle,
+        verdict=verdict,
+        receipt=MappingProxyType(receipt),
+    )
+
+
+def _task9_assembly_handler(
+    attempt: driver.CommandAttempt,
+    *,
+    root: Path,
+) -> cli.TerminalResult:
+    return cli._assembly_handler(
+        attempt,
+        root=root,
+        clock=_FixedClock("production"),
+        args=_task9_paths_namespace(),
+    )
+
+
+class TestTask9Stage1AssemblyCommand:
+    def test_assemble_stage1_parser_has_exactly_twenty_two_relative_flags(
+        self,
+    ) -> None:
+        parser = cli.build_parser()
+        assembly_parser = parser._subparsers._group_actions[0].choices[
+            "assemble-stage1"
+        ]
+        actions = tuple(assembly_parser._actions)
+        assert tuple(action.dest for action in actions) == tuple(
+            field.name for field in fields(assemble.Stage1ArtifactPaths)
+        )
+        assert all(action.required for action in actions)
+        assert all(action.type is cli._relative_ref for action in actions)
+
+    def test_terminal_matrix_is_closed_and_exhaustive(self) -> None:
+        assert cli._TERMINAL_SCHEMA_MATRIX == {
+            "static-preflight": cm.COMMAND_COMPLETION_SCHEMA,
+            "rehearse": driver.REHEARSAL_PACKET_SCHEMA,
+            "vulkan-baseline": cm.COMMAND_COMPLETION_SCHEMA,
+            "cuda-candidate": cm.COMMAND_COMPLETION_SCHEMA,
+            "assemble-stage1": driver.ASSEMBLE_RECEIPT_SCHEMA,
+        }
+
+    def test_assembly_clock_failure_persists_failed_assembly_receipt(
+        self,
+        tmp_path: Path,
+        capfd: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        root = tmp_path / "bench"
+        root.mkdir(mode=0o700)
+
+        class BrokenClock:
+            tier = "production"
+
+            def now_utc(self) -> str:
+                raise RuntimeError("PRIVATE clock detail")
+
+        scorer = mock.Mock(side_effect=AssertionError("scorer reached"))
+        monkeypatch.setattr(assemble, "assemble_stage1", scorer)
+
+        def handler(
+            attempt: driver.CommandAttempt,
+            *,
+            root: Path,
+        ) -> cli.TerminalResult:
+            return cli._assembly_handler(
+                attempt,
+                root=root,
+                clock=BrokenClock(),
+                args=_task9_paths_namespace(),
+            )
+
+        status = cli._run_command(
+            "assemble-stage1",
+            handler,
+            root=root,
+            clock=_FixedClock("production"),
+        )
+        captured = capfd.readouterr()
+        terminal = _one_terminal_line(captured.out)
+        wrapper = json.loads(
+            driver.open_bench_file(str(terminal["artifact_ref"]), root=root)
+        )
+
+        assert status == 4
+        assert captured.err == ""
+        assert "PRIVATE" not in captured.out
+        assert terminal["status"] == "failed"
+        assert terminal["outcome"] == "provider_uncertain"
+        assert wrapper == {
+            "schema": driver.ASSEMBLE_RECEIPT_SCHEMA,
+            "binding_sha256": None,
+            "fields": {
+                "outcome": "provider_uncertain",
+                "timestamp": None,
+            },
+        }
+        scorer.assert_not_called()
+
+    @pytest.mark.parametrize("one_shot", (False, True))
+    def test_assembly_terminal_publication_failure_never_retries_generic_schema(
+        self,
+        tmp_path: Path,
+        capfd: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+        one_shot: bool,
+    ) -> None:
+        root = tmp_path / f"bench-{one_shot}"
+        root.mkdir(mode=0o700)
+        evaluation = _task9_evaluation()
+        monkeypatch.setattr(
+            assemble,
+            "assemble_stage1",
+            lambda *_args, **_kwargs: evaluation,
+        )
+        real_publish = driver.publish_command_artifact
+        calls: list[bytes] = []
+
+        def fail_publication(
+            attempt: driver.CommandAttempt,
+            role: str,
+            encoded: bytes,
+            *,
+            root: Path,
+            on_committed: Callable[[str, str], None] | None = None,
+        ) -> tuple[str, str]:
+            calls.append(encoded)
+            if len(calls) == 1 or not one_shot:
+                raise OSError("PRIVATE terminal publication")
+            return real_publish(
+                attempt,
+                role,
+                encoded,
+                root=root,
+                on_committed=on_committed,
+            )
+
+        monkeypatch.setattr(
+            driver,
+            "publish_command_artifact",
+            fail_publication,
+        )
+
+        status = _private_run(
+            "assemble-stage1",
+            _task9_assembly_handler,
+            root=root,
+        )
+        captured = capfd.readouterr()
+        terminal = _one_terminal_line(captured.out)
+        admission = next(root.glob("*-admission.json"))
+
+        assert status == 4
+        assert captured.err == ""
+        assert "PRIVATE" not in captured.out
+        assert len(calls) == 1
+        assert terminal == {
+            "status": "failed",
+            "outcome": "provider_uncertain",
+            "window_id": None,
+            "artifact_ref": admission.name,
+            "artifact_sha256": hashlib.sha256(
+                admission.read_bytes()
+            ).hexdigest(),
+        }
+        assert not list(root.glob("*-terminal.json"))
+
+    def test_assembly_cleanup_incomplete_is_admission_bound_without_retry(
+        self,
+        tmp_path: Path,
+        capfd: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        root = tmp_path / "bench-cleanup"
+        root.mkdir(mode=0o700)
+        evaluation = _task9_evaluation()
+        monkeypatch.setattr(
+            assemble,
+            "assemble_stage1",
+            lambda *_args, **_kwargs: evaluation,
+        )
+        calls: list[bytes] = []
+
+        def fail_cleanup(
+            _attempt: driver.CommandAttempt,
+            _role: str,
+            encoded: bytes,
+            *,
+            root: Path,
+            on_committed: Callable[[str, str], None] | None = None,
+        ) -> tuple[str, str]:
+            del root, on_committed
+            calls.append(encoded)
+            raise driver.BenchRefusal("cleanup_incomplete")
+
+        monkeypatch.setattr(
+            driver,
+            "publish_command_artifact",
+            fail_cleanup,
+        )
+
+        status = _private_run(
+            "assemble-stage1",
+            _task9_assembly_handler,
+            root=root,
+        )
+        captured = capfd.readouterr()
+        terminal = _one_terminal_line(captured.out)
+        admission = next(root.glob("*-admission.json"))
+
+        assert status == 4
+        assert captured.err == ""
+        assert len(calls) == 1
+        assert terminal == {
+            "status": "failed",
+            "outcome": "cleanup_incomplete",
+            "window_id": None,
+            "artifact_ref": admission.name,
+            "artifact_sha256": hashlib.sha256(
+                admission.read_bytes()
+            ).hexdigest(),
+        }
+        assert not list(root.glob("*-terminal.json"))
+
+    def test_assembly_receipt_encode_failure_never_publishes_generic_terminal(
+        self,
+        tmp_path: Path,
+        capfd: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        root = tmp_path / "bench-encode"
+        root.mkdir(mode=0o700)
+        evaluation = _task9_evaluation()
+        monkeypatch.setattr(
+            assemble,
+            "assemble_stage1",
+            lambda *_args, **_kwargs: evaluation,
+        )
+        real_encode = driver.ProductionArtifactPolicy.encode
+        kinds: list[str] = []
+
+        def fail_receipt_once(
+            self: driver.ProductionArtifactPolicy,
+            kind: str,
+            document: dict[str, object],
+        ) -> bytes:
+            kinds.append(kind)
+            if kind == "receipt":
+                raise ValueError("PRIVATE receipt encoding")
+            return real_encode(self, kind, document)
+
+        monkeypatch.setattr(
+            driver.ProductionArtifactPolicy,
+            "encode",
+            fail_receipt_once,
+        )
+
+        status = _private_run(
+            "assemble-stage1",
+            _task9_assembly_handler,
+            root=root,
+        )
+        captured = capfd.readouterr()
+        terminal = _one_terminal_line(captured.out)
+        admission = next(root.glob("*-admission.json"))
+
+        assert status == 4
+        assert captured.err == ""
+        assert "PRIVATE" not in captured.out
+        assert kinds.count("command_admission") == 1
+        assert kinds.count("receipt") == 1
+        assert "refusal" not in kinds
+        assert terminal == {
+            "status": "failed",
+            "outcome": "provider_uncertain",
+            "window_id": None,
+            "artifact_ref": admission.name,
+            "artifact_sha256": hashlib.sha256(
+                admission.read_bytes()
+            ).hexdigest(),
+        }
+        assert not list(root.glob("*-terminal.json"))
+
+    @pytest.mark.parametrize(
+        "command",
+        (
+            "static-preflight",
+            "rehearse",
+            "vulkan-baseline",
+            "cuda-candidate",
+        ),
+    )
+    @pytest.mark.parametrize(
+        ("status", "outcome"),
+        (
+            ("ok", "bench_passed"),
+            ("refused", "assembly_refused"),
+            ("failed", "provider_uncertain"),
+        ),
+    )
+    def test_receipt_in_phase_terminal_role_fails_closed(
+        self,
+        tmp_path: Path,
+        command: str,
+        status: str,
+        outcome: str,
+    ) -> None:
+        root = tmp_path / f"bench-{command}-{status}"
+        root.mkdir(mode=0o700)
+        evaluation = _task9_evaluation()
+        window_id = (
+            "window-a"
+            if command in {"vulkan-baseline", "cuda-candidate"}
+            else None
+        )
+
+        def wrong_terminal(
+            attempt: driver.CommandAttempt,
+            *,
+            root: Path,
+            authorization: object | None = None,
+        ) -> cli.TerminalResult:
+            del authorization
+            document = dict(evaluation.receipt)
+            document["binding_sha256"] = evaluation.bundle.binding_sha256
+            encoded = driver.ProductionArtifactPolicy().encode(
+                "receipt", document
+            )
+            relative, digest = driver.publish_command_artifact(
+                attempt,
+                "terminal",
+                encoded,
+                root=root,
+            )
+            return cli.TerminalResult(
+                status,
+                outcome,
+                window_id,
+                relative,
+                digest,
+            )
+
+        attempt = driver._admit_command(
+            command=command,
+            window_id=window_id,
+            policy=(
+                driver.RehearsalArtifactPolicy()
+                if command == "rehearse"
+                else driver.ProductionArtifactPolicy()
+            ),
+            clock=_FixedClock(
+                "rehearsal" if command == "rehearse" else "production"
+            ),
+            root=root,
+        )
+        result = wrong_terminal(attempt, root=root)
+        terminal = cli._normalize_handler_result(
+            attempt,
+            result,
+            root=root,
+        )
+
+        assert terminal.status == "failed"
+        assert terminal.outcome == "provider_uncertain"
+        assert terminal.artifact_ref == attempt.admission_ref
+
+    @pytest.mark.parametrize(
+        ("terminal_status", "outcome"),
+        (
+            ("ok", "completed"),
+            ("refused", "assembly_refused"),
+            ("failed", "provider_uncertain"),
+        ),
+    )
+    def test_command_completion_in_assembly_role_fails_closed(
+        self,
+        tmp_path: Path,
+        capfd: pytest.CaptureFixture[str],
+        terminal_status: str,
+        outcome: str,
+    ) -> None:
+        root = tmp_path / f"bench-{terminal_status}"
+        root.mkdir(mode=0o700)
+
+        def wrong_terminal(
+            attempt: driver.CommandAttempt,
+            *,
+            root: Path,
+        ) -> cli.TerminalResult:
+            completion = cm.CommandCompletionDoc(
+                command="static-preflight",
+                ordinal=attempt.ordinal,
+                window_id=None,
+                admission_ref=attempt.admission_ref,
+                admission_sha256=attempt.admission_sha256,
+                artifact_ref="receipts/not-selected.json",
+                artifact_sha256=SHA_A,
+                artifact_schema=cm.STATIC_PREFLIGHT_SCHEMA,
+                status="completed",
+                timestamp=FIXED_TIMESTAMP,
+            )
+            encoded = driver.ProductionArtifactPolicy().encode(
+                "command_completion",
+                cli._completion_fields(completion),
+            )
+            relative, digest = driver.publish_command_artifact(
+                attempt,
+                "terminal",
+                encoded,
+                root=root,
+            )
+            return cli.TerminalResult(
+                terminal_status,
+                outcome,
+                None,
+                relative,
+                digest,
+            )
+
+        status = _private_run(
+            "assemble-stage1",
+            wrong_terminal,
+            root=root,
+        )
+        terminal = _one_terminal_line(capfd.readouterr().out)
+
+        assert status == 4
+        assert terminal["status"] == "failed"
+        assert terminal["outcome"] == "provider_uncertain"
+        assert terminal["artifact_ref"].endswith("-admission.json")
+
+    @pytest.mark.parametrize(
+        "mutation",
+        (
+            "extra_top_field",
+            "missing_top_field",
+            "extra_gate_binding",
+            "missing_gate_binding",
+            "malformed_timestamp",
+            "malformed_value_shape",
+        ),
+    )
+    def test_assembly_success_receipt_requires_exact_canonical_shape(
+        self,
+        tmp_path: Path,
+        mutation: str,
+    ) -> None:
+        root = tmp_path / f"bench-{mutation}"
+        root.mkdir(mode=0o700)
+        evaluation = _task9_evaluation()
+        document = json.loads(json.dumps(dict(evaluation.receipt)))
+        document["binding_sha256"] = evaluation.bundle.binding_sha256
+        if mutation == "extra_top_field":
+            document["unexpected"] = True
+        elif mutation == "missing_top_field":
+            document.pop("runtime")
+        elif mutation == "extra_gate_binding":
+            document["gate_bindings"]["unexpected_sha256"] = SHA_A
+        elif mutation == "missing_gate_binding":
+            document["gate_bindings"].pop("control_summary_sha256")
+        elif mutation == "malformed_timestamp":
+            document["timestamp"] = "not-a-timestamp"
+        else:
+            document["evaluator_versions"] = ["quality", "owner_voice"]
+        attempt = driver._admit_command(
+            command="assemble-stage1",
+            window_id=None,
+            policy=driver.ProductionArtifactPolicy(),
+            clock=_FixedClock("production"),
+            root=root,
+        )
+        encoded = driver.ProductionArtifactPolicy().encode(
+            "receipt",
+            document,
+        )
+        relative, digest = driver.publish_command_artifact(
+            attempt,
+            "terminal",
+            encoded,
+            root=root,
+        )
+        result = cli.TerminalResult(
+            "ok",
+            evaluation.verdict.decision,
+            None,
+            relative,
+            digest,
+        )
+
+        assert not cli._valid_assembly_receipt_result(
+            attempt,
+            result,
+            root=root,
+        )
+
+    @pytest.mark.parametrize(
+        "mutation",
+        (
+            "extra",
+            "missing",
+            "bad_hash",
+            "bad_cycle",
+            "bad_bar",
+            "bad_vram",
+        ),
+    )
+    def test_assembly_success_receipt_requires_exact_nested_cycle_shape(
+        self,
+        tmp_path: Path,
+        mutation: str,
+    ) -> None:
+        root = tmp_path / f"bench-cycle-{mutation}"
+        root.mkdir(mode=0o700)
+        evaluation = _task9_evaluation()
+        document = json.loads(json.dumps(dict(evaluation.receipt)))
+        document["binding_sha256"] = evaluation.bundle.binding_sha256
+        cycle = document["measurements"]["cycles"][0]
+        if mutation == "extra":
+            cycle["unexpected"] = 0
+        elif mutation == "missing":
+            cycle.pop("topology_sha256")
+        elif mutation == "bad_hash":
+            cycle["topology_sha256"] = "not-a-hash"
+        elif mutation == "bad_cycle":
+            cycle["cycle"] = True
+        elif mutation == "bad_bar":
+            cycle["bar1_before_percent"] = "1.0"
+        else:
+            cycle["vram_before_mib"] = 1.5
+        attempt = driver._admit_command(
+            command="assemble-stage1",
+            window_id=None,
+            policy=driver.ProductionArtifactPolicy(),
+            clock=_FixedClock("production"),
+            root=root,
+        )
+        encoded = driver.ProductionArtifactPolicy().encode(
+            "receipt",
+            document,
+        )
+        relative, digest = driver.publish_command_artifact(
+            attempt,
+            "terminal",
+            encoded,
+            root=root,
+        )
+        result = cli.TerminalResult(
+            "ok",
+            evaluation.verdict.decision,
+            None,
+            relative,
+            digest,
+        )
+
+        assert not cli._valid_assembly_receipt_result(
+            attempt,
+            result,
+            root=root,
+        )
+
+    @pytest.mark.parametrize(
+        "mutation",
+        (
+            "unknown_reason",
+            "bench_passed_with_reason",
+            "keep_vulkan_without_reason",
+            "missing_required_backend",
+            "present_later_backend",
+            "backend_gate_mismatch",
+            "wrong_runtime_mode",
+            "wrong_runtime_backend",
+            "wrong_runtime_commit",
+            "wrong_frozen_runtime",
+            "runtime_gate_mismatch",
+            "wrong_frozen_measurement",
+            "phase_gate_mismatch",
+            "containment_gate_mismatch",
+        ),
+    )
+    def test_assembly_success_receipt_closes_stage1_nested_values(
+        self,
+        tmp_path: Path,
+        mutation: str,
+    ) -> None:
+        root = tmp_path / f"bench-stage1-{mutation}"
+        root.mkdir(mode=0o700)
+        evaluation = _task9_evaluation(
+            "keep_vulkan"
+            if mutation == "keep_vulkan_without_reason"
+            else "bench_passed"
+        )
+        document = json.loads(json.dumps(dict(evaluation.receipt)))
+        document["binding_sha256"] = evaluation.bundle.binding_sha256
+        if mutation == "unknown_reason":
+            document["reasons"] = ["unknown_reason"]
+        elif mutation == "bench_passed_with_reason":
+            document["reasons"] = ["false_absence"]
+        elif mutation == "keep_vulkan_without_reason":
+            document["reasons"] = []
+        elif mutation == "missing_required_backend":
+            document["backend_witnesses"]["control_maps_sha256"] = None
+        elif mutation == "present_later_backend":
+            document["backend_witnesses"]["cold_boot_maps_sha256"] = SHA_A
+        elif mutation == "backend_gate_mismatch":
+            document["backend_witnesses"]["control_binding_sha256"] = SHA_A
+        elif mutation == "wrong_runtime_mode":
+            document["runtime"]["mode"] = "production"
+        elif mutation == "wrong_runtime_backend":
+            document["runtime"]["backend"] = "vulkan"
+        elif mutation == "wrong_runtime_commit":
+            document["runtime"]["commit"] = "not-a-commit"
+        elif mutation == "wrong_frozen_runtime":
+            document["runtime"]["tag"] = "b9999"
+        elif mutation == "runtime_gate_mismatch":
+            document["gate_bindings"]["runtime_identity_sha256"] = SHA_A
+        elif mutation == "wrong_frozen_measurement":
+            document["measurements"]["sample_n"] = cm.FROZEN_SAMPLE_N + 1
+        elif mutation == "phase_gate_mismatch":
+            document["phase_evidence"]["boot_authorization_sha256"] = SHA_A
+        else:
+            document["gate_bindings"]["containment_sha256"] = SHA_A
+        attempt = driver._admit_command(
+            command="assemble-stage1",
+            window_id=None,
+            policy=driver.ProductionArtifactPolicy(),
+            clock=_FixedClock("production"),
+            root=root,
+        )
+        encoded = driver.ProductionArtifactPolicy().encode(
+            "receipt",
+            document,
+        )
+        relative, digest = driver.publish_command_artifact(
+            attempt,
+            "terminal",
+            encoded,
+            root=root,
+        )
+        result = cli.TerminalResult(
+            "ok",
+            evaluation.verdict.decision,
+            None,
+            relative,
+            digest,
+        )
+
+        assert not cli._valid_assembly_receipt_result(
+            attempt,
+            result,
+            root=root,
+        )
+
+    @pytest.mark.parametrize(
+        ("command", "status"),
+        (
+            ("static-preflight", "refused"),
+            ("static-preflight", "failed"),
+            ("vulkan-baseline", "refused"),
+            ("cuda-candidate", "failed"),
+        ),
+    )
+    def test_canonical_production_refusal_is_valid_non_ok_terminal_evidence(
+        self,
+        tmp_path: Path,
+        command: str,
+        status: str,
+    ) -> None:
+        root = tmp_path / f"bench-{command}-{status}"
+        root.mkdir(mode=0o700)
+        window_id = (
+            "window-a"
+            if command in {"vulkan-baseline", "cuda-candidate"}
+            else None
+        )
+        attempt = driver._admit_command(
+            command=command,
+            window_id=window_id,
+            policy=driver.ProductionArtifactPolicy(),
+            clock=_FixedClock("production"),
+            root=root,
+        )
+        outcome = (
+            "assembly_refused"
+            if status == "refused"
+            else "provider_uncertain"
+        )
+        normalized = cli._normalize_handler_result(
+            attempt,
+            cli.TerminalResult(status, outcome, window_id, None, None),
+            root=root,
+        )
+
+        assert normalized.artifact_ref == cli._expected_terminal_ref(attempt)
+        assert cli._valid_terminal_result(
+            attempt,
+            normalized,
+            root=root,
+        )
+
+    @pytest.mark.parametrize("status", ("refused", "failed"))
+    def test_canonical_rehearsal_refusal_is_valid_non_ok_terminal_evidence(
+        self,
+        tmp_path: Path,
+        status: str,
+    ) -> None:
+        root = tmp_path / f"bench-{status}"
+        root.mkdir(mode=0o700)
+        attempt = driver._admit_command(
+            command="rehearse",
+            window_id=None,
+            policy=driver.RehearsalArtifactPolicy(),
+            clock=_FixedClock("rehearsal"),
+            root=root,
+        )
+        outcome = (
+            "assembly_refused"
+            if status == "refused"
+            else "provider_uncertain"
+        )
+        normalized = cli._normalize_handler_result(
+            attempt,
+            cli.TerminalResult(status, outcome, None, None, None),
+            root=root,
+        )
+
+        assert normalized.artifact_ref == cli._expected_terminal_ref(attempt)
+        assert cli._valid_terminal_result(
+            attempt,
+            normalized,
+            root=root,
+        )
+
+    @pytest.mark.parametrize(
+        "command",
+        (
+            "static-preflight",
+            "rehearse",
+            "vulkan-baseline",
+            "cuda-candidate",
+        ),
+    )
+    @pytest.mark.parametrize("status", ("refused", "failed"))
+    def test_arbitrary_non_ok_artifact_never_bypasses_terminal_matrix(
+        self,
+        tmp_path: Path,
+        command: str,
+        status: str,
+    ) -> None:
+        root = tmp_path / f"bench-{command}-{status}"
+        root.mkdir(mode=0o700)
+        window_id = (
+            "window-a"
+            if command in {"vulkan-baseline", "cuda-candidate"}
+            else None
+        )
+        attempt = driver._admit_command(
+            command=command,
+            window_id=window_id,
+            policy=(
+                driver.RehearsalArtifactPolicy()
+                if command == "rehearse"
+                else driver.ProductionArtifactPolicy()
+            ),
+            clock=_FixedClock(
+                "rehearsal" if command == "rehearse" else "production"
+            ),
+            root=root,
+        )
+        relative = (
+            "rehearsal/arbitrary.json"
+            if command == "rehearse"
+            else "arbitrary.json"
+        )
+        payload = b'{"arbitrary":true}\n'
+        driver.write_private_file(relative, payload, root=root)
+        normalized = cli._normalize_handler_result(
+            attempt,
+            cli.TerminalResult(
+                status,
+                (
+                    "assembly_refused"
+                    if status == "refused"
+                    else "provider_uncertain"
+                ),
+                window_id,
+                relative,
+                hashlib.sha256(payload).hexdigest(),
+            ),
+            root=root,
+        )
+
+        assert normalized.status == "failed"
+        assert normalized.outcome == "provider_uncertain"
+        assert normalized.artifact_ref == attempt.admission_ref
+
+    @pytest.mark.parametrize("decision", ("bench_passed", "keep_vulkan"))
+    def test_assembly_handler_publishes_distinct_exit_zero_scorer_decisions(
+        self,
+        tmp_path: Path,
+        capfd: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+        decision: str,
+    ) -> None:
+        root = tmp_path / "bench"
+        root.mkdir(mode=0o700)
+        evaluation = _task9_evaluation(decision)
+        monkeypatch.setattr(
+            assemble,
+            "assemble_stage1",
+            lambda *_args, **_kwargs: evaluation,
+        )
+
+        status = _private_run(
+            "assemble-stage1",
+            _task9_assembly_handler,
+            root=root,
+        )
+        terminal = _one_terminal_line(capfd.readouterr().out)
+        wrapper = json.loads(
+            driver.open_bench_file(str(terminal["artifact_ref"]), root=root)
+        )
+
+        assert status == 0
+        assert terminal["status"] == "ok"
+        assert terminal["outcome"] == decision
+        assert wrapper["schema"] == driver.ASSEMBLE_RECEIPT_SCHEMA
+        assert wrapper["binding_sha256"] == evaluation.bundle.binding_sha256
+        assert wrapper["fields"]["decision"] == decision
+        assert (
+            wrapper["fields"]["bench_binding_sha256"]
+            == evaluation.bundle.bench_binding_sha256
+        )
+        assert (
+            wrapper["fields"]["bundle_binding_sha256"]
+            == evaluation.bundle.binding_sha256
+        )
+        assert (
+            wrapper["fields"]["gate_bindings"]["bench_evidence_sha256"]
+            == evaluation.bundle.bench_binding_sha256
+        )
+        assert "migration_authorized" not in wrapper["fields"]
+        assert "cutover_authorized" not in wrapper["fields"]
+
+    def test_structural_owner_input_refusal_is_content_light_and_unscored(
+        self,
+        tmp_path: Path,
+        capfd: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        root = tmp_path / "bench"
+        root.mkdir(mode=0o700)
+        monkeypatch.setattr(
+            assemble,
+            "assemble_stage1",
+            mock.Mock(side_effect=driver.BenchRefusal("assembly_refused")),
+        )
+
+        status = _private_run(
+            "assemble-stage1",
+            _task9_assembly_handler,
+            root=root,
+        )
+        terminal = _one_terminal_line(capfd.readouterr().out)
+        wrapper = json.loads(
+            driver.open_bench_file(str(terminal["artifact_ref"]), root=root)
+        )
+
+        assert status == 3
+        assert terminal["status"] == "refused"
+        assert terminal["outcome"] == "assembly_refused"
+        assert wrapper["schema"] == driver.ASSEMBLE_RECEIPT_SCHEMA
+        assert wrapper["binding_sha256"] is None
+        assert set(wrapper["fields"]) == {"outcome", "timestamp"}
+        assert "decision" not in wrapper["fields"]
+        assert "verdict" not in wrapper["fields"]
+        assert "reasons" not in wrapper["fields"]
+
+    @pytest.mark.parametrize("defect", ("scorer", "receipt_builder"))
+    def test_scorer_or_receipt_builder_defect_is_failed_not_assembly_refused(
+        self,
+        tmp_path: Path,
+        capfd: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+        defect: str,
+    ) -> None:
+        root = tmp_path / f"bench-{defect}"
+        root.mkdir(mode=0o700)
+        monkeypatch.setattr(
+            assemble,
+            "assemble_stage1",
+            mock.Mock(side_effect=RuntimeError(defect)),
+        )
+
+        status = _private_run(
+            "assemble-stage1",
+            _task9_assembly_handler,
+            root=root,
+        )
+        terminal = _one_terminal_line(capfd.readouterr().out)
+        wrapper = json.loads(
+            driver.open_bench_file(str(terminal["artifact_ref"]), root=root)
+        )
+
+        assert status == 4
+        assert terminal["status"] == "failed"
+        assert terminal["outcome"] == "provider_uncertain"
+        assert wrapper["schema"] == driver.ASSEMBLE_RECEIPT_SCHEMA
+        assert wrapper["binding_sha256"] is None
+        assert set(wrapper["fields"]) == {"outcome", "timestamp"}
+        assert wrapper["fields"]["outcome"] != "assembly_refused"
+
+    def test_handler_reuses_one_admission_and_publishes_one_terminal(
+        self,
+        tmp_path: Path,
+        capfd: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        root = tmp_path / "bench"
+        root.mkdir(mode=0o700)
+        evaluation = _task9_evaluation()
+        monkeypatch.setattr(
+            assemble,
+            "assemble_stage1",
+            lambda *_args, **_kwargs: evaluation,
+        )
+        real_admit = driver._admit_command
+        real_publish = driver.publish_command_artifact
+        admit = mock.Mock(wraps=real_admit)
+        publish = mock.Mock(wraps=real_publish)
+        monkeypatch.setattr(driver, "_admit_command", admit)
+        monkeypatch.setattr(driver, "publish_command_artifact", publish)
+
+        status = _private_run(
+            "assemble-stage1",
+            _task9_assembly_handler,
+            root=root,
+        )
+        terminal = _one_terminal_line(capfd.readouterr().out)
+
+        assert status == 0
+        assert admit.call_count == 1
+        assert publish.call_count == 1
+        admitted = admit.call_args.kwargs["_on_latched"]
+        assert callable(admitted)
+        attempt = publish.call_args.args[0]
+        assert publish.call_args.args[1] == "terminal"
+        assert terminal["artifact_ref"] == (
+            f"command-assemble-stage1-attempt-{attempt.ordinal:03d}-terminal.json"
+        )
+
+    def test_assembly_uses_existing_allocator_for_distinct_ordinals(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        root = tmp_path / "bench"
+        root.mkdir(mode=0o700)
+        clock = _FixedClock("production")
+        policy = driver.ProductionArtifactPolicy()
+
+        def admit() -> driver.CommandAttempt:
+            return driver._admit_command(
+                command="assemble-stage1",
+                window_id=None,
+                policy=policy,
+                clock=clock,
+                root=root,
+            )
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            attempts = tuple(executor.map(lambda _index: admit(), range(4)))
+
+        assert sorted(attempt.ordinal for attempt in attempts) == [1, 2, 3, 4]
+        assert len({attempt.admission_ref for attempt in attempts}) == 4
+
+    def test_bench_passed_has_no_action_or_measurement_authority(
+        self,
+        tmp_path: Path,
+        capfd: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        root = tmp_path / "bench"
+        root.mkdir(mode=0o700)
+        evaluation = _task9_evaluation()
+        monkeypatch.setattr(
+            assemble,
+            "assemble_stage1",
+            lambda *_args, **_kwargs: evaluation,
+        )
+        forbidden = mock.Mock(
+            side_effect=AssertionError("action surface reached")
+        )
+        for name in (
+            "stop_service",
+            "start_service",
+            "restart_service",
+            "install_override",
+            "remove_override",
+            "set_model_pointer",
+            "switch_model_pointer",
+            "promote_cuda",
+            "cutover",
+            "rollback_drill",
+        ):
+            monkeypatch.setattr(cli, name, forbidden, raising=False)
+        before = set(root.rglob("*"))
+
+        status = _private_run(
+            "assemble-stage1",
+            _task9_assembly_handler,
+            root=root,
+        )
+        terminal = _one_terminal_line(capfd.readouterr().out)
+        created = {
+            path.relative_to(root)
+            for path in set(root.rglob("*")) - before
+            if path.is_file()
+        }
+
+        assert status == 0
+        assert terminal["outcome"] == "bench_passed"
+        assert created == {
+            Path("command-assemble-stage1-attempt-001-admission.json"),
+            Path("command-assemble-stage1-attempt-001-terminal.json"),
+        }
+        assert "rollback-drill" not in cli.PUBLIC_COMMANDS
+        assert "cutover" not in cli.PUBLIC_COMMANDS
+        assert "authorization" not in inspect.signature(
+            cli._assembly_handler
+        ).parameters
+        forbidden.assert_not_called()
 
 
 class TestTask7ProductionMeasurementCommands:

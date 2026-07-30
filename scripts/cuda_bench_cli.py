@@ -12,13 +12,14 @@ import stat
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import FrameType
 from types import MappingProxyType
 from typing import Literal, Never, Protocol
 
+from scripts import cuda_bench_assemble as assemble
 from scripts import cuda_bench_driver as driver
 from scripts import cuda_migration as cm
 
@@ -29,6 +30,153 @@ PUBLIC_COMMANDS = (
     "vulkan-baseline",
     "cuda-candidate",
     "assemble-stage1",
+)
+_TERMINAL_SCHEMA_MATRIX = MappingProxyType(
+    {
+        "static-preflight": cm.COMMAND_COMPLETION_SCHEMA,
+        "rehearse": driver.REHEARSAL_PACKET_SCHEMA,
+        "vulkan-baseline": cm.COMMAND_COMPLETION_SCHEMA,
+        "cuda-candidate": cm.COMMAND_COMPLETION_SCHEMA,
+        "assemble-stage1": driver.ASSEMBLE_RECEIPT_SCHEMA,
+    }
+)
+_ASSEMBLY_RECEIPT_FIELDS = frozenset(
+    {
+        "timestamp",
+        "bench_binding_sha256",
+        "bundle_binding_sha256",
+        "evaluator_versions",
+        "phase",
+        "artifact_role",
+        "decision",
+        "reasons",
+        "runtime",
+        "backend_witnesses",
+        "measurements",
+        "phase_evidence",
+        "containment",
+        "gate_bindings",
+    }
+)
+_ASSEMBLY_GATE_FIELDS = frozenset(
+    {
+        "control_summary_sha256",
+        "candidate_summary_sha256",
+        "control_maps_sha256",
+        "candidate_maps_sha256",
+        "containment_sha256",
+        "boot_authorization_sha256",
+        "live_authorization_sha256",
+        "bench_evidence_sha256",
+        "runtime_identity_sha256",
+        "cold_boot_maps_sha256",
+        "provisional_live_maps_sha256",
+    }
+)
+_ASSEMBLY_RUNTIME_FIELDS = frozenset(
+    {
+        "tag",
+        "commit",
+        "version",
+        "backend",
+        "runtime_sha256",
+        "runtime_manifest_sha256",
+        "library_manifest_sha256",
+        "configuration_sha256",
+        "mode",
+        "production_override_sha256",
+        "backend_environment_sha256",
+        "model_sha256",
+        "model_bytes",
+        "alias",
+        "cuda_toolkit",
+        "cuda_compiler",
+        "cmake_version",
+        "driver_version",
+        "gpu_identifier",
+        "compute_capability",
+        "rollback_manifest_sha256",
+    }
+)
+_ASSEMBLY_BACKEND_FIELDS = frozenset(
+    {
+        "control_maps_sha256",
+        "candidate_maps_sha256",
+        "control_binding_sha256",
+        "candidate_binding_sha256",
+        "cold_boot_maps_sha256",
+        "cold_boot_binding_sha256",
+        "provisional_live_maps_sha256",
+        "provisional_live_binding_sha256",
+    }
+)
+_ASSEMBLY_MEASUREMENT_FIELDS = frozenset(
+    {
+        "sample_n",
+        "warmup_count",
+        "measured_sample_count",
+        "load_cycles",
+        "corpus_sha256",
+        "order_sha256",
+        "seven_turn_max_ms",
+        "p95_e2e_ms",
+        "median_decode_tps",
+        "median_prefill_tps",
+        "steady_bar1_percent",
+        "topology_sha256",
+        "cycles",
+        "mtp_drafted_tokens",
+        "mtp_accepted_tokens",
+        "mtp_rejected_tokens",
+        "mtp_initialized",
+        "false_absence_count",
+        "wrong_answered_ungrounded_count",
+        "type_regression_count",
+        "recall_posture",
+        "quality_failure_count",
+        "kernel_counters",
+        "crash_count",
+        "restart_count",
+        "hang_count",
+        "timeout_count",
+        "unload_leak_mib",
+    }
+)
+_ASSEMBLY_CYCLE_FIELDS = frozenset(
+    {
+        "cycle",
+        "topology_sha256",
+        "bar1_before_percent",
+        "bar1_after_load_percent",
+        "bar1_after_inference_percent",
+        "bar1_after_unload_percent",
+        "vram_before_mib",
+        "vram_after_load_mib",
+        "vram_after_inference_mib",
+        "vram_after_unload_mib",
+    }
+)
+_ASSEMBLY_PHASE_EVIDENCE_FIELDS = frozenset(
+    {
+        "owner_voice_sha256",
+        "rollback_sha256",
+        "cold_boot_sha256",
+        "provisional_live_sha256",
+        "boot_authorization_sha256",
+        "live_authorization_sha256",
+        "provisional_live_output_lengths",
+    }
+)
+_ASSEMBLY_CONTAINMENT_FIELDS = frozenset({"clean", "phase_hashes"})
+_ASSEMBLY_CONTAINMENT_PHASES = frozenset(
+    {
+        "vulkan_baseline:before",
+        "vulkan_baseline:after",
+        "cuda_candidate:before",
+        "cuda_candidate:after",
+        "vulkan_rollback:before",
+        "vulkan_rollback:after",
+    }
 )
 _WATCHED_SIGNALS = frozenset({signal.SIGINT, signal.SIGTERM})
 _CLI_RESERVED_OUTCOMES = frozenset({"cleanup_incomplete", "interrupted"})
@@ -1301,6 +1449,10 @@ class _StaticTerminalPublicationFailure(Exception):
         super().__init__(code)
 
 
+class _AssemblyTerminalPublicationFailure(Exception):
+    """Assembly terminal could not be proven; preserve the admission binding."""
+
+
 @dataclass(frozen=True, slots=True)
 class TerminalResult:
     status: Literal["ok", "refused", "failed"]
@@ -1417,6 +1569,14 @@ def build_parser() -> NonEchoingParser:
             ):
                 command_parser.add_argument(
                     f"--{name}", type=_relative_ref, required=True
+                )
+        elif command == "assemble-stage1":
+            for field in fields(assemble.Stage1ArtifactPaths):
+                command_parser.add_argument(
+                    f"--{field.name.replace('_', '-')}",
+                    dest=field.name,
+                    type=_relative_ref,
+                    required=True,
                 )
     return parser
 
@@ -1727,6 +1887,485 @@ def _valid_command_completion_result(
     )
 
 
+def _sha256_value(value: object) -> bool:
+    return (
+        type(value) is str
+        and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+    )
+
+
+def _sha256_or_none(value: object) -> bool:
+    return value is None or _sha256_value(value)
+
+
+def _utc_timestamp_value(value: object, *, allow_none: bool = False) -> bool:
+    if value is None:
+        return allow_none
+    if type(value) is not str or not value.endswith("Z"):
+        return False
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return parsed.utcoffset() == timedelta(0)
+
+
+def _read_canonical_terminal_wrapper(
+    result: TerminalResult,
+    *,
+    root: Path,
+) -> dict[str, object] | None:
+    if result.artifact_ref is None or result.artifact_sha256 is None:
+        return None
+    try:
+        payload = driver.open_bench_file(result.artifact_ref, root=root)
+        wrapper = json.loads(payload)
+        if (
+            type(wrapper) is not dict
+            or payload != driver._canonical_json(wrapper)
+            or hashlib.sha256(payload).hexdigest() != result.artifact_sha256
+        ):
+            return None
+        return wrapper
+    except Exception:
+        return None
+
+
+def _valid_rehearsal_result(
+    attempt: driver.CommandAttempt,
+    result: TerminalResult,
+    *,
+    root: Path,
+) -> bool:
+    if result.artifact_ref is None:
+        return result.status != "ok"
+    wrapper = _read_canonical_terminal_wrapper(result, root=root)
+    if (
+        wrapper is None
+        or set(wrapper) != {"rehearsal_schema", "tier", "payload"}
+        or wrapper["rehearsal_schema"] != driver.REHEARSAL_PACKET_SCHEMA
+        or wrapper["tier"] != "rehearsal"
+        or type(wrapper["payload"]) is not dict
+    ):
+        return False
+    packet = wrapper["payload"]
+    if (
+        set(packet) != {"kind", "binding_sha256", "fields"}
+        or packet.get("kind") not in {"packet", "refusal"}
+        or type(packet.get("fields")) is not dict
+        or packet["fields"].get("outcome") != result.outcome
+    ):
+        return False
+    if result.status == "ok":
+        return (
+            packet["kind"] == "packet"
+            and result.outcome == "completed"
+            and _sha256_value(packet["binding_sha256"])
+        )
+    if result.artifact_ref == _expected_terminal_ref(attempt):
+        return (
+            packet["kind"] == "refusal"
+            and packet["binding_sha256"] is None
+            and set(packet["fields"]) == {"outcome"}
+        )
+    return (
+        result.status in {"refused", "failed"}
+        and _sha256_or_none(packet["binding_sha256"])
+    )
+
+
+def _valid_production_refusal_result(
+    attempt: driver.CommandAttempt,
+    result: TerminalResult,
+    *,
+    root: Path,
+) -> bool:
+    if result.artifact_ref is None:
+        return result.status != "ok"
+    wrapper = _read_canonical_terminal_wrapper(result, root=root)
+    if (
+        wrapper is None
+        or set(wrapper) != {"schema", "binding_sha256", "fields"}
+        or type(wrapper["fields"]) is not dict
+    ):
+        return False
+    fields_value = wrapper["fields"]
+    if result.artifact_ref == _expected_terminal_ref(attempt):
+        return (
+            wrapper["schema"] == driver.REFUSAL_SCHEMA
+            and wrapper["binding_sha256"] is None
+            and set(fields_value) == {"outcome"}
+            and fields_value["outcome"] == result.outcome
+        )
+    expected_phase = {
+        "vulkan-baseline": "vulkan_baseline",
+        "cuda-candidate": "cuda_candidate",
+    }.get(attempt.command)
+    if expected_phase is None:
+        return False
+    spawned = fields_value.get("spawned")
+    expected_schema = (
+        driver.PHASE_PACKET_SCHEMA
+        if spawned is True
+        else driver.REFUSAL_SCHEMA
+    )
+    return (
+        type(spawned) is bool
+        and wrapper["schema"] == expected_schema
+        and wrapper["binding_sha256"]
+        == hashlib.sha256(driver._canonical_json(fields_value)).hexdigest()
+        and fields_value.get("phase") == expected_phase
+        and fields_value.get("window_id") == result.window_id
+        and type(fields_value.get("boot_id")) is str
+        and bool(fields_value["boot_id"])
+        and fields_value.get("outcome") == result.outcome
+        and _utc_timestamp_value(fields_value.get("timestamp"))
+        and result.status == ("failed" if spawned else "refused")
+    )
+
+
+def _valid_assembly_success_fields(
+    receipt: dict[str, object],
+    *,
+    binding: str,
+    outcome: str,
+) -> bool:
+    if (
+        set(receipt) != _ASSEMBLY_RECEIPT_FIELDS
+        or not _utc_timestamp_value(receipt.get("timestamp"))
+        or receipt.get("phase") != "cuda_candidate"
+        or receipt.get("artifact_role")
+        != "producer_evidence_not_verdict"
+        or receipt.get("decision") != outcome
+        or type(receipt.get("reasons")) is not list
+        or any(
+            type(item) is not str or item not in cm._REASONS
+            for item in receipt["reasons"]
+        )
+        or (outcome == "bench_passed" and receipt["reasons"] != [])
+        or (outcome == "keep_vulkan" and not receipt["reasons"])
+        or receipt.get("bundle_binding_sha256") != binding
+        or not _sha256_value(receipt.get("bench_binding_sha256"))
+    ):
+        return False
+    evaluator_versions = receipt.get("evaluator_versions")
+    runtime = receipt.get("runtime")
+    backend = receipt.get("backend_witnesses")
+    measurements = receipt.get("measurements")
+    phase_evidence = receipt.get("phase_evidence")
+    containment = receipt.get("containment")
+    gate = receipt.get("gate_bindings")
+    if not (
+        type(evaluator_versions) is dict
+        and set(evaluator_versions) == {"quality", "owner_voice"}
+        and all(
+            type(value) is str and bool(value)
+            for value in evaluator_versions.values()
+        )
+        and type(runtime) is dict
+        and set(runtime) == _ASSEMBLY_RUNTIME_FIELDS
+        and type(backend) is dict
+        and set(backend) == _ASSEMBLY_BACKEND_FIELDS
+        and type(measurements) is dict
+        and set(measurements) == _ASSEMBLY_MEASUREMENT_FIELDS
+        and type(phase_evidence) is dict
+        and set(phase_evidence) == _ASSEMBLY_PHASE_EVIDENCE_FIELDS
+        and type(containment) is dict
+        and set(containment) == _ASSEMBLY_CONTAINMENT_FIELDS
+        and type(gate) is dict
+        and set(gate) == _ASSEMBLY_GATE_FIELDS
+        and all(_sha256_value(value) for value in gate.values())
+        and gate["bench_evidence_sha256"]
+        == receipt["bench_binding_sha256"]
+    ):
+        return False
+    runtime_hashes = {
+        key for key in _ASSEMBLY_RUNTIME_FIELDS if key.endswith("_sha256")
+    }
+    required_backend_fields = {
+        "control_maps_sha256",
+        "candidate_maps_sha256",
+        "control_binding_sha256",
+        "candidate_binding_sha256",
+    }
+    absent_backend_fields = _ASSEMBLY_BACKEND_FIELDS - required_backend_fields
+    if (
+        any(not _sha256_value(runtime[key]) for key in runtime_hashes)
+        or runtime.get("tag") != cm.FROZEN_TAG
+        or runtime.get("commit") != cm.FROZEN_COMMIT
+        or runtime.get("version") != cm.FROZEN_VERSION
+        or type(runtime.get("version")) is not int
+        or runtime.get("backend") != "cuda"
+        or runtime.get("mode") != "bench"
+        or runtime.get("model_sha256") != cm.FROZEN_MODEL_SHA256
+        or runtime.get("model_bytes") != cm.FROZEN_MODEL_BYTES
+        or type(runtime.get("model_bytes")) is not int
+        or runtime.get("alias") != cm.FROZEN_ALIAS
+        or runtime.get("cuda_toolkit") != "13.2"
+        or type(runtime.get("cuda_compiler")) is not str
+        or re.fullmatch(r"13\.2\.\d{1,3}", runtime["cuda_compiler"])
+        is None
+        or type(runtime.get("cmake_version")) is not str
+        or re.fullmatch(
+            r"(?:3\.\d{1,2}\.\d{1,3}|4\.\d{1,2}\.\d{1,3})",
+            runtime["cmake_version"],
+        )
+        is None
+        or type(runtime.get("driver_version")) is not str
+        or re.fullmatch(
+            r"\d{3}\.\d{1,3}\.\d{1,3}",
+            runtime["driver_version"],
+        )
+        is None
+        or tuple(int(part) for part in runtime["driver_version"].split("."))
+        < (590, 44)
+        or type(runtime.get("gpu_identifier")) is not str
+        or re.fullmatch(
+            r"NVIDIA (?:GeForce )?RTX 4090",
+            runtime["gpu_identifier"],
+        )
+        is None
+        or runtime.get("compute_capability") != "8.9"
+        or runtime.get("rollback_manifest_sha256")
+        != cm.FROZEN_ROLLBACK_MANIFEST_SHA256
+        or any(
+            type(runtime[key]) is not str or not runtime[key]
+            for key in _ASSEMBLY_RUNTIME_FIELDS
+            - runtime_hashes
+            - {"model_bytes", "version"}
+        )
+        or any(
+            not _sha256_value(backend[key])
+            for key in required_backend_fields
+        )
+        or any(backend[key] is not None for key in absent_backend_fields)
+        or backend["control_binding_sha256"]
+        != gate["control_maps_sha256"]
+        or backend["candidate_binding_sha256"]
+        != gate["candidate_maps_sha256"]
+        or gate["runtime_identity_sha256"]
+        != hashlib.sha256(
+            json.dumps(
+                runtime,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+    ):
+        return False
+    measurement_hashes = {"corpus_sha256", "order_sha256", "topology_sha256"}
+    integer_measurements = {
+        "sample_n",
+        "warmup_count",
+        "measured_sample_count",
+        "load_cycles",
+        "mtp_drafted_tokens",
+        "mtp_accepted_tokens",
+        "mtp_rejected_tokens",
+        "false_absence_count",
+        "wrong_answered_ungrounded_count",
+        "type_regression_count",
+        "quality_failure_count",
+        "crash_count",
+        "restart_count",
+        "hang_count",
+        "timeout_count",
+    }
+    numeric_measurements = {
+        "seven_turn_max_ms",
+        "p95_e2e_ms",
+        "median_decode_tps",
+        "median_prefill_tps",
+        "steady_bar1_percent",
+        "unload_leak_mib",
+    }
+    kernel = measurements.get("kernel_counters")
+    cycles = measurements.get("cycles")
+    if (
+        any(not _sha256_value(measurements[key]) for key in measurement_hashes)
+        or measurements.get("sample_n") != cm.FROZEN_SAMPLE_N
+        or measurements.get("warmup_count") != cm.FROZEN_WARMUP_COUNT
+        or measurements.get("measured_sample_count")
+        != cm.FROZEN_MEASURED_SAMPLE_COUNT
+        or measurements.get("load_cycles") != cm.FROZEN_LOAD_CYCLES
+        or measurements.get("corpus_sha256") != cm.FROZEN_CORPUS_SHA256
+        or measurements.get("order_sha256") != cm.FROZEN_ORDER_SHA256
+        or any(
+            type(measurements[key]) is not int
+            or isinstance(measurements[key], bool)
+            or measurements[key] < 0
+            for key in integer_measurements
+        )
+        or any(
+            type(measurements[key]) not in {int, float}
+            or isinstance(measurements[key], bool)
+            or measurements[key] < 0
+            for key in numeric_measurements
+        )
+        or type(measurements.get("mtp_initialized")) is not bool
+        or measurements.get("recall_posture") not in {"pass", "fail"}
+        or type(kernel) is not dict
+        or set(kernel) != set(driver.KERNEL_COUNTER_KEYS)
+        or any(
+            type(value) is not int
+            or isinstance(value, bool)
+            or value < 0
+            for value in kernel.values()
+        )
+        or type(cycles) is not list
+        or len(cycles) != measurements["load_cycles"]
+        or any(type(cycle) is not dict for cycle in cycles)
+    ):
+        return False
+    cycle_bar_fields = {
+        "bar1_before_percent",
+        "bar1_after_load_percent",
+        "bar1_after_inference_percent",
+        "bar1_after_unload_percent",
+    }
+    cycle_vram_fields = {
+        "vram_before_mib",
+        "vram_after_load_mib",
+        "vram_after_inference_mib",
+        "vram_after_unload_mib",
+    }
+    if (
+        any(type(cycle.get("cycle")) is not int for cycle in cycles)
+        or tuple(cycle.get("cycle") for cycle in cycles)
+        != tuple(range(1, measurements["load_cycles"] + 1))
+        or any(set(cycle) != _ASSEMBLY_CYCLE_FIELDS for cycle in cycles)
+        or any(
+            not _sha256_value(cycle.get("topology_sha256"))
+            or cycle["topology_sha256"] != measurements["topology_sha256"]
+            or any(
+                type(cycle.get(field)) not in {int, float}
+                or isinstance(cycle[field], bool)
+                or not 0 <= cycle[field] <= 100
+                for field in cycle_bar_fields
+            )
+            or any(
+                type(cycle.get(field)) is not int
+                or isinstance(cycle[field], bool)
+                or cycle[field] < 0
+                for field in cycle_vram_fields
+            )
+            for cycle in cycles
+        )
+    ):
+        return False
+    phase_hashes = containment.get("phase_hashes")
+    if not (
+        type(containment.get("clean")) is bool
+        and type(phase_hashes) is dict
+        and set(phase_hashes) == _ASSEMBLY_CONTAINMENT_PHASES
+        and all(_sha256_value(value) for value in phase_hashes.values())
+        and _sha256_value(phase_evidence.get("owner_voice_sha256"))
+        and _sha256_value(phase_evidence.get("rollback_sha256"))
+        and _sha256_value(
+            phase_evidence.get("boot_authorization_sha256")
+        )
+        and _sha256_value(
+            phase_evidence.get("live_authorization_sha256")
+        )
+        and phase_evidence.get("cold_boot_sha256") is None
+        and phase_evidence.get("provisional_live_sha256") is None
+        and phase_evidence.get("provisional_live_output_lengths") == []
+        and phase_evidence["boot_authorization_sha256"]
+        == gate["boot_authorization_sha256"]
+        and phase_evidence["live_authorization_sha256"]
+        == gate["live_authorization_sha256"]
+        and gate["containment_sha256"]
+        == hashlib.sha256(
+            json.dumps(
+                phase_hashes,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+    ):
+        return False
+    return True
+
+
+def _valid_assembly_receipt_result(
+    attempt: driver.CommandAttempt,
+    result: TerminalResult,
+    *,
+    root: Path,
+) -> bool:
+    if (
+        result.window_id is not None
+        or result.artifact_ref != _expected_terminal_ref(attempt)
+        or result.artifact_sha256 is None
+    ):
+        return False
+    try:
+        wrapper = _read_canonical_terminal_wrapper(result, root=root)
+        if (
+            wrapper is None
+            or set(wrapper) != {"schema", "binding_sha256", "fields"}
+            or wrapper["schema"] != driver.ASSEMBLE_RECEIPT_SCHEMA
+            or type(wrapper["fields"]) is not dict
+        ):
+            return False
+        receipt = wrapper["fields"]
+        binding = wrapper["binding_sha256"]
+        if result.status == "ok":
+            return (
+                result.outcome in {"bench_passed", "keep_vulkan"}
+                and _sha256_value(binding)
+                and _valid_assembly_success_fields(
+                    receipt,
+                    binding=binding,
+                    outcome=result.outcome,
+                )
+            )
+        return (
+            result.status in {"refused", "failed"}
+            and result.outcome
+            == (
+                "assembly_refused"
+                if result.status == "refused"
+                else "provider_uncertain"
+            )
+            and binding is None
+            and set(receipt) == {"outcome", "timestamp"}
+            and receipt["outcome"] == result.outcome
+            and _utc_timestamp_value(
+                receipt["timestamp"],
+                allow_none=result.status == "failed",
+            )
+        )
+    except Exception:
+        return False
+
+
+def _valid_terminal_result(
+    attempt: driver.CommandAttempt,
+    result: TerminalResult,
+    *,
+    root: Path,
+) -> bool:
+    expected_schema = _TERMINAL_SCHEMA_MATRIX.get(attempt.command)
+    if expected_schema is None:
+        return False
+    if expected_schema == driver.ASSEMBLE_RECEIPT_SCHEMA:
+        return _valid_assembly_receipt_result(attempt, result, root=root)
+    if expected_schema == cm.COMMAND_COMPLETION_SCHEMA:
+        return (
+            _valid_command_completion_result(attempt, result, root=root)
+            if result.status == "ok"
+            else _valid_production_refusal_result(
+                attempt,
+                result,
+                root=root,
+            )
+        )
+    if expected_schema == driver.REHEARSAL_PACKET_SCHEMA:
+        return _valid_rehearsal_result(attempt, result, root=root)
+    return False
+
+
 def _publish_terminal_result(
     attempt: driver.CommandAttempt,
     result: TerminalResult,
@@ -1771,12 +2410,7 @@ def _normalize_handler_result(
             result.outcome in _CLI_RESERVED_OUTCOMES
             and not trusted_phase
         )
-        or (
-            _is_command_control_ref(result.artifact_ref)
-            and not _valid_command_completion_result(
-                attempt, result, root=root
-            )
-        )
+        or not _valid_terminal_result(attempt, result, root=root)
     ):
         return _admission_result(attempt, status="failed", outcome="provider_uncertain")
     if result.status == "ok":
@@ -1945,6 +2579,18 @@ def _run_command(
                 interrupted_signum=interrupted.signum,
                 interruption_fallback=terminal,
             )
+        except _AssemblyTerminalPublicationFailure:
+            terminal = (
+                TerminalResult(
+                    "failed", "provider_uncertain", None, None, None
+                )
+                if attempt is None
+                else _admission_result(
+                    attempt,
+                    status="failed",
+                    outcome="provider_uncertain",
+                )
+            )
         except _StaticTerminalPublicationFailure as exc:
             if attempt is None:
                 terminal = TerminalResult(
@@ -1957,6 +2603,7 @@ def _run_command(
         except driver.BenchRefusal as exc:
             if exc.code == "cleanup_incomplete":
                 _cleanup_incomplete_committing = True
+                terminal = _cleanup_incomplete_result(attempt)
             if exc.code == "interrupted":
                 terminal = (
                     TerminalResult(
@@ -1969,6 +2616,8 @@ def _run_command(
                         outcome="provider_uncertain",
                     )
                 )
+            elif exc.code == "cleanup_incomplete":
+                pass
             elif attempt is None:
                 status: Literal["refused", "failed"] = (
                     "failed" if exc.code == "cleanup_incomplete" else "refused"
@@ -2049,6 +2698,154 @@ def _unimplemented_handler(
 ) -> TerminalResult:
     del root
     return TerminalResult("refused", "assembly_refused", None, None, None)
+
+
+def _publish_assembly_receipt(
+    attempt: driver.CommandAttempt,
+    *,
+    document: dict[str, object],
+    status: Literal["ok", "refused", "failed"],
+    outcome: str,
+    root: Path,
+) -> TerminalResult:
+    committed: TerminalResult | None = None
+
+    def latch_receipt(relative: str, digest: str) -> None:
+        nonlocal committed
+        candidate = TerminalResult(
+            status,
+            outcome,
+            None,
+            relative,
+            digest,
+        )
+        try:
+            _latch_durable_success(
+                candidate,
+                root=root,
+                semantic_validator=lambda: _valid_assembly_receipt_result(
+                    attempt,
+                    candidate,
+                    root=root,
+                ),
+            )
+        except driver.BenchRefusal as exc:
+            if exc.code == "cleanup_incomplete":
+                raise
+            raise _AssemblyTerminalPublicationFailure from None
+        except Exception:
+            raise _AssemblyTerminalPublicationFailure from None
+        committed = candidate
+
+    try:
+        encoded = driver.ProductionArtifactPolicy().encode(
+            "receipt",
+            document,
+        )
+        relative, digest = driver.publish_command_artifact(
+            attempt,
+            "terminal",
+            encoded,
+            root=root,
+            on_committed=latch_receipt,
+        )
+    except driver._CommandInterrupted:
+        raise
+    except driver.BenchRefusal as exc:
+        if exc.code == "cleanup_incomplete":
+            raise
+        raise _AssemblyTerminalPublicationFailure from None
+    except _AssemblyTerminalPublicationFailure:
+        raise
+    except Exception:
+        raise _AssemblyTerminalPublicationFailure from None
+    if (
+        committed is None
+        or committed.artifact_ref != relative
+        or committed.artifact_sha256 != digest
+    ):
+        raise _AssemblyTerminalPublicationFailure
+    return committed
+
+
+def _assembly_handler(
+    attempt: driver.CommandAttempt,
+    *,
+    root: Path,
+    clock: driver.Clock,
+    args: argparse.Namespace,
+) -> TerminalResult:
+    timestamp: str | None = None
+    try:
+        timestamp = clock.now_utc()
+        paths = assemble.Stage1ArtifactPaths(
+            **{
+                field.name: getattr(args, field.name)
+                for field in fields(assemble.Stage1ArtifactPaths)
+            }
+        )
+        evaluation = assemble.assemble_stage1(
+            paths,
+            root=root,
+            timestamp=timestamp,
+        )
+        if (
+            type(evaluation) is not assemble.Stage1Evaluation
+            or evaluation.verdict.decision
+            not in {"bench_passed", "keep_vulkan"}
+            or evaluation.receipt.get("decision")
+            != evaluation.verdict.decision
+            or evaluation.receipt.get("bench_binding_sha256")
+            != evaluation.bundle.bench_binding_sha256
+            or evaluation.receipt.get("bundle_binding_sha256")
+            != evaluation.bundle.binding_sha256
+        ):
+            raise ValueError("assembly_evaluation")
+    except driver.BenchRefusal as exc:
+        if exc.code != "assembly_refused":
+            return _publish_assembly_receipt(
+                attempt,
+                document={
+                    "binding_sha256": None,
+                    "outcome": "provider_uncertain",
+                    "timestamp": timestamp,
+                },
+                status="failed",
+                outcome="provider_uncertain",
+                root=root,
+            )
+        return _publish_assembly_receipt(
+            attempt,
+            document={
+                "binding_sha256": None,
+                "outcome": "assembly_refused",
+                "timestamp": timestamp,
+            },
+            status="refused",
+            outcome="assembly_refused",
+            root=root,
+        )
+    except Exception:
+        return _publish_assembly_receipt(
+            attempt,
+            document={
+                "binding_sha256": None,
+                "outcome": "provider_uncertain",
+                "timestamp": timestamp,
+            },
+            status="failed",
+            outcome="provider_uncertain",
+            root=root,
+        )
+    receipt = dict(evaluation.receipt)
+    receipt["binding_sha256"] = evaluation.bundle.binding_sha256
+    return _publish_assembly_receipt(
+        attempt,
+        document=receipt,
+        status="ok",
+        outcome=evaluation.verdict.decision,
+        root=root,
+    )
 
 
 def _rehearsal_providers(
@@ -2771,6 +3568,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args=parsed,
                 _guard=_PRODUCTION_PHASE_HANDLER_GUARD,
             )
+        elif command == "assemble-stage1":
+            def assembly_handler(
+                attempt: driver.CommandAttempt, *, root: Path
+            ) -> TerminalResult:
+                return _assembly_handler(
+                    attempt,
+                    root=root,
+                    clock=clock,
+                    args=parsed,
+                )
+
+            handler = assembly_handler
         return _run_command(
             command,
             handler,

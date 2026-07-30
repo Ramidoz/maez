@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, fields
 from pathlib import Path
+from types import MappingProxyType
 
 from scripts import cuda_migration as cm
 from scripts.cuda_bench_driver import (
@@ -39,6 +41,17 @@ class Stage1ArtifactPaths:
     quality: str
     owner_voice: str
     rollback: str
+
+
+@dataclass(frozen=True, slots=True)
+class Stage1Evaluation:
+    bundle: cm.BenchEvidenceBundle
+    verdict: cm.PromotionVerdict
+    receipt: Mapping[str, object]
+
+
+class _Stage1EvaluationFailure(Exception):
+    """A valid bundle reached the scorer but could not be evaluated."""
 
 
 def _refuse() -> None:
@@ -305,3 +318,22 @@ def build_stage1_bundle(
         _refuse()
     except (AttributeError, KeyError, OverflowError, TypeError, ValueError):
         _refuse()
+
+
+def assemble_stage1(
+    paths: Stage1ArtifactPaths,
+    *,
+    root: Path,
+    timestamp: str,
+) -> Stage1Evaluation:
+    bundle = build_stage1_bundle(paths, root=root, timestamp=timestamp)
+    try:
+        verdict = cm.evaluate_promotion_bundle(bundle)
+        receipt = cm.build_receipt(bundle, verdict, timestamp=timestamp)
+    except Exception:
+        raise _Stage1EvaluationFailure from None
+    return Stage1Evaluation(
+        bundle=bundle,
+        verdict=verdict,
+        receipt=MappingProxyType(dict(receipt)),
+    )
