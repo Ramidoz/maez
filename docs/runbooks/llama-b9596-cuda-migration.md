@@ -339,10 +339,12 @@ pointer after its separate authorization.
 Before and after every reached phase, record a distinct containment artifact:
 
 - `maez.service` state is recorded informationally: if it is running,
-  a system-scope show, `/proc/<maez-pid>/environ` read, and second
-  system-scope show must prove the same positive active PID, whose environment
+  a user-scope show, `/proc/<maez-pid>/environ` read, and second
+  user-scope show must prove the same positive active PID, whose environment
   contains exactly one `MAEZ_SCREEN_PERCEPTION=0`; if the owner has stopped it for the window,
   the stopped state is recorded and the missing PID is NOT a phase refusal;
+  a system-scope not-found result is a wrong-scope refusal, never evidence that
+  the user unit is stopped;
 - the user-scope `llama-vision.service` is inactive/dead and disabled;
 - the vision endpoint is closed;
 - the flag-source and vision-unit hashes equal the Static preflight values and
