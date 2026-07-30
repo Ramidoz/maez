@@ -11152,9 +11152,69 @@ class TestB7ContainmentV2:
         assert first_commands.count(
             ("systemctl", "--user", "show", "llama-vision.service")
         ) == 1
-        assert first_commands.count(("systemctl", "show", "maez.service")) == 2
+        assert first_commands.count(
+            ("systemctl", "--user", "show", "maez.service")
+        ) == 2
         assert first_calls and second_calls
         assert first is not second
+
+    def test_wrong_scope_not_found_cannot_vacuously_replace_live_user_unit(
+        self,
+    ) -> None:
+        calls: list[tuple[str, object]] = []
+
+        def command_reader(argv: list[str]) -> str:
+            calls.append(("command", tuple(argv)))
+            if argv == ["systemctl", "--user", "show", "llama-vision.service"]:
+                return (
+                    "ActiveState=inactive\nSubState=dead\n"
+                    "UnitFileState=disabled\nMainPID=0\n"
+                )
+            if argv == ["systemctl", "--user", "show", "maez.service"]:
+                return (
+                    "ActiveState=active\nSubState=running\n"
+                    "UnitFileState=enabled\nMainPID=4321\n"
+                )
+            if argv == ["systemctl", "show", "maez.service"]:
+                return (
+                    "ActiveState=inactive\nSubState=dead\n"
+                    "UnitFileState=\nMainPID=0\n"
+                )
+            raise AssertionError(argv)
+
+        def file_reader(path: Path) -> bytes:
+            if path == driver.SCREEN_FLAG_SOURCE_PATH:
+                return b"MAEZ_SCREEN_PERCEPTION=0\n"
+            if path == driver.VISION_UNIT_PATH:
+                return b"unit"
+            raise AssertionError(path)
+
+        def environ_reader(pid: int) -> bytes:
+            calls.append(("environ", pid))
+            assert pid == 4321
+            return b"MAEZ_SCREEN_PERCEPTION=0\0"
+
+        provider = driver.RealContainmentProvider(
+            clock=driver.SystemClock(),
+            port_probe=_SafeProductionPortProbe(),
+            command_reader=command_reader,
+            file_reader=file_reader,
+            environ_reader=environ_reader,
+        )
+
+        snapshot = provider.capture("vulkan_baseline", "before")
+
+        assert snapshot.maez_active_state == "active"
+        assert snapshot.maez_process_screen_flag_value == "0"
+        assert calls == [
+            (
+                "command",
+                ("systemctl", "--user", "show", "llama-vision.service"),
+            ),
+            ("command", ("systemctl", "--user", "show", "maez.service")),
+            ("environ", 4321),
+            ("command", ("systemctl", "--user", "show", "maez.service")),
+        ]
 
     def test_stopped_maez_does_not_fabricate_or_read_a_process_flag(self) -> None:
         snapshot, calls = self._capture(maez_active=False)
@@ -11162,6 +11222,11 @@ class TestB7ContainmentV2:
         assert snapshot.maez_process_screen_flag_value is None
         assert snapshot.clean is True
         assert not any(kind == "environ" for kind, _value in calls)
+        commands = [value for kind, value in calls if kind == "command"]
+        assert commands.count(
+            ("systemctl", "--user", "show", "maez.service")
+        ) == 1
+        assert ("systemctl", "show", "maez.service") not in commands
 
     def test_active_maez_without_exact_process_flag_is_observed_as_dirty(self) -> None:
         provider = driver.RealContainmentProvider(

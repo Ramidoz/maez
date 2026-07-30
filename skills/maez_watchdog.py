@@ -46,7 +46,7 @@ def is_maez_active() -> bool:
     """Check if maez.service is active and its HTTP health endpoint is alive."""
     try:
         result = subprocess.run(
-            ["systemctl", "is-active", "maez.service"],
+            ["systemctl", "--user", "is-active", "maez.service"],
             capture_output=True, text=True, timeout=5,
         )
         if result.stdout.strip() != "active":

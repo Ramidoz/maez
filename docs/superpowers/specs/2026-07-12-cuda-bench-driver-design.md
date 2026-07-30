@@ -410,11 +410,14 @@ requested argv. This prevents one correctly pinned cycle from laundering a
 different executable used by either of the other two cycles.
 
 `maez.service` state is recorded **informationally** in containment
-snapshots: if running, its environ containment is checked; if stopped, the
-stopped state is recorded and a missing PID is NOT a phase refusal (the
-owner may reasonably stop it for the window). The runbook's phase-invariant
-section is amended to match this ruling, and to define the flag-source and
-vision-unit hash sources it references (see the runbook's Static preflight).
+snapshots through the same read-only **user-scope** systemctl builder as every
+other bench unit probe. If running, two user-scope shows must bracket the live
+PID's environ containment check; if stopped, the stopped state is recorded and
+a missing PID is NOT a phase refusal (the owner may reasonably stop it for the
+window). A system-scope not-found result is never accepted as a stopped user
+unit. The runbook's phase-invariant section is amended to match this ruling,
+and to define the flag-source and vision-unit hash sources it references (see
+the runbook's Static preflight).
 
 ## Rehearsal mode
 

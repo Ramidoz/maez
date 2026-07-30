@@ -277,7 +277,7 @@ Both April 13 archives are frozen and must not be edited. Both April 15 snapshot
 2. Read [`docs/governance/BETA_ARCHITECTURE_DECISIONS.md`](governance/BETA_ARCHITECTURE_DECISIONS.md) second — it holds the load-bearing architectural decisions that span multiple sessions and could otherwise be lost.
 3. Read [`docs/governance/BETA_READINESS_THRESHOLD.md`](governance/BETA_READINESS_THRESHOLD.md) third — that's the Track A completion test.
 4. Check `git log --oneline -5` — the most recent commit should tell you roughly where the code is.
-5. Check `systemctl status maez.service` — Maez should be active. If it isn't, something broke.
+5. Check `systemctl --user status maez.service` — Maez should be active. If it isn't, something broke.
 6. Do not start writing code until you've confirmed: (a) which current slice is active in `MAEZ_LIFE_SUBSTRATE.md` or the latest handoff, (b) that the owner has anchored you on its meaning, (c) whether the task is Track B preparation, Track C, or cleanup debt.
 
 **If the owner asks you to do something that sounds like Track B or Track C:**
