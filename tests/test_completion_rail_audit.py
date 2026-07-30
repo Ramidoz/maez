@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from core.safety.self_claim_audit import audit
 
@@ -107,8 +108,12 @@ class CompletionRailInAudit(unittest.TestCase):
         self.assertEqual(r.text, "I don't have a completed action to report.")
 
     def test_clean_reflection_untouched(self):
-        r = audit(
-            "I've thought about it and I noticed the pattern earlier.",
-            surface="test",
-        )
+        with patch(
+            "core.safety.self_claim_audit._find_flags",
+            return_value=([], True),
+        ):
+            r = audit(
+                "I've thought about it and I noticed the pattern earlier.",
+                surface="test",
+            )
         self.assertFalse(r.rewritten)

@@ -1,15 +1,19 @@
 # CUDA A/B bench driver — design
 
-Status: spec approved for planning; no implementation yet. Companion to the
-b9596 CUDA migration package (`scripts/cuda_migration.py`, runbook
-`docs/runbooks/llama-b9596-cuda-migration.md`). The driver executes the
-offline A/B measurement those documents describe; the scorer in
+Status: scorer Part A, driver B2--B7, the worktree import airlock, and the lean
+closure are implemented on `feature/cuda-bench-driver`; the dead full-repo
+baseline helper, report plugin, and test are deleted. The owner-ratified lean
+closure in `docs/superpowers/specs/2026-07-20-cuda-bench-lean-closure-design.md`
+supersedes this document's unimplemented multi-stage assembler/CLI closure.
+The driver executes the offline A/B measurement; the scorer in
 `cuda_migration.py` remains the only decision authority.
 
-Sequence of record (owner, 2026-07-12): build and gate the inert driver while
-Maez stays online → rehearse collection/rollback handling without model or
-service contact → independently verify corpus and runtime identities → owner
-names the offline window → run the frozen A/B.
+Sequence of record (owner, amended 2026-07-20): finish and gate the lean
+five-command closure through the worktree airlock → merge it inertly → owner
+names the A/B measurement window → measure, then owner restores production to
+the unchanged Vulkan posture → owner separately authorizes the manual rollback
+drill → assemble a stage-1 verdict. Any permanent cutover is a third, future
+owner act.
 
 ## Authority boundary
 
@@ -29,38 +33,41 @@ The driver refuses to run a phase unless ALL of:
 5. corpus, runtime, and rollback identities match the frozen hashes;
 6. an explicit owner-window authorization artifact is present and current.
 
-The driver may terminate only child process groups it created itself
-(spawned with `start_new_session`). It never signals an ambient PID and never
-restarts production after success or failure.
+The driver may signal only an admitted child leader through the retained pidfd
+for that process instance. Numeric PID and PGID signalling are forbidden;
+process-group enumeration is observational evidence only. It never signals an
+ambient process and never restarts production after success or failure.
 
 ## Components
 
-1. **`scripts/cuda_bench_driver.py`** — orchestration state machine + CLI:
-   `static-preflight`, `preflight`, `rehearse`, `vulkan-baseline`,
-   `cuda-candidate`. Owns measurement; owns nothing else.
-2. **`scripts/cuda_bench_assemble.py`** — `assemble` command. Structurally
-   measurement-free: imports no providers and never calls the legacy
-   unbound evaluator (test-enforced). Fuses phase packets plus external
-   evidence into a `BenchEvidenceBundle` for the new scorer entrypoint, or
-   emits a typed `assembly_refused` / `unscorable` receipt. It never mints
-   `keep_vulkan` or any operational verdict — that conversion belongs to the
-   scorer alone. Its writing surface is exactly two things: its own
-   receipts, and the versioned assembly-selection chain via the
-   `select-append` subcommand (draft read only from the anchored
-   `drafts/selection-draft.json`; each selection file written once,
-   `O_EXCL`, hash-chained to its predecessor). (Amended 2026-07-14 with
-   the implementation-plan gate.)
-3. **`scripts/cuda_bench_stub.py`** — the pinned rehearsal stub: a minimal
+1. **`scripts/cuda_bench_driver.py`** — the implemented orchestration state
+   machine and measurement engine. It owns measurement; it owns no live
+   service action.
+2. **`scripts/cuda_bench_cli.py`** — the lean five-command surface:
+   `static-preflight`, `rehearse`, `vulkan-baseline`, `cuda-candidate`, and
+   `assemble-stage1`. No cutover or service-mutation command exists.
+3. **`scripts/cuda_bench_assemble.py`** — the stage-1-only adapter.
+   Structurally measurement-free: imports no providers and never calls the
+   private inner evaluator. It reads owner-selected relative paths under the
+   canonical private root, constructs the existing `BenchEvidenceBundle`,
+   calls `evaluate_promotion_bundle`, and writes only its content-light
+   receipt. There is no selection chain or later-stage input.
+4. **`scripts/cuda_bench_stub.py`** — the pinned rehearsal stub: a minimal
    loopback HTTP server imitating llama-server's `/health`, `/v1/models`,
    and `/completion` surface with closed personas {healthy,
    readiness_timeout, midturn_hang, crash, malformed_response,
-   wrong_identity}. Readiness is witnessed from `/health`, the exact-alias
+   wrong_identity}. Its reviewed logical argv is `python -B -I
+   /absolute/pinned/cuda_bench_stub.py`; at execution the launcher replaces
+   only that script operand with the sealed `/proc/self/fd/<ephemeral-fd>`
+   snapshot. Isolated file execution prevents cwd or `PYTHONPATH` from
+   substituting a same-named module.
+   Readiness is witnessed from `/health`, the exact-alias
    witness from `/v1/models`, inference from `/completion`; persona tests
    cover wrong, missing, and multiple aliases. The rehearsal launcher can
-   execute only this pinned module (path + content hash enforced), never an
+   execute only this pinned file (absolute path + content hash enforced), never an
    arbitrary binary or model path. It binds `127.0.0.1:0`; port 18080 is
    structurally forbidden in rehearsal.
-4. **Provider seams** — the ONLY swap point between tiers:
+5. **Provider seams** — the ONLY swap point between tiers:
    `ServiceStateProvider` (read-only systemctl), `PortProbe`, `GpuProvider`
    (nvidia-smi queries), `KernelLogProvider` (journalctl cursor reads),
    `ServerLauncher` (spawns the pinned server binary with an explicit
@@ -161,7 +168,11 @@ readiness + exact-alias witness → `/proc/<pid>/maps` backend witness →
 unload-complete proof] → KERNEL_DELTA → CONTAINMENT_AFTER → PACKET_WRITE.
 
 Every transition appends a content-light line to the phase journal. Literal
-prompts/responses exist only in bounded private per-turn artifacts.
+prompts/responses exist only in bounded private per-turn artifacts. Each
+literal document is wrapped as `cuda_bench_driver.turn_artifact.v1` with
+`binding_sha256: null`: its evidentiary identity is the SHA-256 of the
+persisted file bytes recorded by the manifest and `TurnRecord`, not a fake
+object-plane binding for content that has no typed constructor.
 
 **Two-gate preflight (amendment 5).**
 - `static-preflight` — safe while Maez is online: corpus file
@@ -171,6 +182,26 @@ prompts/responses exist only in bounded private per-turn artifacts.
   candidate-absent check), flag-source and vision-unit hashes, driver
   package hash, directory modes, stub pin, rehearsal readiness. Produces a
   static receipt.
+- The static command also freshly observes the host CUDA compiler, CMake,
+  driver, GPU, compute capability, and fully verifies the candidate manifest.
+  `cuda_compiler` and `cmake_version` are host observations at preflight,
+  **not retroactive build provenance**. The bounded CMake validator accepts
+  only 3.x.x or 4.x.x with one/two-digit minor and one-to-three-digit patch,
+  including the truthful host value `4.2.3`; it never substitutes a fictional
+  3.x value. `library_hashes` selects only verified regular `F` `lib*.so*`
+  manifest entries. `runtime-manifest.sha256` itself is the sole permitted
+  top-level file without a row; every other unlisted candidate asset refuses.
+  The phase commands rederive through the same read-only
+  collector and `run_phase` persists the complete identity documents;
+  `static_preflight.v1` itself stays unchanged.
+- The rollback-manifest hash is reproducible from the committed canonical
+  eight-field preimage (unit, drop-in, Vulkan runtime, Vulkan library
+  manifest, model hash and bytes, alias, effective-args hash). Its compact
+  ordered-pair JSON is 582 bytes and hashes to
+  `4ccbadb4de46b8856bdc4fa130a52141784038693e0da0021205fbae3b7db3f2`.
+  Static preflight creates or verifies those exact raw bytes under the private
+  root, and phase commands re-open them. This is a reproducibility asset, not
+  a new schema.
 - Phase preflight — only inside the owner window, after the owner stops
   production: the six refusal gates above plus boot-bound authorization and
   topology capture.
@@ -236,7 +267,10 @@ turns. Frozen statistics over the 21 measured turns per phase:
   first streamed SSE `data:` event whose JSON payload contains a non-empty
   generated-text field (`content`). Metadata, keep-alive, or empty-content
   events never count;
-- e2e = request-write-complete → final chunk received;
+- e2e = request-write-complete → byte arrival of the native `/completion`
+  event carrying `stop:true`; clean EOF must follow, `[DONE]` is rejected, and
+  parse completion or EOF timing never substitutes for the terminal-event
+  arrival;
 - warmup turns are excluded from every statistic;
 - MTP counters are PER-REQUEST on the wire: b9596 resets them each request
   and reports them in that request's terminal response — there is no
@@ -264,14 +298,42 @@ healthy persona reproduces these exact terminal-SSE keys.
 ## Error handling (amendment 7)
 
 Closed refusal vocabulary (Appendix). Cleanup is an **unconditional
-finalizer** — every post-spawn exit path reaches it — but signalling within
+finalizer** — every admitted-child exit path reaches it — but signalling within
 it is ownership-proven, never unconditional: at spawn the driver records
 PID, PGID, `/proc/<pid>/stat` start time, and the executable's content
-hash; before EVERY signal it re-proves that identity quadruple still
+hash; before EVERY admitted-child signal it re-proves that identity quadruple still
 matches. A quadruple mismatch is the typed refusal `pid_reuse_detected`
 (a RED-listed test scenario) and no signal is sent.
 
-Check-then-signal is itself a reuse race, so the leader is signalled only
+**Pidfd-before-exec bootstrap (B5 amendment, ruling 2026-07-15).** `Popen`
+first starts a same-PID inert guard in the new session. The guard blocks on
+a one-byte pipe and has not executed the target. The parent obtains the
+pidfd before sending the go byte; failure closes the pipe, so the guard
+exits 0 without a signal or target execution. A CLOEXEC status pipe proves
+the same PID crossed `execve`. Only then may post-exec identity be captured
+and `OwnedChild` admitted. Post-pidfd/pre-admission failure uses the retained
+pidfd for bootstrap cleanup; the quadruple rule begins at admission because
+no truthful target quadruple exists earlier. For rehearsal, admission also
+requires the exact `STUB_LISTENING` line and binds both the absolute pinned
+file hash and the post-exec interpreter hash. Required REDs prove EOF
+inertness, pidfd-acquisition refusal, post-pidfd cleanup, same-PID authority,
+post-exec capture ordering, and hostile cwd/`PYTHONPATH` isolation.
+
+**Sealed entry-executable snapshot (B5 GREEN amendment, ruling
+2026-07-15).** A pathname fd pins an inode, not immutable bytes, so the
+launcher never executes the checked regular file directly. It copies the
+entry executable into an executable memfd, applies
+`F_SEAL_WRITE|F_SEAL_GROW|F_SEAL_SHRINK|F_SEAL_SEAL`, hashes only after the
+seal set is final, then hands that same sealed kernel object to the inert
+guard. Binary targets use fd-exec; rehearsal Python targets use
+`-B -I /proc/self/fd/<ephemeral-fd>` and close that fd at target startup.
+`MFD_EXEC` or host-policy failure is the typed `spawn_failure`. The original
+absolute path and sealed-content SHA remain the human-readable evidence;
+the `/proc/self/fd` name is ephemeral and never persisted. This pin covers
+the entry executable only. Dynamically loaded backend libraries remain
+under the independent runtime-manifest/static-candidate proof.
+
+Check-then-signal is itself a reuse race, so an admitted leader is signalled only
 through a **pidfd retained from spawn** (`os.pidfd_open` immediately after
 fork, signals via `signal.pidfd_send_signal`): a pidfd names the process
 instance, not the PID, so a recycled PID can never be signalled. The
@@ -297,6 +359,11 @@ CONTAINMENT_AFTER → failed-packet write. All signals go through the
 leader's pidfd; PGID enumeration is OBSERVATIONAL ONLY — it proves group
 absence or reports `cleanup_incomplete`, and is never itself a signalling
 target. Kernel windows use journal cursors plus timestamps.
+Cleanup authority is independent of timestamp evidence: failure of the injected
+clock before or after teardown cannot escape the finalizer or strand a child.
+The result records `timestamp_unavailable` and is at least
+`cleanup_incomplete`, after process-group and listener absence have been
+attempted and witnessed.
 Distinct failure classes: `http_timeout` (request exceeded bound, server
 alive), `crash` (child exited uncommanded), `hang` (unresponsive; required
 forced SIGKILL), `spawn_failure` (child never reached readiness polling),
@@ -314,7 +381,8 @@ them yields a typed `cuda_bench_assemble.receipt.v1` with outcome
 
 Phase packets are immutable, phase-specific, and cryptographically bound to:
 window ID, boot ID, GPU UUID, ambient-topology hash, model/corpus/order
-hashes, exact effective argv hash, driver package hash, the authorization
+hashes, exact effective argv hash, driver package hash, the original absolute
+entry-executable path and sealed-content SHA-256, the authorization
 preimage hash and consumption-receipt hash for the phase, the phase's
 turn-artifact manifest hash, the phase's THREE cycle-indexed backend
 witnesses (typed preimages), its containment before/after snapshot pair,
@@ -331,6 +399,15 @@ manifest hash plus evaluator version — never an ambiguous singular
 "transcript hash." Assembly performs no measurement and accepts no raw
 CLI-entered counts. Owner-voice and rollback artifacts identify their
 producer and bind the same phase/window identities.
+
+The packet's single entry-executable pair is producer evidence from all
+three cycle launches, not a configuration assertion: every admitted child
+must report the same `(pinned_path, pinned_sha256)` pair. Any cycle-level
+path or hash drift is `identity_mismatch` and prevents a completed packet;
+the common pair is then copied from the admitted-child evidence into
+`phase_packet.v2`. The driver never re-derives it from `PhaseConfig` or the
+requested argv. This prevents one correctly pinned cycle from laundering a
+different executable used by either of the other two cycles.
 
 `maez.service` state is recorded **informationally** in containment
 snapshots: if running, its environ containment is checked; if stopped, the
@@ -386,32 +463,46 @@ narrowed, not closed.
 - Rehearsal tier: the `rehearse` command against the pinned stub on
   `127.0.0.1:0`, proving spawn/poll/timeout/kill mechanics and cleanup
   claims for real.
-- Structural tests: no mutating systemctl verb constructible; assembler
-  never references the legacy evaluator; rehearsal artifacts rejected by
-  assembler and scorer; frozen corpus unread in rehearsal; stub launcher
-  refuses any non-pinned executable.
+- Structural tests: no mutating systemctl verb constructible; the stage-1
+  assembler never references the private inner evaluator or any measurement
+  provider; rehearsal artifacts are rejected by assembler and scorer; the
+  frozen corpus is unread in rehearsal; the stub launcher refuses any
+  non-pinned executable; no cutover command or verdict-to-action path exists.
 
 ## Non-goals
 
-No promotion decision (scorer-only), no rollback drill execution, no
-cold-boot or provisional-live witnesses, no unit-file writes, no service
-mutation, no corpus authoring, no vision-flag changes.
+No production promotion or cutover, no rollback drill execution, no cold-boot
+or provisional-live producer, no unit-file writes, no service mutation, no
+corpus authoring, no vision-flag changes. The lean adapter may obtain the
+scorer's stage-1 `bench_passed`/`keep_vulkan` verdict; it performs no action
+from it.
 
 ## Appendix — frozen constants
 
 **Schema names.** `cuda_bench_driver.static_preflight.v1`,
-`cuda_bench_driver.phase_packet.v1`, `cuda_bench_driver.refusal.v1`,
+`cuda_migration_runtime.v1` (the live bundle-bound promotion receipt),
+`cuda_bench_driver.phase_packet.v2`, `cuda_bench_driver.refusal.v1`,
+`cuda_bench_driver.command_admission.v1` (content-light first-durable-write
+receipt with exactly command, positive ordinal, bounded window ID or null,
+`status="admitted"`, and timestamp; wrapper binding is null and the persisted
+file hash is its identity),
+`cuda_bench_driver.command_completion.v1` (durable terminal proof for exactly
+the closed static-preflight, Vulkan-baseline, and CUDA-candidate
+command/artifact/phase matrix; it binds the exact admission and underlying
+artifact file hashes),
 `cuda_bench_driver.window_authorization.v1`,
 `cuda_bench_driver.continuation.v1`,
 `cuda_bench_driver.consumption_receipt.v1`,
 `cuda_bench_driver.turn_manifest.v1`,
-`cuda_bench_driver.containment_snapshot.v1` (persisted lossless
-preimage: `binding_sha256` + complete constructor fields),
+`cuda_bench_driver.turn_artifact.v1` (private literal document; wrapper
+binding is null and the persisted file hash is the evidence identity),
+`cuda_bench_driver.containment_snapshot.v2` (persisted lossless
+preimage: `binding_sha256` + complete constructor fields, including the
+informational Maez state/process-flag observation; its derived artifact hash
+covers only observations while the binding also covers capture context),
 `cuda_bench_driver.runtime_identity.v1` (same wrapper; complete
 constructor fields, reconstructable — not the lossy `identity_packet`),
 `cuda_bench_assemble.receipt.v1`,
-`cuda_bench_assemble.selection.v1` (typed assembly-selection manifest:
-exact per-attempt input paths + file hashes),
 `cuda_bench_rehearsal.packet.v1` (deliberately incompatible),
 `cuda_migration.bench_evidence_bundle.v1`,
 `cuda_migration.cycle_backend_witness.v1`,
@@ -424,7 +515,15 @@ later-stage cold-boot witness), `cuda_migration.provisional_live_witness.v1`
 `cuda_migration.authorization_witness.v1` (persisted boot/live
 authorization witness), `cuda_migration.backend_map_witness.v1` (persisted
 cold-boot/provisional backend-map witness).
-(21 total; amended 2026-07-14 with the implementation-plan gate.)
+(24 active executable families. The owner-ratified 2026-07-20 lean closure
+adds the previously omitted live `cuda_migration_runtime.v1` receipt to the
+appendix and retires the never-implemented
+`cuda_bench_assemble.selection.v1`; no executable schema is removed. The
+2026-07-21 command-boundary amendment adds the honest admission receipt rather
+than misusing an unrelated schema, taking the count from 22 to 23. The uniform
+completion amendment adds one honest family for all three evidence commands,
+taking the count from 23 to 24. The earlier B5 amendment still replaces
+phase-packet v1 with v2.)
 
 **Closed refusal/outcome vocabulary (40 entries; `tier_mismatch` added
 2026-07-13 — a mixed production/rehearsal provider set refuses before any

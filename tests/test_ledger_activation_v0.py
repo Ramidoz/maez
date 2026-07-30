@@ -6,6 +6,7 @@ says "the notebook is real"; the disabled path opens no SQLite at all.
 
 import os
 import sqlite3
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,7 +14,6 @@ from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-PYTHON = "/home/rohit/maez/.venv/bin/python"
 
 
 class LedgerWritesEnabled(unittest.TestCase):
@@ -191,7 +191,7 @@ class InitCLI(unittest.TestCase):
         import subprocess
         from core.ledger import migrate
         db = str(Path(tempfile.mkdtemp()) / "cli.db")
-        cmd = [PYTHON, "-B", "-m", "core.ledger.init", db]
+        cmd = [sys.executable, "-B", "-m", "core.ledger.init", db]
         r1 = subprocess.run(cmd, cwd=REPO_ROOT,
                             capture_output=True, text=True)
         self.assertEqual(r1.returncode, 0, r1.stderr)
