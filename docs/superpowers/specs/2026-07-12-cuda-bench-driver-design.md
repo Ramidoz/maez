@@ -451,6 +451,23 @@ component), and the final file must prove: regular file, owner UID,
 `st_nlink == 1` (hardlink refusal — `O_NOFOLLOW` does NOT provide this),
 mode `0600`. Any violation is the typed refusal `filesystem_hazard`.
 
+### Binary startup diagnostics amendment (2026-07-31)
+
+Production binary launches continuously drain stderr through a bounded
+65,536-byte private capture. The retained prefix is written 0600 under the
+active attempt's `diagnostics/` directory after cleanup. Only its hash, bounded
+byte count, truncation flag, and observed exit status may enter the
+content-light journal. Raw stderr is outside every packet, bundle, assembler,
+scorer, verdict, receipt, and CLI output. The existing finalizer remains the
+sole authority for deliberate signals and is byte-identical. After a
+`cleanup_incomplete` verdict is durably recorded, bounded retirement may close
+the bench-owned stderr reader and thereby cause `EPIPE`/`SIGPIPE` only in an
+unexpected descendant that already violated the single-process-child
+contract; that terminal attempt is unscoreable and unverdictable. Rehearsal
+remains stub-only, online-safe, model-free, and incapable of launching the real
+binary. The full corrective contract is frozen in
+`2026-07-31-cuda-binary-startup-diagnostics-design.md`.
+
 ## Standing owner precondition (corpus durability)
 
 The recovered corpus pre-image currently exists as one gitignored file plus
