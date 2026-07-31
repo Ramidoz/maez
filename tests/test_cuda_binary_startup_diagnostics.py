@@ -223,11 +223,14 @@ def test_task1_binary_pipe_ownership_blocking_and_blast_radius(
             if line.startswith("flags:")
         )
         assert int(fd2_flags_line.split()[1], 8) & os.O_NONBLOCK == 0
-        matching_child_fds = [
-            int(fd.name)
-            for fd in Path(f"/proc/{popen.pid}/fd").iterdir()
-            if fd.readlink() == Path(f"pipe:[{stderr_pipe_inode}]")
-        ]
+        matching_child_fds: list[int] = []
+        for fd in Path(f"/proc/{popen.pid}/fd").iterdir():
+            try:
+                target = fd.readlink()
+            except FileNotFoundError:
+                continue
+            if target == Path(f"pipe:[{stderr_pipe_inode}]"):
+                matching_child_fds.append(int(fd.name))
         assert matching_child_fds == [2]
 
         unrelated = real_popen(
