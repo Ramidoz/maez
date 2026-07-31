@@ -53,6 +53,15 @@ Write REDs first for:
    test harness externally reaps; and
 6. every production binary-launcher call uses the disposal helper.
 
+Owner-ratified storage-failure exception: the helper attempts the durable
+bootstrap-cleanup append first, but if that append fails it must still retire
+the capture within the existing byte/time/join bounds. The attempt then
+unconditionally becomes terminal `cleanup_incomplete`, remains unscoreable,
+and emits the same content-light terminal stdout outcome even when no durable
+failure artifact can be written. Durable-before-retirement ordering remains
+mandatory whenever storage is available; storage failure may not force an
+unbounded thread or descriptor leak.
+
 Witness RED, implement the carrier and disposal helper, and make capture
 retirement uncertainty supersede the original refusal as `cleanup_incomplete`.
 

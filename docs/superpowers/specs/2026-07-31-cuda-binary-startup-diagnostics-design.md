@@ -140,6 +140,17 @@ carrier-disposal helper. If the state machine cannot prove the diagnostic
 thread/descriptors retired, `cleanup_incomplete` supersedes the original
 refusal and no snapshot is claimed.
 
+If the bootstrap-cleanup journal append itself fails, the state machine first
+attempts that durable append and then must still perform bounded capture
+retirement. Storage failure cannot compel an unbounded diagnostic-thread or
+descriptor leak. This is the narrow exception to durable-before-retirement
+ordering: ordering is guaranteed whenever storage is available; after a
+failed durable append, retirement proceeds and the attempt unconditionally
+becomes terminal `cleanup_incomplete`. It remains unscoreable and may produce
+no completion, packet, bundle, scorer call, binding, or verdict. The terminal
+stdout line must still report content-light `cleanup_incomplete` honestly even
+when no durable failure artifact can be written.
+
 ### Private diagnostic artifact
 
 After process cleanup and a successful bounded drainer join, the state machine
