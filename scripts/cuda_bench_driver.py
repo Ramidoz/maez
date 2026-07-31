@@ -52,6 +52,7 @@ REQUEST_TIMEOUT_MS = 30_000
 SIGTERM_GRACE_S = 10
 RESPONSE_BYTE_CAP = 4 * 1024 * 1024
 TURN_ARTIFACT_BYTE_CAP = 8 * 1024 * 1024
+BINARY_STDERR_DIAGNOSTIC_CAP = 65_536
 WINDOW_TTL_S = 14_400
 CONTINUATION_TTL_S = 3_600
 KILL_WAIT_S = 15
@@ -172,7 +173,13 @@ _CONTENT_MARKERS = (
 )
 _JOURNAL_SEQUENCE = itertools.count()
 _AUTHORIZATION_RECEIPT_SEQUENCE = itertools.count()
+_BINARY_STDERR_THREAD_SEQUENCE = itertools.count()
 _NAME_SEED = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:+-]{0,127}")
+
+_BINARY_STDERR_FINISH_BYTE = b"F"
+_BINARY_STDERR_POST_FINISH_CAP = 65_536
+_BINARY_STDERR_POST_FINISH_TIMEOUT_S = 1.0
+_BINARY_STDERR_JOIN_TIMEOUT_S = 2.0
 
 
 class BenchRefusal(Exception):
@@ -942,6 +949,234 @@ except BaseException:
 """
 
 
+@dataclass(frozen=True, slots=True)
+class _BinaryStderrSnapshot:
+    retained: bytes = field(repr=False, compare=False)
+    retained_sha256: str
+    retained_byte_count: int
+    truncated: bool
+    post_finish_byte_count: int = field(repr=False, compare=False)
+
+
+class _BinaryStderrCapture:
+    """Sole-owner drainer for one binary launch's private stderr pipe."""
+
+    def __init__(
+        self,
+        stderr_read: int,
+        control_read: int,
+        control_write: int,
+    ) -> None:
+        self._stderr_read = stderr_read
+        self._control_read = control_read
+        self._control_write: int | None = control_write
+        self._lock = threading.Lock()
+        self._finished = threading.Event()
+        self._retained = bytearray()
+        self._truncated = False
+        self._post_finish_byte_count = 0
+        self._snapshot: _BinaryStderrSnapshot | None = None
+        self._failed = False
+        self._stderr_eof = False
+        self._consumed = False
+        self._thread = threading.Thread(
+            target=self._drain,
+            name=(
+                "cuda-binary-stderr-"
+                f"{next(_BINARY_STDERR_THREAD_SEQUENCE)}"
+            ),
+        )
+
+    def __repr__(self) -> str:
+        return "_BinaryStderrCapture()"
+
+    @property
+    def thread_alive(self) -> bool:
+        return self._thread.is_alive()
+
+    @property
+    def truncated(self) -> bool:
+        with self._lock:
+            return self._truncated
+
+    @property
+    def consumed(self) -> bool:
+        with self._lock:
+            return self._consumed
+
+    def _start(self) -> None:
+        self._thread.start()
+
+    def _close_before_start(self) -> None:
+        for fd in (self._stderr_read, self._control_read, self._control_write):
+            _close_fd(fd)
+        self._control_write = None
+
+    def _retain(self, payload: bytes) -> None:
+        with self._lock:
+            available = BINARY_STDERR_DIAGNOSTIC_CAP - len(self._retained)
+            if available > 0:
+                self._retained.extend(payload[:available])
+            if len(payload) > available:
+                self._truncated = True
+
+    def _drain_ready_stderr(
+        self,
+        *,
+        finish_started: bool,
+        post_finish_remaining: int,
+    ) -> tuple[bool, int]:
+        cycle_remaining = BINARY_STDERR_DIAGNOSTIC_CAP
+        while cycle_remaining > 0:
+            read_cap = cycle_remaining
+            if finish_started:
+                read_cap = min(read_cap, post_finish_remaining)
+                if read_cap <= 0:
+                    return False, post_finish_remaining
+            try:
+                payload = os.read(self._stderr_read, read_cap)
+            except BlockingIOError:
+                return False, post_finish_remaining
+            if not payload:
+                return True, post_finish_remaining
+            self._retain(payload)
+            cycle_remaining -= len(payload)
+            if finish_started:
+                post_finish_remaining -= len(payload)
+                with self._lock:
+                    self._post_finish_byte_count += len(payload)
+        return False, post_finish_remaining
+
+    def _drain(self) -> None:
+        finish_deadline: float | None = None
+        post_finish_remaining = _BINARY_STDERR_POST_FINISH_CAP
+        stderr_eof = False
+        try:
+            poller = select.poll()
+            poller.register(
+                self._stderr_read,
+                select.POLLIN | select.POLLHUP | select.POLLERR | select.POLLNVAL,
+            )
+            poller.register(
+                self._control_read,
+                select.POLLIN | select.POLLHUP | select.POLLERR | select.POLLNVAL,
+            )
+            while True:
+                if finish_deadline is None:
+                    timeout_ms = 100
+                else:
+                    remaining_s = finish_deadline - time.monotonic()
+                    if remaining_s <= 0:
+                        break
+                    timeout_ms = max(1, min(100, int(remaining_s * 1000)))
+                events = dict(poller.poll(timeout_ms))
+                control_mask = events.get(self._control_read, 0)
+                if control_mask:
+                    marker = os.read(self._control_read, 1)
+                    if marker not in {b"", _BINARY_STDERR_FINISH_BYTE}:
+                        raise OSError("invalid diagnostic finish marker")
+                    if finish_deadline is None:
+                        finish_deadline = (
+                            time.monotonic() + _BINARY_STDERR_POST_FINISH_TIMEOUT_S
+                        )
+                stderr_mask = events.get(self._stderr_read, 0)
+                if stderr_mask:
+                    eof, post_finish_remaining = self._drain_ready_stderr(
+                        finish_started=finish_deadline is not None,
+                        post_finish_remaining=post_finish_remaining,
+                    )
+                    if eof:
+                        stderr_eof = True
+                        break
+                if finish_deadline is not None and post_finish_remaining <= 0:
+                    break
+        except BaseException:
+            with self._lock:
+                self._failed = True
+        finally:
+            _close_fd(self._stderr_read)
+            _close_fd(self._control_read)
+            with self._lock:
+                retained = bytes(self._retained)
+                self._stderr_eof = stderr_eof
+                self._snapshot = _BinaryStderrSnapshot(
+                    retained=retained,
+                    retained_sha256=hashlib.sha256(retained).hexdigest(),
+                    retained_byte_count=len(retained),
+                    truncated=self._truncated,
+                    post_finish_byte_count=self._post_finish_byte_count,
+                )
+            self._finished.set()
+
+    def finish(self) -> _BinaryStderrSnapshot:
+        with self._lock:
+            if self._consumed:
+                raise BenchRefusal("cleanup_incomplete")
+            self._consumed = True
+            control_write = self._control_write
+            self._control_write = None
+        write_failed = False
+        try:
+            if control_write is None:
+                write_failed = True
+            elif os.write(control_write, _BINARY_STDERR_FINISH_BYTE) != 1:
+                write_failed = True
+        except OSError:
+            write_failed = True
+        finally:
+            _close_fd(control_write)
+        self._thread.join(timeout=_BINARY_STDERR_JOIN_TIMEOUT_S)
+        with self._lock:
+            snapshot = self._snapshot
+            failed = self._failed
+            stderr_eof = self._stderr_eof
+        if (
+            self._thread.is_alive()
+            or snapshot is None
+            or failed
+            or (write_failed and not stderr_eof)
+        ):
+            raise BenchRefusal("cleanup_incomplete")
+        return snapshot
+
+
+def _start_binary_stderr_capture() -> tuple[_BinaryStderrCapture, int]:
+    stderr_read: int | None = None
+    stderr_write: int | None = None
+    control_read: int | None = None
+    control_write: int | None = None
+    capture: _BinaryStderrCapture | None = None
+    try:
+        stderr_read, stderr_write = os.pipe2(os.O_CLOEXEC)
+        os.set_blocking(stderr_read, False)
+        control_read, control_write = os.pipe2(os.O_CLOEXEC)
+        capture = _BinaryStderrCapture(
+            stderr_read,
+            control_read,
+            control_write,
+        )
+        capture._start()
+        return capture, stderr_write
+    except BaseException:
+        if capture is not None:
+            capture._close_before_start()
+        else:
+            for fd in (stderr_read, control_read, control_write):
+                _close_fd(fd)
+        _close_fd(stderr_write)
+        raise
+
+
+def _finish_binary_stderr_capture(
+    capture: _BinaryStderrCapture | None,
+) -> _BinaryStderrSnapshot | None:
+    if capture is None:
+        return None
+    if type(capture) is not _BinaryStderrCapture:
+        raise BenchRefusal("cleanup_incomplete")
+    return capture.finish()
+
+
 @dataclass(frozen=True)
 class SpawnPin:
     kind: Literal["binary", "python_file"]
@@ -1070,6 +1305,11 @@ class OwnedChild:
     port: int | None
     popen: subprocess.Popen[bytes]
     rehearsal_port_lease: RehearsalPortLease | None = None
+    _stderr_capture: _BinaryStderrCapture | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         if (
@@ -1098,6 +1338,10 @@ class OwnedChild:
                 )
             )
             or not isinstance(self.popen, subprocess.Popen)
+            or (
+                self._stderr_capture is not None
+                and type(self._stderr_capture) is not _BinaryStderrCapture
+            )
         ):
             raise ValueError("owned_child_invalid")
 
@@ -1396,7 +1640,14 @@ def _guarded_popen(
     capture_stdout: bool,
     pinned_fd: int,
     pin_kind: Literal["binary", "python_file"],
-) -> tuple[subprocess.Popen[bytes], int, int, int, set[signal.Signals]]:
+) -> tuple[
+    subprocess.Popen[bytes],
+    int,
+    int,
+    int,
+    set[signal.Signals],
+    _BinaryStderrCapture | None,
+]:
     gate_read: int | None = None
     gate_write: int | None = None
     exec_read: int | None = None
@@ -1404,6 +1655,8 @@ def _guarded_popen(
     popen: subprocess.Popen[bytes] | None = None
     pidfd: int | None = None
     old_mask: set[signal.Signals] | None = None
+    stderr_write: int | None = None
+    stderr_capture: _BinaryStderrCapture | None = None
     cleanup_complete = True
     try:
         old_mask = signal.pthread_sigmask(
@@ -1412,6 +1665,8 @@ def _guarded_popen(
         )
         gate_read, gate_write = os.pipe2(os.O_CLOEXEC)
         exec_read, exec_write = os.pipe2(os.O_CLOEXEC)
+        if pin_kind == "binary":
+            stderr_capture, stderr_write = _start_binary_stderr_capture()
         target_mask = old_mask.difference({signal.SIGINT, signal.SIGTERM})
         encoded_mask = ",".join(str(int(value)) for value in sorted(target_mask))
         guard_argv = [
@@ -1427,17 +1682,25 @@ def _guarded_popen(
             encoded_mask,
             *argv,
         ]
-        popen = subprocess.Popen(
-            guard_argv,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE if capture_stdout else subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            env=dict(env),
-            start_new_session=True,
-            pass_fds=(gate_read, exec_write, pinned_fd),
-            close_fds=True,
-            bufsize=0,
-        )
+        try:
+            popen = subprocess.Popen(
+                guard_argv,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE if capture_stdout else subprocess.DEVNULL,
+                stderr=(
+                    stderr_write
+                    if stderr_write is not None
+                    else subprocess.DEVNULL
+                ),
+                env=dict(env),
+                start_new_session=True,
+                pass_fds=(gate_read, exec_write, pinned_fd),
+                close_fds=True,
+                bufsize=0,
+            )
+        finally:
+            _close_fd(stderr_write)
+            stderr_write = None
         _close_fd(gate_read)
         gate_read = None
         _close_fd(exec_write)
@@ -1446,8 +1709,9 @@ def _guarded_popen(
         binding_state, bound_pid = _pidfd_bound_pid(pidfd)
         if binding_state != "bound" or bound_pid != popen.pid:
             raise BenchRefusal("spawn_failure")
-        return popen, pidfd, gate_write, exec_read, old_mask
+        return popen, pidfd, gate_write, exec_read, old_mask, stderr_capture
     except BaseException as exc:
+        _close_fd(stderr_write)
         _close_fd(gate_read)
         _close_fd(exec_write)
         cleanup_complete = _cleanup_inert_guard(
@@ -1461,6 +1725,10 @@ def _guarded_popen(
                 signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
             except BaseException:
                 cleanup_complete = False
+        try:
+            _finish_binary_stderr_capture(stderr_capture)
+        except BenchRefusal:
+            cleanup_complete = False
         if not cleanup_complete:
             raise BenchRefusal("cleanup_incomplete") from exc
         if isinstance(exc, (KeyboardInterrupt, SystemExit)):
@@ -1619,7 +1887,14 @@ def spawn_pinned(
         raise BenchRefusal("spawn_failure")
     snapshot = _sealed_executable_snapshot(pin)
     try:
-        popen, pidfd, gate_write, exec_read, old_mask = _guarded_popen(
+        (
+            popen,
+            pidfd,
+            gate_write,
+            exec_read,
+            old_mask,
+            stderr_capture,
+        ) = _guarded_popen(
             argv,
             env=env,
             capture_stdout=pin.kind == "python_file",
@@ -1669,6 +1944,7 @@ def spawn_pinned(
             port=port,
             popen=popen,
             rehearsal_port_lease=rehearsal_port_lease,
+            _stderr_capture=stderr_capture,
         )
     except BaseException as exc:
         if target_release_attempted:
@@ -1685,6 +1961,10 @@ def spawn_pinned(
                 signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
             except BaseException:
                 cleanup_complete = False
+        try:
+            _finish_binary_stderr_capture(stderr_capture)
+        except BenchRefusal:
+            cleanup_complete = False
         if not cleanup_complete:
             raise BenchRefusal("cleanup_incomplete") from exc
         if isinstance(exc, BenchRefusal):
