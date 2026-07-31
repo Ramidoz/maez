@@ -340,6 +340,90 @@ def test_task1_finish_caps_continuously_readable_post_finish_bytes() -> None:
     assert _open_fd_identities() == before_fds
 
 
+def test_task1_inflight_read_is_charged_after_finish_marker_is_sent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stderr_read, stderr_write = os.pipe2(os.O_CLOEXEC)
+    os.set_blocking(stderr_read, False)
+    control_read, control_write = os.pipe2(os.O_CLOEXEC)
+    capture = driver._BinaryStderrCapture(
+        stderr_read,
+        control_read,
+        control_write,
+    )
+    real_read = os.read
+    real_write = os.write
+    read_started = threading.Event()
+    release_read = threading.Event()
+    finish_marker_sent = threading.Event()
+    observation_lock = threading.Lock()
+    post_finish_bytes = 0
+    finish_marker_at: float | None = None
+    post_finish_read_times: list[float] = []
+    finish_result: list[object] = []
+    finish_errors: list[BaseException] = []
+
+    def synchronized_read(fd: int, byte_count: int) -> bytes:
+        nonlocal post_finish_bytes
+        if fd == stderr_read and not read_started.is_set():
+            read_started.set()
+            assert release_read.wait(timeout=2)
+        payload = real_read(fd, byte_count)
+        observed_at = time.monotonic()
+        if fd == stderr_read and finish_marker_sent.is_set():
+            with observation_lock:
+                post_finish_bytes += len(payload)
+                post_finish_read_times.append(observed_at)
+        return payload
+
+    def observed_write(fd: int, payload: bytes) -> int:
+        nonlocal finish_marker_at
+        written = real_write(fd, payload)
+        if fd == control_write and payload == driver._BINARY_STDERR_FINISH_BYTE:
+            finish_marker_at = time.monotonic()
+            finish_marker_sent.set()
+        return written
+
+    def produce() -> None:
+        try:
+            while True:
+                real_write(stderr_write, b"x" * 4096)
+        except BrokenPipeError:
+            pass
+        finally:
+            os.close(stderr_write)
+
+    def finish() -> None:
+        try:
+            finish_result.append(driver._finish_binary_stderr_capture(capture))
+        except BaseException as exc:
+            finish_errors.append(exc)
+
+    monkeypatch.setattr(driver.os, "read", synchronized_read)
+    monkeypatch.setattr(driver.os, "write", observed_write)
+    capture._start()
+    producer = threading.Thread(target=produce, name="test-racing-stderr-producer")
+    producer.start()
+    assert read_started.wait(timeout=2)
+    finisher = threading.Thread(target=finish, name="test-racing-stderr-finisher")
+    finisher.start()
+    assert finish_marker_sent.wait(timeout=2)
+    release_read.set()
+    finisher.join(timeout=3)
+    producer.join(timeout=3)
+
+    assert not finisher.is_alive()
+    assert not producer.is_alive()
+    assert finish_errors == []
+    assert len(finish_result) == 1
+    assert post_finish_bytes <= _EXPECTED_CAPTURE_CAP
+    assert finish_marker_at is not None
+    assert all(
+        observed_at - finish_marker_at <= 1.0
+        for observed_at in post_finish_read_times
+    )
+
+
 def test_task1_capture_payload_is_excluded_from_repr_and_equality() -> None:
     first = driver._BinaryStderrSnapshot(
         retained=b"private-a",

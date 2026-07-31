@@ -978,6 +978,7 @@ class _BinaryStderrCapture:
         self._snapshot: _BinaryStderrSnapshot | None = None
         self._failed = False
         self._stderr_eof = False
+        self._finish_requested_at: float | None = None
         self._consumed = False
         self._thread = threading.Thread(
             target=self._drain,
@@ -1023,29 +1024,57 @@ class _BinaryStderrCapture:
     def _drain_ready_stderr(
         self,
         *,
-        finish_started: bool,
+        finish_deadline: float | None,
         post_finish_remaining: int,
-    ) -> tuple[bool, int]:
+    ) -> tuple[bool, int, bool]:
         cycle_remaining = BINARY_STDERR_DIAGNOSTIC_CAP
         while cycle_remaining > 0:
+            with self._lock:
+                finish_requested_at = self._finish_requested_at
+            active_deadline = finish_deadline
+            if finish_requested_at is not None:
+                requested_deadline = (
+                    finish_requested_at + _BINARY_STDERR_POST_FINISH_TIMEOUT_S
+                )
+                active_deadline = (
+                    requested_deadline
+                    if active_deadline is None
+                    else min(active_deadline, requested_deadline)
+                )
             read_cap = cycle_remaining
-            if finish_started:
+            if active_deadline is not None:
                 read_cap = min(read_cap, post_finish_remaining)
-                if read_cap <= 0:
-                    return False, post_finish_remaining
+                if read_cap <= 0 or time.monotonic() >= active_deadline:
+                    return False, post_finish_remaining, True
             try:
                 payload = os.read(self._stderr_read, read_cap)
             except BlockingIOError:
-                return False, post_finish_remaining
+                return False, post_finish_remaining, False
             if not payload:
-                return True, post_finish_remaining
+                return True, post_finish_remaining, False
+            with self._lock:
+                finish_requested_at = self._finish_requested_at
+            if finish_requested_at is not None:
+                requested_deadline = (
+                    finish_requested_at + _BINARY_STDERR_POST_FINISH_TIMEOUT_S
+                )
+                active_deadline = (
+                    requested_deadline
+                    if active_deadline is None
+                    else min(active_deadline, requested_deadline)
+                )
             self._retain(payload)
             cycle_remaining -= len(payload)
-            if finish_started:
+            if active_deadline is not None:
                 post_finish_remaining -= len(payload)
                 with self._lock:
                     self._post_finish_byte_count += len(payload)
-        return False, post_finish_remaining
+                if (
+                    post_finish_remaining <= 0
+                    or time.monotonic() >= active_deadline
+                ):
+                    return False, post_finish_remaining, True
+        return False, post_finish_remaining, False
 
     def _drain(self) -> None:
         finish_deadline: float | None = None
@@ -1062,6 +1091,17 @@ class _BinaryStderrCapture:
                 select.POLLIN | select.POLLHUP | select.POLLERR | select.POLLNVAL,
             )
             while True:
+                with self._lock:
+                    finish_requested_at = self._finish_requested_at
+                if finish_requested_at is not None:
+                    requested_deadline = (
+                        finish_requested_at + _BINARY_STDERR_POST_FINISH_TIMEOUT_S
+                    )
+                    finish_deadline = (
+                        requested_deadline
+                        if finish_deadline is None
+                        else min(finish_deadline, requested_deadline)
+                    )
                 if finish_deadline is None:
                     timeout_ms = 100
                 else:
@@ -1075,18 +1115,24 @@ class _BinaryStderrCapture:
                     marker = os.read(self._control_read, 1)
                     if marker not in {b"", _BINARY_STDERR_FINISH_BYTE}:
                         raise OSError("invalid diagnostic finish marker")
-                    if finish_deadline is None:
-                        finish_deadline = (
-                            time.monotonic() + _BINARY_STDERR_POST_FINISH_TIMEOUT_S
-                        )
+                    marker_deadline = (
+                        time.monotonic() + _BINARY_STDERR_POST_FINISH_TIMEOUT_S
+                    )
+                    finish_deadline = (
+                        marker_deadline
+                        if finish_deadline is None
+                        else min(finish_deadline, marker_deadline)
+                    )
                 stderr_mask = events.get(self._stderr_read, 0)
                 if stderr_mask:
-                    eof, post_finish_remaining = self._drain_ready_stderr(
-                        finish_started=finish_deadline is not None,
+                    eof, post_finish_remaining, stop = self._drain_ready_stderr(
+                        finish_deadline=finish_deadline,
                         post_finish_remaining=post_finish_remaining,
                     )
                     if eof:
                         stderr_eof = True
+                        break
+                    if stop:
                         break
                 if finish_deadline is not None and post_finish_remaining <= 0:
                     break
@@ -1115,6 +1161,7 @@ class _BinaryStderrCapture:
             self._consumed = True
             control_write = self._control_write
             self._control_write = None
+            self._finish_requested_at = time.monotonic()
         write_failed = False
         try:
             if control_write is None:
