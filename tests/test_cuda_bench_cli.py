@@ -7230,11 +7230,16 @@ class TestTask7ProductionMeasurementCommands:
         )
 
         def run(
-            _config: object, _providers: object, *, root: Path
+            _config: object,
+            _providers: object,
+            *,
+            root: Path,
+            _cleanup_incomplete_observer: Callable[[], None] | None = None,
         ) -> Path:
             calls["run"] += 1
             assert calls == {"collect": 1, "verify": 1, "run": 1}
             assert not (root / "preimages").exists()
+            assert callable(_cleanup_incomplete_observer)
             fields = {
                 "phase": phase,
                 "window_id": window.window_id,

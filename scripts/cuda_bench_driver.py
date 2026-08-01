@@ -32,7 +32,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_EVEN
 from pathlib import Path
 from types import MappingProxyType
-from typing import Callable, Literal, Protocol
+from typing import Callable, Literal, NoReturn, Protocol
 
 from scripts import cuda_migration as cm
 
@@ -52,6 +52,7 @@ REQUEST_TIMEOUT_MS = 30_000
 SIGTERM_GRACE_S = 10
 RESPONSE_BYTE_CAP = 4 * 1024 * 1024
 TURN_ARTIFACT_BYTE_CAP = 8 * 1024 * 1024
+BINARY_STDERR_DIAGNOSTIC_CAP = 65_536
 WINDOW_TTL_S = 14_400
 CONTINUATION_TTL_S = 3_600
 KILL_WAIT_S = 15
@@ -172,7 +173,13 @@ _CONTENT_MARKERS = (
 )
 _JOURNAL_SEQUENCE = itertools.count()
 _AUTHORIZATION_RECEIPT_SEQUENCE = itertools.count()
+_BINARY_STDERR_THREAD_SEQUENCE = itertools.count()
 _NAME_SEED = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:+-]{0,127}")
+
+_BINARY_STDERR_FINISH_BYTE = b"F"
+_BINARY_STDERR_POST_FINISH_CAP = 65_536
+_BINARY_STDERR_POST_FINISH_TIMEOUT_S = 1.0
+_BINARY_STDERR_JOIN_TIMEOUT_S = 2.0
 
 
 class BenchRefusal(Exception):
@@ -183,6 +190,39 @@ class BenchRefusal(Exception):
             raise ValueError("closed_refusal")
         self.code = code
         super().__init__(code)
+
+
+class _StorageIndependentCleanupIncomplete(BenchRefusal):
+    """Trusted terminal cleanup when durable failure storage is unavailable."""
+
+    def __init__(self) -> None:
+        super().__init__("cleanup_incomplete")
+
+
+class _CleanupIncompleteLatch(Protocol):
+    def __call__(self, *, storage_unavailable: bool = False) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _BootstrapCleanupResult:
+    outcome: Literal["clean", "cleanup_incomplete"]
+    observed_returncode: int | None
+    exited_before_cleanup_signal: bool
+
+    def __post_init__(self) -> None:
+        if (
+            self.outcome not in {"clean", "cleanup_incomplete"}
+            or (
+                self.observed_returncode is not None
+                and type(self.observed_returncode) is not int
+            )
+            or type(self.exited_before_cleanup_signal) is not bool
+            or (
+                self.observed_returncode is None
+                and self.exited_before_cleanup_signal
+            )
+        ):
+            raise ValueError("bootstrap_cleanup_result_invalid")
 
 
 def _filesystem_hazard() -> None:
@@ -942,6 +982,434 @@ except BaseException:
 """
 
 
+@dataclass(frozen=True, slots=True)
+class _BinaryStderrSnapshot:
+    retained: bytes = field(repr=False, compare=False)
+    retained_sha256: str
+    retained_byte_count: int
+    truncated: bool
+    post_finish_byte_count: int = field(repr=False, compare=False)
+
+
+class _BinaryStderrCapture:
+    """Sole-owner drainer for one binary launch's private stderr pipe."""
+
+    def __init__(
+        self,
+        stderr_read: int,
+        control_read: int,
+        control_write: int,
+    ) -> None:
+        self._stderr_read = stderr_read
+        self._control_read = control_read
+        self._control_write: int | None = control_write
+        self._lock = threading.Lock()
+        self._finished = threading.Event()
+        self._retained = bytearray()
+        self._truncated = False
+        self._post_finish_byte_count = 0
+        self._snapshot: _BinaryStderrSnapshot | None = None
+        self._failed = False
+        self._stderr_eof = False
+        self._finish_requested_at: float | None = None
+        self._consumed = False
+        self._thread = threading.Thread(
+            target=self._drain,
+            name=(
+                "cuda-binary-stderr-"
+                f"{next(_BINARY_STDERR_THREAD_SEQUENCE)}"
+            ),
+        )
+
+    def __repr__(self) -> str:
+        return "_BinaryStderrCapture()"
+
+    @property
+    def thread_alive(self) -> bool:
+        return self._thread.is_alive()
+
+    @property
+    def truncated(self) -> bool:
+        with self._lock:
+            return self._truncated
+
+    @property
+    def consumed(self) -> bool:
+        with self._lock:
+            return self._consumed
+
+    def _start(self) -> None:
+        self._thread.start()
+
+    def _close_before_start(self) -> None:
+        for fd in (self._stderr_read, self._control_read, self._control_write):
+            _close_fd(fd)
+        self._control_write = None
+
+    def _retain(self, payload: bytes) -> None:
+        with self._lock:
+            available = BINARY_STDERR_DIAGNOSTIC_CAP - len(self._retained)
+            if available > 0:
+                self._retained.extend(payload[:available])
+            if len(payload) > available:
+                self._truncated = True
+
+    def _drain_ready_stderr(
+        self,
+        *,
+        finish_deadline: float | None,
+        post_finish_remaining: int,
+    ) -> tuple[bool, int, bool]:
+        cycle_remaining = BINARY_STDERR_DIAGNOSTIC_CAP
+        while cycle_remaining > 0:
+            with self._lock:
+                finish_requested_at = self._finish_requested_at
+            active_deadline = finish_deadline
+            if finish_requested_at is not None:
+                requested_deadline = (
+                    finish_requested_at + _BINARY_STDERR_POST_FINISH_TIMEOUT_S
+                )
+                active_deadline = (
+                    requested_deadline
+                    if active_deadline is None
+                    else min(active_deadline, requested_deadline)
+                )
+            read_cap = cycle_remaining
+            if active_deadline is not None:
+                read_cap = min(read_cap, post_finish_remaining)
+                if read_cap <= 0 or time.monotonic() >= active_deadline:
+                    return False, post_finish_remaining, True
+            try:
+                payload = os.read(self._stderr_read, read_cap)
+            except BlockingIOError:
+                return False, post_finish_remaining, False
+            if not payload:
+                return True, post_finish_remaining, False
+            with self._lock:
+                finish_requested_at = self._finish_requested_at
+            if finish_requested_at is not None:
+                requested_deadline = (
+                    finish_requested_at + _BINARY_STDERR_POST_FINISH_TIMEOUT_S
+                )
+                active_deadline = (
+                    requested_deadline
+                    if active_deadline is None
+                    else min(active_deadline, requested_deadline)
+                )
+            self._retain(payload)
+            cycle_remaining -= len(payload)
+            if active_deadline is not None:
+                post_finish_remaining -= len(payload)
+                with self._lock:
+                    self._post_finish_byte_count += len(payload)
+                if (
+                    post_finish_remaining <= 0
+                    or time.monotonic() >= active_deadline
+                ):
+                    return False, post_finish_remaining, True
+        return False, post_finish_remaining, False
+
+    def _drain(self) -> None:
+        finish_deadline: float | None = None
+        post_finish_remaining = _BINARY_STDERR_POST_FINISH_CAP
+        stderr_eof = False
+        try:
+            poller = select.poll()
+            poller.register(
+                self._stderr_read,
+                select.POLLIN | select.POLLHUP | select.POLLERR | select.POLLNVAL,
+            )
+            poller.register(
+                self._control_read,
+                select.POLLIN | select.POLLHUP | select.POLLERR | select.POLLNVAL,
+            )
+            while True:
+                with self._lock:
+                    finish_requested_at = self._finish_requested_at
+                if finish_requested_at is not None:
+                    requested_deadline = (
+                        finish_requested_at + _BINARY_STDERR_POST_FINISH_TIMEOUT_S
+                    )
+                    finish_deadline = (
+                        requested_deadline
+                        if finish_deadline is None
+                        else min(finish_deadline, requested_deadline)
+                    )
+                if finish_deadline is None:
+                    timeout_ms = 100
+                else:
+                    remaining_s = finish_deadline - time.monotonic()
+                    if remaining_s <= 0:
+                        break
+                    timeout_ms = max(1, min(100, int(remaining_s * 1000)))
+                events = dict(poller.poll(timeout_ms))
+                control_mask = events.get(self._control_read, 0)
+                if control_mask:
+                    marker = os.read(self._control_read, 1)
+                    if marker not in {b"", _BINARY_STDERR_FINISH_BYTE}:
+                        raise OSError("invalid diagnostic finish marker")
+                    marker_deadline = (
+                        time.monotonic() + _BINARY_STDERR_POST_FINISH_TIMEOUT_S
+                    )
+                    finish_deadline = (
+                        marker_deadline
+                        if finish_deadline is None
+                        else min(finish_deadline, marker_deadline)
+                    )
+                stderr_mask = events.get(self._stderr_read, 0)
+                if stderr_mask:
+                    eof, post_finish_remaining, stop = self._drain_ready_stderr(
+                        finish_deadline=finish_deadline,
+                        post_finish_remaining=post_finish_remaining,
+                    )
+                    if eof:
+                        stderr_eof = True
+                        break
+                    if stop:
+                        break
+                if finish_deadline is not None and post_finish_remaining <= 0:
+                    break
+        except BaseException:
+            with self._lock:
+                self._failed = True
+        finally:
+            _close_fd(self._stderr_read)
+            _close_fd(self._control_read)
+            with self._lock:
+                retained = bytes(self._retained)
+                self._stderr_eof = stderr_eof
+                self._snapshot = _BinaryStderrSnapshot(
+                    retained=retained,
+                    retained_sha256=hashlib.sha256(retained).hexdigest(),
+                    retained_byte_count=len(retained),
+                    truncated=self._truncated,
+                    post_finish_byte_count=self._post_finish_byte_count,
+                )
+            self._finished.set()
+
+    def finish(self) -> _BinaryStderrSnapshot:
+        with self._lock:
+            if self._consumed:
+                raise BenchRefusal("cleanup_incomplete")
+            self._consumed = True
+            control_write = self._control_write
+            self._control_write = None
+            self._finish_requested_at = time.monotonic()
+        write_failed = False
+        try:
+            if control_write is None:
+                write_failed = True
+            elif os.write(control_write, _BINARY_STDERR_FINISH_BYTE) != 1:
+                write_failed = True
+        except OSError:
+            write_failed = True
+        finally:
+            _close_fd(control_write)
+        self._thread.join(timeout=_BINARY_STDERR_JOIN_TIMEOUT_S)
+        with self._lock:
+            snapshot = self._snapshot
+            failed = self._failed
+            stderr_eof = self._stderr_eof
+        if (
+            self._thread.is_alive()
+            or snapshot is None
+            or failed
+            or (write_failed and not stderr_eof)
+        ):
+            raise BenchRefusal("cleanup_incomplete")
+        return snapshot
+
+    def retire_after_interruption(self) -> None:
+        """Complete or await the already-bounded retirement after interruption."""
+
+        if not self.consumed:
+            self.finish()
+            return
+        self._thread.join(timeout=_BINARY_STDERR_JOIN_TIMEOUT_S)
+        if self._thread.is_alive():
+            raise BenchRefusal("cleanup_incomplete")
+
+
+class _BinarySpawnFailure(BenchRefusal):
+    """Content-light refusal carrying one still-live binary capture."""
+
+    def __init__(
+        self,
+        code: str,
+        *,
+        bootstrap_cleanup: _BootstrapCleanupResult,
+        stderr_capture: _BinaryStderrCapture,
+    ) -> None:
+        if (
+            type(bootstrap_cleanup) is not _BootstrapCleanupResult
+            or type(stderr_capture) is not _BinaryStderrCapture
+            or stderr_capture.consumed
+        ):
+            raise ValueError("binary_spawn_failure_invalid")
+        self._bootstrap_cleanup = bootstrap_cleanup
+        self._stderr_capture = stderr_capture
+        super().__init__(code)
+
+    def __repr__(self) -> str:
+        return f"_BinarySpawnFailure({self.code!r})"
+
+
+def _start_binary_stderr_capture() -> tuple[_BinaryStderrCapture, int]:
+    stderr_read: int | None = None
+    stderr_write: int | None = None
+    control_read: int | None = None
+    control_write: int | None = None
+    capture: _BinaryStderrCapture | None = None
+    try:
+        stderr_read, stderr_write = os.pipe2(os.O_CLOEXEC)
+        os.set_blocking(stderr_read, False)
+        control_read, control_write = os.pipe2(os.O_CLOEXEC)
+        capture = _BinaryStderrCapture(
+            stderr_read,
+            control_read,
+            control_write,
+        )
+        capture._start()
+        return capture, stderr_write
+    except BaseException:
+        if capture is not None:
+            capture._close_before_start()
+        else:
+            for fd in (stderr_read, control_read, control_write):
+                _close_fd(fd)
+        _close_fd(stderr_write)
+        raise
+
+
+def _finish_binary_stderr_capture(
+    capture: _BinaryStderrCapture | None,
+) -> _BinaryStderrSnapshot | None:
+    if capture is None:
+        return None
+    if type(capture) is not _BinaryStderrCapture:
+        raise BenchRefusal("cleanup_incomplete")
+    return capture.finish()
+
+
+def _retire_binary_stderr_capture(
+    capture: _BinaryStderrCapture | None,
+    *,
+    on_cleanup_incomplete: _CleanupIncompleteLatch | None = None,
+) -> _BinaryStderrSnapshot | None:
+    """Consume one capture, making bounded retirement failure authoritative."""
+
+    try:
+        return _finish_binary_stderr_capture(capture)
+    except BaseException:
+        if on_cleanup_incomplete is not None:
+            on_cleanup_incomplete()
+        if type(capture) is _BinaryStderrCapture:
+            try:
+                capture.retire_after_interruption()
+            except BaseException:
+                pass
+        raise BenchRefusal("cleanup_incomplete") from None
+
+
+def _binary_stderr_metadata(
+    snapshot: _BinaryStderrSnapshot,
+    *,
+    returncode: int | None,
+    exited_before_finalize: bool,
+) -> dict[str, object]:
+    if (
+        type(snapshot) is not _BinaryStderrSnapshot
+        or type(snapshot.retained) is not bytes
+        or type(snapshot.retained_sha256) is not str
+        or _SHA256_RE.fullmatch(snapshot.retained_sha256) is None
+        or snapshot.retained_sha256
+        != hashlib.sha256(snapshot.retained).hexdigest()
+        or type(snapshot.retained_byte_count) is not int
+        or snapshot.retained_byte_count != len(snapshot.retained)
+        or not 0 <= snapshot.retained_byte_count <= BINARY_STDERR_DIAGNOSTIC_CAP
+        or type(snapshot.truncated) is not bool
+        or type(exited_before_finalize) is not bool
+        or (returncode is not None and type(returncode) is not int)
+    ):
+        raise BenchRefusal("cleanup_incomplete")
+    detail: dict[str, object] = {
+        "retained_sha256": snapshot.retained_sha256,
+        "retained_byte_count": snapshot.retained_byte_count,
+        "truncated": snapshot.truncated,
+        "exited_before_finalize": exited_before_finalize,
+    }
+    if returncode is not None:
+        if returncode < 0:
+            detail["terminating_signal"] = -returncode
+        else:
+            detail["exit_code"] = returncode
+    return detail
+
+
+def _dispose_binary_stderr_diagnostic(
+    capture: _BinaryStderrCapture | None,
+    *,
+    journal: PhaseJournal,
+    clock: Clock,
+    cycle: int,
+    attempt_root: Path,
+    returncode: int | None,
+    exited_before_finalize: bool,
+    on_cleanup_incomplete: _CleanupIncompleteLatch | None = None,
+) -> None:
+    """Retire, privately publish, then journal one content-light snapshot."""
+
+    if capture is None:
+        return
+    if type(cycle) is not int or cycle <= 0 or not isinstance(attempt_root, Path):
+        raise BenchRefusal("cleanup_incomplete")
+    snapshot = _retire_binary_stderr_capture(
+        capture,
+        on_cleanup_incomplete=on_cleanup_incomplete,
+    )
+    if snapshot is None:
+        raise BenchRefusal("cleanup_incomplete")
+    detail = _binary_stderr_metadata(
+        snapshot,
+        returncode=returncode,
+        exited_before_finalize=exited_before_finalize,
+    )
+    write_private_file(
+        f"diagnostics/cycle-{cycle}-stderr.bin",
+        snapshot.retained,
+        root=attempt_root,
+    )
+    _append_phase_transition(
+        journal,
+        clock,
+        f"cycle_{cycle}_stderr_diagnostic",
+        detail=detail,
+    )
+
+
+def _raise_binary_spawn_failure(
+    exc: BaseException,
+    *,
+    bootstrap_cleanup: _BootstrapCleanupResult,
+    stderr_capture: _BinaryStderrCapture,
+) -> NoReturn:
+    if type(bootstrap_cleanup) is not _BootstrapCleanupResult:
+        raise ValueError("bootstrap_cleanup_result_invalid")
+    cleanup_complete = bootstrap_cleanup.outcome == "clean"
+    code = (
+        exc.code
+        if cleanup_complete and isinstance(exc, BenchRefusal)
+        else "spawn_failure"
+        if cleanup_complete
+        else "cleanup_incomplete"
+    )
+    raise _BinarySpawnFailure(
+        code,
+        bootstrap_cleanup=bootstrap_cleanup,
+        stderr_capture=stderr_capture,
+    ) from None
+
+
 @dataclass(frozen=True)
 class SpawnPin:
     kind: Literal["binary", "python_file"]
@@ -1070,6 +1538,11 @@ class OwnedChild:
     port: int | None
     popen: subprocess.Popen[bytes]
     rehearsal_port_lease: RehearsalPortLease | None = None
+    _stderr_capture: _BinaryStderrCapture | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         if (
@@ -1098,6 +1571,10 @@ class OwnedChild:
                 )
             )
             or not isinstance(self.popen, subprocess.Popen)
+            or (
+                self._stderr_capture is not None
+                and type(self._stderr_capture) is not _BinaryStderrCapture
+            )
         ):
             raise ValueError("owned_child_invalid")
 
@@ -1396,7 +1873,14 @@ def _guarded_popen(
     capture_stdout: bool,
     pinned_fd: int,
     pin_kind: Literal["binary", "python_file"],
-) -> tuple[subprocess.Popen[bytes], int, int, int, set[signal.Signals]]:
+) -> tuple[
+    subprocess.Popen[bytes],
+    int,
+    int,
+    int,
+    set[signal.Signals],
+    _BinaryStderrCapture | None,
+]:
     gate_read: int | None = None
     gate_write: int | None = None
     exec_read: int | None = None
@@ -1404,6 +1888,8 @@ def _guarded_popen(
     popen: subprocess.Popen[bytes] | None = None
     pidfd: int | None = None
     old_mask: set[signal.Signals] | None = None
+    stderr_write: int | None = None
+    stderr_capture: _BinaryStderrCapture | None = None
     cleanup_complete = True
     try:
         old_mask = signal.pthread_sigmask(
@@ -1412,6 +1898,8 @@ def _guarded_popen(
         )
         gate_read, gate_write = os.pipe2(os.O_CLOEXEC)
         exec_read, exec_write = os.pipe2(os.O_CLOEXEC)
+        if pin_kind == "binary":
+            stderr_capture, stderr_write = _start_binary_stderr_capture()
         target_mask = old_mask.difference({signal.SIGINT, signal.SIGTERM})
         encoded_mask = ",".join(str(int(value)) for value in sorted(target_mask))
         guard_argv = [
@@ -1427,17 +1915,25 @@ def _guarded_popen(
             encoded_mask,
             *argv,
         ]
-        popen = subprocess.Popen(
-            guard_argv,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE if capture_stdout else subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            env=dict(env),
-            start_new_session=True,
-            pass_fds=(gate_read, exec_write, pinned_fd),
-            close_fds=True,
-            bufsize=0,
-        )
+        try:
+            popen = subprocess.Popen(
+                guard_argv,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE if capture_stdout else subprocess.DEVNULL,
+                stderr=(
+                    stderr_write
+                    if stderr_write is not None
+                    else subprocess.DEVNULL
+                ),
+                env=dict(env),
+                start_new_session=True,
+                pass_fds=(gate_read, exec_write, pinned_fd),
+                close_fds=True,
+                bufsize=0,
+            )
+        finally:
+            _close_fd(stderr_write)
+            stderr_write = None
         _close_fd(gate_read)
         gate_read = None
         _close_fd(exec_write)
@@ -1446,8 +1942,9 @@ def _guarded_popen(
         binding_state, bound_pid = _pidfd_bound_pid(pidfd)
         if binding_state != "bound" or bound_pid != popen.pid:
             raise BenchRefusal("spawn_failure")
-        return popen, pidfd, gate_write, exec_read, old_mask
+        return popen, pidfd, gate_write, exec_read, old_mask, stderr_capture
     except BaseException as exc:
+        _close_fd(stderr_write)
         _close_fd(gate_read)
         _close_fd(exec_write)
         cleanup_complete = _cleanup_inert_guard(
@@ -1461,6 +1958,26 @@ def _guarded_popen(
                 signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
             except BaseException:
                 cleanup_complete = False
+        if (
+            popen is not None
+            and stderr_capture is not None
+            and not isinstance(exc, (KeyboardInterrupt, SystemExit))
+        ):
+            _raise_binary_spawn_failure(
+                exc,
+                bootstrap_cleanup=_BootstrapCleanupResult(
+                    outcome=(
+                        "clean" if cleanup_complete else "cleanup_incomplete"
+                    ),
+                    observed_returncode=None,
+                    exited_before_cleanup_signal=False,
+                ),
+                stderr_capture=stderr_capture,
+            )
+        try:
+            _finish_binary_stderr_capture(stderr_capture)
+        except BenchRefusal:
+            cleanup_complete = False
         if not cleanup_complete:
             raise BenchRefusal("cleanup_incomplete") from exc
         if isinstance(exc, (KeyboardInterrupt, SystemExit)):
@@ -1559,25 +2076,37 @@ def _bootstrap_abort(
     pidfd: int,
     *,
     port: int | None,
-) -> bool:
+) -> _BootstrapCleanupResult:
     complete = True
+    cleanup_signal_sent = False
     try:
         status = _pidfd_status(pidfd)
         binding_state, bound_pid = _pidfd_bound_pid(pidfd)
-        if status == "alive" and binding_state == "bound" and bound_pid == popen.pid:
+        target_gone_without_signal = status == "gone" or (
+            status == "alive" and binding_state == "gone"
+        )
+        if (
+            status == "alive"
+            and binding_state == "bound"
+            and bound_pid == popen.pid
+        ):
             try:
                 signal.pidfd_send_signal(pidfd, signal.SIGKILL)
+                cleanup_signal_sent = True
             except ProcessLookupError:
                 if _pidfd_status(pidfd) != "gone":
                     complete = False
             except OSError:
                 complete = False
-        elif status == "alive":
+        elif not target_gone_without_signal:
             complete = False
         try:
             popen.wait(timeout=KILL_WAIT_S)
         except (OSError, subprocess.TimeoutExpired):
             complete = False
+        exited_before_cleanup_signal = (
+            popen.returncode is not None and not cleanup_signal_sent
+        )
         try:
             if _pgid_members(popen.pid):
                 complete = False
@@ -1589,7 +2118,11 @@ def _bootstrap_abort(
                     complete = False
             except BenchRefusal:
                 complete = False
-        return complete
+        return _BootstrapCleanupResult(
+            outcome="clean" if complete else "cleanup_incomplete",
+            observed_returncode=popen.returncode,
+            exited_before_cleanup_signal=exited_before_cleanup_signal,
+        )
     finally:
         _close_fd(pidfd)
         _close_popen_streams(popen)
@@ -1619,7 +2152,14 @@ def spawn_pinned(
         raise BenchRefusal("spawn_failure")
     snapshot = _sealed_executable_snapshot(pin)
     try:
-        popen, pidfd, gate_write, exec_read, old_mask = _guarded_popen(
+        (
+            popen,
+            pidfd,
+            gate_write,
+            exec_read,
+            old_mask,
+            stderr_capture,
+        ) = _guarded_popen(
             argv,
             env=env,
             capture_stdout=pin.kind == "python_file",
@@ -1669,10 +2209,11 @@ def spawn_pinned(
             port=port,
             popen=popen,
             rehearsal_port_lease=rehearsal_port_lease,
+            _stderr_capture=stderr_capture,
         )
     except BaseException as exc:
         if target_release_attempted:
-            cleanup_complete = _bootstrap_abort(popen, pidfd, port=port)
+            bootstrap_cleanup = _bootstrap_abort(popen, pidfd, port=port)
         else:
             cleanup_complete = _cleanup_inert_guard(
                 popen,
@@ -1680,11 +2221,38 @@ def spawn_pinned(
                 gate_write=gate_write,
                 exec_read=exec_read,
             )
+            bootstrap_cleanup = _BootstrapCleanupResult(
+                outcome="clean" if cleanup_complete else "cleanup_incomplete",
+                observed_returncode=None,
+                exited_before_cleanup_signal=False,
+            )
         if not mask_restored:
             try:
                 signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
             except BaseException:
-                cleanup_complete = False
+                bootstrap_cleanup = _BootstrapCleanupResult(
+                    outcome="cleanup_incomplete",
+                    observed_returncode=(
+                        bootstrap_cleanup.observed_returncode
+                    ),
+                    exited_before_cleanup_signal=(
+                        bootstrap_cleanup.exited_before_cleanup_signal
+                    ),
+                )
+        cleanup_complete = bootstrap_cleanup.outcome == "clean"
+        if (
+            stderr_capture is not None
+            and not isinstance(exc, (KeyboardInterrupt, SystemExit))
+        ):
+            _raise_binary_spawn_failure(
+                exc,
+                bootstrap_cleanup=bootstrap_cleanup,
+                stderr_capture=stderr_capture,
+            )
+        try:
+            _finish_binary_stderr_capture(stderr_capture)
+        except BenchRefusal:
+            cleanup_complete = False
         if not cleanup_complete:
             raise BenchRefusal("cleanup_incomplete") from exc
         if isinstance(exc, BenchRefusal):
@@ -6228,7 +6796,13 @@ class _PhaseTailEvidence:
 
 @dataclass(slots=True)
 class _PhaseLifecycleState:
+    cleanup_incomplete_observer: Callable[[], None] | None = field(
+        default=None,
+        repr=False,
+    )
     interrupted: bool = False
+    cleanup_incomplete_latched: bool = False
+    cleanup_storage_unavailable: bool = False
     spawned_any: bool = False
     observed_child: OwnedChild | None = None
     current_child: OwnedChild | None = None
@@ -6241,6 +6815,17 @@ class _PhaseLifecycleState:
         self.current_child = child
         self.observed_child = child
         self.spawned_any = True
+
+    def latch_cleanup_incomplete(self, *, storage_unavailable: bool = False) -> None:
+        already_latched = self.cleanup_incomplete_latched
+        self.cleanup_incomplete_latched = True
+        if storage_unavailable:
+            self.cleanup_storage_unavailable = True
+        if not already_latched and self.cleanup_incomplete_observer is not None:
+            try:
+                self.cleanup_incomplete_observer()
+            except BaseException:
+                pass
 
 
 @dataclass(slots=True)
@@ -7425,12 +8010,65 @@ def _try_append_phase_transition(
     return None
 
 
+def _dispose_binary_spawn_failure(
+    failure: _BinarySpawnFailure,
+    *,
+    journal: PhaseJournal,
+    clock: Clock,
+    cycle: int,
+    attempt_root: Path,
+    on_cleanup_incomplete: _CleanupIncompleteLatch | None = None,
+) -> NoReturn:
+    """Record fixed process cleanup before retiring one failed capture."""
+
+    if type(failure) is not _BinarySpawnFailure or type(cycle) is not int:
+        raise BenchRefusal("cleanup_incomplete")
+    if failure.code == "cleanup_incomplete" and on_cleanup_incomplete is not None:
+        on_cleanup_incomplete()
+    journal_failed = False
+    try:
+        _append_phase_transition(
+            journal,
+            clock,
+            f"cycle_{cycle}_bootstrap_cleanup",
+            detail={"outcome": failure._bootstrap_cleanup.outcome},
+        )
+    except BaseException:
+        journal_failed = True
+        if on_cleanup_incomplete is not None:
+            on_cleanup_incomplete(storage_unavailable=True)
+    if journal_failed:
+        _retire_binary_stderr_capture(
+            failure._stderr_capture,
+            on_cleanup_incomplete=on_cleanup_incomplete,
+        )
+        raise _StorageIndependentCleanupIncomplete from None
+    _dispose_binary_stderr_diagnostic(
+        failure._stderr_capture,
+        journal=journal,
+        clock=clock,
+        cycle=cycle,
+        attempt_root=attempt_root,
+        returncode=failure._bootstrap_cleanup.observed_returncode,
+        exited_before_finalize=(
+            failure._bootstrap_cleanup.exited_before_cleanup_signal
+        ),
+        on_cleanup_incomplete=on_cleanup_incomplete,
+    )
+    raise BenchRefusal(failure.code) from None
+
+
 def _spawn_with_interrupt_handoff(
     launcher: ServerLauncher,
     argv: list[str],
     env: dict[str, str],
     *,
     admit: Callable[[OwnedChild], None],
+    journal: PhaseJournal,
+    clock: Clock,
+    cycle: int,
+    attempt_root: Path,
+    on_cleanup_incomplete: _CleanupIncompleteLatch | None = None,
 ) -> OwnedChild:
     """Block driver interrupts until the caller has recorded child ownership."""
 
@@ -7442,7 +8080,17 @@ def _spawn_with_interrupt_handoff(
     except (OSError, ValueError):
         raise BenchRefusal("spawn_failure") from None
     try:
-        child = launcher.spawn(argv, env)
+        try:
+            child = launcher.spawn(argv, env)
+        except _BinarySpawnFailure as failure:
+            _dispose_binary_spawn_failure(
+                failure,
+                journal=journal,
+                clock=clock,
+                cycle=cycle,
+                attempt_root=attempt_root,
+                on_cleanup_incomplete=on_cleanup_incomplete,
+            )
         if type(child) is not OwnedChild:
             raise BenchRefusal("spawn_failure")
         admit(child)
@@ -7637,6 +8285,11 @@ def _run_three_cycles(
             list(admitted_argv),
             dict(admitted_env),
             admit=lifecycle.admit,
+            journal=journal,
+            clock=providers.clock,
+            cycle=cycle,
+            attempt_root=attempt_root,
+            on_cleanup_incomplete=lifecycle.latch_cleanup_incomplete,
         )
         if providers.tier == "production":
             if config.expected_port != BENCH_PORT or child.port != BENCH_PORT:
@@ -7762,6 +8415,7 @@ def _run_three_cycles(
                 port_probe=providers.port_probe,
                 port=child.port,
             )
+            observed_returncode = child.popen.returncode
 
         unload_refusal: BenchRefusal | None = None
         try:
@@ -7777,11 +8431,34 @@ def _run_three_cycles(
             topology_after_unload = lifecycle.common_topology
             memory_after_unload = memory_before
         lifecycle.current_child = None
-        _append_phase_transition(
-            journal,
-            providers.clock,
-            f"cycle_{cycle}_finalize",
-            detail=_finalizer_fields(lifecycle.last_finalizer),
+        try:
+            finalize_journal_error = _try_append_phase_transition(
+                journal,
+                providers.clock,
+                f"cycle_{cycle}_finalize",
+                detail=_finalizer_fields(lifecycle.last_finalizer),
+            )
+        except BaseException:
+            _retire_binary_stderr_capture(
+                child._stderr_capture,
+                on_cleanup_incomplete=lifecycle.latch_cleanup_incomplete,
+            )
+            raise
+        if finalize_journal_error is not None:
+            _retire_binary_stderr_capture(
+                child._stderr_capture,
+                on_cleanup_incomplete=lifecycle.latch_cleanup_incomplete,
+            )
+            raise finalize_journal_error
+        _dispose_binary_stderr_diagnostic(
+            child._stderr_capture,
+            journal=journal,
+            clock=providers.clock,
+            cycle=cycle,
+            attempt_root=attempt_root,
+            returncode=observed_returncode,
+            exited_before_finalize=child_exited_before_finalize,
+            on_cleanup_incomplete=lifecycle.latch_cleanup_incomplete,
         )
         _append_phase_transition(
             journal,
@@ -8008,12 +8685,17 @@ def _finish_failed_phase(
 ) -> Path:
     """Finish owned work, collect the observable tail, and publish one failure."""
 
-    if lifecycle.interrupted or isinstance(trigger, KeyboardInterrupt):
+    if lifecycle.cleanup_incomplete_latched:
+        outcome = "cleanup_incomplete"
+    elif lifecycle.interrupted or isinstance(trigger, KeyboardInterrupt):
         outcome = "interrupted"
     elif isinstance(trigger, BenchRefusal):
         outcome = trigger.code
     else:
         outcome = "provider_uncertain"
+
+    if lifecycle.cleanup_storage_unavailable:
+        raise _StorageIndependentCleanupIncomplete from None
 
     if lifecycle.current_child is not None:
         child = lifecycle.current_child
@@ -8026,6 +8708,7 @@ def _finish_failed_phase(
             port_probe=providers.port_probe,
             port=child.port,
         )
+        observed_returncode = child.popen.returncode
         if lifecycle.active_cycle is not None:
             unload_refusal: BenchRefusal | None = None
             if (
@@ -8043,12 +8726,48 @@ def _finish_failed_phase(
                 except BenchRefusal as error:
                     unload_refusal = error
             lifecycle.current_child = None
-            journal_error = _try_append_phase_transition(
-                journal,
-                providers.clock,
-                f"cycle_{lifecycle.active_cycle}_finalize",
-                detail=_finalizer_fields(lifecycle.last_finalizer),
-            )
+            try:
+                journal_error = _try_append_phase_transition(
+                    journal,
+                    providers.clock,
+                    f"cycle_{lifecycle.active_cycle}_finalize",
+                    detail=_finalizer_fields(lifecycle.last_finalizer),
+                )
+            except BaseException:
+                _retire_binary_stderr_capture(
+                    child._stderr_capture,
+                    on_cleanup_incomplete=(
+                        lifecycle.latch_cleanup_incomplete
+                    ),
+                )
+                raise
+            diagnostic_refusal: BenchRefusal | None = None
+            if journal_error is None:
+                try:
+                    _dispose_binary_stderr_diagnostic(
+                        child._stderr_capture,
+                        journal=journal,
+                        clock=providers.clock,
+                        cycle=lifecycle.active_cycle,
+                        attempt_root=attempt_root,
+                        returncode=observed_returncode,
+                        exited_before_finalize=child_exited,
+                        on_cleanup_incomplete=(
+                            lifecycle.latch_cleanup_incomplete
+                        ),
+                    )
+                except BenchRefusal as error:
+                    diagnostic_refusal = error
+            else:
+                try:
+                    _retire_binary_stderr_capture(
+                        child._stderr_capture,
+                        on_cleanup_incomplete=(
+                            lifecycle.latch_cleanup_incomplete
+                        ),
+                    )
+                except BenchRefusal as error:
+                    diagnostic_refusal = error
             unload_journal_error = _try_append_phase_transition(
                 journal,
                 providers.clock,
@@ -8070,6 +8789,11 @@ def _finish_failed_phase(
             )
             if resolved is not None:
                 outcome = resolved.code
+            if diagnostic_refusal is not None and (
+                diagnostic_refusal.code == "cleanup_incomplete"
+                or outcome not in {"cleanup_incomplete", "pid_reuse_detected"}
+            ):
+                outcome = diagnostic_refusal.code
             if (
                 journal_error is not None
                 and outcome not in {"cleanup_incomplete", "pid_reuse_detected"}
@@ -8165,7 +8889,13 @@ def _finish_failed_phase(
     return path
 
 
-def run_phase(config: PhaseConfig, providers: Providers, *, root: Path) -> Path:
+def run_phase(
+    config: PhaseConfig,
+    providers: Providers,
+    *,
+    root: Path,
+    _cleanup_incomplete_observer: Callable[[], None] | None = None,
+) -> Path:
     """Run one phase while closing the signal gap before evidence setup."""
 
     terminal = _TerminalCommit()
@@ -8185,6 +8915,7 @@ def run_phase(config: PhaseConfig, providers: Providers, *, root: Path) -> Path:
             root=root,
             entry_signal_mask=entry_signal_mask,
             terminal=terminal,
+            cleanup_incomplete_observer=_cleanup_incomplete_observer,
         )
     except BaseException as error:
         pending = error
@@ -8209,6 +8940,7 @@ def _run_phase_with_blocked_entry(
     root: Path,
     entry_signal_mask: set[signal.Signals],
     terminal: _TerminalCommit,
+    cleanup_incomplete_observer: Callable[[], None] | None = None,
 ) -> Path:
     """Execute after the public entry point has blocked driver signals."""
 
@@ -8247,7 +8979,9 @@ def _run_phase_with_blocked_entry(
         timestamp=started_at,
         root=attempt_root,
     )
-    lifecycle = _PhaseLifecycleState()
+    lifecycle = _PhaseLifecycleState(
+        cleanup_incomplete_observer=cleanup_incomplete_observer,
+    )
     static: cm.StaticPreflightDoc | None = None
     containment_before: cm.ContainmentSnapshot | None = None
     kernel_cursor_before: str | None = None
@@ -8260,6 +8994,8 @@ def _run_phase_with_blocked_entry(
 
     def on_signal(_signum: int, _frame: object) -> None:
         if terminal.path is not None:
+            return
+        if lifecycle.cleanup_incomplete_latched:
             return
         lifecycle.interrupted = True
         raise BenchRefusal("interrupted")
@@ -8451,5 +9187,9 @@ def _run_phase_with_blocked_entry(
             journal.close()
         except (BenchRefusal, OSError, ValueError):
             cleanup_error = BenchRefusal("journal_failure")
-        if cleanup_error is not None and terminal.path is None:
+        if (
+            cleanup_error is not None
+            and terminal.path is None
+            and not lifecycle.cleanup_incomplete_latched
+        ):
             raise cleanup_error
