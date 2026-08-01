@@ -171,6 +171,8 @@ def _run_task2_real_phase_failure_through_cli(
     *,
     journal_failure: Callable[[], BaseException],
     pending_signum: int | None = None,
+    handoff_signum: int | None = None,
+    handoff_observed: threading.Event | None = None,
     interrupt_retirement: bool = False,
 ) -> tuple[int, list[driver._BinarySpawnFailure]]:
     from tests.test_cuda_bench_driver import _b7_harness
@@ -182,9 +184,14 @@ def _run_task2_real_phase_failure_through_cli(
     carriers: list[driver._BinarySpawnFailure] = []
     real_raise_failure = driver._raise_binary_spawn_failure
     real_finish = driver._finish_binary_stderr_capture
+    real_finish_failed_phase = driver._finish_failed_phase
     real_create = driver.RehearsalJournalFactory.create
     real_open = driver.open_bench_file
+    real_signal = signal.signal
+    real_pthread_sigmask = signal.pthread_sigmask
     retirement_interrupted = False
+    cleanup_terminal_raised = threading.Event()
+    handoff_signal_sent = False
 
     def spawn_real_binary(
         _launcher: driver.RehearsalServerLauncher,
@@ -232,6 +239,38 @@ def _run_task2_real_phase_failure_through_cli(
             raise KeyboardInterrupt("task2 retirement interrupt")
         return real_finish(capture)
 
+    def observe_cleanup_terminal(*args: object, **kwargs: object) -> Path:
+        try:
+            return real_finish_failed_phase(*args, **kwargs)  # type: ignore[arg-type]
+        except driver._StorageIndependentCleanupIncomplete:
+            cleanup_terminal_raised.set()
+            raise
+
+    def signal_at_phase_cli_handoff(
+        installed_signum: int,
+        handler: object,
+    ) -> object:
+        nonlocal handoff_signal_sent
+        if (
+            handoff_signum is not None
+            and installed_signum == handoff_signum
+            and handler is cli._on_command_signal
+            and cleanup_terminal_raised.is_set()
+            and not handoff_signal_sent
+        ):
+            handoff_signal_sent = True
+            previous_mask = real_pthread_sigmask(
+                signal.SIG_BLOCK,
+                {handoff_signum},
+            )
+            previous_handler = real_signal(installed_signum, handler)
+            os.kill(os.getpid(), handoff_signum)
+            if handoff_observed is not None:
+                handoff_observed.set()
+            real_pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+            return previous_handler
+        return real_signal(installed_signum, handler)
+
     def phase_handler(
         _attempt: driver.CommandAttempt,
         *,
@@ -239,9 +278,15 @@ def _run_task2_real_phase_failure_through_cli(
         clock: driver.Clock,
         args: object,
         authorization: driver.WindowAuthorization,
+        _cleanup_incomplete_observer: Callable[[], None] | None = None,
     ) -> cli._TrustedPhaseResult:
         del clock, args
-        path = driver.run_phase(harness.config, harness.providers, root=root)
+        path = driver.run_phase(
+            harness.config,
+            harness.providers,
+            root=root,
+            _cleanup_incomplete_observer=_cleanup_incomplete_observer,
+        )
         return cli._phase_artifact_result(
             str(path.relative_to(root)),
             expected_phase=harness.config.phase,
@@ -262,6 +307,8 @@ def _run_task2_real_phase_failure_through_cli(
         "_finish_binary_stderr_capture",
         finish_with_one_interruption,
     )
+    monkeypatch.setattr(driver, "_finish_failed_phase", observe_cleanup_terminal)
+    monkeypatch.setattr(driver.signal, "signal", signal_at_phase_cli_handoff)
     monkeypatch.setattr(cli, "_phase_handler", phase_handler)
     monkeypatch.setattr(
         driver,
@@ -908,6 +955,26 @@ def test_task2_capture_retirement_uncertainty_supersedes_original_refusal(
         journal.close()
 
 
+def test_task2_cleanup_observer_failure_cannot_soften_driver_latch() -> None:
+    observed = 0
+
+    def failing_observer() -> None:
+        nonlocal observed
+        observed += 1
+        raise KeyboardInterrupt("task2 observer failure")
+
+    lifecycle = driver._PhaseLifecycleState(
+        cleanup_incomplete_observer=failing_observer,
+    )
+
+    lifecycle.latch_cleanup_incomplete(storage_unavailable=True)
+    lifecycle.latch_cleanup_incomplete()
+
+    assert observed == 1
+    assert lifecycle.cleanup_incomplete_latched is True
+    assert lifecycle.cleanup_storage_unavailable is True
+
+
 @pytest.mark.parametrize("signum", (signal.SIGINT, signal.SIGTERM))
 def test_task2_pending_signal_cannot_override_storage_failed_cleanup_terminal(
     tmp_path: Path,
@@ -952,6 +1019,38 @@ def test_task2_pending_signal_cannot_override_storage_failed_cleanup_terminal(
     assert _capture_threads() == before_threads
     assert _open_fd_identities() == before_fds
     assert _socket_fd_inodes() == before_sockets
+
+
+@pytest.mark.parametrize("signum", (signal.SIGINT, signal.SIGTERM))
+def test_task2_pending_signal_at_phase_cli_handoff_cannot_override_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capfd: pytest.CaptureFixture[str],
+    signum: int,
+) -> None:
+    handoff_observed = threading.Event()
+
+    exit_code, _carriers = _run_task2_real_phase_failure_through_cli(
+        tmp_path,
+        monkeypatch,
+        journal_failure=lambda: driver.BenchRefusal("journal_failure"),
+        handoff_signum=signum,
+        handoff_observed=handoff_observed,
+    )
+    captured = capfd.readouterr()
+
+    assert handoff_observed.is_set()
+    assert captured.err == ""
+    assert json.loads(captured.out) == {
+        "artifact_ref": None,
+        "artifact_sha256": None,
+        "outcome": "cleanup_incomplete",
+        "status": "failed",
+        "window_id": "window-b7",
+    }
+    assert exit_code == 4
+    assert not list(tmp_path.rglob("vulkan_baseline-*.json"))
+    assert not list(tmp_path.rglob("*command-completion*.json"))
 
 
 def test_task2_journal_keyboard_interrupt_cannot_bypass_capture_retirement(

@@ -2550,11 +2550,21 @@ def _run_command(
                 _on_latched=latch_admission,
                 _on_cleanup_incomplete=suppress_cleanup_interruption,
             )
-            value = (
-                handler(attempt, root=root, authorization=authorization)
-                if authorization is not None
-                else handler(attempt, root=root)
-            )
+            if type(handler) is _ProductionPhaseHandler:
+                if authorization is None:
+                    raise driver.BenchRefusal("authorization_malformed")
+                value = handler(
+                    attempt,
+                    root=root,
+                    authorization=authorization,
+                    _cleanup_incomplete_observer=suppress_cleanup_interruption,
+                )
+            else:
+                value = (
+                    handler(attempt, root=root, authorization=authorization)
+                    if authorization is not None
+                    else handler(attempt, root=root)
+                )
             terminal = (
                 _normalize_handler_result(
                     attempt,
@@ -3395,6 +3405,7 @@ def _phase_handler(
     clock: driver.Clock,
     args: argparse.Namespace,
     authorization: driver.WindowAuthorization | driver.Continuation,
+    _cleanup_incomplete_observer: Callable[[], None] | None = None,
 ) -> TerminalResult | _TrustedPhaseResult:
     observation = collect_static_observation(root=root, clock=clock)
     try:
@@ -3425,7 +3436,12 @@ def _phase_handler(
     if config.window_id != authorization.window_id:
         raise driver.BenchRefusal("authorization_window_mismatch")
     providers = _production_providers(config.phase, observation.runtime_identity)
-    phase_path = driver.run_phase(config, providers, root=root)
+    phase_path = driver.run_phase(
+        config,
+        providers,
+        root=root,
+        _cleanup_incomplete_observer=_cleanup_incomplete_observer,
+    )
     try:
         phase_ref = str(phase_path.relative_to(root))
     except ValueError:
@@ -3486,6 +3502,7 @@ class _ProductionPhaseHandler:
         *,
         root: Path,
         authorization: driver.WindowAuthorization | driver.Continuation,
+        _cleanup_incomplete_observer: Callable[[], None],
     ) -> TerminalResult | _TrustedPhaseResult:
         return _phase_handler(
             attempt,
@@ -3493,6 +3510,7 @@ class _ProductionPhaseHandler:
             clock=self.clock,
             args=self.args,
             authorization=authorization,
+            _cleanup_incomplete_observer=_cleanup_incomplete_observer,
         )
 
 

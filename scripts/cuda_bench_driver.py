@@ -6650,6 +6650,10 @@ class _PhaseTailEvidence:
 
 @dataclass(slots=True)
 class _PhaseLifecycleState:
+    cleanup_incomplete_observer: Callable[[], None] | None = field(
+        default=None,
+        repr=False,
+    )
     interrupted: bool = False
     cleanup_incomplete_latched: bool = False
     cleanup_storage_unavailable: bool = False
@@ -6667,9 +6671,15 @@ class _PhaseLifecycleState:
         self.spawned_any = True
 
     def latch_cleanup_incomplete(self, *, storage_unavailable: bool = False) -> None:
+        already_latched = self.cleanup_incomplete_latched
         self.cleanup_incomplete_latched = True
         if storage_unavailable:
             self.cleanup_storage_unavailable = True
+        if not already_latched and self.cleanup_incomplete_observer is not None:
+            try:
+                self.cleanup_incomplete_observer()
+            except BaseException:
+                pass
 
 
 @dataclass(slots=True)
@@ -8660,7 +8670,13 @@ def _finish_failed_phase(
     return path
 
 
-def run_phase(config: PhaseConfig, providers: Providers, *, root: Path) -> Path:
+def run_phase(
+    config: PhaseConfig,
+    providers: Providers,
+    *,
+    root: Path,
+    _cleanup_incomplete_observer: Callable[[], None] | None = None,
+) -> Path:
     """Run one phase while closing the signal gap before evidence setup."""
 
     terminal = _TerminalCommit()
@@ -8680,6 +8696,7 @@ def run_phase(config: PhaseConfig, providers: Providers, *, root: Path) -> Path:
             root=root,
             entry_signal_mask=entry_signal_mask,
             terminal=terminal,
+            cleanup_incomplete_observer=_cleanup_incomplete_observer,
         )
     except BaseException as error:
         pending = error
@@ -8704,6 +8721,7 @@ def _run_phase_with_blocked_entry(
     root: Path,
     entry_signal_mask: set[signal.Signals],
     terminal: _TerminalCommit,
+    cleanup_incomplete_observer: Callable[[], None] | None = None,
 ) -> Path:
     """Execute after the public entry point has blocked driver signals."""
 
@@ -8742,7 +8760,9 @@ def _run_phase_with_blocked_entry(
         timestamp=started_at,
         root=attempt_root,
     )
-    lifecycle = _PhaseLifecycleState()
+    lifecycle = _PhaseLifecycleState(
+        cleanup_incomplete_observer=cleanup_incomplete_observer,
+    )
     static: cm.StaticPreflightDoc | None = None
     containment_before: cm.ContainmentSnapshot | None = None
     kernel_cursor_before: str | None = None
