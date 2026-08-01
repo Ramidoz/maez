@@ -2579,6 +2579,22 @@ def _run_command(
                 interrupted_signum=interrupted.signum,
                 interruption_fallback=terminal,
             )
+        except driver._StorageIndependentCleanupIncomplete:
+            terminal = (
+                _cleanup_incomplete_result(None)
+                if type(handler) is _ProductionPhaseHandler
+                else (
+                    TerminalResult(
+                        "failed", "provider_uncertain", None, None, None
+                    )
+                    if attempt is None
+                    else _admission_result(
+                        attempt,
+                        status="failed",
+                        outcome="provider_uncertain",
+                    )
+                )
+            )
         except _AssemblyTerminalPublicationFailure:
             terminal = (
                 TerminalResult(

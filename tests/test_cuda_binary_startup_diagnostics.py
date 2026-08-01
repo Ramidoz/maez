@@ -2,24 +2,294 @@
 
 from __future__ import annotations
 
+import ast
+import ctypes
 import fcntl
 import hashlib
+import inspect
+import json
 import os
 import signal
 import subprocess
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
+from scripts import cuda_bench_cli as cli
 from scripts import cuda_bench_driver as driver
 
 
 _CAPTURE_THREAD_PREFIX = "cuda-binary-stderr-"
 _EXPECTED_CAPTURE_CAP = 65_536
+
+
+def _wait_for(predicate: Callable[[], bool], *, timeout: float = 3.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return predicate()
+
+
+@contextmanager
+def _child_subreaper() -> Iterator[None]:
+    libc = ctypes.CDLL(None, use_errno=True)
+    prior = ctypes.c_int()
+    assert libc.prctl(37, ctypes.byref(prior), 0, 0, 0) == 0
+    assert libc.prctl(36, 1, 0, 0, 0) == 0
+    try:
+        yield
+    finally:
+        assert libc.prctl(36, prior.value, 0, 0, 0) == 0
+
+
+class _ObservedJournal:
+    def __init__(self, journal: driver.PhaseJournal) -> None:
+        self._journal = journal
+        self.path = journal.path
+        self.bootstrap_cleanup_appended = threading.Event()
+
+    def append(
+        self,
+        *,
+        ts: str,
+        transition: str,
+        detail: Mapping[str, object],
+    ) -> None:
+        self._journal.append(ts=ts, transition=transition, detail=detail)
+        if transition == "cycle_1_bootstrap_cleanup":
+            self.bootstrap_cleanup_appended.set()
+
+    def close(self) -> None:
+        self._journal.close()
+
+
+class _FailingJournal(_ObservedJournal):
+    def append(
+        self,
+        *,
+        ts: str,
+        transition: str,
+        detail: Mapping[str, object],
+    ) -> None:
+        del ts, detail
+        if transition == "cycle_1_bootstrap_cleanup":
+            self.bootstrap_cleanup_appended.set()
+        raise driver.BenchRefusal("journal_failure")
+
+
+class _BootstrapFailingJournal(_ObservedJournal):
+    def __init__(
+        self,
+        journal: driver.PhaseJournal,
+        *,
+        failure: Callable[[], BaseException],
+        pending_signum: int | None = None,
+    ) -> None:
+        super().__init__(journal)
+        self._failure = failure
+        self._pending_signum = pending_signum
+        self._failed = False
+
+    def append(
+        self,
+        *,
+        ts: str,
+        transition: str,
+        detail: Mapping[str, object],
+    ) -> None:
+        if transition == "cycle_1_bootstrap_cleanup" and not self._failed:
+            self._failed = True
+            self.bootstrap_cleanup_appended.set()
+            if self._pending_signum is not None:
+                signal.raise_signal(self._pending_signum)
+            raise self._failure()
+        super().append(ts=ts, transition=transition, detail=detail)
+
+
+def _task2_journal(root: Path) -> _ObservedJournal:
+    return _ObservedJournal(
+        driver.PhaseJournal(
+            "vulkan_baseline",
+            journal_dir="journal",
+            timestamp="task2",
+            root=root,
+        )
+    )
+
+
+def _task2_identity_failure_argv(
+    *,
+    retained_writer: bool,
+    observed_path: Path | None = None,
+    descendant_pid_path: Path | None = None,
+) -> list[str]:
+    executable = "/usr/bin/bash"
+    if not retained_writer:
+        return [
+            executable,
+            "-c",
+            "printf task2-private-stderr >&2; while :; do :; done",
+            "task2",
+            "--port",
+            str(driver.BENCH_PORT),
+        ]
+    assert observed_path is not None and descendant_pid_path is not None
+    script = r"""
+(
+    trap '' PIPE
+    while :; do
+        printf x >&2 || {
+            printf observed > "$1"
+            exec /usr/bin/sleep 300
+        }
+    done
+) &
+printf '%s\n' "$!" > "$2"
+wait
+"""
+    return [
+        executable,
+        "-c",
+        script,
+        "task2",
+        str(observed_path),
+        str(descendant_pid_path),
+        "--port",
+        str(driver.BENCH_PORT),
+    ]
+
+
+def _run_task2_real_phase_failure_through_cli(
+    root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    journal_failure: Callable[[], BaseException],
+    pending_signum: int | None = None,
+    interrupt_retirement: bool = False,
+) -> tuple[int, list[driver._BinarySpawnFailure]]:
+    from tests.test_cuda_bench_driver import _b7_harness
+
+    root.chmod(0o700)
+    harness = _b7_harness(root, nonce="7" * 64)
+    authorization = harness.config.authorization
+    launcher = driver.RealServerLauncher(_binary_pin(Path("/usr/bin/bash")))
+    carriers: list[driver._BinarySpawnFailure] = []
+    real_raise_failure = driver._raise_binary_spawn_failure
+    real_finish = driver._finish_binary_stderr_capture
+    real_create = driver.RehearsalJournalFactory.create
+    real_open = driver.open_bench_file
+    retirement_interrupted = False
+
+    def spawn_real_binary(
+        _launcher: driver.RehearsalServerLauncher,
+        _argv: list[str],
+        _env: dict[str, str],
+    ) -> driver.OwnedChild:
+        return launcher.spawn(
+            _task2_identity_failure_argv(retained_writer=False),
+            _binary_env(),
+        )
+
+    def record_failure(
+        exc: BaseException,
+        *,
+        cleanup_complete: bool,
+        stderr_capture: driver._BinaryStderrCapture,
+    ) -> None:
+        try:
+            real_raise_failure(
+                exc,
+                cleanup_complete=cleanup_complete,
+                stderr_capture=stderr_capture,
+            )
+        except driver._BinarySpawnFailure as failure:
+            carriers.append(failure)
+            raise
+
+    def failing_journal(
+        factory: driver.RehearsalJournalFactory,
+        *args: object,
+        **kwargs: object,
+    ) -> _BootstrapFailingJournal:
+        return _BootstrapFailingJournal(
+            real_create(factory, *args, **kwargs),  # type: ignore[arg-type]
+            failure=journal_failure,
+            pending_signum=pending_signum,
+        )
+
+    def finish_with_one_interruption(
+        capture: driver._BinaryStderrCapture | None,
+    ) -> driver._BinaryStderrSnapshot | None:
+        nonlocal retirement_interrupted
+        if interrupt_retirement and not retirement_interrupted:
+            retirement_interrupted = True
+            raise KeyboardInterrupt("task2 retirement interrupt")
+        return real_finish(capture)
+
+    def phase_handler(
+        _attempt: driver.CommandAttempt,
+        *,
+        root: Path,
+        clock: driver.Clock,
+        args: object,
+        authorization: driver.WindowAuthorization,
+    ) -> cli._TrustedPhaseResult:
+        del clock, args
+        path = driver.run_phase(harness.config, harness.providers, root=root)
+        return cli._phase_artifact_result(
+            str(path.relative_to(root)),
+            expected_phase=harness.config.phase,
+            expected_window_id=authorization.window_id,
+            root=root,
+        )
+
+    monkeypatch.setattr(driver.RehearsalServerLauncher, "spawn", spawn_real_binary)
+    monkeypatch.setattr(driver, "_raise_binary_spawn_failure", record_failure)
+    monkeypatch.setattr(
+        driver,
+        "_capture_target_identity",
+        lambda _pid: (_ for _ in ()).throw(OSError("identity unavailable")),
+    )
+    monkeypatch.setattr(driver.RehearsalJournalFactory, "create", failing_journal)
+    monkeypatch.setattr(
+        driver,
+        "_finish_binary_stderr_capture",
+        finish_with_one_interruption,
+    )
+    monkeypatch.setattr(cli, "_phase_handler", phase_handler)
+    monkeypatch.setattr(
+        driver,
+        "parse_window_authorization",
+        lambda _payload: authorization,
+    )
+    monkeypatch.setattr(
+        driver,
+        "open_bench_file",
+        lambda relative, *, root: (
+            b"task2-authority"
+            if relative == "task2-authority.json"
+            else real_open(relative, root=root)
+        ),
+    )
+    handler = cli._ProductionPhaseHandler(
+        clock=driver.SystemClock(),
+        args=object(),  # type: ignore[arg-type]
+        _guard=cli._PRODUCTION_PHASE_HANDLER_GUARD,
+    )
+    result = cli._run_command(
+        "vulkan-baseline",
+        handler,
+        root=root,
+        clock=driver.SystemClock(),
+        authority_ref="task2-authority.json",
+    )
+    return result, carriers
 
 
 def _binary_pin(path: Path) -> driver.SpawnPin:
@@ -442,3 +712,465 @@ def test_task1_capture_payload_is_excluded_from_repr_and_equality() -> None:
     assert first == second
     assert "private-a" not in repr(first)
     assert "private-b" not in repr(second)
+
+
+def test_task2_post_popen_identity_failure_carries_fixed_cleanup_and_live_capture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executable = Path("/usr/bin/bash")
+    launcher = driver.RealServerLauncher(_binary_pin(executable))
+    journal = _task2_journal(tmp_path)
+    monkeypatch.setattr(
+        driver,
+        "_capture_target_identity",
+        lambda _pid: (_ for _ in ()).throw(OSError("identity unavailable")),
+    )
+
+    try:
+        with pytest.raises(driver._BinarySpawnFailure) as caught:
+            launcher.spawn(
+                _task2_identity_failure_argv(retained_writer=False),
+                _binary_env(),
+            )
+        failure = caught.value
+        assert failure.code == "spawn_failure"
+        assert failure.args == ("spawn_failure",)
+        assert str(failure) == "spawn_failure"
+        assert repr(failure) == "_BinarySpawnFailure('spawn_failure')"
+        assert "task2-private-stderr" not in repr(failure)
+        assert failure._bootstrap_cleanup.outcome == "clean"
+        assert failure._stderr_capture.consumed is False
+
+        with pytest.raises(driver.BenchRefusal, match="^spawn_failure$"):
+            driver._dispose_binary_spawn_failure(
+                failure,
+                journal=journal,  # type: ignore[arg-type]
+                clock=driver.SystemClock(),
+                cycle=1,
+            )
+        assert failure._stderr_capture.consumed is True
+        records = [
+            json.loads(line)
+            for line in journal.path.read_text(encoding="utf-8").splitlines()
+        ]
+        assert records[-1]["transition"] == "cycle_1_bootstrap_cleanup"
+        assert records[-1]["detail"] == {"outcome": "clean"}
+    finally:
+        journal.close()
+
+
+def test_task2_retained_descendant_observes_pipe_retirement_only_after_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executable = Path("/usr/bin/bash")
+    launcher = driver.RealServerLauncher(_binary_pin(executable))
+    observed_path = tmp_path / "epipe-observed"
+    descendant_pid_path = tmp_path / "descendant-pid"
+    journal = _task2_journal(tmp_path)
+    captured: list[subprocess.Popen[bytes]] = []
+    deliberately_signalled_pids: list[int | None] = []
+    real_popen = subprocess.Popen
+    real_pidfd_signal = signal.pidfd_send_signal
+    real_finish_capture = driver._finish_binary_stderr_capture
+    descendant_pid: int | None = None
+    descendant_pidfd: int | None = None
+
+    def recording_popen(
+        *args: object, **kwargs: object
+    ) -> subprocess.Popen[bytes]:
+        proc = real_popen(*args, **kwargs)  # type: ignore[arg-type]
+        captured.append(proc)
+        return proc
+
+    def fail_after_descendant_started(_pid: int) -> tuple[int, int, str]:
+        assert _wait_for(descendant_pid_path.exists)
+        raise OSError("identity unavailable")
+
+    def recording_pidfd_signal(
+        pidfd: int,
+        signum: int,
+        siginfo: object = None,
+        flags: int = 0,
+    ) -> None:
+        _state, bound_pid = driver._pidfd_bound_pid(pidfd)
+        deliberately_signalled_pids.append(bound_pid)
+        real_pidfd_signal(pidfd, signum, siginfo, flags)
+
+    def finish_after_durable_record(capture: object) -> object:
+        assert journal.bootstrap_cleanup_appended.is_set()
+        return real_finish_capture(capture)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(driver.subprocess, "Popen", recording_popen)
+    monkeypatch.setattr(driver, "_capture_target_identity", fail_after_descendant_started)
+    monkeypatch.setattr(driver.signal, "pidfd_send_signal", recording_pidfd_signal)
+    monkeypatch.setattr(
+        driver,
+        "_finish_binary_stderr_capture",
+        finish_after_durable_record,
+    )
+
+    with _child_subreaper():
+        try:
+            with pytest.raises(driver.BenchRefusal, match="^cleanup_incomplete$"):
+                driver._spawn_with_interrupt_handoff(
+                    launcher,
+                    _task2_identity_failure_argv(
+                        retained_writer=True,
+                        observed_path=observed_path,
+                        descendant_pid_path=descendant_pid_path,
+                    ),
+                    _binary_env(),
+                    admit=lambda _child: pytest.fail("identity failure was admitted"),
+                    journal=journal,  # type: ignore[arg-type]
+                    clock=driver.SystemClock(),
+                    cycle=1,
+                )
+
+            descendant_pid = int(descendant_pid_path.read_text(encoding="utf-8"))
+            descendant_pidfd = os.pidfd_open(descendant_pid)
+            assert journal.bootstrap_cleanup_appended.is_set()
+            assert _wait_for(observed_path.exists)
+            records = [
+                json.loads(line)
+                for line in journal.path.read_text(encoding="utf-8").splitlines()
+            ]
+            assert records[-1]["transition"] == "cycle_1_bootstrap_cleanup"
+            assert records[-1]["detail"] == {"outcome": "cleanup_incomplete"}
+            assert len(captured) == 1
+            assert deliberately_signalled_pids == [captured[0].pid]
+            assert descendant_pid not in deliberately_signalled_pids
+        finally:
+            if descendant_pidfd is not None:
+                try:
+                    real_pidfd_signal(descendant_pidfd, signal.SIGKILL)
+                except (OSError, ProcessLookupError):
+                    pass
+                os.close(descendant_pidfd)
+            if descendant_pid is not None:
+                try:
+                    os.waitpid(descendant_pid, 0)
+                except ChildProcessError:
+                    pass
+                assert _wait_for(
+                    lambda: not Path(f"/proc/{descendant_pid}").exists()
+                )
+            for proc in captured:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait(timeout=3)
+            journal.close()
+
+
+def test_task2_capture_retirement_uncertainty_supersedes_original_refusal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executable = Path("/usr/bin/bash")
+    launcher = driver.RealServerLauncher(_binary_pin(executable))
+    journal = _task2_journal(tmp_path)
+    monkeypatch.setattr(
+        driver,
+        "_capture_target_identity",
+        lambda _pid: (_ for _ in ()).throw(OSError("identity unavailable")),
+    )
+    original_finish = driver._finish_binary_stderr_capture
+
+    try:
+        with pytest.raises(driver._BinarySpawnFailure) as caught:
+            launcher.spawn(
+                _task2_identity_failure_argv(retained_writer=False),
+                _binary_env(),
+            )
+        failure = caught.value
+        monkeypatch.setattr(
+            driver,
+            "_finish_binary_stderr_capture",
+            lambda _capture: (_ for _ in ()).throw(
+                driver.BenchRefusal("cleanup_incomplete")
+            ),
+        )
+
+        with pytest.raises(driver.BenchRefusal) as disposed:
+            driver._dispose_binary_spawn_failure(
+                failure,
+                journal=journal,  # type: ignore[arg-type]
+                clock=driver.SystemClock(),
+                cycle=1,
+            )
+        assert disposed.value.code == "cleanup_incomplete"
+        assert journal.bootstrap_cleanup_appended.is_set()
+    finally:
+        monkeypatch.setattr(driver, "_finish_binary_stderr_capture", original_finish)
+        if "failure" in locals() and not failure._stderr_capture.consumed:
+            original_finish(failure._stderr_capture)
+        journal.close()
+
+
+@pytest.mark.parametrize("signum", (signal.SIGINT, signal.SIGTERM))
+def test_task2_pending_signal_cannot_override_storage_failed_cleanup_terminal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capfd: pytest.CaptureFixture[str],
+    signum: int,
+) -> None:
+    before_fds = _open_fd_identities()
+    before_threads = _capture_threads()
+    before_sockets = _socket_fd_inodes()
+    carriers: list[driver._BinarySpawnFailure] = []
+    real_finish = driver._finish_binary_stderr_capture
+
+    try:
+        exit_code, carriers = _run_task2_real_phase_failure_through_cli(
+            tmp_path,
+            monkeypatch,
+            journal_failure=lambda: driver.BenchRefusal("journal_failure"),
+            pending_signum=signum,
+        )
+        captured = capfd.readouterr()
+
+        assert exit_code == 4
+        assert captured.err == ""
+        assert json.loads(captured.out) == {
+            "artifact_ref": None,
+            "artifact_sha256": None,
+            "outcome": "cleanup_incomplete",
+            "status": "failed",
+            "window_id": "window-b7",
+        }
+        assert len(carriers) == 1
+        assert carriers[0]._stderr_capture.consumed is True
+        assert carriers[0]._stderr_capture.thread_alive is False
+        assert not list(tmp_path.rglob("vulkan_baseline-*.json"))
+        assert not list(tmp_path.rglob("*command-completion*.json"))
+    finally:
+        for carrier in carriers:
+            if not carrier._stderr_capture.consumed:
+                real_finish(carrier._stderr_capture)
+
+    assert _capture_threads() == before_threads
+    assert _open_fd_identities() == before_fds
+    assert _socket_fd_inodes() == before_sockets
+
+
+def test_task2_journal_keyboard_interrupt_cannot_bypass_capture_retirement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    before_fds = _open_fd_identities()
+    before_threads = _capture_threads()
+    before_sockets = _socket_fd_inodes()
+    carriers: list[driver._BinarySpawnFailure] = []
+    real_finish = driver._finish_binary_stderr_capture
+
+    try:
+        exit_code, carriers = _run_task2_real_phase_failure_through_cli(
+            tmp_path,
+            monkeypatch,
+            journal_failure=lambda: KeyboardInterrupt("task2 journal interrupt"),
+        )
+        captured = capfd.readouterr()
+
+        assert exit_code == 4
+        assert captured.err == ""
+        assert json.loads(captured.out) == {
+            "artifact_ref": None,
+            "artifact_sha256": None,
+            "outcome": "cleanup_incomplete",
+            "status": "failed",
+            "window_id": "window-b7",
+        }
+        assert len(carriers) == 1
+        assert carriers[0]._stderr_capture.consumed is True
+        assert carriers[0]._stderr_capture.thread_alive is False
+        assert not list(tmp_path.rglob("vulkan_baseline-*.json"))
+        assert not list(tmp_path.rglob("*command-completion*.json"))
+    finally:
+        for carrier in carriers:
+            if not carrier._stderr_capture.consumed:
+                real_finish(carrier._stderr_capture)
+
+    assert _capture_threads() == before_threads
+    assert _open_fd_identities() == before_fds
+    assert _socket_fd_inodes() == before_sockets
+
+
+def test_task2_retirement_keyboard_interrupt_still_retires_capture_boundedly(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    before_fds = _open_fd_identities()
+    before_threads = _capture_threads()
+    before_sockets = _socket_fd_inodes()
+    carriers: list[driver._BinarySpawnFailure] = []
+    real_finish = driver._finish_binary_stderr_capture
+
+    try:
+        exit_code, carriers = _run_task2_real_phase_failure_through_cli(
+            tmp_path,
+            monkeypatch,
+            journal_failure=lambda: driver.BenchRefusal("journal_failure"),
+            interrupt_retirement=True,
+        )
+        captured = capfd.readouterr()
+
+        assert exit_code == 4
+        assert captured.err == ""
+        assert json.loads(captured.out) == {
+            "artifact_ref": None,
+            "artifact_sha256": None,
+            "outcome": "cleanup_incomplete",
+            "status": "failed",
+            "window_id": "window-b7",
+        }
+        assert len(carriers) == 1
+        assert carriers[0]._stderr_capture.consumed is True
+        assert carriers[0]._stderr_capture.thread_alive is False
+        assert not list(tmp_path.rglob("vulkan_baseline-*.json"))
+        assert not list(tmp_path.rglob("*command-completion*.json"))
+    finally:
+        for carrier in carriers:
+            if not carrier._stderr_capture.consumed:
+                real_finish(carrier._stderr_capture)
+
+    assert _capture_threads() == before_threads
+    assert _open_fd_identities() == before_fds
+    assert _socket_fd_inodes() == before_sockets
+
+
+def test_task2_failed_journal_still_retires_retained_writer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    before_fds = _open_fd_identities()
+    before_threads = _capture_threads()
+    before_sockets = _socket_fd_inodes()
+    executable = Path("/usr/bin/bash")
+    launcher = driver.RealServerLauncher(_binary_pin(executable))
+    observed_path = tmp_path / "journal-failure-epipe"
+    descendant_pid_path = tmp_path / "journal-failure-descendant"
+    journal = _FailingJournal(_task2_journal(tmp_path)._journal)
+    captured: list[subprocess.Popen[bytes]] = []
+    carriers: list[driver._BinarySpawnFailure] = []
+    real_popen = subprocess.Popen
+    real_raise_failure = driver._raise_binary_spawn_failure
+    real_finish_capture = driver._finish_binary_stderr_capture
+    real_pidfd_signal = signal.pidfd_send_signal
+    descendant_pid: int | None = None
+    descendant_pidfd: int | None = None
+
+    def recording_popen(
+        *args: object, **kwargs: object
+    ) -> subprocess.Popen[bytes]:
+        proc = real_popen(*args, **kwargs)  # type: ignore[arg-type]
+        captured.append(proc)
+        return proc
+
+    def fail_after_descendant_started(_pid: int) -> tuple[int, int, str]:
+        assert _wait_for(descendant_pid_path.exists)
+        raise OSError("identity unavailable")
+
+    def record_failure(
+        exc: BaseException,
+        *,
+        cleanup_complete: bool,
+        stderr_capture: driver._BinaryStderrCapture,
+    ) -> None:
+        try:
+            real_raise_failure(
+                exc,
+                cleanup_complete=cleanup_complete,
+                stderr_capture=stderr_capture,
+            )
+        except driver._BinarySpawnFailure as failure:
+            carriers.append(failure)
+            raise
+
+    monkeypatch.setattr(driver.subprocess, "Popen", recording_popen)
+    monkeypatch.setattr(driver, "_capture_target_identity", fail_after_descendant_started)
+    monkeypatch.setattr(driver, "_raise_binary_spawn_failure", record_failure)
+
+    with _child_subreaper():
+        try:
+            with pytest.raises(driver.BenchRefusal) as caught:
+                driver._spawn_with_interrupt_handoff(
+                    launcher,
+                    _task2_identity_failure_argv(
+                        retained_writer=True,
+                        observed_path=observed_path,
+                        descendant_pid_path=descendant_pid_path,
+                    ),
+                    _binary_env(),
+                    admit=lambda _child: pytest.fail("identity failure was admitted"),
+                    journal=journal,  # type: ignore[arg-type]
+                    clock=driver.SystemClock(),
+                    cycle=1,
+                )
+            assert caught.value.code == "cleanup_incomplete"
+            assert journal.bootstrap_cleanup_appended.is_set()
+            assert len(carriers) == 1
+            assert carriers[0]._stderr_capture.consumed is True
+            assert not carriers[0]._stderr_capture.thread_alive
+            assert _wait_for(observed_path.exists)
+            assert journal.path.read_bytes() == b""
+
+        finally:
+            if carriers and not carriers[0]._stderr_capture.consumed:
+                real_finish_capture(carriers[0]._stderr_capture)
+            if descendant_pid_path.exists():
+                descendant_pid = int(
+                    descendant_pid_path.read_text(encoding="utf-8")
+                )
+                try:
+                    descendant_pidfd = os.pidfd_open(descendant_pid)
+                except ProcessLookupError:
+                    descendant_pidfd = None
+            if descendant_pidfd is not None:
+                try:
+                    real_pidfd_signal(descendant_pidfd, signal.SIGKILL)
+                except (OSError, ProcessLookupError):
+                    pass
+                os.close(descendant_pidfd)
+            if descendant_pid is not None:
+                try:
+                    os.waitpid(descendant_pid, 0)
+                except ChildProcessError:
+                    pass
+                assert _wait_for(
+                    lambda: not Path(f"/proc/{descendant_pid}").exists()
+                )
+            for proc in captured:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait(timeout=3)
+            journal.close()
+
+    assert _capture_threads() == before_threads
+    assert _open_fd_identities() == before_fds
+    assert _socket_fd_inodes() == before_sockets
+
+
+def test_task2_every_production_launcher_call_uses_disposal_helper() -> None:
+    module = ast.parse(inspect.getsource(driver))
+    launcher_calls: list[tuple[str, str]] = []
+    for node in ast.walk(module):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for child in ast.walk(node):
+            if (
+                isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Attribute)
+                and child.func.attr == "spawn"
+                and isinstance(child.func.value, ast.Name)
+                and child.func.value.id == "launcher"
+            ):
+                launcher_calls.append((node.name, ast.unparse(child)))
+    assert launcher_calls == [
+        ("_spawn_with_interrupt_handoff", "launcher.spawn(argv, env)")
+    ]
+    helper_source = inspect.getsource(driver._spawn_with_interrupt_handoff)
+    assert "except _BinarySpawnFailure as failure:" in helper_source
+    assert "_dispose_binary_spawn_failure(" in helper_source
