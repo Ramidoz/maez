@@ -2074,6 +2074,7 @@ def _bootstrap_abort(
     port: int | None,
 ) -> _BootstrapCleanupResult:
     complete = True
+    cleanup_signal_sent = False
     exited_before_cleanup_signal = False
     try:
         status = _pidfd_status(pidfd)
@@ -2089,6 +2090,7 @@ def _bootstrap_abort(
         ):
             try:
                 signal.pidfd_send_signal(pidfd, signal.SIGKILL)
+                cleanup_signal_sent = True
             except ProcessLookupError:
                 if _pidfd_status(pidfd) == "gone":
                     exited_before_cleanup_signal = True
@@ -2096,12 +2098,14 @@ def _bootstrap_abort(
                     complete = False
             except OSError:
                 complete = False
-        elif status == "alive":
+        else:
             complete = False
         try:
             popen.wait(timeout=KILL_WAIT_S)
         except (OSError, subprocess.TimeoutExpired):
             complete = False
+        if popen.returncode is not None and not cleanup_signal_sent:
+            exited_before_cleanup_signal = True
         try:
             if _pgid_members(popen.pid):
                 complete = False
