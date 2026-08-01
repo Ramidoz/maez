@@ -1317,7 +1317,6 @@ def _binary_stderr_metadata(
         or type(snapshot.truncated) is not bool
         or type(exited_before_finalize) is not bool
         or (returncode is not None and type(returncode) is not int)
-        or (not exited_before_finalize and returncode is not None)
     ):
         raise BenchRefusal("cleanup_incomplete")
     detail: dict[str, object] = {
@@ -8358,15 +8357,13 @@ def _run_three_cycles(
             pending = exc
         finally:
             child_exited_before_finalize = child.popen.poll() is not None
-            natural_returncode = (
-                child.popen.returncode if child_exited_before_finalize else None
-            )
             lifecycle.last_finalizer = finalize(
                 child,
                 clock=providers.clock,
                 port_probe=providers.port_probe,
                 port=child.port,
             )
+            observed_returncode = child.popen.returncode
 
         unload_refusal: BenchRefusal | None = None
         try:
@@ -8407,7 +8404,7 @@ def _run_three_cycles(
             clock=providers.clock,
             cycle=cycle,
             attempt_root=attempt_root,
-            returncode=natural_returncode,
+            returncode=observed_returncode,
             exited_before_finalize=child_exited_before_finalize,
             on_cleanup_incomplete=lifecycle.latch_cleanup_incomplete,
         )
@@ -8653,13 +8650,13 @@ def _finish_failed_phase(
         lifecycle.observed_child = child
         lifecycle.spawned_any = True
         child_exited = child.popen.poll() is not None
-        natural_returncode = child.popen.returncode if child_exited else None
         lifecycle.last_finalizer = finalize(
             child,
             clock=providers.clock,
             port_probe=providers.port_probe,
             port=child.port,
         )
+        observed_returncode = child.popen.returncode
         if lifecycle.active_cycle is not None:
             unload_refusal: BenchRefusal | None = None
             if (
@@ -8701,7 +8698,7 @@ def _finish_failed_phase(
                         clock=providers.clock,
                         cycle=lifecycle.active_cycle,
                         attempt_root=attempt_root,
-                        returncode=natural_returncode,
+                        returncode=observed_returncode,
                         exited_before_finalize=child_exited,
                         on_cleanup_incomplete=(
                             lifecycle.latch_cleanup_incomplete

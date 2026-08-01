@@ -378,11 +378,11 @@ def _run_task3_admitted_binary_failure(
         _argv: list[str],
         _env: dict[str, str],
     ) -> driver.OwnedChild:
-        terminal = (
-            "exit 23"
-            if termination == "exit"
-            else "kill -TERM $$"
-        )
+        terminal = {
+            "exit": "exit 23",
+            "signal": "kill -TERM $$",
+            "finalizer": "while :; do :; done",
+        }[termination]
         escaped_literal = "".join(f"\\{value:03o}" for value in literal)
         child = launcher.spawn(
             [
@@ -412,7 +412,8 @@ def _run_task3_admitted_binary_failure(
         spawned.append(child)
         if spawned_out is not None:
             spawned_out.append(child)
-        child.popen.wait(timeout=3)
+        if termination != "finalizer":
+            child.popen.wait(timeout=3)
         return child
 
     monkeypatch.setattr(driver.RehearsalServerLauncher, "spawn", spawn_real_binary)
@@ -1472,6 +1473,68 @@ def test_task3_real_elf_admitted_binary_publishes_after_finalize_record(
     assert _capture_threads() == before_threads
     assert _open_fd_identities() == before_fds
     assert _socket_fd_inodes() == before_sockets
+
+
+def test_task3_live_admitted_binary_records_finalizer_terminating_signal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    literal = b"task3-finalizer-signal-31d47c"
+    real_finalize = driver.finalize
+    returncodes_after_finalize: list[int | None] = []
+
+    def finalize_live_child(
+        child: driver.OwnedChild,
+        *,
+        clock: driver.Clock,
+        port_probe: driver.PortProbe,
+        port: int | None,
+    ) -> driver.FinalizeResult:
+        assert child.popen.poll() is None
+        result = real_finalize(
+            child,
+            clock=clock,
+            port_probe=port_probe,
+            port=port,
+        )
+        returncodes_after_finalize.append(child.popen.returncode)
+        return result
+
+    monkeypatch.setattr(driver, "finalize", finalize_live_child)
+    packet_path = _run_task3_admitted_binary_failure(
+        tmp_path,
+        monkeypatch,
+        literal=literal,
+        termination="finalizer",
+    )
+    attempt_root = packet_path.parents[2]
+    records = [
+        json.loads(line)
+        for line in next(attempt_root.rglob("*-journal.jsonl"))
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    finalizer = next(
+        record["detail"]
+        for record in records
+        if record["transition"] == "cycle_1_finalize"
+    )
+    metadata = next(
+        record["detail"]
+        for record in records
+        if record["transition"] == "cycle_1_stderr_diagnostic"
+    )
+
+    assert "SIGTERM" in finalizer["signals_sent"]
+    assert returncodes_after_finalize == [-signal.SIGTERM]
+    assert metadata == {
+        "exited_before_finalize": False,
+        "retained_byte_count": len(literal),
+        "retained_sha256": hashlib.sha256(literal).hexdigest(),
+        "terminating_signal": signal.SIGTERM,
+        "truncated": False,
+    }
+    assert "exit_code" not in metadata
 
 
 def test_task3_real_elf_publication_failure_has_no_metadata_or_completion(
