@@ -209,13 +209,13 @@ def _run_task2_real_phase_failure_through_cli(
     def record_failure(
         exc: BaseException,
         *,
-        cleanup_complete: bool,
+        bootstrap_cleanup: driver._BootstrapCleanupResult,
         stderr_capture: driver._BinaryStderrCapture,
     ) -> None:
         try:
             real_raise_failure(
                 exc,
-                cleanup_complete=cleanup_complete,
+                bootstrap_cleanup=bootstrap_cleanup,
                 stderr_capture=stderr_capture,
             )
         except driver._BinarySpawnFailure as failure:
@@ -858,6 +858,8 @@ def test_task2_post_popen_identity_failure_carries_fixed_cleanup_and_live_captur
         assert repr(failure) == "_BinarySpawnFailure('spawn_failure')"
         assert "task2-private-stderr" not in repr(failure)
         assert failure._bootstrap_cleanup.outcome == "clean"
+        assert failure._bootstrap_cleanup.observed_returncode == -signal.SIGKILL
+        assert failure._bootstrap_cleanup.exited_before_cleanup_signal is False
         assert failure._stderr_capture.consumed is False
 
         with pytest.raises(driver.BenchRefusal, match="^spawn_failure$"):
@@ -886,6 +888,7 @@ def test_task2_post_popen_identity_failure_carries_fixed_cleanup_and_live_captur
             "exited_before_finalize": False,
             "retained_byte_count": len(retained),
             "retained_sha256": hashlib.sha256(retained).hexdigest(),
+            "terminating_signal": signal.SIGKILL,
             "truncated": False,
         }
     finally:
@@ -1270,13 +1273,13 @@ def test_task2_failed_journal_still_retires_retained_writer(
     def record_failure(
         exc: BaseException,
         *,
-        cleanup_complete: bool,
+        bootstrap_cleanup: driver._BootstrapCleanupResult,
         stderr_capture: driver._BinaryStderrCapture,
     ) -> None:
         try:
             real_raise_failure(
                 exc,
-                cleanup_complete=cleanup_complete,
+                bootstrap_cleanup=bootstrap_cleanup,
                 stderr_capture=stderr_capture,
             )
         except driver._BinarySpawnFailure as failure:
@@ -1369,6 +1372,238 @@ def test_task2_every_production_launcher_call_uses_disposal_helper() -> None:
     helper_source = inspect.getsource(driver._spawn_with_interrupt_handoff)
     assert "except _BinarySpawnFailure as failure:" in helper_source
     assert "_dispose_binary_spawn_failure(" in helper_source
+
+
+@pytest.mark.parametrize(
+    ("persona", "expected_status", "first_status_races_alive"),
+    (
+        ("false", {"exit_code": 1}, False),
+        ("false_binding_race", {"exit_code": 1}, True),
+        ("signal", {"terminating_signal": signal.SIGTERM}, False),
+    ),
+)
+def test_task3_real_elf_pre_admission_natural_status_is_recorded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capfd: pytest.CaptureFixture[str],
+    persona: str,
+    expected_status: dict[str, int],
+    first_status_races_alive: bool,
+) -> None:
+    before_fds = _open_fd_identities()
+    before_threads = _capture_threads()
+    before_sockets = _socket_fd_inodes()
+    literal = (
+        b""
+        if persona.startswith("false")
+        else b"task3-pre-admission-raw-819ca2"
+    )
+    executable = Path(
+        "/usr/bin/false" if persona.startswith("false") else "/usr/bin/bash"
+    )
+    _assert_dynamic_elf(executable)
+    launcher = driver.RealServerLauncher(_binary_pin(executable))
+    escaped_literal = "".join(f"\\{value:03o}" for value in literal)
+    argv = (
+        [str(executable), "--port", str(driver.BENCH_PORT)]
+        if persona.startswith("false")
+        else [
+            str(executable),
+            "-c",
+            f"printf '{escaped_literal}' >&2; kill -TERM $$",
+            "task3",
+            "--port",
+            str(driver.BENCH_PORT),
+        ]
+    )
+    expected_returncode = (
+        1 if persona.startswith("false") else -signal.SIGTERM
+    )
+    journal = _task2_journal(tmp_path)
+    spawned: list[subprocess.Popen[bytes]] = []
+    real_popen = subprocess.Popen
+    real_pidfd_status = driver._pidfd_status
+    real_pidfd_send_signal = signal.pidfd_send_signal
+    status_checks = 0
+    sent_signals: list[int] = []
+
+    def recording_popen(
+        *args: object, **kwargs: object
+    ) -> subprocess.Popen[bytes]:
+        proc = real_popen(*args, **kwargs)  # type: ignore[arg-type]
+        spawned.append(proc)
+        return proc
+
+    def fail_identity_after_natural_exit(pid: int) -> tuple[int, int, str]:
+        assert len(spawned) == 1
+        assert spawned[0].pid == pid
+        assert _wait_for(lambda: spawned[0].poll() is not None)
+        assert spawned[0].returncode == expected_returncode
+        raise OSError("identity unavailable after natural exit")
+
+    def race_status_before_binding(pidfd: int) -> str:
+        nonlocal status_checks
+        status_checks += 1
+        if first_status_races_alive and status_checks == 1:
+            assert real_pidfd_status(pidfd) == "gone"
+            return "alive"
+        return real_pidfd_status(pidfd)
+
+    def record_pidfd_signal(
+        pidfd: int,
+        signum: int,
+        siginfo: object = None,
+        flags: int = 0,
+    ) -> None:
+        sent_signals.append(signum)
+        real_pidfd_send_signal(pidfd, signum, siginfo, flags)
+
+    monkeypatch.setattr(driver.subprocess, "Popen", recording_popen)
+    monkeypatch.setattr(driver, "_pidfd_status", race_status_before_binding)
+    monkeypatch.setattr(driver.signal, "pidfd_send_signal", record_pidfd_signal)
+    monkeypatch.setattr(
+        driver,
+        "_capture_target_identity",
+        fail_identity_after_natural_exit,
+    )
+
+    try:
+        with pytest.raises(driver.BenchRefusal) as caught:
+            driver._spawn_with_interrupt_handoff(
+                launcher,
+                argv,
+                _binary_env(),
+                admit=lambda _child: pytest.fail("dead target was admitted"),
+                journal=journal,  # type: ignore[arg-type]
+                clock=driver.SystemClock(),
+                cycle=1,
+                attempt_root=tmp_path,
+            )
+        captured = capfd.readouterr()
+        records = [
+            json.loads(line)
+            for line in journal.path.read_text(encoding="utf-8").splitlines()
+        ]
+        transitions = [record["transition"] for record in records]
+        metadata = next(
+            record["detail"]
+            for record in records
+            if record["transition"] == "cycle_1_stderr_diagnostic"
+        )
+        diagnostic_path = tmp_path / "diagnostics/cycle-1-stderr.bin"
+        retained = diagnostic_path.read_bytes()
+
+        assert transitions[-2:] == [
+            "cycle_1_bootstrap_cleanup",
+            "cycle_1_stderr_diagnostic",
+        ]
+        assert "cycle_1_finalize" not in transitions
+        assert records[-2]["detail"] == {"outcome": "clean"}
+        if literal:
+            assert retained == literal
+        else:
+            assert retained
+        assert stat.S_IMODE(diagnostic_path.stat().st_mode) == 0o600
+        assert metadata == {
+            "exited_before_finalize": True,
+            "retained_byte_count": len(retained),
+            "retained_sha256": hashlib.sha256(retained).hexdigest(),
+            "truncated": False,
+            **expected_status,
+        }
+        assert sent_signals == []
+        assert caught.value.code == "spawn_failure"
+        assert captured.out == ""
+        assert captured.err == ""
+        assert all(
+            retained not in path.read_bytes()
+            for path in tmp_path.rglob("*")
+            if retained and path.is_file() and path != diagnostic_path
+        )
+        assert retained.decode(errors="surrogateescape") not in repr(records)
+        assert not list(tmp_path.rglob("*command-completion*.json"))
+        assert not list(tmp_path.rglob("*completed*.json"))
+        assert len(spawned) == 1
+        assert spawned[0].returncode == expected_returncode
+        assert not Path(f"/proc/{spawned[0].pid}").exists()
+    finally:
+        journal.close()
+
+    assert _capture_threads() == before_threads
+    assert _open_fd_identities() == before_fds
+    assert _socket_fd_inodes() == before_sockets
+
+
+def test_task3_pre_release_inert_guard_has_no_target_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    before_fds = _open_fd_identities()
+    before_threads = _capture_threads()
+    before_sockets = _socket_fd_inodes()
+    executable = Path("/usr/bin/false")
+    _assert_dynamic_elf(executable)
+    launcher = driver.RealServerLauncher(_binary_pin(executable))
+    journal = _task2_journal(tmp_path)
+    spawned: list[subprocess.Popen[bytes]] = []
+    real_popen = subprocess.Popen
+    real_pidfd_bound_pid = driver._pidfd_bound_pid
+    binding_checks = 0
+
+    def recording_popen(
+        *args: object, **kwargs: object
+    ) -> subprocess.Popen[bytes]:
+        proc = real_popen(*args, **kwargs)  # type: ignore[arg-type]
+        spawned.append(proc)
+        return proc
+
+    def fail_first_binding(pidfd: int) -> tuple[str, int | None]:
+        nonlocal binding_checks
+        binding_checks += 1
+        if binding_checks == 1:
+            return "unavailable", None
+        return real_pidfd_bound_pid(pidfd)
+
+    monkeypatch.setattr(driver.subprocess, "Popen", recording_popen)
+    monkeypatch.setattr(driver, "_pidfd_bound_pid", fail_first_binding)
+
+    try:
+        with pytest.raises(driver.BenchRefusal, match="^spawn_failure$"):
+            driver._spawn_with_interrupt_handoff(
+                launcher,
+                [str(executable), "--port", str(driver.BENCH_PORT)],
+                _binary_env(),
+                admit=lambda _child: pytest.fail("inert guard was admitted"),
+                journal=journal,  # type: ignore[arg-type]
+                clock=driver.SystemClock(),
+                cycle=1,
+                attempt_root=tmp_path,
+            )
+        records = [
+            json.loads(line)
+            for line in journal.path.read_text(encoding="utf-8").splitlines()
+        ]
+        metadata = next(
+            record["detail"]
+            for record in records
+            if record["transition"] == "cycle_1_stderr_diagnostic"
+        )
+
+        assert metadata == {
+            "exited_before_finalize": False,
+            "retained_byte_count": 0,
+            "retained_sha256": hashlib.sha256(b"").hexdigest(),
+            "truncated": False,
+        }
+        assert len(spawned) == 1
+        assert spawned[0].returncode is not None
+        assert not Path(f"/proc/{spawned[0].pid}").exists()
+    finally:
+        journal.close()
+
+    assert _capture_threads() == before_threads
+    assert _open_fd_identities() == before_fds
+    assert _socket_fd_inodes() == before_sockets
 
 
 @pytest.mark.parametrize(

@@ -206,9 +206,18 @@ class _CleanupIncompleteLatch(Protocol):
 @dataclass(frozen=True, slots=True)
 class _BootstrapCleanupResult:
     outcome: Literal["clean", "cleanup_incomplete"]
+    observed_returncode: int | None
+    exited_before_cleanup_signal: bool
 
     def __post_init__(self) -> None:
-        if self.outcome not in {"clean", "cleanup_incomplete"}:
+        if (
+            self.outcome not in {"clean", "cleanup_incomplete"}
+            or (
+                self.observed_returncode is not None
+                and type(self.observed_returncode) is not int
+            )
+            or type(self.exited_before_cleanup_signal) is not bool
+        ):
             raise ValueError("bootstrap_cleanup_result_invalid")
 
 
@@ -1377,9 +1386,12 @@ def _dispose_binary_stderr_diagnostic(
 def _raise_binary_spawn_failure(
     exc: BaseException,
     *,
-    cleanup_complete: bool,
+    bootstrap_cleanup: _BootstrapCleanupResult,
     stderr_capture: _BinaryStderrCapture,
 ) -> NoReturn:
+    if type(bootstrap_cleanup) is not _BootstrapCleanupResult:
+        raise ValueError("bootstrap_cleanup_result_invalid")
+    cleanup_complete = bootstrap_cleanup.outcome == "clean"
     code = (
         exc.code
         if cleanup_complete and isinstance(exc, BenchRefusal)
@@ -1389,9 +1401,7 @@ def _raise_binary_spawn_failure(
     )
     raise _BinarySpawnFailure(
         code,
-        bootstrap_cleanup=_BootstrapCleanupResult(
-            outcome="clean" if cleanup_complete else "cleanup_incomplete"
-        ),
+        bootstrap_cleanup=bootstrap_cleanup,
         stderr_capture=stderr_capture,
     ) from None
 
@@ -1951,7 +1961,13 @@ def _guarded_popen(
         ):
             _raise_binary_spawn_failure(
                 exc,
-                cleanup_complete=cleanup_complete,
+                bootstrap_cleanup=_BootstrapCleanupResult(
+                    outcome=(
+                        "clean" if cleanup_complete else "cleanup_incomplete"
+                    ),
+                    observed_returncode=None,
+                    exited_before_cleanup_signal=False,
+                ),
                 stderr_capture=stderr_capture,
             )
         try:
@@ -2056,16 +2072,27 @@ def _bootstrap_abort(
     pidfd: int,
     *,
     port: int | None,
-) -> bool:
+) -> _BootstrapCleanupResult:
     complete = True
+    exited_before_cleanup_signal = False
     try:
         status = _pidfd_status(pidfd)
         binding_state, bound_pid = _pidfd_bound_pid(pidfd)
-        if status == "alive" and binding_state == "bound" and bound_pid == popen.pid:
+        if status == "gone" or (
+            status == "alive" and binding_state == "gone"
+        ):
+            exited_before_cleanup_signal = True
+        elif (
+            status == "alive"
+            and binding_state == "bound"
+            and bound_pid == popen.pid
+        ):
             try:
                 signal.pidfd_send_signal(pidfd, signal.SIGKILL)
             except ProcessLookupError:
-                if _pidfd_status(pidfd) != "gone":
+                if _pidfd_status(pidfd) == "gone":
+                    exited_before_cleanup_signal = True
+                else:
                     complete = False
             except OSError:
                 complete = False
@@ -2086,7 +2113,11 @@ def _bootstrap_abort(
                     complete = False
             except BenchRefusal:
                 complete = False
-        return complete
+        return _BootstrapCleanupResult(
+            outcome="clean" if complete else "cleanup_incomplete",
+            observed_returncode=popen.returncode,
+            exited_before_cleanup_signal=exited_before_cleanup_signal,
+        )
     finally:
         _close_fd(pidfd)
         _close_popen_streams(popen)
@@ -2177,7 +2208,7 @@ def spawn_pinned(
         )
     except BaseException as exc:
         if target_release_attempted:
-            cleanup_complete = _bootstrap_abort(popen, pidfd, port=port)
+            bootstrap_cleanup = _bootstrap_abort(popen, pidfd, port=port)
         else:
             cleanup_complete = _cleanup_inert_guard(
                 popen,
@@ -2185,18 +2216,32 @@ def spawn_pinned(
                 gate_write=gate_write,
                 exec_read=exec_read,
             )
+            bootstrap_cleanup = _BootstrapCleanupResult(
+                outcome="clean" if cleanup_complete else "cleanup_incomplete",
+                observed_returncode=None,
+                exited_before_cleanup_signal=False,
+            )
         if not mask_restored:
             try:
                 signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
             except BaseException:
-                cleanup_complete = False
+                bootstrap_cleanup = _BootstrapCleanupResult(
+                    outcome="cleanup_incomplete",
+                    observed_returncode=(
+                        bootstrap_cleanup.observed_returncode
+                    ),
+                    exited_before_cleanup_signal=(
+                        bootstrap_cleanup.exited_before_cleanup_signal
+                    ),
+                )
+        cleanup_complete = bootstrap_cleanup.outcome == "clean"
         if (
             stderr_capture is not None
             and not isinstance(exc, (KeyboardInterrupt, SystemExit))
         ):
             _raise_binary_spawn_failure(
                 exc,
-                cleanup_complete=cleanup_complete,
+                bootstrap_cleanup=bootstrap_cleanup,
                 stderr_capture=stderr_capture,
             )
         try:
@@ -7999,8 +8044,10 @@ def _dispose_binary_spawn_failure(
         clock=clock,
         cycle=cycle,
         attempt_root=attempt_root,
-        returncode=None,
-        exited_before_finalize=False,
+        returncode=failure._bootstrap_cleanup.observed_returncode,
+        exited_before_finalize=(
+            failure._bootstrap_cleanup.exited_before_cleanup_signal
+        ),
         on_cleanup_incomplete=on_cleanup_incomplete,
     )
     raise BenchRefusal(failure.code) from None
