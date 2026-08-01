@@ -1667,6 +1667,140 @@ def test_task3_uncertain_bootstrap_natural_exit_has_no_cleanup_signal(
     assert _socket_fd_inodes() == before_sockets
 
 
+def test_task3_gone_proof_without_wait_status_has_false_provenance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    before_fds = _open_fd_identities()
+    before_threads = _capture_threads()
+    before_sockets = _socket_fd_inodes()
+    executable = Path("/usr/bin/bash")
+    _assert_dynamic_elf(executable)
+    ready_path = tmp_path / "gone-no-status-ready"
+    script = 'exec 2>&-; printf ready > "$1"; while :; do :; done'
+    journal = _task2_journal(tmp_path)
+    spawned: list[subprocess.Popen[bytes]] = []
+    sent_signals: list[int] = []
+    real_popen = subprocess.Popen
+    real_wait = subprocess.Popen.wait
+    real_pidfd_send_signal = signal.pidfd_send_signal
+    wait_refused = False
+
+    def recording_popen(
+        *args: object, **kwargs: object
+    ) -> subprocess.Popen[bytes]:
+        proc = real_popen(*args, **kwargs)  # type: ignore[arg-type]
+        spawned.append(proc)
+        return proc
+
+    def fail_identity_while_target_alive(pid: int) -> tuple[int, int, str]:
+        assert len(spawned) == 1
+        assert spawned[0].pid == pid
+        assert _wait_for(ready_path.exists)
+        assert spawned[0].poll() is None
+        raise OSError("identity unavailable before bounded wait")
+
+    def refuse_first_target_wait(
+        popen: subprocess.Popen[bytes],
+        timeout: float | None = None,
+    ) -> int:
+        nonlocal wait_refused
+        if popen is spawned[0] and not wait_refused:
+            wait_refused = True
+            assert timeout == driver.KILL_WAIT_S
+            raise subprocess.TimeoutExpired(popen.args, timeout)
+        return real_wait(popen, timeout=timeout)
+
+    def record_pidfd_signal(
+        pidfd: int,
+        signum: int,
+        siginfo: object = None,
+        flags: int = 0,
+    ) -> None:
+        sent_signals.append(signum)
+        real_pidfd_send_signal(pidfd, signum, siginfo, flags)
+
+    monkeypatch.setattr(driver.subprocess, "Popen", recording_popen)
+    monkeypatch.setattr(
+        driver,
+        "_capture_target_identity",
+        fail_identity_while_target_alive,
+    )
+    monkeypatch.setattr(driver, "_pidfd_status", lambda _pidfd: "gone")
+    monkeypatch.setattr(real_popen, "wait", refuse_first_target_wait)
+    monkeypatch.setattr(driver.signal, "pidfd_send_signal", record_pidfd_signal)
+
+    try:
+        with pytest.raises(driver._BinarySpawnFailure) as caught:
+            driver.spawn_pinned(
+                [
+                    str(executable),
+                    "-c",
+                    script,
+                    "task3",
+                    str(ready_path),
+                ],
+                pin=_binary_pin(executable),
+                env=_binary_env(),
+                admitted_port=driver.BENCH_PORT,
+            )
+        failure = caught.value
+        with pytest.raises(driver.BenchRefusal) as disposed:
+            driver._dispose_binary_spawn_failure(
+                failure,
+                journal=journal,  # type: ignore[arg-type]
+                clock=driver.SystemClock(),
+                cycle=1,
+                attempt_root=tmp_path,
+            )
+        records = [
+            json.loads(line)
+            for line in journal.path.read_text(encoding="utf-8").splitlines()
+        ]
+        metadata = next(
+            record["detail"]
+            for record in records
+            if record["transition"] == "cycle_1_stderr_diagnostic"
+        )
+
+        assert wait_refused is True
+        assert sent_signals == []
+        assert failure._bootstrap_cleanup.outcome == "cleanup_incomplete"
+        assert failure._bootstrap_cleanup.observed_returncode is None
+        assert failure._bootstrap_cleanup.exited_before_cleanup_signal is False
+        assert disposed.value.code == "cleanup_incomplete"
+        assert metadata == {
+            "exited_before_finalize": False,
+            "retained_byte_count": 0,
+            "retained_sha256": hashlib.sha256(b"").hexdigest(),
+            "truncated": False,
+        }
+    finally:
+        if (
+            "failure" in locals()
+            and not failure._stderr_capture.consumed
+        ):
+            driver._finish_binary_stderr_capture(failure._stderr_capture)
+        for proc in spawned:
+            if proc.poll() is None:
+                proc.kill()
+                real_wait(proc, timeout=3)
+        journal.close()
+
+    assert _capture_threads() == before_threads
+    assert _open_fd_identities() == before_fds
+    assert _socket_fd_inodes() == before_sockets
+
+
+def test_task3_bootstrap_cleanup_rejects_true_provenance_without_status() -> None:
+    with pytest.raises(ValueError, match="^bootstrap_cleanup_result_invalid$"):
+        driver._BootstrapCleanupResult(
+            outcome="cleanup_incomplete",
+            observed_returncode=None,
+            exited_before_cleanup_signal=True,
+        )
+
+
 def test_task3_pre_release_inert_guard_has_no_target_status(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
