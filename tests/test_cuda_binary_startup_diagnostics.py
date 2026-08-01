@@ -10,16 +10,19 @@ import inspect
 import json
 import os
 import signal
+import stat
 import subprocess
 import threading
 import time
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
+from dataclasses import fields, replace
 from pathlib import Path
 
 import pytest
 
 from scripts import cuda_bench_cli as cli
+from scripts import cuda_bench_assemble as assemble
 from scripts import cuda_bench_driver as driver
 
 
@@ -353,6 +356,73 @@ def _binary_env() -> dict[str, str]:
         "HOME": os.environ.get("HOME", "/home/rohit"),
         "PATH": "/usr/bin:/bin",
     }
+
+
+def _run_task3_admitted_binary_failure(
+    root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    literal: bytes,
+    termination: str = "exit",
+    spawned_out: list[driver.OwnedChild] | None = None,
+) -> Path:
+    from tests.test_cuda_bench_driver import _b7_harness, _free_loopback_port
+
+    root.chmod(0o700)
+    harness = _b7_harness(root, nonce=hashlib.sha256(literal).hexdigest())
+    launcher = driver.RealServerLauncher(_binary_pin(Path("/usr/bin/bash")))
+    spawned: list[driver.OwnedChild] = []
+
+    def spawn_real_binary(
+        _launcher: driver.RehearsalServerLauncher,
+        _argv: list[str],
+        _env: dict[str, str],
+    ) -> driver.OwnedChild:
+        terminal = (
+            "exit 23"
+            if termination == "exit"
+            else "kill -TERM $$"
+        )
+        escaped_literal = "".join(f"\\{value:03o}" for value in literal)
+        child = launcher.spawn(
+            [
+                "/usr/bin/bash",
+                "-c",
+                f"printf '{escaped_literal}' >&2; sleep 0.1; {terminal}",
+                "task3",
+                "--port",
+                str(driver.BENCH_PORT),
+            ],
+            _binary_env(),
+        )
+        generation = harness.rehearsal_ports.reserve_launch()
+        rehearsal_port = _free_loopback_port()
+        lease = harness.rehearsal_ports.activate_from_launcher(
+            generation,
+            rehearsal_port,
+        )
+        expected_pin = harness.providers.server_launcher.pin
+        child = replace(
+            child,
+            port=rehearsal_port,
+            pinned_path=str(expected_pin.pinned_path),
+            pinned_sha256=expected_pin.pinned_sha256,
+            rehearsal_port_lease=lease,
+        )
+        spawned.append(child)
+        if spawned_out is not None:
+            spawned_out.append(child)
+        child.popen.wait(timeout=3)
+        return child
+
+    monkeypatch.setattr(driver.RehearsalServerLauncher, "spawn", spawn_real_binary)
+    path = driver.run_phase(harness.config, harness.providers, root=root)
+    assert len(spawned) == 1
+    assert spawned[0]._stderr_capture is not None
+    assert spawned[0]._stderr_capture.consumed is True
+    assert spawned[0]._stderr_capture.thread_alive is False
+    assert literal not in repr(spawned[0]).encode()
+    return path
 
 
 def _capture_threads() -> set[int]:
@@ -795,14 +865,28 @@ def test_task2_post_popen_identity_failure_carries_fixed_cleanup_and_live_captur
                 journal=journal,  # type: ignore[arg-type]
                 clock=driver.SystemClock(),
                 cycle=1,
+                attempt_root=tmp_path,
             )
         assert failure._stderr_capture.consumed is True
         records = [
             json.loads(line)
             for line in journal.path.read_text(encoding="utf-8").splitlines()
         ]
-        assert records[-1]["transition"] == "cycle_1_bootstrap_cleanup"
-        assert records[-1]["detail"] == {"outcome": "clean"}
+        assert [record["transition"] for record in records[-2:]] == [
+            "cycle_1_bootstrap_cleanup",
+            "cycle_1_stderr_diagnostic",
+        ]
+        assert records[-2]["detail"] == {"outcome": "clean"}
+        diagnostic_path = tmp_path / "diagnostics/cycle-1-stderr.bin"
+        retained = diagnostic_path.read_bytes()
+        assert b"task2-private-stderr".startswith(retained)
+        assert stat.S_IMODE(diagnostic_path.stat().st_mode) == 0o600
+        assert records[-1]["detail"] == {
+            "exited_before_finalize": False,
+            "retained_byte_count": len(retained),
+            "retained_sha256": hashlib.sha256(retained).hexdigest(),
+            "truncated": False,
+        }
     finally:
         journal.close()
 
@@ -873,6 +957,7 @@ def test_task2_retained_descendant_observes_pipe_retirement_only_after_record(
                     journal=journal,  # type: ignore[arg-type]
                     clock=driver.SystemClock(),
                     cycle=1,
+                    attempt_root=tmp_path,
                 )
 
             descendant_pid = int(descendant_pid_path.read_text(encoding="utf-8"))
@@ -883,8 +968,16 @@ def test_task2_retained_descendant_observes_pipe_retirement_only_after_record(
                 json.loads(line)
                 for line in journal.path.read_text(encoding="utf-8").splitlines()
             ]
-            assert records[-1]["transition"] == "cycle_1_bootstrap_cleanup"
-            assert records[-1]["detail"] == {"outcome": "cleanup_incomplete"}
+            transitions = [record["transition"] for record in records]
+            assert transitions.index("cycle_1_bootstrap_cleanup") < transitions.index(
+                "cycle_1_stderr_diagnostic"
+            )
+            cleanup = next(
+                record
+                for record in records
+                if record["transition"] == "cycle_1_bootstrap_cleanup"
+            )
+            assert cleanup["detail"] == {"outcome": "cleanup_incomplete"}
             assert len(captured) == 1
             assert deliberately_signalled_pids == [captured[0].pid]
             assert descendant_pid not in deliberately_signalled_pids
@@ -945,6 +1038,7 @@ def test_task2_capture_retirement_uncertainty_supersedes_original_refusal(
                 journal=journal,  # type: ignore[arg-type]
                 clock=driver.SystemClock(),
                 cycle=1,
+                attempt_root=tmp_path,
             )
         assert disposed.value.code == "cleanup_incomplete"
         assert journal.bootstrap_cleanup_appended.is_set()
@@ -1207,6 +1301,7 @@ def test_task2_failed_journal_still_retires_retained_writer(
                     journal=journal,  # type: ignore[arg-type]
                     clock=driver.SystemClock(),
                     cycle=1,
+                    attempt_root=tmp_path,
                 )
             assert caught.value.code == "cleanup_incomplete"
             assert journal.bootstrap_cleanup_appended.is_set()
@@ -1273,3 +1368,440 @@ def test_task2_every_production_launcher_call_uses_disposal_helper() -> None:
     helper_source = inspect.getsource(driver._spawn_with_interrupt_handoff)
     assert "except _BinarySpawnFailure as failure:" in helper_source
     assert "_dispose_binary_spawn_failure(" in helper_source
+
+
+@pytest.mark.parametrize(
+    ("termination", "status_detail"),
+    (
+        ("exit", {"exit_code": 23}),
+        ("signal", {"terminating_signal": signal.SIGTERM}),
+    ),
+)
+def test_task3_real_elf_admitted_binary_publishes_after_finalize_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capfd: pytest.CaptureFixture[str],
+    termination: str,
+    status_detail: dict[str, int],
+) -> None:
+    literal = f"task3-raw-only-{termination}-4b83a1".encode()
+    before_fds = _open_fd_identities()
+    before_threads = _capture_threads()
+    before_sockets = _socket_fd_inodes()
+    real_finish = driver._finish_binary_stderr_capture
+
+    def finish_after_finalize_record(
+        capture: driver._BinaryStderrCapture | None,
+    ) -> driver._BinaryStderrSnapshot | None:
+        journal_path = next(tmp_path.rglob("*-journal.jsonl"))
+        records = [
+            json.loads(line)
+            for line in journal_path.read_text(encoding="utf-8").splitlines()
+        ]
+        assert any(
+            record["transition"] == "cycle_1_finalize"
+            and set(record["detail"])
+            == {
+                "outcome",
+                "signals_sent",
+                "quadruple_reproofs",
+                "surviving_pgid_members",
+                "listener_free",
+                "started_at",
+                "finished_at",
+            }
+            for record in records
+        )
+        return real_finish(capture)
+
+    monkeypatch.setattr(
+        driver,
+        "_finish_binary_stderr_capture",
+        finish_after_finalize_record,
+    )
+
+    packet_path = _run_task3_admitted_binary_failure(
+        tmp_path,
+        monkeypatch,
+        literal=literal,
+        termination=termination,
+    )
+    captured = capfd.readouterr()
+    attempt_root = packet_path.parents[2]
+    diagnostic_path = attempt_root / "diagnostics/cycle-1-stderr.bin"
+    journal_path = next(attempt_root.rglob("*-journal.jsonl"))
+    records = [
+        json.loads(line)
+        for line in journal_path.read_text(encoding="utf-8").splitlines()
+    ]
+    transitions = [record["transition"] for record in records]
+    metadata = next(
+        record["detail"]
+        for record in records
+        if record["transition"] == "cycle_1_stderr_diagnostic"
+    )
+
+    assert json.loads(packet_path.read_bytes())["payload"]["fields"]["outcome"] == (
+        "crash"
+    )
+    assert transitions.index("cycle_1_finalize") < transitions.index(
+        "cycle_1_stderr_diagnostic"
+    )
+    assert diagnostic_path.read_bytes() == literal
+    diagnostic_info = diagnostic_path.stat()
+    assert stat.S_ISREG(diagnostic_info.st_mode)
+    assert stat.S_IMODE(diagnostic_info.st_mode) == 0o600
+    assert diagnostic_info.st_nlink == 1
+    assert metadata == {
+        "exited_before_finalize": True,
+        "retained_byte_count": len(literal),
+        "retained_sha256": hashlib.sha256(literal).hexdigest(),
+        "truncated": False,
+        **status_detail,
+    }
+    assert captured.out == ""
+    assert captured.err == ""
+    assert all(
+        literal not in path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file() and path != diagnostic_path
+    )
+    assert literal.decode() not in repr(metadata)
+    assert not list(attempt_root.rglob("*command-completion*.json"))
+    assert not list(attempt_root.rglob("*completed*.json"))
+    assert _capture_threads() == before_threads
+    assert _open_fd_identities() == before_fds
+    assert _socket_fd_inodes() == before_sockets
+
+
+def test_task3_real_elf_publication_failure_has_no_metadata_or_completion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    before_fds = _open_fd_identities()
+    before_threads = _capture_threads()
+    before_sockets = _socket_fd_inodes()
+    literal = b"task3-publication-refused-37c90a"
+    real_write = driver.write_private_file
+
+    def fail_diagnostic_write(
+        relative: str,
+        data: bytes,
+        *,
+        root: Path = driver.BENCH_ROOT,
+        on_link: Callable[[Path], None] | None = None,
+    ) -> Path:
+        if relative == "diagnostics/cycle-1-stderr.bin":
+            raise driver.BenchRefusal("filesystem_hazard")
+        return real_write(relative, data, root=root, on_link=on_link)
+
+    monkeypatch.setattr(driver, "write_private_file", fail_diagnostic_write)
+
+    packet_path = _run_task3_admitted_binary_failure(
+        tmp_path,
+        monkeypatch,
+        literal=literal,
+    )
+
+    assert json.loads(packet_path.read_bytes())["payload"]["fields"]["outcome"] == (
+        "filesystem_hazard"
+    )
+    assert not list(tmp_path.rglob("cycle-1-stderr.bin"))
+    assert not list(tmp_path.rglob("*command-completion*.json"))
+    for journal_path in tmp_path.rglob("*-journal.jsonl"):
+        assert "stderr_diagnostic" not in journal_path.read_text(encoding="utf-8")
+    assert _capture_threads() == before_threads
+    assert _open_fd_identities() == before_fds
+    assert _socket_fd_inodes() == before_sockets
+
+
+def test_task3_real_elf_capture_cleanup_failure_has_no_file_or_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    before_fds = _open_fd_identities()
+    before_threads = _capture_threads()
+    before_sockets = _socket_fd_inodes()
+    literal = b"task3-cleanup-refused-f124b8"
+    real_finish = driver._finish_binary_stderr_capture
+    failed_once = False
+
+    def finish_then_refuse(
+        capture: driver._BinaryStderrCapture | None,
+    ) -> driver._BinaryStderrSnapshot | None:
+        nonlocal failed_once
+        snapshot = real_finish(capture)
+        if not failed_once:
+            failed_once = True
+            raise driver.BenchRefusal("cleanup_incomplete")
+        return snapshot
+
+    monkeypatch.setattr(
+        driver,
+        "_finish_binary_stderr_capture",
+        finish_then_refuse,
+    )
+
+    packet_path = _run_task3_admitted_binary_failure(
+        tmp_path,
+        monkeypatch,
+        literal=literal,
+    )
+
+    assert failed_once is True
+    assert json.loads(packet_path.read_bytes())["payload"]["fields"]["outcome"] == (
+        "cleanup_incomplete"
+    )
+    assert not list(tmp_path.rglob("cycle-1-stderr.bin"))
+    assert not list(tmp_path.rglob("*command-completion*.json"))
+    for journal_path in tmp_path.rglob("*-journal.jsonl"):
+        assert "stderr_diagnostic" not in journal_path.read_text(encoding="utf-8")
+    assert _capture_threads() == before_threads
+    assert _open_fd_identities() == before_fds
+    assert _socket_fd_inodes() == before_sockets
+
+
+@pytest.mark.parametrize(
+    "snapshot",
+    (
+        driver._BinaryStderrSnapshot(
+            retained=b"x",
+            retained_sha256="0" * 64,
+            retained_byte_count=1,
+            truncated=False,
+            post_finish_byte_count=0,
+        ),
+        driver._BinaryStderrSnapshot(
+            retained=b"x",
+            retained_sha256=hashlib.sha256(b"x").hexdigest(),
+            retained_byte_count=2,
+            truncated=False,
+            post_finish_byte_count=0,
+        ),
+        driver._BinaryStderrSnapshot(
+            retained=b"x" * (_EXPECTED_CAPTURE_CAP + 1),
+            retained_sha256=hashlib.sha256(
+                b"x" * (_EXPECTED_CAPTURE_CAP + 1)
+            ).hexdigest(),
+            retained_byte_count=_EXPECTED_CAPTURE_CAP + 1,
+            truncated=True,
+            post_finish_byte_count=0,
+        ),
+    ),
+)
+def test_task3_metadata_rejects_fabricated_or_unbounded_snapshot(
+    snapshot: driver._BinaryStderrSnapshot,
+) -> None:
+    with pytest.raises(driver.BenchRefusal, match="^cleanup_incomplete$"):
+        driver._binary_stderr_metadata(
+            snapshot,
+            returncode=0,
+            exited_before_finalize=True,
+        )
+
+
+def test_task3_real_elf_finalize_journal_interrupt_still_retires_capture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    before_fds = _open_fd_identities()
+    before_threads = _capture_threads()
+    before_sockets = _socket_fd_inodes()
+    literal = b"task3-journal-interrupt-b91a72"
+    spawned: list[driver.OwnedChild] = []
+    real_try_append = driver._try_append_phase_transition
+    real_finish = driver._finish_binary_stderr_capture
+
+    def interrupt_finalize_journal(
+        journal: driver.PhaseJournal,
+        clock: driver.Clock,
+        transition: str,
+        *,
+        detail: Mapping[str, object] | None = None,
+    ) -> driver.BenchRefusal | None:
+        if transition == "cycle_1_finalize":
+            raise KeyboardInterrupt("task3 finalize journal interrupt")
+        return real_try_append(journal, clock, transition, detail=detail)
+
+    monkeypatch.setattr(
+        driver,
+        "_try_append_phase_transition",
+        interrupt_finalize_journal,
+    )
+    consumed_by_driver = False
+    packet_path: Path | None = None
+    try:
+        packet_path = _run_task3_admitted_binary_failure(
+            tmp_path,
+            monkeypatch,
+            literal=literal,
+            spawned_out=spawned,
+        )
+        assert len(spawned) == 1
+        capture = spawned[0]._stderr_capture
+        assert capture is not None
+        consumed_by_driver = capture.consumed and not capture.thread_alive
+    finally:
+        for child in spawned:
+            capture = child._stderr_capture
+            if capture is not None and not capture.consumed:
+                real_finish(capture)
+
+    assert consumed_by_driver is True
+    assert packet_path is not None
+    assert json.loads(packet_path.read_bytes())["payload"]["fields"]["outcome"] == (
+        "interrupted"
+    )
+    assert not list(tmp_path.rglob("cycle-1-stderr.bin"))
+    for journal_path in tmp_path.rglob("*-journal.jsonl"):
+        assert "stderr_diagnostic" not in journal_path.read_text(encoding="utf-8")
+    assert _capture_threads() == before_threads
+    assert _open_fd_identities() == before_fds
+    assert _socket_fd_inodes() == before_sockets
+
+
+def test_task3_real_elf_terminal_failures_cannot_reach_bundle_or_scorer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.test_cuda_bench_assemble import _materialize_stage_one
+    from tests.test_cuda_bench_driver import _b7_harness
+
+    terminal_payloads: dict[str, bytes] = {}
+
+    refused_root = tmp_path / "refused"
+    refused_root.mkdir(mode=0o700)
+    refused_harness = _b7_harness(
+        refused_root,
+        service_active=True,
+        nonce="a" * 64,
+    )
+    refused_path = driver.run_phase(
+        refused_harness.config,
+        refused_harness.providers,
+        root=refused_root,
+    )
+    terminal_payloads["service_interference"] = refused_path.read_bytes()
+
+    failed_root = tmp_path / "failed"
+    failed_root.mkdir(mode=0o700)
+    with monkeypatch.context() as local:
+        failed_path = _run_task3_admitted_binary_failure(
+            failed_root,
+            local,
+            literal=b"task3-failed-unscoreable-760b31",
+        )
+    terminal_payloads["crash"] = failed_path.read_bytes()
+
+    cleanup_root = tmp_path / "cleanup"
+    cleanup_root.mkdir(mode=0o700)
+    real_finish = driver._finish_binary_stderr_capture
+    failed_once = False
+
+    def finish_then_refuse(
+        capture: driver._BinaryStderrCapture | None,
+    ) -> driver._BinaryStderrSnapshot | None:
+        nonlocal failed_once
+        snapshot = real_finish(capture)
+        if not failed_once:
+            failed_once = True
+            raise driver.BenchRefusal("cleanup_incomplete")
+        return snapshot
+
+    with monkeypatch.context() as local:
+        local.setattr(
+            driver,
+            "_finish_binary_stderr_capture",
+            finish_then_refuse,
+        )
+        cleanup_path = _run_task3_admitted_binary_failure(
+            cleanup_root,
+            local,
+            literal=b"task3-cleanup-unscoreable-95d244",
+        )
+    assert failed_once is True
+    terminal_payloads["cleanup_incomplete"] = cleanup_path.read_bytes()
+
+    scorer_calls: list[object] = []
+    receipt_calls: list[object] = []
+
+    def forbidden_scorer(bundle: object) -> object:
+        scorer_calls.append(bundle)
+        raise AssertionError("terminal artifact reached scorer")
+
+    def forbidden_receipt(*args: object, **kwargs: object) -> object:
+        receipt_calls.append((args, kwargs))
+        raise AssertionError("terminal artifact minted receipt")
+
+    monkeypatch.setattr(driver.cm, "evaluate_promotion_bundle", forbidden_scorer)
+    monkeypatch.setattr(driver.cm, "build_receipt", forbidden_receipt)
+
+    for index, (outcome, payload) in enumerate(terminal_payloads.items(), start=1):
+        assembler_root = tmp_path / f"assembler-{index}"
+        assembler_root.mkdir(mode=0o700)
+        paths, _bundle = _materialize_stage_one(assembler_root)
+        injected_relative = f"injected/{outcome}.json"
+        injected_path = assembler_root / injected_relative
+        injected_path.parent.mkdir(mode=0o700)
+        injected_path.write_bytes(payload)
+        injected_path.chmod(0o600)
+        terminal_paths = replace(paths, control_packet=injected_relative)
+
+        with pytest.raises(driver.BenchRefusal, match="^assembly_refused$"):
+            assemble.build_stage1_bundle(
+                terminal_paths,
+                root=assembler_root,
+                timestamp="2026-07-13T12:02:10Z",
+            )
+        with pytest.raises(driver.BenchRefusal, match="^assembly_refused$"):
+            assemble.assemble_stage1(
+                terminal_paths,
+                root=assembler_root,
+                timestamp="2026-07-13T12:02:10Z",
+            )
+
+    assert scorer_calls == []
+    assert receipt_calls == []
+
+
+def test_task3_diagnostics_are_structurally_absent_from_evidence_and_actions() -> None:
+    forbidden = {"diagnostic", "stderr_diagnostic", "stderr_sha256", "stderr_bytes"}
+    field_surfaces = (
+        driver.FinalizeResult,
+        driver.CompletedPhaseEvidence,
+        driver.cm.CommandCompletionDoc,
+        driver.cm.PhasePacket,
+        driver.cm.PersistedDoc,
+        driver.cm.BenchEvidenceBundle,
+        driver.cm.PromotionVerdict,
+        assemble.Stage1ArtifactPaths,
+    )
+    for surface in field_surfaces:
+        names = {field.name.lower() for field in fields(surface)}
+        assert all(token not in name for name in names for token in forbidden)
+
+    assert len(fields(assemble.Stage1ArtifactPaths)) == 22
+    assert all(
+        token not in schema.lower()
+        for schema in driver._ARTIFACT_SCHEMAS.values()
+        for token in forbidden
+    )
+    assert all(
+        token not in schema.lower()
+        for schema in driver.cm._PERSISTED_REGISTRY
+        for token in forbidden
+    )
+    source_surfaces = (
+        driver.ArtifactPolicy,
+        driver._write_reduced_outcome,
+        driver._build_completed_phase_packet,
+        driver.cm.evaluate_promotion_bundle,
+        driver.cm.build_receipt,
+        assemble.build_stage1_bundle,
+        assemble.assemble_stage1,
+        cli._completion_fields,
+        cli._publish_phase_completion,
+    )
+    for surface in source_surfaces:
+        source = inspect.getsource(surface).lower()
+        assert all(token not in source for token in forbidden)

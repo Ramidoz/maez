@@ -1278,6 +1278,103 @@ def _finish_binary_stderr_capture(
     return capture.finish()
 
 
+def _retire_binary_stderr_capture(
+    capture: _BinaryStderrCapture | None,
+    *,
+    on_cleanup_incomplete: _CleanupIncompleteLatch | None = None,
+) -> _BinaryStderrSnapshot | None:
+    """Consume one capture, making bounded retirement failure authoritative."""
+
+    try:
+        return _finish_binary_stderr_capture(capture)
+    except BaseException:
+        if on_cleanup_incomplete is not None:
+            on_cleanup_incomplete()
+        if type(capture) is _BinaryStderrCapture:
+            try:
+                capture.retire_after_interruption()
+            except BaseException:
+                pass
+        raise BenchRefusal("cleanup_incomplete") from None
+
+
+def _binary_stderr_metadata(
+    snapshot: _BinaryStderrSnapshot,
+    *,
+    returncode: int | None,
+    exited_before_finalize: bool,
+) -> dict[str, object]:
+    if (
+        type(snapshot) is not _BinaryStderrSnapshot
+        or type(snapshot.retained) is not bytes
+        or type(snapshot.retained_sha256) is not str
+        or _SHA256_RE.fullmatch(snapshot.retained_sha256) is None
+        or snapshot.retained_sha256
+        != hashlib.sha256(snapshot.retained).hexdigest()
+        or type(snapshot.retained_byte_count) is not int
+        or snapshot.retained_byte_count != len(snapshot.retained)
+        or not 0 <= snapshot.retained_byte_count <= BINARY_STDERR_DIAGNOSTIC_CAP
+        or type(snapshot.truncated) is not bool
+        or type(exited_before_finalize) is not bool
+        or (returncode is not None and type(returncode) is not int)
+        or (not exited_before_finalize and returncode is not None)
+    ):
+        raise BenchRefusal("cleanup_incomplete")
+    detail: dict[str, object] = {
+        "retained_sha256": snapshot.retained_sha256,
+        "retained_byte_count": snapshot.retained_byte_count,
+        "truncated": snapshot.truncated,
+        "exited_before_finalize": exited_before_finalize,
+    }
+    if returncode is not None:
+        if returncode < 0:
+            detail["terminating_signal"] = -returncode
+        else:
+            detail["exit_code"] = returncode
+    return detail
+
+
+def _dispose_binary_stderr_diagnostic(
+    capture: _BinaryStderrCapture | None,
+    *,
+    journal: PhaseJournal,
+    clock: Clock,
+    cycle: int,
+    attempt_root: Path,
+    returncode: int | None,
+    exited_before_finalize: bool,
+    on_cleanup_incomplete: _CleanupIncompleteLatch | None = None,
+) -> None:
+    """Retire, privately publish, then journal one content-light snapshot."""
+
+    if capture is None:
+        return
+    if type(cycle) is not int or cycle <= 0 or not isinstance(attempt_root, Path):
+        raise BenchRefusal("cleanup_incomplete")
+    snapshot = _retire_binary_stderr_capture(
+        capture,
+        on_cleanup_incomplete=on_cleanup_incomplete,
+    )
+    if snapshot is None:
+        raise BenchRefusal("cleanup_incomplete")
+    detail = _binary_stderr_metadata(
+        snapshot,
+        returncode=returncode,
+        exited_before_finalize=exited_before_finalize,
+    )
+    write_private_file(
+        f"diagnostics/cycle-{cycle}-stderr.bin",
+        snapshot.retained,
+        root=attempt_root,
+    )
+    _append_phase_transition(
+        journal,
+        clock,
+        f"cycle_{cycle}_stderr_diagnostic",
+        detail=detail,
+    )
+
+
 def _raise_binary_spawn_failure(
     exc: BaseException,
     *,
@@ -7870,6 +7967,7 @@ def _dispose_binary_spawn_failure(
     journal: PhaseJournal,
     clock: Clock,
     cycle: int,
+    attempt_root: Path,
     on_cleanup_incomplete: _CleanupIncompleteLatch | None = None,
 ) -> NoReturn:
     """Record fixed process cleanup before retiring one failed capture."""
@@ -7890,21 +7988,22 @@ def _dispose_binary_spawn_failure(
         journal_failed = True
         if on_cleanup_incomplete is not None:
             on_cleanup_incomplete(storage_unavailable=True)
-    retirement_interrupted = False
-    try:
-        _finish_binary_stderr_capture(failure._stderr_capture)
-    except BaseException:
-        retirement_interrupted = True
-        if on_cleanup_incomplete is not None:
-            on_cleanup_incomplete()
-        try:
-            failure._stderr_capture.retire_after_interruption()
-        except BaseException:
-            pass
-    if retirement_interrupted or failure._stderr_capture.thread_alive:
-        raise BenchRefusal("cleanup_incomplete") from None
     if journal_failed:
+        _retire_binary_stderr_capture(
+            failure._stderr_capture,
+            on_cleanup_incomplete=on_cleanup_incomplete,
+        )
         raise _StorageIndependentCleanupIncomplete from None
+    _dispose_binary_stderr_diagnostic(
+        failure._stderr_capture,
+        journal=journal,
+        clock=clock,
+        cycle=cycle,
+        attempt_root=attempt_root,
+        returncode=None,
+        exited_before_finalize=False,
+        on_cleanup_incomplete=on_cleanup_incomplete,
+    )
     raise BenchRefusal(failure.code) from None
 
 
@@ -7917,6 +8016,7 @@ def _spawn_with_interrupt_handoff(
     journal: PhaseJournal,
     clock: Clock,
     cycle: int,
+    attempt_root: Path,
     on_cleanup_incomplete: _CleanupIncompleteLatch | None = None,
 ) -> OwnedChild:
     """Block driver interrupts until the caller has recorded child ownership."""
@@ -7937,6 +8037,7 @@ def _spawn_with_interrupt_handoff(
                 journal=journal,
                 clock=clock,
                 cycle=cycle,
+                attempt_root=attempt_root,
                 on_cleanup_incomplete=on_cleanup_incomplete,
             )
         if type(child) is not OwnedChild:
@@ -8136,6 +8237,7 @@ def _run_three_cycles(
             journal=journal,
             clock=providers.clock,
             cycle=cycle,
+            attempt_root=attempt_root,
             on_cleanup_incomplete=lifecycle.latch_cleanup_incomplete,
         )
         if providers.tier == "production":
@@ -8256,6 +8358,9 @@ def _run_three_cycles(
             pending = exc
         finally:
             child_exited_before_finalize = child.popen.poll() is not None
+            natural_returncode = (
+                child.popen.returncode if child_exited_before_finalize else None
+            )
             lifecycle.last_finalizer = finalize(
                 child,
                 clock=providers.clock,
@@ -8277,11 +8382,34 @@ def _run_three_cycles(
             topology_after_unload = lifecycle.common_topology
             memory_after_unload = memory_before
         lifecycle.current_child = None
-        _append_phase_transition(
-            journal,
-            providers.clock,
-            f"cycle_{cycle}_finalize",
-            detail=_finalizer_fields(lifecycle.last_finalizer),
+        try:
+            finalize_journal_error = _try_append_phase_transition(
+                journal,
+                providers.clock,
+                f"cycle_{cycle}_finalize",
+                detail=_finalizer_fields(lifecycle.last_finalizer),
+            )
+        except BaseException:
+            _retire_binary_stderr_capture(
+                child._stderr_capture,
+                on_cleanup_incomplete=lifecycle.latch_cleanup_incomplete,
+            )
+            raise
+        if finalize_journal_error is not None:
+            _retire_binary_stderr_capture(
+                child._stderr_capture,
+                on_cleanup_incomplete=lifecycle.latch_cleanup_incomplete,
+            )
+            raise finalize_journal_error
+        _dispose_binary_stderr_diagnostic(
+            child._stderr_capture,
+            journal=journal,
+            clock=providers.clock,
+            cycle=cycle,
+            attempt_root=attempt_root,
+            returncode=natural_returncode,
+            exited_before_finalize=child_exited_before_finalize,
+            on_cleanup_incomplete=lifecycle.latch_cleanup_incomplete,
         )
         _append_phase_transition(
             journal,
@@ -8525,6 +8653,7 @@ def _finish_failed_phase(
         lifecycle.observed_child = child
         lifecycle.spawned_any = True
         child_exited = child.popen.poll() is not None
+        natural_returncode = child.popen.returncode if child_exited else None
         lifecycle.last_finalizer = finalize(
             child,
             clock=providers.clock,
@@ -8548,12 +8677,48 @@ def _finish_failed_phase(
                 except BenchRefusal as error:
                     unload_refusal = error
             lifecycle.current_child = None
-            journal_error = _try_append_phase_transition(
-                journal,
-                providers.clock,
-                f"cycle_{lifecycle.active_cycle}_finalize",
-                detail=_finalizer_fields(lifecycle.last_finalizer),
-            )
+            try:
+                journal_error = _try_append_phase_transition(
+                    journal,
+                    providers.clock,
+                    f"cycle_{lifecycle.active_cycle}_finalize",
+                    detail=_finalizer_fields(lifecycle.last_finalizer),
+                )
+            except BaseException:
+                _retire_binary_stderr_capture(
+                    child._stderr_capture,
+                    on_cleanup_incomplete=(
+                        lifecycle.latch_cleanup_incomplete
+                    ),
+                )
+                raise
+            diagnostic_refusal: BenchRefusal | None = None
+            if journal_error is None:
+                try:
+                    _dispose_binary_stderr_diagnostic(
+                        child._stderr_capture,
+                        journal=journal,
+                        clock=providers.clock,
+                        cycle=lifecycle.active_cycle,
+                        attempt_root=attempt_root,
+                        returncode=natural_returncode,
+                        exited_before_finalize=child_exited,
+                        on_cleanup_incomplete=(
+                            lifecycle.latch_cleanup_incomplete
+                        ),
+                    )
+                except BenchRefusal as error:
+                    diagnostic_refusal = error
+            else:
+                try:
+                    _retire_binary_stderr_capture(
+                        child._stderr_capture,
+                        on_cleanup_incomplete=(
+                            lifecycle.latch_cleanup_incomplete
+                        ),
+                    )
+                except BenchRefusal as error:
+                    diagnostic_refusal = error
             unload_journal_error = _try_append_phase_transition(
                 journal,
                 providers.clock,
@@ -8575,6 +8740,11 @@ def _finish_failed_phase(
             )
             if resolved is not None:
                 outcome = resolved.code
+            if diagnostic_refusal is not None and (
+                diagnostic_refusal.code == "cleanup_incomplete"
+                or outcome not in {"cleanup_incomplete", "pid_reuse_detected"}
+            ):
+                outcome = diagnostic_refusal.code
             if (
                 journal_error is not None
                 and outcome not in {"cleanup_incomplete", "pid_reuse_detected"}
